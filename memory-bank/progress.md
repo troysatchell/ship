@@ -17,13 +17,31 @@
 | Baseline: Terraform/IaC (Category 8) | ✅ done (2026-07-27) — 6 findings (2 High), `audit/terraform/` |
 | Live dashboard + defense brief | ✅ published (URLs in log below); dashboard at checkpoint `report-complete` |
 | AUDIT_REPORT.md assembled + submitted | ✅ `audit/AUDIT_REPORT.md` — **68 findings, 4 Critical, 8 categories** |
-| Findings → Linear tickets | ✅ done (2026-07-28) — 8 epics + 68 sub-issues, `TRO-164`–`TRO-239` |
+| Findings → Linear tickets | ✅ done (2026-07-28) — 8 epics + 68 sub-issues, `TRO-164`–`TRO-239` (+ `TRO-240` post-baseline) |
 | Audit baseline committed + published | ✅ done (2026-07-28) — dual remotes, raw captures gitignored |
+| **Tuesday audit gate** | ✅ **verified 2026-07-28** — every required table row present; rule 1 clean |
+| Orientation write-up (`audit/ORIENTATION.md`) | ✅ done (2026-07-28) — a *final-submission* item banked early |
 | Improvement phase (compare loops) | ⬜ Fri Jul 31 |
-| Submission deploy (provider undecided) | ⬜ Render vs Railway — see 2026-07-28 log |
+| Render deploy | 🟧 service created, **blocked** — Dockerfile COPY + no Postgres (see 2026-07-28 log) |
+| Demo-video companion artifact | ✅ published (2026-07-28) — before/after slots pending Friday |
+| Discovery write-up · demo video · AI cost analysis · social post | ⬜ Sun Aug 2 |
 | Final polish + presentation | ⬜ Sun Aug 2 |
 
 ## Log
+
+### 2026-07-28 (Tue) — Day 2, end of day — gate verified, orientation banked, Render blocked
+
+- **Tuesday gate verified rather than assumed.** Checked `AUDIT_REPORT.md` row-by-row against the PDF's per-category Deliverable tables: all present, several over-delivering (6 API endpoints vs. a required 5; 6 DB flows vs. 5; type-safety table carries all 7 required rows including the `@ts-ignore` count). **Rule 1 confirmed by diff, not by assertion** — `git diff 076a183..HEAD -- api/ web/ shared/ terraform/ e2e/` is empty. Only `audit/`, `memory-bank/`, `.claude/`, `.gitignore`, `README.md` moved.
+- **`audit/ORIENTATION.md` written** (`13b11b5`) — the Appendix checklist deliverable, all 8 sections. Orientation itself happened 2026-07-27; this is the write-up, and claims sourced from later *measurement* are marked `[audit]` with their finding ID so the two aren't conflated. It's a **final-submission** item, so it's banked early. Best line in it: at 10× users the unified document model is *not* what breaks — every scaling problem is in the access layer and fixable without touching the data model.
+- **Corrected a genuine docs defect** (`56ae2aa`). `.claude/CLAUDE.md:102` claimed `documents.program_id` and `documents.project_id` "still exist" and credited migration 027 with dropping only `sprint_id`. Both clauses wrong: **027 drops `sprint_id` AND `project_id`; 029 drops `program_id`** — all three gone. Likely cause of the confusion: `sprint_iterations.sprint_id` (`schema.sql:272`) is a live column on a *different* table. Corrected text calls that distinction out and keeps the DB-1 caveat that `\d documents` remains the authority.
+- **README gained a fork section** — links `AUDIT_REPORT.md` + `ORIENTATION.md`, states baseline conditions, and carries four cold-start warnings drawn from DB-1, TEST-9 and TEST-1 (migrate exits 0 while under-applying; `pnpm test` truncates your dev DB; root `pnpm test` skips web; `pnpm dev` writes its own `.ports`).
+- **New finding: DB-11 → `TRO-240`.** `api/src/db/client.ts` configures **no `ssl`** on the main application pool, while `migrate.ts:32` and `seed.ts:44` both set `ssl: { rejectUnauthorized: false }` in production. Invisible on AWS (Aurora is in-VPC); breaks against any TLS-requiring managed Postgres. Failure signature is confusing because `Dockerfile:35` is `migrate && index.js` — migrate connects and exits 0, then the app fails, so logs read as a database problem rather than a client-config one. **Marked post-baseline in the ticket; it is NOT one of the report's 68** and must not be counted toward the baseline.
+- **Render: service created, deploy blocked.** `ship` / `srv-d9kf2t942hec73aofrt0`, oregon, **docker** runtime, free plan, `https://ship-rr6m.onrender.com`. Two hard stops found by reading the Dockerfile rather than by deploying:
+  1. `Dockerfile:22-23` copies `shared/dist/` and `api/dist/`, both gitignored and untracked — `.dockerignore` even documents the assumption. The image is designed for the AWS build-locally-then-ship flow; Render clones from GitHub, so COPY finds nothing. **This is assignment rule 5 in disguise** (build once, promote the artifact).
+  2. The image is **API-only** — no web build, so no UI regardless.
+  Also: no Postgres instance exists in the workspace (hence no Internal URL anywhere) — must be created in **oregon** to match the service for internal networking.
+- **Render credentials in hand.** Key in gitignored repo-root `.env`; owner ID `tea-d9kevetg1s2s73807n5g` retrieved via `GET /v1/owners`. Corrected earlier env-var guidance: the docker runtime means `NODE_ENV`/`PORT`/`VITE_APP_ENV` come from the Dockerfile and `NODE_VERSION` is irrelevant — only `DATABASE_URL`, `SESSION_SECRET`, `CORS_ORIGIN` need setting, plus health check path `/health`.
+- **Demo video is Sunday, not Tuesday** — and cannot be made early, since its spec requires improvements and before/after measurements that rule 1 forbids producing during the audit. Published a demo-video companion artifact instead (British-green-on-cream, talking-points density) with measured baselines, targets, and *pending* after-slots to fill Friday: claude.ai/code/artifact/a13fd909-f20b-4fdc-bf07-de50e08d43b7
 
 ### 2026-07-28 (Tue) — Day 2, later — assignment PDF re-read; brief was incomplete
 

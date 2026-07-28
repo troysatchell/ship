@@ -68,4 +68,29 @@ Chosen over CI mirroring: no extra machinery, and a push either reaches both or 
 
 - Repo ships via `scripts/deploy.sh prod` (API → Elastic Beanstalk) + `scripts/deploy-frontend.sh prod` (web → S3/CloudFront). Frontend deploy is `aws s3 sync web/dist/` + a CloudFront invalidation; SPA deep links are rewritten to `/index.html` by a CloudFront **function** (`terraform/cloudfront-functions/spa-routing.js`), not `custom_error_response` — deliberately, so API 404s aren't turned into HTML.
 - **AWS prod is not publicly reachable** (verified 2026-07-28): `ship.awsdev.treasury.gov` → 403, EB health endpoint → no response.
-- Submission deploy provider is **undecided** (Render vs Railway) — see activeContext.md open questions.
+
+### Render (submission target — settled by the brief)
+
+| | |
+|---|---|
+| Service | `ship` · `srv-d9kf2t942hec73aofrt0` |
+| Region | **oregon** (a Postgres instance must match this for internal networking) |
+| Runtime | **docker** — the Dockerfile governs; Render's build/start command fields are unused |
+| Plan / branch | free · `main` · repo `github.com/troysatchell/ship` |
+| URL | `https://ship-rr6m.onrender.com` |
+| Health check | **unset** — should be `/health` (`api/src/app.ts:165`) |
+| Postgres | **none exists yet** — which is why no Internal Database URL appears anywhere |
+
+**Env vars to set** (only three — the docker runtime already bakes `NODE_ENV`, `PORT`, `VITE_APP_ENV` into `Dockerfile:29-31`, and `NODE_VERSION` is a native-Node-runtime concept that does nothing here):
+
+- `DATABASE_URL` — via *Add from Database* → **Internal** URL (external requires TLS; see DB-11)
+- `SESSION_SECRET` — generate
+- `CORS_ORIGIN` — `https://ship-rr6m.onrender.com` (code default is `localhost:5173`, `index.ts:25`)
+
+**Never set `PORT`** — Render injects it and `index.ts:24` reads it.
+
+**Credentials.** `RENDER_API_KEY` in the gitignored repo-root `.env` — load into Terraform's process env (`set -a; . ./.env; set +a`), not Vite's. Owner ID `tea-d9kevetg1s2s73807n5g`; not secret, safe to commit. Query the API directly with `GET https://api.render.com/v1/owners` and `/v1/postgres` and `/v1/services`.
+
+⚠️ `.gitignore:74-75` covers only `terraform/terraform.tfvars` and `terraform/environments/*/terraform.tfvars`. A new `terraform/render/terraform.tfvars` would **not** be ignored — widen the rule before any key goes near it.
+
+**Blocked** on the Dockerfile pre-built-artifact assumption and the absent web build — see systemPatterns.md § Deploy path.
