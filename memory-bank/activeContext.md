@@ -43,7 +43,9 @@ The PDF settles it (Category 8): deployment is via **Render**, official first-pa
 
 Topology is forced to a **single Render web service** serving both API and SPA, because the code assumes same-origin: session cookie is `sameSite: 'strict'` (`auth.ts:217`, `routes/auth.ts:188`), the collab WS URL is built from `window.location.host` (`Editor.tsx:334`), and `VITE_API_URL` defaults to `''` (`Editor.tsx:330`). A static-site + separate-API split breaks login and collaboration. **The API does not currently serve `web/dist`** — that's a required code change (~10 lines; port the extension test from `terraform/cloudfront-functions/spa-routing.js`).
 
-Needed from Troy: **Render API key** + **owner ID**.
+**Render credentials — in hand (2026-07-28).** `RENDER_API_KEY` lives in the gitignored repo-root `.env` (`.gitignore:12`); load it into Terraform's process env, not Vite's. Owner ID is **`tea-d9kevetg1s2s73807n5g`** ("My Workspace", type `team`) — retrieved via `GET https://api.render.com/v1/owners`. The owner ID is **not** secret and can be committed in tfvars; only the key must stay out of git.
+
+⚠️ Before any key goes near tfvars: `.gitignore:74-75` only covers `terraform/terraform.tfvars` and `terraform/environments/*/terraform.tfvars` — a new `terraform/render/terraform.tfvars` would **not** be ignored.
 
 ## Open questions
 

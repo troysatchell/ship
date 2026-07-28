@@ -131,3 +131,6 @@ audit/a11y/lighthouse/
 audit/bundle/stats.json
 audit/bundle/stats.html
 audit/**/*.log
+
+# Codacy IDE extension cache
+.codacy/
