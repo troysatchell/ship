@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import { existsSync } from 'fs';
+import { dirname, join } from 'path';
+import { fileURLToPath } from 'url';
 import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import { csrfSync } from 'csrf-sync';
@@ -240,6 +243,31 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   initializeCAIA().catch((err) => {
     console.warn('CAIA initialization failed:', err);
   });
+
+  // ── Static SPA (single-origin deployments) ───────────────────────────────
+  // Serves web/dist when it is present in the image. Absent in local dev and in
+  // the AWS deployment, where CloudFront serves the SPA and proxies /api/* — so
+  // this is a no-op there and only activates for single-service hosts.
+  //
+  // Must be registered after every /api route so it cannot shadow them.
+  //
+  // The extension test mirrors terraform/cloudfront-functions/spa-routing.js:
+  // a path with a file extension resolves to a real asset (or 404s), anything
+  // else falls through to index.html so react-router can handle it. Same-origin
+  // is a requirement, not a preference — the session cookie is sameSite=strict
+  // and the collaboration WebSocket URL is built from window.location.host.
+  const webDist = join(dirname(fileURLToPath(import.meta.url)), '../../web/dist');
+  if (existsSync(webDist)) {
+    app.use(express.static(webDist, { index: false }));
+
+    app.get('*', (req, res, next) => {
+      if (req.path.startsWith('/api/') || req.path.startsWith('/collaboration')) return next();
+      if (/\.[a-zA-Z0-9]+$/.test(req.path)) return next();
+      res.sendFile(join(webDist, 'index.html'));
+    });
+
+    console.log(`Serving SPA from ${webDist}`);
+  }
 
   return app;
 }
