@@ -45,22 +45,47 @@ export async function loadProductionSecrets(): Promise<void> {
 
   console.log(`Loading secrets from SSM path: ${basePath}`);
 
-  const [databaseUrl, sessionSecret, corsOrigin, cdnDomain, appBaseUrl] = await Promise.all([
-    getSSMSecret(`${basePath}/DATABASE_URL`),
-    getSSMSecret(`${basePath}/SESSION_SECRET`),
-    getSSMSecret(`${basePath}/CORS_ORIGIN`),
-    getSSMSecret(`${basePath}/CDN_DOMAIN`),
-    getSSMSecret(`${basePath}/APP_BASE_URL`),
-  ]);
+  try {
+    const [databaseUrl, sessionSecret, corsOrigin, cdnDomain, appBaseUrl] = await Promise.all([
+      getSSMSecret(`${basePath}/DATABASE_URL`),
+      getSSMSecret(`${basePath}/SESSION_SECRET`),
+      getSSMSecret(`${basePath}/CORS_ORIGIN`),
+      getSSMSecret(`${basePath}/CDN_DOMAIN`),
+      getSSMSecret(`${basePath}/APP_BASE_URL`),
+    ]);
 
-  process.env.DATABASE_URL = databaseUrl;
-  process.env.SESSION_SECRET = sessionSecret;
-  process.env.CORS_ORIGIN = corsOrigin;
-  process.env.CDN_DOMAIN = cdnDomain;
-  process.env.APP_BASE_URL = appBaseUrl;
+    process.env.DATABASE_URL = databaseUrl;
+    process.env.SESSION_SECRET = sessionSecret;
+    process.env.CORS_ORIGIN = corsOrigin;
+    process.env.CDN_DOMAIN = cdnDomain;
+    process.env.APP_BASE_URL = appBaseUrl;
 
-  console.log('Secrets loaded from SSM Parameter Store');
-  console.log(`CORS_ORIGIN: ${corsOrigin}`);
-  console.log(`CDN_DOMAIN: ${cdnDomain}`);
-  console.log(`APP_BASE_URL: ${appBaseUrl}`);
+    console.log('Secrets loaded from SSM Parameter Store');
+    console.log(`CORS_ORIGIN: ${corsOrigin}`);
+    console.log(`CDN_DOMAIN: ${cdnDomain}`);
+    console.log(`APP_BASE_URL: ${appBaseUrl}`);
+  } catch (err) {
+    // SSM is the AWS delivery mechanism, not the only one. On a platform that
+    // injects secrets as environment variables directly (Render, Fly, a plain
+    // container), there are no AWS credentials and this call cannot succeed —
+    // previously it threw and killed the process before the app ever started.
+    //
+    // Fall back only when the environment already supplies what SSM would have
+    // provided, so a genuine AWS misconfiguration still fails loudly instead of
+    // starting a server with no database.
+    const message = err instanceof Error ? err.message : String(err);
+
+    if (process.env.DATABASE_URL && process.env.SESSION_SECRET) {
+      console.warn(
+        `SSM unavailable (${message}) — continuing with secrets supplied by the environment.`
+      );
+      return;
+    }
+
+    console.error(
+      `SSM unavailable (${message}) and neither DATABASE_URL nor SESSION_SECRET is set in the ` +
+      `environment. Provide them directly, or grant this runtime read access to ${basePath}/*.`
+    );
+    throw err;
+  }
 }
