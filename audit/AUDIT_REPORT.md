@@ -1077,7 +1077,7 @@ node scratchpad/vacuous.mjs e2e     # brace-scanner: tests whose every expect() 
 | Suite runtime (unit / e2e) | api 12.0 s, web 1.7 s / e2e **541 s / 568 s / 543 s** wall (4 workers, ~9 min per run) |
 | Retries configured? | **Yes — `retries: 2` in CI, `1` locally** (`playwright.config.ts:60`). Retries erased 7 / 5 / 2 first-attempt failures across the three runs. |
 | Critical flows with zero coverage | Concurrent multi-client editing / Yjs merge; `/dashboard`; `/team/org-chart`; global search UI (API-only); single-document delete |
-| Code coverage % per package | api **51.4 % function** (398/774; 7 of 79 modules never loaded) — *approximated, tooling broken*; web **unmeasurable** (no coverage config, no provider); shared **0 %** (no tests, no test script) |
+| Code coverage % per package | **api** — lines **40.52 %** (3199/7893) · branches **33.44 %** (1457/4357) · functions **40.90 %** (243/594). **web** — lines **28.53 %** (456/1598) · branches **19.38 %** (196/1011) · functions **25.60 %** (106/414). **shared 0 %** (no tests, no test script). Measured with `@vitest/coverage-v8@4.0.17`, installed for the measurement and reverted afterwards — see *Coverage tooling* below. |
 | Tests that can pass with zero assertions | **68 of 866** static e2e blocks (7.9 %) — 3 with no `expect()` at all, 65 whose every `expect()` is inside a conditional |
 | CI enforcement | **None.** No `.github/workflows/`, no GitLab/Jenkins/CodeBuild config anywhere in the repo. |
 
@@ -1343,9 +1343,44 @@ coverage 51.4 % (398 / 774)**, 7 of 79 modules never loaded. Weakest modules:
 | `api/src/collaboration/index.ts` | 25.0 % (7/28) |
 | `api/src/utils/document-crud.ts` | 29.3 % (12/41) |
 
-**Estimated impact:** nobody can see coverage move, so no coverage-based decision is possible. The
-registry is blocked in this environment, so this was reported rather than fixed (baseline mode
-would not install dependencies regardless).
+**Estimated impact:** as shipped, nobody can see coverage move, so no coverage-based decision is
+possible and no coverage improvement can be proven in compare mode.
+
+##### Coverage tooling — configured and measured (2026-07-28)
+
+The npm registry was unreachable during the original measurement window, so the figures above came
+from raw `NODE_V8_COVERAGE`. The registry later became reachable, and the audit brief requires that
+coverage tooling be configured rather than merely reported, so it was:
+
+```bash
+pnpm add -D @vitest/coverage-v8@4.0.17 --filter @ship/api --filter @ship/web
+# api — MUST target the isolated DB; the suite TRUNCATEs whatever DATABASE_URL points at (TEST-9)
+DATABASE_URL=…/ship_unit_audit vitest run --coverage --coverage.provider=v8 \
+  --coverage.reportOnFailure=true --coverage.reporter=json-summary
+# manifests reverted afterwards so the audited tree still matches commit 076a183
+```
+
+Three things this surfaced that the substitute measurement could not:
+
+1. **The version must be pinned to vitest's exact release.** `@vitest/coverage-v8@^4` resolves to
+   4.1.10 against `vitest@4.0.17` and fails at load — `vitest/node` does not export
+   `BaseCoverageProvider` at 4.0.17. Only the exactly-matching `4.0.17` works.
+2. **`coverage.reportOnFailure` defaults to `false`.** Because 13 web tests fail (**TEST-1**), a
+   normal `--coverage` run on web produces **no report at all** — it exits without writing one.
+   TEST-1 and TEST-7 therefore compound: the failing tests actively hide the coverage number, and
+   `reportOnFailure=true` is required to see it.
+3. **The real api figure is lower than the substitute suggested** — 40.90 % function against the
+   raw-profiler's 51.4 %. The two use different denominators (594 vs 774 functions) because
+   vitest's provider applies the project's own include/exclude rules while the raw profiler counted
+   every loaded module. The 40.90 % figure is the one compare mode should diff against; the 51.4 %
+   figure and the per-module table above remain valid as a relative ranking of weak modules.
+
+Raw output: `audit/test-quality/runs/coverage/{api,web}-coverage-summary.json`.
+
+**Still unfixed and still the finding:** the shipped repository has no coverage provider in
+`pnpm-lock.yaml`, no `coverage` block in `web/vitest.config.ts`, and no `test:coverage` script in
+`web/package.json`. Configuring it for one measurement does not make it reproducible for the next
+engineer — that is the improvement-phase work.
 
 ---
 
