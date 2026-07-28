@@ -17,10 +17,34 @@
 | Baseline: Terraform/IaC (Category 8) | ✅ done (2026-07-27) — 6 findings (2 High), `audit/terraform/` |
 | Live dashboard + defense brief | ✅ published (URLs in log below); dashboard at checkpoint `report-complete` |
 | AUDIT_REPORT.md assembled + submitted | ✅ `audit/AUDIT_REPORT.md` — **68 findings, 4 Critical, 8 categories** |
+| Findings → Linear tickets | ✅ done (2026-07-28) — 8 epics + 68 sub-issues, `TRO-164`–`TRO-239` |
+| Audit baseline committed + published | ✅ done (2026-07-28) — dual remotes, raw captures gitignored |
 | Improvement phase (compare loops) | ⬜ Fri Jul 31 |
+| Submission deploy (provider undecided) | ⬜ Render vs Railway — see 2026-07-28 log |
 | Final polish + presentation | ⬜ Sun Aug 2 |
 
 ## Log
+
+### 2026-07-28 (Tue) — Day 2, later — assignment PDF re-read; brief was incomplete
+
+- **Read `/Users/troy/Documents/G.Assignments/GFA_Week_4_ShipShape_Updated.pdf` (13 pp) in full.** `projectbrief.md` had been a partial transcription — it captured the 7 category targets, deadlines, and audit rules but **missed the 11 implementation rules, the 10-row submission deliverable table, and the grading weights**. Brief rewritten from the source; it now points at the PDF path as the authority.
+- **Render vs Railway: SETTLED — Render.** Not a judgment call; Category 8 states deployment is via Render with its official first-party provider (`render-oss/render`) and that **no AWS account or cloud credentials are required**. Also: the Render service must be **created by `terraform apply` from a clean checkout**, so it must not be hand-built in the dashboard.
+- **Topology forced to one Render web service** (API + SPA same-origin). Verified in code: session cookie `sameSite: 'strict'` (`api/src/middleware/auth.ts:217`, `api/src/routes/auth.ts:188`), collab WS URL from `window.location.host` (`web/src/components/Editor.tsx:334`), `VITE_API_URL` defaults to `''` (`Editor.tsx:330`). A static-site + separate-API split silently breaks auth and collaboration. **The API does not serve `web/dist` today** — required code change before any deploy works.
+- **Newly surfaced graded scope, none of it in the 68 findings:** CI pipeline w/ source-code inventory (rule 4), regression tests per audit bug (rule 3), build-once/promote artifacts tagged with git SHA (rule 5), one-command local start (rule 6), retries/timeouts/circuit breakers (rule 7), `CHANGES.md` (rule 8) — plus non-code deliverables: improvement docs, discovery write-up (3 things w/ file:line), 3–5 min demo video, AI cost analysis, social post tagging @GauntletAI, orientation notes. Listed in activeContext.md; not yet ticketed.
+- **Grading recorded:** audit report is pass/fail (met). Implementation scored — measurable improvement 40%, technical depth 25%, TypeScript quality 15%, documentation 10%, commit discipline 10%. Rule 11 and the 10% weight both say the git history is read directly, so improvements go on their own labeled branches from here.
+- **Incidental:** the upstream target repo is `github.com/US-Department-of-the-Treasury/ship` — **already public**. The infra-topology exposure weighed before publishing our fork was therefore already public upstream. Also note the submission deliverable is the **GitLab** repo while rule 4 mandates **GitHub Actions** — the dual-remote setup from earlier today happens to satisfy both.
+
+### 2026-07-28 (Tue) — Day 2 — findings → Linear, repo published, deploy target opened
+
+- **All 68 findings decomposed into Linear tickets.** Team `Troysatchell` (`TRO`), project **ShipShape Audit Remediation**. Structure is 8 category "epic" parents with each finding as a sub-issue — parents `TRO-164`–`TRO-171`, sub-issues `TRO-172`–`TRO-239`. Full ID map is in `activeContext.md`; finding IDs stay the join key between report, tickets, and compare runs.
+  - **Ticket convention adopted:** lead with the user-facing cost, keep the measurement underneath as proof. The report is measurement-first by design (it has to be re-runnable and diffable); that makes a poor ticket title but the right ticket body. In practice the "Estimated impact" paragraph became the lede and "Evidence" the body.
+  - Cross-cutting root causes wired as Linear **relations** (DB-2⇄API-6, DB-4⇄API-4/API-5/ERR-7, API-2⇄DB-5, ERR-6⇄TEST-5, ERR-1⇄ERR-2, BUN-1⇄BUN-2/3/4/6) rather than deduplicated. True dependencies as **blocks**: API-1→API-2/API-3, TF-3→TF-4, TF-2→TF-1.
+  - The unpinned boot-crash hypothesis rides inside `TRO-188` (ERR-1) rather than getting its own ticket — it needs a clean repro before it can be called a 5th Critical.
+- **Audit baseline + memory bank committed and published** (`c73e621`). `audit/` tracked at ~700 KB: `AUDIT_REPORT.md`, per-category `baseline.json`/`baseline.md`, and the scan scripts. The ~9 MB of raw captures (server logs, probe JSON, EXPLAIN dumps, screenshots, Lighthouse/axe reports, analyzer stats) is **gitignored and regenerable** from the per-category Methodology sections. Pre-commit hooks (`comply opensource`, empty-test, api-coverage) passed — no `--no-verify`.
+- **Repo now publishes to two remotes from one push.** `origin` fetches from GitLab `troysatchell/Ship` (internal) and has two push URLs — that project plus **public** GitHub `troysatchell/ship`. `upstream` is the original `byronmackay/ship`. Chose dual push URLs over CI mirroring: no extra machinery, and the remotes can't silently drift. See techContext.md.
+  - Public was a deliberate call after a clean secret scan (no credentials in tree or in 557 commits of history; two previously-committed-then-ignored files verified harmless). Exposure that *is* published: the unfixed 68-finding report, Terraform VPC/WAF/Aurora topology, a Route53 zone ID, and `*.awsdev.treasury.gov` hostnames. Reaffirmed after being shown the specifics — **decided, don't re-litigate.**
+- **Verified 2026-07-28: AWS prod is not publicly reachable.** `ship.awsdev.treasury.gov` → 403; `ship-api-prod...elasticbeanstalk.com/health` → no response. Reviewers can't reach a running app there, which is an independent argument for the submission deploy.
+- **Opened: Render vs Railway for the submission deploy.** Undecided. The brief frames Render, and Category 8's improvement target is specifically a *Render-provider* config (`render-oss/render`, pinned, `terraform apply` from a clean machine — `AUDIT_REPORT.md:1673`). Railway has no first-party Terraform provider, so it can host the app but can't produce the graded artifact. Decision hinges on whether the deploy must satisfy Category 8 or is only a demo URL.
 
 ### 2026-07-27 (Mon) — Day 1, latest — Category 8 (Terraform/IaC) baseline
 - Added an 8th audit category: **Terraform Plan Review**. Artifacts in `audit/terraform/baseline.{json,md}` + `raw/` + `drift-demo/`. 6 findings (2 High / 3 Medium / 1 Low), 0 Critical.

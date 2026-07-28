@@ -43,3 +43,29 @@ pnpm db:migrate && pnpm db:seed && ./api/node_modules/.bin/tsx audit/seed-augmen
 ```
 
 Audited volume: 500 documents (254 issue / 91 wiki / 35 sprint / …) / 20 users / 35 sprints — details in `audit/shipshape.config.yaml` `seed.actual`.
+
+## Git remotes — one push, two destinations (set 2026-07-28)
+
+| Remote | URL | Role |
+|---|---|---|
+| `origin` (fetch) | `labs.gauntletai.com/troysatchell/Ship` | GitLab, **internal** |
+| `origin` (push #1) | `labs.gauntletai.com/troysatchell/Ship` | same |
+| `origin` (push #2) | `github.com/troysatchell/ship` | GitHub, **public** |
+| `upstream` | `labs.gauntletai.com/byronmackay/ship` | original project this was cloned from |
+
+`git push` reaches both automatically. Pull from `origin`; fetch `upstream` explicitly to sync with the original.
+
+Reproduce the dual-push setup with — note the **first** `--add --push` replaces the implicit default, so both URLs must be added explicitly:
+
+```bash
+git remote set-url --add --push origin https://labs.gauntletai.com/troysatchell/Ship.git
+git remote set-url --add --push origin https://github.com/troysatchell/ship.git
+```
+
+Chosen over CI mirroring: no extra machinery, and a push either reaches both or fails visibly. GitHub visibility is public by deliberate decision (see progress.md 2026-07-28) — flip with `gh repo edit --visibility private` if that ever changes.
+
+## Deployment (current state, 2026-07-28)
+
+- Repo ships via `scripts/deploy.sh prod` (API → Elastic Beanstalk) + `scripts/deploy-frontend.sh prod` (web → S3/CloudFront). Frontend deploy is `aws s3 sync web/dist/` + a CloudFront invalidation; SPA deep links are rewritten to `/index.html` by a CloudFront **function** (`terraform/cloudfront-functions/spa-routing.js`), not `custom_error_response` — deliberately, so API 404s aren't turned into HTML.
+- **AWS prod is not publicly reachable** (verified 2026-07-28): `ship.awsdev.treasury.gov` → 403, EB health endpoint → no response.
+- Submission deploy provider is **undecided** (Render vs Railway) — see activeContext.md open questions.
