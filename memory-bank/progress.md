@@ -21,13 +21,35 @@
 | Audit baseline committed + published | ✅ done (2026-07-28) — dual remotes, raw captures gitignored |
 | **Tuesday audit gate** | ✅ **verified 2026-07-28** — every required table row present; rule 1 clean |
 | Orientation write-up (`audit/ORIENTATION.md`) | ✅ done (2026-07-28) — a *final-submission* item banked early |
-| Improvement phase (compare loops) | ⬜ Fri Jul 31 |
-| Render deploy | 🟧 service created, **blocked** — Dockerfile COPY + no Postgres (see 2026-07-28 log) |
+| Raw evidence committed | ✅ done (2026-07-28) — 11 cited paths now resolve |
+| Coverage tooling configured + measured | ✅ done (2026-07-28) — api 40.52% / web 28.53% lines |
+| **Render deploy** | ✅ **live + seeded (2026-07-28)** — https://ship-rr6m.onrender.com |
+| Assignment implementation rules tracked | ✅ epic `TRO-241` + 6 sub-issues (2026-07-28) |
+| Screen-reader pass (Cat 7) | ✅ done (2026-07-28) — A11Y-1 escalated to Urgent |
+| Improvement phase (compare loops) | ⬜ **Fri Jul 31 — next session** |
 | Demo-video companion artifact | ✅ published (2026-07-28) — before/after slots pending Friday |
 | Discovery write-up · demo video · AI cost analysis · social post | ⬜ Sun Aug 2 |
 | Final polish + presentation | ⬜ Sun Aug 2 |
 
 ## Log
+
+### 2026-07-28 (Tue) — Day 2, night — Phase 1 closed, application deployed and seeded
+
+**Phase 1 is done.** Tagged `audit-baseline` at `149873a` so compare mode has a fixed reference and the Phase 1 state stays unambiguous after Phase 2 starts changing source.
+
+- **Raw evidence committed** (`b516ab7`). The report cited 11 raw-data paths and **none** were in the repo — silently breaking Category 2's treemap requirement and Category 8's "save the plan output", plus the deliverable's own "raw data" row. Now 102 files / ~9.8 MB tracked. A global `*.log` rule was still swallowing `pg-statements.log` and `api-3009.log` (both cited evidence), so there is an explicit `!audit/**/*.log` negation with a comment. Screened first, since GitHub is public: no hashes, tokens, or real addresses — only synthetic `ship.local` seed data.
+- **Coverage tooling configured and measured** (`149873a`). Category 5 says *configure it*, not *report it broken*; the registry became reachable, so the provider was installed at vitest's exact version, both suites measured, manifests reverted (the same install-measure-revert the bundle category used). Real figures replace the approximation: **api lines 40.52% / branches 33.44% / functions 40.90%; web lines 28.53% / branches 19.38% / functions 25.60%; shared 0%**. Three things the substitute could not have found: the provider must match vitest's *exact* release (`^4` → 4.1.10 fails against 4.0.17); `coverage.reportOnFailure` defaults to **false**, so web's 13 failing tests suppressed the report entirely (**TEST-1 and TEST-7 compound**); and the real api figure is *lower* than the raw profiler suggested (40.90% vs 51.4%, different denominators).
+- **Deployed and seeded** — https://ship-rr6m.onrender.com. Two fixes were required, both on branches, both merged `--no-ff`:
+  - **`TRO-242`** (`137dcd4` → `bace770`) — multi-stage Dockerfile so the image builds from a clean checkout, plus ~12 lines serving `web/dist` from Express after all `/api` routes. Same-origin is forced by `sameSite: 'strict'` cookies and the WS URL from `window.location.host`.
+  - **`TRO-243`** (`11e93b6` → `5b72a79`) — `loadProductionSecrets()` fetched from AWS SSM with no error handling under `NODE_ENV=production` and **overwrote** `DATABASE_URL`. Off AWS it threw and killed the process before the database was touched. Now falls back to environment secrets when present, rethrows when not. AWS behaviour unchanged.
+  - Render Postgres `dpg-d9kgth6417fc7386hhh0-a` created (free, oregon, pg16), migrated, seeded to **11 users / 257 documents**. Seeding needed a temporary IP allowlist entry — Render defaults to `ipAllowList: None` — **removed afterwards**; the service connects internally.
+- **Screen-reader pass done, and it paid off.** VoiceOver revealed the workspace sidebar **does not announce document titles at all**. `TRO-215` escalated **High → Urgent** with the full diagnosis: `role="tree"` declares a composite widget, but there is no `tabIndex`, no `onKeyDown`, no `aria-level`/`setsize`/`posinset`, and bare `<li>` children at `App.tsx:648,653`. Accessibility got *worse* by adding ARIA — plain `<ul><li><a>` would read correctly. Recommended fix is removal, not implementation.
+- **Assignment rules now tracked** — epic `TRO-241` with `TRO-244` (CI, Urgent), `TRO-245` (regression tests), `TRO-246` (build/release/run), `TRO-247` (one-command start), `TRO-248` (retries/timeouts/breakers), `TRO-249` (`CHANGES.md`). Plus `TRO-242`/`TRO-243` filed as Done with before/after and tradeoffs, which is rule 9's improvement documentation.
+
+**Two corrections recorded** so they are not repeated:
+
+1. **DB-1 does not break a fresh database.** `migrate.ts:38-41` runs `schema.sql` first, which carries the end state — a new Render Postgres came out complete (18 tables, 83 indexes) despite the loop abandoning at migration 010. The hazard is an *existing* database at an intermediate state. This was stated backwards earlier in the day.
+2. **A smoke test under `NODE_ENV=development` does not exercise the production startup path.** That is exactly how the SSM coupling was missed on the first local container test — `ssm.ts:39` returns early below production.
 
 ### 2026-07-28 (Tue) — Day 2, end of day — gate verified, orientation banked, Render blocked
 

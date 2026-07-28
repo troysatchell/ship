@@ -93,4 +93,26 @@ Chosen over CI mirroring: no extra machinery, and a push either reaches both or 
 
 ⚠️ `.gitignore:74-75` covers only `terraform/terraform.tfvars` and `terraform/environments/*/terraform.tfvars`. A new `terraform/render/terraform.tfvars` would **not** be ignored — widen the rule before any key goes near it.
 
-**Blocked** on the Dockerfile pre-built-artifact assumption and the absent web build — see systemPatterns.md § Deploy path.
+**Status: LIVE and seeded** since 2026-07-28 — https://ship-rr6m.onrender.com (`dev@ship.local` / `admin123`).
+
+| | |
+|---|---|
+| Database | `ship-db` · `dpg-d9kgth6417fc7386hhh0-a` · free · oregon · **pg 16** |
+| Seeded | 11 users · 1 workspace · **257 documents** (104 issue, 35 sprint, 32 weekly_plan, 27 retro, 15 project, 15 review, 11 person, 7 wiki, 6 standup, 5 program) |
+| Env vars set | `DATABASE_URL` (internal) · `SESSION_SECRET` · `CORS_ORIGIN` |
+| `ipAllowList` | **empty** — external connections refused; the service connects internally |
+
+**To connect from a workstation** (e.g. to re-seed), temporarily add your IP, then remove it:
+
+```bash
+curl -X PATCH https://api.render.com/v1/postgres/dpg-d9kgth6417fc7386hhh0-a \
+  -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
+  -d '{"ipAllowList":[{"cidrBlock":"<your-ip>/32","description":"temporary"}]}'
+# …work…  then reset with  -d '{"ipAllowList":[]}'
+```
+
+⚠️ Migrating or seeding against Render requires **`NODE_ENV=production`** (that is the branch that enables SSL in `migrate.ts:32` / `seed.ts:44`) **and** `SESSION_SECRET` set, or `app.ts:40` throws. The SSM fallback (`TRO-243`) is what makes production mode work off AWS.
+
+**Free-tier caveats:** the web service sleeps on inactivity, so a cold URL takes time to answer; the free database has a limited lifetime. Both worth upgrading before the URL becomes a graded deliverable on Sunday.
+
+**Not yet Terraform-managed** — the service and database were created by hand and API call. Category 8 requires `terraform apply` from a clean checkout, so they need importing or recreating.
