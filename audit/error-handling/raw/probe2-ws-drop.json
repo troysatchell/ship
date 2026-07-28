@@ -1,0 +1,233 @@
+{
+  "doc": "aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+  "mode": "ws-drop",
+  "log": [
+    "[setup] routeWebSocket installed: all /collaboration sockets will be closed immediately",
+    "[0] status after load = Cached | ws events: [{\"ev\":\"open\",\"url\":\"ws://localhost:5173/?token=keCp-R5YTYF3\",\"t\":1785177011261},{\"ev\":\"open\",\"url\":\"ws://localhost:3001/events\",\"t\":1785177011340}]",
+    "[1] online edit persisted to DB? false | status = Cached",
+    "[2] status with collab WS dead but HTTP alive = \"Cached\"",
+    "[3] status after typing with dead WS = \"Cached\"",
+    "[3] text visible in editor? true",
+    "[3] text in DB (expected false = silent data loss)? false",
+    "[3] ws reconnect attempts: 2",
+    "[4] t+2.5s after WS healed: status=\"Cached\" inDb=false",
+    "[4] t+5s after WS healed: status=\"Cached\" inDb=false",
+    "[4] t+7.5s after WS healed: status=\"Cached\" inDb=false",
+    "[4] t+10s after WS healed: status=\"Cached\" inDb=false",
+    "[4] t+12.5s after WS healed: status=\"Cached\" inDb=false",
+    "[4] t+15s after WS healed: status=\"Cached\" inDb=false",
+    "[4] t+17.5s after WS healed: status=\"Cached\" inDb=false",
+    "[4] t+20s after WS healed: status=\"Cached\" inDb=false",
+    "[5] FINAL recovered w/o reload? false",
+    "--- console errors during probe ---",
+    "--- websocket lifecycle ---",
+    "    open ws://localhost:5173/?token=keCp-R5YTYF3 2026-07-27T18:30:11.261Z",
+    "    open ws://localhost:3001/events 2026-07-27T18:30:11.340Z"
+  ],
+  "wsLog": [
+    {
+      "ev": "open",
+      "url": "ws://localhost:5173/?token=keCp-R5YTYF3",
+      "t": 1785177011261
+    },
+    {
+      "ev": "open",
+      "url": "ws://localhost:3001/events",
+      "t": 1785177011340
+    }
+  ],
+  "events": [
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177011173
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177011191
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177011267
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Schema] Initialized schema version: 2",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177011302
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177011345
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177011346
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] IndexedDB synced for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177011442
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177011660
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177012066
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177012872
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177014477
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177016981
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177019485
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177021990
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177024497
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177026999
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177029504
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177032010
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177034515
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177037019
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177039523
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: pong",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177041384
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177042029
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "url": "http://localhost:5173/documents/aae4891e-0f01-4ca7-a2b0-d295e2a7d551",
+      "tag": "main",
+      "t": 1785177044534
+    }
+  ]
+}

@@ -1,0 +1,84 @@
+### bulk-selection.spec.ts:574 :: shift+down then shift+up contracts selection
+    attempt=0 status=failed duration=5656ms
+    Error: expect(locator).toHaveAttribute(expected) failed
+    
+    Locator:  locator('tbody tr').nth(3)
+    Expected: "true"
+    Received: "false"
+    Timeout:  5000ms
+    
+    Call log:
+      - Expect "toHaveAttribute" with timeout 5000ms
+      - waiting for locator('tbody tr').nth(3)
+        9 × locator resolved to <tr role="row" tabindex="-1" data-focused="false" aria-selected="false" data-selected="false" class="group cursor-pointer border-b border-border/50 transition-colors hover:bg-border/30">…</tr>
+          - unexpected value "false"
+    
+    
+
+### mentions.spec.ts:374 :: should sync mentions between collaborators
+    attempt=0 status=failed duration=21914ms
+    Error: expect(locator).toBeVisible() failed
+    
+    Locator: locator('.ProseMirror .mention')
+    Expected: visible
+    Timeout: 15000ms
+    Error: element(s) not found
+    
+    Call log:
+      - Expect "toBeVisible" with timeout 15000ms
+      - waiting for locator('.ProseMirror .mention')
+    
+    
+      415 |
+      416 |       // Verify mention synced to second tab (Yjs sync can be slow)
+
+### my-week-stale-data.spec.ts:28 :: plan edits are visible on /my-week after navigating back
+    attempt=0 status=timedOut duration=60027ms
+    Test timeout of 60000ms exceeded.
+    ---
+    Error: locator.click: Test timeout of 60000ms exceeded.
+    Call log:
+      - waiting for getByRole('button', { name: /create plan for this week/i })
+    
+    
+      32 |
+      33 |     // 2. Create a plan (click the create button)
+    > 34 |     await page.getByRole('button', { name: /create plan for this week/i }).click()
+         |                                                                            ^
+      35 |
+      36 |     // 3. Should navigate to the document editor
+      37 |     await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+/, { timeout: 10000 })
+
+### my-week-stale-data.spec.ts:63 :: retro edits are visible on /my-week after navigating back
+    attempt=0 status=timedOut duration=60031ms
+    Test timeout of 60000ms exceeded.
+    ---
+    Error: locator.click: Test timeout of 60000ms exceeded.
+    Call log:
+      - waiting for getByRole('button', { name: /create retro for this week/i })
+    
+    
+      67 |
+      68 |     // 2. Create a retro (click the main create button, not the nudge link)
+    > 69 |     await page.getByRole('button', { name: /create retro for this week/i }).click()
+         |                                                                             ^
+      70 |
+      71 |     // 3. Should navigate to the document editor
+      72 |     await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+/, { timeout: 10000 })
+
+### weekly-accountability.spec.ts:384 :: Allocation grid shows person with assigned issues and plan/retro status
+    attempt=0 status=failed duration=608ms
+    Error: expect(received).toBe(expected) // Object.is equality
+    
+    Expected: "85139e9b-587e-4fb2-b45b-12dbfc4ebeb3"
+    Received: null
+    
+      467 |     if (week1Data) {
+      468 |       expect(week1Data.isAllocated).toBe(true);
+    > 469 |       expect(week1Data.planId).toBe(plan.id);
+          |                                ^
+      470 |     }
+      471 |   });
+      472 |
+        at /Users/troy/repos/GAUNTLET/Ship/e2e/weekly-accountability.spec.ts:469:32
+

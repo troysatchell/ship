@@ -1,0 +1,353 @@
+{
+  "log": [
+    "network throttled to Fast 3G (150ms RTT, 1.6Mbps down / 750Kbps up)",
+    "Load main page           idle= 61090ms  loadingAffordanceInFirst2s=false  stillLoadingAfterIdle={\"nodes\":1,\"loadingText\":0}  bodyTextLen=527",
+    "View a document          idle=  6054ms  loadingAffordanceInFirst2s=false  stillLoadingAfterIdle={\"nodes\":1,\"loadingText\":0}  bodyTextLen=967",
+    "List issues              idle=  5846ms  loadingAffordanceInFirst2s=false  stillLoadingAfterIdle={\"nodes\":1,\"loadingText\":0}  bodyTextLen=38521",
+    "Team allocation board    idle=  5880ms  loadingAffordanceInFirst2s=false  stillLoadingAfterIdle={\"nodes\":1,\"loadingText\":0}  bodyTextLen=761",
+    "Dashboard                idle=  5907ms  loadingAffordanceInFirst2s=false  stillLoadingAfterIdle={\"nodes\":1,\"loadingText\":0}  bodyTextLen=476",
+    "Documents list           idle=  5801ms  loadingAffordanceInFirst2s=false  stillLoadingAfterIdle={\"nodes\":1,\"loadingText\":0}  bodyTextLen=1417",
+    "\n--- action feedback under 3G ---",
+    "  editor first paint under 3G took 0 ms after domcontentloaded; sync status = \"Saved\"",
+    "  during 6s of throttled typing, did the indicator ever leave \"Saved\"? false (false = no in-flight/unsaved feedback at all)",
+    "\n--- console errors under 3G ---"
+  ],
+  "events": [
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/my-week",
+      "tag": "3g",
+      "t": 1785178000704
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/my-week",
+      "tag": "3g",
+      "t": 1785178000938
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/my-week",
+      "tag": "3g",
+      "t": 1785178038705
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Schema] Initialized schema version: 2",
+      "url": "http://localhost:5173/my-week",
+      "tag": "3g",
+      "t": 1785178038763
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/my-week",
+      "tag": "3g",
+      "t": 1785178039177
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/my-week",
+      "tag": "3g",
+      "t": 1785178039237
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "3g",
+      "t": 1785178045095
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "3g",
+      "t": 1785178045265
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "3g",
+      "t": 1785178049377
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "3g",
+      "t": 1785178049734
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "3g",
+      "t": 1785178049770
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] IndexedDB synced for wiki:d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "3g",
+      "t": 1785178049867
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connected for wiki:d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "3g",
+      "t": 1785178050020
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket sync: true for wiki:d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "3g",
+      "t": 1785178050050
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/issues",
+      "tag": "3g",
+      "t": 1785178051610
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/issues",
+      "tag": "3g",
+      "t": 1785178051786
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/issues",
+      "tag": "3g",
+      "t": 1785178055899
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/issues",
+      "tag": "3g",
+      "t": 1785178056306
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/issues",
+      "tag": "3g",
+      "t": 1785178056341
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/team/allocation",
+      "tag": "3g",
+      "t": 1785178058012
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/team/allocation",
+      "tag": "3g",
+      "t": 1785178058181
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/team/allocation",
+      "tag": "3g",
+      "t": 1785178062302
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/team/allocation",
+      "tag": "3g",
+      "t": 1785178062651
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/team/allocation",
+      "tag": "3g",
+      "t": 1785178062693
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/dashboard",
+      "tag": "3g",
+      "t": 1785178064367
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/dashboard",
+      "tag": "3g",
+      "t": 1785178064553
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/dashboard",
+      "tag": "3g",
+      "t": 1785178068652
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/dashboard",
+      "tag": "3g",
+      "t": 1785178069008
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/dashboard",
+      "tag": "3g",
+      "t": 1785178069038
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/docs",
+      "tag": "3g",
+      "t": 1785178070727
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/docs",
+      "tag": "3g",
+      "t": 1785178070898
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/docs",
+      "tag": "3g",
+      "t": 1785178075004
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/docs",
+      "tag": "3g",
+      "t": 1785178075373
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/docs",
+      "tag": "3g",
+      "t": 1785178075402
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "3g",
+      "t": 1785178077013
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "3g",
+      "t": 1785178077191
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "3g",
+      "t": 1785178081301
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "3g",
+      "t": 1785178081653
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "3g",
+      "t": 1785178081682
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] IndexedDB synced for wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "3g",
+      "t": 1785178081725
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connected for wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "3g",
+      "t": 1785178081881
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket sync: true for wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "3g",
+      "t": 1785178081903
+    }
+  ]
+}

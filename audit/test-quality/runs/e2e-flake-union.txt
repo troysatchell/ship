@@ -1,0 +1,14 @@
+distinct tests with a non-clean outcome in >=1 run: 11
+always-clean tests: 858
+
+TTF  final=flaky/flaky/flaky  my-week-stale-data.spec.ts :: retro edits are visible on /my-week after navigating back
+FPF  final=FAIL/pass/FAIL  inline-comments.spec.ts :: canceling a comment removes the highlight
+PFF  final=pass/flaky/flaky  mentions.spec.ts :: should sync mentions between collaborators
+FFP  final=flaky/flaky/pass  weekly-accountability.spec.ts :: Allocation grid shows person with assigned issues and plan/retro status
+PFP  final=pass/flaky/pass  bulk-selection.spec.ts :: shift+down then shift+up contracts selection
+PTP  final=pass/flaky/pass  my-week-stale-data.spec.ts :: plan edits are visible on /my-week after navigating back
+FPP  final=flaky/pass/pass  performance.spec.ts :: many images do not crash the editor
+FPP  final=flaky/pass/pass  programs.spec.ts :: program cards show emoji or initial badges
+FPP  final=flaky/pass/pass  project-weeks.spec.ts :: project link in Properties sidebar navigates back to project
+FPP  final=flaky/pass/pass  status-overview-heatmap.spec.ts :: displays split cells for plan/retro status
+FPP  final=flaky/pass/pass  team-mode.spec.ts :: clicking collapsed header expands the group

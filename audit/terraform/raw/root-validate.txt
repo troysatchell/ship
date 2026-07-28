@@ -1,0 +1,14 @@
+
+Warning: Invalid Attribute Combination
+
+  with aws_s3_bucket_lifecycle_configuration.uploads,
+  on s3-cloudfront.tf line 426, in resource "aws_s3_bucket_lifecycle_configuration" "uploads":
+ 426: resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
+
+No attribute specified when one (and only one) of
+[rule[0].filter,rule[0].prefix] is required
+
+This will be an error in a future version of the provider
+Success! The configuration is valid, but there were some validation warnings
+as shown above.
+

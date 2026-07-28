@@ -1,0 +1,144 @@
+{
+  "doc": "d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+  "log": [
+    "[1] collab WS refused at load. status = \"Cached\" | refused = 5",
+    "[1] page text matching offline/error vocab: []",
+    "[2] typed. status = \"Cached\" | in editor = true | in DB = false",
+    "[2] console errors = 0 | refused = 7",
+    "[3] collab WS genuinely restored (connectToServer). watching 60s for self-heal, no reload...",
+    "    t+5s status=\"Saved\" inDb=true refused=7 forwarded=1",
+    "[4] SELF-HEALED without reload? true",
+    "[6] final DB content = \"{\\\"type\\\": \\\"doc\\\", \\\"content\\\": [{\\\"type\\\": \\\"paragraph\\\", \\\"content\\\": [{\\\"text\\\": \\\"E_WORK_WHILE_WS_DOWN \\\", \\\"type\\\": \\\"text\\\"}]}]}\"",
+    "--- console errors ---"
+  ],
+  "events": [
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177315643
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177315664
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177315737
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Schema] Initialized schema version: 2",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177315740
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177315854
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177315855
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] IndexedDB synced for wiki:d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177315899
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177316111
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177316514
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177317318
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177318925
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177321433
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177323935
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connecting for wiki:d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177326439
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connected for wiki:d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177326450
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket sync: true for wiki:d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "url": "http://localhost:5173/documents/d0df4c09-494e-4f69-8f0f-7ad14bf2f9dd",
+      "tag": "main",
+      "t": 1785177326454
+    }
+  ]
+}

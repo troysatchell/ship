@@ -1,0 +1,34 @@
+[
+  {
+    "id": "empty-table-header",
+    "impact": "minor",
+    "tags": [
+      "cat.name-role-value",
+      "best-practice"
+    ],
+    "description": "Ensure table headers have discernible text",
+    "help": "Table header text should not be empty",
+    "helpUrl": "https://dequeuniversity.com/rules/axe/4.11/empty-table-header?application=playwright",
+    "nodes": [
+      {
+        "any": [
+          {
+            "id": "has-visible-text",
+            "data": null,
+            "relatedNodes": [],
+            "impact": "minor",
+            "message": "Element does not have text that is visible to screen readers"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "minor",
+        "html": "<th class=\"w-10 px-2 py-2\" aria-label=\"Selection\"></th>",
+        "target": [
+          "th[aria-label=\"Selection\"]"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element does not have text that is visible to screen readers"
+      }
+    ]
+  }
+]

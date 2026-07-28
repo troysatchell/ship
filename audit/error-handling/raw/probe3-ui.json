@@ -1,0 +1,228 @@
+{
+  "log": [
+    "=== 3.1 stored XSS: do payload-titled documents execute anywhere? ===",
+    "  docs list: alerts=0 dialogs=0 strayInlineScripts=0 injectedImgTags=0",
+    "  xss doc page: alerts=0 dialogs=0 strayInlineScripts=0 injectedImgTags=0",
+    "  img doc page: alerts=0 dialogs=0 strayInlineScripts=0 injectedImgTags=0",
+    "  rtl doc page: alerts=0 dialogs=0 strayInlineScripts=0 injectedImgTags=0",
+    "  VERDICT: XSS executed = false",
+    "\n=== 3.2 command palette search with payload ===",
+    "  palette open? false | alerts = 0",
+    "\n=== 3.3 login form: empty submit, huge input, payload ===",
+    "  empty submit -> still on /login? true",
+    "  empty submit -> visible error text: [\"Enter\",\"required\"]",
+    "  empty submit -> network POSTs to /api/auth/login: 0",
+    "  bad email -> visible error: [\"Invalid\"]"
+  ],
+  "events": [
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785177576947
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785177576968
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785177577038
+    },
+    {
+      "kind": "httperror",
+      "level": "error",
+      "text": "401 GET http://localhost:3001/api/auth/me",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785177577040
+    },
+    {
+      "kind": "console",
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785177577040
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Schema] Initialized schema version: 2",
+      "url": "http://localhost:5173/login",
+      "tag": "main",
+      "t": 1785177577088
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/2d417cb4-e6b0-4971-90a0-50e4dbe86108",
+      "tag": "main",
+      "t": 1785177580257
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/2d417cb4-e6b0-4971-90a0-50e4dbe86108",
+      "tag": "main",
+      "t": 1785177580260
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/2d417cb4-e6b0-4971-90a0-50e4dbe86108",
+      "tag": "main",
+      "t": 1785177580280
+    },
+    {
+      "kind": "httperror",
+      "level": "error",
+      "text": "401 GET http://localhost:3001/api/auth/me",
+      "url": "http://localhost:5173/documents/2d417cb4-e6b0-4971-90a0-50e4dbe86108",
+      "tag": "main",
+      "t": 1785177580319
+    },
+    {
+      "kind": "console",
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://localhost:5173/documents/2d417cb4-e6b0-4971-90a0-50e4dbe86108",
+      "tag": "main",
+      "t": 1785177580319
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/c04e59b2-fb48-4da6-a6ad-30a595496cad",
+      "tag": "main",
+      "t": 1785177583389
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/c04e59b2-fb48-4da6-a6ad-30a595496cad",
+      "tag": "main",
+      "t": 1785177583391
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/c04e59b2-fb48-4da6-a6ad-30a595496cad",
+      "tag": "main",
+      "t": 1785177583414
+    },
+    {
+      "kind": "httperror",
+      "level": "error",
+      "text": "401 GET http://localhost:3001/api/auth/me",
+      "url": "http://localhost:5173/documents/c04e59b2-fb48-4da6-a6ad-30a595496cad",
+      "tag": "main",
+      "t": 1785177583429
+    },
+    {
+      "kind": "console",
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://localhost:5173/documents/c04e59b2-fb48-4da6-a6ad-30a595496cad",
+      "tag": "main",
+      "t": 1785177583429
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/1a3e7f05-550f-4000-9940-7a2a11bf2183",
+      "tag": "main",
+      "t": 1785177586498
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/1a3e7f05-550f-4000-9940-7a2a11bf2183",
+      "tag": "main",
+      "t": 1785177586500
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/1a3e7f05-550f-4000-9940-7a2a11bf2183",
+      "tag": "main",
+      "t": 1785177586522
+    },
+    {
+      "kind": "httperror",
+      "level": "error",
+      "text": "401 GET http://localhost:3001/api/auth/me",
+      "url": "http://localhost:5173/documents/1a3e7f05-550f-4000-9940-7a2a11bf2183",
+      "tag": "main",
+      "t": 1785177586538
+    },
+    {
+      "kind": "console",
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://localhost:5173/documents/1a3e7f05-550f-4000-9940-7a2a11bf2183",
+      "tag": "main",
+      "t": 1785177586538
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785177589640
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785177589648
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785177589672
+    },
+    {
+      "kind": "httperror",
+      "level": "error",
+      "text": "401 GET http://localhost:3001/api/auth/me",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785177589685
+    },
+    {
+      "kind": "console",
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785177589685
+    }
+  ],
+  "dialogs": 0
+}

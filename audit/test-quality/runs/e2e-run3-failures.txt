@@ -1,0 +1,68 @@
+### inline-comments.spec.ts:118 :: canceling a comment removes the highlight
+    attempt=0 status=failed duration=12122ms
+    Error: expect(locator).not.toBeVisible() failed
+    
+    Locator:  locator('.comment-highlight')
+    Expected: not visible
+    Received: visible
+    Timeout:  10000ms
+    
+    Call log:
+      - Expect "not toBeVisible" with timeout 10000ms
+      - waiting for locator('.comment-highlight')
+        14 × locator resolved to <span class="comment-highlight" data-comment-id="78d48fbc-6d63-4de3-91f7-dce6d3135fd0">comment that gets canceled</span>
+           - unexpected value "visible"
+    
+    
+
+### inline-comments.spec.ts:118 :: canceling a comment removes the highlight
+    attempt=1 status=failed duration=14834ms
+    Error: expect(locator).not.toBeVisible() failed
+    
+    Locator:  locator('.comment-highlight')
+    Expected: not visible
+    Received: visible
+    Timeout:  10000ms
+    
+    Call log:
+      - Expect "not toBeVisible" with timeout 10000ms
+      - waiting for locator('.comment-highlight')
+        14 × locator resolved to <span class="comment-highlight" data-comment-id="92c65d1a-5d68-4906-b3fd-dcfd08792409">comment that gets canceled</span>
+           - unexpected value "visible"
+    
+    
+
+### mentions.spec.ts:374 :: should sync mentions between collaborators
+    attempt=0 status=failed duration=21943ms
+    Error: expect(locator).toBeVisible() failed
+    
+    Locator: locator('.ProseMirror .mention')
+    Expected: visible
+    Timeout: 15000ms
+    Error: element(s) not found
+    
+    Call log:
+      - Expect "toBeVisible" with timeout 15000ms
+      - waiting for locator('.ProseMirror .mention')
+    
+    
+      415 |
+      416 |       // Verify mention synced to second tab (Yjs sync can be slow)
+
+### my-week-stale-data.spec.ts:63 :: retro edits are visible on /my-week after navigating back
+    attempt=0 status=failed duration=10817ms
+    Error: expect(locator).toBeVisible() failed
+    
+    Locator: getByText('Saved')
+    Expected: visible
+    Timeout: 10000ms
+    Error: element(s) not found
+    
+    Call log:
+      - Expect "toBeVisible" with timeout 10000ms
+      - waiting for getByText('Saved')
+    
+    
+      81 |
+      82 |     // 6. Wait for the collaboration server to persist the content
+

@@ -1,0 +1,7 @@
+local_file.env_file: Refreshing state... [id=1b55e64bdb02be032f818605f95d1228d563baf1]
+local_file.app_config: Refreshing state... [id=3473b09b455e7027dcfe66e5bb5232a8ace1affb]
+
+No changes. Your infrastructure matches the configuration.
+
+Terraform has compared your real infrastructure against your configuration
+and found no differences, so no changes are needed.

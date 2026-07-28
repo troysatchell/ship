@@ -1,0 +1,20 @@
+{
+  "log": [
+    "=== 7a: rejected write — exact PATCH count + toast sampled every 250ms ===",
+    "  total PATCH attempts intercepted   : 14",
+    "  distinct [role=alert] toasts seen  : [\"Failed to update document\"]",
+    "  window unhandledrejection count    : []",
+    "  DB title (unchanged?)              : \"TITLE FROM CONTEXT B\"",
+    "  title box still shows              : \"RETRY COUNT PROBE\"",
+    "  sync indicator says                : \"Saved\"",
+    "\n=== 7c: session DELETED from DB — does the open collaboration WS keep writing? ===",
+    "  pre-revoke  in DB: true",
+    "  DELETED all 10 session rows (user is now fully logged out server-side)",
+    "  POST-REVOKE text written to DB by the WS? true   <-- true means session revocation is not enforced on live sockets",
+    "  sync indicator                            : \"Saved\"",
+    "  url                                       : http://localhost:5173/documents/6abd4c5b-b3ce-4024-b1c7-4c7bf1d434a8",
+    "  visible session warning                   : []",
+    "  after another 60s, later text also written? true",
+    "  console errors: 401 GET http://localhost:3001/api/documents/6abd4c5b-b3ce-4024-b1c7-4c7bf1d434a8/backlinks,Failed to load resource: the server responded with a status of 401 (Unauthorized),Error fetching backlinks: Error: Failed to fetch backlinks\n    at fetchBacklinks (http://localhost:5,401 GET http://localhost:3001/api/documents/6abd4c5b-b3ce-4024-b1c7-4c7bf1d434a8/backlinks,Failed to load resource: the server responded with a status of 401 (Unauthorized),Error fetching backlinks: Error: Failed to fetch backlinks\n    at fetchBacklinks (http://localhost:5"
+  ]
+}

@@ -1,0 +1,45 @@
+{
+  "sourceFiles": 79,
+  "filesExecuted": 72,
+  "filesNeverLoaded": 7,
+  "byteCoveragePct": 83.4,
+  "functionCoveragePct": 51.4,
+  "functionsTotal": 774,
+  "functionsCovered": 398
+}
+
+--- 25 files by FUNCTION coverage (asc), fnTotal>=5 ---
+fn   6.3%  byte  97.3%  ( 16 fns)  api/src/openapi/schemas/dashboard.ts
+fn   7.1%  byte  83.8%  ( 14 fns)  api/src/services/ai-analysis.ts
+fn   8.3%  byte  99.1%  ( 12 fns)  api/src/openapi/schemas/issues.ts
+fn   8.3%  byte  75.1%  ( 12 fns)  api/src/services/secrets-manager.ts
+fn  10.0%  byte  98.6%  ( 10 fns)  api/src/openapi/schemas/weekly-plans.ts
+fn  11.1%  byte  82.3%  (  9 fns)  api/src/services/oauth-state.ts
+fn  14.3%  byte  99.6%  (  7 fns)  api/src/openapi/schemas/weeks.ts
+fn  14.3%  byte  98.5%  (  7 fns)  api/src/openapi/schemas/auth.ts
+fn  15.4%  byte  71.0%  ( 13 fns)  api/src/routes/programs.ts
+fn  16.7%  byte  73.9%  ( 12 fns)  api/src/routes/caia-auth.ts
+fn  16.7%  byte  98.8%  (  6 fns)  api/src/openapi/schemas/claude.ts
+fn  18.2%  byte  68.2%  ( 11 fns)  api/src/routes/admin-credentials.ts
+fn  20.0%  byte  99.3%  (  5 fns)  api/src/openapi/schemas/team.ts
+fn  20.0%  byte  98.8%  (  5 fns)  api/src/openapi/schemas/workspaces.ts
+fn  20.0%  byte  98.8%  (  5 fns)  api/src/openapi/schemas/standups.ts
+fn  21.4%  byte  75.7%  ( 14 fns)  api/src/routes/weekly-plans.ts
+fn  22.2%  byte  72.9%  (  9 fns)  api/src/routes/associations.ts
+fn  25.0%  byte  72.9%  ( 16 fns)  api/src/routes/team.ts
+fn  25.0%  byte  76.5%  ( 28 fns)  api/src/collaboration/index.ts
+fn  25.0%  byte  99.2%  (  8 fns)  api/src/openapi/schemas/projects.ts
+fn  25.0%  byte  76.0%  ( 16 fns)  api/src/services/caia.ts
+fn  29.3%  byte  83.2%  ( 41 fns)  api/src/utils/document-crud.ts
+fn  32.1%  byte  73.4%  ( 28 fns)  api/src/routes/admin.ts
+fn  33.3%  byte  70.2%  (  6 fns)  api/src/routes/dashboard.ts
+fn  33.3%  byte  99.1%  (  6 fns)  api/src/openapi/schemas/documents.ts
+
+--- files never loaded ---
+   api/src/config/ssm.ts
+   api/src/db/migrate.ts
+   api/src/db/scripts/orphan-diagnostic.ts
+   api/src/db/seed.ts
+   api/src/index.ts
+   api/src/mcp/server.ts
+   api/src/scripts/generate-openapi.ts

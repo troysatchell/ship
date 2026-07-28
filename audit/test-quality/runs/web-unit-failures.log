@@ -1,0 +1,507 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.17 [39m[90m/Users/troy/repos/GAUNTLET/Ship/web[39m
+
+(node:17544) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17551) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17553) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17550) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17548) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17552) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17549) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17547) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17545) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17541) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17546) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17543) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17542) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [31m❯[39m src/lib/document-tabs.test.ts [2m([22m[2m22 tests[22m[2m | [22m[31m9 failed[39m[2m)[22m[32m 14[2mms[22m[39m
+[31m     [31m×[31m returns tabs for project documents[39m[32m 3[2mms[22m[39m
+[31m     [31m×[31m returns tabs for program documents[39m[32m 2[2mms[22m[39m
+     [32m✓[39m returns empty array for wiki documents (no tabs)[32m 1[2mms[22m[39m
+     [32m✓[39m returns empty array for issue documents (no tabs)[32m 0[2mms[22m[39m
+[31m     [31m×[31m returns empty array for sprint documents (no tabs)[39m[32m 3[2mms[22m[39m
+     [32m✓[39m returns empty array for unknown document types[32m 0[2mms[22m[39m
+     [32m✓[39m returns true for project documents[32m 0[2mms[22m[39m
+     [32m✓[39m returns true for program documents[32m 0[2mms[22m[39m
+     [32m✓[39m returns false for wiki documents[32m 0[2mms[22m[39m
+     [32m✓[39m returns false for issue documents[32m 0[2mms[22m[39m
+[31m     [31m×[31m returns false for sprint documents[39m[32m 0[2mms[22m[39m
+     [32m✓[39m returns false for unknown document types[32m 0[2mms[22m[39m
+[31m     [31m×[31m validates project tab IDs correctly[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m validates program tab IDs correctly[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m returns first tab as default for URL without tab[39m[32m 2[2mms[22m[39m
+     [32m✓[39m resolves static labels correctly[32m 0[2mms[22m[39m
+[31m     [31m×[31m resolves dynamic labels with counts[39m[32m 0[2mms[22m[39m
+[31m     [31m×[31m resolves dynamic labels without counts[39m[32m 0[2mms[22m[39m
+     [32m✓[39m resolves dynamic labels with zero counts[32m 0[2mms[22m[39m
+     [32m✓[39m has configs for expected document types[32m 0[2mms[22m[39m
+     [32m✓[39m each tab has required properties[32m 1[2mms[22m[39m
+     [32m✓[39m tab IDs are unique within each document type[32m 0[2mms[22m[39m
+ [32m✓[39m src/lib/accountability.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/components/editor/ImageUpload.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+Error: useSelectionPersistence must be used within a SelectionPersistenceProvider
+    at useSelectionPersistence (/Users/troy/repos/GAUNTLET/Ship/web/src/contexts/SelectionPersistenceContext.tsx:54:11)
+    at /Users/troy/repos/GAUNTLET/Ship/web/src/contexts/SelectionPersistenceContext.test.tsx:23:26
+    at TestComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@testing-library+react@16.3.1_@testing-library+dom@10.4.1_@types+react-dom@18.3.7_@type_d9437e0482bb9cab2d9082dbcc570f70/node_modules/@testing-library/react/dist/pure.js:330:27)
+    at renderWithHooks (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:15486:18)
+    at mountIndeterminateComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:20103:13)
+    at beginWork (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:21626:16)
+    at HTMLUnknownElement.callCallback (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:4164:14)
+    at HTMLUnknownElement.callTheUserObjectsOperation (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+Error: useSelectionPersistence must be used within a SelectionPersistenceProvider
+    at useSelectionPersistence (/Users/troy/repos/GAUNTLET/Ship/web/src/contexts/SelectionPersistenceContext.tsx:54:11)
+    at /Users/troy/repos/GAUNTLET/Ship/web/src/contexts/SelectionPersistenceContext.test.tsx:23:26
+    at TestComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@testing-library+react@16.3.1_@testing-library+dom@10.4.1_@types+react-dom@18.3.7_@type_d9437e0482bb9cab2d9082dbcc570f70/node_modules/@testing-library/react/dist/pure.js:330:27)
+    at renderWithHooks (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:15486:18)
+    at mountIndeterminateComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:20103:13)
+    at beginWork (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:21626:16)
+    at HTMLUnknownElement.callCallback (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:4164:14)
+    at HTMLUnknownElement.callTheUserObjectsOperation (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+ [32m✓[39m src/contexts/SelectionPersistenceContext.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [31m❯[39m src/components/editor/DetailsExtension.test.ts [2m([22m[2m10 tests[22m[2m | [22m[31m3 failed[39m[2m)[22m[32m 12[2mms[22m[39m
+     [32m✓[39m should create a valid TipTap extension[32m 1[2mms[22m[39m
+[31m     [31m×[31m should be configured as a block node with content[39m[32m 3[2mms[22m[39m
+     [32m✓[39m should have addAttributes function defined[32m 0[2mms[22m[39m
+     [32m✓[39m should have parseHTML function defined[32m 0[2mms[22m[39m
+     [32m✓[39m should have renderHTML function defined[32m 0[2mms[22m[39m
+     [32m✓[39m should have addCommands function defined[32m 0[2mms[22m[39m
+     [32m✓[39m should have addKeyboardShortcuts function defined[32m 0[2mms[22m[39m
+     [32m✓[39m should have addOptions function defined[32m 0[2mms[22m[39m
+[31m     [31m×[31m should work in editor context[39m[32m 3[2mms[22m[39m
+[31m     [31m×[31m should allow inserting details via command[39m[32m 1[2mms[22m[39m
+ [32m✓[39m src/hooks/useSelection.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 20[2mms[22m[39m
+ [32m✓[39m src/components/PlanQualityBanner.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 32[2mms[22m[39m
+ [32m✓[39m src/components/editor/FileAttachment.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 46[2mms[22m[39m
+ [32m✓[39m src/components/editor/TableOfContents.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 50[2mms[22m[39m
+ [32m✓[39m src/components/icons/uswds/Icon.test.tsx [2m([22m[2m10 tests[22m[2m)[22m[32m 93[2mms[22m[39m
+ [32m✓[39m src/components/ui/ScrollFade.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 88[2mms[22m[39m
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mInitial State[2m > [22m[2mstarts with showWarning = false
+[22m[39mWarning: An update to TestComponent inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TestComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@testing-library+react@16.3.1_@testing-library+dom@10.4.1_@types+react-dom@18.3.7_@type_d9437e0482bb9cab2d9082dbcc570f70/node_modules/@testing-library/react/dist/pure.js:328:5)
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mInitial State[2m > [22m[2mstarts with timeRemaining = null when not warning
+[22m[39mWarning: An update to TestComponent inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TestComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@testing-library+react@16.3.1_@testing-library+dom@10.4.1_@types+react-dom@18.3.7_@type_d9437e0482bb9cab2d9082dbcc570f70/node_modules/@testing-library/react/dist/pure.js:328:5)
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mInitial State[2m > [22m[2mstarts tracking from current time on mount
+[22m[39mWarning: An update to TestComponent inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TestComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@testing-library+react@16.3.1_@testing-library+dom@10.4.1_@types+react-dom@18.3.7_@type_d9437e0482bb9cab2d9082dbcc570f70/node_modules/@testing-library/react/dist/pure.js:328:5)
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mInactivity Timer[2m > [22m[2mdoes NOT call onTimeout if dismissed before 0
+[22m[39mNetwork error extending session - forcing logout
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mActivity Reset[2m > [22m[2mresetTimer() hides warning modal
+[22m[39mNetwork error extending session - forcing logout
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mActivity Reset[2m > [22m[2mresetTimer() resets lastActivity to now
+[22m[39mNetwork error extending session - forcing logout
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mActivity Reset[2m > [22m[2mafter resetTimer(), warning appears 14 min later (not sooner)
+[22m[39mNetwork error extending session - forcing logout
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mActivity Reset[2m > [22m[2mresetTimer() clears countdown interval
+[22m[39mNetwork error extending session - forcing logout
+
+ [32m✓[39m src/pages/Dashboard.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 91[2mms[22m[39m
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mAbsolute Timeout[2m > [22m[2mactivity does NOT reset absolute timeout
+[22m[39mNetwork error extending session - forcing logout
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mEvent Listeners[2m > [22m[2mregisters activity listeners on mount
+[22m[39mWarning: An update to TestComponent inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at TestComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@testing-library+react@16.3.1_@testing-library+dom@10.4.1_@types+react-dom@18.3.7_@type_d9437e0482bb9cab2d9082dbcc570f70/node_modules/@testing-library/react/dist/pure.js:328:5)
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mCleanup[2m > [22m[2mclears interval when warning dismissed
+[22m[39mNetwork error extending session - forcing logout
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout - Edge Cases[2m > [22m[2mhandles resetTimer called when not showing warning
+[22m[39mNetwork error extending session - forcing logout
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout - Edge Cases[2m > [22m[2mhandles multiple resetTimer calls in quick succession
+[22m[39mNetwork error extending session - forcing logout
+
+ [31m❯[39m src/hooks/useSessionTimeout.test.ts [2m([22m[2m34 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[32m 132[2mms[22m[39m
+       [32m✓[39m starts with showWarning = false[32m 9[2mms[22m[39m
+       [32m✓[39m starts with timeRemaining = null when not warning[32m 2[2mms[22m[39m
+       [32m✓[39m starts tracking from current time on mount[32m 1[2mms[22m[39m
+       [32m✓[39m shows warning after 14 minutes of inactivity[32m 2[2mms[22m[39m
+       [32m✓[39m does NOT show warning before 14 minutes[32m 1[2mms[22m[39m
+       [32m✓[39m sets timeRemaining to 60 when warning appears[32m 1[2mms[22m[39m
+       [32m✓[39m decrements timeRemaining every second during warning[32m 1[2mms[22m[39m
+       [32m✓[39m calls onTimeout when timeRemaining reaches 0[32m 1[2mms[22m[39m
+[31m       [31m×[31m does NOT call onTimeout if dismissed before 0[39m[32m 4[2mms[22m[39m
+       [32m✓[39m resetTimer() hides warning modal[32m 1[2mms[22m[39m
+       [32m✓[39m resetTimer() resets lastActivity to now[32m 1[2mms[22m[39m
+       [32m✓[39m after resetTimer(), warning appears 14 min later (not sooner)[32m 1[2mms[22m[39m
+       [32m✓[39m resetTimer() clears countdown interval[32m 1[2mms[22m[39m
+       [32m✓[39m shows absolute warning at 11:55 from session start[32m 34[2mms[22m[39m
+       [32m✓[39m absolute warning has 5-minute countdown[32m 26[2mms[22m[39m
+       [32m✓[39m activity does NOT reset absolute timeout[32m 27[2mms[22m[39m
+       [32m✓[39m absolute timeout fires at 12 hours regardless of activity[32m 1[2mms[22m[39m
+       [32m✓[39m inactivity warning has type = "inactivity"[32m 0[2mms[22m[39m
+       [32m✓[39m absolute warning has type = "absolute"[32m 0[2mms[22m[39m
+       [32m✓[39m inactivity warning takes precedence if both imminent[32m 1[2mms[22m[39m
+       [32m✓[39m registers activity listeners on mount[32m 2[2mms[22m[39m
+       [32m✓[39m removes activity listeners on unmount[32m 1[2mms[22m[39m
+       [32m✓[39m activity listener resets timer (throttled)[32m 1[2mms[22m[39m
+       [32m✓[39m activity events are throttled to max once per 30 seconds[32m 4[2mms[22m[39m
+       [32m✓[39m clears all timers on unmount[32m 1[2mms[22m[39m
+       [32m✓[39m clears interval when warning dismissed[32m 1[2mms[22m[39m
+       [32m✓[39m fetches session info on mount[32m 1[2mms[22m[39m
+       [32m✓[39m uses server createdAt for absolute timeout calculation[32m 1[2mms[22m[39m
+       [32m✓[39m handles session info fetch failure gracefully[32m 1[2mms[22m[39m
+     [32m✓[39m handles time jump (computer wake from sleep)[32m 1[2mms[22m[39m
+     [32m✓[39m handles rapid mount/unmount without errors[32m 2[2mms[22m[39m
+     [32m✓[39m handles resetTimer called when not showing warning[32m 0[2mms[22m[39m
+     [32m✓[39m handles multiple resetTimer calls in quick succession[32m 1[2mms[22m[39m
+     [32m✓[39m survives component re-render without resetting timer[32m 0[2mms[22m[39m
+(node:17568) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17567) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:17569) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/styles/drag-handle.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/components/editor/DragHandle.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/editor/MentionExtension.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 13 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/lib/document-tabs.test.ts[2m > [22mgetTabsForDocumentType[2m > [22mreturns tabs for project documents
+[31m[1mAssertionError[22m: expected [ 'issues', 'details', 'weeks', …(1) ] to include 'sprints'[39m
+[36m [2m❯[22m src/lib/document-tabs.test.ts:[2m25:33[22m[39m
+    [90m 23| [39m    [34mexpect[39m(tabs[33m.[39m[34mmap[39m(t [33m=>[39m t[33m.[39mid))[33m.[39m[34mtoContain[39m([32m'details'[39m)[33m;[39m
+    [90m 24| [39m    [34mexpect[39m(tabs[33m.[39m[34mmap[39m(t [33m=>[39m t[33m.[39mid))[33m.[39m[34mtoContain[39m([32m'issues'[39m)[33m;[39m
+    [90m 25| [39m    [34mexpect[39m(tabs[33m.[39m[34mmap[39m(t [33m=>[39m t[33m.[39mid))[33m.[39m[34mtoContain[39m([32m'sprints'[39m)[33m;[39m
+    [90m   | [39m                                [31m^[39m
+    [90m 26| [39m  })[33m;[39m
+    [90m 27| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/lib/document-tabs.test.ts[2m > [22mgetTabsForDocumentType[2m > [22mreturns tabs for program documents
+[31m[1mAssertionError[22m: expected [ 'overview', 'issues', …(2) ] to include 'sprints'[39m
+[36m [2m❯[22m src/lib/document-tabs.test.ts:[2m34:33[22m[39m
+    [90m 32| [39m    [34mexpect[39m(tabs[33m.[39m[34mmap[39m(t [33m=>[39m t[33m.[39mid))[33m.[39m[34mtoContain[39m([32m'issues'[39m)[33m;[39m
+    [90m 33| [39m    [34mexpect[39m(tabs[33m.[39m[34mmap[39m(t [33m=>[39m t[33m.[39mid))[33m.[39m[34mtoContain[39m([32m'projects'[39m)[33m;[39m
+    [90m 34| [39m    [34mexpect[39m(tabs[33m.[39m[34mmap[39m(t [33m=>[39m t[33m.[39mid))[33m.[39m[34mtoContain[39m([32m'sprints'[39m)[33m;[39m
+    [90m   | [39m                                [31m^[39m
+    [90m 35| [39m  })[33m;[39m
+    [90m 36| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/lib/document-tabs.test.ts[2m > [22mgetTabsForDocumentType[2m > [22mreturns empty array for sprint documents (no tabs)
+[31m[1mAssertionError[22m: expected [ { id: 'overview', …(2) }, …(3) ] to deeply equal [][39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- [][39m
+[31m+ [[39m
+[31m+   {[39m
+[31m+     "component": {[39m
+[31m+       "$$typeof": Symbol(react.lazy),[39m
+[31m+       "_init": [Function lazyInitializer],[39m
+[31m+       "_payload": {[39m
+[31m+         "_result": [Function anonymous],[39m
+[31m+         "_status": -1,[39m
+[31m+       },[39m
+[31m+     },[39m
+[31m+     "id": "overview",[39m
+[31m+     "label": "Overview",[39m
+[31m+   },[39m
+[31m+   {[39m
+[31m+     "component": {[39m
+[31m+       "$$typeof": Symbol(react.lazy),[39m
+[31m+       "_init": [Function lazyInitializer],[39m
+[31m+       "_payload": {[39m
+[31m+         "_result": [Function anonymous],[39m
+[31m+         "_status": -1,[39m
+[31m+       },[39m
+[31m+     },[39m
+[31m+     "id": "plan",[39m
+[31m+     "label": "Plan",[39m
+[31m+   },[39m
+[31m+   {[39m
+[31m+     "component": {[39m
+[31m+       "$$typeof": Symbol(react.lazy),[39m
+[31m+       "_init": [Function lazyInitializer],[39m
+[31m+       "_payload": {[39m
+[31m+         "_result": [Function anonymous],[39m
+[31m+         "_status": -1,[39m
+[31m+       },[39m
+[31m+     },[39m
+[31m+     "id": "review",[39m
+[31m+     "label": "Review",[39m
+[31m+   },[39m
+[31m+   {[39m
+[31m+     "component": {[39m
+[31m+       "$$typeof": Symbol(react.lazy),[39m
+[31m+       "_init": [Function lazyInitializer],[39m
+[31m+       "_payload": {[39m
+[31m+         "_result": [Function anonymous],[39m
+[31m+         "_status": -1,[39m
+[31m+       },[39m
+[31m+     },[39m
+[31m+     "id": "standups",[39m
+[31m+     "label": "Standups",[39m
+[31m+   },[39m
+[31m+ ][39m
+
+[36m [2m❯[22m src/lib/document-tabs.test.ts:[2m49:18[22m[39m
+    [90m 47| [39m  [34mit[39m([32m'returns empty array for sprint documents (no tabs)'[39m[33m,[39m () [33m=>[39m {
+    [90m 48| [39m    [35mconst[39m tabs [33m=[39m [34mgetTabsForDocumentType[39m([32m'sprint'[39m)[33m;[39m
+    [90m 49| [39m    [34mexpect[39m(tabs)[33m.[39m[34mtoEqual[39m([])[33m;[39m
+    [90m   | [39m                 [31m^[39m
+    [90m 50| [39m  })[33m;[39m
+    [90m 51| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/lib/document-tabs.test.ts[2m > [22mdocumentTypeHasTabs[2m > [22mreturns false for sprint documents
+[31m[1mAssertionError[22m: expected true to be false // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- false[39m
+[31m+ true[39m
+
+[36m [2m❯[22m src/lib/document-tabs.test.ts:[2m76:43[22m[39m
+    [90m 74| [39m
+    [90m 75| [39m  [34mit[39m([32m'returns false for sprint documents'[39m[33m,[39m () [33m=>[39m {
+    [90m 76| [39m    [34mexpect[39m([34mdocumentTypeHasTabs[39m([32m'sprint'[39m))[33m.[39m[34mtoBe[39m([35mfalse[39m)[33m;[39m
+    [90m   | [39m                                          [31m^[39m
+    [90m 77| [39m  })[33m;[39m
+    [90m 78| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/lib/document-tabs.test.ts[2m > [22mtab ID validation for URL deep linking[2m > [22mvalidates project tab IDs correctly
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m src/lib/document-tabs.test.ts:[2m97:45[22m[39m
+    [90m 95| [39m    [34mexpect[39m(validTabIds[33m.[39m[34mincludes[39m([32m'details'[39m))[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m 96| [39m    [34mexpect[39m(validTabIds[33m.[39m[34mincludes[39m([32m'issues'[39m))[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m 97| [39m    [34mexpect[39m(validTabIds[33m.[39m[34mincludes[39m([32m'sprints'[39m))[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m   | [39m                                            [31m^[39m
+    [90m 98| [39m    [34mexpect[39m(validTabIds[33m.[39m[34mincludes[39m([32m'retro'[39m))[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m 99| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/lib/document-tabs.test.ts[2m > [22mtab ID validation for URL deep linking[2m > [22mvalidates program tab IDs correctly
+[31m[1mAssertionError[22m: expected false to be true // Object.is equality[39m
+
+[32m- Expected[39m
+[31m+ Received[39m
+
+[32m- true[39m
+[31m+ false[39m
+
+[36m [2m❯[22m src/lib/document-tabs.test.ts:[2m114:45[22m[39m
+    [90m112| [39m    [34mexpect[39m(validTabIds[33m.[39m[34mincludes[39m([32m'issues'[39m))[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m113| [39m    [34mexpect[39m(validTabIds[33m.[39m[34mincludes[39m([32m'projects'[39m))[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m114| [39m    [34mexpect[39m(validTabIds[33m.[39m[34mincludes[39m([32m'sprints'[39m))[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m   | [39m                                            [31m^[39m
+    [90m115| [39m
+    [90m116| [39m    [90m// Invalid tab IDs[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/lib/document-tabs.test.ts[2m > [22mtab ID validation for URL deep linking[2m > [22mreturns first tab as default for URL without tab
+[31m[1mAssertionError[22m: expected 'issues' to be 'details' // Object.is equality[39m
+
+Expected: [32m"[7mdetail[27ms"[39m
+Received: [31m"[7missue[27ms"[39m
+
+[36m [2m❯[22m src/lib/document-tabs.test.ts:[2m124:32[22m[39m
+    [90m122| [39m    [90m// This tests the pattern: tabConfig[0]?.id || ''[39m
+    [90m123| [39m    [35mconst[39m projectTabs [33m=[39m [34mgetTabsForDocumentType[39m([32m'project'[39m)[33m;[39m
+    [90m124| [39m    [34mexpect[39m(projectTabs[[34m0[39m][33m?.[39mid)[33m.[39m[34mtoBe[39m([32m'details'[39m)[33m;[39m
+    [90m   | [39m                               [31m^[39m
+    [90m125| [39m
+    [90m126| [39m    [35mconst[39m programTabs [33m=[39m [34mgetTabsForDocumentType[39m([32m'program'[39m)[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/lib/document-tabs.test.ts[2m > [22mresolveTabLabels[2m > [22mresolves dynamic labels with counts
+[31m[1mAssertionError[22m: expected undefined to be 'Weeks (3)' // Object.is equality[39m
+
+[32m- Expected:[39m 
+"Weeks (3)"
+
+[31m+ Received:[39m 
+undefined
+
+[36m [2m❯[22m src/lib/document-tabs.test.ts:[2m161:31[22m[39m
+    [90m159| [39m
+    [90m160| [39m    [35mconst[39m sprintsTab [33m=[39m resolved[33m.[39m[34mfind[39m(t [33m=>[39m t[33m.[39mid [33m===[39m [32m'sprints'[39m)[33m;[39m
+    [90m161| [39m    [34mexpect[39m(sprintsTab[33m?.[39mlabel)[33m.[39m[34mtoBe[39m([32m'Weeks (3)'[39m)[33m;[39m
+    [90m   | [39m                              [31m^[39m
+    [90m162| [39m  })[33m;[39m
+    [90m163| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/lib/document-tabs.test.ts[2m > [22mresolveTabLabels[2m > [22mresolves dynamic labels without counts
+[31m[1mAssertionError[22m: expected undefined to be 'Weeks' // Object.is equality[39m
+
+[32m- Expected:[39m 
+"Weeks"
+
+[31m+ Received:[39m 
+undefined
+
+[36m [2m❯[22m src/lib/document-tabs.test.ts:[2m172:31[22m[39m
+    [90m170| [39m
+    [90m171| [39m    [35mconst[39m sprintsTab [33m=[39m resolved[33m.[39m[34mfind[39m(t [33m=>[39m t[33m.[39mid [33m===[39m [32m'sprints'[39m)[33m;[39m
+    [90m172| [39m    [34mexpect[39m(sprintsTab[33m?.[39mlabel)[33m.[39m[34mtoBe[39m([32m'Weeks'[39m)[33m;[39m
+    [90m   | [39m                              [31m^[39m
+    [90m173| [39m  })[33m;[39m
+    [90m174| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/hooks/useSessionTimeout.test.ts[2m > [22museSessionTimeout[2m > [22mInactivity Timer[2m > [22mdoes NOT call onTimeout if dismissed before 0
+[31m[1mAssertionError[22m: expected "vi.fn()" to not be called at all, but actually been called 1 times[90m
+
+Received: 
+
+[1m  1st vi.fn() call:
+
+[22m    Array []
+[31m[90m
+
+Number of calls: [1m1[22m
+[31m[39m
+[36m [2m❯[22m src/hooks/useSessionTimeout.test.ts:[2m170:29[22m[39m
+    [90m168| [39m      })[33m;[39m
+    [90m169| [39m
+    [90m170| [39m      [34mexpect[39m(onTimeout)[33m.[39mnot[33m.[39m[34mtoHaveBeenCalled[39m()[33m;[39m
+    [90m   | [39m                            [31m^[39m
+    [90m171| [39m    })[33m;[39m
+    [90m172| [39m  })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/editor/DetailsExtension.test.ts[2m > [22mDetailsExtension[2m > [22mshould be configured as a block node with content
+[31m[1mAssertionError[22m: expected 'detailsSummary detailsContent' to be 'block+' // Object.is equality[39m
+
+Expected: [32m"block+"[39m
+Received: [31m"detailsSummary detailsContent"[39m
+
+[36m [2m❯[22m src/components/editor/DetailsExtension.test.ts:[2m16:38[22m[39m
+    [90m 14| [39m    [35mconst[39m extension [33m=[39m [33mDetailsExtension[39m[33m;[39m
+    [90m 15| [39m    [34mexpect[39m(extension[33m.[39mconfig[33m.[39mgroup)[33m.[39m[34mtoBe[39m([32m'block'[39m)[33m;[39m
+    [90m 16| [39m    [34mexpect[39m(extension[33m.[39mconfig[33m.[39mcontent)[33m.[39m[34mtoBe[39m([32m'block+'[39m)[33m;[39m
+    [90m   | [39m                                     [31m^[39m
+    [90m 17| [39m    [34mexpect[39m(extension[33m.[39mconfig[33m.[39mdefining)[33m.[39m[34mtoBe[39m([35mtrue[39m)[33m;[39m
+    [90m 18| [39m  })[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/13]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/editor/DetailsExtension.test.ts[2m > [22mDetailsExtension[2m > [22mshould work in editor context
+[41m[1m FAIL [22m[49m src/components/editor/DetailsExtension.test.ts[2m > [22mDetailsExtension[2m > [22mshould allow inserting details via command
+[31m[1mSyntaxError[22m: No node type or group 'detailsSummary' found (in content expression 'detailsSummary detailsContent')[39m
+[90m [2m❯[22m TokenStream.err ../node_modules/.pnpm/prosemirror-model@1.25.4/node_modules/prosemirror-model/dist/index.js:[2m1797:22[22m[39m
+[90m [2m❯[22m resolveName ../node_modules/.pnpm/prosemirror-model@1.25.4/node_modules/prosemirror-model/dist/index.js:[2m1859:16[22m[39m
+[90m [2m❯[22m parseExprAtom ../node_modules/.pnpm/prosemirror-model@1.25.4/node_modules/prosemirror-model/dist/index.js:[2m1870:21[22m[39m
+[90m [2m❯[22m parseExprSubscript ../node_modules/.pnpm/prosemirror-model@1.25.4/node_modules/prosemirror-model/dist/index.js:[2m1814:16[22m[39m
+[90m [2m❯[22m parseExprSeq ../node_modules/.pnpm/prosemirror-model@1.25.4/node_modules/prosemirror-model/dist/index.js:[2m1809:20[22m[39m
+[90m [2m❯[22m parseExpr ../node_modules/.pnpm/prosemirror-model@1.25.4/node_modules/prosemirror-model/dist/index.js:[2m1802:20[22m[39m
+[90m [2m❯[22m Function.parse ../node_modules/.pnpm/prosemirror-model@1.25.4/node_modules/prosemirror-model/dist/index.js:[2m1624:20[22m[39m
+[90m [2m❯[22m new Schema ../node_modules/.pnpm/prosemirror-model@1.25.4/node_modules/prosemirror-model/dist/index.js:[2m2441:63[22m[39m
+[90m [2m❯[22m getSchemaByResolvedExtensions ../node_modules/.pnpm/@tiptap+core@2.27.2_@tiptap+pm@2.27.2/node_modules/@tiptap/core/dist/index.js:[2m553:12[22m[39m
+[90m [2m❯[22m new ExtensionManager ../node_modules/.pnpm/@tiptap+core@2.27.2_@tiptap+pm@2.27.2/node_modules/@tiptap/core/dist/index.js:[2m1170:23[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/13]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m3 failed[39m[22m[2m | [22m[1m[32m13 passed[39m[22m[90m (16)[39m
+[2m      Tests [22m [1m[31m13 failed[39m[22m[2m | [22m[1m[32m138 passed[39m[22m[90m (151)[39m
+[2m   Start at [22m 11:50:35
+[2m   Duration [22m 1.68s[2m (transform 1.52s, setup 1.68s, import 3.12s, tests 620ms, environment 9.89s)[22m
+
+JSON report written to /private/tmp/claude-501/-Users-troy-repos-GAUNTLET-Ship/5fae4e11-fece-4a95-b96c-7ab774d3e7cd/scratchpad/web-unit.json
+undefined
+/Users/troy/repos/GAUNTLET/Ship/web:
+ ERR_PNPM_RECURSIVE_EXEC_FIRST_FAIL  Command failed with exit code 1: vitest run --reporter=json --reporter=default --outputFile.json=/private/tmp/claude-501/-Users-troy-repos-GAUNTLET-Ship/5fae4e11-fece-4a95-b96c-7ab774d3e7cd/scratchpad/web-unit.json
+real 2.49
+user 10.10
+sys 5.01

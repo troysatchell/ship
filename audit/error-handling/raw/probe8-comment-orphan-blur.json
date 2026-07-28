@@ -1,0 +1,160 @@
+{
+  "doc": "6666256d-0f31-4979-9fd0-f4083bb82c73",
+  "log": [
+    "[1] baseline content has comment mark? false | len = 166",
+    "[2] after Cmd+Shift+M: pending comment input present = 1 | .comment-highlight nodes in DOM = 1",
+    "[3] after Escape (cancel): pending input = 1 | .comment-highlight nodes = 1",
+    "[3] persisted content mentions \"comment\" mark? true",
+    "[3] content changed vs baseline? true",
+    "[3] persisted content = \"{\\\"type\\\": \\\"doc\\\", \\\"content\\\": [{\\\"type\\\": \\\"paragraph\\\", \\\"content\\\": [{\\\"text\\\": \\\"C_ONLINE_ALPHA C_LOST_BRAVO The quick brown fox jumps over the <commentMark--zycmohQb commentId=\\\\\\\"5d99bc77-db20-4397-9e65-44f4bcc03e82\\\\\\\">lazy dog.</commentMark--zycmohQb>\\\", \\\"type\\\": \\\"text\\\"}]}]}\"",
+    "[3] comment rows in DB for this doc = 0",
+    "[4] after reload: .comment-highlight nodes in DOM = 1",
+    "[4] after reload: persisted content still has mark? true"
+  ],
+  "events": [
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178190342
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178190354
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178190402
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Schema] Initialized schema version: 2",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178190409
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178190454
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178190456
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] IndexedDB synced for wiki:6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178190536
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connected for wiki:6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178190560
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket sync: true for wiki:6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178190567
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178207804
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178207805
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178207820
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178207889
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178207921
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] IndexedDB synced for wiki:6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178207959
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connected for wiki:6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178207977
+    },
+    {
+      "kind": "console",
+      "level": "warning",
+      "text": "A user uses an unsupported color format {name: Dev User, color: hsl(142, 70%, 60%)}",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178207981
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket sync: true for wiki:6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "comment",
+      "t": 1785178207982
+    }
+  ]
+}

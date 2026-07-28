@@ -1,0 +1,9 @@
+
+> @ship/api@0.0.0 test:coverage /Users/troy/repos/GAUNTLET/Ship/api
+> vitest run --coverage
+
+[31m[7m[31m MISSING DEPENDENCY [31m[27m Cannot find dependency '@vitest/coverage-v8'
+
+[39m/Users/troy/repos/GAUNTLET/Ship/api:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @ship/api@0.0.0 test:coverage: `vitest run --coverage`
+Exit status 1

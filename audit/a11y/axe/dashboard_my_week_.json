@@ -1,0 +1,851 @@
+[
+  {
+    "id": "color-contrast",
+    "impact": "serious",
+    "tags": [
+      "cat.color",
+      "wcag2aa",
+      "wcag143",
+      "TTv5",
+      "TT13.c",
+      "EN-301-549",
+      "EN-9.1.4.3",
+      "ACT",
+      "RGAAv4",
+      "RGAA-3.2.1"
+    ],
+    "description": "Ensure the contrast between foreground and background colors meets WCAG 2 AA minimum contrast ratio thresholds",
+    "help": "Elements must meet minimum color contrast ratio thresholds",
+    "helpUrl": "https://dequeuniversity.com/rules/axe/4.11/color-contrast?application=playwright",
+    "nodes": [
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#005ea2",
+              "bgColor": "#0a1d2b",
+              "contrastRatio": 2.55,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<span class=\"text-xs bg-accent/20 text-accent px-1.5 py-0.5 rounded\">Current</span>",
+                "target": [
+                  ".bg-accent\\/20.py-0\\.5.px-1\\.5"
+                ]
+              },
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 2.55 (foreground color: #005ea2, background color: #0a1d2b, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs bg-accent/20 text-accent px-1.5 py-0.5 rounded\">Current</span>",
+        "target": [
+          ".bg-accent\\/20.py-0\\.5.px-1\\.5"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.55 (foreground color: #005ea2, background color: #0a1d2b, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#4c4c4c",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 2.26,
+              "fontSize": "8.3pt (11px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 2.26 (foreground color: #4c4c4c, background color: #0d0d0d, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-[11px] font-semibold text-muted/50 w-4 text-right shrink-0 mt-0.5\">1.</span>",
+        "target": [
+          ".items-start.gap-2\\.5.py-1\\.5:nth-child(1) > .text-\\[11px\\].text-muted\\/50.text-right"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.26 (foreground color: #4c4c4c, background color: #0d0d0d, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#4c4c4c",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 2.26,
+              "fontSize": "8.3pt (11px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 2.26 (foreground color: #4c4c4c, background color: #0d0d0d, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-[11px] font-semibold text-muted/50 w-4 text-right shrink-0 mt-0.5\">2.</span>",
+        "target": [
+          ".items-start.gap-2\\.5.py-1\\.5:nth-child(2) > .text-\\[11px\\].text-muted\\/50.text-right"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.26 (foreground color: #4c4c4c, background color: #0d0d0d, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#4c4c4c",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 2.26,
+              "fontSize": "8.3pt (11px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 2.26 (foreground color: #4c4c4c, background color: #0d0d0d, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-[11px] font-semibold text-muted/50 w-4 text-right shrink-0 mt-0.5\">3.</span>",
+        "target": [
+          ".items-start.gap-2\\.5.py-1\\.5:nth-child(3) > .text-\\[11px\\].text-muted\\/50.text-right"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.26 (foreground color: #4c4c4c, background color: #0d0d0d, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#4c4c4c",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 2.26,
+              "fontSize": "8.3pt (11px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 2.26 (foreground color: #4c4c4c, background color: #0d0d0d, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-[11px] font-semibold text-muted/50 w-4 text-right shrink-0 mt-0.5\">4.</span>",
+        "target": [
+          ".items-start.gap-2\\.5.py-1\\.5:nth-child(4) > .text-\\[11px\\].text-muted\\/50.text-right"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.26 (foreground color: #4c4c4c, background color: #0d0d0d, font size: 8.3pt (11px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#005ea2",
+              "bgColor": "#0c1114",
+              "contrastRatio": 2.82,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<button class=\"flex items-center gap-3 rounded-lg border px-4 py-2.5 border-accent/30 bg-accent/5 hover:border-accent/50 transition-colors w-full text-left cursor-pointer disabled:opacity-50\">",
+                "target": [
+                  ".border-accent\\/30"
+                ]
+              },
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 2.82 (foreground color: #005ea2, background color: #0c1114, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs font-medium text-accent\">Mon</span>",
+        "target": [
+          ".text-accent.font-medium.text-xs"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 2.82 (foreground color: #005ea2, background color: #0c1114, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs font-medium text-muted\">Tue</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(2) > .w-20.flex-shrink-0 > .font-medium.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted ml-1\">7/28</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(2) > .w-20.flex-shrink-0 > .ml-1.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted italic\">Upcoming</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(2) > .min-w-0.flex-1 > .italic.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs font-medium text-muted\">Wed</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(3) > .w-20.flex-shrink-0 > .font-medium.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted ml-1\">7/29</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(3) > .w-20.flex-shrink-0 > .ml-1.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted italic\">Upcoming</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(3) > .min-w-0.flex-1 > .italic.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs font-medium text-muted\">Thu</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(4) > .w-20.flex-shrink-0 > .font-medium.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted ml-1\">7/30</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(4) > .w-20.flex-shrink-0 > .ml-1.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted italic\">Upcoming</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(4) > .min-w-0.flex-1 > .italic.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs font-medium text-muted\">Fri</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(5) > .w-20.flex-shrink-0 > .font-medium.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted ml-1\">7/31</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(5) > .w-20.flex-shrink-0 > .ml-1.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted italic\">Upcoming</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(5) > .min-w-0.flex-1 > .italic.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs font-medium text-muted\">Sat</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(6) > .w-20.flex-shrink-0 > .font-medium.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted ml-1\">8/1</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(6) > .w-20.flex-shrink-0 > .ml-1.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted italic\">Upcoming</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(6) > .min-w-0.flex-1 > .italic.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs font-medium text-muted\">Sun</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(7) > .w-20.flex-shrink-0 > .font-medium.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted ml-1\">8/2</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(7) > .w-20.flex-shrink-0 > .ml-1.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      },
+      {
+        "any": [
+          {
+            "id": "color-contrast",
+            "data": {
+              "fgColor": "#3f3f3f",
+              "bgColor": "#0d0d0d",
+              "contrastRatio": 1.84,
+              "fontSize": "9.0pt (12px)",
+              "fontWeight": "normal",
+              "messageKey": null,
+              "expectedContrastRatio": "4.5:1"
+            },
+            "relatedNodes": [
+              {
+                "html": "<div class=\"flex h-screen flex-col overflow-hidden bg-background\">",
+                "target": [
+                  ".h-screen"
+                ]
+              }
+            ],
+            "impact": "serious",
+            "message": "Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+          }
+        ],
+        "all": [],
+        "none": [],
+        "impact": "serious",
+        "html": "<span class=\"text-xs text-muted italic\">Upcoming</span>",
+        "target": [
+          ".opacity-40.py-2\\.5.bg-surface:nth-child(7) > .min-w-0.flex-1 > .italic.text-xs.text-muted"
+        ],
+        "failureSummary": "Fix any of the following:\n  Element has insufficient color contrast of 1.84 (foreground color: #3f3f3f, background color: #0d0d0d, font size: 9.0pt (12px), font weight: normal). Expected contrast ratio of 4.5:1"
+      }
+    ]
+  }
+]

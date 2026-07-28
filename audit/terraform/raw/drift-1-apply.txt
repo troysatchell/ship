@@ -1,0 +1,53 @@
+
+Terraform used the selected providers to generate the following execution
+plan. Resource actions are indicated with the following symbols:
+  + create
+
+Terraform will perform the following actions:
+
+  # local_file.app_config will be created
+  + resource "local_file" "app_config" {
+      + content              = jsonencode(
+            {
+              + log_level = "info"
+              + replicas  = 2
+              + service   = "shipshape-audit-demo"
+            }
+        )
+      + content_base64sha256 = (known after apply)
+      + content_base64sha512 = (known after apply)
+      + content_md5          = (known after apply)
+      + content_sha1         = (known after apply)
+      + content_sha256       = (known after apply)
+      + content_sha512       = (known after apply)
+      + directory_permission = "0777"
+      + file_permission      = "0644"
+      + filename             = "./generated/app.config.json"
+      + id                   = (known after apply)
+    }
+
+  # local_file.env_file will be created
+  + resource "local_file" "env_file" {
+      + content              = <<-EOT
+            NODE_ENV=production
+            FEATURE_FLAG_BETA=false
+        EOT
+      + content_base64sha256 = (known after apply)
+      + content_base64sha512 = (known after apply)
+      + content_md5          = (known after apply)
+      + content_sha1         = (known after apply)
+      + content_sha256       = (known after apply)
+      + content_sha512       = (known after apply)
+      + directory_permission = "0777"
+      + file_permission      = "0600"
+      + filename             = "./generated/app.env"
+      + id                   = (known after apply)
+    }
+
+Plan: 2 to add, 0 to change, 0 to destroy.
+local_file.env_file: Creating...
+local_file.app_config: Creating...
+local_file.env_file: Creation complete after 0s [id=1b55e64bdb02be032f818605f95d1228d563baf1]
+local_file.app_config: Creation complete after 0s [id=3473b09b455e7027dcfe66e5bb5232a8ace1affb]
+
+Apply complete! Resources: 2 added, 0 changed, 0 destroyed.

@@ -1,0 +1,33 @@
+{
+  "log": [
+    "=== 4a: simultaneous body edits (Yjs CRDT) ===",
+    "A sees: \"BBBBBBBBBB\\nDev User\\n\\n\\n\\nAAAAAAAAAA\"",
+    "B sees: \"BBBBBBBBBB\\n\\nAAAAAAAAAA\\nDev User\\n\\n\"",
+    "A==B (converged)? false",
+    "DB has A chars? true | DB has B chars? true",
+    "DB content: \"{\\\"type\\\": \\\"doc\\\", \\\"content\\\": [{\\\"type\\\": \\\"paragraph\\\", \\\"content\\\": [{\\\"text\\\": \\\"BBBBBBBBBB\\\", \\\"type\\\": \\\"text\\\"}]}, {\\\"type\\\": \\\"paragraph\\\", \\\"content\\\": [{\\\"text\\\": \\\"AAAAAAAAAA\\\", \\\"type\\\": \\\"text\\\"}]}]}\"",
+    "\n=== 4b: simultaneous TITLE edits (title is not a CRDT) ===",
+    "title element found in A? true B? true | selector tried: textarea, input[placeholder*=\"Untitled\" i], [data-testid=\"document-title\"]",
+    "DB title after both wrote: \"TITLE FROM CONTEXT B\"",
+    "A still displays: \"TITLE FROM CONTEXT B\"",
+    "B still displays: \"TITLE FROM CONTEXT B\"",
+    "LOST UPDATE: one context shows a title the server does not have = false",
+    "\n=== 4c: delete the document in B while A is typing into it ===",
+    "pre-delete: A status = \"Saved\" | in DB = true",
+    "delete call -> HTTP:204",
+    "post-delete: A status = \"Saved\"",
+    "post-delete: A still shows editor? true",
+    "post-delete: A body = \"EDITING_A_DOOMED_DOC TYPED_AFTER_DELETE \"",
+    "post-delete: any notice on A? []",
+    "post-delete: row still in documents table? 0",
+    "post-delete: archived_at = ",
+    "post-delete: DB got the post-delete typing? false",
+    "post-delete: console errors on A = 6",
+    "    ERR 404 GET http://localhost:3001/api/documents/28e14d94-b770-4332-b671-2baa2f90fce4/backlinks",
+    "    ERR Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "    ERR Error fetching backlinks: Error: Failed to fetch backlinks\n    at fetchBacklinks (http://localhost:5173/src/components/editor/BacklinksPanel.tsx:45:17)",
+    "    ERR 404 GET http://localhost:3001/api/documents/28e14d94-b770-4332-b671-2baa2f90fce4/backlinks",
+    "    ERR Failed to load resource: the server responded with a status of 404 (Not Found)",
+    "    ERR Error fetching backlinks: Error: Failed to fetch backlinks\n    at fetchBacklinks (http://localhost:5173/src/components/editor/BacklinksPanel.tsx:45:17)"
+  ]
+}

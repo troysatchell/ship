@@ -1,0 +1,370 @@
+{
+  "results": [
+    {
+      "label": "dashboard (my-week)",
+      "url": "http://localhost:5173/my-week",
+      "counts": {
+        "critical": 0,
+        "serious": 1,
+        "moderate": 0,
+        "minor": 0
+      },
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "help": "Elements must meet minimum color contrast ratio thresholds",
+          "nodes": 24,
+          "targets": [
+            ".bg-accent\\/20.py-0\\.5.px-1\\.5",
+            ".items-start.gap-2\\.5.py-1\\.5:nth-child(1) > .text-\\[11px\\].text-muted\\/50.text-right",
+            ".items-start.gap-2\\.5.py-1\\.5:nth-child(2) > .text-\\[11px\\].text-muted\\/50.text-right",
+            ".items-start.gap-2\\.5.py-1\\.5:nth-child(3) > .text-\\[11px\\].text-muted\\/50.text-right"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "issues list",
+      "url": "http://localhost:5173/issues",
+      "counts": {
+        "critical": 0,
+        "serious": 0,
+        "moderate": 0,
+        "minor": 1
+      },
+      "violations": [
+        {
+          "id": "empty-table-header",
+          "impact": "minor",
+          "help": "Table header text should not be empty",
+          "nodes": 1,
+          "targets": [
+            "th[aria-label=\"Selection\"]"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "weeks board",
+      "url": "http://localhost:5173/weeks",
+      "counts": {
+        "critical": 0,
+        "serious": 0,
+        "moderate": 2,
+        "minor": 0
+      },
+      "violations": [
+        {
+          "id": "landmark-one-main",
+          "impact": "moderate",
+          "help": "Document should have one main landmark",
+          "nodes": 1,
+          "targets": [
+            "html"
+          ]
+        },
+        {
+          "id": "page-has-heading-one",
+          "impact": "moderate",
+          "help": "Page should contain a level-one heading",
+          "nodes": 1,
+          "targets": [
+            "html"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "search",
+      "url": "http://localhost:5173/search",
+      "counts": {
+        "critical": 0,
+        "serious": 0,
+        "moderate": 2,
+        "minor": 0
+      },
+      "violations": [
+        {
+          "id": "landmark-one-main",
+          "impact": "moderate",
+          "help": "Document should have one main landmark",
+          "nodes": 1,
+          "targets": [
+            "html"
+          ]
+        },
+        {
+          "id": "page-has-heading-one",
+          "impact": "moderate",
+          "help": "Page should contain a level-one heading",
+          "nodes": 1,
+          "targets": [
+            "html"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "document view",
+      "url": "http://localhost:5173/documents/442f288a-ad31-47df-bbb7-17303fb291e1",
+      "counts": {
+        "critical": 1,
+        "serious": 1,
+        "moderate": 1,
+        "minor": 0
+      },
+      "violations": [
+        {
+          "id": "aria-required-children",
+          "impact": "critical",
+          "help": "Certain ARIA roles must contain particular children",
+          "nodes": 1,
+          "targets": [
+            "ul"
+          ]
+        },
+        {
+          "id": "heading-order",
+          "impact": "moderate",
+          "help": "Heading levels should only increase by one",
+          "nodes": 1,
+          "targets": [
+            "h3"
+          ]
+        },
+        {
+          "id": "listitem",
+          "impact": "serious",
+          "help": "<li> elements must be contained in a <ul> or <ol>",
+          "nodes": 1,
+          "targets": [
+            "li:nth-child(11)"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "document editor focused",
+      "url": "http://localhost:5173/documents/442f288a-ad31-47df-bbb7-17303fb291e1",
+      "counts": {
+        "critical": 2,
+        "serious": 1,
+        "moderate": 1,
+        "minor": 0
+      },
+      "violations": [
+        {
+          "id": "aria-allowed-attr",
+          "impact": "critical",
+          "help": "Elements must only use supported ARIA attributes",
+          "nodes": 1,
+          "targets": [
+            ".tiptap-wrapper > div"
+          ]
+        },
+        {
+          "id": "aria-required-children",
+          "impact": "critical",
+          "help": "Certain ARIA roles must contain particular children",
+          "nodes": 1,
+          "targets": [
+            "ul"
+          ]
+        },
+        {
+          "id": "heading-order",
+          "impact": "moderate",
+          "help": "Heading levels should only increase by one",
+          "nodes": 1,
+          "targets": [
+            "h3"
+          ]
+        },
+        {
+          "id": "listitem",
+          "impact": "serious",
+          "help": "<li> elements must be contained in a <ul> or <ol>",
+          "nodes": 1,
+          "targets": [
+            "li:nth-child(11)"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "command palette open",
+      "url": "http://localhost:5173/documents/442f288a-ad31-47df-bbb7-17303fb291e1",
+      "counts": {
+        "critical": 2,
+        "serious": 2,
+        "moderate": 1,
+        "minor": 0
+      },
+      "violations": [
+        {
+          "id": "aria-allowed-attr",
+          "impact": "critical",
+          "help": "Elements must only use supported ARIA attributes",
+          "nodes": 1,
+          "targets": [
+            ".tiptap-wrapper > div"
+          ]
+        },
+        {
+          "id": "aria-required-children",
+          "impact": "critical",
+          "help": "Certain ARIA roles must contain particular children",
+          "nodes": 1,
+          "targets": [
+            "ul"
+          ]
+        },
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "help": "Elements must meet minimum color contrast ratio thresholds",
+          "nodes": 1,
+          "targets": [
+            ".ml-3:nth-child(5)"
+          ]
+        },
+        {
+          "id": "heading-order",
+          "impact": "moderate",
+          "help": "Heading levels should only increase by one",
+          "nodes": 1,
+          "targets": [
+            "h3"
+          ]
+        },
+        {
+          "id": "listitem",
+          "impact": "serious",
+          "help": "<li> elements must be contained in a <ul> or <ol>",
+          "nodes": 1,
+          "targets": [
+            "li:nth-child(11)"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "issues menu/expanded state",
+      "url": "http://localhost:5173/issues",
+      "counts": {
+        "critical": 0,
+        "serious": 1,
+        "moderate": 0,
+        "minor": 1
+      },
+      "violations": [
+        {
+          "id": "aria-dialog-name",
+          "impact": "serious",
+          "help": "ARIA dialog and alertdialog nodes should have an accessible name",
+          "nodes": 1,
+          "targets": [
+            "#radix-\\:rj\\:"
+          ]
+        },
+        {
+          "id": "empty-table-header",
+          "impact": "minor",
+          "help": "Table header text should not be empty",
+          "nodes": 1,
+          "targets": [
+            "th[aria-label=\"Selection\"]"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "login (unauth)",
+      "url": "http://localhost:5173/login",
+      "counts": {
+        "critical": 0,
+        "serious": 0,
+        "moderate": 2,
+        "minor": 0
+      },
+      "violations": [
+        {
+          "id": "landmark-one-main",
+          "impact": "moderate",
+          "help": "Document should have one main landmark",
+          "nodes": 1,
+          "targets": [
+            "html"
+          ]
+        },
+        {
+          "id": "region",
+          "impact": "moderate",
+          "help": "All page content should be contained by landmarks",
+          "nodes": 5,
+          "targets": [
+            ".mb-8",
+            "form > div:nth-child(1)",
+            "form > div:nth-child(2)",
+            ".mt-8"
+          ]
+        }
+      ]
+    }
+  ],
+  "keyboard": [
+    {
+      "page": "issues",
+      "path": "/issues",
+      "focusableCount": 790,
+      "tabStops": 45,
+      "uniqueStops": 45,
+      "focusRingSeen": 45,
+      "focusRingRatio": 1
+    },
+    {
+      "page": "dashboard",
+      "path": "/my-week",
+      "focusableCount": 20,
+      "tabStops": 44,
+      "uniqueStops": 20,
+      "focusRingSeen": 42,
+      "focusRingRatio": 0.95
+    }
+  ],
+  "tree": {
+    "landmarks": [
+      "navigation",
+      "aside",
+      "tree",
+      "treeitem",
+      "treeitem",
+      "treeitem",
+      "treeitem",
+      "treeitem",
+      "treeitem",
+      "treeitem",
+      "treeitem",
+      "treeitem",
+      "treeitem",
+      "main",
+      "status",
+      "aside"
+    ],
+    "headings": [
+      2,
+      1,
+      3
+    ],
+    "h1Count": 1,
+    "imgsNoAlt": 0,
+    "svgNoLabel": 28,
+    "inputsNoLabel": 1,
+    "liveRegions": 3
+  },
+  "modalDismiss": {
+    "escapeClosed": true,
+    "hadModal": 7
+  }
+}

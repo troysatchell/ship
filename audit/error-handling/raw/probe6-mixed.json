@@ -1,0 +1,30 @@
+{
+  "log": [
+    "=== 6.1 write rejected with 429 (production rate limit) ===",
+    "  title field still shows : \"RENAMED WHILE RATE LIMITED\"",
+    "  DB title (unchanged = write dropped): \"ERRAUDIT scratch 6\" | before was \"ERRAUDIT scratch 6\"",
+    "  toast / alert text on screen   : \"Saved\"",
+    "  page body mentions rate/slow/err: [\"error\",\"RATE LIMIT\"]",
+    "  console errors                 : 429 PATCH http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f,Failed to load resource: the server responded with a status of 429 (Too Many Requests),429 PATCH http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f,Failed to load resource: the server responded with a status of 429 (Too Many Requests),429 PATCH http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f,Failed to load resource: the server responded with a status of 429 (Too Many Requests),429 PATCH http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f,Failed to load resource: the server responded with a status of 429 (Too Many Requests),429 PATCH http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f,Failed to load resource: the server responded with a status of 429 (Too Many Requests),429 PATCH http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f,Failed to load resource: the server responded with a status of 429 (Too Many Requests)",
+    "\n=== 6.2 same write rejected with 500 (server error) ===",
+    "  title field still shows : \"RENAMED WHILE SERVER 500\"",
+    "  DB title                : \"ERRAUDIT scratch 6\"",
+    "  toast text              : \"Saved\"",
+    "  console errors          : 500 PATCH http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f,Failed to load resource: the server responded with a status of 500 (Internal Server Error),500 PATCH http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f,Failed to load resource: the server responded with a status of 500 (Internal Server Error),500 PATCH http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f,Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+    "\n=== 6.3 API returns Express default HTML 404 -> what does the client do? ===",
+    "  before: url = http://localhost:5173/issues",
+    "  after : url = http://localhost:5173/issues",
+    "  FORCED LOGOUT (redirected to /login?expired=true)? false",
+    "  page text: \"Skip to main content\\n1 accountability item is due today.\\n1\\nView items\\nS\\nD\\nIssues\\nALL ISSUES\\nAUDIT-146 Refactor CSV export path\\nAUDIT-145 Fix session expiry handling\\nAUDIT-140 Remove CSV export path\\nAUDIT-121 Fix session expiry handling\\nAUDI\"",
+    "\n=== 6.4 session expires while a document is open and being edited ===",
+    "  pre-expiry: in DB = true | status = Saved",
+    "  forced every session to expired in DB. affected ids = 11",
+    "  post-expiry url        : http://localhost:5173/documents/2b51b076-c8e2-4bc9-9572-002071571b6f",
+    "  post-expiry sync status: \"Saved\"",
+    "  post-expiry editor text: \"BBBBBBBBBB\\n\\nAAAAAAAAAABEFORE_SESSION_EXPIRY AFTER_SESSION_EXPIRY \"",
+    "  post-expiry in DB      : true",
+    "  any expiry warning     : [\"SESSION\",\"SESSION\"]",
+    "  console errors         : 401 GET http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f/backlinks,Failed to load resource: the server responded with a status of 401 (Unauthorized),Error fetching backlinks: Error: Failed to fetch backlinks\n    at fetchBacklinks (http://localhost:5173/src/components/e,401 GET http://localhost:3001/api/documents/2b51b076-c8e2-4bc9-9572-002071571b6f/backlinks,Failed to load resource: the server responded with a status of 401 (Unauthorized),Error fetching backlinks: Error: Failed to fetch backlinks\n    at fetchBacklinks (http://localhost:5173/src/components/e",
+    "  after navigating: url = http://localhost:5173/login"
+  ]
+}

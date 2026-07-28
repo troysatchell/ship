@@ -1,0 +1,82 @@
+########## POST /api/documents ##########
+empty body                                     HTTP 201  641B
+{"id":"ca0f082a-69cc-4343-825b-db9723c9c147","workspace_id":"e8d25b0f-a505-4636-97db-94c72f4e59be","document_type":"wiki","title":"Untitled","content":null,"yjs_state":null,"parent_id":null,"position":0,"properties":{},"
+missing document_type                          HTTP 201  634B
+{"id":"d893efa5-f390-4c9f-b2a5-952c745323d6","workspace_id":"e8d25b0f-a505-4636-97db-94c72f4e59be","document_type":"wiki","title":"x","content":null,"yjs_state":null,"parent_id":null,"position":0,"properties":{},"ticket_
+empty title                                    HTTP 400  190B
+{"error":"Invalid input","details":[{"code":"too_small","minimum":1,"type":"string","inclusive":true,"exact":false,"message":"String must contain at least 1 character(s)","path":["title"]}]}
+title=null                                     HTTP 400  159B
+{"error":"Invalid input","details":[{"code":"invalid_type","expected":"string","received":"null","path":["title"],"message":"Expected string, received null"}]}
+bogus document_type                            HTTP 400  380B
+{"error":"Invalid input","details":[{"received":"totally_made_up","code":"invalid_enum_value","options":["wiki","issue","program","project","sprint","person","weekly_plan","weekly_retro"],"path":["document_type"],"messag
+malformed JSON                                 HTTP 400  1227B
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Error</title>
+</head>
+<body>
+<pre>SyntaxError: Unexpected end of JSON input<br> &nbsp; &nbsp;at JSON.parse (&lt;anonymous&gt;)<br> &nbsp; &nbsp;at par
+XSS in title                                   HTTP 201  658B
+{"id":"2d417cb4-e6b0-4971-90a0-50e4dbe86108","workspace_id":"e8d25b0f-a505-4636-97db-94c72f4e59be","document_type":"wiki","title":"<script>alert(1)</script>","content":null,"yjs_state":null,"parent_id":null,"position":0,
+img onerror in title                           HTTP 201  664B
+{"id":"c04e59b2-fb48-4da6-a6ad-30a595496cad","workspace_id":"e8d25b0f-a505-4636-97db-94c72f4e59be","document_type":"wiki","title":"\"><img src=x onerror=alert(1)>","content":null,"yjs_state":null,"parent_id":null,"positi
+RTL+emoji title                                HTTP 201  670B
+{"id":"1a3e7f05-550f-4000-9940-7a2a11bf2183","workspace_id":"e8d25b0f-a505-4636-97db-94c72f4e59be","document_type":"wiki","title":"‮GNITSET‬ 🚀🇺🇸 مرحبا","content":null,"yjs_state":null,"parent_id":null,"
+null bytes in title                            HTTP 201  644B
+{"id":"cbec2c1f-7c2d-4b12-9fed-6c7f68679999","workspace_id":"e8d25b0f-a505-4636-97db-94c72f4e59be","document_type":"wiki","title":"beforeafter","content":null,"yjs_state":null,"parent_id":null,"position":0,"properties":{
+100k-char title                                HTTP 400  191B
+{"error":"Invalid input","details":[{"code":"too_big","maximum":255,"type":"string","inclusive":true,"exact":false,"message":"String must contain at most 255 ch
+content = wrong shape (string)                 HTTP 201  650B
+{"id":"b26bbf03-df1b-439a-a9d5-56ebddd671d6","workspace_id":"e8d25b0f-a505-4636-97db-94c72f4e59be","document_type":"wiki","title":"badcontent","content":"not-a-doc","yjs_state":null,"parent_id":null,"position":0,"propert
+properties = array not object                  HTTP 400  166B
+{"error":"Invalid input","details":[{"code":"invalid_type","expected":"object","received":"array","path":["properties"],"message":"Expected object, received array"}]}
+prototype pollution attempt                    HTTP 201  638B
+{"id":"fd54c1d5-afe4-450b-b3fb-173c1f672a2b","workspace_id":"e8d25b0f-a505-4636-97db-94c72f4e59be","document_type":"wiki","title":"proto","content":null,"yjs_state":null,"parent_id":null,"position":0,"properties":{},"tic
+
+########## GET path params ##########
+GET /api/documents/not-a-uuid                  HTTP 500  33B
+{"error":"Internal server error"}
+GET /api/issues/not-a-uuid                     HTTP 500  33B
+{"error":"Internal server error"}
+GET /api/documents/<bad>/backlinks             HTTP 500  33B
+{"error":"Internal server error"}
+GET /api/weeks/not-a-number                    HTTP 500  33B
+{"error":"Internal server error"}
+GET unknown api route                          HTTP 404  165B
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Error</title>
+</head>
+<body>
+<pre>Cannot GET /api/definitely-not-a-route</pre>
+</body>
+</html>
+
+
+########## query params ##########
+documents?type=bogus                           HTTP 500  33B
+{"error":"Internal server error"}
+documents?limit=-1                             HTTP 200  299827B
+[{"id":"fd54c1d5-afe4-450b-b3fb-173c1f672a2b","workspace_id":"e8d25b0f-a505-4636-97db-94c72f4e59be","document_type":"wiki","title":"proto","parent_id":null,"position":0,"ticket_number":null,"properties":{},"created_at":"
+documents?limit=999999999                      HTTP 200  299827B
+[{"id":"fd54c1d5-afe4-450b-b3fb-173c1f672a2b","workspace_id":"e8d25b0f-a505-4636-97db-94c72f4e59be","document_type":"wiki","title":"proto","parent_id":null,"position":0,"ticket_number":null,"properties":{},"created_at":"
+search?q= (empty)                              HTTP 200  1757B
+{"people":[{"id":"c219ac0b-7233-4926-ba10-7b6817184405","name":"Alice Chen","document_type":"person"},{"id":"ebf83d4e-1abc-4e10-8846-22e87b93f2a5","name":"Audit User 01","document_type":"person"},{"id":"9b9de4eb-dced-46f
+search?q=%25%25%25                             HTTP 200  28B
+{"people":[],"documents":[]}
+search?q=<script>                              HTTP 200  157B
+{"people":[],"documents":[{"id":"2d417cb4-e6b0-4971-90a0-50e4dbe86108","title":"<script>alert(1)</script>","document_type":"wiki","visibility":"workspace"}]}
+
+########## auth / login form ##########
+login empty body                               HTTP 400  97B
+{"success":false,"error":{"code":"VALIDATION_ERROR","message":"Email and password are required"}}
+login email=null                               HTTP 400  97B
+{"success":false,"error":{"code":"VALIDATION_ERROR","message":"Email and password are required"}}
+login sqli email                               HTTP 401  94B
+{"success":false,"error":{"code":"INVALID_CREDENTIALS","message":"Invalid email or password"}}
+login 100k password                            HTTP 401  94B
+{"success":false,"error":{"code":"INVALID_CREDENTIALS","message":"Invalid email or password"}}

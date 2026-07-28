@@ -1,0 +1,207 @@
+Yjs collaboration server attached
+Events WebSocket server attached
+CAIA not configured, skipping initialization
+API server running on http://localhost:3009
+CORS origin: http://localhost:5173
+SyntaxError: Unexpected end of JSON input
+    at JSON.parse (<anonymous>)
+    at parse (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/body-parser@1.20.4/node_modules/body-parser/lib/types/json.js:92:19)
+    at /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/body-parser@1.20.4/node_modules/body-parser/lib/read.js:128:18
+    at AsyncResource.runInAsyncScope (node:async_hooks:211:14)
+    at invokeCallback (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/raw-body@2.5.3/node_modules/raw-body/index.js:238:16)
+    at done (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/raw-body@2.5.3/node_modules/raw-body/index.js:227:7)
+    at IncomingMessage.onEnd (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/raw-body@2.5.3/node_modules/raw-body/index.js:287:7)
+    at IncomingMessage.emit (node:events:507:28)
+    at endReadableNT (node:internal/streams/readable:1696:12)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)
+Get document error: error: invalid input syntax for type uuid: "not-a-uuid"
+    at /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/pg-pool@3.10.1_pg@8.16.3/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async canAccessDocument (/Users/troy/repos/GAUNTLET/Ship/api/src/routes/documents.ts:19:18)
+    at async <anonymous> (/Users/troy/repos/GAUNTLET/Ship/api/src/routes/documents.ts:227:32) {
+  length: 142,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '133',
+  routine: 'string_to_uuid'
+}
+Get issue error: error: invalid input syntax for type uuid: "not-a-uuid"
+    at /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/pg-pool@3.10.1_pg@8.16.3/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async <anonymous> (/Users/troy/repos/GAUNTLET/Ship/api/src/routes/issues.ts:502:20) {
+  length: 142,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '133',
+  routine: 'string_to_uuid'
+}
+Get backlinks error: error: invalid input syntax for type uuid: "zzz"
+    at /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/pg-pool@3.10.1_pg@8.16.3/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async <anonymous> (/Users/troy/repos/GAUNTLET/Ship/api/src/routes/backlinks.ts:26:23) {
+  length: 135,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '133',
+  routine: 'string_to_uuid'
+}
+Get sprint error: error: invalid input syntax for type uuid: "not-a-number"
+    at /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/pg-pool@3.10.1_pg@8.16.3/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async <anonymous> (/Users/troy/repos/GAUNTLET/Ship/api/src/routes/weeks.ts:750:20) {
+  length: 144,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '133',
+  routine: 'string_to_uuid'
+}
+List documents error: error: invalid input value for enum document_type: "bogus"
+    at /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/pg-pool@3.10.1_pg@8.16.3/node_modules/pg-pool/index.js:45:11
+    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    at async <anonymous> (/Users/troy/repos/GAUNTLET/Ship/api/src/routes/documents.ts:131:20) {
+  length: 138,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $4 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'enum.c',
+  line: '128',
+  routine: 'enum_in'
+}
+[Collaboration] Loading wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5 from yjs_state
+file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/lib0@0.2.117/node_modules/lib0/decoding.js:263
+  throw errorUnexpectedEndOfArray
+  ^
+
+Error: Unexpected end of array
+    at Module.create (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/lib0@0.2.117/node_modules/lib0/error.js:12:28)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/lib0@0.2.117/node_modules/lib0/decoding.js:36:41
+    at ModuleJob.run (node:internal/modules/esm/module_job:271:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:547:26)
+    at async main (/Users/troy/repos/GAUNTLET/Ship/api/src/index.ts:21:25)
+
+Node.js v23.2.0
+Yjs collaboration server attached
+Events WebSocket server attached
+CAIA not configured, skipping initialization
+API server running on http://localhost:3009
+CORS origin: http://localhost:5173
+[Collaboration] Loading wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5 from yjs_state
+file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/lib0@0.2.117/node_modules/lib0/decoding.js:263
+  throw errorUnexpectedEndOfArray
+  ^
+
+Error: Unexpected end of array
+    at Module.create (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/lib0@0.2.117/node_modules/lib0/error.js:12:28)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/lib0@0.2.117/node_modules/lib0/decoding.js:36:41
+    at ModuleJob.run (node:internal/modules/esm/module_job:271:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:547:26)
+    at async main (/Users/troy/repos/GAUNTLET/Ship/api/src/index.ts:21:25)
+
+Node.js v23.2.0
+Yjs collaboration server attached
+Events WebSocket server attached
+CAIA not configured, skipping initialization
+API server running on http://localhost:3009
+CORS origin: http://localhost:5173
+[Collaboration] Loading wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5 from yjs_state
+Yjs collaboration server attached
+Events WebSocket server attached
+CAIA not configured, skipping initialization
+node:events:485
+      throw er; // Unhandled 'error' event
+      ^
+
+Error: listen EADDRINUSE: address already in use :::3009
+    at Server.setupListenHandle [as _listen2] (node:net:1912:16)
+    at listenInCluster (node:net:1969:12)
+    at Server.listen (node:net:2074:7)
+    at main (/Users/troy/repos/GAUNTLET/Ship/api/src/index.ts:39:10)
+Emitted 'error' event on Server instance at:
+    at emitErrorNT (node:net:1948:8)
+    at process.processTicksAndRejections (node:internal/process/task_queues:90:21) {
+  code: 'EADDRINUSE',
+  errno: -48,
+  syscall: 'listen',
+  address: '::',
+  port: 3009
+}
+
+Node.js v23.2.0
+file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/lib0@0.2.117/node_modules/lib0/decoding.js:263
+  throw errorUnexpectedEndOfArray
+  ^
+
+Error: Unexpected end of array
+    at Module.create (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/lib0@0.2.117/node_modules/lib0/error.js:12:28)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/lib0@0.2.117/node_modules/lib0/decoding.js:36:41
+    at ModuleJob.run (node:internal/modules/esm/module_job:271:25)
+    at async onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:547:26)
+    at async main (/Users/troy/repos/GAUNTLET/Ship/api/src/index.ts:21:25)
+
+Node.js v23.2.0
+Yjs collaboration server attached
+Events WebSocket server attached
+CAIA not configured, skipping initialization
+API server running on http://localhost:3009
+CORS origin: http://localhost:5173
+[Collaboration] Loading wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5 from yjs_state
+SIGTERM received, closing database pool...
+Database pool closed

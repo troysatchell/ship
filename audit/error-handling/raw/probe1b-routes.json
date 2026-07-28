@@ -1,0 +1,82 @@
+[
+  {
+    "route": "/weeks",
+    "finalUrl": "http://localhost:5173/weeks",
+    "mainTextLength": 18,
+    "mainTextPreview": "<no #main-content>",
+    "bodyTextLength": 0,
+    "events": [
+      "debug:[vite] connecting...",
+      "info:%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "debug:[vite] connected.",
+      "log:[Schema] Initialized schema version: 2",
+      "log:[RealtimeEvents] Connected",
+      "log:[RealtimeEvents] Received: connected",
+      "log:[RealtimeEvents] Received: pong"
+    ]
+  },
+  {
+    "route": "/search",
+    "finalUrl": "http://localhost:5173/search",
+    "mainTextLength": 18,
+    "mainTextPreview": "<no #main-content>",
+    "bodyTextLength": 0,
+    "events": [
+      "debug:[vite] connecting...",
+      "debug:[vite] connected.",
+      "info:%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "log:[RealtimeEvents] Connected",
+      "log:[RealtimeEvents] Received: connected",
+      "log:[RealtimeEvents] Received: pong"
+    ]
+  },
+  {
+    "route": "/this-route-does-not-exist",
+    "finalUrl": "http://localhost:5173/this-route-does-not-exist",
+    "mainTextLength": 18,
+    "mainTextPreview": "<no #main-content>",
+    "bodyTextLength": 0,
+    "events": [
+      "debug:[vite] connecting...",
+      "debug:[vite] connected.",
+      "info:%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "log:[RealtimeEvents] Connected",
+      "log:[RealtimeEvents] Received: connected",
+      "log:[RealtimeEvents] Received: pong"
+    ]
+  },
+  {
+    "route": "/documents/00000000-0000-0000-0000-000000000000",
+    "finalUrl": "http://localhost:5173/documents/00000000-0000-0000-0000-000000000000",
+    "mainTextLength": 34,
+    "mainTextPreview": "Document not found\nGo to Documents",
+    "bodyTextLength": 575,
+    "events": [
+      "debug:[vite] connecting...",
+      "debug:[vite] connected.",
+      "info:%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "error:404 GET http://localhost:3001/api/documents/00000000-0000-0000-0000-000000000000",
+      "error:Failed to load resource: the server responded with a status of 404 (Not Found)",
+      "error:Query document,00000000-0000-0000-0000-000000000000 failed: Error: Document not found\n    at queryFn (http://localhost:5173/src/pages/UnifiedDocumentPage.tsx:55",
+      "log:[RealtimeEvents] Connected",
+      "log:[RealtimeEvents] Received: connected"
+    ]
+  },
+  {
+    "route": "/documents/not-a-uuid",
+    "finalUrl": "http://localhost:5173/documents/not-a-uuid",
+    "mainTextLength": 40,
+    "mainTextPreview": "Failed to fetch document\nGo to Documents",
+    "bodyTextLength": 581,
+    "events": [
+      "debug:[vite] connecting...",
+      "debug:[vite] connected.",
+      "info:%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "log:[RealtimeEvents] Connected",
+      "error:500 GET http://localhost:3001/api/documents/not-a-uuid",
+      "error:Failed to load resource: the server responded with a status of 500 (Internal Server Error)",
+      "error:Query document,not-a-uuid failed: Error: Failed to fetch document\n    at queryFn (http://localhost:5173/src/pages/UnifiedDocumentPage.tsx:57:15)",
+      "log:[RealtimeEvents] Received: connected"
+    ]
+  }
+]

@@ -1,0 +1,498 @@
+{
+  "perFlow": [
+    {
+      "flow": "Load main page",
+      "url": "/",
+      "finalUrl": "http://localhost:5173/my-week",
+      "errors": 0,
+      "warnings": 0,
+      "total": 5
+    },
+    {
+      "flow": "View a document (wiki)",
+      "url": "/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "finalUrl": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "errors": 0,
+      "warnings": 0,
+      "total": 8
+    },
+    {
+      "flow": "List issues",
+      "url": "/issues",
+      "finalUrl": "http://localhost:5173/issues",
+      "errors": 0,
+      "warnings": 0,
+      "total": 5
+    },
+    {
+      "flow": "Load sprint/week board",
+      "url": "/weeks",
+      "finalUrl": "http://localhost:5173/weeks",
+      "errors": 0,
+      "warnings": 0,
+      "total": 5
+    },
+    {
+      "flow": "Search content",
+      "url": "/search",
+      "finalUrl": "http://localhost:5173/search",
+      "errors": 0,
+      "warnings": 0,
+      "total": 5
+    },
+    {
+      "flow": "Team allocation board",
+      "url": "/team/allocation",
+      "finalUrl": "http://localhost:5173/team/allocation",
+      "errors": 0,
+      "warnings": 0,
+      "total": 5
+    },
+    {
+      "flow": "Dashboard",
+      "url": "/dashboard",
+      "finalUrl": "http://localhost:5173/dashboard",
+      "errors": 0,
+      "warnings": 0,
+      "total": 5
+    },
+    {
+      "flow": "My week",
+      "url": "/my-week",
+      "finalUrl": "http://localhost:5173/my-week",
+      "errors": 0,
+      "warnings": 0,
+      "total": 5
+    }
+  ],
+  "totals": {
+    "error": 2,
+    "warning": 0,
+    "info": 31,
+    "all": 51
+  },
+  "grouped": [
+    {
+      "level": "error",
+      "kind": "httperror",
+      "sample": "401 GET http://localhost:3001/api/auth/me",
+      "count": 1
+    },
+    {
+      "level": "error",
+      "kind": "console",
+      "sample": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "count": 1
+    }
+  ],
+  "raw": [
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/login",
+      "tag": "main",
+      "t": 1785176633030
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/login",
+      "tag": "main",
+      "t": 1785176633052
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/login",
+      "tag": "main",
+      "t": 1785176633123
+    },
+    {
+      "kind": "httperror",
+      "level": "error",
+      "text": "401 GET http://localhost:3001/api/auth/me",
+      "url": "http://localhost:5173/login",
+      "tag": "main",
+      "t": 1785176633126
+    },
+    {
+      "kind": "console",
+      "level": "error",
+      "text": "Failed to load resource: the server responded with a status of 401 (Unauthorized)",
+      "url": "http://localhost:5173/login",
+      "tag": "main",
+      "t": 1785176633126
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Schema] Initialized schema version: 2",
+      "url": "http://localhost:5173/login",
+      "tag": "main",
+      "t": 1785176633173
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785176633380
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/docs",
+      "tag": "main",
+      "t": 1785176633382
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/",
+      "tag": "main",
+      "t": 1785176633962
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/",
+      "tag": "main",
+      "t": 1785176633965
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/",
+      "tag": "main",
+      "t": 1785176634019
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/my-week",
+      "tag": "main",
+      "t": 1785176634102
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/my-week",
+      "tag": "main",
+      "t": 1785176634103
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "main",
+      "t": 1785176637182
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "main",
+      "t": 1785176637184
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "main",
+      "t": 1785176637210
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "main",
+      "t": 1785176637279
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "main",
+      "t": 1785176637291
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] IndexedDB synced for wiki:d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "main",
+      "t": 1785176637346
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connected for wiki:d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "main",
+      "t": 1785176637356
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket sync: true for wiki:d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "url": "http://localhost:5173/documents/d8a6222f-ebfd-4273-912e-95daf1c518f5",
+      "tag": "main",
+      "t": 1785176637363
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/issues",
+      "tag": "main",
+      "t": 1785176640371
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/issues",
+      "tag": "main",
+      "t": 1785176640375
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/issues",
+      "tag": "main",
+      "t": 1785176640390
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/issues",
+      "tag": "main",
+      "t": 1785176640597
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/issues",
+      "tag": "main",
+      "t": 1785176640646
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/weeks",
+      "tag": "main",
+      "t": 1785176643680
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/weeks",
+      "tag": "main",
+      "t": 1785176643682
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/weeks",
+      "tag": "main",
+      "t": 1785176643696
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/weeks",
+      "tag": "main",
+      "t": 1785176643737
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/weeks",
+      "tag": "main",
+      "t": 1785176643737
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/search",
+      "tag": "main",
+      "t": 1785176646753
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/search",
+      "tag": "main",
+      "t": 1785176646757
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/search",
+      "tag": "main",
+      "t": 1785176646786
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/search",
+      "tag": "main",
+      "t": 1785176646841
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/search",
+      "tag": "main",
+      "t": 1785176646841
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/team/allocation",
+      "tag": "main",
+      "t": 1785176649857
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/team/allocation",
+      "tag": "main",
+      "t": 1785176649861
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/team/allocation",
+      "tag": "main",
+      "t": 1785176649907
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/team/allocation",
+      "tag": "main",
+      "t": 1785176649951
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/team/allocation",
+      "tag": "main",
+      "t": 1785176649954
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/dashboard",
+      "tag": "main",
+      "t": 1785176653024
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/dashboard",
+      "tag": "main",
+      "t": 1785176653028
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/dashboard",
+      "tag": "main",
+      "t": 1785176653056
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/dashboard",
+      "tag": "main",
+      "t": 1785176653118
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/dashboard",
+      "tag": "main",
+      "t": 1785176653121
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/my-week",
+      "tag": "main",
+      "t": 1785176656159
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/my-week",
+      "tag": "main",
+      "t": 1785176656161
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/my-week",
+      "tag": "main",
+      "t": 1785176656194
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/my-week",
+      "tag": "main",
+      "t": 1785176656251
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/my-week",
+      "tag": "main",
+      "t": 1785176656255
+    }
+  ]
+}

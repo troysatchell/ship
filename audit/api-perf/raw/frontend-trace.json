@@ -1,0 +1,459 @@
+{
+  "login": [
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 401,
+      "ms": 8,
+      "bytes": 78
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/caia/status",
+      "status": 200,
+      "ms": 42,
+      "bytes": 43
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/caia/status",
+      "status": 200,
+      "ms": 50,
+      "bytes": 43
+    },
+    {
+      "method": "GET",
+      "path": "/api/setup/status",
+      "status": 200,
+      "ms": 50,
+      "bytes": 44
+    },
+    {
+      "method": "GET",
+      "path": "/api/setup/status",
+      "status": 200,
+      "ms": 51,
+      "bytes": 44
+    },
+    {
+      "method": "GET",
+      "path": "/api/csrf-token",
+      "status": 200,
+      "ms": 0,
+      "bytes": 268
+    },
+    {
+      "method": "POST",
+      "path": "/api/auth/login",
+      "status": 200,
+      "ms": 66,
+      "bytes": 377
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 9,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/standups/status",
+      "status": 200,
+      "ms": 12,
+      "bytes": 30
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents?type=wiki",
+      "status": 200,
+      "ms": 15,
+      "bytes": 37806
+    },
+    {
+      "method": "GET",
+      "path": "/api/programs",
+      "status": 200,
+      "ms": 48,
+      "bytes": 1623
+    },
+    {
+      "method": "GET",
+      "path": "/api/projects",
+      "status": 200,
+      "ms": 49,
+      "bytes": 13625
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 48,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/issues",
+      "status": 200,
+      "ms": 49,
+      "bytes": 379907
+    },
+    {
+      "method": "GET",
+      "path": "/api/team/people?includeArchived=true",
+      "status": 200,
+      "ms": 49,
+      "bytes": 4657
+    },
+    {
+      "method": "GET",
+      "path": "/api/accountability/action-items",
+      "status": 200,
+      "ms": 50,
+      "bytes": 483
+    }
+  ],
+  "Load main page": [
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200,
+      "ms": 33,
+      "bytes": 377
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 20,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 21,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents?type=wiki",
+      "status": 200,
+      "ms": 3,
+      "bytes": 37806
+    },
+    {
+      "method": "GET",
+      "path": "/api/dashboard/my-week",
+      "status": 200,
+      "ms": 9,
+      "bytes": 1221
+    }
+  ],
+  "Dashboard": [
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200,
+      "ms": 29,
+      "bytes": 377
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 17,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 20,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents?type=wiki",
+      "status": 200,
+      "ms": 3,
+      "bytes": 37806
+    },
+    {
+      "method": "GET",
+      "path": "/api/weeks/my-action-items",
+      "status": 200,
+      "ms": 3,
+      "bytes": 19
+    },
+    {
+      "method": "GET",
+      "path": "/api/weeks",
+      "status": 200,
+      "ms": 11,
+      "bytes": 4351
+    },
+    {
+      "method": "GET",
+      "path": "/api/weeks/86c5da0c-006c-4842-aa27-4c88adbc7883/standups",
+      "status": 200,
+      "ms": 3,
+      "bytes": 2
+    },
+    {
+      "method": "GET",
+      "path": "/api/weeks/c574f6fe-2202-4b02-8f45-cf098a0b5335/standups",
+      "status": 200,
+      "ms": 3,
+      "bytes": 2
+    },
+    {
+      "method": "GET",
+      "path": "/api/weeks/bfa75b76-961c-467d-a433-d8219caffc43/standups",
+      "status": 200,
+      "ms": 4,
+      "bytes": 2
+    },
+    {
+      "method": "GET",
+      "path": "/api/weeks/43d126ce-d95e-42f1-8be7-f6629f175069/standups",
+      "status": 200,
+      "ms": 4,
+      "bytes": 2
+    },
+    {
+      "method": "GET",
+      "path": "/api/weeks/c2610f2b-2496-4af1-ab1c-90e99a99f1c5/standups",
+      "status": 200,
+      "ms": 4,
+      "bytes": 2
+    },
+    {
+      "method": "GET",
+      "path": "/api/dashboard/my-focus",
+      "status": 200,
+      "ms": 6,
+      "bytes": 2853
+    }
+  ],
+  "Docs list": [
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200,
+      "ms": 25,
+      "bytes": 377
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 20,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents?type=wiki",
+      "status": 200,
+      "ms": 20,
+      "bytes": 37806
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 24,
+      "bytes": 192
+    }
+  ],
+  "View a document": [
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200,
+      "ms": 22,
+      "bytes": 377
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents/03697480-487d-41fc-926a-7dfcffff8447",
+      "status": 200,
+      "ms": 18,
+      "bytes": 849
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 18,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents?type=wiki",
+      "status": 200,
+      "ms": 19,
+      "bytes": 37806
+    },
+    {
+      "method": "GET",
+      "path": "/api/team/people",
+      "status": 200,
+      "ms": 19,
+      "bytes": 4657
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 19,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents/03697480-487d-41fc-926a-7dfcffff8447/comments",
+      "status": 200,
+      "ms": 8,
+      "bytes": 2
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents/03697480-487d-41fc-926a-7dfcffff8447/backlinks",
+      "status": 200,
+      "ms": 8,
+      "bytes": 2
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents/03697480-487d-41fc-926a-7dfcffff8447/backlinks",
+      "status": 200,
+      "ms": 8,
+      "bytes": 2
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents/03697480-487d-41fc-926a-7dfcffff8447/backlinks",
+      "status": 200,
+      "ms": 14,
+      "bytes": 2
+    }
+  ],
+  "List issues": [
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200,
+      "ms": 24,
+      "bytes": 377
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 142,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents?type=wiki",
+      "status": 200,
+      "ms": 143,
+      "bytes": 37868
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 142,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/accountability/action-items",
+      "status": 200,
+      "ms": 143,
+      "bytes": 483
+    }
+  ],
+  "Load sprint board": [
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200,
+      "ms": 21,
+      "bytes": 377
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 15,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/documents?type=wiki",
+      "status": 200,
+      "ms": 16,
+      "bytes": 37868
+    },
+    {
+      "method": "GET",
+      "path": "/api/team/projects",
+      "status": 200,
+      "ms": 16,
+      "bytes": 3403
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/session",
+      "status": 200,
+      "ms": 16,
+      "bytes": 192
+    },
+    {
+      "method": "GET",
+      "path": "/api/team/projects",
+      "status": 200,
+      "ms": 16,
+      "bytes": 3403
+    },
+    {
+      "method": "GET",
+      "path": "/api/team/assignments",
+      "status": 200,
+      "ms": 16,
+      "bytes": 22655
+    },
+    {
+      "method": "GET",
+      "path": "/api/team/grid",
+      "status": 200,
+      "ms": 16,
+      "bytes": 5948
+    },
+    {
+      "method": "GET",
+      "path": "/api/team/grid",
+      "status": 200,
+      "ms": 61,
+      "bytes": 5948
+    },
+    {
+      "method": "GET",
+      "path": "/api/team/assignments",
+      "status": 200,
+      "ms": 61,
+      "bytes": 22655
+    }
+  ],
+  "Search content": [
+    {
+      "method": "GET",
+      "path": "/api/documents",
+      "status": 200,
+      "ms": 13,
+      "bytes": 293891
+    }
+  ]
+}

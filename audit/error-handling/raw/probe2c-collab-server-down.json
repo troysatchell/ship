@@ -1,0 +1,93 @@
+{
+  "doc": "6666256d-0f31-4979-9fd0-f4083bb82c73",
+  "log": [
+    "[1] healthy: status = \"Saved\" | alpha in DB = true",
+    "[2] collab server DOWN, HTTP up. status = \"Saved\"",
+    "[2] any visible warning/toast on page? []",
+    "[3] typed while collab down. status = \"Saved\"",
+    "[3] visible in editor = true | in DB = true",
+    "[3] console errors so far = 0",
+    "[4] collab server BACK UP (killer disarmed). watching for self-heal...",
+    "    t+2.5s status=\"Saved\" lostEditInDb=true collabSocketOpens=1",
+    "[5] SELF-HEALED without reload? true",
+    "[7] final DB content = \"{\\\"type\\\": \\\"doc\\\", \\\"content\\\": [{\\\"type\\\": \\\"paragraph\\\", \\\"content\\\": [{\\\"text\\\": \\\"C_ONLINE_ALPHA C_LOST_BRAVO \\\", \\\"type\\\": \\\"text\\\"}]}]}\"",
+    "--- console errors ---"
+  ],
+  "collabOpens": [
+    1785177104104
+  ],
+  "events": [
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "main",
+      "t": 1785177103827
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "main",
+      "t": 1785177103853
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "main",
+      "t": 1785177103925
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Schema] Initialized schema version: 2",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "main",
+      "t": 1785177103933
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "main",
+      "t": 1785177104047
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "main",
+      "t": 1785177104056
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] IndexedDB synced for wiki:6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "main",
+      "t": 1785177104097
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connected for wiki:6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "main",
+      "t": 1785177104119
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket sync: true for wiki:6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "url": "http://localhost:5173/documents/6666256d-0f31-4979-9fd0-f4083bb82c73",
+      "tag": "main",
+      "t": 1785177104121
+    }
+  ]
+}

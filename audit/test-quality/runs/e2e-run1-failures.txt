@@ -1,0 +1,151 @@
+### inline-comments.spec.ts:118 :: canceling a comment removes the highlight
+    attempt=0 status=failed duration=12014ms
+    Error: expect(locator).not.toBeVisible() failed
+    
+    Locator:  locator('.comment-highlight')
+    Expected: not visible
+    Received: visible
+    Timeout:  10000ms
+    
+    Call log:
+      - Expect "not toBeVisible" with timeout 10000ms
+      - waiting for locator('.comment-highlight')
+        14 × locator resolved to <span class="comment-highlight" data-comment-id="47b9d22b-3705-4a74-9ccd-9035f44af40f">comment that gets canceled</span>
+           - unexpected value "visible"
+    
+    
+
+### inline-comments.spec.ts:118 :: canceling a comment removes the highlight
+    attempt=1 status=failed duration=15286ms
+    Error: expect(locator).not.toBeVisible() failed
+    
+    Locator:  locator('.comment-highlight')
+    Expected: not visible
+    Received: visible
+    Timeout:  10000ms
+    
+    Call log:
+      - Expect "not toBeVisible" with timeout 10000ms
+      - waiting for locator('.comment-highlight')
+        14 × locator resolved to <span class="comment-highlight" data-comment-id="1140cc9f-f225-46a8-b3b3-2327ad18741f">comment that gets canceled</span>
+           - unexpected value "visible"
+    
+    
+
+### my-week-stale-data.spec.ts:63 :: retro edits are visible on /my-week after navigating back
+    attempt=0 status=timedOut duration=60035ms
+    Test timeout of 60000ms exceeded.
+    ---
+    Error: locator.click: Test timeout of 60000ms exceeded.
+    Call log:
+      - waiting for getByRole('button', { name: /create retro for this week/i })
+    
+    
+      67 |
+      68 |     // 2. Create a retro (click the main create button, not the nudge link)
+    > 69 |     await page.getByRole('button', { name: /create retro for this week/i }).click()
+         |                                                                             ^
+      70 |
+      71 |     // 3. Should navigate to the document editor
+      72 |     await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+/, { timeout: 10000 })
+
+### performance.spec.ts:366 :: many images do not crash the editor
+    attempt=0 status=failed duration=61151ms
+    TimeoutError: page.waitForEvent: Timeout 45000ms exceeded while waiting for event "filechooser"
+    =========================== logs ===========================
+    waiting for event "filechooser"
+    ============================================================
+    
+      408 |       imagePaths.push(tmpPath)
+      409 |
+    > 410 |       const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 45000 })
+          |                                       ^
+      411 |       await page.keyboard.press('Enter')
+      412 |
+      413 |       const fileChooser = await fileChooserPromise
+        at /Users/troy/repos/GAUNTLET/Ship/e2e/performance.spec.ts:410:39
+
+### programs.spec.ts:212 :: program cards show emoji or initial badges
+    attempt=0 status=failed duration=2977ms
+    Error: expect(locator).toBeVisible() failed
+    
+    Locator: locator('button:has-text("issues")').first().locator('.rounded-lg.text-sm.font-bold')
+    Expected: visible
+    Timeout: 2000ms
+    Error: element(s) not found
+    
+    Call log:
+      - Expect "toBeVisible" with timeout 2000ms
+      - waiting for locator('button:has-text("issues")').first().locator('.rounded-lg.text-sm.font-bold')
+    
+    
+      221 |       // Each card should have a colored badge
+      222 |       const badge = programCards.first().locator('.rounded-lg.text-sm.font-bold')
+
+### project-weeks.spec.ts:178 :: project link in Properties sidebar navigates back to project
+    attempt=0 status=failed duration=5696ms
+    Error: expect(locator).toBeVisible() failed
+    
+    Locator: locator('a:has-text("Navigation Test Project")')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+    
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for locator('a:has-text("Navigation Test Project")')
+    
+    
+      203 |     // Click the project link to navigate back
+      204 |     const projectLink = page.locator('a:has-text("Navigation Test Project")');
+
+### status-overview-heatmap.spec.ts:69 :: displays split cells for plan/retro status
+    attempt=0 status=failed duration=6314ms
+    Error: expect(locator).toBeVisible() failed
+    
+    Locator: getByRole('button', { name: /Weekly Plan/ }).first()
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+    
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('button', { name: /Weekly Plan/ }).first()
+    
+    
+      80 |     // Should see plan/retro cell buttons with status tooltips
+      81 |     const planButton = page.getByRole('button', { name: /Weekly Plan/ }).first()
+
+### team-mode.spec.ts:408 :: clicking collapsed header expands the group
+    attempt=0 status=failed duration=6080ms
+    Error: expect(locator).toBeVisible() failed
+    
+    Locator: getByRole('button', { name: /Unassigned \d+/ })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+    
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('button', { name: /Unassigned \d+/ })
+    
+    
+      415 |       // Find and collapse the Unassigned group
+      416 |       const groupHeader = page.getByRole('button', { name: /Unassigned \d+/ })
+
+### weekly-accountability.spec.ts:384 :: Allocation grid shows person with assigned issues and plan/retro status
+    attempt=0 status=failed duration=551ms
+    Error: expect(received).toBe(expected) // Object.is equality
+    
+    Expected: "96e5dadb-632c-428f-a919-d5891a43da6a"
+    Received: null
+    
+      467 |     if (week1Data) {
+      468 |       expect(week1Data.isAllocated).toBe(true);
+    > 469 |       expect(week1Data.planId).toBe(plan.id);
+          |                                ^
+      470 |     }
+      471 |   });
+      472 |
+        at /Users/troy/repos/GAUNTLET/Ship/e2e/weekly-accountability.spec.ts:469:32
+

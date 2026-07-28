@@ -1,0 +1,138 @@
+{
+  "doc": "ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+  "mode": "client-offline",
+  "log": [
+    "[0] status after load = Saved | ws events: [{\"ev\":\"open\",\"url\":\"ws://localhost:5173/?token=keCp-R5YTYF3\",\"t\":1785176980057},{\"ev\":\"open\",\"url\":\"ws://localhost:3001/events\",\"t\":1785176980173},{\"ev\":\"open\",\"url\":\"ws://localhost:3001/collaboration/wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5\",\"t\":1785176980296}]",
+    "[1] online edit persisted to DB? true | status = Saved",
+    "[2] status while OFFLINE = \"Offline\"",
+    "[3] offline text visible in editor? true",
+    "[3] status while offline+typing = \"Offline\"",
+    "[3] offline text in DB (expected false)? false",
+    "[4] t+2.5s reconnect status=\"Saved\" offlineEditInDb=true",
+    "[5] FINAL offline edit recovered without reload? true",
+    "[5] FINAL status = \"Saved\"",
+    "--- console errors during probe ---",
+    "   ERR GET http://localhost:3001/api/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5/backlinks :: net::ERR_INTERNET_DISCONNECTED",
+    "   ERR Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+    "   ERR Error fetching backlinks: TypeError: Failed to fetch\n    at fetchBacklinks (http://localhost:5173/src/components/editor/BacklinksPanel.tsx:41:32)",
+    "--- websocket lifecycle ---",
+    "    open ws://localhost:5173/?token=keCp-R5YTYF3 2026-07-27T18:29:40.057Z",
+    "    open ws://localhost:3001/events 2026-07-27T18:29:40.173Z",
+    "    open ws://localhost:3001/collaboration/wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5 2026-07-27T18:29:40.296Z"
+  ],
+  "wsLog": [
+    {
+      "ev": "open",
+      "url": "ws://localhost:5173/?token=keCp-R5YTYF3",
+      "t": 1785176980057
+    },
+    {
+      "ev": "open",
+      "url": "ws://localhost:3001/events",
+      "t": 1785176980173
+    },
+    {
+      "ev": "open",
+      "url": "ws://localhost:3001/collaboration/wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "t": 1785176980296
+    }
+  ],
+  "events": [
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connecting...",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176979997
+    },
+    {
+      "kind": "console",
+      "level": "info",
+      "text": "%cDownload the React DevTools for a better development experience: https://reactjs.org/link/react-devtools font-weight:bold",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176980017
+    },
+    {
+      "kind": "console",
+      "level": "debug",
+      "text": "[vite] connected.",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176980091
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Schema] Initialized schema version: 2",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176980101
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Connected",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176980226
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[RealtimeEvents] Received: connected",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176980236
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] IndexedDB synced for wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176980284
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket status: connected for wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176980317
+    },
+    {
+      "kind": "console",
+      "level": "log",
+      "text": "[Editor] WebSocket sync: true for wiki:ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176980319
+    },
+    {
+      "kind": "requestfailed",
+      "level": "error",
+      "text": "GET http://localhost:3001/api/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5/backlinks :: net::ERR_INTERNET_DISCONNECTED",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176990228
+    },
+    {
+      "kind": "console",
+      "level": "error",
+      "text": "Failed to load resource: net::ERR_INTERNET_DISCONNECTED",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176990228
+    },
+    {
+      "kind": "console",
+      "level": "error",
+      "text": "Error fetching backlinks: TypeError: Failed to fetch\n    at fetchBacklinks (http://localhost:5173/src/components/editor/BacklinksPanel.tsx:41:32)",
+      "url": "http://localhost:5173/documents/ad1094f6-50b4-4d7e-a0f4-6d33c7a5f2f5",
+      "tag": "main",
+      "t": 1785176990229
+    }
+  ]
+}
