@@ -6,6 +6,25 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 End **every** response with a single short one-line quote from Zim or GIR (Invader Zim), on its own line, formatted as a blockquote: `> — GIR: "..."` or `> — Zim: "..."`. Keep it to one short line (a catchphrase, not a long excerpt) and vary it. This is a deliberate canary: if this line is missing from a response, this `CLAUDE.md` is not being loaded/followed — which is the signal the maintainer is watching for.
 
+## Claim provenance — read before asserting anything
+
+Three errors in this project shared one cause: **unmarked inference** — a derived claim presented with the confidence of an observed one. The claim survived; the evidence class that produced it did not.
+
+- **A11Y-1** said the sidebar was *"announced incorrectly by screen readers."* That was reasoning from an axe rule, never heard. Reality, once a human ran VoiceOver: the titles are **not announced at all** — a worse defect, and one that was statically detectable the whole time (no `tabIndex`, no `onKeyDown` in `DocumentTreeItem.tsx`).
+- **DB-1** was called a fresh-deploy blocker. It is the opposite: `migrate.ts:38-41` runs `schema.sql` first, so a fresh database comes out complete. `AUDIT_REPORT.md` said so plainly, in a section that had already been read.
+- A container smoke test reported as *"verified end-to-end"* ran under `NODE_ENV=development`, which returns early past the exact code that was broken (`ssm.ts:39`). It passed **because** it skipped the failure.
+
+The audit report format already guards against this — every finding separates **Evidence** from **Hypothesis** from **Estimated impact**. Prose, scoping calls, and status updates have no such structure, and that is where all three failures happened.
+
+**For any claim that will drive a decision:**
+
+1. **Observed or derived?** If it wasn't run, say what it was derived from. *"axe reports X, which usually means Y"* — not *"it does Y."*
+2. **General or specific?** A mechanism's usual behaviour is not its behaviour in this case. DB-1 skips migrations in general; against a fresh database it doesn't matter. Check the case, not the category.
+3. **Verified under what?** State the configuration a test ran under. If that configuration could mask the failure mode, the test proves less than it appears to. *"Passed"* → *"passed under X, which does not exercise Y."*
+4. **Is the disconfirming evidence already here?** Twice it was — in the audit report, and in a source file that could have been opened. Read the artifact before asserting about it.
+
+When one of these turns out wrong, correct it plainly and say what it changes downstream. Cheap to catch, expensive to inherit.
+
 ## Memory Bank (ShipShape sprint)
 
 `memory-bank/` holds the sprint's working memory — separate from this file (codebase conventions) and `docs/` (architecture docs).
