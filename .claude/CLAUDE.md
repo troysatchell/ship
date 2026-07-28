@@ -99,7 +99,11 @@ pnpm test             # Runs api unit tests via vitest
 
 **New document titles**: All document types use `"Untitled"` as the default title. No variations like "Untitled Issue" or "Untitled Project". The shared Editor component expects this exact string to show placeholder styling. See `docs/document-model-conventions.md` for details.
 
-**Document associations**: Documents reference other documents via the `document_associations` junction table (relationship types: `parent`, `project`, `sprint`, `program`). Legacy columns `program_id` and `project_id` still exist; `sprint_id` was dropped by migration 027.
+**Document associations**: Documents reference other documents via the `document_associations` junction table (relationship types: `parent`, `project`, `sprint`, `program`).
+
+All three legacy association columns have been dropped from `documents` — `sprint_id` and `project_id` by `027_drop_legacy_association_columns.sql`, and `program_id` by `029_drop_program_id_column.sql`. Do not write new code against them.
+
+> Two caveats. `sprint_iterations.sprint_id` (`schema.sql:272`) is a **different column on a different table** and is current — don't confuse the two. And because `pnpm db:migrate` can silently under-apply (audit finding **DB-1**), a given database may not have run 027/029 yet; confirm with `\d documents` before relying on their absence.
 
 **Editor content**: All document types use the same TipTap JSON content structure stored in `content` column, with Yjs binary state in `yjs_state` for conflict-free collaboration.
 

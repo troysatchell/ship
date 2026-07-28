@@ -19,6 +19,32 @@
 
 ---
 
+## ShipShape Audit — about this fork
+
+> This is a fork of [US-Department-of-the-Treasury/ship](https://github.com/US-Department-of-the-Treasury/ship), audited for the GauntletAI **ShipShape** sprint. The upstream product documentation continues below and is unchanged.
+
+| Deliverable | Location |
+|---|---|
+| **Audit report** — 68 findings across 8 categories, with methodology, raw data and severity ranking | [`audit/AUDIT_REPORT.md`](audit/AUDIT_REPORT.md) |
+| **Codebase orientation** — architecture write-up, traced request flow, 10× assessment | [`audit/ORIENTATION.md`](audit/ORIENTATION.md) |
+| **Per-category baselines** — machine-readable, used for before/after comparison | `audit/<category>/baseline.json` + `baseline.md` |
+
+**Baseline:** commit `076a183`, measured 2026-07-27 against 500 documents / 20 users on PostgreSQL 15-alpine.
+**Findings:** 4 Critical · 22 High · 29 Medium · 13 Low, across type safety, bundle size, API response time, database queries, test quality, error handling, accessibility, and Terraform/IaC.
+
+No application or infrastructure source (`api/`, `web/`, `shared/`, `terraform/`) was modified during the audit phase — measurements reflect the commit above.
+
+### Before you run this locally
+
+Four things the setup guide below does not mention, all of them audit findings:
+
+- **`pnpm db:migrate` stops after migration 010 and still exits `0`.** Verify `schema_migrations` has 42 rows before trusting your schema. *(DB-1, Critical)*
+- **`pnpm test` truncates whatever `DATABASE_URL` points at** — including your dev database. Use an isolated one. *(TEST-9)*
+- **Root `pnpm test` runs the API package only.** Web unit tests need `pnpm --filter @ship/web test`, and 13 of them currently fail. *(TEST-1)*
+- **`pnpm dev` picks its own ports** and writes them to a repo-root `.ports` file — don't assume 3000/5173.
+
+---
+
 ## What is Ship?
 
 Ship is a project management tool that combines documentation, issue tracking, and plan-driven weekly workflows in one place. Instead of switching between a wiki, a task tracker, and a spreadsheet, everything lives together.
