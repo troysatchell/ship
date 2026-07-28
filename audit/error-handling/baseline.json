@@ -1,0 +1,121 @@
+{
+  "category": "error-handling",
+  "mode": "baseline",
+  "commit": "076a18371da0a09f88b5329bd59611c4bc9536bb",
+  "dirty": true,
+  "date": "2026-07-27T13:55:00-05:00",
+  "environment": {
+    "hardware": "Apple Mac16,7 — 14 cores, 24 GB RAM (arm64)",
+    "os": "Darwin 25.5.0 arm64 / macOS 26.5.1",
+    "node": "v23.2.0",
+    "dataVolume": "500 documents (254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project / 6 standup / 5 program), 20 users",
+    "concurrency": "single-user probes + one 2-context concurrency probe (probe4)",
+    "scaffolding": [
+      "Ran a dedicated api instance on :3009 for error-handling probes (kept the :3001 dev server untouched); server log tailed to audit/error-handling/raw/api-3009.log throughout.",
+      "Browser automation via repo Playwright 1.57.0 (Chromium), logged in as dev@ship.local; network conditions (offline, Fast 3G, WS route interception) applied via CDP/Playwright — no application source modified.",
+      "Fault injection (429/500 on PATCH, HTML 404, session-row deletion/expiry in Postgres) done at the network/DB layer only; reverted after each probe."
+    ]
+  },
+  "metrics": {
+    "consoleErrorsNormalUsage": 0,
+    "consoleWarningsNormalUsage": 0,
+    "normalUsageFlowsWalked": 8,
+    "benignPreLoginErrors": 1,
+    "serverUnhandledRejections": 0,
+    "serverUncaughtExceptionCrashes": 3,
+    "disconnectRecovery": "Partial — browser-offline recovers; collaboration-WS-only outage = Fail (silent data loss)",
+    "errorBoundariesPresent": 2,
+    "errorBoundaryGaps": "app shell/sidebars outside Outlet boundary; login/public routes unguarded; no router-root boundary; no react-router errorElement",
+    "silentWriteFailures": 4,
+    "clientOnlyValidationGaps": 2,
+    "xssExecuted": false,
+    "findingsTotal": 9,
+    "critical": 2,
+    "high": 3,
+    "medium": 2,
+    "low": 2
+  },
+  "findings": [
+    {
+      "id": "ERR-1",
+      "severity": "Critical",
+      "title": "Collaboration WebSocket unreachable at load → edits silently lost; sync indicator falsely reads \"Cached\"/\"Saved\"",
+      "location": "web/src/components/Editor.tsx (y-websocket provider + sync-status indicator); api/src/collaboration/index.ts (server upgrade at :610-679)",
+      "evidence": "probe2-ws-drop.json: /collaboration socket closed immediately; indicator='Cached'; typed text visible in editor but inDb=false; even 20s after the WS healed, status still 'Cached' and inDb=false; FINAL 'recovered w/o reload?'=false. probe2d-ws-unavailable.json: collab WS refused at load; typed; inDb=false; 60s watch never self-heals (refusedTotal=7); after MANUAL RELOAD editor shows text but inDb=false and final DB content=\"\" — content permanently lost. No offline/error vocabulary ever shown to the user (page-text scan returned []). Contrast probe2-client-offline (whole browser offline) which DOES recover (persisted=true), and probe2e (WS genuinely restored) which self-heals (inDb=true) — so the failure is specific to a collaboration socket that never completes its initial sync.",
+      "hypothesis": "When the /collaboration socket is unreachable but HTTP is alive, the editor shows 'Cached' and keeps accepting edits, but the y-websocket provider never completes the initial sync handshake, so those Yjs updates are held only in the client (and IndexedDB) and are never flushed to the server. The status indicator maps 'has local cache' to a reassuring 'Cached'/'Saved' label rather than surfacing 'not syncing'. On reload before any successful sync, the client cache is discarded/overwritten and the edits are gone.",
+      "estimatedImpact": "Real user-facing data loss whenever the collaboration server/endpoint is unreachable at editor load (collab crash, proxy/LB dropping WS upgrades, a poisoned doc that crashes the loader — see ERR-9). Fixing it (surface a real 'not syncing / changes not saved' state and block the false 'Saved') is the mandatory data-loss fix for the improvement target."
+    },
+    {
+      "id": "ERR-2",
+      "severity": "Critical",
+      "title": "Session revocation/expiry not enforced on live collaboration sockets — a logged-out user keeps writing to documents",
+      "location": "api/src/collaboration/index.ts:659-679 (session validated only at WS upgrade) and :718-745 (per-message handler never re-checks the session)",
+      "evidence": "probe7-retry-and-revocation.json (7c): DELETED all 10 session rows server-side (user fully logged out), then 'POST-REVOKE text written to DB by the WS?'=true, and 'after another 60s, later text also written?'=true; sync indicator='Saved'; no visible session warning. probe6-mixed.json (6.4): forced all sessions to expired in DB (11 rows) — post-expiry the editor still writes to the DB via the WS (inDb=true) even though REST calls (backlinks) correctly 401. The upgrade handler calls validateWebSocketSession once; handleMessage()/schedulePersist run for the life of the socket with no re-validation.",
+      "hypothesis": "Auth is a connect-time gate, not an ongoing check. Once the socket is open, message handling and persistence have no notion of session lifetime, so revoked or expired credentials keep persisting writes until the socket happens to close.",
+      "estimatedImpact": "Security exposure: logout/session-revocation does not stop an open editor from mutating documents; an attacker (or a shared/hijacked machine) retains write access after the session is killed. Fix: periodically re-validate the session on the socket (and close it on failure). Cross-references ERR-1 (both live in the collaboration server)."
+    },
+    {
+      "id": "ERR-3",
+      "severity": "High",
+      "title": "Rejected document writes (429/500 PATCH) are silently dropped; the sync indicator shows \"Saved\" over an unsaved value",
+      "location": "web/src/components/Editor.tsx / document PATCH mutation + sync-status indicator; api PATCH /api/documents/:id",
+      "evidence": "probe6-mixed.json 6.1: PATCH forced to 429 → title box still shows 'RENAMED WHILE RATE LIMITED', DB title unchanged (write dropped), on-screen indicator='Saved', 6× 429 console errors. 6.2: PATCH forced to 500 → title box shows 'RENAMED WHILE SERVER 500', DB unchanged, indicator='Saved'. probe7a: a rejected rename fired 14 PATCH retries and DID raise a transient [role=alert] 'Failed to update document' toast, but the persistent sync indicator still read 'Saved' and the input kept the unsaved value — a direct contradiction the user is likely to trust the wrong half of.",
+      "hypothesis": "Title/property edits optimistically update local state and the 'Saved' indicator without gating on the PATCH response; the retry/toast path exists but does not roll the input back or flip the persistent indicator to a failed state.",
+      "estimatedImpact": "Users believe a rename/property change persisted when it did not (High: silent failure on a write). Fix: reflect the actual mutation state in the indicator and keep the field visibly dirty until the write succeeds."
+    },
+    {
+      "id": "ERR-4",
+      "severity": "High",
+      "title": "Editing a document that is deleted elsewhere continues with no notice; post-delete edits are dropped",
+      "location": "web/src/pages/UnifiedDocumentPage.tsx + Editor.tsx (no reaction to a 404/gone document); api DELETE /api/documents/:id",
+      "evidence": "probe4-concurrency.json 4c: context B deletes the doc (HTTP 204) while context A types. A's status stays 'Saved', A still shows the editor, A's body contains the post-delete typing, but the row is gone (documents count=0), the post-delete typing is NOT in the DB (false), and there is no notice on A ([]). 6 console errors on A (404 GET .../backlinks ×2 + fetch errors).",
+      "hypothesis": "The editor has no handler for the document becoming 404/gone mid-session; it keeps a live editor over a deleted entity and its writes are discarded server-side without feedback.",
+      "estimatedImpact": "Lost work + a confusing ghost editor in a normal multi-user flow (High). Fix: detect the gone document (backlinks/collab 404) and surface a 'this document was deleted' state instead of silently accepting edits."
+    },
+    {
+      "id": "ERR-5",
+      "severity": "Medium",
+      "title": "Invalid path/query params return 500 Internal Server Error instead of 400/404",
+      "location": "api/src/routes/documents.ts (canAccessDocument :19), issues, weeks, backlinks — invalid uuid/enum passed straight to Postgres",
+      "evidence": "probe3-api.txt: GET /api/documents/not-a-uuid → 500; /api/issues/not-a-uuid → 500; /api/documents/<bad>/backlinks → 500; /api/weeks/not-a-number → 500; GET /api/documents?type=bogus → 500. Server log (api-3009.log) shows the raw pg errors ('invalid input syntax for type uuid', 'invalid input value for enum document_type') for each. Client (probe1b-routes.json) renders a generic 'Failed to fetch document' plus red console errors.",
+      "hypothesis": "Route handlers pass user-supplied path/query values directly into parameterized SQL; Postgres rejects the cast and the generic catch maps it to 500 rather than validating the shape (uuid/enum/int) up front and returning 400/404.",
+      "estimatedImpact": "Wrong status codes (a client can't distinguish 'bad request' from 'server broken'), avoidable error-log noise, and a slightly worse not-found UX. Medium. Fix: validate params (zod/regex) and return 400/404. Cross-references the api-perf/db-query surface."
+    },
+    {
+      "id": "ERR-6",
+      "severity": "Medium",
+      "title": "Comment mark orphaned into persisted content when the comment popover is dismissed by blur (not Escape)",
+      "location": "web/src/components/editor/ (comment mark + pending-comment popover lifecycle)",
+      "evidence": "probe8-comment-orphan.json (dismiss via Escape): clean — highlight removed, content unchanged vs baseline, no comment mark persisted, comment rows=0. probe8-comment-orphan-blur.json (dismiss via click-away/blur): the pending input persists, a <commentMark ... commentId=\"5d99bc77-...\"> is written into the persisted content, comment rows in DB for the doc = 0, and after reload the dangling mark is still present.",
+      "hypothesis": "Escape has a cancel path that unwinds the pending mark; blur/click-away commits the mark to the Yjs document without ever creating the backing comment row, leaving a highlight that references a comment that does not exist.",
+      "estimatedImpact": "Data-integrity drift: documents accumulate highlighted spans pointing at non-existent comments (Medium). Fix: treat blur the same as Escape (cancel) or create the comment row on commit."
+    },
+    {
+      "id": "ERR-7",
+      "severity": "Medium",
+      "title": "No loading affordance under slow network; sync indicator never shows an in-flight/unsaved state",
+      "location": "web/src route pages (no skeleton/spinner in first 2s) + Editor sync indicator",
+      "evidence": "probe5-slow-network.json at Fast 3G (150ms RTT, 1.6Mbps/750Kbps): loadingAffordanceInFirst2s=false on EVERY flow; 'Load main page' idle=61090ms (61s) with no loading UI; during 6s of throttled typing the indicator never left 'Saved' (no in-flight/unsaved feedback at all). Other routes 5.8–6.1s idle with no first-paint affordance.",
+      "hypothesis": "Pages render only after data resolves with no skeleton state; the 61s main-page figure is dominated by the my-week dashboard fan-out (see api-perf API-4 standups fan-out). The sync indicator has no 'saving…' state between edit and confirmation.",
+      "estimatedImpact": "On a slow link the app looks hung for many seconds with no signal, and users get no confirmation that typing is being saved (Medium). Fix: add loading skeletons + a real 'saving/unsaved' indicator; cross-references api-perf API-4."
+    },
+    {
+      "id": "ERR-8",
+      "severity": "Low",
+      "title": "Unbounded `limit` query param — negative and huge values both return the full unpaginated payload",
+      "location": "api GET /api/documents (limit handling)",
+      "evidence": "probe3-api.txt: GET /api/documents?limit=-1 → HTTP 200, 299,827 bytes (all rows); GET /api/documents?limit=999999999 → HTTP 200, 299,827 bytes. The limit is neither validated nor clamped.",
+      "hypothesis": "The limit value is not range-checked; invalid values fall through to returning the entire result set.",
+      "estimatedImpact": "Input-validation gap that compounds the already-unpaginated list endpoints (Low here; the payload-size problem is owned by api-perf). Fix: validate/clamp limit to a sane max."
+    },
+    {
+      "id": "ERR-9",
+      "severity": "Low",
+      "title": "BacklinksPanel logs a console.error storm on every failed fetch (offline, deleted, expired, revoked)",
+      "location": "web/src/components/editor/BacklinksPanel.tsx:41-45 (fetchBacklinks catch → console.error)",
+      "evidence": "The same 'Error fetching backlinks' console.error appears across probe2 (offline), probe4c (deleted doc, 404 ×2), probe6.4 (session expired, 401), and probe7c (revoked, 401). Normal-usage console is otherwise clean (probe1-console.json: 0 errors / 0 warnings across all 8 flows; the only baseline error is a benign pre-login 401 GET /api/auth/me). Note: the api log also shows an UNCAUGHT server crash class — see ERR-1 estimatedImpact and the boot-crash note in baseline.md.",
+      "hypothesis": "Backlinks polling has no backoff or quiet-fail path; every transient/expected failure is logged at error level, burying real errors during edge cases.",
+      "estimatedImpact": "Console noise that masks genuine errors during exactly the failure scenarios you most want to debug (Low). Fix: downgrade expected fetch failures to a single warning or silent retry with backoff."
+    }
+  ]
+}

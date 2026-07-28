@@ -1,0 +1,210 @@
+{
+  "category": "db-query",
+  "mode": "baseline",
+  "commit": "076a18371da0a09f88b5329bd59611c4bc9536bb",
+  "dirty": true,
+  "date": "2026-07-27T18:16:24Z",
+  "environment": {
+    "hardware": "Apple Mac16,7 — 14 cores, 24 GB RAM (arm64)",
+    "os": "Darwin 25.5.0 arm64 / macOS 26.5.1",
+    "node": "v23.2.0",
+    "dataVolume": "500 documents (254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project / 6 standup / 5 program), 20 users, 813 document_associations — re-verified immediately before and after measurement",
+    "concurrency": "1 (serial, single browser session + serial curl probes) — concurrency load was api-perf-audit's job; this category measures query shape, not throughput",
+    "scaffolding": [
+      "Enabled PostgreSQL statement logging for the capture window: ALTER SYSTEM SET log_statement='all', log_min_duration_statement=0, log_line_prefix='%m [%p] ' + pg_reload_conf(). REVERTED at end of run via ALTER SYSTEM RESET on all three + pg_reload_conf() (verified: log_statement=none, log_min_duration_statement=-1).",
+      "Created and dropped a throwaway database `ship_migrate_repro` in the same container to reproduce the DB-1 migration bug without touching the audited database. Dropped; audit DB re-verified at 500/20/813 afterwards.",
+      "Wrote measurement harnesses under audit/db-query/raw/ (flow-capture.mjs, parse-log.mjs, explain.sql). No application source, config, or dependency was modified.",
+      "Inherited from the prerequisite gate: PostgreSQL 15.13-alpine in Docker on :5433. docker-compose.local.yml declares postgres:16 but Docker Hub pulls are blocked in this environment. EXPLAIN plans and planner cost estimates in this report therefore reflect PG15, not PG16 — a caveat for any compare run that uses a different major version.",
+      "Inherited from the prerequisite gate: migrations 011-042 were force-applied individually because `pnpm db:migrate` stops at 010 (that is finding DB-1)."
+    ]
+  },
+  "metrics": {
+    "flow_load_main_page_queries_steady": 26,
+    "flow_load_main_page_queries_cold": 26,
+    "flow_load_main_page_slowest_ms": 1.471,
+    "flow_load_main_page_db_ms": 4.194,
+    "flow_load_main_page_auth_query_pct": 69,
+    "flow_load_main_page_n_plus_one": "no",
+
+    "flow_view_a_document_queries_steady": 45,
+    "flow_view_a_document_queries_cold": 44,
+    "flow_view_a_document_slowest_ms": 1.994,
+    "flow_view_a_document_db_ms": 6.36,
+    "flow_view_a_document_auth_query_pct": 60,
+    "flow_view_a_document_n_plus_one": "no (but 3x duplicate identical /backlinks request — DB-9)",
+
+    "flow_list_issues_queries_steady": 17,
+    "flow_list_issues_queries_cold": 17,
+    "flow_list_issues_slowest_ms": 1.183,
+    "flow_list_issues_db_ms": 3.126,
+    "flow_list_issues_auth_query_pct": 94,
+    "flow_list_issues_n_plus_one": "no",
+
+    "flow_load_sprint_board_queries_steady": 51,
+    "flow_load_sprint_board_queries_cold": 65,
+    "flow_load_sprint_board_slowest_ms": 4.764,
+    "flow_load_sprint_board_db_ms": 19.564,
+    "flow_load_sprint_board_auth_query_pct": 67,
+    "flow_load_sprint_board_n_plus_one": "no (but 2x duplicate identical requests on 3 endpoints — DB-9)",
+
+    "flow_load_week_dashboard_queries_steady": 42,
+    "flow_load_week_dashboard_queries_cold": 58,
+    "flow_load_week_dashboard_slowest_ms": 4.133,
+    "flow_load_week_dashboard_db_ms": 12.559,
+    "flow_load_week_dashboard_auth_query_pct": 74,
+    "flow_load_week_dashboard_n_plus_one": "YES — 5 weeks x 5 queries (one /api/weeks/:id/standups per week)",
+
+    "flow_search_content_queries_steady": 44,
+    "flow_search_content_queries_cold": 30,
+    "flow_search_content_slowest_ms": 3.193,
+    "flow_search_content_db_ms": 9.504,
+    "flow_search_content_auth_query_pct": 52,
+    "flow_search_content_n_plus_one": "no",
+
+    "endpoint_get_api_issues_queries": 5,
+    "endpoint_get_api_issues_auth_queries": 3,
+    "endpoint_get_api_issues_slowest_ms": 2.782,
+    "endpoint_get_api_issues_bytes": 379907,
+
+    "endpoint_get_api_documents_queries": 4,
+    "endpoint_get_api_documents_auth_queries": 3,
+    "endpoint_get_api_documents_slowest_ms": 1.324,
+    "endpoint_get_api_documents_bytes": 293953,
+
+    "endpoint_get_api_documents_type_wiki_queries": 4,
+    "endpoint_get_api_documents_type_wiki_auth_queries": 3,
+    "endpoint_get_api_documents_type_wiki_slowest_ms": 0.268,
+    "endpoint_get_api_documents_type_wiki_bytes": 37930,
+
+    "endpoint_get_api_documents_by_id_queries": 4,
+    "endpoint_get_api_documents_by_id_auth_queries": 3,
+    "endpoint_get_api_documents_by_id_slowest_ms": 0.077,
+    "endpoint_get_api_documents_by_id_bytes": 4091,
+
+    "endpoint_get_api_team_assignments_queries": 6,
+    "endpoint_get_api_team_assignments_auth_queries": 3,
+    "endpoint_get_api_team_assignments_slowest_ms": 0.655,
+    "endpoint_get_api_team_assignments_bytes": 22655,
+
+    "endpoint_get_api_weeks_queries": 5,
+    "endpoint_get_api_weeks_auth_queries": 3,
+    "endpoint_get_api_weeks_slowest_ms": 0.713,
+    "endpoint_get_api_weeks_bytes": 4351,
+
+    "totalStatementsCaptured": 684,
+    "totalParseBindEntries": 622,
+    "parseTotalMs": 91.5,
+    "bindTotalMs": 169.5,
+    "executeTotalMs": 167.2,
+    "parseBindShareOfDbTimePct": 61.0,
+    "authQuerySharePctMin": 52,
+    "authQuerySharePctMax": 94,
+    "sessionTouchWritesInCapture": 121,
+    "sessionTouchSlowestMs": 4.764,
+    "issuesListPlanningTimeMs": 1.543,
+    "issuesListExecutionTimeMs": 0.494,
+    "issuesListPlanToExecRatio": 3.12,
+    "indexesOnDocumentsTable": 13,
+    "documentsTableTotalSize": "920 kB",
+    "documentsContentColumnBytes": "342 kB",
+    "issuesContentColumnBytes": "158 kB",
+    "issuesContentPctOfRowBytes": 64.5,
+    "migrationFilesTotal": 42,
+    "migrationsAppliedByDeployPath": 10,
+    "migrationsSilentlySkipped": 32,
+    "skippedMigrationAlterTableStatements": 19,
+    "skippedMigrationDmlStatements": 42
+  },
+  "findings": [
+    {
+      "id": "DB-1",
+      "severity": "Critical",
+      "title": "pnpm db:migrate silently skips 32 of 42 migrations and exits 0, reporting success",
+      "location": "api/src/db/migrate.ts:103-111 (catch block); trigger at api/src/db/migrations/010_oauth_state.sql:8 vs api/src/db/schema.sql:90",
+      "evidence": "Independently reproduced on a throwaway database (ship_migrate_repro, created and dropped inside the audit container, audit DB untouched and re-verified at 500 docs / 20 users / 813 associations). Command: DATABASE_URL=<repro> ./api/node_modules/.bin/tsx api/src/db/migrate.ts. Result: process EXIT CODE 0; last stdout line 'Database schema already exists, continuing...' after 'Running migration: 010_oauth_state.sql'; schema_migrations contained 10 rows (001-009 + 007b, max version 009_audit_logs_nullable_actor) against 42 migration files on disk. Re-running the command a second time produced the identical output and still 10 rows — it is not self-healing. Mechanism confirmed by code read: schema.sql:90 does CREATE TABLE IF NOT EXISTS oauth_state, then 010_oauth_state.sql:8 does CREATE TABLE oauth_state (no IF NOT EXISTS) and throws 'relation \"oauth_state\" already exists'; the catch at migrate.ts:106 matches ANY error message containing 'already exists', logs and returns normally, abandoning the for-loop at migrate.ts:69-95. The 31 files after 010 are never executed and never recorded.",
+      "hypothesis": "The 'already exists' escape hatch was written for the idempotent schema.sql re-run in Step 1, but the try block wraps the whole function including the Step 4 migration loop, so one non-idempotent migration truncates the entire sequence. It has gone unnoticed because on a FRESH database schema.sql already carries the end-state schema: a column-level diff of the deploy-path DB against a fully-migrated DB showed 163 identical columns and zero differences, so a fresh dev DB looks perfectly correct. What schema.sql does NOT carry is any evolution of pre-existing tables or any data: it contains 17 CREATE TABLE, 59 CREATE INDEX, 1 function and 1 trigger, and ZERO ALTER TABLE and ZERO UPDATE/INSERT/DELETE statements. The 31 unexecuted files contain 19 ALTER TABLE and 42 DML statements, all of which are the only path by which an existing database is ever updated.",
+      "estimatedImpact": "Migrations run automatically on deploy (api/src/db/migrate.ts, per CLAUDE.md). Against any database not already at the end state — real prod or shadow — the deploy exits 0 and prints success while silently skipping 19 schema alterations and 42 data backfills, including 027/029 (drop legacy association columns), 033 (sprint->week rename) and 034/028/014b (backfills). This is a live data-integrity and silent-schema-drift risk, and it also means the migration sequence is effectively untested. Fixing it is a correctness prerequisite for every other finding here, since it determines whether the schema this audit measured is the schema production actually has."
+    },
+    {
+      "id": "DB-2",
+      "severity": "High",
+      "title": "Every authenticated request issues a session-table WRITE plus 2 reads; 52-94% of all per-flow queries are auth boilerplate",
+      "location": "api/src/middleware/auth.ts:205-208 (UPDATE sessions SET last_activity), api/src/middleware/auth.ts:126-133 (session+user SELECT), api/src/middleware/visibility.ts:7-11 (SELECT role FROM workspace_memberships)",
+      "evidence": "From the captured statement log (audit/db-query/raw/pg-statements.log, sliced per flow into flow-queries.json): the auth trio accounts for 16 of 17 queries on 'List issues' (94%), 34 of 51 on 'Load sprint board' (67%), 31 of 42 on 'Load week dashboard' (74%), and 3 of every 4-6 queries on all six confirmed keyEndpoints measured in isolation (/api/documents/:id costs 4 queries, of which 3 are auth). UPDATE sessions SET last_activity ran 121 times in the capture and is the single SLOWEST statement measured in 5 of the 6 flows (max 4.764 ms on 'Load sprint board', 4.133 ms on 'Load week dashboard') despite an EXPLAIN ANALYZE execution time of only 0.178 ms in isolation — the in-flight cost is lock/WAL contention, not planning or scanning. EXPLAIN shows the UPDATE dirties a shared buffer (Buffers: shared hit=11 dirtied=1) on every single read request.",
+      "hypothesis": "auth.ts:205 touches last_activity unconditionally on every request. The immediately following block (auth.ts:210-221) already throttles the *cookie* refresh to once per 60 seconds with the comment 'throttled to avoid overhead' — the same throttle was simply never applied to the database write. Because a single page load fires 5-13 API requests, each page load produces 5-13 row-level UPDATEs against the same one session row, serialising on that row's lock and emitting WAL for each. The two accompanying reads are also uncached per-request lookups of data that changes rarely.",
+      "estimatedImpact": "Gating the write on the same 60s threshold already used for the cookie removes ~1 write per request: 'List issues' 17 -> 12 queries (-29%), 'Load sprint board' 51 -> 40 (-22%), 'Load week dashboard' 42 -> 32 (-24%). Each independently clears the >=20% query-count reduction target, and it removes the slowest statement in 5 of 6 flows. It also eliminates a write-per-read amplification that gets strictly worse with concurrency, which is the likeliest contributor to the P95/P99 tail api-perf measured."
+    },
+    {
+      "id": "DB-3",
+      "severity": "High",
+      "title": "61% of all database time is query planning, not execution — every statement is re-parsed and re-planned",
+      "location": "api/src/db/client.ts (raw pg Pool) + all inline pool.query(text, values) call sites; worst observed at api/src/routes/issues.ts:124-140",
+      "evidence": "Parsed from the full statement log: 622 parse entries totalling 91.5 ms, 622 bind entries totalling 169.5 ms, against 684 execute entries totalling 167.2 ms — parse+bind is 261.0 ms of 428.2 ms total, i.e. 61.0% of database time. Every log entry reads 'parse <unnamed>' / 'bind <unnamed>', which is Postgres's marker for a non-reusable prepared statement. Confirmed independently by EXPLAIN ANALYZE on the /api/issues list query, run 3 times consecutively in steady state: Planning Time 2.160 / 1.582 / 1.543 ms versus Execution Time 0.594 / 0.495 / 0.494 ms — the planner costs 3.1x the executor, and the planning phase touched 674 buffers versus 78 for execution.",
+      "hypothesis": "node-postgres sends every pool.query(text, values) as an unnamed prepared statement, so Postgres discards the plan after each execution and re-plans on the next identical call. The cost is amplified on the `documents` table specifically because it carries 13 indexes that the planner must consider on every plan, and because the hot queries filter and sort on JSONB expressions (properties->>'priority', properties->>'assignee_id') for which the planner has no expression statistics and must fall back to generic estimates.",
+      "estimatedImpact": "Naming the handful of hot statements (pool.query({name, text, values})) lets Postgres cache and reuse the plan after five executions, which would remove most of the 261 ms of parse+bind. On /api/issues that is a ~75% reduction in database time for the endpoint (1.54 ms planning + 0.49 ms execution -> ~0.49 ms), comfortably clearing the >=50%-improvement-on-the-slowest-query target with a before/after EXPLAIN as evidence. It requires no schema change and no query rewrite."
+    },
+    {
+      "id": "DB-4",
+      "severity": "High",
+      "title": "Week dashboard N+1: one /api/weeks/:id/standups request per active week, 25 of the flow's 42 queries",
+      "location": "web/src/pages/Dashboard.tsx:69-85 (client fan-out); server handler api/src/routes/weeks.ts:1833-1887",
+      "evidence": "The 'Load week dashboard' slice shows the fan-out at both layers. HTTP: 1x GET /api/weeks followed by 5x GET /api/weeks/<distinct id>/standups. SQL: exactly 5 repetitions of `SELECT id FROM documents WHERE id = $1 AND workspace_id = $2 AND document_type = 'sprint' AND (visibility...)` and 5 repetitions of `SELECT d.id, d.parent_id, d.title, d.content, ... WHERE d.parent_id = $1 AND d.document_type = 'standup'`, plus 5 repetitions of the DB-2 auth trio — 25 of the flow's 42 steady-state queries (60%) are the fan-out. Dashboard.tsx:69 maps activeWeeks to one fetch each inside Promise.all; the handler is itself clean (it already batches issue-link lookups via batchLookupIssues at weeks.ts:1872), so the N+1 is entirely client-side. Cross-references api-perf finding API-4, which flagged this from the HTTP side; this is the SQL-layer confirmation, not a duplicate.",
+      "hypothesis": "The dashboard has no batch endpoint for standups, so it iterates weeks in the browser. The waste compounds: each per-week response is unbounded (no LIMIT in the weeks.ts:1856 query) and returns the full `content` body of every standup, yet Dashboard.tsx:92 immediately discards everything except the 10 most recent across all weeks. The query count grows linearly with the number of active weeks — 5 today at seeded volume, and every new active week adds 5 more queries and one more round trip.",
+      "estimatedImpact": "Replacing the fan-out with a single batched query (standups for all active weeks, ORDER BY created_at DESC LIMIT 10) takes 'Load week dashboard' from 42 to roughly 22 queries — a 48% reduction, more than double the >=20% target — and makes the flow's cost constant in the number of active weeks instead of linear. It also stops shipping standup bodies that are thrown away."
+    },
+    {
+      "id": "DB-5",
+      "severity": "Medium",
+      "title": "/api/issues list query SELECTs the full document body for all 254 issues; the list UI never reads it",
+      "location": "api/src/routes/issues.ts:126 (d.content in the list SELECT)",
+      "evidence": "Measured on the audited data: for the 254 live issue documents, sum(pg_column_size(content)) = 158 kB, which is 64.5% of the total row bytes those documents occupy. EXPLAIN ANALYZE of the list query shows the effect on row width — width=1023 per row with content, versus width=300 for the equivalent /api/documents projection that omits it. Corroborates api-perf finding API-2, which measured the same waste from the HTTP side (380 KB unpaginated response, 72.3% of it the content field); this is the SQL-layer confirmation with on-disk byte figures, not a duplicate.",
+      "hypothesis": "The list and detail views share one SELECT projection. content is a TipTap JSON document body needed only when a single issue is opened, but it is read for every row of the list, forced through the sort node, serialised to JSON and shipped.",
+      "estimatedImpact": "Dropping d.content from the list projection cuts the sort node's row width by roughly 70% and removes 158 kB of body text from the query result at current volume, growing linearly with issue count and issue length. It does not change the query COUNT, so it should be paired with DB-2 or DB-4 to satisfy the improvement target; its own evidence is payload and row-width, and it is the single highest-yield change for the largest endpoint in the app."
+    },
+    {
+      "id": "DB-6",
+      "severity": "Medium",
+      "title": "/api/weeks sprint aggregate runs 8 correlated subplans per row, two of which seq-scan document_associations once per row",
+      "location": "api/src/routes/weeks.ts (sprint list aggregate query); plan captured in audit/db-query/raw/explain-plans.txt section Q4",
+      "evidence": "EXPLAIN ANALYZE with the logged parameters returns 5 rows but touches 1182 shared buffers — 236 buffers per row returned. The plan contains 8 SubPlans, each with loops=5. SubPlan 7 and SubPlan 8 (retro_outcome and retro_id) each execute `Seq Scan on document_associations` with `Rows Removed by Filter: 803, loops=5`, i.e. they read all 813 association rows five times each despite idx_document_associations_related_type existing and being correctly chosen by SubPlans 2, 3, 4 and 6 for the same predicate. SubPlans 2-4 additionally drive 52 documents_pkey index lookups apiece.",
+      "hypothesis": "An N+1 folded into a single SQL statement. Six of the eight subqueries are per-sprint aggregate counts over the same document_associations rows and could be computed once as a grouped LEFT JOIN. SubPlans 7 and 8 differ only in which column they return from the identical row, so the same scan is performed twice; the planner refuses the index there because the LIMIT 1 makes a seq scan look cheap under its (wrong at scale) row estimate.",
+      "estimatedImpact": "Execution is only 1.192 ms at 500 documents / 813 associations because everything is in shared buffers, but the plan is quadratic in shape: cost scales as sprints x associations. Rewriting the six count subqueries as one grouped join and merging SubPlans 7/8 into a single lateral would cut buffer touches by roughly an order of magnitude and remove the seq scans. Low urgency today, high urgency at 10x data."
+    },
+    {
+      "id": "DB-7",
+      "severity": "Medium",
+      "title": "No index on documents.ticket_number — issue deep-link lookup seq-scans the whole documents table",
+      "location": "api/src/routes/issues.ts:371 (WHERE d.ticket_number = $1 AND d.workspace_id = $2 AND d.document_type = 'issue')",
+      "evidence": "pg_indexes lists 13 indexes on documents; none references ticket_number. EXPLAIN ANALYZE of the exact predicate: `Seq Scan on documents d ... Filter: ((ticket_number = 42) AND (workspace_id = ...) AND (document_type = 'issue')), Rows Removed by Filter: 499, Buffers: shared hit=66` — 500 rows examined to return 1. Confirms the repo-mapping lead; the same lead's claim about created_by is only partly right, since idx_documents_visibility_created_by (visibility, created_by) does cover the visibility-filter usage.",
+      "hypothesis": "ticket_number was added as a display/permalink field without an access path. Every deep link into an issue (the /issues/<PREFIX>-<n> route) pays a full table scan.",
+      "estimatedImpact": "A partial index — CREATE INDEX ON documents (workspace_id, ticket_number) WHERE document_type = 'issue' — turns 500 rows examined into 1 and 66 buffers into ~3. Negligible today at 500 rows; this is a Medium because it is on a growing table in a user-facing permalink path, and cost grows linearly with total document count, not issue count."
+    },
+    {
+      "id": "DB-8",
+      "severity": "Medium",
+      "title": "Planner underestimates the document_associations = ANY(...) batch by 28x and chooses a sequential scan",
+      "location": "api/src/routes/issues.ts (association batch fetch: WHERE da.document_id = ANY($1)); plan in audit/db-query/raw/explain-plans.txt section Q3",
+      "evidence": "EXPLAIN ANALYZE: `Seq Scan on document_associations da (cost=0.00..30.29 rows=25 ...) (actual ... rows=707 loops=1), Filter: (document_id = ANY ($0)), Rows Removed by Filter: 106` — estimated 25 rows, actual 707, a 28x underestimate. idx_document_associations_document_id exists and is not used. The inner documents relation is also fully seq-scanned (500 rows) to build the hash.",
+      "hypothesis": "Postgres cannot see the cardinality of the parameterised array at plan time and falls back to a fixed selectivity guess, so it assumes the ANY() matches almost nothing. The batch itself is the right design — it is what keeps /api/issues at 5 queries instead of 255 — but its plan is chosen on a bad estimate.",
+      "estimatedImpact": "Harmless at 813 association rows (1.168 ms, everything cached). The risk is the shape: with a 28x underestimate the planner will keep picking nested loops and seq scans as document_associations grows, and the error scales with it. Rewriting ANY($1) as a JOIN against unnest($1) gives the planner a real row estimate. Worth fixing before the association table reaches five figures."
+    },
+    {
+      "id": "DB-9",
+      "severity": "Medium",
+      "title": "Flows fire byte-identical API requests two and three times, duplicating their entire query cost",
+      "location": "Sprint board (/team/allocation): /api/team/assignments, /api/team/grid, /api/team/projects each fetched 2x. Document view: /api/documents/:id/backlinks fetched 3x.",
+      "evidence": "From audit/db-query/raw/flow-requests.json, steady-state iteration: 'Load sprint board' issues 2x GET /api/team/assignments (22655 bytes each), 2x GET /api/team/grid (5948 bytes each), 2x GET /api/team/projects (3403 bytes each); 'View a document' issues 3x GET /api/documents/:id/backlinks. Every duplicate re-runs the endpoint's full query set including the DB-2 auth trio, which is why the sprint-board flow reaches 51 queries. api-perf's independent trace shows the same doubling, so it is reproducible across harnesses and not an artefact of this capture.",
+      "hypothesis": "Duplicate mounts or overlapping hooks requesting the same key without a shared cache entry — sibling components each owning their own fetch, or an effect firing on both mount and a dependency settle. /api/team/assignments is the app's third-largest payload, so fetching it twice per board load is the most expensive instance.",
+      "estimatedImpact": "Deduplicating these removes 3 redundant endpoint executions from the sprint board — roughly 11 of 51 queries (-22%, clearing the target on its own) and 32 KB of duplicated payload — and 2 of 45 from the document view. This is a client-side cache-key fix with no server or schema change."
+    },
+    {
+      "id": "DB-10",
+      "severity": "Low",
+      "title": "No index on documents.updated_at despite ORDER BY updated_at DESC in seven route modules",
+      "location": "documents table; ORDER BY ... updated_at DESC appears in api/src/routes/{issues,documents,weeks,projects,programs,dashboard,search}.ts",
+      "evidence": "pg_indexes shows no index on documents.updated_at among the table's 13 indexes. The /api/issues list plan sorts 254 rows in memory (Sort Method: quicksort Memory: 270kB) and /api/documents sorts 500 rows (quicksort Memory: 190kB); both are top-of-plan sorts with no index support. Confirms the repo-mapping lead.",
+      "hypothesis": "Sort order was added for UX without a matching access path. It is invisible at 500 rows because the sorts fit easily in work_mem and the table is 66 pages.",
+      "estimatedImpact": "None measurable today — quicksort on 254 rows costs microseconds. It becomes real when a sort no longer fits in work_mem and spills to disk, or when these lists finally get the pagination api-perf recommended, at which point an index on (workspace_id, updated_at DESC) is what makes LIMIT/OFFSET cheap. Fix opportunistically, ideally alongside pagination."
+    }
+  ]
+}

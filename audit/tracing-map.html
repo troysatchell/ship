@@ -1,0 +1,587 @@
+<title>Ship Audit — Tracing Map</title>
+<style>
+  /* ============ FIELD-NOTEBOOK TRACING GUIDE ============
+     Off-white, green-tinted "graph paper" ground with deep pine-green ink.
+     Built to be REDRAWN by hand — diagrams kept small, relationships explicit.
+     Light theme is the hero ("field notebook"); dark is a "blueprint" variant. */
+  :root {
+    --paper:#f2f5ed; --paper-2:#e9efe1; --paper-3:#dde6d2;
+    --grid:rgba(28,107,69,.08); --grid-strong:rgba(28,107,69,.14);
+    --ink:#16211b; --ink-soft:#41524a; --ink-faint:#6a7a70;
+    --accent:#1c6b45; --accent-deep:#0e4a2e; --accent-bright:#2f8f5b;
+    --crit:#a3271f; --crit-bg:#f6e3e0; --high:#8a5d00; --high-bg:#f4ead1;
+    --med:#3f5687; --med-bg:#e3e8f2; --low:#5f6f66; --low-bg:#e7ece5;
+    --rule:#c8d4bd; --shadow:rgba(20,50,35,.10);
+    --card:#f7f9f2;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:#0c1611; --paper-2:#12201a; --paper-3:#1a2b22;
+      --grid:rgba(120,200,155,.09); --grid-strong:rgba(120,200,155,.16);
+      --ink:#e7f0e8; --ink-soft:#a3b8ab; --ink-faint:#75897e;
+      --accent:#6fd6a0; --accent-deep:#9cebbf; --accent-bright:#8ce3b2;
+      --crit:#f3928a; --crit-bg:#37201d; --high:#e2b757; --high-bg:#332a17;
+      --med:#93b2ea; --med-bg:#1c2740; --low:#9aa9a0; --low-bg:#1d2a23;
+      --rule:#26382d; --shadow:rgba(0,0,0,.4); --card:#12201a;
+    }
+  }
+  :root[data-theme="light"]{
+    --paper:#f2f5ed; --paper-2:#e9efe1; --paper-3:#dde6d2;
+    --grid:rgba(28,107,69,.08); --grid-strong:rgba(28,107,69,.14);
+    --ink:#16211b; --ink-soft:#41524a; --ink-faint:#6a7a70;
+    --accent:#1c6b45; --accent-deep:#0e4a2e; --accent-bright:#2f8f5b;
+    --crit:#a3271f; --crit-bg:#f6e3e0; --high:#8a5d00; --high-bg:#f4ead1;
+    --med:#3f5687; --med-bg:#e3e8f2; --low:#5f6f66; --low-bg:#e7ece5;
+    --rule:#c8d4bd; --shadow:rgba(20,50,35,.10); --card:#f7f9f2;
+  }
+  :root[data-theme="dark"]{
+    --paper:#0c1611; --paper-2:#12201a; --paper-3:#1a2b22;
+    --grid:rgba(120,200,155,.09); --grid-strong:rgba(120,200,155,.16);
+    --ink:#e7f0e8; --ink-soft:#a3b8ab; --ink-faint:#75897e;
+    --accent:#6fd6a0; --accent-deep:#9cebbf; --accent-bright:#8ce3b2;
+    --crit:#f3928a; --crit-bg:#37201d; --high:#e2b757; --high-bg:#332a17;
+    --med:#93b2ea; --med-bg:#1c2740; --low:#9aa9a0; --low-bg:#1d2a23;
+    --rule:#26382d; --shadow:rgba(0,0,0,.4); --card:#12201a;
+  }
+
+  *{box-sizing:border-box;}
+  html{scroll-behavior:smooth;}
+  @media (prefers-reduced-motion:reduce){html{scroll-behavior:auto;}}
+  body{
+    margin:0; color:var(--ink); background-color:var(--paper);
+    background-image:
+      linear-gradient(var(--grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+    background-size:23px 23px;
+    font-family:ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    font-size:16px; line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+  }
+  .serif{font-family:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;}
+  .mono,code,.tag{font-family:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;}
+  .wrap{max-width:940px; margin:0 auto; padding:0 22px 90px;}
+
+  /* Masthead — small, notebook-style, not a hero banner */
+  header.mast{padding:40px 0 18px; border-bottom:2.5px solid var(--ink);}
+  .eyebrow{font-family:ui-monospace,Menlo,monospace; text-transform:uppercase; letter-spacing:.24em;
+           font-size:11px; color:var(--accent); font-weight:700;}
+  h1{font-family:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+     font-weight:700; font-size:clamp(30px,5.4vw,46px); line-height:1.05; margin:.28em 0 .16em;
+     letter-spacing:-.01em; text-wrap:balance; color:var(--ink);}
+  h1 .g{color:var(--accent-deep); font-style:italic;}
+  .dek{font-size:16.5px; color:var(--ink-soft); max-width:60ch; margin:0;}
+  .mast-meta{margin-top:16px; display:flex; flex-wrap:wrap; gap:8px 18px; font-size:12.5px;
+             color:var(--ink-faint); font-family:ui-monospace,Menlo,monospace;}
+  .mast-meta b{color:var(--accent); font-weight:700;}
+
+  h2{font-family:"Iowan Old Style",Palatino,Georgia,serif; font-size:clamp(22px,3.6vw,30px);
+     font-weight:700; margin:0 0 4px; letter-spacing:-.01em; color:var(--ink); text-wrap:balance;}
+  .phase-head{margin:56px 0 22px; padding-top:20px; border-top:2px solid var(--rule);}
+  .phase-tag{display:inline-block; font-family:ui-monospace,Menlo,monospace; font-size:11px; font-weight:700;
+             letter-spacing:.18em; text-transform:uppercase; color:var(--paper);
+             background:var(--accent-deep); padding:3px 11px; border-radius:3px; margin-bottom:10px;}
+  .phase-head .dek{font-size:15px; margin-top:6px;}
+  h3{font-family:"Iowan Old Style",Palatino,Georgia,serif; font-size:20px; font-weight:700;
+     margin:38px 0 8px; color:var(--ink); display:flex; align-items:baseline; gap:10px;}
+  h3 .num{font-family:ui-monospace,Menlo,monospace; font-size:13px; color:var(--accent);
+          font-weight:700; letter-spacing:.02em; flex:none;}
+  p{margin:10px 0; max-width:68ch;}
+  a{color:var(--accent-deep); text-decoration-color:var(--rule); text-underline-offset:2px;}
+  strong{color:var(--ink);}
+  em.term{font-style:normal; color:var(--accent-deep); font-weight:600;}
+  code{background:var(--paper-2); border:1px solid var(--rule); border-radius:4px;
+       padding:.06em .38em; font-size:.86em; color:var(--accent-deep);}
+
+  /* Diagram plate */
+  /* Diagram plates are FIXED-LIGHT figures in both themes (like notebook pages
+     pinned into the doc) so the mermaid dark-text always sits on light paper. */
+  .plate{background:#f6f8f0; border:1.5px solid #c3d0b6; border-radius:10px;
+         box-shadow:0 1px 3px rgba(20,50,35,.14); margin:18px 0 8px; overflow:hidden;}
+  .plate-cap{display:flex; align-items:center; gap:10px; padding:10px 15px; border-bottom:1px dashed #c3d0b6;
+             font-family:ui-monospace,Menlo,monospace; font-size:11.5px; letter-spacing:.04em;
+             color:#41524a; background:#e7efdd;}
+  .plate-cap .pl{color:#1c6b45; font-weight:700; text-transform:uppercase; letter-spacing:.14em;}
+  .plate-body{overflow-x:auto; padding:16px 12px; background:#f6f8f0;
+              background-image:linear-gradient(rgba(28,107,69,.06) 1px,transparent 1px),
+                               linear-gradient(90deg,rgba(28,107,69,.06) 1px,transparent 1px);
+              background-size:20px 20px;}
+  .mermaid{min-width:min-content; margin:0 auto; text-align:center;}
+  /* The runtime's mermaid ignores per-diagram theme vars AND may strip the .mermaid
+     class from the rendered SVG, so target the mermaid-generated classes un-scoped.
+     A JS pass (bottom of file) enforces the same colors directly on the SVG in case
+     even this misses. Goal: NO dark fills anywhere in the diagrams. */
+  .plate-body svg, svg[id^="mermaid"], svg[aria-roledescription]{ background:transparent !important;}
+  .node rect, .node polygon, .node path, .node circle, .node ellipse,
+  g[class*="node"] > rect, g[class*="node"] > polygon, g[class*="node"] > path{
+    fill:#eef3e8 !important; stroke:#1c6b45 !important; stroke-width:1.5px !important;}
+  .node .nodeLabel, .node text, .nodeLabel, .node foreignObject div,
+  .node foreignObject span, .node p, g[class*="node"] text, .flowchart-label, .label text{
+    fill:#16211b !important; color:#16211b !important;}
+  .cluster rect{ fill:#e7efdd !important; stroke:#b9cda8 !important;}
+  .cluster text, .cluster .nodeLabel, .cluster span, .cluster div{ fill:#0e4a2e !important; color:#0e4a2e !important;}
+  .edgeLabel, .edgeLabel p, .edgeLabel div, .edgeLabel span, .edgeLabel rect{
+    color:#16211b !important; fill:#16211b !important; background-color:#eef3e8 !important;}
+  .edgePath path, .flowchart-link, .edgePaths path{ stroke:#3a6b52 !important; fill:none !important;}
+  marker path, .marker{ fill:#3a6b52 !important; stroke:#3a6b52 !important;}
+  /* severity tints — light fills, colored borders (higher specificity wins) */
+  .node.crit rect, .node.crit polygon, .node.danger rect, .node.danger polygon, .node.danger path{
+    fill:#f6e3e0 !important; stroke:#a3271f !important;}
+  .node.high rect, .node.high polygon{ fill:#f4ead1 !important; stroke:#8a5d00 !important;}
+  .node.med rect, .node.med polygon{ fill:#e3e8f2 !important; stroke:#3f5687 !important;}
+  .node.safe rect, .node.safe polygon, .node.safe path, .node.t rect, .node.t polygon{
+    fill:#e6efdb !important; stroke:#7ba274 !important;}
+
+  /* Redraw cue */
+  .redraw{border-left:3px solid var(--accent); background:var(--paper-2);
+          border-radius:0 8px 8px 0; padding:11px 15px; margin:14px 0; font-size:14.5px; color:var(--ink-soft);}
+  .redraw .lbl{font-family:ui-monospace,Menlo,monospace; font-size:10.5px; font-weight:700; letter-spacing:.16em;
+               text-transform:uppercase; color:var(--accent); display:block; margin-bottom:3px;}
+  .redraw b{color:var(--accent-deep);}
+
+  /* Recall block */
+  .recall{border:1.5px dashed var(--accent); border-radius:10px; padding:14px 18px; margin:22px 0; background:transparent;}
+  .recall h4{margin:0 0 8px; font-family:ui-monospace,Menlo,monospace; font-size:11.5px; letter-spacing:.16em;
+             text-transform:uppercase; color:var(--accent);}
+  .recall ol{margin:0; padding-left:20px; color:var(--ink-soft); font-size:14.5px;}
+  .recall li{margin:6px 0;}
+  .recall li b{color:var(--ink);}
+
+  /* Legend */
+  .legend{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; margin:16px 0;}
+  .legend .cell{background:var(--card); border:1px solid var(--rule); border-radius:8px; padding:11px 13px; font-size:13.5px;}
+  .legend .cell h5{margin:0 0 6px; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; letter-spacing:.14em;
+                   text-transform:uppercase; color:var(--ink-faint);}
+  .swatch{display:inline-block; width:13px; height:13px; border-radius:3px; vertical-align:-1px; margin-right:6px;}
+  .edge{display:inline-block; width:26px; border-top:2.5px solid var(--accent); vertical-align:middle; margin-right:6px;}
+  .edge.dash{border-top-style:dashed;}
+  .edge.dot{border-top-style:dotted;}
+
+  /* Chips */
+  .chip{display:inline-block; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; font-weight:700;
+        letter-spacing:.05em; text-transform:uppercase; padding:2px 7px; border-radius:4px; white-space:nowrap;}
+  .c-crit{color:#fff; background:var(--crit);}
+  :root[data-theme="dark"] .c-crit{color:#1a0f0d;}
+  @media (prefers-color-scheme:dark){.c-crit{color:#1a0f0d;}}
+  .c-high{color:var(--high); background:var(--high-bg); border:1px solid var(--high);}
+  .c-med{color:var(--med); background:var(--med-bg); border:1px solid var(--med);}
+  .c-low{color:var(--low); background:var(--low-bg); border:1px solid var(--low);}
+  .fid{font-family:ui-monospace,Menlo,monospace; font-weight:700; color:var(--accent-deep); font-size:.9em; white-space:nowrap;}
+
+  /* Tables */
+  .tablewrap{overflow-x:auto; margin:16px 0; border:1px solid var(--rule); border-radius:9px; background:var(--card);}
+  table{border-collapse:collapse; width:100%; font-size:13.6px;}
+  th{ text-align:left; font-family:ui-monospace,Menlo,monospace; font-size:10.5px; text-transform:uppercase;
+      letter-spacing:.08em; color:var(--ink-faint); font-weight:700; padding:9px 12px; border-bottom:2px solid var(--rule);
+      white-space:nowrap; background:var(--paper-2);}
+  td{padding:9px 12px; border-bottom:1px solid var(--rule); vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  td.num{font-variant-numeric:tabular-nums; text-align:right; font-family:ui-monospace,Menlo,monospace;}
+  .cat{font-weight:700; color:var(--accent-deep);}
+
+  /* Key-value facts strip */
+  .facts{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px; background:var(--rule);
+         border:1px solid var(--rule); border-radius:9px; overflow:hidden; margin:16px 0;}
+  .facts .f{background:var(--card); padding:11px 13px;}
+  .facts .f .k{font-family:ui-monospace,Menlo,monospace; font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint);}
+  .facts .f .v{font-size:19px; font-weight:700; color:var(--accent-deep); font-variant-numeric:tabular-nums; margin-top:2px; line-height:1.15;}
+  .facts .f .v small{font-size:12px; color:var(--ink-soft); font-weight:600;}
+
+  /* Sticky index */
+  .toc{position:sticky; top:0; z-index:5; background:color-mix(in srgb,var(--paper) 90%, transparent);
+       backdrop-filter:blur(6px); border-bottom:1px solid var(--rule); margin-bottom:0;}
+  .toc-inner{max-width:940px; margin:0 auto; padding:8px 22px; display:flex; flex-wrap:wrap; gap:4px 14px; align-items:center;}
+  .toc a{font-family:ui-monospace,Menlo,monospace; font-size:11.5px; color:var(--ink-soft); text-decoration:none;
+         letter-spacing:.02em; padding:3px 2px;}
+  .toc a:hover, .toc a:focus{color:var(--accent-deep);}
+  .toc .brand{font-weight:700; color:var(--accent); letter-spacing:.1em; text-transform:uppercase; font-size:10.5px;}
+  a:focus-visible, .toc a:focus-visible{outline:2px solid var(--accent-bright); outline-offset:2px; border-radius:3px;}
+
+  .note-inline{font-size:13.5px; color:var(--ink-faint); font-style:italic;}
+  footer{margin-top:60px; padding-top:18px; border-top:2px solid var(--rule); font-size:13px; color:var(--ink-faint);}
+  footer .mono{color:var(--ink-soft);}
+  hr.soft{border:none; border-top:1px dashed var(--rule); margin:30px 0;}
+  ul.tight{margin:8px 0; padding-left:20px;} ul.tight li{margin:5px 0; max-width:66ch;}
+</style>
+
+<nav class="toc" aria-label="Section index">
+  <div class="toc-inner">
+    <span class="brand">Tracing&nbsp;Map</span>
+    <a href="#legend">Legend</a>
+    <a href="#p1-1">System</a>
+    <a href="#p1-2">Request path</a>
+    <a href="#p1-3">Doc model</a>
+    <a href="#p1-4">Findings spine</a>
+    <a href="#p1-5">8 categories</a>
+    <a href="#p1-6">Infra</a>
+    <a href="#p2-6">Tests</a>
+    <a href="#p2-7">Build&nbsp;&amp;&nbsp;deploy</a>
+  </div>
+</nav>
+
+<div class="wrap">
+<header class="mast">
+  <div class="eyebrow">Ship Audit · study companion</div>
+  <h1 class="serif">The <span class="g">Tracing</span> Map</h1>
+  <p class="dek">A relationship-first field guide to the Ship audit — drawn to be <strong>redrawn</strong>. Every diagram is kept small enough to reproduce by hand; every arrow means something. Phase 1 is the system and its 68 findings; Phase 2 answers the testing &amp; build/deploy questions.</p>
+  <div class="mast-meta">
+    <span>commit <b>076a183</b></span><span>8 categories · <b>68 findings</b> · 4 Critical</span><span>seed 500 docs / 20 users</span><span>Postgres 15 · Node 23</span>
+  </div>
+</header>
+
+<!-- ============ HOW TO USE ============ -->
+<section id="legend">
+  <h3><span class="num">00</span> How to read (and redraw) this</h3>
+  <p>You internalize by rebuilding diagrams on the iPad, so the whole document is organized around <em class="term">maps you can copy</em>, not paragraphs. Reuse this pen legend in your own drawings so a color always means the same thing — that consistency is what makes the relationships stick.</p>
+  <div class="legend">
+    <div class="cell"><h5>Pen colors (severity)</h5>
+      <div><span class="swatch" style="background:var(--crit)"></span>Critical — data loss / security / core flow broken</div>
+      <div><span class="swatch" style="background:var(--high)"></span>High — measurable user-facing harm</div>
+      <div><span class="swatch" style="background:var(--med)"></span>Medium — real risk, not yet user-facing</div>
+      <div><span class="swatch" style="background:var(--low)"></span>Low — hygiene</div>
+    </div>
+    <div class="cell"><h5>Structure pen</h5>
+      <div><span class="swatch" style="background:var(--accent)"></span>Green = the system as built (components, tables, resources)</div>
+      <div class="note-inline" style="margin-top:6px">Draw structure in green; overlay findings in the severity color that hits it.</div>
+    </div>
+    <div class="cell"><h5>Edge meanings</h5>
+      <div><span class="edge"></span>solid = calls / depends on / data flows</div>
+      <div><span class="edge dash"></span>dashed = writes to / persists</div>
+      <div><span class="edge dot"></span>dotted = shared root cause (cross-ref)</div>
+    </div>
+    <div class="cell"><h5>Cues in the margin</h5>
+      <div><b style="color:var(--accent)">REDRAW</b> — a prompt: what to sketch &amp; where to start</div>
+      <div><b style="color:var(--accent)">RECALL</b> — cover the page, answer from memory</div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================================================== -->
+<!-- ========================= PHASE 1 ================== -->
+<!-- ==================================================== -->
+<div class="phase-head" id="phase1">
+  <span class="phase-tag">Phase 1 — the system &amp; its findings</span>
+  <h2 class="serif">What Ship is, and where it hurts</h2>
+  <p class="dek">Six maps. The first three are the machine as designed; the last three are where the audit found damage. Trace them in order — each one reuses nodes from the one before.</p>
+</div>
+
+<!-- P1.1 SYSTEM MAP -->
+<h3 id="p1-1"><span class="num">1.1</span> The system in one map</h3>
+<p>One React SPA, one Express API, one Postgres table doing most of the work. "Everything is a document" — wiki, issue, project, sprint, person, weekly_* all live in a single <code>documents</code> table, distinguished by a <code>document_type</code> column, not by separate tables.</p>
+<div class="plate">
+  <div class="plate-cap"><span class="pl">Plate 1</span> component &amp; data-flow map — the whole app on one page</div>
+  <div class="plate-body">
+<pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'fontFamily':'ui-monospace,Menlo,monospace','fontSize':'13px','primaryColor':'#eef3e8','primaryBorderColor':'#1c6b45','primaryTextColor':'#16211b','lineColor':'#3a6b52','edgeLabelBackground':'#eef3e8','tertiaryColor':'#e4ecdd','textColor':'#16211b','titleColor':'#0e4a2e','nodeTextColor':'#16211b','clusterBkg':'#e4ecdd','clusterBorder':'#bcd0ac'}}}%%
+flowchart TD
+  subgraph Browser["Browser · React 18 + Vite + TipTap"]
+    UI["SPA routes<br/>(one 2.07 MB chunk)"]
+    ED["TipTap editor<br/>+ Yjs client"]
+  end
+  subgraph API["Express API · raw pg, no ORM"]
+    MW["auth + CSRF<br/>middleware"]
+    RT["~33 route modules<br/>/api/*"]
+    WS["collaboration<br/>WebSocket server"]
+  end
+  DB[("PostgreSQL<br/>unified documents table")]
+  S3["S3 + CloudFront<br/>(SPA + uploads)"]
+  UI -->|REST /api/*| MW
+  MW --> RT
+  RT -->|inline SQL| DB
+  ED -->|"/collaboration/{type}:{id}"| WS
+  WS -.->|"persist yjs_state"| DB
+  UI --> S3
+  RT -.->|"content + yjs_state"| DB
+</pre>
+  </div>
+</div>
+<div class="redraw"><span class="lbl">Redraw</span> Start with the <b>documents</b> table in the center. Draw two paths into it: the <b>REST</b> path (UI→middleware→routes→DB, solid) and the <b>collab</b> path (editor→WebSocket→DB, dashed = persists). If you can place the WebSocket server as a <b>separate</b> door into the same table, you've got the core mental model.</div>
+
+<!-- P1.2 REQUEST LIFECYCLE -->
+<h3 id="p1-2"><span class="num">1.2</span> The request path — and the write hiding in every read</h3>
+<p>Every authenticated request walks the same middleware. The trap the audit found lives here: <em class="term">every</em> request — even a plain <code>GET</code> — issues a session-row <strong>UPDATE</strong> plus two reads before the route even runs. That auth boilerplate is 52–94% of all queries per flow (<span class="fid">DB-2</span> / <span class="fid">API-6</span>, same root cause).</p>
+<div class="plate">
+  <div class="plate-cap"><span class="pl">Plate 2</span> request lifecycle — where the cost is</div>
+  <div class="plate-body">
+<pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'fontFamily':'ui-monospace,Menlo,monospace','fontSize':'13px','primaryColor':'#eef3e8','primaryBorderColor':'#1c6b45','primaryTextColor':'#16211b','lineColor':'#3a6b52','edgeLabelBackground':'#eef3e8','tertiaryColor':'#e4ecdd','textColor':'#16211b','titleColor':'#0e4a2e','nodeTextColor':'#16211b'}}}%%
+flowchart LR
+  R["GET /api/issues"] --> RL{"rate limit<br/>100/min per IP"}
+  RL -->|429 dropped| X["write silently lost<br/>(API-1, Critical)"]
+  RL --> C["CSRF check<br/>(mutations)"]
+  C --> S["session middleware"]
+  S -.->|"UPDATE sessions<br/>every request"| DB[("documents /<br/>sessions")]
+  S -->|"2 reads"| DB
+  S --> H["route handler<br/>inline SQL"]
+  H --> DB
+  H --> RESP["JSON (implicitly any:<br/>TS-2)"]
+</pre>
+  </div>
+</div>
+<div class="redraw"><span class="lbl">Redraw</span> Draw the pipeline left→right, then put a <b>dashed line</b> from "session middleware" down to the DB labeled <b>UPDATE</b>. That single dashed line is the finding: gate it on the 60-second window already used for the cookie and 22–29% of every flow's queries disappear.</div>
+
+<!-- P1.3 DOCUMENT MODEL -->
+<h3 id="p1-3"><span class="num">1.3</span> The unified document model</h3>
+<p>Content types differ by <em class="term">properties, not structure</em> (Notion's paradigm). Relationships between documents live in a junction table, not foreign-key columns.</p>
+<div class="plate">
+  <div class="plate-cap"><span class="pl">Plate 3</span> one table, ten shapes</div>
+  <div class="plate-body">
+<pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'fontFamily':'ui-monospace,Menlo,monospace','fontSize':'12.5px','primaryColor':'#eef3e8','primaryBorderColor':'#1c6b45','primaryTextColor':'#16211b','lineColor':'#3a6b52','edgeLabelBackground':'#eef3e8','tertiaryColor':'#e4ecdd','textColor':'#16211b','titleColor':'#0e4a2e','nodeTextColor':'#16211b'}}}%%
+flowchart TD
+  D[("documents<br/>document_type · title<br/>content (JSONB) · yjs_state (BYTEA)<br/>properties (JSONB, GIN)")]
+  A["document_associations<br/>parent · project · sprint · program"]
+  T1["wiki"]:::t --> D
+  T2["issue"]:::t --> D
+  T3["project / program / sprint"]:::t --> D
+  T4["person"]:::t --> D
+  T5["weekly_plan / retro / review / standup"]:::t --> D
+  D <-->|"relationships"| A
+  classDef t fill:#e4ecdd,stroke:#8fb08f,color:#25402d;
+</pre>
+  </div>
+</div>
+<p class="note-inline">Watch-out you already flagged: CLAUDE.md claims legacy <code>program_id</code>/<code>project_id</code> columns still exist, but migrations 027/029 removed them — trust the migrations.</p>
+
+<!-- P1.4 FINDINGS SPINE -->
+<h3 id="p1-4"><span class="num">1.4</span> The findings spine — how the 68 connect</h3>
+<p>This is the map worth memorizing. Four Criticals, and five pairs of findings that are <em class="term">the same bug seen from two categories</em> (dotted = shared root cause). Fix the root once, credit both.</p>
+<div class="plate">
+  <div class="plate-cap"><span class="pl">Plate 4</span> cross-reference graph — dotted edges share a root cause</div>
+  <div class="plate-body">
+<pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'fontFamily':'ui-monospace,Menlo,monospace','fontSize':'12.5px','primaryColor':'#eef3e8','primaryBorderColor':'#1c6b45','primaryTextColor':'#16211b','lineColor':'#3a6b52','edgeLabelBackground':'#eef3e8','tertiaryColor':'#e4ecdd','textColor':'#16211b','titleColor':'#0e4a2e','nodeTextColor':'#16211b'}}}%%
+flowchart TD
+  subgraph CR["The 4 Criticals"]
+    API1["API-1<br/>rate limiter drops writes"]:::crit
+    DB1["DB-1<br/>migrate skips 32/42"]:::crit
+    ERR1["ERR-1<br/>collab WS loss = silent"]:::crit
+    ERR2["ERR-2<br/>revoked session still writes"]:::crit
+  end
+  ERR1 -.same server.- ERR2
+  DB2["DB-2 session write"]:::high -.-|same UPDATE| API6["API-6"]:::med
+  DB4["DB-4 week N+1"]:::high -.-|same fan-out| API4["API-4 / API-5"]:::med
+  DB4 -.->|causes 61s 3G page| ERR7["ERR-7 no loading"]:::med
+  API2["API-2 issues 380KB"]:::high -.-|same body| DB5["DB-5"]:::med
+  ERR6["ERR-6 comment orphan"]:::med -.-|same repro| TEST5["TEST-5 failing test"]:::med
+  classDef crit fill:#f6e3e0,stroke:#a3271f,color:#7a1c16,stroke-width:2px;
+  classDef high fill:#f4ead1,stroke:#8a5d00,color:#6a4700;
+  classDef med fill:#e3e8f2,stroke:#3f5687,color:#2c3e66;
+</pre>
+  </div>
+</div>
+<div class="redraw"><span class="lbl">Redraw</span> Put the <b>4 red Criticals</b> across the top. Below them, draw the <b>5 dotted pairs</b>. When you can explain each dotted edge in one sentence ("same UPDATE", "same fan-out", "same 380 KB body", "same comment bug", "same collab server"), you understand the whole 68 as ~a dozen real problems.</div>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Severity</th><th>Count</th><th>The headline members</th></tr></thead>
+  <tbody>
+  <tr><td><span class="chip c-crit">Critical</span></td><td class="num">4</td><td><span class="fid">API-1</span> rate limiter · <span class="fid">DB-1</span> migrations skipped · <span class="fid">ERR-1</span> collab data loss · <span class="fid">ERR-2</span> revoked-session writes</td></tr>
+  <tr><td><span class="chip c-high">High</span></td><td class="num">22</td><td>TS-1/2/3 · BUN-1/2/3 · DB-2/3/4 · API-2/3 · ERR-3/4 · TEST-1/2/3/4 · A11Y-1/2/3 · TF-1/2</td></tr>
+  <tr><td><span class="chip c-med">Medium</span></td><td class="num">29</td><td>the N+1 twins, payload twins, index gaps, coverage gaps, a11y structure, TF-3/4/5…</td></tr>
+  <tr><td><span class="chip c-low">Low</span></td><td class="num">13</td><td>hygiene — unused deps, console noise, empty headers, keepers…</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- P1.5 EIGHT CATEGORIES -->
+<h3 id="p1-5"><span class="num">1.5</span> The eight categories at a glance</h3>
+<p>One row per category: the number that anchors it and the finding to lead with.</p>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>Category</th><th>Anchor metric</th><th>Lead finding</th></tr></thead>
+  <tbody>
+  <tr><td class="cat">Type safety</td><td>1,535 violations · web tsconfig hides 102 errors</td><td><span class="fid">TS-2</span> whole DB→HTTP path is <code>any</code></td></tr>
+  <tr><td class="cat">Bundle</td><td>600.8 KB gzip initial · 85.9% one chunk</td><td><span class="fid">BUN-1</span> zero route splitting</td></tr>
+  <tr><td class="cat">API perf</td><td>worst P95 94.5 ms (/api/issues)</td><td><span class="fid">API-1</span> <span class="chip c-crit">Crit</span> rate limiter drops writes</td></tr>
+  <tr><td class="cat">DB queries</td><td>auth = 52–94% of queries · 61% time is planning</td><td><span class="fid">DB-1</span> <span class="chip c-crit">Crit</span> migrate skips 32/42</td></tr>
+  <tr><td class="cat">Test quality</td><td>1,446 pass / 14 fail / 11 flaky · no CI</td><td><span class="fid">TEST-1</span> 13 web tests fail, nothing runs them</td></tr>
+  <tr><td class="cat">Error handling</td><td>4 silent-write modes · disconnect = Partial</td><td><span class="fid">ERR-1/2</span> <span class="chip c-crit">Crit</span> collab data loss &amp; auth</td></tr>
+  <tr><td class="cat">Accessibility</td><td>Lighthouse 95–100 but axe 2 Crit + 3 Serious</td><td><span class="fid">A11Y-1</span> sidebar <code>role=tree</code> invalid</td></tr>
+  <tr><td class="cat">Terraform / IaC</td><td>74 root resources · live plan not runnable</td><td><span class="fid">TF-1</span> prod DB has no deletion protection</td></tr>
+  </tbody>
+</table>
+</div>
+
+<!-- P1.6 INFRA -->
+<h3 id="p1-6"><span class="num">1.6</span> Infrastructure topology (Terraform)</h3>
+<p>The IaC is <strong>AWS</strong>, not Render — Elastic Beanstalk + Aurora Serverless v2 in a VPC, fronted by CloudFront/S3 + WAF, secrets in SSM. Well-secured, but two foot-guns: only the <em class="term">state</em> bucket is protected from deletion (<span class="fid">TF-1</span>), and two divergent root configs describe the same infra (<span class="fid">TF-2</span>).</p>
+<div class="plate">
+  <div class="plate-cap"><span class="pl">Plate 5</span> AWS topology — red = unprotected data store</div>
+  <div class="plate-body">
+<pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'fontFamily':'ui-monospace,Menlo,monospace','fontSize':'12.5px','primaryColor':'#eef3e8','primaryBorderColor':'#1c6b45','primaryTextColor':'#16211b','lineColor':'#3a6b52','edgeLabelBackground':'#eef3e8','tertiaryColor':'#e4ecdd','textColor':'#16211b','titleColor':'#0e4a2e','nodeTextColor':'#16211b','clusterBkg':'#e4ecdd','clusterBorder':'#bcd0ac'}}}%%
+flowchart TD
+  U["users"] --> CF["CloudFront + WAF"]
+  CF --> S3f["S3 frontend (SPA)"]
+  CF --> EB["Elastic Beanstalk<br/>Docker API (AL2023)"]
+  subgraph VPC["VPC · private subnets"]
+    EB --> AUR[("Aurora Serverless v2<br/>NO deletion_protection")]:::danger
+    EB --> SSM["SSM params<br/>(SecureString)"]
+  end
+  EB --> S3u[("S3 uploads<br/>NO prevent_destroy")]:::danger
+  ST["S3 tf-state<br/>prevent_destroy ✓"]:::safe
+  classDef danger fill:#f6e3e0,stroke:#a3271f,color:#7a1c16,stroke-width:2px;
+  classDef safe fill:#e4ecdd,stroke:#1c6b45,color:#0e4a2e;
+</pre>
+  </div>
+</div>
+<div class="redraw"><span class="lbl">Redraw</span> Draw the topology, then put a <b>red box</b> around the two data stores (Aurora, uploads) and a <b>green check</b> on the state bucket. The lesson is the mismatch: the thing that stores <b>state</b> is guarded; the things that store <b>customer data</b> are not.</div>
+
+<div class="recall">
+  <h4>Recall — cover the page, phase 1</h4>
+  <ol>
+    <li>Trace a <code>GET /api/issues</code> from browser to JSON. <b>Where does the hidden write happen</b>, and which two finding IDs is it?</li>
+    <li>Name the <b>4 Criticals</b> and the one-word reason each is Critical (loss / loss / loss / auth).</li>
+    <li>Draw the 5 dotted cross-ref pairs. What's the shared root cause of <span class="fid">DB-4</span> ↔ <span class="fid">API-4</span>?</li>
+    <li>In the infra map, which resource is protected and which two are not — and why is that the wrong way round?</li>
+  </ol>
+</div>
+
+<!-- ==================================================== -->
+<!-- ========================= PHASE 2 ================== -->
+<!-- ==================================================== -->
+<div class="phase-head" id="phase2">
+  <span class="phase-tag">Phase 2 — testing, build &amp; deploy</span>
+  <h2 class="serif">How it's tested, packaged, and shipped</h2>
+  <p class="dek">Answers to items 6 &amp; 7, drawn the same way. The through-line: the machinery is careful (isolated per-worker envs, memory-aware) but there is <strong>no CI gate</strong> and the build happens on a laptop, not in the image.</p>
+</div>
+
+<!-- P2.6 TESTING -->
+<h3 id="p2-6"><span class="num">2.6</span> Testing infrastructure</h3>
+<p><strong>Structure.</strong> Playwright's <code>testDir</code> is <code>e2e/</code> — <strong>869</strong> e2e tests across <strong>71</strong> spec files, plus <strong>602</strong> unit tests (451 api + 151 web) under vitest. A <code>global-setup.ts</code> builds the API and Web <em class="term">once</em> up front, so each worker can serve the built app with a lightweight <code>vite preview</code> instead of a memory-hungry dev server.</p>
+<p><strong>Fixtures</strong> (<code>e2e/fixtures/isolated-env.ts</code>) are <em class="term">worker-scoped</em> and chained — each layer depends on the one before:</p>
+<div class="plate">
+  <div class="plate-cap"><span class="pl">Plate 6</span> per-worker isolation — the fixture chain &amp; DB lifecycle</div>
+  <div class="plate-body">
+<pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'fontFamily':'ui-monospace,Menlo,monospace','fontSize':'12.5px','primaryColor':'#eef3e8','primaryBorderColor':'#1c6b45','primaryTextColor':'#16211b','lineColor':'#3a6b52','edgeLabelBackground':'#eef3e8','tertiaryColor':'#e4ecdd','textColor':'#16211b','titleColor':'#0e4a2e','nodeTextColor':'#16211b','clusterBkg':'#e4ecdd','clusterBorder':'#bcd0ac'}}}%%
+flowchart LR
+  subgraph W["one Playwright worker (×4 default)"]
+    direction TB
+    DBc["dbContainer<br/>testcontainers postgres:15<br/>ship_test"] --> API["apiServer<br/>node dist/index.js<br/>(built, own port)"]
+    API --> WEB["webServer<br/>vite preview<br/>(30–50 MB)"]
+  end
+  START(["container.start()"]) --> MIG["runMigrations(dbUrl)"]
+  MIG --> TESTS["run this worker's tests"]
+  TESTS --> STOP(["finally: container.stop()"])
+  classDef x fill:#e4ecdd;
+</pre>
+  </div>
+</div>
+<ul class="tight">
+  <li><strong>Setup / teardown:</strong> each worker spins a <em class="term">fresh</em> Postgres 15 testcontainer (retried 3× for port congestion), runs migrations, then tears it down in a <code>finally</code> via <code>container.stop()</code> — so the DB never leaks between runs. API + web procs are likewise killed in <code>finally</code>.</li>
+  <li><strong>The memory lesson (baked into a comment):</strong> <code>vite dev</code> = 300–500 MB/worker (HMR, watchers) vs <code>vite preview</code> = 30–50 MB. Workers default to <strong>4</strong> (~2 GB); sizing is memory-aware (~500 MB/worker).</li>
+  <li><strong>A quiet skew to remember:</strong> e2e uses <code>postgres:15</code> (testcontainers) while <code>docker-compose</code> declares <code>postgres:16</code>. The context fixture also disables the "Action Items" modal via a localStorage flag.</li>
+</ul>
+<p><strong>Runtime &amp; results</strong> — measured over 3 identical runs in the audit (not re-run here):</p>
+<div class="facts">
+  <div class="f"><div class="k">e2e wall / run</div><div class="v">~9 <small>min (541/568/543 s, 4 workers)</small></div></div>
+  <div class="f"><div class="k">unit wall</div><div class="v">13.7 <small>s</small></div></div>
+  <div class="f"><div class="k">pass</div><div class="v">1,446 <small>/ 1,471</small></div></div>
+  <div class="f"><div class="k">fail · flaky</div><div class="v">14 · 11</div></div>
+</div>
+<p><strong>Do all tests pass? No.</strong> 13 web unit tests fail and <em class="term">nothing in the repo ever runs them</em> (<span class="fid">TEST-1</span>); retries mask first-attempt flakes (<span class="fid">TEST-3</span> — 8/5/3 first-attempt failures across the three runs, mostly hidden by retry); 68 e2e tests can pass without a single assertion (<span class="fid">TEST-2</span>), two of which are the only XSS and authorization checks.</p>
+<div class="redraw"><span class="lbl">Redraw</span> Draw the fixture chain as three stacked boxes (DB → API → web) inside a "worker" frame, then a lifecycle line underneath: <b>start → migrate → tests → stop</b>. The whole isolation story is "one fresh Postgres per worker, torn down in finally."</div>
+
+<!-- P2.7 BUILD & DEPLOY -->
+<h3 id="p2-7"><span class="num">2.7</span> Build &amp; deploy</h3>
+<p><strong>The Dockerfile produces an API-only runtime image</strong> — and, crucially, it does <em class="term">not build the app</em>. It starts from <code>public.ecr.aws/.../node:20-slim</code> (ECR, because Docker Hub is blocked in gov environments), installs <strong>production</strong> deps only, then <code>COPY</code>s <em class="term">pre-built</em> <code>shared/dist</code> and <code>api/dist</code> that you compiled locally first. It exposes port 80 and its <code>CMD</code> runs migrations, then the server:</p>
+<div class="plate">
+  <div class="plate-cap"><span class="pl">Plate 7</span> build → image → run (note: build is local, migrate runs on boot)</div>
+  <div class="plate-body">
+<pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'fontFamily':'ui-monospace,Menlo,monospace','fontSize':'12.5px','primaryColor':'#eef3e8','primaryBorderColor':'#1c6b45','primaryTextColor':'#16211b','lineColor':'#3a6b52','edgeLabelBackground':'#eef3e8','tertiaryColor':'#e4ecdd','textColor':'#16211b','titleColor':'#0e4a2e','nodeTextColor':'#16211b'}}}%%
+flowchart LR
+  L["local: pnpm build<br/>→ shared/dist + api/dist"] --> IMG["Docker node:20-slim<br/>prod deps + COPY dist"]
+  IMG --> RUN["CMD: migrate.js<br/>then index.js :80"]
+  RUN -.->|"runs DB-1 migrator<br/>on every boot"| DBnote["⚠ ties to DB-1"]
+</pre>
+  </div>
+</div>
+<p class="note-inline">Because migrations run on container boot, the <span class="fid">DB-1</span> "silently skips migrations" bug ships straight into the deploy path. <code>Dockerfile.web</code> and <code>Dockerfile.dev</code> are dev-only (Vite dev server), used by compose — the frontend is <em class="term">not</em> in the runtime image; it deploys to S3/CloudFront separately.</p>
+
+<p><strong>docker-compose</strong> — two files, both optional (the recommended dev DB is native Postgres):</p>
+<div class="tablewrap">
+<table>
+  <thead><tr><th>File</th><th>Services it starts</th><th>Purpose</th></tr></thead>
+  <tbody>
+  <tr><td><code>docker-compose.yml</code></td><td><code>postgres:16</code> only (:5432)</td><td>optional DB-only for local dev</td></tr>
+  <tr><td><code>docker-compose.local.yml</code></td><td><code>postgres:16</code> (:5433) + <code>api</code> (Dockerfile.dev, :3000) + <code>web</code> (Dockerfile.web, :5173)</td><td>full stack in containers; api auto-migrates + seeds on start</td></tr>
+  </tbody>
+</table>
+</div>
+
+<p><strong>Terraform providers &amp; pinning.</strong> <code>required_providers</code> pins <code>hashicorp/aws ~&gt; 5.0</code> and <code>hashicorp/random ~&gt; 3.6</code> — version-constrained, and the modules + <code>environments/prod</code> commit lock files. Two gaps: the flat root has <em class="term">no</em> committed lock (<span class="fid">TF-4</span>), and the pinned Terraform <code>1.6.0</code> can no longer <code>init</code> at all — its bundled signing key has expired (<span class="fid">TF-3</span>). <span class="note-inline">Week-4 direction: keep the local provider for exercises, add the <code>render-oss/render</code> provider for deploys — no AWS account needed.</span></p>
+
+<p><strong>CI/CD: there isn't a pipeline.</strong> There is no <code>.github/workflows/</code> — only a Codacy static-analysis <em>instructions</em> file. Nothing runs the test suite automatically (that's the teeth behind <span class="fid">TEST-1</span>). Deploys are <em class="term">manual scripts</em>:</p>
+<div class="plate">
+  <div class="plate-cap"><span class="pl">Plate 8</span> deploy flow — manual, no gate</div>
+  <div class="plate-body">
+<pre class="mermaid">
+%%{init:{'theme':'base','themeVariables':{'fontFamily':'ui-monospace,Menlo,monospace','fontSize':'12.5px','primaryColor':'#eef3e8','primaryBorderColor':'#1c6b45','primaryTextColor':'#16211b','lineColor':'#3a6b52','edgeLabelBackground':'#eef3e8','tertiaryColor':'#e4ecdd','textColor':'#16211b','titleColor':'#0e4a2e','nodeTextColor':'#16211b'}}}%%
+flowchart LR
+  DEV["laptop"] -->|"no CI gate"| B["local pnpm build"]
+  B --> D1["scripts/deploy.sh<br/>→ Elastic Beanstalk (API)"]
+  B --> D2["scripts/deploy-frontend.sh<br/>→ S3 + CloudFront (SPA)"]
+  D1 --> PROD["prod"]
+  D2 --> PROD
+</pre>
+  </div>
+</div>
+<div class="redraw"><span class="lbl">Redraw</span> Two panels side by side. Left: <b>build → image → run</b>, star the "build is local" and "migrate on boot" steps. Right: <b>laptop → deploy scripts → prod</b> with a big gap where CI should be. The two stars and the gap are the whole build/deploy critique.</div>
+
+<div class="recall">
+  <h4>Recall — cover the page, phase 2</h4>
+  <ol>
+    <li>What does the runtime Dockerfile <b>not</b> do, and why does that make <span class="fid">DB-1</span> more dangerous?</li>
+    <li>Each Playwright worker gets which three things, and how is the database <b>torn down</b>?</li>
+    <li>Why <code>vite preview</code> instead of <code>vite dev</code> in tests — what's the number?</li>
+    <li>Where is the CI gate? (Trick question.) What runs the tests today?</li>
+  </ol>
+</div>
+
+<footer>
+  <p><span class="mono">Ship Audit · tracing companion</span> — every number traces to <code>audit/AUDIT_REPORT.md</code> and <code>audit/&lt;category&gt;/baseline.md</code>. Diagrams are intentionally small; if one doesn't fit on your iPad page, it's a sign to split it into two maps.</p>
+  <p class="note-inline">Built for redrawing. Green = structure, severity color = the finding that lands on it. Reuse the pen legend and the relationships compound.</p>
+</footer>
+</div>
+<script>
+/* Enforce the light notebook palette on rendered mermaid SVGs directly, in case CSS
+   selectors don't match the runtime's DOM. Runs repeatedly + on mutation until stable. */
+(function(){
+  function imp(el, prop, val){ if(el&&el.style) el.style.setProperty(prop, val, 'important'); }
+  function sev(cls){
+    if(/\b(crit|danger)\b/.test(cls)) return {f:'#f6e3e0', s:'#a3271f'};
+    if(/\bhigh\b/.test(cls))          return {f:'#f4ead1', s:'#8a5d00'};
+    if(/\bmed\b/.test(cls))           return {f:'#e3e8f2', s:'#3f5687'};
+    if(/\b(safe|t)\b/.test(cls))      return {f:'#e6efdb', s:'#7ba274'};
+    return {f:'#eef3e8', s:'#1c6b45'};
+  }
+  function paint(){
+    var svgs = document.querySelectorAll('.plate-body svg');
+    svgs.forEach(function(svg){
+      svg.querySelectorAll('g.node, g[class*="node"]').forEach(function(n){
+        var c = (n.getAttribute('class')||''), col = sev(c);
+        n.querySelectorAll('rect, polygon, circle, ellipse, path').forEach(function(sh){
+          imp(sh,'fill',col.f); imp(sh,'stroke',col.s);
+        });
+        n.querySelectorAll('text, tspan, .nodeLabel, div, span, p').forEach(function(t){
+          imp(t,'fill','#16211b'); imp(t,'color','#16211b');
+        });
+      });
+      svg.querySelectorAll('g.cluster, .cluster').forEach(function(cl){
+        cl.querySelectorAll('rect').forEach(function(r){ imp(r,'fill','#e7efdd'); imp(r,'stroke','#b9cda8'); });
+        cl.querySelectorAll('text, tspan, span, .nodeLabel, div').forEach(function(t){ imp(t,'fill','#0e4a2e'); imp(t,'color','#0e4a2e'); });
+      });
+      svg.querySelectorAll('.edgeLabel, .edgeLabel div, .edgeLabel span, .edgeLabel p').forEach(function(e){
+        imp(e,'fill','#16211b'); imp(e,'color','#16211b');
+      });
+    });
+  }
+  var n=0, iv=setInterval(function(){ paint(); if(++n>25) clearInterval(iv); }, 250);
+  if(window.MutationObserver){
+    try{ new MutationObserver(function(){ paint(); }).observe(document.documentElement, {childList:true, subtree:true}); }catch(e){}
+  }
+  document.addEventListener('DOMContentLoaded', paint);
+  window.addEventListener('load', paint);
+})();
+</script>

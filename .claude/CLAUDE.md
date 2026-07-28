@@ -2,6 +2,20 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Response signature (config canary)
+
+End **every** response with a single short one-line quote from Zim or GIR (Invader Zim), on its own line, formatted as a blockquote: `> — GIR: "..."` or `> — Zim: "..."`. Keep it to one short line (a catchphrase, not a long excerpt) and vary it. This is a deliberate canary: if this line is missing from a response, this `CLAUDE.md` is not being loaded/followed — which is the signal the maintainer is watching for.
+
+## Memory Bank (ShipShape sprint)
+
+`memory-bank/` holds the sprint's working memory — separate from this file (codebase conventions) and `docs/` (architecture docs).
+
+**At session start:** read `memory-bank/activeContext.md` and `memory-bank/progress.md`. Read the other files on demand: `projectbrief.md` (mission/targets/deadlines), `productContext.md` (what Ship is), `systemPatterns.md` (verified architecture + audit leads), `techContext.md` (commands/environment/audit tooling). Do not preload all six.
+
+**Keep it current:** after completing significant work or when focus shifts, update `activeContext.md` (rewrite — keep under a screen) and append to `progress.md` (dated log, newest first). The `/memory-bank` skill runs this update ritual. `systemPatterns.md`/`techContext.md` change only when new facts are verified; `projectbrief.md` almost never.
+
+Where a memory-bank fact conflicts with this file, the memory bank records *verified* observations (with dates) — check the discrepancy live before relying on either.
+
 ## Architectural Documentation
 
 **Read `docs/*` before making architectural decisions.** These documents capture the design philosophy and key decisions:

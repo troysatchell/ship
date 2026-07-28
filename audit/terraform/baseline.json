@@ -1,0 +1,99 @@
+{
+  "category": "terraform",
+  "mode": "baseline",
+  "commit": "076a18371da0a09f88b5329bd59611c4bc9536bb",
+  "dirty": true,
+  "date": "2026-07-27T17:15:00-05:00",
+  "environment": {
+    "hardware": "Apple Mac16,7 — 14 cores, 24 GB RAM (arm64)",
+    "os": "Darwin 25.5.0 arm64 / macOS 26.5.1",
+    "node": "v23.2.0",
+    "terraformPinned": "1.6.0 (.terraform-version) — FAILS `init`: bundled provider-signature key expired (openpgp: key expired)",
+    "terraformUsed": "1.9.8 (satisfies required_version >= 1.6.0; downloaded to a temp bin, not added to repo)",
+    "providers": "hashicorp/aws ~> 5.0 (resolved 5.100.0), hashicorp/random ~> 3.6 (resolved 3.9.0); drift demo uses hashicorp/local 2.5.2",
+    "dataVolume": "n/a (infrastructure-as-code review)",
+    "scaffolding": [
+      "Installed Terraform 1.9.8 to $CLAUDE_JOB_DIR/tmp/bin (temp only) — the repo's pinned 1.6.0 cannot install providers (expired signing key, finding TF-3).",
+      "Ran `terraform init -backend=false` + `terraform validate` in terraform/ (root) and terraform/environments/prod ONLY to download providers and validate; NO backend, NO AWS credentials, NO state access, NO apply against cloud.",
+      "Removed the .terraform provider cache and the root .terraform.lock.hcl that init created, so the repo's terraform/ tree is byte-for-byte unchanged (git status terraform/ is empty). Pre-existing committed lock files under modules/* and environments/prod were left intact.",
+      "Drift demonstration built under audit/terraform/drift-demo/ using ONLY the hashicorp/local provider (no cloud); its provider cache was trimmed, keeping main.tf + terraform.tfstate + the captured plan outputs."
+    ]
+  },
+  "metrics": {
+    "rootResourceBlocks": 74,
+    "moduleResourceBlocks": 66,
+    "countForEachUsesRoot": 20,
+    "environments": "prod, shadow, dev (modular) + flat root module + bootstrap",
+    "validateRoot": "pass (1 warning: uploads lifecycle rule missing filter/prefix)",
+    "validateProd": "pass (1 warning: same uploads lifecycle rule)",
+    "livePlanRunnable": false,
+    "livePlanBlockers": "S3 remote backend (state bucket name stored in SSM, not committed) + AWS credentials — the exercise provides neither",
+    "rootLockfilePresent": false,
+    "prodLockfilePresent": true,
+    "resourcesWithPreventDestroy": 1,
+    "preventDestroyResource": "aws_s3_bucket.terraform_state (bootstrap) — the ONLY guarded resource",
+    "statefulResourcesWithoutDestroyGuard": "aws_rds_cluster.aurora, aws_rds_cluster_instance.aurora, aws_s3_bucket.uploads, aws_s3_bucket.frontend",
+    "driftDetectedByLocalProvider": true,
+    "findingsTotal": 6,
+    "critical": 0,
+    "high": 2,
+    "medium": 3,
+    "low": 1
+  },
+  "findings": [
+    {
+      "id": "TF-1",
+      "severity": "High",
+      "title": "Prod data stores have no deletion protection — only the Terraform state bucket is guarded",
+      "location": "terraform/database.tf:34 (aws_rds_cluster.aurora), terraform/s3-cloudfront.tf:374 (aws_s3_bucket.uploads); cf. terraform/bootstrap/main.tf:22 (the only prevent_destroy)",
+      "evidence": "Grep of all *.tf for deletion_protection/prevent_destroy/force_destroy: the Aurora cluster sets neither `deletion_protection` (defaults false) nor a `prevent_destroy` lifecycle block; the uploads and frontend S3 buckets set neither `prevent_destroy` nor `force_destroy`. The ONLY resource with `prevent_destroy = true` is the Terraform state bucket in bootstrap/main.tf:22. Aurora takes a final snapshot only in prod (`skip_final_snapshot = var.environment != \"prod\"`, database.tf:43) — non-prod destroys lose the DB outright, and S3 has no snapshot concept.",
+      "hypothesis": "The state bucket was hardened (prevent_destroy + versioning + encryption) but that guardrail was never extended to the resources that actually hold customer data. A `terraform destroy`, a workspace/var mix-up, or any attribute change that forces cluster/bucket replacement would delete the prod database or the uploads bucket.",
+      "estimatedImpact": "One careless `apply`/`destroy` from prod data loss. Fix: `deletion_protection = true` on the Aurora cluster + `lifecycle { prevent_destroy = true }` on the cluster, the uploads bucket, and the frontend bucket. This is the most severe finding in the Terraform category (closest to Critical; not Critical only because prod still takes a final DB snapshot)."
+    },
+    {
+      "id": "TF-2",
+      "severity": "High",
+      "title": "Two divergent root configurations manage the same infrastructure, and they have already drifted apart",
+      "location": "terraform/*.tf (flat root, state key `ship/terraform.tfstate`) vs terraform/environments/prod/ (modular, state key `ship/prod/terraform.tfstate`) → terraform/modules/*",
+      "evidence": "The flat root declares 74 resource blocks including `waf.tf` (aws_wafv2_web_acl + ip_set + regex_set) and `cloudfront-logging.tf` (kinesis + realtime log config). The modular prod env (environments/prod/main.tf) calls only modules vpc/security-groups/aurora/elastic-beanstalk/cloudfront-s3/ssm — there is NO WAF module and NO realtime-logging module. Both paths reuse the same names (e.g. Aurora `cluster_identifier = \"${var.project_name}-aurora\"`, database.tf:35 and modules/aurora/main.tf) with different Terraform addresses and separate state files. Root defaults `environment = \"dev\"` (terraform.tfvars.example).",
+      "hypothesis": "A modular refactor (environments/ + modules/) was started but the flat root was never retired, so the repo now has two sources of truth. They have diverged: WAF and CloudFront realtime logging exist only in the flat root.",
+      "estimatedImpact": "Ambiguity over which config is authoritative; if both are applied to one account they collide on hard-coded resource names; security controls (WAF, realtime logs) silently differ between the two definitions. Fix: pick one structure (the modular one), port WAF + logging into it, and delete the other."
+    },
+    {
+      "id": "TF-3",
+      "severity": "Medium",
+      "title": "Repo pins Terraform 1.6.0, which can no longer bootstrap — its provider-signature key has expired",
+      "location": "terraform/.terraform-version (`1.6.0`); required_version `>= 1.6.0` in versions.tf",
+      "evidence": "Verified this session: `terraform 1.6.0 init -backend=false` fails with `Error: Failed to install provider … openpgp: key expired` for both hashicorp/aws and hashicorp/random. The same command on Terraform 1.9.8 succeeds (`Installed hashicorp/aws v5.100.0 (signed by HashiCorp)`). The bundled HashiCorp release/trust key in 1.6.0 has expired.",
+      "hypothesis": "1.6.0 shipped a trust keyring that has since expired; HashiCorp rotated the signing key and newer Terraform builds carry the current one.",
+      "estimatedImpact": "A clean-machine `terraform init` at the pinned version is impossible — onboarding/CI following `.terraform-version` breaks. Fix is trivial and already permitted by `required_version >= 1.6.0`: bump `.terraform-version` to a current release (e.g. 1.9.x). Low effort, but it blocks the documented workflow, so Medium."
+    },
+    {
+      "id": "TF-4",
+      "severity": "Medium",
+      "title": "The flat root module has no committed provider lock file — provider versions float",
+      "location": "terraform/ (no .terraform.lock.hcl); contrast terraform/environments/prod/.terraform.lock.hcl and terraform/modules/*/.terraform.lock.hcl which ARE committed",
+      "evidence": "Before this audit, `find terraform -name .terraform.lock.hcl` returned lock files only under modules/* and environments/prod — never the flat root. `terraform init` in the root just now printed \"Terraform has created a lock file\" and resolved `~> 5.0` → aws 5.100.0 and `~> 3.6` → random 3.9.0 with nothing pinning those hashes in git.",
+      "hypothesis": "The root was initialized ad hoc and its lock file was gitignored/never committed, unlike the modular paths.",
+      "estimatedImpact": "Two operators (or CI vs laptop) running the flat root can silently get different provider builds, so plans are non-reproducible and a compromised provider release isn't pinned out. Fix: commit the root `.terraform.lock.hcl` (or standardize on the modular structure per TF-2, which is already locked)."
+    },
+    {
+      "id": "TF-5",
+      "severity": "Medium",
+      "title": "uploads S3 lifecycle rule has no filter/prefix — a provider validation warning that becomes a future error",
+      "location": "terraform/s3-cloudfront.tf:426 and terraform/modules/cloudfront-s3/main.tf:437 (aws_s3_bucket_lifecycle_configuration.uploads)",
+      "evidence": "`terraform validate` (both root and prod) warns: \"Invalid Attribute Combination … No attribute specified when one (and only one) of [rule[0].filter, rule[0].prefix] is required. This will be an error in a future version of the provider.\"",
+      "hypothesis": "The lifecycle rule omits the now-required `filter {}` (or `prefix`). Under aws provider 5.x it is accepted with a warning but the intended scope of the rule is ambiguous.",
+      "estimatedImpact": "The uploads-bucket lifecycle policy may not apply as intended, and the config will hard-fail on a future aws-provider major. Fix: add an explicit `filter {}` (apply to all objects) or a `prefix`."
+    },
+    {
+      "id": "TF-6",
+      "severity": "Low",
+      "title": "Secret generators have no keepers — regeneration silently rotates the DB password and logs out all users (blast-radius note)",
+      "location": "terraform/database.tf:1 (random_password.db_password → Aurora master_password), terraform/ssm.tf:105 (random_password.session_secret → SSM SecureString)",
+      "evidence": "Both random_password resources set only length/special, no `keepers`. `db_password.result` is the Aurora `master_password`; `session_secret.result` is the express-session signing secret stored in SSM. Not a defect, but replacement (taint, or a length/special edit, or provider behavior change) rotates them.",
+      "hypothesis": "Fine as steady-state; the risk is that a seemingly-innocent edit to these blocks regenerates the value.",
+      "estimatedImpact": "Regenerating session_secret invalidates every active session (all users logged out); regenerating db_password rotates the Aurora master password in place (breaks any consumer reading the old value until SSM propagates). Document it and, if intentional rotation is wanted, drive it explicitly rather than as a side effect. Low."
+    }
+  ]
+}

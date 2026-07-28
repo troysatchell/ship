@@ -1,0 +1,200 @@
+# ShipShape per-project audit config for Ship
+# Read by all shipshape category audit skills. Facts verified against the repo 2026-07-27.
+
+project:
+  name: ship
+  repoRoot: /Users/troy/repos/GAUNTLET/Ship
+  packageManager: pnpm
+  packages:
+    - path: web
+      role: frontend
+    - path: api
+      role: backend
+    - path: shared
+      role: shared
+
+commands:
+  install: pnpm install
+  buildWeb: pnpm build:web          # runs build:shared first; web build = tsc && vite build
+  buildAll: pnpm build
+  typecheck: pnpm type-check
+  test: pnpm test                    # NOTE: root test runs ONLY @ship/api vitest; web has its own `pnpm --filter @ship/web test`
+  testE2e: pnpm test:e2e             # Playwright, 71 spec files / ~866 tests; per-worker Postgres testcontainers + vite preview — heavy, needs Docker
+  dev: pnpm dev                      # scripts/dev.sh — auto-creates DB, migrates, seeds, picks free ports, writes .ports file
+  dbSeed: pnpm db:seed               # api/src/db/seed.ts — idempotent; see seed: notes below
+  dbMigrate: pnpm db:migrate
+
+urls:
+  web: http://localhost:5173         # VERIFIED 2026-07-27, this run
+  api: http://localhost:3001         # VERIFIED 2026-07-27: :3000 is occupied by an unrelated
+                                     # `open-webui` container, so dev.sh fell through to 3001.
+                                     # ALWAYS read repo-root .ports rather than assuming 3000.
+  loginDev: dev@ship.local / admin123  # seeded super-admin (all seeded users use admin123)
+  auth: >                            # VERIFIED working sequence — login 403s without this
+    1. GET /api/csrf-token  -> {"token": "..."}   (field is `token`, NOT `csrfToken`)
+    2. POST /api/auth/login with header `x-csrf-token: <token>`, same cookie jar,
+       body {"email":"dev@ship.local","password":"admin123"}
+    3. Reuse that cookie jar for all subsequent requests.
+    Bearer-token requests skip CSRF entirely (api/src/app.ts:52).
+
+database:
+  kind: postgres
+  # VERIFIED 2026-07-27: there is NO local PostgreSQL on this machine (no psql/pg_isready
+  # on PATH) despite CLAUDE.md's claim. This audit runs against a Docker container:
+  #   docker run -d --name ship-audit-pg -e POSTGRES_DB=ship_dev -e POSTGRES_USER=ship \
+  #     -e POSTGRES_PASSWORD=ship_dev_password -p 5433:5432 postgres:15-alpine
+  # docker-compose.local.yml declares postgres:16, but registry pulls are blocked in this
+  # environment and only postgres:15-alpine was cached. Version skew is recorded in every
+  # artifact's environment.scaffolding — it matters for EXPLAIN plan comparisons.
+  connection: postgresql://ship:ship_dev_password@localhost:5433/ship_dev
+  queryLogging: >
+    Local PG: ALTER SYSTEM SET log_statement='all'; ALTER SYSTEM SET log_min_duration_statement=0; SELECT pg_reload_conf();
+    Docker (compose.local): add command: ["postgres","-c","log_statement=all","-c","log_min_duration_statement=0"] to the postgres service.
+    Revert after db-query audit.
+  schema: api/src/db/schema.sql      # unified `documents` table ("EVERYTHING IS A DOCUMENT"), 38 migrations in api/src/db/migrations/
+  dbLayer: raw pg Pool (api/src/db/client.ts) — inline parameterized SQL in route files, no ORM
+
+seed:                                # brief-required minimums
+  documents: 500
+  issues: 100
+  users: 20
+  sprints: 10
+  # VERIFIED 2026-07-27 — `pnpm db:seed` alone yields 257 documents / 11 users, i.e. it
+  # MISSES the documents and users targets. audit/seed-augment.ts (written for this audit)
+  # tops the dataset up deterministically. Required setup order:
+  #   pnpm db:migrate  &&  pnpm db:seed  &&  ./api/node_modules/.bin/tsx audit/seed-augment.ts
+  # (`tsx` is not on PATH; use the workspace-local binary shown above.)
+  actual:                            # measured after augmentation — the audited data volume
+    documents: 500                   # issue 254, wiki 91, sprint 35, weekly_plan 32,
+                                     # weekly_retro 27, person 20, weekly_review 15,
+                                     # project 15, standup 6, program 5
+    users: 20
+    sprints: 35
+  verify: docker exec ship-audit-pg psql -U ship -d ship_dev -c "SELECT document_type, count(*) FROM documents GROUP BY 1 ORDER BY 2 DESC;"
+
+# CONFIRMED 2026-07-27 by api-perf-audit (baseline) — replaces the earlier provisional list.
+# Method: headless Chromium (repo Playwright 1.57.0) logged in as dev@ship.local, ran every
+# `userFlows` entry, recorded all /api/* requests. Raw trace: audit/api-perf/raw/frontend-trace.json.
+# Selection = frequency x user-visibility across the 8 traced flows (63 requests / 49 unique).
+# Benchmarked with a session cookie (see auth: above) via autocannon 8.0.0.
+keyEndpoints:
+  - method: GET
+    path: /api/documents?type=wiki
+    flow: App shell wiki sidebar — fires on every cold page load (5 of 8 flows); 37.9 KB
+  - method: GET
+    path: /api/issues
+    flow: Issues list / app boot — largest payload at 380 KB, no pagination
+  - method: GET
+    path: /api/documents
+    flow: Unfiltered doc list (global search / doc picker) — 294 KB, all 500 docs
+  - method: GET
+    path: /api/documents/:id
+    flow: View a document — 1 KB; control for per-request auth overhead
+  - method: GET
+    path: /api/team/assignments
+    flow: Sprint board (/team/allocation, where /sprints redirects) — 22.7 KB
+  - method: GET
+    path: /api/weeks
+    flow: Dashboard week list — 4.4 KB; parent of the per-week standups fan-out (API-4)
+# NOT confirmed, removed from the provisional list:
+#   /api/search?q=...  — no such route is reachable from the UI. `/api/search` exists but the
+#                        only frontend caller is /api/search/mentions (editor @-autocomplete,
+#                        web/src/components/editor/MentionExtension.ts:23). The UI's document
+#                        search filters client-side over the full GET /api/documents payload.
+#   /api/dashboard     — not a route; the real endpoints are /api/dashboard/my-week and
+#                        /api/dashboard/my-focus (both small, 1.2-2.9 KB).
+
+keyPages:
+  - name: Dashboard / main page
+    url: /
+  - name: Document view (wiki doc)
+    url: /documents/<seeded doc id>
+  - name: Issues list
+    url: /issues
+  - name: Sprint / week board
+    url: /weeks
+  - name: Search
+    url: /search
+
+userFlows:
+  - "Load main page"
+  - "View a document"
+  - "List issues"
+  - "Load sprint board"
+  - "Search content"
+
+# Live status dashboard — regenerated + republished by the orchestrator at each
+# checkpoint (see "Live dashboard" in shipshape-audit SKILL.md). The url targets the
+# existing artifact so every republish keeps the same link.
+dashboard:
+  file: audit/dashboard.html
+  url: https://claude.ai/code/artifact/7a2310eb-6cce-4da6-a83f-5c5b8d3f2c6c
+  favicon: "🩺"
+
+bundle:
+  distDir: web/dist
+  analyzer: rollup-plugin-visualizer   # not yet installed; no manualChunks/rollupOptions configured in web/vite.config.ts
+apiPerf:
+  loadTool: autocannon
+  concurrency: [10, 25, 50]
+  auth: >
+    POST /api/auth/login {email: dev@ship.local, password: admin123} — capture session
+    cookie for benchmark requests. Login is rate-limited (loginLimiter): authenticate
+    once, reuse the cookie. CSRF middleware (csrf-sync) guards mutations; benchmark GETs
+    with the cookie, or fetch a CSRF token first for POST benchmarks.
+
+# Stamp these verbatim into every artifact's `environment` block (conventions.md contract),
+# so all seven categories are comparable. Captured 2026-07-27 at the prerequisite gate.
+environment:
+  hardware: "Apple Mac16,7 — 14 cores, 24 GB RAM (arm64)"
+  os: "Darwin 25.5.0 arm64 / macOS 26.5.1"
+  node: "v23.2.0"
+  packageManagerVersion: "pnpm 10.27.0"
+  commit: "076a18371da0a09f88b5329bd59611c4bc9536bb"
+  dirty: true    # only .claude/, .gitignore, audit/, memory-bank/ — NO application source
+                 # (api/, web/, shared/) is modified, so measurements reflect the commit.
+  dataVolume: "500 documents (254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project / 6 standup / 5 program), 20 users"
+  scaffolding:
+    - "Installed pnpm 10.27.0 globally via npm — corepack could not self-provision (stale signing keyring)."
+    - "Ran PostgreSQL 15-alpine in Docker on :5433; docker-compose.local.yml declares postgres:16 but registry pulls are blocked here."
+    - "Created api/.env.local pointing DATABASE_URL at that container (gitignored dev config, not app source)."
+    - "Tagged postgres:15-alpine as postgres:15 so e2e testcontainers (e2e/fixtures/isolated-env.ts:119) resolve locally."
+    - "Force-applied migrations 011-042 individually; pnpm db:migrate silently stops at 010 (see finding DB/migrate below)."
+    - "Ran audit/seed-augment.ts to reach the required data volumes (inserts rows only)."
+
+# Prerequisite-gate finding, handed to db-query-audit for confirmation and ID assignment.
+# Severity: Critical. Discovered while bringing the database up for this audit.
+preflightFindings:
+  - title: "pnpm db:migrate silently skips 32 of 42 migrations and exits 0"
+    location: "api/src/db/migrate.ts:103-111"
+    evidence: >
+      On a fresh database, migrate.ts applies schema.sql first (which already contains the
+      END-STATE schema), then replays migrations from 001. Migration 010_oauth_state.sql runs
+      `CREATE TABLE oauth_state` WITHOUT `IF NOT EXISTS`, but schema.sql:90 already created that
+      table — so it throws `relation "oauth_state" already exists`. The catch block treats ANY
+      error whose message contains "already exists" as benign, logs "Database schema already
+      exists, continuing...", and returns normally. The loop is abandoned: migrations 011-042
+      never run and are never recorded. Verified: schema_migrations held 10 rows after two
+      successive `pnpm db:migrate` runs that both reported success; 42 migration files exist.
+      Applying them individually also surfaced 025 and 035 failing the same benign way, and
+      033_sprint_to_week_rename failing with `"sprint_plan" is not an existing enum label`.
+    hypothesis: >
+      The "already exists" escape hatch was written for schema.sql re-runs (step 1) but wraps
+      the entire function including the migration loop (step 4), so a single non-idempotent
+      migration silently truncates the whole sequence. A fresh dev DB still looks correct
+      because schema.sql carries the end state — which is exactly why this has gone unnoticed.
+    estimatedImpact: >
+      On any database that is NOT already at the end state (a real deploy against an older
+      prod/shadow DB), deploys report migration success while silently skipping data backfills
+      and schema changes not present in schema.sql. Migrations run automatically on deploy
+      (api/src/db/migrate.ts, per CLAUDE.md), so this is a live data-integrity risk.
+
+# Orientation facts with audit relevance (found during repo mapping — verify before citing)
+notes:
+  - "TYPE-SAFETY lead: web/tsconfig.json does NOT extend root — silently missing noUncheckedIndexedAccess, noImplicitReturns, noFallthroughCasesInSwitch that api/shared inherit. Root strict: true everywhere."
+  - "BUNDLE lead: no analyzer, no manualChunks; code splitting exists only for document tabs (13 React.lazy in web/src/lib/document-tabs.tsx) — no route-level splitting."
+  - "TEST lead: api vitest.config declares v8 coverage + test:coverage script, but @vitest/coverage-v8 is NOT installed (absent from pnpm-lock) — coverage is currently broken. Web vitest has no coverage block. Root pnpm test skips web unit tests (16 files)."
+  - "DB lead: no index on documents.ticket_number, created_by, or updated_at. Associations moved to document_associations (migrations 027/029). GIN index exists on properties."
+  - "A11Y head start: e2e/accessibility.spec.ts + accessibility-remediation.spec.ts use @axe-core/playwright (8 AxeBuilder scans, WCAG-numbered phases). Run these before independent scanning."
+  - "E2E: retries configured (2 CI / 1 local) — flakiness audit must record first-attempt outcomes. playwright.config comment says 641 tests, actual ~866 — count drifted."
+  - "Dev quirk: e2e uses vite preview, not dev server (documented memory blowup with dev). Multi-worktree port allocation via .ports file."

@@ -1,0 +1,116 @@
+{
+  "category": "a11y",
+  "mode": "baseline",
+  "commit": "076a18371da0a09f88b5329bd59611c4bc9536bb",
+  "dirty": true,
+  "date": "2026-07-27T14:20:00-05:00",
+  "environment": {
+    "hardware": "Apple Mac16,7 — 14 cores, 24 GB RAM (arm64)",
+    "os": "Darwin 25.5.0 arm64 / macOS 26.5.1",
+    "node": "v23.2.0",
+    "dataVolume": "500 documents (254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project / 6 standup / 5 program), 20 users",
+    "concurrency": "n/a (single authenticated session)",
+    "scaffolding": [
+      "Lighthouse 11.7.1 via `npx --yes lighthouse@11` (not added to the repo); driven against Playwright's bundled Chromium 147 (chromium-1217) via CHROME_PATH — no system Chrome present.",
+      "axe-core scan via the repo's @axe-core/playwright 4.11.0 + @playwright/test 1.57.0 Chromium; tags wcag2a,wcag2aa,wcag21a,wcag21aa,best-practice.",
+      "Authenticated with a real session cookie (dev@ship.local); pages verified to render authenticated content (finalUrl not /login).",
+      "The seeded dev user has an overdue action item, so an 'Action Items' role=dialog auto-opens on every navigation; it was dismissed (Escape) before page/keyboard scans so measurements reflect the underlying page.",
+      "Runner scripts saved: audit/a11y/run-lighthouse.sh, audit/a11y/axe-scan.mjs; raw reports in audit/a11y/lighthouse/ and audit/a11y/axe/."
+    ]
+  },
+  "metrics": {
+    "lighthousePerPage": "my-week 95 · document 100 · issues 100 · weeks 100 · search 100",
+    "axeCritical": 2,
+    "axeSerious": 3,
+    "axeModerate": 4,
+    "axeMinor": 1,
+    "axeCriticalRules": "aria-required-children, aria-allowed-attr",
+    "axeSeriousRules": "color-contrast, listitem, aria-dialog-name",
+    "keyboardPerPage": "issues: Full (45 stops, no focus trap, focus ring 45/45) · my-week: Full (20/20 stops, focus ring 42/44)",
+    "contrastFailures": 25,
+    "contrastWorstOffender": "/my-week — text-[11px] text-muted/50 timestamps + bg-accent/20 badges below 4.5:1",
+    "actionItemsModalEscapeCloses": true,
+    "missingMainLandmark": "/search, /weeks, /login",
+    "missingH1": "/search, /weeks",
+    "findingsTotal": 8,
+    "critical": 0,
+    "high": 3,
+    "medium": 3,
+    "low": 2,
+    "note508": "Deployed at ship.awsdev.treasury.gov — a federal (Treasury) app, so Section 508 / WCAG 2.1 AA conformance is effectively mandated; every Critical/Serious axe violation below contradicts that."
+  },
+  "findings": [
+    {
+      "id": "A11Y-1",
+      "severity": "High",
+      "title": "Workspace-documents sidebar uses role=\"tree\" but its children are plain <li> nav links, not treeitems (axe Critical + Serious)",
+      "location": "web/src — contextual sidebar 'Workspace documents' tree (rendered on every authenticated page); <ul role=\"tree\" aria-label=\"Workspace documents\" aria-live=\"polite\">",
+      "evidence": "axe rule aria-required-children (Critical): `<ul role=\"tree\" aria-label=\"Workspace documents\" aria-live=\"polite\">` — \"Element has children which are not allowed: li[tabindex]\". axe rule listitem (Serious): `<li><a href=\"/docs?filter=workspace\">…` — \"List item parent element has a role that is not role=\\\"list\\\"\". Present on document view AND document-editor-focused states (audit/a11y/axe/document_view.json, document_editor_focused.json).",
+      "hypothesis": "The sidebar mixes ARIA-tree items (role=treeitem) with plain filter links (`All documents`, `Workspace`, …) as bare <li> children of the same role=\"tree\" <ul>. role=\"tree\" requires role=\"treeitem\"/group children; the plain <li>s violate both the tree contract and the list contract.",
+      "estimatedImpact": "The primary navigation tree — on every page — is announced incorrectly by screen readers (item count/role wrong), a Section-508 blocker on a federal app. Fix: give every child treeitem semantics, or drop role=\"tree\" for a plain list/nav. Cross-references A11Y-8 (both are semantic-markup defects)."
+    },
+    {
+      "id": "A11Y-2",
+      "severity": "High",
+      "title": "TipTap editor wrapper sets aria-expanded on a plain <div> with no supporting role (axe Critical)",
+      "location": "web/src/components/editor (.tiptap-wrapper > div)",
+      "evidence": "axe rule aria-allowed-attr (Critical): `<div style=\"position: relative;\" aria-expanded=\"false\">` — \"ARIA attribute is not allowed: aria-expanded='false'\". Appears whenever the editor is mounted/focused (audit/a11y/axe/document_editor_focused.json).",
+      "hypothesis": "A wrapper div (likely a floating/bubble-menu container) carries aria-expanded without a widget role (button/combobox/etc.) that permits it, so assistive tech gets a meaningless/expanded-collapsed cue on a non-interactive element.",
+      "estimatedImpact": "Confusing/invalid ARIA on the core editing surface used for every document type (508 contradiction). Fix: move aria-expanded onto the actual toggle control (with a supporting role) or remove it from the wrapper."
+    },
+    {
+      "id": "A11Y-3",
+      "severity": "High",
+      "title": "Dashboard (/my-week) fails color contrast on 25 elements — muted 50%-opacity text and translucent badges (axe Serious; the only Lighthouse-failing page)",
+      "location": "web/src — /my-week dashboard: `.text-[11px] .text-muted/50` timestamps and `.bg-accent/20` badges",
+      "evidence": "axe color-contrast (Serious): 25 nodes on /my-week, e.g. `.text-[11px].text-muted/50.text-right` and `.bg-accent/20.py-0.5.px-1.5`. Corroborated by Lighthouse — /my-week is the ONLY key page below 100 (score 95) and color-contrast is its sole failing audit (audit/a11y/lighthouse/dashboard.report.json).",
+      "hypothesis": "Tailwind opacity modifiers (`text-muted/50`, `bg-accent/20`) at an 11px size drop foreground/background contrast below WCAG AA 4.5:1.",
+      "estimatedImpact": "Low-vision users can't read dashboard timestamps/labels; 508 contradiction on the landing page. This is the best improvement-target candidate: +≥10 Lighthouse pts on the lowest-scoring page is achievable by raising these opacities/colors. Fix: use full-opacity muted tokens meeting 4.5:1."
+    },
+    {
+      "id": "A11Y-4",
+      "severity": "Medium",
+      "title": "A Radix popover/dropdown opens as a role=dialog with no accessible name (axe Serious)",
+      "location": "web/src — issues page menu/expanded control (`#radix-:rj:`)",
+      "evidence": "axe aria-dialog-name (Serious): `#radix-:rj:` dialog node has no accessible name (audit/a11y/axe/issues_menu_expanded_state.json). Triggered by opening a menu/popover on /issues.",
+      "hypothesis": "A Radix Dialog/Popover is rendered without aria-label / aria-labelledby (or a visually-hidden title), so screen readers announce an unnamed dialog.",
+      "estimatedImpact": "Screen-reader users hear 'dialog' with no context when the control opens (508 contradiction on a core list page). Fix: add an accessible name to the dialog/popover."
+    },
+    {
+      "id": "A11Y-5",
+      "severity": "Medium",
+      "title": "/search and /weeks render with no <main> landmark and no level-one heading (axe Moderate)",
+      "location": "web/src pages for /search and /weeks",
+      "evidence": "axe landmark-one-main + page-has-heading-one (both Moderate) fire on /search and /weeks (audit/a11y/axe/search.json, weeks_board.json). Corroborates the error-handling probe1b observation that /search and /weeks rendered near-empty (`<no #main-content>`, bodyTextLength 0).",
+      "hypothesis": "These two routes render content outside the shell's `<main id=\"main-content\">` (or render an empty state before data), and neither provides an h1, so there is no main landmark or page heading for AT users to orient by.",
+      "estimatedImpact": "No landmark/heading structure to navigate two key pages (508). Fix: ensure every route renders inside the main landmark with an h1 (even in empty states)."
+    },
+    {
+      "id": "A11Y-6",
+      "severity": "Medium",
+      "title": "Document pages skip heading levels (h1 → h3), breaking the screen-reader outline (axe Moderate)",
+      "location": "web/src — document view (headings observed: h2, h1, h3 with no h2 under h1)",
+      "evidence": "axe heading-order (Moderate) on document view/editor states; a11y-tree probe recorded headings [2,1,3] with a single h1 (audit/a11y/axe/_summary.json tree).",
+      "hypothesis": "Section headings in the document chrome/content are chosen for size, not level, producing a non-monotonic outline (an h3 directly under the h1).",
+      "estimatedImpact": "Heading-based navigation lands users on mis-nested sections (Medium; 508). Fix: make heading levels increase by one."
+    },
+    {
+      "id": "A11Y-7",
+      "severity": "Low",
+      "title": "Login page: form content not contained in a landmark and no main landmark (axe Moderate) — missed by the repo's critical-only specs",
+      "location": "web/src login page",
+      "evidence": "axe region + landmark-one-main (Moderate) on /login: 5 nodes (`.mb-8`, `form > div:nth-child(1..2)`, …) not contained by a landmark (audit/a11y/axe/login_unauth.json). Note: e2e/accessibility.spec.ts asserts login has 'no critical accessibility violations' — these are Moderate, so they pass that gate; this is exactly what the existing critical-only specs miss.",
+      "hypothesis": "The login route renders outside the app shell, so its form/content sits directly under <body> with no <main>/landmark wrapper.",
+      "estimatedImpact": "Minor orientation loss on the unauthenticated entry page (Low). Fix: wrap the login view in a main landmark."
+    },
+    {
+      "id": "A11Y-8",
+      "severity": "Low",
+      "title": "Issues table selection column has an empty table header (axe Minor)",
+      "location": "web/src issues table — `th[aria-label=\"Selection\"]` with no cell text",
+      "evidence": "axe empty-table-header (Minor) on /issues (audit/a11y/axe/issues_list.json).",
+      "hypothesis": "The checkbox/selection column header renders empty visible text; axe wants header text even though an aria-label is present.",
+      "estimatedImpact": "Minor screen-reader ambiguity on the issues table header row (Low). Fix: provide visually-hidden header text."
+    }
+  ]
+}

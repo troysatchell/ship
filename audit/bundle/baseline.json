@@ -1,0 +1,149 @@
+{
+  "category": "bundle",
+  "mode": "baseline",
+  "commit": "076a18371da0a09f88b5329bd59611c4bc9536bb",
+  "dirty": true,
+  "date": "2026-07-27T00:00:00Z",
+  "environment": {
+    "hardware": "Apple Mac16,7 — 14 cores, 24 GB RAM (arm64)",
+    "os": "Darwin 25.5.0 arm64 / macOS 26.5.1",
+    "node": "v23.2.0",
+    "packageManagerVersion": "pnpm 10.27.0",
+    "dataVolume": "500 documents (254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project / 6 standup / 5 program), 20 users",
+    "concurrency": "n/a — static analysis of the production build output; no runtime load applied",
+    "scaffolding": [
+      "Installed pnpm 10.27.0 globally via npm — corepack could not self-provision (stale signing keyring).",
+      "Ran PostgreSQL 15-alpine in Docker on :5433; docker-compose.local.yml declares postgres:16 but registry pulls are blocked here.",
+      "Created api/.env.local pointing DATABASE_URL at that container (gitignored dev config, not app source).",
+      "Tagged postgres:15-alpine as postgres:15 so e2e testcontainers (e2e/fixtures/isolated-env.ts:119) resolve locally.",
+      "Force-applied migrations 011-042 individually; pnpm db:migrate silently stops at 010 (see finding DB/migrate below).",
+      "Ran audit/seed-augment.ts to reach the required data volumes (inserts rows only).",
+      "BUNDLE-SPECIFIC: installed rollup-plugin-visualizer@7.0.1 as a devDependency of @ship/web (`pnpm add -D rollup-plugin-visualizer --filter @ship/web`). The registry is blocked in this environment but the package resolved from the local pnpm store. After analysis, web/package.json and pnpm-lock.yaml were reverted with `git checkout` so the audited tree matches the commit exactly; the package remains present in web/node_modules for compare-mode reuse.",
+      "BUNDLE-SPECIFIC: added audit/bundle/vite.analyze.config.ts — a standalone Vite config that mirrors web/vite.config.ts's build-relevant options (react + svgr with identical svgrOptions, alias '@' -> web/src) and adds two rollup-plugin-visualizer instances (treemap HTML + raw-data JSON). web/vite.config.ts was NOT modified. Fidelity verified: the analyzer build emits the same 262 chunk names and byte-for-byte identical sizes as the pre-existing web/dist.",
+      "BUNDLE-SPECIFIC: the analyzer build wrote to a scratch outDir outside the repo; web/dist is the untouched production build produced by `pnpm build` before this audit began, and every reported number is measured from web/dist.",
+      "NOTE: dev servers (API :3001, web :5173) were left running throughout and were neither restarted nor used for these measurements."
+    ]
+  },
+  "metrics": {
+    "totalRawKb": 2316.96,
+    "totalGzipKb": 699.75,
+    "initialRawKb": 2140.21,
+    "initialGzipKb": 600.75,
+    "chunkCount": 262,
+    "largestChunkKb": 2073.7,
+    "largestChunkGzipKb": 587.93,
+    "largestChunkName": "assets/index-C2vAyoQ1.js",
+    "jsChunkCount": 261,
+    "cssChunkCount": 1,
+    "jsRawKb": 2250.45,
+    "jsGzipKb": 686.93,
+    "cssRawKb": 66.51,
+    "cssGzipKb": 12.83,
+    "initialShareOfTotalRawPct": 92.4,
+    "initialShareOfTotalGzipPct": 85.9,
+    "lazyChunkCount": 260,
+    "lazyChunkRawKb": 176.75,
+    "lazyChunkGzipKb": 99.0,
+    "iconChunkCount": 245,
+    "iconChunkRawKb": 104.6,
+    "iconChunksNeverReferencedCount": 209,
+    "iconChunksNeverReferencedRawKb": 91.3,
+    "documentTabLazyChunkCount": 14,
+    "documentTabLazyChunkRawKb": 71.8,
+    "routeLevelLazyChunkCount": 0,
+    "staticallyImportedPageComponents": 25,
+    "unusedDependencyCount": 1,
+    "duplicateDependencyVersionCount": 2,
+    "top1DepInitialChunk": "highlight.js — 176.3 kB raw / 64.0 kB gzip est (10.9% of entry gzip)",
+    "top2DepInitialChunk": "emoji-picker-react — 186.4 kB raw / 39.1 kB gzip est (6.6% of entry gzip)",
+    "top3DepInitialChunk": "prosemirror-view — 110.2 kB raw / 30.9 kB gzip est (5.3% of entry gzip)",
+    "editorStackInitialChunkRawKb": 726.5,
+    "editorStackInitialChunkGzipKb": 208.7,
+    "editorStackShareOfEntryGzipPct": 35.5,
+    "appSourceInitialChunkGzipKb": 142.5,
+    "distDirTotalMb": 4.5
+  },
+  "findings": [
+    {
+      "id": "BUN-1",
+      "severity": "High",
+      "title": "Whole application ships in one 2.07 MB entry chunk — zero route-level code splitting",
+      "location": "web/src/main.tsx:19-43 (25 static page imports), routes at web/src/main.tsx:214-247",
+      "evidence": "index.html references exactly one module script (assets/index-C2vAyoQ1.js, 2073.70 kB raw / 587.93 kB gzip) and one stylesheet (assets/index-DJeYp5na.css, 66.51 kB / 12.83 kB); there are no modulepreload tags. That entry pair is 92.4% of all emitted raw bytes and 85.9% of all gzip bytes. All 25 page components (LoginPage, DashboardPage, IssuesPage, AdminDashboardPage, AdminWorkspaceDetailPage, OrgChartPage, ReviewsPage, WorkspaceSettingsPage, PublicFeedbackPage, SetupPage, InviteAcceptPage, …) are statically imported at web/src/main.tsx:19-43. Treemap attribution puts 198.9 kB raw / 44.2 kB gzip of /src/pages/* modules inside the entry chunk, on top of the components they pull in. `grep -rnE 'React.lazy|\\bimport\\(' web/src` finds lazy loading ONLY in web/src/lib/document-tabs.tsx (13 document-tab components), web/src/components/editor/SlashCommands.tsx:377,445, and the icon glob in web/src/components/icons/uswds/Icon.tsx — never at a route boundary. Vite emits its >500 kB chunk warning on every build.",
+      "hypothesis": "web/vite.config.ts has no `build` block at all (no rollupOptions, no manualChunks, no chunkSizeWarningLimit), and main.tsx was written with eager imports. Splitting was added later only for document tabs, so the pattern never propagated up to routes. Nothing in CI fails on bundle size, so the Vite warning has been normalised.",
+      "estimatedImpact": "This is the structural cause of the other findings: an unauthenticated visitor on /login downloads the admin dashboard, org chart, reviews queue and the entire editor stack before the login form paints. Converting the non-critical routes to React.lazy moves the ~44 kB gzip of page modules plus their exclusive component subtrees out of the entry chunk and is the prerequisite for the 20% initial-load reduction target."
+    },
+    {
+      "id": "BUN-2",
+      "severity": "High",
+      "title": "TipTap + ProseMirror + Yjs editor/collaboration stack is 35.5% of the entry chunk and loads on every page",
+      "location": "web/src/components/Editor.tsx (imported eagerly by web/src/components/UnifiedEditor.tsx:3 and web/src/pages/PersonEditor.tsx:3)",
+      "evidence": "Treemap attribution of the entry chunk: @tiptap/* + prosemirror-* + yjs + lib0 + y-prosemirror/y-websocket/y-protocols + linkifyjs total 726.5 kB raw / 208.7 kB gzip est = 35.5% of the entry chunk's 587.93 kB gzip. Largest individual members: prosemirror-view 110.2 kB raw / 30.9 kB gzip, yjs 123.6 kB raw / 30.0 kB gzip, @tiptap/core 84.5 kB raw / 19.9 kB gzip, lib0 49.7 kB raw / 18.4 kB gzip, prosemirror-model 56.5 kB raw / 15.5 kB gzip. Editor.tsx has no dynamic-import boundary anywhere in its import chain, so this is in the single entry chunk that /login loads.",
+      "hypothesis": "The Editor component is the centrepiece of the 'everything is a document' model, so it was imported directly rather than behind a Suspense boundary. Because there is only one chunk (BUN-1), there is no seam at which the editor could be deferred.",
+      "estimatedImpact": "Wrapping Editor/UnifiedEditor in React.lazy + Suspense removes up to 208.7 kB gzip from the initial load — 34.7% of the 600.75 kB initial payload, on its own more than the 20% initial-load improvement target. Users who never open a document editor (login, dashboards, issue lists, admin) stop paying for it entirely."
+    },
+    {
+      "id": "BUN-3",
+      "severity": "High",
+      "title": "lowlight `common` pulls 37 highlight.js language grammars into the entry chunk — the largest single npm dependency by gzip",
+      "location": "web/src/components/Editor.tsx:12 (`import { common, createLowlight } from 'lowlight'`) and Editor.tsx:46 (`const lowlight = createLowlight(common)`), consumed at Editor.tsx:549",
+      "evidence": "highlight.js contributes 39 modules totalling 387.0 kB pre-minification / 176.3 kB raw est after minification / 64.0 kB gzip est to assets/index-C2vAyoQ1.js — 10.9% of the entry chunk's gzip and the largest npm package in it. `createLowlight(common)` was resolved at runtime against the installed lowlight: it registers 37 grammars (arduino, bash, c, cpp, csharp, css, diff, go, graphql, ini, java, javascript, json, kotlin, less, lua, makefile, markdown, objectivec, perl, php, php-template, plaintext, python, python-repl, r, ruby, rust, scss, shell, sql, swift, typescript, vbnet, wasm, xml, yaml). @tiptap/extension-code-block-lowlight adds a further 37.3 kB raw / 12.6 kB gzip. Family total for syntax highlighting: 181.8 kB raw / 65.8 kB gzip = 11.2% of the entry chunk.",
+      "hypothesis": "`common` is lowlight's convenience export and the path of least resistance; nobody measured what 37 grammars cost. Arduino, VBNet, Objective-C, R, Lua, Perl and WASM are unlikely to appear in a project-management wiki, but they are indistinguishable from the languages that matter once `common` is imported.",
+      "estimatedImpact": "Replacing `common` with an explicit 6-8 language registration is a one-line change worth an estimated 45-55 kB gzip. Dynamically importing the whole lowlight instance when a code block is first rendered removes the full 65.8 kB gzip — 11.0% of the initial payload — at the cost of one async boundary."
+    },
+    {
+      "id": "BUN-4",
+      "severity": "Medium",
+      "title": "emoji-picker-react (186 kB raw / 39 kB gzip) is in the entry chunk to serve a single sidebar popover",
+      "location": "web/src/components/EmojiPicker.tsx:2 (`import EmojiPicker from 'emoji-picker-react'`); sole consumer web/src/components/sidebars/ProjectSidebar.tsx:2,295",
+      "evidence": "emoji-picker-react is a single 409.2 kB pre-minification module → 186.4 kB raw est / 39.1 kB gzip est inside assets/index-C2vAyoQ1.js — 6.6% of the entry chunk's gzip and the 2nd-largest npm dependency in it. `grep -rn 'EmojiPicker' web/src --include='*.tsx'` returns exactly one consumer outside the wrapper: the project-icon PropertyRow in ProjectSidebar.tsx:295. The import is fully static, so the picker downloads on every page load including /login.",
+      "hypothesis": "The wrapper component EmojiPicker.tsx was written as a plain re-export, and because there is no splitting infrastructure (BUN-1) there was no obvious place to defer it. The cost is invisible without a treemap.",
+      "estimatedImpact": "React.lazy on the EmojiPickerPopover body removes 39.1 kB gzip from the initial payload (6.5% of 600.75 kB) for near-zero risk — the picker is behind a click on a properties sidebar, so a Suspense fallback is imperceptible. Lowest effort-to-yield ratio of any finding here."
+    },
+    {
+      "id": "BUN-5",
+      "severity": "Medium",
+      "title": "USWDS icon glob emits 245 chunks of which 209 are never referenced, and ships a 245-entry loader map in the entry chunk",
+      "location": "web/src/components/icons/uswds/Icon.tsx:23-26 (`import.meta.glob('/node_modules/@uswds/uswds/dist/img/usa-icons/*.svg', { query: '?react' })`)",
+      "evidence": "The build emits 245 per-icon JS chunks (104.6 kB raw / 74.3 kB gzip in aggregate — tiny files gzip badly). Cross-referencing every emitted icon chunk basename against string literals in web/src (excluding the generated IconName union in types.ts, Icon.tsx itself, mocks and tests): 36 icon names are referenced, 209 are not (91.3 kB raw / 64.2 kB gzip of files deployed but never requested). `grep -rnE '<Icon\\s+name=\\{' web/src --include='*.tsx'` returns zero matches, so every Icon usage passes a literal name and the reference scan is exhaustive rather than heuristic. Separately, the generated glob map inside Icon.tsx is 42.7 kB pre-minification (3.6 kB gzip) and lives in the ENTRY chunk — the price of enumerating icons the app never uses.",
+      "hypothesis": "`import.meta.glob` over the whole USWDS icon directory was chosen so any icon name would 'just work' at runtime. Because every icon is also enumerated in the generated types.ts union, tree-shaking cannot narrow the glob, and the build has no signal about which 36 icons are real.",
+      "estimatedImpact": "Narrowing the glob to the icons actually used (or generating the loader map from the same source that generates types.ts, via `pnpm generate:icon-types`) removes ~3 kB gzip from the entry chunk and 209 dead files from every S3/CloudFront deploy. Secondary benefit: each used icon is currently a separate lazy HTTP request on first paint — a per-icon network waterfall that a small eager map would eliminate."
+    },
+    {
+      "id": "BUN-6",
+      "severity": "Medium",
+      "title": "No build/chunking configuration at all — no vendor chunk, so every app-code change invalidates all 588 kB gzip",
+      "location": "web/vite.config.ts:46-94 (returned config object has no `build` key)",
+      "evidence": "web/vite.config.ts declares plugins, resolve.alias, server and preview only. There is no `build.rollupOptions.output.manualChunks`, no `build.chunkSizeWarningLimit`, no `build.sourcemap`. Consequence measured in the output: 262 emitted chunks, of which exactly one (index-C2vAyoQ1.js) holds all application code AND all third-party code — React, react-dom, react-router, TanStack Query, TipTap/ProseMirror/Yjs, highlight.js, emoji-picker-react, Radix, dnd-kit, tippy, popper. Stable vendor code (105.2 kB raw / 36.7 kB gzip for react+react-dom+router alone; 726.5 kB raw for the editor stack) shares a content hash with volatile app source (556.8 kB raw / 142.5 kB gzip). Every build prints the Vite '(!) Some chunks are larger than 500 kB after minification' warning.",
+      "hypothesis": "The default Vite config was never revisited after the app grew past a few pages. The chunk-size warning is advisory and does not fail the build or CI, so it has been absorbed as build noise.",
+      "estimatedImpact": "A manualChunks vendor split does not reduce total bytes but converts ~250-300 kB gzip of stable dependency code into a long-lived cache entry: returning users after a routine deploy would download tens of kB instead of 588 kB. Compare mode should track initialGzipKb and a separate 'bytes changed per deploy' figure, because this fix improves the latter without moving the former."
+    },
+    {
+      "id": "BUN-7",
+      "severity": "Low",
+      "title": "Unused dependency @tanstack/query-sync-storage-persister declared but never imported",
+      "location": "web/package.json:25",
+      "evidence": "Zero import sites: `grep -rE \"from '@tanstack/query-sync-storage-persister\" web/src` returns nothing, and the treemap confirms 0 modules from that package in any emitted chunk. web/src/lib/queryClient.ts:1-3 implements persistence itself with idb-keyval plus the `PersistedClient`/`Persister` TYPES from @tanstack/react-query-persist-client, so the sync-storage persister was superseded and never removed. Related but distinct: @tanstack/react-query-devtools (web/package.json:27) is a runtime `dependency` and is statically imported at web/src/main.tsx:6 and rendered at main.tsx:265 — verified harmless, its production build tree-shakes to a ~0-byte no-op stub in the entry chunk.",
+      "hypothesis": "Left over from an earlier localStorage-based query-persistence approach that was replaced by the IndexedDB persister with corruption detection in queryClient.ts.",
+      "estimatedImpact": "0 shipped bytes today — this is dependency hygiene and supply-chain surface, not payload. Removing it shrinks install time and the audit/compliance surface. react-query-devtools should move to devDependencies for the same reason."
+    },
+    {
+      "id": "BUN-8",
+      "severity": "Low",
+      "title": "Two Radix packages resolve to duplicate versions and both copies ship in the entry chunk",
+      "location": "pnpm-lock.yaml (transitive peers of @radix-ui/react-dialog, react-popover, react-tooltip); both copies land in assets/index-C2vAyoQ1.js",
+      "evidence": "Scanning module ids in the treemap for .pnpm version segments: @radix-ui/react-slot resolves to both 1.2.3 and 1.2.4, and @radix-ui/react-primitive to both 2.1.3 and 2.1.4 — all four copies present in the entry chunk. Measured cost: react-slot 1.9 + 1.8 kB raw est, react-primitive 0.4 + 0.3 kB raw est; the redundant copies are ~2.1 kB raw. No other package in the bundle has more than one version (124 packages checked).",
+      "hypothesis": "@radix-ui/react-dialog, react-popover and react-tooltip are pinned at different caret ranges and resolved their shared internals at different times, so pnpm kept two trees.",
+      "estimatedImpact": "~2.1 kB raw / <1 kB gzip. Real but negligible; fix opportunistically with a pnpm resolution or by refreshing the three Radix packages together. Recorded so compare mode can confirm it does not grow."
+    },
+    {
+      "id": "BUN-9",
+      "severity": "Low",
+      "title": "Initial render blocks on a third-party Google Fonts stylesheet outside the bundle",
+      "location": "web/index.html:65-67",
+      "evidence": "The built index.html (web/dist/index.html) carries two preconnects to fonts.googleapis.com / fonts.gstatic.com and a render-blocking `<link rel=stylesheet href=https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap>`. This is not counted in any bundle metric above (it is not an emitted asset) but it is part of the initial-load critical path, and it sits ahead of the 587.93 kB gzip entry script in the head.",
+      "hypothesis": "Standard Vite/Tailwind starter boilerplate that survived into a production app which is otherwise fully self-hosted (its own icons, its own CSS, its own PWA manifest).",
+      "estimatedImpact": "Self-hosting Inter as a woff2 subset removes a cross-origin round trip from first paint and removes a third-party runtime dependency from an application deployed at ship.awsdev.treasury.gov. No effect on the bundle-size improvement target; flagged because it is measured on the same critical path."
+    }
+  ]
+}

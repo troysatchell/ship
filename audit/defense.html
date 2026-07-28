@@ -1,0 +1,505 @@
+<title>Ship — Architecture Defense Brief</title>
+<style>
+  :root {
+    --bg:#f6f1e5; --panel:#efe8d6; --panel2:#e7dfc9; --ink:#1b2a22; --muted:#5c6a5e;
+    --line:#d5cbb2; --green:#0b4a33; --green2:#1e6b4d; --brass:#9c7c3c;
+    --crit:#7d2b2b; --high:#96662a; --med:#5c6a5e; --low:#8b917f;
+    --barbg:#e7dfc9; --chipink:#f6f1e5;
+  }
+  @media (prefers-color-scheme: dark) { :root {
+    --bg:#0c1510; --panel:#122019; --panel2:#182a20; --ink:#ede6d4; --muted:#a3ad9c;
+    --line:#28392f; --green:#4fa377; --green2:#6fbd92; --brass:#c9a961;
+    --crit:#d98080; --high:#d3a35e; --med:#a3ad9c; --low:#7c8676;
+    --barbg:#182a20; --chipink:#0c1510;
+  } }
+  :root[data-theme="dark"] {
+    --bg:#0c1510; --panel:#122019; --panel2:#182a20; --ink:#ede6d4; --muted:#a3ad9c;
+    --line:#28392f; --green:#4fa377; --green2:#6fbd92; --brass:#c9a961;
+    --crit:#d98080; --high:#d3a35e; --med:#a3ad9c; --low:#7c8676;
+    --barbg:#182a20; --chipink:#0c1510;
+  }
+  :root[data-theme="light"] {
+    --bg:#f6f1e5; --panel:#efe8d6; --panel2:#e7dfc9; --ink:#1b2a22; --muted:#5c6a5e;
+    --line:#d5cbb2; --green:#0b4a33; --green2:#1e6b4d; --brass:#9c7c3c;
+    --crit:#7d2b2b; --high:#96662a; --med:#5c6a5e; --low:#8b917f;
+    --barbg:#e7dfc9; --chipink:#f6f1e5;
+  }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:var(--ink); margin:0; padding:0 24px 90px;
+         font:16px/1.62 -apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+  main { max-width:1000px; margin:0 auto; }
+  .serif { font-family:"Iowan Old Style",Palatino,"Palatino Linotype","Book Antiqua",Georgia,serif; }
+  code, .mono { font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace; font-variant-numeric:tabular-nums; }
+
+  /* masthead */
+  .mast { padding:56px 0 26px; border-bottom:3px double var(--green); }
+  .mast .over { text-transform:uppercase; letter-spacing:.24em; font-size:11px; font-weight:700; color:var(--brass); }
+  h1 { font-family:"Iowan Old Style",Palatino,"Palatino Linotype",Georgia,serif;
+       font-size:clamp(34px,5.5vw,52px); line-height:1.06; margin:12px 0 14px; font-weight:600;
+       letter-spacing:-.01em; text-wrap:balance; color:var(--green); }
+  .mast p.thesis { font-family:Georgia,serif; font-size:18px; max-width:64ch; margin:0 0 26px; color:var(--ink); }
+  .statrow { display:flex; flex-wrap:wrap; gap:0; border-top:1px solid var(--line); }
+  .stat { flex:1 1 150px; padding:16px 18px 4px 0; border-right:1px solid var(--line); margin-right:18px; }
+  .stat:last-child { border-right:none; }
+  .stat .n { font-family:Georgia,serif; font-size:30px; font-weight:600; color:var(--green); font-variant-numeric:tabular-nums; }
+  .stat .l { font-size:11px; text-transform:uppercase; letter-spacing:.14em; color:var(--muted); font-weight:700; }
+
+  /* sections */
+  section { margin-top:58px; }
+  .secno { font-family:Georgia,serif; color:var(--brass); font-size:15px; font-style:italic; }
+  h2 { font-family:"Iowan Old Style",Palatino,Georgia,serif; font-size:27px; margin:2px 0 6px;
+       font-weight:600; color:var(--green); border-bottom:1px solid var(--line); padding-bottom:10px; }
+  .lede { color:var(--muted); max-width:70ch; margin:10px 0 22px; }
+  .lede strong, p strong { color:var(--ink); }
+  .say { border-left:3px solid var(--brass); padding:4px 0 4px 16px; margin:18px 0 6px;
+         font-family:Georgia,serif; font-style:italic; font-size:15.5px; color:var(--ink); max-width:66ch; }
+  .say b { font-style:normal; font-size:11px; letter-spacing:.16em; text-transform:uppercase; color:var(--brass); display:block; margin-bottom:3px; }
+
+  /* severity chips */
+  .sev { display:inline-block; font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.08em;
+         padding:2px 9px; border-radius:3px; color:var(--chipink); white-space:nowrap; vertical-align:2px; }
+  .sev.c { background:var(--crit); } .sev.h { background:var(--high); }
+  .sev.m { background:var(--med); } .sev.l { background:var(--low); }
+
+  /* generic bar chart */
+  .chart { margin:20px 0 8px; }
+  .chart .row { display:grid; grid-template-columns:190px 1fr 92px; gap:12px; align-items:center; margin:7px 0; font-size:13.5px; }
+  .chart .cl { text-align:right; color:var(--ink); font-weight:600; }
+  .chart .cl small { display:block; font-weight:400; color:var(--muted); font-size:11.5px; }
+  .chart .track { background:var(--barbg); border-radius:3px; height:22px; position:relative; overflow:hidden; }
+  .chart .fill { position:absolute; inset:0 auto 0 0; background:var(--green); border-radius:3px; }
+  .chart .fill.b2 { background:var(--brass); }
+  .chart .fill.crit { background:var(--crit); }
+  .chart .fill.hi { background:var(--high); }
+  .chart .seg { position:absolute; top:0; bottom:0; }
+  .chart .cv { font-weight:700; font-variant-numeric:tabular-nums; font-size:13px; white-space:nowrap; }
+  .chart .cv small { color:var(--muted); font-weight:400; }
+  .axisnote, .legend { color:var(--muted); font-size:12px; margin:6px 0 0; }
+  .legend .sw { display:inline-block; width:10px; height:10px; border-radius:2px; vertical-align:-1px; margin:0 5px 0 14px; }
+  .legend .sw:first-child { margin-left:0; }
+
+  /* criticals */
+  .critcard { border:1px solid var(--line); border-top:4px solid var(--crit); background:var(--panel);
+              border-radius:8px; padding:24px 28px; margin:22px 0; }
+  .critcard h3 { font-family:Georgia,serif; font-size:20px; margin:0 0 4px; color:var(--ink); }
+  .critcard .where { color:var(--muted); font-size:12.5px; margin-bottom:14px; }
+  .flow { display:flex; flex-wrap:wrap; gap:8px; align-items:stretch; margin:16px 0 6px; }
+  .fstep { flex:1 1 150px; max-width:210px; border:1px solid var(--line); border-radius:6px; background:var(--bg);
+           padding:10px 13px; font-size:13px; }
+  .fstep b { display:block; font-size:12.5px; margin-bottom:2px; }
+  .fstep.bad { border-color:var(--crit); background:color-mix(in srgb, var(--crit) 7%, var(--bg)); }
+  .fstep span { color:var(--muted); font-size:12.5px; }
+  .farrow { align-self:center; color:var(--muted); flex:none; }
+  .bigmath { display:flex; flex-wrap:wrap; gap:10px; margin:16px 0 4px; }
+  .bm { flex:1 1 140px; background:var(--bg); border:1px solid var(--line); border-radius:6px; padding:12px 14px; text-align:center; }
+  .bm .n { font-family:Georgia,serif; font-size:23px; font-weight:600; color:var(--green); font-variant-numeric:tabular-nums; }
+  .bm .n.bad { color:var(--crit); }
+  .bm .l { font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.1em; font-weight:700; margin-top:2px; }
+
+  /* category blocks */
+  .cat { border-top:1px solid var(--line); padding-top:26px; margin-top:34px; }
+  .cat h3 { font-family:"Iowan Old Style",Palatino,Georgia,serif; font-size:22px; margin:0; color:var(--ink); }
+  .cat h3 .tag { font-family:ui-monospace,Menlo,monospace; font-size:12px; color:var(--brass); letter-spacing:.06em; margin-left:10px; }
+  .findlist { margin:16px 0 0; padding:0; list-style:none; max-width:74ch; }
+  .findlist li { padding:9px 0; border-bottom:1px dashed var(--line); font-size:14.5px; }
+  .findlist li:last-child { border-bottom:none; }
+  .findlist .fid { font-family:ui-monospace,Menlo,monospace; font-weight:700; font-size:12.5px; color:var(--green); margin-right:8px; }
+  .findlist small { color:var(--muted); display:block; margin-top:2px; }
+
+  /* remediation table */
+  table.rem { border-collapse:collapse; width:100%; font-size:14px; margin:18px 0 6px; }
+  table.rem th { text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.12em; color:var(--muted);
+                 border-bottom:2px solid var(--green); padding:8px 14px 7px 0; }
+  table.rem td { border-bottom:1px solid var(--line); padding:11px 14px 11px 0; vertical-align:top; }
+  table.rem td:first-child { font-weight:700; white-space:nowrap; }
+  table.rem .exp { color:var(--green); font-weight:700; white-space:nowrap; }
+  .tablewrap { overflow-x:auto; }
+
+  .scope { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--brass);
+           border-radius:0 8px 8px 0; padding:18px 22px; margin:20px 0; font-size:14.5px; max-width:78ch; }
+  .scope b { display:block; margin-bottom:4px; }
+  footer { margin-top:70px; padding-top:16px; border-top:3px double var(--green); color:var(--muted);
+           font-size:12.5px; display:flex; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+  @media (max-width:640px){ .chart .row { grid-template-columns:110px 1fr 70px; font-size:12px; } }
+  @media (prefers-reduced-motion: reduce){ *{ animation:none!important; transition:none!important; } }
+  table.ix { border-collapse:collapse; width:100%; font-size:13.5px; }
+  table.ix thead th { position:sticky; top:0; background:var(--panel); text-align:left; font-size:10.5px;
+      text-transform:uppercase; letter-spacing:.1em; color:var(--muted); border-bottom:2px solid var(--green); padding:8px 12px 7px 0; }
+  table.ix td { border-bottom:1px solid var(--line); padding:8px 12px 8px 0; vertical-align:top; }
+  table.ix tr.grp td { font-family:"Iowan Old Style",Palatino,Georgia,serif; font-weight:700; color:var(--green); font-size:14px;
+      padding-top:16px; border-bottom:1px solid var(--green); }
+  table.ix td.ix-id { font-family:ui-monospace,Menlo,monospace; font-weight:700; color:var(--green); white-space:nowrap; }
+  table.ix tr[id]:target { background:color-mix(in srgb, var(--brass) 22%, transparent); }
+  table.ix tr[id]:target td.ix-id { color:var(--brass); }
+  kbd { font-family:ui-monospace,Menlo,monospace; font-size:.85em; background:var(--panel2); border:1px solid var(--line);
+      border-radius:4px; padding:.05em .4em; }
+</style>
+
+<main>
+<header class="mast">
+  <div class="over">ShipShape Audit · Baseline Defense · 2026-07-27</div>
+  <h1>Ship: an Architecture Defense Brief</h1>
+  <p class="thesis">Eight health categories baselined against a seeded, production-shaped dataset — seven code/runtime categories plus a Terraform/IaC review. The system is fast and correct at today's scale, and quietly dependent on a handful of shared mechanisms that fail invisibly. Every number below is reproducible from a recorded command; every finding ID is indexed at the end.</p>
+  <div class="statrow">
+    <div class="stat"><div class="n">68</div><div class="l">Findings</div></div>
+    <div class="stat"><div class="n">4</div><div class="l">Critical</div></div>
+    <div class="stat"><div class="n">16,200</div><div class="l">Requests benchmarked</div></div>
+    <div class="stat"><div class="n">4,413</div><div class="l">Test executions (3×)</div></div>
+    <div class="stat"><div class="n">684</div><div class="l">SQL statements traced</div></div>
+    <div class="stat"><div class="n">500</div><div class="l">Seeded documents</div></div>
+  </div>
+</header>
+
+<section>
+  <div class="secno">i.</div>
+  <h2>The shape of the findings</h2>
+  <p class="lede">Severity was assigned by <strong>measured blast radius</strong>, not count: one silent data-integrity failure outranks fifty hygiene issues. The distribution is healthy in one sense — most findings are Medium or Low — but the four Criticals sit on the infrastructure everything else depends on: the deploy path, the request path, and the real-time collaboration server.</p>
+  <div class="chart">
+    <div class="row"><div class="cl">Critical</div><div class="track"><span class="fill crit" style="width:14%"></span></div><div class="cv">4</div></div>
+    <div class="row"><div class="cl">High</div><div class="track"><span class="fill hi" style="width:76%"></span></div><div class="cv">22</div></div>
+    <div class="row"><div class="cl">Medium</div><div class="track"><span class="fill" style="width:100%"></span></div><div class="cv">29</div></div>
+    <div class="row"><div class="cl">Low</div><div class="track"><span class="fill" style="width:45%; opacity:.45"></span></div><div class="cv">13</div></div>
+  </div>
+  <p class="axisnote">68 findings across 8 categories · type-safety 9 · bundle 9 · api-perf 6 · db-query 10 · test-quality 11 · error-handling 9 · a11y 8 · terraform 6</p>
+  <div class="say"><b>For the room</b>Nothing here is on fire at 500 documents. The defense case is about trajectory: which of these get linearly or quadratically worse with data, and which fail silently. Those two lenses produced every High.</div>
+</section>
+
+<section>
+  <div class="secno">ii.</div>
+  <h2>Four Critical findings</h2>
+
+  <div class="critcard">
+    <h3><span class="sev c">Critical</span> &nbsp;DB-1 — The deploy path silently abandons 32 of 42 migrations</h3>
+    <div class="where mono">api/src/db/migrate.ts:103 · reproduced independently on a throwaway database · exit code 0 both runs</div>
+    <div class="flow">
+      <div class="fstep"><b>1 · schema.sql applies</b><span>End-state tables, idempotent</span></div>
+      <div class="farrow">→</div>
+      <div class="fstep"><b>2 · Migrations 001–009 run</b><span>Recorded normally</span></div>
+      <div class="farrow">→</div>
+      <div class="fstep bad"><b>3 · 010 throws</b><span><code>CREATE TABLE</code> without <code>IF NOT EXISTS</code> — "already exists"</span></div>
+      <div class="farrow">→</div>
+      <div class="fstep bad"><b>4 · catch swallows it</b><span>Any "already exists" treated as benign — <em>loop abandoned</em></span></div>
+      <div class="farrow">→</div>
+      <div class="fstep bad"><b>5 · Exit 0, "success"</b><span>011–042 never run, never recorded</span></div>
+    </div>
+    <div class="chart">
+      <div class="row"><div class="cl">Migrations applied<small>of 42 on disk</small></div>
+        <div class="track"><span class="fill" style="width:23.8%"></span><span class="seg" style="left:23.8%; right:0; background:color-mix(in srgb, var(--crit) 25%, var(--barbg))"></span></div>
+        <div class="cv">10 <small>/ 42</small></div></div>
+    </div>
+    <p class="lede" style="margin-top:10px">Why it went unnoticed: a <em>fresh</em> database looks perfect, because schema.sql already carries the end state — a column-level diff showed zero differences. But the 31 skipped files contain <strong>19 ALTER TABLEs and 42 data backfills</strong>: the only mechanism by which an <em>existing</em> database (production, shadow) ever evolves. Migrations run automatically on deploy.</p>
+    <div class="say"><b>For the room</b>This is the finding that reframes the audit: the schema we all measure locally is not provably the schema production has. It's also a one-line fix — scope the catch to step 1 — plus an <code>IF NOT EXISTS</code> on 010.</div>
+  </div>
+
+  <div class="critcard">
+    <h3><span class="sev c">Critical</span> &nbsp;API-1 — The rate limiter is sized for pages, but the SPA spends requests</h3>
+    <div class="where mono">api/src/app.ts:81 · client retry predicates: web/src/lib/queryClient.ts:141–159 · zero matches for "429" in web/src</div>
+    <div class="bigmath">
+      <div class="bm"><div class="n">100</div><div class="l">req / min / IP in prod</div></div>
+      <div class="bm"><div class="n">4–16</div><div class="l">requests per page view</div></div>
+      <div class="bm"><div class="n">≈6–10</div><div class="l">page views / min budget</div></div>
+      <div class="bm"><div class="n bad">1 IP</div><div class="l">= whole team behind agency NAT</div></div>
+      <div class="bm"><div class="n bad">0</div><div class="l">client retries on 429</div></div>
+    </div>
+    <p class="lede" style="margin-top:10px">Benchmark proof: the first load-test run produced <strong>511,872 responses in 30 seconds — every one an HTTP 429</strong>. The limiter, not the application, is the binding constraint. Worse, the client treats 429 as a permanent failure: a throttled PATCH of document metadata — title, state, assignee — is <strong>silently dropped</strong>, surfacing only as a toast. Editor body text survives (the WebSocket path bypasses the limiter); metadata writes do not.</p>
+    <div class="say"><b>For the room</b>No latency work is observable in production until this is fixed — the limiter caps throughput two orders of magnitude below what we measured the app can do. Key it per session, size it per page-view reality, and make the client retry 429s with backoff.</div>
+  </div>
+
+  <div class="critcard">
+    <h3><span class="sev c">Critical</span> &nbsp;ERR-1 — A collaboration socket that never connects loses edits under a “Saved” label</h3>
+    <div class="where mono">web/src/components/Editor.tsx (sync indicator) · api/src/collaboration/index.ts · reproduced via WebSocket fault injection</div>
+    <p class="lede" style="margin-top:6px">When the <code>/collaboration</code> WebSocket is unreachable at editor load but HTTP is alive, the editor keeps accepting edits under a reassuring <em>“Cached / Saved”</em> indicator, never completes the initial Yjs sync, and discards the work on reload — final DB content empty, no warning. Whole-browser-offline recovers cleanly; this collab-socket-only case does not.</p>
+    <div class="say"><b>For the room</b>The indicator maps “I have a local cache” to “Saved.” The fix is to make it tell the truth — a distinct “not syncing” state that blocks the false “Saved.” This is the mandatory data-loss fix of the improvement phase.</div>
+  </div>
+
+  <div class="critcard">
+    <h3><span class="sev c">Critical</span> &nbsp;ERR-2 — Session revocation is not enforced on live collaboration sockets</h3>
+    <div class="where mono">api/src/collaboration/index.ts:659 (auth at WS upgrade only) · :718–745 (per-message handler never re-checks)</div>
+    <p class="lede" style="margin-top:6px">The socket is authenticated once, at connection. After the session is deleted or expired server-side, the open editor <strong>keeps writing to documents</strong> — verified: post-revocation edits persisted, and again 60 seconds later. A logged-out or revoked user retains write access until the socket happens to close.</p>
+    <div class="say"><b>For the room</b>Auth is a connect-time gate, not an ongoing check. Re-validate the session periodically on the socket and close it on failure — the same change lands next to ERR-1 in one file.</div>
+  </div>
+</section>
+
+<section>
+  <div class="secno">iii.</div>
+  <h2>Category baselines</h2>
+
+  <div class="cat">
+    <h3>Type safety <span class="tag">9 findings · 3 High</span></h3>
+    <p class="lede">Strict mode is on everywhere and the headline counts look manageable — <strong>1,535 tracked violations</strong>. The defense case is where they sit: the compiler has been quietly excluded from the two places correctness matters most.</p>
+    <div class="chart">
+      <div class="row"><div class="cl">pg queries typed<small>of 707 production call sites</small></div><div class="track"><span class="fill crit" style="width:100%"></span></div><div class="cv">0 <small>/ 707</small></div></div>
+      <div class="row"><div class="cl"><code>as</code> assertions</div><div class="track"><span class="fill" style="width:100%"></span></div><div class="cv">1,385</div></div>
+      <div class="row"><div class="cl">explicit <code>any</code></div><div class="track"><span class="fill" style="width:7.4%"></span></div><div class="cv">102</div></div>
+      <div class="row"><div class="cl">non-null <code>!</code><small>corrected count 321</small></div><div class="track"><span class="fill" style="width:3.4%"></span></div><div class="cv">47</div></div>
+      <div class="row"><div class="cl">web latent errors<small>strict flags silently dropped</small></div><div class="track"><span class="fill hi" style="width:7.4%"></span></div><div class="cv">102</div></div>
+    </div>
+    <ul class="findlist">
+      <li><span class="fid">TS-2</span><span class="sev h">High</span> The entire database→HTTP path is implicitly <code>any</code>: 707 untyped queries, 767 unchecked <code>.rows</code> accesses, 7 mappers all <code>(row: any)</code>.<small>A column rename produces <code>undefined</code> in a JSON response with zero compile-time signal.</small></li>
+      <li><span class="fid">TS-1</span><span class="sev h">High</span> <code>web/tsconfig.json</code> doesn't extend the root — three strict flags silently dropped, hiding 102 latent errors.<small>The repo's own reference config extends root; the shipped one drifted.</small></li>
+      <li><span class="fid">TS-3</span><span class="sev h">High</span> The Yjs↔TipTap converter — the persistence path for all document content — is fully untyped (12 <code>any</code> in 245 lines).<small>A shape regression here corrupts user content with no compiler signal.</small></li>
+      <li><span class="fid">TS-4</span><span class="sev m">Med</span> 236 non-null assertions on request auth trace to one optional declaration — an <code>AuthenticatedRequest</code> type retires them in one edit.<small>Today, a route missing <code>requireAuth</code> compiles identically to one that has it.</small></li>
+    </ul>
+    <div class="say"><b>For the room</b>We don't have an <code>any</code> problem; we have an <em>unchecked boundary</em> problem. Type the 707 query results and the shared/ contract, and the same compiler that's already green starts guarding the API surface.</div>
+  </div>
+
+  <div class="cat">
+    <h3>Bundle <span class="tag">9 findings · 3 High</span></h3>
+    <p class="lede">Total is <strong>699.8 KB gzip — and 85.9% of it is a single 2.07 MB entry chunk</strong>. There is no route-level code splitting: an unauthenticated visitor on /login downloads the admin dashboard, the org chart, and the entire collaborative editor before the form paints.</p>
+    <div class="chart">
+      <div class="row"><div class="cl">Editor stack<small>TipTap · ProseMirror · Yjs</small></div><div class="track"><span class="fill" style="width:100%"></span></div><div class="cv">208.7 KB <small>35.5%</small></div></div>
+      <div class="row"><div class="cl">App source<small>all 25 pages, eager</small></div><div class="track"><span class="fill" style="width:68%"></span></div><div class="cv">142.5 KB <small>24.2%</small></div></div>
+      <div class="row"><div class="cl">highlight.js<small>37 grammars via lowlight "common"</small></div><div class="track"><span class="fill b2" style="width:31%"></span></div><div class="cv">64.0 KB <small>10.9%</small></div></div>
+      <div class="row"><div class="cl">emoji-picker-react<small>serves one sidebar popover</small></div><div class="track"><span class="fill b2" style="width:19%"></span></div><div class="cv">39.1 KB <small>6.6%</small></div></div>
+      <div class="row"><div class="cl">react + dom + router</div><div class="track"><span class="fill" style="width:18%; opacity:.55"></span></div><div class="cv">36.7 KB <small>6.2%</small></div></div>
+      <div class="row"><div class="cl">Everything else</div><div class="track"><span class="fill" style="width:46%; opacity:.35"></span></div><div class="cv">96.9 KB <small>16.5%</small></div></div>
+    </div>
+    <p class="axisnote">Composition of the 587.9 KB gzip entry chunk (treemap attribution, rollup-plugin-visualizer against an unmodified build)</p>
+    <ul class="findlist">
+      <li><span class="fid">BUN-2</span><span class="sev h">High</span> Lazy-loading the editor alone removes 34.7% of the initial payload — more than the whole 20% target.<small>Users who never open an editor (login, dashboards, lists) stop paying for it entirely.</small></li>
+      <li><span class="fid">BUN-3</span><span class="sev h">High</span> lowlight's <code>common</code> registers 37 language grammars — Arduino, VBNet, Perl — for a project-management wiki.<small>Explicit 6–8 language registration is a one-line, ~50 KB change.</small></li>
+      <li><span class="fid">BUN-6</span><span class="sev m">Med</span> No vendor chunking: every app deploy invalidates all 588 KB for returning users.<small>Stable dependencies share a content hash with volatile app code.</small></li>
+    </ul>
+    <div class="say"><b>For the room</b>Nobody chose this bundle; it accreted because Vite's 500 KB warning is advisory and prints on every build. The fix is seams — route-level lazy, editor lazy — not deleting features.</div>
+  </div>
+
+  <div class="cat">
+    <h3>API performance <span class="tag">6 findings · 1 Critical, 2 High</span></h3>
+    <p class="lede">Six endpoints, three concurrency levels, 16,200 requests, <strong>zero errors</strong>. Latency is healthy and scales linearly — the risks are payload-shaped: the slowest endpoint ships data its consumer throws away, and nothing is compressed.</p>
+    <div class="chart">
+      <div class="row"><div class="cl">GET /api/issues<small>380 KB · no pagination</small></div><div class="track"><span class="fill hi" style="width:100%"></span></div><div class="cv">94.5 ms</div></div>
+      <div class="row"><div class="cl">GET /api/documents<small>294 KB, full corpus</small></div><div class="track"><span class="fill" style="width:80%"></span></div><div class="cv">75.7 ms</div></div>
+      <div class="row"><div class="cl">GET /api/team/assignments</div><div class="track"><span class="fill" style="width:24%"></span></div><div class="cv">22.9 ms</div></div>
+      <div class="row"><div class="cl">GET /api/documents?type=wiki</div><div class="track"><span class="fill" style="width:18%"></span></div><div class="cv">17.3 ms</div></div>
+      <div class="row"><div class="cl">GET /api/weeks</div><div class="track"><span class="fill" style="width:15%"></span></div><div class="cv">14.2 ms</div></div>
+      <div class="row"><div class="cl">GET /api/documents/:id</div><div class="track"><span class="fill" style="width:10%"></span></div><div class="cv">9.2 ms</div></div>
+    </div>
+    <p class="axisnote">P95 at 25 concurrent connections · autocannon 8.0.0 · dev-mode server (documented caveat) · identical seed for every run</p>
+    <ul class="findlist">
+      <li><span class="fid">API-2</span><span class="sev h">High</span> /api/issues returns 380 KB unpaginated; 72% is a <code>content</code> field the list UI never reads.<small>Dropping it cuts P95 an estimated 55–60% — the category target on one endpoint. ~3.8 MB at 10× data.</small></li>
+      <li><span class="fid">API-3</span><span class="sev h">High</span> No response compression anywhere: the largest payload ships 15.4× larger than needed.<small>Invisible on localhost; ~300 ms of transfer on a 10 Mbps agency link. Must be validated by payload size, not loopback latency.</small></li>
+      <li><span class="fid">API-4</span><span class="sev m">Med</span> Cmd+K re-downloads the entire 294 KB document corpus on every open, bypassing the query cache.<small>Linear in workspace size; a search endpoint already exists and is unused by the UI.</small></li>
+    </ul>
+    <div class="say"><b>For the room</b>The engine is fine; the cargo is the problem. Project less, paginate, compress — three boring fixes, all independently measurable.</div>
+  </div>
+
+  <div class="cat">
+    <h3>Database queries <span class="tag">10 findings · 1 Critical, 3 High</span></h3>
+    <p class="lede">684 statements captured across six real user flows. The unified-document model itself held up — <strong>no server-side N+1 in the core flows</strong>. What the trace exposed instead: most of the database's work is overhead, not the product.</p>
+    <div class="chart">
+      <div class="row"><div class="cl">Load sprint board</div><div class="track"><span class="fill" style="width:100%"></span><span class="seg" style="left:0; width:67%; background:var(--green2); opacity:.55"></span></div><div class="cv">51 <small>67% auth</small></div></div>
+      <div class="row"><div class="cl">View a document</div><div class="track"><span class="fill" style="width:88%"></span><span class="seg" style="left:0; width:53%; background:var(--green2); opacity:.55"></span></div><div class="cv">45 <small>60% auth</small></div></div>
+      <div class="row"><div class="cl">Search content</div><div class="track"><span class="fill" style="width:86%"></span><span class="seg" style="left:0; width:45%; background:var(--green2); opacity:.55"></span></div><div class="cv">44 <small>52% auth</small></div></div>
+      <div class="row"><div class="cl">Week dashboard<small>client N+1: 5 weeks × 5 queries</small></div><div class="track"><span class="fill hi" style="width:82%"></span><span class="seg" style="left:0; width:61%; background:var(--green2); opacity:.55"></span></div><div class="cv">42 <small>74% auth</small></div></div>
+      <div class="row"><div class="cl">Load main page</div><div class="track"><span class="fill" style="width:51%"></span><span class="seg" style="left:0; width:35%; background:var(--green2); opacity:.55"></span></div><div class="cv">26 <small>69% auth</small></div></div>
+      <div class="row"><div class="cl">List issues</div><div class="track"><span class="fill" style="width:33%"></span><span class="seg" style="left:0; width:31%; background:var(--green2); opacity:.55"></span></div><div class="cv">17 <small>94% auth</small></div></div>
+    </div>
+    <p class="axisnote">Steady-state queries per flow · lighter overlay = auth middleware share (session SELECT + session UPDATE + role SELECT, every request)</p>
+    <ul class="findlist">
+      <li><span class="fid">DB-2</span><span class="sev h">High</span> Every authenticated request — including every GET — performs a session-row <em>write</em>. It's the slowest statement in 5 of 6 flows.<small>The 60-second throttle already exists for the cookie refresh, four lines below. Applying it to the write clears the 20% query-reduction target on three flows at once.</small></li>
+      <li><span class="fid">DB-3</span><span class="sev h">High</span> 61% of all database time is query <em>planning</em>, not execution — every statement re-parsed as unnamed.<small>Naming hot statements lets Postgres cache plans: ~75% off the slowest query, no schema change.</small></li>
+      <li><span class="fid">DB-4</span><span class="sev h">High</span> Week dashboard fires one standups request per active week — 25 of its 42 queries, growing linearly with weeks.<small>One batched query makes the flow constant-cost and clears the target twice over.</small></li>
+      <li><span class="fid">DB-7</span><span class="sev m">Med</span> Issue deep-links seq-scan the whole documents table — no index on <code>ticket_number</code>.<small>500 rows examined to return 1; grows with total documents, not issues.</small></li>
+    </ul>
+    <div class="say"><b>For the room</b>The single-table design is not the villain — the trace cleared it. The villain is per-request ceremony: three auth queries and a write before any endpoint does its job. One throttle, one prepared-statement pass, one batch endpoint.</div>
+  </div>
+
+  <div class="cat">
+    <h3>Test quality <span class="tag">11 findings · 4 High</span></h3>
+    <p class="lede">1,471 tests executed three times under pinned conditions: <strong>1,446 clean · 14 failing · 11 flaky</strong>. The suite is large and largely healthy — and structurally unable to protect the codebase, because nothing runs all of it and retries hide what fails.</p>
+    <div class="chart">
+      <div class="row"><div class="cl">Run 1 · first-attempt fails</div><div class="track"><span class="fill hi" style="width:100%"></span><span class="seg" style="left:0; width:12.5%; background:var(--crit)"></span></div><div class="cv">8 → 1</div></div>
+      <div class="row"><div class="cl">Run 2 · first-attempt fails</div><div class="track"><span class="fill hi" style="width:62%"></span></div><div class="cv">5 → 0</div></div>
+      <div class="row"><div class="cl">Run 3 · first-attempt fails</div><div class="track"><span class="fill hi" style="width:38%"></span><span class="seg" style="left:0; width:12.5%; background:var(--crit)"></span></div><div class="cv">3 → 1</div></div>
+    </div>
+    <p class="axisnote">First-attempt e2e failures vs. failures still reported after retries — retries erased 14 of 16. One test failed its first attempt in 100% of runs and was reported green every time.</p>
+    <ul class="findlist">
+      <li><span class="fid">TEST-1</span><span class="sev h">High</span> 13 web unit tests are failing and <em>nothing ever runs them</em>: root <code>pnpm test</code> is api-only, and the repo has no CI of any kind.<small>Every one of the 13 would have been caught on its introducing commit.</small></li>
+      <li><span class="fid">TEST-2</span><span class="sev h">High</span> 68 e2e tests (7.9%) can pass without executing a single assertion — including the only XSS and authorization checks.<small>Every expectation sits inside an <code>if</code> that silently skips on missing data.</small></li>
+      <li><span class="fid">TEST-4</span><span class="sev h">High</span> Concurrent multi-client editing — the justification for the Yjs architecture — has no test at all.<small>Collaboration server function coverage: 25%. A merge regression that drops one client's edits ships green.</small></li>
+      <li><span class="fid">TEST-9</span><span class="sev m">Med</span> <code>pnpm test</code> TRUNCATEs whatever database <code>DATABASE_URL</code> points at — following the repo's own docs wipes the dev database.<small>The audit had to build a separate database to survive running the suite.</small></li>
+    </ul>
+    <div class="say"><b>For the room</b>866 tests is an asset most codebases would envy. But a suite nobody runs completely, that can pass vacuously, behind retries that hide 87% of first-attempt failures, provides confidence — not protection. CI plus three honest tests beats a hundred more green checkmarks.</div>
+  </div>
+
+  <div class="cat">
+    <h3>Error handling <span class="tag">9 findings · 2 Critical, 2 High</span></h3>
+    <p class="lede">Fault injection across disconnect, concurrency, malformed input and slow network. The happy path is clean — <strong>zero console errors across 8 flows, no exploitable XSS, clean API validation</strong> — but four write-failure modes are silent, and two are Critical (ERR-1, ERR-2, above).</p>
+    <ul class="findlist">
+      <li><span class="fid">ERR-3</span><span class="sev h">High</span> Rejected writes (429/500 PATCH) are silently dropped while the sync indicator still reads “Saved” over the unsaved value.<small>A transient toast fires; the persistent indicator contradicts it, and users trust the wrong half.</small></li>
+      <li><span class="fid">ERR-4</span><span class="sev h">High</span> Editing a document deleted elsewhere continues with no notice; post-delete edits vanish.<small>The editor holds a live surface over a document the server has already removed.</small></li>
+      <li><span class="fid">ERR-5</span><span class="sev m">Med</span> Invalid path/query params return 500 instead of 400/404 — bad uuid/enum reach Postgres directly.<small>Also ERR-6 (comment orphan) · ERR-7 (no loading state, 61s 3G page) · ERR-8/9 (unbounded limit, console noise) in the index.</small></li>
+    </ul>
+    <div class="say"><b>For the room</b>The pattern from cause #1 again: writes fail quietly. The three worth shipping are ERR-1, ERR-2, ERR-3 — all “make the failure loud.”</div>
+  </div>
+
+  <div class="cat">
+    <h3>Accessibility <span class="tag">8 findings · 3 High</span></h3>
+    <p class="lede">Ship runs at <code>ship.awsdev.treasury.gov</code> — a federal app, so Section 508 / WCAG 2.1 AA is effectively mandated. Lighthouse rates the key pages <strong>95–100</strong>, but that score is generous: axe on the same pages <em>plus interactive states</em> finds 2 Critical + 3 Serious rule violations the score and the repo’s own critical-only specs both miss.</p>
+    <ul class="findlist">
+      <li><span class="fid">A11Y-1</span><span class="sev h">High</span> The workspace-documents sidebar (on every page) uses <code>role="tree"</code> but its children are plain <code>&lt;li&gt;</code> nav links, not treeitems — axe Critical.</li>
+      <li><span class="fid">A11Y-2</span><span class="sev h">High</span> The TipTap editor wrapper sets <code>aria-expanded</code> on a plain <code>&lt;div&gt;</code> with no supporting role — axe Critical, on the core editing surface.</li>
+      <li><span class="fid">A11Y-3</span><span class="sev h">High</span> The dashboard fails color contrast on 25 elements (muted 50%-opacity text, translucent badges) — the only Lighthouse-failing page (95).<small>A11Y-4–8 (unnamed dialog, missing landmarks/h1, heading order, empty header) in the index.</small></li>
+    </ul>
+    <div class="say"><b>For the room</b>“WCAG AA” is a testable claim, and the generous score doesn’t support it. A11Y-3 alone (contrast) buys the +10-point improvement target on the lowest page.</div>
+  </div>
+
+  <div class="cat">
+    <h3>Terraform / IaC <span class="tag">6 findings · 2 High</span></h3>
+    <p class="lede">The infrastructure is <strong>AWS</strong> (Elastic Beanstalk + Aurora Serverless v2 + VPC + CloudFront/S3 + WAF + SSM), well-secured — encryption, private subnets, WAF, SSM SecureString. A live <code>plan</code> is not runnable without AWS credentials and the SSM-stored state bucket, so blast radius was reasoned statically; drift was demonstrated cloud-free with the local provider.</p>
+    <ul class="findlist">
+      <li><span class="fid">TF-1</span><span class="sev h">High</span> The prod Aurora database and the uploads bucket have no deletion protection — the <em>only</em> guarded resource is the Terraform state bucket.<small>One careless apply/destroy from prod data loss.</small></li>
+      <li><span class="fid">TF-2</span><span class="sev h">High</span> Two divergent root configs manage the same infra; the flat root carries WAF + realtime logging the modular <code>environments/prod</code> path lacks.</li>
+      <li><span class="fid">TF-3</span><span class="sev m">Med</span> The pinned Terraform 1.6.0 can no longer <code>init</code> — its bundled provider-signing key has expired.<small>TF-4 (no root lockfile) · TF-5 (lifecycle warning) · TF-6 (secret keepers) in the index.</small></li>
+    </ul>
+    <div class="say"><b>For the room</b>The thing that stores <em>state</em> is protected; the things that store <em>customer data</em> are not. TF-1 is the one-line guardrail that should exist and doesn’t.</div>
+  </div>
+</section>
+
+<section>
+  <div class="secno">iv.</div>
+  <h2>The defense: three systemic causes</h2>
+  <p class="lede">Forty-five findings, but not forty-five problems. Nearly everything above traces to three architectural habits — which is good news, because habits can be fixed centrally.</p>
+  <ul class="findlist" style="max-width:78ch">
+    <li><strong>1 · Failures are silent by default.</strong> The migration runner exits 0 having done a quarter of its job. Retries convert failing tests to green. Vacuous tests pass on missing data. <code>pnpm lint</code> matches zero targets and succeeds. Dropped 429 writes surface as a toast.<small>Pattern: every guard rail reports success on the path where it did nothing. Defense priority #1 is making failure loud — CI, scoped catches, retry budgets, assertion linting.</small></li>
+    <li><strong>2 · Shared mechanisms concentrate cost.</strong> One auth middleware taxes every request with three queries and a write. One entry chunk taxes every page with the whole app. One untyped pg pool taxes every route with unchecked rows. One rate-limit key taxes a whole agency NAT.<small>Pattern: the unified architecture that makes Ship elegant means single-point fixes have system-wide yield — throttle one write, lazy-load one component, type one pool.</small></li>
+    <li><strong>3 · Nothing ratchets.</strong> No CI, no lint, no bundle budget, no coverage gate (the tool isn't even installed), a stale test-count comment 228 tests out of date.<small>Pattern: every improvement made this week can silently regress next week. The remediation plan pairs each fix with the ratchet that keeps it fixed.</small></li>
+  </ul>
+  <p class="lede" style="margin-top:26px"><strong>The same bug from two angles.</strong> Five pairs of findings share a single root cause — fix the root once and both resolve. Trace this when a finding ID looks isolated:</p>
+  <ul class="findlist" style="max-width:78ch">
+    <li><span class="fid">ERR-1 ↔ ERR-2</span> both live in the collaboration server (data loss + session enforcement) — one file, one fix window.</li>
+    <li><span class="fid">DB-2 ↔ API-6</span> the same per-request <code>UPDATE sessions</code> write, seen from the query trace and the endpoint benchmark.</li>
+    <li><span class="fid">DB-4 ↔ API-4 / API-5</span> the same week-dashboard standups fan-out (client N+1) — and the cause of the 61-second slow-network main page (ERR-7).</li>
+    <li><span class="fid">API-2 ↔ DB-5</span> the same <code>/api/issues</code> list shipping the full document body the list UI never reads.</li>
+    <li><span class="fid">ERR-6 ↔ TEST-5</span> the same orphaned comment-highlight-on-cancel bug — TEST-5 is the failing test that reproduces it.</li>
+  </ul>
+</section>
+
+<section>
+  <div class="secno">v.</div>
+  <h2>Remediation plan</h2>
+  <p class="lede">One primary fix per category, chosen for yield-per-risk, each independently provable by re-running the same measurement under identical conditions (compare mode).</p>
+  <div class="tablewrap">
+  <table class="rem">
+    <tr><th>Category</th><th>Target</th><th>Primary fix</th><th>Expected</th></tr>
+    <tr><td>Deploy path</td><td>Correctness</td><td>Scope the migrate catch to schema.sql; add <code>IF NOT EXISTS</code> to 010 (DB-1)</td><td class="exp">42/42 applied</td></tr>
+    <tr><td>Type safety</td><td>−25% violations</td><td><code>AuthenticatedRequest</code> type (−236 <code>!</code>, TS-4) + typed row interfaces on hot routes (TS-2) + web tsconfig inheritance (TS-1)</td><td class="exp">≈ −30%</td></tr>
+    <tr><td>Bundle</td><td>−20% initial load</td><td>Lazy editor (BUN-2) + route-level lazy (BUN-1) + explicit lowlight languages (BUN-3)</td><td class="exp">−35% or more</td></tr>
+    <tr><td>API perf</td><td>−20% P95 × 2 endpoints</td><td>Drop <code>content</code> from list projections + paginate (API-2/DB-5); fix limiter + 429 retry (API-1)</td><td class="exp">−55% on /issues</td></tr>
+    <tr><td>DB queries</td><td>−20% queries on a flow</td><td>Throttle session write to the existing 60s rule (DB-2); batch week-dashboard standups (DB-4)</td><td class="exp">−22 to −48%</td></tr>
+    <tr><td>Tests</td><td>3 meaningful tests <em>or</em> 3 flakes</td><td>CI workflow running all suites (TEST-1) + a real two-client Yjs merge test (TEST-4)</td><td class="exp">ratchet installed</td></tr>
+    <tr><td>Error handling</td><td>3 gaps, ≥1 data-loss</td><td>Truthful sync indicator + block false “Saved” (ERR-1); re-validate live sockets (ERR-2); reflect write result (ERR-3)</td><td class="exp">data loss closed</td></tr>
+    <tr><td>Accessibility</td><td>+10 Lighthouse or all Crit/Serious</td><td>Contrast tokens on /my-week (A11Y-3); treeitem semantics (A11Y-1); editor aria (A11Y-2)</td><td class="exp">95 → 100 expected</td></tr>
+    <tr><td>Terraform</td><td>guard data + one structure</td><td>deletion_protection + prevent_destroy on Aurora/uploads (TF-1); converge the two roots (TF-2); bump the pin (TF-3)</td><td class="exp">state = protected</td></tr>
+  </table>
+  </div>
+</section>
+
+<section>
+  <div class="secno">vi.</div>
+  <h2>Scope &amp; conditions</h2>
+  <div class="scope">
+    <b>All eight categories now baselined.</b>
+    The earlier gap — error handling &amp; accessibility (Group C) — is closed, and a Terraform / IaC review was added as category 8. Totals rose from 45 to <strong>68 findings</strong> and from 2 to <strong>4 Criticals</strong> (ERR-1, ERR-2 joined DB-1, API-1). Two carry-over leads resolved into findings: the orphaned comment-highlight on cancel is ERR-6 / TEST-5, and the dropped-429-write path is API-1 / ERR-3. The full per-ID list is the index below.
+  </div>
+  <div class="scope">
+    <b>Measurement conditions, recorded in every artifact.</b>
+    Commit <code>076a183</code> (application source unmodified) · 500 documents / 20 users, deterministically seeded and re-verified by row count before and after each category · Apple M-series, 24 GB, Node 23 · PostgreSQL 15-alpine in Docker (compose declares 16 — version skew recorded; EXPLAIN plans are PG15) · API in dev mode (limiter at dev threshold; absolute latencies mildly pessimistic, payload and query shapes unaffected) · e2e pinned at 4 workers across all three runs · statement logging enabled for db-query only, then reverted and verified off.
+  </div>
+</section>
+
+<section>
+  <div class="secno">vii.</div>
+  <h2>Finding index — all 68, by ID</h2>
+  <p class="lede">Every finding, grouped by category and ordered by number, so any ID is one <kbd>Ctrl/⌘-F</kbd> away. Each row is anchored — e.g. <code>#API-6</code> jumps straight to it.</p>
+  <div class="tablewrap">
+  <table class="ix">
+    <thead><tr><th>ID</th><th>Sev</th><th>Finding</th></tr></thead>
+    <tbody>
+    <tr class="grp"><td colspan="3">Type safety · 9</td></tr>
+    <tr id="TS-1"><td class="ix-id">TS-1</td><td><span class="sev h">High</span></td><td>web/tsconfig.json does not extend the root tsconfig — 102 latent type errors are invisible in the frontend</td></tr>
+    <tr id="TS-2"><td class="ix-id">TS-2</td><td><span class="sev h">High</span></td><td>The entire database-to-HTTP response path is implicitly `any` — 707 pg queries, none typed</td></tr>
+    <tr id="TS-3"><td class="ix-id">TS-3</td><td><span class="sev h">High</span></td><td>The Yjs &lt;-&gt; TipTap converter — the persistence path for every document's content — is fully untyped</td></tr>
+    <tr id="TS-4"><td class="ix-id">TS-4</td><td><span class="sev m">Med</span></td><td>236 non-null assertions on request auth context, all traceable to one optional declaration</td></tr>
+    <tr id="TS-5"><td class="ix-id">TS-5</td><td><span class="sev m">Med</span></td><td>The shared/ type contract is bypassed — 46 exported types, adopted by 13 of 198 web files, with ~40 duplicate local model declarations</td></tr>
+    <tr id="TS-6"><td class="ix-id">TS-6</td><td><span class="sev m">Med</span></td><td>No ESLint anywhere in the repo — `pnpm lint` is a silent no-op, so nothing prevents these counts from growing</td></tr>
+    <tr id="TS-7"><td class="ix-id">TS-7</td><td><span class="sev m">Med</span></td><td>`as any` used to silence type mismatches on a destructive bulk mutation and on a SQL parameter</td></tr>
+    <tr id="TS-8"><td class="ix-id">TS-8</td><td><span class="sev l">Low</span></td><td>68% of flagged sites are in test files, where `as any` mocks decouple tests from the shapes they claim to verify</td></tr>
+    <tr id="TS-9"><td class="ix-id">TS-9</td><td><span class="sev l">Low</span></td><td>web build and script files are never type-checked</td></tr>
+    <tr class="grp"><td colspan="3">Bundle · 9</td></tr>
+    <tr id="BUN-1"><td class="ix-id">BUN-1</td><td><span class="sev h">High</span></td><td>Whole application ships in one 2.07 MB entry chunk — zero route-level code splitting</td></tr>
+    <tr id="BUN-2"><td class="ix-id">BUN-2</td><td><span class="sev h">High</span></td><td>TipTap + ProseMirror + Yjs editor/collaboration stack is 35.5% of the entry chunk and loads on every page</td></tr>
+    <tr id="BUN-3"><td class="ix-id">BUN-3</td><td><span class="sev h">High</span></td><td>lowlight `common` pulls 37 highlight.js language grammars into the entry chunk — the largest single npm dependency by gzip</td></tr>
+    <tr id="BUN-4"><td class="ix-id">BUN-4</td><td><span class="sev m">Med</span></td><td>emoji-picker-react (186 kB raw / 39 kB gzip) is in the entry chunk to serve a single sidebar popover</td></tr>
+    <tr id="BUN-5"><td class="ix-id">BUN-5</td><td><span class="sev m">Med</span></td><td>USWDS icon glob emits 245 chunks of which 209 are never referenced, and ships a 245-entry loader map in the entry chunk</td></tr>
+    <tr id="BUN-6"><td class="ix-id">BUN-6</td><td><span class="sev m">Med</span></td><td>No build/chunking configuration at all — no vendor chunk, so every app-code change invalidates all 588 kB gzip</td></tr>
+    <tr id="BUN-7"><td class="ix-id">BUN-7</td><td><span class="sev l">Low</span></td><td>Unused dependency @tanstack/query-sync-storage-persister declared but never imported</td></tr>
+    <tr id="BUN-8"><td class="ix-id">BUN-8</td><td><span class="sev l">Low</span></td><td>Two Radix packages resolve to duplicate versions and both copies ship in the entry chunk</td></tr>
+    <tr id="BUN-9"><td class="ix-id">BUN-9</td><td><span class="sev l">Low</span></td><td>Initial render blocks on a third-party Google Fonts stylesheet outside the bundle</td></tr>
+    <tr class="grp"><td colspan="3">API performance · 6</td></tr>
+    <tr id="API-1"><td class="ix-id">API-1</td><td><span class="sev c">Crit</span></td><td>Global rate limiter caps production traffic at 100 req/min per IP while one page view costs 4-16 requests; 429s are never retried, so throttled w…</td></tr>
+    <tr id="API-2"><td class="ix-id">API-2</td><td><span class="sev h">High</span></td><td>GET /api/issues returns 380 KB with no pagination, 72% of which is a content field the list UI never reads</td></tr>
+    <tr id="API-3"><td class="ix-id">API-3</td><td><span class="sev h">High</span></td><td>No response compression anywhere in the API; the largest payload ships 15.4x larger than it needs to</td></tr>
+    <tr id="API-4"><td class="ix-id">API-4</td><td><span class="sev m">Med</span></td><td>Command palette (cmd+K) re-downloads the entire 294 KB document corpus on every open, bypassing the react-query cache</td></tr>
+    <tr id="API-5"><td class="ix-id">API-5</td><td><span class="sev m">Med</span></td><td>Dashboard issues one request per active week for standups (client-side N+1)</td></tr>
+    <tr id="API-6"><td class="ix-id">API-6</td><td><span class="sev m">Med</span></td><td>Every authenticated request — including every GET — performs a session UPDATE, making all reads writers</td></tr>
+    <tr class="grp"><td colspan="3">Database queries · 10</td></tr>
+    <tr id="DB-1"><td class="ix-id">DB-1</td><td><span class="sev c">Crit</span></td><td>pnpm db:migrate silently skips 32 of 42 migrations and exits 0, reporting success</td></tr>
+    <tr id="DB-2"><td class="ix-id">DB-2</td><td><span class="sev h">High</span></td><td>Every authenticated request issues a session-table WRITE plus 2 reads; 52-94% of all per-flow queries are auth boilerplate</td></tr>
+    <tr id="DB-3"><td class="ix-id">DB-3</td><td><span class="sev h">High</span></td><td>61% of all database time is query planning, not execution — every statement is re-parsed and re-planned</td></tr>
+    <tr id="DB-4"><td class="ix-id">DB-4</td><td><span class="sev h">High</span></td><td>Week dashboard N+1: one /api/weeks/:id/standups request per active week, 25 of the flow's 42 queries</td></tr>
+    <tr id="DB-5"><td class="ix-id">DB-5</td><td><span class="sev m">Med</span></td><td>/api/issues list query SELECTs the full document body for all 254 issues; the list UI never reads it</td></tr>
+    <tr id="DB-6"><td class="ix-id">DB-6</td><td><span class="sev m">Med</span></td><td>/api/weeks sprint aggregate runs 8 correlated subplans per row, two of which seq-scan document_associations once per row</td></tr>
+    <tr id="DB-7"><td class="ix-id">DB-7</td><td><span class="sev m">Med</span></td><td>No index on documents.ticket_number — issue deep-link lookup seq-scans the whole documents table</td></tr>
+    <tr id="DB-8"><td class="ix-id">DB-8</td><td><span class="sev m">Med</span></td><td>Planner underestimates the document_associations = ANY(...) batch by 28x and chooses a sequential scan</td></tr>
+    <tr id="DB-9"><td class="ix-id">DB-9</td><td><span class="sev m">Med</span></td><td>Flows fire byte-identical API requests two and three times, duplicating their entire query cost</td></tr>
+    <tr id="DB-10"><td class="ix-id">DB-10</td><td><span class="sev l">Low</span></td><td>No index on documents.updated_at despite ORDER BY updated_at DESC in seven route modules</td></tr>
+    <tr class="grp"><td colspan="3">Test quality · 11</td></tr>
+    <tr id="TEST-1"><td class="ix-id">TEST-1</td><td><span class="sev h">High</span></td><td>13 web unit tests are failing, and nothing in the repository ever runs them</td></tr>
+    <tr id="TEST-2"><td class="ix-id">TEST-2</td><td><span class="sev h">High</span></td><td>68 e2e tests (7.9%) can pass without executing a single assertion, including a security and an authorization test</td></tr>
+    <tr id="TEST-3"><td class="ix-id">TEST-3</td><td><span class="sev h">High</span></td><td>Retries hide a test that fails on first attempt in 100% of runs; 11 tests flaked across 3 identical runs</td></tr>
+    <tr id="TEST-4"><td class="ix-id">TEST-4</td><td><span class="sev h">High</span></td><td>Concurrent multi-client editing / Yjs merge has no test</td></tr>
+    <tr id="TEST-5"><td class="ix-id">TEST-5</td><td><span class="sev m">Med</span></td><td>Canceling an inline comment leaves an orphaned comment-highlight mark in the saved document (real app bug candidate)</td></tr>
+    <tr id="TEST-6"><td class="ix-id">TEST-6</td><td><span class="sev m">Med</span></td><td>Allocation grid returns planId: null immediately after the plan is created (read-after-write race candidate)</td></tr>
+    <tr id="TEST-7"><td class="ix-id">TEST-7</td><td><span class="sev m">Med</span></td><td>Coverage measurement is broken in api and entirely absent in web and shared</td></tr>
+    <tr id="TEST-8"><td class="ix-id">TEST-8</td><td><span class="sev m">Med</span></td><td>Two shipped routes have zero test coverage of any kind</td></tr>
+    <tr id="TEST-9"><td class="ix-id">TEST-9</td><td><span class="sev m">Med</span></td><td>`pnpm test` TRUNCATEs whatever database DATABASE_URL points at</td></tr>
+    <tr id="TEST-10"><td class="ix-id">TEST-10</td><td><span class="sev l">Low</span></td><td>E2E worker auto-sizing collapses to 1 worker on macOS</td></tr>
+    <tr id="TEST-11"><td class="ix-id">TEST-11</td><td><span class="sev l">Low</span></td><td>Stale test-count comment and heavy fixed-sleep usage</td></tr>
+    <tr class="grp"><td colspan="3">Error handling · 9</td></tr>
+    <tr id="ERR-1"><td class="ix-id">ERR-1</td><td><span class="sev c">Crit</span></td><td>Collaboration WebSocket unreachable at load → edits silently lost; sync indicator falsely reads "Cached"/"Saved"</td></tr>
+    <tr id="ERR-2"><td class="ix-id">ERR-2</td><td><span class="sev c">Crit</span></td><td>Session revocation/expiry not enforced on live collaboration sockets — a logged-out user keeps writing to documents</td></tr>
+    <tr id="ERR-3"><td class="ix-id">ERR-3</td><td><span class="sev h">High</span></td><td>Rejected document writes (429/500 PATCH) are silently dropped; the sync indicator shows "Saved" over an unsaved value</td></tr>
+    <tr id="ERR-4"><td class="ix-id">ERR-4</td><td><span class="sev h">High</span></td><td>Editing a document that is deleted elsewhere continues with no notice; post-delete edits are dropped</td></tr>
+    <tr id="ERR-5"><td class="ix-id">ERR-5</td><td><span class="sev m">Med</span></td><td>Invalid path/query params return 500 Internal Server Error instead of 400/404</td></tr>
+    <tr id="ERR-6"><td class="ix-id">ERR-6</td><td><span class="sev m">Med</span></td><td>Comment mark orphaned into persisted content when the comment popover is dismissed by blur (not Escape)</td></tr>
+    <tr id="ERR-7"><td class="ix-id">ERR-7</td><td><span class="sev m">Med</span></td><td>No loading affordance under slow network; sync indicator never shows an in-flight/unsaved state</td></tr>
+    <tr id="ERR-8"><td class="ix-id">ERR-8</td><td><span class="sev l">Low</span></td><td>Unbounded `limit` query param — negative and huge values both return the full unpaginated payload</td></tr>
+    <tr id="ERR-9"><td class="ix-id">ERR-9</td><td><span class="sev l">Low</span></td><td>BacklinksPanel logs a console.error storm on every failed fetch (offline, deleted, expired, revoked)</td></tr>
+    <tr class="grp"><td colspan="3">Accessibility · 8</td></tr>
+    <tr id="A11Y-1"><td class="ix-id">A11Y-1</td><td><span class="sev h">High</span></td><td>Workspace-documents sidebar uses role="tree" but its children are plain &lt;li&gt; nav links, not treeitems (axe Critical + Serious)</td></tr>
+    <tr id="A11Y-2"><td class="ix-id">A11Y-2</td><td><span class="sev h">High</span></td><td>TipTap editor wrapper sets aria-expanded on a plain &lt;div&gt; with no supporting role (axe Critical)</td></tr>
+    <tr id="A11Y-3"><td class="ix-id">A11Y-3</td><td><span class="sev h">High</span></td><td>Dashboard (/my-week) fails color contrast on 25 elements — muted 50%-opacity text and translucent badges (axe Serious; the only Lighthouse-failin…</td></tr>
+    <tr id="A11Y-4"><td class="ix-id">A11Y-4</td><td><span class="sev m">Med</span></td><td>A Radix popover/dropdown opens as a role=dialog with no accessible name (axe Serious)</td></tr>
+    <tr id="A11Y-5"><td class="ix-id">A11Y-5</td><td><span class="sev m">Med</span></td><td>/search and /weeks render with no &lt;main&gt; landmark and no level-one heading (axe Moderate)</td></tr>
+    <tr id="A11Y-6"><td class="ix-id">A11Y-6</td><td><span class="sev m">Med</span></td><td>Document pages skip heading levels (h1 → h3), breaking the screen-reader outline (axe Moderate)</td></tr>
+    <tr id="A11Y-7"><td class="ix-id">A11Y-7</td><td><span class="sev l">Low</span></td><td>Login page: form content not contained in a landmark and no main landmark (axe Moderate) — missed by the repo's critical-only specs</td></tr>
+    <tr id="A11Y-8"><td class="ix-id">A11Y-8</td><td><span class="sev l">Low</span></td><td>Issues table selection column has an empty table header (axe Minor)</td></tr>
+    <tr class="grp"><td colspan="3">Terraform / IaC · 6</td></tr>
+    <tr id="TF-1"><td class="ix-id">TF-1</td><td><span class="sev h">High</span></td><td>Prod data stores have no deletion protection — only the Terraform state bucket is guarded</td></tr>
+    <tr id="TF-2"><td class="ix-id">TF-2</td><td><span class="sev h">High</span></td><td>Two divergent root configurations manage the same infrastructure, and they have already drifted apart</td></tr>
+    <tr id="TF-3"><td class="ix-id">TF-3</td><td><span class="sev m">Med</span></td><td>Repo pins Terraform 1.6.0, which can no longer bootstrap — its provider-signature key has expired</td></tr>
+    <tr id="TF-4"><td class="ix-id">TF-4</td><td><span class="sev m">Med</span></td><td>The flat root module has no committed provider lock file — provider versions float</td></tr>
+    <tr id="TF-5"><td class="ix-id">TF-5</td><td><span class="sev m">Med</span></td><td>uploads S3 lifecycle rule has no filter/prefix — a provider validation warning that becomes a future error</td></tr>
+    <tr id="TF-6"><td class="ix-id">TF-6</td><td><span class="sev l">Low</span></td><td>Secret generators have no keepers — regeneration silently rotates the DB password and logs out all users (blast-radius note)</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="axisnote">68 findings · 4 Critical · 22 High · 29 Medium · 13 Low · full evidence per ID in <code>audit/&lt;category&gt;/baseline.md</code></p>
+</section>
+
+<footer>
+  <span>ShipShape Audit · baseline of 2026-07-27 · full evidence in <code>audit/&lt;category&gt;/baseline.{json,md}</code></span>
+  <span>Every number reproducible: methodology and exact commands recorded per artifact</span>
+</footer>
+</main>

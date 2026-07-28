@@ -113,3 +113,21 @@ vendor/
 
 # Vite PWA dev artifacts
 web/dev-dist/
+
+
+#Ignore vscode AI rules
+.github/instructions/codacy.instructions.md
+
+# ShipShape audit (audit/)
+# Tracked: AUDIT_REPORT.md, per-category baseline.json/baseline.md, scan scripts, config.
+# Ignored: captured raw output — server logs, probe JSON, EXPLAIN dumps, screenshots,
+# Lighthouse/axe reports, and the regenerable bundle-analyzer dumps (~9 MB total).
+# Re-generate via the per-category Methodology sections in AUDIT_REPORT.md.
+audit/*/raw/
+audit/*/runs/
+audit/*/screenshots/
+audit/a11y/axe/
+audit/a11y/lighthouse/
+audit/bundle/stats.json
+audit/bundle/stats.html
+audit/**/*.log
