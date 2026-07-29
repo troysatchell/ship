@@ -33,12 +33,30 @@ Settings, and why:
   **15.17×**, not the 15.4× the audit projected from `gzip -9`.
 - **Filter delegates to `compression.filter`**, which consults `mime-db` and so already declines
   already-compressed types — the images, PDFs and archives served by `/api/files/:id` keep their own
-  encoding rather than being wastefully re-compressed. Two additions on top: the conventional
-  `x-no-compression` request opt-out, and an explicit `text/event-stream` guard. There is no SSE
-  endpoint in this codebase today (verified by grep for `text/event-stream` and `flushHeaders`,
-  2026-07-29); the guard is there because compression buffers, which would silently stall the first
-  SSE endpoint someone adds. The Yjs collaboration WebSocket is unaffected — `ws` handles the
-  upgrade off the HTTP response path, so this middleware never sees it.
+  encoding rather than being wastefully re-compressed. Three additions on top:
+  - the conventional `x-no-compression` request opt-out;
+  - a `text/event-stream` guard. There is no SSE endpoint in this codebase today (verified by grep
+    for `text/event-stream` and `flushHeaders`, 2026-07-29); the guard is there because compression
+    buffers, which would silently stall the first SSE endpoint someone adds. Note mime-db would
+    happily compress `text/*`, so this guard is doing real work rather than restating the default.
+  - an `application/octet-stream` guard. mime-db reports octet-stream as **compressible**, but it is
+    the "unknown binary" fallback, and the one route that emits it is `GET /api/files/:id`, which
+    echoes a client-declared `mime_type` verbatim (`files.ts:309`) for an upload validated only
+    against a filename extension blocklist (`files.ts:80-84` — any mime string is accepted).
+    Speculatively gzipping an arbitrary, likely already-compressed user binary on every download
+    costs CPU for no benefit.
+
+  The Yjs collaboration WebSocket is unaffected — `ws` handles the upgrade off the HTTP response
+  path, so this middleware never sees it.
+
+  Filter behaviour was verified by hand against a real HTTP server using the exact filter from
+  `app.ts`, across 22 content types. Compressed: `application/json`, `text/html`,
+  `application/javascript`, `text/css`, `text/csv`, `text/plain`, `application/xml`,
+  `image/svg+xml`. Passed through: `image/png`, `image/jpeg`, `image/webp`, `application/pdf`,
+  `application/zip`, `application/gzip`, `application/x-7z-compressed`, `video/mp4`, the four
+  Office formats (docx/xlsx/doc/xls), plus the two guarded types above. **This content-type matrix
+  is manual verification, not automated coverage** — the regression test covers the JSON list-payload
+  behaviour that the finding is about, not every mime type.
 
 **⚠️ DO NOT "DISPROVE" THIS FIX WITH A LOCALHOST BENCHMARK.** Enabling gzip does **not** reduce P95
 over loopback and may raise it slightly. Localhost transfer time is ~0, so the only thing a local

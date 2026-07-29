@@ -129,6 +129,15 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   //     codebase today (verified by grep for text/event-stream and flushHeaders,
   //     2026-07-29); the guard is here because compression buffers, which would
   //     silently stall the first SSE endpoint someone adds.
+  //   - an application/octet-stream guard. mime-db reports octet-stream as
+  //     compressible, but it is the "unknown binary" fallback, and the one route
+  //     that emits it is GET /api/files/:id, which echoes a client-declared
+  //     mime_type verbatim (files.ts:309) for an upload validated only against a
+  //     filename blocklist. Speculatively gzipping an arbitrary — and likely
+  //     already-compressed — user binary on every download costs CPU for no
+  //     benefit. Types mime-db can actually identify are unaffected: docx, xlsx,
+  //     zip, gzip, 7z, pdf and webp already pass through, while svg, csv, plain
+  //     text and xml still compress.
   // The Yjs collaboration WebSocket is unaffected — `ws` handles the upgrade off
   // the HTTP response path, so this middleware never sees it.
   //
@@ -142,8 +151,9 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
     filter: (req, res) => {
       if (req.headers['x-no-compression']) return false;
       const contentType = res.getHeader('Content-Type');
-      if (typeof contentType === 'string' && contentType.includes('text/event-stream')) {
-        return false;
+      if (typeof contentType === 'string') {
+        if (contentType.includes('text/event-stream')) return false;
+        if (contentType.includes('application/octet-stream')) return false;
       }
       return compression.filter(req, res);
     },
