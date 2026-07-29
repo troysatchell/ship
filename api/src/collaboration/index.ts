@@ -36,8 +36,10 @@ const messageTimestamps = new Map<WebSocket, number[]>();
 const rateLimitViolations = new Map<WebSocket, number>();
 const RATE_LIMIT_VIOLATION_THRESHOLD = 50; // Close connection after 50 violations
 
-// Clean up old connection attempts periodically
-setInterval(() => {
+// Clean up old connection attempts periodically.
+// unref() so merely importing this module (e.g. from a test) does not keep the
+// Node event loop alive; the HTTP server's listening socket does that in prod.
+const connectionAttemptCleanupTimer = setInterval(() => {
   const now = Date.now();
   connectionAttempts.forEach((timestamps, ip) => {
     const valid = timestamps.filter(t => now - t < RATE_LIMIT.CONNECTION_WINDOW_MS);
@@ -48,6 +50,7 @@ setInterval(() => {
     }
   });
 }, 30_000);
+connectionAttemptCleanupTimer.unref?.();
 
 // Check if IP is rate limited for new connections
 function isConnectionRateLimited(ip: string): boolean {
@@ -88,11 +91,33 @@ function recordMessage(ws: WebSocket): void {
 // Store documents and awareness by room name
 const docs = new Map<string, Y.Doc>();
 const awareness = new Map<string, awarenessProtocol.Awareness>();
-const conns = new Map<WebSocket, { docName: string; awarenessClientId: number; userId: string; workspaceId: string }>();
+
+// Per-connection metadata. `sessionId` is what lets the server re-check, on a
+// live socket, the session that authorized the upgrade (finding ERR-2). `revoked`
+// short-circuits inbound messages the moment we decide the session is gone —
+// ws.close() only *starts* the closing handshake, so without this flag an edit
+// already in flight would still be applied and persisted.
+interface DocConnection {
+  docName: string;
+  awarenessClientId: number;
+  userId: string;
+  workspaceId: string;
+  sessionId: string;
+  revoked: boolean;
+}
+
+interface EventConnection {
+  userId: string;
+  workspaceId: string;
+  sessionId: string;
+  revoked: boolean;
+}
+
+const conns = new Map<WebSocket, DocConnection>();
 
 // Global events connections (separate from document collaboration)
 // These persist across navigation and are used for real-time notifications
-const eventConns = new Map<WebSocket, { userId: string; workspaceId: string }>();
+const eventConns = new Map<WebSocket, EventConnection>();
 
 // Debounce persistence (save every 2 seconds after changes)
 const pendingSaves = new Map<string, NodeJS.Timeout>();
@@ -343,8 +368,29 @@ function handleMessage(ws: WebSocket, message: Uint8Array, docName: string, doc:
   }
 }
 
-// Validate session from cookie header - returns userId/workspaceId or null
-async function validateWebSocketSession(request: IncomingMessage): Promise<{ userId: string; workspaceId: string } | null> {
+export interface WebSocketSession {
+  userId: string;
+  workspaceId: string;
+  sessionId: string;
+}
+
+/**
+ * Shared session-window check, applied identically at upgrade time and on every
+ * revalidation sweep. Mirrors the two windows enforced by the REST middleware
+ * (`api/src/middleware/auth.ts`) so a socket cannot outlive what a request would
+ * have accepted.
+ */
+function isSessionRowValid(
+  row: { last_activity: string | Date; created_at: string | Date },
+  now: number
+): boolean {
+  const inactivityMs = now - new Date(row.last_activity).getTime();
+  const sessionAgeMs = now - new Date(row.created_at).getTime();
+  return sessionAgeMs <= ABSOLUTE_SESSION_TIMEOUT_MS && inactivityMs <= SESSION_TIMEOUT_MS;
+}
+
+// Validate session from cookie header - returns userId/workspaceId/sessionId or null
+async function validateWebSocketSession(request: IncomingMessage): Promise<WebSocketSession | null> {
   const cookieHeader = request.headers.cookie;
   if (!cookieHeader) return null;
 
@@ -363,19 +409,8 @@ async function validateWebSocketSession(request: IncomingMessage): Promise<{ use
     if (!session) return null;
 
     const now = new Date();
-    const lastActivity = new Date(session.last_activity);
-    const createdAt = new Date(session.created_at);
-    const inactivityMs = now.getTime() - lastActivity.getTime();
-    const sessionAgeMs = now.getTime() - createdAt.getTime();
 
-    // Check absolute timeout (12 hours)
-    if (sessionAgeMs > ABSOLUTE_SESSION_TIMEOUT_MS) {
-      await pool.query('DELETE FROM sessions WHERE id = $1', [sessionId]);
-      return null;
-    }
-
-    // Check inactivity timeout (15 minutes)
-    if (inactivityMs > SESSION_TIMEOUT_MS) {
+    if (!isSessionRowValid(session, now.getTime())) {
       await pool.query('DELETE FROM sessions WHERE id = $1', [sessionId]);
       return null;
     }
@@ -386,10 +421,106 @@ async function validateWebSocketSession(request: IncomingMessage): Promise<{ use
       [now, sessionId]
     );
 
-    return { userId: session.user_id, workspaceId: session.workspace_id };
+    return { userId: session.user_id, workspaceId: session.workspace_id, sessionId };
   } catch {
     return null;
   }
+}
+
+/**
+ * WebSocket close code used when a live socket's session is no longer valid.
+ * In the 4000-4999 application range; the client treats it as "stop reconnecting,
+ * you are logged out" rather than a transient network drop.
+ */
+export const WS_CLOSE_SESSION_INVALID = 4401;
+
+/** How often live sockets are re-checked against the sessions table. */
+export const DEFAULT_SESSION_REVALIDATION_INTERVAL_MS = 30_000;
+
+/**
+ * Close every live collaboration/events socket authorized by `sessionId`.
+ *
+ * ERR-2: the socket is authenticated once at upgrade. Logout, session rotation
+ * and revocation all delete the session row, but nothing tore down the sockets
+ * that row had already authorized, so a logged-out user kept write access.
+ *
+ * Returns the number of sockets closed.
+ */
+export function closeSocketsForSession(sessionId: string, reason = 'Session ended'): number {
+  if (!sessionId) return 0;
+  let closed = 0;
+
+  const closeOne = (ws: WebSocket) => {
+    // Mark first: ws.close() only starts the closing handshake, and 'message'
+    // can still fire before it completes. A revoked connection must not be able
+    // to land one more edit on the way out.
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close(WS_CLOSE_SESSION_INVALID, reason);
+    }
+    closed++;
+  };
+
+  conns.forEach((conn, ws) => {
+    if (conn.sessionId === sessionId && !conn.revoked) {
+      conn.revoked = true;
+      closeOne(ws);
+    }
+  });
+  eventConns.forEach((conn, ws) => {
+    if (conn.sessionId === sessionId && !conn.revoked) {
+      conn.revoked = true;
+      closeOne(ws);
+    }
+  });
+
+  return closed;
+}
+
+/**
+ * Re-check every session backing a live socket and disconnect the ones that are
+ * gone or outside the session windows.
+ *
+ * One batched query for all distinct sessions, not one per connection.
+ *
+ * Fails OPEN on a database error: a transient outage must not disconnect every
+ * open editor in the product. The next sweep re-checks.
+ */
+export async function revalidateLiveSessions(): Promise<number> {
+  const sessionIds = new Set<string>();
+  conns.forEach((conn) => { if (conn.sessionId && !conn.revoked) sessionIds.add(conn.sessionId); });
+  eventConns.forEach((conn) => { if (conn.sessionId && !conn.revoked) sessionIds.add(conn.sessionId); });
+  if (sessionIds.size === 0) return 0;
+
+  const ids = Array.from(sessionIds);
+  let rows: Array<{ id: string; last_activity: string; created_at: string }>;
+  try {
+    const result = await pool.query(
+      `SELECT id, last_activity, created_at FROM sessions WHERE id = ANY($1::text[])`,
+      [ids]
+    );
+    rows = result.rows;
+  } catch (err) {
+    console.error('[Collaboration] Session revalidation failed, leaving sockets open:', err);
+    return 0;
+  }
+
+  const now = Date.now();
+  const stillValid = new Set<string>();
+  for (const row of rows) {
+    if (isSessionRowValid(row, now)) stillValid.add(row.id);
+  }
+
+  let closed = 0;
+  for (const id of ids) {
+    if (!stillValid.has(id)) {
+      closed += closeSocketsForSession(id, 'Session expired or revoked');
+    }
+  }
+
+  if (closed > 0) {
+    console.log(`[Collaboration] Closed ${closed} socket(s) whose session is no longer valid`);
+  }
+  return closed;
 }
 
 // Check if user can access a document for collaboration (visibility check)
@@ -498,7 +629,7 @@ export function handleDocumentConversion(
   newDocType: 'issue' | 'project'
 ): void {
   // Find all connections to this document (across all doc types)
-  const connectionsToNotify: Array<{ ws: WebSocket; conn: { docName: string; awarenessClientId: number; userId: string; workspaceId: string } }> = [];
+  const connectionsToNotify: Array<{ ws: WebSocket; conn: DocConnection }> = [];
 
   conns.forEach((conn, ws) => {
     const connDocId = parseDocId(conn.docName);
@@ -533,7 +664,7 @@ export async function handleVisibilityChange(
   creatorId: string
 ): Promise<void> {
   // Find all connections to this document (across all doc types)
-  const connectionsToCheck: Array<{ ws: WebSocket; conn: { docName: string; awarenessClientId: number; userId: string; workspaceId: string } }> = [];
+  const connectionsToCheck: Array<{ ws: WebSocket; conn: DocConnection }> = [];
 
   conns.forEach((conn, ws) => {
     const connDocId = parseDocId(conn.docName);
@@ -603,7 +734,20 @@ export function broadcastToUser(userId: string, eventType: string, data?: Record
 // DDoS protection: Max WebSocket message size (10MB, matches REST API limit)
 const MAX_WS_MESSAGE_SIZE = 10 * 1024 * 1024;
 
-export function setupCollaboration(server: Server) {
+export interface CollaborationOptions {
+  /**
+   * How often live sockets are re-checked against the sessions table.
+   * Defaults to DEFAULT_SESSION_REVALIDATION_INTERVAL_MS; tests pass a small value.
+   */
+  sessionRevalidationIntervalMs?: number;
+}
+
+export interface CollaborationHandle {
+  /** Stop the periodic session revalidation sweep (tests / shutdown). */
+  stopSessionRevalidation: () => void;
+}
+
+export function setupCollaboration(server: Server, options: CollaborationOptions = {}): CollaborationHandle {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_MESSAGE_SIZE });
   const eventsWss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_MESSAGE_SIZE });
 
@@ -680,13 +824,20 @@ export function setupCollaboration(server: Server) {
     });
   });
 
-  wss.on('connection', async (ws: WebSocket, _request: IncomingMessage, docName: string, sessionData: { userId: string; workspaceId: string }) => {
+  wss.on('connection', async (ws: WebSocket, _request: IncomingMessage, docName: string, sessionData: WebSocketSession) => {
     const doc = await getOrCreateDoc(docName);
     const aw = getAwareness(docName, doc);
 
     // Track this connection with user info for visibility change handling
     const clientId = doc.clientID;
-    conns.set(ws, { docName, awarenessClientId: clientId, userId: sessionData.userId, workspaceId: sessionData.workspaceId });
+    conns.set(ws, {
+      docName,
+      awarenessClientId: clientId,
+      userId: sessionData.userId,
+      workspaceId: sessionData.workspaceId,
+      sessionId: sessionData.sessionId,
+      revoked: false,
+    });
 
     // If this doc was loaded fresh from JSON (API-created or API-updated content),
     // tell the browser to clear its IndexedDB cache before sync to prevent stale content merge
@@ -716,6 +867,12 @@ export function setupCollaboration(server: Server) {
     }
 
     ws.on('message', (data: Buffer) => {
+      // ERR-2: the session backing this socket was revoked/expired and the socket
+      // is closing. Drop anything still arriving rather than persisting it.
+      if (conns.get(ws)?.revoked) {
+        return;
+      }
+
       // DDoS protection: Defense-in-depth size check (WS server also enforces maxPayload)
       if (data.length > MAX_WS_MESSAGE_SIZE) {
         ws.close(1009, 'Message too large');
@@ -786,8 +943,13 @@ export function setupCollaboration(server: Server) {
   });
 
   // Handle events WebSocket connections (for real-time notifications)
-  eventsWss.on('connection', (ws: WebSocket, sessionData: { userId: string; workspaceId: string }) => {
-    eventConns.set(ws, { userId: sessionData.userId, workspaceId: sessionData.workspaceId });
+  eventsWss.on('connection', (ws: WebSocket, sessionData: WebSocketSession) => {
+    eventConns.set(ws, {
+      userId: sessionData.userId,
+      workspaceId: sessionData.workspaceId,
+      sessionId: sessionData.sessionId,
+      revoked: false,
+    });
     console.log(`[Events] User ${sessionData.userId} connected (${eventConns.size} total connections)`);
 
     // Send initial connected message
@@ -795,6 +957,11 @@ export function setupCollaboration(server: Server) {
 
     // Handle ping/pong for keepalive with rate limiting
     ws.on('message', (data: Buffer) => {
+      // ERR-2: revoked session — stop serving this socket immediately.
+      if (eventConns.get(ws)?.revoked) {
+        return;
+      }
+
       // DDoS protection: Rate limit events WebSocket messages
       if (isMessageRateLimited(ws)) {
         const violations = (rateLimitViolations.get(ws) || 0) + 1;
@@ -829,6 +996,22 @@ export function setupCollaboration(server: Server) {
     });
   });
 
+  // ERR-2: the upgrade handshake is the ONLY place the session was ever checked.
+  // Sweep live sockets on an interval and disconnect the ones whose session has
+  // been deleted (logout/revocation) or has fallen outside the session windows.
+  // unref() so the timer never keeps a test runner or CLI process alive.
+  const revalidationIntervalMs =
+    options.sessionRevalidationIntervalMs ?? DEFAULT_SESSION_REVALIDATION_INTERVAL_MS;
+  const revalidationTimer = setInterval(() => {
+    void revalidateLiveSessions();
+  }, revalidationIntervalMs);
+  revalidationTimer.unref?.();
+
   console.log('Yjs collaboration server attached');
   console.log('Events WebSocket server attached');
+  console.log(`Collaboration session revalidation every ${revalidationIntervalMs}ms`);
+
+  return {
+    stopSessionRevalidation: () => clearInterval(revalidationTimer),
+  };
 }
