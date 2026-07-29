@@ -3,6 +3,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { staticValueImports } from '@/test/sourceImports';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -130,19 +131,28 @@ describe('LazyEditor (TRO-198 / BUN-2)', () => {
     const unified = readFileSync(resolve(here, 'UnifiedEditor.tsx'), 'utf8');
     const person = readFileSync(resolve(here, '../pages/PersonEditor.tsx'), 'utf8');
 
+    // Detection via src/test/sourceImports.ts, which is tested against every
+    // import form. The regex previously inlined here matched only a
+    // single-quoted named import, so a default or namespace import of
+    // components/Editor would have passed while undoing the split.
     for (const [name, src] of [['UnifiedEditor', unified], ['PersonEditor', person]] as const) {
-      expect(src, `${name} should not statically import components/Editor`).not.toMatch(
-        /^import\s+\{[^}]*\bEditor\b[^}]*\}\s+from\s+'@\/components\/Editor';/m
-      );
-      expect(src, `${name} should render the shared Editor via LazyEditor`).toContain(
-        "from '@/components/LazyEditor'"
-      );
+      expect(
+        staticValueImports(src),
+        `${name} should not statically import components/Editor`
+      ).not.toContain('@/components/Editor');
+      expect(
+        staticValueImports(src),
+        `${name} should render the shared Editor via LazyEditor`
+      ).toContain('@/components/LazyEditor');
     }
 
     const wrapper = readFileSync(resolve(here, 'LazyEditor.tsx'), 'utf8');
     expect(wrapper).toContain("lazy(() => import('@/components/Editor')");
     // A value-level import here would pull the whole TipTap/Yjs stack back into
-    // the parent chunk while the lazy() call still looked correct.
+    // the parent chunk while the lazy() call still looked correct. The type
+    // import is erased at build time, so it is allowed — and must be the only
+    // reference.
     expect(wrapper).toMatch(/import type \{ Editor as EditorComponent \} from '@\/components\/Editor';/);
+    expect(staticValueImports(wrapper)).not.toContain('@/components/Editor');
   });
 });

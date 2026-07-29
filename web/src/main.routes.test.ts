@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { staticPageImports } from './test/sourceImports';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const mainSource = readFileSync(resolve(here, 'main.tsx'), 'utf8');
@@ -25,9 +26,12 @@ const appSource = readFileSync(resolve(here, 'pages/App.tsx'), 'utf8');
  * components/RouteFallback.test.tsx.
  */
 describe('route-level code splitting (TRO-197 / BUN-1)', () => {
-  const staticPageImports = [...mainSource.matchAll(/^import\s+\{([^}]*)\}\s+from\s+'@\/pages\/([^']+)';/gm)].map(
-    (m) => ({ names: m[1].trim(), module: m[2] })
-  );
+  // Detection lives in src/test/sourceImports.ts, which has its own test
+  // covering every syntactic form it claims to catch. The regex that used to
+  // sit here matched only `import { X } from '@/pages/Y';` — a default import,
+  // a namespace import, double quotes or a multi-line brace list would all have
+  // passed this guard while re-merging the bundle.
+  const pageImports = staticPageImports(mainSource);
 
   const lazyPages = [...mainSource.matchAll(/React\.lazy\(\(\)\s*=>\s*import\('@\/pages\/([^']+)'\)\.then\(\(m\)\s*=>\s*\(\{\s*default:\s*m\.(\w+)\s*\}\)\)\)/g)].map(
     (m) => ({ module: m[1], exportName: m[2] })
@@ -37,8 +41,8 @@ describe('route-level code splitting (TRO-197 / BUN-1)', () => {
     // Deferring Login too would trade one oversized download for two round
     // trips before the form appears — the same user-visible problem BUN-1 is
     // about. Every other page must be lazy.
-    expect(staticPageImports.map((i) => i.module)).toEqual(['Login']);
-    expect(staticPageImports[0].names).toBe('LoginPage');
+    expect(pageImports).toEqual(['@/pages/Login']);
+    expect(mainSource).toMatch(/import \{ LoginPage \} from '@\/pages\/Login';/);
   });
 
   it('lazy-loads every other page component', () => {
@@ -55,8 +59,8 @@ describe('route-level code splitting (TRO-197 / BUN-1)', () => {
         resolve(here, 'pages', `${module}.ts`),
       ];
       const file = candidates.find(existsSync);
-      expect(file, `@/pages/${module} should exist`).toBeTruthy();
-      const src = readFileSync(file!, 'utf8');
+      if (!file) throw new Error(`@/pages/${module} is lazily imported by main.tsx but does not exist`);
+      const src = readFileSync(file, 'utf8');
       const exported =
         new RegExp(`export\\s+(function|const|class)\\s+${exportName}\\b`).test(src) ||
         new RegExp(`export\\s*\\{[^}]*\\b${exportName}\\b`).test(src);

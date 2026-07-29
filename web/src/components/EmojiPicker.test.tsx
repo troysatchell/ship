@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { staticValueImports } from '@/test/sourceImports';
 import { EmojiPickerPopover } from './EmojiPicker';
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -115,9 +116,18 @@ describe('EmojiPickerPopover (TRO-200 / BUN-4)', () => {
     // emoji-picker-react at value level in this module — for a `Theme` enum,
     // say — pulls all 186 kB back into the parent chunk while the
     // `React.lazy` call still looks correct.
+    //
+    // Detection is in src/test/sourceImports.ts, tested against every import
+    // form. The regex previously inlined here only matched a single-quoted,
+    // line-initial import, so a double-quoted or multi-line one would have
+    // passed this guard with the bundle regression in place.
     const src = readFileSync(resolve(here, 'EmojiPicker.tsx'), 'utf8');
-    expect(src).not.toMatch(/^import\s+(?!type\b).*'emoji-picker-react'/m);
+    expect(staticValueImports(src)).not.toContain('emoji-picker-react');
     expect(src).toContain("lazy(() => import('./EmojiPickerBody'))");
+
+    // The body module is where it is allowed to live, and must.
+    const body = readFileSync(resolve(here, 'EmojiPickerBody.tsx'), 'utf8');
+    expect(staticValueImports(body)).toContain('emoji-picker-react');
 
     // And the fallback is sized to the picker (300x350) so the popover does
     // not resize under the cursor when the chunk lands.
