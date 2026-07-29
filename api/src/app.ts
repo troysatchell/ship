@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import cors from 'cors';
 import helmet from 'helmet';
 import { existsSync } from 'fs';
@@ -106,6 +107,47 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
       next();
     });
   }
+
+  // ── Response compression (finding API-3 / TRO-174) ───────────────────────
+  // Registered before every route so all response bodies pass through it: API
+  // JSON, the Swagger UI, and the static SPA on single-origin deployments.
+  //
+  // Threshold is 1 KB — the library default, set explicitly to document it.
+  // Below roughly one MTU there is nothing to win: the gzip framing plus the CPU
+  // makes a small body marginally larger and slower.
+  //
+  // Compression level is left at zlib's default (6) rather than 9. Level 9 costs
+  // substantially more CPU per response for a low-single-digit percentage of
+  // extra size on JSON, and this runs on every list request.
+  //
+  // The filter delegates to compression.filter, which consults mime-db and so
+  // already declines already-compressed types — the images, PDFs and archives
+  // served by /api/files/:id keep their own encoding. Two additions on top:
+  //   - the conventional `x-no-compression` request opt-out, for a client that
+  //     needs an identity-encoded body;
+  //   - an explicit text/event-stream guard. There is no SSE endpoint in this
+  //     codebase today (verified by grep for text/event-stream and flushHeaders,
+  //     2026-07-29); the guard is here because compression buffers, which would
+  //     silently stall the first SSE endpoint someone adds.
+  // The Yjs collaboration WebSocket is unaffected — `ws` handles the upgrade off
+  // the HTTP response path, so this middleware never sees it.
+  //
+  // MEASUREMENT WARNING: this fix shows no latency win over loopback, and can
+  // look marginally worse. Localhost transfer time is ~0, so all a local
+  // benchmark can measure is the added compression CPU. It is a bytes-on-the-wire
+  // fix; validate it by payload size or over a bandwidth-shaped link. See
+  // CHANGES.md (TRO-174).
+  app.use(compression({
+    threshold: 1024,
+    filter: (req, res) => {
+      if (req.headers['x-no-compression']) return false;
+      const contentType = res.getHeader('Content-Type');
+      if (typeof contentType === 'string' && contentType.includes('text/event-stream')) {
+        return false;
+      }
+      return compression.filter(req, res);
+    },
+  }));
 
   // Middleware - Security headers
   app.use(helmet({
