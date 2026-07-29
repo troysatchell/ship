@@ -8,6 +8,67 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-277 — [TEST-12] Load-sensitive api flake: leaking mock queues and an unguarded shared test database
+
+**What was broken.** The api suite failed an otherwise-good branch four times in one day, on a
+different test each time, and passed on standalone re-run. `audit/factory/quarantine.json` records
+api as `knownFailing: 0`, so each occurrence burned a gate attempt against the 3-retry cap. One
+occurrence was on a branch touching only `web/` and `vite.config.ts`, which cannot break an api
+DELETE test — so the cause was never in the ticket's diff. Two independent defects were found.
+
+**Defect 1 — `vi.clearAllMocks()` does not drain queued once-values.** Confirmed on vitest 4.0.17:
+`clearAllMocks` wipes call records but leaves unconsumed `mockResolvedValueOnce` responses queued.
+A test that queues more responses than its handler consumes therefore leaves one behind, and the
+next test receives that stale response first — shifting every subsequent mock in that test by one
+and surfacing as a failure in an unrelated place. Five api test files combined the two.
+
+**Defect 2 — nothing stopped two api suites from sharing one database.**
+`api/src/test/setup.ts` `TRUNCATE`s 16 tables in the `beforeAll` of *every* api test file, and each
+file then builds fixtures it depends on for the rest of the file. `fileParallelism: false` makes
+that safe within one process and does nothing across processes. Two suites on one `DATABASE_URL`
+delete each other's fixtures mid-file. Reproduced deliberately by running two suites against one
+database: **18 and 20 failures**, dominated by `expected 401 to be 200` (the session row was
+truncated away) and `violates foreign key constraint "documents_workspace_id_fkey"` in nested
+`beforeAll` hooks — the exact shapes of all four recorded flakes.
+
+**This also explains the phantom skips.** Two full runs had previously reported
+`450 passed | 6 skipped (456)` with no `.skip`/`.todo`/`.fixme` marker anywhere in
+`api/src/**/*.test.ts`. When a `beforeAll` hook fails, vitest reports that describe's tests as
+**skipped, not failed** — an intermittently-absent assertion that reads as a pass. The two-suite
+run reproduced it at scale: **11 and 33 skipped**, same zero markers.
+
+**What changed.**
+
+- `api/src/test/setup.ts` — takes a session-level Postgres advisory lock, held for the duration of
+  each test file, before truncating. Concurrent suites now serialize at file granularity instead of
+  corrupting each other; on timeout it fails with a message naming the cause rather than producing a
+  mystery 401. Advisory lock spaces are per-database, so worktrees with their own database never
+  contend, and the lock is released on disconnect so a crashed run cannot wedge the next one. The
+  hook timeout is raised above the lock deadline deliberately: a hook that vitest abandons keeps
+  running and would truncate outside vitest's control — that hole caused a residual failure in
+  testing before it was closed.
+- `api/src/routes/issues-history.test.ts`, `api/src/routes/iterations.test.ts`,
+  `api/src/__tests__/activity.test.ts`, `api/src/__tests__/auth.test.ts`,
+  `api/src/__tests__/transformIssueLinks.test.ts` — `resetAllMocks` in place of the clear-only
+  variant. Mock factories in the first two were rewritten from `vi.fn().mockResolvedValue(x)` to
+  `vi.fn(impl)`, because `resetAllMocks` restores an implementation passed to `vi.fn()` but wipes one
+  chained on afterwards; a naive conversion would have turned those mocks into undefined-returning
+  stubs. `issues-history.test.ts` also drops three now-redundant re-establishment lines, one of
+  which was an `as any` cast.
+- `api/src/__tests__/mock-isolation.test.ts` — new. Pins the four vitest semantics the fix rests on,
+  and scans every api test file to fail the suite if the clear-plus-once-queue combination returns.
+
+**Evidence.** The guard test is red-before-green: with two pre-fix files restored it fails with an
+`AssertionError` naming `__tests__/activity.test.ts` and `routes/issues-history.test.ts`. The
+infrastructure fix is proven by repetition, not by a unit test — see the report for the run counts
+under concurrent build load, and the two-suite before/after (38 failures + 44 phantom skips → 0
+failures + 0 skips).
+
+**Rollback.** `git revert` the commits. The lock is confined to the test setup file and the
+converted files are self-contained; nothing in `api/src` production code changed.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
