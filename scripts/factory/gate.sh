@@ -200,6 +200,24 @@ else
   record changes-md fail "no entry mentioning ${TICKET}"
 fi
 
+# --- G7b: recurring review-finding classes ----------------------------------
+# Added after `review-ledger.mjs report` showed the same two mechanical defect
+# classes recurring across four and three tickets respectively, every one filed
+# by a reviewer AFTER this gate had already passed. A rule stated in the agent
+# brief and ignored three times needs a check, not a louder restatement.
+# Judgement-dependent classes (concurrency, docs accuracy) stay in the brief.
+if [ -f scripts/factory/review-patterns.mjs ]; then
+  if RP_OUT="$(node scripts/factory/review-patterns.mjs "$BASE_REF" 2>&1)"; then
+    record review-patterns pass "no new non-null/any casts or fixed sleeps"
+  else
+    echo "$RP_OUT" > "$OUT_DIR/review-patterns.txt"
+    RP_N="$(grep -cE '^\s{4}\S+:' "$OUT_DIR/review-patterns.txt")" || RP_N=0
+    record review-patterns fail "${RP_N} recurring review-finding pattern(s) — see .factory/review-patterns.txt"
+  fi
+else
+  record review-patterns skip "checker not present"
+fi
+
 # --- G8: scope discipline ---------------------------------------------------
 CHANGED_FILES="$(git diff "${BASE_REF}"...HEAD --name-only 2>/dev/null | wc -l | tr -d ' ')"
 if [ "${CHANGED_FILES:-0}" -eq 0 ]; then
