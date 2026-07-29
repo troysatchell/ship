@@ -70,6 +70,9 @@ structure, and the two session fail-closed tests.
 **Roll back.** `git revert` the commits on `fix/test-1-web-suite-green`. Reverting restores the 13
 failures, so also restore the `knownFailing` list in `audit/factory/quarantine.json` from
 `previousCapture` — otherwise the gate reads them as new regressions and fails every branch.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
