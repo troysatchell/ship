@@ -160,11 +160,46 @@ Push to GitHub (`GH_REPO=troysatchell/ship`) and open a PR whose body is the evi
 summary. Template in `references/agent-contract.md`. A batched branch **must list every ticket it
 closes**. Move all of them to **In Review** and attach the PR link.
 
-### 7. Triage the review
+### 7. Triage the review — and record every finding
 
 CodeRabbit reviews the PR. Classify every finding into fix-now / new-ticket / dismissed-with-reason
 per `references/triage.md`. **New tickets get filed in Linear automatically** — that is how the
 factory grows its own backlog instead of losing findings in PR threads.
+
+**Record every finding in the ledger, whatever its disposition:**
+
+```bash
+node scripts/factory/review-ledger.mjs record --ticket TRO-276 --pr 12 --source cli \
+  --severity major --category type-safety \
+  --file api/src/__tests__/process-safety.test.ts \
+  --disposition fixed --summary "non-null assertions and any cast" --ts 2026-07-29
+```
+
+This is not bookkeeping. Fixing findings one at a time and discarding them means a defect class can
+recur on four separate branches without anyone noticing it is the same defect four times — which is
+exactly what happened on the first real day of operation: five type-safety findings across four
+tickets, each fixed in isolation.
+
+**Then read the aggregate before dispatching the next wave:**
+
+```bash
+node scripts/factory/review-ledger.mjs report
+```
+
+The thresholds are the point:
+
+| Recurrence | Meaning | Action |
+|---|---|---|
+| 1 ticket | feedback | fix it, move on |
+| **2 tickets** | a rule is missing from the brief | add it to `references/lessons.md` |
+| **3+ tickets** | the prompt is not holding | add a **mechanical check** to `gate.sh` |
+
+A rule stated in the brief and ignored three times does not need restating louder. `gate.sh` G7b
+(`review-patterns.mjs`) exists because two classes crossed that line. Extend it when others do.
+
+Also read the **dismissed** list the report prints. Dismissals are legitimate — two on day one were
+correct, one with strong disconfirming evidence — but a growing pile in one category means the
+factory is talking itself out of real feedback.
 
 ### 8. Merge — auto-merge once the review is green
 

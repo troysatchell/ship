@@ -3,19 +3,26 @@
 ATTESTATION.md merge=ours
 
 # CHANGES.md is append-at-top: every ticket branch inserts its entry directly
-# under the header, so N concurrent branches conflict with each other, and each
-# merge re-conflicts every branch still open.
+# under the header, so N concurrent branches conflict, and each merge
+# re-conflicts every branch still open.
 #
-# The default 3-way merge is worse than useless here. Because every entry uses
-# the same "**How to run it.**" and "**Roll back.**" headings, git matches those
-# common lines and COLLAPSES two entries into one — so deleting the conflict
-# markers welds one ticket's rollback instructions onto another ticket's entry.
-# In a file whose whole purpose is telling someone how to undo a change under
-# pressure, that is a silent and dangerous defect. It happened on three separate
-# branches before this rule existed, and was caught by hand each time.
+# DO NOT add a merge driver for it. Both obvious ones are wrong:
 #
-# union keeps every line from both sides, so both entries survive intact. It
-# drops the shared `---` separator between them; run
-# `node scripts/factory/normalize-changes.mjs` after a union merge to restore it.
-# union is not a substitute for reading the resulting diff.
-CHANGES.md merge=union
+#   * The default 3-way merge produces a resolution that is WRONG but looks
+#     right. Entries share the same "**How to run it.**" / "**Rollback.**"
+#     headings, so git matches those lines and COLLAPSES two entries into one —
+#     deleting the markers then welds one ticket's rollback instructions onto
+#     another ticket's entry.
+#
+#   * `merge=union` was tried here and reverted. It fails more quietly: it keeps
+#     every line, so nothing looks missing, but it DROPS the shared context
+#     lines — which are exactly the "**How to run it.**" heading and the ```bash
+#     fences. Five branches came out with 9 entry headings and 8 run blocks, two
+#     of them with an odd number of fences, and one entry's command block
+#     belonging to a different ticket. A reviewer caught it; a check for
+#     headings and separators did not.
+#
+# Resolve conflicts with `node scripts/factory/merge-changes.mjs`, which merges
+# whole entries instead of lines and then ASSERTS every emitted entry is
+# byte-identical to its source. Run `--check` after any merge of this file, by
+# any method.
