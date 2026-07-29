@@ -93,9 +93,10 @@ const listPaginationSchema = z.object({
 });
 
 // Helper to extract the fields shared by the list and detail issue projections.
-// The TipTap document body is NOT included here: it is 64.5% of an issue row's
-// bytes and 72% of the list payload, and no list consumer reads it (TRO-173 /
-// API-2). Detail responses add it back via extractIssueFromRow.
+// The TipTap document body is NOT included here: measured on 254 issues it is
+// 64.5% of an issue row's bytes in Postgres and 38.4% of the JSON list payload
+// (146,015 of 379,907 B), and no list consumer reads it (TRO-173 / API-2).
+// Detail responses add it back via extractIssueFromRow.
 function extractIssueListItemFromRow(row: any) {
   const props = row.properties || {};
   return {
