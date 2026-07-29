@@ -80,6 +80,64 @@ Saved" behaviour.
 
 ---
 
+## TRO-172 — [API-1] Rate limiter no longer caps production at 100 req/min per IP
+
+**What changed.** Two halves, server and client.
+
+*Server* — `api/src/middleware/rate-limit.ts` (new) replaces the single `apiLimiter` that lived in
+`api/src/app.ts`. `/api/` is now guarded by two chained limiters over the same 60 s window:
+
+| Limiter | Key | Production limit | Purpose |
+|---|---|---|---|
+| `perSourceIpLimiter` | source IP | 6,000 / min (100 req/s) | anti-flood floor; makes the identity key unspoofable in aggregate |
+| `perIdentityLimiter` | `session_id` cookie → `Bearer` token → source IP | 600 / min (10 req/s) | the budget users actually feel |
+
+The old configuration was **100 / min keyed on IP**. Both numbers in it were wrong:
+
+- *Unit.* The ceiling was sized as if one page view were one request. The audit's browser trace
+  measured 63 `/api` requests across 8 flows (login 16, dashboard 12, document view 10, sprint
+  board 10), so a user exhausted the window after ~6–10 navigations per minute.
+- *Key.* With CloudFront → Elastic Beanstalk and `trust proxy 1`, every user behind one agency NAT
+  egress resolved to the same IP, so a whole team shared one 100 req/min budget.
+
+600 is justified against the measurement: the worst single-user burst is 16 XHRs × 20 navigations
+per minute = 320 req/min, so 600 leaves ~1.9× headroom and still caps one session at 10 req/s.
+6,000 accommodates ~187 simultaneously-active users behind one NAT egress at the measured average
+of ~32 req/min per active user, while staying far below the 299–4,049 req/s this API was measured
+to serve — a single-source flood is still capped. Test (10,000) and dev (1,000) budgets are
+unchanged. Session ids and tokens are SHA-256 fingerprinted before use as bucket keys.
+
+*Client* — `web/src/lib/queryClient.ts` now retries HTTP 429 for **queries and mutations** with a
+2 s / 8 s / 20 s / 45 s backoff plus additive jitter. The schedule sums to ≥75 s so at least one
+attempt lands after the server's 60 s window rolls over; React Query's default 1/2/4 s backoff
+would exhaust itself inside the same window. Every other 4xx is still treated as permanent. If the
+retries are exhausted the write is genuinely lost, so `MutationErrorToast` now raises a **sticky**
+toast (`web/src/components/ui/Toast.tsx` gained `duration: 0` = no auto-dismiss) naming rate
+limiting as the cause instead of a generic three-second message.
+
+**Measured, NODE_ENV=production, concurrency 10, `GET /api/documents?type=wiki`, in-process listener:**
+
+| Scenario | Before | After |
+|---|---|---|
+| 1,000 requests, no session cookie | 100 served / 900 throttled (90%) | 600 served / 400 throttled (40%) |
+| 2,000 requests, 20 distinct sessions behind one IP | 100 served / 1,900 throttled (95%) | **2,000 served / 0 throttled** |
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api test src/middleware/__tests__/rate-limit.test.ts
+pnpm --filter @ship/web test src/lib/queryClient.test.ts src/components/MutationErrorToast.test.tsx
+```
+
+**Rollback.** Revert the commits, or by hand: delete `api/src/middleware/rate-limit.ts` and restore
+the single `apiLimiter` (`windowMs: 60_000`, `max: isTestEnv ? 10000 : isDevEnv ? 1000 : 100`) plus
+`app.use('/api/', apiLimiter)` in `api/src/app.ts`; restore the two inline `retry` predicates in
+`web/src/lib/queryClient.ts` and drop `retryDelay`. The `Toast` `duration: 0` support and the
+sticky-toast branch in `MutationErrorToast` are additive and safe to leave.
+
+---
+
 ## Factory visibility — status command, published board, cost analysis (no ticket: tooling)
 
 **What changed.** Three additions, all reading from sources of truth rather than a status file:

@@ -8,6 +8,7 @@ import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import { csrfSync } from 'csrf-sync';
 import rateLimit from 'express-rate-limit';
+import { createApiRateLimiters } from './middleware/rate-limit.js';
 import authRoutes from './routes/auth.js';
 import documentsRoutes from './routes/documents.js';
 import issuesRoutes from './routes/issues.js';
@@ -65,9 +66,9 @@ const conditionalCsrf = (req: Request, res: Response, next: NextFunction) => {
 
 // Rate limiting configurations
 // In test/dev environment, use much higher limits to avoid issues
-// Production limits: login=5/15min (failed only), api=100/min
+// Production limits: login=5/15min (failed only); see middleware/rate-limit.ts
+// for the /api/ budgets and the reasoning behind the numbers (finding API-1).
 const isTestEnv = process.env.NODE_ENV === 'test' || process.env.E2E_TEST === '1';
-const isDevEnv = process.env.NODE_ENV !== 'production';
 
 // Strict rate limit for login (5 failed attempts / 15 min) - brute force protection
 // skipSuccessfulRequests: true means only failed attempts count toward the limit
@@ -80,14 +81,10 @@ const loginLimiter = rateLimit({
   skipSuccessfulRequests: true, // Only count failed login attempts
 });
 
-// General API rate limit (100 req/min in prod, 1000 in dev)
-const apiLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: isTestEnv ? 10000 : isDevEnv ? 1000 : 100, // High limit for tests/dev
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests. Please slow down.' },
-});
+// General API rate limiting: a coarse per-source-IP flood ceiling followed by a
+// per-session/per-token budget. Keyed per identity so a shared agency NAT egress
+// no longer collapses an entire team into one bucket (finding API-1 / TRO-172).
+const apiLimiters = createApiRateLimiters();
 
 
 export function createApp(corsOrigin: string = 'http://localhost:5173'): express.Express {
@@ -137,7 +134,7 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   }));
 
   // Apply rate limiting to all API routes
-  app.use('/api/', apiLimiter);
+  app.use('/api/', ...apiLimiters);
   app.use(cors({
     origin: corsOrigin,
     credentials: true,
