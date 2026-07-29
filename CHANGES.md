@@ -8,6 +8,114 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-226 — [TEST-4] Concurrent multi-client editing / Yjs merge had no executing test
+
+**What was missing.** The CRDT is the entire justification for the Yjs architecture
+(`docs/unified-document-model.md`), and nothing verified it. A regression that silently dropped one
+collaborator's edits would have shipped green. Two tests looked like they covered this and did not:
+
+- `api/src/collaboration/__tests__/collaboration.test.ts:144` "should merge concurrent Yjs updates
+  correctly" exchanges updates between two bare `Y.Doc`s with `Y.applyUpdate`. That is a test of the
+  yjs library. No server, no socket, no persistence — a bug in
+  `api/src/collaboration/index.ts` cannot fail it.
+- `e2e/mentions.spec.ts:374` is the only two-client test. It uses `browser.newPage()` (one browser,
+  sequential), every assertion sits inside `if (await option.isVisible())`, and it synchronizes with
+  `waitForTimeout(2000)`/`waitForTimeout(3000)`. It is also in `e2e/`, which neither `gate.sh` nor
+  `.github/workflows/ci.yml` executes.
+
+**What changed.** One new file, `api/src/collaboration/__tests__/concurrent-merge.test.ts`, in the
+vitest project the gate actually runs. Four tests drive two independent Yjs clients — separate
+`Y.Doc`s, separate WebSockets, separate sessions — against the real `setupCollaboration()` over real
+sockets, speaking the real `y-protocols` sync protocol in **both** directions, and assert on the
+`documents` row.
+
+- **control** — one client's edit reaches `content` and `yjs_state`. Without this, a broken harness
+  and a broken merge look identical.
+- **different regions** — both clients append a paragraph in one synchronous block, so neither
+  update is in the other's causal history. Concurrency is *asserted*, not assumed: each replica must
+  not yet contain the other's marker at edit time. Then both replicas must converge to a
+  byte-identical document containing both edits, and both edits must be in `yjs_state`.
+- **same region** — the crux. A seeded paragraph is the contested text; both clients insert at the
+  same character offset in the same `Y.XmlText`. Asserts both inserts survive, the replicas converge
+  on one identical string, and the pre-existing text is intact. The interleaving *order* is
+  deliberately not asserted — Yjs breaks the tie by client id, which is not stable across runs.
+- **offline divergence** — one client's socket is closed, it edits anyway, the other edits online,
+  then it reconnects. Asserts the offline edit is merged in rather than discarded, the online edit is
+  not clobbered, and the result persists. This is the expensive regression: a user's work silently
+  lost on reconnect.
+
+Persistence is checked by decoding `documents.yjs_state` into a fresh `Y.Doc` in the test process,
+not by trusting the `content` JSON mirror. `api/src/collaboration/index.ts` is **not modified** —
+this is coverage only, and three branches are in flight against that file.
+
+**No fixed sleeps.** Convergence is awaited on Yjs `update` events. Persistence — which emits no
+event — is awaited by re-reading the row until a predicate holds, with a 50ms gap between reads and
+a hard deadline. Every wait is a condition, never a duration guessed to be long enough (TEST-11 /
+TRO-233).
+
+**How to run it.**
+
+```bash
+cd <worktree> && source .factory-env      # api tests TRUNCATE 16 tables
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/concurrent-merge.test.ts
+```
+
+**Evidence — the test was proved capable of failing.** New coverage has no bug to go red on, so the
+server was temporarily sabotaged twice (both reverted; `git diff main -- api/src/collaboration/index.ts`
+is empty on this branch).
+
+1. *Merge sabotage* — `handleMessage` was made to silently discard `messageYjsUpdate` frames from any
+   client that is not the first connection in the room. Both concurrent tests failed; the control and
+   offline tests still passed, so the harness was provably fine. Failure text:
+   `clientA never received clientB's concurrent edit (BOB_…) — local replica:
+   <paragraph></paragraph><paragraph>ALICE_…</paragraph> frames received: [3,0,1,0,1]`.
+2. *Persistence sabotage* — the `UPDATE documents SET yjs_state = …, content = …` in
+   `persistDocument()` was reduced to writing only `properties`. In-memory merge still worked; all
+   four tests failed on the database assertion:
+   `merged content never reached documents.content: database predicate never held within 30000ms
+   (576 reads)`.
+
+Both are `AssertionError`/explicit-condition failures naming the missing edit, not import or setup
+errors.
+
+**Stability.** 5 consecutive standalone runs, 4/4 passing each time, ~10.4s per run. Full api suite
+green: 473 passed / 31 files (up from 469 / 30).
+
+**Coverage delta on `api/src/collaboration/index.ts`.** v8 provider, full api suite
+(`vitest run --coverage`), factory database `ship_wt_tro_226` on the `ship-audit-pg` container at
+`:5433`, macOS, measured twice under identical conditions with the new file present and absent:
+
+| | statements | branches | functions | lines |
+|---|---|---|---|---|
+| without this test | 60.68% | 40.57% | 67.24% | 62.07% |
+| with this test | **62.50%** | **45.41%** | **70.68%** | **63.04%** |
+
+The ticket's "25.0% function coverage (7 of 28)" figure is **not reproducible today** and is not the
+baseline above: `session-revocation.test.ts` (ERR-2 / TRO-189) landed on the same file earlier the
+same day and had already lifted functions to 67.24%. The v8 provider also counts closures, so its
+denominator is not 28. `@vitest/coverage-v8` is not a dependency of this repo; it was installed to
+take the measurement and `api/package.json`/`pnpm-lock.yaml` were reverted afterwards, so
+`--coverage` will not run without installing it again.
+
+**New finding, not fixed here.** Building the test surfaced a real race in the server.
+`wss.on('connection')` in `api/src/collaboration/index.ts` `await`s `getOrCreateDoc()` — a database
+round trip — and registers `ws.on('message')` only afterwards. A client frame that arrives inside
+that window has no listener and is dropped by the EventEmitter. A y-websocket client sends sync step
+1 immediately on `open`, so on a low-latency link its step 1 is lost, the server never replies with
+step 2, and **the client never receives the server's document state** — the editor stays empty while
+the client's own state is pushed up. Observed deterministically on loopback (frames received were
+`[3,0,1,1]`: cache-clear, the server's own step 1, two awareness updates, and no step 2). Derived,
+not measured, for production: over a real network the client's step 1 normally arrives after the DB
+read completes, so this reads as a dev/loopback defect — but the window is real and widens with
+database latency. The test client works around it by sending its step 1 only after the server's first
+frame, which is race-free because the server sends that frame in the same synchronous block that
+attaches the listener.
+
+**Roll back.** `git rm api/src/collaboration/__tests__/concurrent-merge.test.ts` and drop this
+entry. Nothing else on this branch touches product code.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
