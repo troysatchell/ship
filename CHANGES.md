@@ -8,6 +8,102 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-240 — [DB-11] The application's database pool negotiated no TLS while migrate and seed did
+
+**What was broken.** Three pools connect to Ship's database with three different SSL policies.
+`api/src/db/migrate.ts:32` and `api/src/db/seed.ts:44` each carried their own copy of
+`ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false`.
+`api/src/db/client.ts:17-26` — the pool the entire running application uses — had **no `ssl` key at
+all**. A fourth pool, `api/src/db/scripts/orphan-diagnostic.ts:34`, had none either.
+
+An absent `ssl` key is not "let pg decide sensibly". `pg`'s `ConnectionParameters` does
+`this.ssl = typeof config.ssl === 'undefined' ? readSSLConfigFromEnvironment() : config.ssl`, and
+with `PGSSLMODE` unset that resolves to `defaults.ssl`, which is `false`
+(`pg/lib/connection-parameters.js:100`, `pg/lib/defaults.js:43`). So the app pool connected in
+**plaintext**, unconditionally, in production.
+
+**Why it never surfaced on AWS.** Aurora is in-VPC and the connection is internal, so plaintext
+works. The gap only appears against a managed Postgres that requires TLS on a public endpoint —
+i.e. every PaaS, including the Render deployment.
+
+**Why the failure signature misdirects.** `Dockerfile:35` is
+`node dist/db/migrate.js && node dist/index.js`. `migrate.ts` *did* configure SSL, so it connected,
+ran, exited 0, and the `&&` proceeded — then `index.js` started and `client.ts` failed to connect.
+The logs read "migration succeeded, database unreachable", which looks like a database problem
+rather than a client-config one. `connectionTimeoutMillis: 2000` turned it into a fast crash-loop
+instead of a legible TLS error.
+
+**What changed.** The drift was the defect, so the fix is one decision in one place rather than a
+fourth copy of the ternary. New `api/src/db/ssl.ts` exports `resolveDatabaseSsl(nodeEnv?)`, and all
+four pools under `api/src/db/` now call it:
+
+- `api/src/db/client.ts:23` — **the actual bug**; previously passed nothing.
+- `api/src/db/migrate.ts:33`, `api/src/db/seed.ts:45` — inline ternary replaced by the helper.
+- `api/src/db/scripts/orphan-diagnostic.ts:37` — previously passed nothing; same defect class.
+
+The returned value is unchanged from what the scripts already did: `{ rejectUnauthorized: false }`
+in production, `false` otherwise. A fresh object per call, so no two pools share a mutable TLS
+config. `nodeEnv` is a parameter defaulting to `process.env.NODE_ENV` purely so the decision is
+testable without env stubbing; production code calls it with no arguments.
+
+**Behaviour outside production is byte-for-byte identical.** Local dev, CI and the factory
+databases previously got `false` by pg's default and now get `false` by explicit decision.
+
+**`rejectUnauthorized: false` was carried over deliberately, not endorsed.** It encrypts the
+connection but does not verify the server certificate chain — it stops passive eavesdropping, not an
+active man-in-the-middle. Managed providers sign with their own CA, absent from Node's trust store,
+so verification fails without the provider bundle. A federal deployment probably wants
+`rejectUnauthorized: true` plus an explicit `ca`. Tightening it here would be a silent posture
+change that no test in this repo can verify, so it is left as a follow-up that needs the CA bundle
+decided first. This is called out in the header comment of `api/src/db/ssl.ts`.
+
+**Out of scope, deliberately.** `api/scripts/migrate-shadow.ts:32`, `api/scripts/create-test-user.ts:35`
+and `api/scripts/check-db-user.ts:10,19` set `ssl: { rejectUnauthorized: false }`
+**unconditionally** — a fifth and sixth policy. They are operator scripts outside
+`api/tsconfig.json`'s `include: ["src/**/*"]`, always pointed at a remote AWS endpoint. Routing them
+through a `NODE_ENV`-conditional helper would silently **downgrade** them to plaintext whenever
+`NODE_ENV` is unset, which is how they are normally invoked. Changing them needs its own ticket and
+its own verification.
+
+**Evidence.** `pnpm --filter @ship/api test` against
+`postgresql://ship:***@localhost:5433/ship_wt_tro_240` (docker `ship-audit-pg`, postgres:15-alpine),
+`NODE_ENV` unset in the shell so vitest sets `test`. 31 files, **484 passed, 0 failed**.
+`pnpm --filter @ship/web test`: 13 failed / 186 passed — the same 13 identities quarantined as
+TEST-1 / TRO-223, in the same three files; nothing in `web/` was touched. `pnpm type-check` clean
+across shared, api and web.
+
+The regression test is `api/src/db/__tests__/ssl.test.ts` (15 cases). Against the unfixed call
+sites it failed 7 / passed 8, every failure an `AssertionError` on the claimed behaviour — the
+headline one being `expected undefined to deeply equal { rejectUnauthorized: false }` for the
+application pool under `NODE_ENV=production`, which is DB-11 stated as a test. It asserts three
+things: the decision per `NODE_ENV`; that `client.ts`'s pool actually applies it (re-imported under
+a stubbed env, since the pool is built at module scope); and that **no** pool under `api/src/db/`
+sets `ssl` to anything other than `resolveDatabaseSsl()`. That last one is what prevents
+recurrence — a future file adding `new Pool(...)` with its own policy fails the suite.
+
+**How to run it.**
+
+```bash
+source .factory-env                                             # api tests TRUNCATE 16 tables
+pnpm --filter @ship/api test src/db/__tests__/ssl.test.ts       # 15 cases, the regression test
+pnpm --filter @ship/api test                                    # full api suite: 484/484
+pnpm type-check
+```
+
+**Rollback.** `git revert` the commits on `fix/db-11-pool-ssl`, or by hand: delete
+`api/src/db/ssl.ts` and `api/src/db/__tests__/ssl.test.ts`, drop the `ssl:` line and the import from
+`client.ts` and `scripts/orphan-diagnostic.ts`, and restore the inline ternary in `migrate.ts` and
+`seed.ts`. Reverting reinstates plaintext connections from the application pool.
+
+**Not verified — do not read this as a fixed deployment.** No test here proves TLS actually
+negotiates. Proving that needs a managed Postgres endpoint that *requires* TLS on a public address;
+there is none in this repo's test environment, and the local docker Postgres speaks plaintext only,
+so a passing local suite is silent on the real failure mode. What is verified is the decision logic
+and its propagation to all four call sites — everything up to the socket. The claim "Render now
+starts" remains **untested**; confirming it means deploying and reading the startup logs.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
