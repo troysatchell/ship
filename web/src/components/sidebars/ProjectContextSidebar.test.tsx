@@ -11,36 +11,45 @@ import { render, screen, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
-const apiGet = vi.fn(async (path: string) => {
+// Real Response instances rather than object literals cast to Response.
+// Audit finding TS-8 is precisely that `as any`-shaped mocks decouple a test
+// from the contract it claims to verify — a hand-rolled stub cannot drift out
+// of sync with the real thing if it IS the real thing.
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+const PROJECT = { id: 'proj1', title: 'Ship Rebuild', color: '#6366f1' };
+
+const ALLOCATION_GRID = {
+  project: { id: 'proj1', title: 'Ship Rebuild' },
+  people: [
+    {
+      id: 'person1',
+      name: 'Ada Lovelace',
+      weeks: [
+        {
+          week_number: 3,
+          plan: { id: 'plan1', status: 'done' },
+          retro: { id: 'retro1', status: 'due' },
+        },
+      ],
+    },
+  ],
+  weeks: [3],
+};
+
+const apiGet = vi.fn(async (path: string): Promise<Response> => {
   if (path.startsWith('/api/documents/')) {
-    return {
-      ok: true,
-      json: async () => ({ id: 'proj1', title: 'Ship Rebuild', color: '#6366f1' }),
-    } as unknown as Response;
+    return jsonResponse(PROJECT);
   }
   if (path.startsWith('/api/weekly-plans/project-allocation-grid/')) {
-    return {
-      ok: true,
-      json: async () => ({
-        project: { id: 'proj1', title: 'Ship Rebuild' },
-        people: [
-          {
-            id: 'person1',
-            name: 'Ada Lovelace',
-            weeks: [
-              {
-                week_number: 3,
-                plan: { id: 'plan1', status: 'done' },
-                retro: { id: 'retro1', status: 'due' },
-              },
-            ],
-          },
-        ],
-        weeks: [3],
-      }),
-    } as unknown as Response;
+    return jsonResponse(ALLOCATION_GRID);
   }
-  return { ok: true, json: async () => [] } as unknown as Response;
+  return jsonResponse([]);
 });
 
 vi.mock('@/lib/api', () => ({
@@ -110,7 +119,12 @@ describe('ProjectContextSidebar — native list semantics (A11Y-1 / TRO-215)', (
 
     const person = screen.getByRole('button', { name: /Ada Lovelace/ });
     const item = person.closest('li');
-    expect(item).not.toBeNull();
-    expect(within(item as HTMLElement).getByText('Ada Lovelace')).toBeInTheDocument();
+    // Narrow rather than cast: `closest` is genuinely nullable, and an
+    // unchecked assertion here would turn a structural regression into a
+    // confusing "within(null)" crash instead of a clear failure.
+    if (item === null) {
+      throw new Error('Expected the person row to be inside a list item');
+    }
+    expect(within(item).getByText('Ada Lovelace')).toBeInTheDocument();
   });
 });
