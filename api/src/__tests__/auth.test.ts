@@ -10,7 +10,11 @@ vi.mock('../db/client.js', () => ({
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/client.js';
 import { Request, Response, NextFunction } from 'express';
-import { SESSION_TIMEOUT_MS, ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
+import { ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
+// The enforced inactivity window is SESSION_TIMEOUT_MS plus the throttle interval the
+// `last_activity` write now runs on, so that a lagging recorded value cannot expire a
+// session early (TRO-179 / TRO-177). Boundary cases below are expressed against it.
+import { SESSION_INACTIVITY_LIMIT_MS } from '../middleware/auth.js';
 
 // Helper to create mock request/response
 function createMockReqRes(cookies: Record<string, string> = {}) {
@@ -26,7 +30,11 @@ function createMockReqRes(cookies: Record<string, string> = {}) {
 
 describe('authMiddleware', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks, not clearAllMocks: clearing only wipes recorded calls, so an
+    // unconsumed `mockResolvedValueOnce` survives into the next test and silently
+    // shifts its query sequence by one. That is a live hazard now that the middleware
+    // issues a variable number of queries (the last_activity write is throttled).
+    vi.resetAllMocks();
   });
 
   describe('session validation', () => {
@@ -70,8 +78,9 @@ describe('authMiddleware', () => {
             is_super_admin: false,
           }],
         } as any)
-        .mockResolvedValueOnce({ rows: [{ id: 'membership-1' }] } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+        // Session + membership only: last_activity is current, so the throttled
+        // write does not fire.
+        .mockResolvedValueOnce({ rows: [{ id: 'membership-1' }] } as any);
 
       await authMiddleware(req, res, next);
       expect(req.sessionId).toBe('valid-session');
@@ -82,10 +91,10 @@ describe('authMiddleware', () => {
   });
 
   describe('session timeout handling', () => {
-    it('returns 401 when session exceeds 15-minute inactivity timeout', async () => {
+    it('returns 401 when session exceeds the inactivity timeout', async () => {
       const { req, res, next } = createMockReqRes({ session_id: 'stale-session' });
       const now = new Date();
-      const staleActivity = new Date(now.getTime() - SESSION_TIMEOUT_MS - 1000);
+      const staleActivity = new Date(now.getTime() - SESSION_INACTIVITY_LIMIT_MS - 1000);
       vi.mocked(pool.query).mockResolvedValueOnce({
         rows: [{
           id: 'stale-session',
@@ -137,7 +146,7 @@ describe('authMiddleware', () => {
     it('deletes expired session from database', async () => {
       const { req, res, next } = createMockReqRes({ session_id: 'expired-session' });
       const now = new Date();
-      const staleActivity = new Date(now.getTime() - SESSION_TIMEOUT_MS - 1000);
+      const staleActivity = new Date(now.getTime() - SESSION_INACTIVITY_LIMIT_MS - 1000);
       vi.mocked(pool.query)
         .mockResolvedValueOnce({
           rows: [{
@@ -200,8 +209,7 @@ describe('authMiddleware', () => {
             created_at: now,
             is_super_admin: true,
           }],
-        } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+        } as any);
 
       await authMiddleware(req, res, next);
       expect(req.isSuperAdmin).toBe(true);
@@ -248,7 +256,9 @@ describe('authMiddleware', () => {
         httpOnly: true,
         secure: false, // NODE_ENV is 'test', not 'production'
         sameSite: 'strict',
-        maxAge: SESSION_TIMEOUT_MS,
+        // Matches the server-side window, so the browser cannot drop the cookie
+        // before the server would have rejected the session.
+        maxAge: SESSION_INACTIVITY_LIMIT_MS,
         path: '/',
       });
       expect(next).toHaveBeenCalled();
@@ -270,8 +280,8 @@ describe('authMiddleware', () => {
             is_super_admin: false,
           }],
         } as any)
-        .mockResolvedValueOnce({ rows: [{ id: 'membership-1' }] } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+        // Inside the throttle window, so neither the cookie nor the row is refreshed.
+        .mockResolvedValueOnce({ rows: [{ id: 'membership-1' }] } as any);
 
       await authMiddleware(req, res, next);
       expect(res.cookie).not.toHaveBeenCalled();

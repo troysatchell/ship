@@ -8,7 +8,8 @@ import * as decoding from 'lib0/decoding';
 import { pool } from '../db/client.js';
 import { extractHypothesisFromContent, extractSuccessCriteriaFromContent, extractVisionFromContent, extractGoalsFromContent } from '../utils/extractHypothesis.js';
 import { yjsToJson, jsonToYjs } from '../utils/yjsConverter.js';
-import { SESSION_TIMEOUT_MS, ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
+import { ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
+import { SESSION_INACTIVITY_LIMIT_MS } from '../middleware/auth.js';
 import cookie from 'cookie';
 
 const messageSync = 0;
@@ -379,6 +380,12 @@ export interface WebSocketSession {
  * revalidation sweep. Mirrors the two windows enforced by the REST middleware
  * (`api/src/middleware/auth.ts`) so a socket cannot outlive what a request would
  * have accepted.
+ *
+ * The inactivity bound is `SESSION_INACTIVITY_LIMIT_MS`, the same value the REST
+ * middleware compares against, and the mirror has to hold in *both* directions: this
+ * sweep reads `last_activity` without ever refreshing it, so a bound tighter than the
+ * middleware's would tear down the socket of a user whose REST requests are still being
+ * served — and a collaboration socket is exactly where unsaved editor state lives.
  */
 function isSessionRowValid(
   row: { last_activity: string | Date; created_at: string | Date },
@@ -386,7 +393,7 @@ function isSessionRowValid(
 ): boolean {
   const inactivityMs = now - new Date(row.last_activity).getTime();
   const sessionAgeMs = now - new Date(row.created_at).getTime();
-  return sessionAgeMs <= ABSOLUTE_SESSION_TIMEOUT_MS && inactivityMs <= SESSION_TIMEOUT_MS;
+  return sessionAgeMs <= ABSOLUTE_SESSION_TIMEOUT_MS && inactivityMs <= SESSION_INACTIVITY_LIMIT_MS;
 }
 
 // Validate session from cookie header - returns userId/workspaceId/sessionId or null
