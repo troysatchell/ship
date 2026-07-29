@@ -30,15 +30,25 @@ The report's hypothesis held exactly, including its list of the other blocking f
   a substring — substring matching on `already exists` would also swallow, for example, a failed
   `ALTER ... ADD CONSTRAINT` in a data migration.
 - A failing migration is rethrown with its filename in the message, and `migrate.ts` exits 1.
+- `applySchema` no longer swallows the duplicate-object error it tolerates — it **re-applies**
+  `schema.sql` and lets the second attempt decide. `pool.query` sends the file as one simple query,
+  so Postgres runs it as a single implicit transaction: an error at statement *k* rolls back
+  statements 1..*k*-1 too, meaning nothing was applied. Returning normally there was DB-1 inside
+  the DB-1 fix. A clean second pass proves every object exists (verified by the file itself, not by
+  a hardcoded list that could drift); a second failure propagates and exits 1.
 - Migrations `010`, `025`, `033`, `035` are now idempotent against the `schema.sql` end state
   (`IF NOT EXISTS`; a `pg_constraint` lookup for the CHECK constraint; `DROP TRIGGER IF EXISTS`
   before `CREATE TRIGGER`, the pattern `schema.sql:193` already uses; a `pg_enum`-guarded loop for
   the three `ALTER TYPE ... RENAME VALUE` statements). These four files are edited rather than
   superseded by a new migration, because a new migration cannot stop `010` itself from throwing,
   and databases that already recorded these versions never re-read them.
-- Migration filenames are validated against `NNN_description.sql` (optional single-letter suffix,
-  as in `007b_`). A file that cannot be ordered throws before anything is applied, rather than
-  sorting to an arbitrary position in the sequence.
+- Migration filenames are validated against `NNN_description.sql` — exactly three digits, an
+  optional single letter (`007b_`, `014b_`, `015b_`, `018b_`, `020b_` all exist), then an
+  underscore. The runner sorts the validated names **lexicographically**; that equals numeric
+  order only because the pattern forces a zero-padded three-digit prefix, which is the whole
+  reason the pattern is enforced. Anything outside it — an unnumbered `hotfix.sql`, or a
+  four-digit `1000_` that would sort before `999_` — throws and names the offender before any
+  migration is applied. The runner does not infer an order for such a file; it refuses to guess.
 - Regression tests: `api/src/db/__tests__/migrationRunner.test.ts`.
 
 **New ways `pnpm db:migrate` can now fail — all deliberate.** It previously exited 0 in every one
@@ -76,6 +86,48 @@ these 31 files are the only mechanism that would ever have changed it. Notable: 
 `028` and `034` are backfills. **The first deploy after this change will apply all 32 at once.**
 Take a snapshot first and run `pnpm db:migrate` against a restore of production before running it
 against production.
+
+**How to run it.**
+
+```bash
+source .factory-env                      # or otherwise point DATABASE_URL at the target
+pnpm db:migrate                          # now exits non-zero on any migration failure
+pnpm --filter @ship/api test src/db/__tests__/migrationRunner.test.ts
+```
+
+Verify with `select count(*) from schema_migrations;` — it should equal the number of `.sql` files
+in `api/src/db/migrations/` (42 today), not 10.
+
+**Verified** against PostgreSQL 15-alpine in the `ship-audit-pg` container on `:5433`:
+
+- fresh database → 42 rows in `schema_migrations`, exit 0
+- second run on it → clean no-op, still 42, exit 0
+- `ship_wt_tro_178`, stuck at 10 rows (the state DB-1 had left it in) → 32 applied, 42 rows, exit 0
+- a database seeded with the *pre-*`033` enum labels → renamed to `weekly_*`, 42 rows, exit 0
+- both enum labels present plus one stale document → exit 1, naming the count and the remedy
+- `document_type` missing both labels of a pair → exit 1
+- applying `schema.sql` three times in a row against one database → no error any time, so the
+  duplicate-object tolerance in `applySchema` is unreachable **sequentially** for the current file
+  (17/17 `CREATE TABLE` and 59/59 `CREATE INDEX` guarded, both `CREATE TYPE`s in guarded `DO`
+  blocks, function `OR REPLACE`, trigger preceded by `DROP TRIGGER IF EXISTS`)
+- applying `schema.sql` from **6 connections at once** → 5 of 6 failed, so it is emphatically
+  reachable **concurrently**: `CREATE TABLE IF NOT EXISTS` is check-then-create and not atomic.
+  Mostly SQLSTATE 23505 on the catalog index `pg_type_typname_nsp_index`, sometimes 42710. 23505 is
+  deliberately not tolerated; the concurrency defect itself is TRO-279
+- `pnpm --filter @ship/api test` against the fully-migrated database → 475 tests passed
+
+**Not verified.** No run against production or shadow, and no run against PostgreSQL 16 (production
+runs pg16; CI and this work run pg15 — see the pin comment in `.github/workflows/ci.yml`). Proving
+the production path needs a restore of a production snapshot.
+
+**Rollback.** `git revert` the commits on `fix/db-1-migration-runner`, or, to restore only the old
+runner behaviour, delete `api/src/db/migrationRunner.ts` and restore `api/src/db/migrate.ts` from
+`main`. Rolling back the runner alone leaves migrations `010`/`025`/`033`/`035` idempotent, which is
+harmless. Note that rollback does **not** un-apply migrations already recorded in
+`schema_migrations`; reversing those requires a database restore.
+
+---
+
 ## TRO-217 — [A11Y-3] `/my-week` failed colour contrast, the landing page of the app
 
 **What was broken.** `/` redirects to `/my-week`, and it was the only key page Lighthouse failed on
@@ -168,31 +220,6 @@ No import or locator errors.
 **How to run it.**
 
 ```bash
-source .factory-env                      # or otherwise point DATABASE_URL at the target
-pnpm db:migrate                          # now exits non-zero on any migration failure
-pnpm --filter @ship/api test src/db/__tests__/migrationRunner.test.ts
-```
-
-Verify with `select count(*) from schema_migrations;` — it should equal the number of `.sql` files
-in `api/src/db/migrations/` (42 today), not 10.
-
-**Verified** against PostgreSQL 15-alpine in the `ship-audit-pg` container on `:5433`:
-
-- fresh database → 42 rows in `schema_migrations`, exit 0
-- second run on it → clean no-op, still 42, exit 0
-- `ship_wt_tro_178`, stuck at 10 rows (the state DB-1 had left it in) → 32 applied, 42 rows, exit 0
-- a database seeded with the *pre-*`033` enum labels → renamed to `weekly_*`, 42 rows, exit 0
-- `pnpm --filter @ship/api test` against the fully-migrated database → 29 files, 455 tests passed
-
-**Not verified.** No run against production or shadow, and no run against PostgreSQL 16 (production
-runs pg16; CI and this work run pg15 — see the pin comment in `.github/workflows/ci.yml`). Proving
-the production path needs a restore of a production snapshot.
-
-**Rollback.** `git revert` the four commits on `fix/db-1-migration-runner`, or, to restore only the
-old runner behaviour, delete `api/src/db/migrationRunner.ts` and restore `api/src/db/migrate.ts`
-from `main`. Rolling back the runner alone leaves migrations `010`/`025`/`033`/`035` idempotent,
-which is harmless. Note that rollback does **not** un-apply migrations already recorded in
-`schema_migrations`; reversing those requires a database restore.
 pnpm --filter @ship/web test        # 24 new tests; 13 known failures are TEST-1/TRO-223, unchanged
 pnpm --filter @ship/web type-check
 ```
