@@ -8,6 +8,139 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-174 — [API-3] No response compression anywhere; the largest list payload shipped 15× larger than needed
+
+**What was broken.** `api/src/app.ts` never registered any compression middleware, and
+`compression` was not a dependency of `api/package.json`. Every JSON response went out
+uncompressed even when the client explicitly advertised `Accept-Encoding: gzip`. `GET /api/issues`
+was the worst case at **379,907 bytes**. On a 10 Mbps agency link that body alone is ~304 ms of
+transfer time, paid by every user on every list load. The gap is invisible in local development
+and in the api-perf benchmark because loopback transfer is effectively free — it only costs users
+on a real WAN link.
+
+**What changed.** `compression` is registered as the first middleware in `createApp()`, ahead of
+every route, so all response bodies pass through it: API JSON, the Swagger UI, and the static SPA
+on single-origin deployments.
+
+Settings, and why:
+
+- **`threshold: 1024`** — the library default, written out explicitly to document it. Below roughly
+  one MTU there is nothing to win; gzip framing plus the CPU makes a small body marginally larger
+  and slower. `/health` (15 bytes) is correctly left alone.
+- **Compression level: zlib's default (6), not 9.** Measured on the real 379,907-byte body, level 9
+  yields 24,091 bytes against level 6's 25,050 — **3.8% smaller for materially more CPU per
+  response**, on a path that runs on every list request. Note this means the honest ratio is
+  **15.17×**, not the 15.4× the audit projected from `gzip -9`.
+- **Filter delegates to `compression.filter`**, which consults `mime-db` and so already declines
+  already-compressed types — the images, PDFs and archives served by `/api/files/:id` keep their own
+  encoding rather than being wastefully re-compressed. Two additions on top: the conventional
+  `x-no-compression` request opt-out, and an explicit `text/event-stream` guard. There is no SSE
+  endpoint in this codebase today (verified by grep for `text/event-stream` and `flushHeaders`,
+  2026-07-29); the guard is there because compression buffers, which would silently stall the first
+  SSE endpoint someone adds. The Yjs collaboration WebSocket is unaffected — `ws` handles the
+  upgrade off the HTTP response path, so this middleware never sees it.
+
+**⚠️ DO NOT "DISPROVE" THIS FIX WITH A LOCALHOST BENCHMARK.** Enabling gzip does **not** reduce P95
+over loopback and may raise it slightly. Localhost transfer time is ~0, so the only thing a local
+benchmark can measure is the compression CPU that was added. A compare-mode `/api-perf-audit` run
+against `audit-baseline` will therefore show this fix as **flat or marginally worse**, and that
+result is not evidence against it. This is a bytes-on-the-wire fix: validate it by **payload size**,
+or over a **bandwidth-shaped link**. This is standing rule 13 in the factory lessons, and it exists
+because of this exact finding.
+
+**Evidence — payload bytes, not loopback timing.** Local Express server (`tsx api/src/index.ts`,
+port 3154, `NODE_ENV` unset i.e. development) against PostgreSQL 15 in Docker `ship-audit-pg` on
+`:5433`, database `ship_wt_tro_174`, seeded with `pnpm db:seed` followed by `audit/seed-augment.ts`
+to the volumes in `audit/shipshape.config.yaml` — 500 documents (254 of them issues) / 20 users.
+Bytes counted by `curl -w '%{size_download}'`, which does not decompress when `Accept-Encoding` is
+set by hand. The "before" column is the same server answering `Accept-Encoding: identity`; that is
+byte-for-byte what the pre-fix code returned regardless of request headers, and it is independently
+confirmed by the `x-no-compression` opt-out returning the identical 379,907.
+
+| endpoint | before (identity) | after (gzip, level 6) | reduction |
+|---|---|---|---|
+| `GET /api/issues` | 379,907 B | **25,050 B** | **15.17× / −93.4%** |
+| `GET /api/documents` | 293,822 B | **28,227 B** | 10.41× / −90.4% |
+| `GET /api/openapi.json` | — | 18,039 B | compressed |
+| `GET /health` (15 B) | 15 B | 15 B | under threshold, untouched |
+
+The 379,907-byte "before" figure reproduces `audit/AUDIT_REPORT.md`'s number **exactly**, which
+confirms the dataset here is byte-identical to the one the finding was measured against.
+
+Transfer time at 10 Mbps is **derived arithmetic from those measured byte counts, not an observed
+WAN measurement**: 379,907 B → ~304 ms, 25,050 B → ~20 ms, a saving of ~284 ms per issue-list load.
+
+**Interaction with TRO-173/TRO-182 — do not double-count.** That branch removes `content` from the
+`/api/issues` list projection, shrinking the same payload. Measured on the identity body from this
+branch, the `content` field is **36.5%** of those 379,907 bytes. The two fixes compose, and the
+honest attribution is:
+
+| | identity | gzip level 6 | compression's own factor |
+|---|---|---|---|
+| this branch (`content` present) | 379,907 B | 25,050 B | **15.17×** |
+| after TRO-173 (`content` stripped) | 241,338 B | 19,894 B | **12.13×** |
+
+So compression alone is worth 15.17× today and still 12.13× once TRO-173 lands; the *combined*
+379,907 → 19,894 is **19.10×** and belongs to both tickets, not to either one. Neither ticket
+should claim it alone.
+
+**CloudFront in the deployed stack — does it already do this?** Partly answered from config, and
+the answer is "no, and the win is not double-counted" — but the deployed-stack half is **derived
+from Terraform, not observed against the live distribution**.
+
+*Observed in the repo:* the `/api/*` cache behaviour does set `compress = true`
+(`terraform/s3-cloudfront.tf:154`, `terraform/modules/cloudfront-s3/main.tf:172`), and all three
+environments (dev/prod/shadow) use `modules/cloudfront-s3`. But that behaviour attaches
+`aws_cloudfront_cache_policy.api_no_cache`, whose
+`parameters_in_cache_key_and_forwarded_to_origin` block sets `header_behavior = "none"` and sets
+**neither `enable_accept_encoding_gzip` nor `enable_accept_encoding_brotli`** — a repo-wide grep for
+`enable_accept_encoding` returns no matches at all.
+
+*Derived from AWS's documented behaviour:* CloudFront automatic compression requires the attached
+cache policy to enable Accept-Encoding gzip/Brotli support; with both unset (Terraform default
+`false`), `compress = true` is inert. So `/api/*` was very likely **not** being compressed at the
+edge, and the 15.17× measured here is a real production win rather than a re-count of something
+CloudFront was already doing. The fix is also robust either way: the origin request policy uses
+`header_behavior = "allViewerAndWhitelistCloudFront"`, so the viewer's `Accept-Encoding` does reach
+Express, and CloudFront relays an origin response that already carries `Content-Encoding: gzip`
+without re-compressing it.
+
+*Unverified:* no `curl` was run against `https://ship.awsdev.treasury.gov` to observe an actual
+`Content-Encoding` header on a deployed response. The deployed-stack claim above rests on config
+plus documented behaviour only.
+
+**Regression test.** `api/src/routes/compression.test.ts` — three cases, in a vitest file the gate
+actually executes (an `e2e/*.spec.ts` would satisfy the gate's added-test grep while never running).
+It asserts `Content-Encoding: gzip` appears on `/api/issues` when the client advertises gzip, does
+**not** appear when the client sends `Accept-Encoding: identity`, and does not appear on a
+sub-threshold response. It also asserts the decoded body is intact, because a `Content-Encoding`
+header over a corrupted body would otherwise read as a pass.
+
+One deliberate design choice: the negative case additionally asserts the uncompressed
+`Content-Length` **exceeds** the 1024-byte threshold, with an actionable failure message. If a
+future payload reduction takes `/api/issues` under the threshold, the gzip assertion would start
+passing for the wrong reason — nothing to compress rather than compression working. The test fails
+loudly instead. The seeded payload is padded via long **titles**, not `content`, precisely so
+TRO-173 removing `content` cannot make it vacuous.
+
+Confirmed red first: with the middleware absent the gzip case failed with
+`AssertionError: expected undefined to be 'gzip'` at the `content-encoding` assertion — the right
+reason, not an import or setup error — while the other two cases passed.
+
+**Rollback.** Delete the `app.use(compression({...}))` block and the `import compression` line from
+`api/src/app.ts`; optionally drop `compression` and `@types/compression` from `api/package.json`.
+Deleting `api/src/routes/compression.test.ts` reverts the test. No schema, route, or API-contract
+change; nothing to migrate.
+
+**Found, not fixed.** The inert `compress = true` on the `/api/*` CloudFront behaviour is a latent
+config inconsistency worth its own ticket: enabling `enable_accept_encoding_gzip` on the
+`api_no_cache` cache policy would make the edge setting mean what it appears to mean. It is a
+Terraform change, out of scope here, and origin-side compression is the more robust fix anyway
+because it also covers single-origin deployments and direct-to-Elastic-Beanstalk access, which do
+not pass through CloudFront at all.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
