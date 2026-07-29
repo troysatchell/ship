@@ -76,6 +76,9 @@ const REVALIDATION_INTERVAL_MS = 300_000
 /** Deadline for the offending socket to be closed by the server. */
 const CLOSE_TIMEOUT_MS = 5_000
 
+/** Deadline for a socket to finish closing during teardown. */
+const SOCKET_DRAIN_TIMEOUT_MS = 2_000
+
 /** Deadline for a write to reach the documents table (persistDocument is debounced 2s). */
 const PERSIST_TIMEOUT_MS = 15_000
 
@@ -232,9 +235,32 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
 
   afterAll(async () => {
     recorder.stop()
-    for (const ws of openSockets) {
-      try { ws.terminate() } catch { /* already gone */ }
-    }
+
+    // Close gracefully and WAIT for the server to run its 'close' handler, rather
+    // than terminating and moving on. That handler is what flushes a pending
+    // debounced persist and clears the 2s timer behind it; terminating instead
+    // leaves timers armed that fire `pool.query` into the shared test database
+    // after this file has finished, which is exactly the kind of cross-file
+    // interference TRO-277 is made of. Terminate only as a fallback.
+    await Promise.all(openSockets.map((ws) => new Promise<void>((resolve) => {
+      if (ws.readyState === WebSocket.CLOSED) {
+        resolve()
+        return
+      }
+      let timer: NodeJS.Timeout | undefined
+      const onClose = () => {
+        clearTimeout(timer)
+        resolve()
+      }
+      timer = setTimeout(() => {
+        ws.off('close', onClose)
+        try { ws.terminate() } catch { /* already gone */ }
+        resolve()
+      }, SOCKET_DRAIN_TIMEOUT_MS)
+      ws.once('close', onClose)
+      try { ws.close() } catch { onClose() }
+    })))
+
     for (const socket of openRawSockets) {
       try { socket.destroy() } catch { /* already gone */ }
     }
