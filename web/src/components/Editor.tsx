@@ -31,6 +31,7 @@ import { createMentionExtension } from './editor/MentionExtension';
 import { ImageUploadExtension } from './editor/ImageUpload';
 import { FileAttachmentExtension } from './editor/FileAttachment';
 import { DetailsExtension, DetailsSummary, DetailsContent } from './editor/DetailsExtension';
+import { SyncStatusIndicator, type SyncStatus } from './editor/SyncStatusIndicator';
 import { EmojiExtension } from './editor/EmojiExtension';
 import { TableOfContentsExtension } from './editor/TableOfContents';
 import { HypothesisBlockExtension } from './editor/HypothesisBlockExtension';
@@ -89,8 +90,6 @@ interface EditorProps {
   /** Suffix displayed after the title in the header (e.g., author name) */
   titleSuffix?: string;
 }
-
-type SyncStatus = 'connecting' | 'cached' | 'synced' | 'disconnected';
 
 // Generate a consistent color from a string
 function stringToColor(str: string): string {
@@ -227,6 +226,12 @@ export function Editor({
   }, [title]);
   const [provider, setProvider] = useState<WebsocketProvider | null>(null);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('connecting');
+  // ERR-1: a connected socket is not a synced socket. `isSynced` tracks the
+  // y-websocket 'sync' event — the only evidence the document reached the
+  // server — and `isInitialConnect` distinguishes "still loading" from
+  // "connected and failing to sync".
+  const [isSynced, setIsSynced] = useState(false);
+  const [isInitialConnect, setIsInitialConnect] = useState(true);
   const [isBrowserOnline, setIsBrowserOnline] = useState(navigator.onLine);
   const [connectedUsers, setConnectedUsers] = useState<{ name: string; color: string }[]>([]);
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(() => {
@@ -387,9 +392,14 @@ export function Editor({
         console.log(`[Editor] WebSocket status: ${event.status} for ${roomPrefix}:${documentId}`);
         if (event.status === 'connected') {
           setSyncStatus('synced');
+          // The socket is open. That is NOT the same as "your work is saved" —
+          // the Yjs handshake may still never complete (ERR-1). Only the 'sync'
+          // event below is allowed to claim the document is saved.
+          setIsInitialConnect(false);
         } else if (event.status === 'disconnected') {
           // If we have cached content, show 'cached' instead of 'disconnected'
           setSyncStatus(hasCachedContent ? 'cached' : 'disconnected');
+          setIsSynced(false);
         }
       });
 
@@ -423,6 +433,19 @@ export function Editor({
             alert('This document was converted. Please refresh to view the new document.');
             onBack?.();
           }
+        } else if (event?.code === 4401) {
+          // Session expired or revoked server-side (TRO-189). Reconnecting would
+          // just 401 at the upgrade forever; stop, and let the indicator show
+          // that nothing typed from here on is being saved.
+          console.log(`[Editor] Session no longer valid for ${documentId}; stopping collaboration`);
+          // Explicit guard rather than a non-null assertion (TS-4 tracks the
+          // count of those and this branch is new code).
+          if (wsProvider) {
+            wsProvider.shouldConnect = false;
+          }
+          setIsSynced(false);
+          setIsInitialConnect(false);
+          setSyncStatus('disconnected');
         } else if (event?.code === 4101) {
           // Content updated via API - clear IndexedDB cache to prevent stale content merge
           console.log(`[Editor] Content updated via API for ${documentId}, clearing IndexedDB cache`);
@@ -437,11 +460,16 @@ export function Editor({
         }
       });
 
-      wsProvider.on('sync', (isSynced: boolean) => {
+      // The ONLY signal that the document is actually saved to the server.
+      // y-websocket emits sync(true) once it has received the server's sync
+      // step 2, and sync(false) whenever that guarantee is lost.
+      wsProvider.on('sync', (synced: boolean) => {
         if (cancelled) return; // Don't update state if effect was cleaned up
-        console.log(`[Editor] WebSocket sync: ${isSynced} for ${roomPrefix}:${documentId}`);
-        if (isSynced) {
+        console.log(`[Editor] WebSocket sync: ${synced} for ${roomPrefix}:${documentId}`);
+        setIsSynced(synced);
+        if (synced) {
           setSyncStatus('synced');
+          setIsInitialConnect(false);
         }
       });
 
@@ -499,6 +527,10 @@ export function Editor({
       // Clear provider state
       setProvider(null);
       setConnectedUsers([]);
+      // Switching documents starts a fresh sync: nothing is proven saved yet.
+      setIsSynced(false);
+      setIsInitialConnect(true);
+      setSyncStatus('connecting');
     };
   }, [documentId, userName, color, ydoc, roomPrefix, onBack, onDocumentConverted]);
 
@@ -846,36 +878,13 @@ export function Editor({
           </h1>
 
           {/* Sync status - WCAG 4.1.3 aria-live for status messages */}
-          {/* Show 'Offline' when browser is offline, regardless of WebSocket state */}
-          {(() => {
-            const effectiveStatus = !isBrowserOnline ? 'disconnected' : syncStatus;
-            return (
-              <div
-                role="status"
-                aria-live="polite"
-                aria-atomic="true"
-                className="flex items-center gap-1.5"
-                data-testid="sync-status"
-              >
-                <div
-                  className={cn(
-                    'h-2 w-2 rounded-full',
-                    effectiveStatus === 'synced' && 'bg-green-500',
-                    effectiveStatus === 'cached' && 'bg-blue-500',
-                    effectiveStatus === 'connecting' && 'bg-yellow-500 animate-pulse',
-                    effectiveStatus === 'disconnected' && 'bg-red-500'
-                  )}
-                  aria-hidden="true"
-                />
-                <span className="text-xs text-muted">
-                  {effectiveStatus === 'synced' && 'Saved'}
-                  {effectiveStatus === 'cached' && 'Cached'}
-                  {effectiveStatus === 'connecting' && 'Saving'}
-                  {effectiveStatus === 'disconnected' && 'Offline'}
-                </span>
-              </div>
-            );
-          })()}
+          <SyncStatusIndicator
+            syncStatus={syncStatus}
+            isBrowserOnline={isBrowserOnline}
+            isSynced={isSynced}
+            isInitialConnect={isInitialConnect}
+          />
+
 
           {/* Delete button */}
           {onDelete && (
