@@ -296,29 +296,82 @@ test.describe('Authorization - Audit Log Access', () => {
     expect(response.status()).toBe(403)
   })
 
+  /**
+   * Rewritten for audit finding TEST-2 (TRO-224).
+   *
+   * The `expect(...).toBe(403)` used to sit inside `if (wsResponse.status() ===
+   * 200)` inside `if (workspaceId)`. Any hiccup fetching
+   * `/api/workspaces/current` — a 400 because no workspace was selected, a
+   * response-shape change, a slow session write — silently skipped the entire
+   * authorization check and the test reported green. This was the only
+   * automated coverage of member-level audit-log access.
+   *
+   * Each precondition is now its own assertion with an actionable message, so a
+   * setup failure fails the test *as a setup failure* rather than masquerading
+   * as an authorization pass.
+   *
+   * The same authorization rule is also pinned in
+   * `api/src/routes/workspaces.test.ts`, which the factory gate runs; `e2e/` is
+   * executed by neither the gate nor CI.
+   */
   test('workspace member cannot view workspace audit logs (admin only)', async ({ page, request }) => {
     await loginAsMember(page)
 
     const cookies = await page.context().cookies()
     const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ')
 
-    // Get current workspace ID
+    // Precondition 1: the member has a current workspace.
     const wsResponse = await request.get('/api/workspaces/current', {
       headers: { 'Cookie': cookieHeader }
     })
+    expect(
+      wsResponse.status(),
+      'GET /api/workspaces/current must succeed for a logged-in member. ' +
+        'A failure here is a setup problem, not evidence about authorization.'
+    ).toBe(200)
 
-    if (wsResponse.status() === 200) {
-      const wsData = await wsResponse.json()
-      const workspaceId = wsData.data?.workspace?.id
+    // Precondition 2: the response carries a workspace id at the documented path.
+    const wsData = await wsResponse.json()
+    const workspaceId: string = wsData?.data?.workspace?.id ?? ''
+    expect(
+      workspaceId,
+      'GET /api/workspaces/current should return data.workspace.id. Seed data ' +
+        'gives bob.martinez@ship.local a membership in Test Workspace ' +
+        '(e2e/fixtures/isolated-env.ts).'
+    ).not.toBe('')
 
-      if (workspaceId) {
-        const response = await request.get(`/api/workspaces/${workspaceId}/audit-logs`, {
-          headers: { 'Cookie': cookieHeader }
-        })
+    // The actual claim: a member — not an admin — is refused the audit log.
+    const response = await request.get(`/api/workspaces/${workspaceId}/audit-logs`, {
+      headers: { 'Cookie': cookieHeader }
+    })
+    expect(
+      response.status(),
+      'A workspace member must not be able to read the workspace audit log'
+    ).toBe(403)
 
-        // Should fail - members can't view audit logs
-        expect(response.status()).toBe(403)
-      }
-    }
+    // And the refusal must not leak log entries in the body.
+    const body = await response.text()
+    expect(body, 'a 403 body must not contain audit log entries').not.toContain('"logs"')
+  })
+
+  test('workspace member is refused the audit log of a workspace they do not belong to', async ({ page, request }) => {
+    // Companion to the test above: proves the 403 comes from an authorization
+    // decision rather than from the id being unroutable. A random UUID is not a
+    // workspace the member administers either way, so it must never return 200.
+    await loginAsMember(page)
+
+    const cookies = await page.context().cookies()
+    const cookieHeader = cookies.map(c => `${c.name}=${c.value}`).join('; ')
+
+    const foreignWorkspaceId = '00000000-0000-4000-8000-000000000abc'
+    const response = await request.get(`/api/workspaces/${foreignWorkspaceId}/audit-logs`, {
+      headers: { 'Cookie': cookieHeader }
+    })
+
+    expect(
+      response.status(),
+      'reading a foreign workspace audit log must be refused (403) or not found (404), never 200'
+    ).not.toBe(200)
+    expect([403, 404]).toContain(response.status())
   })
 })
