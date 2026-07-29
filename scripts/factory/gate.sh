@@ -185,7 +185,17 @@ if [ ! -f CHANGES.md ]; then
 # Anchored on non-identifier boundaries: an unanchored match lets TRO-24
 # false-pass on an existing "TRO-244" entry written for a different ticket.
 elif grep -qE "(^|[^A-Za-z0-9-])${TICKET}([^A-Za-z0-9-]|\$)" CHANGES.md; then
-  record changes-md pass "entry for ${TICKET} present"
+  # "An entry mentions the ticket" is not enough. A merge of this file can leave
+  # the entry present-but-spliced: `merge=union` produced branches with 9 entry
+  # headings and 8 run blocks, an odd number of ``` fences, and one entry whose
+  # command block belonged to a different ticket. Every such branch passed this
+  # grep. So also assert the file is structurally intact.
+  if [ -f scripts/factory/merge-changes.mjs ] \
+     && ! node scripts/factory/merge-changes.mjs --check CHANGES.md >/dev/null 2>&1; then
+    record changes-md fail "entry for ${TICKET} present but CHANGES.md is structurally invalid — run: node scripts/factory/merge-changes.mjs --check CHANGES.md"
+  else
+    record changes-md pass "entry for ${TICKET} present; structure valid"
+  fi
 else
   record changes-md fail "no entry mentioning ${TICKET}"
 fi
