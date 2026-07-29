@@ -438,7 +438,11 @@ export function Editor({
           // just 401 at the upgrade forever; stop, and let the indicator show
           // that nothing typed from here on is being saved.
           console.log(`[Editor] Session no longer valid for ${documentId}; stopping collaboration`);
-          wsProvider!.shouldConnect = false;
+          // Explicit guard rather than a non-null assertion (TS-4 tracks the
+          // count of those and this branch is new code).
+          if (wsProvider) {
+            wsProvider.shouldConnect = false;
+          }
           setIsSynced(false);
           setIsInitialConnect(false);
           setSyncStatus('disconnected');

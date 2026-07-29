@@ -450,53 +450,72 @@ export function closeSocketsForSession(sessionId: string, reason = 'Session ende
   if (!sessionId) return 0;
   let closed = 0;
 
-  const closeOne = (ws: WebSocket) => {
-    // Mark first: ws.close() only starts the closing handshake, and 'message'
-    // can still fire before it completes. A revoked connection must not be able
-    // to land one more edit on the way out.
-    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-      ws.close(WS_CLOSE_SESSION_INVALID, reason);
-    }
-    closed++;
-  };
-
   conns.forEach((conn, ws) => {
-    if (conn.sessionId === sessionId && !conn.revoked) {
-      conn.revoked = true;
-      closeOne(ws);
-    }
+    if (conn.sessionId === sessionId && revokeConnection(ws, conn, reason)) closed++;
   });
   eventConns.forEach((conn, ws) => {
-    if (conn.sessionId === sessionId && !conn.revoked) {
-      conn.revoked = true;
-      closeOne(ws);
-    }
+    if (conn.sessionId === sessionId && revokeConnection(ws, conn, reason)) closed++;
   });
 
   return closed;
 }
 
 /**
+ * Revoke one connection: mark it, then close it.
+ *
+ * The order matters and must not be reversed. `ws.close()` only *starts* the
+ * closing handshake and 'message' can still fire before it completes, so the
+ * `revoked` flag has to be set first or a revoked connection can land one more
+ * edit on the way out.
+ *
+ * Returns true if this call revoked the connection (false if it already was).
+ */
+function revokeConnection(
+  ws: WebSocket,
+  conn: { revoked: boolean },
+  reason: string
+): boolean {
+  if (conn.revoked) return false;
+  conn.revoked = true;
+  if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+    ws.close(WS_CLOSE_SESSION_INVALID, reason);
+  }
+  return true;
+}
+
+/**
  * Re-check every session backing a live socket and disconnect the ones that are
  * gone or outside the session windows.
  *
- * One batched query for all distinct sessions, not one per connection.
+ * One batched query for all distinct sessions, not one per connection, and one
+ * pass over the connection maps rather than one pass per invalid session — a
+ * mass revocation is exactly when a rescan-per-id would degrade, and this runs
+ * on a timer in a security path.
  *
  * Fails OPEN on a database error: a transient outage must not disconnect every
  * open editor in the product. The next sweep re-checks.
  */
 export async function revalidateLiveSessions(): Promise<number> {
-  const sessionIds = new Set<string>();
-  conns.forEach((conn) => { if (conn.sessionId && !conn.revoked) sessionIds.add(conn.sessionId); });
-  eventConns.forEach((conn) => { if (conn.sessionId && !conn.revoked) sessionIds.add(conn.sessionId); });
-  if (sessionIds.size === 0) return 0;
+  // Index sessionId -> connections, built once, before the await. Sockets that
+  // connect while the query is in flight are deliberately not in this snapshot:
+  // they were just validated at upgrade, so judging them on an older read of the
+  // sessions table would be wrong.
+  const bySession = new Map<string, Array<{ ws: WebSocket; conn: { revoked: boolean } }>>();
+  const index = (ws: WebSocket, conn: { sessionId: string; revoked: boolean }) => {
+    if (!conn.sessionId || conn.revoked) return;
+    const entries = bySession.get(conn.sessionId);
+    if (entries) entries.push({ ws, conn });
+    else bySession.set(conn.sessionId, [{ ws, conn }]);
+  };
+  conns.forEach((conn, ws) => index(ws, conn));
+  eventConns.forEach((conn, ws) => index(ws, conn));
+  if (bySession.size === 0) return 0;
 
-  const ids = Array.from(sessionIds);
   let rows: Array<{ id: string; last_activity: string; created_at: string }>;
   try {
     const result = await pool.query(
       `SELECT id, last_activity, created_at FROM sessions WHERE id = ANY($1::text[])`,
-      [ids]
+      [Array.from(bySession.keys())]
     );
     rows = result.rows;
   } catch (err) {
@@ -511,9 +530,10 @@ export async function revalidateLiveSessions(): Promise<number> {
   }
 
   let closed = 0;
-  for (const id of ids) {
-    if (!stillValid.has(id)) {
-      closed += closeSocketsForSession(id, 'Session expired or revoked');
+  for (const [sessionId, entries] of bySession) {
+    if (stillValid.has(sessionId)) continue;
+    for (const { ws, conn } of entries) {
+      if (revokeConnection(ws, conn, 'Session expired or revoked')) closed++;
     }
   }
 
@@ -1002,8 +1022,17 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
   // unref() so the timer never keeps a test runner or CLI process alive.
   const revalidationIntervalMs =
     options.sessionRevalidationIntervalMs ?? DEFAULT_SESSION_REVALIDATION_INTERVAL_MS;
+
+  // Skip a tick rather than overlap. A sweep that outruns the interval is the
+  // slow-database case — the same case the fail-open branch exists for — and
+  // stacking invocations would pile queries onto an already-struggling pool.
+  let revalidationInFlight = false;
   const revalidationTimer = setInterval(() => {
-    void revalidateLiveSessions();
+    if (revalidationInFlight) return;
+    revalidationInFlight = true;
+    void revalidateLiveSessions().finally(() => {
+      revalidationInFlight = false;
+    });
   }, revalidationIntervalMs);
   revalidationTimer.unref?.();
 

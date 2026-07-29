@@ -30,9 +30,22 @@ const MESSAGE_SYNC = 0
 // Inlined rather than imported so this file also loads against the unfixed module.
 const EXPECTED_CLOSE_CODE = 4401
 
-// persistDocument() is debounced by 2s; give writes room to land (or to fail to).
-const PERSIST_WAIT_MS = 4_000
 const REVALIDATION_INTERVAL_MS = 200
+
+// `schedulePersist()` in api/src/collaboration/index.ts debounces persistDocument()
+// by this many ms. Any write the server accepted becomes visible in `documents`
+// within one debounce window of the frame arriving (sooner if the socket closes,
+// which flushes the pending save). Positive assertions poll for the value
+// appearing; this constant only sizes the window for proving a write ABSENT,
+// which cannot be polled for in the same way.
+const PERSIST_DEBOUNCE_MS = 2_000
+
+// Three debounce windows. Not a round number chosen for comfort: a write that was
+// going to land had two full windows in which to do so, plus one for scheduling
+// slack on a loaded CI box. TEST-11 (TRO-233) tracks fixed sleeps as this repo's
+// dominant flake cause, so this window is *sampled throughout* rather than slept
+// through — see watchContentAbsent().
+const ABSENCE_WATCH_MS = PERSIST_DEBOUNCE_MS * 3
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -134,6 +147,32 @@ describe('Collaboration session revocation (TRO-189 / ERR-2)', () => {
       content = await documentContent(docId)
     }
     return content
+  }
+
+  /**
+   * Bounded stability check for a value that must NEVER appear.
+   *
+   * An absence cannot be polled for the way a presence can, so a window is
+   * unavoidable — but sleeping through it and checking once at the end would
+   * miss a write that lands and is then overwritten by a later persist. This
+   * samples for the whole window and reports whether the marker was EVER seen.
+   */
+  async function watchContentAbsent(
+    docId: string,
+    marker: string,
+    windowMs = ABSENCE_WATCH_MS
+  ): Promise<{ everSeen: boolean; samples: number; lastContent: string }> {
+    const deadline = Date.now() + windowMs
+    let everSeen = false
+    let samples = 0
+    let lastContent = ''
+    do {
+      lastContent = await documentContent(docId)
+      samples++
+      if (lastContent.includes(marker)) everSeen = true
+      await delay(100)
+    } while (Date.now() < deadline)
+    return { everSeen, samples, lastContent }
   }
 
   interface TestClient {
@@ -279,14 +318,16 @@ describe('Collaboration session revocation (TRO-189 / ERR-2)', () => {
 
     // The revoked editor keeps typing, exactly as a logged-out user's open tab would.
     client.type(after)
-    await delay(PERSIST_WAIT_MS)
 
-    const content = await documentContent(docId)
-    expect(content, 'the earlier authorized edit must survive').toContain(before)
+    const watch = await watchContentAbsent(docId, after)
+
+    expect(watch.samples, 'the absence window must actually have been sampled').toBeGreaterThan(1)
+    expect(watch.lastContent, 'the earlier authorized edit must survive').toContain(before)
     expect(
-      content,
-      'a write made after the session was revoked must never reach the documents table (ERR-2 / probe7c)'
-    ).not.toContain(after)
+      watch.everSeen,
+      `a write made after the session was revoked must never reach the documents table (ERR-2 / probe7c) — ` +
+        `watched ${ABSENCE_WATCH_MS}ms across ${watch.samples} samples`
+    ).toBe(false)
   }, 40_000)
 
   it('closes sockets for a session immediately, without waiting for the sweep', async () => {
