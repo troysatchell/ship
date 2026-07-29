@@ -13,6 +13,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Least privilege. Without this key the default GITHUB_TOKEN scope applies, which
+# is broader than this workflow needs — it only reads, builds, tests and uploads.
+permissions:
+  contents: read
+
 env:
   # Unit tests TRUNCATE 16 tables in the beforeAll of every api test file
   # (api/src/test/setup.ts). This database exists only for that purpose.
@@ -87,6 +92,11 @@ jobs:
       # set to the package directory, so a relative path lands at api/api-tests.json
       # and the regression check below cannot find it.
       - name: API unit tests
+        # continue-on-error mirrors the web step: without it a single api failure
+        # skips every later step, so the regression check never runs and CI tells
+        # you it broke but not WHICH test. The regression check below is the gate
+        # for both packages — it fails the job on any new failure.
+        continue-on-error: true
         env:
           DATABASE_URL: ${{ env.CI_DATABASE_URL }}
           NODE_ENV: test
@@ -163,9 +173,14 @@ jobs:
             echo "|---|---:|---:|"
             for p in api web shared e2e; do
               [ -d "$p" ] || continue
-              files=$(git ls-files "$p" | grep -E '\.(ts|tsx|js|jsx|sql)$' | wc -l | tr -d ' ')
-              lines=$(git ls-files "$p" | grep -E '\.(ts|tsx|js|jsx|sql)$' | xargs wc -l 2>/dev/null | tail -1 | awk '{print $1}')
-              echo "| $p | $files | ${lines:-0} |"
+              # `grep` exits 1 on zero matches, which aborts the whole step under
+              # `set -e -o pipefail`. `xargs -r` avoids wc reading stdin when the
+              # list is empty. A package with no source files must report 0, not
+              # kill the job.
+              list=$(git ls-files "$p" | grep -E '\.(ts|tsx|js|jsx|sql)$' || true)
+              files=$(printf '%s' "$list" | grep -c . || true)
+              lines=$(printf '%s\n' "$list" | xargs -r wc -l 2>/dev/null | tail -1 | awk '{print $1}')
+              echo "| $p | ${files:-0} | ${lines:-0} |"
             done
             echo
             echo "## Direct dependencies"

@@ -28,8 +28,9 @@ for a in "$@"; do
   esac
 done
 
-WT_ROOT="$(git rev-parse --show-toplevel)"
-cd "$WT_ROOT"
+WT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "ERROR: not inside a git repository." >&2; exit 2; }
+cd "$WT_ROOT" || { echo "ERROR: cannot cd to ${WT_ROOT}" >&2; exit 2; }
 
 # .factory-env carries the ticket id and the worktree's EXCLUSIVE database.
 # Without it we would run unit tests against whatever DATABASE_URL happens to be
@@ -150,8 +151,12 @@ run_tests web
 WEAKENED=""
 DIFF_TESTS="$(git diff "${BASE_REF}"...HEAD --name-only -- '*.test.ts' '*.test.tsx' '*.spec.ts' 2>/dev/null || true)"
 if [ -n "$DIFF_TESTS" ]; then
+  # `.fixme(` is deliberately NOT forbidden: CLAUDE.md and .coderabbit.yaml both
+  # require test.fixme() for unimplemented tests (a bare TODO-only test passes
+  # silently — finding TEST-2). Forbidding it here would make the repo's rules
+  # unsatisfiable. `.skip`/`.todo` on the other hand disable a test that ran.
   SKIPS="$(git diff "${BASE_REF}"...HEAD -- '*.test.ts' '*.test.tsx' '*.spec.ts' 2>/dev/null \
-           | grep -E '^\+' | grep -cE '\.(skip|todo|fixme)\(' || true)"
+           | grep -E '^\+' | grep -cE '\.(skip|todo)\(' || true)"
   DELS="$(git diff "${BASE_REF}"...HEAD -- '*.test.ts' '*.test.tsx' '*.spec.ts' 2>/dev/null \
            | grep -E '^-' | grep -cE '^\-\s*(it|test|expect)\(' || true)"
   [ "${SKIPS:-0}" -gt 0 ] && WEAKENED="${WEAKENED}${SKIPS} newly skipped test(s); "
@@ -177,7 +182,9 @@ fi
 # --- G7: CHANGES.md entry (assignment rule 8) -------------------------------
 if [ ! -f CHANGES.md ]; then
   record changes-md fail "CHANGES.md missing (rule 8)"
-elif grep -q "$TICKET" CHANGES.md; then
+# Anchored on non-identifier boundaries: an unanchored match lets TRO-24
+# false-pass on an existing "TRO-244" entry written for a different ticket.
+elif grep -qE "(^|[^A-Za-z0-9-])${TICKET}([^A-Za-z0-9-]|\$)" CHANGES.md; then
   record changes-md pass "entry for ${TICKET} present"
 else
   record changes-md fail "no entry mentioning ${TICKET}"

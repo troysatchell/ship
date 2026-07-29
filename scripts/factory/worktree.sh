@@ -45,7 +45,10 @@ fi
 
 TICKET_SLUG="$(echo "$TICKET" | tr '[:upper:]-' '[:lower:]_')"
 DB_NAME="ship_wt_${TICKET_SLUG}"
-WT_PATH="${REPO_ROOT}/../Ship-wt-${TICKET_SLUG}"
+# Canonicalized: `git worktree list` prints resolved absolute paths, so an
+# unnormalized "${REPO_ROOT}/../Ship-wt-x" never matches and the reuse check
+# below silently misses — making every retry fail in `git worktree add`.
+WT_PATH="$(cd "${REPO_ROOT}/.." && pwd -P)/Ship-wt-${TICKET_SLUG}"
 
 echo "=== factory worktree: ${TICKET} ==="
 echo "  branch:    ${BRANCH}  (from ${BASE_REF})"
@@ -78,19 +81,49 @@ fi
 # Dropped and recreated so a retried ticket starts from a known state rather
 # than inheriting a half-migrated database from the previous attempt.
 echo "provisioning database ${DB_NAME}..."
+# WITH (FORCE) terminates any lingering backend first. Without it a retry after
+# a crashed agent — whose pool is still connected — fails with "database is being
+# accessed by other users" and aborts provisioning under `set -e`. (pg13+.)
 docker exec -i "$PG_CONTAINER" psql -U "$PG_USER" -d postgres -v ON_ERROR_STOP=1 \
-  -c "DROP DATABASE IF EXISTS ${DB_NAME};" \
+  -c "DROP DATABASE IF EXISTS ${DB_NAME} WITH (FORCE);" \
   -c "CREATE DATABASE ${DB_NAME} OWNER ${PG_USER};" >/dev/null
 
 DATABASE_URL="postgresql://${PG_USER}:${PG_PASSWORD}@${PG_HOST}:${PG_PORT}/${DB_NAME}"
 
 # --- 4. per-worktree ports --------------------------------------------------
-# Derived from the ticket slug so they are stable across re-provisions and
-# distinct between concurrent agents.
+# The hash gives a STABLE starting point across re-provisions; it does not give
+# uniqueness. md5 % 900 collides (birthday bound: ~50% odds by 36 concurrent
+# tickets), so we probe upward from it and claim the first port that is neither
+# listening nor already recorded in a sibling worktree's .factory-env.
 HASH="$(echo -n "$TICKET_SLUG" | md5 2>/dev/null | cut -c1-4 || echo -n "$TICKET_SLUG" | md5sum | cut -c1-4)"
 PORT_OFFSET=$(( 0x$HASH % 900 + 10 ))
-API_PORT=$(( 3000 + PORT_OFFSET ))
-WEB_PORT=$(( 5173 + PORT_OFFSET ))
+
+WT_PARENT="$(cd "${REPO_ROOT}/.." && pwd -P)"
+
+port_listening() {   # 0 = something is bound to it
+  ( exec 3<>"/dev/tcp/127.0.0.1/$1" ) >/dev/null 2>&1
+}
+
+port_claimed() {     # 0 = another worktree already recorded it
+  grep -rhsE "^export (API_PORT|WEB_PORT)=$1$" \
+    "${WT_PARENT}"/Ship-wt-*/.factory-env 2>/dev/null | grep -q .
+}
+
+find_free_port() {   # find_free_port <start>
+  local p="$1" tries=0
+  while [ $tries -lt 500 ]; do
+    if ! port_listening "$p" && ! port_claimed "$p"; then
+      echo "$p"; return 0
+    fi
+    p=$(( p + 1 )); tries=$(( tries + 1 ))
+  done
+  echo "ERROR: no free port found starting at $1" >&2
+  return 1
+}
+
+API_PORT="$(find_free_port $(( 3000 + PORT_OFFSET )))"
+WEB_PORT="$(find_free_port $(( 5173 + PORT_OFFSET )))"
+echo "  ports:     api ${API_PORT} / web ${WEB_PORT}"
 
 cd "$WT_PATH"
 
