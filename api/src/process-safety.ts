@@ -48,10 +48,24 @@ export interface DrainableServer {
 /** Injection seam for tests; defaults to the real `process`. */
 export type SafetyNetListener = (...args: unknown[]) => void;
 
+/**
+ * The slice of `process` this module uses. Deliberately structural and minimal so
+ * the real `process` satisfies it directly — no cast at the call site, and a test
+ * double has to implement only what is genuinely used.
+ */
 export interface SafetyNetTarget {
   on(event: string, listener: SafetyNetListener): unknown;
   off(event: string, listener: SafetyNetListener): unknown;
   exit(code: number): unknown;
+}
+
+/**
+ * What this module needs from a logger. `console` satisfies it, and so does a
+ * recording fake — without either side needing a cast, which is the point:
+ * `Pick<Console, 'error'>` forced one because its signature is `(...data: any[])`.
+ */
+export interface FatalLogger {
+  error(message: string, meta?: unknown): void;
 }
 
 export interface ProcessSafetyNetOptions {
@@ -64,7 +78,7 @@ export interface ProcessSafetyNetOptions {
   /** Hard cap on the drain window. */
   drainTimeoutMs?: number;
   target?: SafetyNetTarget;
-  logger?: Pick<Console, 'error'>;
+  logger?: FatalLogger;
 }
 
 /**
@@ -75,7 +89,7 @@ export function installProcessSafetyNet(options: ProcessSafetyNetOptions = {}): 
   const {
     server,
     drainTimeoutMs = DEFAULT_DRAIN_TIMEOUT_MS,
-    target = process as unknown as SafetyNetTarget,
+    target = process,
     logger = console,
   } = options;
 

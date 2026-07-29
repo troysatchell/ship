@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { EventEmitter } from 'events'
 import {
   installProcessSafetyNet,
   DEFAULT_DRAIN_TIMEOUT_MS,
   type SafetyNetTarget,
+  type FatalLogger,
 } from '../process-safety.js'
 
 /**
@@ -16,7 +17,12 @@ import {
  * process with a non-zero code rather than continuing on unknown state.
  *
  * The real `process` is never touched here — a fake target is injected, which is
- * exactly why `installProcessSafetyNet` takes one.
+ * exactly why `installProcessSafetyNet` accepts one.
+ *
+ * The drain is driven with vitest's fake timers rather than by sleeping. That is
+ * not just faster: advancing the clock deliberately is what lets the "exits
+ * exactly once" case prove an *absence* — no second exit after the window
+ * elapses — which no amount of real waiting can establish.
  */
 
 /** A stand-in for `process`: an EventEmitter plus a recording exit(). */
@@ -27,23 +33,33 @@ class FakeProcess extends EventEmitter implements SafetyNetTarget {
   }
 }
 
-function makeLogger() {
-  const calls: Array<{ message: string; meta: unknown }> = []
+interface LoggedCall {
+  message: string
+  meta?: unknown
+}
+
+/** A recording logger. Implements FatalLogger directly, so no cast is involved. */
+function makeLogger(): { calls: LoggedCall[]; logger: FatalLogger } {
+  const calls: LoggedCall[] = []
   return {
     calls,
     logger: {
-      error: (message: string, meta?: unknown) => {
+      error(message: string, meta?: unknown) {
         calls.push({ message, meta })
       },
-    } as unknown as Pick<Console, 'error'>,
+    },
   }
 }
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
 describe('installProcessSafetyNet (TRO-276 / ERR-10)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
   it('registers handlers for both fatal event types and removes them on uninstall', () => {
     const target = new FakeProcess()
 
@@ -68,60 +84,61 @@ describe('installProcessSafetyNet (TRO-276 / ERR-10)', () => {
   it('logs an uncaught exception with the error name, message and stack', () => {
     const target = new FakeProcess()
     const { calls, logger } = makeLogger()
-    installProcessSafetyNet({ target, logger, drainTimeoutMs: 10_000 })
+    installProcessSafetyNet({ target, logger })
 
-    const boom = new RangeError('Invalid typed array length: 5')
-    target.emit('uncaughtException', boom, 'uncaughtException')
+    target.emit('uncaughtException', new RangeError('Invalid typed array length: 5'), 'uncaughtException')
 
-    expect(calls.length, 'the fatal must be logged, not swallowed').toBe(1)
-    expect(calls[0]!.message).toContain('uncaughtException')
-
-    const meta = calls[0]!.meta as Record<string, any>
-    expect(meta.error.name).toBe('RangeError')
-    expect(meta.error.message).toBe('Invalid typed array length: 5')
-    expect(meta.error.stack, 'the stack must be captured for diagnosis').toBeTruthy()
-    // The lib0 trap that sent an earlier ticket to the wrong file: decoding
-    // errors are module-scope singletons whose stack is captured at import time.
-    // The log has to say so, or the next reader chases the same ghost.
-    expect(
-      meta.error.stackCaveat,
-      'the log must warn that the stack may not be the throw site'
-    ).toBeTruthy()
-    expect(meta.timestamp, 'a fatal log needs a timestamp').toBeTruthy()
+    expect(calls, 'the fatal must be logged, not swallowed').toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      message: expect.stringContaining('uncaughtException'),
+      meta: {
+        kind: 'uncaughtException',
+        error: {
+          name: 'RangeError',
+          message: 'Invalid typed array length: 5',
+          // The stack is captured for diagnosis but explicitly flagged as
+          // unreliable: lib0 — the decoder behind the ERR-10 crashes — builds its
+          // errors as module-scope singletons whose stack is captured at import
+          // time, so the trace is not the throw site. An earlier ticket chased the
+          // wrong file for exactly this reason, so the caveat travels with the log.
+          stack: expect.any(String),
+          stackCaveat: expect.any(String),
+        },
+        timestamp: expect.any(String),
+      },
+    })
   })
 
-  it('stops accepting new connections and exits non-zero after the drain window', async () => {
+  it('stops accepting new connections and exits non-zero after the drain window', () => {
     const target = new FakeProcess()
     const close = vi.fn()
-    installProcessSafetyNet({
-      target,
-      logger: makeLogger().logger,
-      // `server.close()` waits for every existing connection to end, and open
-      // WebSockets never do — so the timeout, not the close callback, is the
-      // normal path to exit in this process.
-      server: { close },
-      drainTimeoutMs: 30,
-    })
+    const drainTimeoutMs = 5_000
+    installProcessSafetyNet({ target, logger: makeLogger().logger, server: { close }, drainTimeoutMs })
 
     target.emit('uncaughtException', new Error('Unexpected end of array'))
 
+    // `server.close()` waits for every existing connection to end, and open
+    // WebSockets never do — so the timeout, not the close callback, is the normal
+    // path to exit in this process.
     expect(close, 'the listening socket must be closed so no new work arrives during the drain').toHaveBeenCalledTimes(1)
     expect(target.exitCodes, 'the exit must not be immediate — in-flight work gets the drain window').toEqual([])
 
-    await delay(120)
+    vi.advanceTimersByTime(drainTimeoutMs - 1)
+    expect(target.exitCodes, 'the drain window must actually be honoured').toEqual([])
 
+    vi.advanceTimersByTime(1)
     expect(
       target.exitCodes,
       'a process that has lost track of its own state must end, and with a non-zero code so the supervisor restarts it'
     ).toEqual([1])
   })
 
-  it('exits as soon as the drain completes rather than always waiting out the window', async () => {
+  it('exits as soon as the drain completes rather than always waiting out the window', () => {
     const target = new FakeProcess()
     installProcessSafetyNet({
       target,
       logger: makeLogger().logger,
-      server: { close: (cb?: () => void) => cb?.() },
+      server: { close: (callback?: () => void) => callback?.() },
       drainTimeoutMs: 10_000,
     })
 
@@ -130,22 +147,26 @@ describe('installProcessSafetyNet (TRO-276 / ERR-10)', () => {
     expect(target.exitCodes).toEqual([1])
   })
 
-  it('exits exactly once even when the drain window elapses after a completed drain', async () => {
+  it('exits exactly once even when the drain window elapses after a completed drain', () => {
     const target = new FakeProcess()
+    const drainTimeoutMs = 5_000
     installProcessSafetyNet({
       target,
       logger: makeLogger().logger,
-      server: { close: (cb?: () => void) => cb?.() },
-      drainTimeoutMs: 20,
+      server: { close: (callback?: () => void) => callback?.() },
+      drainTimeoutMs,
     })
 
     target.emit('uncaughtException', new Error('boom'))
-    await delay(80)
+    expect(target.exitCodes).toEqual([1])
 
-    expect(target.exitCodes, 'double exit would mask the first exit code').toEqual([1])
+    // Run the clock past the drain timer that is still pending. A double exit
+    // would mask the first exit code.
+    vi.advanceTimersByTime(drainTimeoutMs * 2)
+    expect(target.exitCodes).toEqual([1])
   })
 
-  it('abandons the drain if a second fatal arrives while shutting down', async () => {
+  it('abandons the drain if a second fatal arrives while shutting down', () => {
     const target = new FakeProcess()
     const { calls, logger } = makeLogger()
     installProcessSafetyNet({
@@ -162,37 +183,45 @@ describe('installProcessSafetyNet (TRO-276 / ERR-10)', () => {
     target.emit('uncaughtException', new Error('second'))
 
     expect(target.exitCodes, 'a second fatal during shutdown must exit immediately').toEqual([1])
-    expect(calls.length, 'both fatals must be logged').toBe(2)
-    expect(calls[1]!.message).toContain('during shutdown')
+    expect(calls, 'both fatals must be logged').toHaveLength(2)
+    expect(calls[1]).toMatchObject({
+      message: expect.stringContaining('during shutdown'),
+      meta: { error: { message: 'second' } },
+    })
   })
 
-  it('treats an unhandled rejection as fatal on the same path', async () => {
+  it('treats an unhandled rejection as fatal on the same path', () => {
     const target = new FakeProcess()
     const { calls, logger } = makeLogger()
     const close = vi.fn()
-    installProcessSafetyNet({ target, logger, server: { close }, drainTimeoutMs: 30 })
+    const drainTimeoutMs = 5_000
+    installProcessSafetyNet({ target, logger, server: { close }, drainTimeoutMs })
 
     // Node's default has been --unhandled-rejections=throw since v15, so this
-    // already kills the process today. Owning it changes the diagnostics, not
-    // the outcome.
+    // already kills the process today. Owning it changes the diagnostics, not the
+    // outcome.
     target.emit('unhandledRejection', new Error('rejected'), Promise.resolve())
 
-    expect(calls[0]!.message).toContain('unhandledRejection')
+    expect(calls[0]).toMatchObject({
+      message: expect.stringContaining('unhandledRejection'),
+      meta: { kind: 'unhandledRejection', error: { message: 'rejected' } },
+    })
     expect(close).toHaveBeenCalledTimes(1)
 
-    await delay(120)
+    vi.advanceTimersByTime(drainTimeoutMs)
     expect(target.exitCodes).toEqual([1])
   })
 
   it('logs a non-Error rejection value instead of dropping it', () => {
     const target = new FakeProcess()
     const { calls, logger } = makeLogger()
-    installProcessSafetyNet({ target, logger, drainTimeoutMs: 10_000 })
+    installProcessSafetyNet({ target, logger })
 
     target.emit('unhandledRejection', 'a bare string rejection', Promise.resolve())
 
-    const meta = calls[0]!.meta as Record<string, any>
-    expect(meta.error.message).toBe('a bare string rejection')
+    expect(calls[0]).toMatchObject({
+      meta: { error: { message: 'a bare string rejection' } },
+    })
   })
 
   it('defaults the drain window to a bounded, non-zero value', () => {
