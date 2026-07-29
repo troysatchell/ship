@@ -612,7 +612,9 @@ function RailIcon({ icon, label, active, onClick, showBadge }: { icon: React.Rea
 
 const SIDEBAR_ITEM_LIMIT = 10;
 
-function DocumentsTree({ documents, activeId, onSelect }: { documents: WikiDocument[]; activeId?: string; onSelect: (id: string) => void }) {
+// Exported for unit tests (web/src/pages/App.test.tsx) — the workspace/private
+// document sidebars are the subject of A11Y-1 (TRO-215) and need direct coverage.
+export function DocumentsTree({ documents, activeId, onSelect }: { documents: WikiDocument[]; activeId?: string; onSelect: (id: string) => void }) {
   // Split documents by visibility and build separate trees
   const { privateTree, workspaceTree } = useMemo(() => {
     // Group documents by visibility (root documents determine the section)
@@ -643,7 +645,15 @@ function DocumentsTree({ documents, activeId, onSelect }: { documents: WikiDocum
           <GlobeIcon className="h-3 w-3" />
           Workspace
         </div>
-        <ul role="tree" aria-label="Workspace documents" aria-live="polite" className="space-y-0.5 px-2">
+        {/* Native list semantics — see A11Y-1 / TRO-215. Do not add role="tree"
+            without also implementing the full tree keyboard model (roving
+            tabIndex, arrow keys, aria-level/setsize/posinset).
+            aria-live is retained deliberately: it is the WCAG 4.1.3 mechanism
+            for announcing document create/delete, asserted by
+            e2e/accessibility-remediation.spec.ts "document tree updates are
+            announced". Whether it is too verbose on expand/collapse needs a
+            human screen-reader pass, not a guess. */}
+        <ul aria-label="Workspace documents" aria-live="polite" className="space-y-0.5 px-2">
           {workspaceToShow.length > 0 ? (
             workspaceToShow.map((doc) => (
               <DocumentTreeItem
@@ -676,7 +686,7 @@ function DocumentsTree({ documents, activeId, onSelect }: { documents: WikiDocum
             <LockIcon className="h-3 w-3" />
             Private
           </div>
-          <ul role="tree" aria-label="Private documents" aria-live="polite" className="space-y-0.5 px-2">
+          <ul aria-label="Private documents" aria-live="polite" className="space-y-0.5 px-2">
             {privateToShow.map((doc) => (
               <DocumentTreeItem
                 key={doc.id}
@@ -826,9 +836,6 @@ function DocumentTreeItem({
 
   return (
     <li
-      role="treeitem"
-      aria-expanded={hasChildren ? isOpen : undefined}
-      aria-selected={isActive}
       data-tree-item
       data-testid="doc-item"
     >
@@ -850,6 +857,7 @@ function DocumentTreeItem({
             className="w-4 h-4 flex-shrink-0 flex items-center justify-center p-0 rounded hover:bg-border/50"
             onClick={() => setIsOpen(!isOpen)}
             aria-label={isOpen ? 'Collapse' : 'Expand'}
+            aria-expanded={isOpen}
           >
             <ChevronIcon isOpen={isOpen} />
           </button>
@@ -912,7 +920,7 @@ function DocumentTreeItem({
 
       {/* Children (collapsible) */}
       {hasChildren && isOpen && (
-        <ul role="group" className="space-y-0.5">
+        <ul className="space-y-0.5">
           {document.children.map((child) => (
             <DocumentTreeItem
               key={child.id}
@@ -1247,12 +1255,12 @@ function ProjectsList({
 
   return (
     <>
-      <ul className="space-y-0.5 px-2" role="tree" data-testid="projects-list">
+      <ul className="space-y-0.5 px-2" aria-label="Projects" data-testid="projects-list">
         {projects.map((project) => {
           const isExpanded = expandedProjects.has(project.id);
           const currentTab = getCurrentTab(project.id);
           return (
-            <li key={project.id} data-testid="project-item" role="treeitem" aria-expanded={isExpanded}>
+            <li key={project.id} data-testid="project-item">
               <div className="group relative">
                 <div
                   onContextMenu={(e) => handleContextMenu(e, project)}
@@ -1269,6 +1277,7 @@ function ProjectsList({
                     onClick={() => toggleProject(project.id)}
                     className="w-4 h-4 flex-shrink-0 flex items-center justify-center p-0 rounded hover:bg-border/50"
                     aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                    aria-expanded={isExpanded}
                   >
                     <ChevronIcon isOpen={isExpanded} />
                   </button>
@@ -1304,8 +1313,8 @@ function ProjectsList({
 
               {/* Expanded content - Project tabs */}
               {isExpanded && (
-                <ul className="ml-6 space-y-0.5 mt-0.5" role="group">
-                  <li role="treeitem">
+                <ul className="ml-6 space-y-0.5 mt-0.5">
+                  <li>
                     <Link
                       to={`/documents/${project.id}`}
                       className={cn(
@@ -1319,7 +1328,7 @@ function ProjectsList({
                       <span>Details</span>
                     </Link>
                   </li>
-                  <li role="treeitem">
+                  <li>
                     <Link
                       to={`/documents/${project.id}/weeks`}
                       className={cn(
@@ -1333,7 +1342,7 @@ function ProjectsList({
                       <span>Weeks</span>
                     </Link>
                   </li>
-                  <li role="treeitem">
+                  <li>
                     <Link
                       to={`/documents/${project.id}/issues`}
                       className={cn(
@@ -1347,7 +1356,7 @@ function ProjectsList({
                       <span>Issues</span>
                     </Link>
                   </li>
-                  <li role="treeitem">
+                  <li>
                     <Link
                       to={`/documents/${project.id}/retro`}
                       className={cn(

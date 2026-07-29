@@ -22,7 +22,7 @@ test('debug document creation', async ({ page }) => {
   await page.waitForLoadState('networkidle');
 
   // Count initial documents
-  const initialCount = await page.locator('aside [role="tree"] [role="treeitem"]').count();
+  const initialCount = await page.locator('aside ul[aria-label*="documents"] [data-testid="doc-item"]').count();
   console.log('Initial document count:', initialCount);
 
   // Get the button - should match the sidebar "New document" button
@@ -47,7 +47,7 @@ test('debug document creation', async ({ page }) => {
   console.log('Current URL after click:', currentUrl);
 
   // Check document count
-  const newCount = await page.locator('aside [role="tree"] [role="treeitem"]').count();
+  const newCount = await page.locator('aside ul[aria-label*="documents"] [data-testid="doc-item"]').count();
   console.log('New document count:', newCount);
 
   // Dump console messages
