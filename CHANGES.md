@@ -76,6 +76,9 @@ these 31 files are the only mechanism that would ever have changed it. Notable: 
 `028` and `034` are backfills. **The first deploy after this change will apply all 32 at once.**
 Take a snapshot first and run `pnpm db:migrate` against a restore of production before running it
 against production.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
