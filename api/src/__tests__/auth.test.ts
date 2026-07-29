@@ -91,7 +91,11 @@ describe('authMiddleware', () => {
   });
 
   describe('session timeout handling', () => {
-    it('returns 401 when session exceeds the inactivity timeout', async () => {
+    // The enforced bound is SESSION_INACTIVITY_LIMIT_MS — the 15-minute window plus the
+    // interval the last_activity write is throttled on, so a lagging recorded value
+    // cannot expire a session early. Both edges are pinned in
+    // middleware/__tests__/session-activity-throttle.test.ts.
+    it('returns 401 when session exceeds 15-minute inactivity timeout', async () => {
       const { req, res, next } = createMockReqRes({ session_id: 'stale-session' });
       const now = new Date();
       const staleActivity = new Date(now.getTime() - SESSION_INACTIVITY_LIMIT_MS - 1000);
