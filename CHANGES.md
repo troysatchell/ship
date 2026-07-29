@@ -90,6 +90,24 @@ The one remaining failure is a different defect and is **not fixed**:
 exceeded even the 15s deadline once in 20 runs, which is a hung request rather than a slow one. It
 needs its own ticket.
 
+**How to run it.**
+
+```bash
+source .factory-env    # api tests TRUNCATE 16 tables; never run them without this
+
+# The guard, and the four vitest semantics the fix rests on.
+pnpm --filter @ship/api test --run src/__tests__/mock-isolation.test.ts
+
+# Defect 2, directly: two suites against one database. Both must now pass.
+# Before the lock they reported 18 and 20 failures, and 11 and 33 phantom skips.
+pnpm --filter @ship/api test --run & (sleep 4; pnpm --filter @ship/api test --run); wait
+
+# The repetition the flake actually needed: build load in parallel with the suite.
+for i in 1 2 3 4; do (while :; do pnpm --filter @ship/api type-check; done >/dev/null 2>&1) & done
+for n in $(seq 1 20); do pnpm --filter @ship/api test --run >/dev/null 2>&1 || echo "run $n FAILED"; done
+kill %1 %2 %3 %4
+```
+
 **Rollback.** `git revert` the commits. The lock is confined to the test setup file and the
 converted files are self-contained; nothing in `api/src` production code changed.
 
