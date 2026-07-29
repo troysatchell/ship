@@ -26,12 +26,56 @@
 | **Render deploy** | ✅ **live + seeded (2026-07-28)** — https://ship-rr6m.onrender.com |
 | Assignment implementation rules tracked | ✅ epic `TRO-241` + 6 sub-issues (2026-07-28) |
 | Screen-reader pass (Cat 7) | ✅ done (2026-07-28) — A11Y-1 escalated to Urgent |
-| Improvement phase (compare loops) | ⬜ **Fri Jul 31 — next session** |
+| Ticket factory harness | ✅ built + self-tested + committed (2026-07-29) — `feat/ticket-factory-harness` @ `ea2dcd3` |
+| CI pipeline (`TRO-244`, rule 4) | ✅ written (2026-07-29) — `.github/workflows/ci.yml`; first real run is the harness PR |
+| Improvement phase (compare loops) | ⬜ **Fri Jul 31** — harness ready, zero tickets worked |
 | Demo-video companion artifact | ✅ published (2026-07-28) — before/after slots pending Friday |
 | Discovery write-up · demo video · AI cost analysis · social post | ⬜ Sun Aug 2 |
 | Final polish + presentation | ⬜ Sun Aug 2 |
 
 ## Log
+
+### 2026-07-29 (Wed) — Day 3 — ticket factory built and proven on itself
+
+**No audit tickets were worked today.** What was built is the machinery to work them
+autonomously, plus `TRO-244` (CI), which the factory needed anyway. All of it is **uncommitted**.
+
+- **Green-on-arrival established.** `audit/factory/quarantine.json` — api **451/451 green**, web
+  **138/151**, the 13 failures being TEST-1 (`TRO-223`), recorded by *identity*
+  (`file::full test name`), not by count. api was measured on a dedicated database because
+  `api/src/test/setup.ts:9-21` TRUNCATEs 16 tables in the `beforeAll` of every test file.
+- **The eval is two-tier**, and the distinction matters: `gate.sh` answers *did this break
+  anything* (seconds, every attempt); a category compare run against the `audit-baseline` tag
+  answers *did this measurably improve anything* (expensive, batched). Tests passing is not
+  evidence of improvement, and improvement is 40% of the grade. Details in
+  `.claude/skills/ship-factory/references/evals.md`.
+- **The gate was negative-tested, not assumed.** Forged a vitest report where one passing test
+  fails and one quarantined test is fixed: total failures stayed at 13, and the gate still failed
+  and named the new break. A count-based comparison would have passed it.
+- **CodeRabbit reviewed the harness itself — 13 findings, 10 fixed, 3 dismissed.** Two were
+  serious:
+  1. *Critical* — the ticket ID reached `CREATE DATABASE` uninterpolated-unchecked in
+     `worktree.sh`; identifiers can't be bound as parameters, so `X"; DROP DATABASE …` would have
+     executed. Now validated against `^[A-Za-z][A-Za-z0-9]*-[A-Za-z0-9]+$` before any psql call.
+  2. *Anti-gaming hole* — `gate.sh` read `quarantine.json` from the **ticket branch**, so an agent
+     could have appended its own new failures and gone green. Now materialized from `BASE_REF`.
+  Dismissed: two gitignored build artifacts and one trivial nit.
+- **Two bugs found by my own testing**, both now rules in `references/lessons.md`: in a linked
+  worktree `.git` is a **file**, so `.git/info/exclude` fails "Not a directory" and under `set -e`
+  aborts provisioning *before* migration (a worktree came out with a database and 0 tables); and
+  `grep -c … || echo 0` yields `"0\n0"` because `grep -c` prints `0` then exits 1.
+- **DB-1 reproduced again** incidentally: provisioning ran `pnpm db:migrate`, which reported
+  `rc=0` while abandoning at migration 010. Schema still complete, because `schema.sql` runs
+  first — the documented nuance, confirmed a second time.
+- **`gh` could not resolve the repo at all** — `origin` fetches from GitLab, so every `gh pr`
+  call would have failed. Fixed with `GH_REPO=troysatchell/ship` in `.claude/settings.local.json`
+  rather than by touching the deliberate dual-push remote config.
+- **CodeRabbit GitHub App is not installed** — verified from the CLI's own message, not inferred.
+  Without it there are no automatic PR reviews.
+
+**Decisions (maintainer, 2026-07-29):** auto-merge once the CodeRabbit review is green; push and
+PR creation pre-authorized; parallel by default, serializing only on real dependencies; scope for
+Phase 2 is the 4 Criticals + the assignment rules, not all 75 tickets.
 
 ### 2026-07-28 (Tue) — Day 2, night — Phase 1 closed, application deployed and seeded
 

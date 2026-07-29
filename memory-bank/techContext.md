@@ -32,6 +32,29 @@ pnpm build:web      # tsc && vite build → web/dist
 - Load tool: autocannon @ concurrency 10/25/50. Query logging: `ALTER SYSTEM SET log_statement='all'` (revert after).
 - a11y tooling (verified 2026-07-27, no system Chrome on this box): Lighthouse via `npx lighthouse@11` pointed at Playwright's Chromium through `CHROME_PATH` (…/ms-playwright/chromium-1217/…/Google Chrome for Testing), authenticated with the session cookie in `--extra-headers`. axe via the repo's `@axe-core/playwright` — import `chromium` from `@playwright/test` (NOT `playwright`) and run scripts from the repo root so node resolves the workspace modules. Runners: `audit/a11y/run-lighthouse.sh`, `audit/a11y/axe-scan.mjs` (both read `SESSION_ID`/`WIKI_DOC_ID` from env — re-auth first).
 
+## Ticket factory (added 2026-07-29)
+
+```bash
+scripts/factory/worktree.sh TRO-178 fix/db-1-migration-runner   # worktree + EXCLUSIVE db + ports
+cd ../Ship-wt-tro_178 && source .factory-env                    # exports DATABASE_URL
+scripts/factory/gate.sh            # full gate;  --fast = skip build+review (inner loop)
+```
+
+- Skill: `/ship-factory` (`.claude/skills/ship-factory/` — SKILL.md + 5 references).
+- **Per-ticket databases are mandatory**, not tidiness: `api/src/test/setup.ts:9-21` TRUNCATEs 16
+  tables in the `beforeAll` of *every* api test file. `gate.sh` refuses to run unless
+  `DATABASE_URL` matches `ship_wt_*` / `ship_factory_*` / `ship_ci*`.
+- Baseline: `audit/factory/quarantine.json` (api 451/451; web 138/151, the 13 = TEST-1/`TRO-223`).
+  `gate.sh` materializes it from `BASE_REF`, never the ticket branch, so it cannot be widened to
+  force a pass. Scorecard: `audit/factory/scorecard.jsonl`.
+- `.factory-env` and `.factory/` are gitignored. Do **not** use `.git/info/exclude` in a worktree —
+  `.git` is a file there.
+- `gh` needs `GH_REPO=troysatchell/ship` (origin fetches GitLab); set in
+  `.claude/settings.local.json`.
+- CodeRabbit: CLI v0.7.0 authed as troysatchell. `coderabbit review --agent --base <ref>` emits
+  JSONL findings (`--plain` does not exist; plain text is the default). **The GitHub App is not
+  installed** on `troysatchell/ship` — no automatic PR reviews until it is.
+
 ## Seed volumes (RESOLVED — deterministic 500 docs / 20 users)
 
 Built-in `pnpm db:seed` ≈ 257 docs / 11 users — short of the brief's **500+ docs / 100+ issues / 20+ users / 10+ sprints**. `audit/seed-augment.ts` tops it up deterministically. Reproduce the audited dataset (needed for compare mode) in this order:
