@@ -24,6 +24,12 @@ import {
  * Worst realistic single-user burst, derived from the audit's browser trace:
  * the heaviest flow (login) costs 16 `/api` requests, and a user navigating
  * every 3 s performs 20 navigations per minute. 16 x 20 = 320 req/min.
+ *
+ * Deliberately NOT imported from `rate-limit.ts`, which exports the same number
+ * as `MEASURED_WORST_CASE_BURST_PER_MINUTE`. This is the test's oracle and it
+ * comes from the measurement, not from the implementation — sharing the symbol
+ * would let a future change lower the production ceiling and the bar it is
+ * checked against in one edit, and the test would still pass.
  */
 const WORST_CASE_BURST_PER_MINUTE = 320
 
