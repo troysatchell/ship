@@ -8,6 +8,116 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-173 (API-2) + TRO-182 (DB-5) — the issue list stops shipping every issue's document body
+
+Two findings, one cause, one change. API-2 measured it at the socket (`GET /api/issues` was the
+slowest endpoint at every concurrency level and sent 379,907 bytes for 254 issues); DB-5 measured
+the same thing in the planner (`width=1023` per row, against `width=300` for the `/api/documents`
+projection that omits `content`). The list and detail views shared **one** SELECT projection
+(`api/src/routes/issues.ts:126`, `content: row.content` at `:99`), so the list carried each issue's
+full TipTap body, and there was no `LIMIT`/`OFFSET` anywhere in the file.
+
+**Not a query problem.** The handler already batches associations in one `ANY($1)` query
+(`api/src/utils/document-crud.ts:148-180`) — no N+1 — and the plan is a seq scan over 254 rows
+costing ~142. The cost was `JSON.stringify` plus socket writes. No index was added; none was
+missing.
+
+**What changed.**
+
+- `extractIssueFromRow` split into `extractIssueListItemFromRow` (shared fields) plus a thin
+  `extractIssueFromRow` wrapper that adds `content` back. `GET /api/issues/:id`,
+  `/by-ticket/:number` and `/:id/children` still return the body and are byte-identical.
+- `d.content` removed from the list SELECT.
+- `limit` (1-500) and `offset` (>=0) added to `GET /api/issues`, validated with zod. Unparseable or
+  out-of-range values get **400**, not silent truncation.
+
+**The pagination contract, stated deliberately: there is NO default limit.** Omit both params and
+you get every matching row, in the same order, exactly as before. That is not laziness — two
+consumers read the response as a complete set, and a default limit would have returned *wrong*
+lists rather than shorter ones:
+
+- `web/src/hooks/useIssuesQuery.ts:137-143` filters by project **client-side** over the whole array
+  (the API has no `project_id` filter — see the follow-up below).
+- `web/src/components/IssuesList.tsx:310-330` groups, counts and merges the full array, including
+  the "Show All Issues" path.
+
+No web caller passes `limit` or `offset` today, so no existing caller changes behaviour. New
+callers (and the generated MCP tool) can now bound a response; a caller knows it has the last page
+when it receives fewer rows than it asked for.
+
+**Contract change is registered with OpenAPI.** `GET /issues` now responds with a new
+`IssueListItem` component — `Issue` minus `content` — and documents `limit`, `offset` and the 400.
+`api/openapi.{json,yaml}` regenerated, so Swagger and the runtime-generated MCP tools describe the
+shape the route actually returns. `Issue` (27 properties, with `content`) still backs the detail
+paths.
+
+**Evidence.** Same machine, same worktree, same deterministic dataset for every number below:
+PostgreSQL 15-alpine in Docker (`ship-audit-pg`, `:5433`), API on `:3155` via `tsx watch` with
+`NODE_ENV=development`, `pnpm db:seed` + `audit/seed-augment.ts` → **500 documents / 254 issues /
+20 users** (the audit's volumes; the seed is fixed-seed so before and after ran against identical
+bytes — `sum(pg_column_size(content))` = 158 kB / 64.5% of issue row bytes both times, matching
+DB-5's figure). Before/after were measured by swapping only `api/src/routes/issues.ts`.
+
+| | before | after | |
+|---|---|---|---|
+| `GET /api/issues` payload (254 issues) | 379,907 B | **241,338 B** | 1.57× smaller |
+| `EXPLAIN` row width | `width=1023` | **`width=335`** | 3.05× narrower |
+| p95 @ c=10 | 42.0 ms | **28.6 ms** | |
+| p95 @ c=25 | 90.4 ms | **59.1 ms** | |
+| p95 @ c=50 | 184.0 ms | **107.9 ms** | |
+| p99 @ c=50 | 228.4 ms | **161.2 ms** | |
+| throughput ceiling (Little's law) | ~311-325 rps | **~490-546 rps** | |
+| `GET /api/issues?limit=50` | 379,907 B (ignored) | **47,608 B** | |
+| `GET /api/issues/:id` | 1,802 B | 1,802 B | unchanged |
+
+Latency: autocannon 8.0.0 installed into a session scratchpad (never into the repo), 600 requests
+per level — a fixed request count rather than a duration, because
+`api/src/middleware/rate-limit.ts:89` caps one session identity at 1000 requests / 60 s in
+development. Each level logged in fresh for its own bucket; `non2xx=0, errors=0` on every level, so
+no 429 is hiding in these numbers. Percentiles come from per-response latencies on autocannon's
+`response` event. A second `after` run put p95 @ c=25 at 55.5 ms and @ c=50 at 110.2 ms, so read
+these as ±5%. The `before` column reproduces the audit baseline (its c=25 p95 was 94.5 ms, c=50 p95
+182.0 ms), which is the reason to trust the `after` column.
+
+**Where the ticket's estimate was wrong.** TRO-173 predicted ~2.6× payload shrink and p95 @ c=25
+falling to 35-40 ms. Actual: 1.57× and 59 ms. The estimate applied content's **database** share
+(64.5% of row bytes) to the **JSON** payload, but in the response body `content` was only 146,015 of
+379,907 bytes — **38.4%**. The other 25 fields carry per-row overhead (UUIDs, ISO timestamps,
+repeated key names) that dominates at 254 rows. The mechanism held exactly; the magnitude did not.
+The largest remaining component is now `belongs_to` at 80,900 bytes (**33.5%** of the response) —
+association objects carrying `title` for every program/project/sprint/parent. That is the next
+payload win on this endpoint and it has no ticket.
+
+**How to run it.**
+
+```bash
+source .factory-env                                   # api tests TRUNCATE 16 tables
+pnpm --filter @ship/api test -- src/routes/issues.test.ts
+pnpm type-check
+pnpm --filter @ship/api openapi:generate              # should be a no-op diff
+```
+
+**Roll back.** `git revert` the commits on `fix/api-2-db-5-issues-payload`. By hand: put
+`d.content,` back in the list SELECT, call `extractIssueFromRow` instead of
+`extractIssueListItemFromRow` in the list handler, drop `listPaginationSchema` and the
+`LIMIT`/`OFFSET` block, restore `z.array(IssueResponseSchema)` on the `/issues` 200 response, and
+regenerate the spec. The five new cases in `api/src/routes/issues.test.ts` fail if the body comes
+back or pagination stops being honoured.
+
+**Not verified.** Only api-tier tests and this endpoint were exercised — no browser pass confirms
+the issues list still renders correctly against the narrower payload (it should: the web `Issue`
+interface at `web/src/hooks/useIssuesQuery.ts:25-48` never declared `content`, and no `.tsx` reads
+it off an issue). `/api/issues/:id/children` still returns `content` for sub-issues; it has the
+same shape of waste, bounded by children per issue, and was left alone deliberately rather than
+widening this change.
+
+**Found, not fixed.** `web/src/components/sidebars/ProjectContextSidebar.tsx:148` requests
+`/api/issues?project_id=<id>`, but the list route never reads `project_id` — the parameter is
+silently ignored and that sidebar receives every issue in the workspace. Pre-existing, unrelated to
+these two findings, and worth its own ticket.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
