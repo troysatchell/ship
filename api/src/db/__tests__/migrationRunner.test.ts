@@ -321,23 +321,92 @@ describe('migration runner — error handling (DB-1 / TRO-178)', () => {
   );
 
   it(
-    'still tolerates duplicate-object errors raised by schema.sql itself',
+    'refuses to report success when a rolled-back schema batch applied nothing',
     async () => {
-      // schema.sql is initial-setup DDL that is re-applied on every deploy. A
-      // non-idempotent statement there must remain survivable — narrowing the
-      // catch must not turn a routine re-run into a failed deploy.
+      // pool.query sends schema.sql as one simple query, so Postgres runs it as
+      // a single implicit transaction: a duplicate-object error at any statement
+      // discards the whole batch. Tolerating that and returning normally — which
+      // this runner used to do — is DB-1 inside the DB-1 fix.
+      //
+      // This test replaces one that asserted the opposite ("still tolerates
+      // duplicate-object errors raised by schema.sql itself"). That assertion
+      // described the defect: it passed precisely because nothing was applied
+      // and nobody was told.
       const root = mkdtempSync(join(tmpdir(), 'tro178-schema-'));
       try {
         mkdirSync(join(root, 'migrations'));
-        writeFileSync(join(root, 'schema.sql'), 'CREATE TABLE tro178_dup (id INT);\n');
+        // First statement is non-idempotent, second is the object that a silent
+        // rollback would quietly fail to create.
+        writeFileSync(
+          join(root, 'schema.sql'),
+          'CREATE TABLE tro178_dup (id INT);\n' +
+            'CREATE TABLE IF NOT EXISTS tro178_rollback_victim (id INT);\n'
+        );
         const options = {
           schemaPath: join(root, 'schema.sql'),
           migrationsDir: join(root, 'migrations'),
           log: silent,
         };
 
+        // Pass 1 creates both tables and succeeds.
         await runMigrations(pool, options);
-        await expect(runMigrations(pool, options)).resolves.toBeDefined();
+        await pool.query('DROP TABLE tro178_rollback_victim');
+
+        // Pass 2: 'CREATE TABLE tro178_dup' now conflicts, the batch rolls back,
+        // and tro178_rollback_victim is therefore NOT recreated. The run must
+        // fail rather than claim success for work it did not do.
+        await expect(runMigrations(pool, options)).rejects.toThrow(/already exists/);
+
+        const victim = await pool.query<{ present: string | null }>(
+          "SELECT to_regclass('public.tro178_rollback_victim') AS present"
+        );
+        const [victimRow] = victim.rows;
+        expect(victimRow, 'to_regclass should return exactly one row').toBeDefined();
+        expect(
+          victimRow?.present,
+          'the rolled-back batch really did apply nothing — which is why it must not report success'
+        ).toBeNull();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+    HOOK_TIMEOUT
+  );
+
+  it(
+    'creates objects that are still missing when earlier ones already exist',
+    async () => {
+      // The invariant a silent rollback breaks: applying the schema to a
+      // partially-populated database must still create what is absent. This is
+      // green today because schema.sql is idempotent, and it fails the moment a
+      // non-idempotent statement is added while the error is being tolerated.
+      const root = mkdtempSync(join(tmpdir(), 'tro178-partial-'));
+      try {
+        mkdirSync(join(root, 'migrations'));
+        await pool.query('CREATE TABLE IF NOT EXISTS tro178_partial_existing (id INT)');
+        await pool.query('DROP TABLE IF EXISTS tro178_partial_missing');
+
+        writeFileSync(
+          join(root, 'schema.sql'),
+          'CREATE TABLE IF NOT EXISTS tro178_partial_existing (id INT);\n' +
+            'CREATE TABLE IF NOT EXISTS tro178_partial_missing (id INT);\n'
+        );
+
+        await runMigrations(pool, {
+          schemaPath: join(root, 'schema.sql'),
+          migrationsDir: join(root, 'migrations'),
+          log: silent,
+        });
+
+        const created = await pool.query<{ present: string | null }>(
+          "SELECT to_regclass('public.tro178_partial_missing') AS present"
+        );
+        const [createdRow] = created.rows;
+        expect(createdRow, 'to_regclass should return exactly one row').toBeDefined();
+        expect(
+          createdRow?.present,
+          'the object that did not exist yet must have been created'
+        ).not.toBeNull();
       } finally {
         rmSync(root, { recursive: true, force: true });
       }

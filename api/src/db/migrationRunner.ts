@@ -41,6 +41,13 @@ const DUPLICATE_OBJECT_SQLSTATES = new Set([
   '42723', // duplicate_function
 ]);
 
+// Deliberately NOT in that set: 23505 (unique_violation). Concurrent schema
+// applies raise it on the system catalog index pg_type_typname_nsp_index, so it
+// is tempting to add — but 23505 is the generic "a unique constraint was
+// violated", and widening the set to cover a catalog race would also swallow a
+// real data conflict. schema.sql contains zero DML today, which is exactly the
+// kind of fact that stops being true quietly. Concurrency belongs to TRO-279.
+
 function isDuplicateObjectError(error: unknown): boolean {
   const code = (error as { code?: unknown } | null)?.code;
   return typeof code === 'string' && DUPLICATE_OBJECT_SQLSTATES.has(code);
@@ -92,12 +99,29 @@ export function listMigrationFiles(migrationsDir: string): string[] {
 /**
  * Applies schema.sql, the initial-setup DDL.
  *
- * A duplicate-object error here is tolerated because schema.sql is re-applied
- * on every deploy and every object it creates may already exist. Note that
- * `pool.query` sends the file as one simple query, so Postgres runs it as a
- * single implicit transaction: if it throws, nothing in it was applied. That is
- * only safe because the error we tolerate is precisely "it was already there".
- * Any other error means the file did not apply and must not be swallowed.
+ * `pool.query` sends the whole file as ONE simple query, so Postgres runs it as
+ * a single implicit transaction. A duplicate-object error at statement k
+ * therefore rolls back statements 1..k-1 as well — **nothing** in the file was
+ * applied. Catching that and returning normally is DB-1 exactly: applied
+ * nothing, reported success. It was in this function until now.
+ *
+ * So the error is no longer swallowed, it is *re-tested*. schema.sql is
+ * idempotent — 17/17 `CREATE TABLE` and 59/59 `CREATE INDEX` use
+ * `IF NOT EXISTS`, both `CREATE TYPE`s sit in guarded `DO` blocks, the function
+ * is `OR REPLACE`, and the trigger is preceded by `DROP TRIGGER IF EXISTS` —
+ * so a second pass must succeed. Re-apply and let the outcome decide:
+ *
+ *  - it succeeds: every object the file creates is now present, verified by the
+ *    file itself rather than by a hardcoded list that could drift from it;
+ *  - it fails again: the file is genuinely not idempotent, or the conflict is
+ *    real, and the run must fail rather than log a reassuring line.
+ *
+ * The tolerance is kept rather than deleted because the error *is* reachable,
+ * just not sequentially: two `pnpm db:migrate` runs at once race in the
+ * catalog, and `CREATE TABLE IF NOT EXISTS` is not atomic. Measured on
+ * PostgreSQL 15, 6 simultaneous applies of this file: 5 failed, mostly SQLSTATE
+ * 23505 on `pg_type_typname_nsp_index` and sometimes 42710. The retry turns
+ * that into a correct outcome; the underlying concurrency defect is TRO-279.
  */
 export async function applySchema(
   pool: Pool,
@@ -108,12 +132,17 @@ export async function applySchema(
   try {
     await pool.query(schema);
     log('✅ Schema applied');
+    return;
   } catch (error) {
     if (!isDuplicateObjectError(error)) {
       throw error;
     }
-    log('ℹ️  Schema objects already exist, continuing...');
+    log('ℹ️  Duplicate object while applying schema; the batch rolled back — re-applying');
   }
+
+  // Deliberately outside the catch: a second failure propagates.
+  await pool.query(schema);
+  log('✅ Schema applied on the second attempt');
 }
 
 /** Creates the schema_migrations bookkeeping table if it does not exist. */
