@@ -105,10 +105,12 @@ export function ContextTreeNav({ documentId, documentType }: ContextTreeNavProps
         Context
       </div>
 
-      <ul className="space-y-0.5 px-2" role="tree" aria-label="Document context">
+      {/* Native list semantics — see A11Y-1 / TRO-215. Do not add role="tree"
+          without also implementing the full tree keyboard model. */}
+      <ul className="space-y-0.5 px-2" aria-label="Document context">
         {/* Ancestors (from root to immediate parent) */}
         {context.ancestors.map((ancestor, index) => (
-          <li key={ancestor.id} role="treeitem">
+          <li key={ancestor.id}>
             <Link
               to={getDocumentPath(ancestor.document_type, ancestor.id)}
               className={cn(
@@ -127,7 +129,7 @@ export function ContextTreeNav({ documentId, documentType }: ContextTreeNavProps
         ))}
 
         {/* Current document (highlighted) */}
-        <li role="treeitem" aria-current="page">
+        <li aria-current="page">
           <div
             className={cn(
               'flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
@@ -150,7 +152,7 @@ export function ContextTreeNav({ documentId, documentType }: ContextTreeNavProps
 
         {/* Children */}
         {context.children.map((child) => (
-          <li key={child.id} role="treeitem">
+          <li key={child.id}>
             <Link
               to={getDocumentPath(child.document_type, child.id)}
               className={cn(

@@ -279,7 +279,8 @@ export function DocumentsPage() {
         </div>
       ) : viewMode === 'tree' ? (
         <div className="flex-1 overflow-auto p-6 pb-20">
-          <ul role="tree" aria-label="Documents" className="space-y-0.5">
+          {/* Native list semantics — see A11Y-1 / TRO-215. */}
+          <ul aria-label="Documents" className="space-y-0.5">
             {documentTree.map((doc) => (
               <DocumentTreeItem
                 key={doc.id}

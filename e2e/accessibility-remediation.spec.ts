@@ -412,7 +412,7 @@ test.describe('Phase 1: Critical Violations', () => {
       await page.waitForLoadState('networkidle')
 
       // Tree items MUST exist
-      const treeItems = page.locator('[role="treeitem"], .tree-item, [data-tree-item]')
+      const treeItems = page.locator('[data-tree-item], [data-testid="doc-item"]')
       await expect(treeItems.first()).toBeVisible({ timeout: 5000 })
 
       // Focus the first tree item
@@ -928,17 +928,19 @@ test.describe('Phase 2: Serious Violations', () => {
       const sidebar = page.locator('#sidebar-content, aside[aria-label="Document list"]')
       await expect(sidebar).toBeVisible({ timeout: 5000 })
 
-      // Find a document that has children (indicated by aria-expanded attribute)
-      const expandableItem = page.locator('[aria-expanded]').first()
+      // Find a document that has children. A11Y-1 / TRO-215: aria-expanded now
+      // lives on the disclosure <button> (where it is valid ARIA) rather than on
+      // the list item, so match the item that owns such a button.
+      const expandableItem = page.locator('[data-tree-item]:has(button[aria-expanded])').first()
       const hasExpandable = await expandableItem.count() > 0
 
       // Seed data must provide nested documents for this test
       expect(hasExpandable, 'Seed data should provide nested documents. Run: pnpm db:seed').toBe(true)
 
       // Expand to find a nested document
-      const isExpanded = await expandableItem.getAttribute('aria-expanded')
+      const expander = expandableItem.locator('button[aria-expanded]').first()
+      const isExpanded = await expander.getAttribute('aria-expanded')
       if (isExpanded === 'false') {
-        const expander = expandableItem.locator('button, [role="button"]').first()
         await expect(expander).toBeVisible()
         await expander.click()
         await page.waitForTimeout(300)
@@ -957,7 +959,7 @@ test.describe('Phase 2: Serious Violations', () => {
 
       // CRITICAL: Tree MUST auto-expand to show this document
       // Use the sidebar tree specifically to avoid conflicts with main content tree
-      const sidebarTree = page.locator('[role="tree"][aria-label*="documents"]').first()
+      const sidebarTree = page.locator('ul[aria-label*="documents"]').first()
       const currentDocInTree = sidebarTree.locator(`a[href="${childHref}"]`)
       await expect(currentDocInTree).toBeVisible({ timeout: 3000 })
 
@@ -985,9 +987,11 @@ test.describe('Phase 2: Serious Violations', () => {
       await page.waitForURL(`**${href}`)
       await page.waitForLoadState('networkidle')
 
-      // Wait for the treeitem to become selected (React needs time to re-render)
-      // The treeitem should have aria-selected="true" when active
-      const selectedTreeItem = sidebar.locator(`[role="treeitem"]:has(a[href="${href}"])[aria-selected="true"]`)
+      // Wait for the active document to be marked (React needs time to re-render).
+      // A11Y-1 / TRO-215: the sidebar uses native list semantics, so the current
+      // document is marked with aria-current="page" on its link — the standard
+      // navigation equivalent of the aria-selected this used to assert.
+      const selectedTreeItem = sidebar.locator(`a[href="${href}"][aria-current="page"]`)
 
       // Wait up to 5 seconds for selection to appear
       await expect(selectedTreeItem).toBeVisible({ timeout: 5000 })
@@ -1052,7 +1056,7 @@ test.describe('Phase 2: Serious Violations', () => {
 
       // Document tree MUST have aria-live region for update announcements
       // Use the sidebar tree specifically (aria-label containing "documents")
-      const tree = page.locator('[role="tree"][aria-label*="documents"]').first()
+      const tree = page.locator('ul[aria-label*="documents"]').first()
       await expect(tree).toBeVisible({ timeout: 5000 })
 
       // Tree or parent container MUST announce updates to screen readers
