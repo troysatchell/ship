@@ -8,7 +8,7 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
-## TRO-179 (DB-2) + TRO-177 (API-6) — every authenticated read stops writing to the session row
+## TRO-179 (DB-2) + TRO-177 (API-6) — authenticated reads stop rewriting the session row once per request
 
 One statement, measured from two sides. `authMiddleware` ran
 `UPDATE sessions SET last_activity = $1 WHERE id = $2` **unconditionally on every authenticated
@@ -27,6 +27,29 @@ them, all against the same row.
 had always been throttled to once per 60s ("throttled to avoid overhead"); the same threshold was
 simply never applied to the database write. Both halves of the sliding expiration now share one
 throttle (`SESSION_ACTIVITY_UPDATE_THRESHOLD_MS`, 60s).
+
+**Precisely what the throttle does and does not do.** Reads *within* the 60s window issue no write
+at all. The first read *after* the window still refreshes `last_activity` — the sliding expiration is
+intact, so a session in continuous use never expires. What is gone is the one-write-per-request
+pattern, not the write.
+
+**The throttle is enforced twice, and both placements are load-bearing.** The application-side check
+uses the value the request already SELECTed, so when it says "not due" no statement is sent — that is
+what removes the query from the hot path. But that value can already be stale: a page load fires 5-13
+requests in parallel, and when the burst straddles the threshold they all read the same pre-write
+`last_activity` and all conclude the write is due. So the predicate is repeated in SQL —
+`UPDATE ... WHERE id = $2 AND last_activity < $3` — and Postgres arbitrates: under READ COMMITTED the
+losers re-evaluate the qualification against the committed row version, fail it, and affect zero
+rows. Measured below: without the SQL predicate a 10-request burst produced **10** row versions;
+with it, **1**. Dropping either placement re-opens half the finding.
+
+The expiry invariant survives the conditional write. A no-op leaves the row at its previous value,
+and the UPDATE no-ops *only* when `last_activity >= now - threshold` failed the predicate — which is
+exactly the bound the grace below assumes. In all three cases (application check skipped, write
+applied, write no-opped) the stored `last_activity` is `>= requestTime - threshold`, so the lag is
+still capped at one threshold. The conditional form is in fact strictly stronger: the unconditional
+version could move `last_activity` *backwards* when two concurrent requests wrote timestamps captured
+microseconds apart.
 
 **Session expiry semantics — read this before changing the threshold.** Throttling the write means
 the recorded `last_activity` trails real request activity by up to 60s. Comparing a lagging value
@@ -60,11 +83,25 @@ window, `NODE_ENV=test`, vitest + supertest, concurrency 1, worktree PostgreSQL 
 query-**count** measurement — the audit's c=10/c=50 latency numbers need a running server and a load
 generator, and were not reproduced here.
 
+**Measured, concurrent** — 10 parallel authenticated requests on one session parked 61s back, so the
+whole burst straddles the threshold. Same conditions, plus a pre-warmed connection pool (a cold pool
+serializes the burst and hides the effect entirely):
+
+| | UPDATE statements | row versions written |
+|---|---|---|
+| application-side gate only | 10 | 10 |
+| gate + SQL predicate | 10 | **1** |
+
+The statement count is identical — all ten requests read the same stale row and all ten ask — but
+only one row version, and therefore one row lock and one WAL record, results. Row-lock and WAL
+contention on this single shared row is what the audit measured as the 0.178 ms → 4.764 ms gap.
+
 **Files:** `api/src/middleware/auth.ts` (throttle + the two window constants),
 `api/src/collaboration/index.ts` (mirrors the window).
 **Tests:** `api/src/middleware/__tests__/session-activity-throttle.test.ts` (write skipped inside the
-window, written after it, and both expiry boundaries),
-`api/src/routes/documents-query-count.test.ts` (statements per authenticated read).
+window, written after it, the SQL predicate's shape, and both expiry boundaries),
+`api/src/middleware/__tests__/session-activity-race.test.ts` (one row version under a concurrent
+burst), `api/src/routes/documents-query-count.test.ts` (statements per authenticated read).
 
 **Rollback:** revert the commits on `fix/db-2-api-6-session-write`. No migration, no schema change,
 no data change — sessions written under either version are interpreted correctly by the other.
@@ -403,3 +440,4 @@ WebSocket URL being derived from `window.location.host`.
 which builds from the repository.
 
 **Rollback.** Revert the merge of `feat/render-deploy` (`bace770`).
+

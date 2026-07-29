@@ -128,4 +128,5 @@ describe('GET /api/documents/:id query count (TRO-177 / API-6)', () => {
         `(${AUTH_QUERIES} auth + ${ROUTE_QUERIES} document); got:\n${sql.join('\n')}`
     ).toHaveLength(EXPECTED_QUERIES_PER_READ);
   });
+
 });

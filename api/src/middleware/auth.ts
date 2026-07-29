@@ -245,9 +245,28 @@ export async function authMiddleware(
     // SESSION_ACTIVITY_UPDATE_THRESHOLD_MS, which is why the inactivity check above
     // carries the same interval as grace.
     if (inactivityMs > SESSION_ACTIVITY_UPDATE_THRESHOLD_MS) {
+      // The throttle is expressed TWICE, deliberately, because the two placements buy
+      // different things and neither one alone is sufficient:
+      //
+      //   - The check above uses the value this request already SELECTed, so when it says
+      //     "not due" no statement is sent at all. That is what removes the query from
+      //     the hot path (DB-2's headline metric was queries per request).
+      //   - `AND last_activity < $3` re-checks the same predicate inside the database,
+      //     because the value read above can already be stale. A page load fires 5-13
+      //     requests in parallel; when the burst straddles the threshold they all SELECT
+      //     the same pre-write `last_activity` and all conclude the write is due. Left
+      //     unconditional, the burst degrades to one write per request — precisely the
+      //     row-lock and WAL contention this change exists to remove. With the predicate,
+      //     Postgres arbitrates: under READ COMMITTED the losers re-evaluate the
+      //     qualification against the committed row version, fail it, and affect 0 rows.
+      //
+      // A no-op is the expected outcome under contention, so rowCount is not inspected.
+      // `last_activity IS NULL` cannot reach here — the inactivity check above reads NULL
+      // as the epoch and has already rejected the session.
+      const activityCutoff = new Date(now.getTime() - SESSION_ACTIVITY_UPDATE_THRESHOLD_MS);
       await pool.query(
-        'UPDATE sessions SET last_activity = $1 WHERE id = $2',
-        [now, sessionId]
+        'UPDATE sessions SET last_activity = $1 WHERE id = $2 AND last_activity < $3',
+        [now, sessionId, activityCutoff]
       );
 
       res.cookie('session_id', sessionId, {

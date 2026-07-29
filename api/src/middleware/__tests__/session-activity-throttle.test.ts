@@ -14,11 +14,19 @@
  * and the inactivity window is still enforced.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { QueryResult } from 'pg';
+
+// Declared with the promise-returning signature: `vi.mocked(pool.query)` would resolve to
+// pg's callback overload, whose return type is `void`, forcing a cast on every mocked
+// result and switching off checking of the row shapes these tests assert about.
+const { queryMock } = vi.hoisted(() => ({
+  queryMock: vi.fn<(text: string, values?: unknown[]) => Promise<QueryResult>>(),
+}));
 
 // Mock pool before importing auth middleware
 vi.mock('../../db/client.js', () => ({
   pool: {
-    query: vi.fn(),
+    query: queryMock,
   },
 }));
 
@@ -27,29 +35,32 @@ import {
   SESSION_ACTIVITY_UPDATE_THRESHOLD_MS,
   SESSION_INACTIVITY_LIMIT_MS,
 } from '../auth.js';
-import { pool } from '../../db/client.js';
 import { Request, Response, NextFunction } from 'express';
 import { SESSION_TIMEOUT_MS, ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
+import { pgResult } from '../../test/pg-result.js';
 
 const SESSION_ID = 'throttle-session';
 
+// Typed as Partial<> first, then asserted once, so the members set here are checked
+// against the real Express shapes. A full Request/Response cannot be constructed without
+// a live socket, which is why the single assertion remains.
 function createMockReqRes(cookies: Record<string, string> = { session_id: SESSION_ID }) {
-  const req = { cookies } as unknown as Request;
-  const res = {
+  const req: Partial<Request> = { cookies };
+  const res: Partial<Response> = {
     status: vi.fn().mockReturnThis(),
     json: vi.fn().mockReturnThis(),
     cookie: vi.fn().mockReturnThis(),
-  } as unknown as Response;
-  const next = vi.fn() as NextFunction;
-  return { req, res, next };
+  };
+  const next: NextFunction = vi.fn();
+  return { req: req as Request, res: res as Response, next };
 }
 
 /** Queue the session row plus the workspace-membership row the middleware reads. */
 function mockValidSession(opts: { lastActivityMsAgo: number; sessionAgeMs?: number }) {
   const now = Date.now();
-  vi.mocked(pool.query)
-    .mockResolvedValueOnce({
-      rows: [
+  queryMock
+    .mockResolvedValueOnce(
+      pgResult([
         {
           id: SESSION_ID,
           user_id: 'user-123',
@@ -58,16 +69,14 @@ function mockValidSession(opts: { lastActivityMsAgo: number; sessionAgeMs?: numb
           created_at: new Date(now - (opts.sessionAgeMs ?? 0)),
           is_super_admin: false,
         },
-      ],
-    } as never)
-    .mockResolvedValue({ rows: [{ id: 'membership-1' }] } as never);
+      ])
+    )
+    .mockResolvedValue(pgResult([{ id: 'membership-1' }]));
 }
 
 /** Every statement the middleware issued, whitespace-normalized. */
 function statements(): string[] {
-  return vi
-    .mocked(pool.query)
-    .mock.calls.map((call) => String(call[0]).replace(/\s+/g, ' ').trim());
+  return queryMock.mock.calls.map((call) => String(call[0]).replace(/\s+/g, ' ').trim());
 }
 
 function activityWrites(): string[] {
@@ -106,16 +115,30 @@ describe('session activity write throttle (TRO-179 / DB-2)', () => {
       await authMiddleware(req, res, next);
 
       expect(activityWrites(), 'a request past the throttle window must refresh the row').toHaveLength(1);
-      expect(pool.query).toHaveBeenCalledWith(
-        'UPDATE sessions SET last_activity = $1 WHERE id = $2',
-        [expect.any(Date), SESSION_ID]
+      // The predicate is repeated in SQL so that concurrent requests cannot each land a
+      // write: Postgres, not the application's possibly-stale read, decides.
+      expect(queryMock).toHaveBeenCalledWith(
+        'UPDATE sessions SET last_activity = $1 WHERE id = $2 AND last_activity < $3',
+        [expect.any(Date), SESSION_ID, expect.any(Date)]
       );
-      const writtenAt = vi
-        .mocked(pool.query)
-        .mock.calls.find((call) =>
-          String(call[0]).startsWith('UPDATE sessions SET last_activity')
-        )![1] as [Date, string];
-      expect(writtenAt[0].getTime()).toBeGreaterThanOrEqual(before);
+
+      const writeCall = queryMock.mock.calls.find((call) =>
+        String(call[0]).startsWith('UPDATE sessions SET last_activity')
+      );
+      expect(writeCall, 'the throttled write should have been issued').toBeDefined();
+
+      const params: unknown[] = Array.isArray(writeCall?.[1]) ? writeCall[1] : [];
+      expect(params, 'the write must be parameterized, never interpolated').toHaveLength(3);
+      const [writtenAt, , cutoff] = params;
+      expect(writtenAt, 'last_activity is written as a Date').toBeInstanceOf(Date);
+      expect(cutoff, 'the SQL cutoff is a Date').toBeInstanceOf(Date);
+
+      if (writtenAt instanceof Date && cutoff instanceof Date) {
+        expect(writtenAt.getTime()).toBeGreaterThanOrEqual(before);
+        // The cutoff is exactly one throttle interval behind the written timestamp, so
+        // the SQL predicate and the application check test the same condition.
+        expect(writtenAt.getTime() - cutoff.getTime()).toBe(SESSION_ACTIVITY_UPDATE_THRESHOLD_MS);
+      }
       expect(next).toHaveBeenCalled();
     });
 
@@ -162,7 +185,7 @@ describe('session activity write throttle (TRO-179 / DB-2)', () => {
           error: expect.objectContaining({ message: expect.stringContaining('inactivity') }),
         })
       );
-      expect(pool.query).toHaveBeenCalledWith('DELETE FROM sessions WHERE id = $1', [SESSION_ID]);
+      expect(queryMock).toHaveBeenCalledWith('DELETE FROM sessions WHERE id = $1', [SESSION_ID]);
       expect(next).not.toHaveBeenCalled();
     });
 
@@ -176,7 +199,7 @@ describe('session activity write throttle (TRO-179 / DB-2)', () => {
       await authMiddleware(req, res, next);
 
       expect(res.status).toHaveBeenCalledWith(401);
-      expect(pool.query).toHaveBeenCalledWith('DELETE FROM sessions WHERE id = $1', [SESSION_ID]);
+      expect(queryMock).toHaveBeenCalledWith('DELETE FROM sessions WHERE id = $1', [SESSION_ID]);
       expect(next).not.toHaveBeenCalled();
     });
   });
