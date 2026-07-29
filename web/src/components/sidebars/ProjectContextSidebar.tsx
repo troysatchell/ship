@@ -187,11 +187,13 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
   return (
     <div className="space-y-1" data-testid="project-context-sidebar">
       {/* Project tree with expandable tabs */}
-      <ul className="space-y-0.5 px-2 py-2" role="tree">
+      {/* Native list semantics — see A11Y-1 / TRO-215. */}
+      <ul className="space-y-0.5 px-2 py-2">
         {/* Project root node */}
-        <li role="treeitem">
+        <li>
           <button
             onClick={() => setProjectExpanded(prev => !prev)}
+            aria-expanded={projectExpanded}
             className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-foreground hover:bg-border/30 transition-colors"
           >
             <ChevronIcon expanded={projectExpanded} />
@@ -204,9 +206,9 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
 
           {/* Project tabs */}
           {projectExpanded && (
-            <ul className="ml-4 space-y-0.5 mt-0.5" role="group">
+            <ul className="ml-4 space-y-0.5 mt-0.5">
               {/* Details tab */}
-              <li role="treeitem">
+              <li>
                 <Link
                   to={`/documents/${projectId}`}
                   className={cn(
@@ -220,7 +222,7 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
               </li>
 
               {/* Weeks tab */}
-              <li role="treeitem">
+              <li>
                 <Link
                   to={`/documents/${projectId}/weeks`}
                   className={cn(
@@ -234,7 +236,7 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
               </li>
 
               {/* Issues tab */}
-              <li role="treeitem">
+              <li>
                 <Link
                   to={`/documents/${projectId}/issues`}
                   className={cn(
@@ -248,7 +250,7 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
               </li>
 
               {/* Retro tab */}
-              <li role="treeitem">
+              <li>
                 <Link
                   to={`/documents/${projectId}/retro`}
                   className={cn(
@@ -280,16 +282,17 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
             No team members allocated
           </div>
         ) : (
-          <ul className="space-y-0.5 px-2" role="tree">
+          <ul className="space-y-0.5 px-2">
             {gridData.people.map(person => {
               const isExpanded = expandedPeople.has(person.id);
               const hasWeeks = person.weeks && person.weeks.length > 0;
 
               return (
-                <li key={person.id} role="treeitem">
+                <li key={person.id}>
                   {/* Person row */}
                   <button
                     onClick={() => togglePerson(person.id)}
+                    aria-expanded={isExpanded}
                     className={cn(
                       'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors text-left',
                       'text-muted hover:bg-border/30 hover:text-foreground'
@@ -307,7 +310,7 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
 
                   {/* Weeks for this person */}
                   {isExpanded && hasWeeks && (
-                    <ul className="ml-4 space-y-0.5" role="group">
+                    <ul className="ml-4 space-y-0.5">
                       {person.weeks.map(week => (
                         <li key={week.week_number} className="space-y-0.5">
                           <div className="px-2 py-1 text-xs font-medium text-muted">
