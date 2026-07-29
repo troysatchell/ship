@@ -16,7 +16,7 @@ test.describe('Wiki Document Properties Sidebar', () => {
       await page.goto('/docs');
 
       // Wait for the document tree to load
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
       await tree.first().waitFor({ timeout: 10000 });
 
       // Click on first document
@@ -37,7 +37,7 @@ test.describe('Wiki Document Properties Sidebar', () => {
       await page.goto('/docs');
 
       // Wait for the document tree to load
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
       await tree.first().waitFor({ timeout: 10000 });
 
       // Click on first document
@@ -58,7 +58,7 @@ test.describe('Wiki Document Properties Sidebar', () => {
       await page.goto('/docs');
 
       // Wait for the document tree to load
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
       await tree.first().waitFor({ timeout: 10000 });
 
       // Click on first document
@@ -88,7 +88,7 @@ test.describe('Wiki Document Properties Sidebar', () => {
       await page.goto('/docs');
 
       // Wait for the document tree to load
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
       await tree.first().waitFor({ timeout: 10000 });
 
       // Click on first document
@@ -123,7 +123,7 @@ test.describe('Wiki Document Properties Sidebar', () => {
       await page.goto('/docs');
 
       // Wait for the document tree to load
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
       await tree.first().waitFor({ timeout: 10000 });
 
       // Click on first document
@@ -152,7 +152,7 @@ test.describe('Wiki Document Properties Sidebar', () => {
       await page.goto('/docs');
 
       // Wait for the document tree to load
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
       await tree.first().waitFor({ timeout: 10000 });
 
       // Click on first document
@@ -177,7 +177,7 @@ test.describe('Wiki Document Properties Sidebar', () => {
       await page.goto('/docs');
 
       // Wait for the document tree to load
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
       await tree.first().waitFor({ timeout: 10000 });
 
       // Click on first document
@@ -202,7 +202,7 @@ test.describe('Wiki Document Properties Sidebar', () => {
       await page.goto('/docs');
 
       // Wait for the document tree to load
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
       await tree.first().waitFor({ timeout: 10000 });
 
       // Click on first document
@@ -243,7 +243,7 @@ test.describe('Wiki Document Properties Sidebar', () => {
       await page.goto('/docs');
 
       // Wait for the document tree to load
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
       await tree.first().waitFor({ timeout: 10000 });
 
       // Click on first document
@@ -267,7 +267,7 @@ test.describe('Wiki Document Properties Sidebar', () => {
       await page.goto('/docs');
 
       // Wait for the document tree to load
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
       await tree.first().waitFor({ timeout: 10000 });
 
       // Click on first document
