@@ -145,6 +145,25 @@ Confirmed red first: with the middleware absent the gzip case failed with
 `AssertionError: expected undefined to be 'gzip'` at the `content-encoding` assertion — the right
 reason, not an import or setup error — while the other two cases passed.
 
+**How to run it.**
+
+```bash
+source .factory-env                       # api tests TRUNCATE 16 tables; use the worktree database
+pnpm --filter @ship/api exec vitest run src/routes/compression.test.ts
+
+# Reproduce the payload measurement (NOT a latency benchmark — see the warning above).
+pnpm --filter @ship/api db:seed && api/node_modules/.bin/tsx audit/seed-augment.ts
+PORT=3154 api/node_modules/.bin/tsx api/src/index.ts &
+# then, with a valid session cookie for a seeded user:
+curl -s -o /dev/null -H "Cookie: session_id=$SID" -H 'Accept-Encoding: identity' \
+  http://localhost:3154/api/issues -w 'identity=%{size_download}\n'
+curl -s -o /dev/null -H "Cookie: session_id=$SID" -H 'Accept-Encoding: gzip' \
+  http://localhost:3154/api/issues -w 'gzip=%{size_download}\n'
+```
+
+Setting `Accept-Encoding` by hand matters: `curl --compressed` would decompress transparently and
+report the identity size for both, hiding the entire effect.
+
 **Rollback.** Delete the `app.use(compression({...}))` block and the `import compression` line from
 `api/src/app.ts`; optionally drop `compression` and `@types/compression` from `api/package.json`.
 Deleting `api/src/routes/compression.test.ts` reverts the test. No schema, route, or API-contract
