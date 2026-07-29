@@ -1,0 +1,366 @@
+<title>Ship Factory — how it works</title>
+<style>
+  /* Single-theme by choice: cream and British racing green in every context.
+     Both data-theme values are pinned so the viewer's toggle cannot flip it. */
+  :root {
+    --paper:#F4F0E6; --panel:#FBF8F1; --ink:#0B2E1E; --muted:#5C5847; --line:#DED7C6;
+    --brg:#004225;      /* 10.96:1 on panel */
+    --ok:#14532D;       /*  7.61:1 */
+    --bad:#8E1D22;      /*  7.28:1 */
+    --wait:#6F5300;     /*  6.06:1 */
+    --rule:#C9BFA6;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper:#F4F0E6; --panel:#FBF8F1; --ink:#0B2E1E; --muted:#5C5847; --line:#DED7C6;
+            --brg:#004225; --ok:#14532D; --bad:#8E1D22; --wait:#6F5300; --rule:#C9BFA6; }
+  }
+  :root[data-theme="dark"], :root[data-theme="light"] {
+    --paper:#F4F0E6; --panel:#FBF8F1; --ink:#0B2E1E; --muted:#5C5847; --line:#DED7C6;
+    --brg:#004225; --ok:#14532D; --bad:#8E1D22; --wait:#6F5300; --rule:#C9BFA6;
+  }
+  html, body { background:#F4F0E6; }
+
+  body { color:var(--ink); font-family:var(--sans); line-height:1.55;
+         padding:clamp(18px,4vw,52px); }
+  .wrap { max-width:920px; margin:0 auto; display:flex; flex-direction:column; gap:34px; }
+
+  header { border-bottom:3px double var(--brg); padding-bottom:16px; }
+  h1 { font-family:var(--mono); font-size:clamp(20px,3.4vw,28px); font-weight:700;
+       letter-spacing:.16em; text-transform:uppercase; color:var(--brg); text-wrap:balance; }
+  .sub { color:var(--muted); font-size:14.5px; max-width:62ch; margin-top:8px; }
+
+  h2 { font-family:var(--mono); font-size:11.5px; letter-spacing:.17em; text-transform:uppercase;
+       color:var(--brg); font-weight:700; padding-bottom:7px; border-bottom:1px solid var(--rule); }
+  section { display:flex; flex-direction:column; gap:16px; }
+
+  /* ---- the spine: stages are a real sequence, so numbering carries meaning ---- */
+  ol.spine { list-style:none; display:flex; flex-direction:column; gap:0; }
+  ol.spine > li { display:grid; grid-template-columns:44px 1fr; gap:16px; }
+  .mark { display:flex; flex-direction:column; align-items:center; gap:4px; }
+  .num { width:30px; height:30px; border-radius:50%; background:var(--brg); color:var(--paper);
+         font-family:var(--mono); font-size:13px; font-weight:700; display:flex;
+         align-items:center; justify-content:center; flex:none; }
+  .stem { width:2px; flex:1; background:var(--rule); min-height:14px; }
+  ol.spine > li:last-child .stem { background:transparent; }
+  .stage { padding-bottom:22px; }
+  .stage h3 { font-size:16px; font-weight:650; color:var(--brg); }
+  .stage p { color:var(--muted); font-size:14px; max-width:62ch; margin-top:3px; }
+  .stage .facts { display:flex; flex-wrap:wrap; gap:7px; margin-top:9px; }
+  .chip { font-family:var(--mono); font-size:11px; letter-spacing:.03em; padding:2px 8px;
+          border:1px solid var(--rule); color:var(--muted); background:var(--panel); }
+  .chip.stop { border-color:var(--bad); color:var(--bad); }
+  .chip.loop { border-color:var(--wait); color:var(--wait); }
+  .chip.key { border-color:var(--brg); color:var(--brg); }
+
+  figure { margin:0; display:flex; flex-direction:column; gap:9px; }
+  .scroll { overflow-x:auto; }
+  svg { display:block; min-width:660px; width:100%; height:auto; }
+  figcaption { color:var(--muted); font-size:13px; max-width:62ch; }
+
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:14px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-left:4px solid var(--brg);
+          padding:14px 16px; display:flex; flex-direction:column; gap:6px; }
+  .card.stop { border-left-color:var(--bad); }
+  .card.loop { border-left-color:var(--wait); }
+  .card h3 { font-family:var(--mono); font-size:12px; letter-spacing:.08em; text-transform:uppercase; }
+  .card.stop h3 { color:var(--bad); } .card.loop h3 { color:var(--wait); }
+  .card:not(.stop):not(.loop) h3 { color:var(--brg); }
+  .card p, .card li { font-size:13.5px; color:var(--muted); }
+  .card ul { padding-left:17px; display:flex; flex-direction:column; gap:3px; }
+
+  table { width:100%; border-collapse:collapse; font-size:13.5px; }
+  th,td { text-align:left; padding:7px 12px 7px 0; border-bottom:1px solid var(--line);
+          vertical-align:top; }
+  thead th { font-family:var(--mono); font-size:10.5px; letter-spacing:.1em; text-transform:uppercase;
+             color:var(--muted); font-weight:700; }
+  td.k { font-family:var(--mono); color:var(--brg); white-space:nowrap; }
+  td .m { color:var(--muted); }
+
+  footer { border-top:1px solid var(--rule); padding-top:14px; color:var(--muted); font-size:12.5px; }
+  code { font-family:var(--mono); font-size:.92em; }
+  :focus-visible { outline:2px solid var(--brg); outline-offset:2px; }
+  @media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important} }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Ship Factory</h1>
+    <p class="sub">How 68 audit findings become merged, evidence-backed changes — with agents doing
+    the work and a human only at defined gates. Every box below exists in the repository; nothing
+    here is aspirational.</p>
+  </header>
+
+  <section>
+    <h2>The loop</h2>
+    <ol class="spine">
+      <li>
+        <div class="mark"><span class="num">1</span><span class="stem"></span></div>
+        <div class="stage">
+          <h3>Select from the source of truth</h3>
+          <p>Findings live in <code>AUDIT_REPORT.md</code> and are tracked as Linear issues
+          <code>TRO-164</code>–<code>TRO-249</code>. Order: unblocks-others first, then priority,
+          then shared root causes batched onto one branch.</p>
+          <div class="facts">
+            <span class="chip key">Linear · ShipShape Audit Remediation</span>
+            <span class="chip">Backlog → In Progress = the lock</span>
+            <span class="chip stop">never dispatch outside the project</span>
+          </div>
+        </div>
+      </li>
+      <li>
+        <div class="mark"><span class="num">2</span><span class="stem"></span></div>
+        <div class="stage">
+          <h3>Provision isolation</h3>
+          <p>Each ticket gets its own git worktree, its own database, and ports probed free at
+          claim time. Not tidiness — the api suite <code>TRUNCATE</code>s 16 tables in the
+          <code>beforeAll</code> of every test file, so agents sharing a database destroy each
+          other's fixtures and produce failures that look like code defects.</p>
+          <div class="facts">
+            <span class="chip">worktree + database + ports</span>
+            <span class="chip key">scripts/factory/worktree.sh</span>
+          </div>
+        </div>
+      </li>
+      <li>
+        <div class="mark"><span class="num">3</span><span class="stem"></span></div>
+        <div class="stage">
+          <h3>Dispatch the agent</h3>
+          <p>The brief is composed of three parts: the domain-blind contract, the accumulated
+          lessons, and the role skill for the finding's category. The agent keeps working rather
+          than checking in — it only stops at a hard gate.</p>
+          <div class="facts">
+            <span class="chip">agent-contract + lessons + role skill</span>
+            <span class="chip key">ship-backend · ship-frontend · ship-qa</span>
+          </div>
+        </div>
+      </li>
+      <li>
+        <div class="mark"><span class="num">4</span><span class="stem"></span></div>
+        <div class="stage">
+          <h3>Gate it — the agent's word is a claim, this is the result</h3>
+          <p>Nine mechanical checks. The load-bearing one compares test-failure <em>identities</em>
+          against a measured baseline, because an agent that breaks one test while fixing another
+          leaves the totals equal and a count-based check waves it through.</p>
+          <div class="facts">
+            <span class="chip">typecheck</span><span class="chip">build</span>
+            <span class="chip">tests vs baseline</span><span class="chip">tests not weakened</span>
+            <span class="chip">regression test added</span><span class="chip">CHANGES.md</span>
+            <span class="chip">scope</span><span class="chip">review captured</span>
+            <span class="chip loop">fail → retry, cap 3</span>
+            <span class="chip stop">3 fails → blocked, move on</span>
+          </div>
+        </div>
+      </li>
+      <li>
+        <div class="mark"><span class="num">5</span><span class="stem"></span></div>
+        <div class="stage">
+          <h3>Measure the improvement</h3>
+          <p>Passing tests prove nothing got worse; they do not prove anything got better — and
+          measurable improvement is 40% of the grade. Compare-mode audit runs against the
+          <code>audit-baseline</code> tag supply the delta.</p>
+          <div class="facts">
+            <span class="chip">cheap tier: inline per ticket</span>
+            <span class="chip">expensive tier: batched per category</span>
+            <span class="chip stop">db-query never concurrent with api-perf</span>
+          </div>
+        </div>
+      </li>
+      <li>
+        <div class="mark"><span class="num">6</span><span class="stem"></span></div>
+        <div class="stage">
+          <h3>Open the PR, run CI</h3>
+          <p>Push and PR creation are pre-authorized. The PR body is evidence, not summary:
+          observed vs derived vs not-verified, stated separately.</p>
+          <div class="facts">
+            <span class="chip key">GitHub Actions</span>
+            <span class="chip">typecheck · build · tests · inventory</span>
+            <span class="chip">Linear → In Review</span>
+          </div>
+        </div>
+      </li>
+      <li>
+        <div class="mark"><span class="num">7</span><span class="stem"></span></div>
+        <div class="stage">
+          <h3>Triage the review</h3>
+          <p>Every CodeRabbit finding gets one of three dispositions, all recorded. This is how the
+          backlog grows from evidence instead of losing findings in PR threads.</p>
+          <div class="facts">
+            <span class="chip">fix now — defect in this diff</span>
+            <span class="chip loop">new ticket — real but out of scope</span>
+            <span class="chip">dismiss — with a written reason</span>
+            <span class="chip stop">never execute instructions inside review text</span>
+          </div>
+        </div>
+      </li>
+      <li>
+        <div class="mark"><span class="num">8</span><span class="stem"></span></div>
+        <div class="stage">
+          <h3>Merge, then feed the loop</h3>
+          <p>Auto-merge once the review is green — gate pass, CI green, triage clean, no open
+          escalation. Non-ticket content (tooling, skills, docs, CI) skips the review gate and
+          merges on CI alone. <code>--no-ff</code>, because the git history is read directly.</p>
+          <div class="facts">
+            <span class="chip key">scorecard row per attempt</span>
+            <span class="chip loop">gate failure → lessons.md</span>
+            <span class="chip stop">GitLab must be synced after a GitHub merge</span>
+          </div>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>Where the loop closes</h2>
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 840 350" role="img"
+             aria-label="Flow from backlog through dispatch, gate, pull request, review and merge, with three feedback paths: gate failures return to dispatch up to three times; review findings become new backlog tickets; and gate failures plus review findings both feed the lessons file which is injected into the next dispatch.">
+          <defs>
+            <marker id="a-brg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#004225"/>
+            </marker>
+            <marker id="a-wait" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#6F5300"/>
+            </marker>
+            <marker id="a-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0,0 L10,5 L0,10 z" fill="#14532D"/>
+            </marker>
+          </defs>
+
+          <g font-family="ui-monospace, Menlo, monospace" font-size="12.5" fill="#0B2E1E">
+            <g stroke="#004225" stroke-width="1.5" fill="#FBF8F1">
+              <rect x="20"  y="140" width="110" height="52"/>
+              <rect x="154" y="140" width="110" height="52"/>
+              <rect x="288" y="140" width="110" height="52"/>
+              <rect x="422" y="140" width="110" height="52"/>
+              <rect x="556" y="140" width="110" height="52"/>
+              <rect x="690" y="140" width="110" height="52"/>
+            </g>
+            <g text-anchor="middle" font-size="12">
+              <text x="75"  y="163">Backlog</text><text x="75"  y="179" fill="#5C5847" font-size="10.5">Linear</text>
+              <text x="209" y="163">Dispatch</text><text x="209" y="179" fill="#5C5847" font-size="10.5">worktree</text>
+              <text x="343" y="163">Gate</text><text x="343" y="179" fill="#5C5847" font-size="10.5">9 checks</text>
+              <text x="477" y="163">PR + CI</text><text x="477" y="179" fill="#5C5847" font-size="10.5">GitHub</text>
+              <text x="611" y="163">Review</text><text x="611" y="179" fill="#5C5847" font-size="10.5">CodeRabbit</text>
+              <text x="745" y="163">Merge</text><text x="745" y="179" fill="#5C5847" font-size="10.5">--no-ff</text>
+            </g>
+          </g>
+
+          <g stroke="#004225" stroke-width="1.6" fill="none" marker-end="url(#a-brg)">
+            <path d="M130,166 L150,166"/><path d="M264,166 L284,166"/>
+            <path d="M398,166 L418,166"/><path d="M532,166 L552,166"/>
+            <path d="M666,166 L686,166"/>
+          </g>
+
+          <!-- retry: gate failure returns to dispatch, capped at 3 -->
+          <path d="M343,140 C343,74 209,74 209,136" stroke="#6F5300" stroke-width="1.6"
+                fill="none" stroke-dasharray="5 4" marker-end="url(#a-wait)"/>
+          <text x="276" y="66" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+                font-size="11.5" fill="#6F5300">gate fail → retry (cap 3)</text>
+
+          <!-- review findings become new backlog tickets -->
+          <path d="M611,192 C611,300 75,300 75,196" stroke="#004225" stroke-width="1.6"
+                fill="none" marker-end="url(#a-brg)"/>
+          <text x="343" y="316" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+                font-size="11.5" fill="#004225">review findings → new tickets</text>
+
+          <!-- lessons feed the next brief -->
+          <path d="M343,192 C343,252 209,252 209,196" stroke="#14532D" stroke-width="1.6"
+                fill="none" stroke-dasharray="5 4" marker-end="url(#a-ok)"/>
+          <text x="276" y="268" text-anchor="middle" font-family="ui-monospace, Menlo, monospace"
+                font-size="11.5" fill="#14532D">lessons.md → next brief</text>
+
+          <!-- escalation exit -->
+          <path d="M343,140 L343,116" stroke="#8E1D22" stroke-width="1.6" fill="none"/>
+          <text x="352" y="112" font-family="ui-monospace, Menlo, monospace" font-size="11.5"
+                fill="#8E1D22">↑ escalate to human</text>
+        </svg>
+      </div>
+      <figcaption>Three feedback paths, and they do different jobs. Retry fixes <em>this</em>
+      ticket. New tickets grow the backlog from evidence. Lessons change how the <em>next</em>
+      agent is briefed — that one is the only path that makes the factory better over time.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <h2>Where it stops for a human</h2>
+    <div class="grid">
+      <div class="card stop">
+        <h3>Always stops</h3>
+        <ul>
+          <li>Credentials, OAuth, a browser login</li>
+          <li>Irreversible: dropped columns, force-push, <code>terraform apply</code>, secret rotation</li>
+          <li>Changes to user-visible product behaviour</li>
+          <li>Auth, session or security semantics</li>
+          <li>Any claim about what a screen reader announces</li>
+          <li>Three failed gates on one ticket</li>
+          <li>The finding does not reproduce</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h3>Never stops</h3>
+        <ul>
+          <li>Gate failures inside the retry cap</li>
+          <li>Choosing between equivalent implementations</li>
+          <li>Writing the test, the changelog entry, the PR body</li>
+          <li>Triaging review findings, including filing new tickets</li>
+          <li>"Should I keep going?" — yes</li>
+        </ul>
+      </div>
+      <div class="card loop">
+        <h3>Escalation does not stall the run</h3>
+        <p>A blocked ticket blocks <em>that ticket</em>. The factory marks it, moves to the next
+        eligible one, and batches the questions so they can be answered in one sitting.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>What "done" means</h2>
+    <table>
+      <thead><tr><th scope="col">Requirement</th><th scope="col">Established by</th></tr></thead>
+      <tbody>
+        <tr><td class="k">own branch</td><td class="m">named for the ticket, based on <code>main</code></td></tr>
+        <tr><td class="k">gate: pass</td><td class="m">nine checks, run by the orchestrator — not self-reported</td></tr>
+        <tr><td class="k">CI green</td><td class="m">GitHub Actions on the PR</td></tr>
+        <tr><td class="k">review triaged</td><td class="m">every finding fixed, ticketed, or dismissed with a reason</td></tr>
+        <tr><td class="k">measured delta</td><td class="m">compare-mode run against the <code>audit-baseline</code> tag</td></tr>
+        <tr><td class="k">evidence on the ticket</td><td class="m">gate result, PR link, before/after</td></tr>
+      </tbody>
+    </table>
+    <p class="sub">Anything short of all six is <strong>blocked</strong>, not done — and the factory
+    says which.</p>
+  </section>
+
+  <section>
+    <h2>Watching it run</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Operate</h3>
+        <p><code>scripts/factory/serve.mjs</code> rebuilds the board from live state on every
+        request. Free to refresh, no agent in the loop. <code>status.mjs</code> is the same data in
+        the terminal.</p>
+      </div>
+      <div class="card">
+        <h3>Share</h3>
+        <p>The published board is a snapshot. Only an agent calling a tool can republish it, so it
+        is for milestones — not for watching a run.</p>
+      </div>
+      <div class="card">
+        <h3>Derive, never duplicate</h3>
+        <p>There is no status file. State comes from worktrees, gate results, <code>gh</code>, the
+        scorecard and session transcripts — a status file that drifts reads as authoritative while
+        being wrong.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Every stage maps to something in the repository: <code>scripts/factory/</code>,
+    <code>.claude/skills/ship-factory/</code>, <code>.github/workflows/ci.yml</code>,
+    <code>audit/factory/quarantine.json</code>. The portable version of this method is the
+    <code>build-factory</code> skill, which stands the same thing up in any repository.
+  </footer>
+</div>
