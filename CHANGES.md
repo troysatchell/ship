@@ -8,6 +8,145 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-197 (BUN-1) + TRO-198 (BUN-2) + TRO-199 (BUN-3) + TRO-200 (BUN-4) + TRO-202 (BUN-6) — the app stops shipping as one 2 MB file
+
+Five findings, one root cause: `web/dist/index.html` referenced exactly **one** module script —
+2,074.98 kB raw / 588.62 kB gzip — because nothing in the app split at a route boundary. Everything
+else followed from that. There was no seam at which to defer the editor (BUN-2), the syntax
+grammars (BUN-3) or the emoji picker (BUN-4), and no vendor chunk to cache (BUN-6). They ship as one
+branch because fixing any one of them alone moves almost nothing.
+
+**What a user actually downloads now**, by route. This is the static-import closure of the entry
+chunk plus that route's chunk — not the `index.html` figure, which code splitting improves by
+construction and therefore flatters any change of this kind:
+
+| Route | Before | After | Change |
+|---|---:|---:|---:|
+| `/login` (unauthenticated first paint) | 601.45 kB gzip | **117.29 kB** | −484.16 (−80.5%) |
+| `/docs` (4-panel layout + list) | 601.45 kB gzip | **181.90 kB** | −419.55 (−69.8%) |
+| `/documents/:id` (layout + editor) | 601.45 kB gzip | **211.34 kB** | −390.11 (−64.9%) |
+
+The audit's target was 600.75 → ≤ 480.60 kB gzip. Every route clears it. Total emitted bytes are
+essentially unchanged (1,762.09 → 1,770.55 kB gzip, +0.5%) — as the audit predicted, this moves
+bytes rather than deleting them, and total-bundle size is the wrong yardstick for it.
+
+**Conditions** (all figures): Node v23.2.0, pnpm 10.27.0, `cd web && pnpm build`, gzip level 9,
+kB = 1000 bytes, baseline commit `93651cc`. Run `node audit/bundle/measure.mjs web/dist` to
+reproduce. **Build from `web/`, not the repo root** — Tailwind's `content` globs resolve against the
+CWD, and building from the root silently under-generates the CSS.
+
+**TRO-197 / BUN-1 — route-level code splitting** (`web/src/main.tsx`, `web/src/pages/App.tsx`,
+`web/src/components/RouteFallback.tsx`). All 23 page components were statically imported, so a
+visitor on `/login` downloaded the admin dashboard, the org chart, the reviews queue and the whole
+TipTap/Yjs stack before the login form could paint. Every page is now `React.lazy`; most use named
+exports, hence `.then(m => ({ default: m.X }))`. **`LoginPage` deliberately stays static** — it is
+the first paint for an unauthenticated visitor, and deferring it would trade one oversized download
+for two round trips before the form appears.
+
+Two Suspense boundaries, and the placement is the whole risk: the outer one (in `main.tsx`) covers
+the standalone routes and `AppLayout` itself; the inner one sits **inside `<main>` in
+`pages/App.tsx`**, so the Icon Rail, Contextual Sidebar and Properties Sidebar stay mounted while a
+page chunk loads. A single boundary above `AppLayout` would tear the 4-panel layout down and rebuild
+it on every navigation — the flash the audit warned about. Measured on its own: /login −489.11,
+/docs −424.58, /documents/:id −71.50 kB gzip.
+
+**TRO-198 / BUN-2 — the editor loads when an editor is shown** (`web/src/components/LazyEditor.tsx`;
+consumers `UnifiedEditor.tsx`, `pages/PersonEditor.tsx`). `@tiptap/*` + `prosemirror-*` + `yjs` +
+`lib0` + `y-*` + `linkifyjs` are 726.5 kB raw / 208.7 kB gzip and were pulled statically by every
+route that *could* show an editor — including project, program and week documents, which render a
+tab component and never mount one. `LazyEditor` is **not a second editor**: it is the same shared
+`components/Editor` behind a dynamic import, with the prop type derived from it so the contract
+cannot drift.
+
+Safe because `Editor` creates its own `Y.Doc`, `WebsocketProvider` and `IndexeddbPersistence` inside
+its own effects and neither consumer holds a ref to it — deferring the mount defers the whole
+collaboration setup as a unit rather than interleaving it. `initialTitle` is forwarded verbatim, so
+the `"Untitled"` placeholder contract is untouched. Measured on its own: **/documents/:id −230.11 kB
+gzip**, the largest single win here.
+
+**TRO-199 / BUN-3 — 37 syntax grammars down to 12** (`web/src/components/editor/lowlight.ts`,
+`Editor.tsx:12`). `createLowlight(common)` registered arduino, vbnet, objectivec, r, lua, perl,
+wasm and 30 others. Kept: **bash, css, diff, javascript, json, markdown, python, shell, sql,
+typescript, xml (covers html), yaml**. Verified no seeded document is affected: zero of the 523
+documents in the seeded database contain a `codeBlock` node (in `content` or in `yjs_state`), and
+neither `api/src/db/seed.ts` nor `welcomeDocument.ts` emits one; the only language named anywhere in
+the repo is `javascript`, in `e2e/syntax-highlighting.spec.ts`. A language *not* in the list renders
+as plain monospace rather than throwing — `@tiptap/extension-code-block-lowlight` guards on
+`lowlight.registered()` — and that third-party behaviour is pinned by a test rather than assumed.
+Measured on its own: the grammar chunk drops 52.22 → 22.56 kB gzip (−29.66), and total emitted bytes
+fall 29.56 kB. It no longer touches any route's initial payload, because BUN-2 already moved it off.
+
+**TRO-200 / BUN-4 — the emoji picker loads on click** (`web/src/components/EmojiPickerBody.tsx`,
+`EmojiPicker.tsx`). `emoji-picker-react` shipped on every page load, `/login` included, for one
+consumer: the project-icon `PropertyRow` in `ProjectSidebar`. The package import now lives in its
+own module — that, not the `React.lazy` call, is what creates the boundary; naming the package at
+value level in `EmojiPicker.tsx` (for its `Theme` enum, say) would pull it all back while the code
+still looked correct. The fallback is sized 300×350 so the popover does not resize under the cursor.
+Measured on its own: **/documents/:id −63.37 kB gzip**, for a component behind a click.
+
+**TRO-202 / BUN-6 — a vendor split, judged on bytes changed per deploy** (`web/vite.config.ts`).
+The config had no `build` key at all, so stable dependency code shared a content hash with volatile
+app source. **This does not reduce the initial payload — it costs about 5 kB gzip per route** — and
+scoring it on `initialGzipKb` would read as a no-op or a regression. The right measurement is what a
+returning user with a warm cache re-downloads after a routine deploy. Editing one string in
+`web/src/pages/Login.tsx` and rebuilding:
+
+| Route | Before | BUN-1..4 only | After (with BUN-6) |
+|---|---:|---:|---:|
+| `/login` | 588.63 kB gzip (97.9% of route) | 99.89 kB (88.9%) | **31.68 kB (27.0%)** |
+| `/docs` | 588.63 kB gzip (97.9%) | 164.18 kB (92.8%) | **67.26 kB (37.0%)** |
+| `/documents/:id` | 588.63 kB gzip (97.9%) | 193.18 kB (93.7%) | **96.32 kB (45.6%)** |
+
+BUN-6's own contribution is the last column against the middle one: −68.21 kB on `/login`, −96.92 on
+`/docs`, −96.86 on `/documents/:id` per deploy, for +4.95 to +5.06 kB on a first visit.
+
+Two rules are encoded in the config and both were found by measuring, not by reasoning. **Never
+merge a lazily-reachable package into an eagerly-reachable chunk** — a manual chunk loads as soon as
+anything in it is statically reachable, so a catch-all `vendor` would have silently undone BUN-2 and
+BUN-4 while the split still existed on disk. And **Rollup's CommonJS interop helpers must be pinned**:
+left unassigned they landed in `vendor-highlight`, which every chunk then imported, dragging 22.6 kB
+gzip of syntax grammars back into first paint. A `vendor-ui` group for Radix/cmdk/dnd-kit was tried
+and **rejected on measurement** — it cost 15.0 kB gzip on `/docs` and `/documents/:id`, because a
+route needing one primitive then downloads all of them.
+
+**New dependency:** `highlight.js` is now an explicit dependency of `@ship/web`. It was already in
+the tree via `lowlight`, but importing individual grammars from it without declaring it would be a
+phantom dependency. No new package entered the lockfile's resolution set.
+
+**Regression tests** (all in `web/src/**`, so `scripts/factory/gate.sh` actually executes them — an
+`e2e/` spec satisfies the gate's "test added" check while never running):
+
+- `web/src/main.routes.test.ts` — no page may be statically imported except `Login`; every lazy
+  loader names a real export; the child-route Suspense boundary stays inside `<main>`. **Red before
+  the fix** (4 assertion failures against `HEAD`'s `main.tsx`/`App.tsx`).
+- `web/src/components/editor/lowlight.test.ts` — the grammar list is exactly the curated 12, kept
+  languages still produce highlight nodes, dropped ones are absent and degrade rather than throw.
+  **Red before the fix** (9 assertion failures against `createLowlight(common)`).
+- `web/src/components/EmojiPicker.test.tsx` — picker opens on click, closes on Escape, clears
+  through `onChange`, and the package import stays out of `EmojiPicker.tsx`. The last assertion was
+  **red before the fix**; the interaction tests are regression guards and passed both ways, which is
+  their purpose.
+- `web/src/components/LazyEditor.test.tsx` — the editor still mounts, `"Untitled"` is forwarded
+  verbatim, `documentId`/`roomPrefix` reach the editor unchanged, and the fallback is the panel
+  variant. Regression guards.
+- `web/src/components/RouteFallback.test.tsx` — the surrounding 4-panel chrome stays mounted while a
+  lazy child resolves. Regression guard for the layout-flash risk.
+
+**Rollback.** Per finding, in decreasing order of risk: revert `LazyEditor.tsx` and repoint
+`UnifiedEditor.tsx`/`PersonEditor.tsx` at `@/components/Editor` (BUN-2); delete the `build` key in
+`web/vite.config.ts` (BUN-6); restore `createLowlight(common)` in `Editor.tsx` and delete
+`components/editor/lowlight.ts` (BUN-3); restore the static `emoji-picker-react` import in
+`EmojiPicker.tsx` (BUN-4); replace the `React.lazy` declarations in `main.tsx` with static imports
+and drop both Suspense boundaries (BUN-1). BUN-1 must be reverted last — the others depend on the
+seam it creates.
+
+**Still open, deliberately.** Vite still prints its >500 kB warning: `vendor-editor` is 577.5 kB raw.
+The warning limit was *not* raised — silencing it would remove the only signal in the build about
+this class of problem. BUN-5 (245 icon chunks, 209 unreferenced), BUN-7, BUN-8 and BUN-9 are
+untouched and remain open.
+
+---
+
 ## TRO-188 (ERR-1) + TRO-189 (ERR-2) — the editor stops lying about "Saved", and a revoked session stops writing
 
 Both findings live in the collaboration path and ship as one change: TRO-189 makes the server hang
