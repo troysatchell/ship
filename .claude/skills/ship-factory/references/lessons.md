@@ -70,3 +70,19 @@ Seeded 2026-07-29 from failures already documented in this project.
 - 2026-07-29 — **Anything interpolated into a `psql` command must be validated first.** Database
   and other identifiers cannot be bound as parameters. Caught by CodeRabbit on the factory's own
   provisioner, where a ticket ID reached `CREATE DATABASE` unchecked.
+- 2026-07-29 (TRO-215) — **NEVER `git stash` in a factory worktree.** `refs/stash` lives in the
+  **common** `.git` directory, so every concurrent worktree shares ONE stash stack. An agent
+  stashing its fix to take a "before" measurement had its entry popped by a sibling worktree within
+  ~2 minutes and gone from `git stash list`. Recovered only via `git fsck --unreachable`. To measure
+  before/after, **copy the files aside or `git worktree add` a second checkout** — never stash.
+- 2026-07-29 (TRO-178) — **The api suite has a pre-existing, load-sensitive intermittent failure, and
+  `quarantine.json` records api as `knownFailing: 0`.** A flake therefore fails an otherwise-good
+  branch. Demonstrated not to be any one ticket's fault: with the ticket's new test file removed
+  entirely, 1 of 5 runs still failed. It appears right after `pnpm type-check` + `pnpm build`, i.e.
+  under CPU load. **If a gate fails on an api test you did not touch, re-run it standalone before
+  believing it** — and never "fix" it by widening the quarantine. Report the identities either way.
+- 2026-07-29 (TRO-215) — **Some findings are data-dependent; reproduce before you conclude.**
+  A11Y-1's bare-`<li>` violations only render when a sidebar section has **>10** root docs (the
+  "N more…" link) or **zero** (empty state). Default seed data has 5, so axe reports **C0/S0** and a
+  re-measurement on stock seed would wrongly conclude the finding never existed. Check the data
+  precondition before reporting a finding as unreproducible.

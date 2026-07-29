@@ -89,6 +89,136 @@ which is harmless. Note that rollback does **not** un-apply migrations already r
 
 ---
 
+## TRO-188 (ERR-1) + TRO-189 (ERR-2) — the editor stops lying about "Saved", and a revoked session stops writing
+
+Both findings live in the collaboration path and ship as one change: TRO-189 makes the server hang
+up on sockets whose session is gone, and TRO-188 makes the editor say so instead of showing
+"Saved" over work that is not saved. Fixing one without the other would have produced a *silently*
+disconnected editor — a worse version of ERR-1.
+
+**What changed — TRO-189 / ERR-2 (security: logged-out user kept write access).**
+
+The collaboration socket was authenticated exactly once, during the HTTP upgrade
+(`api/src/collaboration/index.ts`, `server.on('upgrade')`), and never re-checked. Deleting or
+expiring the session left the socket writing to `documents` indefinitely while REST correctly 401'd
+(audit `probe7c`, `probe6.4`).
+
+- Each connection now records the `sessionId` that authorized it (`DocConnection` / `EventConnection`).
+- `revalidateLiveSessions()` re-checks every session backing a live socket on an interval
+  (`DEFAULT_SESSION_REVALIDATION_INTERVAL_MS = 30_000`), in **one batched query** for all distinct
+  sessions, applying the same two windows as the REST middleware (`SESSION_TIMEOUT_MS`,
+  `ABSOLUTE_SESSION_TIMEOUT_MS`). Invalid → the socket is closed with code **4401**.
+- It **fails open** on a database error: a transient outage must not disconnect every open editor.
+- `closeSocketsForSession()` is called directly from `POST /api/auth/logout` and from the
+  session-fixation rotation on login, so logout takes effect at once rather than up to 30s later.
+- Connections are marked `revoked` *before* `ws.close()`, and inbound frames from a revoked
+  connection are dropped — `close()` only starts the closing handshake, so without this an edit
+  already in flight could still be persisted.
+
+Behaviour change to be aware of: a session that has passed the 15-minute inactivity window now
+loses its collaboration socket, where before only REST rejected it. Collaboration traffic
+deliberately does **not** refresh `last_activity` — doing so would let an open tab keep a session
+alive forever, which is a larger hole than the one being closed.
+
+**What changed — TRO-188 / ERR-1 (data loss under a "Saved" label).**
+
+`Editor.tsx` treated the WebSocket `status: connected` event as proof of persistence. It is not:
+audit `probe2d-ws-unavailable.json` records **three** `connected` events and **zero** `sync` events,
+with the indicator reading "Saved" for 60 s while `inDb=false`, ending in a document whose content
+was `""`. `probe2-ws-drop` and `probe2e` show the same lie under the "Cached" label.
+
+- The header indicator moved out of `Editor.tsx` into `web/src/components/editor/SyncStatusIndicator.tsx`
+  with the derivation as a pure function (`deriveSyncIndicator`).
+- "Saved" now requires `isSynced` — the y-websocket `sync` event, the only evidence the document
+  reached the server. `status: connected` no longer sets it, and `sync(false)`/`disconnected`
+  clears it.
+- The unsynced state renders as **"Not saved"**, red, with a title that names the consequence
+  ("changes … will be lost if you reload"). The reassuring "Cached" label is gone.
+- A neutral "Connecting" state covers the first connection attempt only, so a normal page load does
+  not flash a warning.
+- Close code 4401 (TRO-189) stops the reconnect loop and drives the indicator to "Not saved",
+  which is how a revoked session becomes visible to the user.
+
+**How to run it.**
+
+```bash
+source .factory-env                       # api tests TRUNCATE 16 tables; use the worktree database
+pnpm --filter @ship/api  exec vitest run src/collaboration/__tests__/session-revocation.test.ts
+pnpm --filter @ship/web  exec vitest run src/components/editor/SyncStatusIndicator.test.tsx
+scripts/factory/gate.sh
+```
+
+The api test drives the real collaboration server over a real WebSocket and asserts on the
+`documents` table, not on a mock. It runs with a 200 ms revalidation interval via
+`setupCollaboration(server, { sessionRevalidationIntervalMs })`.
+
+**Rollback.** Revert the commits on `fix/err-1-err-2-collab-socket`. Independently:
+for TRO-189 alone, delete the `revalidateLiveSessions`/`closeSocketsForSession` block in
+`api/src/collaboration/index.ts` and its two call sites in `api/src/routes/auth.ts` — nothing else
+depends on them, and `setupCollaboration`'s second argument is optional. For TRO-188 alone, pass a
+permanently-true `isSynced` to `SyncStatusIndicator`, which restores the old "connected means
+Saved" behaviour.
+
+---
+
+## TRO-172 — [API-1] Rate limiter no longer caps production at 100 req/min per IP
+
+**What changed.** Two halves, server and client.
+
+*Server* — `api/src/middleware/rate-limit.ts` (new) replaces the single `apiLimiter` that lived in
+`api/src/app.ts`. `/api/` is now guarded by two chained limiters over the same 60 s window:
+
+| Limiter | Key | Production limit | Purpose |
+|---|---|---|---|
+| `perSourceIpLimiter` | source IP | 6,000 / min (100 req/s) | anti-flood floor; makes the identity key unspoofable in aggregate |
+| `perIdentityLimiter` | `session_id` cookie → `Bearer` token → source IP | 600 / min (10 req/s) | the budget users actually feel |
+
+The old configuration was **100 / min keyed on IP**. Both numbers in it were wrong:
+
+- *Unit.* The ceiling was sized as if one page view were one request. The audit's browser trace
+  measured 63 `/api` requests across 8 flows (login 16, dashboard 12, document view 10, sprint
+  board 10), so a user exhausted the window after ~6–10 navigations per minute.
+- *Key.* With CloudFront → Elastic Beanstalk and `trust proxy 1`, every user behind one agency NAT
+  egress resolved to the same IP, so a whole team shared one 100 req/min budget.
+
+600 is justified against the measurement: the worst single-user burst is 16 XHRs × 20 navigations
+per minute = 320 req/min, so 600 leaves ~1.9× headroom and still caps one session at 10 req/s.
+6,000 accommodates ~187 simultaneously-active users behind one NAT egress at the measured average
+of ~32 req/min per active user, while staying far below the 299–4,049 req/s this API was measured
+to serve — a single-source flood is still capped. Test (10,000) and dev (1,000) budgets are
+unchanged. Session ids and tokens are SHA-256 fingerprinted before use as bucket keys.
+
+*Client* — `web/src/lib/queryClient.ts` now retries HTTP 429 for **queries and mutations** with a
+2 s / 8 s / 20 s / 45 s backoff plus additive jitter. The schedule sums to ≥75 s so at least one
+attempt lands after the server's 60 s window rolls over; React Query's default 1/2/4 s backoff
+would exhaust itself inside the same window. Every other 4xx is still treated as permanent. If the
+retries are exhausted the write is genuinely lost, so `MutationErrorToast` now raises a **sticky**
+toast (`web/src/components/ui/Toast.tsx` gained `duration: 0` = no auto-dismiss) naming rate
+limiting as the cause instead of a generic three-second message.
+
+**Measured, NODE_ENV=production, concurrency 10, `GET /api/documents?type=wiki`, in-process listener:**
+
+| Scenario | Before | After |
+|---|---|---|
+| 1,000 requests, no session cookie | 100 served / 900 throttled (90%) | 600 served / 400 throttled (40%) |
+| 2,000 requests, 20 distinct sessions behind one IP | 100 served / 1,900 throttled (95%) | **2,000 served / 0 throttled** |
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api test src/middleware/__tests__/rate-limit.test.ts
+pnpm --filter @ship/web test src/lib/queryClient.test.ts src/components/MutationErrorToast.test.tsx
+```
+
+**Rollback.** Revert the commits, or by hand: delete `api/src/middleware/rate-limit.ts` and restore
+the single `apiLimiter` (`windowMs: 60_000`, `max: isTestEnv ? 10000 : isDevEnv ? 1000 : 100`) plus
+`app.use('/api/', apiLimiter)` in `api/src/app.ts`; restore the two inline `retry` predicates in
+`web/src/lib/queryClient.ts` and drop `retryDelay`. The `Toast` `duration: 0` support and the
+sticky-toast branch in `MutationErrorToast` are additive and safe to leave.
+
+---
+
 ## Factory visibility — status command, published board, cost analysis (no ticket: tooling)
 
 **What changed.** Three additions, all reading from sources of truth rather than a status file:
