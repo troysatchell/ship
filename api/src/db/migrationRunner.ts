@@ -23,6 +23,29 @@ export interface MigrationRunResult {
   alreadyApplied: string[];
 }
 
+/**
+ * Postgres SQLSTATE codes meaning "the object you asked me to create is
+ * already there". schema.sql is initial-setup DDL that is re-applied on every
+ * deploy, so these are expected *there*.
+ *
+ * They are never expected from a numbered migration: a migration that cannot
+ * be applied twice is a migration that has not been made idempotent, and
+ * treating that as benign is what let DB-1 abandon 32 files while exiting 0.
+ */
+const DUPLICATE_OBJECT_SQLSTATES = new Set([
+  '42P04', // duplicate_database
+  '42P06', // duplicate_schema
+  '42P07', // duplicate_table (also index, view, sequence)
+  '42701', // duplicate_column
+  '42710', // duplicate_object (trigger, constraint, type, operator, ...)
+  '42723', // duplicate_function
+]);
+
+function isDuplicateObjectError(error: unknown): boolean {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === 'string' && DUPLICATE_OBJECT_SQLSTATES.has(code);
+}
+
 /** Migration files in the order they must be applied. */
 export function listMigrationFiles(migrationsDir: string): string[] {
   try {
@@ -34,10 +57,31 @@ export function listMigrationFiles(migrationsDir: string): string[] {
   }
 }
 
-/** Applies schema.sql, the initial-setup DDL. */
-export async function applySchema(pool: Pool, schemaPath: string): Promise<void> {
+/**
+ * Applies schema.sql, the initial-setup DDL.
+ *
+ * A duplicate-object error here is tolerated because schema.sql is re-applied
+ * on every deploy and every object it creates may already exist. Note that
+ * `pool.query` sends the file as one simple query, so Postgres runs it as a
+ * single implicit transaction: if it throws, nothing in it was applied. That is
+ * only safe because the error we tolerate is precisely "it was already there".
+ * Any other error means the file did not apply and must not be swallowed.
+ */
+export async function applySchema(
+  pool: Pool,
+  schemaPath: string,
+  log: (message: string) => void = console.log
+): Promise<void> {
   const schema = readFileSync(schemaPath, 'utf-8');
-  await pool.query(schema);
+  try {
+    await pool.query(schema);
+    log('✅ Schema applied');
+  } catch (error) {
+    if (!isDuplicateObjectError(error)) {
+      throw error;
+    }
+    log('ℹ️  Schema objects already exist, continuing...');
+  }
 }
 
 /** Creates the schema_migrations bookkeeping table if it does not exist. */
@@ -63,9 +107,14 @@ export async function runPendingMigrations(
   const alreadyApplied = appliedResult.rows.map(r => r.version as string);
   const alreadyAppliedSet = new Set(alreadyApplied);
 
+  const files = listMigrationFiles(migrationsDir);
+  if (files.length === 0) {
+    log('ℹ️  No migration files found');
+  }
+
   const applied: string[] = [];
-  for (const file of listMigrationFiles(migrationsDir)) {
-    const version = file.replace('.sql', '');
+  for (const file of files) {
+    const version = file.replace(/\.sql$/, '');
     if (alreadyAppliedSet.has(version)) {
       continue; // Already applied
     }
@@ -83,7 +132,11 @@ export async function runPendingMigrations(
       applied.push(version);
     } catch (err) {
       await client.query('ROLLBACK');
-      throw err;
+      // Name the file in the message. The old handler reported every migration
+      // failure as "Database schema already exists", which is why this bug went
+      // unnoticed through 32 skipped files.
+      const detail = err instanceof Error ? err.message : String(err);
+      throw new Error(`Migration ${file} failed: ${detail}`, { cause: err });
     } finally {
       client.release();
     }
@@ -94,37 +147,29 @@ export async function runPendingMigrations(
 
 /**
  * Full migration sequence: schema.sql, then every pending numbered migration.
+ *
+ * Errors propagate. The only error tolerated anywhere in this sequence is a
+ * duplicate-object error from schema.sql, handled inside applySchema. Anything
+ * else reaches the caller, which is what makes `pnpm db:migrate` exit non-zero
+ * rather than reporting a success it did not achieve.
  */
 export async function runMigrations(
   pool: Pool,
   options: MigrationRunOptions
 ): Promise<MigrationRunResult> {
   const log = options.log ?? console.log;
-  const empty: MigrationRunResult = { applied: [], alreadyApplied: [] };
 
-  try {
-    log('Running database migrations...');
+  log('Running database migrations...');
 
-    await applySchema(pool, options.schemaPath);
-    log('✅ Schema applied');
+  await applySchema(pool, options.schemaPath, log);
+  await ensureMigrationsTable(pool);
 
-    await ensureMigrationsTable(pool);
+  const result = await runPendingMigrations(pool, options.migrationsDir, log);
 
-    const result = await runPendingMigrations(pool, options.migrationsDir, log);
-
-    if (result.applied.length === 0) {
-      log('✅ All migrations already applied');
-    } else {
-      log(`✅ ${result.applied.length} migration(s) applied successfully`);
-    }
-    return result;
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    // "already exists" errors from schema.sql are fine
-    if (errorMessage.includes('already exists')) {
-      log('Database schema already exists, continuing...');
-      return empty;
-    }
-    throw error;
+  if (result.applied.length === 0) {
+    log('✅ All migrations already applied');
+  } else {
+    log(`✅ ${result.applied.length} migration(s) applied successfully`);
   }
+  return result;
 }
