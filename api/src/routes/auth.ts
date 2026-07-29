@@ -6,6 +6,7 @@ import { pool } from '../db/client.js';
 import { authMiddleware } from '../middleware/auth.js';
 import { ERROR_CODES, HTTP_STATUS, SESSION_TIMEOUT_MS, ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
 import { logAuditEvent } from '../services/audit.js';
+import { closeSocketsForSession } from '../collaboration/index.js';
 
 const router: RouterType = Router();
 
@@ -142,6 +143,9 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
     const oldSessionId = req.cookies.session_id;
     if (oldSessionId) {
       await pool.query('DELETE FROM sessions WHERE id = $1', [oldSessionId]);
+      // ERR-2: deleting the row is not enough — sockets it already authorized
+      // keep write access until the next revalidation sweep. Tear them down now.
+      closeSocketsForSession(oldSessionId, 'Session replaced');
     }
 
     // Create NEW session with cryptographically secure ID
@@ -236,6 +240,13 @@ router.post('/logout', authMiddleware, async (req: Request, res: Response): Prom
 
     // Delete session from database
     await pool.query('DELETE FROM sessions WHERE id = $1', [req.sessionId]);
+
+    // ERR-2: the collaboration/events sockets this session authorized are
+    // long-lived and were only ever checked at upgrade. Close them on logout
+    // instead of waiting up to one revalidation interval.
+    if (req.sessionId) {
+      closeSocketsForSession(req.sessionId, 'Logged out');
+    }
 
     // Clear cookie with same options used when setting it
     res.clearCookie('session_id', {
