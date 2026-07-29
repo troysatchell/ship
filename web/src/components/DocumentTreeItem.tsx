@@ -66,12 +66,10 @@ export function DocumentTreeItem({
   const hasChildren = document.children.length > 0;
 
   return (
-    <li
-      role="treeitem"
-      aria-expanded={hasChildren ? isOpen : undefined}
-      aria-selected={isActive}
-      data-testid="doc-item"
-    >
+    // Native list semantics — see A11Y-1 / TRO-215. Do not add role="treeitem"
+    // without also implementing the full tree keyboard model (roving tabIndex,
+    // arrow keys, aria-level/setsize/posinset) on the owning list.
+    <li data-testid="doc-item">
       <div
         className={cn(
           'group flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm',
@@ -90,6 +88,7 @@ export function DocumentTreeItem({
               className="w-4 h-4 flex-shrink-0 flex items-center justify-center p-0 rounded hover:bg-border/50"
               onClick={() => setIsOpen(!isOpen)}
               aria-label={isOpen ? 'Collapse' : 'Expand'}
+              aria-expanded={isOpen}
             >
               <ChevronIcon isOpen={isOpen} className="text-muted" />
             </button>
@@ -173,7 +172,7 @@ export function DocumentTreeItem({
 
       {/* Children (collapsible) */}
       {hasChildren && isOpen && (
-        <ul role="group" className="space-y-0.5">
+        <ul className="space-y-0.5">
           {document.children.map((child) => (
             <DocumentTreeItem
               key={child.id}

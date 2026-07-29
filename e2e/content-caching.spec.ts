@@ -15,7 +15,7 @@ test.describe('Content Caching - High Performance Navigation', () => {
     await page.goto('/docs');
 
     // Wait for the document tree to load (tree has aria-label="Workspace documents" or "Documents")
-    const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+    const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
     await tree.first().waitFor({ timeout: 10000 });
 
     // Get first two document links from sidebar tree (seed data provides these)
@@ -75,7 +75,7 @@ test.describe('WebSocket Connection Reliability', () => {
     });
 
     // Navigate to a document (tree has aria-label="Workspace documents" or "Documents")
-    const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+    const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
     const firstDoc = tree.getByRole('link').first();
     await firstDoc.click();
     await page.waitForURL(/\/documents\/.+/);
@@ -91,7 +91,7 @@ test.describe('WebSocket Connection Reliability', () => {
   test('sync status shows status indicator after WebSocket connects', async ({ page }) => {
     await page.goto('/docs');
 
-    const tree2 = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+    const tree2 = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
     const firstDoc2 = tree2.getByRole('link').first();
     await firstDoc2.click();
     await page.waitForURL(/\/documents\/.+/);
@@ -119,7 +119,7 @@ test.describe('WebSocket Connection Reliability', () => {
 
     await page.goto('/docs');
 
-    const tree3 = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }));
+    const tree3 = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }));
     const firstDoc3 = tree3.getByRole('link').first();
     await firstDoc3.click();
     await page.waitForURL(/\/documents\/.+/);
