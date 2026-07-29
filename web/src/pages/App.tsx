@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef, Suspense } from 'react';
 import { Link, Outlet, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { RouteFallback } from '@/components/RouteFallback';
 import { useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
 import { useFocusOnNavigate } from '@/hooks/useFocusOnNavigate';
@@ -540,7 +541,15 @@ export function AppLayout() {
         {/* Main content */}
         <main id="main-content" className="flex flex-1 flex-col overflow-hidden" role="main" tabIndex={-1}>
           <ErrorBoundary>
-            <Outlet />
+            {/*
+              Route chunks (BUN-1 / TRO-197) resolve here, inside <main>, so the
+              Icon Rail, Contextual Sidebar and Properties Sidebar stay mounted
+              while a page loads. A boundary above AppLayout would tear the
+              whole 4-panel layout down on every navigation.
+            */}
+            <Suspense fallback={<RouteFallback variant="panel" />}>
+              <Outlet />
+            </Suspense>
           </ErrorBoundary>
         </main>
 
