@@ -80,15 +80,22 @@ else here is proven by repetition, since converting a mock-reset call has no mea
 
 | Condition | Before | After |
 |---|---|---|
-| Two api suites, one database | 18 and 20 failures; 11 and 33 phantom skips | 0 failures; 0 skips |
+| Two api suites, one database | 18 and 20 failures; 11 and 33 phantom skips | 1 failure in 950 tests; **0 skips** |
 | 20 api runs under concurrent build load (load avg ~29 on 14 cores) | 6 runs failed | **1 run failed** |
 | Phantom skips across those 20 runs | — | **0, in all 20** |
 | `rate-limit.test.ts` alone, 25 runs under the same load | failed 3 times in 20 full runs | 25/25 |
 
-The one remaining failure is a different defect and is **not fixed**:
-`sprint-reviews.test.ts > POST /api/weeks/:id/review > returns 403 without auth (CSRF check first)`
-exceeded even the 15s deadline once in 20 runs, which is a hung request rather than a slow one. It
-needs its own ticket.
+**What is still broken, and is not fixed here.** Two residual failures remain, each seen once, and
+neither is the mechanism above:
+
+- `sprint-reviews.test.ts > POST /api/weeks/:id/review > returns 403 without auth (CSRF check first)`
+  exceeded even the 15s deadline once in 20 runs — a hung request, not a slow one, so a larger
+  deadline is not the answer.
+- `workspaces.test.ts > POST /api/admin/workspaces > should return 403 for non-super-admin` returned
+  **200** once in the two-suite run. An authorization assertion failing open deserves its own
+  investigation on its own merits, separately from any flake question.
+
+Both need their own ticket. Neither was reproduced twice, so no mechanism is claimed for either.
 
 **How to run it.**
 
