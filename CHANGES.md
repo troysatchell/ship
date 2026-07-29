@@ -58,8 +58,69 @@ legible.
 One trap worth recording, because it already cost this project a ticket: **the stack trace lies.**
 lib0 builds `errorUnexpectedEndOfArray` as a module-scope singleton `Error` whose stack is captured
 at module *load*, so every one of these crashes points at whatever first imported lib0 rather than
-at the throw site. Both the frame log and the fatal log therefore record the offending bytes and
-carry an explicit caveat on the stack field.
+at the throw site. Both the frame log and the fatal log therefore carry an explicit caveat on the
+stack field, and the frame log identifies the input by other means.
+
+**What the frame log does and does not contain.** It records frame *identity*, never frame content:
+a truncated SHA-256 digest, the byte length, and the protocol message type. The first version of
+this fix logged a 32-byte hex prefix of the frame, which was wrong — a frame that failed to decode
+has usually been *partially* decoded, so its leading bytes can carry fragments of document text, and
+logs get shipped, aggregated and retained. A digest preserves the property that matters for triage
+(the same frame sent twice yields the same identity, so a repeated or automated attack is visible)
+without the log holding the payload. Stated limit: for a very short frame the digest is reversible
+by brute force, which is acceptable precisely because a four-byte frame cannot contain document
+content, and the frames long enough to carry any are far too large to enumerate. The cost is that a
+byte-exact replay can no longer be reconstructed from a log line; error name, length and message
+type localize the failing decode path well enough to rebuild the frame by construction.
+
+**How to run it.**
+
+```bash
+source .factory-env   # api tests TRUNCATE 16 tables; never run without this
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/malformed-frames.test.ts
+pnpm --filter @ship/api exec vitest run src/__tests__/process-safety.test.ts
+```
+
+`malformed-frames.test.ts` drives the real collaboration server over real sockets with each frame
+from the audit table plus a raw hand-rolled WebSocket frame with RSV1 set, and asserts that nothing
+reaches the process level, that the offending socket is closed **with code 1002**, that a co-tenant
+editor on the same document keeps working, and that new connections still persist edits afterwards.
+It also pins the two frames that were always survivable (`[0,1]`, `[9,9,9]`) as still survivable, so
+an over-broad fix that hangs up on legitimate traffic fails.
+
+It contains **no fixed sleeps** (TEST-11 / TRO-233). Every wait is an observable: socket closures are
+awaited as `'close'` events, and liveness is proved by pushing a write through a socket and reading
+it back out of `documents`. The one polling helper reads the database until the row appears, because
+`persistDocument()` is debounced inside the server and emits no external signal — it returns as soon
+as the condition holds and the caller asserts on the value, so a timeout surfaces as a real
+assertion about content rather than as "waited long enough". Each malformed frame gets its own fresh
+attacker connection, so no case is ever asserting against a socket a previous case already closed.
+`process-safety.test.ts` uses vitest fake timers, which is what lets it prove the *absence* of a
+second exit after the drain window elapses.
+
+Red before green, with `api/src/collaboration/index.ts` restored to the version on `main`:
+**8 failed / 3 passed**, every failure a clean assertion — five naming the escaped exception
+(`Unexpected end of array`, `Invalid typed array length: 5`), one naming
+`Invalid WebSocket frame: RSV1 must be clear`, one `expected undefined to be 1002` for the missing
+close-code constant, and one `expected false to be true` for the socket that was never closed. With
+the fix: **11 passed**. Full api suite 488/488.
+
+Note for anyone repeating that check: reverting with `git checkout HEAD -- <file>` stops working once
+the fix is committed, because `HEAD` then *contains* the fix. Use `git show main:<file>`.
+
+**How to roll it back.**
+
+```bash
+git revert <commit>   # or, per piece:
+```
+
+Reverting `api/src/process-safety.ts` plus its two lines in `api/src/index.ts` restores Node's
+default crash behaviour without touching the frame guards — the guards are independent and are the
+part that matters. Reverting `runFrameHandler` / `attachSocketErrorHandler` in
+`api/src/collaboration/index.ts` restores the crash. No schema change, no migration, no config, no
+API surface change; the only observable difference for a well-behaved client is that a client
+sending undecodable bytes is now disconnected with close code 1002 instead of taking the server with
+it.
 
 ---
 
@@ -126,36 +187,6 @@ freshly seeded database has 5 and shows **no** violation. The audit environment 
 **How to run it.**
 
 ```bash
-source .factory-env   # api tests TRUNCATE 16 tables; never run without this
-pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/malformed-frames.test.ts
-pnpm --filter @ship/api exec vitest run src/__tests__/process-safety.test.ts
-```
-
-`malformed-frames.test.ts` drives the real collaboration server over real sockets with each frame
-from the audit table plus a raw hand-rolled WebSocket frame with RSV1 set, and asserts that nothing
-reaches the process level, that the offending socket is closed, that a co-tenant editor on the same
-document keeps working, and that new connections still persist edits afterwards. It also pins the
-two frames that were always survivable (`[0,1]`, `[9,9,9]`) as still survivable, so an over-broad
-fix that hangs up on legitimate traffic fails.
-
-Red before green, with `api/src/collaboration/index.ts` reverted to `HEAD`: **7 failed / 3 passed**,
-every failure a clean assertion naming the escaped exception (`Unexpected end of array`,
-`Invalid typed array length: 5`, `Invalid WebSocket frame: RSV1 must be clear`). With the fix:
-**10 passed**. Full api suite 488/488.
-
-**How to roll it back.**
-
-```bash
-git revert <commit>   # or, per piece:
-```
-
-Reverting `api/src/process-safety.ts` plus its two lines in `api/src/index.ts` restores Node's
-default crash behaviour without touching the frame guards — the guards are independent and are the
-part that matters. Reverting `runFrameHandler` / `attachSocketErrorHandler` in
-`api/src/collaboration/index.ts` restores the crash. No schema change, no migration, no config, no
-API surface change; the only observable difference for a well-behaved client is that a client
-sending undecodable bytes is now disconnected with close code 1002 instead of taking the server with
-it.
 pnpm --filter @ship/web test        # 5 new specs, 26 assertions, all green
 pnpm type-check
 ```
@@ -425,3 +456,4 @@ WebSocket URL being derived from `window.location.host`.
 which builds from the repository.
 
 **Rollback.** Revert the merge of `feat/render-deploy` (`bace770`).
+
