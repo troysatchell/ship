@@ -159,11 +159,28 @@ if [ -n "$DIFF_TESTS" ]; then
            | grep -E '^\+' | grep -cE '\.(skip|todo)\(' || true)"
   DELS="$(git diff "${BASE_REF}"...HEAD -- '*.test.ts' '*.test.tsx' '*.spec.ts' 2>/dev/null \
            | grep -E '^-' | grep -cE '^\-\s*(it|test|expect)\(' || true)"
+  # Counting removals ALONE was wrong, and it misfired three times before this
+  # was fixed. Correcting a stale assertion, renaming an `it(` title, and
+  # renaming a mock handle all rewrite the line — so a deletion and a correction
+  # are identical to the grep. TRO-223 went 131 -> 147 assertions and still
+  # failed; TRO-179 failed twice on pure renames and reverted both rather than
+  # argue, which is the worst outcome: a false positive that suppresses real work.
+  #
+  # A net comparison distinguishes them. Removing 12 assertions while adding 16
+  # is not a weaker suite; removing 12 while adding 2 is.
+  ADDS="$(git diff "${BASE_REF}"...HEAD -- '*.test.ts' '*.test.tsx' '*.spec.ts' 2>/dev/null \
+           | grep -E '^\+' | grep -cE '^\+\s*(it|test|expect)\(' || true)"
   [ "${SKIPS:-0}" -gt 0 ] && WEAKENED="${WEAKENED}${SKIPS} newly skipped test(s); "
-  [ "${DELS:-0}" -gt 0 ] && WEAKENED="${WEAKENED}${DELS} removed test/assertion line(s); "
+  # `.skip`/`.todo` stays an unconditional failure — that is unambiguous
+  # weakening and no amount of added assertions offsets a disabled test.
+  if [ "${DELS:-0}" -gt "${ADDS:-0}" ]; then
+    WEAKENED="${WEAKENED}net loss of test lines (-${DELS} / +${ADDS}); "
+  fi
 fi
 if [ -n "$WEAKENED" ]; then
   record tests:not-weakened fail "${WEAKENED}justify in the PR or revert"
+elif [ "${DELS:-0}" -gt 0 ]; then
+  record tests:not-weakened pass "-${DELS} / +${ADDS} test line(s) — net gain, reviewer should confirm the removals are corrections"
 else
   record tests:not-weakened pass "no tests skipped or assertions removed"
 fi
