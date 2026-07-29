@@ -127,6 +127,102 @@ describe('the application pool applies the decision', () => {
   });
 });
 
+describe('a connection-string sslmode cannot defeat the resolved SSL', () => {
+  const BASE_URL = 'postgresql://u:p@db.example.com:5432/ship';
+
+  /** What pg will actually put on the socket, given a URL and an explicit ssl option. */
+  function effectiveSsl(connectionString: string, ssl: DatabaseSslConfig): unknown {
+    const client = new pg.Client({ connectionString, ssl });
+    // `connectionParameters` is real and stable on pg's Client but absent from
+    // @types/pg. Reflect.get returns `any`, so this reads the property without a
+    // type assertion (`as any` / `as unknown as` are both banned here, rightly).
+    const params: { ssl?: unknown } = Reflect.get(client, 'connectionParameters');
+    return params.ssl;
+  }
+
+  it('CHARACTERISES pg: the connection string outranks the explicit ssl option', () => {
+    // Not a test of our code — a test of the premise the guard below rests on.
+    // pg applies `parse(connectionString)` LAST (connection-parameters.js:56), so
+    // `sslmode=disable` overwrites the caller's object and the socket goes plaintext.
+    // If a future pg makes the explicit option win, THIS test fails, and that is the
+    // signal that the throw in resolveDatabaseSsl can be relaxed to a passed option.
+    expect(
+      effectiveSsl(`${BASE_URL}?sslmode=disable`, { rejectUnauthorized: false }),
+      'if this is no longer false, pg changed its precedence — revisit ssl.ts'
+    ).toBe(false);
+
+    // And the mirror image: with no sslmode, our option survives. This is the only
+    // reason the fix works at all.
+    expect(effectiveSsl(BASE_URL, { rejectUnauthorized: false })).toEqual({
+      rejectUnauthorized: false,
+    });
+  });
+
+  it('CHARACTERISES pg: every other sslmode still encrypts', () => {
+    // Establishes that `disable` is the ONLY value the guard needs to reject.
+    for (const mode of ['prefer', 'require', 'verify-ca', 'verify-full', 'no-verify']) {
+      const eff = effectiveSsl(`${BASE_URL}?sslmode=${mode}`, { rejectUnauthorized: false });
+      expect(eff, `sslmode=${mode} must not resolve to plaintext`).not.toBe(false);
+      expect(eff, `sslmode=${mode} must resolve to something`).toBeTruthy();
+    }
+  });
+
+  it('refuses to start in production when the URL forces plaintext', () => {
+    // The guard. Since the option cannot beat the URL, the only way to keep the
+    // production guarantee is to fail loudly instead of connecting in the clear.
+    expect(() => resolveDatabaseSsl('production', `${BASE_URL}?sslmode=disable`)).toThrow(
+      /sslmode=disable/
+    );
+    expect(() => resolveDatabaseSsl('production', `${BASE_URL}?sslmode=DISABLE`)).toThrow(
+      /UNENCRYPTED/
+    );
+    // The message has to tell the operator what to do about it.
+    expect(() => resolveDatabaseSsl('production', `${BASE_URL}?sslmode=disable`)).toThrow(
+      /Remove the sslmode parameter/
+    );
+  });
+
+  it('allows every sslmode that still encrypts, in production', () => {
+    for (const mode of ['prefer', 'require', 'verify-ca', 'verify-full', 'no-verify']) {
+      expect(
+        resolveDatabaseSsl('production', `${BASE_URL}?sslmode=${mode}`),
+        `sslmode=${mode} encrypts, so it must be allowed through`
+      ).toEqual({ rejectUnauthorized: false });
+    }
+  });
+
+  it('allows sslmode=disable outside production', () => {
+    // Local Postgres and the CI container are plaintext-only; forbidding this
+    // would make the guard unsatisfiable in development.
+    expect(resolveDatabaseSsl('development', `${BASE_URL}?sslmode=disable`)).toBe(false);
+    expect(resolveDatabaseSsl('test', `${BASE_URL}?sslmode=disable`)).toBe(false);
+    expect(resolveDatabaseSsl(undefined, `${BASE_URL}?sslmode=disable`)).toBe(false);
+  });
+
+  it('does not throw on a missing or unparseable DATABASE_URL', () => {
+    // Reporting a malformed URL is pg's job; this guard must not pre-empt it with
+    // a misleading TLS error.
+    expect(resolveDatabaseSsl('production', undefined)).toEqual({ rejectUnauthorized: false });
+    expect(resolveDatabaseSsl('production', '')).toEqual({ rejectUnauthorized: false });
+    expect(resolveDatabaseSsl('production', 'not a url at all')).toEqual({
+      rejectUnauthorized: false,
+    });
+  });
+
+  it('reads process.env.DATABASE_URL when called with no arguments', () => {
+    // The call shape every pool site actually uses: resolveDatabaseSsl().
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', `${BASE_URL}?sslmode=disable`);
+    expect(() => resolveDatabaseSsl()).toThrow(/sslmode=disable/);
+    vi.stubEnv('DATABASE_URL', BASE_URL);
+    expect(resolveDatabaseSsl()).toEqual({ rejectUnauthorized: false });
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+});
+
 describe('no pool under api/src/db re-derives the SSL rule', () => {
   /** Every non-test `.ts` file under `api/src/db`, recursively. */
   function dbSourceFiles(dir: string = DB_DIR): string[] {

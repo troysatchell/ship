@@ -57,6 +57,52 @@ so verification fails without the provider bundle. A federal deployment probably
 change that no test in this repo can verify, so it is left as a follow-up that needs the CA bundle
 decided first. This is called out in the header comment of `api/src/db/ssl.ts`.
 
+**Precedence — the helper is not the only input, and not the strongest.** There is a third SSL
+surface besides these pools and the helper: the connection string. Raised by CodeRabbit, then
+established by reading pg rather than inferring it from the finding above, and confirmed empirically
+against pg 8.16.3 / pg-connection-string 2.9.1.
+
+`pg/lib/connection-parameters.js:56` does
+`config = Object.assign({}, config, parse(config.connectionString))` — the parsed URL is the **last**
+source, so its `ssl` key overwrites the caller's; the comment on `:54` says so outright.
+`pg-connection-string/index.js:76` sets `ssl = {}` whenever `sslmode` is present, and `:133-135` sets
+`ssl = false` for `disable`. `connection-parameters.js:81` then uses that value as-is.
+
+Effective order, weakest to strongest: **pg defaults → `PGSSLMODE` → the `ssl` option this helper
+returns → `sslmode` in the connection string.**
+
+Measured, passing an explicit `{ rejectUnauthorized: false }` throughout:
+
+| `sslmode` in URL | effective `ssl` | on the wire |
+|---|---|---|
+| absent | `{ rejectUnauthorized: false }` | encrypted — our option survives |
+| `disable` | `false` | **plaintext — our option is discarded** |
+| `prefer` / `require` / `verify-ca` / `verify-full` | `{}` | encrypted |
+| `no-verify` | `{ rejectUnauthorized: false }` | encrypted |
+
+So `DATABASE_URL=...?sslmode=disable` silently defeated the fix, in exactly the way these strings
+arrive — copied from a provider dashboard. The helper would report the right value, every test would
+pass, and production would be in the clear.
+
+The `ssl` option can never win that argument, so `resolveDatabaseSsl` **refuses to start** instead:
+in production, an `sslmode` that pg resolves to plaintext throws with the parameter named and the
+remedy stated. `disable` is the only such value — the other five all encrypt, and are allowed
+through untouched. Outside production `sslmode=disable` is still fine, because local Postgres and
+the CI container are plaintext-only.
+
+It deliberately does **not** rewrite the URL. Silently editing an operator's explicit instruction is
+the same class of mistake as the original bug: the code would report one thing and do another.
+
+Note in passing: `sslmode=require` resolves to `{}`, which leaves Node's `rejectUnauthorized` at
+`true` — stricter than this helper, and it will **fail** against a provider using a private CA. That
+is a loud connection error rather than a silent downgrade, so it is left alone.
+
+**Deployment precondition — check this before rolling out.** If the production `DATABASE_URL` in SSM
+already contains `sslmode=disable`, this turns a currently-working in-VPC deploy into a startup
+failure with the message above. The value lives in SSM and could not be inspected from here, so this
+is stated as a risk, not a cleared check. If plaintext is genuinely intended for that deployment,
+that is a decision for a human to make explicitly.
+
 **Out of scope, deliberately.** `api/scripts/migrate-shadow.ts:32`, `api/scripts/create-test-user.ts:35`
 and `api/scripts/check-db-user.ts:10,19` set `ssl: { rejectUnauthorized: false }`
 **unconditionally** — a fifth and sixth policy. They are operator scripts outside
@@ -67,33 +113,55 @@ its own verification.
 
 **Evidence.** `pnpm --filter @ship/api test` against
 `postgresql://ship:***@localhost:5433/ship_wt_tro_240` (docker `ship-audit-pg`, postgres:15-alpine),
-`NODE_ENV` unset in the shell so vitest sets `test`. 31 files, **484 passed, 0 failed**.
+`NODE_ENV` unset in the shell so vitest sets `test`. 31 files, **491 passed, 0 failed**.
 `pnpm --filter @ship/web test`: 13 failed / 186 passed — the same 13 identities quarantined as
 TEST-1 / TRO-223, in the same three files; nothing in `web/` was touched. `pnpm type-check` clean
 across shared, api and web.
 
-The regression test is `api/src/db/__tests__/ssl.test.ts` (15 cases). Against the unfixed call
-sites it failed 7 / passed 8, every failure an `AssertionError` on the claimed behaviour — the
-headline one being `expected undefined to deeply equal { rejectUnauthorized: false }` for the
-application pool under `NODE_ENV=production`, which is DB-11 stated as a test. It asserts three
-things: the decision per `NODE_ENV`; that `client.ts`'s pool actually applies it (re-imported under
-a stubbed env, since the pool is built at module scope); and that **no** pool under `api/src/db/`
-sets `ssl` to anything other than `resolveDatabaseSsl()`. That last one is what prevents
-recurrence — a future file adding `new Pool(...)` with its own policy fails the suite.
+The regression test is `api/src/db/__tests__/ssl.test.ts` (22 cases), covering four things:
+
+1. the decision per `NODE_ENV`, including that `production` is matched exactly, so a deploy setting
+   `NODE_ENV=Production` cannot silently drop to plaintext;
+2. that `client.ts`'s pool actually applies it — re-imported under a stubbed env, since the pool is
+   built at module scope. **7 failed / 8 passed** against the unfixed call sites, every failure an
+   `AssertionError` on the claimed behaviour, the headline being
+   `expected undefined to deeply equal { rejectUnauthorized: false }` — DB-11 stated as a test;
+3. the precedence above: two tests **characterise pg itself**, pinning that `sslmode=disable`
+   discards the explicit option and that the other five values do not. If a future pg makes the
+   option win, those tests fail, which is the signal the throw can be relaxed. Then the guard:
+   **2 failed / 6 passed** against the unguarded helper, both `expected [Function] to throw an
+   error`. Only two of the eight went red on purpose — the other six assert behaviour that must
+   *not* change (dev still permits `sslmode=disable`, encrypting modes still pass, a malformed URL
+   is still pg's to report);
+4. that **no** pool under `api/src/db/` sets `ssl` to anything other than `resolveDatabaseSsl()`.
+   This is what prevents recurrence — a future file adding `new Pool(...)` with its own policy fails
+   the suite rather than quietly adding a fifth policy.
+
+Beyond the suite, the **compiled** artifact was exercised directly, since `Dockerfile:35` runs
+`dist/`, not the TypeScript: `NODE_ENV=production` with a clean URL yields
+`{"rejectUnauthorized":false}`; with `?sslmode=disable` importing `dist/db/client.js` throws the
+guard message; `NODE_ENV=development` with `?sslmode=disable` still yields `false`.
 
 **How to run it.**
 
 ```bash
 source .factory-env                                             # api tests TRUNCATE 16 tables
-pnpm --filter @ship/api test src/db/__tests__/ssl.test.ts       # 15 cases, the regression test
-pnpm --filter @ship/api test                                    # full api suite: 484/484
+pnpm --filter @ship/api test src/db/__tests__/ssl.test.ts       # 22 cases, the regression test
+pnpm --filter @ship/api test                                    # full api suite: 491/491
 pnpm type-check
+
+# the guard, on the compiled artifact (throws; prints the remedy)
+pnpm --filter @ship/api build
+cd api && NODE_ENV=production DATABASE_URL='postgresql://u:p@h:5432/d?sslmode=disable' \
+  node -e "import('./dist/db/client.js').catch(e => console.log(e.message))"
 ```
 
 **Rollback.** `git revert` the commits on `fix/db-11-pool-ssl`, or by hand: delete
 `api/src/db/ssl.ts` and `api/src/db/__tests__/ssl.test.ts`, drop the `ssl:` line and the import from
 `client.ts` and `scripts/orphan-diagnostic.ts`, and restore the inline ternary in `migrate.ts` and
-`seed.ts`. Reverting reinstates plaintext connections from the application pool.
+`seed.ts`. Reverting reinstates plaintext connections from the application pool. To keep the fix but
+drop only the startup guard, delete the `PLAINTEXT_SSL_MODES` check in `resolveDatabaseSsl` — that
+restores the state where `sslmode=disable` in `DATABASE_URL` silently wins.
 
 **Not verified — do not read this as a fixed deployment.** No test here proves TLS actually
 negotiates. Proving that needs a managed Postgres endpoint that *requires* TLS on a public address;
