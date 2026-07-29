@@ -38,7 +38,8 @@
 ### 2026-07-29 (Wed) — Day 3 — ticket factory built and proven on itself
 
 **No audit tickets were worked today.** What was built is the machinery to work them
-autonomously, plus `TRO-244` (CI), which the factory needed anyway. All of it is **uncommitted**.
+autonomously, plus `TRO-244` (CI), which the factory needed anyway. Shipped via PR #1
+(`feat/ticket-factory-harness` → merge `2dced06`), CI green on both jobs.
 
 - **Green-on-arrival established.** `audit/factory/quarantine.json` — api **451/451 green**, web
   **138/151**, the 13 failures being TEST-1 (`TRO-223`), recorded by *identity*
