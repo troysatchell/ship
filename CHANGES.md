@@ -10,14 +10,17 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ## TRO-223 (TEST-1) — the web unit suite is green, and `pnpm test` now actually runs it
 
-13 of 151 web unit tests failed, and nothing in the repository ran them: root `"test"` was
-`pnpm --filter @ship/api test`, so the suite reported green while a third of three files were red.
-The failures were 5 months of accumulated drift that a suite nobody ran could not catch.
+**13 web unit tests failed, in 3 files, and nothing in the repository ran them.** Root `"test"` was
+`pnpm --filter @ship/api test`, so `pnpm test` reported green while those 13 stayed red. The suite
+was 151 tests when the factory captured its baseline and 172 by the time this branch measured it —
+the same 13 failing in both. They were five months of accumulated drift that a suite nobody ran
+could not catch.
 
 **The judgement this ticket turned on: for each failure, was the test wrong or the source wrong?**
-It was not uniform. 11 were stale assertions; **2 were real source defects**.
+It was not uniform, and it did not fall the convenient way. Of the 13: **11 were stale
+assertions**, **1 was a source defect**, and **1 was a defect in the test harness**.
 
-*Stale tests (source was right, assertions were corrected — a correction, not a weakening):*
+*Stale tests — 11 (source was right, assertions were corrected — a correction, not a weakening):*
 
 - **`sprints` → `weeks` (5 assertions).** `7713ef0` renamed the tab id in both the project and
   program configs. `e2e/project-weeks.spec.ts:121` navigates to `/documents/:id/weeks`, confirming
@@ -31,22 +34,27 @@ It was not uniform. 11 were stale assertions; **2 were real source defects**.
   without the two child nodes, so ProseMirror threw `No node type or group 'detailsSummary' found`.
   `Editor.tsx:628-630` registers all three together — the test now does the same.
 
-*Source defects (the tests were right; the product was fixed):*
+*Source defect — 1 (the test was right; the product was fixed):*
 
 - **`web/src/lib/document-tabs.tsx` — the project Weeks tab stopped showing its count.** In one
   hunk, `7713ef0` renamed the id *and* collapsed `label` from a count function to the bare string
   `'Weeks'` — while leaving the identical function intact on the program tab beside it. That
   asymmetry inside a single commit is the fingerprint of an accident, and
   `UnifiedDocumentPage.tsx:133,141` still fetches project weeks and computes `weeks:
-  projectWeeks.length` for a consumer that no longer existed. Label function restored.
-- **`web/src/hooks/useSessionTimeout.test.ts` — dismissing the timeout warning logged you out.**
-  The fault was in the harness, not the hook, but the *assertion* was correct and is untouched.
-  `lib/api.ts` reads `response.headers.get('content-type')`; the stub had no `headers`, so
-  `apiPost` threw a `TypeError`, and `resetTimer` catches every throw as "network error — force
-  logout" (observed: stderr printed `Network error extending session - forcing logout`). Stubs are
-  now Response-shaped. **The hook's fail-closed logout was deliberately left alone**, and two new
-  tests assert it still fires when extend-session genuinely fails — without them, "fix" and
-  "neuter" would look identical.
+  projectWeeks.length` for a consumer that no longer existed. Label function restored; the two
+  callbacks are now byte-identical.
+
+*Test-harness defect — 1 (no product code changed):*
+
+- **`web/src/hooks/useSessionTimeout.test.ts` — the stub, not the hook, caused the phantom logout.**
+  `lib/api.ts` reads `response.headers.get('content-type')`; the stub had no `headers`, so `apiPost`
+  threw a `TypeError`, and `resetTimer` catches every throw as "network error — force logout".
+  Observed, not inferred: stderr printed `Network error extending session - forcing logout` — the
+  `catch` branch — and never `Failed to extend session`, the `!response.ok` branch. **The assertion
+  was correct and is untouched, and the hook's fail-closed logout was deliberately left alone**: a
+  session that cannot be extended *should* end. Only the stubs changed — they now hand the code
+  under test a real `Response`. Two new tests assert the logout still fires when extend-session
+  returns non-ok or rejects, so "fixed the stub" and "neutered the logout" cannot be confused.
 
 **Also changed.** Root `"test"` is now `test:api && test:web`, with `test:api`/`test:web` for
 single suites. CI already ran both (`.github/workflows/ci.yml:105-118`) and diffs them against the
@@ -57,15 +65,19 @@ entries were removed from `audit/factory/quarantine.json`; both suites are now g
 **Run it.**
 
 ```bash
-pnpm test:web                    # 186 passed / 186 total, 16 files
-pnpm test                        # api (needs DATABASE_URL) then web
+pnpm test:web                    # 214 passed / 214 total, 24 files
+pnpm test                        # api 469/469 (needs DATABASE_URL), then web
 scripts/factory/gate.sh          # full evidence gate
 ```
 
-14 tests were added: sprint status-aware tab selection (previously uncovered — which is how
+Those totals are measured on this branch *after* merging `main`, which brought in 5 further test
+files from other tickets; the web suite was 186 tests before that merge.
+
+15 test cases were added: sprint status-aware tab selection (previously uncovered — which is how
 `getTabsForDocumentType('sprint')` drifted from `[]` to four tabs unnoticed), project/program week
-count-label symmetry, a guard that no config exposes a `'sprints'` id again, `setDetails` document
-structure, and the two session fail-closed tests.
+count-label symmetry, the zero-count convention asserted across every count-aware label, a guard
+that no config exposes a `'sprints'` id again, `setDetails` document structure, and the two session
+fail-closed tests. Assertions in the three repaired files went from 131 to 147.
 
 **Roll back.** `git revert` the commits on `fix/test-1-web-suite-green`. Reverting restores the 13
 failures, so also restore the `knownFailing` list in `audit/factory/quarantine.json` from
@@ -405,3 +417,4 @@ WebSocket URL being derived from `window.location.host`.
 which builds from the repository.
 
 **Rollback.** Revert the merge of `feat/render-deploy` (`bace770`).
+

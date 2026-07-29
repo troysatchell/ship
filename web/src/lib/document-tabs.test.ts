@@ -6,6 +6,7 @@ import {
   resolveTabLabels,
   documentTabConfigs,
   type DocumentResponse,
+  type TabCounts,
 } from './document-tabs';
 
 /**
@@ -266,6 +267,29 @@ describe('weeks tab count labels', () => {
   it.each(['project', 'program'])('omits a zero week count for %s documents', type => {
     const resolved = resolveTabLabels(getTabsForDocumentType(type), doc(type), { weeks: 0 });
     expect(resolved.find(t => t.id === 'weeks')?.label).toBe('Weeks');
+  });
+
+  /**
+   * The zero behaviour is a convention, not an accident of `?`: every count-aware
+   * label in this file hides a zero rather than rendering "(0)". Asserted across all
+   * of them so the next reader does not have to infer it from one callback — and so
+   * changing one label to a nullish check fails here instead of silently putting
+   * "Weeks (0)" on every project that has no weeks yet.
+   */
+  it('hides a zero count on every count-aware label', () => {
+    const zero: TabCounts = { issues: 0, weeks: 0, projects: 0 };
+    const countAware = Object.entries(documentTabConfigs).flatMap(([type, tabs]) =>
+      tabs.filter(tab => typeof tab.label === 'function').map(tab => ({ type, tab }))
+    );
+
+    // Without this the loop below would pass vacuously if the configs ever lost
+    // their function labels — which is exactly the regression this file exists for.
+    expect(countAware.length).toBeGreaterThan(0);
+
+    for (const { type, tab } of countAware) {
+      const [resolved] = resolveTabLabels([tab], doc(type), zero);
+      expect(resolved.label, `${type}.${tab.id} should render no "(0)"`).not.toMatch(/\(\d+\)/);
+    }
   });
 
   it('no longer exposes a "sprints" tab id on any document type', () => {

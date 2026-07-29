@@ -85,11 +85,17 @@ export const documentTabConfigs: Record<string, DocumentTabConfig[]> = {
     },
     {
       id: 'weeks',
-      // Count-aware, matching the program 'weeks' tab below. 7713ef0 renamed this
-      // tab from 'sprints' to 'weeks' and collapsed this label to a bare string in
-      // the same hunk, while leaving the program tab's function intact — so the
-      // count UnifiedDocumentPage still computes (weeks: projectWeeks.length) had
-      // no consumer. Restored.
+      // Count-aware, byte-identical to the program 'weeks' tab below. 7713ef0
+      // renamed this tab from 'sprints' to 'weeks' and collapsed this label to a
+      // bare string in the same hunk, while leaving the program tab's function
+      // intact — so the count UnifiedDocumentPage still computes
+      // (weeks: projectWeeks.length) had no consumer. Restored.
+      //
+      // The truthy check is deliberate and shared by every count label in this file:
+      // a zero count renders the bare noun ('Weeks', not 'Weeks (0)'). See the
+      // 'resolves dynamic labels with zero counts' test. Switching this one to a
+      // nullish check would put "Weeks (0)" on every project that has no weeks yet,
+      // and would make this the only count label in the file that shows its zero.
       label: (_, counts) => counts?.weeks ? `Weeks (${counts.weeks})` : 'Weeks',
       component: ProjectWeeksTab,
     },

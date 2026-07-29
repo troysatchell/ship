@@ -17,34 +17,50 @@ const ABSOLUTE_SESSION_TIMEOUT_MS = 12 * 60 * 60 * 1000; // 12 hours
 const ABSOLUTE_WARNING_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes before absolute timeout
 const ACTIVITY_THROTTLE_MS = 30 * 1000; // 30 seconds
 
-// Mock fetch globally
-const mockFetch = vi.fn();
+/**
+ * The parts of a response a test in this file actually chooses. Everything else —
+ * notably `headers` — is supplied by `toResponse()` below, which builds a real
+ * `Response`. Tests describe intent; the harness supplies fidelity.
+ */
+interface ResponseStub {
+  ok?: boolean;
+  status?: number;
+  json?: () => Promise<unknown>;
+}
+
+// Mock fetch globally. Typed against the stub shape so a malformed stub is a
+// compile error rather than a runtime TypeError swallowed by resetTimer().
+const mockFetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<ResponseStub>>();
 
 /**
  * `lib/api.ts` does not only read `.ok` and `.json()` off a response — its
  * `isJsonResponse()` helper reads `response.headers.get('content-type')`, both in
  * `ensureCsrfToken()` and again on the POST that follows. A bare `{ ok, json }`
- * stub therefore throws a TypeError inside `apiPost`, and `resetTimer()` treats
+ * object therefore throws a TypeError inside `apiPost`, and `resetTimer()` treats
  * *any* throw as "network error - force logout".
  *
  * That is what made "does NOT call onTimeout if dismissed before 0" fail: the hook
- * behaved exactly as designed, and the stub was not Response-shaped. These helpers
- * give every stub the shape the production code actually reads, so a future test
- * in this file cannot re-acquire the same phantom logout.
+ * behaved exactly as designed, and the stub was not a Response. Rather than
+ * hand-rolling the one property that was missing, these helpers hand the code under
+ * test a **real** `Response`, so there is no second shape to keep in sync.
  */
-const jsonHeaders = {
-  get: (name: string) =>
-    name.toLowerCase() === 'content-type' ? 'application/json' : null,
-};
-
-function jsonResponse(body: unknown, { ok = true, status = 200 } = {}) {
-  return { ok, status, headers: jsonHeaders, json: async () => body };
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
-/** Give a hand-written stub the `headers` that lib/api.ts requires. */
-function asResponse(res: unknown) {
-  if (res && typeof res === 'object' && 'headers' in res) return res;
-  return { ...(res as object), headers: jsonHeaders };
+/**
+ * Build a fresh `Response` from a test's stub.
+ *
+ * Fresh per call, deliberately: a `Response` body can only be read once, so a
+ * single shared instance would throw on the second read — which the
+ * mount/unmount loop below does ten times.
+ */
+async function toResponse(stub: ResponseStub): Promise<Response> {
+  const status = stub.status ?? (stub.ok === false ? 500 : 200);
+  return jsonResponse(stub.json ? await stub.json() : {}, status);
 }
 
 /**
@@ -52,12 +68,12 @@ function asResponse(res: unknown) {
  * POST is answered here, so each test only has to stub the endpoint under test.
  */
 function installFetch() {
-  global.fetch = (async (url: string, init?: RequestInit) => {
-    if (String(url).includes('/api/csrf-token')) {
+  global.fetch = async (input, init) => {
+    if (String(input).includes('/api/csrf-token')) {
       return jsonResponse({ token: 'test-csrf-token' });
     }
-    return asResponse(await mockFetch(url, init));
-  }) as unknown as typeof fetch;
+    return toResponse(await mockFetch(input, init));
+  };
 }
 
 describe('useSessionTimeout', () => {
@@ -218,9 +234,9 @@ describe('useSessionTimeout', () => {
      */
     it('DOES call onTimeout when extend-session is rejected by the server', async () => {
       const onTimeout = vi.fn();
-      mockFetch.mockImplementation((url: string) =>
+      mockFetch.mockImplementation(input =>
         Promise.resolve(
-          String(url).includes('/api/auth/extend-session')
+          String(input).includes('/api/auth/extend-session')
             ? { ok: false, status: 401, json: async () => ({ success: false }) }
             : { ok: true, json: async () => ({ success: true }) }
         )
@@ -237,8 +253,8 @@ describe('useSessionTimeout', () => {
 
     it('DOES call onTimeout when extend-session fails with a network error', async () => {
       const onTimeout = vi.fn();
-      mockFetch.mockImplementation((url: string) =>
-        String(url).includes('/api/auth/extend-session')
+      mockFetch.mockImplementation(input =>
+        String(input).includes('/api/auth/extend-session')
           ? Promise.reject(new Error('Network error'))
           : Promise.resolve({ ok: true, json: async () => ({ success: true }) })
       );

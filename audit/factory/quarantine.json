@@ -36,12 +36,13 @@
       "note": "Re-measured at capturedAtCommit: 469 tests, up from 451 at the previous capture. This branch changed no api code. One standalone run, no flake observed."
     },
     "web": {
-      "totals": { "tests": 186, "passed": 186, "failed": 0 },
+      "totals": { "tests": 214, "passed": 214, "failed": 0, "files": 24 },
       "resolved": {
         "linearTicket": "TRO-223",
         "auditFinding": "TEST-1",
         "on": "2026-07-29",
-        "note": "All 13 entries removed because the tests now pass, not because they were reclassified. Two were source defects (the project 'weeks' tab lost its count label in 7713ef0; nothing ran the suite); the rest were assertions left behind by the sprint->week rename (7713ef0), the project tab reorder (b1e4c5a) and the sprint-tabs feature (9f77237). Test count rose from 151 to 186: 172 already existed at re-measurement, plus 14 added by this ticket."
+        "note": "All 13 entries removed because the tests now pass, not because they were reclassified. One was a source defect (the project 'weeks' tab lost its count label in 7713ef0), one was a test-harness defect (a fetch stub without headers, which made resetTimer force a logout), and 11 were assertions left behind by the sprint->week rename (7713ef0), the project tab reorder (b1e4c5a) and the sprint-tabs feature (9f77237).",
+        "counts": "151 tests at the previous capture and 172 when this branch re-measured (the suite grew on main in between). This branch adds 15 test-case declarations, some via it.each, and merging main brought in 5 further test files from other tickets. Measured on the branch after that merge: 214 tests across 24 files, 0 failing. Assertions in the three repaired files went from 131 to 147; no test was skipped and none deleted."
       },
       "knownFailing": []
     }

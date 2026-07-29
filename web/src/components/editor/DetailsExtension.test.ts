@@ -94,7 +94,9 @@ describe('DetailsExtension', () => {
       content: '<p>Test content</p>',
     });
 
-    (editor.commands as any).setDetails();
+    // No cast: DetailsExtension.ts declares setDetails via module augmentation on
+    // @tiptap/core's Commands interface, so importing it types this call.
+    editor.commands.setDetails();
 
     const details = editor.getJSON().content?.find(node => node.type === 'details');
     expect(details).toBeDefined();
