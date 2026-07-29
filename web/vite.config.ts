@@ -143,6 +143,22 @@ export default defineConfig(({ mode }) => {
       },
     },
     build: {
+      // Emits dist/.vite/manifest.json: the chunk graph, with each chunk's
+      // static `imports` and — the reason it is on — its `css`.
+      //
+      // audit/bundle/measure.mjs originally derived the per-route payload by
+      // walking `import "./x.js"` specifiers out of the emitted chunks. That
+      // walk cannot see stylesheets, so CSS pulled in by a lazy chunk was
+      // invisible and every route measured smaller than it is (CodeRabbit
+      // finding 1 on PR #14). The manifest is the same graph Vite itself uses
+      // to decide which modulepreload and stylesheet links a chunk needs, so
+      // measuring from it cannot disagree with what the browser fetches.
+      //
+      // Deploy note: this file ships to S3/CloudFront with the rest of dist.
+      // It exposes chunk names, which are already enumerable from the entry
+      // chunk, and no source paths beyond the module ids already present in
+      // the bundle.
+      manifest: true,
       rollupOptions: {
         output: { manualChunks },
       },
