@@ -226,6 +226,27 @@ factory resumes rather than being interrupted per-ticket.
 Report progress as a running board: tickets done (with PR links), in flight, blocked with reasons,
 and new tickets filed from review triage. Keep it scannable.
 
+## Visibility — keep the board current
+
+```bash
+node scripts/factory/status.mjs          # terminal, any time
+node scripts/factory/board.mjs > audit/factory/board.html   # then republish
+```
+
+**Regenerate and republish the board after every state transition** — a ticket dispatched,
+a gate run, a PR opened, a merge. Publish with the Artifact tool using the **same file path**
+(`audit/factory/board.html`) so it redeploys to the one stable URL rather than minting a new one:
+
+https://claude.ai/code/artifact/28506acd-4d74-4889-aee6-a2b6d9932a83
+
+Both read from sources of truth — worktrees, `.factory/gate-result.json`, `gh pr list`, the
+scorecard, and local session transcripts. There is deliberately **no status file to update**,
+because a status file that drifts is worse than none: it reads as authoritative while being wrong.
+That also means the board is only as fresh as its last regeneration; it is a snapshot and says so.
+
+Linear stays authoritative for *ticket status*; the board shows *execution state*. When they
+disagree, Linear wins and something has gone wrong — say so rather than reconciling silently.
+
 ## Guardrails
 
 - **Never `git commit --no-verify`.** Pre-commit runs the compliance scan; bypassing it is a

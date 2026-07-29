@@ -1,0 +1,170 @@
+<title>Ship Factory — control panel</title>
+<style>
+  /* Cream ground, British racing green ink. Every severity colour below is
+     contrast-checked against its own ground for WCAG AA normal text (>=4.5:1);
+     measured ratios are in the comments so a future edit cannot quietly break
+     them. Severity is carried by hue AND a tinted row wash AND a border stripe,
+     so it never depends on colour perception alone. */
+  :root {
+    --paper:#F4F0E6; --panel:#FBF8F1; --ink:#0B2E1E; --muted:#5C5847; --line:#DED7C6;
+    /* Measured, not estimated — see the checker in the commit message. */
+    --accent:#004225;                 /* BRG on panel ............. 10.96:1 */
+    --ok:#14532D;                     /* deep green on ok-wash .....  7.61:1 */
+    --bad:#8E1D22;                    /* oxblood on bad-wash .......  7.28:1 */
+    --wait:#6F5300;                   /* dark amber on wait-wash ...  6.06:1 */
+    --idle:#6B6455;                   /* warm grey on panel ........  5.53:1 */
+    --ok-wash:#E4EDE4; --bad-wash:#F6E4E1; --wait-wash:#F3EBD6;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  /* Dark keeps the identity rather than inverting it: a green-black ground with
+     cream ink. Severities are lifted until each clears AA on that ground. */
+  @media (prefers-color-scheme: dark) {
+    :root { --paper:#0B1712; --panel:#122019; --ink:#F0EADA; --muted:#9DA394; --line:#25342A;
+            --accent:#7FC8A0;         /* BRG lifted on green-black .  8.56:1 */
+            --ok:#6FBF8B;             /* ............................  6.43:1 */
+            --bad:#F0908A;            /* ............................  6.88:1 */
+            --wait:#DCBA55;           /* ............................  7.78:1 */
+            --idle:#8E9589;           /* ............................  5.46:1 */
+            --ok-wash:#16301F; --bad-wash:#341B1A; --wait-wash:#302814; }
+  }
+  :root[data-theme="dark"] {
+    --paper:#0B1712; --panel:#122019; --ink:#F0EADA; --muted:#9DA394; --line:#25342A;
+    --accent:#7FC8A0; --ok:#6FBF8B; --bad:#F0908A; --wait:#DCBA55; --idle:#8E9589;
+    --ok-wash:#16301F; --bad-wash:#341B1A; --wait-wash:#302814;
+  }
+  :root[data-theme="light"] {
+    --paper:#F4F0E6; --panel:#FBF8F1; --ink:#0B2E1E; --muted:#5C5847; --line:#DED7C6;
+    --accent:#004225; --ok:#14532D; --bad:#8E1D22; --wait:#6F5300; --idle:#6B6455;
+    --ok-wash:#E4EDE4; --bad-wash:#F6E4E1; --wait-wash:#F3EBD6;
+  }
+
+  body { background:var(--paper); color:var(--ink); font-family:var(--mono);
+         font-size:14px; line-height:1.5; padding:clamp(16px,4vw,44px); }
+  .wrap { max-width:940px; margin:0 auto; display:flex; flex-direction:column; gap:22px; }
+
+  header { display:flex; flex-wrap:wrap; align-items:baseline; gap:12px;
+           border-bottom:2px solid var(--ink); padding-bottom:12px; }
+  h1 { font-size:19px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; }
+  .stamp { color:var(--muted); font-size:12px; margin-left:auto; }
+
+  .strip { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:2px;
+           background:var(--line); border:1px solid var(--line); }
+  .cell { background:var(--panel); padding:14px 16px; display:flex; flex-direction:column; gap:5px; }
+  .cell .k { font-size:10.5px; letter-spacing:.13em; text-transform:uppercase; color:var(--muted); }
+  .cell .v { font-size:26px; font-weight:700; font-variant-numeric:tabular-nums; }
+  .cell .v.dim { color:var(--muted); font-weight:400; font-size:19px; }
+
+  .panel { background:var(--panel); border:1px solid var(--line); padding:18px 20px;
+           display:flex; flex-direction:column; gap:12px; }
+  h2 { font-size:11px; letter-spacing:.15em; text-transform:uppercase; color:var(--accent);
+       font-weight:700; }
+
+  ul { list-style:none; display:flex; flex-direction:column; gap:2px; }
+  /* Severity reads three ways at once — stripe, wash, and text colour — so a row
+     needing attention is findable at a glance and without relying on hue alone. */
+  .row { border-left:4px solid var(--idle); padding:9px 12px; }
+  .row.ok { border-left-color:var(--ok); background:var(--ok-wash); }
+  .row.bad { border-left-color:var(--bad); background:var(--bad-wash); }
+  .row.wait { border-left-color:var(--wait); background:var(--wait-wash); }
+  .row-head { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+  .tkt { font-weight:700; letter-spacing:.04em; }
+  .verdict { color:var(--muted); }
+  .row.bad .verdict { color:var(--bad); }
+  .row.ok .verdict { color:var(--ok); }
+  .commits { margin-left:auto; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  .row-meta { display:flex; flex-wrap:wrap; gap:14px; color:var(--muted); font-size:12px; margin-top:3px; }
+  .empty { color:var(--muted); padding:9px 0 9px 15px; }
+
+  .pill { font-size:10.5px; letter-spacing:.07em; text-transform:uppercase; padding:2px 8px;
+          border:1px solid currentColor; border-radius:2px; }
+  .pill.ok{color:var(--ok);} .pill.bad{color:var(--bad);}
+  .pill.wait{color:var(--wait);} .pill.idle{color:var(--idle);}
+
+  table { width:100%; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  caption { text-align:left; color:var(--muted); font-size:12px; padding-bottom:7px; }
+  th,td { text-align:left; padding:5px 10px 5px 0; border-bottom:1px solid var(--line); font-weight:400; }
+  thead th { font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+  .num { text-align:right; width:64px; }
+  .barcell { width:46%; }
+  .bar { height:7px; background:var(--accent); opacity:.75; }
+
+  .tokens { display:grid; grid-template-columns:repeat(auto-fit,minmax(128px,1fr)); gap:12px; }
+  .tokens .k { display:block; font-size:10.5px; letter-spacing:.11em; text-transform:uppercase; color:var(--muted); }
+  .tokens .v { display:block; font-size:16px; font-variant-numeric:tabular-nums; }
+  .cachebar { height:9px; background:var(--line); overflow:hidden; }
+  .cachebar .fill { height:100%; background:var(--accent); }
+
+  .basis, .note, .lede { font-family:var(--sans); max-width:64ch; }
+  .basis, .note { color:var(--muted); font-size:12.5px; }
+  .lede { font-size:15px; }
+  .muted { color:var(--muted); }
+
+  .annunciator { border-left:3px solid var(--wait); }
+  .warn li { color:var(--wait); padding:3px 0; }
+
+  footer { color:var(--muted); font-size:12px; font-family:var(--sans);
+           border-top:1px solid var(--line); padding-top:12px; }
+  a { color:var(--accent); }
+  a:focus-visible, :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  @media (prefers-reduced-motion:reduce){ *{animation:none!important;transition:none!important} }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Ship Factory</h1>
+    <span class="stamp">main@126be6e · Wed, 29 Jul 2026 17:26:48 GMT</span>
+  </header>
+
+  <div class="strip">
+    <div class="cell"><span class="k">In flight</span><span class="v">0</span></div>
+    <div class="cell"><span class="k">Open PRs</span><span class="v">0</span></div>
+    <div class="cell"><span class="k">First-attempt pass</span>
+      <span class="v ">1/1</span></div>
+    <div class="cell"><span class="k">Spend (est.)</span>
+      <span class="v">$508</span></div>
+  </div>
+
+  <section class="panel">
+    <h2>In flight</h2>
+    <ul><li class="empty">No ticket worktrees provisioned. The factory is idle.</li></ul>
+  </section>
+
+  <section class="panel">
+    <h2>Open pull requests</h2>
+    <ul><li class="empty">No open pull requests.</li></ul>
+  </section>
+
+  
+<section class="panel">
+  <h2>Gate trend</h2>
+  <p class="lede"><strong>1/1</strong> tickets passed the gate on their first attempt (100%).</p>
+  
+</section>
+  
+<section class="panel">
+  <h2>Spend</h2>
+  <p class="basis">List-rate estimate over observed token counts — <strong>not billed spend</strong>.
+     On a subscription plan the marginal cost is zero and this is API-equivalent value.</p>
+  <div class="tokens">
+    <div><span class="k">output</span><span class="v">3,841,573</span></div>
+    <div><span class="k">cache write</span><span class="v">27,797,041</span></div>
+    <div><span class="k">cache read</span><span class="v">475,499,204</span></div>
+    <div><span class="k">raw input</span><span class="v">18,144</span></div>
+  </div>
+  <div class="cachebar" role="img"
+       aria-label="94 percent of token volume is cache reads">
+    <div class="fill" style="width:93.8%"></div>
+  </div>
+  <p class="note">94% of all token volume is cache reads, billed at one tenth
+     the input rate. The economics of this workflow are prompt-cache economics.</p>
+</section>
+  
+
+  <footer>
+    Snapshot, not a live feed — regenerate with <code>node scripts/factory/board.mjs</code> and
+    republish to the same URL. State is derived from git worktrees, gate results,
+    <code>gh</code>, the scorecard and local session transcripts; there is no status file to drift.
+    <strong>Linear remains authoritative for ticket status</strong> — this shows execution state.
+  </footer>
+</div>
