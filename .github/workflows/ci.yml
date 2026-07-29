@@ -1,0 +1,180 @@
+name: CI
+
+# Assignment rule 4: run on every PR and every commit to the default branch.
+# This is also the merge gate the ticket factory depends on — a factory PR is
+# not eligible for merge until this is green.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Unit tests TRUNCATE 16 tables in the beforeAll of every api test file
+  # (api/src/test/setup.ts). This database exists only for that purpose.
+  CI_DATABASE_URL: postgresql://ship:ship_ci_password@localhost:5432/ship_ci
+
+jobs:
+  verify:
+    name: typecheck · build · unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    services:
+      postgres:
+        # Pinned to 15-alpine because that is the environment the quarantine
+        # baseline in audit/factory/quarantine.json was measured on. Production
+        # (Render) runs pg16 — that divergence is a real gap, tracked separately,
+        # and deliberately NOT papered over by silently bumping this pin.
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: ship
+          POSTGRES_PASSWORD: ship_ci_password
+          POSTGRES_DB: ship_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # source-code inventory reports commit history depth
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared (api and web both depend on its dist)
+        run: pnpm build:shared
+
+      - name: Type check
+        run: pnpm type-check
+
+      # NOTE: `pnpm lint` is deliberately NOT run here. Audit finding TS-6
+      # (TRO-211) established that no ESLint config exists anywhere in the repo,
+      # so the script exits 0 having checked nothing. Adding it would make CI
+      # report a passing quality gate that does not exist. Wire it in when
+      # TRO-211 lands.
+
+      - name: Build all packages
+        run: pnpm build
+
+      - name: Migrate CI database
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+        run: pnpm db:migrate
+
+      - name: API unit tests
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+          NODE_ENV: test
+        run: pnpm --filter @ship/api test --reporter=json --outputFile=api-tests.json
+
+      - name: Web unit tests
+        # continue-on-error: web has 13 known failures (TEST-1 / TRO-223). The
+        # regression check below is the real gate — it fails only on NEW breakage.
+        continue-on-error: true
+        run: pnpm --filter @ship/web test --reporter=json --outputFile=web-tests.json
+
+      - name: Check for test regressions vs quarantine baseline
+        run: |
+          node scripts/factory/lib/testdiff.mjs \
+            --package api --current api-tests.json \
+            --baseline audit/factory/quarantine.json --repo-root "$PWD"
+          node scripts/factory/lib/testdiff.mjs \
+            --package web --current web-tests.json \
+            --baseline audit/factory/quarantine.json --repo-root "$PWD"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports-${{ github.sha }}
+          path: |
+            api-tests.json
+            web-tests.json
+          retention-days: 14
+
+  inventory:
+    name: source-code inventory
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.27.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Assignment rule 4 requires the pipeline to produce an inventory of the
+      # source code it built. Tagged with the git SHA so an artifact can always
+      # be traced back to the exact tree that produced it (rule 5).
+      - name: Generate inventory
+        run: |
+          set -euo pipefail
+          mkdir -p inventory
+          {
+            echo "# Source-code inventory"
+            echo
+            echo "- commit: \`${GITHUB_SHA}\`"
+            echo "- ref: \`${GITHUB_REF}\`"
+            echo "- built: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "- total commits: $(git rev-list --count HEAD)"
+            echo
+            echo "## Source files by package"
+            echo
+            echo "| Package | Files | Lines |"
+            echo "|---|---:|---:|"
+            for p in api web shared e2e; do
+              [ -d "$p" ] || continue
+              files=$(git ls-files "$p" | grep -E '\.(ts|tsx|js|jsx|sql)$' | wc -l | tr -d ' ')
+              lines=$(git ls-files "$p" | grep -E '\.(ts|tsx|js|jsx|sql)$' | xargs wc -l 2>/dev/null | tail -1 | awk '{print $1}')
+              echo "| $p | $files | ${lines:-0} |"
+            done
+            echo
+            echo "## Direct dependencies"
+            echo
+            echo '```'
+            pnpm list --depth 0 --recursive 2>/dev/null || true
+            echo '```'
+            echo
+            echo "## Licenses"
+            echo
+            echo '```'
+            pnpm licenses list --prod 2>/dev/null | head -200 || echo "(pnpm licenses unavailable)"
+            echo '```'
+          } > inventory/INVENTORY-${GITHUB_SHA}.md
+          echo "--- generated ---"
+          head -30 inventory/INVENTORY-${GITHUB_SHA}.md
+
+      - name: Upload inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-inventory-${{ github.sha }}
+          path: inventory/
+          retention-days: 90

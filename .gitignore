@@ -131,3 +131,11 @@ web/dev-dist/
 
 # Codacy IDE extension cache
 .codacy/
+
+# Ticket factory per-worktree artifacts (scripts/factory/).
+# .factory-env carries a worktree-exclusive DATABASE_URL; .factory/ holds gate
+# logs and gate-result.json. Both are per-run and must never be committed.
+# NOTE: these must live here rather than in .git/info/exclude — in a linked
+# worktree .git is a FILE, not a directory, so that path does not exist.
+.factory-env
+.factory/

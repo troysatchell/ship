@@ -1,0 +1,111 @@
+# CodeRabbit configuration for Ship
+# https://docs.coderabbit.ai/reference/configuration
+#
+# Reviews here are consumed by the ticket factory, not only by humans:
+# .claude/skills/ship-factory/references/triage.md classifies every finding into
+# fix-now / new-Linear-ticket / dismissed-with-reason. Instructions below are
+# written to produce findings that survive that triage — specific, located, and
+# tied to a rule the repo actually holds.
+
+language: en-US
+early_access: false
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - main
+
+  path_filters:
+    - '!**/dist/**'
+    - '!**/node_modules/**'
+    - '!pnpm-lock.yaml'
+    - '!audit/**/raw/**'          # ~9 MB of regenerable audit captures
+    - '!test-results/**'
+    - '!**/*.log'
+
+  path_instructions:
+    - path: '**/*.{ts,tsx}'
+      instructions: |
+        Ship is a TypeScript monorepo under an active type-safety remediation.
+        Flag as defects, with file:line:
+        - New `any`, `as any`, or non-null `!` assertions. The repo is reducing
+          these (findings TS-2, TS-4, TS-7); new ones move the number backwards.
+        - `@ts-ignore` / `@ts-expect-error` without an adjacent justification.
+        - Type assertions that paper over a genuine shape mismatch rather than
+          narrowing a legitimately-wider type.
+        Distinguish "new in this diff" from "pre-existing nearby". Only the former
+        should block; the latter is worth reporting separately as backlog.
+
+    - path: 'api/src/db/**'
+      instructions: |
+        Schema changes MUST be numbered migration files in api/src/db/migrations/
+        (NNN_description.sql). Editing schema.sql for an EXISTING table is a
+        defect — schema.sql is initial-setup only.
+        Three association columns are DROPPED and must not be referenced by new
+        code: documents.sprint_id, documents.project_id (migration 027),
+        documents.program_id (migration 029). Note that sprint_iterations.sprint_id
+        is a DIFFERENT, live column — do not flag it.
+        Flag any new query lacking an index on its WHERE/ORDER BY columns, and any
+        query fetching full document `content` for a list view.
+
+    - path: 'api/src/routes/**'
+      instructions: |
+        Every route must be registered with OpenAPI (schema -> register path ->
+        implement). An unregistered route is a defect: Swagger and the generated
+        MCP tools both silently omit it.
+        Invalid path/query params must return 400/404, never 500 (finding ERR-5).
+        Flag unbounded `limit` query params — negative and huge values must be
+        clamped (finding ERR-8).
+
+    - path: '**/*.{test,spec}.{ts,tsx}'
+      instructions: |
+        Flag tests containing only comments or TODOs with no assertion — they pass
+        silently and are a known repo footgun (finding TEST-2: 68 e2e tests pass
+        without executing an assertion). Unimplemented tests must use test.fixme().
+        Flag newly added `.skip`/`.todo` and any removed assertions — the factory
+        forbids weakening the suite to get green.
+        Flag fixed `waitForTimeout`/`sleep` calls; 619 of them are the known cause
+        of the repo's flakes (finding TEST-11). Prefer web-first assertions.
+
+    - path: 'web/src/**'
+      instructions: |
+        All document types share one Editor component; type-specific editor
+        components are an architectural violation. New documents are titled
+        exactly "Untitled" — not "Untitled Issue" or any variant.
+        Accessibility is under active remediation: flag ARIA roles declared
+        without their required contract (e.g. role="tree" without tabIndex,
+        keyboard handlers, and aria-level/setsize/posinset — finding A11Y-1),
+        aria-* attributes on elements that do not allow them (A11Y-2), skipped
+        heading levels (A11Y-6), and interactive elements with no accessible name.
+
+    - path: 'terraform/**'
+      instructions: |
+        Flag stateful resources (databases, buckets) without deletion_protection
+        or prevent_destroy lifecycle blocks (finding TF-1). Flag provider blocks
+        without a committed lock file or version pin (TF-4). Note that two root
+        configs manage the same infrastructure (TF-2) — changes to one that are
+        not mirrored are drift.
+
+  tools:
+    shellcheck:
+      enabled: true
+    markdownlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    yamllint:
+      enabled: true
+    actionlint:
+      enabled: true
+
+chat:
+  auto_reply: true
