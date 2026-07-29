@@ -38,6 +38,8 @@ const ALLOCATION_GRID = {
         },
       ],
     },
+    // A person with no weeks: nothing to expand.
+    { id: 'person2', name: 'Grace Hopper', weeks: [] },
   ],
   weeks: [3],
 };
@@ -112,6 +114,25 @@ describe('ProjectContextSidebar — native list semantics (A11Y-1 / TRO-215)', (
     const personToggle = screen.getByRole('button', { name: /Ada Lovelace/ });
     expect(personToggle).toHaveAttribute('aria-expanded', 'false');
     expect(personToggle.closest('li')).not.toHaveAttribute('aria-expanded');
+  });
+
+  // A person with no weeks has no collapsible content. aria-expanded on a
+  // control that discloses nothing is a false promise, and a focusable button
+  // whose click is a no-op is a phantom tab stop.
+  it('renders a person with no weeks as plain text, not an empty disclosure', async () => {
+    await renderSidebar();
+
+    // Present and readable...
+    expect(screen.getByText('Grace Hopper')).toBeInTheDocument();
+
+    // ...but not a control, and carrying no expansion state.
+    expect(screen.queryByRole('button', { name: /Grace Hopper/ })).toBeNull();
+    const row = screen.getByText('Grace Hopper').closest('li');
+    if (row === null) {
+      throw new Error('Expected the person row to be inside a list item');
+    }
+    expect(within(row).queryByRole('button')).toBeNull();
+    expect(row.querySelector('[aria-expanded]')).toBeNull();
   });
 
   it('keeps the weekly docs section reachable as a list', async () => {

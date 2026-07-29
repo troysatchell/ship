@@ -289,24 +289,36 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
 
               return (
                 <li key={person.id}>
-                  {/* Person row */}
-                  <button
-                    onClick={() => togglePerson(person.id)}
-                    aria-expanded={isExpanded}
-                    className={cn(
-                      'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors text-left',
-                      'text-muted hover:bg-border/30 hover:text-foreground'
-                    )}
-                  >
-                    {hasWeeks && <ChevronIcon expanded={isExpanded} />}
-                    {!hasWeeks && <PersonIcon className="text-muted" />}
-                    <span className="truncate flex-1">{person.name}</span>
-                    {hasWeeks && (
+                  {/* Person row. Only a disclosure control when there is
+                      something to disclose: a person with no weeks has no
+                      collapsible content, so rendering a focusable button with
+                      aria-expanded would advertise a widget that does nothing. */}
+                  {hasWeeks ? (
+                    <button
+                      onClick={() => togglePerson(person.id)}
+                      aria-expanded={isExpanded}
+                      className={cn(
+                        'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm transition-colors text-left',
+                        'text-muted hover:bg-border/30 hover:text-foreground'
+                      )}
+                    >
+                      <ChevronIcon expanded={isExpanded} />
+                      <span className="truncate flex-1">{person.name}</span>
                       <span className="text-xs text-muted">
                         {person.weeks.length}w
                       </span>
-                    )}
-                  </button>
+                    </button>
+                  ) : (
+                    <div
+                      className={cn(
+                        'flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-sm text-left',
+                        'text-muted'
+                      )}
+                    >
+                      <PersonIcon className="text-muted" />
+                      <span className="truncate flex-1">{person.name}</span>
+                    </div>
+                  )}
 
                   {/* Weeks for this person */}
                   {isExpanded && hasWeeks && (
