@@ -70,7 +70,6 @@ in tiers the gate executes.
 | `e2e/file-attachments.spec.ts:422` | should block dangerous executable files (.exe) | assertions lived *inside* `page.on('dialog')`, so they never ran if the dialog never fired. Messages are collected and asserted outside the handler. |
 | `e2e/check-aria.spec.ts` | check aria-expanded elements | **0 `expect()`** — a diagnostic script with 19 `console.log`s and `return`-on-missing-data. Now asserts the A11Y-1 contract: `aria-expanded` sits on a real `<button>`, is named, and (new second test) tracks the children and survives navigating into one. |
 | `e2e/accessibility-remediation.spec.ts:1398` | code blocks have language indication | **0 `expect()`** — ran on `/docs`, which renders no code block, and discarded the computed result. Now opens a seeded document with one code block and asserts count **and** language. |
-| `e2e/ai-analysis-api.spec.ts:209` | analyze-plan returns 429 after 10 rapid requests | `if (!allSucceeded)` meant the one outcome it existed to catch — the limiter doing nothing — was the one outcome it excused. Now unconditional: `checkRateLimit` (`api/src/routes/ai.ts:33`) is an in-process 10/hour counter that runs *before* the AI call, so 11 requests must yield ≥1 `429` whether or not Bedrock is reachable. |
 | `e2e/admin-workspace-members.spec.ts:87` | can change member role | whole body inside `if (await roleSelect.isVisible())`. Now asserts the seeded member row exists, and reloads to prove the PATCH reached the server rather than only moving a local `<select>`. |
 
 **Fixture work, never a conditional skip.** `e2e/fixtures/isolated-env.ts` gains
@@ -96,9 +95,29 @@ vitest run <file>` against the branch's own worktree database
 | `workspaces.ts:1021` → `workspaceAdminMiddleware` removed from `GET /:id/audit-logs` | **3 failed / 25 passed**, each `expected 200 to be 403`. Includes the foreign-workspace case, i.e. without the middleware the handler itself does no scoping. |
 | both reverted | 27/27 and 28/28 pass. |
 
-**Not done, deliberately.** 59 of the 68 remain. `program-mode-week-ux.spec.ts` alone holds 33
+**Attempted, then reverted — and it found two bugs.** `e2e/ai-analysis-api.spec.ts:209`
+*"POST /api/ai/analyze-plan returns 429 after 10 rapid requests"* guards its assertions with
+`if (!allSucceeded)`, so the single outcome it exists to catch — the limiter doing nothing — is the
+one outcome it excuses. Making the assertion unconditional produced, **observed**,
+`Got: 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200` — eleven admissions, no `429`. Two
+findings fall out, neither of them a test bug:
+
+1. **The test's premise is false.** `api/src/services/ai-analysis.ts:39` sets `RATE_LIMIT = 120`
+   per hour, not 10. Eleven requests cannot trip it, and never could.
+2. **The user is told the wrong number.** `api/src/routes/ai.ts:34` returns *"Rate limit exceeded.
+   Max 10 analysis requests per hour."* while 120 is enforced. Whoever hits the ceiling is given a
+   figure off by 12×.
+
+The file is reverted to its original state. Asserting truthfully would need 121 requests — 120 of
+which each attempt a Bedrock call and would likely blow the 60 s test timeout — or making the limit
+injectable, which is a production change to enable a test. Neither belongs in a test-integrity
+ticket. The 10-vs-120 inconsistency needs its own ticket; the vacuous guard stays on the TEST-2 list
+until it does.
+
+**Not done, deliberately.** 60 of the 68 remain. `program-mode-week-ux.spec.ts` alone holds 33
 (sprint-filter and quick-menu UX, no security content); `accessibility-remediation.spec.ts` has 6
 more, `context-menus.spec.ts` 6, `features-real.spec.ts` 5, `performance.spec.ts` 2, and
+`ai-analysis-api.spec.ts` keeps 1 (see above), and
 `admin-workspace-members.spec.ts` keeps 2 (`selecting user from search…`, `can add existing user…`)
 which are guarded on a **"test space" workspace and a "carol" user that the isolated fixture does
 not create** — converting those guards needs a second seeded workspace and more users, which risks
@@ -183,7 +202,32 @@ the strongest remaining candidate), `mentions.spec.ts › should sync mentions b
 `status-overview-heatmap.spec.ts › displays split cells for plan/retro status`,
 `team-mode.spec.ts › clicking collapsed header expands the group`.
 
-**New finding, reported not fixed.** `extractPlanItems` exists in three copies with **divergent**
+**Second finding, and the more serious one: the editor sometimes never receives a new document's
+content.** Once the test asserted that the template had *arrived* — rather than typing into whatever
+happened to be on screen — it began failing for an entirely different reason. **Observed**, three
+repeat runs at `--workers=1 --retries=0`: run 1 clean, run 2 the *plan* document opened blank, run 3
+the *retro* document opened blank. To a user that is a brand-new weekly plan opening as an empty
+editor instead of the template.
+
+**Derived** from code reading, not instrumented: `getOrCreateDoc`
+(`api/src/collaboration/index.ts:220-226`) publishes the new `Y.Doc` into the shared `docs` map
+*before* awaiting the database read and the `jsonToYjs` conversion at `:231-266`, and registers the
+broadcasting `doc.on('update')` handler only afterwards. A second connection for the same document
+arriving inside that window is handed the empty doc, is sent `writeSyncStep1` from it, and never
+receives the conversion update — and `freshFromJsonDocs.delete(docName)` after the first client means
+it does not get the cache-clear signal either. The shape of the fix is to store the load *promise* in
+the map so concurrent callers await the same load. Needs its own ticket.
+
+This also explains the **other** my-week entry on the flake list (`plan edits are visible on /my-week
+…`, flaky in 1 of 3 audit runs), which the plan/retro template coupling does not — and it is very
+probably what the original file header was reaching for when it blamed "Yjs persistence".
+
+Until it is fixed, `typeIntoTemplateList` tolerates it with **one bounded reload** (`toPass`, the
+construct `e2e/AGENTS.md` sanctions) and a failure message that names the finding and the file:line.
+That is a workaround in the *setup* phase of a test whose subject is something else; it is not a
+guard, because the assertion still has to pass, and it is not silent.
+
+**Third finding, reported not fixed.** `extractPlanItems` exists in three copies with **divergent**
 behaviour: `api/src/routes/dashboard.ts:279-309` collects only `listItem`/`taskItem`, while
 `api/src/routes/weekly-plans.ts:63-95` and `api/src/services/ai-analysis.ts:69` also collect
 top-level paragraphs longer than 10 characters. Consequence for a real user: an auto-populated retro

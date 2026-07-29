@@ -228,7 +228,31 @@ test.describe('Security - XSS Prevention', () => {
    * `web/src/components/editor/linkOptions.test.ts`, which the factory gate
    * actually runs — `e2e/` is executed by neither the gate nor CI.
    */
-  test('stored dangerous link hrefs are not rendered live', async ({ page }) => {
+  test('XSS via markdown link injection', async ({ page }) => {
+    // This is the fact the two old tests were unknowingly asserting: markdown
+    // link syntax creates no link. Pinning it explicitly means that if an input
+    // rule is ever added, this test fails and whoever adds it is pointed at the
+    // sanitization test below rather than silently re-opening the vector.
+    await createNewDocument(page)
+
+    const editor = page.locator('.ProseMirror')
+    await editor.click()
+    await page.keyboard.type('[Click](javascript:alert("XSS"))')
+
+    // The literal text must be present — proves the keystrokes landed, so the
+    // link-count assertion below is about behaviour and not about a lost type.
+    await expect(editor, 'typed markdown should appear as literal text').toContainText(
+      '[Click](javascript:alert("XSS"))',
+      { timeout: 10000 }
+    )
+    await expect(
+      editor.locator('a'),
+      'TipTap has no markdown-link input rule; if this now creates a link, the ' +
+        'href must be sanitised — see "XSS via data: URI in links" below'
+    ).toHaveCount(0)
+  })
+
+  test('XSS via data: URI in links', async ({ page }) => {
     await openFixtureDocument(page, FIXTURE_DOC_LINK_SANITIZATION)
 
     const editor = page.locator('.ProseMirror')
@@ -271,30 +295,6 @@ test.describe('Security - XSS Prevention', () => {
       .not.toContain('text/html')
     expect(editorHtml, 'the svg data-URI payload must not appear in rendered markup')
       .not.toContain('image/svg+xml')
-  })
-
-  test('markdown link syntax does not create a link at all (documents current behaviour)', async ({ page }) => {
-    // This is the fact the two old tests were unknowingly asserting. Pinning it
-    // explicitly means that if a markdown-link input rule is ever added, this
-    // test fails and whoever adds it is pointed at the sanitization tests above
-    // rather than silently re-opening the vector.
-    await createNewDocument(page)
-
-    const editor = page.locator('.ProseMirror')
-    await editor.click()
-    await page.keyboard.type('[Click](javascript:alert("XSS"))')
-
-    // The literal text must be present — proves the keystrokes landed, so the
-    // link-count assertion below is about behaviour and not about a lost type.
-    await expect(editor, 'typed markdown should appear as literal text').toContainText(
-      '[Click](javascript:alert("XSS"))',
-      { timeout: 10000 }
-    )
-    await expect(
-      editor.locator('a'),
-      'TipTap has no markdown-link input rule; if this now creates a link, the ' +
-        'href must be sanitised — see "stored dangerous link hrefs" above'
-    ).toHaveCount(0)
   })
 })
 
