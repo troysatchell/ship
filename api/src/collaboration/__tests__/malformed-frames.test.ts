@@ -73,14 +73,46 @@ const BENIGN_FRAMES: Array<{ label: string; bytes: number[] }> = [
 /** Long enough that the revalidation sweep never runs mid-test and confounds ERR-2 with ERR-10. */
 const REVALIDATION_INTERVAL_MS = 300_000
 
-/** How long to wait for the offending socket to be closed by the server. */
+/** Deadline for the offending socket to be closed by the server. */
 const CLOSE_TIMEOUT_MS = 5_000
 
-/** Settle window after a frame, so an asynchronously-surfaced throw still lands in the recorder. */
-const SETTLE_MS = 250
+/** Deadline for a write to reach the documents table (persistDocument is debounced 2s). */
+const PERSIST_TIMEOUT_MS = 15_000
 
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms))
+/** Interval of the bounded condition poll below. Not a synchronisation sleep — see waitUntil(). */
+const POLL_INTERVAL_MS = 25
+
+/**
+ * The RFC 6455 protocol-error code the server must use for a frame it cannot
+ * decode. Inlined rather than imported so this file still loads against the
+ * unfixed module (a named import of an export that does not exist yet fails at
+ * module load — a broken test, not a red one). A dedicated case below pins it
+ * against the module's exported constant so the two cannot drift.
+ */
+const EXPECTED_CLOSE_CODE = 1002
+
+/**
+ * Bounded condition poll: returns as soon as the condition holds.
+ *
+ * This is the replacement for a fixed sleep, not an instance of one (TEST-11 /
+ * TRO-233). There is genuinely no event to await here — `persistDocument()` is
+ * debounced *inside* the server and emits no external signal — so reading until
+ * the value appears is the honest mechanism. It returns the observed value either
+ * way, so the caller asserts on the value and a timeout surfaces as a real
+ * assertion about content rather than as "waited long enough".
+ */
+async function waitUntil<T>(
+  read: () => Promise<T>,
+  holds: (value: T) => boolean,
+  timeoutMs = PERSIST_TIMEOUT_MS
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs
+  let value = await read()
+  while (!holds(value) && Date.now() < deadline) {
+    await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS))
+    value = await read()
+  }
+  return value
 }
 
 /** Build a Yjs sync-update frame exactly as a y-websocket client would. */
@@ -235,15 +267,22 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
     return content == null ? '' : JSON.stringify(content)
   }
 
-  /** Poll rather than sleep: persistDocument() is debounced by 2s, not instant. */
-  async function waitForContent(docId: string, marker: string, timeoutMs = 15_000): Promise<string> {
-    const deadline = Date.now() + timeoutMs
-    let content = await documentContent(docId)
-    while (Date.now() < deadline && !content.includes(marker)) {
-      await delay(200)
-      content = await documentContent(docId)
-    }
-    return content
+  /** Read `documents.content` until it contains `marker`. Returns what it last saw. */
+  function waitForContent(docId: string, marker: string): Promise<string> {
+    return waitUntil(() => documentContent(docId), (content) => content.includes(marker))
+  }
+
+  /**
+   * A write pushed through a live socket and observed arriving in the database.
+   *
+   * This is the file's liveness probe, and it is deliberately a full round trip:
+   * it can only succeed if the server is still running, still reading that socket,
+   * and still persisting. "The process survived" is otherwise an absence, and an
+   * absence cannot be asserted by waiting.
+   */
+  async function expectWriteLands(client: TestClient, docId: string, marker: string, why: string): Promise<void> {
+    client.type(marker)
+    expect(await waitForContent(docId, marker), why).toContain(marker)
   }
 
   interface TestClient {
@@ -316,14 +355,51 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
     }
   }
 
-  async function waitForClose(client: TestClient, timeoutMs = CLOSE_TIMEOUT_MS): Promise<{ closed: boolean; code: number | null }> {
-    const deadline = Date.now() + timeoutMs
-    while (Date.now() < deadline) {
-      const info = client.closeInfo()
-      if (info.closed) return info
-      await delay(50)
-    }
-    return client.closeInfo()
+  /**
+   * Resolve on the socket's 'close' event — the event itself, not a poll.
+   *
+   * The deadline exists so a server that never closes yields a reportable
+   * `{ closed: false }` instead of hanging the run: this file must go red with an
+   * assertion when run against the unfixed module, and a timeout thrown from a
+   * helper would be a broken test rather than a red one.
+   *
+   * Ordering note, which is why awaiting this is sufficient: the server sends the
+   * close frame from inside `runFrameHandler`'s catch block, on the same I/O
+   * callback that processed the frame. Observing the close therefore proves that
+   * callback ran to completion — so any synchronous throw would already have
+   * reached the recorder by the time this resolves.
+   */
+  function whenClosed(client: TestClient, timeoutMs = CLOSE_TIMEOUT_MS): Promise<{ closed: boolean; code: number | null }> {
+    if (client.closeInfo().closed) return Promise.resolve(client.closeInfo())
+    return new Promise((resolve) => {
+      let timer: NodeJS.Timeout | undefined
+      const onClose = () => {
+        clearTimeout(timer)
+        resolve(client.closeInfo())
+      }
+      timer = setTimeout(() => {
+        client.ws.off('close', onClose)
+        resolve(client.closeInfo())
+      }, timeoutMs)
+      client.ws.once('close', onClose)
+    })
+  }
+
+  /** Same contract as whenClosed(), for a hand-driven raw TCP socket. */
+  function whenRawClosed(socket: net.Socket, timeoutMs = CLOSE_TIMEOUT_MS): Promise<boolean> {
+    if (socket.closed) return Promise.resolve(true)
+    return new Promise((resolve) => {
+      let timer: NodeJS.Timeout | undefined
+      const onClose = () => {
+        clearTimeout(timer)
+        resolve(true)
+      }
+      timer = setTimeout(() => {
+        socket.off('close', onClose)
+        resolve(socket.closed)
+      }, timeoutMs)
+      socket.once('close', onClose)
+    })
   }
 
   /**
@@ -358,9 +434,9 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
         buffered += chunk.toString('latin1')
         if (!buffered.includes('\r\n\r\n')) return
         socket.off('data', onData)
-        const statusLine = buffered.split('\r\n')[0]!
+        const [statusLine = ''] = buffered.split('\r\n')
         if (statusLine.startsWith('HTTP/1.1 101')) resolve()
-        else reject(new Error(`upgrade rejected: ${statusLine}`))
+        else reject(new Error(`upgrade rejected: ${statusLine || '<no status line>'}`))
       }
       socket.on('data', onData)
       socket.once('error', reject)
@@ -381,7 +457,11 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
   function maskedFrame(firstByte: number, payload: Buffer): Buffer {
     const mask = crypto.randomBytes(4)
     const masked = Buffer.from(payload)
-    for (let i = 0; i < masked.length; i++) masked[i] = masked[i]! ^ mask[i % 4]!
+    for (let i = 0; i < masked.length; i++) {
+      // readUInt8/writeUInt8 return and take plain numbers and range-check
+      // themselves, so the masking loop needs no non-null assertions.
+      masked.writeUInt8(masked.readUInt8(i) ^ mask.readUInt8(i % 4), i)
+    }
     // Payloads here are tiny, so the 7-bit length form always applies.
     return Buffer.concat([Buffer.from([firstByte, 0x80 | masked.length]), mask, masked])
   }
@@ -390,17 +470,23 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
     const docId = await createDocument('Malformed frame control doc')
     const client = await connect(docId)
 
-    const marker = `WELLFORMED_${testRunId}`
-    client.type(marker)
-
-    expect(
-      await waitForContent(docId, marker),
+    await expectWriteLands(
+      client,
+      docId,
+      `WELLFORMED_${testRunId}`,
       'a well-formed update must still persist — otherwise the malformed-frame assertions below prove nothing'
-    ).toContain(marker)
+    )
     expect(recorder.summary(), 'a well-formed update must not raise anything at the process level').toBe('none')
 
     client.ws.close()
   }, 40_000)
+
+  it('exports the RFC 6455 protocol-error code this file asserts on', () => {
+    // Pins the literal used throughout this file against the module's constant, so
+    // the deliberate choice of 1002 (protocol error — the peer's bytes) over 1011
+    // (internal error — our fault) cannot be changed without a test noticing.
+    expect(collab.WS_CLOSE_PROTOCOL_ERROR).toBe(EXPECTED_CLOSE_CODE)
+  })
 
   it.each(CRASHING_FRAMES)(
     'does not let a $label reach the process level',
@@ -410,8 +496,10 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
 
       client.sendRaw(bytes)
 
-      const info = await waitForClose(client)
-      await delay(SETTLE_MS)
+      // Await the close event — the server emits it from the same I/O callback
+      // that processed the frame, so this both orders the assertions after that
+      // callback and is itself the behaviour under test. No settling delay.
+      const info = await whenClosed(client)
 
       // The load-bearing assertion. Node kills a process on `uncaughtException`
       // precisely when nothing is listening, so an empty recorder is the proof
@@ -429,7 +517,11 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
         info.closed,
         `the server must close the socket that sent [${bytes.join(',')}] (${label}) rather than leaving a peer it can no longer parse connected`
       ).toBe(true)
-      expect(info.code, `close code for [${bytes.join(',')}]`).not.toBeNull()
+      expect(
+        info.code,
+        `[${bytes.join(',')}] (${label}) must be refused with ${EXPECTED_CLOSE_CODE} (protocol error — the peer's bytes), ` +
+          `not 1011 (internal error — our fault) or a generic code`
+      ).toBe(EXPECTED_CLOSE_CODE)
     },
     40_000
   )
@@ -441,7 +533,18 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
       const client = await connect(docId)
 
       client.sendRaw(bytes)
-      await delay(SETTLE_MS * 2)
+
+      // The observable that replaces a settling delay, and a stronger claim than
+      // "not closed": the same socket goes on to do real work. A write that
+      // reaches the database can only have been read off a socket the server is
+      // still serving, and it orders every assertion below after the benign frame
+      // was processed.
+      await expectWriteLands(
+        client,
+        docId,
+        `TOLERATED_${testRunId}`,
+        `[${bytes.join(',')}] (${label}) is tolerated by the protocol, so the socket must still be able to save afterwards`
+      )
 
       expect(recorder.summary(), `[${bytes.join(',')}] (${label}) must not reach the process level`).toBe('none')
       expect(
@@ -458,9 +561,6 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
     const docId = await createDocument('Malformed frame RSV1 doc')
     const socket = await rawUpgrade(docId)
 
-    let socketEnded = false
-    socket.on('close', () => { socketEnded = true })
-
     // FIN=1, RSV1=1, opcode=2 (binary). RSV1 may only be set when
     // permessage-deflate has been negotiated, and it was not. `ws` rejects the
     // frame by emitting 'error' on the WebSocket — a *different* crash vector
@@ -469,9 +569,7 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
     // I/O callback.
     socket.write(maskedFrame(0xc2, Buffer.from([0, 0])))
 
-    const deadline = Date.now() + CLOSE_TIMEOUT_MS
-    while (Date.now() < deadline && !socketEnded) await delay(50)
-    await delay(SETTLE_MS)
+    const socketEnded = await whenRawClosed(socket)
 
     expect(
       recorder.summary(),
@@ -482,16 +580,41 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
       socketEnded,
       'the server must hang up on a peer that is not speaking WebSocket correctly'
     ).toBe(true)
+
+    // The server is not merely un-crashed but still serving: a fresh client
+    // completes a full write after the transport-level violation.
+    const survivorDocId = await createDocument('Malformed frame post-RSV1 doc')
+    const survivor = await connect(survivorDocId)
+    await expectWriteLands(
+      survivor,
+      survivorDocId,
+      `AFTER_RSV1_${testRunId}`,
+      'the collaboration server must still accept and persist work after a protocol-violating frame — a dead process could not'
+    )
+    survivor.ws.close()
   }, 40_000)
 
   it('keeps the co-tenant socket usable and stays connectable after every malformed frame', async () => {
     const docId = await createDocument('Malformed frame blast radius doc')
     const victim = await connect(docId)
-    const attacker = await connect(docId)
 
-    for (const { bytes } of CRASHING_FRAMES) {
+    // A FRESH attacker per frame. Reusing one connection would mean every frame
+    // after the first was written to a socket the server had already closed, so
+    // the later iterations would assert nothing at all.
+    for (const { label, bytes } of CRASHING_FRAMES) {
+      const attacker = await connect(docId)
       attacker.sendRaw(bytes)
-      await delay(SETTLE_MS)
+
+      const info = await whenClosed(attacker)
+      expect(
+        info.closed,
+        `[${bytes.join(',')}] (${label}) must close its own socket during the burst — otherwise later frames in this loop test a dead socket`
+      ).toBe(true)
+      expect(info.code, `close code for [${bytes.join(',')}] during the burst`).toBe(EXPECTED_CLOSE_CODE)
+      expect(
+        victim.closeInfo().closed,
+        `[${bytes.join(',')}] (${label}) must not disconnect another client on the same document`
+      ).toBe(false)
     }
 
     expect(
@@ -501,27 +624,22 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
 
     // Blast radius is one socket: the other editor on the same document is
     // untouched and can still write.
-    expect(
-      victim.closeInfo().closed,
-      'a malformed frame from one client must not disconnect another client on the same document'
-    ).toBe(false)
-
-    const victimMarker = `COTENANT_${testRunId}`
-    victim.type(victimMarker)
-    expect(
-      await waitForContent(docId, victimMarker),
+    await expectWriteLands(
+      victim,
+      docId,
+      `COTENANT_${testRunId}`,
       'the co-tenant editor must still be able to save after another client sent garbage'
-    ).toContain(victimMarker)
+    )
 
     // And the server still accepts new work — a terminated process accepts none.
     const freshDocId = await createDocument('Malformed frame post-attack doc')
     const fresh = await connect(freshDocId)
-    const freshMarker = `AFTER_ATTACK_${testRunId}`
-    fresh.type(freshMarker)
-    expect(
-      await waitForContent(freshDocId, freshMarker),
+    await expectWriteLands(
+      fresh,
+      freshDocId,
+      `AFTER_ATTACK_${testRunId}`,
       'the collaboration server must still accept and persist new connections after malformed frames — a dead process could not'
-    ).toContain(freshMarker)
+    )
 
     victim.ws.close()
     fresh.ws.close()
