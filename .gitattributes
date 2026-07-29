@@ -1,3 +1,21 @@
 # Auto-resolve merge conflicts for generated files
 # The pre-commit hook regenerates ATTESTATION.md anyway, so conflicts don't matter
 ATTESTATION.md merge=ours
+
+# CHANGES.md is append-at-top: every ticket branch inserts its entry directly
+# under the header, so N concurrent branches conflict with each other, and each
+# merge re-conflicts every branch still open.
+#
+# The default 3-way merge is worse than useless here. Because every entry uses
+# the same "**How to run it.**" and "**Roll back.**" headings, git matches those
+# common lines and COLLAPSES two entries into one — so deleting the conflict
+# markers welds one ticket's rollback instructions onto another ticket's entry.
+# In a file whose whole purpose is telling someone how to undo a change under
+# pressure, that is a silent and dangerous defect. It happened on three separate
+# branches before this rule existed, and was caught by hand each time.
+#
+# union keeps every line from both sides, so both entries survive intact. It
+# drops the shared `---` separator between them; run
+# `node scripts/factory/normalize-changes.mjs` after a union merge to restore it.
+# union is not a substitute for reading the resulting diff.
+CHANGES.md merge=union
