@@ -76,6 +76,65 @@ these 31 files are the only mechanism that would ever have changed it. Notable: 
 `028` and `034` are backfills. **The first deploy after this change will apply all 32 at once.**
 Take a snapshot first and run `pnpm db:migrate` against a restore of production before running it
 against production.
+## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
+
+**What was broken.** `web/src/pages/App.tsx:637` declared
+`<ul role="tree" aria-label="Workspace documents">`, which tells assistive technology "this is a
+composite widget, enter interaction mode and navigate with arrow keys." Nothing implemented that
+contract: no roving `tabIndex`, no `onKeyDown`, no `aria-level`/`aria-setsize`/`aria-posinset`
+anywhere in `DocumentTreeItem.tsx` or `App.tsx`. The same pattern appeared in four more places.
+Because `role="tree"` also overrides the `<ul>`'s list role, the two bare `<li>` children of that
+list — the empty state and the "N more..." overflow link — became roleless orphans, producing axe
+**Critical `aria-required-children`** plus **Serious `listitem`**.
+
+**What changed.** Subtraction. `role="tree"`, `role="treeitem"` and `role="group"` are gone from
+the document/context/project navigation sidebars, along with `aria-expanded`/`aria-selected` on
+the `<li>` elements. The native `<ul>`/`<li>`/`<a>` structure is unchanged and needs no ARIA.
+
+- `web/src/pages/App.tsx` — workspace + private document lists, the local `DocumentTreeItem`, and
+  the projects list. `DocumentsTree` is now exported as a unit-test seam.
+- `web/src/components/DocumentTreeItem.tsx` — the shared item used by the /docs tree view.
+- `web/src/pages/Documents.tsx` — the container for the above; it had to move with the items,
+  because a `role="tree"` whose children stop being treeitems is a *new* Critical.
+- `web/src/components/ContextTreeNav.tsx`, `web/src/components/sidebars/ProjectContextSidebar.tsx`.
+
+State that used to live on the `<li>` moved to where it is valid ARIA: `aria-expanded` is now on
+the expand/collapse `<button>`s, and the active document was already marked with
+`aria-current="page"` on its `<a>`.
+
+**One behaviour change, from PR review.** Moving `aria-expanded` onto the buttons exposed that the
+person row in `ProjectContextSidebar` was a `<button aria-expanded="false">` even for a person with
+**no weeks** — controlling nothing, and with a provably no-op click (`togglePerson` writes
+`expandedPeople`, read only by `isExpanded && hasWeeks`). That row is now a plain `<div>`: still
+readable, no longer a phantom tab stop. People *with* weeks are unchanged — chevron, week count,
+working `aria-expanded`. Reverting restores the focusable no-op button.
+
+**Deliberately kept.** `aria-live="polite"` on the two document lists. It is the WCAG 4.1.3
+mechanism for announcing create/delete and is asserted by
+`e2e/accessibility-remediation.spec.ts` ("document tree updates are announced"). Whether it is
+too verbose on expand/collapse is a screen-reader question, and removing it on a prediction is
+the exact error A11Y-1 itself was — see the follow-up note below.
+
+**Out of scope, deliberately.** `web/src/pages/OrgChartPage.tsx` keeps `role="tree"`: it is the
+one real tree widget in the codebase (roving `tabIndex` at `:664`, `onKeyDown` at `:462`).
+
+**Evidence.** axe-core 4.11 via `@axe-core/playwright`, Chromium 1223 headless, 1440×900, tags
+`wcag2a,wcag2aa,wcag21a,wcag21aa,best-practice`, logged in as `dev@ship.local` against a locally
+seeded database. Counts are Critical/Serious/Moderate/minor.
+
+| page | before | after |
+|---|---|---|
+| `/docs` | **C1 S1** M0 m0 — `aria-required-children`, `listitem` | **C0 S0** M0 m0 |
+| `/documents/:id` | **C2 S1** M1 m0 | **C1 S0** M1 m0 |
+| `/issues` | C0 S0 M0 m1 | C0 S0 M0 m1 |
+
+The Critical remaining on the document view is `aria-allowed-attr` on the editor `<div>` — that is
+**A11Y-2**, a separate finding, untouched here.
+
+**Reproduction precondition (worth knowing).** The violation is data-dependent: it only fires when
+a sidebar section has **more than `SIDEBAR_ITEM_LIMIT` (10)** root documents, which renders the
+bare `<li>` "N more..." overflow link, or **zero**, which renders the bare `<li>` empty state. A
+freshly seeded database has 5 and shows **no** violation. The audit environment had more than 10.
 
 **How to run it.**
 
@@ -105,6 +164,20 @@ old runner behaviour, delete `api/src/db/migrationRunner.ts` and restore `api/sr
 from `main`. Rolling back the runner alone leaves migrations `010`/`025`/`033`/`035` idempotent,
 which is harmless. Note that rollback does **not** un-apply migrations already recorded in
 `schema_migrations`; reversing those requires a database restore.
+pnpm --filter @ship/web test        # 5 new specs, 26 assertions, all green
+pnpm type-check
+```
+
+**Rollback.** `git revert` the commits on `fix/a11y-1-sidebar-aria`, or by hand: restore the five
+`role="tree"`/`role="treeitem"` sites listed above, and restore the person row in
+`ProjectContextSidebar.tsx` to a single `<button>` for both the has-weeks and no-weeks cases. The
+five new `*.test.tsx` files fail if either comes back, which is the point.
+
+**Still owed — do not mark this fully verified.** Nobody has listened to it. A human found on
+2026-07-28 that VoiceOver did not announce the document titles *at all* under the old markup;
+this change makes the DOM use native list semantics and axe agrees, but **no screen-reader pass
+has been run on the fixed build.** That verification, plus a judgement on the retained
+`aria-live`, is outstanding.
 
 ---
 

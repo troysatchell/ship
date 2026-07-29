@@ -16,7 +16,7 @@ test.describe('Context Menus - Sidebar', () => {
       await page.waitForLoadState('networkidle')
 
       // Look for document tree items in the sidebar
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }))
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }))
       const firstDoc = tree.first().locator('[data-testid="doc-item"]').first()
 
       // Data should always exist - fail if it doesn't
@@ -40,7 +40,7 @@ test.describe('Context Menus - Sidebar', () => {
       await page.waitForLoadState('networkidle')
 
       // Look for document tree items
-      const tree = page.getByRole('tree', { name: 'Workspace documents' }).or(page.getByRole('tree', { name: 'Documents' }))
+      const tree = page.getByRole('list', { name: 'Workspace documents' }).or(page.getByRole('list', { name: 'Documents' }))
       const firstDoc = tree.first().locator('[data-testid="doc-item"]').first()
 
       // Data should always exist - fail if it doesn't
