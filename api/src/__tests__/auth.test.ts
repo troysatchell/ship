@@ -26,7 +26,10 @@ function createMockReqRes(cookies: Record<string, string> = {}) {
 
 describe('authMiddleware', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks, not the clear-only variant: clearing mocks leaves unconsumed
+    // mockResolvedValueOnce values queued, which leak into later tests
+    // (TRO-277 / TEST-12).
+    vi.resetAllMocks();
   });
 
   describe('session validation', () => {
