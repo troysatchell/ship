@@ -10,8 +10,11 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ## TRO-223 (TEST-1) — the web unit suite is green, and `pnpm test` now actually runs it
 
-**13 web unit tests failed, in 3 files, and nothing in the repository ran them.** Root `"test"` was
-`pnpm --filter @ship/api test`, so `pnpm test` reported green while those 13 stayed red. The suite
+**13 web unit tests failed, in 3 files, and the root `pnpm test` never ran them.** Root `"test"` was
+`pnpm --filter @ship/api test`, so `pnpm test` reported green while those 13 stayed red. CI *did*
+run the web suite (`.github/workflows/ci.yml:105-118`, under `continue-on-error` with a quarantine
+diff), so the failures were visible there — they were invisible to anyone running the suite locally,
+which is where they needed to be caught. The suite
 was 151 tests when the factory captured its baseline and 172 by the time this branch measured it —
 the same 13 failing in both. They were five months of accumulated drift that a suite nobody ran
 could not catch.
@@ -80,8 +83,16 @@ that no config exposes a `'sprints'` id again, `setDetails` document structure, 
 fail-closed tests. Assertions in the three repaired files went from 131 to 147.
 
 **Roll back.** `git revert` the commits on `fix/test-1-web-suite-green`. Reverting restores the 13
-failures, so also restore the `knownFailing` list in `audit/factory/quarantine.json` from
-`previousCapture` — otherwise the gate reads them as new regressions and fails every branch.
+failures, so the `knownFailing` list in `audit/factory/quarantine.json` must come back too —
+otherwise the gate reads them as new regressions and fails every branch.
+
+Get it from git, **not** from `previousCapture`: that key records only `capturedAt`,
+`capturedAtCommit` and `totals`, so it cannot restore the list. The 13 entries are at commit
+`ae2a00e` (recorded as `previousCapture.capturedAtCommit`):
+
+```bash
+git show ae2a00e:audit/factory/quarantine.json > audit/factory/quarantine.json
+```
 
 ---
 
