@@ -226,6 +226,35 @@ factory resumes rather than being interrupted per-ticket.
 Report progress as a running board: tickets done (with PR links), in flight, blocked with reasons,
 and new tickets filed from review triage. Keep it scannable.
 
+## Visibility — keep the board current
+
+Two surfaces, deliberately, because they answer different questions:
+
+```bash
+node scripts/factory/serve.mjs           # OPERATE — http://localhost:7373, free to refresh
+node scripts/factory/status.mjs          # OPERATE — one-screen terminal view
+node scripts/factory/board.mjs > audit/factory/board.html   # SHARE — then republish
+```
+
+**Use `serve.mjs` while a run is in progress.** It rebuilds from live state on every request,
+costs nothing, and needs no agent in the loop. `status.mjs` is the same data in the terminal.
+
+**The published Artifact is for sharing a milestone, not for operating.** It can only be updated
+by an agent calling the Artifact tool — a shell script cannot republish it — so every refresh
+costs a tool call and only happens mid-turn. Republish it at meaningful checkpoints (end of a
+run, before a demo), not per transition. Use the **same file path** so it redeploys to the one
+stable URL rather than minting a new one:
+
+https://claude.ai/code/artifact/28506acd-4d74-4889-aee6-a2b6d9932a83
+
+Both read from sources of truth — worktrees, `.factory/gate-result.json`, `gh pr list`, the
+scorecard, and local session transcripts. There is deliberately **no status file to update**,
+because a status file that drifts is worse than none: it reads as authoritative while being wrong.
+That also means the board is only as fresh as its last regeneration; it is a snapshot and says so.
+
+Linear stays authoritative for *ticket status*; the board shows *execution state*. When they
+disagree, Linear wins and something has gone wrong — say so rather than reconciling silently.
+
 ## Guardrails
 
 - **Never `git commit --no-verify`.** Pre-commit runs the compliance scan; bypassing it is a

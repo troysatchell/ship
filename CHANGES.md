@@ -8,6 +8,45 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## Factory visibility — status command, published board, cost analysis (no ticket: tooling)
+
+**What changed.** Three additions, all reading from sources of truth rather than a status file:
+
+- `scripts/factory/lib/state.mjs` — reconstructs factory state from git worktrees, `.factory-env`,
+  `.factory/gate-result.json`, `gh pr list`, `scorecard.jsonl`, and Claude Code session
+  transcripts. No state file is written, because one that drifts reads as authoritative while
+  being wrong.
+- `scripts/factory/status.mjs` — one-screen terminal view. `--json` feeds the board.
+- `scripts/factory/board.mjs` — renders a self-contained HTML control panel (cream ground,
+  British racing green, severity carried by stripe + wash + text colour, all contrast-measured
+  against WCAG AA rather than estimated). Single-theme by choice: both `data-theme` values are
+  pinned to the cream tokens so the viewer's toggle cannot flip it.
+- `scripts/factory/serve.mjs` — local server that rebuilds the board from live state on every
+  request. This is the surface for *operating* the factory: free to refresh, no agent needed.
+  The published Artifact can only be updated by an agent calling a tool, so it is for *sharing*
+  a milestone, not for watching a run.
+- `scripts/factory/cost-report.mjs` — the graded "AI cost analysis" deliverable
+  (`projectbrief.md:63`), derived retroactively from transcripts that already record per-message
+  token usage.
+
+**Decision: not LangGraph.** The workers are Claude Code sub-agents with their own tool loops in
+git worktrees, so a graph framework would orchestrate opaque subprocesses — the interesting
+internals are exactly what it cannot see. The durable state (branch, gate result, PR, Linear
+ticket) already exists; a checkpointer would duplicate it and then disagree with it.
+
+**How to run it.**
+
+```bash
+node scripts/factory/status.mjs
+node scripts/factory/board.mjs > audit/factory/board.html   # then republish to the same URL
+node scripts/factory/cost-report.mjs > audit/factory/COST_ANALYSIS.md
+```
+
+**Rollback.** Remove `scripts/factory/{status,board,cost-report}.mjs`, `scripts/factory/lib/state.mjs`,
+and `audit/factory/{board.html,COST_ANALYSIS.md}`. Nothing else depends on them.
+
+---
+
 ## TRO-244 — CI pipeline with source-code inventory
 
 **What changed.** Added `.github/workflows/ci.yml`: typecheck, build, and unit tests for both
