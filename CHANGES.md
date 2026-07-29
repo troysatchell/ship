@@ -8,6 +8,95 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-276 (ERR-10) — one malformed WebSocket frame no longer kills the API for everyone
+
+**The user-facing cost.** Any authenticated user could send four bytes down a collaboration socket
+and the entire API process died — every open editor in every workspace disconnected, every in-flight
+request dropped, until the container restarted. It did not need malice: a truncated frame from a
+flaky connection does it. Measured against a real running server, 5 of 7 malformed frames produced
+an uncaught exception.
+
+**Root cause.** `handleMessage()` in `api/src/collaboration/index.ts` decodes attacker-controlled
+bytes with raw lib0 readers, which throw on truncated input. It was called from `ws.on('message')`
+with no try/catch anywhere in the chain, and there was no `process.on('uncaughtException')` handler
+in `api/`, `web/` or `shared/`. A `ws` 'message' listener is an I/O callback: a throw there escapes
+to the process, and Node's default for an unhandled `uncaughtException` is to terminate.
+
+**What changed.**
+
+- `runFrameHandler()` wraps the **entire** body of both `ws.on('message')` handlers — the
+  collaboration socket and the events socket. On a throw it logs structured context and closes that
+  one socket with code **1002** (RFC 6455 protocol error). No other connection is affected. The
+  whole body is guarded, not just the `handleMessage()` call, so the rate limiter and any future
+  addition are covered too. It composes with the ERR-2 `revoked` check rather than duplicating it:
+  the revocation short-circuit is now the first statement *inside* the guard, so a revoked socket is
+  not even decoded.
+- `attachSocketErrorHandler()` covers a second vector of the same class. `ws` reports framing and
+  transport failures by emitting `'error'` on the WebSocket, and `EventEmitter` throws an `'error'`
+  event that has no listener — so a peer sending a frame with a reserved bit set crashed the process
+  without ever reaching `handleMessage()`. It is attached as the **first statement** of the
+  connection handler, before any `await`: that handler is `async` and loads the document from
+  Postgres, and a frame arriving during that window found the socket unguarded. This was found by
+  the regression test, against the first version of this fix.
+- `api/src/process-safety.ts` — `installProcessSafetyNet()`, wired in at `api/src/index.ts` only
+  (the entrypoint, so importing the app never hijacks a test runner's error handling). It takes
+  ownership of `uncaughtException` / `unhandledRejection`, logs full structured context, stops
+  accepting new connections, and exits **1** after a bounded 5s drain.
+
+**Why the safety net exits rather than continuing.** By the time it fires, the exception has escaped
+every guard, so nothing is known about the state left behind — Node's own guidance is that resuming
+is undefined behaviour. Continuing would trade a fast restart for an indefinitely, silently wrong
+server. It is also not an availability regression, which is the decisive point: with no handler
+installed, Node **already** terminates on an uncaught exception, and (since v15) on an unhandled
+rejection too. This cannot make the process die more often than it does today. What it changes is
+everything around the death — structured context instead of a bare stack, the listening socket
+closed first, a bounded window for in-flight work, and a deliberate non-zero code for the supervisor
+(`Dockerfile:75` runs `node dist/index.js` as the container command, so a non-zero exit is a
+restart). The availability win comes entirely from the try/catch; the safety net only makes failures
+legible.
+
+One trap worth recording, because it already cost this project a ticket: **the stack trace lies.**
+lib0 builds `errorUnexpectedEndOfArray` as a module-scope singleton `Error` whose stack is captured
+at module *load*, so every one of these crashes points at whatever first imported lib0 rather than
+at the throw site. Both the frame log and the fatal log therefore record the offending bytes and
+carry an explicit caveat on the stack field.
+
+**How to run it.**
+
+```bash
+source .factory-env   # api tests TRUNCATE 16 tables; never run without this
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/malformed-frames.test.ts
+pnpm --filter @ship/api exec vitest run src/__tests__/process-safety.test.ts
+```
+
+`malformed-frames.test.ts` drives the real collaboration server over real sockets with each frame
+from the audit table plus a raw hand-rolled WebSocket frame with RSV1 set, and asserts that nothing
+reaches the process level, that the offending socket is closed, that a co-tenant editor on the same
+document keeps working, and that new connections still persist edits afterwards. It also pins the
+two frames that were always survivable (`[0,1]`, `[9,9,9]`) as still survivable, so an over-broad
+fix that hangs up on legitimate traffic fails.
+
+Red before green, with `api/src/collaboration/index.ts` reverted to `HEAD`: **7 failed / 3 passed**,
+every failure a clean assertion naming the escaped exception (`Unexpected end of array`,
+`Invalid typed array length: 5`, `Invalid WebSocket frame: RSV1 must be clear`). With the fix:
+**10 passed**. Full api suite 488/488.
+
+**How to roll it back.**
+
+```bash
+git revert <commit>   # or, per piece:
+```
+
+Reverting `api/src/process-safety.ts` plus its two lines in `api/src/index.ts` restores Node's
+default crash behaviour without touching the frame guards — the guards are independent and are the
+part that matters. Reverting `runFrameHandler` / `attachSocketErrorHandler` in
+`api/src/collaboration/index.ts` restores the crash. No schema change, no migration, no config, no
+API surface change; the only observable difference for a well-behaved client is that a client
+sending undecodable bytes is now disconnected with close code 1002 instead of taking the server with
+it.
+
+---
+
 ## TRO-188 (ERR-1) + TRO-189 (ERR-2) — the editor stops lying about "Saved", and a revoked session stops writing
 
 Both findings live in the collaboration path and ship as one change: TRO-189 makes the server hang
