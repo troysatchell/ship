@@ -119,7 +119,7 @@ export function MyWeekPage() {
         <div className="flex items-center gap-2.5">
           <h1 className="text-xl font-semibold text-foreground">Week {week.week_number}</h1>
           {week.is_current && (
-            <span className="text-xs bg-accent/20 text-accent px-1.5 py-0.5 rounded">Current</span>
+            <span className="text-xs bg-accent/20 text-accent-text px-1.5 py-0.5 rounded">Current</span>
           )}
         </div>
         <div className="flex items-center gap-1">
@@ -217,7 +217,10 @@ export function MyWeekPage() {
                     return <span className="absolute top-3 right-3 text-xs bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded">Submitted</span>;
                   }
                   if (hasContent) {
-                    return <span className="absolute top-3 right-3 text-xs bg-border text-muted px-1.5 py-0.5 rounded">Unsubmitted</span>;
+                    // text-foreground, not text-muted: muted on a bg-border fill is
+                    // 4.38:1 and fails AA. This now matches how the sibling badges
+                    // above pair bright text with a dim fill.
+                    return <span className="absolute top-3 right-3 text-xs bg-border text-foreground px-1.5 py-0.5 rounded">Unsubmitted</span>;
                   }
                   return null;
                 })()}
@@ -225,7 +228,11 @@ export function MyWeekPage() {
                   <div className="space-y-0 max-h-[300px] overflow-hidden">
                     {plan.items.map((item, i) => (
                       <div key={i} className="flex items-start gap-2.5 py-1.5">
-                        <span className="text-[11px] font-semibold text-muted/50 w-4 text-right shrink-0 mt-0.5">
+                        {/* text-muted, not text-muted/50: the 50% modifier resolved to
+                            #4c4c4c (2.26:1). AA on this background bottoms out around
+                            #7a7a7a, so there is no compliant tier below muted to move
+                            these to. */}
+                        <span className="text-[11px] font-semibold text-muted w-4 text-right shrink-0 mt-0.5">
                           {i + 1}.
                         </span>
                         <span className="text-sm text-foreground leading-relaxed">{item.text}</span>
@@ -279,7 +286,10 @@ export function MyWeekPage() {
                     return <span className="absolute top-3 right-3 text-xs bg-yellow-500/20 text-yellow-400 px-1.5 py-0.5 rounded">Submitted</span>;
                   }
                   if (hasContent) {
-                    return <span className="absolute top-3 right-3 text-xs bg-border text-muted px-1.5 py-0.5 rounded">Unsubmitted</span>;
+                    // text-foreground, not text-muted: muted on a bg-border fill is
+                    // 4.38:1 and fails AA. This now matches how the sibling badges
+                    // above pair bright text with a dim fill.
+                    return <span className="absolute top-3 right-3 text-xs bg-border text-foreground px-1.5 py-0.5 rounded">Unsubmitted</span>;
                   }
                   return null;
                 })()}
@@ -287,7 +297,11 @@ export function MyWeekPage() {
                   <div className="space-y-0 max-h-[300px] overflow-hidden">
                     {retro.items.map((item, i) => (
                       <div key={i} className="flex items-start gap-2.5 py-1.5">
-                        <span className="text-[11px] font-semibold text-muted/50 w-4 text-right shrink-0 mt-0.5">
+                        {/* text-muted, not text-muted/50: the 50% modifier resolved to
+                            #4c4c4c (2.26:1). AA on this background bottoms out around
+                            #7a7a7a, so there is no compliant tier below muted to move
+                            these to. */}
+                        <span className="text-[11px] font-semibold text-muted w-4 text-right shrink-0 mt-0.5">
                           {i + 1}.
                         </span>
                         <span className="text-sm text-foreground leading-relaxed">{item.text}</span>
@@ -333,16 +347,25 @@ export function MyWeekPage() {
               const isToday = isDateToday(slot.date);
               const isFuture = !isPast && !isToday;
 
+              // Future rows used to carry `opacity-40`, which dimmed their text along
+              // with their chrome and put every label at 1.84:1 — most of the
+              // color-contrast nodes axe reported on this page. Opacity cannot be tuned
+              // out of the problem: text-muted only clears 4.5:1 above ~86% opacity, by
+              // which point nothing looks dimmed. So the de-emphasis moves to the
+              // border alone and the text stays at full strength.
               const rowClass = cn(
                 'flex items-center gap-3 rounded-lg border px-4 py-2.5',
-                isToday ? 'border-accent/30 bg-accent/5' : 'border-border bg-surface',
-                isFuture && 'opacity-40',
+                isToday
+                  ? 'border-accent/30 bg-accent/5'
+                  : isFuture
+                    ? 'border-border/50 bg-surface'
+                    : 'border-border bg-surface',
                 !isFuture && 'hover:border-accent/50 transition-colors'
               );
 
               const dateLabel = (
                 <div className="w-20 flex-shrink-0">
-                  <span className={cn('text-xs font-medium', isToday ? 'text-accent' : 'text-muted')}>
+                  <span className={cn('text-xs font-medium', isToday ? 'text-accent-text' : 'text-muted')}>
                     {slot.day.slice(0, 3)}
                   </span>
                   <span className="text-xs text-muted ml-1">
