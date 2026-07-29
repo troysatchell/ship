@@ -10,6 +10,7 @@ import pg from 'pg';
 import { config } from 'dotenv';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { resolveDatabaseSsl } from '../ssl.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -33,6 +34,7 @@ interface OrphanReport {
 async function runDiagnostic() {
   const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
+    ssl: resolveDatabaseSsl(),
   });
 
   console.log('\n========================================');
