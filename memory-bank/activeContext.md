@@ -15,14 +15,18 @@ due **Fri Jul 31**.
 
 ## Start here tomorrow
 
-1. **Merge the harness PR** once CI is green — this is the run that proves `ci.yml` works against
-   a real PR for the first time.
-2. **Run `/ship-factory`.** Agreed scope: the 4 Criticals + the assignment rules —
+**Harness is shipped and on `main` at `58714cb`** — PR #1 (`2dced06`, the harness + CI) and PR #2
+(`58714cb`, role skills + the fixes from #1's review). CI green on both; CodeRabbit clean on #2.
+Both remotes verified in parity. Nothing is pending.
+
+1. **Run `/ship-factory`.** Agreed scope: the 4 Criticals + the assignment rules —
    `TRO-178` (DB-1), `TRO-188`+`TRO-189` (ERR-1/ERR-2, **one branch**, same file), `TRO-172`
    (API-1), `TRO-215` (A11Y-1), and `TRO-245`–`TRO-249`. `TRO-244` (CI) is **done**.
 
 ## Decisions made 2026-07-29
 
+- **Non-ticket content skips the CodeRabbit gate** — tooling, skills, docs, CI merge on gate + CI
+  green alone. Anything under `api/`/`web/`/`shared/` is ticket content and the full gate applies.
 - **Merge policy: auto-merge once the CodeRabbit review is green** (gate-green + CI-green +
   triage-clean + no open escalation). Pushing factory branches and opening PRs is pre-authorized.
   CodeRabbit findings get fixed when in scope and non-trivial; trivial nits and findings that
