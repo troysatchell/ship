@@ -68,6 +68,9 @@ window, written after it, and both expiry boundaries),
 
 **Rollback:** revert the commits on `fix/db-2-api-6-session-write`. No migration, no schema change,
 no data change — sessions written under either version are interpreted correctly by the other.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
