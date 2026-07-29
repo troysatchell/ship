@@ -207,6 +207,22 @@ describe('migration runner — error handling (DB-1 / TRO-178)', () => {
   );
 
   it(
+    'rejects when the migrations directory cannot be read, rather than applying nothing',
+    async () => {
+      // "No migrations to run" and "I could not find out what to run" must not
+      // look the same: the second reported as success is DB-1 in another form.
+      await expect(
+        runMigrations(pool, {
+          schemaPath: join(fixtureRoot, 'schema.sql'),
+          migrationsDir: join(fixtureRoot, 'no-such-directory'),
+          log: silent,
+        })
+      ).rejects.toThrow(/ENOENT|no such file or directory/i);
+    },
+    HOOK_TIMEOUT
+  );
+
+  it(
     'still tolerates duplicate-object errors raised by schema.sql itself',
     async () => {
       // schema.sql is initial-setup DDL that is re-applied on every deploy. A

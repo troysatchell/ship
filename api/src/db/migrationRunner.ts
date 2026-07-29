@@ -46,15 +46,19 @@ function isDuplicateObjectError(error: unknown): boolean {
   return typeof code === 'string' && DUPLICATE_OBJECT_SQLSTATES.has(code);
 }
 
-/** Migration files in the order they must be applied. */
+/**
+ * Migration files in the order they must be applied.
+ *
+ * Read errors propagate. Swallowing them here would reproduce DB-1 in a second
+ * form: a missing or unreadable migrations directory — a `dist/db/migrations`
+ * the build failed to copy, say — would apply schema.sql, apply nothing else,
+ * and report success. "No migrations to run" and "I could not find out what to
+ * run" must not look the same to the caller.
+ */
 export function listMigrationFiles(migrationsDir: string): string[] {
-  try {
-    return readdirSync(migrationsDir)
-      .filter(f => f.endsWith('.sql'))
-      .sort(); // Ensures numeric order: 001_, 002_, etc.
-  } catch {
-    return [];
-  }
+  return readdirSync(migrationsDir)
+    .filter(f => f.endsWith('.sql'))
+    .sort(); // Ensures numeric order: 001_, 002_, etc.
 }
 
 /**
