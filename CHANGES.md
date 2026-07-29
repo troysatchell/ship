@@ -48,6 +48,16 @@ Persistence is checked by decoding `documents.yjs_state` into a fresh `Y.Doc` in
 not by trusting the `content` JSON mirror. `api/src/collaboration/index.ts` is **not modified** —
 this is coverage only, and three branches are in flight against that file.
 
+**Plus an additive browser spec, clearly labelled as not run by CI.**
+`e2e/concurrent-editing.spec.ts` does the same two scenarios through two real
+`browser.newContext()`s — separate cookie jars, separate sessions, separate IndexedDB — logged in as
+two different users, typing concurrently via `Promise.all` on two keystroke streams. It covers the
+one layer the vitest test cannot reach: TipTap and the real `y-websocket` client rather than a
+hand-rolled protocol client. It is **additive, not the proof** — `.github/workflows/ci.yml` has no
+Playwright job and `gate.sh` executes only the two vitest projects, so a test living only in `e2e/`
+satisfies the gate's added-test check while never running. That is the TEST-2 failure mode, and the
+file's header says so.
+
 **No fixed sleeps.** Convergence is awaited on Yjs `update` events. Persistence — which emits no
 event — is awaited by re-reading the row until a predicate holds, with a 50ms gap between reads and
 a hard deadline. Every wait is a condition, never a duration guessed to be long enough (TEST-11 /
@@ -58,6 +68,9 @@ TRO-233).
 ```bash
 cd <worktree> && source .factory-env      # api tests TRUNCATE 16 tables
 pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/concurrent-merge.test.ts
+
+# the additive browser spec — deliberate, never as part of the full suite
+pnpm build && npx playwright test e2e/concurrent-editing.spec.ts --workers=1 --retries=0
 ```
 
 **Evidence — the test was proved capable of failing.** New coverage has no bug to go red on, so the
@@ -78,8 +91,14 @@ is empty on this branch).
 Both are `AssertionError`/explicit-condition failures naming the missing edit, not import or setup
 errors.
 
-**Stability.** 5 consecutive standalone runs, 4/4 passing each time, ~10.4s per run. Full api suite
-green: 473 passed / 31 files (up from 469 / 30).
+The **e2e spec was proved capable of failing too**, under the same merge sabotage (rebuilt through
+`pnpm --filter @ship/api build`, since the e2e harness runs `api/dist/index.js`). Both browser tests
+failed with `Error: clientA lost clientB's concurrent edit / Expected substring: "BBB-…" / Received
+string: "AAA-…"`, then passed again after the source was restored and rebuilt.
+
+**Stability.** 5 consecutive standalone runs of the vitest file, 4/4 passing each time, ~10.4s per
+run. Full api suite green: 473 passed / 31 files (up from 469 / 30). The e2e spec: 2/2 passing,
+verified with `--retries=0` so a retry cannot mask a flake, ~33-51s for the pair on one worker.
 
 **Coverage delta on `api/src/collaboration/index.ts`.** v8 provider, full api suite
 (`vitest run --coverage`), factory database `ship_wt_tro_226` on the `ship-audit-pg` container at
@@ -97,6 +116,15 @@ denominator is not 28. `@vitest/coverage-v8` is not a dependency of this repo; i
 take the measurement and `api/package.json`/`pnpm-lock.yaml` were reverted afterwards, so
 `--coverage` will not run without installing it again.
 
+**Second new finding, not fixed here, and it probably affects other e2e specs.**
+`web/src/components/ActionItemsModal.tsx` is a Radix `Dialog`, and the seeded workspace has 32
+overdue accountability items, so it opens on load over the document editor. While it is open it both
+covers the editor — `locator.click()` never passes hit-testing and dies as a bare 60s timeout with no
+assertion — and traps focus, so `document.activeElement` can never become the editor. Observed
+directly: three failed e2e runs before the dialog was identified. Any e2e test that drives the editor
+after a direct `page.goto('/documents/:id')` has to dismiss it first; the new spec does. Derived, not
+verified: this is a plausible contributor to the existing editor-spec flakiness in TEST-11 / TRO-233.
+
 **New finding, not fixed here.** Building the test surfaced a real race in the server.
 `wss.on('connection')` in `api/src/collaboration/index.ts` `await`s `getOrCreateDoc()` — a database
 round trip — and registers `ws.on('message')` only afterwards. A client frame that arrives inside
@@ -111,8 +139,9 @@ database latency. The test client works around it by sending its step 1 only aft
 frame, which is race-free because the server sends that frame in the same synchronous block that
 attaches the listener.
 
-**Roll back.** `git rm api/src/collaboration/__tests__/concurrent-merge.test.ts` and drop this
-entry. Nothing else on this branch touches product code.
+**Roll back.** `git rm api/src/collaboration/__tests__/concurrent-merge.test.ts
+e2e/concurrent-editing.spec.ts` and drop this entry. Nothing else on this branch touches product
+code.
 
 ---
 
