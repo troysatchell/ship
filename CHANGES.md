@@ -124,6 +124,28 @@ not create** — converting those guards needs a second seeded workspace and mor
 the workspace-switcher and admin-dashboard specs and belongs in its own ticket. See TRO-225's entry
 for the retries decision.
 
+**How to run it.**
+
+```bash
+source .factory-env                       # api tests TRUNCATE 16 tables; use the worktree database
+
+# The tiers the factory gate actually executes
+pnpm --filter @ship/web exec vitest run src/components/editor/linkOptions.test.ts   # 27 pass
+pnpm --filter @ship/api exec vitest run src/routes/workspaces.test.ts               # 28 pass
+
+# The e2e specs, targeted. Never the whole suite: 600+ tests, per-worker containers.
+pnpm exec playwright test e2e/security.spec.ts       --workers=1 --retries=0        # 18 pass
+pnpm exec playwright test e2e/authorization.spec.ts  --workers=2 --retries=0        # 18 pass
+pnpm exec playwright test e2e/file-attachments.spec.ts --workers=2 --retries=0      # 13 pass
+pnpm exec playwright test e2e/check-aria.spec.ts e2e/admin-workspace-members.spec.ts --workers=2 --retries=0
+pnpm exec playwright test e2e/accessibility-remediation.spec.ts --workers=2 --retries=0 \
+  -g "code blocks have language indication"                                          # 1 pass
+```
+
+To see the security tests fail, reintroduce the vulnerability: set
+`isAllowedUri: () => true` in `web/src/components/editor/linkOptions.ts`, or drop
+`workspaceAdminMiddleware` from `api/src/routes/workspaces.ts:1021`.
+
 **Rollback.** `git revert` the branch. The only production code touched is the new
 `linkOptions.ts` and the four `Link.configure` call sites that spread it; reverting restores
 reliance on `@tiptap/extension-link`'s default `isAllowedUri`, which blocks the same five schemes
@@ -239,6 +261,20 @@ is out of scope for a test-integrity ticket. Needs its own ticket.
 **Evidence.** Targeted specs only — the full suite was not run (600+ tests, per-worker containers,
 not in the gate). Commands and results are in the PR body / final report; the decisive pair is the
 two-run table above.
+
+**How to run it.**
+
+```bash
+source .factory-env
+
+# The configuration that reproduced the deterministic failure. 4 consecutive clean runs
+# after the fix; before it, the retro test failed every time this way.
+pnpm exec playwright test e2e/my-week-stale-data.spec.ts --workers=1 --retries=0
+
+# The two-run experiment that identified the cross-test dependency (run against `main`):
+pnpm exec playwright test e2e/my-week-stale-data.spec.ts --workers=1 --retries=0
+pnpm exec playwright test e2e/my-week-stale-data.spec.ts --workers=1 --retries=0 -g "retro edits"
+```
 
 **Rollback.** `git revert` the branch. `playwright.config.ts` changes are comment-only, so reverting
 restores the previous behaviour exactly.
