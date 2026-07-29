@@ -3,6 +3,7 @@ import { useEditor, EditorContent, JSONContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
+import { LINK_HREF_POLICY } from './editor/linkOptions';
 import { useToast } from '@/components/ui/Toast';
 import { useAuth } from '@/hooks/useAuth';
 import { useInvalidateStandupStatus } from '@/hooks/useStandupStatusQuery';
@@ -42,6 +43,7 @@ export function StandupFeed({ sprintId }: StandupFeedProps) {
         placeholder: 'What did you work on? Any blockers? What\'s next?',
       }),
       Link.configure({
+        ...LINK_HREF_POLICY,
         openOnClick: false,
         HTMLAttributes: {
           class: 'text-accent hover:underline cursor-pointer',
@@ -59,6 +61,7 @@ export function StandupFeed({ sprintId }: StandupFeedProps) {
         placeholder: 'Edit your standup update...',
       }),
       Link.configure({
+        ...LINK_HREF_POLICY,
         openOnClick: false,
         HTMLAttributes: {
           class: 'text-accent hover:underline cursor-pointer',
@@ -299,6 +302,7 @@ function StandupCard({
     extensions: [
       StarterKit,
       Link.configure({
+        ...LINK_HREF_POLICY,
         openOnClick: true,
         HTMLAttributes: {
           class: 'text-accent hover:underline cursor-pointer',
