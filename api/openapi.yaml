@@ -4563,7 +4563,8 @@ paths:
                       type: integer
                       nullable: true
                       minimum: 0
-                      description: Number of issues to skip, applied after ordering. Use with `limit` to page.
+                      maximum: 100000
+                      description: Number of issues to skip, applied after ordering (0-100000). Use with `limit` to page.
                       example: 50
                     required: false
                     name: offset

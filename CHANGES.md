@@ -28,8 +28,20 @@ missing.
   `extractIssueFromRow` wrapper that adds `content` back. `GET /api/issues/:id`,
   `/by-ticket/:number` and `/:id/children` still return the body and are byte-identical.
 - `d.content` removed from the list SELECT.
-- `limit` (1-500) and `offset` (>=0) added to `GET /api/issues`, validated with zod. Unparseable or
-  out-of-range values get **400**, not silent truncation.
+- `limit` (1-500) and `offset` (0-100,000) added to `GET /api/issues`. Both are bounded at both
+  ends: unparseable, negative, fractional or over-maximum values get **400**, never silent
+  truncation. `offset` is capped because an unbounded one is scanned and discarded inside Postgres —
+  `OFFSET 1e9` buys a full scan that returns nothing.
+- The route validates with `IssueListPaginationSchema` **imported from the OpenAPI schema module**,
+  not a second copy, so the bounds Swagger advertises and the bounds the route enforces cannot
+  drift.
+- Both extractors take declared row types (`IssueListRow` / `IssueDetailRow`) instead of `any`. From
+  PR review: an `any` *annotation* silences every field read, which on a projection extractor meant
+  the exact thing this change touched — which columns the SELECT returns — was the one part not
+  type-checked. Verified by introducing `row.titel` and getting
+  `TS2551: Property 'titel' does not exist on type 'IssueListRow'`; under `any` that compiled.
+  What it does not buy: TypeScript still cannot read the SQL string, so deleting a column from a
+  query is not a compile error.
 
 **The pagination contract, stated deliberately: there is NO default limit.** Omit both params and
 you get every matching row, in the same order, exactly as before. That is not laziness — two

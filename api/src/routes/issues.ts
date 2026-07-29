@@ -12,6 +12,9 @@ import {
   type BelongsToEntry,
 } from '../utils/document-crud.js';
 import { broadcastToUser } from '../collaboration/index.js';
+// The registered OpenAPI schema is the single source of truth for the list
+// endpoint's pagination bounds — see the comment on the pagination block below.
+import { IssueListPaginationSchema } from '../openapi/schemas/issues.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -80,6 +83,10 @@ const rejectIssueSchema = z.object({
 
 // Pagination for GET /api/issues.
 //
+// The schema is imported, not redeclared: `IssueListPaginationSchema` is the same
+// object registered with OpenAPI, so the bounds the route enforces and the bounds
+// Swagger and the generated MCP tool advertise cannot drift apart.
+//
 // Deliberately OPT-IN with no default limit (TRO-182 / DB-5). Two existing
 // consumers read the response as a complete set: web/src/hooks/useIssuesQuery.ts
 // filters by project client-side over the whole array (the API has no project_id
@@ -87,17 +94,68 @@ const rejectIssueSchema = z.object({
 // return *wrong* lists rather than shorter ones. Callers that want a bounded
 // response ask for one; callers that omit both params get the full list, exactly
 // as before this change.
-const listPaginationSchema = z.object({
-  limit: z.coerce.number().int().min(1).max(500).optional(),
-  offset: z.coerce.number().int().min(0).optional(),
-});
+
+/** The `properties` JSONB keys the issue extractors read. */
+type IssueRowProperties = {
+  state?: string;
+  priority?: string;
+  assignee_id?: string | null;
+  estimate?: number | null;
+  source?: string;
+  rejection_reason?: string | null;
+  due_date?: string | null;
+  is_system_generated?: boolean;
+  accountability_target_id?: string | null;
+  accountability_type?: string | null;
+};
+
+/**
+ * The columns an issue list projection provides.
+ *
+ * This replaced `row: any` on the extractors (CodeRabbit MAJOR on this branch):
+ * an annotation of `any` silences every field read, so the projection this PR
+ * changed was the one thing no longer type-checked.
+ *
+ * Worth being precise about what it does and does not buy. It does NOT let
+ * TypeScript validate SQL — removing a column from a query string still
+ * compiles, because no type system reads the string. What it buys is that the
+ * extractors' reads are checked against a declaration, that the
+ * required-versus-optional split is written down in one place, and that a typo
+ * or a field added to the extractor without being added to a projection is a
+ * compile error rather than `undefined` in a response.
+ */
+type IssueListRow = {
+  id: string;
+  title: string;
+  properties: IssueRowProperties | null;
+  ticket_number: number | null;
+  created_at: Date;
+  updated_at: Date;
+  created_by: string | null;
+  started_at: Date | null;
+  completed_at: Date | null;
+  cancelled_at: Date | null;
+  reopened_at: Date | null;
+  converted_from_id: string | null;
+  // Optional because they come from JOINs that only some projections perform:
+  // the list, `/:id`, `/by-ticket/:number` and `/:id/children` select them; the
+  // INSERT/UPDATE paths that map a bare `RETURNING *` row do not.
+  assignee_name?: string | null;
+  assignee_archived?: boolean | null;
+  created_by_name?: string | null;
+};
+
+/** A detail projection: an issue row plus the TipTap document body. */
+type IssueDetailRow = IssueListRow & {
+  content: Record<string, unknown> | null;
+};
 
 // Helper to extract the fields shared by the list and detail issue projections.
 // The TipTap document body is NOT included here: measured on 254 issues it is
 // 64.5% of an issue row's bytes in Postgres and 38.4% of the JSON list payload
 // (146,015 of 379,907 B), and no list consumer reads it (TRO-173 / API-2).
 // Detail responses add it back via extractIssueFromRow.
-function extractIssueListItemFromRow(row: any) {
+function extractIssueListItemFromRow(row: IssueListRow) {
   const props = row.properties || {};
   return {
     id: row.id,
@@ -129,7 +187,7 @@ function extractIssueListItemFromRow(row: any) {
 }
 
 // Detail projection: the list fields plus the TipTap document body.
-function extractIssueFromRow(row: any) {
+function extractIssueFromRow(row: IssueDetailRow) {
   return {
     ...extractIssueListItemFromRow(row),
     content: row.content,
@@ -146,7 +204,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     // Validate pagination before touching the database. Unparseable or
     // out-of-range values are rejected rather than silently ignored — a caller
     // asking for 10 rows and getting 254 is worse than an error.
-    const pagination = listPaginationSchema.safeParse(req.query);
+    const pagination = IssueListPaginationSchema.safeParse(req.query);
     if (!pagination.success) {
       res.status(400).json({ error: 'Invalid input', details: pagination.error.errors });
       return;
@@ -267,7 +325,9 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
       params.push(offset);
     }
 
-    const result = await pool.query(query, params);
+    // Typed rows, so the mapping below is checked against IssueListRow rather
+    // than against `any`.
+    const result = await pool.query<IssueListRow>(query, params);
 
     // Extract issues and batch-fetch associations to avoid N+1 queries
     const issueIds = result.rows.map(row => row.id);

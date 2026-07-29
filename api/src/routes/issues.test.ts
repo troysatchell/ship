@@ -295,12 +295,37 @@ describe('Issues API', () => {
     })
 
     it('rejects pagination params it cannot honour (TRO-182)', async () => {
-      for (const qs of ['limit=0', 'limit=abc', 'limit=501', 'offset=-1', 'offset=x']) {
+      // Both bounds are checked from both ends. A naive `> max` test passes
+      // negative input, which is the classic bypass, so -1 is here explicitly.
+      const rejected = [
+        'limit=0',
+        'limit=-1',
+        'limit=abc',
+        'limit=501',
+        'limit=1.5',
+        'offset=-1',
+        'offset=x',
+        'offset=100001',
+      ]
+      for (const qs of rejected) {
         const res = await request(app)
           .get(`/api/issues?${qs}`)
           .set('Cookie', sessionCookie)
 
         expect(res.status, `?${qs} should be rejected, not silently ignored`).toBe(400)
+      }
+    })
+
+    it('accepts the documented pagination bounds (TRO-182)', async () => {
+      // The inclusive edges must pass, or the bound is off by one and the
+      // OpenAPI contract (limit 1-500, offset 0-100000) is wrong.
+      for (const qs of ['limit=1', 'limit=500', 'offset=0', 'offset=100000', 'limit=500&offset=100000']) {
+        const res = await request(app)
+          .get(`/api/issues?${qs}`)
+          .set('Cookie', sessionCookie)
+
+        expect(res.status, `?${qs} is a documented bound and must be accepted`).toBe(200)
+        expect(Array.isArray(res.body), `?${qs} should still return an array`).toBe(true)
       }
     })
   })
