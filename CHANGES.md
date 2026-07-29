@@ -8,6 +8,71 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-223 (TEST-1) — the web unit suite is green, and `pnpm test` now actually runs it
+
+13 of 151 web unit tests failed, and nothing in the repository ran them: root `"test"` was
+`pnpm --filter @ship/api test`, so the suite reported green while a third of three files were red.
+The failures were 5 months of accumulated drift that a suite nobody ran could not catch.
+
+**The judgement this ticket turned on: for each failure, was the test wrong or the source wrong?**
+It was not uniform. 11 were stale assertions; **2 were real source defects**.
+
+*Stale tests (source was right, assertions were corrected — a correction, not a weakening):*
+
+- **`sprints` → `weeks` (5 assertions).** `7713ef0` renamed the tab id in both the project and
+  program configs. `e2e/project-weeks.spec.ts:121` navigates to `/documents/:id/weeks`, confirming
+  the new id is the live contract. Tests still asserted `'sprints'`.
+- **Project tabs reordered (1 assertion).** `b1e4c5a` ("streamline navigation") moved `details`
+  below `issues`, so a project opens on its issue list. The test asserted `details` was first.
+- **Sprint documents gained tabs (2 assertions).** `9f77237` added a status-aware sprint tab set,
+  landing *after* the test file was written. The tests asserted sprints had none.
+- **`DetailsExtension` content model (1 assertion) and schema construction (2 errors).** The node's
+  `content` is `'detailsSummary detailsContent'`; the test asserted `'block+'` and built an `Editor`
+  without the two child nodes, so ProseMirror threw `No node type or group 'detailsSummary' found`.
+  `Editor.tsx:628-630` registers all three together — the test now does the same.
+
+*Source defects (the tests were right; the product was fixed):*
+
+- **`web/src/lib/document-tabs.tsx` — the project Weeks tab stopped showing its count.** In one
+  hunk, `7713ef0` renamed the id *and* collapsed `label` from a count function to the bare string
+  `'Weeks'` — while leaving the identical function intact on the program tab beside it. That
+  asymmetry inside a single commit is the fingerprint of an accident, and
+  `UnifiedDocumentPage.tsx:133,141` still fetches project weeks and computes `weeks:
+  projectWeeks.length` for a consumer that no longer existed. Label function restored.
+- **`web/src/hooks/useSessionTimeout.test.ts` — dismissing the timeout warning logged you out.**
+  The fault was in the harness, not the hook, but the *assertion* was correct and is untouched.
+  `lib/api.ts` reads `response.headers.get('content-type')`; the stub had no `headers`, so
+  `apiPost` threw a `TypeError`, and `resetTimer` catches every throw as "network error — force
+  logout" (observed: stderr printed `Network error extending session - forcing logout`). Stubs are
+  now Response-shaped. **The hook's fail-closed logout was deliberately left alone**, and two new
+  tests assert it still fires when extend-session genuinely fails — without them, "fix" and
+  "neuter" would look identical.
+
+**Also changed.** Root `"test"` is now `test:api && test:web`, with `test:api`/`test:web` for
+single suites. CI already ran both (`.github/workflows/ci.yml:105-118`) and diffs them against the
+quarantine baseline, so this closes the *local* gap only — it does not duplicate CI. All 13
+entries were removed from `audit/factory/quarantine.json`; both suites are now green on arrival.
+`README.md:43`, which documented this finding as open, is updated.
+
+**Run it.**
+
+```bash
+pnpm test:web                    # 186 passed / 186 total, 16 files
+pnpm test                        # api (needs DATABASE_URL) then web
+scripts/factory/gate.sh          # full evidence gate
+```
+
+14 tests were added: sprint status-aware tab selection (previously uncovered — which is how
+`getTabsForDocumentType('sprint')` drifted from `[]` to four tabs unnoticed), project/program week
+count-label symmetry, a guard that no config exposes a `'sprints'` id again, `setDetails` document
+structure, and the two session fail-closed tests.
+
+**Roll back.** `git revert` the commits on `fix/test-1-web-suite-green`. Reverting restores the 13
+failures, so also restore the `knownFailing` list in `audit/factory/quarantine.json` from
+`previousCapture` — otherwise the gate reads them as new regressions and fails every branch.
+
+---
+
 ## TRO-188 (ERR-1) + TRO-189 (ERR-2) — the editor stops lying about "Saved", and a revoked session stops writing
 
 Both findings live in the collaboration path and ship as one change: TRO-189 makes the server hang

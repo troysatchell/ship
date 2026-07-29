@@ -6,15 +6,19 @@
     "from a failure that was already red on main. Without this file every branch",
     "looks broken and the gate is useless.",
     "",
-    "These 13 web failures ARE audit finding TEST-1 (TRO-223). They are quarantined,",
-    "not accepted: when TRO-223 is fixed, delete the entries it repairs. The gate",
-    "reports 'previously-quarantined test now passes' so this file cannot silently",
-    "rot into a permanent excuse list.",
+    "The 13 web failures that lived here WERE audit finding TEST-1 (TRO-223). They",
+    "were fixed on 2026-07-29 and their entries deleted, as this comment required.",
+    "Both suites are now green on arrival, so any failure the gate sees is new.",
     "",
     "Identity format: <repo-relative test file>::<full test name>."
   ],
   "capturedAt": "2026-07-29",
-  "capturedAtCommit": "ae2a00e49b8ed2ceb0ab709937ed6774aca3187b",
+  "capturedAtCommit": "aa33ca882e3d0762b01f1cce8d8832f54dad496a",
+  "previousCapture": {
+    "capturedAt": "2026-07-29",
+    "capturedAtCommit": "ae2a00e49b8ed2ceb0ab709937ed6774aca3187b",
+    "totals": { "api": "451/451", "web": "138/151, 13 failing" }
+  },
   "capturedBy": [
     "pnpm --filter @ship/api test --reporter=json --outputFile=api-base.json",
     "pnpm --filter @ship/web test --reporter=json --outputFile=web-base.json"
@@ -22,33 +26,24 @@
   "environment": {
     "node": "v23.2.0",
     "pnpm": "10.27.0",
-    "apiDatabaseUrl": "postgresql://ship:***@localhost:5433/ship_factory_base (docker ship-audit-pg, postgres:15-alpine)",
+    "apiDatabaseUrl": "postgresql://ship:***@localhost:5433/ship_wt_tro_223 (docker ship-audit-pg, postgres:15-alpine)",
     "note": "api tests were run against a dedicated database because api/src/test/setup.ts TRUNCATEs 16 tables in beforeAll of every test file."
   },
   "packages": {
     "api": {
-      "totals": { "tests": 451, "passed": 451, "failed": 0 },
-      "knownFailing": []
+      "totals": { "tests": 469, "passed": 469, "failed": 0 },
+      "knownFailing": [],
+      "note": "Re-measured at capturedAtCommit: 469 tests, up from 451 at the previous capture. This branch changed no api code. One standalone run, no flake observed."
     },
     "web": {
-      "totals": { "tests": 151, "passed": 138, "failed": 13 },
-      "linearTicket": "TRO-223",
-      "auditFinding": "TEST-1",
-      "knownFailing": [
-        "web/src/components/editor/DetailsExtension.test.ts::DetailsExtension should allow inserting details via command",
-        "web/src/components/editor/DetailsExtension.test.ts::DetailsExtension should be configured as a block node with content",
-        "web/src/components/editor/DetailsExtension.test.ts::DetailsExtension should work in editor context",
-        "web/src/hooks/useSessionTimeout.test.ts::useSessionTimeout Inactivity Timer does NOT call onTimeout if dismissed before 0",
-        "web/src/lib/document-tabs.test.ts::documentTypeHasTabs returns false for sprint documents",
-        "web/src/lib/document-tabs.test.ts::getTabsForDocumentType returns empty array for sprint documents (no tabs)",
-        "web/src/lib/document-tabs.test.ts::getTabsForDocumentType returns tabs for program documents",
-        "web/src/lib/document-tabs.test.ts::getTabsForDocumentType returns tabs for project documents",
-        "web/src/lib/document-tabs.test.ts::resolveTabLabels resolves dynamic labels with counts",
-        "web/src/lib/document-tabs.test.ts::resolveTabLabels resolves dynamic labels without counts",
-        "web/src/lib/document-tabs.test.ts::tab ID validation for URL deep linking returns first tab as default for URL without tab",
-        "web/src/lib/document-tabs.test.ts::tab ID validation for URL deep linking validates program tab IDs correctly",
-        "web/src/lib/document-tabs.test.ts::tab ID validation for URL deep linking validates project tab IDs correctly"
-      ]
+      "totals": { "tests": 186, "passed": 186, "failed": 0 },
+      "resolved": {
+        "linearTicket": "TRO-223",
+        "auditFinding": "TEST-1",
+        "on": "2026-07-29",
+        "note": "All 13 entries removed because the tests now pass, not because they were reclassified. Two were source defects (the project 'weeks' tab lost its count label in 7713ef0; nothing ran the suite); the rest were assertions left behind by the sprint->week rename (7713ef0), the project tab reorder (b1e4c5a) and the sprint-tabs feature (9f77237). Test count rose from 151 to 186: 172 already existed at re-measurement, plus 14 added by this ticket."
+      },
+      "knownFailing": []
     }
   }
 }

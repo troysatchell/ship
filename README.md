@@ -40,7 +40,7 @@ Four things the setup guide below does not mention, all of them audit findings:
 
 - **`pnpm db:migrate` stops after migration 010 and still exits `0`.** Verify `schema_migrations` has 42 rows before trusting your schema. *(DB-1, Critical)*
 - **`pnpm test` truncates whatever `DATABASE_URL` points at** — including your dev database. Use an isolated one. *(TEST-9)*
-- **Root `pnpm test` runs the API package only.** Web unit tests need `pnpm --filter @ship/web test`, and 13 of them currently fail. *(TEST-1)*
+- **Root `pnpm test` now runs both packages** (`test:api` then `test:web`); use `pnpm test:web` for the web suite alone. The 13 web unit tests that used to fail are fixed. *(TEST-1, resolved)*
 - **`pnpm dev` picks its own ports** and writes them to a repo-root `.ports` file — don't assume 3000/5173.
 
 ---
