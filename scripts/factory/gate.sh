@@ -185,9 +185,37 @@ if [ ! -f CHANGES.md ]; then
 # Anchored on non-identifier boundaries: an unanchored match lets TRO-24
 # false-pass on an existing "TRO-244" entry written for a different ticket.
 elif grep -qE "(^|[^A-Za-z0-9-])${TICKET}([^A-Za-z0-9-]|\$)" CHANGES.md; then
-  record changes-md pass "entry for ${TICKET} present"
+  # "An entry mentions the ticket" is not enough. A merge of this file can leave
+  # the entry present-but-spliced: `merge=union` produced branches with 9 entry
+  # headings and 8 run blocks, an odd number of ``` fences, and one entry whose
+  # command block belonged to a different ticket. Every such branch passed this
+  # grep. So also assert the file is structurally intact.
+  if [ -f scripts/factory/merge-changes.mjs ] \
+     && ! node scripts/factory/merge-changes.mjs --check CHANGES.md >/dev/null 2>&1; then
+    record changes-md fail "entry for ${TICKET} present but CHANGES.md is structurally invalid — run: node scripts/factory/merge-changes.mjs --check CHANGES.md"
+  else
+    record changes-md pass "entry for ${TICKET} present; structure valid"
+  fi
 else
   record changes-md fail "no entry mentioning ${TICKET}"
+fi
+
+# --- G7b: recurring review-finding classes ----------------------------------
+# Added after `review-ledger.mjs report` showed the same two mechanical defect
+# classes recurring across four and three tickets respectively, every one filed
+# by a reviewer AFTER this gate had already passed. A rule stated in the agent
+# brief and ignored three times needs a check, not a louder restatement.
+# Judgement-dependent classes (concurrency, docs accuracy) stay in the brief.
+if [ -f scripts/factory/review-patterns.mjs ]; then
+  if RP_OUT="$(node scripts/factory/review-patterns.mjs "$BASE_REF" 2>&1)"; then
+    record review-patterns pass "no new non-null/any casts or fixed sleeps"
+  else
+    echo "$RP_OUT" > "$OUT_DIR/review-patterns.txt"
+    RP_N="$(grep -cE '^\s{4}\S+:' "$OUT_DIR/review-patterns.txt")" || RP_N=0
+    record review-patterns fail "${RP_N} recurring review-finding pattern(s) — see .factory/review-patterns.txt"
+  fi
+else
+  record review-patterns skip "checker not present"
 fi
 
 # --- G8: scope discipline ---------------------------------------------------
