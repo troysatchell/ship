@@ -78,8 +78,25 @@ const rejectIssueSchema = z.object({
   reason: z.string().min(1).max(1000),
 });
 
-// Helper to extract issue properties from row (without belongs_to - added separately)
-function extractIssueFromRow(row: any) {
+// Pagination for GET /api/issues.
+//
+// Deliberately OPT-IN with no default limit (TRO-182 / DB-5). Two existing
+// consumers read the response as a complete set: web/src/hooks/useIssuesQuery.ts
+// filters by project client-side over the whole array (the API has no project_id
+// filter), and IssuesList.tsx groups and counts across it. A default limit would
+// return *wrong* lists rather than shorter ones. Callers that want a bounded
+// response ask for one; callers that omit both params get the full list, exactly
+// as before this change.
+const listPaginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
+// Helper to extract the fields shared by the list and detail issue projections.
+// The TipTap document body is NOT included here: it is 64.5% of an issue row's
+// bytes and 72% of the list payload, and no list consumer reads it (TRO-173 /
+// API-2). Detail responses add it back via extractIssueFromRow.
+function extractIssueListItemFromRow(row: any) {
   const props = row.properties || {};
   return {
     id: row.id,
@@ -96,7 +113,6 @@ function extractIssueFromRow(row: any) {
     accountability_target_id: props.accountability_target_id || null,
     accountability_type: props.accountability_type || null,
     ticket_number: row.ticket_number,
-    content: row.content,
     created_at: row.created_at,
     updated_at: row.updated_at,
     created_by: row.created_by,
@@ -111,6 +127,14 @@ function extractIssueFromRow(row: any) {
   };
 }
 
+// Detail projection: the list fields plus the TipTap document body.
+function extractIssueFromRow(row: any) {
+  return {
+    ...extractIssueListItemFromRow(row),
+    content: row.content,
+  };
+}
+
 // List issues with filters
 router.get('/', authMiddleware, async (req: Request, res: Response) => {
   try {
@@ -118,12 +142,22 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     const userId = req.userId!;
     const workspaceId = req.workspaceId!;
 
+    // Validate pagination before touching the database. Unparseable or
+    // out-of-range values are rejected rather than silently ignored — a caller
+    // asking for 10 rows and getting 254 is worse than an error.
+    const pagination = listPaginationSchema.safeParse(req.query);
+    if (!pagination.success) {
+      res.status(400).json({ error: 'Invalid input', details: pagination.error.errors });
+      return;
+    }
+
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
+    // d.content is deliberately absent: the document body is not part of the
+    // list projection (TRO-173 / API-2). GET /api/issues/:id returns it.
     let query = `
       SELECT d.id, d.title, d.properties, d.ticket_number,
-             d.content,
              d.created_at, d.updated_at, d.created_by,
              d.started_at, d.completed_at, d.cancelled_at, d.reopened_at,
              d.converted_from_id,
@@ -137,7 +171,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
       WHERE d.workspace_id = $1 AND d.document_type = 'issue'
         AND ${VISIBILITY_FILTER_SQL('d', '$2', '$3')}
     `;
-    const params: (string | boolean | null)[] = [workspaceId, userId, isAdmin];
+    const params: (string | number | boolean | null)[] = [workspaceId, userId, isAdmin];
 
     // Exclude archived and deleted issues by default
     query += ` AND d.archived_at IS NULL AND d.deleted_at IS NULL`;
@@ -220,6 +254,18 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
       END,
       d.updated_at DESC`;
 
+    // Opt-in pagination. Omitting both params keeps the pre-TRO-182 contract:
+    // every matching row, in the same order.
+    const { limit, offset } = pagination.data;
+    if (limit !== undefined) {
+      query += ` LIMIT $${params.length + 1}`;
+      params.push(limit);
+    }
+    if (offset !== undefined) {
+      query += ` OFFSET $${params.length + 1}`;
+      params.push(offset);
+    }
+
     const result = await pool.query(query, params);
 
     // Extract issues and batch-fetch associations to avoid N+1 queries
@@ -227,7 +273,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     const associationsMap = await getBelongsToAssociationsBatch(issueIds);
 
     const issues = result.rows.map(row => {
-      const issue = extractIssueFromRow(row);
+      const issue = extractIssueListItemFromRow(row);
       return {
         ...issue,
         display_id: `#${issue.ticket_number}`,
