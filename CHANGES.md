@@ -46,17 +46,32 @@ Settings, and why:
     Speculatively gzipping an arbitrary, likely already-compressed user binary on every download
     costs CPU for no benefit.
 
+  Both guards compare against a **lower-cased** media type. RFC 9110 §8.3.1 makes media types
+  case-insensitive, so `Text/Event-Stream` and `Application/Octet-Stream` are legitimate headers.
+  A case-sensitive comparison would defeat both guards silently, and for octet-stream the bypass
+  would be **client-controlled** — the same client-declared `mime_type` that reaches
+  `files.ts:309` would decide whether the guard applied to its own download. Caught in PR review;
+  see the exclusion tests below.
+
+  **`compression.filter`'s own mime-db lookup is already case-insensitive** — verified against a
+  real server: `Application/JSON` and `APPLICATION/JSON` compress exactly as `application/json`
+  does, `Image/PNG` and `Application/PDF` pass through exactly as their lower-case forms do, and
+  a `; Charset=UTF-8` parameter changes nothing. **So normalisation belongs only in the two
+  additions above — do not add it to the library path.** Recorded here because the natural
+  "fix" for a case bug is to normalise everywhere, and here that would be wasted work.
+
   The Yjs collaboration WebSocket is unaffected — `ws` handles the upgrade off the HTTP response
   path, so this middleware never sees it.
 
-  Filter behaviour was verified by hand against a real HTTP server using the exact filter from
-  `app.ts`, across 22 content types. Compressed: `application/json`, `text/html`,
-  `application/javascript`, `text/css`, `text/csv`, `text/plain`, `application/xml`,
-  `image/svg+xml`. Passed through: `image/png`, `image/jpeg`, `image/webp`, `application/pdf`,
-  `application/zip`, `application/gzip`, `application/x-7z-compressed`, `video/mp4`, the four
-  Office formats (docx/xlsx/doc/xls), plus the two guarded types above. **This content-type matrix
-  is manual verification, not automated coverage** — the regression test covers the JSON list-payload
-  behaviour that the finding is about, not every mime type.
+  Filter behaviour was verified against a real HTTP server using the exact filter from `app.ts`,
+  across 22 content types. Compressed: `application/json`, `text/html`, `application/javascript`,
+  `text/css`, `text/csv`, `text/plain`, `application/xml`, `image/svg+xml`. Passed through:
+  `image/png`, `image/jpeg`, `image/webp`, `application/pdf`, `application/zip`, `application/gzip`,
+  `application/x-7z-compressed`, `video/mp4`, the four Office formats (docx/xlsx/doc/xls), plus the
+  two guarded types above. **That 22-type matrix was run lower-case only, and is manual
+  verification, not automated coverage** — mime-db's own behaviour is the library's business. The
+  two guards this change adds are a different matter: they are safety guards with a client-reachable
+  input, so they now have assertions (11 cases, mixed-case included) rather than a hand-run matrix.
 
 **⚠️ DO NOT "DISPROVE" THIS FIX WITH A LOCALHOST BENCHMARK.** Enabling gzip does **not** reduce P95
 over loopback and may raise it slightly. Localhost transfer time is ~0, so the only thing a local
@@ -127,12 +142,19 @@ without re-compressing it.
 `Content-Encoding` header on a deployed response. The deployed-stack claim above rests on config
 plus documented behaviour only.
 
-**Regression test.** `api/src/routes/compression.test.ts` — three cases, in a vitest file the gate
+**Regression test.** `api/src/routes/compression.test.ts` — 14 cases, in a vitest file the gate
 actually executes (an `e2e/*.spec.ts` would satisfy the gate's added-test grep while never running).
-It asserts `Content-Encoding: gzip` appears on `/api/issues` when the client advertises gzip, does
-**not** appear when the client sends `Accept-Encoding: identity`, and does not appear on a
-sub-threshold response. It also asserts the decoded body is intact, because a `Content-Encoding`
-header over a corrupted body would otherwise read as a pass.
+
+Three integration cases over the real app via supertest: `Content-Encoding: gzip` appears on
+`/api/issues` when the client advertises gzip, does **not** appear when the client sends
+`Accept-Encoding: identity`, and does not appear on a sub-threshold response. Each also asserts the
+decoded body is intact, because a `Content-Encoding` header over a corrupted body would otherwise
+read as a pass.
+
+Eleven unit cases over `isCompressionExcluded`, exported from `app.ts` as a test seam: both guarded
+types in four case variants each, the `x-no-compression` opt-out, ordinary compressible types
+(which must fall *through* to mime-db, so over-excluding would lose the whole fix), and absent /
+numeric / array `Content-Type` values.
 
 One deliberate design choice: the negative case additionally asserts the uncompressed
 `Content-Length` **exceeds** the 1024-byte threshold, with an actionable failure message. If a
@@ -141,9 +163,12 @@ passing for the wrong reason — nothing to compress rather than compression wor
 loudly instead. The seeded payload is padded via long **titles**, not `content`, precisely so
 TRO-173 removing `content` cannot make it vacuous.
 
-Confirmed red first: with the middleware absent the gzip case failed with
+Confirmed red first, twice. With the middleware absent the gzip case failed with
 `AssertionError: expected undefined to be 'gzip'` at the `content-encoding` assertion — the right
-reason, not an import or setup error — while the other two cases passed.
+reason, not an import or setup error — while the other two cases passed. Then the case-insensitivity
+fix was driven the same way: against the case-sensitive comparison, exactly the six mixed-case
+assertions failed with `AssertionError: expected false to be true` while all four lower-case cases
+passed, which is what proves the refactor that introduced the seam changed no behaviour on its own.
 
 **How to run it.**
 

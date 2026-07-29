@@ -23,7 +23,7 @@
 import { describe, it, expect, beforeAll } from 'vitest'
 import request from 'supertest'
 import crypto from 'crypto'
-import { createApp } from '../app.js'
+import { createApp, isCompressionExcluded } from '../app.js'
 import { pool } from '../db/client.js'
 
 // Must match the `threshold` configured in api/src/app.ts.
@@ -135,5 +135,70 @@ describe('Response compression (API-3)', () => {
     expect(response.body).toEqual({ status: 'ok' })
     // ~20 bytes: compressing it would add bytes and CPU for no benefit.
     expect(response.headers['content-encoding']).toBeUndefined()
+  })
+})
+
+/**
+ * The two exclusions are safety guards, so they get assertions rather than a
+ * hand-run content-type matrix.
+ *
+ * The octet-stream branch matters most: `/api/files/:id` sets Content-Type from
+ * a client-declared `mime_type` (`files.ts:309`) that is validated only against a
+ * filename extension blocklist (`files.ts:80-84` accepts any mime string). A
+ * case-sensitive comparison would therefore let the client choose whether the
+ * guard applies to its own download. RFC 9110 makes media types
+ * case-insensitive, so `Application/Octet-Stream` is a legitimate header.
+ */
+describe('Compression exclusions (API-3)', () => {
+  describe('text/event-stream — compression buffers and would stall a stream', () => {
+    for (const header of [
+      'text/event-stream',
+      'Text/Event-Stream',
+      'TEXT/EVENT-STREAM',
+      'Text/Event-Stream; charset=utf-8',
+    ]) {
+      it(`excludes ${header}`, () => {
+        expect(isCompressionExcluded(undefined, header)).toBe(true)
+      })
+    }
+  })
+
+  describe('application/octet-stream — client-declared, so case must not decide', () => {
+    for (const header of [
+      'application/octet-stream',
+      'Application/Octet-Stream',
+      'APPLICATION/OCTET-STREAM',
+      'Application/octet-stream',
+    ]) {
+      it(`excludes ${header}`, () => {
+        expect(isCompressionExcluded(undefined, header)).toBe(true)
+      })
+    }
+  })
+
+  it('honours the x-no-compression opt-out regardless of content type', () => {
+    expect(isCompressionExcluded('1', 'application/json')).toBe(true)
+    expect(isCompressionExcluded(['1'], 'application/json')).toBe(true)
+  })
+
+  it('does not exclude ordinary compressible types, in any case', () => {
+    // These must fall through to compression.filter's mime-db lookup, which is
+    // itself case-insensitive — so excluding them here would lose the fix.
+    for (const header of [
+      'application/json',
+      'Application/JSON',
+      'application/json; charset=utf-8',
+      'text/html',
+      'Text/HTML',
+    ]) {
+      expect(isCompressionExcluded(undefined, header), header).toBe(false)
+    }
+  })
+
+  it('does not throw on absent or non-string content types', () => {
+    expect(isCompressionExcluded(undefined, undefined)).toBe(false)
+    expect(isCompressionExcluded(undefined, 0)).toBe(false)
+    expect(isCompressionExcluded(undefined, ['application/octet-stream'])).toBe(true)
+    expect(isCompressionExcluded(undefined, ['application/json'])).toBe(false)
   })
 })

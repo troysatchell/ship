@@ -88,6 +88,35 @@ const loginLimiter = rateLimit({
 const apiLimiters = createApiRateLimiters();
 
 
+/**
+ * The exclusions layered on top of `compression.filter`'s own mime-db lookup
+ * (finding API-3 / TRO-174). Exported as a unit-test seam: both branches are
+ * safety guards, and the octet-stream one is reachable by a client-declared
+ * value, so it needs assertions rather than a hand-run matrix.
+ *
+ * `compression.filter` itself is already case-insensitive — verified against a
+ * real server: `Application/JSON` compresses and `Image/PNG` does not, matching
+ * their lower-case forms. So normalisation belongs here and NOT in the library
+ * path; do not add it there.
+ */
+export function isCompressionExcluded(
+  noCompressionHeader: string | string[] | undefined,
+  contentTypeHeader: number | string | string[] | undefined,
+): boolean {
+  if (noCompressionHeader) return true;
+  // RFC 9110 §8.3.1: media types are case-insensitive, so `Text/Event-Stream` and
+  // `Application/Octet-Stream` are legitimate headers a client or proxy may send.
+  // Compare against a normalised value — otherwise a client that declares a
+  // mixed-case type chooses whether these guards apply to it.
+  const mediaType = (Array.isArray(contentTypeHeader)
+    ? contentTypeHeader.join(',')
+    : String(contentTypeHeader ?? '')
+  ).toLowerCase();
+  if (mediaType.includes('text/event-stream')) return true;
+  if (mediaType.includes('application/octet-stream')) return true;
+  return false;
+}
+
 export function createApp(corsOrigin: string = 'http://localhost:5173'): express.Express {
   const app = express();
 
@@ -150,11 +179,8 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   app.use(compression({
     threshold: 1024,
     filter: (req, res) => {
-      if (req.headers['x-no-compression']) return false;
-      const contentType = res.getHeader('Content-Type');
-      if (typeof contentType === 'string') {
-        if (contentType.includes('text/event-stream')) return false;
-        if (contentType.includes('application/octet-stream')) return false;
+      if (isCompressionExcluded(req.headers['x-no-compression'], res.getHeader('Content-Type'))) {
+        return false;
       }
       return compression.filter(req, res);
     },
