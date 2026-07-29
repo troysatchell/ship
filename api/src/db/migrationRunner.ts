@@ -47,18 +47,46 @@ function isDuplicateObjectError(error: unknown): boolean {
 }
 
 /**
+ * Required migration filename shape: `NNN_description.sql`, with an optional
+ * single-letter suffix for files inserted between existing numbers —
+ * `007b_`, `014b_`, `015b_`, `018b_` and `020b_` all exist today.
+ */
+const MIGRATION_FILENAME = /^\d{3}[a-z]?_[A-Za-z0-9_]+\.sql$/;
+
+/**
  * Migration files in the order they must be applied.
  *
- * Read errors propagate. Swallowing them here would reproduce DB-1 in a second
- * form: a missing or unreadable migrations directory — a `dist/db/migrations`
- * the build failed to copy, say — would apply schema.sql, apply nothing else,
- * and report success. "No migrations to run" and "I could not find out what to
- * run" must not look the same to the caller.
+ * Two ways of not knowing what to run are refused rather than papered over,
+ * because both are DB-1's failure mode wearing a different hat — a run that
+ * applies less than it should and reports success:
+ *
+ *  - Read errors propagate. A missing or unreadable migrations directory (a
+ *    `dist/db/migrations` the build failed to copy, say) would otherwise apply
+ *    schema.sql, apply nothing else, and exit 0. "No migrations to run" and
+ *    "I could not find out what to run" must not look the same to the caller.
+ *  - Filenames are validated. An unnumbered file sorts by its first character
+ *    and would run at an arbitrary point in the sequence — `hotfix.sql` sorts
+ *    after every numbered file, `a_fix.sql` too, while `!fix.sql` sorts before
+ *    all of them. Ordering is the only correctness guarantee a migration
+ *    sequence has, so a file that cannot be ordered is an error, not a guess.
  */
 export function listMigrationFiles(migrationsDir: string): string[] {
-  return readdirSync(migrationsDir)
-    .filter(f => f.endsWith('.sql'))
-    .sort(); // Ensures numeric order: 001_, 002_, etc.
+  const files = readdirSync(migrationsDir).filter(f => f.endsWith('.sql'));
+
+  const malformed = files.filter(f => !MIGRATION_FILENAME.test(f)).sort();
+  if (malformed.length > 0) {
+    throw new Error(
+      `Migration filenames must match NNN_description.sql (three digits, ` +
+        `optionally one letter, e.g. 007b_remove_prefix.sql). Offending file(s) ` +
+        `in ${migrationsDir}: ${malformed.join(', ')}. ` +
+        `Rename them, or renumber the sequence if it has outgrown three digits.`
+    );
+  }
+
+  // A plain lexicographic sort IS numeric order here, and only because the
+  // pattern above forces a zero-padded three-digit prefix: '009' < '010', and
+  // '007' < '007b' < '008'. That equivalence is what the validation buys.
+  return files.sort();
 }
 
 /**
@@ -107,8 +135,10 @@ export async function runPendingMigrations(
   migrationsDir: string,
   log: (message: string) => void = console.log
 ): Promise<MigrationRunResult> {
-  const appliedResult = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  const alreadyApplied = appliedResult.rows.map(r => r.version as string);
+  const appliedResult = await pool.query<{ version: string }>(
+    'SELECT version FROM schema_migrations ORDER BY version'
+  );
+  const alreadyApplied = appliedResult.rows.map(r => r.version);
   const alreadyAppliedSet = new Set(alreadyApplied);
 
   const files = listMigrationFiles(migrationsDir);
