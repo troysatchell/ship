@@ -122,7 +122,7 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   //
   // The filter delegates to compression.filter, which consults mime-db and so
   // already declines already-compressed types — the images, PDFs and archives
-  // served by /api/files/:id keep their own encoding. Two additions on top:
+  // served by /api/files/:id keep their own encoding. Three additions on top:
   //   - the conventional `x-no-compression` request opt-out, for a client that
   //     needs an identity-encoded body;
   //   - an explicit text/event-stream guard. There is no SSE endpoint in this
@@ -138,6 +138,7 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   //     benefit. Types mime-db can actually identify are unaffected: docx, xlsx,
   //     zip, gzip, 7z, pdf and webp already pass through, while svg, csv, plain
   //     text and xml still compress.
+  //
   // The Yjs collaboration WebSocket is unaffected — `ws` handles the upgrade off
   // the HTTP response path, so this middleware never sees it.
   //
