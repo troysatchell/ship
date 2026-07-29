@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Editor } from '@/components/Editor';
+import { LazyEditor as Editor } from '@/components/LazyEditor';
 import { useAuth } from '@/hooks/useAuth';
 import { useDocuments } from '@/contexts/DocumentsContext';
 import { useWorkspace } from '@/contexts/WorkspaceContext';

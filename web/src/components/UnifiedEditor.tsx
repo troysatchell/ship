@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Editor } from '@/components/Editor';
+import { LazyEditor as Editor } from '@/components/LazyEditor';
 import { PropertiesPanel } from '@/components/sidebars/PropertiesPanel';
 import { WeeklyReviewSubNav } from '@/components/review/WeeklyReviewSubNav';
 import { useWeeklyReviewActions } from '@/hooks/useWeeklyReviewActions';
