@@ -34,6 +34,13 @@ State that used to live on the `<li>` moved to where it is valid ARIA: `aria-exp
 the expand/collapse `<button>`s, and the active document was already marked with
 `aria-current="page"` on its `<a>`.
 
+**One behaviour change, from PR review.** Moving `aria-expanded` onto the buttons exposed that the
+person row in `ProjectContextSidebar` was a `<button aria-expanded="false">` even for a person with
+**no weeks** — controlling nothing, and with a provably no-op click (`togglePerson` writes
+`expandedPeople`, read only by `isExpanded && hasWeeks`). That row is now a plain `<div>`: still
+readable, no longer a phantom tab stop. People *with* weeks are unchanged — chevron, week count,
+working `aria-expanded`. Reverting restores the focusable no-op button.
+
 **Deliberately kept.** `aria-live="polite"` on the two document lists. It is the WCAG 4.1.3
 mechanism for announcing create/delete and is asserted by
 `e2e/accessibility-remediation.spec.ts` ("document tree updates are announced"). Whether it is
@@ -68,9 +75,10 @@ pnpm --filter @ship/web test        # 5 new specs, 26 assertions, all green
 pnpm type-check
 ```
 
-**Rollback.** `git revert` the two commits on `fix/a11y-1-sidebar-aria`, or restore the five
-`role="tree"`/`role="treeitem"` sites listed above. The five new `*.test.tsx` files fail if the
-roles come back, which is the point.
+**Rollback.** `git revert` the commits on `fix/a11y-1-sidebar-aria`, or by hand: restore the five
+`role="tree"`/`role="treeitem"` sites listed above, and restore the person row in
+`ProjectContextSidebar.tsx` to a single `<button>` for both the has-weeks and no-weeks cases. The
+five new `*.test.tsx` files fail if either comes back, which is the point.
 
 **Still owed — do not mark this fully verified.** Nobody has listened to it. A human found on
 2026-07-28 that VoiceOver did not announce the document titles *at all* under the old markup;
