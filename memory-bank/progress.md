@@ -28,12 +28,75 @@
 | Screen-reader pass (Cat 7) | ✅ done (2026-07-28) — A11Y-1 escalated to Urgent |
 | Ticket factory harness | ✅ built + self-tested + committed (2026-07-29) — `feat/ticket-factory-harness` @ `ea2dcd3` |
 | CI pipeline (`TRO-244`, rule 4) | ✅ written (2026-07-29) — `.github/workflows/ci.yml`; first real run is the harness PR |
-| Improvement phase (compare loops) | ⬜ **Fri Jul 31** — harness ready, zero tickets worked |
-| Demo-video companion artifact | ✅ published (2026-07-28) — before/after slots pending Friday |
+| **Improvement phase (Phase 2)** | 🟡 **underway (2026-07-29/30)** — 19 tickets worked, **4 merged**, 12 in review across 8 PRs |
+| Post-baseline findings from remediation | 🟡 12 filed — `TRO-276`–`TRO-287`, all marked post-baseline (1 cancelled after investigation) |
+| Demo-video companion artifact | ✅ published (2026-07-28) — before/after slots now have real numbers, see log |
 | Discovery write-up · demo video · AI cost analysis · social post | ⬜ Sun Aug 2 |
 | Final polish + presentation | ⬜ Sun Aug 2 |
 
 ## Log
+
+### 2026-07-29 (Wed) night → 2026-07-30 — Phase 2, three factory waves
+
+**19 tickets worked. 4 merged, 12 in review.** `main` at `84f05ff`. Every gate run by the orchestrator
+independently of the agent's self-report; no ticket merged on a self-report.
+
+**Merged audit findings (4):** `TRO-172` API-1 (rate limiter), `TRO-188`+`TRO-189` ERR-1/ERR-2
+(collaboration socket), `TRO-215` A11Y-1 (sidebar ARIA).
+
+**Measured results now in hand** — these are the Friday compare-mode numbers:
+
+| Finding | Before → After | Conditions |
+|---|---|---|
+| API-3 gzip | `/api/issues` **379,907 → 25,050 B (15.17×)** | payload bytes over real HTTP, not loopback timing |
+| BUN-1..6 | `/login` **601 → 117 kB gzip (−80.5%)** | transitive static-import closure per route |
+| API-2/DB-5 | payload 380 → 241 kB; p95 c=25 **90.4 → 59.1 ms** | 254 issues, seed-augmented, autocannon |
+| A11Y-3 | Lighthouse **95 → 100**; axe 18 Serious → **0** | Chrome headless 1440×900, authenticated |
+| DB-2/API-6 | **20% fewer statements per read**; 10 row versions → 1 | 12 sequential reads, `NODE_ENV=test` |
+| TEST-1 | web **138/151 → 214/214**; quarantine emptied | — |
+| TEST-12 | api flake **6/20 → 1/20** failures under load | 4 concurrent build loops, load ~29 |
+
+**Three agents independently found one architectural flaw** in `api/src/collaboration/index.ts`: async
+work happening between making something reachable and making it able to respond. ERR-10 (`'error'`
+listener after an `await`) is fixed; ERR-11 (`TRO-284`, `'message'` listener, drops sync step 1) and
+ERR-12 (`TRO-285`, doc published to the shared map before it loads) are filed. Worth a
+`systemPatterns.md` note before someone makes it a fourth time.
+
+**Agents corrected the audit repeatedly, which is the result worth keeping:**
+- **API-2's estimate was arithmetically wrong** — it applied `content`'s *database* share (64.5% of row
+  bytes) to the *JSON payload*. On the wire it was 38.4%, so 1.57× not 2.6×.
+- **A11Y-3's stated cause was wrong twice over** — the dominant cause was `opacity-40` (18 of 24 nodes),
+  which the ticket never mentions; and `bg-accent/20`, which it blames, is not the defect (`#005ea2` is
+  already 2.89:1 as text before any badge exists).
+- **The stored-XSS test never tested sanitization at all.** TipTap has no markdown-link input rule, so
+  `[Click](data:...)` produced **zero `<a>` elements** — "the app rendered nothing" was passing as "the
+  app sanitised the URI", for the whole life of the test.
+- **TEST-4's coverage claim (25%) was not reproducible** — ERR-2's test had landed on that file hours
+  earlier and already lifted function coverage to 67.24%.
+- **The api-flake connection-timeout hypothesis was disconfirmed by code.** `auth.ts:230-238` returns
+  500 on a query error, so a timeout can never produce the observed 401. The correlation was real; the
+  mechanism was invented.
+
+**Factory self-improvement, driven by aggregating review findings.** `review-ledger.mjs` records every
+finding; grouping day-one's 29 showed type-safety recurring across **4** tickets and fixed sleeps across
+**3**, every one filed *after* the gate passed. So `gate.sh` gained **G7b** (`review-patterns.mjs`) for
+the two mechanically-decidable classes, and `lessons.md` gained rules 16–20 for the rest. G7b
+immediately caught 12 violations on one branch and 5 on another that the reviews had missed.
+
+**Two of my own tools were wrong and were fixed:**
+- `merge=union` on `CHANGES.md` silently damaged all five open branches (dropped the shared
+  `**How to run it.**` heading and ```` ``` ```` fences — 9 entry headings, 8 run blocks). CodeRabbit
+  caught it. Replaced with `merge-changes.mjs`, which merges whole entries and **asserts byte-identity**.
+- G5 (`tests:not-weakened`) counted removals alone, so a corrected assertion looked like a deleted one.
+  It misfired 3× — forced an override on TRO-223 and made TRO-179 revert two legitimate renames. Now
+  compares removed *vs added*.
+
+**Decisions:** ticket agents run on **Sonnet** (the brief carries the knowledge, not the model);
+concurrency is capped by **gates, not agents** (load hit 39.75 on 14 cores and manufactured phantom
+failures).
+
+**Still owed to a human:** VoiceOver on `TRO-215`/`TRO-281`; Terraform tickets need escalation gate 2
+before any `apply`.
 
 ### 2026-07-29 (Wed) — Day 3 — ticket factory built and proven on itself
 

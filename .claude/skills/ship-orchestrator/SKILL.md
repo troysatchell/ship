@@ -65,6 +65,30 @@ Reserve the **whole batch** in Linear (all tickets → In Progress) before any a
 only works if it covers every ticket the branch will close; otherwise a second worker picks up a
 ticket already being fixed inside someone else's diff.
 
+## 2a. Dispatch ticket agents on Sonnet
+
+Pass `model: "sonnet"` on every `Agent` call that dispatches ticket work, a triage round, or a
+measurement run. Set by the maintainer 2026-07-29.
+
+The reasoning matters more than the setting: **the brief carries the knowledge, not the model.** By the
+time an agent is dispatched it has the role skill, `lessons.md`'s standing rules, the finding's
+measured evidence, the escalation boundaries, and the gate to check itself against. It is executing a
+well-specified task, not deriving one. Across a ~75-ticket backlog, paying top-tier rates per ticket is
+waste.
+
+The **orchestrator** — the main loop — stays on its own model. It holds the board, runs the gates
+independently of agent self-reports, triages reviews, and makes the merge and escalation calls. Those
+are the judgement-heavy parts.
+
+Two caveats:
+
+- `subagent_type: "fork"` always inherits the parent model; `model` is ignored there. Use a normal
+  agent type for ticket work.
+- If a specific ticket genuinely needs more reasoning — a contested diagnosis, or one where the right
+  *metric* has to be invented rather than measured (TRO-197's bundle work is the example: the audit's
+  own metric flattered the fix, so a better one had to be designed) — raise the model **for that
+  ticket** and say why. Do not quietly raise the default back up.
+
 ## 3. Size the concurrency to the machine
 
 Parallelism is bounded by things that are not ticket-shaped:
