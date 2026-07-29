@@ -77,6 +77,35 @@ these 31 files are the only mechanism that would ever have changed it. Notable: 
 Take a snapshot first and run `pnpm db:migrate` against a restore of production before running it
 against production.
 
+**How to run it.**
+
+```bash
+source .factory-env                      # or otherwise point DATABASE_URL at the target
+pnpm db:migrate                          # now exits non-zero on any migration failure
+pnpm --filter @ship/api test src/db/__tests__/migrationRunner.test.ts
+```
+
+Verify with `select count(*) from schema_migrations;` — it should equal the number of `.sql` files
+in `api/src/db/migrations/` (42 today), not 10.
+
+**Verified** against PostgreSQL 15-alpine in the `ship-audit-pg` container on `:5433`:
+
+- fresh database → 42 rows in `schema_migrations`, exit 0
+- second run on it → clean no-op, still 42, exit 0
+- `ship_wt_tro_178`, stuck at 10 rows (the state DB-1 had left it in) → 32 applied, 42 rows, exit 0
+- a database seeded with the *pre-*`033` enum labels → renamed to `weekly_*`, 42 rows, exit 0
+- `pnpm --filter @ship/api test` against the fully-migrated database → 29 files, 455 tests passed
+
+**Not verified.** No run against production or shadow, and no run against PostgreSQL 16 (production
+runs pg16; CI and this work run pg15 — see the pin comment in `.github/workflows/ci.yml`). Proving
+the production path needs a restore of a production snapshot.
+
+**Rollback.** `git revert` the four commits on `fix/db-1-migration-runner`, or, to restore only the
+old runner behaviour, delete `api/src/db/migrationRunner.ts` and restore `api/src/db/migrate.ts`
+from `main`. Rolling back the runner alone leaves migrations `010`/`025`/`033`/`035` idempotent,
+which is harmless. Note that rollback does **not** un-apply migrations already recorded in
+`schema_migrations`; reversing those requires a database restore.
+
 ---
 
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
@@ -142,31 +171,6 @@ freshly seeded database has 5 and shows **no** violation. The audit environment 
 **How to run it.**
 
 ```bash
-source .factory-env                      # or otherwise point DATABASE_URL at the target
-pnpm db:migrate                          # now exits non-zero on any migration failure
-pnpm --filter @ship/api test src/db/__tests__/migrationRunner.test.ts
-```
-
-Verify with `select count(*) from schema_migrations;` — it should equal the number of `.sql` files
-in `api/src/db/migrations/` (42 today), not 10.
-
-**Verified** against PostgreSQL 15-alpine in the `ship-audit-pg` container on `:5433`:
-
-- fresh database → 42 rows in `schema_migrations`, exit 0
-- second run on it → clean no-op, still 42, exit 0
-- `ship_wt_tro_178`, stuck at 10 rows (the state DB-1 had left it in) → 32 applied, 42 rows, exit 0
-- a database seeded with the *pre-*`033` enum labels → renamed to `weekly_*`, 42 rows, exit 0
-- `pnpm --filter @ship/api test` against the fully-migrated database → 29 files, 455 tests passed
-
-**Not verified.** No run against production or shadow, and no run against PostgreSQL 16 (production
-runs pg16; CI and this work run pg15 — see the pin comment in `.github/workflows/ci.yml`). Proving
-the production path needs a restore of a production snapshot.
-
-**Rollback.** `git revert` the four commits on `fix/db-1-migration-runner`, or, to restore only the
-old runner behaviour, delete `api/src/db/migrationRunner.ts` and restore `api/src/db/migrate.ts`
-from `main`. Rolling back the runner alone leaves migrations `010`/`025`/`033`/`035` idempotent,
-which is harmless. Note that rollback does **not** un-apply migrations already recorded in
-`schema_migrations`; reversing those requires a database restore.
 pnpm --filter @ship/web test        # 5 new specs, 26 assertions, all green
 pnpm type-check
 ```
@@ -436,3 +440,4 @@ WebSocket URL being derived from `window.location.host`.
 which builds from the repository.
 
 **Rollback.** Revert the merge of `feat/render-deploy` (`bace770`).
+
