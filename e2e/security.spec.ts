@@ -1,4 +1,12 @@
-import { test, expect, Page } from './fixtures/isolated-env'
+import {
+  test,
+  expect,
+  Page,
+  FIXTURE_DOC_LINK_SANITIZATION,
+  FIXTURE_DANGEROUS_HREFS,
+  FIXTURE_SAFE_HREF,
+} from './fixtures/isolated-env'
+import { openFixtureDocument } from './fixtures/test-helpers'
 import * as fs from 'fs'
 import * as path from 'path'
 import * as os from 'os'
@@ -194,47 +202,99 @@ test.describe('Security - XSS Prevention', () => {
     fs.unlinkSync(tmpPath)
   })
 
-  test('XSS via markdown link injection', async ({ page }) => {
-    await createNewDocument(page)
+  /**
+   * Rewritten for audit finding TEST-2 (TRO-224).
+   *
+   * The previous pair of tests typed `[Click](javascript:...)` /
+   * `[Click](data:text/html,...)` into a new document and then looped over
+   * `editor.locator('a')`. TipTap ships no markdown-link input rule, so the
+   * typed text stayed plain text, **zero `<a>` elements were produced, the loop
+   * body never executed, and both tests reported green having observed
+   * nothing.** They could not distinguish "the app sanitised the URI" from "the
+   * app rendered no link at all".
+   *
+   * These read a seeded document (`seedRenderingFixtures` in
+   * `e2e/fixtures/isolated-env.ts`) whose `content` column already holds link
+   * marks with dangerous hrefs. That is the vector that matters — stored XSS,
+   * where the payload reaches `documents.content` and is rendered later — and
+   * it is reachable, because TipTap's JSON path does not run the `parseHTML`
+   * href guard.
+   *
+   * Every assertion below is unconditional, and each test first insists the
+   * benign control link rendered. Without that control, "the editor rendered
+   * nothing" would still look like a pass.
+   *
+   * The href policy is additionally pinned by
+   * `web/src/components/editor/linkOptions.test.ts`, which the factory gate
+   * actually runs — `e2e/` is executed by neither the gate nor CI.
+   */
+  test('stored dangerous link hrefs are not rendered live', async ({ page }) => {
+    await openFixtureDocument(page, FIXTURE_DOC_LINK_SANITIZATION)
 
     const editor = page.locator('.ProseMirror')
-    await editor.click()
+    const links = editor.locator('a')
 
-    // Try to inject XSS via markdown link
-    const xssLink = '[Click](javascript:alert("XSS"))'
-    await page.keyboard.type(xssLink)
+    // Positive control. The fixture holds 1 benign + N dangerous links; if the
+    // editor rendered nothing, this fails instead of vacuously passing.
+    await expect(
+      links,
+      `The ${FIXTURE_DOC_LINK_SANITIZATION} document should render one <a> per ` +
+        `seeded link mark. Zero links means the editor did not load the fixture ` +
+        `content, not that the hrefs were sanitised.`
+    ).toHaveCount(1 + FIXTURE_DANGEROUS_HREFS.length, { timeout: 15000 })
 
-    await page.waitForTimeout(500)
+    await expect(
+      editor.locator(`a[href="${FIXTURE_SAFE_HREF}"]`),
+      'the benign control href must survive sanitization untouched'
+    ).toHaveCount(1)
 
-    // Link should be rendered but javascript: protocol should be blocked
-    const links = await editor.locator('a').all()
-    for (const link of links) {
-      const href = await link.getAttribute('href')
-      expect(href).not.toContain('javascript:')
+    // Now the real claim: no rendered href carries a script-capable scheme.
+    const hrefs = await links.evaluateAll((els) =>
+      els.map((el) => el.getAttribute('href') ?? '')
+    )
+    expect(hrefs, 'every seeded link mark should have produced an href attribute')
+      .toHaveLength(1 + FIXTURE_DANGEROUS_HREFS.length)
+
+    for (const href of hrefs) {
+      const collapsed = href.replace(/[\s\u0000-\u001f]+/g, '').toLowerCase()
+      expect(collapsed, `rendered href "${href}" must not use the javascript: scheme`)
+        .not.toMatch(/^javascript:/)
+      expect(collapsed, `rendered href "${href}" must not use the data: scheme`)
+        .not.toMatch(/^data:/)
+      expect(collapsed, `rendered href "${href}" must not use the vbscript: scheme`)
+        .not.toMatch(/^vbscript:/)
     }
+
+    // And specifically: the payload bodies are gone, not merely re-encoded.
+    const editorHtml = await editor.innerHTML()
+    expect(editorHtml, 'the data:text/html payload must not appear in rendered markup')
+      .not.toContain('text/html')
+    expect(editorHtml, 'the svg data-URI payload must not appear in rendered markup')
+      .not.toContain('image/svg+xml')
   })
 
-  test('XSS via data: URI in links', async ({ page }) => {
+  test('markdown link syntax does not create a link at all (documents current behaviour)', async ({ page }) => {
+    // This is the fact the two old tests were unknowingly asserting. Pinning it
+    // explicitly means that if a markdown-link input rule is ever added, this
+    // test fails and whoever adds it is pointed at the sanitization tests above
+    // rather than silently re-opening the vector.
     await createNewDocument(page)
 
     const editor = page.locator('.ProseMirror')
     await editor.click()
+    await page.keyboard.type('[Click](javascript:alert("XSS"))')
 
-    // Try to inject XSS via data URI
-    const dataUri = '[Click](data:text/html,<script>alert("XSS")</script>)'
-    await page.keyboard.type(dataUri)
-
-    await page.waitForTimeout(500)
-
-    // Dangerous data URIs should be blocked
-    const links = await editor.locator('a').all()
-    for (const link of links) {
-      const href = await link.getAttribute('href')
-      if (href?.startsWith('data:')) {
-        expect(href).not.toContain('text/html')
-        expect(href).not.toContain('<script')
-      }
-    }
+    // The literal text must be present — proves the keystrokes landed, so the
+    // link-count assertion below is about behaviour and not about a lost type.
+    await expect(editor, 'typed markdown should appear as literal text').toContainText(
+      '[Click](javascript:alert("XSS"))',
+      { timeout: 10000 }
+    )
+    await expect(
+      editor.locator('a'),
+      'TipTap has no markdown-link input rule; if this now creates a link, the ' +
+        'href must be sanitised — see "stored dangerous link hrefs" above'
+    ).toHaveCount(0)
   })
 })
 

@@ -206,39 +206,56 @@ test.describe('AI Analyze Retro API', () => {
 });
 
 test.describe('AI Rate Limiting', () => {
+  /**
+   * Rewritten for audit finding TEST-2 (TRO-224).
+   *
+   * Both assertions used to be conditional. `if (!allSucceeded)` meant that if
+   * every request returned 200 — i.e. **if the rate limiter did nothing at all**
+   * — the test passed. The second assertion sat inside `if
+   * (rateLimitedResponse)`, so it only ran when a 429 already existed. The one
+   * outcome the test existed to catch was the one outcome it excused.
+   *
+   * The limit is not timing-dependent: `api/src/routes/ai.ts:33` calls
+   * `checkRateLimit(userId)`, an in-process per-user counter capped at 10 per
+   * hour. Sending 11 requests must therefore produce at least one 429 whether
+   * or not Bedrock is reachable — an AI outage returns 200 with
+   * `{ error: 'ai_unavailable' }` from the route's catch, and never bypasses the
+   * limiter, which runs first.
+   */
   test('POST /api/ai/analyze-plan returns 429 after 10 rapid requests', async ({ page, apiServer }) => {
     const { csrfToken } = await loginAsAdmin(page, apiServer.url);
 
-    // Send 10 requests rapidly to hit the rate limit
-    const requests = [];
-    for (let i = 0; i < 11; i++) {
-      requests.push(
+    const ANALYSES_PER_HOUR = 10;
+    const attempts = ANALYSES_PER_HOUR + 1;
+
+    const responses = await Promise.all(
+      Array.from({ length: attempts }, () =>
         page.request.post(`${apiServer.url}/api/ai/analyze-plan`, {
           headers: { 'x-csrf-token': csrfToken },
           data: { content: samplePlanContent },
         })
-      );
-    }
-
-    const responses = await Promise.all(requests);
+      )
+    );
     const statuses = responses.map(r => r.status());
 
-    // At least one response should be 429 (rate limited)
-    // Note: depending on implementation timing, some may succeed
-    const has429 = statuses.some(s => s === 429);
-    const allSucceeded = statuses.every(s => s === 200);
+    // Unconditional: the limiter runs before the AI call, so its behaviour does
+    // not depend on Bedrock being reachable.
+    expect(
+      statuses.filter(s => s === 429).length,
+      `Sending ${attempts} requests against a ${ANALYSES_PER_HOUR}/hour limit must ` +
+        `produce at least one 429. Got: ${statuses.join(', ')}`
+    ).toBeGreaterThanOrEqual(1);
 
-    // If all requests return 200, AI might be unavailable (catches before rate limit)
-    // or rate limit window is per-hour and 11 isn't enough. Mark as soft check.
-    if (!allSucceeded) {
-      expect(has429, 'At least one request should be rate-limited (429)').toBe(true);
-    }
+    // ...and it must not refuse everything either, or the limit is misconfigured
+    // rather than working.
+    expect(
+      statuses.filter(s => s !== 429).length,
+      `The first ${ANALYSES_PER_HOUR} requests should be admitted. Got: ${statuses.join(', ')}`
+    ).toBeGreaterThanOrEqual(1);
 
-    // Verify the 429 response body mentions rate limit
-    const rateLimitedResponse = responses.find(r => r.status() === 429);
-    if (rateLimitedResponse) {
-      const body = await rateLimitedResponse.json();
-      expect(body.error, 'Rate limit error should mention rate limit').toContain('Rate limit');
-    }
+    const rateLimited = responses.find(r => r.status() === 429);
+    expect(rateLimited, 'a 429 response must exist to inspect').toBeTruthy();
+    const body = await (rateLimited ?? responses[0]).json();
+    expect(body.error, 'Rate limit error should mention rate limit').toContain('Rate limit');
   });
 });

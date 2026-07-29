@@ -84,23 +84,61 @@ test.describe('Admin Workspace Member Management', () => {
     await loginAsSuperAdmin(page)
   })
 
+  /**
+   * Rewritten for audit finding TEST-2 (TRO-224).
+   *
+   * The whole body was wrapped in `if (await roleSelect.isVisible())`, so the
+   * test passed whenever the member table failed to render — which is the most
+   * likely way for role management to be broken. Seed data guarantees
+   * bob.martinez@ship.local is a `member` of Test Workspace
+   * (`e2e/fixtures/isolated-env.ts`), so the row's existence is now asserted.
+   *
+   * It also only checked the local `<select>` value, which a client-side change
+   * satisfies without any request succeeding. It now reloads and re-reads, so a
+   * silently-failed PATCH fails the test.
+   */
   test('can change member role', async ({ page }) => {
     await page.goto('/admin')
     await page.getByRole('link', { name: /Test Workspace/i }).first().click()
 
-    // Find a member with "Member" role and change to "Admin"
+    // Find the seeded member row and its role control.
     const memberRow = page.locator('tr').filter({ hasText: 'Member' }).first()
+    await expect(
+      memberRow,
+      'Seed data should provide a workspace member (bob.martinez@ship.local) in ' +
+        'Test Workspace. See e2e/fixtures/isolated-env.ts.'
+    ).toBeVisible({ timeout: 15000 })
+
     const roleSelect = memberRow.locator('select')
+    await expect(
+      roleSelect,
+      'each member row should expose a role <select> for an admin to change'
+    ).toBeVisible({ timeout: 10000 })
 
-    if (await roleSelect.isVisible()) {
-      const currentRole = await roleSelect.inputValue()
-      const newRole = currentRole === 'admin' ? 'member' : 'admin'
+    const currentRole = await roleSelect.inputValue()
+    const newRole = currentRole === 'admin' ? 'member' : 'admin'
 
-      await roleSelect.selectOption(newRole)
+    await roleSelect.selectOption(newRole)
+    await expect(roleSelect, 'the control should show the newly selected role').toHaveValue(newRole, {
+      timeout: 10000,
+    })
 
-      // Verify the change persists (role dropdown shows new value)
-      await expect(roleSelect).toHaveValue(newRole)
-    }
+    // The real claim: the change reached the server. Re-reading after a reload is
+    // the only way to tell that apart from a purely local <select> update.
+    await page.reload()
+    const reloadedRow = page.locator('tr').filter({ hasText: /bob\.martinez/i }).first()
+    await expect(
+      reloadedRow,
+      'the member row should still be present after reload'
+    ).toBeVisible({ timeout: 15000 })
+    await expect(
+      reloadedRow.locator('select'),
+      'the role change must persist across a reload, not just in local state'
+    ).toHaveValue(newRole, { timeout: 15000 })
+
+    // Restore the seeded role so later tests in this worker see the fixture state.
+    await reloadedRow.locator('select').selectOption(currentRole)
+    await expect(reloadedRow.locator('select')).toHaveValue(currentRole, { timeout: 10000 })
   })
 
   test('can send invite to new email', async ({ page }) => {
