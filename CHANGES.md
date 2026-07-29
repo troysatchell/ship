@@ -8,6 +8,78 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-188 (ERR-1) + TRO-189 (ERR-2) — the editor stops lying about "Saved", and a revoked session stops writing
+
+Both findings live in the collaboration path and ship as one change: TRO-189 makes the server hang
+up on sockets whose session is gone, and TRO-188 makes the editor say so instead of showing
+"Saved" over work that is not saved. Fixing one without the other would have produced a *silently*
+disconnected editor — a worse version of ERR-1.
+
+**What changed — TRO-189 / ERR-2 (security: logged-out user kept write access).**
+
+The collaboration socket was authenticated exactly once, during the HTTP upgrade
+(`api/src/collaboration/index.ts`, `server.on('upgrade')`), and never re-checked. Deleting or
+expiring the session left the socket writing to `documents` indefinitely while REST correctly 401'd
+(audit `probe7c`, `probe6.4`).
+
+- Each connection now records the `sessionId` that authorized it (`DocConnection` / `EventConnection`).
+- `revalidateLiveSessions()` re-checks every session backing a live socket on an interval
+  (`DEFAULT_SESSION_REVALIDATION_INTERVAL_MS = 30_000`), in **one batched query** for all distinct
+  sessions, applying the same two windows as the REST middleware (`SESSION_TIMEOUT_MS`,
+  `ABSOLUTE_SESSION_TIMEOUT_MS`). Invalid → the socket is closed with code **4401**.
+- It **fails open** on a database error: a transient outage must not disconnect every open editor.
+- `closeSocketsForSession()` is called directly from `POST /api/auth/logout` and from the
+  session-fixation rotation on login, so logout takes effect at once rather than up to 30s later.
+- Connections are marked `revoked` *before* `ws.close()`, and inbound frames from a revoked
+  connection are dropped — `close()` only starts the closing handshake, so without this an edit
+  already in flight could still be persisted.
+
+Behaviour change to be aware of: a session that has passed the 15-minute inactivity window now
+loses its collaboration socket, where before only REST rejected it. Collaboration traffic
+deliberately does **not** refresh `last_activity` — doing so would let an open tab keep a session
+alive forever, which is a larger hole than the one being closed.
+
+**What changed — TRO-188 / ERR-1 (data loss under a "Saved" label).**
+
+`Editor.tsx` treated the WebSocket `status: connected` event as proof of persistence. It is not:
+audit `probe2d-ws-unavailable.json` records **three** `connected` events and **zero** `sync` events,
+with the indicator reading "Saved" for 60 s while `inDb=false`, ending in a document whose content
+was `""`. `probe2-ws-drop` and `probe2e` show the same lie under the "Cached" label.
+
+- The header indicator moved out of `Editor.tsx` into `web/src/components/editor/SyncStatusIndicator.tsx`
+  with the derivation as a pure function (`deriveSyncIndicator`).
+- "Saved" now requires `isSynced` — the y-websocket `sync` event, the only evidence the document
+  reached the server. `status: connected` no longer sets it, and `sync(false)`/`disconnected`
+  clears it.
+- The unsynced state renders as **"Not saved"**, red, with a title that names the consequence
+  ("changes … will be lost if you reload"). The reassuring "Cached" label is gone.
+- A neutral "Connecting" state covers the first connection attempt only, so a normal page load does
+  not flash a warning.
+- Close code 4401 (TRO-189) stops the reconnect loop and drives the indicator to "Not saved",
+  which is how a revoked session becomes visible to the user.
+
+**How to run it.**
+
+```bash
+source .factory-env                       # api tests TRUNCATE 16 tables; use the worktree database
+pnpm --filter @ship/api  exec vitest run src/collaboration/__tests__/session-revocation.test.ts
+pnpm --filter @ship/web  exec vitest run src/components/editor/SyncStatusIndicator.test.tsx
+scripts/factory/gate.sh
+```
+
+The api test drives the real collaboration server over a real WebSocket and asserts on the
+`documents` table, not on a mock. It runs with a 200 ms revalidation interval via
+`setupCollaboration(server, { sessionRevalidationIntervalMs })`.
+
+**Rollback.** Revert the commits on `fix/err-1-err-2-collab-socket`. Independently:
+for TRO-189 alone, delete the `revalidateLiveSessions`/`closeSocketsForSession` block in
+`api/src/collaboration/index.ts` and its two call sites in `api/src/routes/auth.ts` — nothing else
+depends on them, and `setupCollaboration`'s second argument is optional. For TRO-188 alone, pass a
+permanently-true `isSynced` to `SyncStatusIndicator`, which restores the old "connected means
+Saved" behaviour.
+
+---
+
 ## Factory visibility — status command, published board, cost analysis (no ticket: tooling)
 
 **What changed.** Three additions, all reading from sources of truth rather than a status file:
