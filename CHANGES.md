@@ -19,7 +19,12 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 - `scripts/factory/status.mjs` — one-screen terminal view. `--json` feeds the board.
 - `scripts/factory/board.mjs` — renders a self-contained HTML control panel (cream ground,
   British racing green, severity carried by stripe + wash + text colour, all contrast-measured
-  against WCAG AA rather than estimated).
+  against WCAG AA rather than estimated). Single-theme by choice: both `data-theme` values are
+  pinned to the cream tokens so the viewer's toggle cannot flip it.
+- `scripts/factory/serve.mjs` — local server that rebuilds the board from live state on every
+  request. This is the surface for *operating* the factory: free to refresh, no agent needed.
+  The published Artifact can only be updated by an agent calling a tool, so it is for *sharing*
+  a milestone, not for watching a run.
 - `scripts/factory/cost-report.mjs` — the graded "AI cost analysis" deliverable
   (`projectbrief.md:63`), derived retroactively from transcripts that already record per-message
   token usage.

@@ -105,7 +105,14 @@ const trendBlock = `
      agents. That is the signal this table exists to surface.</p>` : ''}
 </section>`
 
+// --live adds a meta refresh for the local server (scripts/factory/serve.mjs).
+// It is deliberately OMITTED from the published Artifact: that copy is a shared
+// snapshot, and a page that reloads itself every 15s in someone else's browser
+// without new data behind it is just noise.
+const live = process.argv.includes('--live')
+
 process.stdout.write(`<title>Ship Factory — control panel</title>
+${live ? '<meta http-equiv="refresh" content="15">' : ''}
 <style>
   /* Cream ground, British racing green ink. Every severity colour below is
      contrast-checked against its own ground for WCAG AA normal text (>=4.5:1);
@@ -124,27 +131,25 @@ process.stdout.write(`<title>Ship Factory — control panel</title>
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  /* Dark keeps the identity rather than inverting it: a green-black ground with
-     cream ink. Severities are lifted until each clears AA on that ground. */
+  /* SINGLE-THEME BY CHOICE, not omission. This board commits to cream and
+     British racing green in every context. Both data-theme values are pinned
+     to the same tokens so the viewer's theme toggle and a dark OS preference
+     cannot flip it — without these two blocks the toggle would find no dark
+     definition and leave the page cream anyway, but a later edit adding a dark
+     media query would silently start winning. This makes the intent explicit. */
   @media (prefers-color-scheme: dark) {
-    :root { --paper:#0B1712; --panel:#122019; --ink:#F0EADA; --muted:#9DA394; --line:#25342A;
-            --accent:#7FC8A0;         /* BRG lifted on green-black .  8.56:1 */
-            --ok:#6FBF8B;             /* ............................  6.43:1 */
-            --bad:#F0908A;            /* ............................  6.88:1 */
-            --wait:#DCBA55;           /* ............................  7.78:1 */
-            --idle:#8E9589;           /* ............................  5.46:1 */
-            --ok-wash:#16301F; --bad-wash:#341B1A; --wait-wash:#302814; }
+    :root {
+      --paper:#F4F0E6; --panel:#FBF8F1; --ink:#0B2E1E; --muted:#5C5847; --line:#DED7C6;
+      --accent:#004225; --ok:#14532D; --bad:#8E1D22; --wait:#6F5300; --idle:#6B6455;
+      --ok-wash:#E4EDE4; --bad-wash:#F6E4E1; --wait-wash:#F3EBD6;
+    }
   }
-  :root[data-theme="dark"] {
-    --paper:#0B1712; --panel:#122019; --ink:#F0EADA; --muted:#9DA394; --line:#25342A;
-    --accent:#7FC8A0; --ok:#6FBF8B; --bad:#F0908A; --wait:#DCBA55; --idle:#8E9589;
-    --ok-wash:#16301F; --bad-wash:#341B1A; --wait-wash:#302814;
-  }
-  :root[data-theme="light"] {
+  :root[data-theme="dark"], :root[data-theme="light"] {
     --paper:#F4F0E6; --panel:#FBF8F1; --ink:#0B2E1E; --muted:#5C5847; --line:#DED7C6;
     --accent:#004225; --ok:#14532D; --bad:#8E1D22; --wait:#6F5300; --idle:#6B6455;
     --ok-wash:#E4EDE4; --bad-wash:#F6E4E1; --wait-wash:#F3EBD6;
   }
+  html, body { background:#F4F0E6; }   /* cream to the edges, above the fold and below */
 
   body { background:var(--paper); color:var(--ink); font-family:var(--mono);
          font-size:14px; line-height:1.5; padding:clamp(16px,4vw,44px); }

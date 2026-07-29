@@ -1,4 +1,5 @@
 <title>Ship Factory — control panel</title>
+
 <style>
   /* Cream ground, British racing green ink. Every severity colour below is
      contrast-checked against its own ground for WCAG AA normal text (>=4.5:1);
@@ -17,27 +18,25 @@
     --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  /* Dark keeps the identity rather than inverting it: a green-black ground with
-     cream ink. Severities are lifted until each clears AA on that ground. */
+  /* SINGLE-THEME BY CHOICE, not omission. This board commits to cream and
+     British racing green in every context. Both data-theme values are pinned
+     to the same tokens so the viewer's theme toggle and a dark OS preference
+     cannot flip it — without these two blocks the toggle would find no dark
+     definition and leave the page cream anyway, but a later edit adding a dark
+     media query would silently start winning. This makes the intent explicit. */
   @media (prefers-color-scheme: dark) {
-    :root { --paper:#0B1712; --panel:#122019; --ink:#F0EADA; --muted:#9DA394; --line:#25342A;
-            --accent:#7FC8A0;         /* BRG lifted on green-black .  8.56:1 */
-            --ok:#6FBF8B;             /* ............................  6.43:1 */
-            --bad:#F0908A;            /* ............................  6.88:1 */
-            --wait:#DCBA55;           /* ............................  7.78:1 */
-            --idle:#8E9589;           /* ............................  5.46:1 */
-            --ok-wash:#16301F; --bad-wash:#341B1A; --wait-wash:#302814; }
+    :root {
+      --paper:#F4F0E6; --panel:#FBF8F1; --ink:#0B2E1E; --muted:#5C5847; --line:#DED7C6;
+      --accent:#004225; --ok:#14532D; --bad:#8E1D22; --wait:#6F5300; --idle:#6B6455;
+      --ok-wash:#E4EDE4; --bad-wash:#F6E4E1; --wait-wash:#F3EBD6;
+    }
   }
-  :root[data-theme="dark"] {
-    --paper:#0B1712; --panel:#122019; --ink:#F0EADA; --muted:#9DA394; --line:#25342A;
-    --accent:#7FC8A0; --ok:#6FBF8B; --bad:#F0908A; --wait:#DCBA55; --idle:#8E9589;
-    --ok-wash:#16301F; --bad-wash:#341B1A; --wait-wash:#302814;
-  }
-  :root[data-theme="light"] {
+  :root[data-theme="dark"], :root[data-theme="light"] {
     --paper:#F4F0E6; --panel:#FBF8F1; --ink:#0B2E1E; --muted:#5C5847; --line:#DED7C6;
     --accent:#004225; --ok:#14532D; --bad:#8E1D22; --wait:#6F5300; --idle:#6B6455;
     --ok-wash:#E4EDE4; --bad-wash:#F6E4E1; --wait-wash:#F3EBD6;
   }
+  html, body { background:#F4F0E6; }   /* cream to the edges, above the fold and below */
 
   body { background:var(--paper); color:var(--ink); font-family:var(--mono);
          font-size:14px; line-height:1.5; padding:clamp(16px,4vw,44px); }
@@ -113,16 +112,16 @@
 <div class="wrap">
   <header>
     <h1>Ship Factory</h1>
-    <span class="stamp">main@126be6e · Wed, 29 Jul 2026 17:26:48 GMT</span>
+    <span class="stamp">main@126be6e · Wed, 29 Jul 2026 17:30:23 GMT</span>
   </header>
 
   <div class="strip">
     <div class="cell"><span class="k">In flight</span><span class="v">0</span></div>
-    <div class="cell"><span class="k">Open PRs</span><span class="v">0</span></div>
+    <div class="cell"><span class="k">Open PRs</span><span class="v">1</span></div>
     <div class="cell"><span class="k">First-attempt pass</span>
       <span class="v ">1/1</span></div>
     <div class="cell"><span class="k">Spend (est.)</span>
-      <span class="v">$508</span></div>
+      <span class="v">$512</span></div>
   </div>
 
   <section class="panel">
@@ -132,7 +131,15 @@
 
   <section class="panel">
     <h2>Open pull requests</h2>
-    <ul><li class="empty">No open pull requests.</li></ul>
+    <ul>
+  <li class="row wait">
+    <div class="row-head">
+      <span class="tkt">#4</span>
+      <span class="pill wait">CI pending</span>
+      
+    </div>
+    <div class="row-meta"><span>feat(factory): status command, published control board, cost analysis</span></div>
+  </li></ul>
   </section>
 
   
@@ -147,10 +154,10 @@
   <p class="basis">List-rate estimate over observed token counts — <strong>not billed spend</strong>.
      On a subscription plan the marginal cost is zero and this is API-equivalent value.</p>
   <div class="tokens">
-    <div><span class="k">output</span><span class="v">3,841,573</span></div>
-    <div><span class="k">cache write</span><span class="v">27,797,041</span></div>
-    <div><span class="k">cache read</span><span class="v">475,499,204</span></div>
-    <div><span class="k">raw input</span><span class="v">18,144</span></div>
+    <div><span class="k">output</span><span class="v">3,871,633</span></div>
+    <div><span class="k">cache write</span><span class="v">27,837,062</span></div>
+    <div><span class="k">cache read</span><span class="v">483,144,046</span></div>
+    <div><span class="k">raw input</span><span class="v">18,184</span></div>
   </div>
   <div class="cachebar" role="img"
        aria-label="94 percent of token volume is cache reads">
