@@ -36,7 +36,26 @@ The report's hypothesis held exactly, including its list of the other blocking f
   the three `ALTER TYPE ... RENAME VALUE` statements). These four files are edited rather than
   superseded by a new migration, because a new migration cannot stop `010` itself from throwing,
   and databases that already recorded these versions never re-read them.
+- Migration filenames are validated against `NNN_description.sql` (optional single-letter suffix,
+  as in `007b_`). A file that cannot be ordered throws before anything is applied, rather than
+  sorting to an arbitrary position in the sequence.
 - Regression tests: `api/src/db/__tests__/migrationRunner.test.ts`.
+
+**New ways `pnpm db:migrate` can now fail — all deliberate.** It previously exited 0 in every one
+of these cases:
+
+| Condition | Behaviour |
+|---|---|
+| any migration raises | exit 1, naming the file |
+| migrations directory missing or unreadable | exit 1 |
+| a `.sql` file there is not `NNN_description.sql` | exit 1, naming the offender |
+| `033`: `document_type` has both `sprint_*` and `weekly_*` **and** documents still use the old label | exit 1 with the row count and the remedy |
+| `033`: `document_type` has neither label of a pair | exit 1 |
+
+The one state `033` deliberately tolerates is both labels present with **no** rows using the old
+one — that is the normal outcome on a fresh database, because `schema.sql:100` declares the
+post-rename labels and `017_standup_sprint_review_types.sql:14` then re-adds `sprint_review` via
+`ADD VALUE IF NOT EXISTS`. Raising there would fail every fresh install.
 
 **What the 32 previously-skipped migrations mean for an existing database.** Reported, not executed
 against anything but a factory database — this is the part that needs an operator's eyes before the
