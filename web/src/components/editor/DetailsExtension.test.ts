@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { DetailsExtension } from './DetailsExtension';
+import { DetailsExtension, DetailsSummary, DetailsContent } from './DetailsExtension';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
+
+/**
+ * `details` is a three-node extension: the wrapper plus its required
+ * `detailsSummary` / `detailsContent` children. Editor.tsx:628-630 registers all
+ * three together, and a schema that names a child node type it was not given
+ * throws at construction ("No node type or group 'detailsSummary' found"). Tests
+ * must register the same trio the editor does.
+ */
+const detailsExtensions = [StarterKit, DetailsExtension, DetailsSummary, DetailsContent];
 
 describe('DetailsExtension', () => {
   it('should create a valid TipTap extension', () => {
@@ -13,7 +22,8 @@ describe('DetailsExtension', () => {
   it('should be configured as a block node with content', () => {
     const extension = DetailsExtension;
     expect(extension.config.group).toBe('block');
-    expect(extension.config.content).toBe('block+');
+    // A details block is a summary followed by its content, not free-form blocks.
+    expect(extension.config.content).toBe('detailsSummary detailsContent');
     expect(extension.config.defining).toBe(true);
   });
 
@@ -55,7 +65,7 @@ describe('DetailsExtension', () => {
 
   it('should work in editor context', () => {
     const editor = new Editor({
-      extensions: [StarterKit, DetailsExtension],
+      extensions: detailsExtensions,
       content: '<p>Test content</p>',
     });
 
@@ -67,13 +77,45 @@ describe('DetailsExtension', () => {
 
   it('should allow inserting details via command', () => {
     const editor = new Editor({
-      extensions: [StarterKit, DetailsExtension],
+      extensions: detailsExtensions,
       content: '<p>Test content</p>',
     });
 
     // Check that the command exists
     expect((editor.commands as any).setDetails).toBeDefined();
     expect(typeof (editor.commands as any).setDetails).toBe('function');
+
+    editor.destroy();
+  });
+
+  it('inserts a details node containing a summary and a content block', () => {
+    const editor = new Editor({
+      extensions: detailsExtensions,
+      content: '<p>Test content</p>',
+    });
+
+    (editor.commands as any).setDetails();
+
+    const details = editor.getJSON().content?.find(node => node.type === 'details');
+    expect(details).toBeDefined();
+    expect(details?.attrs?.open).toBe(true);
+    // The content model is positional: summary first, then content.
+    expect(details?.content?.map(child => child.type)).toEqual([
+      'detailsSummary',
+      'detailsContent',
+    ]);
+
+    editor.destroy();
+  });
+
+  it('registers the summary and content child nodes in the schema', () => {
+    const editor = new Editor({ extensions: detailsExtensions });
+
+    // Without these the details schema cannot be built at all — the failure mode
+    // this file previously hit.
+    expect(Object.keys(editor.schema.nodes)).toEqual(
+      expect.arrayContaining(['details', 'detailsSummary', 'detailsContent'])
+    );
 
     editor.destroy();
   });
