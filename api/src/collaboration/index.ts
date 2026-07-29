@@ -10,6 +10,7 @@ import { extractHypothesisFromContent, extractSuccessCriteriaFromContent, extrac
 import { yjsToJson, jsonToYjs } from '../utils/yjsConverter.js';
 import { SESSION_TIMEOUT_MS, ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
 import cookie from 'cookie';
+import { createHash } from 'crypto';
 
 const messageSync = 0;
 const messageAwareness = 1;
@@ -376,11 +377,46 @@ function handleMessage(ws: WebSocket, message: Uint8Array, docName: string, doc:
  */
 export const WS_CLOSE_PROTOCOL_ERROR = 1002;
 
+/** Digest length in hex characters. Long enough to distinguish frames, short enough to read. */
+const FRAME_DIGEST_CHARS = 16;
+
 /**
- * How much of an offending frame to log. Enough to identify the message type and
- * reproduce the decode, bounded so a 10MB frame cannot flood the log.
+ * A correlation identity for a frame that leaks none of its content.
+ *
+ * The bytes themselves must never be logged. A Yjs sync update carries document
+ * text, and a frame that failed to decode has usually been *partially* decoded —
+ * so its leading bytes can contain fragments of what a user typed. Logs get
+ * shipped, aggregated and retained, which would quietly turn a crash log into a
+ * content leak.
+ *
+ * A one-way digest keeps the property that actually matters for triage: the same
+ * frame sent twice yields the same identity, so a repeated or automated attack is
+ * visible in the log without the log holding the payload.
+ *
+ * Honest limit, stated rather than hidden: for a very short frame the digest is
+ * reversible by brute force. That is acceptable precisely because a four-byte
+ * frame cannot contain document content — and the frames long enough to carry
+ * any are far too large to enumerate.
  */
-const FRAME_LOG_PREFIX_BYTES = 32;
+function frameDigest(frame: Uint8Array): string {
+  return createHash('sha256').update(frame).digest('hex').slice(0, FRAME_DIGEST_CHARS);
+}
+
+/**
+ * The protocol discriminator, when it can be read without decoding anything else.
+ *
+ * Structural metadata, not content: it is one of a handful of fixed protocol
+ * constants (sync / awareness / custom event / clear cache) and says nothing about
+ * what any user typed. It is also the first thing worth knowing when triaging —
+ * a broken awareness frame implicates a different code path than a broken sync
+ * frame. A varuint whose first byte has the continuation bit set is multi-byte and
+ * is reported as such rather than guessed at.
+ */
+function frameMessageType(frame: Uint8Array): number | 'empty' | 'multibyte' {
+  const first = frame.at(0);
+  if (first === undefined) return 'empty';
+  return first < 0x80 ? first : 'multibyte';
+}
 
 /**
  * TRO-276 / ERR-10 — a malformed frame must never take down the process.
@@ -398,10 +434,11 @@ const FRAME_LOG_PREFIX_BYTES = 32;
  * has nothing useful left to say, and its client will reconnect); every other
  * connection is untouched.
  *
- * Note on the log: the frame prefix is recorded *because the stack trace lies*.
+ * Note on the log: frame identity is recorded *because the stack trace lies*.
  * lib0 builds `errorUnexpectedEndOfArray` as a module-scope singleton Error whose
  * stack is captured at module load, so `err.stack` points at whatever first
- * imported lib0 rather than at the throw site. The bytes are the real evidence.
+ * imported lib0 rather than at the throw site. The digest, length and message type
+ * are the usable evidence — and, unlike the raw bytes, they carry no user content.
  */
 function runFrameHandler(
   ws: WebSocket,
@@ -415,9 +452,10 @@ function runFrameHandler(
     console.error('[Collaboration] Unhandled error while processing a WebSocket frame; closing that socket', {
       ...context,
       error: err instanceof Error ? { name: err.name, message: err.message } : String(err),
+      // Identity, not content. See frameDigest() for why the bytes are not here.
       frameBytes: frame.length,
-      // See the note above: this, not the stack, identifies the failing input.
-      framePrefixHex: Buffer.from(frame.subarray(0, FRAME_LOG_PREFIX_BYTES)).toString('hex'),
+      frameDigest: frameDigest(frame),
+      frameMessageType: frameMessageType(frame),
       stackIsUnreliable: 'lib0 decoding errors are module-scope singletons; err.stack is not the throw site',
     });
 
