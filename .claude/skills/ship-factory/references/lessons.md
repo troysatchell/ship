@@ -42,6 +42,10 @@ Seeded 2026-07-29 from failures already documented in this project.
 11. **Confirm a regression test fails for the right reason.** An import error or a typo is not a
     red test — it proves nothing about the behaviour you claim to have fixed.
 12. **Never widen the quarantine or skip a test to get green.** The gate greps your diff for it.
+13. **Put the regression test where the gate runs it** — `api/src/**/*.test.ts` or
+    `web/src/**/*.test.ts(x)`. The gate's regression-test check counts added cases in `*.spec.ts`
+    too, but its test *execution* is only the two vitest projects and neither includes `e2e/`. An
+    e2e-only regression test passes the check unexecuted.
 
 ## Measurement
 

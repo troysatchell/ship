@@ -3,6 +3,11 @@
 Fill this in and hand it to the agent verbatim. Substitute `{{...}}`. Append the current contents
 of `lessons.md` under *Standing rules* — that is how eval feedback reaches the worker.
 
+Then append the **role brief** for the finding's category — `/ship-frontend`, `/ship-backend`, or
+`/ship-qa`, per the routing table in `/ship-orchestrator` §1. This contract is domain-blind by
+design; the role brief is what carries the repo's actual frontend/backend/test facts. A brief
+without one leaves the agent to rediscover them, usually by breaking something first.
+
 ---
 
 ## Brief
@@ -35,6 +40,10 @@ accounted for in your final report.
 2. **A regression test that fails before your fix and passes after.** Assignment rule 3 requires
    one per audit bug. Confirm it fails for the *right reason* on the unfixed code — an import
    error is not a red test. State in your report that you saw it red first.
+   It must live in a **vitest** file the gate actually runs — `api/src/**/*.test.ts` or
+   `web/src/**/*.test.ts(x)`. A test added only as `e2e/*.spec.ts` satisfies the gate's
+   regression-test check while never executing, because neither vitest config includes `e2e/`. Add
+   an e2e spec as well if the flow deserves it; it is additive coverage, not the proof.
 3. **A `CHANGES.md` entry** naming `{{TICKET_ID}}`: what changed, how to run it, how to roll it
    back. Assignment rule 8.
 4. **Commits with real messages.** The git history is read directly and is 10% of the grade.
@@ -99,9 +108,13 @@ Return, concisely:
 ## PR body template
 
 ```markdown
-## {{TICKET_ID}} — {{TITLE}}
+## {{TICKET_IDS}} — {{TITLES}}
 
-Closes {{TICKET_ID}}. Audit finding `{{FINDING_ID}}`.
+<!-- One `Closes` line PER ticket — GitHub only auto-closes what it sees named
+     individually, and a batched branch that closes one of three leaves two
+     tickets open with their work already merged. -->
+Closes {{TICKET_ID_1}}. Audit finding `{{FINDING_ID_1}}`.
+Closes {{TICKET_ID_2}}. Audit finding `{{FINDING_ID_2}}`.
 
 ### What was broken
 {{root cause, file:line}}

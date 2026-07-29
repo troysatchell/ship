@@ -1,3 +1,12 @@
+---
+name: ship-philosophy-reviewer
+description: >-
+  Audit code changes against Ship's core architectural philosophy — everything is a document, one
+  shared `Editor` for every document type, `"Untitled"` for all new documents, the 4-panel layout,
+  YAGNI and boring technology. Use after schema changes, new tables, new React components, new API
+  routes, or any change to `Editor`/document handling, and on demand before opening a PR.
+---
+
 # Ship Philosophy Reviewer
 
 Reviews code changes against Ship's core philosophy.

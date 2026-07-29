@@ -1,3 +1,12 @@
+---
+name: ship-deploy
+description: >-
+  Deploy Ship to AWS — API to Elastic Beanstalk, frontend to S3 + CloudFront — as one paired
+  operation, with the health-polling sequence that decides when it is actually done. Use when asked
+  to deploy, ship, or release Ship, or to check whether a deploy has finished. "Deploy" always means
+  both halves; deploying one alone leaves the API and frontend out of sync.
+---
+
 # Ship Deployment
 
 Deploy Ship API and frontend to AWS.

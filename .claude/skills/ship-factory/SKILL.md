@@ -84,9 +84,11 @@ Dispatch every eligible ticket concurrently. The **only** reasons to serialize:
 - **Expensive-tier measurement ordering.** `db-query-audit` must run after `api-perf-audit`, never
   concurrently — its statement logging skews the other's timings.
 
-Everything else runs at once. Each ticket has its own worktree, database, and ports, so parallel
-agents cannot interfere. Re-evaluate the graph after every completion: a ticket whose blockers are
-now `Done` becomes eligible immediately.
+Everything else runs at once. Each ticket has its own worktree, its own database, and ports that
+`worktree.sh` **probes for and claims** rather than deriving from a hash alone — the hash only sets
+a stable starting point, and `md5 % 900` collides in practice (~50% odds by 36 concurrent tickets).
+Re-evaluate the graph after every completion: a ticket whose blockers are now `Done` becomes
+eligible immediately.
 
 ### 2. Provision an isolated worktree
 
@@ -103,6 +105,21 @@ Use the contract in `references/agent-contract.md` verbatim as the agent's brief
 the ticket. The contract carries the non-negotiables: scope, the locked-quarantine rule, the
 provenance requirements, and the instruction to keep working rather than check in.
 
+The contract is deliberately domain-blind, so **compose the brief in three parts**:
+
+```
+agent-contract.md (filled in) + lessons.md (verbatim) + the role skill(s) for this finding
+```
+
+`/ship-orchestrator` §1 holds the routing table — `TS-*`/`BUN-*`/`A11Y-*` → `/ship-frontend`,
+`API-*`/`DB-*`/`ERR-*` → `/ship-backend`, `TEST-*` → `/ship-qa`, plus the cases that need two. Every
+brief carries `/ship-qa`'s regression-test placement rule regardless of category, because the gate's
+regression-test check can be satisfied by a test the gate never executes.
+
+`/ship-orchestrator` also owns the parallelism decision (§2), concurrency sizing against the single
+Postgres container (§3), and **recovery of an interrupted run** (§4) — reconcile worktrees, branches,
+and Linear locks there before dispatching anything new.
+
 ### 4. Gate it — do not trust the self-report
 
 ```bash
@@ -115,6 +132,17 @@ the exact gate output back to the same agent (context is worth keeping) and retr
 **Retry cap: 3.** After three failed gates, stop, mark the ticket `blocked` in Linear with the
 gate output and your best read on why, and move to the next ticket. Do not raise the cap to force
 a pass — the cap is what converts "burns tokens forever" into "surfaces a hard problem".
+
+**Append a scorecard row after EVERY gate run — pass or fail, including each retry.** One line to
+`audit/factory/scorecard.jsonl`, right here in the loop, before you retry or move on:
+
+```json
+{"ticket":"TRO-178","attempt":2,"verdict":"fail","failedGates":["regression-test"],"ts":"..."}
+```
+
+If rows are only written on success, failed and retried tickets vanish from the record and the
+gate-pass-on-first-attempt trend — the whole point of the scorecard — reads as 100%. Fill the
+`cr*` fields in at triage (step 7).
 
 ### 5. Measure (findings with a target)
 
@@ -158,10 +186,27 @@ git log. Then move the ticket(s) to **Done** with the evidence attached.
 If any of the four fails, the PR stays open and the factory moves to the next ticket. Never merge
 to clear a queue.
 
+**Exception — non-ticket content skips the CodeRabbit gate** (maintainer, 2026-07-29). A PR that
+does not change code in service of a ticket may merge on gate + CI green alone, without waiting
+for the review. That covers factory tooling, skills, docs, the memory bank, and CI config.
+
+The test is what the change *is*, not which files it touches: if a reviewer's opinion could change
+whether the product behaves correctly, it is ticket content and the gate applies. Anything under
+`api/`, `web/`, or `shared/` is ticket content by default. When genuinely unsure, wait for the
+review — the exception exists to stop tooling PRs blocking on a slow reviewer, not to route fixes
+around it.
+
+Triage the review anyway when it lands. Skipping the *gate* is not skipping the *reading*: file
+what it finds (`references/triage.md`), as a follow-up PR if the branch is already merged.
+
 > **Remote note.** CI and CodeRabbit run on GitHub, but the graded submission remote is GitLab.
 > After merging, make sure `main` reaches both — `origin` pushes to GitLab *and* GitHub, but it
 > *fetches* from GitLab, so a merge performed on GitHub must be pulled down before the next push
 > or the two will diverge. Verify with `git ls-remote` against both rather than assuming.
+>
+> Verified 2026-07-29 on PR #1: after the GitHub merge, GitLab `main` was still one commit behind.
+> The fix that does not disturb a checked-out feature branch is
+> `git fetch https://github.com/troysatchell/ship.git main:main && git push origin main`.
 
 ### 9. Close the loop back into the factory
 
@@ -184,7 +229,9 @@ and new tickets filed from review triage. Keep it scannable.
 ## Guardrails
 
 - **Never `git commit --no-verify`.** Pre-commit runs the compliance scan; bypassing it is a
-  security-compliance violation in this repo.
+  security-compliance violation in this repo. `/ship-security-compliance` has what the hook actually
+  runs — including the fact that a missing `comply` CLI lets commits through on a warning, so a
+  successful commit is not by itself evidence the secrets scan ran.
 - **Never let an agent widen the quarantine.** Adding entries to `quarantine.json` to get green is
   gaming the gate. Only *removing* entries (tests genuinely fixed) is legitimate.
 - **Never dispatch outside the ShipShape project** in Linear.
