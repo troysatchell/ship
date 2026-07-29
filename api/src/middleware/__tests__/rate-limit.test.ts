@@ -100,22 +100,22 @@ describe('API-1: /api rate limiter', () => {
      * one session key, still zero tolerated 429s.
      */
     it('serves a realistic navigation burst with zero 429s', async () => {
+      const statuses: number[] = []
       const server = createServer(prodApp)
       await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
       try {
-        const statuses: number[] = []
         for (let i = 0; i < WORST_CASE_BURST_PER_MINUTE; i++) {
           const res = await request(server)
             .get('/api/csrf-token')
             .set('Cookie', `session_id=${sessionIdLike('c')}`)
           statuses.push(res.status)
         }
-
-        const throttled = statuses.filter((s) => s === 429).length
-        expect(throttled, `${throttled}/${statuses.length} requests were throttled`).toBe(0)
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()))
       }
+
+      const throttled = statuses.filter((s) => s === 429).length
+      expect(throttled, `${throttled}/${statuses.length} requests were throttled`).toBe(0)
     })
   })
 
