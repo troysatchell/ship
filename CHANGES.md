@@ -58,11 +58,37 @@ run reproduced it at scale: **11 and 33 skipped**, same zero markers.
 - `api/src/__tests__/mock-isolation.test.ts` — new. Pins the four vitest semantics the fix rests on,
   and scans every api test file to fail the suite if the clear-plus-once-queue combination returns.
 
-**Evidence.** The guard test is red-before-green: with two pre-fix files restored it fails with an
-`AssertionError` naming `__tests__/activity.test.ts` and `routes/issues-history.test.ts`. The
-infrastructure fix is proven by repetition, not by a unit test — see the report for the run counts
-under concurrent build load, and the two-suite before/after (38 failures + 44 phantom skips → 0
-failures + 0 skips).
+**Defect 3 — deadlines sized for an idle machine.** With the two mechanisms above fixed, 20 api runs
+under concurrent build load still failed 6 times, and half of those failed on nothing but
+`Test timed out in 5000ms` — on tests that take 10-70ms unloaded. A deadline 80x a test's normal
+duration says nothing about correctness on an oversubscribed machine, and it cost a gate attempt each
+time. Separately, `rate-limit.test.ts`'s 320-request burst was the single most frequent failure in
+the suite, because `request(app)` binds a throwaway server per call and the burst created 320 of
+them; it failed as `socket hang up` and as a 5s timeout.
+
+- `api/vitest.config.ts` — `testTimeout` 5s → 15s, `hookTimeout` 10s → 30s. No assertion is raised or
+  removed and nothing is skipped. The hook deadline is the more consequential one, because a hook
+  that merely misses its deadline reports its describe's tests as *skipped* — silently dropping
+  assertions instead of flagging anything.
+- `api/src/middleware/__tests__/rate-limit.test.ts` — the burst binds one server for all 320
+  requests, measuring the limiter instead of the ephemeral-port supply. The assertion is byte-for-byte
+  unchanged: still 320 requests on one session key, still zero tolerated 429s.
+
+**Evidence.** Red-before-green for the guard test: with two pre-fix files restored it fails with an
+`AssertionError` naming `__tests__/activity.test.ts` and `routes/issues-history.test.ts`. Everything
+else here is proven by repetition, since converting a mock-reset call has no meaningful unit test.
+
+| Condition | Before | After |
+|---|---|---|
+| Two api suites, one database | 18 and 20 failures; 11 and 33 phantom skips | 0 failures; 0 skips |
+| 20 api runs under concurrent build load (load avg ~29 on 14 cores) | 6 runs failed | **1 run failed** |
+| Phantom skips across those 20 runs | — | **0, in all 20** |
+| `rate-limit.test.ts` alone, 25 runs under the same load | failed 3 times in 20 full runs | 25/25 |
+
+The one remaining failure is a different defect and is **not fixed**:
+`sprint-reviews.test.ts > POST /api/weeks/:id/review > returns 403 without auth (CSRF check first)`
+exceeded even the 15s deadline once in 20 runs, which is a hung request rather than a slow one. It
+needs its own ticket.
 
 **Rollback.** `git revert` the commits. The lock is confined to the test setup file and the
 converted files are self-contained; nothing in `api/src` production code changed.
