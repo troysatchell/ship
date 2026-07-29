@@ -115,7 +115,7 @@ test.describe('Docs Mode (Phase 3)', () => {
     await page.goto('/docs')
 
     // Wait for sidebar to load - use links within tree items (not buttons, which are for expand/add)
-    const sidebarLinks = page.locator('aside [role="tree"] [role="treeitem"] a')
+    const sidebarLinks = page.locator('aside ul[aria-label*="documents"] li a')
     await page.waitForTimeout(500)
 
     // If there are documents in the sidebar, click one and verify navigation
