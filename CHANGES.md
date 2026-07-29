@@ -8,6 +8,87 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-178 — [DB-1] `pnpm db:migrate` silently skipped 32 of 42 migrations and exited 0
+
+**What was broken.** `api/src/db/migrate.ts:103-111` wrapped *both* the `schema.sql` application
+and the migration loop in one `try`, and its handler matched any error message containing the
+substring `already exists`. `010_oauth_state.sql:8` created `oauth_state` without `IF NOT EXISTS`
+while `schema.sql:90` had already created it, so the migration threw `relation "oauth_state"
+already exists` — indistinguishable, to that handler, from a benign `schema.sql` re-run. It logged
+`Database schema already exists, continuing...`, returned normally, abandoned the remaining 32
+files, and the process exited **0**. A second run behaved identically; it did not self-heal.
+
+The report's hypothesis held exactly, including its list of the other blocking files.
+
+**What changed.**
+
+- `api/src/db/migrationRunner.ts` (new) — the migration logic, extracted from `migrate.ts` so it
+  can be exercised by tests. `migrate.ts` is now the CLI wrapper: env, pool, exit code.
+- The `already exists` tolerance now lives inside `applySchema` and covers only the `schema.sql`
+  call, so a failure in the migration loop can no longer be mistaken for one. It matches Postgres
+  SQLSTATE duplicate-object codes (`42P04`, `42P06`, `42P07`, `42701`, `42710`, `42723`) instead of
+  a substring — substring matching on `already exists` would also swallow, for example, a failed
+  `ALTER ... ADD CONSTRAINT` in a data migration.
+- A failing migration is rethrown with its filename in the message, and `migrate.ts` exits 1.
+- Migrations `010`, `025`, `033`, `035` are now idempotent against the `schema.sql` end state
+  (`IF NOT EXISTS`; a `pg_constraint` lookup for the CHECK constraint; `DROP TRIGGER IF EXISTS`
+  before `CREATE TRIGGER`, the pattern `schema.sql:193` already uses; a `pg_enum`-guarded loop for
+  the three `ALTER TYPE ... RENAME VALUE` statements). These four files are edited rather than
+  superseded by a new migration, because a new migration cannot stop `010` itself from throwing,
+  and databases that already recorded these versions never re-read them.
+- Regression tests: `api/src/db/__tests__/migrationRunner.test.ts`.
+
+**What the 32 previously-skipped migrations mean for an existing database.** Reported, not executed
+against anything but a factory database — this is the part that needs an operator's eyes before the
+next production deploy. Measured over `011`–`037` (31 files; `010` is the 32nd):
+
+| | count |
+|---|---|
+| `ALTER TABLE` | 19 |
+| of which `DROP COLUMN` | 3 |
+| `CREATE TABLE` | 7 |
+| `ALTER TYPE` | 4 |
+| `UPDATE` / `INSERT` / `DELETE` statements | 27 / 8 / 3 |
+
+`schema.sql` contains **zero** `ALTER TABLE` and **zero** DML, so on a database that already exists
+these 31 files are the only mechanism that would ever have changed it. Notable: `027`/`029` drop
+`documents.sprint_id`, `documents.project_id`, `documents.program_id`; `033` renames three
+`document_type` enum labels `sprint_* → weekly_*` and rewrites matching `properties` JSON; `014b`,
+`028` and `034` are backfills. **The first deploy after this change will apply all 32 at once.**
+Take a snapshot first and run `pnpm db:migrate` against a restore of production before running it
+against production.
+
+**How to run it.**
+
+```bash
+source .factory-env                      # or otherwise point DATABASE_URL at the target
+pnpm db:migrate                          # now exits non-zero on any migration failure
+pnpm --filter @ship/api test src/db/__tests__/migrationRunner.test.ts
+```
+
+Verify with `select count(*) from schema_migrations;` — it should equal the number of `.sql` files
+in `api/src/db/migrations/` (42 today), not 10.
+
+**Verified** against PostgreSQL 15-alpine in the `ship-audit-pg` container on `:5433`:
+
+- fresh database → 42 rows in `schema_migrations`, exit 0
+- second run on it → clean no-op, still 42, exit 0
+- `ship_wt_tro_178`, stuck at 10 rows (the state DB-1 had left it in) → 32 applied, 42 rows, exit 0
+- a database seeded with the *pre-*`033` enum labels → renamed to `weekly_*`, 42 rows, exit 0
+- `pnpm --filter @ship/api test` against the fully-migrated database → 29 files, 455 tests passed
+
+**Not verified.** No run against production or shadow, and no run against PostgreSQL 16 (production
+runs pg16; CI and this work run pg15 — see the pin comment in `.github/workflows/ci.yml`). Proving
+the production path needs a restore of a production snapshot.
+
+**Rollback.** `git revert` the four commits on `fix/db-1-migration-runner`, or, to restore only the
+old runner behaviour, delete `api/src/db/migrationRunner.ts` and restore `api/src/db/migrate.ts`
+from `main`. Rolling back the runner alone leaves migrations `010`/`025`/`033`/`035` idempotent,
+which is harmless. Note that rollback does **not** un-apply migrations already recorded in
+`schema_migrations`; reversing those requires a database restore.
+
+---
+
 ## Factory visibility — status command, published board, cost analysis (no ticket: tooling)
 
 **What changed.** Three additions, all reading from sources of truth rather than a status file:
