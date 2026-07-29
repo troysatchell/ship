@@ -86,13 +86,20 @@ fail-closed tests. Assertions in the three repaired files went from 131 to 147.
 failures, so the `knownFailing` list in `audit/factory/quarantine.json` must come back too —
 otherwise the gate reads them as new regressions and fails every branch.
 
-Get it from git, **not** from `previousCapture`: that key records only `capturedAt`,
-`capturedAtCommit` and `totals`, so it cannot restore the list. The 13 entries are at commit
-`ae2a00e` (recorded as `previousCapture.capturedAtCommit`):
+`previousCapture` now carries the 13 identities directly, under `previousCapture.webKnownFailing`.
+Copy them back into `packages.web.knownFailing`; no git archaeology required.
 
-```bash
-git show ae2a00e:audit/factory/quarantine.json > audit/factory/quarantine.json
-```
+Two traps were found while writing this, both worth knowing:
+
+- `previousCapture` originally held only `capturedAt`, `capturedAtCommit` and `totals` — so the
+  earlier instruction to "restore from `previousCapture`" pointed at data that was not there.
+- The obvious replacement was equally wrong. `capturedAtCommit` (`ae2a00e`) is the commit the
+  **measurement** was taken against; `audit/factory/quarantine.json` **did not exist yet** at that
+  commit, so `git show ae2a00e:…` fails outright. The file was introduced at `ea2dcd3`, now recorded
+  as `previousCapture.fileAtCommit`.
+
+That is why the identities are stored inline rather than referenced: a rollback instruction is read
+under pressure, and two successive versions of this one pointed somewhere that could not answer.
 
 ---
 

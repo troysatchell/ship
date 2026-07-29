@@ -17,7 +17,27 @@
   "previousCapture": {
     "capturedAt": "2026-07-29",
     "capturedAtCommit": "ae2a00e49b8ed2ceb0ab709937ed6774aca3187b",
-    "totals": { "api": "451/451", "web": "138/151, 13 failing" }
+    "totals": {
+      "api": "451/451",
+      "web": "138/151, 13 failing"
+    },
+    "note": "Self-contained on purpose. capturedAtCommit is the commit the MEASUREMENT was taken against; quarantine.json did not exist there yet, so it cannot be recovered from that commit. The identities below are the authoritative copy for a rollback.",
+    "fileAtCommit": "ea2dcd3",
+    "webKnownFailing": [
+      "web/src/components/editor/DetailsExtension.test.ts::DetailsExtension should allow inserting details via command",
+      "web/src/components/editor/DetailsExtension.test.ts::DetailsExtension should be configured as a block node with content",
+      "web/src/components/editor/DetailsExtension.test.ts::DetailsExtension should work in editor context",
+      "web/src/hooks/useSessionTimeout.test.ts::useSessionTimeout Inactivity Timer does NOT call onTimeout if dismissed before 0",
+      "web/src/lib/document-tabs.test.ts::documentTypeHasTabs returns false for sprint documents",
+      "web/src/lib/document-tabs.test.ts::getTabsForDocumentType returns empty array for sprint documents (no tabs)",
+      "web/src/lib/document-tabs.test.ts::getTabsForDocumentType returns tabs for program documents",
+      "web/src/lib/document-tabs.test.ts::getTabsForDocumentType returns tabs for project documents",
+      "web/src/lib/document-tabs.test.ts::resolveTabLabels resolves dynamic labels with counts",
+      "web/src/lib/document-tabs.test.ts::resolveTabLabels resolves dynamic labels without counts",
+      "web/src/lib/document-tabs.test.ts::tab ID validation for URL deep linking returns first tab as default for URL without tab",
+      "web/src/lib/document-tabs.test.ts::tab ID validation for URL deep linking validates program tab IDs correctly",
+      "web/src/lib/document-tabs.test.ts::tab ID validation for URL deep linking validates project tab IDs correctly"
+    ]
   },
   "capturedBy": [
     "pnpm --filter @ship/api test --reporter=json --outputFile=api-base.json",
@@ -31,12 +51,21 @@
   },
   "packages": {
     "api": {
-      "totals": { "tests": 469, "passed": 469, "failed": 0 },
+      "totals": {
+        "tests": 469,
+        "passed": 469,
+        "failed": 0
+      },
       "knownFailing": [],
       "note": "Re-measured at capturedAtCommit: 469 tests, up from 451 at the previous capture. This branch changed no api code. One standalone run, no flake observed."
     },
     "web": {
-      "totals": { "tests": 214, "passed": 214, "failed": 0, "files": 24 },
+      "totals": {
+        "tests": 214,
+        "passed": 214,
+        "failed": 0,
+        "files": 24
+      },
       "resolved": {
         "linearTicket": "TRO-223",
         "auditFinding": "TEST-1",
