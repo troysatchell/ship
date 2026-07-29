@@ -144,6 +144,9 @@ seam it creates.
 The warning limit was *not* raised — silencing it would remove the only signal in the build about
 this class of problem. BUN-5 (245 icon chunks, 209 unreferenced), BUN-7, BUN-8 and BUN-9 are
 untouched and remain open.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
