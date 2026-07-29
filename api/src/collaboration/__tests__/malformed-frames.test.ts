@@ -594,6 +594,38 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
     survivor.ws.close()
   }, 40_000)
 
+  it('contains a rejected promise from an async frame handler instead of letting it escape', async () => {
+    const docId = await createDocument('Malformed frame async handler doc')
+    const client = await connect(docId)
+
+    // `runFrameHandler`'s parameter is `() => void`, and TypeScript accepts an
+    // async function there — a function returning Promise<void> is assignable to
+    // `() => void`. So this compiles silently, and without the thenable branch in
+    // runFrameHandler the rejection would land *after* its try/catch had exited
+    // and resurface as an unhandled rejection: ERR-10 again, by the back door.
+    // No cast is needed to express that, which is precisely the hazard.
+    const asyncHandler: () => void = async () => {
+      throw new Error('async frame handler rejected')
+    }
+
+    const runFrameHandler = collab.runFrameHandler
+    expect(
+      typeof runFrameHandler,
+      'collaboration module must expose runFrameHandler so this branch can be pinned'
+    ).toBe('function')
+
+    runFrameHandler(client.ws, new Uint8Array([1, 2, 3]), { test: 'async-escape' }, asyncHandler)
+
+    const info = await whenClosed(client)
+
+    expect(
+      recorder.summary(),
+      'a rejected async frame handler must be routed through the guard, not surface as an unhandled rejection'
+    ).toBe('none')
+    expect(info.closed, 'the guard must close the socket for an async failure too').toBe(true)
+    expect(info.code).toBe(EXPECTED_CLOSE_CODE)
+  }, 40_000)
+
   it('keeps the co-tenant socket usable and stays connectable after every malformed frame', async () => {
     const docId = await createDocument('Malformed frame blast radius doc')
     const victim = await connect(docId)

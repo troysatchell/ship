@@ -30,14 +30,25 @@ to the process, and Node's default for an unhandled `uncaughtException` is to te
   whole body is guarded, not just the `handleMessage()` call, so the rate limiter and any future
   addition are covered too. It composes with the ERR-2 `revoked` check rather than duplicating it:
   the revocation short-circuit is now the first statement *inside* the guard, so a revoked socket is
-  not even decoded.
+  not even decoded. It also contains a **rejected promise**: `() => void` accepts an `async` function
+  in TypeScript, so an async handler added later would reject after the `try/catch` had exited and
+  escape as an unhandled rejection — ERR-10 again by the back door. A thenable result is routed
+  through the same log-and-close path, and a test pins it.
+- On the events channel the `catch` around `JSON.parse` no longer spans the response as well. It
+  previously swallowed anything raised while replying, so an error there was discarded instead of
+  reaching the guard's log-and-close path — a `catch {}` covering more than its comment claims is how
+  a guarded handler quietly stops being guarded.
 - `attachSocketErrorHandler()` covers a second vector of the same class. `ws` reports framing and
   transport failures by emitting `'error'` on the WebSocket, and `EventEmitter` throws an `'error'`
   event that has no listener — so a peer sending a frame with a reserved bit set crashed the process
   without ever reaching `handleMessage()`. It is attached as the **first statement** of the
   connection handler, before any `await`: that handler is `async` and loads the document from
   Postgres, and a frame arriving during that window found the socket unguarded. This was found by
-  the regression test, against the first version of this fix.
+  the regression test, against the first version of this fix. The events handler registers it first
+  too — there, honestly, as defence in depth rather than a live fix: that handler is synchronous, and
+  `ws.send()` with no callback does not emit `'error'` on a closed socket (`sendAfterClose` builds the
+  error only `if (cb)`), so nothing could slip in ahead of a later registration. "Error listener
+  first" is simply cheaper to hold as an invariant than to re-derive.
 - `api/src/process-safety.ts` — `installProcessSafetyNet()`, wired in at `api/src/index.ts` only
   (the entrypoint, so importing the app never hijacks a test runner's error handling). It takes
   ownership of `uncaughtException` / `unhandledRejection`, logs full structured context, stops
@@ -103,7 +114,9 @@ Red before green, with `api/src/collaboration/index.ts` restored to the version 
 (`Unexpected end of array`, `Invalid typed array length: 5`), one naming
 `Invalid WebSocket frame: RSV1 must be clear`, one `expected undefined to be 1002` for the missing
 close-code constant, and one `expected false to be true` for the socket that was never closed. With
-the fix: **11 passed**. Full api suite 488/488.
+the fix: **12 passed** (the twelfth is the async-escape case, which has no unfixed counterpart —
+verified red by removing only the thenable branch, giving
+`unhandledRejection -> Error: async frame handler rejected`).
 
 Note for anyone repeating that check: reverting with `git checkout HEAD -- <file>` stops working once
 the fix is committed, because `HEAD` then *contains* the fix. Use `git show main:<file>`.

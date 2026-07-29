@@ -440,34 +440,66 @@ function frameMessageType(frame: Uint8Array): number | 'empty' | 'multibyte' {
  * imported lib0 rather than at the throw site. The digest, length and message type
  * are the usable evidence — and, unlike the raw bytes, they carry no user content.
  */
-function runFrameHandler(
+// Exported for the ERR-10 regression test, which pins the async-escape branch
+// below — there is no async call site to exercise it through, and defensive code
+// nothing can reach is defensive code that rots. Same rationale as the exports of
+// revalidateLiveSessions()/closeSocketsForSession() above.
+export function runFrameHandler(
   ws: WebSocket,
   frame: Uint8Array,
   context: Record<string, unknown>,
   handler: () => void
 ): void {
   try {
-    handler();
-  } catch (err) {
-    console.error('[Collaboration] Unhandled error while processing a WebSocket frame; closing that socket', {
-      ...context,
-      error: err instanceof Error ? { name: err.name, message: err.message } : String(err),
-      // Identity, not content. See frameDigest() for why the bytes are not here.
-      frameBytes: frame.length,
-      frameDigest: frameDigest(frame),
-      frameMessageType: frameMessageType(frame),
-      stackIsUnreliable: 'lib0 decoding errors are module-scope singletons; err.stack is not the throw site',
-    });
+    const result: unknown = handler();
 
-    try {
-      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-        ws.close(WS_CLOSE_PROTOCOL_ERROR, 'Malformed frame');
-      }
-    } catch {
-      // The socket is already gone. Nothing further to do, and this must not
-      // throw either — it runs on the same I/O callback stack.
+    // TypeScript cannot express "not async" here: a function returning
+    // `Promise<void>` is assignable to `() => void`, so an `async` handler added
+    // later would compile silently, reject *after* this try/catch had already
+    // exited, and escape the guard entirely — reintroducing ERR-10 by the back
+    // door as an unhandled rejection. Contain it rather than merely discourage it.
+    if (isThenable(result)) {
+      result.then(undefined, (err: unknown) => reportFrameFailure(ws, frame, context, err));
     }
+  } catch (err) {
+    reportFrameFailure(ws, frame, context, err);
   }
+}
+
+/** Log a frame failure and hang up on the peer that caused it. Must never throw. */
+function reportFrameFailure(
+  ws: WebSocket,
+  frame: Uint8Array,
+  context: Record<string, unknown>,
+  err: unknown
+): void {
+  console.error('[Collaboration] Unhandled error while processing a WebSocket frame; closing that socket', {
+    ...context,
+    error: err instanceof Error ? { name: err.name, message: err.message } : String(err),
+    // Identity, not content. See frameDigest() for why the bytes are not here.
+    frameBytes: frame.length,
+    frameDigest: frameDigest(frame),
+    frameMessageType: frameMessageType(frame),
+    stackIsUnreliable: 'lib0 decoding errors are module-scope singletons; err.stack is not the throw site',
+  });
+
+  try {
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close(WS_CLOSE_PROTOCOL_ERROR, 'Malformed frame');
+    }
+  } catch {
+    // The socket is already gone. Nothing further to do, and this must not
+    // throw either — it runs on the same I/O callback stack.
+  }
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === 'object' && value !== null && 'then' in value && typeof value.then === 'function';
+}
+
+/** Narrow an arbitrary parsed JSON value to the events channel's keepalive ping. */
+function isPingMessage(message: unknown): boolean {
+  return typeof message === 'object' && message !== null && 'type' in message && message.type === 'ping';
 }
 
 /**
@@ -1102,6 +1134,16 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
 
   // Handle events WebSocket connections (for real-time notifications)
   eventsWss.on('connection', (ws: WebSocket, sessionData: WebSocketSession) => {
+    // ERR-10: first statement, before anything that touches the socket — the same
+    // rule as the collaboration handler above. Note this is defence in depth
+    // rather than a live fix: `ws.send()` with no callback does not emit 'error'
+    // on a closed socket (`sendAfterClose` only builds the error `if (cb)`), and
+    // this handler is synchronous, so nothing could currently slip in ahead of a
+    // later registration. The point is that "error listener first" is a cheaper
+    // invariant to hold than to re-derive — and the collaboration handler proved
+    // what late registration costs once someone makes the function async.
+    attachSocketErrorHandler(ws, { channel: 'events', userId: sessionData.userId });
+
     eventConns.set(ws, {
       userId: sessionData.userId,
       workspaceId: sessionData.workspaceId,
@@ -1113,13 +1155,9 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
     // Send initial connected message
     ws.send(JSON.stringify({ type: 'connected', data: {} }));
 
-    attachSocketErrorHandler(ws, { channel: 'events', userId: sessionData.userId });
-
     // Handle ping/pong for keepalive with rate limiting
     ws.on('message', (data: Buffer) => {
-      // ERR-10: same guard as the collaboration socket. The inner try/catch below
-      // only covers JSON.parse; ws.send() on a socket that died mid-handler, and
-      // anything else added here later, would still escape to the process.
+      // ERR-10: same guard as the collaboration socket.
       runFrameHandler(ws, data, { channel: 'events', userId: sessionData.userId }, () => {
         // ERR-2: revoked session — stop serving this socket immediately.
         if (eventConns.get(ws)?.revoked) {
@@ -1142,13 +1180,22 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
         rateLimitViolations.delete(ws);
         recordMessage(ws);
 
+        // The catch covers exactly what its comment claims — parsing — and
+        // nothing else. It previously wrapped the response too, so any error
+        // raised while replying was silently discarded instead of reaching
+        // runFrameHandler's log-and-close path: a `catch {}` that spans more than
+        // it says is how a guarded handler quietly stops being guarded.
+        let message: unknown;
         try {
-          const message = JSON.parse(data.toString());
-          if (message.type === 'ping') {
-            ws.send(JSON.stringify({ type: 'pong' }));
-          }
+          message = JSON.parse(data.toString());
         } catch {
-          // Ignore invalid messages
+          // Malformed JSON on this channel is expected noise from clients, not a
+          // frame worth logging or closing the socket over.
+          return;
+        }
+
+        if (isPingMessage(message)) {
+          ws.send(JSON.stringify({ type: 'pong' }));
         }
       });
     });
