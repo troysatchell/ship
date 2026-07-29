@@ -68,8 +68,8 @@ const WeekStandupsTab = React.lazy(() => import('@/components/document-tabs/Week
 /**
  * Tab configurations for each document type.
  *
- * Document types without tabs (wiki, issue, sprint) will render directly
- * in the editor without a tab bar.
+ * Document types without tabs (wiki, issue) render directly in the editor without
+ * a tab bar. Sprints DO have tabs, chosen by status — use getTabsForDocument().
  */
 export const documentTabConfigs: Record<string, DocumentTabConfig[]> = {
   project: [
@@ -85,7 +85,12 @@ export const documentTabConfigs: Record<string, DocumentTabConfig[]> = {
     },
     {
       id: 'weeks',
-      label: 'Weeks',
+      // Count-aware, matching the program 'weeks' tab below. 7713ef0 renamed this
+      // tab from 'sprints' to 'weeks' and collapsed this label to a bare string in
+      // the same hunk, while leaving the program tab's function intact — so the
+      // count UnifiedDocumentPage still computes (weeks: projectWeeks.length) had
+      // no consumer. Restored.
+      label: (_, counts) => counts?.weeks ? `Weeks (${counts.weeks})` : 'Weeks',
       component: ProjectWeeksTab,
     },
     {
