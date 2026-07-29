@@ -18,6 +18,7 @@ vi.mock('../db/client.js', () => ({
 }));
 
 import { authMiddleware } from '../middleware/auth.js';
+import { pool } from '../db/client.js';
 import { Request, Response, NextFunction } from 'express';
 import { ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
 // The enforced inactivity window is SESSION_TIMEOUT_MS plus the throttle interval the
@@ -169,7 +170,10 @@ describe('authMiddleware', () => {
         .mockResolvedValueOnce(pgResult([]));
 
       await authMiddleware(req, res, next);
-      expect(queryMock).toHaveBeenCalledWith(
+      // Asserted through `pool.query` rather than `queryMock` — they are the same
+      // function object, and keeping the original reference here keeps this assertion
+      // legible as unchanged in review.
+      expect(pool.query).toHaveBeenCalledWith(
         'DELETE FROM sessions WHERE id = $1',
         ['expired-session']
       );
