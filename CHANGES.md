@@ -95,6 +95,26 @@ vitest run <file>` against the branch's own worktree database
 | `workspaces.ts:1021` → `workspaceAdminMiddleware` removed from `GET /:id/audit-logs` | **3 failed / 25 passed**, each `expected 200 to be 403`. Includes the foreign-workspace case, i.e. without the middleware the handler itself does no scoping. |
 | both reverted | 27/27 and 28/28 pass. |
 
+**Expected gate result, stated up front.** `scripts/factory/gate.sh` reports
+`tests:not-weakened FAIL — 6 removed test/assertion line(s)`. That check greps the diff for removed
+`expect(` lines, and cannot distinguish deleting an assertion from *replacing a vacuous one*. All six
+are the vacuous assertions this ticket exists to delete:
+
+```
+e2e/authorization.spec.ts    expect(response.status()).toBe(403)        # was inside two nested ifs
+e2e/file-attachments.spec.ts expect(dialog.message()).toContain('.exe')      # was inside page.on('dialog')
+e2e/file-attachments.spec.ts expect(dialog.message()).toContain('blocked')   # was inside page.on('dialog')
+e2e/security.spec.ts         expect(href).not.toContain('javascript:')       # was inside a loop over 0 elements
+e2e/security.spec.ts         expect(href).not.toContain('text/html')         # was inside `if (href?.startsWith('data:'))`
+e2e/security.spec.ts         expect(href).not.toContain('<script')           # was inside `if (href?.startsWith('data:'))`
+```
+
+Each is replaced by a stronger unconditional assertion in the same test; `regression-test` reports 13
+added cases. Every other gate is green, including `review-patterns` (G7b) and both vitest projects.
+Two earlier gate runs failed `tests:api` on a *different* untouched test each time
+(`backlinks.test.ts`, then `rate-limit.test.ts`); both pass standalone and the full api suite is
+472/472 — that is TRO-277's load-sensitive flake, not this branch.
+
 **Attempted, then reverted — and it found two bugs.** `e2e/ai-analysis-api.spec.ts:209`
 *"POST /api/ai/analyze-plan returns 429 after 10 rapid requests"* guards its assertions with
 `if (!allSucceeded)`, so the single outcome it exists to catch — the limiter doing nothing — is the
