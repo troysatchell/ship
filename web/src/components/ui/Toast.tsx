@@ -33,8 +33,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
   const showToast = useCallback((message: string, type: Toast['type'] = 'success', duration = 3000, action?: ToastAction) => {
     const id = crypto.randomUUID();
+    // duration <= 0 means "sticky": stay until the user dismisses it. Used for
+    // failures that must be acknowledged, e.g. a write that could not be saved.
     // If there's an action (like undo), extend duration to give user time to click
-    const finalDuration = action ? Math.max(duration, 5000) : duration;
+    const finalDuration = duration <= 0 ? 0 : action ? Math.max(duration, 5000) : duration;
     setToasts((prev) => [...prev, { id, message, type, duration: finalDuration, action }]);
   }, []);
 
@@ -56,7 +58,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 
 function ToastItem({ toast, onClose }: { toast: Toast; onClose: () => void }) {
   useEffect(() => {
-    const timer = setTimeout(onClose, toast.duration || 3000);
+    // A sticky toast (duration 0) has no auto-dismiss timer - it stays until
+    // the user closes it, so a failed write cannot scroll past unnoticed.
+    const duration = toast.duration ?? 3000;
+    if (duration <= 0) return;
+    const timer = setTimeout(onClose, duration);
     return () => clearTimeout(timer);
   }, [toast.duration, onClose]);
 
