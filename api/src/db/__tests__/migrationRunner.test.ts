@@ -12,13 +12,14 @@
  * These tests run against throwaway databases created from DATABASE_URL, never
  * against DATABASE_URL itself.
  */
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { randomBytes } from 'crypto';
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { listMigrationFiles, runMigrations } from '../migrationRunner.js';
+import { runMigrations } from '../migrationRunner.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DB_DIR = join(__dirname, '..');
@@ -46,8 +47,11 @@ function databaseNames(): { adminUrl: string; urlFor: (name: string) => string; 
   return { adminUrl: urlFor('postgres'), urlFor, base };
 }
 
+/** Postgres identifiers are limited to 63 bytes. */
+const MAX_IDENTIFIER_BYTES = 63;
+
 function assertSafeIdentifier(name: string): string {
-  if (!/^[a-z_][a-z0-9_]*$/.test(name) || name.length > 63) {
+  if (!/^[a-z_][a-z0-9_]*$/.test(name) || name.length > MAX_IDENTIFIER_BYTES) {
     throw new Error(`Refusing to interpolate unsafe database identifier: ${name}`);
   }
   return name;
@@ -55,42 +59,86 @@ function assertSafeIdentifier(name: string): string {
 
 const { adminUrl, urlFor, base } = databaseNames();
 
-async function recreateDatabase(name: string): Promise<void> {
+/**
+ * A fresh, unguessable database name per suite run.
+ *
+ * Deliberately random rather than derived-and-fixed. A deterministic name is
+ * safe against *other* tickets — it is prefixed with this worktree's own
+ * exclusive database — but it collides with itself: two runs of this suite at
+ * once (a gate run alongside a manual one) would have the second run drop and
+ * recreate the database the first is still using. A random name per run cannot
+ * do that to anybody, including me.
+ */
+function throwawayDatabaseName(role: string): string {
+  const tail = `_${role}_${randomBytes(6).toString('hex')}`;
+  const head = base.slice(0, MAX_IDENTIFIER_BYTES - tail.length);
+  return assertSafeIdentifier(`${head}${tail}`);
+}
+
+/**
+ * The name is generated, never taken from input, and still validated before
+ * interpolation — database identifiers cannot be bound as query parameters, so
+ * validation is the only thing standing between this and injection.
+ */
+async function createDatabase(name: string): Promise<void> {
   assertSafeIdentifier(name);
   const admin = new pg.Client({ connectionString: adminUrl });
   await admin.connect();
   try {
-    await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    // No preceding DROP: a randomly named database cannot already exist, so
+    // there is nothing here that could destroy someone else's state.
     await admin.query(`CREATE DATABASE ${name}`);
   } finally {
     await admin.end();
   }
 }
 
+/**
+ * No `WITH (FORCE)`. FORCE terminates other sessions, which would turn "my
+ * teardown found an unexpected connection" into "my teardown disconnected
+ * something and deleted its database". If a drop fails because a client is
+ * still attached, that is a fact worth surfacing.
+ */
 async function dropDatabase(name: string): Promise<void> {
   assertSafeIdentifier(name);
   const admin = new pg.Client({ connectionString: adminUrl });
   await admin.connect();
   try {
-    await admin.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    await admin.query(`DROP DATABASE IF EXISTS ${name}`);
   } finally {
     await admin.end();
   }
 }
 
 async function recordedVersions(pool: pg.Pool): Promise<string[]> {
-  const res = await pool.query('SELECT version FROM schema_migrations ORDER BY version');
-  return res.rows.map(r => r.version as string);
+  const res = await pool.query<{ version: string }>(
+    'SELECT version FROM schema_migrations ORDER BY version'
+  );
+  return res.rows.map(r => r.version);
+}
+
+/**
+ * Expected migration versions, read straight off disk.
+ *
+ * Deliberately NOT via listMigrationFiles(): that is a function under test
+ * here, and deriving the expectation from it would make a wrong implementation
+ * agree with an equally wrong expectation and still report green.
+ */
+function expectedVersionsFromDisk(): string[] {
+  return readdirSync(MIGRATIONS_DIR)
+    .filter(f => f.endsWith('.sql'))
+    .map(f => f.replace(/\.sql$/, ''))
+    .sort();
 }
 
 const silent = () => {};
 
 describe('migration runner — real migration set (DB-1 / TRO-178)', () => {
-  const dbName = `${base}_migrations`;
+  const dbName = throwawayDatabaseName('migset');
   let pool: pg.Pool;
 
   beforeAll(async () => {
-    await recreateDatabase(dbName);
+    await createDatabase(dbName);
     pool = new pg.Pool({ connectionString: urlFor(dbName) });
   }, HOOK_TIMEOUT);
 
@@ -102,7 +150,7 @@ describe('migration runner — real migration set (DB-1 / TRO-178)', () => {
   it(
     'applies every migration file against a fresh database',
     async () => {
-      const expected = listMigrationFiles(MIGRATIONS_DIR).map(f => f.replace(/\.sql$/, ''));
+      const expected = expectedVersionsFromDisk();
       expect(
         expected.length,
         'the migrations directory should contain migration files to apply'
@@ -124,7 +172,7 @@ describe('migration runner — real migration set (DB-1 / TRO-178)', () => {
   it(
     'is a clean no-op on a second invocation, not a silent abandon',
     async () => {
-      const expected = listMigrationFiles(MIGRATIONS_DIR).map(f => f.replace(/\.sql$/, ''));
+      const expected = expectedVersionsFromDisk();
 
       const result = await runMigrations(pool, {
         schemaPath: SCHEMA_PATH,
@@ -140,12 +188,12 @@ describe('migration runner — real migration set (DB-1 / TRO-178)', () => {
 });
 
 describe('migration runner — error handling (DB-1 / TRO-178)', () => {
-  const dbName = `${base}_migfail`;
+  const dbName = throwawayDatabaseName('migfail');
   let pool: pg.Pool;
   let fixtureRoot: string;
 
   beforeAll(async () => {
-    await recreateDatabase(dbName);
+    await createDatabase(dbName);
     pool = new pg.Pool({ connectionString: urlFor(dbName) });
 
     fixtureRoot = mkdtempSync(join(tmpdir(), 'tro178-migrations-'));
@@ -195,11 +243,13 @@ describe('migration runner — error handling (DB-1 / TRO-178)', () => {
       expect(recorded).not.toContain('002_conflicts');
       expect(recorded).not.toContain('003_after_the_failure');
 
-      const after = await pool.query(
+      const after = await pool.query<{ present: string | null }>(
         "SELECT to_regclass('public.tro178_after') AS present"
       );
+      const [afterRow] = after.rows;
+      expect(afterRow, 'to_regclass should return exactly one row').toBeDefined();
       expect(
-        after.rows[0].present,
+        afterRow?.present,
         'migration 003 must not have been applied after 002 failed'
       ).toBeNull();
     },
@@ -218,6 +268,54 @@ describe('migration runner — error handling (DB-1 / TRO-178)', () => {
           log: silent,
         })
       ).rejects.toThrow(/ENOENT|no such file or directory/i);
+    },
+    HOOK_TIMEOUT
+  );
+
+  it(
+    'rejects a migrations directory containing an unnumbered file, before applying anything',
+    async () => {
+      // Ordering is the only correctness guarantee a migration sequence has.
+      // 'hotfix.sql' sorts after every numbered file and would silently run
+      // last; the run must refuse instead of picking an order.
+      const root = mkdtempSync(join(tmpdir(), 'tro178-badname-'));
+      try {
+        mkdirSync(join(root, 'migrations'));
+        writeFileSync(
+          join(root, 'schema.sql'),
+          'CREATE TABLE IF NOT EXISTS tro178_badname_marker (id INT);\n'
+        );
+        writeFileSync(
+          join(root, 'migrations', '001_ok.sql'),
+          'CREATE TABLE IF NOT EXISTS tro178_badname_ok (id INT);\n'
+        );
+        writeFileSync(
+          join(root, 'migrations', 'hotfix.sql'),
+          'CREATE TABLE IF NOT EXISTS tro178_badname_hotfix (id INT);\n'
+        );
+
+        await expect(
+          runMigrations(pool, {
+            schemaPath: join(root, 'schema.sql'),
+            migrationsDir: join(root, 'migrations'),
+            log: silent,
+          })
+        ).rejects.toThrow(/hotfix\.sql/);
+
+        // Validation happens before the loop, so even the well-named migration
+        // must not have been applied.
+        const ok = await pool.query<{ present: string | null }>(
+          "SELECT to_regclass('public.tro178_badname_ok') AS present"
+        );
+        const [okRow] = ok.rows;
+        expect(okRow, 'to_regclass should return exactly one row').toBeDefined();
+        expect(
+          okRow?.present,
+          'no migration should be applied from a directory that failed validation'
+        ).toBeNull();
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
     },
     HOOK_TIMEOUT
   );
