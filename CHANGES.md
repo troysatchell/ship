@@ -60,6 +60,9 @@ lib0 builds `errorUnexpectedEndOfArray` as a module-scope singleton `Error` whos
 at module *load*, so every one of these crashes points at whatever first imported lib0 rather than
 at the throw site. Both the frame log and the fatal log therefore record the offending bytes and
 carry an explicit caveat on the stack field.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
