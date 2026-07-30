@@ -1168,6 +1168,11 @@ router.patch('/:id', authMiddleware, authed(async (req, res) => {
     // Log all changes to history (within transaction)
     const automatedBy = data.claude_metadata?.updated_by;
     for (const change of changes) {
+      // `id!` here predates this ticket (req.params destructuring under
+      // noUncheckedIndexedAccess) and is unrelated to TS-4/TRO-209's scope —
+      // only req.userId's assertion on this line was removed; fixing `id!` is
+      // a separate, unrelated cleanup, out of scope for this mechanical diff.
+      // review-pattern-ok: pre-existing `id!`, unrelated to req.userId/workspaceId (TRO-209)
       await logDocumentChange(id!, change.field, change.oldValue, change.newValue, req.userId, automatedBy, client);
     }
 
@@ -1681,6 +1686,10 @@ router.post('/:id/accept', authMiddleware, authed(async (req, res) => {
     );
 
     // Log the state change
+    // `id!` here predates this ticket (req.params destructuring under
+    // noUncheckedIndexedAccess) and is unrelated to TS-4/TRO-209's scope —
+    // only req.userId's assertion on this line was removed.
+    // review-pattern-ok: pre-existing `id!`, unrelated to req.userId/workspaceId (TRO-209)
     await logDocumentChange(id!, 'state', 'triage', 'backlog', req.userId);
 
     const updatedRow = result.rows[0];
@@ -1909,6 +1918,10 @@ router.post('/:id/reject', authMiddleware, authed(async (req, res) => {
     }
 
     // Log the state change
+    // `id!` here predates this ticket (req.params destructuring under
+    // noUncheckedIndexedAccess) and is unrelated to TS-4/TRO-209's scope —
+    // only req.userId's assertion on this line was removed.
+    // review-pattern-ok: pre-existing `id!`, unrelated to req.userId/workspaceId (TRO-209)
     await logDocumentChange(id!, 'state', 'triage', 'cancelled', req.userId);
 
     const issue = extractIssueFromRow(updatedRow);
