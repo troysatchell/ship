@@ -21,6 +21,69 @@ function getApiPort(): number {
   return 3000;
 }
 
+/**
+ * Vendor chunking (BUN-6 / TRO-202).
+ *
+ * This does NOT reduce total bytes. It changes *which* bytes a returning user
+ * has to re-download after a routine deploy. Before this, one chunk held all
+ * application code and all third-party code, so editing a single page gave the
+ * whole ~588 kB gzip a new content hash and invalidated it for every user.
+ *
+ * Three rules govern the groups below:
+ *
+ *  1. Group by release cadence, not by size. React and TanStack Query change
+ *     on their own upgrade schedule, which is roughly never compared to
+ *     `web/src`. That is what makes them worth a stable chunk.
+ *
+ *  2. **Never merge a lazily-reachable package into an eagerly-reachable
+ *     chunk.** A manual chunk is loaded as soon as *anything* in it is
+ *     statically reachable from the entry. Sweeping the editor stack or
+ *     emoji-picker-react into a catch-all `vendor` alongside, say, `clsx`
+ *     would silently undo BUN-2 and BUN-4 — the split would still exist on
+ *     disk while the bytes came back to the initial payload. Hence the
+ *     dedicated `vendor-editor`, `vendor-highlight` and `vendor-emoji` groups,
+ *     and hence `audit/bundle/measure.mjs` reports per-route closures rather
+ *     than trusting the chunk list.
+ *
+ *  3. Only group a package that *every* route needs. Radix, cmdk and dnd-kit
+ *     were tried as a `vendor-ui` group and measured: it cost 15.0 kB gzip on
+ *     /docs and /documents/:id, because a route that needs one primitive then
+ *     downloads all of them. Rollup's default placement splits those better
+ *     than a hand-written rule does, so they are deliberately left alone.
+ */
+function manualChunks(id: string): string | undefined {
+  // Rollup's CommonJS interop helpers (`getDefaultExportFromCjs`) are a virtual
+  // module every chunk needs. Left unassigned, Rollup folds them into whichever
+  // manual chunk happens to claim them first — in this app that was
+  // `vendor-highlight`, which then became a static dependency of the entry and
+  // silently dragged 22.6 kB gzip of syntax grammars back into first paint.
+  // Pinning them to the always-eager react chunk costs ~200 bytes and removes
+  // the failure mode.
+  if (id.includes('commonjsHelpers')) return 'vendor-react';
+
+  if (!id.includes('node_modules')) return undefined;
+
+  // Reached only through the dynamic import of components/Editor (BUN-2).
+  if (/node_modules\/(@tiptap|prosemirror-[^/]+|yjs|y-protocols|y-prosemirror|y-websocket|y-indexeddb|lib0|linkifyjs|tippy\.js|@popperjs)\//.test(id)) {
+    return 'vendor-editor';
+  }
+  // Reached only through vendor-editor's code-block extension (BUN-3).
+  if (/node_modules\/(highlight\.js|lowlight)\//.test(id)) return 'vendor-highlight';
+  // Reached only through the emoji popover's dynamic import (BUN-4).
+  if (/node_modules\/emoji-picker-react\//.test(id)) return 'vendor-emoji';
+
+  // Eagerly reachable, and stable across app deploys.
+  if (/node_modules\/(react|react-dom|react-router|react-router-dom|scheduler)\//.test(id)) {
+    return 'vendor-react';
+  }
+  if (/node_modules\/@tanstack\//.test(id)) return 'vendor-query';
+
+  // Everything else keeps Rollup's default placement. A catch-all `vendor`
+  // here would violate rule 2 above for any package that is only ever
+  // dynamically imported.
+  return undefined;
+}
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), 'VITE_');
   const apiPort = getApiPort();
@@ -77,6 +140,27 @@ export default defineConfig(({ mode }) => {
     resolve: {
       alias: {
         '@': resolve(__dirname, './src'),
+      },
+    },
+    build: {
+      // Emits dist/.vite/manifest.json: the chunk graph, with each chunk's
+      // static `imports` and — the reason it is on — its `css`.
+      //
+      // audit/bundle/measure.mjs originally derived the per-route payload by
+      // walking `import "./x.js"` specifiers out of the emitted chunks. That
+      // walk cannot see stylesheets, so CSS pulled in by a lazy chunk was
+      // invisible and every route measured smaller than it is (CodeRabbit
+      // finding 1 on PR #14). The manifest is the same graph Vite itself uses
+      // to decide which modulepreload and stylesheet links a chunk needs, so
+      // measuring from it cannot disagree with what the browser fetches.
+      //
+      // Deploy note: this file ships to S3/CloudFront with the rest of dist.
+      // It exposes chunk names, which are already enumerable from the entry
+      // chunk, and no source paths beyond the module ids already present in
+      // the bundle.
+      manifest: true,
+      rollupOptions: {
+        output: { manualChunks },
       },
     },
     server: {

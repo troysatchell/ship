@@ -1,0 +1,155 @@
+/**
+ * Regression test for audit finding TEST-2 (TRO-224).
+ *
+ * `e2e/security.spec.ts` had two tests named for link XSS. Both iterated the
+ * `<a>` elements the editor had rendered and asserted only inside the loop, so
+ * with zero links rendered — which is what actually happened, because TipTap
+ * has no markdown-link input rule — they passed while observing nothing.
+ *
+ * This file is the assertion that runs. `e2e/` is executed by neither the
+ * factory gate nor CI (`api/vitest.config.ts` pins `src/**` and `web`'s config
+ * is rooted at `web/`), so a link-sanitization test that lives only in a
+ * Playwright spec never runs. The e2e spec was fixed too, but this is the proof.
+ *
+ * What it pins: content loaded as TipTap **JSON** — the stored-XSS path, since
+ * `documents.content` is JSON and `Mark.fromJSON` does not run `parseHTML`'s
+ * `getAttrs` guard — must not render a live `javascript:` or `data:` href.
+ */
+import { describe, it, expect } from 'vitest';
+import { Editor } from '@tiptap/core';
+import StarterKit from '@tiptap/starter-kit';
+import Link from '@tiptap/extension-link';
+import { LINK_HREF_POLICY, DENIED_LINK_SCHEMES, usesDeniedScheme } from './linkOptions';
+
+const SAFE_HREF = 'https://example.gov/safe-control';
+
+/** Mirrors the `Link.configure(...)` call in `web/src/components/Editor.tsx`. */
+function editorWithLinks(hrefs: string[]): Editor {
+  return new Editor({
+    extensions: [
+      StarterKit,
+      Link.configure({
+        ...LINK_HREF_POLICY,
+        openOnClick: true,
+        HTMLAttributes: { class: 'text-accent hover:underline cursor-pointer' },
+      }),
+    ],
+    content: {
+      type: 'doc',
+      content: hrefs.map((href, i) => ({
+        type: 'paragraph',
+        content: [
+          {
+            type: 'text',
+            marks: [{ type: 'link', attrs: { href } }],
+            text: `link ${i}`,
+          },
+        ],
+      })),
+    },
+  });
+}
+
+describe('link href policy (LINK_HREF_POLICY)', () => {
+  it('renders a benign https href unchanged — positive control', () => {
+    // Without this, "no links rendered at all" would look like a pass, which is
+    // exactly the defect TEST-2 describes.
+    const editor = editorWithLinks([SAFE_HREF]);
+    try {
+      const html = editor.getHTML();
+      expect(html, 'the editor must actually render an <a> for a benign href').toContain('<a ');
+      expect(html, 'a benign https href must survive sanitization').toContain(`href="${SAFE_HREF}"`);
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('strips the href of a stored javascript: link', () => {
+    const editor = editorWithLinks(['javascript:alert("XSS")', SAFE_HREF]);
+    try {
+      const html = editor.getHTML();
+      expect(html, 'positive control must still render').toContain(`href="${SAFE_HREF}"`);
+      expect(html, 'javascript: must not survive into a rendered href').not.toContain('javascript:');
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('strips the href of a stored data:text/html link', () => {
+    const editor = editorWithLinks([
+      'data:text/html,<script>alert("XSS")</script>',
+      SAFE_HREF,
+    ]);
+    try {
+      const html = editor.getHTML();
+      expect(html, 'positive control must still render').toContain(`href="${SAFE_HREF}"`);
+      expect(html, 'data: URIs must not survive into a rendered href').not.toContain('data:text/html');
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('strips the href of a stored data:image/svg+xml link (svg executes script)', () => {
+    const editor = editorWithLinks([
+      'data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9ImFsZXJ0KDEpIj48L3N2Zz4=',
+      SAFE_HREF,
+    ]);
+    try {
+      const html = editor.getHTML();
+      expect(html, 'positive control must still render').toContain(`href="${SAFE_HREF}"`);
+      expect(html, 'data:image/svg+xml must not survive into a rendered href').not.toContain('data:image');
+    } finally {
+      editor.destroy();
+    }
+  });
+
+  it('allows no denied scheme through `protocols`', () => {
+    // `protocols` entries become allowed schemes. Adding one of these would
+    // re-open the vector without touching any other line of the codebase.
+    const configured = (LINK_HREF_POLICY.protocols ?? []).map((p) =>
+      typeof p === 'string' ? p : p.scheme
+    );
+    for (const denied of DENIED_LINK_SCHEMES) {
+      expect(configured, `"${denied}" must never be an allowed link protocol`).not.toContain(denied);
+    }
+  });
+});
+
+describe('usesDeniedScheme', () => {
+  it.each([
+    'javascript:alert(1)',
+    'JavaScript:alert(1)',
+    '  javascript:alert(1)',
+    'java\nscript:alert(1)',
+    'java\tscript:alert(1)',
+    'jav\u0000ascript:alert(1)',
+    'jav ascript:alert(1)',
+    'javascript\n:alert(1)',
+    'j a v a s c r i p t:alert(1)',
+    'data:text/html,<script>alert(1)</script>',
+    'DATA:text/html;base64,PHNjcmlwdD4=',
+    'vbscript:msgbox(1)',
+    'file:///etc/passwd',
+    'blob:https://example.gov/1234',
+  ])('rejects %j', (url) => {
+    expect(usesDeniedScheme(url)).toBe(true);
+  });
+
+  it.each([
+    SAFE_HREF,
+    'http://example.gov',
+    'mailto:someone@example.gov',
+    'tel:+15551234567',
+    '/documents/abc-123',
+    '#anchor',
+    'https://example.gov/?q=data:text/html',
+    '',
+  ])('accepts %j', (url) => {
+    expect(usesDeniedScheme(url)).toBe(false);
+  });
+
+  it('treats null and undefined as not-denied (no href is not a dangerous href)', () => {
+    expect(usesDeniedScheme(null)).toBe(false);
+    expect(usesDeniedScheme(undefined)).toBe(false);
+  });
+});
