@@ -3,6 +3,7 @@ import { config } from 'dotenv';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveDatabaseSsl } from './ssl.js';
+import { resolvePoolTiming } from './poolConfig.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -13,7 +14,11 @@ config({ path: join(__dirname, '../../.env') });
 
 const { Pool } = pg;
 
-const isProduction = process.env.NODE_ENV === 'production';
+// Connection timeout and pool size are operator-tunable via env (TRO-248 /
+// RULE-7) — see poolConfig.ts for the failure mode this protects against and
+// why statement_timeout is deliberately not part of it. Defaults match the
+// previous hardcoded values, so behaviour is unchanged unless overridden.
+const { connectionTimeoutMillis, max: poolMax } = resolvePoolTiming(process.env);
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -22,11 +27,12 @@ const pool = new Pool({
   // run either side of it, negotiated TLS (DB-11 / TRO-240).
   ssl: resolveDatabaseSsl(),
   // Production-ready pool configuration
-  max: isProduction ? 20 : 10, // Max connections (default is 10)
+  max: poolMax, // DB_POOL_MAX (production) / DB_POOL_MAX_DEV (else); default 20/10
   idleTimeoutMillis: 30000, // Close idle connections after 30 seconds
-  connectionTimeoutMillis: 2000, // Fail fast if can't connect in 2 seconds
+  connectionTimeoutMillis, // DB_POOL_CONNECTION_TIMEOUT_MS; default 2000ms — fail fast if can't connect
   maxUses: 7500, // Recycle connections after 7500 queries to prevent memory leaks
-  // DDoS protection: Terminate queries running longer than 30 seconds
+  // DDoS protection: Terminate queries running longer than 30 seconds. Not
+  // env-configurable by design — see poolConfig.ts's file header.
   statement_timeout: 30000, // 30 seconds max query duration
 });
 
