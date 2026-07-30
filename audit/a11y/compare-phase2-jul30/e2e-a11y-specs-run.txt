@@ -1,0 +1,32 @@
+Re-run of the repo's own a11y e2e specs (compare-mode requirement: ARIA fixes can break
+selectors/behavior), scoped to the 3 accessibility spec files rather than the full ~866-test
+suite (time-boxed; the full suite is a separate, heavier gate not required by this measurement
+task). Command:
+
+  pnpm exec playwright test e2e/accessibility.spec.ts e2e/accessibility-remediation.spec.ts \
+    e2e/status-colors-accessibility.spec.ts
+
+Uses the repo's own testcontainer Postgres + vite-preview harness (independent of the worktree's
+dev servers used for the Lighthouse/axe measurement above).
+
+Result (test-results/summary.json): total 75, passed 74, failed 1 (2 attempts counted: base run +
+1 local retry, both failed the same way — not a flake; see test-results/progress.jsonl).
+
+FAILING (both attempts):
+  accessibility-remediation.spec.ts :: "tooltips shown on hover also appear on focus"
+  Error: "Moving the mouse away should hide the hover tooltip" — expect(locator).toBeHidden()
+  failed; a Radix role="tooltip" ("More actions", KanbanBoard.tsx /issues Kanban view) stayed
+  visible after page.mouse.move(0,0), timeout 3000ms.
+
+This test targets KanbanBoard's "More actions" tooltip — not any of A11Y-1..A11Y-8 (sidebar tree,
+editor aria-expanded, dashboard contrast, issues popover naming, /search+/weeks landmarks,
+heading-order, login landmark, issues empty th). None of the merged a11y fixes touch
+KanbanBoard.tsx or tooltip logic. Not investigated further under this measurement-only mandate
+(no product-code changes permitted) — flagged here as an observed, reproducible failure for
+follow-up, not attributed to the A11Y-1..8 fixes without evidence they touch this code path.
+
+All other checks in the 3 specs passed, including the specs' own critical-impact axe assertions
+across /login, the app shell, /docs, /programs, /issues, /team, /documents and the keyboard/
+skip-link/aria-live checks — corroborating that the ARIA changes (role="tree" removal, editor
+aria-expanded removal, popover naming, landmark/heading additions) did not break existing
+selectors or behavior.

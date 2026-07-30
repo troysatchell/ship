@@ -1,0 +1,106 @@
+{
+  "category": "a11y",
+  "mode": "compare",
+  "label": "phase2-jul30",
+  "commit": "1474cb1cfb44b7897832092525a55b28e2ce895d",
+  "dirty": false,
+  "date": "2026-07-30T16:10:00-05:00",
+  "environment": {
+    "hardware": "Apple Mac16,7 — 14 cores, 24 GB RAM (arm64)",
+    "os": "Darwin 25.5.0 arm64 / macOS 26.5.1",
+    "node": "v23.2.0",
+    "dataVolume": "500 documents (254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project / 6 standup / 5 program), 20 users — identical per-type breakdown to the baseline, reproduced via `pnpm db:seed` + `audit/seed-augment.ts` (same deterministic script) against this worktree's own database (ship_wt_a11y_compare). Verified 26 root-level wiki docs (parent_id IS NULL), satisfying the A11Y-1 >10-root-docs data precondition recorded in lessons.md.",
+    "concurrency": "n/a (single authenticated session)",
+    "scaffolding": [
+      "Worktree /Users/troy/repos/GAUNTLET/Ship-wt-a11y_compare, branch measure/a11y-compare-jul30 at main 1474cb1 (contains every merged a11y fix through A11Y-4/A11Y-8).",
+      "Dedicated DB ship_wt_a11y_compare on the shared ship-audit-pg container (:5433); dedicated ports API 3475 / web 5648 per .factory-env.",
+      "Fresh login performed for this run (dev@ship.local/admin123 via /api/csrf-token + /api/auth/login) — new SESSION_ID cookie, not reused from baseline.",
+      "Lighthouse 11.7.1 via `npx --yes lighthouse@11`, axe-core 4.11.0 via @axe-core/playwright, Playwright 1.57.0 — all identical versions to baseline, driven against the same cached Chromium (chromium-1217, chrome-mac-arm64).",
+      "Runner scripts are worktree-local copies of the baseline's audit/a11y/run-lighthouse.sh and audit/a11y/axe-scan.mjs, saved under audit/a11y/compare-phase2-jul30/, with ONLY the base URL port and output directory changed (WEB_PORT/SESSION_ID/WIKI_DOC_ID read from env, no hardcoded session tokens) — methodology otherwise byte-identical (same tags, same viewport 1440x900, same page/state list, same modal-dismiss logic).",
+      "Re-ran the repo's 3 a11y e2e spec files (not the full ~866-test suite) via Playwright's own testcontainer+vite-preview harness; see e2e-a11y-specs-run.txt."
+    ]
+  },
+  "metrics": {
+    "lighthousePerPage": "my-week 100 (was 95, +5) · document 100 (was 100) · issues 100 (was 100) · weeks 95 (was 100, -5) · search 95 (was 100, -5)",
+    "axeCritical": 0,
+    "axeSerious": 1,
+    "axeModerate": 0,
+    "axeMinor": 0,
+    "axeCriticalRulesCleared": "aria-required-children, aria-allowed-attr — both fully cleared (0 instances anywhere scanned)",
+    "axeSeriousRulesCleared": "listitem, aria-dialog-name — fully cleared. color-contrast: cleared at its baseline location (/my-week) but a NEW instance appeared at a different location (see newFindings).",
+    "axeModerateRulesCleared": "landmark-one-main, page-has-heading-one, heading-order, region — all fully cleared",
+    "axeMinorRulesCleared": "empty-table-header — fully cleared",
+    "threeKeyPagesCriticalSerious": "0 Critical / 0 Serious on my-week, document view (incl. editor-focused), and issues (incl. menu/expanded) across every measured state — CONFIRMED",
+    "keyboardPerPage": "issues: Full (45 tab stops, 45 unique, no trap, focus ring 45/45 — matches baseline exactly) · my-week: Full (44 tab stops, 23 unique, focus ring 43/44; baseline was 20/20 stops, ring 42/44 — same Full verdict, raw stop count differs, attributable to incidental seeded-content differences, not a regression)",
+    "actionItemsModalEscapeCloses": true,
+    "actionItemsModalEncounters": 9,
+    "newViolations": "TRO-298: color-contrast (Serious) on /weeks and /search — DashboardSidebar.tsx active-nav-item button (bg-accent/10 text-accent, contrastRatio ~2.7-2.74 vs required 4.5:1). NOT on the 3 key pages (my-week/document/issues).",
+    "findingsTotal_baseline": 8,
+    "findingsResolved": "A11Y-1, A11Y-2, A11Y-3, A11Y-4, A11Y-5, A11Y-6, A11Y-7, A11Y-8 — all 8 baseline findings show 0 occurrences in their originally-measured location/state.",
+    "verdict": "TARGET MET via prong 2: all Critical/Serious axe violations fixed on the 3 most important pages (my-week, document view, issues) across every measured state, including interactive states. Prong 1 (+10 Lighthouse on lowest page) NOT met: my-week only gained +5 (95->100), and weeks/search regressed -5 each (100->95) due to the newly-reachable TRO-298 defect — so the lowest-scoring pages are now weeks/search at 95, a smaller gap than baseline's 95, not a +10 gain anywhere."
+  },
+  "findings": [
+    {
+      "id": "A11Y-1",
+      "status": "resolved",
+      "evidence": "aria-required-children (Critical) and listitem (Serious) both 0 occurrences in document_view.json and document_editor_focused.json (compare-phase2-jul30/axe/). Verified data precondition held: 26 root-level wiki docs (>10)."
+    },
+    {
+      "id": "A11Y-2",
+      "status": "resolved",
+      "evidence": "aria-allowed-attr (Critical) 0 occurrences in document_editor_focused.json."
+    },
+    {
+      "id": "A11Y-3",
+      "status": "resolved",
+      "evidence": "color-contrast (Serious) 0 occurrences in dashboard_my_week_.json; Lighthouse /my-week 95->100, no failing audits."
+    },
+    {
+      "id": "A11Y-4",
+      "status": "resolved",
+      "evidence": "aria-dialog-name (Serious) 0 occurrences in issues_menu_expanded_state.json."
+    },
+    {
+      "id": "A11Y-5",
+      "status": "resolved",
+      "evidence": "landmark-one-main + page-has-heading-one (Moderate) 0 occurrences in weeks_board.json and search.json. Lighthouse still 100 on the a11y category for the previously-empty content itself, though a NEW color-contrast defect (TRO-298) is now reachable on these same two pages — see newFindings."
+    },
+    {
+      "id": "A11Y-6",
+      "status": "resolved",
+      "evidence": "heading-order (Moderate) 0 occurrences in document_view.json / document_editor_focused.json."
+    },
+    {
+      "id": "A11Y-7",
+      "status": "resolved",
+      "evidence": "region + landmark-one-main (Moderate) 0 occurrences in login_unauth.json."
+    },
+    {
+      "id": "A11Y-8",
+      "status": "resolved",
+      "evidence": "empty-table-header (Minor) 0 occurrences in issues_list.json."
+    },
+    {
+      "id": "TRO-298",
+      "status": "new (not in baseline; not on the 3 key pages)",
+      "severity": "Serious",
+      "title": "DashboardSidebar active-item button fails color contrast on /weeks and /search",
+      "location": "web/src/components/DashboardSidebar.tsx:33-37,46-52 (the 'My Work'/'Overview' toggle's active state: `bg-accent/10 text-accent font-medium`)",
+      "evidence": "axe color-contrast (Serious): weeks_board.json and search.json each report 1 node, `.bg-accent\\/10`, fgColor #005ea2 / bgColor #0c151c, contrastRatio 2.74 vs required 4.5:1. Lighthouse corroborates: /weeks and /search each score 95 with color-contrast as the SOLE failing audit (compare-phase2-jul30/lighthouse/{weeks,search}.report.json).",
+      "hypothesis": "Read web/src/pages/App.tsx:152-178 (getActiveMode()): /weeks and /search match none of the explicit path branches and fall through to the `return 'dashboard'` default at line 178, which mounts <DashboardSidebar/> as the contextual sidebar (App.tsx:527-528). Per the A11Y-5/6/7 fix commit (e813117), /weeks and /search were previously DEAD routes with no page component and no catch-all — an unmatched path rendered nothing, so DashboardSidebar was never mounted there and this pre-existing contrast defect was unreachable. Adding real routes for these paths (to fix A11Y-5) makes them fall into the same default-mode branch as truly-unmatched paths, mounting DashboardSidebar for the first time on these URLs and exposing the defect. NOTE: this mechanism is derived from reading App.tsx's routing logic, not confirmed by a code author; flagged as hypothesis, not fact. An open, unresolved observation: manual inspection found the identical button (same classes, same computed rgba(0,94,162,0.1) background, same DOM ancestor chain, same bounding rect) IS also rendered on /my-week — yet axe reports 0 violations there in both the full-page scan and a scope-restricted re-check. The mechanism for why /my-week's structurally-identical instance does not also fail was not resolved (axe's pass/violation node lists for /my-week do not reference the DashboardSidebar button at all, in either direction) — reported as an open question rather than asserted.",
+      "estimatedImpact": "Low-vision users cannot read the active-view label on the only two navigable states currently rendering it; also a Section 508 contradiction on these two pages, structurally identical to the already-fixed A11Y-3. Fix: same remedy as A11Y-3 — raise bg-accent/10+text-accent to meet 4.5:1, or reuse whatever token A11Y-3 introduced."
+    }
+  ],
+  "supplementaryObservations": [
+    {
+      "note": "Command-palette-open state (excluded from the primary table, matching the baseline's own methodology note that this state 'did not reliably isolate the palette overlay') this run DID reliably open and returned 1 additional color-contrast (Serious) node: a `<kbd class=\"ml-3 rounded bg-border ...\">esc</kbd>` shortcut hint inside the palette. Not folded into the primary before/after comparison for identical-conditions reasons, but recorded here since it may be a 3rd location for the same underlying contrast-token problem. Raw output: compare-phase2-jul30/axe/command_palette_open.json."
+    },
+    {
+      "note": "Action Items modal: encountered on 9/9 navigations in this run (every goto()), Escape closed it every time (escapeClosed: true) — same behavior as baseline. (A prior curl-based login check in this session showed pendingAccountabilityItems: [] at the API level; the modal nonetheless appeared in the browser session on every navigation, so that curl snapshot was not representative — flagging so the discrepancy isn't misread as a condition change.)"
+    },
+    {
+      "note": "Re-ran e2e/accessibility.spec.ts, e2e/accessibility-remediation.spec.ts, e2e/status-colors-accessibility.spec.ts (75 test invocations): 74 passed, 1 failed on both its run and its local retry (not a flake) — accessibility-remediation.spec.ts :: 'tooltips shown on hover also appear on focus', a Radix tooltip on KanbanBoard.tsx's 'More actions' button that stays visible after mouse-away. Unrelated to A11Y-1..8 (no merged a11y fix touches KanbanBoard.tsx); not investigated further under this measurement-only mandate. Full detail: e2e-a11y-specs-run.txt. Did not run the full ~866-test e2e suite (time-boxed to the a11y-specific specs); scope explicitly noted."
+    }
+  ],
+  "baselineRef": "audit/a11y/baseline.json"
+}
