@@ -148,10 +148,11 @@ describe('Collaboration preload message buffer (TRO-284 / ERR-11)', () => {
     const deadline = Date.now() + timeoutMs
     let text = await readYjsState(docId)
     while (Date.now() < deadline && !text.includes(marker)) {
-      // review-pattern-ok: bounded poll, not a fixed wait — re-checks a real
-      // condition (the marker's presence) against a real deadline, and exits
-      // the instant the condition holds. Same shape as the pre-existing
-      // waitForContent() in session-revocation.test.ts.
+      // Bounded poll, not a fixed wait: re-checks a real condition (the
+      // marker's presence) against a real deadline, exiting the instant it
+      // holds — same shape as the pre-existing waitForContent() in
+      // session-revocation.test.ts.
+      // review-pattern-ok: bounded poll, see comment above
       await delay(150)
       text = await readYjsState(docId)
     }
@@ -242,9 +243,10 @@ describe('Collaboration preload message buffer (TRO-284 / ERR-11)', () => {
 
     const deadline = Date.now() + 15_000
     while (Date.now() < deadline && closeCode === null) {
-      // review-pattern-ok: bounded poll on the socket's own 'close' event
-      // handler having fired, not a fixed wait — exits the instant closeCode
-      // is set, same shape as waitForClose() in session-revocation.test.ts.
+      // Bounded poll on the socket's own 'close' handler having fired, not a
+      // fixed wait: exits the instant closeCode is set — same shape as
+      // waitForClose() in session-revocation.test.ts.
+      // review-pattern-ok: bounded poll, see comment above
       await delay(100)
     }
 
