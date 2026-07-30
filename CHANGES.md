@@ -8,6 +8,129 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-248 — [RULE-7] Retries, timeouts and circuit breakers on outbound calls
+
+Assignment rule 7 asks for an assessment of every outbound-call boundary in the ticket's table,
+not just a pile of new retry code — several rows had already been addressed by other merged
+tickets since the table was written, and re-verifying that against current code is itself part of
+the deliverable.
+
+**Row-by-row verdicts (current code, re-checked, not taken from the ticket text):**
+
+1. **`api/src/db/client.ts:24` `connectionTimeoutMillis: 2000`, hardcoded pool `max` 10/20.**
+   Confirmed still hardcoded. **Gap — fixed.** See below.
+2. **`statement_timeout: 30000` hardcoded.** Confirmed. **Assessed, no change.** This is a
+   runaway-query/DDoS guard (its own comment says so), the same category as `index.ts`'s server
+   timeouts below — not a "waiting on a dependency that might be slow" value, so the tunability
+   argument for row 1 doesn't apply to it.
+3. **`api/src/index.ts:31-33` server timeouts (Slowloris protection).** Confirmed unchanged,
+   confirmed deliberate (inline comment says so). **Assessed, no change**, per the ticket's own
+   steer.
+4. **`web/src/lib/queryClient.ts` 429 handling.** The ticket's premise — "429 is never retried" —
+   is **stale**. `shouldRetryRequest`/`retryDelayMs` (added under TRO-172/API-1, commit
+   `9f3885c`, well before TRO-248 was written) already retry HTTP 429 with a jittered backoff
+   schedule (`THROTTLE_RETRY_DELAYS_MS = [2000, 8000, 20000, 45000]`, summing past the server's
+   60s rate-limit window) for **both** `queries` and `mutations` — the client's
+   `defaultOptions.mutations.retry`/`retryDelay` are wired to the same predicate, not left on
+   react-query's default (which does treat every 4xx, including 429, as permanent). Every other
+   4xx (400/401/403/404/409/422) is still correctly treated as permanent.
+   `web/src/lib/queryClient.test.ts` (pre-existing, 11 cases) already pins this for both query and
+   mutation defaults, including "still retries 5xx", "gives up on 429 eventually", and "backs off
+   past the rate-limit window". Checked PR #51 (`fix/err-13-err-14-editor-save-paths`, open) for
+   collision: it edits `queryClient.ts` too, but only to add `notifyDocumentGoneOnRead()` after the
+   write-outcome bus — it does not touch the retry-policy section, so there is no conflict.
+   **No code change; verified only.**
+   One adjacent, narrower gap noticed but out of this ticket's table and not fixed here:
+   `UnifiedDocumentPage.tsx:79` sets `retry: false` on the top-level document-by-id query, and its
+   `queryFn` throws plain `Error`s with no `.status` attached — so even without the override, a
+   429 on that specific fetch wouldn't be recognized as throttling by `shouldRetryRequest`. Worth
+   its own ticket; not touched here (drive-by fixes outside this ticket's table are out of scope).
+5. **`api/src/config/ssm.ts` — no timeout, no retry.** Confirmed: `getSSMSecret` awaited
+   `client.send(command)` directly. TRO-243 (`11e93b6`) added a fallback to env-supplied secrets
+   *after* a failure, but nothing bounded how long a single attempt could hang or retried a
+   transient one. **Gap — fixed.** See below.
+6. **Circuit breakers: none, strongest candidate the collaboration WebSocket.** Checked whether
+   ERR-1/ERR-2's merged fix already does this job. Two things verified in the current tree, not
+   assumed:
+   - `y-websocket`'s `WebsocketProvider` (the client the editor uses,
+     `node_modules/y-websocket/src/y-websocket.js:158-167`) already reconnects on exponential
+     backoff (`2^wsUnsuccessfulReconnects * 100ms`, capped at `maxBackoffTime` = 2500ms by
+     default) — a bounded retry schedule already exists for the transient case, from the library,
+     with no code in this repo re-deriving it.
+   - ERR-1/ERR-2's merged fix (`Editor.tsx:441-495`) sets `wsProvider.shouldConnect = false` on
+     the three permanent-failure close codes (4401 session invalid, 4403 access revoked, 4100
+     document converted) — i.e. it **opens the breaker and leaves it open** on exactly the
+     conditions where retrying could never succeed, rather than reconnecting forever against a
+     doomed socket. `SyncStatusIndicator` (ERR-1) then reports the true unsynced state instead of
+     a false "Saved". Together, bounded-backoff-for-transient plus stop-forever-for-permanent plus
+     truthful state surfacing **is** the behavior a circuit breaker is for.
+   **Assessed, no change** — building a second breaker here would duplicate a job already done,
+   which the ticket itself flagged as the risk to check for.
+
+**What changed.**
+
+- **`api/src/db/poolConfig.ts` (new).** Pure `resolvePoolTiming(env)` — same pattern as the
+  existing `ssl.ts`/`resolveDatabaseSsl` decision file — resolving `connectionTimeoutMillis` from
+  `DB_POOL_CONNECTION_TIMEOUT_MS` and pool `max` from `DB_POOL_MAX` (production) /
+  `DB_POOL_MAX_DEV` (else), each falling back to today's hardcoded values (2000ms, 20/10) for any
+  unset, empty, non-numeric, zero, or negative override. `client.ts` now calls it instead of
+  inlining the numbers; **defaults are unchanged**, so behavior does not change unless an operator
+  sets one of the three env vars. Failure mode this protects against: `ssl.ts`'s own file header
+  already documents what a fixed 2000ms timeout does against a managed Postgres with a slow cold
+  start — every connection attempt in that window fails and, under restart-on-crash infra, the
+  process crash-loops before the database is ever actually reachable.
+- **`api/src/config/ssm.ts`.** `getSSMSecret` now runs each SSM call through `sendWithRetry`: a
+  5s per-attempt timeout (`AbortController` passed as `send`'s `abortSignal`, per the
+  `@aws-sdk/client-ssm` `HttpHandlerOptions` shape) and up to 3 total attempts, backing off between
+  them with full jitter capped at 2000ms (`Math.random() * min(200 * 2^attempt, 2000)`) so that
+  the five parameters `loadProductionSecrets` fetches concurrently (`Promise.all`) don't retry in
+  lockstep if they all fail on the same underlying blip. A response that succeeds but reports the
+  parameter missing is **not** retried — that's a permanent condition (checked after the retry
+  loop returns, not inside it). Exhausting all attempts re-throws into the existing
+  `loadProductionSecrets` catch block unchanged, so the already-correct fallback-to-env-vars
+  behavior from TRO-243 is untouched. Concurrency note (rule 18): this is a bounded, one-shot retry
+  inside a single awaited call, not a `setInterval` — `loadProductionSecrets()` is invoked exactly
+  once, in `index.ts`'s `main()`, before the app is created, so there is no in-flight-guard
+  question.
+
+**Regression tests (new).**
+
+- `api/src/db/__tests__/poolConfig.test.ts` — 13 cases: defaults match the previous hardcoded
+  values; `DB_POOL_CONNECTION_TIMEOUT_MS`/`DB_POOL_MAX`/`DB_POOL_MAX_DEV` overrides apply
+  independently per `NODE_ENV`; malformed overrides (empty/non-numeric/zero/negative) fall back to
+  the default rather than propagating `NaN` or an unsafe pool size. New capability with unchanged
+  defaults, not a bug fix — no pre-existing broken behavior to reproduce red for; confirmed green
+  against the implementation.
+- `api/src/config/ssm.test.ts` — 5 cases against a mocked `SSMClient`, fake timers driving the
+  timeout/backoff (no real waiting): success-first-try; retries-then-succeeds; exhausts all 3
+  attempts and throws the last transient error; a hung call is bounded by the per-attempt timeout
+  and then retries; a successful-but-"not found" response is never retried.
+  **Confirmed red before the fix**, for the right reason: reverted `ssm.ts` to the pre-fix version
+  (copied aside, not stashed — the `git stash` ref is shared across every worktree in this repo per
+  `lessons.md`) and re-ran the same test file. 3 of 5 failed: "retries a transient failure" failed
+  with the raw `ECONNRESET` propagating (no retry existed); "gives up after exhausting attempts"
+  failed on `expected 3 calls, got 1`; "bounds a hung call" failed with a `TypeError` reading
+  `abortSignal` off `undefined`, because the old code never passed a second argument to `send` at
+  all — a faithful demonstration that no timeout wiring existed, not a typo in the test. The other
+  2 cases passed unchanged on old code (a first-try success and a "not found" response were never
+  going to exercise retry logic either way). Restored the fix; all 5 pass.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run \
+  src/db/__tests__/poolConfig.test.ts \
+  src/config/ssm.test.ts \
+  src/db/__tests__/ssl.test.ts
+```
+
+**Rollback.** Revert this ticket's commits. `client.ts` and `ssm.ts` return to their previous
+inline values with no functional loss elsewhere — nothing else imports `poolConfig.ts`, and
+`loadProductionSecrets`'s fallback behavior (TRO-243) is untouched either way.
+
+---
+
 ## TRO-208 — [TS-3] The Yjs <-> TipTap converter — the persistence path for every document's content — was fully untyped
 
 `api/src/utils/yjsConverter.ts` carried 12 `any` in 245 lines, the highest any-per-line density of
