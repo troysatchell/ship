@@ -736,6 +736,100 @@ router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
   }
 });
 
+// ============================================
+// Batched standups across multiple weeks (TRO-181 / TRO-176, audit findings
+// DB-4 / API-5). The dashboard used to Promise.all one
+// GET /api/weeks/:id/standups per active week - one request and one round
+// of queries per week, each returning ~2 bytes. This single endpoint
+// replaces that fan-out with one request and a bounded query count.
+// ============================================
+const listStandupsForWeeksQuerySchema = z.object({
+  week_ids: z
+    .string()
+    .min(1, 'week_ids is required')
+    .transform((val) => val.split(',').map((s) => s.trim()).filter(Boolean))
+    .pipe(
+      z.array(z.string().uuid('week_ids must be a comma-separated list of UUIDs'))
+        .min(1, 'At least one week id is required')
+        .max(50, 'Too many week ids (max 50)')
+    ),
+});
+
+// GET /api/weeks/standups?week_ids=uuid,uuid,... - Recent standups across
+// multiple sprints in one request, newest first, capped at 10 - the only
+// slice any caller has ever rendered.
+router.get('/standups', authMiddleware, async (req: Request, res: Response) => {
+  try {
+    const { userId, workspaceId } = req;
+    if (!userId || !workspaceId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const queryParsed = listStandupsForWeeksQuerySchema.safeParse(req.query);
+    if (!queryParsed.success) {
+      res.status(400).json({ error: 'Invalid week_ids', details: queryParsed.error.errors });
+      return;
+    }
+    const { week_ids: weekIds } = queryParsed.data;
+
+    // Get visibility context for filtering
+    const { isAdmin } = await getVisibilityContext(userId, workspaceId);
+
+    // Narrow to the sprints that exist in this workspace and are visible to
+    // the user - the same access check the per-week route ran once per
+    // request, run once here for every requested id.
+    const accessibleSprints = await pool.query(
+      `SELECT id FROM documents
+       WHERE id = ANY($1) AND workspace_id = $2 AND document_type = 'sprint'
+         AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
+      [weekIds, workspaceId, userId, isAdmin]
+    );
+    const accessibleSprintIds: string[] = accessibleSprints.rows.map((row) => row.id);
+
+    if (accessibleSprintIds.length === 0) {
+      res.json([]);
+      return;
+    }
+
+    // One query for standups across every accessible sprint, most-recent
+    // first, capped at 10 - the client only ever rendered the 10 most
+    // recent across all active weeks, but the old per-week query shipped
+    // every row's full content with no LIMIT at all.
+    const result = await pool.query(
+      `SELECT d.id, d.parent_id, d.title, d.content, d.created_at, d.updated_at,
+              d.properties->>'author_id' as author_id,
+              u.name as author_name, u.email as author_email
+       FROM documents d
+       LEFT JOIN users u ON (d.properties->>'author_id')::uuid = u.id
+       WHERE d.parent_id = ANY($1) AND d.document_type = 'standup'
+         AND ${VISIBILITY_FILTER_SQL('d', '$2', '$3')}
+       ORDER BY d.created_at DESC
+       LIMIT 10`,
+      [accessibleSprintIds, userId, isAdmin]
+    );
+
+    // Transform issue links in standup content (e.g., #123 -> clickable links).
+    // Batch pre-load all issue references across every sprint in one query.
+    const allContents = result.rows.map((row) => row.content);
+    const allTicketNumbers = extractTicketNumbersFromContents(allContents);
+    const issueMap = await batchLookupIssues(workspaceId, allTicketNumbers);
+
+    const standups = await Promise.all(
+      result.rows.map(async (row) => {
+        const formatted = formatStandupResponse(row);
+        formatted.content = await transformIssueLinks(formatted.content, workspaceId, issueMap);
+        return formatted;
+      })
+    );
+
+    res.json(standups);
+  } catch (err) {
+    console.error('Get batched standups error:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // Get single sprint
 // Automatically takes a plan snapshot when sprint becomes active (start_date reached)
 router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
