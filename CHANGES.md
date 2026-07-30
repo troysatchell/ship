@@ -62,6 +62,89 @@ file's header says so.
 event — is awaited by re-reading the row until a predicate holds, with a 50ms gap between reads and
 a hard deadline. Every wait is a condition, never a duration guessed to be long enough (TEST-11 /
 TRO-233).
+
+**How to run it.**
+
+```bash
+cd <worktree> && source .factory-env      # api tests TRUNCATE 16 tables
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/concurrent-merge.test.ts
+
+# the additive browser spec — deliberate, never as part of the full suite
+pnpm build && npx playwright test e2e/concurrent-editing.spec.ts --workers=1 --retries=0
+```
+
+**Evidence — the test was proved capable of failing.** New coverage has no bug to go red on, so the
+server was temporarily sabotaged twice (both reverted; `git diff main -- api/src/collaboration/index.ts`
+is empty on this branch).
+
+1. *Merge sabotage* — `handleMessage` was made to silently discard `messageYjsUpdate` frames from any
+   client that is not the first connection in the room. Both concurrent tests failed; the control and
+   offline tests still passed, so the harness was provably fine. Failure text:
+   `clientA never received clientB's concurrent edit (BOB_…) — local replica:
+   <paragraph></paragraph><paragraph>ALICE_…</paragraph> frames received: [3,0,1,0,1]`.
+2. *Persistence sabotage* — the `UPDATE documents SET yjs_state = …, content = …` in
+   `persistDocument()` was reduced to writing only `properties`. In-memory merge still worked; all
+   four tests failed on the database assertion:
+   `merged content never reached documents.content: database predicate never held within 30000ms
+   (576 reads)`.
+
+Both are `AssertionError`/explicit-condition failures naming the missing edit, not import or setup
+errors.
+
+The **e2e spec was proved capable of failing too**, under the same merge sabotage (rebuilt through
+`pnpm --filter @ship/api build`, since the e2e harness runs `api/dist/index.js`). Both browser tests
+failed with `Error: clientA lost clientB's concurrent edit / Expected substring: "BBB-…" / Received
+string: "AAA-…"`, then passed again after the source was restored and rebuilt.
+
+**Stability.** 5 consecutive standalone runs of the vitest file, 4/4 passing each time, ~10.4s per
+run. Full api suite green: 473 passed / 31 files (up from 469 / 30). The e2e spec: 2/2 passing,
+verified with `--retries=0` so a retry cannot mask a flake, ~33-51s for the pair on one worker.
+
+**Coverage delta on `api/src/collaboration/index.ts`.** v8 provider, full api suite
+(`vitest run --coverage`), factory database `ship_wt_tro_226` on the `ship-audit-pg` container at
+`:5433`, macOS, measured twice under identical conditions with the new file present and absent:
+
+| | statements | branches | functions | lines |
+|---|---|---|---|---|
+| without this test | 60.68% | 40.57% | 67.24% | 62.07% |
+| with this test | **62.50%** | **45.41%** | **70.68%** | **63.04%** |
+
+The ticket's "25.0% function coverage (7 of 28)" figure is **not reproducible today** and is not the
+baseline above: `session-revocation.test.ts` (ERR-2 / TRO-189) landed on the same file earlier the
+same day and had already lifted functions to 67.24%. The v8 provider also counts closures, so its
+denominator is not 28. `@vitest/coverage-v8` is not a dependency of this repo; it was installed to
+take the measurement and `api/package.json`/`pnpm-lock.yaml` were reverted afterwards, so
+`--coverage` will not run without installing it again.
+
+**Second new finding, not fixed here, and it probably affects other e2e specs.**
+`web/src/components/ActionItemsModal.tsx` is a Radix `Dialog`, and the seeded workspace has 32
+overdue accountability items, so it opens on load over the document editor. While it is open it both
+covers the editor — `locator.click()` never passes hit-testing and dies as a bare 60s timeout with no
+assertion — and traps focus, so `document.activeElement` can never become the editor. Observed
+directly: three failed e2e runs before the dialog was identified. Any e2e test that drives the editor
+after a direct `page.goto('/documents/:id')` has to dismiss it first; the new spec does. Derived, not
+verified: this is a plausible contributor to the existing editor-spec flakiness in TEST-11 / TRO-233.
+
+**New finding, not fixed here.** Building the test surfaced a real race in the server.
+`wss.on('connection')` in `api/src/collaboration/index.ts` `await`s `getOrCreateDoc()` — a database
+round trip — and registers `ws.on('message')` only afterwards. A client frame that arrives inside
+that window has no listener and is dropped by the EventEmitter. A y-websocket client sends sync step
+1 immediately on `open`, so on a low-latency link its step 1 is lost, the server never replies with
+step 2, and **the client never receives the server's document state** — the editor stays empty while
+the client's own state is pushed up. Observed deterministically on loopback (frames received were
+`[3,0,1,1]`: cache-clear, the server's own step 1, two awareness updates, and no step 2). Derived,
+not measured, for production: over a real network the client's step 1 normally arrives after the DB
+read completes, so this reads as a dev/loopback defect — but the window is real and widens with
+database latency. The test client works around it by sending its step 1 only after the server's first
+frame, which is race-free because the server sends that frame in the same synchronous block that
+attaches the listener.
+
+**Roll back.** `git rm api/src/collaboration/__tests__/concurrent-merge.test.ts
+e2e/concurrent-editing.spec.ts` and drop this entry. Nothing else on this branch touches product
+code.
+
+---
+
 ## TRO-217 — [A11Y-3] `/my-week` failed colour contrast, the landing page of the app
 
 **What was broken.** `/` redirects to `/my-week`, and it was the only key page Lighthouse failed on
@@ -154,82 +237,6 @@ No import or locator errors.
 **How to run it.**
 
 ```bash
-cd <worktree> && source .factory-env      # api tests TRUNCATE 16 tables
-pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/concurrent-merge.test.ts
-
-# the additive browser spec — deliberate, never as part of the full suite
-pnpm build && npx playwright test e2e/concurrent-editing.spec.ts --workers=1 --retries=0
-```
-
-**Evidence — the test was proved capable of failing.** New coverage has no bug to go red on, so the
-server was temporarily sabotaged twice (both reverted; `git diff main -- api/src/collaboration/index.ts`
-is empty on this branch).
-
-1. *Merge sabotage* — `handleMessage` was made to silently discard `messageYjsUpdate` frames from any
-   client that is not the first connection in the room. Both concurrent tests failed; the control and
-   offline tests still passed, so the harness was provably fine. Failure text:
-   `clientA never received clientB's concurrent edit (BOB_…) — local replica:
-   <paragraph></paragraph><paragraph>ALICE_…</paragraph> frames received: [3,0,1,0,1]`.
-2. *Persistence sabotage* — the `UPDATE documents SET yjs_state = …, content = …` in
-   `persistDocument()` was reduced to writing only `properties`. In-memory merge still worked; all
-   four tests failed on the database assertion:
-   `merged content never reached documents.content: database predicate never held within 30000ms
-   (576 reads)`.
-
-Both are `AssertionError`/explicit-condition failures naming the missing edit, not import or setup
-errors.
-
-The **e2e spec was proved capable of failing too**, under the same merge sabotage (rebuilt through
-`pnpm --filter @ship/api build`, since the e2e harness runs `api/dist/index.js`). Both browser tests
-failed with `Error: clientA lost clientB's concurrent edit / Expected substring: "BBB-…" / Received
-string: "AAA-…"`, then passed again after the source was restored and rebuilt.
-
-**Stability.** 5 consecutive standalone runs of the vitest file, 4/4 passing each time, ~10.4s per
-run. Full api suite green: 473 passed / 31 files (up from 469 / 30). The e2e spec: 2/2 passing,
-verified with `--retries=0` so a retry cannot mask a flake, ~33-51s for the pair on one worker.
-
-**Coverage delta on `api/src/collaboration/index.ts`.** v8 provider, full api suite
-(`vitest run --coverage`), factory database `ship_wt_tro_226` on the `ship-audit-pg` container at
-`:5433`, macOS, measured twice under identical conditions with the new file present and absent:
-
-| | statements | branches | functions | lines |
-|---|---|---|---|---|
-| without this test | 60.68% | 40.57% | 67.24% | 62.07% |
-| with this test | **62.50%** | **45.41%** | **70.68%** | **63.04%** |
-
-The ticket's "25.0% function coverage (7 of 28)" figure is **not reproducible today** and is not the
-baseline above: `session-revocation.test.ts` (ERR-2 / TRO-189) landed on the same file earlier the
-same day and had already lifted functions to 67.24%. The v8 provider also counts closures, so its
-denominator is not 28. `@vitest/coverage-v8` is not a dependency of this repo; it was installed to
-take the measurement and `api/package.json`/`pnpm-lock.yaml` were reverted afterwards, so
-`--coverage` will not run without installing it again.
-
-**Second new finding, not fixed here, and it probably affects other e2e specs.**
-`web/src/components/ActionItemsModal.tsx` is a Radix `Dialog`, and the seeded workspace has 32
-overdue accountability items, so it opens on load over the document editor. While it is open it both
-covers the editor — `locator.click()` never passes hit-testing and dies as a bare 60s timeout with no
-assertion — and traps focus, so `document.activeElement` can never become the editor. Observed
-directly: three failed e2e runs before the dialog was identified. Any e2e test that drives the editor
-after a direct `page.goto('/documents/:id')` has to dismiss it first; the new spec does. Derived, not
-verified: this is a plausible contributor to the existing editor-spec flakiness in TEST-11 / TRO-233.
-
-**New finding, not fixed here.** Building the test surfaced a real race in the server.
-`wss.on('connection')` in `api/src/collaboration/index.ts` `await`s `getOrCreateDoc()` — a database
-round trip — and registers `ws.on('message')` only afterwards. A client frame that arrives inside
-that window has no listener and is dropped by the EventEmitter. A y-websocket client sends sync step
-1 immediately on `open`, so on a low-latency link its step 1 is lost, the server never replies with
-step 2, and **the client never receives the server's document state** — the editor stays empty while
-the client's own state is pushed up. Observed deterministically on loopback (frames received were
-`[3,0,1,1]`: cache-clear, the server's own step 1, two awareness updates, and no step 2). Derived,
-not measured, for production: over a real network the client's step 1 normally arrives after the DB
-read completes, so this reads as a dev/loopback defect — but the window is real and widens with
-database latency. The test client works around it by sending its step 1 only after the server's first
-frame, which is race-free because the server sends that frame in the same synchronous block that
-attaches the listener.
-
-**Roll back.** `git rm api/src/collaboration/__tests__/concurrent-merge.test.ts
-e2e/concurrent-editing.spec.ts` and drop this entry. Nothing else on this branch touches product
-code.
 pnpm --filter @ship/web test        # 24 new tests; 13 known failures are TEST-1/TRO-223, unchanged
 pnpm --filter @ship/web type-check
 ```
@@ -606,3 +613,4 @@ WebSocket URL being derived from `window.location.host`.
 which builds from the repository.
 
 **Rollback.** Revert the merge of `feat/render-deploy` (`bace770`).
+
