@@ -10,6 +10,25 @@ data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
   name = "com.amazonaws.global.cloudfront.origin-facing"
 }
 
+# CAUTION (CodeRabbit finding on this PR, not yet mitigated — see CHANGES.md's
+# TRO-278 post-deploy checklist and the follow-up ticket it references): AWS
+# counts a security-group rule that references a prefix list against the
+# "rules per security group" quota as though it were expanded to
+# `data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.max_entries`
+# separate rules, not as one rule. The two ingress rules below both reference
+# this same prefix list (ports 80 and 443), so the ALB security group alone
+# could consume roughly 2x that entry count against the default quota of 60
+# rules per security group — plausibly exceeding it on its own, before AWS's
+# CloudFront IP-range growth over time is even considered. NOT verified here
+# (no AWS credentials, and the exact current `max_entries` value and quota
+# code are not looked up live): before `apply`, check the account's actual
+# "Rules per security group" quota in the VPC section of the Service Quotas
+# console (or `aws service-quotas list-service-quotas --service-code vpc` and
+# find it by name — do not trust a hardcoded quota code without confirming it
+# against that account), and either request an increase or split these two
+# rules across separate security groups attached to the ALB if the prefix
+# list's entry count would exceed the limit.
+
 # Aurora Security Group
 resource "aws_security_group" "aurora" {
   name        = "${var.project_name}-aurora"

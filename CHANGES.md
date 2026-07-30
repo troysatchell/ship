@@ -115,9 +115,24 @@ safety rule for this ticket forbids both regardless.
       append rather than trust incoming XFF content — both assumed from AWS's published behavior,
       not observed here.
 - [ ] Decide whether to update `.claude/CLAUDE.md`'s direct-EB-URL health check to the
-      CloudFront-fronted `/health` path, since the direct one will stop working.
+      CloudFront-fronted `/health` path, since the direct one will stop working (TRO-294).
+- [ ] **Before `apply`:** confirm the ALB security group's two new prefix-list-referencing rules
+      (80 and 443, both against `com.amazonaws.global.cloudfront.origin-facing`) do not exceed the
+      account's "Rules per security group" quota. AWS counts a prefix-list rule against that quota
+      as though expanded to one rule per entry in the list, not as one rule — with two rules on the
+      same list, this could plausibly exceed the default 60-rule quota outright. Not checked here
+      (no AWS credentials/live lookup). See the caution comment above the two ingress rules in
+      `terraform/security-groups.tf` and TRO-295 (High — plausible deploy blocker, not cosmetic).
 - [ ] `pnpm db:migrate`/deploy itself is unaffected (no schema change here) — this is purely
       infra + one app.ts line.
+
+**CodeRabbit triage (2 findings, both filed as new tickets per `triage.md` — neither is fixable
+within this ticket's authorized scope of `terraform/security-groups.tf` + `api/src/app.ts`):**
+
+| Finding | Disposition | Ticket |
+|---|---|---|
+| `.claude/CLAUDE.md`'s direct-ALB health-check URL goes stale once this ships | NEW TICKET — doc-only, out of scope here | TRO-294 (Low) |
+| The two new prefix-list ALB ingress rules may exceed the AWS rules-per-security-group quota | NEW TICKET — real, but the fix needs either live AWS access or editing `elastic-beanstalk.tf`, both out of scope here | TRO-295 (High) |
 
 **Rollback.** `git revert` this commit. By hand: in `terraform/security-groups.tf`, remove the
 `cloudfront_origin_facing` data source and restore both ALB ingress rules to
