@@ -28,7 +28,7 @@
  * the per-identity budget rather than the flood ceiling.
  */
 import crypto from 'node:crypto';
-import type { Request, RequestHandler } from 'express';
+import type { RequestHandler } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 /** All `/api/` limits are evaluated over a rolling one-minute window. */
@@ -141,10 +141,39 @@ export function readBearerToken(authorization: string | undefined): string | nul
  * Hash the credential before using it as a bucket key. The rate-limit store is
  * long-lived, in-memory and surfaces in diagnostics; it should never hold a
  * live session id or API token verbatim.
+ *
+ * TRO-302 (API-8) profiled this specifically as the suspected cause of a
+ * +12-18% P95 regression on cheap endpoints (`audit/api-perf/compare-phase2-jul30`).
+ * Measured, not assumed to be cheap: a microbenchmark put the full cost of
+ * `apiRateLimitKey()` (cookie parse + this hash) at ~650 ns/op — about 0.008%
+ * of a 4 ms request — and a live `--cpu-prof` capture under the same c=25
+ * autocannon load attributed ~0.15% of *active* (non-idle) CPU time to
+ * anything hash/rate-limit-related, with the server otherwise >99% idle
+ * (I/O-bound). A controlled live A/B (real hash vs. a no-op replacement vs.
+ * the entire limiter chain removed, same server, same load, back-to-back)
+ * showed no consistent directional difference — smaller than the rep-to-rep
+ * noise of unmodified code alone. See `__tests__/rate-limit.test.ts`
+ * ("TRO-302: fingerprint cost stays negligible") for the pinned cost/sync
+ * guards, and CHANGES.md for the full writeup. This function was not changed:
+ * the measurement acquitted it, so it stayed as-is rather than being
+ * "fixed" to satisfy a hypothesis the numbers didn't support.
  */
 function fingerprint(prefix: string, credential: string): string {
   const digest = crypto.createHash('sha256').update(credential).digest('base64url');
   return `${prefix}:${digest.slice(0, 22)}`;
+}
+
+/**
+ * The exact shape `apiRateLimitKey` reads — nothing more. Express's `Request`
+ * satisfies this structurally, so every production call site (the
+ * `keyGenerator` below) needs no change, but a test can build a plain literal
+ * that satisfies it directly, with no `as unknown as Request` cast (TS-8: a
+ * cast like that decouples the test from the shape it claims to verify).
+ */
+export interface RateLimitKeyRequest {
+  headers?: { cookie?: string; authorization?: string };
+  ip?: string;
+  socket?: { remoteAddress?: string };
 }
 
 /**
@@ -155,7 +184,7 @@ function fingerprint(prefix: string, credential: string): string {
  * auth), so a client that rotates forged cookies gets fresh buckets — which is
  * precisely what `perSourceIpLimiter` is for.
  */
-export function apiRateLimitKey(req: Request): string {
+export function apiRateLimitKey(req: RateLimitKeyRequest): string {
   const sessionId = readSessionIdCookie(req.headers?.cookie);
   if (sessionId) return fingerprint('s', sessionId);
 
