@@ -787,6 +787,94 @@ async function seedMinimalTestData(pool: Pool): Promise<void> {
       [workspaceId, doc.title, JSON.stringify(contentJson), i + 1, userId]
     );
   }
+
+  await seedRenderingFixtures(pool, workspaceId, userId);
+}
+
+/**
+ * Titles of the seeded fixture documents. Specs import these instead of
+ * hard-coding strings, so renaming a fixture cannot silently orphan a test.
+ */
+export const FIXTURE_DOC_LINK_SANITIZATION = 'Link Sanitization Fixture';
+export const FIXTURE_DOC_CODE_BLOCK = 'Code Block Fixture';
+
+/** The one benign href in {@link FIXTURE_DOC_LINK_SANITIZATION}. Positive control. */
+export const FIXTURE_SAFE_HREF = 'https://example.gov/safe-control';
+
+/**
+ * Hrefs that must never be rendered live. Stored directly in `documents.content`
+ * as TipTap link marks — the *stored*-XSS path, which is what the security specs
+ * need and what typing markdown into the editor cannot produce (TipTap has no
+ * markdown-link input rule; see TRO-224).
+ */
+export const FIXTURE_DANGEROUS_HREFS = [
+  'javascript:alert("XSS")',
+  'data:text/html,<script>alert("XSS")</script>',
+  'data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9ImFsZXJ0KDEpIj48L3N2Zz4=',
+] as const;
+
+/** The language attribute on the code block in {@link FIXTURE_DOC_CODE_BLOCK}. */
+export const FIXTURE_CODE_BLOCK_LANGUAGE = 'javascript';
+
+/**
+ * Documents that exist so rendering-integrity specs have something real to
+ * assert against.
+ *
+ * Added for audit finding TEST-2 (TRO-224): several specs looped over rendered
+ * elements and asserted only inside the loop, so an empty page made them pass.
+ * The cure is a *positive control* — content the spec knows must render — which
+ * only works if the content is seeded rather than typed.
+ *
+ * `position` is deliberately high so these sort last in the sidebar and never
+ * become the document `/docs` auto-opens.
+ */
+async function seedRenderingFixtures(pool: Pool, workspaceId: string, userId: string): Promise<void> {
+  const linkParagraph = (label: string, href: string) => ({
+    type: 'paragraph',
+    content: [
+      { type: 'text', text: `${label}: ` },
+      { type: 'text', text: label, marks: [{ type: 'link', attrs: { href } }] },
+    ],
+  });
+
+  const linkFixtureContent = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'Fixture for stored-XSS link tests. Do not edit.' }],
+      },
+      linkParagraph('safe control link', FIXTURE_SAFE_HREF),
+      ...FIXTURE_DANGEROUS_HREFS.map((href, i) => linkParagraph(`dangerous link ${i + 1}`, href)),
+    ],
+  };
+
+  await pool.query(
+    `INSERT INTO documents (workspace_id, document_type, title, content, position, created_by)
+     VALUES ($1, 'wiki', $2, $3, 90, $4)`,
+    [workspaceId, FIXTURE_DOC_LINK_SANITIZATION, JSON.stringify(linkFixtureContent), userId]
+  );
+
+  const codeBlockContent = {
+    type: 'doc',
+    content: [
+      {
+        type: 'paragraph',
+        content: [{ type: 'text', text: 'Fixture for code-block rendering tests. Do not edit.' }],
+      },
+      {
+        type: 'codeBlock',
+        attrs: { language: FIXTURE_CODE_BLOCK_LANGUAGE },
+        content: [{ type: 'text', text: 'const shipped = true;' }],
+      },
+    ],
+  };
+
+  await pool.query(
+    `INSERT INTO documents (workspace_id, document_type, title, content, position, created_by)
+     VALUES ($1, 'wiki', $2, $3, 91, $4)`,
+    [workspaceId, FIXTURE_DOC_CODE_BLOCK, JSON.stringify(codeBlockContent), userId]
+  );
 }
 
 /**

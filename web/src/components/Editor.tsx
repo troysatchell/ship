@@ -39,6 +39,7 @@ import { CommentMark } from './editor/CommentMark';
 import { CommentDisplayExtension } from './editor/CommentDisplay';
 import { AIScoringDisplayExtension } from './editor/AIScoringDisplay';
 import { PlanReferenceBlockExtension } from './editor/PlanReferenceBlock';
+import { LINK_HREF_POLICY } from './editor/linkOptions';
 import { useCommentsQuery, useCreateComment, useUpdateComment } from '@/hooks/useCommentsQuery';
 import { BubbleMenu } from '@tiptap/react';
 import 'tippy.js/dist/tippy.css';
@@ -583,6 +584,7 @@ export function Editor({
     Placeholder.configure({ placeholder }),
     Collaboration.configure({ document: ydoc }),
     Link.configure({
+      ...LINK_HREF_POLICY,
       openOnClick: true,
       HTMLAttributes: {
         class: 'text-accent hover:underline cursor-pointer',

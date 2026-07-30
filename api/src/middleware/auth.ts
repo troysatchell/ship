@@ -16,6 +16,34 @@ declare global {
   }
 }
 
+/**
+ * How often an authenticated request is allowed to rewrite `sessions.last_activity`.
+ *
+ * The sliding-cookie refresh below has always been throttled at this interval
+ * ("throttled to avoid overhead"); the database write was not, so every read
+ * dirtied the session row and generated WAL.
+ */
+export const SESSION_ACTIVITY_UPDATE_THRESHOLD_MS = 60 * 1000;
+
+/**
+ * The inactivity window actually enforced against the *recorded* `last_activity`.
+ *
+ * Because the write is throttled, the recorded value trails real request activity
+ * by at most `SESSION_ACTIVITY_UPDATE_THRESHOLD_MS`. Comparing a lagging value
+ * against a bare `SESSION_TIMEOUT_MS` would end sessions *early* — up to 60s before
+ * the documented 15 minutes — and the web client runs its own 15-minute idle timer
+ * off real user interaction (`web/src/hooks/useSessionTimeout.ts`), so an early
+ * server-side expiry surfaces as an unexplained 401 while the client still believes
+ * it is logged in.
+ *
+ * Carrying the throttle interval as grace makes the rounding error extend a session
+ * instead of ending one: true idle logout lands in
+ * [SESSION_TIMEOUT_MS, SESSION_TIMEOUT_MS + SESSION_ACTIVITY_UPDATE_THRESHOLD_MS].
+ * The 12-hour absolute cap (`ABSOLUTE_SESSION_TIMEOUT_MS`) is unaffected.
+ */
+export const SESSION_INACTIVITY_LIMIT_MS =
+  SESSION_TIMEOUT_MS + SESSION_ACTIVITY_UPDATE_THRESHOLD_MS;
+
 // Hash a token for comparison
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -165,8 +193,11 @@ export async function authMiddleware(
       return;
     }
 
-    // Check 15-minute inactivity timeout
-    if (inactivityMs > SESSION_TIMEOUT_MS) {
+    // Check the inactivity timeout. Compared against SESSION_INACTIVITY_LIMIT_MS, not
+    // SESSION_TIMEOUT_MS, because `last_activity` is written on a throttle below and so
+    // trails real request activity by up to SESSION_ACTIVITY_UPDATE_THRESHOLD_MS. The
+    // grace makes that lag extend a session rather than end one early.
+    if (inactivityMs > SESSION_INACTIVITY_LIMIT_MS) {
       await pool.query('DELETE FROM sessions WHERE id = $1', [sessionId]);
 
       res.status(HTTP_STATUS.UNAUTHORIZED).json({
@@ -201,21 +232,50 @@ export async function authMiddleware(
       }
     }
 
-    // Update last activity
-    await pool.query(
-      'UPDATE sessions SET last_activity = $1 WHERE id = $2',
-      [now, sessionId]
-    );
+    // Refresh the session's sliding expiration — both halves of it, on one throttle.
+    //
+    // The cookie refresh was already throttled here "to avoid overhead"; the database
+    // write was not, so every authenticated read issued
+    // `UPDATE sessions SET last_activity` against the same row. One page load fires
+    // 5-13 requests, so a read-only page produced 5-13 row-locking, WAL-generating
+    // writes and 3 of every 4 statements on a document read were auth overhead
+    // (DB-2 / TRO-179, API-6 / TRO-177).
+    //
+    // Skipping the write means `last_activity` trails real activity by at most
+    // SESSION_ACTIVITY_UPDATE_THRESHOLD_MS, which is why the inactivity check above
+    // carries the same interval as grace.
+    if (inactivityMs > SESSION_ACTIVITY_UPDATE_THRESHOLD_MS) {
+      // The throttle is expressed TWICE, deliberately, because the two placements buy
+      // different things and neither one alone is sufficient:
+      //
+      //   - The check above uses the value this request already SELECTed, so when it says
+      //     "not due" no statement is sent at all. That is what removes the query from
+      //     the hot path (DB-2's headline metric was queries per request).
+      //   - `AND last_activity < $3` re-checks the same predicate inside the database,
+      //     because the value read above can already be stale. A page load fires 5-13
+      //     requests in parallel; when the burst straddles the threshold they all SELECT
+      //     the same pre-write `last_activity` and all conclude the write is due. Left
+      //     unconditional, the burst degrades to one write per request — precisely the
+      //     row-lock and WAL contention this change exists to remove. With the predicate,
+      //     Postgres arbitrates: under READ COMMITTED the losers re-evaluate the
+      //     qualification against the committed row version, fail it, and affect 0 rows.
+      //
+      // A no-op is the expected outcome under contention, so rowCount is not inspected.
+      // `last_activity IS NULL` cannot reach here — the inactivity check above reads NULL
+      // as the epoch and has already rejected the session.
+      const activityCutoff = new Date(now.getTime() - SESSION_ACTIVITY_UPDATE_THRESHOLD_MS);
+      await pool.query(
+        'UPDATE sessions SET last_activity = $1 WHERE id = $2 AND last_activity < $3',
+        [now, sessionId, activityCutoff]
+      );
 
-    // Refresh cookie with sliding expiration (throttled to avoid overhead)
-    // Only refresh if more than 60 seconds since last activity
-    const COOKIE_REFRESH_THRESHOLD_MS = 60 * 1000;
-    if (inactivityMs > COOKIE_REFRESH_THRESHOLD_MS) {
       res.cookie('session_id', sessionId, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'strict',
-        maxAge: SESSION_TIMEOUT_MS,
+        // Matches the server-side window so the browser cannot drop the cookie
+        // before the server would have rejected the session.
+        maxAge: SESSION_INACTIVITY_LIMIT_MS,
         path: '/',
       });
     }

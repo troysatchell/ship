@@ -57,7 +57,24 @@ export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
-  retries: process.env.CI ? 2 : 1,  // 1 retry locally for flaky WebSocket/timing tests
+  // 1 retry locally for flaky WebSocket/timing tests.
+  //
+  // TRO-225 / audit finding TEST-3: these retries are currently *masking* real
+  // failures, not absorbing noise. Across three identical 869-test runs, counting
+  // first attempts only, 8 / 5 / 3 tests failed; after retries the runner reported
+  // 1 / 0 / 1. `my-week-stale-data.spec.ts › retro edits ...` failed or timed out
+  // on the first attempt in all three runs and was reported as passing all three
+  // times. Flake list: `audit/test-quality/runs/e2e-flake-union.txt`.
+  //
+  // Deliberately NOT changed on the TRO-225 branch. That branch fixed one of the
+  // eleven (the my-week retro test — a cross-test database dependency, see that
+  // spec's header); flipping the switch with ten root causes outstanding would turn
+  // a misleadingly-green suite into a permanently-red one, which gets ignored just
+  // as fast. The honest end state is `failOnFlakyTests: true` (Playwright >= 1.49,
+  // or `--fail-on-flaky-tests`), which keeps the retry's trace artifact while
+  // refusing to report a retry-rescued test as a pass. Turn it on with the last
+  // flake fix, not the first.
+  retries: process.env.CI ? 2 : 1,
   workers: calculatedWorkers,
   // Reporters:
   // - 'line' shows real-time progress: [1/641] ✓ auth.spec.ts:15 (2.3s)
