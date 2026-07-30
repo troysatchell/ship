@@ -8,6 +8,127 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-284 (ERR-11) + TRO-285 (ERR-12) — the collaboration server stops dropping frames and serving blank documents during its own document load
+
+**The user-facing cost.** Two ways a collaborative editor could load and simply show nothing, with
+no error anywhere. ERR-11: a client's very first sync message could vanish silently, so the editor
+sat empty forever with no server reply. ERR-12: a second person opening the same not-yet-open
+document at the same moment as a first could get a blank document that never fills in. Observed for
+ERR-12, non-deterministically, at `--workers=1 --retries=0`: run 1 clean, run 2 the weekly **plan**
+opened blank, run 3 the **retro** opened blank.
+
+**Root cause — one mistake, found three times.** `wss.on('connection')` in
+`api/src/collaboration/index.ts` is `async` and `await`s a database round trip before the socket is
+fully wired up. Everything registered after that `await` — a message listener, a shared cache entry
+— is exposed to whatever arrives in the gap between the moment a connection becomes reachable and
+the moment it can actually respond. This is the same defect class as the already-merged ERR-10 (an
+`'error'` listener attached after an `await`); ERR-11 and ERR-12 are the `'message'`-listener and
+document-cache versions of it, found independently by two different agents on the same day.
+
+- **ERR-11**: `ws.on('message')` was registered only after `await getOrCreateDoc()`. A
+  `y-websocket` client sends sync step 1 on the very first tick after `'open'`; a frame landing in
+  the gap had no listener, and Node's `EventEmitter` discards an event with no listener **silently**
+  — no error, no log, nothing. The server never replies with step 2, so the client never learns the
+  server's state. Observed deterministically on loopback before the fix: frames received were
+  `[3, 0, 1, 1]` (cache-clear, the server's own step 1, two awareness updates) and no step 2, ever.
+- **ERR-12**: `getOrCreateDoc()` (`api/src/collaboration/index.ts`) published a brand-new `Y.Doc`
+  into the shared `docs` map **before** awaiting the database read and the JSON→Yjs conversion, and
+  attached the broadcasting `doc.on('update')` handler only afterwards. A second connection arriving
+  in that gap found the doc already cached — so it triggered no load of its own — received the
+  **empty** doc as its server state, and had no listener yet attached to notice when the real
+  content landed a moment later.
+
+**What changed.**
+
+- **ERR-11.** `ws.on('message')` is now registered as a **bounded buffering handler** right after
+  ERR-10's error-listener registration (still the first statement) and, like it, before the `await`.
+  Frames that arrive before the document has
+  loaded are queued, not processed — processing them early against a `doc`/`Awareness` that do not
+  exist yet would just move the bug. Once the load finishes, the buffering listener is swapped for
+  the real one and the queue is drained, in order — all within the same uninterrupted synchronous
+  stretch of code that already sent the server's own sync step 1, so replying to a drained client
+  step 1 remains race-free, the same invariant `concurrent-merge.test.ts` already relied on for the
+  server's outbound step 1. The buffer is bounded at **1 MiB of buffered bytes**
+  (`MAX_PRELOAD_BUFFER_BYTES`): this handler sees attacker-controlled bytes before their content can
+  be validated (ERR-10's own finding), so an unbounded queue during the load window is a
+  memory-exhaustion vector. Exceeding the bound closes the socket with a new code,
+  `WS_CLOSE_PRELOAD_BUFFER_FULL` (4429, mnemonic HTTP 429), rather than growing further.
+- **ERR-12.** The `docs` map now stores the **load promise**, not the eventual `Y.Doc`
+  (`loadDoc()` / `getOrCreateDoc()`). A second caller arriving while the first is still loading
+  awaits that same promise and is guaranteed a fully-loaded doc — there is no intermediate step at
+  which an unloaded doc is ever handed to anyone, which removes the window rather than narrowing it.
+  `doc.on('update')` is attached before the database read / JSON→Yjs conversion, not after, so the
+  very first update — the one that carries the loaded content — has a listener. A failed database
+  read now **rejects** (previously it was swallowed and the doc silently stayed empty) and
+  **evicts** its own map entry, but only if it is still the current entry — a caller that arrived
+  after the failure may already have published a fresh attempt of its own, and an unconditional
+  delete would tear that down instead. Malformed *stored data* (a corrupt `yjs_state` blob,
+  unparsable JSON `content`) is deliberately **not** treated the same way: retrying decodes the exact
+  same bytes again, so those two branches keep their own try/catch and fall back to an empty
+  document, matching this function's behavior before ERR-12.
+
+**Concurrency argument.** Both fixes close the window instead of narrowing it. ERR-11 no longer
+depends on the message listener winning a race against the database read, because every frame that
+can arrive before the doc is ready is captured (bounded) and replayed in order — there is no gap
+left in which a frame has nowhere to go. ERR-12 no longer depends on one connection's read of the
+`docs` map happening to land after another's load completes, because the map holds the one promise
+every concurrent caller converges on; "the doc is in the map but not yet loaded" is no longer a
+state the map can be in.
+
+**Provenance, marked.** ERR-11's mechanism was reproduced directly (not merely reasoned about): a
+regression test connects and writes in the same tick as `'open'`, red on the pre-fix module with the
+exact `[3,0,1,1]` frame signature the ticket predicted. ERR-12's two-concurrent-caller mechanism was
+also **observed directly** — a test issues two `getOrCreateDoc()` calls back to back and shows the
+second one returning an empty doc on the pre-fix logic, an `AssertionError`, not a crash — which is a
+step up from "derived from code, not instrumented," the state this finding was in when picked up.
+What was **not** independently instrumented is a live two-socket connection count in a running
+server outside the test harness; the two-real-socket regression test below is the closest evidence
+of that shape and it is described as such, not as proof of a separately-measured connection count.
+
+**How to run it.**
+
+```bash
+source .factory-env   # api tests TRUNCATE 16 tables; never run without this
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/preload-message-buffer.test.ts
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/concurrent-doc-load.test.ts
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/concurrent-merge.test.ts
+```
+
+`preload-message-buffer.test.ts` (ERR-11): a frame sent in the same tick as `'open'` is processed,
+not dropped; flooding past `MAX_PRELOAD_BUFFER_BYTES` closes the socket with
+`WS_CLOSE_PRELOAD_BUFFER_FULL` instead of growing the queue. Both cases force a **real** load delay
+(no mocked timing) by seeding the target document with a large `content` value, which measurably
+slows the one database read `loadDoc()` issues (~70-110ms observed locally for a 20MB value, versus
+well under 1ms for a small row) — long enough to reliably land inside the window without touching
+production internals.
+
+`concurrent-doc-load.test.ts` (ERR-12): two `getOrCreateDoc()` calls issued back to back resolve to
+the same, fully-loaded doc; a load failure (a syntactically invalid UUID — a real Postgres error,
+not a mock) rejects and evicts, proved by observing that a second call issues a **fresh** query
+rather than reusing a cached rejection; two real clients connecting simultaneously to the same
+not-yet-loaded document both receive the seeded content rather than a blank one.
+
+`concurrent-merge.test.ts` (TRO-226/TEST-4, already on `main`) documented the ERR-11 drop as a
+workaround: it withheld a client's sync step 1 until after the server's first frame, specifically to
+dodge the bug. That workaround is now removed — the acceptance signal for ERR-11 — and the file
+still passes: red first (2 of 4 cases timed out waiting for sync step 2, frame signature
+`[3,0,1,1]`), green and **faster** after the fix (10.5s vs 44.5s wall time, no timeouts).
+
+No fixed sleeps (TEST-11 / TRO-233): every wait is an observable — a socket `'close'` event, a
+database row polled until a predicate holds, or a Yjs `update` event.
+
+**How to roll it back.**
+
+```bash
+git revert <commit>
+```
+
+No schema change, no migration, no config, no API surface change for a well-behaved client. Reverting
+restores both windows: `ws.on('message')` moves back after the `await`, and `docs` goes back to
+storing the doc directly instead of its load promise.
+
+---
+
 ## TRO-240 — [DB-11] The application's database pool negotiated no TLS while migrate and seed did
 
 **What was broken.** Three pools connect to Ship's database with three different SSL policies.
