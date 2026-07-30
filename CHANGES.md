@@ -8,6 +8,114 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-286 (TEST-14) — no e2e test can pass without executing an assertion any more
+
+TEST-2 (TRO-224) fixed the 8 vacuous tests that gave false *security* assurance and deliberately
+stopped, reporting the boundary. This finishes the job and clears two adjacent defects it surfaced.
+
+**Part 1 — the remaining conditional-only tests: 62 → 0.**
+
+Measured with the repo's own detector, `audit/test-quality/runs/vacuous.mjs`, which finds tests
+whose every `expect()` sits inside a conditional branch — i.e. tests that pass with zero assertions
+executed. On `main` (`c4e92c2`) it reports `testsWithOnlyConditionalExpects: 62`. On this branch it
+reports **0**, across the same 870 scanned test blocks.
+
+Every `if (await x.isVisible()) { …expects… }` became an assertion carrying an actionable message,
+per the pattern already in `bulk-selection.spec.ts:793`. Converted tests also record *why* the
+precondition holds, so the next reader does not re-derive it — seed data creates sprints from
+`currentSprintNumber-2` through `+2` (`e2e/fixtures/isolated-env.ts`), so completed sprints always
+exist; `cleanupExtraSprints` in `beforeEach` guarantees an empty future week window.
+
+By file: `program-mode-week-ux.spec.ts` (33), `accessibility-remediation.spec.ts` (6),
+`context-menus.spec.ts` (6), `features-real.spec.ts` (5), `performance.spec.ts` (2),
+`admin-workspace-members.spec.ts` (2), `ai-analysis-api.spec.ts` (1), plus 7 more not named in the
+ticket's table that the detector caught.
+
+Two of these were more than a mechanical conversion. `admin-workspace-members.spec.ts` needed the
+fixture work the ticket flagged as risky — `isolated-env.ts` now seeds a second workspace and an
+unattached user — and the workspace-switcher and admin-dashboard specs were checked for fallout.
+`features-real.spec.ts` turned out to be hiding a **real file-chooser race** behind its guard, which
+is exactly the failure mode a silently-passing test conceals.
+
+**Part 2 — a user was being told the wrong rate limit.** `api/src/services/ai-analysis.ts` enforces
+`RATE_LIMIT = 120`/hour while `api/src/routes/ai.ts` told the user "Max 10 analysis requests per
+hour" — off by 12×. Rather than pick a number, the message is now derived from the constant
+(`RATE_LIMIT_MESSAGE`), so the two cannot drift apart again, and `api/src/routes/ai.test.ts` (new)
+asserts the 429 body reports the enforced limit.
+
+The e2e test that provoked this is marked `test.fixme()` **with a written reason** rather than left
+lying. Asserting the real limit needs either 121 requests — 120 of which attempt Bedrock, blowing
+the 60s timeout — or an injectable limit, which is a production seam added solely to enable a test.
+That is a maintainer's call, not the factory's, and is left open deliberately.
+
+**Part 3 — `.husky/pre-commit` is now `100755` in the index**, where it was `100644`. It *did* still
+run, because `core.hooksPath` is `.husky/_` and husky v9's wrapper **sources** the hook rather than
+exec'ing it — but that made the mode a latent trap: if the wrapper ever exec'd instead, every
+pre-commit check would stop running silently, including the compliance scan.
+
+The ticket carried an unreproduced report that hooks do not fire in a linked worktree. **That is
+now disproved**: committing from `Ship-wt-tro_286` (a linked worktree) fired `check-empty-tests.sh`
+and `check-api-coverage.sh` and printed their output, as did every commit from the main checkout
+throughout the run. Hooks fire in both.
+
+Unrelated but worth stating plainly: `comply` is not installed in this environment, so the secrets
+scan warns and passes. **A successful commit is not evidence that scan ran.**
+
+**Part 4 — CodeRabbit review triage on PR #40.** 22 line comments, all real defects in code this PR
+touched, none out of scope — every finding was either fixed here or dismissed with a written reason
+in the ledger (`audit/factory/review-findings.jsonl`), never silently dropped.
+
+Six were Majors that reintroduced the exact defect class this ticket exists to fix: two fixed
+`waitForTimeout` sleeps standing in for synchronization (`admin-workspace-members.spec.ts`,
+`program-mode-week-ux.spec.ts`, plus siblings in `issue-display-id.spec.ts` and
+`status-colors-accessibility.spec.ts`), the swallowed-failure pattern
+`isVisible().catch(() => false)` in an availability-indicator check, a `dashCount === rowCount`
+comparison that could pass while filtering nothing correctly (`td` filtered by `—` also matches
+assignee/estimate/due-date cells), a near-tautological "highlight" check that matched every card in
+the timeline regardless of active state, and non-deterministic fixture restoration in the carol/Test
+Space cleanup (`isVisible().catch(() => false)` could silently skip removing her, leaving the next
+test in the worker to find her already attached).
+
+Fixing finding 18 (point-in-time `rows.count()` preconditions) surfaced three tests in
+`program-mode-week-ux.spec.ts` — "issue row has quick menu (⋮) button" and its two siblings — that
+assert a per-row hover-revealed actions button. Traced the full render path
+(`IssuesList.tsx` → `IssueRowContent` → `SelectableList.tsx`): no such button exists in list view,
+only a right-click context menu and the bulk "Move to Week" toolbar action already covered
+elsewhere. TRO-286 Part 1 had already tightened these from "passes whether the feature exists or
+not" to a real assertion, which would now fail hard, not vacuously — same shape as the
+team-directory quick-menu gap already `test.fixme()`'d in `context-menus.spec.ts`. Marked
+`test.fixme()` with the same reasoning rather than left to fail.
+
+One finding was dismissed rather than fixed: WCAG 3.3.3 recovery guidance on the login-error test.
+The message is exactly `"Invalid email or password"` (`api/src/routes/auth.ts`), a deliberate
+security choice, and `Login.tsx` has no recovery link at all — tightening the assertion would only
+ever fail without a UI change, which is a product accessibility gap, not a test bug. Filed as a
+follow-up rather than fixed here.
+
+One derived claim was checked and found not to transfer: CodeRabbit's suggested fix for the fixed
+sleeps in `program-mode-week-ux.spec.ts` was `page.waitForResponse(...)` on `/api/issues`. Traced
+`IssuesList.tsx:569-570` — the sprint filter dropdown filters already-fetched issues client-side; no
+new request fires when it changes. Used a retrying DOM assertion instead, which is what the
+mechanism actually calls for.
+
+**How to run it.**
+
+```bash
+node audit/test-quality/runs/vacuous.mjs        # expect testsWithOnlyConditionalExpects: 0
+git ls-files -s .husky/pre-commit               # expect mode 100755
+pnpm --filter @ship/api test src/routes/ai.test.ts
+```
+
+The Playwright specs themselves need a live app — use `/e2e-test-runner`, never `pnpm test:e2e`
+directly, which produces enough output to crash the session.
+
+**Roll back.** `git revert` this merge commit. The conditional guards return (and with them the 62
+silently-passing tests), the 429 message goes back to quoting 10/hour against 120/hour enforcement,
+and `.husky/pre-commit` reverts to mode `100644`. No schema, API surface, or product behaviour is
+touched by any of it — the only production change is the text of one error message.
+
+---
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write

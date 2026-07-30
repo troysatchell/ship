@@ -118,25 +118,42 @@ test.describe('Issue Display IDs', () => {
     await page.goto('/programs')
     await page.waitForTimeout(500)
 
-    // Click on first program in the list
-    const programCard = page.locator('[data-testid="program-card"], .contextual-sidebar button').first()
-    if (await programCard.isVisible({ timeout: 5000 })) {
-      await programCard.click()
-      await page.waitForTimeout(500)
+    // Click on first program in the list. Programs render as a table row
+    // (web/src/pages/Programs.tsx, SelectableList) -- not
+    // [data-testid="program-card"], ".contextual-sidebar button", or a
+    // "button:has-text(issues)" card; none of those selectors exist in
+    // web/src.
+    const programCard = page.locator('table[aria-label="Programs list"] tbody tr').first()
+    await expect(
+      programCard,
+      'Seed data should include at least one program with issues. Run: pnpm db:seed'
+    ).toBeVisible({ timeout: 5000 })
+    await programCard.click()
+    await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+/, { timeout: 5000 })
 
-      // Click Issues tab if it exists
-      const issuesTab = page.getByRole('button', { name: /issues/i })
-      if (await issuesTab.isVisible()) {
-        await issuesTab.click()
-        await page.waitForTimeout(500)
-      }
+    // Click the Issues tab. Document tabs render with role="tab"
+    // (web/src/components/ui/TabBar.tsx), not role="button" -- the previous
+    // selector never matched, so isVisible() was always false and the tab was
+    // never actually clicked.
+    const issuesTab = page.getByRole('tab', { name: /issues/i })
+    await expect(issuesTab, 'Program document view should have an Issues tab').toBeVisible({ timeout: 5000 })
+    await issuesTab.click()
+    // TabBar.tsx sets aria-selected on the active tab -- wait for that instead
+    // of a fixed sleep before reading its content.
+    await expect(issuesTab).toHaveAttribute('aria-selected', 'true', { timeout: 3000 })
 
-      // Check that issues in the program view show #N format
-      const issueDisplayId = page.getByText(/#\d+/).first()
-      if (await issueDisplayId.isVisible({ timeout: 3000 })) {
-        await expect(issueDisplayId).toHaveText(/^#\d+$/)
-      }
-    }
+    // Check that issues in the program view show #N format. `getByText(/#\d+/)`
+    // resolves to the smallest matching element, which may still carry
+    // surrounding text (e.g. "#12 · Fix login"), contradicting the anchored
+    // `toHaveText(/^#\d+$/)` below even when the UI is correct -- target the id
+    // gridcell precisely instead, matching the other tests in this file
+    // (lines 77, 102).
+    const issueDisplayId = page.locator('[role="gridcell"]').filter({ hasText: /^#\d+$/ }).first()
+    await expect(
+      issueDisplayId,
+      'Program view should show at least one issue in #N format'
+    ).toBeVisible({ timeout: 3000 })
+    await expect(issueDisplayId).toHaveText(/^#\d+$/)
   });
 
   test('command palette shows issues with hash-number format (#N)', async ({ page }) => {

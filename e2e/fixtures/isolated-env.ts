@@ -789,6 +789,63 @@ async function seedMinimalTestData(pool: Pool): Promise<void> {
   }
 
   await seedRenderingFixtures(pool, workspaceId, userId);
+  await seedAdminUserSearchFixtures(pool, userId, passwordHash);
+}
+
+/**
+ * TRO-286 (TEST-14): a second workspace plus one unattached user, needed by
+ * e2e/admin-workspace-members.spec.ts's "Admin User Search" tests. Those tests
+ * search for a user to add to a workspace with few existing members ("test
+ * space" / "carol"), which the fixture never created before this ticket --
+ * both tests guarded their whole body on `isVisible()` for data that could
+ * never appear, and passed vacuously every run.
+ *
+ * Kept deliberately minimal -- one membership, one membership-less user --
+ * specifically because a second workspace/user risks perturbing every other
+ * spec that reads workspace or member counts. Checked before adding this:
+ * workspaces.spec.ts's workspace-switcher and admin-dashboard tests all use
+ * `.first()` or read counts dynamically from the DOM (e.g. parsing
+ * `Members (\d+)`) rather than hard-coding "1 workspace" or "2 users", and
+ * admin-workspace-members.spec.ts's own `getByRole('link', { name: /Test
+ * Workspace/i })` is specific enough that "Test Space" (this fixture) never
+ * matches it. Re-run both spec files if this fixture ever changes shape.
+ */
+async function seedAdminUserSearchFixtures(
+  pool: Pool,
+  adminUserId: string,
+  passwordHash: string
+): Promise<void> {
+  // Use UTC throughout to match the API's date math (team.ts parses as UTC),
+  // rather than CURRENT_DATE which is evaluated in PostgreSQL's session
+  // timezone and can diverge from API/UI UTC date handling around midnight.
+  const nowUtc = new Date();
+  const todayUtcStr = new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate()))
+    .toISOString()
+    .split('T')[0];
+  const testSpaceResult = await pool.query(
+    `INSERT INTO workspaces (name, sprint_start_date)
+     VALUES ('Test Space', $1)
+     RETURNING id`,
+    [todayUtcStr]
+  );
+  const testSpaceId = testSpaceResult.rows[0].id;
+
+  // One membership so "Test Space" behaves like a normal, non-empty workspace
+  // (member count starts at 1) instead of an edge case no other workspace hits.
+  await pool.query(
+    `INSERT INTO workspace_memberships (workspace_id, user_id, role)
+     VALUES ($1, $2, 'admin')`,
+    [testSpaceId, adminUserId]
+  );
+
+  // carol has NO workspace membership anywhere, so /api/admin/users/search
+  // (which excludes users already in the target workspace) always finds her
+  // as addable to Test Space, without touching Test Workspace's member count.
+  await pool.query(
+    `INSERT INTO users (email, password_hash, name, is_super_admin)
+     VALUES ('carol@ship.local', $1, 'Carol Chen', false)`,
+    [passwordHash]
+  );
 }
 
 /**
