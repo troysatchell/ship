@@ -64,23 +64,27 @@ test.describe('Icon Tooltips', () => {
 
     // Find a document tree item and hover to reveal delete button
     const docItem = page.locator('[data-testid="doc-item"]').first()
-    if (await docItem.count() > 0) {
-      await docItem.hover()
+    await expect(
+      docItem,
+      'Seed data should include at least one wiki document in the tree. Run: pnpm db:seed'
+    ).toBeVisible({ timeout: 5000 })
+    await docItem.hover()
 
-      // Find and hover over delete button
-      const deleteButton = page.locator('[data-testid="delete-document-button"]').first()
-      if (await deleteButton.count() > 0) {
-        await deleteButton.hover()
+    // Find and hover over delete button
+    const deleteButton = page.locator('[data-testid="delete-document-button"]').first()
+    await expect(
+      deleteButton,
+      'Document tree item should expose a delete button on hover'
+    ).toBeVisible({ timeout: 3000 })
+    await deleteButton.hover()
 
-        // Wait for tooltip to appear
-        await page.waitForTimeout(400)
+    // Wait for tooltip to appear
+    await page.waitForTimeout(400)
 
-        // Check that tooltip content is visible
-        const tooltip = page.getByRole('tooltip')
-        await expect(tooltip).toBeVisible()
-        await expect(tooltip).toContainText('Delete')
-      }
-    }
+    // Check that tooltip content is visible
+    const tooltip = page.getByRole('tooltip')
+    await expect(tooltip).toBeVisible()
+    await expect(tooltip).toContainText('Delete')
   })
 
   test('command palette close button shows tooltip on hover', async ({ page }) => {

@@ -47,34 +47,40 @@ test.describe('Status Colors Accessibility', () => {
       await page.goto('/programs');
       await page.waitForSelector('[data-testid="programs-list"], .program-card, [class*="program"]', { timeout: 10000 });
 
-      // Click first program if available
-      const programLink = page.locator('a[href*="/documents/"]').first();
-      if (await programLink.count() > 0) {
-        await programLink.click();
-        await page.waitForTimeout(1000);
+      // Click first program if available. Programs render as a table
+      // (web/src/pages/Programs.tsx, SelectableList) -- a row, not a
+      // "button:has-text(issues)" card or an <a href="/documents/..."> link.
+      const programLink = page.locator('table[aria-label="Programs list"] tbody tr').first();
+      await expect(
+        programLink,
+        'Seed data should include at least one program to navigate into. Run: pnpm db:seed'
+      ).toBeVisible({ timeout: 5000 });
+      await programLink.click();
+      await page.waitForTimeout(1000);
 
-        // Verify no low-contrast status colors
-        const lowContrastBadges = page.locator('[class*="text-gray-400"], [class*="text-blue-400"], [class*="text-yellow-400"], [class*="text-green-400"]');
-        const statusBadges = lowContrastBadges.filter({ hasText: /backlog|todo|in.progress|done|cancelled|planned|active|completed/i });
+      // Verify no low-contrast status colors
+      const lowContrastBadges = page.locator('[class*="text-gray-400"], [class*="text-blue-400"], [class*="text-yellow-400"], [class*="text-green-400"]');
+      const statusBadges = lowContrastBadges.filter({ hasText: /backlog|todo|in.progress|done|cancelled|planned|active|completed/i });
 
-        await expect(statusBadges).toHaveCount(0);
-      }
+      await expect(statusBadges).toHaveCount(0);
     });
 
     test('sprint status badges use accessible colors', async ({ page }) => {
       await page.goto('/programs');
       await page.waitForSelector('[data-testid="programs-list"], .program-card, [class*="program"]', { timeout: 10000 });
 
-      const programLink = page.locator('a[href*="/documents/"]').first();
-      if (await programLink.count() > 0) {
-        await programLink.click();
-        await page.waitForTimeout(1000);
+      const programLink = page.locator('table[aria-label="Programs list"] tbody tr').first();
+      await expect(
+        programLink,
+        'Seed data should include at least one program to navigate into. Run: pnpm db:seed'
+      ).toBeVisible({ timeout: 5000 });
+      await programLink.click();
+      await page.waitForTimeout(1000);
 
-        // Sprint status (planned/active/completed) should use accessible colors
-        const sprintStatusLowContrast = page.locator('[class*="text-gray-400"], [class*="text-green-400"], [class*="text-blue-400"]').filter({ hasText: /planned|active|completed/i });
+      // Sprint status (planned/active/completed) should use accessible colors
+      const sprintStatusLowContrast = page.locator('[class*="text-gray-400"], [class*="text-green-400"], [class*="text-blue-400"]').filter({ hasText: /planned|active|completed/i });
 
-        await expect(sprintStatusLowContrast).toHaveCount(0);
-      }
+      await expect(sprintStatusLowContrast).toHaveCount(0);
     });
   });
 

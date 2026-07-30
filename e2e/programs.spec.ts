@@ -165,12 +165,17 @@ test.describe('Programs', () => {
     // Wait for programs to load
     await page.waitForTimeout(1000)
 
-    // Program cards should show issue counts (e.g., "5 issues")
-    // Use a regex locator to match only count text like "N issues", not titles containing "issues"
-    const countBadges = page.locator('text=/^\\d+ issues?$/')
-    if (await countBadges.count() > 0) {
-      await expect(countBadges.first()).toBeVisible()
-    }
+    // Programs render as a table (web/src/pages/Programs.tsx, SelectableList),
+    // not cards -- issue/sprint counts are plain numeric gridcells ("3"), not
+    // "N issues" badge text. Only the Issues/Weeks columns render bare
+    // integers; Name/Owner are text and Created/Updated are formatted dates.
+    const countCells = page
+      .locator('table[aria-label="Programs list"] [role="gridcell"]')
+      .filter({ hasText: /^\d+$/ })
+    await expect(
+      countCells.first(),
+      'Seed data should include at least one program with a numeric issue/sprint count cell. Run: pnpm db:seed'
+    ).toBeVisible({ timeout: 5000 })
   })
 
   test('can navigate between programs using sidebar', async ({ page }) => {
@@ -215,13 +220,22 @@ test.describe('Programs', () => {
     // Wait for programs to load
     await page.waitForTimeout(500)
 
-    // If there are program cards, they should show badges (emoji or first letter)
-    const programCards = page.locator('button:has-text("issues")')
-    if (await programCards.count() > 0) {
-      // Each card should have a colored badge
-      const badge = programCards.first().locator('.rounded-lg.text-sm.font-bold')
-      await expect(badge).toBeVisible({ timeout: 2000 })
-    }
+    // Programs render as a table (web/src/pages/Programs.tsx
+    // ProgramRowContent), not cards -- the Name gridcell holds a colored
+    // `div.rounded-md` badge showing an emoji or initial, not
+    // `button:has-text("issues")` / `.rounded-lg.text-sm.font-bold`. The row's
+    // first gridcell is a selection checkbox (SelectableList, selectable=true),
+    // so search the whole row rather than assume the Name cell is first.
+    const row = page.locator('table[aria-label="Programs list"] tbody tr').first()
+    await expect(
+      row,
+      'Seed data should include at least one program row. Run: pnpm db:seed'
+    ).toBeVisible({ timeout: 5000 })
+
+    const badge = row.locator('div.rounded-md')
+    await expect(badge, 'Program name cell should show a colored emoji/initial badge').toBeVisible({ timeout: 2000 })
+    const badgeText = (await badge.textContent())?.trim()
+    expect(badgeText, 'Badge should contain an emoji or initial character').toBeTruthy()
   })
 
   test('empty programs page shows create prompt', async ({ page }) => {
