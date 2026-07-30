@@ -8,6 +8,156 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-219 (A11Y-5) + TRO-220 (A11Y-6) + TRO-221 (A11Y-7) — page-shell landmark and heading structure
+
+Three findings, one shared root cause per the assignment: missing landmark/heading structure in the
+page shells. Each turned out to need a different fix once actually diagnosed.
+
+**A11Y-5 was mis-filed as a landmark bug on two working pages. It is not: `/search` and `/weeks` are
+not routes.** The finding assumed real pages missing `<main>`/`<h1>`. Checking
+`audit/error-handling/raw/probe1b-routes.json` first (as the ticket required) showed both routes with
+`bodyTextLength: 0` - byte-for-byte identical to `/this-route-does-not-exist`, which was included in
+that probe specifically because it's guaranteed not to exist. `web/src/main.tsx` had no
+`path="/search"` or `path="/weeks"` entry, and there is no `SearchPage`/`WeeksPage` anywhere in
+`web/src/pages/` - `/api/weeks` and `/api/search/mentions` are backend endpoints the audit's route
+list conflated with frontend pages. `AppRoutes`'s `<Routes>` had no wildcard fallback, so an unmatched
+path under `/` didn't match the parent `<Route path="/">` either and the whole tree rendered nothing -
+not a page missing a landmark, a routing gap with no landmark, heading, or content of any kind.
+Papering `<main>` around that emptiness would have been decoration; a real catch-all is the fix that
+also happens to clear the axe rules the finding named.
+
+**What changed - A11Y-5.**
+
+- `web/src/pages/NotFound.tsx` (new) - a real "Page not found" view with its own `<h1>` and a link
+  back to `/docs`. It does *not* render its own `<main>`: every route nested under `AppLayout` already
+  gets one for free (`pages/App.tsx:542`), and a second `<main>` would be a duplicate landmark - its
+  own axe violation.
+- `web/src/main.tsx` - added `<Route path="*" element={<NotFoundPage />} />` as the last child of the
+  same `<Route path="/">` that renders `<AppLayout />`, lazy-loaded like every other page (BUN-1
+  convention). Placement matters: as a sibling of `dashboard`, `my-week`, etc., it inherits
+  `AppLayout`'s persistent `<main>` instead of needing its own.
+
+**A11Y-6: the skip is page chrome, not user-authored TipTap content.** A document view's only
+page-level heading is the title `<h1>` (`Editor.tsx:888`). `WikiSidebar` renders nothing but
+`<label>` property rows and `BacklinksPanel`, whose "Backlinks" header was an `<h3>` with no `<h2>`
+anywhere in the chrome - an h1 -> h3 skip, reproduced on a real seeded wiki document with zero body
+headings (`audit/a11y/axe/document_view.json`: `heading-order` targeting `h3`; re-confirmed live
+against this worktree's own dev server with the same result). Because it reproduces with no user
+content at all, this cannot be a TipTap-authored skip, so the fix does not touch the editor's Heading
+extension or constrain what levels a user can type into their own document - only the chrome.
+`web/src/components/sidebars/PropertiesPanel.tsx`'s `WeeklyDocumentSidebar` had the identical pattern
+(an `<h3>` "Weekly Plan"/"Weekly Retro" header with no `<h2>` above it) for weekly_plan/weekly_retro
+documents - same root cause, different document type, fixed alongside it.
+
+**What changed - A11Y-6.**
+
+- `web/src/components/editor/BacklinksPanel.tsx` - all three "Backlinks" headers (loading/error/loaded
+  states) promoted from `<h3>` to `<h2>`, the first real section heading under the page's single
+  `<h1>`.
+- `web/src/components/sidebars/PropertiesPanel.tsx` - `WeeklyDocumentSidebar`'s "Weekly Plan"/"Weekly
+  Retro" header promoted the same way, and the function is now exported (was module-private) so its
+  own regression test can render it without also mocking `useAuth`/`useWorkspace`, which the exported
+  `PropertiesPanel` wrapper calls unconditionally regardless of document type.
+
+**A11Y-7: straightforward - wrap the form in `<main>`.** The entire login page (logo, form, dev-hint)
+sat in a plain `<div>` with no landmark anywhere on the page. axe reported `landmark-one-main` and
+`region` (five separate un-landmarked blocks, including both form field wrappers) -
+`audit/a11y/axe/login_unauth.json`. `web/src/pages/Login.tsx`'s single wrapping `<div
+className="w-full max-w-[360px]">` is now a `<main>` with the same class - no visual change, since
+Tailwind classes fully control the box's appearance and `<main>`/`<div>` carry no differing default
+styles.
+
+**Process note the ticket also asked about.** The repo's e2e a11y specs (`e2e/accessibility.spec.ts`)
+filter every assertion to `expect(violations.filter(v => v.impact === 'critical' || v.impact ===
+'serious')).toHaveLength(0)` - Moderate violations (all three of these rules) pass those specs by
+construction, which is exactly how A11Y-5/6/7 went unnoticed by CI. This PR does **not** tighten that
+filter - live-measured before/after below (Serious+ column) shows it would stay green on `/search`,
+`/weeks`, and `/login` after this fix, but `document view` already carried a pre-existing Serious
+`color-contrast` finding unrelated to this ticket (see below), so tightening the filter repo-wide is a
+separate decision for a human, not a side effect of this PR.
+
+**Regression tests** (`web/src/**/*.test.tsx`, run by `pnpm --filter @ship/web test`, the tier the
+gate actually executes):
+
+- `web/src/pages/NotFound.test.tsx` - renders an `<h1>`, offers a link back to `/docs`, and does
+  *not* render its own `<main>`.
+- `web/src/main.routes.test.ts` (extended) - pins the catch-all as a lazy-loaded sibling route inside
+  the `AppLayout`-wrapping `<Route path="/">`, not a bare top-level route.
+- `web/src/components/editor/BacklinksPanel.test.tsx` - asserts the "Backlinks" heading is `h2` in
+  both the loading and loaded states.
+- `web/src/components/sidebars/PropertiesPanel.test.tsx` - asserts `WeeklyDocumentSidebar`'s header is
+  `h2` for both weekly_plan and weekly_retro.
+- `web/src/pages/Login.test.tsx` - asserts the sign-in form, both inputs, and the submit button are
+  all reachable inside a single `<main>`.
+
+Every test above was confirmed red first (against the pre-fix markup, restored via file copies -
+never `git stash`, per this project's standing rule) for the reason claimed - missing `<main>`/`h1`,
+or the wrong heading level - then green after the fix, with no other change to the assertion.
+
+**Measurement (a11y DoD).** axe-core 4.11.0 via `@axe-core/playwright`, tags
+`wcag2a,wcag2aa,wcag21a,wcag21aa,best-practice`, Chromium 1217 headless, 1440x900, against this
+worktree's own dev servers (`web :5995`, `api :3822`, seeded fresh), authenticated as `dev@ship.local`
+except where noted. The seeded user's "Action Items" modal auto-opens on every navigation and was
+dismissed after each one before scanning - an earlier pass here that dismissed it only once (right
+after login) produced a false-clean reading on the document view, because the modal was still
+covering the page for that scan; re-scanning with the modal dismissed on every navigation reproduced
+the real `heading-order` violation and is what these numbers reflect.
+
+| Page / state | Before (C/S/M/m, rules) | After (C/S/M/m, rules) |
+|---|---|---|
+| `/login` (unauthenticated) | 0/0/2/0 - `landmark-one-main`, `region` | 0/0/0/0 |
+| `/search` | 0/0/2/0 - `landmark-one-main`, `page-has-heading-one` | 0/1/0/0 - `color-contrast` (see below) |
+| `/weeks` | 0/0/2/0 - `landmark-one-main`, `page-has-heading-one` | 0/1/0/0 - `color-contrast` (see below) |
+| document view (seeded wiki doc) | 0/0/1/0 - `heading-order` | 0/0/0/0 |
+
+All four of the named axe rules (`landmark-one-main`, `page-has-heading-one`, `heading-order`,
+`region`) clear. `/login` and document view are fully clean after the fix.
+
+**New, honestly-reported: `/search` and `/weeks` now surface a pre-existing Serious `color-contrast`
+finding that was never reachable before.** Before this fix those two URLs rendered nothing at all, so
+they trivially had zero violations of every kind, not just the two landmark/heading ones. Once
+`AppLayout` actually mounts there (via the new catch-all), they inherit the same 4-panel chrome every
+other authenticated page uses - and `getActiveMode()` (`pages/App.tsx`) has no match for `/search` or
+`/weeks`, so it falls through to its `'dashboard'` default, highlighting the "My Work" nav item in
+`DashboardSidebar.tsx:36` (and a second item at line 51) with `bg-accent/10 text-accent` - `accent`
+(#005ea2) is a *fill* color, documented in `web/tailwind.config.js` as only 2.89:1 as text, the exact
+A11Y-3/TRO-217 failure mode. This exact element is never flagged on the real `/my-week` page only
+because that one page hides its whole contextual sidebar (`hideLeftSidebar` in `pages/App.tsx`) for
+unrelated layout reasons - the defect was always there, just never visible. This is pre-existing
+chrome, not something this PR added, and swapping its color token is a visible change to unrelated,
+already-shipped UI - out of a landmark/heading ticket's scope per this project's "no visual redesign;
+escalate a visible fix" rule, so it is reported here rather than fixed. Recommend a follow-up finding
+(`DashboardSidebar.tsx:36,51`, same class as A11Y-3) rather than silently expanding this PR.
+`NotFoundPage.tsx`'s own new "Go to Documents" link had the identical mistake (`text-accent` copied
+from `UnifiedDocumentPage.tsx`'s existing, equally-affected "Go to Documents" button) and *was* fixed
+here, since it's this PR's own new code: swapped to `text-accent-text` (6.08:1), the token this
+codebase already defines for accent-colored text.
+
+**Unverified.** Everything above is DOM/axe evidence (observed) or code-read (derived and marked as
+such). No claim is made about what a screen reader announces; VoiceOver verification of the new
+`<main>`/`<h1>` structure is owed to a human, per this project's standing rule that only a human
+listening can confirm announcement behavior.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run \
+  src/pages/NotFound.test.tsx \
+  src/main.routes.test.ts \
+  src/components/editor/BacklinksPanel.test.tsx \
+  src/components/sidebars/PropertiesPanel.test.tsx \
+  src/pages/Login.test.tsx
+scripts/factory/gate.sh
+```
+
+**Rollback.** Revert the commit(s) on `fix/a11y-5-6-7-landmarks`. The three fixes are independent:
+reverting `web/src/main.tsx`'s catch-all route and deleting `NotFound.tsx` undoes A11Y-5 alone;
+reverting the two heading-level changes undoes A11Y-6 alone; reverting `Login.tsx`'s `<main>` undoes
+A11Y-7 alone.
+
+---
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write
