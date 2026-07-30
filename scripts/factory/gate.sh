@@ -254,10 +254,42 @@ else
   # --agent emits structured findings; the triage step classifies them into
   # fix-now / new-Linear-ticket / dismissed. CodeRabbit findings never fail the
   # gate on their own — a reviewer's opinion is input to triage, not a verdict.
-  if coderabbit review --agent --base "${BASE_REF}" > "$OUT_DIR/coderabbit.json" 2>"$OUT_DIR/coderabbit.err"; then
-    record coderabbit pass "findings captured — see .factory/coderabbit.json (triage required)"
+  #
+  # TIMEOUT, and why it is not optional: this call has no internal deadline and
+  # blocks on I/O indefinitely when several worktrees invoke the CLI at once.
+  # Observed 2026-07-30 on TRO-197: 11+ minutes of wall time against 2.6s of CPU,
+  # with sibling worktrees running the same command concurrently. Because G9 can
+  # only ever record pass/warn/skip, a hang cannot change the verdict — it just
+  # stalls the whole gate until an operator kills the subprocess by hand, which
+  # is exactly the failure an unattended factory run cannot absorb.
+  CR_TIMEOUT="${CR_TIMEOUT:-360}"
+  if command -v timeout >/dev/null 2>&1; then
+    CR_RUNNER=(timeout --foreground -k 10 "${CR_TIMEOUT}")
+  elif command -v gtimeout >/dev/null 2>&1; then
+    CR_RUNNER=(gtimeout --foreground -k 10 "${CR_TIMEOUT}")
   else
-    record coderabbit warn "review did not complete — see .factory/coderabbit.err"
+    CR_RUNNER=()
+  fi
+
+  if [ ${#CR_RUNNER[@]} -eq 0 ]; then
+    # No timeout binary available. Run it, but say so — a silent unbounded call
+    # is how this stalled in the first place.
+    if coderabbit review --agent --base "${BASE_REF}" > "$OUT_DIR/coderabbit.json" 2>"$OUT_DIR/coderabbit.err"; then
+      record coderabbit pass "findings captured (no timeout binary — call was unbounded)"
+    else
+      record coderabbit warn "review did not complete — see .factory/coderabbit.err"
+    fi
+  else
+    "${CR_RUNNER[@]}" coderabbit review --agent --base "${BASE_REF}" \
+      > "$OUT_DIR/coderabbit.json" 2>"$OUT_DIR/coderabbit.err"
+    CR_RC=$?
+    if [ "$CR_RC" -eq 0 ]; then
+      record coderabbit pass "findings captured — see .factory/coderabbit.json (triage required)"
+    elif [ "$CR_RC" -eq 124 ] || [ "$CR_RC" -eq 137 ]; then
+      record coderabbit warn "review timed out after ${CR_TIMEOUT}s — PR-level review is authoritative; triage that instead"
+    else
+      record coderabbit warn "review did not complete (rc=${CR_RC}) — see .factory/coderabbit.err"
+    fi
   fi
 fi
 

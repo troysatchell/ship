@@ -343,6 +343,53 @@ describe('Workspaces API', () => {
       // Non-admin should get 403
       expect(response.status).toBe(403)
     })
+
+    /**
+     * Added for audit finding TEST-2 (TRO-224).
+     *
+     * `e2e/authorization.spec.ts` was the *only* automated check on member-level
+     * audit-log access, and its `expect(403)` sat inside two nested `if`s — any
+     * hiccup fetching `/api/workspaces/current` skipped the check silently. That
+     * spec is fixed, but `e2e/` is run by neither the factory gate nor CI, so the
+     * rule is pinned here as well, in a tier that actually executes.
+     */
+    it('should not leak audit log entries in the 403 body', async () => {
+      const response = await request(app)
+        .get(`/api/workspaces/${testWorkspaceId}/audit-logs`)
+        .set('Cookie', sessionCookie)
+
+      expect(response.status).toBe(403)
+      expect(response.body?.data?.logs, 'a refused request must not carry logs').toBeUndefined()
+      expect(JSON.stringify(response.body)).not.toContain('"logs"')
+    })
+
+    it('should refuse an unauthenticated request for audit logs', async () => {
+      const response = await request(app)
+        .get(`/api/workspaces/${testWorkspaceId}/audit-logs`)
+
+      expect([401, 403]).toContain(response.status)
+      expect(JSON.stringify(response.body)).not.toContain('"logs"')
+    })
+
+    it('should refuse a member reading the audit log of a workspace they are not in', async () => {
+      const otherWorkspace = await pool.query(
+        `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
+        [`${testWorkspaceName} Foreign`]
+      )
+      const foreignWorkspaceId = otherWorkspace.rows[0].id
+
+      try {
+        const response = await request(app)
+          .get(`/api/workspaces/${foreignWorkspaceId}/audit-logs`)
+          .set('Cookie', sessionCookie)
+
+        // No membership at all in that workspace, so certainly not admin of it.
+        expect(response.status).toBe(403)
+        expect(JSON.stringify(response.body)).not.toContain('"logs"')
+      } finally {
+        await pool.query('DELETE FROM workspaces WHERE id = $1', [foreignWorkspaceId])
+      }
+    })
   })
 })
 

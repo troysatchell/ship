@@ -1,6 +1,12 @@
-import { useState, useRef, useEffect } from 'react';
-import EmojiPicker, { Theme, EmojiClickData } from 'emoji-picker-react';
+import { useState, useRef, useEffect, lazy, Suspense } from 'react';
 import { cn } from '@/lib/cn';
+
+/**
+ * BUN-4 / TRO-200: the picker itself is behind a click in a properties
+ * sidebar, so there is no reason for every page load — including /login — to
+ * carry it. See EmojiPickerBody.tsx for why the package import lives there.
+ */
+const EmojiPickerBody = lazy(() => import('./EmojiPickerBody'));
 
 interface EmojiPickerPopoverProps {
   value?: string | null;
@@ -41,8 +47,8 @@ export function EmojiPickerPopover({ value, onChange, children, className }: Emo
     return () => document.removeEventListener('keydown', handleEscape);
   }, [isOpen]);
 
-  const handleEmojiClick = (emojiData: EmojiClickData) => {
-    onChange(emojiData.emoji);
+  const handleEmojiSelect = (emoji: string) => {
+    onChange(emoji);
     setIsOpen(false);
   };
 
@@ -73,15 +79,24 @@ export function EmojiPickerPopover({ value, onChange, children, className }: Emo
                 Remove emoji
               </button>
             )}
-            <EmojiPicker
-              onEmojiClick={handleEmojiClick}
-              skinTonesDisabled={true}
-              theme={Theme.DARK}
-              height={350}
-              width={300}
-              searchPlaceholder="Search emoji..."
-              previewConfig={{ showPreview: false }}
-            />
+            {/*
+              The fallback is sized to the picker (300x350) so the popover does
+              not resize under the cursor when the chunk arrives.
+            */}
+            <Suspense
+              fallback={
+                <div
+                  role="status"
+                  aria-live="polite"
+                  style={{ height: 350, width: 300 }}
+                  className="flex items-center justify-center text-sm text-muted"
+                >
+                  Loading emoji…
+                </div>
+              }
+            >
+              <EmojiPickerBody onSelect={handleEmojiSelect} />
+            </Suspense>
           </div>
         </div>
       )}
