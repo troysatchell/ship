@@ -134,9 +134,26 @@ export function isCompressionExcluded(
 export function createApp(corsOrigin: string = 'http://localhost:5173'): express.Express {
   const app = express();
 
-  // Trust proxy headers (CloudFront) for secure cookies and correct protocol detection
+  // Trust proxy headers (CloudFront) for secure cookies and correct protocol detection.
+  //
+  // Two reverse-proxy hops sit between the client and this app in production
+  // (terraform/s3-cloudfront.tf's `EB-API` custom origin behind CloudFront, then
+  // the ALB): client -> CloudFront -> ALB -> here. `trust proxy` is a hop COUNT,
+  // not "trust the header" — with N=1 (the previous value), Express only peels
+  // the ALB's own honest append and stops, so `req.ip` resolved to CloudFront's
+  // own edge-server IP for every request, never the real client. See TF-7 /
+  // TRO-278 and the analysis + regression tests in `api/src/app.test.ts`.
+  //
+  // Raising this to 2 is only safe paired with `terraform/security-groups.tf`
+  // restricting the ALB security group to CloudFront's origin-facing managed
+  // prefix list (same PR): with the ALB reachable only from CloudFront, hop 0 is
+  // always the ALB and hop 1 is always a genuine CloudFront edge node, so the
+  // remaining (3rd) entry is the real client IP. If the ALB were ever reachable
+  // directly, N=2 would let a client's own forged `X-Forwarded-For` entry be
+  // trusted as though it were CloudFront's — do not raise this number without
+  // the security group restricting ingress to match.
   if (process.env.NODE_ENV === 'production') {
-    app.set('trust proxy', 1);
+    app.set('trust proxy', 2);
 
     // CloudFront with viewer_protocol_policy="redirect-to-https" always serves viewers over HTTPS.
     // However, CloudFront -> EB uses HTTP (origin_protocol_policy="http-only"), so CloudFront
