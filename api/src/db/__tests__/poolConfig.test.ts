@@ -57,6 +57,7 @@ describe('resolvePoolTiming — malformed overrides fall back to the default', (
     ['non-numeric', 'abc'],
     ['zero', '0'],
     ['negative', '-100'],
+    ['fractional', '1.5'],
   ])('%s DB_POOL_CONNECTION_TIMEOUT_MS falls back to 2000', (_label, value) => {
     expect(resolvePoolTiming({ DB_POOL_CONNECTION_TIMEOUT_MS: value }).connectionTimeoutMillis).toBe(
       2000
@@ -68,6 +69,7 @@ describe('resolvePoolTiming — malformed overrides fall back to the default', (
     ['non-numeric', 'abc'],
     ['zero', '0'],
     ['negative', '-5'],
+    ['fractional', '3.7'],
   ])('%s DB_POOL_MAX falls back to the production default', (_label, value) => {
     expect(resolvePoolTiming({ NODE_ENV: 'production', DB_POOL_MAX: value }).max).toBe(20);
   });

@@ -10,14 +10,24 @@
  *   - Application config that changes per environment
  *   - CAIA OAuth credentials (CAIA_ISSUER_URL, CAIA_CLIENT_ID, etc.)
  */
-import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
+import { SSMClient, GetParameterCommand, ParameterNotFound } from '@aws-sdk/client-ssm';
 
 // Lazy-initialized client to avoid keeping Node.js alive during import tests
 let _client: SSMClient | null = null;
 
 function getClient(): SSMClient {
   if (!_client) {
-    _client = new SSMClient({ region: process.env.AWS_REGION || 'us-east-1' });
+    _client = new SSMClient({
+      region: process.env.AWS_REGION || 'us-east-1',
+      // `sendWithRetry` below is the sole retry layer. The SDK's own default
+      // (maxAttempts: 3, its own internal backoff) would otherwise compound
+      // silently with it — e.g. a single logical "attempt" here could involve
+      // up to 3 real network round-trips for anything the SDK itself treats
+      // as retryable (ThrottlingException), making the "3 total attempts"
+      // this file documents inaccurate and the jitter schedule below (sized
+      // for this file's own attempts) apply to the wrong layer.
+      maxAttempts: 1,
+    });
   }
   return _client;
 }
@@ -45,6 +55,16 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && err.name === 'AbortError';
 }
 
+/**
+ * `ParameterNotFound` means the name is wrong or the parameter was never
+ * created — no number of retries changes that outcome, so it must not be
+ * treated as transient. (Other permanent SSM exceptions, e.g.
+ * `AccessDeniedException`, aren't special-cased here; add them if seen.)
+ */
+function isNonRetryable(err: unknown): boolean {
+  return err instanceof ParameterNotFound;
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -64,8 +84,9 @@ function ssmRetryDelayMs(attempt: number): number {
 /**
  * Runs one SSM call with a per-attempt timeout, retrying transient failures
  * (network errors, throttling, the timeout itself) up to `SSM_MAX_ATTEMPTS`
- * times total. Concurrency note: this is a bounded, one-shot retry inside a
- * single call — not a `setInterval` — so there is no in-flight-guard
+ * times total — except `ParameterNotFound`, which propagates immediately
+ * (see `isNonRetryable`). Concurrency note: this is a bounded, one-shot retry
+ * inside a single call — not a `setInterval` — so there is no in-flight-guard
  * question; `loadProductionSecrets` awaits it once at boot before the app is
  * created (`index.ts`), and nothing else invokes it concurrently.
  */
@@ -80,6 +101,7 @@ async function sendWithRetry<T>(
     try {
       return await fn(controller.signal);
     } catch (err) {
+      if (isNonRetryable(err)) throw err;
       lastErr = isAbortError(err)
         ? new Error(`${label} timed out after ${SSM_REQUEST_TIMEOUT_MS}ms`)
         : err;
@@ -102,9 +124,10 @@ export async function getSSMSecret(name: string): Promise<string> {
   const response = await sendWithRetry(`SSM parameter ${name}`, (signal) =>
     getClient().send(command, { abortSignal: signal })
   );
-  // Reached only after a successful call — the parameter genuinely doesn't
-  // exist (or has no value), which is a permanent condition. Retrying it
-  // above would not help, which is why this check sits outside the retry.
+  // Belt-and-braces: a genuinely missing parameter name throws
+  // `ParameterNotFound` from `send()` itself (handled as non-retryable
+  // above), so this is reached only if a *successful* call reported no
+  // value — still a permanent condition, so it is not retried either.
   if (!response.Parameter?.Value) {
     throw new Error(`SSM parameter ${name} not found`);
   }

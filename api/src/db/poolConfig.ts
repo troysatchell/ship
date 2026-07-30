@@ -40,15 +40,17 @@ const DEFAULT_POOL_MAX_DEV = 10;
  * Parses a positive integer from an env var, falling back to `fallback` for
  * anything that isn't one — unset, empty, non-numeric, zero, or negative.
  *
- * Validated rather than a bare `Number(...)`: an empty or malformed override
- * (`DB_POOL_MAX=""` or `"abc"`) would otherwise produce `NaN`, which is not
- * a safe pool size (Postgres' pool implementation is not specified against
- * it) — falling back keeps the value finite and sane either way.
+ * Validated rather than a bare `Number(...)`: a malformed override (unset,
+ * empty, non-numeric, zero, negative, or fractional — `DB_POOL_MAX="1.5"` is
+ * not a valid connection count any more than `"abc"` is) would otherwise
+ * produce `NaN` or a value neither `pg.Pool` nor a millisecond timeout is
+ * specified against — falling back keeps the value a sane, exact integer
+ * either way.
  */
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   if (value === undefined || value === '') return fallback;
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 export interface PoolTimingEnv {

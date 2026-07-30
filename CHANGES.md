@@ -73,47 +73,58 @@ the deliverable.
   existing `ssl.ts`/`resolveDatabaseSsl` decision file — resolving `connectionTimeoutMillis` from
   `DB_POOL_CONNECTION_TIMEOUT_MS` and pool `max` from `DB_POOL_MAX` (production) /
   `DB_POOL_MAX_DEV` (else), each falling back to today's hardcoded values (2000ms, 20/10) for any
-  unset, empty, non-numeric, zero, or negative override. `client.ts` now calls it instead of
-  inlining the numbers; **defaults are unchanged**, so behavior does not change unless an operator
-  sets one of the three env vars. Failure mode this protects against: `ssl.ts`'s own file header
-  already documents what a fixed 2000ms timeout does against a managed Postgres with a slow cold
-  start — every connection attempt in that window fails and, under restart-on-crash infra, the
-  process crash-loops before the database is ever actually reachable.
+  unset, empty, non-numeric, zero, negative, **or fractional** override — `Number.isInteger`, not
+  just `Number.isFinite`, because a pool size or millisecond timeout of `1.5` is as meaningless as
+  `"abc"` (CodeRabbit caught the original version accepting fractional overrides). `client.ts` now
+  calls it instead of inlining the numbers; **defaults are unchanged**, so behavior does not change
+  unless an operator sets one of the three env vars. Failure mode this protects against: `ssl.ts`'s
+  own file header already documents what a fixed 2000ms timeout does against a managed Postgres
+  with a slow cold start — every connection attempt in that window fails and, under
+  restart-on-crash infra, the process crash-loops before the database is ever actually reachable.
 - **`api/src/config/ssm.ts`.** `getSSMSecret` now runs each SSM call through `sendWithRetry`: a
   5s per-attempt timeout (`AbortController` passed as `send`'s `abortSignal`, per the
   `@aws-sdk/client-ssm` `HttpHandlerOptions` shape) and up to 3 total attempts, backing off between
   them with full jitter capped at 2000ms (`Math.random() * min(200 * 2^attempt, 2000)`) so that
   the five parameters `loadProductionSecrets` fetches concurrently (`Promise.all`) don't retry in
-  lockstep if they all fail on the same underlying blip. A response that succeeds but reports the
-  parameter missing is **not** retried — that's a permanent condition (checked after the retry
-  loop returns, not inside it). Exhausting all attempts re-throws into the existing
-  `loadProductionSecrets` catch block unchanged, so the already-correct fallback-to-env-vars
-  behavior from TRO-243 is untouched. Concurrency note (rule 18): this is a bounded, one-shot retry
-  inside a single awaited call, not a `setInterval` — `loadProductionSecrets()` is invoked exactly
-  once, in `index.ts`'s `main()`, before the app is created, so there is no in-flight-guard
-  question.
+  lockstep if they all fail on the same underlying blip. The `SSMClient` is now constructed with
+  `maxAttempts: 1`, so this file's loop is the **only** retry layer — the SDK's own default
+  (`maxAttempts: 3` with its own internal backoff) would otherwise silently compound with it,
+  making "3 total attempts" untrue and applying this file's jitter schedule to the wrong layer
+  (CodeRabbit caught the first version missing this). `ParameterNotFound` — what the real SSM API
+  actually rejects with for a genuinely missing name, not a resolved-with-empty-value response as
+  the first version of this fix assumed — is classified as non-retryable and propagates on the
+  first attempt; a resolved-but-empty-value response (belt-and-braces, in case that shape is ever
+  possible) is also not retried, for the same reason. Exhausting the retryable attempts re-throws
+  into the existing `loadProductionSecrets` catch block unchanged, so the already-correct
+  fallback-to-env-vars behavior from TRO-243 is untouched. Concurrency note (rule 18): this is a
+  bounded, one-shot retry inside a single awaited call, not a `setInterval` —
+  `loadProductionSecrets()` is invoked exactly once, in `index.ts`'s `main()`, before the app is
+  created, so there is no in-flight-guard question.
 
 **Regression tests (new).**
 
-- `api/src/db/__tests__/poolConfig.test.ts` — 13 cases: defaults match the previous hardcoded
+- `api/src/db/__tests__/poolConfig.test.ts` — 15 cases: defaults match the previous hardcoded
   values; `DB_POOL_CONNECTION_TIMEOUT_MS`/`DB_POOL_MAX`/`DB_POOL_MAX_DEV` overrides apply
-  independently per `NODE_ENV`; malformed overrides (empty/non-numeric/zero/negative) fall back to
-  the default rather than propagating `NaN` or an unsafe pool size. New capability with unchanged
-  defaults, not a bug fix — no pre-existing broken behavior to reproduce red for; confirmed green
-  against the implementation.
-- `api/src/config/ssm.test.ts` — 5 cases against a mocked `SSMClient`, fake timers driving the
+  independently per `NODE_ENV`; malformed overrides (empty/non-numeric/zero/negative/**fractional**)
+  fall back to the default rather than propagating `NaN` or an unsafe pool size. New capability
+  with unchanged defaults, not a bug fix — no pre-existing broken behavior to reproduce red for;
+  confirmed green against the implementation.
+- `api/src/config/ssm.test.ts` — 7 cases against a mocked `SSMClient`, fake timers driving the
   timeout/backoff (no real waiting): success-first-try; retries-then-succeeds; exhausts all 3
   attempts and throws the last transient error; a hung call is bounded by the per-attempt timeout
-  and then retries; a successful-but-"not found" response is never retried.
+  and then retries; a successful-but-"not found" response is never retried; **the real
+  `ParameterNotFound` rejection** the live API actually throws is never retried either (1 `send`
+  call only); the `SSMClient` is constructed with `maxAttempts: 1`.
   **Confirmed red before the fix**, for the right reason: reverted `ssm.ts` to the pre-fix version
   (copied aside, not stashed — the `git stash` ref is shared across every worktree in this repo per
-  `lessons.md`) and re-ran the same test file. 3 of 5 failed: "retries a transient failure" failed
-  with the raw `ECONNRESET` propagating (no retry existed); "gives up after exhausting attempts"
-  failed on `expected 3 calls, got 1`; "bounds a hung call" failed with a `TypeError` reading
-  `abortSignal` off `undefined`, because the old code never passed a second argument to `send` at
-  all — a faithful demonstration that no timeout wiring existed, not a typo in the test. The other
-  2 cases passed unchanged on old code (a first-try success and a "not found" response were never
-  going to exercise retry logic either way). Restored the fix; all 5 pass.
+  `lessons.md`) and re-ran the same test file. 3 of 5 cases present at that point failed: "retries a
+  transient failure" failed with the raw `ECONNRESET` propagating (no retry existed); "gives up
+  after exhausting attempts" failed on `expected 3 calls, got 1`; "bounds a hung call" failed with a
+  `TypeError` reading `abortSignal` off `undefined`, because the old code never passed a second
+  argument to `send` at all — a faithful demonstration that no timeout wiring existed, not a typo
+  in the test. The other 2 cases passed unchanged on old code (a first-try success and a "not
+  found" response were never going to exercise retry logic either way). Restored the fix; all 7
+  (after the `ParameterNotFound`/`maxAttempts` additions below) pass.
 
 **How to run it.**
 

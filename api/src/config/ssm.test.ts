@@ -15,6 +15,16 @@
  * `Math.random` is stubbed to `1` so the jittered backoff delay is the
  * deterministic upper bound of its schedule, not a random value the test
  * would otherwise have to tolerate a range for.
+ *
+ * Two things a code-review pass caught that the first version of this file
+ * missed, both covered below:
+ *  - The AWS SDK's own client has a default retry strategy (`maxAttempts: 3`)
+ *    that would otherwise compound with this file's own retry loop. The
+ *    client is now constructed with `maxAttempts: 1` so this file's loop is
+ *    the sole retry layer — asserted directly below.
+ *  - A genuinely missing parameter name doesn't resolve with an empty value;
+ *    the real SSM API rejects with `ParameterNotFound`, which must not be
+ *    retried (retrying a name that doesn't exist can never succeed).
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
@@ -22,7 +32,15 @@ const sendMock = vi.hoisted(() => vi.fn());
 
 vi.mock('@aws-sdk/client-ssm', () => {
   // Regular `function` expressions, not arrows: `new GetParameterCommand(...)`
-  // requires a constructible value, and arrow functions have no `[[Construct]]`.
+  // (and `new ParameterNotFound(...)`) require a constructible value, and
+  // arrow functions have no `[[Construct]]`.
+  class ParameterNotFound extends Error {
+    readonly name = 'ParameterNotFound';
+    constructor(opts?: { message?: string }) {
+      super(opts?.message ?? 'Parameter not found');
+    }
+  }
+
   return {
     SSMClient: vi.fn().mockImplementation(function SSMClient() {
       return { send: sendMock };
@@ -32,9 +50,11 @@ vi.mock('@aws-sdk/client-ssm', () => {
     ) {
       return { input };
     }),
+    ParameterNotFound,
   };
 });
 
+import { SSMClient, ParameterNotFound } from '@aws-sdk/client-ssm';
 import { getSSMSecret } from './ssm.js';
 
 function abortableHang(signal: AbortSignal): Promise<never> {
@@ -121,5 +141,27 @@ describe('getSSMSecret (TRO-248)', () => {
     // The call succeeded (no exception); "not found" is a permanent outcome
     // discovered only after a successful send, so it must not be retried.
     expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry the real ParameterNotFound rejection SSM actually throws', async () => {
+    // What the live AWS API does for a genuinely missing name: `send()`
+    // rejects with `ParameterNotFound` rather than resolving with an empty
+    // value. Retrying a name that will never exist just delays the same
+    // failure, so this must propagate on the very first attempt.
+    sendMock.mockRejectedValue(
+      new ParameterNotFound({ message: '/ship/prod/DOES_NOT_EXIST', $metadata: {} })
+    );
+
+    const promise = getSSMSecret('/ship/prod/DOES_NOT_EXIST');
+
+    await expect(promise).rejects.toThrow('/ship/prod/DOES_NOT_EXIST');
+    expect(sendMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('constructs the SSM client with maxAttempts: 1 so this file is the only retry layer', async () => {
+    sendMock.mockResolvedValueOnce(parameterResponse('secret-value'));
+    await getSSMSecret('/ship/prod/DATABASE_URL');
+
+    expect(vi.mocked(SSMClient).mock.calls[0]?.[0]).toMatchObject({ maxAttempts: 1 });
   });
 });
