@@ -235,14 +235,16 @@ const freshFromJsonDocs = new Set<string>();
  *    'update'. Attaching the listener afterwards means that very first update —
  *    the one that actually carries the loaded content — fires with nobody
  *    listening and is lost, the same shape of bug as a dropped WebSocket frame.
- * 2. A load failure PROPAGATES. This function is deliberately not wrapped in a
- *    top-level try/catch that swallows the database error the way the old
- *    single-function version did. getOrCreateDoc() below relies on the
- *    rejection to evict a failed load from the `docs` map, so the next
+ * 2. A DATABASE READ failure PROPAGATES. The `pool.query()` call below is
+ *    deliberately not wrapped in a try/catch that swallows the error the way
+ *    the old single-function version did. getOrCreateDoc() below relies on
+ *    the rejection to evict a failed load from the `docs` map, so the next
  *    connection retries instead of reusing a doc that silently stayed empty
- *    forever. A malformed-JSON-content failure is NOT the same kind of
- *    failure — retrying would hit the exact same bytes — so that inner parse
- *    step keeps its own try/catch and still falls back to an empty document.
+ *    forever. A malformed STORED VALUE (corrupt `yjs_state`, unparsable JSON
+ *    `content`) is NOT the same kind of failure — retrying would decode the
+ *    exact same bytes again — so those two branches each keep their own
+ *    try/catch and fall back to an empty document, matching this function's
+ *    pre-ERR-12 behavior for corrupted data.
  */
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
@@ -285,7 +287,16 @@ async function loadDoc(docName: string): Promise<Y.Doc> {
   if (result.rows[0]?.yjs_state) {
     // Load from binary Yjs state (preferred path - content was previously synced)
     console.log(`[Collaboration] Loading ${docName} from yjs_state`);
-    Y.applyUpdate(doc, result.rows[0].yjs_state);
+    try {
+      Y.applyUpdate(doc, result.rows[0].yjs_state);
+    } catch (applyErr) {
+      console.error(`[Collaboration] Failed to apply stored yjs_state for ${docName}:`, applyErr);
+      // Same reasoning as the JSON-parse catch below: corrupted STORED DATA is
+      // not a transient failure — retrying the load would decode the exact
+      // same bytes again — so this is swallowed rather than rejecting the
+      // whole load and evicting the cache entry. The document starts empty,
+      // matching this branch's pre-ERR-12 behavior.
+    }
   } else if (result.rows[0]?.content) {
     // Fallback: convert JSON content to Yjs (for API-created documents)
     console.log(`[Collaboration] Converting JSON content to Yjs for ${docName}`);
