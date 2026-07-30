@@ -237,6 +237,32 @@ if (!check(result, 'merge result')) {
   process.exit(1);
 }
 
+// --expect <TICKET>: assert the ticket appears in an entry heading.
+//
+// Added after a near-miss that the integrity check could not catch. Two agents
+// working concurrently both used the scratch filename `ours-CHANGES.md`; one
+// clobbered the other, so `--ours` was fed a DIFFERENT branch's file. Every
+// entry was byte-identical to that (wrong) source, so integrity passed, `--check`
+// passed, and the result had the wrong ticket at the top and the right one
+// missing entirely. It was caught by hand, against git.
+//
+// Byte-identity proves nothing was mangled. It cannot prove the inputs were the
+// intended ones. This asserts the one fact the caller actually knows.
+const expect = flag('expect');
+if (expect) {
+  const found = outEntries.some((e) => e.heading.includes(expect));
+  if (!found) {
+    console.error(
+      `merge-changes: EXPECTED TICKET MISSING — no entry heading contains "${expect}".\n` +
+        `  Entries present: ${outEntries.map((e) => e.heading.replace(/^##\s*/, '').slice(0, 40)).join(' | ')}\n` +
+        `  This usually means --ours or --theirs was fed the wrong file. Scratch\n` +
+        `  filenames are shared between concurrent agents; prefix them with the ticket ID.`
+    );
+    process.exit(1);
+  }
+  console.error(`merge-changes: expected ticket ${expect} present`);
+}
+
 console.error(`merge-changes: entry integrity OK — all ${outEntries.length} entries byte-identical to source`);
 
 const out = flag('out') ?? oursPath;
