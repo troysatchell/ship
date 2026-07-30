@@ -114,7 +114,18 @@ Chosen over CI mirroring: no extra machinery, and a push either reaches both or 
 
 **Credentials.** `RENDER_API_KEY` in the gitignored repo-root `.env` — load into Terraform's process env (`set -a; . ./.env; set +a`), not Vite's. Owner ID `tea-d9kevetg1s2s73807n5g`; not secret, safe to commit. Query the API directly with `GET https://api.render.com/v1/owners` and `/v1/postgres` and `/v1/services`.
 
-⚠️ `.gitignore:74-75` covers only `terraform/terraform.tfvars` and `terraform/environments/*/terraform.tfvars`. A new `terraform/render/terraform.tfvars` would **not** be ignored — widen the rule before any key goes near it.
+**Correction (TRO-299, 2026-07-30, verified empirically):** the line below, as originally written,
+was wrong. `.gitignore:74-75` (root file) does only cover `terraform/terraform.tfvars` and
+`terraform/environments/*/terraform.tfvars` — but there is *also* a nested `terraform/.gitignore`
+(pre-existing, untouched by TRO-299, present since `2c1c633`) whose unanchored `*.tfvars` /
+`.terraform/` / `*.tfstate*` patterns already apply recursively to every subdirectory under
+`terraform/`, `terraform/render/` included. Checked directly: with only the pre-TRO-299 gitignore
+files in place, `git check-ignore -v terraform/render/terraform.tfvars` already matched
+(`terraform/.gitignore:5:*.tfvars`). The one real gap TRO-299 found and closed was `*.tfplan`/
+`tfplan` — genuinely uncovered by any existing rule. Original (inaccurate) claim, kept below for
+context rather than deleted outright:
+
+> ~~`.gitignore:74-75` covers only `terraform/terraform.tfvars` and `terraform/environments/*/terraform.tfvars`. A new `terraform/render/terraform.tfvars` would **not** be ignored — widen the rule before any key goes near it.~~
 
 **Status: LIVE and seeded** since 2026-07-28 — https://ship-rr6m.onrender.com (`dev@ship.local` / `admin123`).
 
@@ -138,4 +149,10 @@ curl -X PATCH https://api.render.com/v1/postgres/dpg-d9kgth6417fc7386hhh0-a \
 
 **Free-tier caveats:** the web service sleeps on inactivity, so a cold URL takes time to answer; the free database has a limited lifetime. Both worth upgrading before the URL becomes a graded deliverable on Sunday.
 
-**Not yet Terraform-managed** — the service and database were created by hand and API call. Category 8 requires `terraform apply` from a clean checkout, so they need importing or recreating.
+**Not yet Terraform-*applied*** — the service and database were created by hand and API call, and
+still are (TRO-299 did not run `apply` or `import` — hard safety rule). A config that declares both
+now exists at `terraform/render/` (pinned `render-oss/render` 1.9.1), `terraform validate`/`plan`
+clean against the live account with real credentials (`2 to add, 0 to change` — expected, since
+nothing has been imported yet). Whether to `terraform import` the existing resources or `apply` a
+parallel pair is an open human decision — see `terraform/render/README.md`'s adoption memo and the
+TRO-299 PR ("HOLD FOR HUMAN: apply/import decision, gate 2").

@@ -84,6 +84,19 @@ terraform/test-runner/.terraform.lock.hcl
 terraform/test-runner/terraform.tfstate
 terraform/test-runner/terraform.tfstate.backup
 
+# Terraform: Render provider config (TF-10 / TRO-299). Only *.tfplan/tfplan
+# actually need a new rule here: terraform/.gitignore's pre-existing
+# *.tfvars / .terraform/ / *.tfstate* patterns are unanchored (no leading
+# slash), so they already apply recursively to terraform/render/ too —
+# verified empirically against the pre-this-ticket file. That corrects
+# memory-bank/techContext.md, which asserted "a new
+# terraform/render/terraform.tfvars would NOT be ignored" — that check only
+# looked at this file's terraform/*-specific lines above and missed the
+# nested terraform/.gitignore's blanket coverage. Filed as a memory-bank
+# correction (see memory-bank/progress.md).
+terraform/render/*.tfplan
+terraform/render/tfplan
+
 # Elastic Beanstalk
 api/.elasticbeanstalk/
 .elasticbeanstalk/

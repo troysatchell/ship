@@ -18,3 +18,11 @@ override.tf.json
 
 # Sensitive variable files
 *.auto.tfvars.secret
+
+# Exception: terraform/render/ (TF-10 / TRO-299) deliberately commits its
+# provider lock file for reproducibility/pinning — unlike the other
+# subdirectories under terraform/, none of which commit theirs (TF-4 flagged
+# this gap for the root flat config specifically; this is the new config
+# choosing not to repeat it). Re-including a file whose parent directory is
+# not itself excluded is fine per git's ignore-negation rules.
+!render/.terraform.lock.hcl

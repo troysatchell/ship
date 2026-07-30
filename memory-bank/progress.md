@@ -65,6 +65,46 @@ ALB doc URL, SG quota High, marks round-trip, floating promises 398, DashboardSi
 Render TF config→PR #57, TEST-16 flake, doc-read retry). Session end state: backlog no longer has
 Urgent/High audit items unstarted except human-held TF work.
 
+### 2026-07-30 (Thu) evening — TRO-299 (TF-10): Render-provider Terraform config, PR opened (gate-2 hold)
+
+`terraform/render/` (new): `render-oss/render` 1.9.1 pinned, `render_web_service.ship` (docker,
+oregon, free, `/health`) + `render_postgres.ship` (pg16, oregon, free). `DATABASE_URL` derived from
+`render_postgres.ship.connection_info.internal_connection_string` (resource reference, never a
+literal); `render_api_key`/`session_secret` are `sensitive = true` variables. Verified live against
+the Render API (not re-derived from the memory bank): service/db id/region/runtime/plan/URL,
+health check path (now actually set to `/health` — newer than techContext's older "unset" note),
+repo/branch, owner id, the three env var names. One fact only partially confirmed: Postgres
+`ipAllowList` reads `null` via the API, not `[]` — functionally equivalent per the provider docs,
+not byte-identical.
+
+**Real `terraform plan` run against the live account** (temp Terraform 1.9.8, `RENDER_API_KEY`
+from the gitignored repo-root `.env`, never printed): `validate` clean (no warnings, unlike the AWS
+root's TF-5), `fmt -check` clean after one pass, plan = `2 to add, 0 to change, 0 to destroy` —
+expected, since nothing was imported (no `apply`/`import` ran, per hard safety rules). Captured,
+annotated, and redaction-checked at `terraform/render/plan/plan-annotated.md`. Notable pitfall
+found and avoided: `terraform show -json` embeds the *real* sensitive value in plain text (only a
+parallel boolean map marks it sensitive) — unlike the human-readable plan renderer, which prints
+`(sensitive value)`. The committed capture was built from the redacted text renderer; the JSON
+capture (which briefly existed in the session scratchpad, containing the real generated
+`session_secret`) was shredded, never touched the repo.
+
+**Correction to `memory-bank/techContext.md`:** its claim that a new `terraform/render/terraform.tfvars`
+"would not be ignored" was checked and found false — a pre-existing, unrelated nested
+`terraform/.gitignore` (present since `2c1c633`, untouched by this ticket) already covers it via an
+unanchored `*.tfvars` pattern. Verified by testing `git check-ignore` against the pre-TRO-299
+gitignore files directly (copied aside, not stashed). The one real gap was `*.tfplan`/`tfplan`,
+closed in the root `.gitignore`. techContext.md corrected in place with the verified fact.
+
+Adoption memo (import vs. clean-machine apply) written in `terraform/render/README.md` and the PR
+body; recommends import, since apply creates a second live parallel service/db needing a manual
+CORS/DNS/data-migration follow-up. Confirmed `audit/terraform/drift-demo/` already satisfies the
+local-provider deliverable (2 pinned `local_file` resources) — no changes needed, just referenced.
+Gate: `typecheck`/`build`/`tests:api`/`tests:web`/`tests:not-weakened`/`changes-md`/`review-patterns`
+pass; `regression-test` fails honestly (Terraform-only diff, no vitest case — same as PR #41's
+precedent); `coderabbit` found 2 (both about the same gitignore/CHANGES.md wording mismatch above,
+fixed by making the actual `.gitignore` rule match the accurate wording rather than the reverse).
+PR opened with **"HOLD FOR HUMAN: apply/import decision (gate 2)"** — not merged.
+
 ### 2026-07-30 (Thu) evening — factory resumed: recovery, 3 merges, 8 agents in flight
 
 **Recovery first, per `/ship-orchestrator` §4:** reconciled disk/branches/Linear. Found `main` had
