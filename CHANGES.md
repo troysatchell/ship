@@ -8,6 +8,76 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-246 (rule 5) — CI builds the image once and pushes it by SHA; Render still rebuilds it a second time (switch prepared, not executed)
+
+TRO-242 made the root `Dockerfile` buildable from a clean checkout (multi-stage: builds
+`shared`→`api`→`web` inside the image, instead of requiring pre-built `dist/` in the build context).
+That closed the "build on a laptop" problem but not the "build once" one: CI verified the source, and
+then Render separately built the *same* Dockerfile itself, on its own infrastructure, at its own
+time — two independent builds of the same commit, never proven to be the same artifact.
+
+**What changed.**
+
+- `.github/workflows/ci.yml` gains a `build-image` job that builds the root `Dockerfile` with
+  `docker/build-push-action` and pushes to `ghcr.io/troysatchell/ship`, authenticated with the
+  workflow's own `GITHUB_TOKEN` (job-scoped `permissions: packages: write`). `needs: verify`, so it
+  never runs on code that failed typecheck/build/the test-regression check.
+  - Tags: the full git SHA (immutable — the identity a rollback promotes/demotes by) and a moving
+    `main` tag.
+  - Pushes only on an actual push to `main` (`SHOULD_PUSH` gate). Every pull request still **builds**
+    (unauthenticated, no push) — this proves the Dockerfile stays buildable from whatever the PR
+    changed, without ever needing registry credentials (which a fork PR's `GITHUB_TOKEN` doesn't have
+    write scope for anyway).
+  - Third-party actions (`docker/setup-buildx-action`, `docker/login-action`,
+    `docker/build-push-action`) are pinned to full commit SHAs, matching this file's existing
+    convention for non-`actions/*` steps.
+- `docs/deployment-artifact-lifecycle.md` (new): what's built, where it's stored, the tagging
+  scheme, and — the actual "promote" and "roll back to a previous SHA" procedures — plus a
+  ready-to-run Render switch runbook.
+- `docs/application-architecture.md`: one-line pointer from the (stale, AWS-only) Deployment section
+  to the new doc and to `memory-bank/techContext.md`'s Render facts, so the two don't silently
+  diverge further. The AWS-only diagram/infra list itself is untouched — out of scope here.
+
+**What did NOT change — the Render switch itself is prepared, not executed.** Changing the live
+`ship` service (`srv-d9kf2t942hec73aofrt0`, currently `runtime: docker` building the Dockerfile on
+Render's own infrastructure) from a repo-build to an image-deploy is an outward-facing, largely
+irreversible action against the graded submission URL (`https://ship-rr6m.onrender.com`) —
+escalation gate 2. No Render API call was made, no credential was read or moved, and the repo-root
+`.env` was not touched. `docs/deployment-artifact-lifecycle.md`'s runbook is the exact procedure for
+whoever runs it, including the parts that could not be independently verified from here (Render's
+`image` field on the Update Service API is documented to exist but its full sub-schema was not
+reachable this session — flagged explicitly, with a documented dashboard fallback that needs no
+schema guessing).
+
+**Regression test: honestly, none applies.** This ticket's deliverable is a CI workflow change plus
+documentation — there is no application code path for a vitest regression test to exercise, and
+`scripts/factory/gate.sh`'s regression-test check (G6, which counts added `it(`/`test(` cases in
+`*.test.ts`/`*.test.tsx`/`*.spec.ts`) is expected to fail honestly rather than be satisfied by a
+manufactured, vacuous test. YAML validity of the workflow file was checked instead — see PR body for
+the exact method (the repo's own `js-yaml` dependency, since `actionlint` is not installed here).
+
+**How to run it.**
+
+```bash
+# Local build proof — same Dockerfile path CI runs, from a clean tree:
+docker build -t ship:tro-246-local -f Dockerfile .
+docker images ship:tro-246-local   # 482 MB, observed this session
+
+# YAML-validate the workflow (repo's own transitive js-yaml dep, no actionlint installed):
+node -e "require('js-yaml_absolute_path').load(require('fs').readFileSync('.github/workflows/ci.yml','utf8'))"
+
+# The real test of the CI behavior itself is derived, not run here — the first push to `main`
+# after this merges is the live test of build-image actually pushing to GHCR.
+```
+
+**How to roll it back.**
+
+- CI job: revert the `build-image` addition to `.github/workflows/ci.yml`; `verify`/`inventory` are
+  untouched and keep running exactly as before.
+- Docs: delete `docs/deployment-artifact-lifecycle.md` and revert the one-line pointer in
+  `docs/application-architecture.md`.
+- Nothing to roll back on Render — the switch was never executed.
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write
