@@ -66,6 +66,7 @@ export function Combobox({
 
       <Popover.Portal>
         <Popover.Content
+          aria-label={ariaLabel || placeholder}
           className="z-50 w-[var(--radix-popover-trigger-width)] rounded-md border border-border bg-background shadow-lg"
           sideOffset={4}
           align="start"
