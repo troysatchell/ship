@@ -96,6 +96,30 @@ neither is the mechanism above:
   investigation on its own merits, separately from any flake question.
 
 Both need their own ticket. Neither was reproduced twice, so no mechanism is claimed for either.
+
+**How to run it.**
+
+```bash
+source .factory-env    # api tests TRUNCATE 16 tables; never run them without this
+
+# The guard, and the four vitest semantics the fix rests on.
+pnpm --filter @ship/api test --run src/__tests__/mock-isolation.test.ts
+
+# Defect 2, directly: two suites against one database. Both must now pass.
+# Before the lock they reported 18 and 20 failures, and 11 and 33 phantom skips.
+pnpm --filter @ship/api test --run & (sleep 4; pnpm --filter @ship/api test --run); wait
+
+# The repetition the flake actually needed: build load in parallel with the suite.
+for i in 1 2 3 4; do (while :; do pnpm --filter @ship/api type-check; done >/dev/null 2>&1) & done
+for n in $(seq 1 20); do pnpm --filter @ship/api test --run >/dev/null 2>&1 || echo "run $n FAILED"; done
+kill %1 %2 %3 %4
+```
+
+**Rollback.** `git revert` the commits. The lock is confined to the test setup file and the
+converted files are self-contained; nothing in `api/src` production code changed.
+
+---
+
 ## TRO-217 — [A11Y-3] `/my-week` failed colour contrast, the landing page of the app
 
 **What was broken.** `/` redirects to `/my-week`, and it was the only key page Lighthouse failed on
@@ -188,23 +212,6 @@ No import or locator errors.
 **How to run it.**
 
 ```bash
-source .factory-env    # api tests TRUNCATE 16 tables; never run them without this
-
-# The guard, and the four vitest semantics the fix rests on.
-pnpm --filter @ship/api test --run src/__tests__/mock-isolation.test.ts
-
-# Defect 2, directly: two suites against one database. Both must now pass.
-# Before the lock they reported 18 and 20 failures, and 11 and 33 phantom skips.
-pnpm --filter @ship/api test --run & (sleep 4; pnpm --filter @ship/api test --run); wait
-
-# The repetition the flake actually needed: build load in parallel with the suite.
-for i in 1 2 3 4; do (while :; do pnpm --filter @ship/api type-check; done >/dev/null 2>&1) & done
-for n in $(seq 1 20); do pnpm --filter @ship/api test --run >/dev/null 2>&1 || echo "run $n FAILED"; done
-kill %1 %2 %3 %4
-```
-
-**Rollback.** `git revert` the commits. The lock is confined to the test setup file and the
-converted files are self-contained; nothing in `api/src` production code changed.
 pnpm --filter @ship/web test        # 24 new tests; 13 known failures are TEST-1/TRO-223, unchanged
 pnpm --filter @ship/web type-check
 ```
@@ -581,3 +588,4 @@ WebSocket URL being derived from `window.location.host`.
 which builds from the repository.
 
 **Rollback.** Revert the merge of `feat/render-deploy` (`bace770`).
+
