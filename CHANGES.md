@@ -171,202 +171,6 @@ and the query text.
 
 ---
 
-## TRO-208 — [TS-3] The Yjs <-> TipTap converter — the persistence path for every document's content — was fully untyped
-
-`api/src/utils/yjsConverter.ts` carried 12 `any` in 245 lines, the highest any-per-line density of
-any production file, on the only code path that translates collaborative CRDT state into the
-durable `documents.content` column: `collaboration/index.ts:151` (`persistDocument()`, right before
-the write) and `routes/documents.ts:456` (content served over REST). `api/src/types/y-protocols.d.ts`
-added 7 more `any` on the awareness/sync surface underneath. Every exported signature was untyped —
-`yjsToJson(fragment): any`, `jsonToYjs(doc, fragment, content: any)`,
-`loadContentFromYjsState(yjsState): any | null` — so a shape regression here would silently corrupt
-or drop user-authored content with nothing failing to compile.
-
-**What changed — types only, no behavior change.**
-
-- **`api/src/types/tiptap.ts` (new).** One recursive TipTap/ProseMirror JSON node type —
-  `TipTapNode` (`type`, optional `attrs`/`content`/`marks`/`text`), `TipTapMark`, `TipTapDoc`, and the
-  `TipTapAttrValue` union (`string | number | boolean | null`) node/mark attributes actually hold.
-  Kept API-local by design (see "Not done" below).
-- **`yjsConverter.ts`** — all five signatures now use these types instead of `any`:
-  `yjsToJson(fragment): TipTapDoc`, `jsonToYjs(doc, fragment, content: TipTapNode): void`,
-  `loadContentFromYjsState(yjsState): TipTapDoc | null`, plus the internal
-  `extractTextWithMarks`/`yjsElementToJson`. A new `typeAttributes()` helper centralizes the one
-  existing `Record<string, unknown>` -> typed-attrs conversion (unchanged logic, just typed); a new
-  `setAttributeValue()` helper centralizes the one real, documented gap this fix could not type away:
-  Yjs's own ambient `XmlElement.setAttribute` pins attribute values to `string`, but this codebase has
-  always written some attributes (a numeric heading `level`) using their real JS type and relies on
-  Yjs's runtime not enforcing that — a `value as string` assertion there is the one non-`any` cast in
-  the diff, isolated and commented rather than repeated at each of the two call sites it used to
-  appear at.
-- **`y-protocols.d.ts`** — `any` replaced with `unknown` throughout (transaction origins, awareness
-  state records, event callback args), except `Awareness.on`/`off`, which gained a real overload for
-  the one event this codebase actually listens for (`AwarenessChange { added, updated, removed }`)
-  plus a loose `unknown[]` fallback for anything else — a fully untyped variadic callback would have
-  accepted a mistyped `'update'` handler just as silently as a correct one.
-- **`collaboration/index.ts`** — two type-only edits, no control-flow change: `isTipTapDocContent`'s
-  type predicate now asserts `value is TipTapDoc` instead of an inline `{ type: 'doc'; content:
-  unknown[] }`, so its narrowed value satisfies `jsonToYjs`'s new parameter type.
-- **`collaboration/__tests__/api-content-preservation.test.ts`** — this pre-existing test file calls
-  `yjsToJson`/`loadContentFromYjsState` directly and, once they stopped returning `any`, tripped real
-  `noUncheckedIndexedAccess` errors on chained array indexing (`convertedBack.content[0].content[0].text`)
-  that `any` had been silently swallowing. Fixed with optional chaining (`?.`) and one narrowing
-  `if (!result) throw ...` for the nullable `loadContentFromYjsState` case — no assertion was
-  loosened; all 18 cases in the file still pass unchanged.
-
-**Found, not fixed (out of scope for a types-only ticket).** Writing the round-trip regression test
-below surfaced a real, pre-existing behavioral quirk: `jsonToYjs`/`jsonToYjsChildren` apply text
-marks via Yjs's native `YXmlText.format()`, but `yjsToJson`'s read side only recognizes marks
-represented as nested `Y.XmlElement` wrapper tags (e.g. `<bold>...</bold>`), which is how the actual
-browser TipTap/y-prosemirror binding represents them — not how `.format()` does. `YXmlText.toString()`
-(`node_modules/yjs/src/types/YXmlText.js:68-100`) serializes format-delta attributes back as literal
-pseudo-XML baked into the plain-text string, so round-tripping a marked text node through
-`jsonToYjs` -> `yjsToJson` produces `{ type: 'text', text: '<bold>bold</bold>' }`, not a `marks` array.
-This only fires on the one-time JSON->Yjs migration path for documents created via the API and never
-opened in the collaborative editor before their first collaboration-server load
-(`collaboration/index.ts`'s `loadDoc()`) — verified present, byte-for-byte identical, on both the
-unfixed and fixed code (see measurement below), so it predates this ticket and this fix does not
-touch it. Worth a follow-up finding; not attempted here per the ticket's explicit "types-only, no
-behavior change" scope.
-
-**Not done.** Promoting `TipTapNode`/`TipTapDoc` to `shared/` so the frontend imports the identical
-type is a natural next step but is TS-5's business (the `shared/` contract is a separate, open
-finding), not this ticket's.
-
-**Regression test — `api/src/utils/__tests__/yjsConverter.test.ts`** (new, vitest, run by the gate).
-Two independent parts, per the ticket:
-
-1. Six `expectTypeOf` assertions (`yjsToJson`/`jsonToYjs`/`loadContentFromYjsState` each `.not.toBeAny()`
-   plus `.toEqualTypeOf<...>()`) proving the exported signatures are real types. These are
-   compile-time-only — `vitest run` transpiles via esbuild and does not evaluate them, so they pass
-   silently either way at runtime; verified red **only** via `tsc --noEmit`, by temporarily restoring
-   the pre-fix `yjsConverter.ts`/`y-protocols.d.ts`/`collaboration/index.ts` (backed up first, no
-   `git stash`) and re-running `pnpm --filter @ship/api exec tsc --noEmit`. Against the unfixed code
-   it fails with real, on-point errors — `TS2349: This expression is not callable` on each
-   `.not.toBeAny()`, and `TS2344: Type 'TipTapDoc' does not satisfy the constraint 'never'` on each
-   `.toEqualTypeOf<...>()` — not an import error or a typo. Restoring the fix returns `tsc --noEmit`
-   to clean.
-2. Two runtime round-trip tests: a representative document (heading with a numeric `level` attr,
-   a paragraph with bold text and a link mark, a nested 2-item bullet list) through
-   `jsonToYjs` -> `yjsToJson`, and a second through a real binary Yjs update via
-   `loadContentFromYjsState`. Both pin the exact output observed by running the conversion directly
-   (`tsx`, no DB) against both the unfixed and fixed `yjsConverter.ts` and diffing — byte-for-byte
-   identical — proving the types change altered nothing at runtime, including the marks quirk noted
-   above.
-
-**Measurement** (`~/.claude/skills/type-safety-audit/scripts/count.sh`, the audit's own method —
-`explicit_any` pattern `:\s*any\b|<any>|\bany\[\]|Array<any>`, BSD grep, counts matching lines):
-
-| Scope | Before | After |
-|---|---|---|
-| `api/src/utils/yjsConverter.ts` | 12 | **0** |
-| `api/src/types/y-protocols.d.ts` | 7 | **0** |
-| `api/` package-wide (`explicit_any`) | 78 | **59** (-19) |
-
-The api-wide before (78) matches `audit/type-safety/baseline.json`'s tracked `perPackage.api.anyTotal`
-exactly; the -19 delta is precisely the two files' combined reduction, confirmed by isolated
-before/after counts on every other file this diff touches (`collaboration/index.ts` and
-`api-content-preservation.test.ts` are unchanged on every tracked metric — `explicit_any`,
-`as_assertions`, `as_any`, `non_null_assertions` — before vs after). The regex undercounts by its own
-documented blind spot (`Record<string, any>` doesn't match `:\s*any\b|<any>`, since `any` isn't
-preceded directly by `:`): two such sites in each of `yjsConverter.ts` and `y-protocols.d.ts` were
-fixed too and are real reductions the tracked number doesn't reflect.
-
-**How to run it.**
-
-```bash
-source .factory-env
-pnpm --filter @ship/api exec tsc --noEmit
-pnpm --filter @ship/api exec vitest run \
-  src/utils/__tests__/yjsConverter.test.ts \
-  src/collaboration/__tests__/api-content-preservation.test.ts
-```
-
-**Rollback.** `git checkout main -- api/src/utils/yjsConverter.ts api/src/types/y-protocols.d.ts
-api/src/collaboration/index.ts api/src/collaboration/__tests__/api-content-preservation.test.ts &&
-git rm api/src/types/tiptap.ts api/src/utils/__tests__/yjsConverter.test.ts` and drop this entry. No
-schema, route, or runtime-behavior change accompanies this fix, so rollback is type-signature-only.
-
----
-
-## TRO-206 (TS-1) — `web/tsconfig.json` now extends the root config; 156 latent type errors fixed
-
-`web/tsconfig.json` re-declared `strict: true` standalone instead of extending `../tsconfig.json`,
-so it silently ran without the root's `noUncheckedIndexedAccess`, `noImplicitReturns`, and
-`noFallthroughCasesInSwitch` — the only two packages that extend the root (`api`, `shared`) had
-them; `web` did not. `research/configs/web/tsconfig.json` (a reference copy in the repo) already
-`extends: "../tsconfig.json"`, confirming this was drift, not an intentional divergence.
-
-**Ticket hypothesis vs. observed.** The audit (measured at commit `076a183`) recorded 102 errors
-under the restored flags. Reproducing the identical command
-(`cd web && ./node_modules/.bin/tsc -p tsconfig.json --noEmit --noUncheckedIndexedAccess
---noImplicitReturns --noFallthroughCasesInSwitch`) on this branch's base — `main` had gained ~30
-merged tickets since the audit, adding new files (`lib/contrast.ts`, `lib/contrast.test.ts`,
-`pages/MyWeekPage.contrast.test.tsx` from TRO-217, plus other unrelated changes) — produced **156**
-errors, not 102: 63 TS2532, 41 TS18048, 26 TS2345, 17 TS2322, 8 TS7030, 1 TS18047, across 29 files.
-The fix direction held; the count was stale. All 156 are fixed, not just the original 102.
-
-**What changed.**
-
-- `web/tsconfig.json` — added `"extends": "../tsconfig.json"`; kept web's `target`/`lib`/`module`/
-  `moduleResolution`/`jsx`/`noEmit`/`baseUrl`/`paths` overrides (all of which differ from or add to
-  the root, e.g. `module: "ESNext"` + `moduleResolution: "bundler"` vs. the root's `NodeNext`, and
-  `lib` adding `DOM`/`DOM.Iterable`). Dropped the overrides that were byte-identical to the root
-  (`strict`, `skipLibCheck`, `esModuleInterop`, `allowSyntheticDefaultImports`,
-  `forceConsistentCasingInFileNames`, `isolatedModules`) since inheriting them is the whole point.
-- `web/tailwind.config.d.ts` — the hand-written ambient type for `tailwind.config.js` typed
-  `colors` as a bare `Record<string, string>`, so every dot-accessed token (`palette.background`,
-  `palette.muted`, ...) came back `string | undefined` under the restored flag. Gave the six tokens
-  actually dot-accessed by `contrast.ts`/`contrast.test.ts`/`MyWeekPage.contrast.test.tsx` explicit
-  (non-optional) properties, kept a `[key: string]: string` index signature so dynamic lookups
-  (`palette[name]`) stay honestly optional.
-- 28 source files fixed with genuine narrowing — destructure-then-check, explicit `undefined`
-  guards, or an `?? null`/`?? ''` fallback at the point a nullable value crosses into a non-nullable
-  slot. No `!`, `as any`, `as unknown as`, or `: any` anywhere in the diff (`node
-  scripts/factory/review-patterns.mjs` — G7b — reports clean). Densest: `CommandPalette.tsx` (13),
-  `hooks/useSelection.ts` (12), `editor/CommentDisplay.tsx` (12), `editor/AIScoringDisplay.tsx` (12),
-  `lib/cn.ts` (12).
-- `pages/ReviewsPage.tsx` — the one fix that is more than type-satisfying. Three optimistic-update
-  handlers (`approvePlan`, `requestChanges`, `rateRetro`) did
-  `updated.reviews[personId][weekNumber] = { ...updated.reviews[personId][weekNumber], patch }`.
-  Spreading `undefined` is legal JS and this type-checked before the fix, but for a person/week
-  pair with no prior review row it silently produced a `ReviewCell` missing every field except the
-  one just patched (`hasPlan`/`hasRetro`/`sprintId`/`planDocId`/`retroDocId` all `undefined` instead
-  of their contract). Extracted `emptyReviewCell`/`mergeReviewCellPatch` (both exported) so all
-  three handlers merge over a real default instead of a possibly-missing lookup.
-  **Reachability, checked rather than assumed:** every UI path that can call these three handlers
-  (`ReviewsPage.tsx:919-935`, `:1115`) is gated on `cell.hasPlan`/`cell.hasRetro` already being
-  `true`, which requires an already-fetched cell — so this specific corruption was not reachable
-  through today's UI. It is a genuine type-safety fix against a real invariant gap, not a
-  demonstrated production crash; recorded as such rather than oversold.
-
-**What did NOT change.** No product behavior. `pnpm --filter @ship/web test` is 37 files / 366
-tests green before and after (quarantine is already empty per TEST-1); the fixes are narrowing,
-not behavior changes, with the one exception above, which changes nothing observable given the
-current gating.
-
-**How to run it.**
-
-```bash
-source .factory-env
-# Reproduce the flag-restoration count (should be 0 now that tsconfig extends root):
-cd web && ./node_modules/.bin/tsc -p tsconfig.json --noEmit \
-  --noUncheckedIndexedAccess --noImplicitReturns --noFallthroughCasesInSwitch
-# Or just the normal check, since the flags are now inherited permanently:
-pnpm --filter @ship/web type-check
-# Regression test for the ReviewsPage fix:
-pnpm --filter @ship/web exec vitest run src/pages/ReviewsPage.reviewCellMerge.test.ts
-```
-
-**Rollback.** Revert the commits on `fix/ts-1-web-tsconfig`. Reverting just
-`web/tsconfig.json`'s `extends` line restores the pre-fix (silently non-strict) behavior without
-touching the 29 narrowed files, which remain correct either way since the narrowing is a strict
-superset of the original logic. `emptyReviewCell`/`mergeReviewCellPatch` can be reverted
-independently by inlining the old spread in the three `ReviewsPage.tsx` handlers, which restores
-the (unreached, per above) invariant gap.
-
----
-
 ## TRO-207 (TS-2) — the database-to-HTTP response path is no longer implicitly `any`
 
 `@types/pg`'s `query()` defaults its row generic to `any`, and in `api/src` production code
@@ -876,6 +680,307 @@ all green.
 `"@tanstack/query-sync-storage-persister": "^5.90.18"` line to `web/package.json`'s `dependencies`,
 delete the `"pnpm"."overrides"` block from the root `package.json` — then `pnpm install` to
 regenerate `pnpm-lock.yaml`. Delete `web/src/lib/radixVersionDedupe.test.ts`.
+
+---
+
+## TRO-218 (A11Y-4) + TRO-222 (A11Y-8) — /issues Radix popovers open unnamed, and the selection column header is empty
+
+Both are the last two accessibility gaps on /issues, the improvement target for Category 7
+(all Critical/Serious axe violations fixed on the 3 most important pages). A11Y-4 was the last
+open Serious; A11Y-8 the remaining Minor.
+
+**What was broken — A11Y-4.** axe's "issues menu open" scan reported a Serious `aria-dialog-name`
+violation: `<div data-state="open" role="dialog" id="radix-:rj:" class="z-50 w-[var(--radix-...">`
+(`audit/a11y/axe/issues_menu_expanded_state.json`). Radix's `Popover.Content` defaults to
+`role="dialog"` (`@radix-ui/react-popover` dist/index.mjs:243) with no name unless one is supplied.
+`web/src/components/ui/Combobox.tsx:68` (the `Popover.Content` this class string belongs to) never
+passed `aria-label`/`aria-labelledby`, so the popover the axe scan actually opened — the "Filter
+issues by program" combobox, confirmed by inspecting the live DOM after the click — announced only
+as an unnamed dialog.
+
+**The mechanism is a shared wrapper, not a one-off.** `Combobox` is consumed by
+`IssuesList.tsx` (program/project/sprint filters), `DocumentListToolbar.tsx` (the sort dropdown —
+itself reused by `/issues`, `/projects`, `/programs`, and `/documents`), `IssueSidebar.tsx`
+(assignee, week pickers), and `WeekSidebar.tsx` (owner picker). Fixing the one component clears the
+unnamed-dialog defect on all of those surfaces. Every existing call site already passes
+`aria-label` (verified: `grep -n "<Combobox" -A 12` across all 5 consumer files), so this is a
+complete fix in practice; the fallback below is defense for any future caller that omits it.
+
+A second, separate `Popover.Content` on the same page — the "Customize columns" picker inline in
+`DocumentListToolbar.tsx:147` — is not the `Combobox` wrapper and had the identical defect
+independently (its own unnamed Radix dialog). It shares the same page and the same missing-name
+mechanism, so it is fixed alongside rather than left as a second unnamed dialog on /issues.
+
+**What changed — A11Y-4.**
+- `web/src/components/ui/Combobox.tsx:69` — `Popover.Content` now gets
+  `aria-label={ariaLabel || placeholder}`, naming the dialog from the caller's label (or, if a
+  future caller omits it, the always-present placeholder text) instead of leaving it unnamed.
+- `web/src/components/DocumentListToolbar.tsx:148` — the column-picker's own `Popover.Content`
+  gets `aria-label="Customize columns"`, matching its trigger button's existing label.
+
+**What was broken — A11Y-8.** The same scan reported a Minor `empty-table-header` violation:
+`<th class="w-10 px-2 py-2" aria-label="Selection"></th>` (same JSON file). The `<th>` already
+carried `aria-label="Selection"` — but axe's `empty-table-header` rule checks only the
+`has-visible-text` alternative (axe-core 4.11.1 `axe.js`: `{ id: 'empty-table-header', any:
+['has-visible-text'] }` — no `aria-label`/`aria-labelledby` fallback, unlike most other
+name-required rules in the same file). That check's evaluator (`hasTextContentEvaluate` →
+`subtree_text_default`) walks the element's rendered subtree text; an `aria-label` attribute never
+populates it. The header needed actual (visually-hidden) text content, not just an ARIA attribute.
+
+**What changed — A11Y-8.** `web/src/components/SelectableList.tsx:134` — the selection column
+`<th>` now wraps a `<span className="sr-only">Select</span>` instead of carrying only
+`aria-label="Selection"`. `sr-only` is the repo's existing visually-hidden utility class (already
+used nearby, in this same file's selection announcer at line ~192).
+
+**Evidence.** Both measured on this branch, same conditions: worktree ports (`.factory-env`,
+API `:3413` / web `:5586`), seeded via `pnpm db:seed` (104 issues), authenticated as
+`dev@ship.local` via a fresh `session_id` obtained through `/api/csrf-token` + `/api/auth/login`,
+axe-core 4.11.1 via `@axe-core/playwright`, Chromium (Playwright 1.57.0's bundled build), scanning
+`/issues` static and after clicking the first `button[aria-haspopup], [aria-expanded]` control
+(the same selector `audit/a11y/axe-scan.mjs` uses for its "issues menu/expanded state"). "Before"
+was measured by copying the three fixed files aside, `git checkout --` reverting them to `HEAD`,
+scanning, then restoring the copies — never `git stash` (this repo's shared-stash hazard, see
+`lessons.md`).
+
+| Measurement — /issues | Before | After |
+|---|---|---|
+| static: all severities | C0 S0 M0 **m1** | C0 S0 M0 **m0** |
+| static: `empty-table-header` | 1 node (`th[aria-label="Selection"]`) | absent |
+| menu open: all severities | C0 **S1** M0 **m1** | C0 S0 M0 m0 |
+| menu open: `aria-dialog-name` | **Serious**, 1 node | absent |
+| menu open: `empty-table-header` | Minor, 1 node | absent |
+
+**Regression tests.**
+- `web/src/components/ui/Combobox.test.tsx` — renders the real `Combobox`, opens the popover, and
+  asserts the `role="dialog"` element has an accessible name (one test with an explicit
+  `aria-label`, one exercising the placeholder fallback). Needed two jsdom environment shims
+  (`ResizeObserver`, `Element.prototype.scrollIntoView`) that `cmdk` requires and jsdom doesn't
+  implement — same class of shim as `EmojiPicker.test.tsx`'s `IntersectionObserver` stub, not a
+  stub of the component under test. Confirmed red first: before the fix, both tests failed with
+  `Error: expect(element).toHaveAccessibleName() — Received: ""` — not an environment error (the
+  shims were already in place at that point) or an import failure.
+- `web/src/components/SelectableList.test.tsx` — renders `SelectableList` with `selectable` and
+  asserts the selection `<th>`'s `textContent` is non-empty, deliberately checking subtree text
+  rather than accessible name so the test fails for the same reason axe's rule does. Confirmed red
+  first: `AssertionError: expected '' not to be ''`.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test -- src/components/ui/Combobox.test.tsx src/components/SelectableList.test.tsx
+pnpm --filter @ship/web exec tsc --noEmit
+```
+
+To re-measure against a browser: start the worktree's API and Vite, log in for a fresh
+`session_id` (via `/api/csrf-token` then `/api/auth/login`), open `/issues`, run an axe scan, then
+click the program-filter (or sort, or column-picker) button and scan again.
+
+**Roll back.** Revert the three `aria-label`/`sr-only` additions (`git revert` the commit on
+`fix/a11y-4-8-issues-page`), or drop them individually — `Combobox.tsx:69`,
+`DocumentListToolbar.tsx:148`, `SelectableList.tsx:134-138`. The regression tests fail immediately
+if any of them come back unnamed/empty.
+
+**Not established.** What a screen reader actually announces for either fix — this closes the axe
+contract violations (a name exists, and discernible text exists), but no human ran VoiceOver
+against either surface. The repo's three Playwright a11y specs were not re-run here (not executed
+by the factory gate; they also only assert `impact === 'critical'`, and both these findings were
+already below that threshold, so they would not have caught either one regardless).
+
+---
+
+## TRO-208 — [TS-3] The Yjs <-> TipTap converter — the persistence path for every document's content — was fully untyped
+
+`api/src/utils/yjsConverter.ts` carried 12 `any` in 245 lines, the highest any-per-line density of
+any production file, on the only code path that translates collaborative CRDT state into the
+durable `documents.content` column: `collaboration/index.ts:151` (`persistDocument()`, right before
+the write) and `routes/documents.ts:456` (content served over REST). `api/src/types/y-protocols.d.ts`
+added 7 more `any` on the awareness/sync surface underneath. Every exported signature was untyped —
+`yjsToJson(fragment): any`, `jsonToYjs(doc, fragment, content: any)`,
+`loadContentFromYjsState(yjsState): any | null` — so a shape regression here would silently corrupt
+or drop user-authored content with nothing failing to compile.
+
+**What changed — types only, no behavior change.**
+
+- **`api/src/types/tiptap.ts` (new).** One recursive TipTap/ProseMirror JSON node type —
+  `TipTapNode` (`type`, optional `attrs`/`content`/`marks`/`text`), `TipTapMark`, `TipTapDoc`, and the
+  `TipTapAttrValue` union (`string | number | boolean | null`) node/mark attributes actually hold.
+  Kept API-local by design (see "Not done" below).
+- **`yjsConverter.ts`** — all five signatures now use these types instead of `any`:
+  `yjsToJson(fragment): TipTapDoc`, `jsonToYjs(doc, fragment, content: TipTapNode): void`,
+  `loadContentFromYjsState(yjsState): TipTapDoc | null`, plus the internal
+  `extractTextWithMarks`/`yjsElementToJson`. A new `typeAttributes()` helper centralizes the one
+  existing `Record<string, unknown>` -> typed-attrs conversion (unchanged logic, just typed); a new
+  `setAttributeValue()` helper centralizes the one real, documented gap this fix could not type away:
+  Yjs's own ambient `XmlElement.setAttribute` pins attribute values to `string`, but this codebase has
+  always written some attributes (a numeric heading `level`) using their real JS type and relies on
+  Yjs's runtime not enforcing that — a `value as string` assertion there is the one non-`any` cast in
+  the diff, isolated and commented rather than repeated at each of the two call sites it used to
+  appear at.
+- **`y-protocols.d.ts`** — `any` replaced with `unknown` throughout (transaction origins, awareness
+  state records, event callback args), except `Awareness.on`/`off`, which gained a real overload for
+  the one event this codebase actually listens for (`AwarenessChange { added, updated, removed }`)
+  plus a loose `unknown[]` fallback for anything else — a fully untyped variadic callback would have
+  accepted a mistyped `'update'` handler just as silently as a correct one.
+- **`collaboration/index.ts`** — two type-only edits, no control-flow change: `isTipTapDocContent`'s
+  type predicate now asserts `value is TipTapDoc` instead of an inline `{ type: 'doc'; content:
+  unknown[] }`, so its narrowed value satisfies `jsonToYjs`'s new parameter type.
+- **`collaboration/__tests__/api-content-preservation.test.ts`** — this pre-existing test file calls
+  `yjsToJson`/`loadContentFromYjsState` directly and, once they stopped returning `any`, tripped real
+  `noUncheckedIndexedAccess` errors on chained array indexing (`convertedBack.content[0].content[0].text`)
+  that `any` had been silently swallowing. Fixed with optional chaining (`?.`) and one narrowing
+  `if (!result) throw ...` for the nullable `loadContentFromYjsState` case — no assertion was
+  loosened; all 18 cases in the file still pass unchanged.
+
+**Found, not fixed (out of scope for a types-only ticket).** Writing the round-trip regression test
+below surfaced a real, pre-existing behavioral quirk: `jsonToYjs`/`jsonToYjsChildren` apply text
+marks via Yjs's native `YXmlText.format()`, but `yjsToJson`'s read side only recognizes marks
+represented as nested `Y.XmlElement` wrapper tags (e.g. `<bold>...</bold>`), which is how the actual
+browser TipTap/y-prosemirror binding represents them — not how `.format()` does. `YXmlText.toString()`
+(`node_modules/yjs/src/types/YXmlText.js:68-100`) serializes format-delta attributes back as literal
+pseudo-XML baked into the plain-text string, so round-tripping a marked text node through
+`jsonToYjs` -> `yjsToJson` produces `{ type: 'text', text: '<bold>bold</bold>' }`, not a `marks` array.
+This only fires on the one-time JSON->Yjs migration path for documents created via the API and never
+opened in the collaborative editor before their first collaboration-server load
+(`collaboration/index.ts`'s `loadDoc()`) — verified present, byte-for-byte identical, on both the
+unfixed and fixed code (see measurement below), so it predates this ticket and this fix does not
+touch it. Worth a follow-up finding; not attempted here per the ticket's explicit "types-only, no
+behavior change" scope.
+
+**Not done.** Promoting `TipTapNode`/`TipTapDoc` to `shared/` so the frontend imports the identical
+type is a natural next step but is TS-5's business (the `shared/` contract is a separate, open
+finding), not this ticket's.
+
+**Regression test — `api/src/utils/__tests__/yjsConverter.test.ts`** (new, vitest, run by the gate).
+Two independent parts, per the ticket:
+
+1. Six `expectTypeOf` assertions (`yjsToJson`/`jsonToYjs`/`loadContentFromYjsState` each `.not.toBeAny()`
+   plus `.toEqualTypeOf<...>()`) proving the exported signatures are real types. These are
+   compile-time-only — `vitest run` transpiles via esbuild and does not evaluate them, so they pass
+   silently either way at runtime; verified red **only** via `tsc --noEmit`, by temporarily restoring
+   the pre-fix `yjsConverter.ts`/`y-protocols.d.ts`/`collaboration/index.ts` (backed up first, no
+   `git stash`) and re-running `pnpm --filter @ship/api exec tsc --noEmit`. Against the unfixed code
+   it fails with real, on-point errors — `TS2349: This expression is not callable` on each
+   `.not.toBeAny()`, and `TS2344: Type 'TipTapDoc' does not satisfy the constraint 'never'` on each
+   `.toEqualTypeOf<...>()` — not an import error or a typo. Restoring the fix returns `tsc --noEmit`
+   to clean.
+2. Two runtime round-trip tests: a representative document (heading with a numeric `level` attr,
+   a paragraph with bold text and a link mark, a nested 2-item bullet list) through
+   `jsonToYjs` -> `yjsToJson`, and a second through a real binary Yjs update via
+   `loadContentFromYjsState`. Both pin the exact output observed by running the conversion directly
+   (`tsx`, no DB) against both the unfixed and fixed `yjsConverter.ts` and diffing — byte-for-byte
+   identical — proving the types change altered nothing at runtime, including the marks quirk noted
+   above.
+
+**Measurement** (`~/.claude/skills/type-safety-audit/scripts/count.sh`, the audit's own method —
+`explicit_any` pattern `:\s*any\b|<any>|\bany\[\]|Array<any>`, BSD grep, counts matching lines):
+
+| Scope | Before | After |
+|---|---|---|
+| `api/src/utils/yjsConverter.ts` | 12 | **0** |
+| `api/src/types/y-protocols.d.ts` | 7 | **0** |
+| `api/` package-wide (`explicit_any`) | 78 | **59** (-19) |
+
+The api-wide before (78) matches `audit/type-safety/baseline.json`'s tracked `perPackage.api.anyTotal`
+exactly; the -19 delta is precisely the two files' combined reduction, confirmed by isolated
+before/after counts on every other file this diff touches (`collaboration/index.ts` and
+`api-content-preservation.test.ts` are unchanged on every tracked metric — `explicit_any`,
+`as_assertions`, `as_any`, `non_null_assertions` — before vs after). The regex undercounts by its own
+documented blind spot (`Record<string, any>` doesn't match `:\s*any\b|<any>`, since `any` isn't
+preceded directly by `:`): two such sites in each of `yjsConverter.ts` and `y-protocols.d.ts` were
+fixed too and are real reductions the tracked number doesn't reflect.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec tsc --noEmit
+pnpm --filter @ship/api exec vitest run \
+  src/utils/__tests__/yjsConverter.test.ts \
+  src/collaboration/__tests__/api-content-preservation.test.ts
+```
+
+**Rollback.** `git checkout main -- api/src/utils/yjsConverter.ts api/src/types/y-protocols.d.ts
+api/src/collaboration/index.ts api/src/collaboration/__tests__/api-content-preservation.test.ts &&
+git rm api/src/types/tiptap.ts api/src/utils/__tests__/yjsConverter.test.ts` and drop this entry. No
+schema, route, or runtime-behavior change accompanies this fix, so rollback is type-signature-only.
+
+---
+
+## TRO-206 (TS-1) — `web/tsconfig.json` now extends the root config; 156 latent type errors fixed
+
+`web/tsconfig.json` re-declared `strict: true` standalone instead of extending `../tsconfig.json`,
+so it silently ran without the root's `noUncheckedIndexedAccess`, `noImplicitReturns`, and
+`noFallthroughCasesInSwitch` — the only two packages that extend the root (`api`, `shared`) had
+them; `web` did not. `research/configs/web/tsconfig.json` (a reference copy in the repo) already
+`extends: "../tsconfig.json"`, confirming this was drift, not an intentional divergence.
+
+**Ticket hypothesis vs. observed.** The audit (measured at commit `076a183`) recorded 102 errors
+under the restored flags. Reproducing the identical command
+(`cd web && ./node_modules/.bin/tsc -p tsconfig.json --noEmit --noUncheckedIndexedAccess
+--noImplicitReturns --noFallthroughCasesInSwitch`) on this branch's base — `main` had gained ~30
+merged tickets since the audit, adding new files (`lib/contrast.ts`, `lib/contrast.test.ts`,
+`pages/MyWeekPage.contrast.test.tsx` from TRO-217, plus other unrelated changes) — produced **156**
+errors, not 102: 63 TS2532, 41 TS18048, 26 TS2345, 17 TS2322, 8 TS7030, 1 TS18047, across 29 files.
+The fix direction held; the count was stale. All 156 are fixed, not just the original 102.
+
+**What changed.**
+
+- `web/tsconfig.json` — added `"extends": "../tsconfig.json"`; kept web's `target`/`lib`/`module`/
+  `moduleResolution`/`jsx`/`noEmit`/`baseUrl`/`paths` overrides (all of which differ from or add to
+  the root, e.g. `module: "ESNext"` + `moduleResolution: "bundler"` vs. the root's `NodeNext`, and
+  `lib` adding `DOM`/`DOM.Iterable`). Dropped the overrides that were byte-identical to the root
+  (`strict`, `skipLibCheck`, `esModuleInterop`, `allowSyntheticDefaultImports`,
+  `forceConsistentCasingInFileNames`, `isolatedModules`) since inheriting them is the whole point.
+- `web/tailwind.config.d.ts` — the hand-written ambient type for `tailwind.config.js` typed
+  `colors` as a bare `Record<string, string>`, so every dot-accessed token (`palette.background`,
+  `palette.muted`, ...) came back `string | undefined` under the restored flag. Gave the six tokens
+  actually dot-accessed by `contrast.ts`/`contrast.test.ts`/`MyWeekPage.contrast.test.tsx` explicit
+  (non-optional) properties, kept a `[key: string]: string` index signature so dynamic lookups
+  (`palette[name]`) stay honestly optional.
+- 28 source files fixed with genuine narrowing — destructure-then-check, explicit `undefined`
+  guards, or an `?? null`/`?? ''` fallback at the point a nullable value crosses into a non-nullable
+  slot. No `!`, `as any`, `as unknown as`, or `: any` anywhere in the diff (`node
+  scripts/factory/review-patterns.mjs` — G7b — reports clean). Densest: `CommandPalette.tsx` (13),
+  `hooks/useSelection.ts` (12), `editor/CommentDisplay.tsx` (12), `editor/AIScoringDisplay.tsx` (12),
+  `lib/cn.ts` (12).
+- `pages/ReviewsPage.tsx` — the one fix that is more than type-satisfying. Three optimistic-update
+  handlers (`approvePlan`, `requestChanges`, `rateRetro`) did
+  `updated.reviews[personId][weekNumber] = { ...updated.reviews[personId][weekNumber], patch }`.
+  Spreading `undefined` is legal JS and this type-checked before the fix, but for a person/week
+  pair with no prior review row it silently produced a `ReviewCell` missing every field except the
+  one just patched (`hasPlan`/`hasRetro`/`sprintId`/`planDocId`/`retroDocId` all `undefined` instead
+  of their contract). Extracted `emptyReviewCell`/`mergeReviewCellPatch` (both exported) so all
+  three handlers merge over a real default instead of a possibly-missing lookup.
+  **Reachability, checked rather than assumed:** every UI path that can call these three handlers
+  (`ReviewsPage.tsx:919-935`, `:1115`) is gated on `cell.hasPlan`/`cell.hasRetro` already being
+  `true`, which requires an already-fetched cell — so this specific corruption was not reachable
+  through today's UI. It is a genuine type-safety fix against a real invariant gap, not a
+  demonstrated production crash; recorded as such rather than oversold.
+
+**What did NOT change.** No product behavior. `pnpm --filter @ship/web test` is 37 files / 366
+tests green before and after (quarantine is already empty per TEST-1); the fixes are narrowing,
+not behavior changes, with the one exception above, which changes nothing observable given the
+current gating.
+
+**How to run it.**
+
+```bash
+source .factory-env
+# Reproduce the flag-restoration count (should be 0 now that tsconfig extends root):
+cd web && ./node_modules/.bin/tsc -p tsconfig.json --noEmit \
+  --noUncheckedIndexedAccess --noImplicitReturns --noFallthroughCasesInSwitch
+# Or just the normal check, since the flags are now inherited permanently:
+pnpm --filter @ship/web type-check
+# Regression test for the ReviewsPage fix:
+pnpm --filter @ship/web exec vitest run src/pages/ReviewsPage.reviewCellMerge.test.ts
+```
+
+**Rollback.** Revert the commits on `fix/ts-1-web-tsconfig`. Reverting just
+`web/tsconfig.json`'s `extends` line restores the pre-fix (silently non-strict) behavior without
+touching the 29 narrowed files, which remain correct either way since the narrowing is a strict
+superset of the original logic. `emptyReviewCell`/`mergeReviewCellPatch` can be reverted
+independently by inlining the old spread in the three `ReviewsPage.tsx` handlers, which restores
+the (unreached, per above) invariant gap.
 
 ---
 
