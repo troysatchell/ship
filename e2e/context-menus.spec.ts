@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures/isolated-env'
+import { hoverWithRetry, waitForTableData } from './fixtures/test-helpers'
 
 test.describe('Context Menus - Sidebar', () => {
   test.beforeEach(async ({ page }) => {
@@ -63,11 +64,17 @@ test.describe('Context Menus - Sidebar', () => {
       // <li data-testid="program-item"> (see web/src/pages/App.tsx ProgramsSidebar).
       const programItem = page.locator('[data-testid="program-item"]').first()
       await expect(programItem, 'Seed data should include at least one program in the sidebar. Run: pnpm db:seed').toBeVisible({ timeout: 5000 })
-      await programItem.hover()
 
-      // Look for the three-dot menu button
-      const menuButton = programItem.locator('button[aria-label*="Actions"]')
-      await expect(menuButton, 'Program sidebar item should expose an Actions button on hover').toBeVisible({ timeout: 3000 })
+      // Look for the three-dot menu button. getByRole matches the accessible
+      // name (consistent with the Kanban card locator below) rather than a
+      // case-sensitive CSS attribute substring. Hover is retried alongside the
+      // visibility check (hoverWithRetry) so a stray pointer move or re-render
+      // between the two steps can't leave the button hidden and the assertion
+      // timing out.
+      const menuButton = programItem.getByRole('button', { name: /actions/i })
+      await hoverWithRetry(programItem, async () => {
+        await expect(menuButton, 'Program sidebar item should expose an Actions button on hover').toBeVisible({ timeout: 3000 })
+      })
       await menuButton.click()
 
       // Context menu should appear
@@ -85,11 +92,14 @@ test.describe('Context Menus - Sidebar', () => {
       // <li data-testid="issue-item"> (see web/src/pages/App.tsx IssuesList).
       const issueItem = page.locator('[data-testid="issue-item"]').first()
       await expect(issueItem, 'Seed data should include at least one issue in the sidebar. Run: pnpm db:seed').toBeVisible({ timeout: 5000 })
-      await issueItem.hover()
 
-      // Look for the three-dot menu button
-      const menuButton = issueItem.locator('button[aria-label*="Actions"]')
-      await expect(menuButton, 'Issue sidebar item should expose an Actions button on hover').toBeVisible({ timeout: 3000 })
+      // Look for the three-dot menu button. See the Programs section above for
+      // why this uses getByRole + hoverWithRetry instead of a case-sensitive
+      // CSS attribute selector with a bare hover().
+      const menuButton = issueItem.getByRole('button', { name: /actions/i })
+      await hoverWithRetry(issueItem, async () => {
+        await expect(menuButton, 'Issue sidebar item should expose an Actions button on hover').toBeVisible({ timeout: 3000 })
+      })
       await menuButton.click()
 
       // Context menu should appear with status change option
@@ -111,7 +121,7 @@ test.describe('Context Menus - Team Directory', () => {
 
   test('right-click on team member shows context menu', async ({ page }) => {
     await page.goto('/team/directory')
-    await page.waitForLoadState('networkidle')
+    await waitForTableData(page)
 
     // Team Directory renders people as table rows, not "PersonCard" elements
     // (see web/src/pages/TeamDirectory.tsx: <tr onContextMenu={...}>).
@@ -194,12 +204,16 @@ test.describe('Context Menus - Kanban Board', () => {
     // Hover over kanban card to reveal menu button
     const card = page.locator('[data-issue]').first()
     await expect(card, 'Seed data should include at least one issue to render as a kanban card. Run: pnpm db:seed').toBeVisible({ timeout: 5000 })
-    await card.hover()
 
     // Look for the three-dot menu button. Its aria-label is "More actions for
     // issue #N" (lowercase "actions"), so the match must be case-insensitive.
+    // Hover is retried alongside the visibility check (hoverWithRetry) so a
+    // stray pointer move or re-render between the two steps can't leave the
+    // button hidden and the assertion timing out.
     const menuButton = card.getByRole('button', { name: /actions/i })
-    await expect(menuButton, 'Kanban card should expose an Actions button on hover').toBeVisible({ timeout: 3000 })
+    await hoverWithRetry(card, async () => {
+      await expect(menuButton, 'Kanban card should expose an Actions button on hover').toBeVisible({ timeout: 3000 })
+    })
     await menuButton.click()
 
     // Context menu should appear
