@@ -115,6 +115,41 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     **When you record a finding in the ledger, use the slug `type-safety`** for anything in this
     family; a fragmented taxonomy hides recurrence and is why this took six tickets to see.
 
+22. **Never start a background poll or monitor and then wait for it. Nothing will wake you.**
+    Six agents in one run stalled this way — on CI polls, on gate runs, on a "monitor" that was
+    going to notify them. Each burned wall-clock doing nothing and had to be nudged by the
+    orchestrator to produce a report it had already earned. Run what you need in the **foreground**
+    and read the result, or make one synchronous check and move on.
+    Concretely: `gh pr checks <n>` once, not a loop. `scripts/factory/gate.sh` in the foreground, or
+    read `.factory/gate-result.json` after it returns.
+    **CI is the orchestrator's gate, not yours.** "CI queued at time of report" is a complete and
+    acceptable answer — an unsent report is not. Finish, write it up, stop.
+
+23. **After `git merge main`, run `pnpm install` before you believe any failure.**
+    `main` gains dependencies. When it does, your worktree's `node_modules` is stale and the import
+    fails at module load — so **every** test file that imports the app fails at once. The cascade
+    looks like a catastrophic regression from your merge; it is one missing package.
+    Observed three times in one hour, on TRO-277, TRO-240 and TRO-181, all from PR #20 adding
+    `compression`: ~19 api file-level failures, a web failure, and typecheck errors
+    (`Cannot find module 'compression'`, then `TS7006` on the untyped params downstream). One
+    `pnpm install` cleared all of it — the lockfile was already correct, so nothing else was wrong.
+    Symptom to recognise: failures in files your diff never touched, all reporting import or
+    module-resolution errors rather than assertion failures.
+24. **The load-sensitive api flake has at least five identities. Name yours; never quarantine it.**
+    `backlinks.test.ts`, `rate-limit.test.ts`, `weeks.test.ts::should reject review approval without
+    rating`, `session-activity-race.test.ts::modifies the session row exactly once when a concurrent
+    burst crosses the threshold`, and a candidate `workspaces.test.ts::should archive person
+    document`. Every one fails inside a full `gate.sh` run — which carries typecheck + build, so CPU
+    is loaded — and passes standalone. Five identities across files unrelated to each other is the
+    evidence that this is **one shared mechanism** (TRO-277), not five flaky tests. Re-run standalone
+    before believing it, report the identity so the set keeps growing, and never widen the quarantine.
+25. **A commit message that claims a cleanup is not evidence the cleanup happened.**
+    A commit on TRO-223 asserted it had removed two `as any` casts; only one was removed, and the
+    survivor sat in a file the branch otherwise edited. `review-patterns.mjs` (G7b) could not catch
+    it because it only inspects **added** lines — a pre-existing violation inside a file you touch is
+    a structural blind spot. When you claim to have removed casts, `grep` the file afterwards and
+    quote the result.
+
 ## Log
 
 *Append dated entries as the factory learns. One line each, with the ticket that taught it.*
