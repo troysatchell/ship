@@ -21,7 +21,7 @@ import { test, expect, Page } from './fixtures/isolated-env'
  * instead of a hand-rolled protocol client in Node.
  *
  * Run it deliberately:
- *   pnpm build && npx playwright test e2e/concurrent-editing.spec.ts --workers=1
+ *   pnpm build && npx playwright test e2e/concurrent-editing.spec.ts --workers=1 --retries=0
  * (see the `/e2e-test-runner` skill; never run the full suite in the foreground)
  * ============================================================================
  *
@@ -47,10 +47,20 @@ async function login(page: Page, email: string) {
   await expect(page).not.toHaveURL('/login', { timeout: 15000 })
 }
 
+/** Body of `GET /api/csrf-token` — only the field this file reads. */
+interface CsrfTokenResponseBody {
+  token: string
+}
+
+/** Body of `POST /api/documents` — only the field this file reads. */
+interface CreatedDocumentResponseBody {
+  id: string
+}
+
 async function getCsrfToken(page: Page): Promise<string> {
   const response = await page.request.get('/api/csrf-token')
   expect(response.ok(), 'CSRF token request must succeed').toBe(true)
-  const data = await response.json()
+  const data: CsrfTokenResponseBody = await response.json()
   return data.token
 }
 
@@ -64,7 +74,7 @@ async function createDocument(page: Page, title: string): Promise<string> {
     response.ok(),
     `document creation must succeed or nothing below is under test (status ${response.status()})`
   ).toBe(true)
-  const doc = await response.json()
+  const doc: CreatedDocumentResponseBody = await response.json()
   return doc.id
 }
 
@@ -126,11 +136,16 @@ async function focusEditor(editor: import('@playwright/test').Locator) {
     .toBe(true)
 }
 
+/** Body of `GET /api/documents/:id` — only the field this file reads. */
+interface DocumentResponseBody {
+  content: unknown
+}
+
 /** The document's content as stored by the server, via the REST API. */
 async function storedText(page: Page, docId: string): Promise<string> {
   const response = await page.request.get(`/api/documents/${docId}`)
   expect(response.ok(), 'document fetch must succeed').toBe(true)
-  const data = await response.json()
+  const data: DocumentResponseBody = await response.json()
   return JSON.stringify(data.content ?? '')
 }
 

@@ -101,8 +101,17 @@ interface StoredDocument {
   hasYjsState: boolean
 }
 
+/** Row shape of `SELECT content, yjs_state FROM documents` — only what `readStored` reads. */
+interface DocumentContentRow {
+  content: unknown
+  yjs_state: Buffer | null
+}
+
 async function readStored(docId: string): Promise<StoredDocument> {
-  const result = await pool.query('SELECT content, yjs_state FROM documents WHERE id = $1', [docId])
+  const result = await pool.query<DocumentContentRow>(
+    'SELECT content, yjs_state FROM documents WHERE id = $1',
+    [docId]
+  )
   const row = result.rows[0]
   const content = row?.content == null ? '' : JSON.stringify(row.content)
 
@@ -147,7 +156,6 @@ async function waitForStored(
 interface Client {
   name: string
   doc: Y.Doc
-  socket: () => WebSocket
   /** Structure + text of the local replica, used for convergence comparison. */
   snapshot: () => string
   /** Resolves once the server's sync step 2 has been applied locally. */
@@ -207,6 +215,18 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
   })
 
   afterAll(async () => {
+    // beforeAll can fail partway through (a user insert, the listen() call).
+    // A step whose resource was never created must not throw and abort the
+    // steps after it — that would leave whatever DID get created (say, a
+    // workspace with no matching users) orphaned in the shared test database.
+    const safely = async (step: () => Promise<unknown> | unknown): Promise<void> => {
+      try {
+        await step()
+      } catch {
+        /* the resource this step cleans up was never created; keep going */
+      }
+    }
+
     for (const ws of openSockets) {
       try {
         ws.terminate()
@@ -214,13 +234,13 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
         /* already gone */
       }
     }
-    handle?.stopSessionRevalidation()
-    await new Promise<void>((resolve) => server.close(() => resolve()))
-    await pool.query('DELETE FROM sessions WHERE user_id = ANY($1::uuid[])', [[userAId, userBId]])
-    await pool.query('DELETE FROM documents WHERE workspace_id = $1', [workspaceId])
-    await pool.query('DELETE FROM workspace_memberships WHERE workspace_id = $1', [workspaceId])
-    await pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[userAId, userBId]])
-    await pool.query('DELETE FROM workspaces WHERE id = $1', [workspaceId])
+    await safely(() => handle?.stopSessionRevalidation())
+    await safely(() => new Promise<void>((resolve) => server.close(() => resolve())))
+    await safely(() => pool.query('DELETE FROM sessions WHERE user_id = ANY($1::uuid[])', [[userAId, userBId]]))
+    await safely(() => pool.query('DELETE FROM documents WHERE workspace_id = $1', [workspaceId]))
+    await safely(() => pool.query('DELETE FROM workspace_memberships WHERE workspace_id = $1', [workspaceId]))
+    await safely(() => pool.query('DELETE FROM users WHERE id = ANY($1::uuid[])', [[userAId, userBId]]))
+    await safely(() => pool.query('DELETE FROM workspaces WHERE id = $1', [workspaceId]))
   })
 
   async function createSession(userId: string): Promise<string> {
@@ -272,7 +292,7 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
       }
     })
 
-    function handleFrame(data: Buffer, onSynced: () => void): void {
+    function handleFrame(data: Buffer, onSynced: () => void, onFatal: (error: Error) => void): void {
       const decoder = decoding.createDecoder(new Uint8Array(data))
       const messageType = decoding.readVarUint(decoder)
       framesSeen.push(messageType)
@@ -280,7 +300,19 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
       if (messageType === MESSAGE_SYNC) {
         const encoder = encoding.createEncoder()
         encoding.writeVarUint(encoder, MESSAGE_SYNC)
-        const syncType = syncProtocol.readSyncMessage(decoder, encoder, doc, REMOTE_ORIGIN)
+        let syncType: number
+        try {
+          syncType = syncProtocol.readSyncMessage(decoder, encoder, doc, REMOTE_ORIGIN)
+        } catch (error) {
+          // A decode failure here is exactly the kind of regression this file
+          // exists to catch (a corrupted frame from a broken server). Without
+          // this, the exception would escape the 'message' event handler as an
+          // uncaught exception instead of failing the handshake with a message
+          // naming what happened — the same "red for the wrong reason" trap
+          // this file's own SYNCHRONIZATION POLICY comment warns about.
+          onFatal(error instanceof Error ? error : new Error(String(error)))
+          return
+        }
         if (encoding.length(encoder) > 1) {
           const current = ws
           if (current && current.readyState === WebSocket.OPEN) {
@@ -336,6 +368,7 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
       requestedServerState = false
 
       let markSynced: (() => void) | null = null
+      let failHandshake: ((error: Error) => void) | null = null
       let clearHandshakeTimer: (() => void) | null = null
       const synced = new Promise<void>((resolve, reject) => {
         const timer = setTimeout(() => {
@@ -349,22 +382,49 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
         timer.unref?.()
         clearHandshakeTimer = () => clearTimeout(timer)
         markSynced = resolve
+        failHandshake = reject
       })
 
-      socket.on('message', (data: Buffer) => {
-        handleFrame(data, () => {
-          clearHandshakeTimer?.()
-          markSynced?.()
+      // If the socket errors before the handshake completes, `synced` would
+      // otherwise sit unresolved for the full CONVERGE_TIMEOUT_MS and then
+      // reject with an unrelated "never completed the handshake" error that
+      // nothing is still awaiting — an unhandled rejection surfacing seconds
+      // later, plausibly attributed to whatever test happens to be running by
+      // then. Cancel the timer and settle `synced` quietly; the real
+      // connection error is what the caller below throws instead.
+      const abortHandshakeOnConnectionFailure = (): void => {
+        clearHandshakeTimer?.()
+        synced.catch(() => {
+          /* superseded by the connection error the caller is about to throw */
         })
+      }
+
+      socket.on('message', (data: Buffer) => {
+        handleFrame(
+          data,
+          () => {
+            clearHandshakeTimer?.()
+            markSynced?.()
+          },
+          (error) => {
+            clearHandshakeTimer?.()
+            failHandshake?.(error)
+          }
+        )
       })
       socket.on('close', (code: number, reason: Buffer) => {
         closeEvents.push(`${code}:${reason.toString().slice(0, 40)}`)
       })
 
-      await new Promise<void>((resolve, reject) => {
-        socket.on('open', () => resolve())
-        socket.on('error', reject)
-      })
+      try {
+        await new Promise<void>((resolve, reject) => {
+          socket.on('open', () => resolve())
+          socket.on('error', reject)
+        })
+      } catch (error) {
+        abortHandshakeOnConnectionFailure()
+        throw error
+      }
 
       // The step 1 we owe the server is sent from handleFrame, once the server
       // has proved it is listening. See the comment there.
@@ -420,11 +480,6 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
     return {
       name,
       doc,
-      socket: () => {
-        const current = ws
-        if (!current) throw new Error(`${name}: not connected`)
-        return current
-      },
       snapshot: () => doc.getXmlFragment('default').toString(),
       connect,
       disconnect,
@@ -614,11 +669,14 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
     )
     expect(stored.yjsText, 'the merged contested region must survive in yjs_state').toContain(markerA)
     expect(stored.yjsText, 'the merged contested region must survive in yjs_state').toContain(markerB)
-    // The persisted copy is the merged one, not one client's view of it.
+    // The persisted copy is the merged one, not one client's view of it. Same
+    // strength as the in-memory check above: strip both markers and require the
+    // FULL seed — including the trailing TAIL — rather than a disjunction that
+    // could pass on the head alone while the tail was silently dropped.
     expect(
-      stored.yjsText.includes(seed) || stored.yjsText.includes(seed.slice(0, insertAt)),
+      stored.yjsText.replace(markerA, '').replace(markerB, ''),
       `persisted state lost the seeded text: ${stored.yjsText.slice(0, 300)}`
-    ).toBe(true)
+    ).toContain(seed)
 
     await clientA.disconnect()
     await clientB.disconnect()
