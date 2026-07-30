@@ -23,6 +23,25 @@ import {
 } from '@/lib/document-tabs';
 
 /**
+ * Legacy tab id aliases, keyed by document type. A previous rename can leave
+ * old bookmarks/shared links pointing at a tab id that no longer exists in
+ * `documentTabConfigs` (web/src/lib/document-tabs.tsx). Rather than treat
+ * those as plain invalid tabs and bounce to the bare document URL, map them
+ * to the tab's current id so the link (and any nested path under it) keeps
+ * working.
+ *
+ * TRO-282: the program tab was renamed `sprints` -> `weeks` in commit
+ * 7713ef0, but `ProgramSprintsTab`/`ProgramWeeksTab`'s own navigation calls
+ * still pointed at `/sprints/:id` — clicking a week card bounced the user to
+ * the document root. That call site is fixed directly (ProgramWeeksTab.tsx),
+ * but this alias also covers anyone who already bookmarked or shared a
+ * `/documents/:id/sprints/:sprintId` URL before the rename.
+ */
+const LEGACY_TAB_ALIASES: Record<string, Record<string, string>> = {
+  program: { sprints: 'weeks' },
+};
+
+/**
  * UnifiedDocumentPage - Renders any document type via /documents/:id route
  *
  * This page fetches a document by ID regardless of type and renders it
@@ -96,10 +115,21 @@ export function UnifiedDocumentPage() {
     // If URL has a tab but it's not valid for this document type, redirect to base URL
     const isValidTab = tabConfig.some(t => t.id === urlTab);
     if (urlTab && !isValidTab) {
+      // A renamed tab id (see LEGACY_TAB_ALIASES) redirects to its current
+      // location instead of dropping the tab and any nested path under it.
+      const aliasTarget = LEGACY_TAB_ALIASES[document.document_type]?.[urlTab];
+      if (aliasTarget) {
+        const target = nestedPath
+          ? `/documents/${id}/${aliasTarget}/${nestedPath}`
+          : `/documents/${id}/${aliasTarget}`;
+        console.warn(`Tab "${urlTab}" for document type "${document.document_type}" was renamed to "${aliasTarget}", redirecting`);
+        navigate(target, { replace: true });
+        return;
+      }
       console.warn(`Invalid tab "${urlTab}" for document type "${document.document_type}", redirecting to base URL`);
       navigate(`/documents/${id}`, { replace: true });
     }
-  }, [document, id, urlTab, tabConfig, navigate]);
+  }, [document, id, urlTab, nestedPath, tabConfig, navigate]);
 
   // Fetch team members for sidebar data
   const { data: teamMembersData = [] } = useAssignableMembersQuery();
@@ -238,10 +268,21 @@ export function UnifiedDocumentPage() {
     mutationFn: async ({ documentId, updates }: { documentId: string; updates: Partial<DocumentResponse> }) => {
       const response = await apiPatch(`/api/documents/${documentId}`, updates);
       if (!response.ok) {
-        throw new Error('Failed to update document');
+        // Attach the real HTTP status (TRO-190/ERR-3, TRO-191/ERR-4) so the
+        // shared retry policy (`shouldRetryRequest`) can tell a throttled 429
+        // from a permanent 404, and so `isNotFoundError` can tell the editor
+        // the document itself is gone rather than just "the write failed".
+        const error = new Error(
+          response.status === 404 ? 'Document not found' : 'Failed to update document'
+        ) as Error & { status: number };
+        error.status = response.status;
+        throw error;
       }
-      return response.json();
+      return response.json() as Promise<DocumentResponse>;
     },
+    // documentId here (not the per-call variable) drives Editor.tsx's
+    // subscribeToDocumentWriteOutcome filter - see queryClient.ts.
+    meta: { operation: 'update document', documentId: id },
     onMutate: async ({ documentId, updates }) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: ['document', documentId] });

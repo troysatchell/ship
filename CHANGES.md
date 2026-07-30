@@ -8,6 +8,567 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
+
+Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write
+(429/500 on a PATCH). ERR-4 is a write against a document someone else already deleted (404).
+Neither reaches the Yjs collaboration socket `SyncStatusIndicator` (TRO-188/ERR-1) watches — title
+and properties are not CRDT content, they go straight over REST — so both used to leave the
+indicator reading "Saved" with a rejected value still sitting in the field. `probe6-mixed.json`
+(6.1/6.2): forced 429 then 500 on a rename, DB title unchanged both times, indicator stayed
+"Saved". `probe7-retry-and-revocation.json` (7a): 14 PATCH attempts, a transient "Failed to update
+document" toast fires, indicator still "Saved". `probe4-concurrency.json` (4c): another user
+deletes the open document; this user's own typing keeps failing with 404, with **no** notice beyond
+a console error on backlinks the user never sees.
+
+**What changed.**
+
+- `web/src/lib/queryClient.ts` gains `isNotFoundError`/`NOT_FOUND_STATUS` (same shape as the
+  existing `isThrottleError`/`THROTTLE_STATUS` from API-1) and a small document-write-outcome bus
+  (`subscribeToDocumentWriteOutcome`), fed from the real `MutationCache`'s `onError` (extended) and a
+  new `onSuccess`, for any mutation tagged `meta.documentId`.
+- `web/src/hooks/useDocumentWriteStatus.ts` (new) subscribes to that bus filtered to one
+  `documentId`, exposing `hasFailedWrite` and calling `onDocumentGone` exactly once per document
+  when a write 404s — so a retry storm (probe7a's 14 attempts) cannot open 14 blocking alerts.
+- `web/src/components/editor/SyncStatusIndicator.tsx` — reused, not replaced: `deriveSyncIndicator`
+  gains one optional input, `hasFailedWrite`, checked ahead of `isSynced`. A rejected write now
+  overrides an otherwise-fully-synced Yjs socket and returns the exact same "Not saved" (red) view
+  ERR-1 already built. No new state, no new copy in the indicator itself.
+- `web/src/components/Editor.tsx` calls `useDocumentWriteStatus(documentId, () => alert(...))` and
+  passes `hasFailedWrite` into the indicator. The one-time notice reuses the exact `alert()` pattern
+  already in this file for the 4403 (access revoked) and 4100 (document converted) WebSocket close
+  codes — not a new toast/modal system.
+- `web/src/pages/UnifiedDocumentPage.tsx`'s `updateMutation` now attaches `.status` to the thrown
+  error (it previously threw a bare `Error`, so `errorStatus()` could not see 429 vs 404 vs 500 at
+  all) and tags `meta: { operation: 'update document', documentId: id }` so the bus above fires for
+  it.
+
+**New user-facing copy** — `Editor.tsx`, shown once per document, via the same blocking `alert()`
+ERR-1's sibling fixes already use for this class of event:
+
+> This document was deleted by someone else. Your changes here were not saved - copy anything you
+> want to keep before leaving this page.
+
+No other new copy or flow. The indicator itself reuses ERR-1's existing "Not saved" label and
+detail text verbatim — this PR adds no new indicator copy.
+
+**What did NOT change.** The field keeping the user's typed-but-unsaved text is pre-existing
+`Editor.tsx` behaviour (`hasLocalChangesRef` / the `initialTitle` sync effect) and is untouched here
+— rolling back the optimistic query-cache entry on a failed write never overwrote it, before or
+after this fix. This PR only changes what the indicator is allowed to claim.
+
+**Correcting TRO-190's own cross-reference.** TRO-190 describes ERR-3 as blocked on API-1's retry
+predicates returning `false` for every 429/500. API-1 (TRO-172) is merged and that is no longer
+true: `shouldRetryRequest` (`web/src/lib/queryClient.ts`) already retries 429 up to 4 times (delays
+summing past the 60s rate-limit window) and plain 5xx/network errors up to 3 times, globally, as
+the default for every mutation. The gap this PR closes is downstream of that: once retries
+genuinely exhaust, nothing told the indicator. Separately, `UnifiedDocumentPage.tsx`'s mutation had
+no `.status` on its thrown error, so a 429 hitting *this* mutation specifically fell back to the
+generic 3-retry/1-2-4s schedule instead of the tuned one — too short to outlast the 60s window —
+which this PR also fixes as part of attaching `.status` for the 404 case.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run \
+  src/components/editor/SyncStatusIndicator.test.tsx \
+  src/hooks/useDocumentWriteStatus.test.ts \
+  src/lib/queryClient.test.ts
+scripts/factory/gate.sh
+```
+
+**Verification note.** `probe6.1/6.2/7a/4c` need a live app with forced 429/500/404 responses; they
+were not re-run here. The tests above drive the real `queryClient` `MutationCache` config directly
+(the same technique `MutationErrorToast.test.tsx` already used for API-1) rather than a mock or a
+mounted page, so they prove the actual production wiring reacts correctly — that is mutation-layer
+proof, not a rerun of the original browser-level probes.
+
+**Rollback.** Revert the commit(s) on `fix/err-3-err-4-silent-write-failure`. To disable
+independently: pass `hasFailedWrite={false}` (or omit it) from `Editor.tsx` to restore ERR-1's
+original indicator behaviour without touching `UnifiedDocumentPage.tsx`; or remove the
+`meta: { documentId }` line there to stop the bus from ever firing for document writes.
+
+---
+
+## TRO-282 — [TEST-13] Program Weeks tab linked to a dead `/sprints/` route and bounced the user out
+
+**Reproduced first, as the ticket required.** The finding was derived (read from `main.tsx` and
+`UnifiedDocumentPage.tsx`, "nobody has reproduced this in a browser"). A component test rendering the
+real route tree (`documents/:id/*` -> `UnifiedDocumentPage` -> the real program tab config -> the
+real `ProgramWeeksTab`) and clicking a week card confirmed it: the app logged
+`Invalid tab "sprints" for document type "program", redirecting to base URL` and the location became
+the bare `/documents/:id` — no tab, no selected week. The bug was real, not rescued by a fallback.
+
+**Root cause.** `web/src/components/document-tabs/ProgramWeeksTab.tsx` (lines 28, 34, 71 as of this
+branch) navigated to `/documents/:id/sprints/:sprintId` on selecting or opening a week, and back to
+`/documents/:id/sprints` from the week detail view. Commit 7713ef0 renamed the program tab's id from
+`sprints` to `weeks` in `web/src/lib/document-tabs.tsx`, but the tab's own navigation calls were never
+updated. `UnifiedDocumentPage.tsx`'s tab-validation effect (~line 93-102) treats any URL tab segment
+absent from `tabConfig` as invalid and redirects to the bare document URL — so every click bounced.
+Same root commit as five of the thirteen TEST-1 failures; TRO-223 fixed the tab *label* half, this is
+the navigation half, which no unit test covered.
+
+**What changed.**
+
+- `ProgramWeeksTab.tsx` — all three navigate targets now point at `weeks` instead of `sprints`.
+- `UnifiedDocumentPage.tsx` — added a small `LEGACY_TAB_ALIASES` map (`{ program: { sprints: 'weeks' } }`)
+  consulted by the invalid-tab effect. A URL segment matching a known legacy alias now redirects to
+  the tab's current id (preserving any nested path, e.g. the sprint/week id) instead of being treated
+  as a plain invalid tab and dropped to the document root.
+
+**Decision: redirect, not 404, for old `/sprints/` links.** The rename already shipped, so a bookmark
+or shared link from before it is a normal, expected case — a 404 would be a second, quieter defect (a
+link that silently stopped working) layered on top of the first. Redirecting keeps those links alive
+with the same behavior a fresh rename-aware click gets.
+
+**Regression test — `web/src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx`** (vitest, run by the
+gate; this is the tier that actually executes, per `ship-qa`). Two cases:
+
+1. Clicking a week card lands on `/documents/:id/weeks/:sprintId`, not the document root.
+2. A bookmarked `/documents/:id/sprints/:sprintId` URL redirects to the equivalent `/weeks/` URL.
+
+Confirmed red first, for the right reason: both cases failed with
+`AssertionError: expected '/documents/prog-1' to be '/documents/prog-1/weeks/a1b2c3d4-…'`, and the
+console carried the real `Invalid tab "sprints"...redirecting to base URL` warning — not a crash, not
+a bad selector. After the fix, both pass with no warning.
+
+**Also updated, additive only.** `e2e/program-mode-week-ux.spec.ts:369-417` asserted the stale
+`/sprints/` URL after clicking/double-clicking a week card; updated to expect `/weeks/`. This suite is
+not run by the gate or CI (`ship-qa`), which is exactly why the stale assertions never caught the
+break — the vitest test above is the actual proof.
+
+**How to run it.**
+
+```bash
+cd <worktree> && source .factory-env
+pnpm --filter @ship/web test -- src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx
+```
+
+**Roll back.** `git checkout main -- web/src/components/document-tabs/ProgramWeeksTab.tsx
+web/src/pages/UnifiedDocumentPage.tsx e2e/program-mode-week-ux.spec.ts && git rm
+web/src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx` and drop this entry.
+
+---
+
+## TRO-288 — [TEST-15] session-activity-race's "did the burst race" precondition was a scheduling hope, not a guarantee
+
+**Not one of the audit report's 68 baseline findings** — a merge-queue blocker introduced by the
+DB-2/API-6 work (TRO-179/TRO-177, PR #13) that landed on `main` afterward.
+
+**What was broken.** `api/src/middleware/__tests__/session-activity-race.test.ts` fires a burst of
+10 concurrent `authMiddleware()` calls via `Promise.all` and expects all 10 to read the session's
+stale `last_activity` before any of them writes it. On an idle box `Promise.all` starting all 10
+calls in the same synchronous tick is normally enough. It is not a guarantee: this repo's CI job
+runs on a 2-vCPU `ubuntu-latest` runner with Postgres as a co-located service container sharing
+those same 2 vCPUs (`.github/workflows/ci.yml`) — a far more contended environment than a dev
+box — where connection acquisition and query dispatch can serialize enough that a later request's
+SELECT lands after an earlier request's UPDATE has already committed. That request then correctly
+reads the just-refreshed row and correctly skips writing, collapsing `updateStatements` to 1 and
+failing the test's own "did the burst actually race" precondition
+(`session-activity-race.test.ts:216-219`, `toBeGreaterThan(1)`). Because the test lives on `main`,
+the factory gate compared this against the quarantine baseline and reported it as a *new* failure on
+branches that never touch auth — observed blocking PR #29 (failed CI, then passed on a plain re-run
+of the identical commit) and PR #11 (failed CI on this single identity, `newFailures: 1`).
+
+**Correcting the ticket's own framing.** The ticket (and this test's name) describes the fragile
+half as "modifies the session row exactly once." Confirmed directly, not inferred: reproducing the
+non-overlapping case (a throwaway experiment invoking the burst fully sequentially instead of via
+`Promise.all`, deleted before this commit) produced `updateStatements=1, rowsModified=1` —
+the *precondition* check failed while the *exactly-once* check still passed. The exactly-once
+assertion held in every timing pattern tried (fully concurrent, half-staggered, fully sequential);
+Postgres's `WHERE ... AND last_activity < $3` predicate arbitrates correctly regardless of arrival
+order, exactly as DB-2 intended. The fragile half was never "exactly once" — it was "did the burst
+race at all."
+
+**What changed — `api/src/middleware/__tests__/session-activity-race.test.ts` only.** Added
+`createArrivalBarrier()`, installed as a plain property reassignment of `pool.query` *underneath*
+the existing `vi.spyOn` (not through `mockImplementation`, which would collapse `pool.query`'s
+overloaded signature to its last — callback-style — form, the wrong shape for this codebase's
+promise-based calls). Also added two dedicated, database-free unit tests for the barrier helper
+itself (`describe('createArrivalBarrier ...')`) — the release-on-count-reached behavior and the
+passthrough for non-matching SQL — so a regression in the barrier's own logic fails fast rather than
+only showing up as a reintroduced flake in the concurrent-burst test. The barrier holds every
+session-lookup SELECT until all 10 concurrent callers
+have asked to send one, then releases them together.
+
+**Concurrency argument.** While any of the 10 calls is waiting at the barrier, none of them has yet
+sent its SELECT, so none has read anything, so none can have decided a write is due, so no UPDATE
+can exist yet. That makes it structurally impossible for any of the 10 SELECTs to observe anything
+other than the original stale `last_activity` — not "unlikely under contention" but unreachable by
+construction, independent of how slow or reordered the surrounding scheduling is. Validated by
+instrumenting the barrier with an arrival counter and confirming all 10 arrivals fire before release
+(temporary, removed before this commit) — the mechanism engages on the real SQL, it is not a no-op.
+
+No fixed sleep was added or would help — this is a timing-determinism fix, and a sleep only
+narrows a race, it does not close it.
+
+**Not touched:** `api/src/middleware/auth.ts` — the throttle and its `WHERE`-clause predicate are
+correct and unchanged. Verified by temporarily reverting the predicate to the pre-DB-2 unconditional
+`UPDATE sessions SET last_activity = $1 WHERE id = $2` (file copied aside, never `git stash`d, and
+restored — `git diff` against this branch shows zero changes to `auth.ts`): the barriered test goes
+red for the right reason, `AssertionError: expected 10 to be 1`, i.e. all 10 requests now
+deterministically raced and all 10 landed a write against the broken code. Restored immediately
+after.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/session-activity-race.test.ts
+```
+10 consecutive runs passed under deliberate load: 14 CPU-bound busy-loop worker processes (pure
+`Math.sqrt` summation, no I/O) saturating all 14 physical cores of the host (load average
+~40-54 on a 14-core machine), plus 3 concurrent full `pnpm --filter @ship/api test` suite runs
+against a separate scratch database on the shared `ship-audit-pg` container, generating simultaneous
+Postgres contention alongside the CPU load. All scratch load (busy-loop processes, the extra
+database) was torn down after measurement. Standalone (no artificial load) and the full local api
+suite (592/592) also pass. **Not verified**: reproducing the original CI failure directly on this
+14-core dev machine — 20+ standalone/loaded attempts under busy-loop and concurrent-suite load did
+not reproduce a failure against the pre-fix test, consistent with the mechanism needing CI's
+specific 2-vCPU-shared-with-Postgres constraint rather than raw CPU contention on a larger box. The
+fully-sequential white-box experiment (above) is the direct confirmation of the failure mode in lieu
+of that reproduction.
+
+**How to roll it back.** Revert this commit; the prior test file returns with the same
+scheduling-dependent precondition. No production code, migration, or other file changes to undo.
+
+---
+
+## TRO-223 (TEST-1) — the web unit suite is green, and `pnpm test` now actually runs it
+
+**13 web unit tests failed, in 3 files, and the root `pnpm test` never ran them.** Root `"test"` was
+`pnpm --filter @ship/api test`, so `pnpm test` reported green while those 13 stayed red. CI *did*
+run the web suite (`.github/workflows/ci.yml:105-118`, under `continue-on-error` with a quarantine
+diff), so the failures were visible there — they were invisible to anyone running the suite locally,
+which is where they needed to be caught. The suite
+was 151 tests when the factory captured its baseline and 172 by the time this branch measured it —
+the same 13 failing in both. They were five months of accumulated drift that a suite nobody ran
+could not catch.
+
+**The judgement this ticket turned on: for each failure, was the test wrong or the source wrong?**
+It was not uniform, and it did not fall the convenient way. Of the 13: **11 were stale
+assertions**, **1 was a source defect**, and **1 was a defect in the test harness**.
+
+*Stale tests — 11 (source was right, assertions were corrected — a correction, not a weakening):*
+
+- **`sprints` → `weeks` (5 assertions).** `7713ef0` renamed the tab id in both the project and
+  program configs. `e2e/project-weeks.spec.ts:121` navigates to `/documents/:id/weeks`, confirming
+  the new id is the live contract. Tests still asserted `'sprints'`.
+- **Project tabs reordered (1 assertion).** `b1e4c5a` ("streamline navigation") moved `details`
+  below `issues`, so a project opens on its issue list. The test asserted `details` was first.
+- **Sprint documents gained tabs (2 assertions).** `9f77237` added a status-aware sprint tab set,
+  landing *after* the test file was written. The tests asserted sprints had none.
+- **`DetailsExtension` content model (1 assertion) and schema construction (2 errors).** The node's
+  `content` is `'detailsSummary detailsContent'`; the test asserted `'block+'` and built an `Editor`
+  without the two child nodes, so ProseMirror threw `No node type or group 'detailsSummary' found`.
+  `Editor.tsx:628-630` registers all three together — the test now does the same.
+
+*Source defect — 1 (the test was right; the product was fixed):*
+
+- **`web/src/lib/document-tabs.tsx` — the project Weeks tab stopped showing its count.** In one
+  hunk, `7713ef0` renamed the id *and* collapsed `label` from a count function to the bare string
+  `'Weeks'` — while leaving the identical function intact on the program tab beside it. That
+  asymmetry inside a single commit is the fingerprint of an accident, and
+  `UnifiedDocumentPage.tsx:133,141` still fetches project weeks and computes `weeks:
+  projectWeeks.length` for a consumer that no longer existed. Label function restored; the two
+  callbacks are now byte-identical.
+
+*Test-harness defect — 1 (no product code changed):*
+
+- **`web/src/hooks/useSessionTimeout.test.ts` — the stub, not the hook, caused the phantom logout.**
+  `lib/api.ts` reads `response.headers.get('content-type')`; the stub had no `headers`, so `apiPost`
+  threw a `TypeError`, and `resetTimer` catches every throw as "network error — force logout".
+  Observed, not inferred: stderr printed `Network error extending session - forcing logout` — the
+  `catch` branch — and never `Failed to extend session`, the `!response.ok` branch. **The assertion
+  was correct and is untouched, and the hook's fail-closed logout was deliberately left alone**: a
+  session that cannot be extended *should* end. Only the stubs changed — they now hand the code
+  under test a real `Response`. Two new tests assert the logout still fires when extend-session
+  returns non-ok or rejects, so "fixed the stub" and "neutered the logout" cannot be confused.
+
+**Also changed.** Root `"test"` is now `test:api && test:web`, with `test:api`/`test:web` for
+single suites. CI already ran both (`.github/workflows/ci.yml:105-118`) and diffs them against the
+quarantine baseline, so this closes the *local* gap only — it does not duplicate CI. All 13
+entries were removed from `audit/factory/quarantine.json`; both suites are now green on arrival.
+`README.md:43`, which documented this finding as open, is updated.
+
+**Run it.**
+
+```bash
+pnpm test:web                    # 345 passed / 345 total, 33 files
+pnpm test                        # api (needs DATABASE_URL), then web
+scripts/factory/gate.sh          # full evidence gate
+```
+
+Those totals are measured on this branch *after* merging `main` a second time (`main` moved from
+`84f05ff` to `f7b15c9`, nine more PRs, including route-level code splitting and a deferred editor).
+That merge brought in another round of web test files written by other tickets. Sequence of
+measurements on this branch: 186 tests before the first `main` merge, 214/214 across 24 files
+after it, 345/345 across 33 files after this second one — the 13 identities this ticket fixes did
+not change across any of those merges, only the file count around them did.
+
+15 test cases were added to the three repaired files: sprint status-aware tab selection (previously
+uncovered — which is how `getTabsForDocumentType('sprint')` drifted from `[]` to four tabs
+unnoticed), project/program week count-label symmetry, the zero-count convention asserted across
+every count-aware label, a guard that no config exposes a `'sprints'` id again, `setDetails`
+document structure, and the two session fail-closed tests. Assertions in the three repaired files
+went from 131 to 147.
+
+**Correction post-merge.** The `fix(web): drop test-side casts` commit's message claimed both
+test-side casts flagged by CodeRabbit were removed. Only the `useSessionTimeout.test.ts` fetch cast
+was; `DetailsExtension.test.ts`'s pre-existing `(editor.commands as any).setDetails` — inside the
+same quarantined test this ticket claims to have fixed, `should allow inserting details via
+command` — was untouched and still present after merging `main`. Removed now (no cast needed:
+`setDetails` is typed via module augmentation, same as the sibling test already relied on).
+`node scripts/factory/review-patterns.mjs main` reports clean before and after, because the cast
+predates this branch and G7b only diffs added lines — it would not have caught this on its own.
+
+**Roll back.** `git revert` the commits on `fix/test-1-web-suite-green`. Reverting restores the 13
+failures, so the `knownFailing` list in `audit/factory/quarantine.json` must come back too —
+otherwise the gate reads them as new regressions and fails every branch.
+
+`previousCapture` now carries the 13 identities directly, under `previousCapture.webKnownFailing`.
+Copy them back into `packages.web.knownFailing`; no git archaeology required.
+
+Two traps were found while writing this, both worth knowing:
+
+- `previousCapture` originally held only `capturedAt`, `capturedAtCommit` and `totals` — so the
+  earlier instruction to "restore from `previousCapture`" pointed at data that was not there.
+- The obvious replacement was equally wrong. `capturedAtCommit` (`ae2a00e`) is the commit the
+  **measurement** was taken against; `audit/factory/quarantine.json` **did not exist yet** at that
+  commit, so `git show ae2a00e:…` fails outright. The file was introduced at `ea2dcd3`, now recorded
+  as `previousCapture.fileAtCommit`.
+
+That is why the identities are stored inline rather than referenced: a rollback instruction is read
+under pressure, and two successive versions of this one pointed somewhere that could not answer.
+
+---
+
+## TRO-284 (ERR-11) + TRO-285 (ERR-12) — the collaboration server stops dropping frames and serving blank documents during its own document load
+
+**The user-facing cost.** Two ways a collaborative editor could load and simply show nothing, with
+no error anywhere. ERR-11: a client's very first sync message could vanish silently, so the editor
+sat empty forever with no server reply. ERR-12: a second person opening the same not-yet-open
+document at the same moment as a first could get a blank document that never fills in. Observed for
+ERR-12, non-deterministically, at `--workers=1 --retries=0`: run 1 clean, run 2 the weekly **plan**
+opened blank, run 3 the **retro** opened blank.
+
+**Root cause — one mistake, found three times.** `wss.on('connection')` in
+`api/src/collaboration/index.ts` is `async` and `await`s a database round trip before the socket is
+fully wired up. Everything registered after that `await` — a message listener, a shared cache entry
+— is exposed to whatever arrives in the gap between the moment a connection becomes reachable and
+the moment it can actually respond. This is the same defect class as the already-merged ERR-10 (an
+`'error'` listener attached after an `await`); ERR-11 and ERR-12 are the `'message'`-listener and
+document-cache versions of it, found independently by two different agents on the same day.
+
+- **ERR-11**: `ws.on('message')` was registered only after `await getOrCreateDoc()`. A
+  `y-websocket` client sends sync step 1 on the very first tick after `'open'`; a frame landing in
+  the gap had no listener, and Node's `EventEmitter` discards an event with no listener **silently**
+  — no error, no log, nothing. The server never replies with step 2, so the client never learns the
+  server's state. Observed deterministically on loopback before the fix: frames received were
+  `[3, 0, 1, 1]` (cache-clear, the server's own step 1, two awareness updates) and no step 2, ever.
+- **ERR-12**: `getOrCreateDoc()` (`api/src/collaboration/index.ts`) published a brand-new `Y.Doc`
+  into the shared `docs` map **before** awaiting the database read and the JSON→Yjs conversion, and
+  attached the broadcasting `doc.on('update')` handler only afterwards. A second connection arriving
+  in that gap found the doc already cached — so it triggered no load of its own — received the
+  **empty** doc as its server state, and had no listener yet attached to notice when the real
+  content landed a moment later.
+
+**What changed.**
+
+- **ERR-11.** `ws.on('message')` is now registered as a **bounded buffering handler** right after
+  ERR-10's error-listener registration (still the first statement) and, like it, before the `await`.
+  Frames that arrive before the document has
+  loaded are queued, not processed — processing them early against a `doc`/`Awareness` that do not
+  exist yet would just move the bug. Once the load finishes, the buffering listener is swapped for
+  the real one and the queue is drained, in order — all within the same uninterrupted synchronous
+  stretch of code that already sent the server's own sync step 1, so replying to a drained client
+  step 1 remains race-free, the same invariant `concurrent-merge.test.ts` already relied on for the
+  server's outbound step 1. The buffer is bounded at **1 MiB of buffered bytes**
+  (`MAX_PRELOAD_BUFFER_BYTES`): this handler sees attacker-controlled bytes before their content can
+  be validated (ERR-10's own finding), so an unbounded queue during the load window is a
+  memory-exhaustion vector. Exceeding the bound closes the socket with a new code,
+  `WS_CLOSE_PRELOAD_BUFFER_FULL` (4429, mnemonic HTTP 429), rather than growing further.
+- **ERR-12.** The `docs` map now stores the **load promise**, not the eventual `Y.Doc`
+  (`loadDoc()` / `getOrCreateDoc()`). A second caller arriving while the first is still loading
+  awaits that same promise and is guaranteed a fully-loaded doc — there is no intermediate step at
+  which an unloaded doc is ever handed to anyone, which removes the window rather than narrowing it.
+  `doc.on('update')` is attached before the database read / JSON→Yjs conversion, not after, so the
+  very first update — the one that carries the loaded content — has a listener. A failed database
+  read now **rejects** (previously it was swallowed and the doc silently stayed empty) and
+  **evicts** its own map entry, but only if it is still the current entry — a caller that arrived
+  after the failure may already have published a fresh attempt of its own, and an unconditional
+  delete would tear that down instead. Malformed *stored data* (a corrupt `yjs_state` blob,
+  unparsable JSON `content`) is deliberately **not** treated the same way: retrying decodes the exact
+  same bytes again, so those two branches keep their own try/catch and fall back to an empty
+  document, matching this function's behavior before ERR-12.
+
+**Concurrency argument.** Both fixes close the window instead of narrowing it. ERR-11 no longer
+depends on the message listener winning a race against the database read, because every frame that
+can arrive before the doc is ready is captured (bounded) and replayed in order — there is no gap
+left in which a frame has nowhere to go. ERR-12 no longer depends on one connection's read of the
+`docs` map happening to land after another's load completes, because the map holds the one promise
+every concurrent caller converges on; "the doc is in the map but not yet loaded" is no longer a
+state the map can be in.
+
+**Provenance, marked.** ERR-11's mechanism was reproduced directly (not merely reasoned about): a
+regression test connects and writes in the same tick as `'open'`, red on the pre-fix module with the
+exact `[3,0,1,1]` frame signature the ticket predicted. ERR-12's two-concurrent-caller mechanism was
+also **observed directly** — a test issues two `getOrCreateDoc()` calls back to back and shows the
+second one returning an empty doc on the pre-fix logic, an `AssertionError`, not a crash — which is a
+step up from "derived from code, not instrumented," the state this finding was in when picked up.
+What was **not** independently instrumented is a live two-socket connection count in a running
+server outside the test harness; the two-real-socket regression test below is the closest evidence
+of that shape and it is described as such, not as proof of a separately-measured connection count.
+
+**How to run it.**
+
+```bash
+source .factory-env   # api tests TRUNCATE 16 tables; never run without this
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/preload-message-buffer.test.ts
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/concurrent-doc-load.test.ts
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/concurrent-merge.test.ts
+```
+
+`preload-message-buffer.test.ts` (ERR-11): a frame sent in the same tick as `'open'` is processed,
+not dropped; flooding past `MAX_PRELOAD_BUFFER_BYTES` closes the socket with
+`WS_CLOSE_PRELOAD_BUFFER_FULL` instead of growing the queue. Both cases force a **real** load delay
+(no mocked timing) by seeding the target document with a large `content` value, which measurably
+slows the one database read `loadDoc()` issues (~70-110ms observed locally for a 20MB value, versus
+well under 1ms for a small row) — long enough to reliably land inside the window without touching
+production internals.
+
+`concurrent-doc-load.test.ts` (ERR-12): two `getOrCreateDoc()` calls issued back to back resolve to
+the same, fully-loaded doc; a load failure (a syntactically invalid UUID — a real Postgres error,
+not a mock) rejects and evicts, proved by observing that a second call issues a **fresh** query
+rather than reusing a cached rejection; two real clients connecting simultaneously to the same
+not-yet-loaded document both receive the seeded content rather than a blank one.
+
+`concurrent-merge.test.ts` (TRO-226/TEST-4, already on `main`) documented the ERR-11 drop as a
+workaround: it withheld a client's sync step 1 until after the server's first frame, specifically to
+dodge the bug. That workaround is now removed — the acceptance signal for ERR-11 — and the file
+still passes: red first (2 of 4 cases timed out waiting for sync step 2, frame signature
+`[3,0,1,1]`), green and **faster** after the fix (10.5s vs 44.5s wall time, no timeouts).
+
+No fixed sleeps (TEST-11 / TRO-233): every wait is an observable — a socket `'close'` event, a
+database row polled until a predicate holds, or a Yjs `update` event.
+
+**How to roll it back.**
+
+```bash
+git revert <commit>
+```
+
+No schema change, no migration, no config, no API surface change for a well-behaved client. Reverting
+restores both windows: `ws.on('message')` moves back after the `await`, and `docs` goes back to
+storing the doc directly instead of its load promise.
+
+---
+
+## TRO-279 — [DB-12] Concurrent `pnpm db:migrate` is broken — 5 of 6 simultaneous schema applies failed
+
+**What was broken.** `CREATE TABLE IF NOT EXISTS` (and `CREATE INDEX IF NOT EXISTS`) is
+check-then-create, not atomic. Two `pnpm db:migrate` processes racing against the same database
+could both pass the existence check and both attempt the create; one loses on the catalog's unique
+index. `Dockerfile:35` runs migrations on every container boot, so a rolling deploy, a scale-out, or
+a crash-restart overlapping a fresh boot runs this concurrently against one database — this is not a
+theoretical race, it is the normal shape of this deployment.
+
+**Why it was worse than a failed deploy.** `applySchema` runs `schema.sql` as one simple query, so
+Postgres executes it as a single implicit transaction: a duplicate-object error at statement *k*
+rolls back statements 1..*k*-1 too. PR #8 (TRO-178) put `42710` in the tolerated-error set and added
+a retry, which recovers *that* case — but the raw race mostly raises **23505** (`unique_violation` on
+`pg_type_typname_nsp_index`), which is deliberately *not* tolerated (23505 is the generic
+unique-violation code; tolerating it would also swallow a genuine data conflict). Left unfixed, a
+losing run under a still-tolerant retry policy could apply nothing and still exit 0 — DB-1's exact
+failure mode, reachable only through this race.
+
+**What changed.** `api/src/db/migrationRunner.ts` — `runMigrations` now takes one Postgres
+**session-level advisory lock** (`pg_advisory_lock` / `pg_advisory_unlock` on a fixed key,
+`MIGRATION_ADVISORY_LOCK_KEY = 0x53686970`, spelling "Ship" in hex) around the entire run: `applySchema`,
+`ensureMigrationsTable`, and the migration loop in `runPendingMigrations`. The lock is acquired
+**before** anything else touches the database — in particular before `runPendingMigrations`' first
+query, the `schema_migrations` read — because locking after that read would preserve the exact race
+this closes.
+
+- A single `PoolClient`, checked out once for the whole run, now flows through
+  `applySchema`/`ensureMigrationsTable`/`runPendingMigrations` instead of each call going through
+  `pool.query(...)` independently. `runPendingMigrations` no longer opens its own connection per
+  migration file; each migration's transaction now runs sequentially on the one client that holds
+  the lock. This means the fix does not depend on the pool having a second connection free while the
+  lock-holder is checked out — it works even against a pool sized for exactly one connection.
+- The lock is released in a `finally` on every exit path, success or failure. The unlock call is
+  wrapped in its own inner `try/catch` so that if unlocking itself fails, it cannot mask a real error
+  already propagating from the migration work. If the explicit unlock did not run or failed, the
+  connection is force-destroyed (`client.release(true)`) instead of returned to the pool — ending the
+  session is the backstop that still releases the lock even when the explicit unlock command could
+  not be sent.
+- **Concurrency argument.** A second `pnpm db:migrate` process blocks at `pg_advisory_lock` until the
+  first releases (or its session ends), so the two runs' critical sections cannot overlap in time —
+  this closes the window rather than narrowing it. A runner that dies while holding the lock does not
+  wedge every future run: session-level advisory locks are released when their session ends, cleanly
+  or otherwise (documented Postgres behaviour), and this is verified directly — not just assumed —
+  by a test that opens a lock, ends that connection without unlocking, and confirms a second
+  connection can then acquire it immediately.
+- **`applySchema`'s duplicate-object retry (from PR #8) is left in place, not removed.** With the
+  lock held, only one session is ever inside `applySchema` at a time, so the concurrent case it was
+  added for should no longer reach it — but it is still the correct response to a genuine
+  non-concurrent duplicate-object error (a stray manual `psql` session, a future caller that bypasses
+  the lock), and removing a defensive path that is merely believed-unreachable is out of scope here.
+- **The tolerated-error set is unchanged — 23505 is still not in it.** Widening it would swallow a
+  real data conflict the day `schema.sql` stops having zero DML; the lock removes the need to
+  tolerate the concurrent case at all, which is the point of fixing this at the actual race instead
+  of widening what errors are forgiven.
+- Regression tests: `api/src/db/__tests__/migrationLock.test.ts` (new). `MIGRATION_ADVISORY_LOCK_KEY`
+  is now exported from `migrationRunner.ts` so tests can assert the lock is actually free via
+  `pg_try_advisory_lock`, rather than only inferring release from a second run's success.
+
+**How to run it.**
+
+```bash
+source .factory-env                      # or otherwise point DATABASE_URL at the target
+pnpm db:migrate
+pnpm --filter @ship/api test src/db/__tests__/migrationLock.test.ts
+pnpm --filter @ship/api test src/db/__tests__/migrationRunner.test.ts   # DB-1 regressions, unaffected
+```
+
+**Verified**, all against PostgreSQL 15 in the `ship-audit-pg`-style container on `:5433`, using the
+real `tsx src/db/migrate.ts` entry point (what `pnpm db:migrate` invokes) unless noted:
+
+- **Before the fix** (pre-fix `migrationRunner.ts` restored from `main`, six `tsx src/db/migrate.ts`
+  processes launched concurrently against one fresh throwaway database): 1 of 6 exited 0, 5 of 6
+  exited 1, all five with SQLSTATE `23505` on `pg_type_typname_nsp_index` — reproducing the ticket's
+  numbers with this branch's own harness before trusting it.
+- **After the fix**, same harness, a fresh throwaway database: all six processes exited 0,
+  `schema_migrations` held exactly 42 distinct rows, no duplicate-object or unique-violation output
+  in any of the six logs.
+- A single, non-concurrent `tsx src/db/migrate.ts` against a fresh throwaway database: exit 0, 42/42
+  migrations recorded.
+- A genuine failure (a deliberately broken migration file added temporarily, removed immediately
+  after) via the real CLI: exit 1, naming the failure — DB-1's exit-non-zero guarantee still holds
+  and is unaffected by this change (`migrate.ts` itself was not modified).
+- `api/src/db/__tests__/migrationLock.test.ts`, run against the **pre-fix** runner first: the
+  six-concurrent-runs test failed with five real `23505` `unique_violation` errors (red for the
+  right reason); the two lock-semantics tests failed too, but because `MIGRATION_ADVISORY_LOCK_KEY`
+  does not exist on the pre-fix module — expected, since those tests exercise a lock that does not
+  exist yet. Restoring the fix turned all three green.
+- `pnpm --filter @ship/api test` (full suite, factory database `ship_wt_tro_279`): 43 files, 595
+  tests, all green.
+- `pnpm --filter @ship/api exec tsc --noEmit`: clean.
+
+**Not verified.** No run against PostgreSQL 16 (production; CI and this work run pg15 — see the pin
+in `.github/workflows/ci.yml`), and no run against production or shadow. The advisory-lock mechanism
+itself is standard Postgres behaviour independent of major version, but this was not measured against
+16 directly.
+
+**Rollback.** `git revert` the commit(s) on `fix/db-12-migrate-advisory-lock`, or restore
+`api/src/db/migrationRunner.ts` from `main` and delete `api/src/db/__tests__/migrationLock.test.ts`.
+Rolling back returns `pnpm db:migrate` to PR #8's retry-only mitigation — `42710` recovers, `23505`
+does not, and the race described above is live again. No database state is affected by rolling back;
+the lock itself leaves no persistent artifact (advisory locks are session-scoped, never written to
+disk).
+
+---
+
 ## TRO-240 — [DB-11] The application's database pool negotiated no TLS while migrate and seed did
 
 **What was broken.** Three pools connect to Ship's database with three different SSL policies.

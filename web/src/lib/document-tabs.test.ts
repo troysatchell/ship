@@ -1,10 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import {
   getTabsForDocumentType,
+  getTabsForDocument,
   documentTypeHasTabs,
   resolveTabLabels,
   documentTabConfigs,
   type DocumentResponse,
+  type TabCounts,
 } from './document-tabs';
 
 /**
@@ -22,7 +24,7 @@ describe('getTabsForDocumentType', () => {
     expect(tabs.length).toBeGreaterThan(0);
     expect(tabs.map(t => t.id)).toContain('details');
     expect(tabs.map(t => t.id)).toContain('issues');
-    expect(tabs.map(t => t.id)).toContain('sprints');
+    expect(tabs.map(t => t.id)).toContain('weeks');
   });
 
   it('returns tabs for program documents', () => {
@@ -31,7 +33,7 @@ describe('getTabsForDocumentType', () => {
     expect(tabs.map(t => t.id)).toContain('overview');
     expect(tabs.map(t => t.id)).toContain('issues');
     expect(tabs.map(t => t.id)).toContain('projects');
-    expect(tabs.map(t => t.id)).toContain('sprints');
+    expect(tabs.map(t => t.id)).toContain('weeks');
   });
 
   it('returns empty array for wiki documents (no tabs)', () => {
@@ -44,9 +46,13 @@ describe('getTabsForDocumentType', () => {
     expect(tabs).toEqual([]);
   });
 
-  it('returns empty array for sprint documents (no tabs)', () => {
+  // Sprint documents DO have tabs. They gained them in 9f77237 ("feat: add sprint
+  // tabs to document-tabs registry"), which landed after this file was written and
+  // did not update it. getTabsForDocumentType() returns the status-independent
+  // default set; getTabsForDocument() narrows it by status (covered below).
+  it('returns the default tab set for sprint documents', () => {
     const tabs = getTabsForDocumentType('sprint');
-    expect(tabs).toEqual([]);
+    expect(tabs.map(t => t.id)).toEqual(['overview', 'plan', 'review', 'standups']);
   });
 
   it('returns empty array for unknown document types', () => {
@@ -72,8 +78,8 @@ describe('documentTypeHasTabs', () => {
     expect(documentTypeHasTabs('issue')).toBe(false);
   });
 
-  it('returns false for sprint documents', () => {
-    expect(documentTypeHasTabs('sprint')).toBe(false);
+  it('returns true for sprint documents', () => {
+    expect(documentTypeHasTabs('sprint')).toBe(true);
   });
 
   it('returns false for unknown document types', () => {
@@ -94,7 +100,7 @@ describe('tab ID validation for URL deep linking', () => {
     // Valid tab IDs
     expect(validTabIds.includes('details')).toBe(true);
     expect(validTabIds.includes('issues')).toBe(true);
-    expect(validTabIds.includes('sprints')).toBe(true);
+    expect(validTabIds.includes('weeks')).toBe(true);
     expect(validTabIds.includes('retro')).toBe(true);
 
     // Invalid tab IDs (should trigger redirect in UnifiedDocumentPage)
@@ -111,7 +117,7 @@ describe('tab ID validation for URL deep linking', () => {
     expect(validTabIds.includes('overview')).toBe(true);
     expect(validTabIds.includes('issues')).toBe(true);
     expect(validTabIds.includes('projects')).toBe(true);
-    expect(validTabIds.includes('sprints')).toBe(true);
+    expect(validTabIds.includes('weeks')).toBe(true);
 
     // Invalid tab IDs
     expect(validTabIds.includes('details')).toBe(false); // details is for projects
@@ -120,8 +126,11 @@ describe('tab ID validation for URL deep linking', () => {
 
   it('returns first tab as default for URL without tab', () => {
     // This tests the pattern: tabConfig[0]?.id || ''
+    // Issues is deliberately first for projects: b1e4c5a ("feat: Dashboard
+    // improvements, streamline navigation, fix due dates") moved the Details block
+    // below Issues so a project opens on its issue list.
     const projectTabs = getTabsForDocumentType('project');
-    expect(projectTabs[0]?.id).toBe('details');
+    expect(projectTabs[0]?.id).toBe('issues');
 
     const programTabs = getTabsForDocumentType('program');
     expect(programTabs[0]?.id).toBe('overview');
@@ -157,8 +166,8 @@ describe('resolveTabLabels', () => {
     const issuesTab = resolved.find(t => t.id === 'issues');
     expect(issuesTab?.label).toBe('Issues (5)');
 
-    const sprintsTab = resolved.find(t => t.id === 'sprints');
-    expect(sprintsTab?.label).toBe('Weeks (3)');
+    const weeksTab = resolved.find(t => t.id === 'weeks');
+    expect(weeksTab?.label).toBe('Weeks (3)');
   });
 
   it('resolves dynamic labels without counts', () => {
@@ -168,8 +177,8 @@ describe('resolveTabLabels', () => {
     const issuesTab = resolved.find(t => t.id === 'issues');
     expect(issuesTab?.label).toBe('Issues');
 
-    const sprintsTab = resolved.find(t => t.id === 'sprints');
-    expect(sprintsTab?.label).toBe('Weeks');
+    const weeksTab = resolved.find(t => t.id === 'weeks');
+    expect(weeksTab?.label).toBe('Weeks');
   });
 
   it('resolves dynamic labels with zero counts', () => {
@@ -179,6 +188,114 @@ describe('resolveTabLabels', () => {
     // Zero should not show count (falsy check in label function)
     const issuesTab = resolved.find(t => t.id === 'issues');
     expect(issuesTab?.label).toBe('Issues');
+  });
+});
+
+describe('getTabsForDocument (status-aware sprint tabs)', () => {
+  /**
+   * getTabsForDocument() is what UnifiedDocumentPage actually calls
+   * (UnifiedDocumentPage.tsx:81). Sprint tabs vary by properties.status, and that
+   * branching had no unit coverage — which is how getTabsForDocumentType('sprint')
+   * could drift from [] to four tabs without any test noticing.
+   */
+  const sprintDoc = (status?: string): DocumentResponse => ({
+    id: 'sprint-1',
+    title: 'Untitled',
+    document_type: 'sprint',
+    ...(status ? { properties: { status } } : {}),
+  });
+
+  it('shows only overview and plan for a planning sprint', () => {
+    expect(getTabsForDocument(sprintDoc('planning')).map(t => t.id)).toEqual([
+      'overview',
+      'plan',
+    ]);
+  });
+
+  it('shows the full working set for an active sprint', () => {
+    expect(getTabsForDocument(sprintDoc('active')).map(t => t.id)).toEqual([
+      'overview',
+      'issues',
+      'review',
+      'standups',
+    ]);
+  });
+
+  it('treats a completed sprint like an active one', () => {
+    expect(getTabsForDocument(sprintDoc('completed')).map(t => t.id)).toEqual([
+      'overview',
+      'issues',
+      'review',
+      'standups',
+    ]);
+  });
+
+  it('defaults a sprint with no status to the planning tabs', () => {
+    expect(getTabsForDocument(sprintDoc()).map(t => t.id)).toEqual(['overview', 'plan']);
+  });
+
+  it('falls back to the plain type lookup for non-sprint documents', () => {
+    const projectDoc: DocumentResponse = {
+      id: 'project-1',
+      title: 'Untitled',
+      document_type: 'project',
+    };
+    expect(getTabsForDocument(projectDoc).map(t => t.id)).toEqual(
+      getTabsForDocumentType('project').map(t => t.id)
+    );
+  });
+});
+
+describe('weeks tab count labels', () => {
+  /**
+   * Regression guard for TRO-223 / TEST-1. The project and program 'weeks' tabs are
+   * both fed by TabCounts.weeks and must both render the count. 7713ef0 dropped the
+   * label function from the project tab only, so the count computed at
+   * UnifiedDocumentPage.tsx:141 was silently discarded.
+   */
+  const doc = (document_type: string): DocumentResponse => ({
+    id: 'doc-1',
+    title: 'Untitled',
+    document_type,
+  });
+
+  it.each(['project', 'program'])('renders the week count for %s documents', type => {
+    const resolved = resolveTabLabels(getTabsForDocumentType(type), doc(type), { weeks: 3 });
+    expect(resolved.find(t => t.id === 'weeks')?.label).toBe('Weeks (3)');
+  });
+
+  it.each(['project', 'program'])('omits a zero week count for %s documents', type => {
+    const resolved = resolveTabLabels(getTabsForDocumentType(type), doc(type), { weeks: 0 });
+    expect(resolved.find(t => t.id === 'weeks')?.label).toBe('Weeks');
+  });
+
+  /**
+   * The zero behaviour is a convention, not an accident of `?`: every count-aware
+   * label in this file hides a zero rather than rendering "(0)". Asserted across all
+   * of them so the next reader does not have to infer it from one callback — and so
+   * changing one label to a nullish check fails here instead of silently putting
+   * "Weeks (0)" on every project that has no weeks yet.
+   */
+  it('hides a zero count on every count-aware label', () => {
+    const zero: TabCounts = { issues: 0, weeks: 0, projects: 0 };
+    const countAware = Object.entries(documentTabConfigs).flatMap(([type, tabs]) =>
+      tabs.filter(tab => typeof tab.label === 'function').map(tab => ({ type, tab }))
+    );
+
+    // Without this the loop below would pass vacuously if the configs ever lost
+    // their function labels — which is exactly the regression this file exists for.
+    expect(countAware.length).toBeGreaterThan(0);
+
+    for (const { type, tab } of countAware) {
+      const [resolved] = resolveTabLabels([tab], doc(type), zero);
+      expect(resolved.label, `${type}.${tab.id} should render no "(0)"`).not.toMatch(/\(\d+\)/);
+    }
+  });
+
+  it('no longer exposes a "sprints" tab id on any document type', () => {
+    // The sprint->week rename (7713ef0) is the contract this file drifted from.
+    const allTabIds = Object.values(documentTabConfigs).flatMap(tabs => tabs.map(t => t.id));
+    expect(allTabIds).not.toContain('sprints');
   });
 });
 
