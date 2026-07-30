@@ -159,27 +159,24 @@ test.describe('TIER 1: Image Upload - REAL TESTS', () => {
     // Use /image command
     await page.keyboard.type('/image');
     await page.waitForTimeout(500);
-    await page.keyboard.press('Enter');
 
-    // File chooser should appear
     const [fileChooser] = await Promise.all([
       page.waitForEvent('filechooser', { timeout: 5000 }),
-    ]).catch(() => [null]);
+      page.keyboard.press('Enter'),
+    ]);
 
-    if (fileChooser) {
-      const testImage = createTestImage();
-      await fileChooser.setFiles(testImage);
+    const testImage = createTestImage();
+    await fileChooser.setFiles(testImage);
 
-      // Wait for image to appear
-      const img = page.locator('.tiptap img');
-      await expect(img.first()).toBeVisible({ timeout: 30000 });
+    // Wait for image to appear
+    const img = page.locator('.tiptap img');
+    await expect(img.first()).toBeVisible({ timeout: 30000 });
 
-      // Verify image actually loaded (naturalWidth > 0)
-      const loaded = await img.first().evaluate((el: HTMLImageElement) =>
-        el.complete && el.naturalWidth > 0
-      );
-      expect(loaded).toBe(true);
-    }
+    // Verify image actually loaded (naturalWidth > 0)
+    const loaded = await img.first().evaluate((el: HTMLImageElement) =>
+      el.complete && el.naturalWidth > 0
+    );
+    expect(loaded).toBe(true);
   });
 
   test('uploaded image persists after page reload', async ({ page }) => {
@@ -191,28 +188,26 @@ test.describe('TIER 1: Image Upload - REAL TESTS', () => {
     // Upload image
     await page.keyboard.type('/image');
     await page.waitForTimeout(500);
-    await page.keyboard.press('Enter');
 
     const [fileChooser] = await Promise.all([
       page.waitForEvent('filechooser', { timeout: 5000 }),
-    ]).catch(() => [null]);
+      page.keyboard.press('Enter'),
+    ]);
 
-    if (fileChooser) {
-      const testImage = createTestImage();
-      await fileChooser.setFiles(testImage);
+    const testImage = createTestImage();
+    await fileChooser.setFiles(testImage);
 
-      // Wait for upload
-      await page.waitForSelector('.tiptap img', { timeout: 30000 });
-      await page.waitForTimeout(2000); // Wait for save
+    // Wait for upload
+    await page.waitForSelector('.tiptap img', { timeout: 30000 });
+    await page.waitForTimeout(2000); // Wait for save
 
-      // Reload page
-      await page.reload();
-      await page.waitForSelector('.tiptap', { timeout: 10000 });
+    // Reload page
+    await page.reload();
+    await page.waitForSelector('.tiptap', { timeout: 10000 });
 
-      // Image should still be there
-      const img = page.locator('.tiptap img');
-      await expect(img.first()).toBeVisible({ timeout: 10000 });
-    }
+    // Image should still be there
+    const img = page.locator('.tiptap img');
+    await expect(img.first()).toBeVisible({ timeout: 10000 });
   });
 
   test('image is not blocked by CORS (no console errors)', async ({ page }) => {
@@ -233,20 +228,18 @@ test.describe('TIER 1: Image Upload - REAL TESTS', () => {
 
     await loginAndCreateDoc(page);
     await page.keyboard.type('/image');
-    await page.keyboard.press('Enter');
 
     const [fileChooser] = await Promise.all([
       page.waitForEvent('filechooser', { timeout: 5000 }),
-    ]).catch(() => [null]);
+      page.keyboard.press('Enter'),
+    ]);
 
-    if (fileChooser) {
-      const testImage = createTestImage();
-      await fileChooser.setFiles(testImage);
-      await page.waitForTimeout(5000);
+    const testImage = createTestImage();
+    await fileChooser.setFiles(testImage);
+    await page.waitForTimeout(5000);
 
-      expect(consoleErrors).toHaveLength(0);
-      expect(failedRequests).toHaveLength(0);
-    }
+    expect(consoleErrors).toHaveLength(0);
+    expect(failedRequests).toHaveLength(0);
   });
 });
 
@@ -260,31 +253,29 @@ test.describe('TIER 2: File Attachments - REAL TESTS', () => {
 
     await page.keyboard.type('/file');
     await page.waitForTimeout(500);
-    await page.keyboard.press('Enter');
 
     const [fileChooser] = await Promise.all([
       page.waitForEvent('filechooser', { timeout: 5000 }),
-    ]).catch(() => [null]);
+      page.keyboard.press('Enter'),
+    ]);
 
-    if (fileChooser) {
-      // Create fixtures directory and test file
-      const fixturesDir = path.join(__dirname, 'fixtures');
-      if (!fs.existsSync(fixturesDir)) {
-        fs.mkdirSync(fixturesDir, { recursive: true });
-      }
-      const testFilePath = path.join(fixturesDir, 'test.pdf');
-      if (!fs.existsSync(testFilePath)) {
-        fs.writeFileSync(testFilePath, '%PDF-1.4 test file');
-      }
-
-      await fileChooser.setFiles(testFilePath);
-      await page.waitForTimeout(3000);
-
-      // Should show file attachment node
-      const attachment = page.locator('[data-type="fileAttachment"], .file-attachment');
-      const count = await attachment.count();
-      expect(count).toBeGreaterThan(0);
+    // Create fixtures directory and test file
+    const fixturesDir = path.join(__dirname, 'fixtures');
+    if (!fs.existsSync(fixturesDir)) {
+      fs.mkdirSync(fixturesDir, { recursive: true });
     }
+    const testFilePath = path.join(fixturesDir, 'test.pdf');
+    if (!fs.existsSync(testFilePath)) {
+      fs.writeFileSync(testFilePath, '%PDF-1.4 test file');
+    }
+
+    await fileChooser.setFiles(testFilePath);
+    await page.waitForTimeout(3000);
+
+    // Should show file attachment node
+    const attachment = page.locator('[data-type="fileAttachment"], .file-attachment');
+    const count = await attachment.count();
+    expect(count).toBeGreaterThan(0);
   });
 });
 
@@ -533,17 +524,16 @@ test.describe('TIER 3: Backlinks - REAL TESTS', () => {
     // Get current document ID from URL
     const url = page.url();
     const docId = url.split('/').pop();
+    expect(docId, `Expected a document id in the editor URL, got: ${url}`).toBeTruthy();
 
-    if (docId) {
-      // Check backlinks API
-      const response = await page.request.get(`/api/documents/${docId}/backlinks`);
+    // Check backlinks API
+    const response = await page.request.get(`/api/documents/${docId}/backlinks`);
 
-      // Should return 200 (even if empty)
-      expect(response.status()).toBe(200);
+    // Should return 200 (even if empty)
+    expect(response.status()).toBe(200);
 
-      const data = await response.json();
-      expect(Array.isArray(data)).toBe(true);
-    }
+    const data: unknown = await response.json();
+    expect(Array.isArray(data)).toBe(true);
   });
 
   test('linking to document creates backlink', async ({ page }) => {
