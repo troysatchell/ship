@@ -2,34 +2,36 @@
 
 *The most-updated file in the bank. Read this first every session; rewrite it whenever focus shifts. Keep it under a screen — move finished work to progress.md.*
 
-**Last updated:** 2026-07-30, day 4 evening · **Phase 2 factory resumed after recovery; wave-based dispatch running.** Phase 2 due **Fri Jul 31**.
+**Last updated:** 2026-07-30, day 4 night · **Phase 2 nearly banked: 25 tickets Done today, 13 PRs merged, measurement pass in progress.** Phase 2 due **Fri Jul 31**.
 
 ## Where we are
 
-`main` at `9a15f43`, all three remotes identical. This session: recovered the interrupted run (19 stale worktrees + DBs cleaned), then **3 PRs merged** — #40 (TEST-14/TRO-286), #42 (RULE-5/TRO-246, CI now builds → GHCR by SHA), #43 (A11Y-2/TRO-216, axe Critical 1→0). Audit-68 Done: 26 → **27** (TRO-216; the other two are post-baseline/rule tickets — derived from the prior verified 26, not re-counted).
+`main` at `15e6cb0`+a11y-artifacts merge, all remotes synced. Today's merges: #40 #42 #43 #45 #46 #48 #49 #50 #51 #52 #53 #54 #55 #56 #58 #59. Audit-68 Done ≈ **40** (27 + TS-1/2/3/4, DB-6/7/8/10, A11Y-4/5/6/7/8, TS-6, ERR-6, TEST-5, BUN-7/8 — recount against Linear before quoting precisely).
 
-## Held for the maintainer (decision queue — batch-answer these)
+## Category-target status (the graded 40%)
 
-- **PR #41 (TF-2)** — deletes tracked infra config (gate 2). Agent corrected the ticket: only `environments/prod` was an unused duplicate (deleted); `dev`/`shadow` are the live TF path (kept). Ports include a real IAM fix (`PutSecretValue` missing from flat-root policy).
-- **PR #47 (TF-7)** — gate 2+6. Pair that must land together: ALB SG → CloudFront prefix list + `trust proxy` 1→2. **Discovery: under `trust proxy 1`, `req.ip` was CloudFront's edge IP for ALL traffic** — the API-1 flood floor has been keying on edge IPs. Before apply: TRO-295 (SG rule quota, High), TRO-294 (doc health-check URL breaks).
-- **Render image-deploy switch** — runbook in `docs/deployment-artifact-lifecycle.md` (RULE-5), not executed.
-- Carried from before: prod SSM `DATABASE_URL` read; VoiceOver on TRO-215/281; PR #30 ordering decision.
+- **Cat 2 bundle** ✅ banked (−80.5% /login, earlier run).
+- **Cat 5 tests** ✅ banked (far past 3-tests/3-flakes).
+- **Cat 6 errors** ✅ banked (ERR-1 data-loss headline + 10 more; screenshot/recording pass still owed for the write-up).
+- **Cat 7 a11y** ✅ **banked today** — compare-phase2-jul30: all 8 baseline findings resolved; C/S = 0 on my-week, document view, issues (all states). Known new Serious on /weeks+/search = TRO-298 (not key pages). Lighthouse my-week 95→100.
+- **Cat 4 db** ✅ evidence merged (dashboard 30→6 queries; #50's four EXPLAIN pairs); formal db-query compare runs AFTER api-perf.
+- **Cat 3 api-perf** 🟡 **compare running now** (worktree Ship-wt-api_compare, branch measure/api-perf-compare-jul30, bench-runner.mjs unchanged, 500/100/20 seed). Need ≥2 endpoints at −20% P95; /api/issues already proven, dashboard expected.
+- **Cat 1 type-safety** ✅ by per-ticket deltas: ~130 (TS-1) + ~45 (TS-2) + 19 (TS-3) + 233 (TS-4 corrected count 286→53) ≈ **427 ≥ 384 target**. **Critical nuance (TS-4 discovery): the tracked count.sh metric has a BSD-grep bracket bug that never counted property!-assertions, and live totals grew with the codebase (1747 vs 1535) — present Cat-1 evidence as controlled per-ticket diffs, never a naive live re-count.**
+- **Cat 8 terraform** ✅ artifact exists (PR #57, held): pinned Render provider 1.9.1 + live plan + adoption memo; local-provider + drift demo pre-existing.
 
-## In flight (8 Sonnet agents)
+## Held for the maintainer (batch-answer)
 
-TS-2 (TRO-207 typed pg boundary) · DB planner batch (183/184/185/187, one branch) · ERR-13/14 batch (289/290) · A11Y landmark batch (219/220/221) · TS-6 ESLint (211) · BUN-7/8 dep hygiene (203/204) · PR #45 fix round (TS-3 recursive-guard finding + main merge) · PR #46 fix round (TS-1: 2 findings + failed CI run diagnosis + main merge).
+PR #41 (TF-2, deletes environments/prod; dev/shadow kept — premise corrected), PR #47 (TF-7 pair: SG prefix-list + trust proxy 2; TRO-295 quota check first; discovery: req.ip was CloudFront's edge IP for ALL traffic), PR #57 (TF-10: import vs apply), Render image-switch runbook (RULE-5), prod SSM DATABASE_URL read, VoiceOver (TRO-215/281 + today's a11y fixes), PR #30 ordering decision.
 
-## Sequencing holds
+## In flight / next
 
-- **DB-3 (TRO-180) waits for TS-2** — both would rewrite the same query call sites.
-- **TS-4/TS-5 wait for TS-2**; ERR-6+TEST-5 (193/227) wait for PR #46 (editor files).
-- **TF-1 (234) blocked on PR #41 human decision.** RULE-3 (245) deferred until today's merges settle.
+1. api-perf compare (running) → then **db-query compare** (never concurrent, same worktree pattern) → merge both artifact branches.
+2. **Deferred CodeRabbit triage sweep**: reviews never landed for #48–#59 (service rate-limited all evening); when they appear on merged PRs, triage as follow-ups. GitHub also dropped pull_request events 19:33–19:43 — workflow_dispatch was the workaround.
+3. TRO-300 (TEST-16, High): session-activity-race flaked CI 4× today post-TEST-15-fix — needs the CI-constrained repro.
+4. Sunday deliverables: improvement docs per category, discovery write-up, demo video, AI cost analysis, social post, Cat-6 screenshots.
 
-## Session discoveries worth carrying
+## Session lessons already in lessons.md
 
-- TS-1's audit count had drifted: 156 latent errors (not 102) after 30 merges; all fixed, zero new casts.
-- TRO-296 filed: converter marks round-trip asymmetry (`format()` written, never read back) — pre-existing, persistence path.
-- New tickets this session: TRO-291..296.
-- zsh does not word-split unquoted vars — two orchestrator scripts failed on it; use functions/explicit args in Bash-tool loops.
+Stash-at-A/B-test moment (2 agents); programWeeksNav new web flake identity; zsh no-word-split in orchestrator Bash loops.
 
 > — GIR: "I'm gonna sing the doom song now."

@@ -36,6 +36,35 @@
 
 ## Log
 
+### 2026-07-30 (Thu) night — deliverable push: 13 more PRs merged (25 tickets today), Cat 7 banked, measurement pass running
+
+**Merged after the evening entry:** #45 #46 #48 #49 #50 #51 #52 #53 #54 #55 #56 #58 #59 — TS-1/2/3/4,
+TS-6, DB-6/7/8/10, ERR-6+TEST-5, ERR-13/14, A11Y-4/5/6/7/8, BUN-7/8, RULE-6, RULE-7. Method: the
+documented local `--no-ff` sequence + merge-changes/jsonl-union + combined verify per batch + single
+push. Two integration repairs caught by the combined verify, both from strict-flags-vs-parallel-
+authorship: radixVersionDedupe.test captures (fixed on main) and nothing else.
+
+**Category 7 banked** (compare-phase2-jul30, merged to main): all 8 baseline findings resolved,
+C/S = 0 on the three key pages across all states, my-week Lighthouse 95→100. New Serious on
+/weeks+/search is TRO-298 (DashboardSidebar contrast, newly reachable via the A11Y-5 wildcard-route
+fix — `getActiveMode()` fallback mounts DashboardSidebar there).
+
+**Category 1's metric corrected (TS-4 agent):** `count.sh`'s non-null pattern has a BSD-grep bracket
+bug — the 236 `req.userId!` sites were never in the tracked count, and live totals grew with the
+codebase (1747 now vs 1535 baseline). Category progress is provable ONLY as controlled per-ticket
+diffs: ~130+45+19+233 ≈ 427 sites retired ≥ 384 target. Corrected api non-null: 286 → 53.
+
+**Infra fights:** GitHub dropped pull_request webhook events 19:33–19:43 (no Actions runs created;
+status page clean) — close/reopen did NOT re-trigger; empty commits didn't either; workflow_dispatch
+DID and became the session's CI path. CodeRabbit was rate-limited org-wide all evening — merged the
+green queue on the documented degraded-service judgment; deferred triage sweep owed when reviews
+land. session-activity-race flaked CI 4× today post-TEST-15-fix → TRO-300 (High).
+
+**New tickets today:** TRO-291..301 (login recovery guidance, tfplan hygiene, quick-menu fixmes,
+ALB doc URL, SG quota High, marks round-trip, floating promises 398, DashboardSidebar contrast,
+Render TF config→PR #57, TEST-16 flake, doc-read retry). Session end state: backlog no longer has
+Urgent/High audit items unstarted except human-held TF work.
+
 ### 2026-07-30 (Thu) evening — factory resumed: recovery, 3 merges, 8 agents in flight
 
 **Recovery first, per `/ship-orchestrator` §4:** reconciled disk/branches/Linear. Found `main` had
