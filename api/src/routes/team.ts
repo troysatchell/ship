@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db/client.js';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { TEMPLATE_HEADINGS, extractText, hasContent } from '../utils/document-content.js';
 
 type RouterType = ReturnType<typeof Router>;
@@ -11,10 +11,10 @@ const router: RouterType = Router();
 // Query params:
 //   fromSprint: number - start of range (default: current - 7)
 //   toSprint: number - end of range (default: current + 7)
-router.get('/grid', authMiddleware, async (req: Request, res: Response) => {
+router.get('/grid', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -193,14 +193,14 @@ router.get('/grid', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get team grid error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/team/projects - Get all projects with their parent program info
 // Returns projects that can be assigned to team members in the assignments grid
-router.get('/projects', authMiddleware, async (req: Request, res: Response) => {
+router.get('/projects', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -232,13 +232,13 @@ router.get('/projects', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get projects error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/team/programs - Get all programs
-router.get('/programs', authMiddleware, async (req: Request, res: Response) => {
+router.get('/programs', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -257,15 +257,15 @@ router.get('/programs', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get programs error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/team/assignments - Get user->sprint->project assignments
 // Combines: 1) Explicit sprint document assignments (properties.project_id)
 //           2) Inferred assignments from issue assignees (fallback)
-router.get('/assignments', authMiddleware, async (req: Request, res: Response) => {
+router.get('/assignments', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -454,14 +454,14 @@ router.get('/assignments', authMiddleware, async (req: Request, res: Response) =
     console.error('Get assignments error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/team/assign - Assign user as sprint owner for a program
 // Accepts personId (person document ID) - preferred for pending users
 // Falls back to userId for backward compatibility
-router.post('/assign', authMiddleware, async (req: Request, res: Response) => {
+router.post('/assign', authMiddleware, authed(async (req, res) => {
   try {
-    const workspaceId = req.workspaceId!;
+    const workspaceId = req.workspaceId;
     // Support both projectId (new) and programId (legacy)
     const { personId, userId, projectId, programId, sprintNumber } = req.body;
 
@@ -639,15 +639,15 @@ router.post('/assign', authMiddleware, async (req: Request, res: Response) => {
     console.error('Assign error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // DELETE /api/team/assign - Remove user as sprint owner
 // Accepts personId (person document ID) - preferred
 // Falls back to userId for backward compatibility
-router.delete('/assign', authMiddleware, async (req: Request, res: Response) => {
+router.delete('/assign', authMiddleware, authed(async (req, res) => {
   try {
-    const currentUserId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const currentUserId = req.userId;
+    const workspaceId = req.workspaceId;
     const { personId, userId, sprintNumber } = req.body;
 
     // Get visibility context for filtering
@@ -724,13 +724,13 @@ router.delete('/assign', authMiddleware, async (req: Request, res: Response) => 
     console.error('Unassign error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/team/people - Get all people (person documents)
-router.get('/people', authMiddleware, async (req: Request, res: Response) => {
+router.get('/people', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -764,14 +764,14 @@ router.get('/people', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get people error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/team/accountability - Get sprint completion metrics per person (admin only)
 // Returns: { people, sprints, metrics } where metrics[userId][sprintNumber] = { committed, completed }
-router.get('/accountability', authMiddleware, async (req: Request, res: Response) => {
+router.get('/accountability', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Check if user is admin
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -934,14 +934,14 @@ router.get('/accountability', authMiddleware, async (req: Request, res: Response
     console.error('Get accountability error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/team/people/:personId/sprint-metrics - Get sprint completion metrics for a specific person
 // Only visible to the person themselves or workspace admins
-router.get('/people/:personId/sprint-metrics', authMiddleware, async (req: Request, res: Response) => {
+router.get('/people/:personId/sprint-metrics', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const { personId } = req.params;
 
     // Get the person document to find the user_id
@@ -1066,16 +1066,16 @@ router.get('/people/:personId/sprint-metrics', authMiddleware, async (req: Reque
     console.error('Get person sprint metrics error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/team/accountability-grid-v2 - Get per-person plan/retro status for all projects
 // Returns: { programs: [{ projects: [{ people: [{ weeks }] }] }], weeks, currentSprintNumber }
 // Query params:
 //   showArchived: boolean - include archived projects (default: false)
-router.get('/accountability-grid-v2', authMiddleware, async (req: Request, res: Response) => {
+router.get('/accountability-grid-v2', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const showArchived = req.query.showArchived === 'true';
 
     // Check if user is admin
@@ -1354,14 +1354,14 @@ router.get('/accountability-grid-v2', authMiddleware, async (req: Request, res: 
     console.error('Get accountability grid v2 error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/team/reviews - Manager review grid (approval status + performance ratings)
 // Returns: { people, weeks, reviews, currentSprintNumber }
-router.get('/reviews', authMiddleware, async (req: Request, res: Response) => {
+router.get('/reviews', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const sprintCount = Math.min(parseInt(req.query.sprint_count as string, 10) || 5, 20);
     const showArchived = req.query.showArchived === 'true';
 
@@ -1599,16 +1599,16 @@ router.get('/reviews', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get team reviews error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/team/accountability-grid-v3 - Person-centric plan/retro status (like Allocation view)
 // Returns: { programs: [{ people: [{ weeks }] }], weeks, currentSprintNumber }
 // Groups people by their current week's allocation's program
 // Each person's week shows plan/retro status for their allocated project
-router.get('/accountability-grid-v3', authMiddleware, async (req: Request, res: Response) => {
+router.get('/accountability-grid-v3', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const showArchived = req.query.showArchived === 'true';
 
     // Check if user is admin
@@ -2001,14 +2001,14 @@ router.get('/accountability-grid-v3', authMiddleware, async (req: Request, res: 
     console.error('Get accountability grid v3 error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/team/accountability-grid - Get accountability grid data (hypothesis/review status)
 // Returns: { sprints, projects, sprintAccountability } for admin accountability view
-router.get('/accountability-grid', authMiddleware, async (req: Request, res: Response) => {
+router.get('/accountability-grid', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Check if user is admin
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -2190,6 +2190,6 @@ router.get('/accountability-grid', authMiddleware, async (req: Request, res: Res
     console.error('Get accountability grid error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 export default router;

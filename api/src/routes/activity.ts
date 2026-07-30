@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db/client.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { z } from 'zod';
 
 type RouterType = ReturnType<typeof Router>;
@@ -52,10 +52,10 @@ const entityTypeSchema = z.enum(['program', 'project', 'sprint']);
  *       404:
  *         description: Entity not found
  */
-router.get('/:entityType/:entityId', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:entityType/:entityId', authMiddleware, authed(async (req, res) => {
   try {
     const { entityType, entityId } = req.params;
-    const workspaceId = req.workspaceId!;
+    const workspaceId = req.workspaceId;
 
     // Validate entity type
     const typeResult = entityTypeSchema.safeParse(entityType);
@@ -218,6 +218,6 @@ router.get('/:entityType/:entityId', authMiddleware, async (req: Request, res: R
     console.error('Activity fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch activity data' });
   }
-});
+}));
 
 export default router;

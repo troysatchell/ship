@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { pool } from '../db/client.js';
 import { z } from 'zod';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { validateUuidParam } from '../middleware/paramValidation.js';
 import {
   transformIssueLinks,
@@ -391,9 +391,9 @@ async function broadcastAccountabilityUpdateToSprintOwner(
 }
 
 // GET /api/weeks/lookup-person - Find person document by user_id
-router.get('/lookup-person', authMiddleware, async (req: Request, res: Response) => {
+router.get('/lookup-person', authMiddleware, authed(async (req, res) => {
   try {
-    const workspaceId = req.workspaceId!;
+    const workspaceId = req.workspaceId;
     const userId = req.query.user_id as string;
 
     if (!userId) {
@@ -419,13 +419,13 @@ router.get('/lookup-person', authMiddleware, async (req: Request, res: Response)
     console.error('Person lookup error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/weeks/lookup - Find sprint by project_id + sprint_number
 // Returns the sprint document with its approval properties
-router.get('/lookup', authMiddleware, async (req: Request, res: Response) => {
+router.get('/lookup', authMiddleware, authed(async (req, res) => {
   try {
-    const workspaceId = req.workspaceId!;
+    const workspaceId = req.workspaceId;
     const projectId = req.query.project_id as string;
     const sprintNumber = parseInt(req.query.sprint_number as string, 10);
 
@@ -455,7 +455,7 @@ router.get('/lookup', authMiddleware, async (req: Request, res: Response) => {
     console.error('Sprint lookup error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Validation schemas
 // Sprint properties: sprint_number, assignee_ids (array), and plan fields
@@ -584,10 +584,10 @@ async function takeSprintSnapshot(sprintId: string): Promise<string[]> {
 
 // Get all active sprints across the workspace
 // Active = sprint_number matches the current 7-day window based on workspace.sprint_start_date
-router.get('/', authMiddleware, async (req: Request, res: Response) => {
+router.get('/', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -697,14 +697,14 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get active sprints error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get action items for current user (sprints needing docs)
 // Returns sprints owned by the user that need plan or retro
-router.get('/my-action-items', authMiddleware, async (req: Request, res: Response) => {
+router.get('/my-action-items', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get workspace sprint configuration
     const workspaceResult = await pool.query<WorkspaceStartDateRow>(
@@ -874,15 +874,15 @@ router.get('/my-action-items', authMiddleware, async (req: Request, res: Respons
     console.error('Get my action items error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get "My Week" view - aggregates issues from all active sprints
 // Virtual aggregation: no 'week' document created, purely computed
 // Supports historical week viewing via sprint_number query param
-router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
+router.get('/my-week', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const { state, assignee, show_mine, sprint_number: requestedSprintNumber } = req.query;
 
     // Get visibility context for filtering
@@ -1069,7 +1069,7 @@ router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get my-week error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============================================
 // Batched standups across multiple weeks (TRO-181 / TRO-176, audit findings
@@ -1167,11 +1167,11 @@ router.get('/standups', authMiddleware, async (req: Request, res: Response) => {
 
 // Get single sprint
 // Automatically takes a plan snapshot when sprint becomes active (start_date reached)
-router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -1264,15 +1264,15 @@ router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Create sprint (creates a document with document_type = 'sprint')
 // Only stores sprint_number and owner_id - dates/status computed from sprint_number
 // program_id is optional - allows creating projectless sprints for ad-hoc work
-router.post('/', authMiddleware, async (req: Request, res: Response) => {
+router.post('/', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = createSprintSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1460,15 +1460,15 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     console.error('Create sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Update sprint - title, owner_id, and sprint_number can be updated
 // When sprint_number changes, the plan snapshot is cleared and will be retaken when the new date arrives
-router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = updateSprintSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1667,15 +1667,15 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Update sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Start sprint - manually activate a planning sprint with scope snapshot
 // POST /api/weeks/:id/start
-router.post('/:id/start', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/start', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -1727,7 +1727,7 @@ router.post('/:id/start', authMiddleware, async (req: Request, res: Response) =>
     );
 
     // Broadcast celebration when sprint is started
-    broadcastToUser(req.userId!, 'accountability:updated', { type: 'week_start', targetId: id as string });
+    broadcastToUser(req.userId, 'accountability:updated', { type: 'week_start', targetId: id as string });
 
     // Re-query to get full sprint with owner info
     const result = await pool.query<SprintDetailRow>(
@@ -1793,14 +1793,14 @@ router.post('/:id/start', authMiddleware, async (req: Request, res: Response) =>
     console.error('Start sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Delete sprint
-router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.delete('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -1834,15 +1834,15 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Delete sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Update sprint plan (append mode - preserves history)
 // PATCH /api/weeks/:id/plan
-router.patch('/:id/plan', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id/plan', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = updatePlanSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1953,7 +1953,7 @@ router.patch('/:id/plan', authMiddleware, async (req: Request, res: Response) =>
 
     // Broadcast celebration when plan is added
     if (data.plan && data.plan.trim() !== '') {
-      broadcastToUser(req.userId!, 'accountability:updated', { type: 'weekly_plan', targetId: id as string });
+      broadcastToUser(req.userId, 'accountability:updated', { type: 'weekly_plan', targetId: id as string });
     }
 
     // Re-query to get full sprint with owner info
@@ -2016,14 +2016,14 @@ router.patch('/:id/plan', authMiddleware, async (req: Request, res: Response) =>
     console.error('Update sprint plan error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get sprint issues
-router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/issues', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -2118,15 +2118,15 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
     console.error('Get sprint issues error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get sprint scope changes
 // Returns: { originalScope, currentScope, scopeChangePercent, scopeChanges }
-router.get('/:id/scope-changes', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/scope-changes', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -2292,7 +2292,7 @@ router.get('/:id/scope-changes', authMiddleware, async (req: Request, res: Respo
     console.error('Get sprint scope changes error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============================================
 // Standup Endpoints - Comment-like entries on sprints
@@ -2347,11 +2347,11 @@ function formatStandupResponse(row: StandupRow) {
  *       404:
  *         description: Sprint not found
  */
-router.get('/:id/standups', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/standups', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -2401,7 +2401,7 @@ router.get('/:id/standups', authMiddleware, async (req: Request, res: Response) 
     console.error('Get sprint standups error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 /**
  * @swagger
@@ -2440,11 +2440,11 @@ router.get('/:id/standups', authMiddleware, async (req: Request, res: Response) 
  *       404:
  *         description: Sprint not found
  */
-router.post('/:id/standups', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/standups', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = createStandupSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -2526,7 +2526,7 @@ router.post('/:id/standups', authMiddleware, async (req: Request, res: Response)
     console.error('Create standup error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============================================
 // Sprint Review Endpoints - One per sprint with plan validation
@@ -2675,11 +2675,11 @@ async function generatePrefilledReviewContent(sprintData: PrefilledReviewSprintD
 }
 
 // GET /api/weeks/:id/review - Get or generate pre-filled sprint review
-router.get('/:id/review', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/review', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -2785,14 +2785,14 @@ router.get('/:id/review', authMiddleware, async (req: Request, res: Response) =>
     console.error('Get sprint review error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/review - Create finalized sprint review
-router.post('/:id/review', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/review', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = sprintReviewSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -2904,14 +2904,14 @@ router.post('/:id/review', authMiddleware, async (req: Request, res: Response) =
     console.error('Create sprint review error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // PATCH /api/weeks/:id/review - Update existing sprint review
-router.patch('/:id/review', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id/review', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = sprintReviewSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -3071,7 +3071,7 @@ router.patch('/:id/review', authMiddleware, async (req: Request, res: Response) 
     console.error('Update sprint review error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Carryover schema
 const carryoverSchema = z.object({
@@ -3080,11 +3080,11 @@ const carryoverSchema = z.object({
 });
 
 // POST /api/weeks/:id/carryover - Move incomplete issues to another sprint
-router.post('/:id/carryover', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/carryover', authMiddleware, authed(async (req, res) => {
   try {
     const { id: sourceSprintId } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = carryoverSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -3208,14 +3208,14 @@ router.post('/:id/carryover', authMiddleware, async (req: Request, res: Response
     console.error('Week carryover error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/approve-plan - Approve sprint plan
-router.post('/:id/approve-plan', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/approve-plan', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const parsedComment = parseApprovalComment(req.body);
     if (parsedComment.error) {
       res.status(400).json({ error: parsedComment.error });
@@ -3307,14 +3307,14 @@ router.post('/:id/approve-plan', authMiddleware, async (req: Request, res: Respo
     console.error('Approve sprint plan error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/unapprove-plan - Revoke plan approval (logged to history)
-router.post('/:id/unapprove-plan', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/unapprove-plan', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
@@ -3365,15 +3365,15 @@ router.post('/:id/unapprove-plan', authMiddleware, async (req: Request, res: Res
     console.error('Unapprove sprint plan error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/approve-review - Approve sprint review (rating required)
-router.post('/:id/approve-review', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/approve-review', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
     const { rating } = req.body || {};
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const parsedComment = parseApprovalComment(req.body);
     if (parsedComment.error) {
       res.status(400).json({ error: parsedComment.error });
@@ -3493,15 +3493,15 @@ router.post('/:id/approve-review', authMiddleware, async (req: Request, res: Res
     console.error('Approve sprint review error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/request-plan-changes - Request changes on sprint plan
-router.post('/:id/request-plan-changes', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/request-plan-changes', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
     const { feedback } = req.body || {};
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Validate feedback is provided and not too long
     if (!feedback || typeof feedback !== 'string' || feedback.trim().length === 0) {
@@ -3585,15 +3585,15 @@ router.post('/:id/request-plan-changes', authMiddleware, async (req: Request, re
     console.error('Request plan changes error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/request-retro-changes - Request changes on sprint retro
-router.post('/:id/request-retro-changes', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/request-retro-changes', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
     const { feedback } = req.body || {};
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Validate feedback is provided and not too long
     if (!feedback || typeof feedback !== 'string' || feedback.trim().length === 0) {
@@ -3676,6 +3676,6 @@ router.post('/:id/request-retro-changes', authMiddleware, async (req: Request, r
     console.error('Request retro changes error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 export default router;

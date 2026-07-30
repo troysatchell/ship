@@ -297,6 +297,21 @@ describe('Auth API', () => {
   })
 
   describe('POST /api/auth/extend-session', () => {
+    // TRO-209 (TS-4) runtime pin: this route's handler is now wrapped in
+    // `authed()` instead of asserting non-null on req.userId directly. The
+    // wrapper must not change observable behavior — unauthenticated requests still 401
+    // (this case) and authenticated ones still 200 (`should extend session
+    // expiry`, unmodified, below).
+    it('should reject extend-session without a session (TRO-209: authed() preserves 401)', async () => {
+      const { csrfToken, cookie } = await getCsrfTokenAndCookie()
+      const res = await request(app)
+        .post('/api/auth/extend-session')
+        .set('Cookie', cookie)
+        .set('x-csrf-token', csrfToken)
+
+      expect(res.status).toBe(401)
+    })
+
     it('should extend session expiry', async () => {
       // Login to get a session
       const loginRes = await loginWithCsrf(testEmail, testPassword)

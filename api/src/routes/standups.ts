@@ -3,7 +3,7 @@ import { pool } from '../db/client.js';
 import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -40,7 +40,7 @@ const createStandupSchema = z.object({
  *       400:
  *         description: Invalid input
  */
-router.post('/', authMiddleware, async (req: Request, res: Response) => {
+router.post('/', authMiddleware, authed(async (req, res) => {
   try {
     const parsed = createStandupSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -49,8 +49,8 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     }
 
     const { date } = parsed.data;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Check if standup already exists for this user+date
     const existingResult = await pool.query(
@@ -129,7 +129,7 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     console.error('Create standup error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 /**
  * @swagger
@@ -154,10 +154,10 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
  *       200:
  *         description: List of standups in the date range
  */
-router.get('/', authMiddleware, async (req: Request, res: Response) => {
+router.get('/', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const { date_from, date_to } = req.query;
 
     if (!date_from || !date_to) {
@@ -193,7 +193,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get standups error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 /**
  * @swagger
@@ -218,10 +218,10 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
  *                   nullable: true
  *                   description: Timestamp of last standup posted
  */
-router.get('/status', authMiddleware, async (req: Request, res: Response) => {
+router.get('/status', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get workspace sprint_start_date to calculate current sprint number
     const workspaceResult = await pool.query(
@@ -299,7 +299,7 @@ router.get('/status', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get standup status error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Schema for updating a standup
 const updateStandupSchema = z.object({
@@ -339,11 +339,11 @@ const updateStandupSchema = z.object({
  *       403:
  *         description: Forbidden - only author or admin can update
  */
-router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = updateStandupSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -432,7 +432,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Update standup error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 /**
  * @swagger
@@ -455,11 +455,11 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
  *       403:
  *         description: Forbidden - only author or admin can delete
  */
-router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.delete('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -494,6 +494,6 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Delete standup error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 export default router;

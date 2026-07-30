@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { pool } from '../db/client.js';
 import { z } from 'zod';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { logAuditEvent } from '../services/audit.js';
 import type { ProgramDocumentRow, ProjectDocumentRow, IssueDocumentRow, SprintDocumentRow } from './rowTypes.js';
 
@@ -141,11 +141,11 @@ const updateProgramSchema = z.object({
 });
 
 // List programs (documents with document_type = 'program')
-router.get('/', authMiddleware, async (req: Request, res: Response) => {
+router.get('/', authMiddleware, authed(async (req, res) => {
   try {
     const includeArchived = req.query.archived === 'true';
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -180,14 +180,14 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     console.error('List programs error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get single program
-router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -221,7 +221,7 @@ router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get program error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Create program (creates a document with document_type = 'program')
 router.post('/', authMiddleware, async (req: Request, res: Response) => {
@@ -283,11 +283,11 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
 });
 
 // Update program
-router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = updateProgramSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -405,14 +405,14 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Update program error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Delete program
-router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.delete('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -447,14 +447,14 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Delete program error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get program issues
-router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/issues', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -526,14 +526,14 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
     console.error('Get program issues error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get program projects (documents with document_type = 'project' that belong to this program)
-router.get('/:id/projects', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/projects', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -608,15 +608,15 @@ router.get('/:id/projects', authMiddleware, async (req: Request, res: Response) 
     console.error('Get program projects error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get program sprints (documents with document_type = 'sprint' that belong to this program)
 // Returns sprints with sprint_number and owner_id - dates/status computed on frontend
-router.get('/:id/sprints', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/sprints', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -703,17 +703,17 @@ router.get('/:id/sprints', authMiddleware, async (req: Request, res: Response) =
     console.error('Get program sprints error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============== Program Merge ==============
 
 // Merge preview - returns counts of entities that will be moved
-router.get('/:id/merge-preview', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/merge-preview', authMiddleware, authed(async (req, res) => {
   try {
     const sourceId = req.params.id;
     const targetId = req.query.target_id as string;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     if (!targetId) {
       res.status(400).json({ error: 'target_id query parameter is required' });
@@ -805,7 +805,7 @@ router.get('/:id/merge-preview', authMiddleware, async (req: Request, res: Respo
     console.error('Merge preview error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Merge execution - re-parents all children, archives source
 const mergeProgramSchema = z.object({
@@ -813,12 +813,12 @@ const mergeProgramSchema = z.object({
   confirm_name: z.string().min(1),
 });
 
-router.post('/:id/merge', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/merge', authMiddleware, authed(async (req, res) => {
   const client = await pool.connect();
   try {
     const sourceId = String(req.params.id);
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = mergeProgramSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -991,6 +991,6 @@ router.post('/:id/merge', authMiddleware, async (req: Request, res: Response) =>
   } finally {
     client.release();
   }
-});
+}));
 
 export default router;
