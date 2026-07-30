@@ -69,6 +69,48 @@ function notifyMutationError(error: Error, context: { operation?: string }) {
   mutationErrorListeners.forEach(l => l(error, context));
 }
 
+// ===========================================
+// Document write outcome (TRO-190/ERR-3, TRO-191/ERR-4)
+// ===========================================
+
+/**
+ * Result of one settled document-write mutation (a title/property PATCH),
+ * reported for whichever document it targeted.
+ *
+ * This is the same "global mutation event bus" shape as `subscribeToMutationErrors`
+ * above (built for API-1's toast), extended to also carry which document was
+ * involved and whether the failure means the document is gone. `Editor.tsx` -
+ * the one shared editor - subscribes to this and filters by its own
+ * `documentId`, rather than every page threading a "did my write fail" prop
+ * down through the component tree.
+ */
+export interface DocumentWriteOutcome {
+  documentId: string;
+  status: 'error' | 'success';
+  /** True only when the failure was HTTP 404: the document itself is gone. */
+  documentGone: boolean;
+}
+
+type DocumentWriteListener = (outcome: DocumentWriteOutcome) => void;
+let documentWriteListeners: DocumentWriteListener[] = [];
+
+export function subscribeToDocumentWriteOutcome(listener: DocumentWriteListener): () => void {
+  documentWriteListeners.push(listener);
+  return () => {
+    documentWriteListeners = documentWriteListeners.filter(l => l !== listener);
+  };
+}
+
+function notifyDocumentWriteOutcome(outcome: DocumentWriteOutcome) {
+  documentWriteListeners.forEach(l => l(outcome));
+}
+
+/** Mutations opt into document-write tracking via `meta.documentId`. */
+function documentIdFromMeta(mutation: { options: { meta?: Record<string, unknown> } }): string | undefined {
+  const value = mutation.options.meta?.documentId;
+  return typeof value === 'string' ? value : undefined;
+}
+
 export function isCacheCorrupted(): boolean {
   return cacheCorrupted;
 }
@@ -167,6 +209,17 @@ export function isThrottleError(error: unknown): boolean {
   return errorStatus(error) === THROTTLE_STATUS;
 }
 
+/** HTTP 404 — whatever this request targeted no longer exists server-side. */
+export const NOT_FOUND_STATUS = 404;
+
+/**
+ * True when a request failed because its target document was gone (deleted,
+ * typically by another user - TRO-191 / audit finding ERR-4).
+ */
+export function isNotFoundError(error: unknown): boolean {
+  return errorStatus(error) === NOT_FOUND_STATUS;
+}
+
 /**
  * Retry predicate shared by queries and mutations.
  *
@@ -223,6 +276,19 @@ export const queryClient = new QueryClient({
       // Notify listeners (for toast display)
       const operation = mutation.options.meta?.operation as string | undefined;
       notifyMutationError(error instanceof Error ? error : new Error(String(error)), { operation });
+
+      // TRO-190/ERR-3, TRO-191/ERR-4: tell the owning Editor this document's
+      // write did not persist, and whether the document itself is gone.
+      const documentId = documentIdFromMeta(mutation);
+      if (documentId) {
+        notifyDocumentWriteOutcome({ documentId, status: 'error', documentGone: isNotFoundError(error) });
+      }
+    },
+    onSuccess: (_data, _variables, _context, mutation) => {
+      const documentId = documentIdFromMeta(mutation);
+      if (documentId) {
+        notifyDocumentWriteOutcome({ documentId, status: 'success', documentGone: false });
+      }
     },
   }),
 });

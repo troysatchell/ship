@@ -13,7 +13,7 @@
  * than off the helper functions, so they assert what the app actually runs.
  */
 import { describe, it, expect } from 'vitest';
-import { queryClient } from './queryClient';
+import { queryClient, isNotFoundError, NOT_FOUND_STATUS } from './queryClient';
 
 type RetryFn = (failureCount: number, error: unknown) => boolean;
 type RetryDelayFn = (failureCount: number, error: unknown) => number;
@@ -73,4 +73,28 @@ function assertRetryPolicy(label: string, retry: unknown, retryDelay: unknown) {
 describe('API-1 (TRO-172): queryClient retry policy', () => {
   assertRetryPolicy('queries', defaults.queries?.retry, defaults.queries?.retryDelay);
   assertRetryPolicy('mutations', defaults.mutations?.retry, defaults.mutations?.retryDelay);
+});
+
+/**
+ * TRO-191 / ERR-4 — `probe4c`: another user deletes the open document (204)
+ * while this user keeps typing; the next write 404s. `isNotFoundError` is the
+ * predicate `useDocumentWriteStatus` uses to tell that apart from an ordinary
+ * rejected write (429/500, TRO-190/ERR-3) so it knows when to raise the
+ * "document is gone" notice instead of just marking the write unsaved.
+ */
+describe('TRO-191 (ERR-4): isNotFoundError', () => {
+  it('is true only for HTTP 404', () => {
+    expect(NOT_FOUND_STATUS).toBe(404);
+    expect(isNotFoundError(httpError(404))).toBe(true);
+  });
+
+  it('is false for every other status, including the throttle and permanent 4xx cases', () => {
+    for (const status of [400, 401, 403, 409, 422, 429, 500]) {
+      expect(isNotFoundError(httpError(status)), `status ${status}`).toBe(false);
+    }
+  });
+
+  it('is false for an error with no status attached', () => {
+    expect(isNotFoundError(new Error('Failed to fetch'))).toBe(false);
+  });
 });
