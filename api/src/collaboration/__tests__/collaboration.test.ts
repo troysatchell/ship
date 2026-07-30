@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vites
 import * as Y from 'yjs'
 import { pool } from '../../db/client.js'
 import crypto from 'crypto'
+import { getOrCreateDoc } from '../index.js'
 
 /**
  * Collaboration server tests
@@ -576,6 +577,47 @@ describe('Collaboration Server', () => {
 
       // Cleanup
       await pool.query('DELETE FROM documents WHERE id = $1', [jsonDocId])
+    })
+
+    it('skips the whole JSON->Yjs conversion when a nested node is malformed (TRO-208)', async () => {
+      // The top-level entry ("paragraph") is well-formed, but one of ITS
+      // children lacks a `type` field. A guard that only checks the root
+      // `content` array (or only its direct children) would miss this and
+      // hand the malformed node to jsonToYjs(), which would create a garbage
+      // `Y.XmlElement(undefined)` and splice it into the live fragment
+      // *before* discovering the problem - a partially-corrupted document,
+      // not the documented "start empty" fallback.
+      const malformedContent = {
+        type: 'doc',
+        content: [
+          {
+            type: 'paragraph',
+            content: [
+              { type: 'text', text: 'valid text' },
+              { text: 'missing the required type field' },
+            ],
+          },
+        ],
+      }
+
+      const malformedDocResult = await pool.query(
+        `INSERT INTO documents (workspace_id, document_type, title, content, yjs_state, created_by)
+         VALUES ($1, 'wiki', 'Malformed Nested Node Doc', $2, NULL, $3)
+         RETURNING id`,
+        [testWorkspaceId, JSON.stringify(malformedContent), testUserId]
+      )
+      const malformedDocId = malformedDocResult.rows[0].id
+
+      const doc = await getOrCreateDoc(`wiki:${malformedDocId}`)
+      const fragment = doc.getXmlFragment('default')
+
+      // Conversion must be skipped entirely - no partially-built fragment
+      // containing the valid "paragraph"/"valid text" nodes plus a garbage
+      // element for the malformed one.
+      expect(fragment.length).toBe(0)
+
+      // Cleanup
+      await pool.query('DELETE FROM documents WHERE id = $1', [malformedDocId])
     })
   })
 
