@@ -172,11 +172,13 @@ test.describe('TIER 1: Image Upload - REAL TESTS', () => {
     const img = page.locator('.tiptap img');
     await expect(img.first()).toBeVisible({ timeout: 30000 });
 
-    // Verify image actually loaded (naturalWidth > 0)
-    const loaded = await img.first().evaluate((el: HTMLImageElement) =>
-      el.complete && el.naturalWidth > 0
-    );
-    expect(loaded).toBe(true);
+    // Verify image actually loaded (naturalWidth > 0). toBeVisible() above only
+    // covers render state; a one-shot evaluate() can still race image decoding,
+    // so poll until it actually finishes loading.
+    await expect.poll(
+      () => img.first().evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0),
+      { timeout: 10000 }
+    ).toBe(true);
   });
 
   test('uploaded image persists after page reload', async ({ page }) => {
@@ -197,9 +199,10 @@ test.describe('TIER 1: Image Upload - REAL TESTS', () => {
     const testImage = createTestImage();
     await fileChooser.setFiles(testImage);
 
-    // Wait for upload
+    // Wait for upload to actually persist (not just render) before reloading --
+    // the image appearing only proves render, not that the save round-tripped.
     await page.waitForSelector('.tiptap img', { timeout: 30000 });
-    await page.waitForTimeout(2000); // Wait for save
+    await expect(page.getByTestId('sync-status')).toContainText(/Saved|Cached/, { timeout: 15000 });
 
     // Reload page
     await page.reload();
@@ -236,7 +239,16 @@ test.describe('TIER 1: Image Upload - REAL TESTS', () => {
 
     const testImage = createTestImage();
     await fileChooser.setFiles(testImage);
-    await page.waitForTimeout(5000);
+
+    // Wait for the upload to settle (image rendered and actually decoded)
+    // before checking accumulated console/request errors, rather than a fixed
+    // delay that either races the upload or pads every run with dead time.
+    const img = page.locator('.tiptap img');
+    await expect(img.first()).toBeVisible({ timeout: 30000 });
+    await expect.poll(
+      () => img.first().evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0),
+      { timeout: 10000 }
+    ).toBe(true);
 
     expect(consoleErrors).toHaveLength(0);
     expect(failedRequests).toHaveLength(0);
@@ -270,12 +282,11 @@ test.describe('TIER 2: File Attachments - REAL TESTS', () => {
     }
 
     await fileChooser.setFiles(testFilePath);
-    await page.waitForTimeout(3000);
 
-    // Should show file attachment node
-    const attachment = page.locator('[data-type="fileAttachment"], .file-attachment');
-    const count = await attachment.count();
-    expect(count).toBeGreaterThan(0);
+    // Should show file attachment node. FileAttachment.tsx renders
+    // `data-file-attachment` on the node wrapper -- wait for it directly
+    // instead of a fixed delay plus a point-in-time count().
+    await expect(page.locator('.ProseMirror [data-file-attachment]')).toBeVisible({ timeout: 10000 });
   });
 });
 
