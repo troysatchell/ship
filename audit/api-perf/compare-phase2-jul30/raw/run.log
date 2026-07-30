@@ -1,0 +1,64 @@
+=== documents-wiki c=10 attempt 1 2026-07-30T21:18:17.071Z
+    warmup 80 reqs (discarded)
+    DISCARD: non2xx=31 errors=0 samples=900 codes={"200":{"count":869},"429":{"count":31}}
+=== documents-wiki c=10 attempt 2 2026-07-30T21:18:19.133Z
+    waiting 50s for limiter window (status=429 remaining=0)
+    warmup 80 reqs (discarded)
+    p50=5.607 p95=8.828 p99=10.992 rps=900 2xx=900 bytes/res=38979 dur=1s
+=== documents-wiki c=25 attempt 1 2026-07-30T21:19:11.171Z
+    waiting 60s for limiter window (status=200 remaining=18)
+    p50=13.775 p95=20.442 p99=39.327 rps=900 2xx=900 bytes/res=38979 dur=1s
+=== documents-wiki c=50 attempt 1 2026-07-30T21:20:12.248Z
+    waiting 61s for limiter window (status=200 remaining=98)
+    p50=27.113 p95=37.859 p99=56.237 rps=900 2xx=900 bytes/res=38979 dur=1.01s
+=== issues c=10 attempt 1 2026-07-30T21:21:14.323Z
+    waiting 61s for limiter window (status=200 remaining=98)
+    warmup 80 reqs (discarded)
+    p50=18.887 p95=26.658 p99=37.571 rps=450 2xx=900 bytes/res=242513 dur=2.01s
+=== issues c=25 attempt 1 2026-07-30T21:22:18.409Z
+    waiting 59s for limiter window (status=200 remaining=18)
+    p50=50.478 p95=65.482 p99=84.972 rps=450 2xx=900 bytes/res=242513 dur=2s
+=== issues c=50 attempt 1 2026-07-30T21:23:19.490Z
+    waiting 60s for limiter window (status=200 remaining=98)
+    p50=97.998 p95=110.257 p99=133.986 rps=450 2xx=900 bytes/res=242513 dur=2.01s
+=== documents-all c=10 attempt 1 2026-07-30T21:24:21.566Z
+    waiting 60s for limiter window (status=200 remaining=98)
+    warmup 80 reqs (discarded)
+    p50=26.222 p95=39.304 p99=44.951 rps=300 2xx=900 bytes/res=295002 dur=3s
+=== documents-all c=25 attempt 1 2026-07-30T21:25:25.637Z
+    waiting 58s for limiter window (status=200 remaining=18)
+    p50=63.003 p95=85.246 p99=104.729 rps=300 2xx=900 bytes/res=295002 dur=3.01s
+=== documents-all c=50 attempt 1 2026-07-30T21:26:26.698Z
+    waiting 59s for limiter window (status=200 remaining=98)
+    p50=128.431 p95=144.51 p99=160.197 rps=300 2xx=900 bytes/res=295002 dur=3.01s
+=== documents-byid c=10 attempt 1 2026-07-30T21:27:28.756Z
+    waiting 59s for limiter window (status=200 remaining=98)
+    warmup 80 reqs (discarded)
+    p50=2.798 p95=4.639 p99=9.141 rps=900 2xx=900 bytes/res=2767 dur=1s
+=== documents-byid c=25 attempt 1 2026-07-30T21:28:29.822Z
+    waiting 60s for limiter window (status=200 remaining=18)
+    p50=6.332 p95=12.671 p99=28.323 rps=900 2xx=900 bytes/res=2767 dur=1.01s
+=== documents-byid c=50 attempt 1 2026-07-30T21:29:30.902Z
+    waiting 61s for limiter window (status=200 remaining=98)
+    p50=12.569 p95=30.118 p99=37.369 rps=900 2xx=900 bytes/res=2767 dur=1.01s
+=== team-assignments c=10 attempt 1 2026-07-30T21:30:32.974Z
+    waiting 61s for limiter window (status=200 remaining=98)
+    warmup 80 reqs (discarded)
+    p50=8.683 p95=12.67 p99=22.381 rps=900 2xx=900 bytes/res=23828 dur=1.01s
+=== team-assignments c=25 attempt 1 2026-07-30T21:31:36.065Z
+    waiting 60s for limiter window (status=200 remaining=18)
+    p50=16.591 p95=22.152 p99=32.82 rps=900 2xx=900 bytes/res=23828 dur=1s
+=== team-assignments c=50 attempt 1 2026-07-30T21:32:37.109Z
+    waiting 61s for limiter window (status=200 remaining=98)
+    p50=39.327 p95=55.028 p99=74.987 rps=900 2xx=900 bytes/res=23828 dur=1.01s
+=== weeks c=10 attempt 1 2026-07-30T21:33:39.195Z
+    waiting 61s for limiter window (status=200 remaining=98)
+    warmup 80 reqs (discarded)
+    p50=3.966 p95=8.018 p99=16.886 rps=900 2xx=900 bytes/res=5523 dur=1s
+=== weeks c=25 attempt 1 2026-07-30T21:34:42.258Z
+    waiting 60s for limiter window (status=200 remaining=18)
+    p50=8.495 p95=15.092 p99=41.392 rps=900 2xx=900 bytes/res=5523 dur=1s
+=== weeks c=50 attempt 1 2026-07-30T21:35:43.350Z
+    waiting 61s for limiter window (status=200 remaining=98)
+    p50=18.2 p95=41.584 p99=52.554 rps=900 2xx=900 bytes/res=5523 dur=1.01s
+=== DONE 2026-07-30T21:36:45.420Z
