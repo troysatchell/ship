@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, expectTypeOf, beforeEach, vi } from 'vitest';
 import type { QueryResult } from 'pg';
 
 // `pool.query` is overloaded and TypeScript resolves `vi.mocked(pool.query)` to pg's
@@ -17,7 +17,7 @@ vi.mock('../db/client.js', () => ({
   },
 }));
 
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed, type AuthenticatedRequest } from '../middleware/auth.js';
 import { pool } from '../db/client.js';
 import { Request, Response, NextFunction } from 'express';
 import { ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
@@ -389,5 +389,93 @@ describe('authMiddleware', () => {
       expect(req.isApiToken).toBe(true);
       expect(next).toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * TS-4 / TRO-209 — `req.userId?` / `req.workspaceId?` used to be optional
+ * everywhere, so every one of the 236 authenticated route handlers re-asserted
+ * non-null on both fields with a bare `!`. Worse than hygiene: a route wired up
+ * *without* `authMiddleware` type-checked identically to one wired up correctly,
+ * because nothing distinguished "authenticated" as its own type.
+ *
+ * `AuthenticatedRequest` + `authed()` fix that: `userId`/`workspaceId` are
+ * required `string`s inside a handler wrapped in `authed()`, and a handler that
+ * is NOT wrapped still sees them as `string | undefined` — so treating them as a
+ * plain string outside `authed()` is now a compile error instead of a silent
+ * `undefined` reaching a query at runtime.
+ *
+ * These `expectTypeOf` assertions (and the pinned suppression comment below) are
+ * compile-time only — checked by `tsc`/vitest's type collector, not executed at
+ * runtime. Red-before-green proof: temporarily delete the suppression comment
+ * in the third test below and run `pnpm --filter @ship/api type-check`
+ * — it fails with `TS2322: Type 'string | undefined' is not assignable to type
+ * 'string'` at that exact line. Put the comment back and the same command is
+ * clean. (There is no prior version of `authed()` to regress against — it is a
+ * new type, not a bug fix to an existing one — so this is the direct proof that
+ * the compile error is real, rather than a before/after diff of an old test.)
+ */
+describe('authed() request typing (TS-4 / TRO-209)', () => {
+  it('AuthenticatedRequest requires userId and workspaceId as string, not string | undefined', () => {
+    expectTypeOf<AuthenticatedRequest['userId']>().toEqualTypeOf<string>();
+    expectTypeOf<AuthenticatedRequest['workspaceId']>().toEqualTypeOf<string>();
+  });
+
+  it('an authed() handler receives userId/workspaceId already narrowed to string', () => {
+    authed((req) => {
+      expectTypeOf(req.userId).toEqualTypeOf<string>();
+      expectTypeOf(req.workspaceId).toEqualTypeOf<string>();
+    });
+  });
+
+  it('a plain (unwrapped) handler cannot treat req.userId as a required string', () => {
+    function plainHandler(req: Request): string {
+      // @ts-expect-error req.userId is `string | undefined` on a plain Request —
+      // only a handler wrapped in authed() gets it narrowed to `string`. See the
+      // red-before-green proof in this block's doc comment.
+      const userId: string = req.userId;
+      return userId;
+    }
+    expectTypeOf(plainHandler).toBeFunction();
+  });
+});
+
+describe('authed() runtime guard (defense in depth, TRO-209)', () => {
+  it('invokes the wrapped handler when userId and workspaceId are already present', async () => {
+    const { req, res, next } = createMockReqRes({});
+    req.userId = 'user-123';
+    req.workspaceId = 'ws-123';
+    const handler = vi.fn((r: AuthenticatedRequest, response: Response) => {
+      response.status(200).json({ userId: r.userId, workspaceId: r.workspaceId });
+    });
+
+    await authed(handler)(req, res, next);
+
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith({ userId: 'user-123', workspaceId: 'ws-123' });
+  });
+
+  // This case cannot happen on any currently-registered route — every one of
+  // them runs `authMiddleware` (directly or via `router.use`) before `authed()`,
+  // and `authMiddleware` always sets both fields together before calling
+  // `next()` (see the `attaches session info to request for valid session` and
+  // `authenticates with valid bearer token` cases above). It exists so a
+  // *future* route wired up without `authMiddleware` fails closed instead of
+  // silently forwarding `undefined` into a query — the exact hole TS-4 flags.
+  it('returns 401 and never calls the handler when userId/workspaceId are missing', async () => {
+    const { req, res, next } = createMockReqRes({});
+    const handler = vi.fn();
+
+    await authed(handler)(req, res, next);
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(res.status).toHaveBeenCalledWith(401);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        success: false,
+        error: expect.objectContaining({ message: 'Authentication required' }),
+      })
+    );
   });
 });
