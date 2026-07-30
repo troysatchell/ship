@@ -2,9 +2,22 @@
 -- This protects against infinite loops in recursive CTE queries
 
 -- Step 1: Add simple CHECK constraint for self-reference
-ALTER TABLE documents
-ADD CONSTRAINT documents_no_self_parent
-CHECK (id != parent_id);
+-- Guarded: schema.sql:161 declares the same constraint inline, so it already
+-- exists on any database created from schema.sql. Postgres has no
+-- ADD CONSTRAINT IF NOT EXISTS, hence the DO block.
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'documents_no_self_parent'
+      AND conrelid = 'documents'::regclass
+  ) THEN
+    ALTER TABLE documents
+    ADD CONSTRAINT documents_no_self_parent
+    CHECK (id != parent_id);
+  END IF;
+END
+$$;
 
 -- Step 2: Create function to detect circular references by traversing ancestors
 CREATE OR REPLACE FUNCTION prevent_circular_parent()
@@ -51,6 +64,9 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- Step 3: Create trigger to run the function
+-- Dropped first because schema.sql:194 creates the same trigger and Postgres
+-- has no CREATE TRIGGER IF NOT EXISTS. schema.sql:193 uses this same pattern.
+DROP TRIGGER IF EXISTS prevent_circular_parent_trigger ON documents;
 CREATE TRIGGER prevent_circular_parent_trigger
 BEFORE INSERT OR UPDATE OF parent_id ON documents
 FOR EACH ROW

@@ -229,6 +229,128 @@ stylesheet — the tests added by this branch grew `index-*.css` by 0.32 kB raw 
 is to narrow the glob (e.g. exclude `*.test.*`), but `tailwind.config.js` was just modified by
 TRO-217 and this is not the branch to contend for it. Filed rather than folded in.
 
+---
+
+## TRO-178 — [DB-1] `pnpm db:migrate` silently skipped 32 of 42 migrations and exited 0
+
+**What was broken.** `api/src/db/migrate.ts:103-111` wrapped *both* the `schema.sql` application
+and the migration loop in one `try`, and its handler matched any error message containing the
+substring `already exists`. `010_oauth_state.sql:8` created `oauth_state` without `IF NOT EXISTS`
+while `schema.sql:90` had already created it, so the migration threw `relation "oauth_state"
+already exists` — indistinguishable, to that handler, from a benign `schema.sql` re-run. It logged
+`Database schema already exists, continuing...`, returned normally, abandoned the remaining 32
+files, and the process exited **0**. A second run behaved identically; it did not self-heal.
+
+The report's hypothesis held exactly, including its list of the other blocking files.
+
+**What changed.**
+
+- `api/src/db/migrationRunner.ts` (new) — the migration logic, extracted from `migrate.ts` so it
+  can be exercised by tests. `migrate.ts` is now the CLI wrapper: env, pool, exit code.
+- The `already exists` tolerance now lives inside `applySchema` and covers only the `schema.sql`
+  call, so a failure in the migration loop can no longer be mistaken for one. It matches Postgres
+  SQLSTATE duplicate-object codes (`42P04`, `42P06`, `42P07`, `42701`, `42710`, `42723`) instead of
+  a substring — substring matching on `already exists` would also swallow, for example, a failed
+  `ALTER ... ADD CONSTRAINT` in a data migration.
+- A failing migration is rethrown with its filename in the message, and `migrate.ts` exits 1.
+- `applySchema` no longer swallows the duplicate-object error it tolerates — it **re-applies**
+  `schema.sql` and lets the second attempt decide. `pool.query` sends the file as one simple query,
+  so Postgres runs it as a single implicit transaction: an error at statement *k* rolls back
+  statements 1..*k*-1 too, meaning nothing was applied. Returning normally there was DB-1 inside
+  the DB-1 fix. A clean second pass proves every object exists (verified by the file itself, not by
+  a hardcoded list that could drift); a second failure propagates and exits 1.
+- Migrations `010`, `025`, `033`, `035` are now idempotent against the `schema.sql` end state
+  (`IF NOT EXISTS`; a `pg_constraint` lookup for the CHECK constraint; `DROP TRIGGER IF EXISTS`
+  before `CREATE TRIGGER`, the pattern `schema.sql:193` already uses; a `pg_enum`-guarded loop for
+  the three `ALTER TYPE ... RENAME VALUE` statements). These four files are edited rather than
+  superseded by a new migration, because a new migration cannot stop `010` itself from throwing,
+  and databases that already recorded these versions never re-read them.
+- Migration filenames are validated against `NNN_description.sql` — exactly three digits, an
+  optional single letter (`007b_`, `014b_`, `015b_`, `018b_`, `020b_` all exist), then an
+  underscore. The runner sorts the validated names **lexicographically**; that equals numeric
+  order only because the pattern forces a zero-padded three-digit prefix, which is the whole
+  reason the pattern is enforced. Anything outside it — an unnumbered `hotfix.sql`, or a
+  four-digit `1000_` that would sort before `999_` — throws and names the offender before any
+  migration is applied. The runner does not infer an order for such a file; it refuses to guess.
+- Regression tests: `api/src/db/__tests__/migrationRunner.test.ts`.
+
+**New ways `pnpm db:migrate` can now fail — all deliberate.** It previously exited 0 in every one
+of these cases:
+
+| Condition | Behaviour |
+|---|---|
+| any migration raises | exit 1, naming the file |
+| migrations directory missing or unreadable | exit 1 |
+| a `.sql` file there is not `NNN_description.sql` | exit 1, naming the offender |
+| `033`: `document_type` has both `sprint_*` and `weekly_*` **and** documents still use the old label | exit 1 with the row count and the remedy |
+| `033`: `document_type` has neither label of a pair | exit 1 |
+
+The one state `033` deliberately tolerates is both labels present with **no** rows using the old
+one — that is the normal outcome on a fresh database, because `schema.sql:100` declares the
+post-rename labels and `017_standup_sprint_review_types.sql:14` then re-adds `sprint_review` via
+`ADD VALUE IF NOT EXISTS`. Raising there would fail every fresh install.
+
+**What the 32 previously-skipped migrations mean for an existing database.** Reported, not executed
+against anything but a factory database — this is the part that needs an operator's eyes before the
+next production deploy. Measured over `011`–`037` (31 files; `010` is the 32nd):
+
+| | count |
+|---|---|
+| `ALTER TABLE` | 19 |
+| of which `DROP COLUMN` | 3 |
+| `CREATE TABLE` | 7 |
+| `ALTER TYPE` | 4 |
+| `UPDATE` / `INSERT` / `DELETE` statements | 27 / 8 / 3 |
+
+`schema.sql` contains **zero** `ALTER TABLE` and **zero** DML, so on a database that already exists
+these 31 files are the only mechanism that would ever have changed it. Notable: `027`/`029` drop
+`documents.sprint_id`, `documents.project_id`, `documents.program_id`; `033` renames three
+`document_type` enum labels `sprint_* → weekly_*` and rewrites matching `properties` JSON; `014b`,
+`028` and `034` are backfills. **The first deploy after this change will apply all 32 at once.**
+Take a snapshot first and run `pnpm db:migrate` against a restore of production before running it
+against production.
+
+**How to run it.**
+
+```bash
+source .factory-env                      # or otherwise point DATABASE_URL at the target
+pnpm db:migrate                          # now exits non-zero on any migration failure
+pnpm --filter @ship/api test src/db/__tests__/migrationRunner.test.ts
+```
+
+Verify with `select count(*) from schema_migrations;` — it should equal the number of `.sql` files
+in `api/src/db/migrations/` (42 today), not 10.
+
+**Verified** against PostgreSQL 15-alpine in the `ship-audit-pg` container on `:5433`:
+
+- fresh database → 42 rows in `schema_migrations`, exit 0
+- second run on it → clean no-op, still 42, exit 0
+- `ship_wt_tro_178`, stuck at 10 rows (the state DB-1 had left it in) → 32 applied, 42 rows, exit 0
+- a database seeded with the *pre-*`033` enum labels → renamed to `weekly_*`, 42 rows, exit 0
+- both enum labels present plus one stale document → exit 1, naming the count and the remedy
+- `document_type` missing both labels of a pair → exit 1
+- applying `schema.sql` three times in a row against one database → no error any time, so the
+  duplicate-object tolerance in `applySchema` is unreachable **sequentially** for the current file
+  (17/17 `CREATE TABLE` and 59/59 `CREATE INDEX` guarded, both `CREATE TYPE`s in guarded `DO`
+  blocks, function `OR REPLACE`, trigger preceded by `DROP TRIGGER IF EXISTS`)
+- applying `schema.sql` from **6 connections at once** → 5 of 6 failed, so it is emphatically
+  reachable **concurrently**: `CREATE TABLE IF NOT EXISTS` is check-then-create and not atomic.
+  Mostly SQLSTATE 23505 on the catalog index `pg_type_typname_nsp_index`, sometimes 42710. 23505 is
+  deliberately not tolerated; the concurrency defect itself is TRO-279
+- `pnpm --filter @ship/api test` against the fully-migrated database → 475 tests passed
+
+**Not verified.** No run against production or shadow, and no run against PostgreSQL 16 (production
+runs pg16; CI and this work run pg15 — see the pin comment in `.github/workflows/ci.yml`). Proving
+the production path needs a restore of a production snapshot.
+
+**Rollback.** `git revert` the commits on `fix/db-1-migration-runner`, or, to restore only the old
+runner behaviour, delete `api/src/db/migrationRunner.ts` and restore `api/src/db/migrate.ts` from
+`main`. Rolling back the runner alone leaves migrations `010`/`025`/`033`/`035` idempotent, which is
+harmless. Note that rollback does **not** un-apply migrations already recorded in
+`schema_migrations`; reversing those requires a database restore.
+
+---
+
 ## TRO-217 — [A11Y-3] `/my-week` failed colour contrast, the landing page of the app
 
 **What was broken.** `/` redirects to `/my-week`, and it was the only key page Lighthouse failed on
@@ -697,3 +819,4 @@ WebSocket URL being derived from `window.location.host`.
 which builds from the repository.
 
 **Rollback.** Revert the merge of `feat/render-deploy` (`bace770`).
+
