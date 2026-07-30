@@ -8,6 +8,577 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-240 — [DB-11] The application's database pool negotiated no TLS while migrate and seed did
+
+**What was broken.** Three pools connect to Ship's database with three different SSL policies.
+`api/src/db/migrate.ts:32` and `api/src/db/seed.ts:44` each carried their own copy of
+`ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false`.
+`api/src/db/client.ts:17-26` — the pool the entire running application uses — had **no `ssl` key at
+all**. A fourth pool, `api/src/db/scripts/orphan-diagnostic.ts:34`, had none either.
+
+An absent `ssl` key is not "let pg decide sensibly". `pg`'s `ConnectionParameters` does
+`this.ssl = typeof config.ssl === 'undefined' ? readSSLConfigFromEnvironment() : config.ssl`, and
+with `PGSSLMODE` unset that resolves to `defaults.ssl`, which is `false`
+(`pg/lib/connection-parameters.js:100`, `pg/lib/defaults.js:43`). So the app pool connected in
+**plaintext**, unconditionally, in production.
+
+**Why it never surfaced on AWS.** Aurora is in-VPC and the connection is internal, so plaintext
+works. The gap only appears against a managed Postgres that requires TLS on a public endpoint —
+i.e. every PaaS, including the Render deployment.
+
+**Why the failure signature misdirects.** `Dockerfile:35` is
+`node dist/db/migrate.js && node dist/index.js`. `migrate.ts` *did* configure SSL, so it connected,
+ran, exited 0, and the `&&` proceeded — then `index.js` started and `client.ts` failed to connect.
+The logs read "migration succeeded, database unreachable", which looks like a database problem
+rather than a client-config one. `connectionTimeoutMillis: 2000` turned it into a fast crash-loop
+instead of a legible TLS error.
+
+**What changed.** The drift was the defect, so the fix is one decision in one place rather than a
+fourth copy of the ternary. New `api/src/db/ssl.ts` exports `resolveDatabaseSsl(nodeEnv?)`, and all
+four pools under `api/src/db/` now call it:
+
+- `api/src/db/client.ts:23` — **the actual bug**; previously passed nothing.
+- `api/src/db/migrate.ts:33`, `api/src/db/seed.ts:45` — inline ternary replaced by the helper.
+- `api/src/db/scripts/orphan-diagnostic.ts:37` — previously passed nothing; same defect class.
+
+The returned value is unchanged from what the scripts already did: `{ rejectUnauthorized: false }`
+in production, `false` otherwise. A fresh object per call, so no two pools share a mutable TLS
+config. `nodeEnv` is a parameter defaulting to `process.env.NODE_ENV` purely so the decision is
+testable without env stubbing; production code calls it with no arguments.
+
+**Behaviour outside production is byte-for-byte identical.** Local dev, CI and the factory
+databases previously got `false` by pg's default and now get `false` by explicit decision.
+
+**`rejectUnauthorized: false` was carried over deliberately, not endorsed.** It encrypts the
+connection but does not verify the server certificate chain — it stops passive eavesdropping, not an
+active man-in-the-middle. Managed providers sign with their own CA, absent from Node's trust store,
+so verification fails without the provider bundle. A federal deployment probably wants
+`rejectUnauthorized: true` plus an explicit `ca`. Tightening it here would be a silent posture
+change that no test in this repo can verify, so it is left as a follow-up that needs the CA bundle
+decided first. This is called out in the header comment of `api/src/db/ssl.ts`.
+
+**Precedence — the helper is not the only input, and not the strongest.** There is a third SSL
+surface besides these pools and the helper: the connection string. Raised by CodeRabbit, then
+established by reading pg rather than inferring it from the finding above, and confirmed empirically
+against pg 8.16.3 / pg-connection-string 2.9.1.
+
+`pg/lib/connection-parameters.js:56` does
+`config = Object.assign({}, config, parse(config.connectionString))` — the parsed URL is the **last**
+source, so its `ssl` key overwrites the caller's; the comment on `:54` says so outright.
+`pg-connection-string/index.js:76` sets `ssl = {}` whenever `sslmode` is present, and `:133-135` sets
+`ssl = false` for `disable`. `connection-parameters.js:81` then uses that value as-is.
+
+Effective order, weakest to strongest: **pg defaults → `PGSSLMODE` → the `ssl` option this helper
+returns → `sslmode` in the connection string.**
+
+Measured, passing an explicit `{ rejectUnauthorized: false }` throughout:
+
+| `sslmode` in URL | effective `ssl` | on the wire |
+|---|---|---|
+| absent | `{ rejectUnauthorized: false }` | encrypted — our option survives |
+| `disable` | `false` | **plaintext — our option is discarded** |
+| `prefer` / `require` / `verify-ca` / `verify-full` | `{}` | encrypted |
+| `no-verify` | `{ rejectUnauthorized: false }` | encrypted |
+
+So `DATABASE_URL=...?sslmode=disable` silently defeated the fix, in exactly the way these strings
+arrive — copied from a provider dashboard. The helper would report the right value, every test would
+pass, and production would be in the clear.
+
+The `ssl` option can never win that argument, so `resolveDatabaseSsl` **refuses to start** instead:
+in production, an `sslmode` that pg resolves to plaintext throws with the parameter named and the
+remedy stated. `disable` is the only such value — the other five all encrypt, and are allowed
+through untouched. Outside production `sslmode=disable` is still fine, because local Postgres and
+the CI container are plaintext-only.
+
+It deliberately does **not** rewrite the URL. Silently editing an operator's explicit instruction is
+the same class of mistake as the original bug: the code would report one thing and do another.
+
+Note in passing: `sslmode=require` resolves to `{}`, which leaves Node's `rejectUnauthorized` at
+`true` — stricter than this helper, and it will **fail** against a provider using a private CA. That
+is a loud connection error rather than a silent downgrade, so it is left alone.
+
+**Deployment precondition — check this before rolling out.** If the production `DATABASE_URL` in SSM
+already contains `sslmode=disable`, this turns a currently-working in-VPC deploy into a startup
+failure with the message above. The value lives in SSM and could not be inspected from here, so this
+is stated as a risk, not a cleared check. If plaintext is genuinely intended for that deployment,
+that is a decision for a human to make explicitly.
+
+**Out of scope, deliberately.** `api/scripts/migrate-shadow.ts:32`, `api/scripts/create-test-user.ts:35`
+and `api/scripts/check-db-user.ts:10,19` set `ssl: { rejectUnauthorized: false }`
+**unconditionally** — a fifth and sixth policy. They are operator scripts outside
+`api/tsconfig.json`'s `include: ["src/**/*"]`, always pointed at a remote AWS endpoint. Routing them
+through a `NODE_ENV`-conditional helper would silently **downgrade** them to plaintext whenever
+`NODE_ENV` is unset, which is how they are normally invoked. Changing them needs its own ticket and
+its own verification.
+
+**Evidence.** `pnpm --filter @ship/api test` against
+`postgresql://ship:***@localhost:5433/ship_wt_tro_240` (docker `ship-audit-pg`, postgres:15-alpine),
+`NODE_ENV` unset in the shell so vitest sets `test`. 31 files, **491 passed, 0 failed**.
+`pnpm --filter @ship/web test`: 13 failed / 186 passed — the same 13 identities quarantined as
+TEST-1 / TRO-223, in the same three files; nothing in `web/` was touched. `pnpm type-check` clean
+across shared, api and web.
+
+The regression test is `api/src/db/__tests__/ssl.test.ts` (22 cases), covering four things:
+
+1. the decision per `NODE_ENV`, including that `production` is matched exactly, so a deploy setting
+   `NODE_ENV=Production` cannot silently drop to plaintext;
+2. that `client.ts`'s pool actually applies it — re-imported under a stubbed env, since the pool is
+   built at module scope. **7 failed / 8 passed** against the unfixed call sites, every failure an
+   `AssertionError` on the claimed behaviour, the headline being
+   `expected undefined to deeply equal { rejectUnauthorized: false }` — DB-11 stated as a test;
+3. the precedence above: two tests **characterise pg itself**, pinning that `sslmode=disable`
+   discards the explicit option and that the other five values do not. If a future pg makes the
+   option win, those tests fail, which is the signal the throw can be relaxed. Then the guard:
+   **2 failed / 6 passed** against the unguarded helper, both `expected [Function] to throw an
+   error`. Only two of the eight went red on purpose — the other six assert behaviour that must
+   *not* change (dev still permits `sslmode=disable`, encrypting modes still pass, a malformed URL
+   is still pg's to report);
+4. that **no** pool under `api/src/db/` sets `ssl` to anything other than `resolveDatabaseSsl()`.
+   This is what prevents recurrence — a future file adding `new Pool(...)` with its own policy fails
+   the suite rather than quietly adding a fifth policy.
+
+Beyond the suite, the **compiled** artifact was exercised directly, since `Dockerfile:35` runs
+`dist/`, not the TypeScript: `NODE_ENV=production` with a clean URL yields
+`{"rejectUnauthorized":false}`; with `?sslmode=disable` importing `dist/db/client.js` throws the
+guard message; `NODE_ENV=development` with `?sslmode=disable` still yields `false`.
+
+**How to run it.**
+
+```bash
+source .factory-env                                             # api tests TRUNCATE 16 tables
+pnpm --filter @ship/api test src/db/__tests__/ssl.test.ts       # 22 cases, the regression test
+pnpm --filter @ship/api test                                    # full api suite: 491/491
+pnpm type-check
+
+# the guard, on the compiled artifact (throws; prints the remedy)
+pnpm --filter @ship/api build
+cd api && NODE_ENV=production DATABASE_URL='postgresql://u:p@h:5432/d?sslmode=disable' \
+  node -e "import('./dist/db/client.js').catch(e => console.log(e.message))"
+```
+
+**Rollback.** `git revert` the commits on `fix/db-11-pool-ssl`, or by hand: delete
+`api/src/db/ssl.ts` and `api/src/db/__tests__/ssl.test.ts`, drop the `ssl:` line and the import from
+`client.ts` and `scripts/orphan-diagnostic.ts`, and restore the inline ternary in `migrate.ts` and
+`seed.ts`. Reverting reinstates plaintext connections from the application pool. To keep the fix but
+drop only the startup guard, delete the `PLAINTEXT_SSL_MODES` check in `resolveDatabaseSsl` — that
+restores the state where `sslmode=disable` in `DATABASE_URL` silently wins.
+
+**Not verified — do not read this as a fixed deployment.** No test here proves TLS actually
+negotiates. Proving that needs a managed Postgres endpoint that *requires* TLS on a public address;
+there is none in this repo's test environment, and the local docker Postgres speaks plaintext only,
+so a passing local suite is silent on the real failure mode. What is verified is the decision logic
+and its propagation to all four call sites — everything up to the socket. The claim "Render now
+starts" remains **untested**; confirming it means deploying and reading the startup logs.
+
+---
+
+## TRO-226 — [TEST-4] Concurrent multi-client editing / Yjs merge had no executing test
+
+**What was missing.** The CRDT is the entire justification for the Yjs architecture
+(`docs/unified-document-model.md`), and nothing verified it. A regression that silently dropped one
+collaborator's edits would have shipped green. Two tests looked like they covered this and did not:
+
+- `api/src/collaboration/__tests__/collaboration.test.ts:144` "should merge concurrent Yjs updates
+  correctly" exchanges updates between two bare `Y.Doc`s with `Y.applyUpdate`. That is a test of the
+  yjs library. No server, no socket, no persistence — a bug in
+  `api/src/collaboration/index.ts` cannot fail it.
+- `e2e/mentions.spec.ts:374` is the only two-client test. It uses `browser.newPage()` (one browser,
+  sequential), every assertion sits inside `if (await option.isVisible())`, and it synchronizes with
+  `waitForTimeout(2000)`/`waitForTimeout(3000)`. It is also in `e2e/`, which neither `gate.sh` nor
+  `.github/workflows/ci.yml` executes.
+
+**What changed.** One new file, `api/src/collaboration/__tests__/concurrent-merge.test.ts`, in the
+vitest project the gate actually runs. Four tests drive two independent Yjs clients — separate
+`Y.Doc`s, separate WebSockets, separate sessions — against the real `setupCollaboration()` over real
+sockets, speaking the real `y-protocols` sync protocol in **both** directions, and assert on the
+`documents` row.
+
+- **control** — one client's edit reaches `content` and `yjs_state`. Without this, a broken harness
+  and a broken merge look identical.
+- **different regions** — both clients append a paragraph in one synchronous block, so neither
+  update is in the other's causal history. Concurrency is *asserted*, not assumed: each replica must
+  not yet contain the other's marker at edit time. Then both replicas must converge to a
+  byte-identical document containing both edits, and both edits must be in `yjs_state`.
+- **same region** — the crux. A seeded paragraph is the contested text; both clients insert at the
+  same character offset in the same `Y.XmlText`. Asserts both inserts survive, the replicas converge
+  on one identical string, and the pre-existing text is intact. The interleaving *order* is
+  deliberately not asserted — Yjs breaks the tie by client id, which is not stable across runs.
+- **offline divergence** — one client's socket is closed, it edits anyway, the other edits online,
+  then it reconnects. Asserts the offline edit is merged in rather than discarded, the online edit is
+  not clobbered, and the result persists. This is the expensive regression: a user's work silently
+  lost on reconnect.
+
+Persistence is checked by decoding `documents.yjs_state` into a fresh `Y.Doc` in the test process,
+not by trusting the `content` JSON mirror. `api/src/collaboration/index.ts` is **not modified** —
+this is coverage only, and three branches are in flight against that file.
+
+**Plus an additive browser spec, clearly labelled as not run by CI.**
+`e2e/concurrent-editing.spec.ts` does the same two scenarios through two real
+`browser.newContext()`s — separate cookie jars, separate sessions, separate IndexedDB — logged in as
+two different users, typing concurrently via `Promise.all` on two keystroke streams. It covers the
+one layer the vitest test cannot reach: TipTap and the real `y-websocket` client rather than a
+hand-rolled protocol client. It is **additive, not the proof** — `.github/workflows/ci.yml` has no
+Playwright job and `gate.sh` executes only the two vitest projects, so a test living only in `e2e/`
+satisfies the gate's added-test check while never running. That is the TEST-2 failure mode, and the
+file's header says so.
+
+**No fixed sleeps.** Convergence is awaited on Yjs `update` events. Persistence — which emits no
+event — is awaited by re-reading the row until a predicate holds, with a 50ms gap between reads and
+a hard deadline. Every wait is a condition, never a duration guessed to be long enough (TEST-11 /
+TRO-233).
+
+**How to run it.**
+
+```bash
+cd <worktree> && source .factory-env      # api tests TRUNCATE 16 tables
+pnpm --filter @ship/api exec vitest run src/collaboration/__tests__/concurrent-merge.test.ts
+
+# the additive browser spec — deliberate, never as part of the full suite
+pnpm build && npx playwright test e2e/concurrent-editing.spec.ts --workers=1 --retries=0
+```
+
+**Evidence — the test was proved capable of failing.** New coverage has no bug to go red on, so the
+server was temporarily sabotaged twice (both reverted; `git diff main -- api/src/collaboration/index.ts`
+is empty on this branch).
+
+1. *Merge sabotage* — `handleMessage` was made to silently discard `messageYjsUpdate` frames from any
+   client that is not the first connection in the room. Both concurrent tests failed; the control and
+   offline tests still passed, so the harness was provably fine. Failure text:
+   `clientA never received clientB's concurrent edit (BOB_…) — local replica:
+   <paragraph></paragraph><paragraph>ALICE_…</paragraph> frames received: [3,0,1,0,1]`.
+2. *Persistence sabotage* — the `UPDATE documents SET yjs_state = …, content = …` in
+   `persistDocument()` was reduced to writing only `properties`. In-memory merge still worked; all
+   four tests failed on the database assertion:
+   `merged content never reached documents.content: database predicate never held within 30000ms
+   (576 reads)`.
+
+Both are `AssertionError`/explicit-condition failures naming the missing edit, not import or setup
+errors.
+
+The **e2e spec was proved capable of failing too**, under the same merge sabotage (rebuilt through
+`pnpm --filter @ship/api build`, since the e2e harness runs `api/dist/index.js`). Both browser tests
+failed with `Error: clientA lost clientB's concurrent edit / Expected substring: "BBB-…" / Received
+string: "AAA-…"`, then passed again after the source was restored and rebuilt.
+
+**Stability.** 5 consecutive standalone runs of the vitest file, 4/4 passing each time, ~10.4s per
+run. Full api suite green: 473 passed / 31 files (up from 469 / 30). The e2e spec: 2/2 passing,
+verified with `--retries=0` so a retry cannot mask a flake, ~33-51s for the pair on one worker.
+
+**Coverage delta on `api/src/collaboration/index.ts`.** v8 provider, full api suite
+(`vitest run --coverage`), factory database `ship_wt_tro_226` on the `ship-audit-pg` container at
+`:5433`, macOS, measured twice under identical conditions with the new file present and absent:
+
+| | statements | branches | functions | lines |
+|---|---|---|---|---|
+| without this test | 60.68% | 40.57% | 67.24% | 62.07% |
+| with this test | **62.50%** | **45.41%** | **70.68%** | **63.04%** |
+
+The ticket's "25.0% function coverage (7 of 28)" figure is **not reproducible today** and is not the
+baseline above: `session-revocation.test.ts` (ERR-2 / TRO-189) landed on the same file earlier the
+same day and had already lifted functions to 67.24%. The v8 provider also counts closures, so its
+denominator is not 28. `@vitest/coverage-v8` is not a dependency of this repo; it was installed to
+take the measurement and `api/package.json`/`pnpm-lock.yaml` were reverted afterwards, so
+`--coverage` will not run without installing it again.
+
+**Second new finding, not fixed here, and it probably affects other e2e specs.**
+`web/src/components/ActionItemsModal.tsx` is a Radix `Dialog`, and the seeded workspace has 32
+overdue accountability items, so it opens on load over the document editor. While it is open it both
+covers the editor — `locator.click()` never passes hit-testing and dies as a bare 60s timeout with no
+assertion — and traps focus, so `document.activeElement` can never become the editor. Observed
+directly: three failed e2e runs before the dialog was identified. Any e2e test that drives the editor
+after a direct `page.goto('/documents/:id')` has to dismiss it first; the new spec does. Derived, not
+verified: this is a plausible contributor to the existing editor-spec flakiness in TEST-11 / TRO-233.
+
+**New finding, not fixed here.** Building the test surfaced a real race in the server.
+`wss.on('connection')` in `api/src/collaboration/index.ts` `await`s `getOrCreateDoc()` — a database
+round trip — and registers `ws.on('message')` only afterwards. A client frame that arrives inside
+that window has no listener and is dropped by the EventEmitter. A y-websocket client sends sync step
+1 immediately on `open`, so on a low-latency link its step 1 is lost, the server never replies with
+step 2, and **the client never receives the server's document state** — the editor stays empty while
+the client's own state is pushed up. Observed deterministically on loopback (frames received were
+`[3,0,1,1]`: cache-clear, the server's own step 1, two awareness updates, and no step 2). Derived,
+not measured, for production: over a real network the client's step 1 normally arrives after the DB
+read completes, so this reads as a dev/loopback defect — but the window is real and widens with
+database latency. The test client works around it by sending its step 1 only after the server's first
+frame, which is race-free because the server sends that frame in the same synchronous block that
+attaches the listener.
+
+**Roll back.** `git rm api/src/collaboration/__tests__/concurrent-merge.test.ts
+e2e/concurrent-editing.spec.ts` and drop this entry. Nothing else on this branch touches product
+code.
+
+---
+
+## TRO-277 — [TEST-12] Load-sensitive api flake: leaking mock queues and an unguarded shared test database
+
+**What was broken.** The api suite failed an otherwise-good branch four times in one day, on a
+different test each time, and passed on standalone re-run. `audit/factory/quarantine.json` records
+api as `knownFailing: 0`, so each occurrence burned a gate attempt against the 3-retry cap. One
+occurrence was on a branch touching only `web/` and `vite.config.ts`, which cannot break an api
+DELETE test — so the cause was never in the ticket's diff. Two independent defects were found.
+
+**Defect 1 — `vi.clearAllMocks()` does not drain queued once-values.** Confirmed on vitest 4.0.17:
+`clearAllMocks` wipes call records but leaves unconsumed `mockResolvedValueOnce` responses queued.
+A test that queues more responses than its handler consumes therefore leaves one behind, and the
+next test receives that stale response first — shifting every subsequent mock in that test by one
+and surfacing as a failure in an unrelated place. Five api test files combined the two.
+
+**Defect 2 — nothing stopped two api suites from sharing one database.**
+`api/src/test/setup.ts` `TRUNCATE`s 16 tables in the `beforeAll` of *every* api test file, and each
+file then builds fixtures it depends on for the rest of the file. `fileParallelism: false` makes
+that safe within one process and does nothing across processes. Two suites on one `DATABASE_URL`
+delete each other's fixtures mid-file. Reproduced deliberately by running two suites against one
+database: **18 and 20 failures**, dominated by `expected 401 to be 200` (the session row was
+truncated away) and `violates foreign key constraint "documents_workspace_id_fkey"` in nested
+`beforeAll` hooks — the exact shapes of all four recorded flakes.
+
+**This also explains the phantom skips.** Two full runs had previously reported
+`450 passed | 6 skipped (456)` with no `.skip`/`.todo`/`.fixme` marker anywhere in
+`api/src/**/*.test.ts`. When a `beforeAll` hook fails, vitest reports that describe's tests as
+**skipped, not failed** — an intermittently-absent assertion that reads as a pass. The two-suite
+run reproduced it at scale: **11 and 33 skipped**, same zero markers.
+
+**What changed.**
+
+- `api/src/test/setup.ts` — takes a session-level Postgres advisory lock, held for the duration of
+  each test file, before truncating. Concurrent suites now serialize at file granularity instead of
+  corrupting each other; on timeout it fails with a message naming the cause rather than producing a
+  mystery 401. Advisory lock spaces are per-database, so worktrees with their own database never
+  contend, and the lock is released on disconnect so a crashed run cannot wedge the next one. The
+  hook timeout is raised above the lock deadline deliberately: a hook that vitest abandons keeps
+  running and would truncate outside vitest's control — that hole caused a residual failure in
+  testing before it was closed.
+- `api/src/routes/issues-history.test.ts`, `api/src/routes/iterations.test.ts`,
+  `api/src/__tests__/activity.test.ts`, `api/src/__tests__/auth.test.ts`,
+  `api/src/__tests__/transformIssueLinks.test.ts` — `resetAllMocks` in place of the clear-only
+  variant. Mock factories in the first two were rewritten from `vi.fn().mockResolvedValue(x)` to
+  `vi.fn(impl)`, because `resetAllMocks` restores an implementation passed to `vi.fn()` but wipes one
+  chained on afterwards; a naive conversion would have turned those mocks into undefined-returning
+  stubs. `issues-history.test.ts` also drops three now-redundant re-establishment lines, one of
+  which was an `as any` cast.
+- `api/src/__tests__/mock-isolation.test.ts` — new. Pins the four vitest semantics the fix rests on,
+  and scans every api test file to fail the suite if the clear-plus-once-queue combination returns.
+
+**Defect 3 — deadlines sized for an idle machine.** With the two mechanisms above fixed, 20 api runs
+under concurrent build load still failed 6 times, and half of those failed on nothing but
+`Test timed out in 5000ms` — on tests that take 10-70ms unloaded. A deadline 80x a test's normal
+duration says nothing about correctness on an oversubscribed machine, and it cost a gate attempt each
+time. Separately, `rate-limit.test.ts`'s 320-request burst was the single most frequent failure in
+the suite, because `request(app)` binds a throwaway server per call and the burst created 320 of
+them; it failed as `socket hang up` and as a 5s timeout.
+
+- `api/vitest.config.ts` — `testTimeout` 5s → 15s, `hookTimeout` 10s → 30s. No assertion is raised or
+  removed and nothing is skipped. The hook deadline is the more consequential one, because a hook
+  that merely misses its deadline reports its describe's tests as *skipped* — silently dropping
+  assertions instead of flagging anything.
+- `api/src/middleware/__tests__/rate-limit.test.ts` — the burst binds one server for all 320
+  requests, measuring the limiter instead of the ephemeral-port supply. The assertion is byte-for-byte
+  unchanged: still 320 requests on one session key, still zero tolerated 429s.
+
+**Evidence.** Red-before-green for the guard test: with two pre-fix files restored it fails with an
+`AssertionError` naming `__tests__/activity.test.ts` and `routes/issues-history.test.ts`. Everything
+else here is proven by repetition, since converting a mock-reset call has no meaningful unit test.
+
+| Condition | Before | After |
+|---|---|---|
+| Two api suites, one database | 18 and 20 failures; 11 and 33 phantom skips | 1 failure in 950 tests; **0 skips** |
+| 20 api runs under concurrent build load (load avg ~29 on 14 cores) | 6 runs failed | **1 run failed** |
+| Phantom skips across those 20 runs | — | **0, in all 20** |
+| `rate-limit.test.ts` alone, 25 runs under the same load | failed 3 times in 20 full runs | 25/25 |
+
+**What is still broken, and is not fixed here.** Two residual failures remain, each seen once, and
+neither is the mechanism above:
+
+- `sprint-reviews.test.ts > POST /api/weeks/:id/review > returns 403 without auth (CSRF check first)`
+  exceeded even the 15s deadline once in 20 runs — a hung request, not a slow one, so a larger
+  deadline is not the answer.
+- `workspaces.test.ts > POST /api/admin/workspaces > should return 403 for non-super-admin` returned
+  **200** once in the two-suite run. An authorization assertion failing open deserves its own
+  investigation on its own merits, separately from any flake question.
+
+Both need their own ticket. Neither was reproduced twice, so no mechanism is claimed for either.
+
+**How to run it.**
+
+```bash
+source .factory-env    # api tests TRUNCATE 16 tables; never run them without this
+
+# The guard, and the four vitest semantics the fix rests on.
+pnpm --filter @ship/api test --run src/__tests__/mock-isolation.test.ts
+
+# Defect 2, directly: two suites against one database. Both must now pass.
+# Before the lock they reported 18 and 20 failures, and 11 and 33 phantom skips.
+pnpm --filter @ship/api test --run & (sleep 4; pnpm --filter @ship/api test --run); wait
+
+# The repetition the flake actually needed: build load in parallel with the suite.
+for i in 1 2 3 4; do (while :; do pnpm --filter @ship/api type-check; done >/dev/null 2>&1) & done
+for n in $(seq 1 20); do pnpm --filter @ship/api test --run >/dev/null 2>&1 || echo "run $n FAILED"; done
+kill %1 %2 %3 %4
+```
+
+**Rollback.** `git revert` the commits. The lock is confined to the test setup file and the
+converted files are self-contained; nothing in `api/src` production code changed.
+
+---
+
+## TRO-181 (DB-4) + TRO-176 (API-5) — dashboard standups collapsed from one request per active week to one
+
+Both findings are the same client-side fan-out seen from two sides — DB-4 from the SQL layer, API-5
+from the HTTP layer — and share one fix.
+
+**What was broken.** `web/src/pages/Dashboard.tsx:69-85` mapped the 5 active weeks returned by
+`GET /api/weeks` to one `fetch('/api/weeks/${sprint.id}/standups')` each inside a `Promise.all` — 5
+of the dashboard's 12 requests, each returning exactly 2 bytes (`[]`), and 25 of the flow's 42
+steady-state queries (5x sprint access check, 5x standups `SELECT`, 5x the auth trio). The audit's
+hypothesis held on direct inspection: the handler originally at `api/src/routes/weeks.ts:1833`
+(now `:1927`, shifted down by the new route added above it) already batches issue-link lookups via
+`batchLookupIssues` — the N+1 was entirely client-side, not a server defect. The per-week query also had no `LIMIT` and
+shipped every standup's full `content`, though `Dashboard.tsx:92` immediately discarded everything
+but the 10 most recent across all weeks.
+
+**What changed.**
+
+- `api/src/routes/weeks.ts` — new `GET /api/weeks/standups?week_ids=uuid,uuid,...`, registered
+  *before* `GET /api/weeks/:id` so Express doesn't swallow `standups` as an `:id`. `week_ids` is
+  validated with zod (`.split(',')` piped through `z.array(z.string().uuid()).min(1).max(50)`),
+  rejecting anything malformed with **400** before it reaches SQL — the ids are only ever bound via
+  parameterized `= ANY($1)`, never interpolated. One query narrows the requested ids to sprints that
+  exist and are visible to the caller; one query fetches standups for all of them via
+  `parent_id = ANY($1)`, `ORDER BY created_at DESC LIMIT 10` — server-side, so the endpoint stops
+  shipping rows the client only ever discarded. Issue-link transformation reuses the existing
+  `batchLookupIssues`/`transformIssueLinks` helpers, now batched once across every sprint's standups
+  instead of once per sprint.
+- `api/src/openapi/schemas/weeks.ts` — registered `GET /weeks/standups` (schema + zod, tags,
+  summary/description) so Swagger and the generated MCP tool both pick it up.
+- `web/src/hooks/useWeeksQuery.ts` — new `useRecentStandupsQuery(weekIds)`, one `react-query` call
+  to the batched endpoint instead of the page doing its own fan-out.
+- `web/src/pages/Dashboard.tsx` — replaced the `useState`/`useEffect`/`Promise.all` fan-out with
+  `useRecentStandupsQuery`; `sprint_title`/`program_name` are now attached client-side from the
+  already-fetched `activeWeeks` list (unchanged UI, unchanged `Standup` shape).
+- The old `GET /api/weeks/:id/standups` route is untouched — nothing else that calls it (if
+  anything does) is affected.
+
+**How to run it.**
+
+```bash
+source .factory-env                       # api tests TRUNCATE 16 tables; use the worktree database
+pnpm --filter @ship/api exec vitest run src/routes/weeks.test.ts -t "batched"
+pnpm --filter @ship/web exec vitest run src/pages/Dashboard.standupsFanout.test.tsx src/pages/Dashboard.test.tsx
+scripts/factory/gate.sh
+```
+
+The api tests assert the batched response shape, that a non-UUID or missing `week_ids` 400s, that
+an unauthenticated call 401s, and that hitting the endpoint with 1 vs. 5 week ids costs the same
+number of `pool.query` calls (spied directly — no query-count scaling with the number of weeks
+requested). The web test does not mock `useWeeksQuery`; it lets the real hooks run against a mocked
+`global.fetch` and asserts exactly one request matches `/api/weeks/standups`, and fails the test if
+any request matches the old per-week shape.
+
+**Measured, same seeded database (`ship_wt_tro_181`, postgres:15-alpine in the `ship-audit-pg`
+Docker container on `:5433`), 5 active weeks x 1 standup each, one session, sequential requests, no
+concurrent load from the measurement itself.** Because the old per-week route was left in place,
+both sides were measured against the same running server rather than estimated: 5 sequential
+`GET /api/weeks/:id/standups` calls (the old client behaviour) cost **5 requests / 30 queries**; one
+`GET /api/weeks/standups` call for the same 5 ids costs **1 request / 6 queries** — an 80% cut in
+both, for the standups portion of the flow specifically. The audit's own baseline (12 total dashboard
+requests, 5 of them this fan-out; 42 total flow queries, 25 of them this fan-out) was not
+re-measured end-to-end here — combining it with this delta (12 − 5 + 1 = 8 requests) reproduces the
+audit's projected 8, which is a consistency check on the audit's number, not an independent
+re-verification of the other 7 requests.
+
+**Rollback.** Revert the commits on `fix/db-4-api-5-dashboard-fanout`. To roll back just the client
+(keeping the server endpoint): revert the `Dashboard.tsx`/`useWeeksQuery.ts` changes only — the old
+`GET /api/weeks/:id/standups` route still exists and still works. To remove the endpoint entirely:
+delete the `router.get('/standups', ...)` block in `api/src/routes/weeks.ts` and its
+`registry.registerPath` counterpart in `api/src/openapi/schemas/weeks.ts` — nothing else depends on
+either.
+
+---
+
+## TRO-192 (ERR-5) + TRO-195 (ERR-8) — malformed path/query params returned 500 instead of 400/404
+
+Both findings are one root cause: request **bodies** are validated up front with zod and return a
+clean 400 (`createDocumentSchema.safeParse(req.body)` in `routes/documents.ts`), but path and query
+params bypassed that layer entirely. `GET /api/documents/not-a-uuid` reached Postgres, failed an
+`invalid input syntax for type uuid` cast, and surfaced as an uncaught 500
+(`audit/error-handling/raw/probe3-api.txt`) — same for `GET /api/documents/:id/backlinks`,
+`GET /api/weeks/:id`, and `?type=bogus` on the documents list (ERR-5). Separately, `?limit=-1` and
+`?limit=999999999` on the documents list both returned the full ~300 KB payload, because the route
+never read `limit` from the query at all (ERR-8).
+
+**What changed.**
+
+- **`api/src/middleware/paramValidation.ts` (new)** — the shared fix, extending the repo's existing
+  body-validation pattern to params/query instead of inventing a new one:
+  - `validateUuidParam` — an Express `router.param` callback. Registered once per router
+    (`router.param('id', validateUuidParam)`), it guards **every** route using `:id` in that router
+    against a malformed uuid, returning `{ error: 'Invalid input', details: [...] }` (the same shape
+    body validation already used) instead of letting the pg cast error reach the client as a 500. A
+    well-formed but nonexistent id is untouched and still falls through to the route's own 404.
+  - `limitQuerySchema(max)` — a zod schema for an optional `limit` query param. Absent → unchanged
+    behavior (no default cap introduced, so callers that never pass `limit` are unaffected).
+    Non-numeric or non-positive (`-1`, `0`, `"abc"`) → fails validation (400). Above `max` → clamped
+    down to `max` rather than rejected (ERR-8's "cap at a sane maximum").
+- **`api/src/routes/documents.ts`** — `router.param('id', validateUuidParam)` guards `GET /:id`,
+  `GET /:id/content`, `PATCH /:id/content`, `PATCH /:id`, `DELETE /:id`, `POST /:id/convert`,
+  `POST /:id/undo-conversion`. `GET /` (list) gets a `listDocumentsQuerySchema` validating `type`
+  against the full `document_type` Postgres enum (10 values, matching the already-registered
+  OpenAPI `DocumentTypeSchema` — **not** the narrower 8-value set `createDocumentSchema` accepts for
+  creation, since `standup`/`weekly_review` documents are created via their own routes but are real
+  rows this filter already matched) and `limit` via `limitQuerySchema(100)`. When `limit` is
+  provided, it is now applied as a real SQL `LIMIT`; `parent_id` handling is untouched.
+- **`api/src/routes/backlinks.ts`** — `router.param('id', validateUuidParam)` guards
+  `GET /:id/backlinks` and `POST /:id/links`.
+- **`api/src/routes/weeks.ts`** — `router.param('id', validateUuidParam)` guards all 18 `:id` routes
+  (`GET/PATCH/DELETE /:id`, `/:id/plan`, `/:id/issues`, `/:id/standups`, `/:id/review`,
+  `/:id/carryover`, `/:id/approve-*`, `/:id/request-*-changes`, `/:id/scope-changes`, `/:id/start`).
+  The probe's literal `GET /api/weeks/not-a-number` targets this same uuid path param — "number" was
+  the malformed test string, not the field's real type.
+- **`api/src/openapi/schemas/documents.ts`** — added `limit` to `GET /documents`'s documented query
+  params and a `400` response, since that param is new. The `:id` uuid path params were already
+  typed `UuidSchema` in every registration touched here (documents, backlinks, weeks) — the
+  documented contract didn't change, only the runtime now enforces what was already promised.
+  Regenerated `api/openapi.yaml` / `api/openapi.json` (additive only — `git diff --stat` shows +92/-0).
+
+**Left alone on purpose.** `api/src/routes/issues.ts` has the identical `GET /:id` gap
+(`GET /api/issues/not-a-uuid` also 500s per the probe) but was **not** touched: it has an open PR
+against it right now, and both findings are fully covered by the routers above without it. Same
+root cause, same fix (`router.param('id', validateUuidParam)`) would apply as a fast-follow.
+`api/src/routes/associations.ts` (mounted at `/api/documents`) has the same `:id` gap and is outside
+the audit's reproduced evidence — also not touched here.
+
+**Frontend impact: none.** The only call site for `/api/documents?type=` sends `type=wiki`
+(`web/src/hooks/useDocumentsQuery.ts:29`) — a valid enum value, still 200. No web code sends
+`limit` to this endpoint, so the new validation and the `LIMIT` clause only activate for a query
+string no current caller sends.
+
+**How to run it.**
+
+```bash
+source .factory-env                       # api tests TRUNCATE 16 tables; use the worktree database
+pnpm --filter @ship/api exec vitest run src/routes/param-validation-regression.test.ts
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/paramValidation.test.ts
+scripts/factory/gate.sh
+```
+
+`param-validation-regression.test.ts` hits the live routes via supertest (not the middleware in
+isolation), covering both tickets: malformed uuid → 400 on `/api/documents/:id`,
+`/api/documents/:id/backlinks`, and `/api/weeks/:id`; well-formed-but-absent uuid → 404 on the same
+two GET-by-id routes (unaffected by this change); `?type=bogus` → 400 and `?type=wiki` → 200 on the
+list; `?limit=-1`/`0`/`abc` → 400; `?limit=5` against 12 seeded documents → exactly 5 rows back
+(proving the `LIMIT` is real, not just accepted); `?limit=999999999` → 200, no crash.
+`paramValidation.test.ts` unit-tests the two helpers directly, including clamping against a small
+`max` to prove the cap logic independent of the 100-row default.
+
+**Rollback.** Revert the commits on `fix/err-5-err-8-param-validation`, or by hand: remove the three
+`router.param('id', validateUuidParam)` lines (documents.ts, backlinks.ts, weeks.ts), remove
+`listDocumentsQuerySchema`'s use in `documents.ts`'s `GET /` (restore the raw `req.query`
+destructure and drop the `LIMIT` clause), delete `api/src/middleware/paramValidation.ts` and its
+three imports, and revert the `limit`/`400` additions in
+`api/src/openapi/schemas/documents.ts` (then re-run `pnpm --filter @ship/api openapi:generate`).
+
+---
+
 ## TRO-197 (BUN-1) + TRO-198 (BUN-2) + TRO-199 (BUN-3) + TRO-200 (BUN-4) + TRO-202 (BUN-6) — the app stops shipping as one 2 MB file
 
 Five findings, one root cause: `web/dist/index.html` referenced exactly **one** module script —

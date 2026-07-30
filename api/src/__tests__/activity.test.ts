@@ -33,7 +33,11 @@ describe('Activity API', () => {
   let app: express.Application;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks, not the clear-only variant: clearing mocks wipes call records but
+    // leaves unconsumed mockResolvedValueOnce values queued, so a test that
+    // queues more responses than its handler consumes shifts every later test's
+    // mocks by one (TRO-277 / TEST-12).
+    vi.resetAllMocks();
     app = createTestApp();
   });
 

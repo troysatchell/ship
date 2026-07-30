@@ -35,8 +35,20 @@ cd "$WT_ROOT" || { echo "ERROR: cannot cd to ${WT_ROOT}" >&2; exit 2; }
 # .factory-env carries the ticket id and the worktree's EXCLUSIVE database.
 # Without it we would run unit tests against whatever DATABASE_URL happens to be
 # set — and api/src/test/setup.ts TRUNCATEs on contact. Refuse rather than guess.
+#
+# An explicitly-exported FACTORY_BASE_REF must survive the source. `.factory-env`
+# hardcodes `main`, and `set -a; .` overwrites the caller's value — so
+# `FACTORY_BASE_REF=origin/main scripts/factory/gate.sh` silently gated against
+# the local ref instead. That matters at factory pace: local `main` is shared
+# across worktrees and lagged `origin/main` by three merges in one session
+# (TRO-226). Triple-dot diffs still resolve via merge-base, so the failure is
+# quiet rather than loud, which is worse.
+BASE_REF_OVERRIDE="${FACTORY_BASE_REF:-}"
 if [ -f .factory-env ]; then
   set -a; . ./.factory-env; set +a
+fi
+if [ -n "$BASE_REF_OVERRIDE" ]; then
+  FACTORY_BASE_REF="$BASE_REF_OVERRIDE"
 fi
 TICKET="${FACTORY_TICKET:-}"
 if [ -z "$TICKET" ]; then
@@ -268,25 +280,61 @@ else
   elif command -v gtimeout >/dev/null 2>&1; then
     CR_RUNNER=(gtimeout --foreground -k 10 "${CR_TIMEOUT}")
   else
+    # No timeout binary. Still run it, but say so — a silent unbounded call is
+    # how this stalled in the first place.
     CR_RUNNER=()
   fi
 
+  # NEVER write the CLI's output straight over coderabbit.json. The free CLI
+  # allowance is shared and frequently exhausted, and on failure the CLI still
+  # emits a short JSON error stub. Redirecting into the real path therefore
+  # DESTROYS a completed review: observed 2026-07-30 on TRO-226, where a 21-line
+  # file holding 10 findings was replaced by a 5-line `rate_limit` object. The
+  # agent had already transcribed them, so nothing was lost that time — but the
+  # gate cannot rely on that. Capture to a temp file and only promote it when the
+  # run actually produced findings, or when there is nothing worth keeping.
+  CR_TMP="$OUT_DIR/coderabbit.next.json"
+  : > "$CR_TMP"
   if [ ${#CR_RUNNER[@]} -eq 0 ]; then
-    # No timeout binary available. Run it, but say so — a silent unbounded call
-    # is how this stalled in the first place.
-    if coderabbit review --agent --base "${BASE_REF}" > "$OUT_DIR/coderabbit.json" 2>"$OUT_DIR/coderabbit.err"; then
-      record coderabbit pass "findings captured (no timeout binary — call was unbounded)"
-    else
-      record coderabbit warn "review did not complete — see .factory/coderabbit.err"
-    fi
+    coderabbit review --agent --base "${BASE_REF}" > "$CR_TMP" 2>"$OUT_DIR/coderabbit.err"
+    CR_RC=$?
+    CR_UNBOUNDED=1
   else
     "${CR_RUNNER[@]}" coderabbit review --agent --base "${BASE_REF}" \
-      > "$OUT_DIR/coderabbit.json" 2>"$OUT_DIR/coderabbit.err"
+      > "$CR_TMP" 2>"$OUT_DIR/coderabbit.err"
     CR_RC=$?
-    if [ "$CR_RC" -eq 0 ]; then
-      record coderabbit pass "findings captured — see .factory/coderabbit.json (triage required)"
-    elif [ "$CR_RC" -eq 124 ] || [ "$CR_RC" -eq 137 ]; then
+    CR_UNBOUNDED=0
+  fi
+
+  # `--agent` emits JSONL; a real review contains `"type":"finding"` rows.
+  cr_findings() { grep -c '"type"[[:space:]]*:[[:space:]]*"finding"' "$1" 2>/dev/null || true; }
+  CR_NEW_N="$(cr_findings "$CR_TMP")"; CR_NEW_N="${CR_NEW_N:-0}"
+  CR_OLD_N=0
+  [ -f "$OUT_DIR/coderabbit.json" ] && { CR_OLD_N="$(cr_findings "$OUT_DIR/coderabbit.json")"; CR_OLD_N="${CR_OLD_N:-0}"; }
+
+  if [ "$CR_RC" -eq 0 ] && [ "$CR_NEW_N" -gt 0 ]; then
+    mv "$CR_TMP" "$OUT_DIR/coderabbit.json"
+    if [ "$CR_UNBOUNDED" = 1 ]; then
+      record coderabbit pass "${CR_NEW_N} finding(s) captured (no timeout binary — call was unbounded)"
+    else
+      record coderabbit pass "${CR_NEW_N} finding(s) captured — see .factory/coderabbit.json (triage required)"
+    fi
+  elif [ "$CR_OLD_N" -gt 0 ]; then
+    # A previous run's findings are still sitting there and are worth more than
+    # this run's stub. Keep them, and say plainly that G9's file is stale.
+    rm -f "$CR_TMP"
+    if [ "$CR_RC" -eq 124 ] || [ "$CR_RC" -eq 137 ]; then
+      record coderabbit warn "review timed out after ${CR_TIMEOUT}s — KEPT ${CR_OLD_N} finding(s) from an earlier run; triage those or the PR review"
+    else
+      record coderabbit warn "review did not complete (rc=${CR_RC}) — KEPT ${CR_OLD_N} finding(s) from an earlier run; triage those or the PR review"
+    fi
+  else
+    # Nothing to preserve, so recording the stub is useful diagnostic material.
+    mv "$CR_TMP" "$OUT_DIR/coderabbit.json"
+    if [ "$CR_RC" -eq 124 ] || [ "$CR_RC" -eq 137 ]; then
       record coderabbit warn "review timed out after ${CR_TIMEOUT}s — PR-level review is authoritative; triage that instead"
+    elif [ "$CR_RC" -eq 0 ]; then
+      record coderabbit pass "review completed with no findings"
     else
       record coderabbit warn "review did not complete (rc=${CR_RC}) — see .factory/coderabbit.err"
     fi

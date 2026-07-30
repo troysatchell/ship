@@ -85,7 +85,12 @@ function activityWrites(): string[] {
 
 describe('session activity write throttle (TRO-179 / DB-2)', () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks, not clearAllMocks: clearing only wipes recorded calls, leaving a
+    // queued mockResolvedValueOnce (or the persistent mockResolvedValue default set by
+    // mockValidSession) to leak into the next test. Every test here happens to drain its
+    // own once-queue today, but that is exactly the fragile invariant TRO-277/TEST-12
+    // exists to not depend on — enforced across the suite by mock-isolation.test.ts.
+    vi.resetAllMocks();
   });
 
   describe('database write throttling', () => {

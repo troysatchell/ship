@@ -3,9 +3,15 @@ import { pool } from '../db/client.js';
 import { z } from 'zod';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { validateUuidParam } from '../middleware/paramValidation.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
+
+// ERR-5: guard `:id` in this router against a malformed uuid (e.g.
+// `GET /api/documents/not-a-uuid/backlinks`), which previously reached
+// Postgres as an invalid cast and surfaced as an uncaught 500.
+router.param('id', validateUuidParam);
 
 // Validation schema for updating links
 const updateLinksSchema = z.object({

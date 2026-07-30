@@ -110,6 +110,10 @@ registry.registerPath({
       parent_id: UuidSchema.optional().openapi({
         description: 'Filter by parent document ID',
       }),
+      limit: z.coerce.number().int().positive().optional().openapi({
+        description: 'Maximum number of documents to return (capped at 100). Omit for the full unfiltered list.',
+        example: 20,
+      }),
     }),
   },
   responses: {
@@ -118,6 +122,20 @@ registry.registerPath({
       content: {
         'application/json': {
           schema: z.array(DocumentListItemSchema),
+        },
+      },
+    },
+    400: {
+      description: 'Invalid type, parent_id, or limit',
+      content: {
+        'application/json': {
+          schema: z.object({
+            error: z.string(),
+            details: z.array(z.object({
+              path: z.array(z.union([z.string(), z.number()])).optional(),
+              message: z.string(),
+            })).optional(),
+          }),
         },
       },
     },

@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { useActiveWeeksQuery, ActiveWeek } from '@/hooks/useWeeksQuery';
+import { useActiveWeeksQuery, useRecentStandupsQuery, ActiveWeek } from '@/hooks/useWeeksQuery';
 import { useProjects, Project } from '@/contexts/ProjectsContext';
 import { useDashboardActionItems } from '@/hooks/useDashboardActionItems';
 import { cn } from '@/lib/cn';
@@ -8,8 +8,6 @@ import { formatRelativeTime } from '@/lib/date-utils';
 import { DashboardVariantC } from '@/components/dashboard/DashboardVariantC';
 
 type DashboardView = 'my-work' | 'overview';
-
-const API_URL = import.meta.env.VITE_API_URL ?? '';
 
 interface Standup {
   id: string;
@@ -49,58 +47,28 @@ export function DashboardPage() {
   const { data: weeksData, isLoading: weeksLoading } = useActiveWeeksQuery();
   const { projects, loading: projectsLoading } = useProjects();
   const { data: actionItemsData, isLoading: actionItemsLoading } = useDashboardActionItems();
-  const [recentStandups, setRecentStandups] = useState<Standup[]>([]);
-  const [standupsLoading, setStandupsLoading] = useState(true);
 
-  const activeWeeks = weeksData?.weeks || [];
+  const activeWeeks = useMemo(() => weeksData?.weeks || [], [weeksData]);
   const actionItems = actionItemsData?.action_items || [];
 
-  // Fetch recent standups from all active sprints
-  useEffect(() => {
-    async function fetchStandups() {
-      if (activeWeeks.length === 0) {
-        setStandupsLoading(false);
-        return;
-      }
+  // Recent standups across every active week, in one batched request
+  // (audit findings DB-4 / API-5: this used to be one fetch per active week).
+  const weekIds = useMemo(() => activeWeeks.map(week => week.id), [activeWeeks]);
+  const { data: recentStandupsData, isLoading: standupsQueryLoading } = useRecentStandupsQuery(weekIds);
+  const standupsLoading = weeksLoading || (weekIds.length > 0 && standupsQueryLoading);
 
-      try {
-        const allStandups: Standup[] = [];
-
-        const responses = await Promise.all(
-          activeWeeks.map(async (sprint) => {
-            const res = await fetch(`${API_URL}/api/weeks/${sprint.id}/standups`, {
-              credentials: 'include',
-            });
-            if (res.ok) {
-              const standups: Standup[] = await res.json();
-              return standups.map(s => ({
-                ...s,
-                sprint_id: sprint.id,
-                sprint_title: sprint.name,
-                program_name: sprint.program_name,
-              }));
-            }
-            return [];
-          })
-        );
-
-        responses.forEach(standups => allStandups.push(...standups));
-        allStandups.sort((a, b) =>
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        );
-
-        setRecentStandups(allStandups.slice(0, 10));
-      } catch (err) {
-        console.error('Failed to fetch standups:', err);
-      } finally {
-        setStandupsLoading(false);
-      }
-    }
-
-    if (!weeksLoading) {
-      fetchStandups();
-    }
-  }, [activeWeeks, weeksLoading]);
+  const recentStandups: Standup[] = useMemo(() => {
+    if (!recentStandupsData) return [];
+    const weekById = new Map(activeWeeks.map(week => [week.id, week]));
+    return recentStandupsData.map(standup => {
+      const week = weekById.get(standup.sprint_id);
+      return {
+        ...standup,
+        sprint_title: week?.name,
+        program_name: week?.program_name,
+      };
+    });
+  }, [recentStandupsData, activeWeeks]);
 
   const projectSummary = {
     active: projects.filter(p => !p.archived_at).length,

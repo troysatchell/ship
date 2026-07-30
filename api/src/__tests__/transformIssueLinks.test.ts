@@ -14,7 +14,10 @@ describe('transformIssueLinks', () => {
   const workspaceId = 'test-workspace-id';
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks, not the clear-only variant: clearing mocks leaves unconsumed
+    // mockResolvedValueOnce values queued, which leak into later tests
+    // (TRO-277 / TEST-12).
+    vi.resetAllMocks();
   });
 
   describe('pattern matching and transformation', () => {

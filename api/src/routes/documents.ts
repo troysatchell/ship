@@ -3,12 +3,24 @@ import { pool } from '../db/client.js';
 import { z } from 'zod';
 import { authMiddleware } from '../middleware/auth.js';
 import { isWorkspaceAdmin } from '../middleware/visibility.js';
+import { validateUuidParam, limitQuerySchema } from '../middleware/paramValidation.js';
 import { handleVisibilityChange, handleDocumentConversion, invalidateDocumentCache, broadcastToUser } from '../collaboration/index.js';
 import { extractHypothesisFromContent, extractSuccessCriteriaFromContent, extractVisionFromContent, extractGoalsFromContent, checkDocumentCompleteness } from '../utils/extractHypothesis.js';
 import { loadContentFromYjsState } from '../utils/yjsConverter.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
+
+// ERR-5: guard every `:id` route in this router against a malformed uuid
+// (e.g. `GET /api/documents/not-a-uuid`), which previously reached Postgres
+// as an invalid cast and surfaced as an uncaught 500. A well-formed but
+// absent id is unaffected and still gets each route's own 404.
+router.param('id', validateUuidParam);
+
+// Maximum rows the list endpoint will return for an explicit `limit` query
+// param (ERR-8). Matches the cap already used by `PaginationParamsSchema`
+// (openapi/schemas/common.ts) for this repo's other list endpoints.
+const MAX_DOCUMENTS_LIST_LIMIT = 100;
 
 // Check if user can access a document (visibility check)
 async function canAccessDocument(
@@ -46,6 +58,29 @@ const createDocumentSchema = z.object({
     id: z.string().uuid(),
     type: z.enum(['program', 'project', 'sprint', 'parent']),
   })).optional(),
+});
+
+// Every value the `documents.document_type` Postgres enum accepts
+// (`api/src/db/schema.sql:100`) — matches this repo's already-registered
+// OpenAPI `DocumentTypeSchema` for this endpoint (openapi/schemas/documents.ts).
+// Deliberately NOT the narrower set `createDocumentSchema` above accepts for
+// creation: 'standup' and 'weekly_review' documents are created via their own
+// routes (e.g. POST /api/standups) but are real rows this list endpoint's
+// `?type=` filter already matches against, so validating against the fuller
+// set avoids rejecting a value that was previously accepted.
+const LIST_QUERY_DOCUMENT_TYPE_VALUES = [
+  'wiki', 'issue', 'program', 'project', 'sprint', 'person',
+  'weekly_plan', 'weekly_retro', 'standup', 'weekly_review',
+] as const;
+
+// Query params for GET / (list documents). `parent_id` keeps its existing
+// ad-hoc handling (including the 'null'/'' sentinel below) — only `type` and
+// `limit` are validated here, since those are the two params the audit
+// actually reproduced a defect against (ERR-5's `?type=bogus`, ERR-8's
+// `?limit=-1`/`?limit=999999999`).
+const listDocumentsQuerySchema = z.object({
+  type: z.enum(LIST_QUERY_DOCUMENT_TYPE_VALUES).optional(),
+  limit: limitQuerySchema(MAX_DOCUMENTS_LIST_LIMIT),
 });
 
 const updateDocumentSchema = z.object({
@@ -93,7 +128,16 @@ const updateDocumentSchema = z.object({
 // List documents
 router.get('/', authMiddleware, async (req: Request, res: Response) => {
   try {
-    const { type, parent_id } = req.query;
+    // ERR-5 (`?type=bogus`) / ERR-8 (`?limit=-1`, `?limit=999999999`): validate
+    // up front instead of letting a bogus type silently filter out every row
+    // or an unbounded limit return the full payload unbounded.
+    const parsedQuery = listDocumentsQuerySchema.safeParse(req.query);
+    if (!parsedQuery.success) {
+      res.status(400).json({ error: 'Invalid input', details: parsedQuery.error.errors });
+      return;
+    }
+    const { type, limit } = parsedQuery.data;
+    const { parent_id } = req.query;
     const userId = req.userId!;
     const workspaceId = req.workspaceId!;
 
@@ -110,11 +154,11 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
         AND deleted_at IS NULL
         AND (visibility = 'workspace' OR created_by = $2 OR $3 = TRUE)
     `;
-    const params: (string | boolean | null)[] = [workspaceId, userId, isAdmin];
+    const params: (string | boolean | null | number)[] = [workspaceId, userId, isAdmin];
 
     if (type) {
       query += ` AND document_type = $${params.length + 1}`;
-      params.push(type as string);
+      params.push(type);
     }
 
     if (parent_id !== undefined) {
@@ -127,6 +171,13 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     }
 
     query += ` ORDER BY position ASC, created_at DESC`;
+
+    // Only applied when the caller explicitly passes `limit` — absent `limit`
+    // keeps the existing unbounded-list behavior other callers rely on.
+    if (limit !== undefined) {
+      query += ` LIMIT $${params.length + 1}`;
+      params.push(limit);
+    }
 
     const result = await pool.query(query, params);
 
