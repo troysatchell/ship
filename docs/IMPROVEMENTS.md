@@ -266,13 +266,23 @@ window-synced bursts, same concurrency sweep (10/25/50), same 6 endpoints/order 
 the slowest query, with before/after EXPLAIN ANALYZE as evidence."* (`AUDIT_REPORT.md`, Database
 Query Efficiency § Recommended improvement plan)
 
-**Verdict: met.** The week-dashboard flow's query count fell 80%, on its own more than 4× the 20%
-bar. `audit/db-query/compare-phase2-jul30/` does not exist in this worktree as of this commit —
-confirmed by directory listing — so this section's evidence is per-PR `EXPLAIN ANALYZE` pairs
-recorded directly in `CHANGES.md`, not a re-captured full-flow comparison. Reference it as **in
-flight**; if it lands, it supersedes the figures below.
+**Verdict: met — on both prongs, by the formal compare run.** The full-flow re-capture
+(`audit/db-query/compare-phase2-jul30/`, 2026-07-30, identical 500/20/813 seed, per-database
+statement logging, 3 capture runs with majority-value reporting) shows: **List issues −23.5%
+query count** (17→13, clearing the ≥20% prong), and **the baseline's #1 slowest statement −87.1%**
+(`UPDATE sessions SET last_activity`, 4.764 → 0.614 ms, clearing the ≥50% prong). The bonus
+week-dashboard flow fell **−69.0%** (42→13 queries) with its N+1 eliminated (was the only flow
+with one; all six captured flows are now N+1-free). Steady-state deltas on the five required
+flows: main page −19.2%, view document −8.9% (cold −20.5%), list issues −23.5%, sprint board
+−19.6%, search −13.6% (cold −20.0%).
 
-### Before → After
+**Methodology note (flow-name correction):** the per-PR "30→6 standup queries" figure below is
+PR #29's own measurement of the standups *portion* of the dashboard page under its stated
+conditions; the compare harness measures whole flows and maps "load main page" to `/my-week`
+(the actual `/` redirect), where the week dashboard is a separate captured flow. Both numbers are
+real under their own conditions; the harness figures are authoritative for the deliverable table.
+
+### Before → After (per-PR evidence, each under its own stated conditions)
 
 | Flow / query | Before | After | Δ | Source |
 |---|---|---|---|---|
