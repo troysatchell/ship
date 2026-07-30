@@ -570,15 +570,20 @@ test.describe('Performance - Memory Usage', () => {
       return 0
     })
 
-    if (initialMemory > 0 && finalMemory > 0) {
-      const memoryGrowth = finalMemory - initialMemory
-      const growthMB = memoryGrowth / (1024 * 1024)
+    // performance.memory is a non-standard Chromium extension; Playwright's
+    // default browser is Chromium, so it should always be present here (fails
+    // with an actionable message if that ever stops being true, rather than
+    // silently skipping the growth assertion below it).
+    expect(initialMemory, 'performance.memory should be available in Chromium; check the browser being used').toBeGreaterThan(0)
+    expect(finalMemory, 'performance.memory should be available in Chromium; check the browser being used').toBeGreaterThan(0)
 
-      console.log(`Memory growth: ${growthMB.toFixed(2)}MB`)
+    const memoryGrowth = finalMemory - initialMemory
+    const growthMB = memoryGrowth / (1024 * 1024)
 
-      // Memory growth should be reasonable (under 50MB for this test)
-      expect(growthMB).toBeLessThan(50)
-    }
+    console.log(`Memory growth: ${growthMB.toFixed(2)}MB`)
+
+    // Memory growth should be reasonable (under 50MB for this test)
+    expect(growthMB).toBeLessThan(50)
   })
 
   test('memory is released after deleting content', async ({ page }) => {
@@ -625,17 +630,18 @@ test.describe('Performance - Memory Usage', () => {
       return 0
     })
 
-    if (beforeDelete > 0 && afterDelete > 0) {
-      console.log(`Memory before delete: ${(beforeDelete / (1024 * 1024)).toFixed(2)}MB`)
-      console.log(`Memory after delete: ${(afterDelete / (1024 * 1024)).toFixed(2)}MB`)
+    expect(beforeDelete, 'performance.memory should be available in Chromium; check the browser being used').toBeGreaterThan(0)
+    expect(afterDelete, 'performance.memory should be available in Chromium; check the browser being used').toBeGreaterThan(0)
 
-      // Memory should not have grown significantly
-      // (It may not decrease immediately due to GC timing, but shouldn't grow)
-      const memoryGrowth = afterDelete - beforeDelete
-      const growthMB = memoryGrowth / (1024 * 1024)
+    console.log(`Memory before delete: ${(beforeDelete / (1024 * 1024)).toFixed(2)}MB`)
+    console.log(`Memory after delete: ${(afterDelete / (1024 * 1024)).toFixed(2)}MB`)
 
-      expect(growthMB).toBeLessThan(20)
-    }
+    // Memory should not have grown significantly
+    // (It may not decrease immediately due to GC timing, but shouldn't grow)
+    const memoryGrowth = afterDelete - beforeDelete
+    const growthMB = memoryGrowth / (1024 * 1024)
+
+    expect(growthMB).toBeLessThan(20)
   })
 
 })
