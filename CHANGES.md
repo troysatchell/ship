@@ -8,12 +8,38 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
-## TRO-278 — [TF-7] ALB security group locked to CloudFront's prefix list; `trust proxy` corrected to the real 2-hop chain
+## TRO-278 — [TF-7] ALB security group locked to CloudFront's prefix list; `trust proxy` hop count made environment-configurable
 
-**HOLD FOR HUMAN REVIEW — security semantics (gate 6) + infra change (gate 2).** This changes a
-production security group and the trust boundary `req.ip` is computed from. See the post-deploy
-checklist below; several DoD items need live AWS traffic this environment cannot produce (no
-credentials, no `apply`).
+**HOLD, scoped to the terraform side only — security semantics (gate 6) + infra change (gate 2).**
+`terraform/security-groups.tf` and `terraform/elastic-beanstalk.tf` still need human sign-off
+before any AWS `apply`. Per the maintainer, that `apply` is **not planned** — the AWS blueprints in
+this repo are repo hygiene, not the live deployment. **The `api/src/app.ts` change is NOT held** and
+is safe to auto-deploy to the actual live target, Render: see the maintainer follow-up immediately
+below for why, and the post-deploy checklist further down for what remains genuinely unverified on
+the AWS side.
+
+**MAINTAINER FOLLOW-UP (2026-07-30) — this repo's live deployment is Render, not AWS.** The first
+version of this fix set `app.set('trust proxy', 2)` unconditionally. That count is correct only for
+the AWS chain analyzed below (`client -> CloudFront -> ALB -> Express`, two hops). This repo's
+actual live deployment is **Render** (`terraform/render/web_service.tf`, adopted onto `main` via
+TF-10 the same day, `auto_deploy = true`), sitting directly in front of Express with **no CDN
+layer** — `client -> Render's proxy -> Express`, ONE hop. Render auto-deploys from `main`, so
+merging the unconditional `2` as originally written would have made `req.ip` forgeable (a
+client-supplied `X-Forwarded-For` entry trusted as though it were Render's own) on the live demo
+site the moment this PR merged — recreating on Render the exact vulnerability this ticket fixes on
+AWS.
+
+**The fix:** the hop count is no longer a constant. `api/src/app.ts`'s `resolveTrustProxyHops`
+(defined just above `createApp`, called at `app.set('trust proxy', resolveTrustProxyHops(process.env.TRUST_PROXY_HOPS))`)
+reads `TRUST_PROXY_HOPS` from the environment, validated as a positive integer, and **defaults to
+1** when the variable is unset, empty, or invalid (zero, negative, non-integer, or non-numeric) —
+logging a warning rather than crashing or silently trusting a bogus count. 1 is the correct value
+for Render and local dev, and is *identical* to what `app.set('trust proxy', 1)` did before this
+ticket touched the file at all, because `terraform/render/web_service.tf` sets no
+`TRUST_PROXY_HOPS` override — so the default is what actually ships to the live site.
+`terraform/elastic-beanstalk.tf` now sets `TRUST_PROXY_HOPS = "2"` for the AWS blueprint (the
+CloudFront -> ALB chain below) — inert today since that environment is not live and not planned to
+be applied, but present so the blueprint is correct if it ever is.
 
 **Observed** (`terraform/security-groups.tf`, before this change): the ALB security group allowed
 ports 80/443 from `0.0.0.0/0` — not restricted to CloudFront — while `api/src/app.ts` set
@@ -50,13 +76,17 @@ ports 80/443 from `0.0.0.0/0` — not restricted to CloudFront — while `api/sr
 **What changed — the trust-proxy hop count (`api/src/app.ts`).**
 
 `terraform/s3-cloudfront.tf` puts the ALB behind CloudFront as a custom origin (`EB-API`), so the
-real chain is `client -> CloudFront -> ALB -> Express`: **two** reverse-proxy hops, not one.
-`trust proxy 1` under-counted by one hop — verified by reading the installed `proxy-addr`/
-`forwarded` packages (not by assumption): with N trusted hops, `req.ip` resolves to the (N+1)-th
-`X-Forwarded-For` entry counting from the end, because each honest proxy appends exactly one entry.
-At N=1, `req.ip` for **all** legitimate CloudFront-routed traffic resolved to CloudFront's own
-edge-server IP, never the real client — a correctness bug independent of the security-group finding.
-`app.set('trust proxy', 1)` is now `app.set('trust proxy', 2)`.
+AWS chain is `client -> CloudFront -> ALB -> Express`: **two** reverse-proxy hops, not one.
+`trust proxy 1` under-counted by one hop for that chain — verified by reading the installed
+`proxy-addr`/`forwarded` packages (not by assumption): with N trusted hops, `req.ip` resolves to the
+(N+1)-th `X-Forwarded-For` entry counting from the end, because each honest proxy appends exactly
+one entry. At N=1, `req.ip` for legitimate CloudFront-routed traffic would resolve to CloudFront's
+own edge-server IP, never the real client — a correctness bug independent of the security-group
+finding, *if* AWS were live. It is not (see the follow-up above), which is why `1` is also the
+correct value for the deployment that is actually live.
+`app.set('trust proxy', 1)` is now `app.set('trust proxy', resolveTrustProxyHops(process.env.TRUST_PROXY_HOPS))`,
+which evaluates to `2` only when `TRUST_PROXY_HOPS=2` is set (as `terraform/elastic-beanstalk.tf`
+now does for the AWS blueprint) and defaults to `1` everywhere else, including Render and local dev.
 
 **DERIVED, not verified against live traffic** (no AWS credentials/apply available here): AWS's
 documented behavior is that the ALB always appends the peer it directly observed to
@@ -65,46 +95,72 @@ itself with the real viewer IP it observed for a custom origin, regardless of th
 policy's header allow-list. Both are load-bearing assumptions behind trusting exactly 2 hops; a
 human with AWS access should confirm them post-deploy (checklist below).
 
-**The two changes are paired, not independent.** Raising the trusted hop count to 2 is only safe
-*because* the ALB is now unreachable except from CloudFront's ranges. Proven mechanically (not just
-asserted) by the third test below: with N=2 and only one real proxy hop actually present — i.e. the
-security group *not* enforcing this — a client's own forged `X-Forwarded-For` entry gets trusted as
-though it were CloudFront's. Under the previous N=1, the same forged header does **not** work: the
-ALB's own honest append is always what N=1 selects, regardless of any decoy entries in front of it.
-That means the finding's literal framing ("a client reaching the ALB directly can choose `req.ip`")
-was **not yet true under the code as it stood** (`trust proxy 1`) — it becomes true only once the
-hop count is raised to 2, which is exactly why the SG restriction has to land in the same change and
-not be treated as optional hardening.
+**The two AWS-side changes remain paired, not independent — relevant only if that blueprint is ever
+applied.** Raising the trusted hop count to 2 there is only safe *because* the ALB would be
+unreachable except from CloudFront's ranges. Proven mechanically (not just asserted) by test 3
+below: with N=2 and only one real proxy hop actually present — i.e. the security group *not*
+enforcing this — a client's own forged `X-Forwarded-For` entry gets trusted as though it were
+CloudFront's. Under N=1 (this ticket's default, and what was live before either version of this
+fix), the same forged header does **not** work: the honest proxy's own append is always what N=1
+selects, regardless of any decoy entries in front of it. That means the finding's literal framing
+("a client reaching the ALB directly can choose `req.ip`") was **not yet true under the code as it
+originally stood** (`trust proxy 1`) — it becomes true only once the hop count is raised to 2 for an
+environment where the SG restriction doesn't also apply, which is exactly why the SG restriction has
+to land paired with `TRUST_PROXY_HOPS=2` and not be treated as optional hardening.
 
-**How to run it.** Regression tests live in `api/src/app.test.ts` (new),
-`describe('TF-7: trust proxy hop count')`:
+**How to run it.** Regression tests live in `api/src/app.test.ts`,
+`describe('TF-7: trust proxy hop count')` and `describe('resolveTrustProxyHops')`:
 
 ```bash
 source .factory-env
 pnpm --filter @ship/api test src/app.test.ts
 ```
 
-1. `recovers the real client IP through the CloudFront -> ALB chain, not an intermediate hop` — a
-   synthetic 2-entry `X-Forwarded-For` (real client, then a CloudFront-edge stand-in) must resolve to
-   the real client. **Red before** (`trust proxy 1`): `AssertionError: expected '203.0.113.10' to be
-   '198.51.100.42'` — resolved to the CloudFront-edge stand-in, matching the derived mechanism
-   exactly, not an import/typo failure. **Green after** (`trust proxy 2`).
-2. `still resolves correctly when only one proxy hop is present` — a pin; passes both before and
-   after (single-hop shape is unaffected by the hop-count change).
-3. `would trust a forged entry if a client ever reached the ALB directly (why the security-group fix
-   is required)` — characterizes the coupling above, not a defect being fixed here. **Fails before**
-   (N=1 doesn't fall for the forgery: `expected '203.0.113.200' to be '192.0.2.99'`) and **passes
-   after** (N=2 does) — its "pass" state documents an accepted, SG-gated risk, not a resolved one.
+`describe('TF-7: trust proxy hop count')` (integration, through a real Express app via supertest):
 
-All three pass together post-fix; the full api suite (46 files / 605 tests) still passes standalone.
+1. `recovers the real client IP through the CloudFront -> ALB chain, not an intermediate hop
+   (TRUST_PROXY_HOPS=2)` — **PIN.** A synthetic 2-entry `X-Forwarded-For` (real client, then a
+   CloudFront-edge stand-in) resolves to the real client with `TRUST_PROXY_HOPS=2` set. Passes
+   against both the prior hard-coded-`2` commit (which ignored the env var and always behaved as 2)
+   and this round's change — only the configuration mechanism moved, not this behavior.
+2. `still resolves correctly when only one proxy hop is present` — **PIN**, hop-count-invariant
+   (true for any N >= 1); left on the default deliberately.
+3. `would trust a forged entry if a client ever reached the ALB directly (why the security-group fix
+   is required) (TRUST_PROXY_HOPS=2)` — **PIN**, same reasoning as #1: characterizes an accepted,
+   SG-gated risk under explicit `TRUST_PROXY_HOPS=2`, unchanged by this round.
+4. `defaults to trusting exactly one hop when TRUST_PROXY_HOPS is unset — the live Render/local-dev
+   topology` — **RED BEFORE this round / GREEN AFTER.** Against the prior commit (hard-coded `2`,
+   no env var support), this exact assertion fails: `AssertionError: expected '192.0.2.150' to be
+   '203.0.113.77'` — it walks past the honest proxy's append and lands on the client's decoy,
+   reproducing the Render vulnerability the maintainer flagged. Verified by temporarily restoring
+   the pre-round `app.ts` via `git show` (not by inference) and re-running this test in isolation;
+   it failed with that exact assertion, not an import error.
+5. `falls back to one trusted hop when TRUST_PROXY_HOPS is not a positive integer, rather than
+   crashing` — **RED BEFORE / GREEN AFTER**, same mechanism, `TRUST_PROXY_HOPS=0`. Also verified to
+   fail (not error) against the pre-round `app.ts`.
+
+`describe('resolveTrustProxyHops')` (unit, the pure function directly) — 3 tests covering the full
+validation matrix (unset/empty/whitespace -> 1; valid positive integers, including
+whitespace-trimmed; zero/negative/non-integer/non-numeric -> 1 with a logged warning, never a
+throw). **New capability, not red-before/pin** — the function did not exist before this round.
+
+All 8 tests pass together post-fix; the full api suite (56 files / 670 tests, against `main` merged
+through TF-10/TS-4 and the rest of that day's landings) passes with `scripts/factory/gate.sh
+--skip-review`. One run's full-suite pass hit `session-activity-race.test.ts`'s already-documented
+load-sensitive flake (lessons.md #24) under the gate's own build+typecheck CPU load; `gate.sh`
+reran it standalone and it passed, confirming it, not this change.
 
 **Verification performed here.** `terraform fmt -check` (clean) and `terraform validate` (clean
 except the pre-existing, unrelated TF-5 lifecycle warning) against a temp-downloaded
 **Terraform v1.9.8** (darwin_arm64; the pinned 1.6.0 cannot `init` — TF-3) with
-`init -backend=false`. No `plan`/`apply` — no AWS credentials, no S3 backend access, and the hard
-safety rule for this ticket forbids both regardless.
+`init -backend=false`, run against both `security-groups.tf` (unchanged this round) and
+`elastic-beanstalk.tf` (this round's `TRUST_PROXY_HOPS` setting). No `plan`/`apply` — no AWS
+credentials, no S3 backend access, and the hard safety rule for this ticket forbids both regardless.
 
-**NOT verified — post-deploy human checklist:**
+**NOT verified — post-deploy human checklist.** All items below are scoped to the AWS blueprint and
+apply only if a human ever runs `apply` against it, which per the maintainer is not planned. None of
+them block or bear on the Render auto-deploy of `api/src/app.ts`'s change, which needs no post-deploy
+verification here: the default (`TRUST_PROXY_HOPS` unset -> 1) is exactly today's live behavior.
 
 - [ ] A direct HTTP request to the ALB (bypassing CloudFront) is refused at the network layer
       (connection refused/timeout), not merely 4xx'd by the app.
@@ -136,9 +192,13 @@ within this ticket's authorized scope of `terraform/security-groups.tf` + `api/s
 
 **Rollback.** `git revert` this commit. By hand: in `terraform/security-groups.tf`, remove the
 `cloudfront_origin_facing` data source and restore both ALB ingress rules to
-`cidr_blocks = ["0.0.0.0/0"]`; in `api/src/app.ts`, restore `app.set('trust proxy', 1)`. The two
-must be reverted together — `trust proxy 2` alone (SG still open) is the spoofable configuration
-described above, and is strictly worse than either the pre-fix state or this fix.
+`cidr_blocks = ["0.0.0.0/0"]`; in `terraform/elastic-beanstalk.tf`, remove the `TRUST_PROXY_HOPS`
+setting; in `api/src/app.ts`, restore `app.set('trust proxy', 1)` and drop `resolveTrustProxyHops`.
+None of this is urgent for the live site — Render is unaffected by any of it, since `app.ts`
+already defaults to 1 with `TRUST_PROXY_HOPS` unset and Render's config sets no override. The AWS
+pairing rule still applies if that blueprint is ever applied: `TRUST_PROXY_HOPS=2` with the ALB
+security group open to `0.0.0.0/0` (i.e. reverting only the SG half) is a spoofable configuration
+strictly worse than either the pre-fix state or this fix.
 
 ---
 

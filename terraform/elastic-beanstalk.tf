@@ -296,6 +296,24 @@ resource "aws_elastic_beanstalk_environment" "api" {
     value     = var.aws_region
   }
 
+  # Trust-proxy hop count for `req.ip` (finding TF-7 / TRO-278). This
+  # environment's real chain is `client -> CloudFront (terraform/s3-cloudfront.tf's
+  # EB-API custom origin) -> this ALB -> Express` — TWO reverse-proxy hops — paired
+  # with `terraform/security-groups.tf` restricting the ALB security group to
+  # CloudFront's origin-facing prefix list (same PR). Only correct together: `2`
+  # with the SG still open to 0.0.0.0/0 would let a client that bypasses
+  # CloudFront plant a decoy X-Forwarded-For entry that gets trusted as though it
+  # were CloudFront's. See `api/src/app.ts`'s `resolveTrustProxyHops` for the
+  # fallback behavior on an invalid value, and CHANGES.md (TRO-278) for why the
+  # default (unset, used by Render and local dev) is 1, not 2. This blueprint is
+  # repo hygiene only — the live deployment is Render, and this environment is not
+  # planned to be applied.
+  setting {
+    namespace = "aws:elasticbeanstalk:application:environment"
+    name      = "TRUST_PROXY_HOPS"
+    value     = "2"
+  }
+
   # Health Check Path
   setting {
     namespace = "aws:elasticbeanstalk:environment:process:default"
