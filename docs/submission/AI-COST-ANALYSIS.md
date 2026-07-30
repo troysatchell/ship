@@ -55,7 +55,7 @@ introductory $2/$10 per MTok, in effect through 2026-08-31).
 | | |
 |---|---|
 | Total API-equivalent cost, full sprint (audit + remediation) | **≈ $2,385–$2,714** at list rates |
-| Actual out-of-pocket | `[FILL: if on a Claude Max/Pro subscription, the subscription fee — the figure above is then the API-equivalent *value* consumed; if on API billing, the console figure]` |
+| Actual out-of-pocket | **Claude Max subscription** — a flat monthly fee, no per-token billing. The ≈$2,385–2,714 above is therefore the *API-equivalent value* consumed in four days: on its own a multiple of the monthly subscription price, which is the real economics headline of this sprint. |
 | Tickets completed | **65** (46 of the 68 audit findings + 19 rules/post-baseline) |
 | PRs merged | **75** |
 | Cost per completed ticket | ≈ $2,385 / 65 = **~$37** (upper bound ~$42) |
