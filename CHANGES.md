@@ -8,6 +8,92 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-216 — [A11Y-2] `aria-expanded` on a plain `<div>` in the editor wrapper
+
+**What was broken.** axe reported a Critical `aria-allowed-attr` violation on `.tiptap-wrapper >
+div`: `<div style="position: relative;" aria-expanded="false">` — a plain `<div>` with no role,
+carrying an ARIA attribute that role does not support. It only appeared in the "editor focused"
+state, which is why the repo's own axe specs (which scan static viewports) never caught it.
+
+**The mechanism — found, not guessed.** `.tiptap-wrapper > div` is the `<div>` `@tiptap/react`'s
+`<EditorContent>` renders to host the ProseMirror view; once mounted it is also
+`editor.options.element`. The comment `<BubbleMenu>` in `Editor.tsx` (~line 1008) is implemented by
+`@tiptap/extension-bubble-menu`'s `BubbleMenuPlugin`, whose `BubbleMenuView.createTooltip()`
+(2.27.2, `dist/index.js:122-136`) calls `tippy(editorElement, { interactive: true, ... })` the
+first time the selection or doc changes after mount — i.e. `editorElement` **is**
+`editor.options.element`, the same div. tippy's default `aria: { expanded: 'auto' }` combined with
+`interactive: true` makes it call `referenceEl.setAttribute('aria-expanded', ...)` on that div
+unconditionally (`tippy.js`'s `handleAriaExpandedAttribute`, `dist/tippy.cjs.js:801-813`), whether
+or not the bubble menu is ever shown. The `position: relative;` inline style on the same node is a
+second, independent library write to the identical element — `DragHandleExtension`
+(`web/src/components/editor/DragHandle.tsx:206`) sets it on `view.dom.parentElement`, which is the
+same wrapper — confirming both clues in the axe `html` string point at one node for two unrelated
+reasons.
+
+The div itself does not expand or collapse anything; it is only tippy's positioning anchor for the
+floating "Comment" button. This is subtraction, not a role fix — there was never a widget here.
+
+**What changed.** `web/src/components/Editor.tsx`: the comment `<BubbleMenu>`'s `tippyOptions` is
+now a named export, `commentBubbleMenuTippyOptions`, with `aria: { expanded: false }` added. That
+tells tippy never to manage `aria-expanded` on its reference element for this instance. No
+behavioural change: the bubble menu still shows and hides identically on selection; only the
+ARIA bookkeeping attribute on the unrelated wrapper div is suppressed. The element does not become
+focusable and no keyboard behaviour changes, so this does not require the escalation path for a
+user-perceivable interaction change.
+
+**Evidence.** Both ends measured on this branch, same conditions: `http://localhost:5906`
+(worktree ports), Chrome for Testing (Playwright 1217 build) headless, 1440×900, axe-core 4.11
+(`@axe-core/playwright`), authenticated as `dev@ship.local` via a fresh `session_id`, wiki document
+`7b254b07-e251-46bc-8e14-d4e10b76dd2b` ("Welcome to Ship"), editor focused by clicking into
+`.ProseMirror`. Each measurement restarted the Vite dev server first and the served module content
+was diffed directly (`curl .../src/components/Editor.tsx`) to confirm which code path was live
+before scanning — Vite's dev transform cache does not always invalidate on save alone.
+
+| Measurement — "document editor focused" | Before | After |
+|---|---|---|
+| axe `aria-allowed-attr` | **Critical, 1 node** (`.tiptap-wrapper > div`) | **absent** |
+| axe all severities | **C1** S0 M0 m0 | **C0** S0 M0 m0 |
+
+**Regression test.** `web/src/components/Editor.bubbleMenuAria.test.tsx` imports the real
+`commentBubbleMenuTippyOptions` from `Editor.tsx` (not a copy) and calls the same `tippy(...)`
+invocation `BubbleMenuView.createTooltip()` makes, against a stand-in `.tiptap-wrapper > div`,
+asserting no element carries `aria-expanded`. It does not mount the real `<BubbleMenu>` +
+`<EditorContent>` + a driven selection change: `@tiptap/extension-bubble-menu` is only a transitive
+dependency of `web` (not resolvable directly from a test file), and its prebuilt ESM bundle's own
+`import tippy from 'tippy.js'` does not interop cleanly through vitest's module runner reached via
+that path — confirmed by direct experiment (`tippy` resolves to the whole CJS exports object, not
+the callable, only through that nested import chain; a direct `import tippy from 'tippy.js'`
+in a test file resolves correctly). That is a pre-existing environment limitation of this
+dependency chain, not a defect under test — the same class `LazyEditor.test.tsx` already documents
+("mounting real TipTap + Yjs in jsdom proves ... a great deal about jsdom").
+
+Confirmed red first, for the right reason: with the unfixed (no `aria` key) options object, the
+test failed with `AssertionError: Expected the element not to have attribute: aria-expanded /
+Received: aria-expanded="false"` — not an import error or a locator failure.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test src/components/Editor.bubbleMenuAria.test.tsx
+pnpm --filter @ship/web exec tsc --noEmit
+```
+
+To re-measure against a browser: start the worktree's API and Vite (`.factory-env` ports), log in
+for a fresh `session_id`, open a wiki document, click into `.ProseMirror` to focus the editor, then
+run an axe scan and check `aria-allowed-attr` is absent.
+
+**Roll back.** Remove `aria: { expanded: false }` from `commentBubbleMenuTippyOptions` in
+`Editor.tsx` (or `git revert` the commit on `fix/a11y-2-editor-aria`). The regression test fails
+immediately if it comes back.
+
+**Not established.** What a screen reader announces about the comment bubble menu — this fix only
+removes an invalid ARIA attribute axe can detect; no human ran VoiceOver against it. The repo's
+three Playwright a11y specs were not re-run here (not executed by the factory gate; they also only
+assert `impact === 'critical'`, which this finding already was, so they would have caught it had
+they scanned the focused-editor state — they scan static viewports only).
+
+---
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write
