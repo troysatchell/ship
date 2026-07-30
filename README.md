@@ -34,14 +34,57 @@
 
 No application or infrastructure source (`api/`, `web/`, `shared/`, `terraform/`) was modified during the audit phase — measurements reflect the commit above.
 
-### Before you run this locally
+### Cold start (one command)
 
-Four things the setup guide below does not mention, all of them audit findings:
+```bash
+git clone https://github.com/US-Department-of-the-Treasury/ship.git
+cd ship
+./start.sh
+```
 
-- **`pnpm db:migrate` stops after migration 010 and still exits `0`.** Verify `schema_migrations` has 42 rows before trusting your schema. *(DB-1, Critical)*
-- **`pnpm test` truncates whatever `DATABASE_URL` points at** — including your dev database. Use an isolated one. *(TEST-9)*
-- **Root `pnpm test` now runs both packages** (`test:api` then `test:web`); use `pnpm test:web` for the web suite alone. The 13 web unit tests that used to fail are fixed. *(TEST-1, resolved)*
-- **`pnpm dev` picks its own ports** and writes them to a repo-root `.ports` file — don't assume 3000/5173.
+That is the whole thing, from a genuinely clean checkout: it installs dependencies if needed, creates
+the database, runs every migration (and independently verifies the count — see DB-1 below, not just
+trusts the exit code), seeds sample data, finds free ports, starts both servers, and prints the URLs
+to open. Re-running `./start.sh` is safe — every step is idempotent, so it heals a partially-set-up
+checkout instead of assuming yesterday's state is still correct. `Ctrl-C` stops both servers.
+
+`./start.sh` is a thin preflight (Node/pnpm present) wrapping `scripts/dev.sh`, which does the actual
+work and is also what `pnpm dev` runs — there is exactly one implementation of "set up and start Ship,"
+not two that can drift apart.
+
+**Postgres.** By default this assumes a native PostgreSQL on `localhost` (no password) — the common
+Homebrew/apt setup. No native Postgres installed? Bring up one of the two bundled Docker options first,
+then point `start.sh` at it with `DATABASE_URL`:
+
+```bash
+# Option A — root docker-compose.yml (Postgres only, port 5432)
+docker compose up -d
+DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5432/ship_dev ./start.sh
+
+# Option B — docker-compose.local.yml (Postgres only, port 5433 — coexists with a native install)
+docker compose -f docker-compose.local.yml up -d postgres
+DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_dev ./start.sh
+```
+
+If Postgres isn't reachable at all, `./start.sh` fails immediately and says exactly what to start —
+it does not proceed to start servers against a database it never confirmed existed.
+
+### Things a new engineer hits, all audit findings
+
+- **`pnpm db:migrate` used to stop after migration 010 and still exit `0`.** Fixed (DB-1 / TRO-178): the
+  runner now throws — and `./start.sh`/`pnpm dev` independently re-verify every migration file on disk
+  is recorded in `schema_migrations`, printing `Migrations: 42/42 applied`. Confirmed in this tree by
+  running `runMigrations()` against the real 42-file migration set in
+  `api/src/db/__tests__/migrationRunner.test.ts` and `verifyMigrations.test.ts`.
+- **`pnpm test` TRUNCATEs whatever `DATABASE_URL` points at** (`api/src/test/setup.ts`, every api test
+  file's `beforeAll`) — including the database `./start.sh`/`pnpm dev` just set up. Never run `pnpm test`
+  against your dev database; give it an isolated one (`.factory-env` does this for factory worktrees).
+  *(TEST-9, still open.)*
+- **Root `pnpm test` runs both packages** (`test:api` then `test:web`) — this used to silently skip
+  `web/` entirely; that is fixed (TEST-1 / TRO-223, PR #11). Use `pnpm test:web` to run the web suite
+  alone.
+- **`./start.sh`/`pnpm dev` pick their own ports** and write them to a repo-root `.ports` file — don't
+  assume 3000/5173; read the printed URLs or `.ports`.
 
 ---
 
@@ -118,23 +161,18 @@ The goal isn't to check boxes. It's to capture what your team learned so you can
 git clone https://github.com/US-Department-of-the-Treasury/ship.git
 cd ship
 
-# 2. Install dependencies
+# 2. One command: installs deps, creates + migrates + seeds the database,
+#    starts both servers. See "Cold start" above for Docker Postgres options.
+./start.sh
+```
+
+Prefer to run the steps yourself? `./start.sh` (and `pnpm dev`) do the equivalent of:
+
+```bash
 pnpm install
-
-# 3. Configure environment
-cp api/.env.example api/.env.local
-cp web/.env.example web/.env
-
-# 4. Start the database
-docker-compose up -d
-
-# 5. Create sample data
-pnpm db:seed
-
-# 6. Run database migrations
-pnpm db:migrate
-
-# 7. Start the application
+pnpm build:shared
+DATABASE_URL=... pnpm --filter @ship/api db:migrate   # applies schema.sql + every migration
+DATABASE_URL=... pnpm --filter @ship/api db:seed      # idempotent — safe to re-run
 pnpm dev
 ```
 

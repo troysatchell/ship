@@ -901,6 +901,68 @@ this entry. No schema or API change accompanies this fix.
 
 ---
 
+## TRO-247 — [RULE-6] One-command local start from a clean checkout
+
+**What changed.** `./start.sh` at the repo root: from a genuinely clean checkout, one command
+installs dependencies if needed, ensures the database exists, runs every migration, seeds sample
+data, finds free ports, starts both servers, and prints the resolved URLs. Re-running it is safe —
+every step is idempotent, so a second run heals a partially-set-up checkout instead of assuming
+yesterday's state still holds.
+
+`start.sh` is a thin preflight (Node/pnpm on PATH, with actionable install instructions if not) that
+hands off to `scripts/dev.sh`, which now does the actual database bootstrap unconditionally (not
+only when `api/.env.local` is missing, as before) and is also what `pnpm dev` runs — one
+implementation, not two that can drift apart.
+
+`scripts/dev.sh` previously shelled out to `psql`/`createdb` to create the database, which are
+absent on any machine that only runs Postgres via Docker with the port published to the host (this
+project's own factory machine is one — `ship-audit-pg` on `:5433`). New `api/src/db/ensureDatabase.ts`
+replaces that with a plain `pg` connection to the server's `postgres` maintenance database, which
+works identically over TCP for a native install or a Docker container — no shell dependency either
+way, and it fails with an actionable message ("start it, then re-run — here's the native command and
+the Docker command") when Postgres is unreachable at all, rather than a bare `createdb` error.
+
+New `api/src/db/verifyMigrations.ts` makes the DB-1 (TRO-178) fix's "42/42 applied" claim an
+executed check rather than a trusted exit code: it reuses `migrationRunner.ts`'s own
+`listMigrationFiles()` — the exact file discovery the fixed runner uses — and compares it against
+`schema_migrations`, printing `Migrations: 42/42 applied` or failing loudly, naming the missing
+files, if the runner's guarantee is ever violated. `migrate.ts`/`migrationRunner.ts` themselves are
+unchanged; DB-1's fix (throw-on-any-failure) was independently re-confirmed live in this tree by
+running `migrationRunner.test.ts`'s real-migration-set suite against a throwaway database (7/7
+passing) rather than only re-reading the code.
+
+DATABASE_URL resolution (documented in `scripts/dev.sh`'s header): an explicit `DATABASE_URL` env var
+always wins; otherwise an existing `api/.env.local` keeps its own value (a plain re-run never
+silently switches databases under a configured worktree); otherwise the same default as before
+(`postgresql://localhost/$DB_NAME`, native Postgres, no password). The README's new "Cold start"
+section documents both bundled Docker Postgres options (`docker-compose.yml` on :5432,
+`docker-compose.local.yml` on :5433) with the exact `DATABASE_URL` override for each.
+
+README also corrects one stale claim while updating this: the fork banner's hazard list still
+described root `pnpm test` as silently skipping `web/` (TEST-1). That was already fixed by TRO-223
+(PR #11, `pnpm run test:api && pnpm run test:web`) — the banner text already said "resolved" in one
+place but the "Getting Started" section had not been reconciled with `start.sh`. Both now describe
+current behavior only.
+
+**Regression tests.** `api/src/db/__tests__/ensureDatabase.test.ts` (9 cases: identifier validation,
+create-when-missing, idempotent no-op, and the actionable unreachable-Postgres message — confirmed
+red-before-green by temporarily removing the `CREATE DATABASE` call and observing the exact two
+tests fail for the right reason) and `api/src/db/__tests__/verifyMigrations.test.ts` (2 cases: a
+fully-migrated database reports N/N, and a DB-1-shaped gap — a `schema_migrations` row deleted out
+from under an otherwise-complete database — is detected and named). No `!`, `as any`, or fixed
+sleeps anywhere in the diff; the one bounded wait (Postgres connection) uses a `connectionTimeoutMillis`
+on the client, not a sleep.
+
+**How to run it.** `./start.sh` from a clean checkout. To target Docker Postgres instead of a native
+install: `docker compose -f docker-compose.local.yml up -d postgres && DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_dev ./start.sh`.
+A throwaway database name works the same way: `DATABASE_URL=.../a_new_name ./start.sh`.
+
+**Rollback.** Revert the merge of `fix/rule-6-one-command-start`. `scripts/dev.sh` reverts to only
+bootstrapping the database when `api/.env.local` is absent, and back to requiring `psql`/`createdb`
+on PATH; `pnpm dev`/`pnpm db:migrate`/`pnpm db:seed` are unaffected as standalone commands either way.
+
+---
+
 ## TRO-208 — [TS-3] The Yjs <-> TipTap converter — the persistence path for every document's content — was fully untyped
 
 `api/src/utils/yjsConverter.ts` carried 12 `any` in 245 lines, the highest any-per-line density of
