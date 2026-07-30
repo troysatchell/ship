@@ -1028,8 +1028,11 @@ const MAX_WS_MESSAGE_SIZE = 10 * 1024 * 1024;
  * over that — generous headroom for a contended database — while still
  * capping the worst case for one loading socket to a small, fixed amount
  * rather than letting it grow without limit.
+ *
+ * Exported so the regression test can assert against the exact bound instead
+ * of duplicating the number.
  */
-const MAX_PRELOAD_BUFFER_BYTES = 1024 * 1024; // 1 MiB
+export const MAX_PRELOAD_BUFFER_BYTES = 1024 * 1024; // 1 MiB
 
 export interface CollaborationOptions {
   /**
