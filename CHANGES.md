@@ -8,6 +8,38 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-299 (TF-10) follow-up — live Render deployment adopted into Terraform state via `import`; post-import plan is a clean no-op
+
+**What was added.** Maintainer decision 2026-07-30 resolved the TF-10 entry's HOLD: adopt the
+live, hand-built Render deployment via `terraform import` rather than a clean-machine `apply`
+(no duplicate stack, no data loss, no second URL). Both live resources
+(`render_web_service.ship` = srv-d9kf2t942hec73aofrt0, `render_postgres.ship` =
+dpg-d9kgth6417fc7386hhh0-a) were imported into the config's local, gitignored state. Two
+reconciliation rounds followed, exactly as `terraform/render/README.md` predicted:
+`database_name` reconciled to the live auto-generated `ship_34oc` (its mismatch forced a
+**destructive replacement** in the first post-import plan — never applied), then
+`environment_id` declared plus `lifecycle.ignore_changes` on Render-assigned display fields.
+Final result: **"No changes. Your infrastructure matches the configuration."**
+
+**How to run it.**
+
+```bash
+cd terraform/render
+set -a; source ../../.env; set +a   # RENDER_API_KEY (gitignored)
+terraform init && terraform plan     # expect: No changes
+```
+
+Evidence: `terraform/render/plan/post-import-plan-no-changes.txt` (verbatim capture) and
+`terraform/render/plan/IMPORT-LOG.md` (full narrative). `terraform apply` was never run; the
+live service was never modified — import writes only local state.
+
+**How to roll it back.** `terraform state rm render_web_service.ship render_postgres.ship`
+un-adopts the resources (state-only; the live service is untouched either way). The config
+edits (`database_name` default, `environment_id`, `ignore_changes`) revert with
+`git revert <commit>`.
+
+---
+
 ## TRO-278 — [TF-7] ALB security group locked to CloudFront's prefix list; `trust proxy` hop count made environment-configurable
 
 **HOLD, scoped to the terraform side only — security semantics (gate 6) + infra change (gate 2).**
