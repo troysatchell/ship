@@ -1,16 +1,31 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { QueryResult } from 'pg';
+
+// `pool.query` is overloaded and TypeScript resolves `vi.mocked(pool.query)` to pg's
+// CALLBACK overload, whose return type is `void` — which is why every mocked result in
+// this file used to be cast with `as any`. Declaring the mock with its promise-returning
+// signature up front makes all 16 of those casts unnecessary, and restores type checking
+// on the row shapes the tests assert about (findings TS-4, TS-8).
+const { queryMock } = vi.hoisted(() => ({
+  queryMock: vi.fn<(text: string, values?: unknown[]) => Promise<QueryResult>>(),
+}));
 
 // Mock pool before importing auth middleware
 vi.mock('../db/client.js', () => ({
   pool: {
-    query: vi.fn(),
+    query: queryMock,
   },
 }));
 
 import { authMiddleware } from '../middleware/auth.js';
 import { pool } from '../db/client.js';
 import { Request, Response, NextFunction } from 'express';
-import { SESSION_TIMEOUT_MS, ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
+import { ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
+// The enforced inactivity window is SESSION_TIMEOUT_MS plus the throttle interval the
+// `last_activity` write now runs on, so that a lagging recorded value cannot expire a
+// session early (TRO-179 / TRO-177). Boundary cases below are expressed against it.
+import { SESSION_INACTIVITY_LIMIT_MS } from '../middleware/auth.js';
+import { pgResult } from '../test/pg-result.js';
 
 // Helper to create mock request/response
 function createMockReqRes(cookies: Record<string, string> = {}) {
@@ -26,9 +41,11 @@ function createMockReqRes(cookies: Record<string, string> = {}) {
 
 describe('authMiddleware', () => {
   beforeEach(() => {
-    // resetAllMocks, not the clear-only variant: clearing mocks leaves unconsumed
-    // mockResolvedValueOnce values queued, which leak into later tests
-    // (TRO-277 / TEST-12).
+    // resetAllMocks, not the clear-only variant: clearing only wipes recorded calls, so
+    // an unconsumed mockResolvedValueOnce survives into the next test and silently
+    // shifts its query sequence by one (TRO-277 / TEST-12). That hazard is now live on
+    // every case, not just a hypothetical one, because the middleware issues a variable
+    // number of queries — the last_activity write is throttled (TRO-179 / API-6).
     vi.resetAllMocks();
   });
 
@@ -48,7 +65,7 @@ describe('authMiddleware', () => {
 
     it('returns 401 when session does not exist in database', async () => {
       const { req, res, next } = createMockReqRes({ session_id: 'invalid-session' });
-      vi.mocked(pool.query).mockResolvedValueOnce({ rows: [], rowCount: 0 } as any);
+      queryMock.mockResolvedValueOnce(pgResult([]));
       await authMiddleware(req, res, next);
       expect(res.status).toHaveBeenCalledWith(401);
       expect(res.json).toHaveBeenCalledWith(
@@ -62,19 +79,20 @@ describe('authMiddleware', () => {
     it('attaches session info to request for valid session', async () => {
       const { req, res, next } = createMockReqRes({ session_id: 'valid-session' });
       const now = new Date();
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({
-          rows: [{
+      queryMock
+        .mockResolvedValueOnce(
+          pgResult([{
             id: 'valid-session',
             user_id: 'user-123',
             workspace_id: 'ws-123',
             last_activity: now,
             created_at: now,
             is_super_admin: false,
-          }],
-        } as any)
-        .mockResolvedValueOnce({ rows: [{ id: 'membership-1' }] } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+          }])
+        )
+        // Session + membership only: last_activity is current, so the throttled
+        // write does not fire.
+        .mockResolvedValueOnce(pgResult([{ id: 'membership-1' }]));
 
       await authMiddleware(req, res, next);
       expect(req.sessionId).toBe('valid-session');
@@ -85,20 +103,22 @@ describe('authMiddleware', () => {
   });
 
   describe('session timeout handling', () => {
+    // The enforced bound is SESSION_INACTIVITY_LIMIT_MS — the 15-minute window plus the
+    // interval the last_activity write is throttled on, so a lagging recorded value
+    // cannot expire a session early. Both edges are pinned in
+    // middleware/__tests__/session-activity-throttle.test.ts.
     it('returns 401 when session exceeds 15-minute inactivity timeout', async () => {
       const { req, res, next } = createMockReqRes({ session_id: 'stale-session' });
       const now = new Date();
-      const staleActivity = new Date(now.getTime() - SESSION_TIMEOUT_MS - 1000);
-      vi.mocked(pool.query).mockResolvedValueOnce({
-        rows: [{
+      const staleActivity = new Date(now.getTime() - SESSION_INACTIVITY_LIMIT_MS - 1000);
+      queryMock.mockResolvedValueOnce(pgResult([{
           id: 'stale-session',
           user_id: 'user-123',
           workspace_id: 'ws-123',
           last_activity: staleActivity,
           created_at: now,
           is_super_admin: false,
-        }],
-      } as any);
+        }]));
 
       await authMiddleware(req, res, next);
       expect(res.status).toHaveBeenCalledWith(401);
@@ -115,16 +135,14 @@ describe('authMiddleware', () => {
       const { req, res, next } = createMockReqRes({ session_id: 'old-session' });
       const now = new Date();
       const oldCreatedAt = new Date(now.getTime() - ABSOLUTE_SESSION_TIMEOUT_MS - 1000);
-      vi.mocked(pool.query).mockResolvedValueOnce({
-        rows: [{
+      queryMock.mockResolvedValueOnce(pgResult([{
           id: 'old-session',
           user_id: 'user-123',
           workspace_id: 'ws-123',
           last_activity: now,
           created_at: oldCreatedAt,
           is_super_admin: false,
-        }],
-      } as any);
+        }]));
 
       await authMiddleware(req, res, next);
       expect(res.status).toHaveBeenCalledWith(401);
@@ -140,21 +158,22 @@ describe('authMiddleware', () => {
     it('deletes expired session from database', async () => {
       const { req, res, next } = createMockReqRes({ session_id: 'expired-session' });
       const now = new Date();
-      const staleActivity = new Date(now.getTime() - SESSION_TIMEOUT_MS - 1000);
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({
-          rows: [{
+      const staleActivity = new Date(now.getTime() - SESSION_INACTIVITY_LIMIT_MS - 1000);
+      queryMock
+        .mockResolvedValueOnce(pgResult([{
             id: 'expired-session',
             user_id: 'user-123',
             workspace_id: 'ws-123',
             last_activity: staleActivity,
             created_at: now,
             is_super_admin: false,
-          }],
-        } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+          }]))
+        .mockResolvedValueOnce(pgResult([]));
 
       await authMiddleware(req, res, next);
+      // Asserted through `pool.query` rather than `queryMock` — they are the same
+      // function object, and keeping the original reference here keeps this assertion
+      // legible as unchanged in review.
       expect(pool.query).toHaveBeenCalledWith(
         'DELETE FROM sessions WHERE id = $1',
         ['expired-session']
@@ -166,18 +185,16 @@ describe('authMiddleware', () => {
     it('returns 403 when user no longer has workspace access', async () => {
       const { req, res, next } = createMockReqRes({ session_id: 'valid-session' });
       const now = new Date();
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({
-          rows: [{
+      queryMock
+        .mockResolvedValueOnce(pgResult([{
             id: 'valid-session',
             user_id: 'user-123',
             workspace_id: 'ws-123',
             last_activity: now,
             created_at: now,
             is_super_admin: false,
-          }],
-        } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+          }]))
+        .mockResolvedValueOnce(pgResult([]));
 
       await authMiddleware(req, res, next);
       expect(res.status).toHaveBeenCalledWith(403);
@@ -193,18 +210,17 @@ describe('authMiddleware', () => {
     it('skips workspace check for super-admin users', async () => {
       const { req, res, next } = createMockReqRes({ session_id: 'admin-session' });
       const now = new Date();
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({
-          rows: [{
+      queryMock
+        .mockResolvedValueOnce(
+          pgResult([{
             id: 'admin-session',
             user_id: 'admin-123',
             workspace_id: 'ws-123',
             last_activity: now,
             created_at: now,
             is_super_admin: true,
-          }],
-        } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+          }])
+        );
 
       await authMiddleware(req, res, next);
       expect(req.isSuperAdmin).toBe(true);
@@ -215,7 +231,7 @@ describe('authMiddleware', () => {
   describe('error handling', () => {
     it('returns 500 on database error', async () => {
       const { req, res, next } = createMockReqRes({ session_id: 'some-session' });
-      vi.mocked(pool.query).mockRejectedValueOnce(new Error('DB connection failed'));
+      queryMock.mockRejectedValueOnce(new Error('DB connection failed'));
       await authMiddleware(req, res, next);
       expect(res.status).toHaveBeenCalledWith(500);
       expect(res.json).toHaveBeenCalledWith(
@@ -232,26 +248,26 @@ describe('authMiddleware', () => {
       const now = new Date();
       // Last activity was 90 seconds ago (beyond 60s threshold)
       const lastActivity = new Date(now.getTime() - 90 * 1000);
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({
-          rows: [{
+      queryMock
+        .mockResolvedValueOnce(pgResult([{
             id: 'valid-session',
             user_id: 'user-123',
             workspace_id: 'ws-123',
             last_activity: lastActivity,
             created_at: now,
             is_super_admin: false,
-          }],
-        } as any)
-        .mockResolvedValueOnce({ rows: [{ id: 'membership-1' }] } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+          }]))
+        .mockResolvedValueOnce(pgResult([{ id: 'membership-1' }]))
+        .mockResolvedValueOnce(pgResult([]));
 
       await authMiddleware(req, res, next);
       expect(res.cookie).toHaveBeenCalledWith('session_id', 'valid-session', {
         httpOnly: true,
         secure: false, // NODE_ENV is 'test', not 'production'
         sameSite: 'strict',
-        maxAge: SESSION_TIMEOUT_MS,
+        // Matches the server-side window, so the browser cannot drop the cookie
+        // before the server would have rejected the session.
+        maxAge: SESSION_INACTIVITY_LIMIT_MS,
         path: '/',
       });
       expect(next).toHaveBeenCalled();
@@ -262,19 +278,19 @@ describe('authMiddleware', () => {
       const now = new Date();
       // Last activity was 30 seconds ago (within 60s threshold)
       const lastActivity = new Date(now.getTime() - 30 * 1000);
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({
-          rows: [{
+      queryMock
+        .mockResolvedValueOnce(
+          pgResult([{
             id: 'valid-session',
             user_id: 'user-123',
             workspace_id: 'ws-123',
             last_activity: lastActivity,
             created_at: now,
             is_super_admin: false,
-          }],
-        } as any)
-        .mockResolvedValueOnce({ rows: [{ id: 'membership-1' }] } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+          }])
+        )
+        // Inside the throttle window, so neither the cookie nor the row is refreshed.
+        .mockResolvedValueOnce(pgResult([{ id: 'membership-1' }]));
 
       await authMiddleware(req, res, next);
       expect(res.cookie).not.toHaveBeenCalled();
@@ -301,17 +317,15 @@ describe('authMiddleware', () => {
       const { req, res, next } = createMockReqResWithAuth('Bearer ship_validtoken123');
 
       // Mock token validation query
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({
-          rows: [{
+      queryMock
+        .mockResolvedValueOnce(pgResult([{
             id: 'token-1',
             user_id: 'user-123',
             workspace_id: 'ws-123',
             is_super_admin: false,
-          }],
-        } as any)
+          }]))
         // Mock update last_used_at
-        .mockResolvedValueOnce({ rows: [] } as any);
+        .mockResolvedValueOnce(pgResult([]));
 
       await authMiddleware(req, res, next);
       expect(req.userId).toBe('user-123');
@@ -324,7 +338,7 @@ describe('authMiddleware', () => {
       const { req, res, next } = createMockReqResWithAuth('Bearer invalid_token');
 
       // Mock token not found
-      vi.mocked(pool.query).mockResolvedValueOnce({ rows: [] } as any);
+      queryMock.mockResolvedValueOnce(pgResult([]));
 
       await authMiddleware(req, res, next);
       expect(res.status).toHaveBeenCalledWith(401);
@@ -340,7 +354,7 @@ describe('authMiddleware', () => {
       const { req, res, next } = createMockReqResWithAuth('Bearer ship_revokedtoken');
 
       // Mock token found but revoked (revoked_at is set)
-      vi.mocked(pool.query).mockResolvedValueOnce({ rows: [] } as any); // No results means revoked/expired
+      queryMock.mockResolvedValueOnce(pgResult([])); // No results means revoked/expired
 
       await authMiddleware(req, res, next);
       expect(res.status).toHaveBeenCalledWith(401);
@@ -360,16 +374,14 @@ describe('authMiddleware', () => {
       } as unknown as Response;
       const next = vi.fn() as NextFunction;
 
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({
-          rows: [{
+      queryMock
+        .mockResolvedValueOnce(pgResult([{
             id: 'token-1',
             user_id: 'api-user',
             workspace_id: 'api-ws',
             is_super_admin: false,
-          }],
-        } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+          }]))
+        .mockResolvedValueOnce(pgResult([]));
 
       await authMiddleware(req, res, next);
       // Should use token auth, not session

@@ -1,4 +1,10 @@
-import { test, expect } from './fixtures/isolated-env'
+import {
+  test,
+  expect,
+  FIXTURE_DOC_CODE_BLOCK,
+  FIXTURE_CODE_BLOCK_LANGUAGE,
+} from './fixtures/isolated-env'
+import { openFixtureDocument } from './fixtures/test-helpers'
 import AxeBuilder from '@axe-core/playwright'
 
 /**
@@ -1399,23 +1405,55 @@ test.describe('Phase 3: Moderate Violations', () => {
 
 test.describe('Phase 4: Minor Violations', () => {
   test.describe('4.1 Language of Code Blocks (WCAG 3.1.2)', () => {
+    /**
+     * Rewritten for audit finding TEST-2 (TRO-224).
+     *
+     * This test had **no `expect()` at all**. It navigated to `/docs` — which
+     * renders no code block — counted zero elements, and computed
+     * `hasLangIndication` into a variable it then discarded. It reported green
+     * on an empty page and would have reported green on a page full of
+     * unlabelled code blocks.
+     *
+     * It now opens a seeded document that contains one code block with a known
+     * language (`seedRenderingFixtures` in `e2e/fixtures/isolated-env.ts`). The
+     * count assertion is the positive control: without it, "no code blocks
+     * rendered" still passes, which is the whole defect class.
+     */
     test('code blocks have language indication', async ({ page }) => {
       await login(page)
-      await page.goto('/docs')
-      await page.waitForLoadState('networkidle')
+      await openFixtureDocument(page, FIXTURE_DOC_CODE_BLOCK)
 
-      const codeBlocks = page.locator('pre code, .code-block')
-      const count = await codeBlocks.count()
+      const codeBlocks = page.locator('.ProseMirror pre code')
+      await expect(
+        codeBlocks,
+        `The ${FIXTURE_DOC_CODE_BLOCK} document seeds exactly one code block. ` +
+          `Zero means the editor did not render the fixture content, not that ` +
+          `every code block is labelled.`
+      ).toHaveCount(1, { timeout: 15000 })
 
-      // If there are code blocks, they should have language class or data attribute
-      for (let i = 0; i < count; i++) {
-        const code = codeBlocks.nth(i)
-        const className = await code.getAttribute('class')
-        const dataLang = await code.getAttribute('data-language')
-        // Many code blocks will have language-* class
-        const hasLangIndication = className?.includes('language-') || dataLang
-        // Not all code blocks need language, but if syntax highlighted they should
+      const descriptors = await codeBlocks.evaluateAll((els) =>
+        els.map((el) => ({
+          className: el.getAttribute('class') ?? '',
+          dataLanguage: el.getAttribute('data-language') ?? '',
+        }))
+      )
+      expect(descriptors, 'the seeded code block should have been inspected').toHaveLength(1)
+
+      for (const d of descriptors) {
+        const indicated = d.className.includes('language-') || d.dataLanguage !== ''
+        expect(
+          indicated,
+          `WCAG 3.1.2: a code block must declare its language. Got class=` +
+            `"${d.className}" data-language="${d.dataLanguage}".`
+        ).toBe(true)
       }
+
+      // And specifically the language the fixture stored, so a generic
+      // "language-" prefix on an empty value cannot satisfy this.
+      await expect(
+        page.locator(`.ProseMirror pre code.language-${FIXTURE_CODE_BLOCK_LANGUAGE}`),
+        `the seeded code block declares language "${FIXTURE_CODE_BLOCK_LANGUAGE}"`
+      ).toHaveCount(1)
     })
   })
 
