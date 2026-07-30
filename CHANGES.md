@@ -8,6 +8,139 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-289 (ERR-13) — PersonEditor saved title/properties with no error handling at all
+
+**Confirmed against the code, not just the ticket.** `web/src/pages/PersonEditor.tsx` saved the
+title (via `useAutoSave`'s `onSave`) and every sidebar property change (`onUpdateProperties`) with a
+bare `await apiPatch(...)` — no `.ok` check, no thrown error, no `.status`, no `useMutation`, and no
+tag into the write-outcome bus `web/src/hooks/useDocumentWriteStatus.ts` (TRO-190/ERR-3) already
+drives every OTHER document type's `SyncStatusIndicator` from. A rejected or throttled person-document
+write vanished with zero observable effect: no console error, no toast, no change to the "Saved"
+indicator, and (for `onUpdateProperties`) the local optimistic state update happened unconditionally,
+even on failure, since nothing ever checked the response.
+
+**What changed.** `web/src/pages/PersonEditor.tsx` gains one `useMutation` (`updatePersonMutation`),
+built exactly like `UnifiedDocumentPage.tsx`'s real `updateMutation`:
+
+- `mutationFn` throws an `Error & { status: number }` on a non-ok response (`error.status =
+  response.status`), so the shared retry policy (`shouldRetryRequest`/`retryDelayMs` in
+  `queryClient.ts`) can back a throttled 429 off on its tuned schedule instead of dropping it, and so
+  `isNotFoundError` can tell a 404 apart from any other failure.
+- `meta: { operation: 'update person', documentId: id }` tags it into the same document-write-outcome
+  bus every other document type's mutation already reports through — no new bus, no new subscriber;
+  `Editor.tsx`'s existing `useDocumentWriteStatus(documentId, ...)` call picks it up unchanged and
+  flips this document's own `SyncStatusIndicator` to "Not saved" (and raises the existing one-shot
+  "document was deleted" notice on a 404), because `PersonEditorPage` already renders through the
+  same shared `Editor` (`LazyEditor`).
+- The title save (`throttledTitleSave`'s `onSave`) and the property save (`onUpdateProperties`) both
+  call `updatePersonMutation.mutateAsync(...)` instead of the bare `apiPatch`. `onUpdateProperties`
+  now applies its local optimistic state update only after the write actually succeeds — it is a
+  fire-and-forget event handler (`PersonCombobox`'s `onChange` doesn't await it), so the catch also
+  swallows the rejection there rather than letting it escape as an unhandled rejection; failure is
+  still visible via the shared indicator.
+
+**Regression tests — `web/src/pages/PersonEditor.test.tsx`** (vitest, run by the gate). Renders the
+real `PersonEditorPage` against the app's actual `queryClient` singleton (mocking only the
+`@/lib/api` network boundary and the lightweight `useAuth`/`useDocuments`/`useWorkspace` context
+hooks), paired with a second, independent `useDocumentWriteStatus` subscriber on the SAME
+`queryClient` — the same "drive real mutations, don't cast mutation-cache internals" technique
+`useDocumentWriteStatus.test.tsx` uses (see commit 9510f8e). Five cases:
+
+1. A successful property save leaves `hasFailedWrite` false.
+2. A rejected (400) property save flips `hasFailedWrite` true.
+3. A rejected (400) title save (the `useAutoSave`-throttled path) also flips `hasFailedWrite` true.
+4. A 404 property save calls the shared `onDocumentGone` notice exactly once, reusing the ERR-4
+   deletion notice rather than inventing a second one.
+5. A 429 property save is retried on the throttle schedule (`THROTTLE_RETRY_DELAYS_MS`, first retry
+   at ≥2s) rather than the generic ~1s exponential schedule any other retryable error gets — confirmed
+   under `vi.useFakeTimers()` by asserting no second attempt lands by 1.5s, then that one has by 3s.
+
+Confirmed red first, for the right reason: reverting `PersonEditor.tsx` to its pre-fix version and
+re-running this same test file failed 4 of 5 cases with real `AssertionError`s (`hasFailedWrite`
+stayed `false`, `onGone` was called 0 times, the 429 case never issued a second `apiPatch` call at
+all because there was no mutation/retry policy in play) — not an import error or a typo.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/pages/PersonEditor.test.tsx
+```
+
+**Rollback.** Revert the commit(s) on `fix/err-13-err-14-editor-save-paths` touching
+`PersonEditor.tsx`. `queryClient.ts` and `UnifiedDocumentPage.tsx` are unaffected by this ticket's
+half of the branch (see TRO-290 below).
+
+---
+
+## TRO-290 (ERR-14) — a window-focus refetch on a deleted document unmounted the editor and discarded in-progress text
+
+**Reproduced first, as directed — this is the headline claim.** Wrote a jsdom test rendering the
+real `UnifiedDocumentPage` route against the app's actual `queryClient` singleton (so `staleTime` and
+the default retry policy are exactly production's, not a relaxed test client), loaded a `wiki`
+document successfully, marked the `['document', id]` query stale via `queryClient.invalidateQueries({
+refetchType: 'none' })` (stale, but no auto-refetch yet — isolates the trigger), then dispatched a
+real `window.dispatchEvent(new Event('visibilitychange'))` — the exact event
+`@tanstack/query-core`'s `focusManager` listens for. React-query's own focus-refetch machinery fired
+a second fetch, mocked to return 404 (another user deleted the document). **Observed:** the second
+`apiGet` call landed, and the mocked editor (`data-testid="editor-mounted"`, holding text standing in
+for an in-progress, unsaved draft) disappeared from the DOM, replaced by the "Document not found"
+screen. This is REPRODUCED, not derived — the failure was watched happening, not inferred from
+reading the code.
+
+**Root cause.** `web/src/pages/UnifiedDocumentPage.tsx`'s top-level `useQuery(['document', id])`
+never overrode `refetchOnWindowFocus`, so it gets react-query's default background refetch on window
+focus. React-query does not clear cached `data` just because a later background fetch failed — `data`
+stays the last good snapshot while `error` becomes set. The render, though, checked
+`if (error || !document)` — truthy `error` alone was enough to bail into the "not found" screen,
+regardless of whether `document` still held a perfectly good, cached copy — unmounting the entire
+editor tree and destroying whatever local (Yjs/TipTap/title) state it held.
+
+**What changed — preferred fix from the ticket: one deletion story, not two.**
+
+- The query's `queryFn` now attaches `.status` to its thrown error (same pattern as ERR-3/ERR-4's
+  write-path fix), so a 404 can be told apart from any other fetch failure.
+- `web/src/lib/queryClient.ts` gains `notifyDocumentGoneOnRead(documentId)`, a thin wrapper around the
+  existing (private) `notifyDocumentWriteOutcome` — the READ-path counterpart to the write-outcome
+  bus TRO-190/ERR-3 built. No new bus, no new subscriber.
+- `UnifiedDocumentPage.tsx` adds one effect: when a background refetch's `error` is a 404
+  (`isNotFoundError`) while `document` (cached data) still exists, it calls
+  `notifyDocumentGoneOnRead(id)` — routing the read-path deletion through the exact same bus and
+  user-facing notice (`Editor.tsx`'s `alert(DOCUMENT_GONE_MESSAGE)`) ERR-4 already gives a failed
+  *write* against a deleted document. `useDocumentWriteStatus`'s existing one-shot guard keeps the
+  alert to a single firing even if the query keeps re-attempting the failed refetch.
+- The render's error branch changed from `if (error || !document)` to `if (!document)` — a background
+  refetch failure (404 or otherwise) no longer unmounts the editor as long as a cached document
+  exists; a hard failure on the very first load (no cached data at all) still shows the "not found"
+  screen exactly as before.
+
+**Regression tests — `web/src/pages/UnifiedDocumentPage.deletedFocusRefetch.test.tsx`** (vitest, run
+by the gate). Same real-`queryClient` / real-focus-event technique as the reproduction above:
+
+1. After the focus-triggered 404, the editor stays mounted with its original in-progress text intact,
+   the shared bus's `onGone` fires exactly once and `hasFailedWrite` becomes true, and the doc is
+   fetched exactly twice (no retry storm, no repeated notice).
+2. A hard 404 with no cached document at all (first load) still shows "Document not found" — the
+   existing behavior for that case is unchanged.
+
+Confirmed red first, for the right reason: reverting `UnifiedDocumentPage.tsx` to its pre-fix version
+and re-running case 1 failed with `expected "vi.fn()" to be called 1 times, but got 0 times` (the
+notice never fired) and the DOM showing "Document not found" — exactly the reproduced bug, not an
+import error.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/pages/UnifiedDocumentPage.deletedFocusRefetch.test.tsx
+```
+
+**Rollback.** Revert the commit(s) on `fix/err-13-err-14-editor-save-paths` touching
+`UnifiedDocumentPage.tsx` and the `notifyDocumentGoneOnRead` addition in `queryClient.ts`.
+`PersonEditor.tsx` (TRO-289 above) is unaffected.
+
+---
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write

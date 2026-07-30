@@ -9,6 +9,7 @@ import { useProgramsQuery } from '@/hooks/useProgramsQuery';
 import { useProjectsQuery } from '@/hooks/useProjectsQuery';
 import { useDocumentConversion } from '@/hooks/useDocumentConversion';
 import { apiGet, apiPatch, apiDelete, apiPost } from '@/lib/api';
+import { isNotFoundError, notifyDocumentGoneOnRead } from '@/lib/queryClient';
 import { useToast } from '@/components/ui/Toast';
 import { issueKeys } from '@/hooks/useIssuesQuery';
 import { projectKeys, useProjectWeeksQuery } from '@/hooks/useProjectsQuery';
@@ -68,16 +69,39 @@ export function UnifiedDocumentPage() {
     queryFn: async () => {
       const response = await apiGet(`/api/documents/${id}`);
       if (!response.ok) {
-        if (response.status === 404) {
-          throw new Error('Document not found');
-        }
-        throw new Error('Failed to fetch document');
+        // Attach the real HTTP status (mirrors the write-path fix,
+        // TRO-190/ERR-3, TRO-191/ERR-4) so a background refetch that 404s -
+        // e.g. the window-focus refetch every query gets by default, after
+        // another user deletes this document - can be told apart from any
+        // other fetch failure (TRO-290/ERR-14).
+        const err = new Error(
+          response.status === 404 ? 'Document not found' : 'Failed to fetch document'
+        ) as Error & { status: number };
+        err.status = response.status;
+        throw err;
       }
       return response.json();
     },
     enabled: !!id,
     retry: false,
   });
+
+  // TRO-290/ERR-14 - reproduced: this query never overrides
+  // `refetchOnWindowFocus`, so a background refetch fires on focus by
+  // default. If another user deleted the document while this tab sat open,
+  // that refetch 404s - but `document` (react-query's cached `data`) is still
+  // the last good snapshot, not cleared just because a later fetch failed.
+  // The render below used to bail into the "not found" screen whenever
+  // `error` was truthy at all, unmounting the editor and discarding whatever
+  // was mid-typing. Route the 404 into the SAME deletion notice ERR-4 already
+  // gives write failures (one deletion story, not two), and leave the render
+  // path below to keep the editor mounted whenever cached `document` data
+  // exists at all.
+  useEffect(() => {
+    if (id && document && error && isNotFoundError(error)) {
+      notifyDocumentGoneOnRead(id);
+    }
+  }, [id, document, error]);
 
   // Sync current document context for rail highlighting
   useEffect(() => {
@@ -492,8 +516,13 @@ export function UnifiedDocumentPage() {
     );
   }
 
-  // Error state
-  if (error || !document) {
+  // Error state - only when there is no cached document to fall back on.
+  // TRO-290/ERR-14: once `document` has a value, a later failed background
+  // refetch must not unmount the editor - a 404 there is routed into the
+  // deletion notice by the effect above instead, and any other transient
+  // refetch failure should likewise leave the last good snapshot on screen
+  // rather than discarding in-progress text.
+  if (!document) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-4">
         <div className="text-muted">

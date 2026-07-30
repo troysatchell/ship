@@ -105,6 +105,23 @@ function notifyDocumentWriteOutcome(outcome: DocumentWriteOutcome) {
   documentWriteListeners.forEach(l => l(outcome));
 }
 
+/**
+ * TRO-290/ERR-14 - the READ path's counterpart to the write-outcome notice
+ * above. `UnifiedDocumentPage.tsx`'s top-level document query doesn't
+ * override `refetchOnWindowFocus`, so a background refetch (e.g. the user
+ * returning to a tab) can 404 after another user deletes the document while
+ * this tab had it open. That is not a write failure - nothing was written -
+ * but it is the same underlying fact ERR-4 already has a notice for, so it
+ * goes through the same bus instead of a second "document deleted" channel.
+ * Call this once per document id when a background refetch 404s while
+ * cached data still exists; `useDocumentWriteStatus`'s own one-shot guard
+ * keeps the user-facing notice (`Editor.tsx`'s alert) to a single firing even
+ * if the query keeps retrying the failed refetch.
+ */
+export function notifyDocumentGoneOnRead(documentId: string): void {
+  notifyDocumentWriteOutcome({ documentId, status: 'error', documentGone: true });
+}
+
 /** Mutations opt into document-write tracking via `meta.documentId`. */
 function documentIdFromMeta(mutation: { options: { meta?: Record<string, unknown> } }): string | undefined {
   const value = mutation.options.meta?.documentId;
