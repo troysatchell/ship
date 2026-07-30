@@ -150,7 +150,19 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     `pnpm install` cleared all of it — the lockfile was already correct, so nothing else was wrong.
     Symptom to recognise: failures in files your diff never touched, all reporting import or
     module-resolution errors rather than assertion failures.
-24. **The load-sensitive api flake has at least five identities. Name yours; never quarantine it.**
+24. **The load-sensitive api flake has at least NINE identities, and the quarantine is now empty.**
+    Added 2026-07-30: `concurrent-merge.test.ts::merges concurrent inserts from two clients into the
+    SAME text region`, `documents-visibility.test.ts::returns private docs only to creator`,
+    `documents-visibility.test.ts::returns private docs to workspace admins`,
+    `search.test.ts::returns people with correct structure` — joining the five below.
+    **This matters more than it used to.** TEST-1 emptied `quarantine.json` entirely, so there is no
+    longer any list absorbing a red test: one flake now fails a gate and a CI run outright. `gate.sh`
+    therefore re-runs each new failure standalone and reports the result, so you no longer have to do
+    it by hand — but it still records `fail`, deliberately. "Fails in the suite, passes alone" is
+    equally the signature of a real test-isolation bug, which is exactly what TEST-12 turned out to
+    be, so auto-passing it would hide the class this project keeps finding.
+    Read `.factory/<pkg>-standalone.txt` and judge. Concurrency across worktrees is the usual cause —
+    check `ps` for sibling gates before concluding anything.
     `backlinks.test.ts`, `rate-limit.test.ts`, `weeks.test.ts::should reject review approval without
     rating`, `session-activity-race.test.ts::modifies the session row exactly once when a concurrent
     burst crosses the threshold`, and a candidate `workspaces.test.ts::should archive person
