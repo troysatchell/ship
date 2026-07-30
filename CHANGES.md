@@ -8,6 +8,89 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-299 — [TF-10] Render-provider Terraform config for the deployed fork
+
+Ship's Render deployment (`ship` / `srv-d9kf2t942hec73aofrt0`, `ship-db` /
+`dpg-d9kgth6417fc7386hhh0-a`) was hand-built via the dashboard and one-off API calls — the last
+piece of Category 8 not backed by Terraform (`memory-bank/techContext.md`: "Not yet
+Terraform-managed — the service and database were created by hand and API call."). This adds a
+config that can reproduce it.
+
+**What changed.**
+
+- **`terraform/render/`** (new): `versions.tf` pins `render-oss/render` `1.9.1` (verified latest
+  stable on the public registry) and `required_version >= 1.9.0`; `postgres.tf`/`web_service.tf`
+  declare `render_postgres.ship` (pg16, oregon, free) and `render_web_service.ship` (docker
+  runtime, this repo/`main`, oregon, free, health check `/health`); `variables.tf` gives every
+  input a description, with `render_api_key`/`session_secret` marked `sensitive = true` and no
+  real default. `DATABASE_URL` is derived from `render_postgres.ship.connection_info.internal_connection_string`
+  (a resource reference, never a literal). `outputs.tf` deliberately omits anything sensitive.
+- **`terraform/render/terraform.tfvars.example`** (new): placeholders only.
+- Root `.gitignore` gains `terraform/render/*.tfplan` and `terraform/render/tfplan` — the one
+  genuine gap: no existing pattern covered a captured plan file under this new directory.
+  `terraform/.gitignore`'s pre-existing, unrelated `*.tfvars` / `.terraform/` / `*.tfstate*`
+  patterns (no leading slash, so unanchored — they already apply recursively under `terraform/`)
+  turn out to **already cover** `terraform/render/`'s `.terraform/` cache, `terraform.tfvars`, and
+  state files, verified empirically against the pre-this-ticket version of that file. **This
+  corrects `memory-bank/techContext.md`**, which asserted "a new `terraform/render/terraform.tfvars`
+  would NOT be ignored" — that check looked only at the root file's `terraform/`-specific lines and
+  missed the nested file's blanket coverage; filed as a memory-bank correction rather than silently
+  treated as a non-issue. One negation, `!render/.terraform.lock.hcl` (added to the nested file),
+  so this directory's provider lock file is committed — deliberately unlike every other `terraform/*`
+  subdirectory, none of which commit theirs (the gap TF-4 flagged for the flat root specifically).
+- **`terraform/render/README.md`** (new): verified-vs-on-record fact table, why this directory
+  sits inside `terraform/` given PR #41's single-root guard (it wouldn't be flagged either way —
+  the guard greps for `provider "aws"`, and this declares `provider "render"`), confirmation that
+  `audit/terraform/drift-demo/` already satisfies the local-provider deliverable (2 pinned
+  `local_file` resources — no changes needed there), and the import-vs-apply adoption memo.
+- **`terraform/render/plan/plan-annotated.md`** (new): the captured, redacted `terraform plan`
+  output plus one-sentence-per-resource blast-radius annotations.
+
+**Verified live against the Render API (2026-07-30)**, via `GET /v1/services/{id}`,
+`/v1/postgres/{id}`, `/v1/services/{id}/env-vars` (names only), `/v1/owners` — not re-derived from
+the memory bank: service id/name/region/runtime/plan/URL, health check path (now set to `/health`,
+newer than an older memory-bank note calling it unset), repo/branch/auto-deploy/Dockerfile path,
+database id/name/region/version/plan, owner id, and that the three expected env var names
+(`DATABASE_URL`, `SESSION_SECRET`, `CORS_ORIGIN`) are the only ones set. One fact only *partially*
+confirmed: Postgres `ipAllowList` reads `null` via the API, not `[]` — functionally equivalent per
+the provider's docs but not a byte-for-byte match, called out as such in the README rather than
+rounded up to "verified."
+
+**What did NOT change / was not run — hard safety rules.** No `terraform apply` or
+`terraform import` ran against the live account; `terraform plan` is read-only and was run with
+real credentials (`RENDER_API_KEY` sourced from the gitignored repo-root `.env`, never printed,
+echoed, or committed). The plan shows `2 to add, 0 to change, 0 to destroy` — Terraform proposing
+brand-new resources, because nothing was imported; this is the expected "hand-built resource, empty
+state" collision the ticket anticipated, not a defect, and is not "fixed" here. The
+adoption-path decision (import vs. a clean-machine apply that creates a parallel service) is a
+human call — see the PR body's **"HOLD FOR HUMAN: apply/import decision (gate 2)"** and the memo in
+`terraform/render/README.md`.
+
+**Regression test: honestly, none applies.** This ticket's deliverable is Terraform configuration
+and documentation — there is no `api/**/*.test.ts` or `web/**/*.test.tsx` change for
+`scripts/factory/gate.sh`'s regression-test check (G6) to find, and it is expected to fail
+honestly rather than be satisfied by a manufactured vitest case with nothing to regress-test. The
+real verification is `terraform validate` (clean, no warnings) + `terraform fmt -check -recursive`
+(clean, after one formatting pass) + the live `terraform plan` capture referenced above, all shown
+in the PR body.
+
+**How to run it.**
+
+```bash
+cd terraform/render
+terraform init -input=false          # downloads render-oss/render 1.9.1
+terraform validate
+terraform fmt -check -recursive .
+cp terraform.tfvars.example terraform.tfvars   # fill in session_secret; gitignored
+set -a; source ../../.env; set +a              # RENDER_API_KEY
+terraform plan -var-file=terraform.tfvars -input=false
+```
+
+**How to roll it back.** Delete `terraform/render/`, revert the two `.gitignore` edits. Nothing on
+Render itself needs rolling back — no `apply`/`import` ever touched the live account.
+
+---
+
 ## TRO-208 — [TS-3] The Yjs <-> TipTap converter — the persistence path for every document's content — was fully untyped
 
 `api/src/utils/yjsConverter.ts` carried 12 `any` in 245 lines, the highest any-per-line density of
