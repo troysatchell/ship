@@ -21,13 +21,18 @@ import { emptyReviewCell, mergeReviewCellPatch } from './ReviewsPage';
  * instead of the type's contract (`boolean` / `string | null`).
  *
  * Reachability caveat (observed, not assumed): tracing the call sites that
- * invoke `approvePlan`/`requestChanges`/`rateRetro` from the rendered UI
- * (`ReviewsPage.tsx:919-935`, `:1115`), every one is gated on
- * `cell.hasPlan`/`cell.hasRetro` already being `true` — which requires a
- * pre-existing, already-fetched `ReviewCell`. So the corrupting branch was
- * not reachable through today's UI; this pins a real type-safety gap the
- * compiler could not previously see, not a demonstrated production crash.
- * Recorded here rather than overclaimed, per this repo's provenance rule.
+ * invoke `approvePlan`/`requestChanges`/`rateRetro` — the `onApprovePlan`/
+ * `onRateRetro`/`onRequestChanges` callbacks at `ReviewsPage.tsx:972`, `:989`,
+ * `:1007` — every action button that fires them is disabled unless the
+ * corresponding flag is already `true`: `canApprove = selectedCell.cell.hasPlan`
+ * (`:1123`) disables "Approve Plan" (`:1349`) and hides plan "Request Changes"
+ * (`:1367`); the retro actions require `retroDoc` to have already loaded
+ * (`:1315`), which is only set once a retro document exists for that cell.
+ * Both paths require a pre-existing, already-fetched `ReviewCell`. So the
+ * corrupting branch was not reachable through today's UI; this pins a real
+ * type-safety gap the compiler could not previously see, not a demonstrated
+ * production crash. Recorded here rather than overclaimed, per this repo's
+ * provenance rule.
  */
 describe('mergeReviewCellPatch (TRO-206 / TS-1)', () => {
   it('emptyReviewCell fills every ReviewCell field, none left undefined', () => {

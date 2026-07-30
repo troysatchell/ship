@@ -159,9 +159,13 @@ export const EmojiExtension = Node.create({
 
         // Replace the :shortcode: with the emoji character
         // Modifying state.tr in place applies the transformation
+        // NOTE: must return undefined (not null) here — Tiptap's InputRule
+        // runner treats a `null` return as "not handled" and skips
+        // view.dispatch(tr) even when tr has steps queued (see
+        // @tiptap/core's InputRule.ts: `if (handler === null || !tr.steps.length) return`).
         const textNode = state.schema.text(emoji.emoji + ' ');
         state.tr.replaceWith(range.from, range.to, textNode);
-        return null;
+        return;
       },
     });
 
