@@ -10,6 +10,7 @@ import { extractHypothesisFromContent, extractSuccessCriteriaFromContent, extrac
 import { yjsToJson, jsonToYjs } from '../utils/yjsConverter.js';
 import { SESSION_TIMEOUT_MS, ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
 import cookie from 'cookie';
+import { createHash } from 'crypto';
 
 const messageSync = 0;
 const messageAwareness = 1;
@@ -366,6 +367,160 @@ function handleMessage(ws: WebSocket, message: Uint8Array, docName: string, doc:
       break;
     }
   }
+}
+
+/**
+ * WebSocket close code for a frame this server could not process.
+ * RFC 6455 §7.4.1: 1002 "protocol error" — the peer sent something that violates
+ * the protocol we are speaking, which is exactly what a malformed Yjs frame is.
+ * Not 1011 ("internal error"), which would blame the server for the client's bytes.
+ */
+export const WS_CLOSE_PROTOCOL_ERROR = 1002;
+
+/** Digest length in hex characters. Long enough to distinguish frames, short enough to read. */
+const FRAME_DIGEST_CHARS = 16;
+
+/**
+ * A correlation identity for a frame that leaks none of its content.
+ *
+ * The bytes themselves must never be logged. A Yjs sync update carries document
+ * text, and a frame that failed to decode has usually been *partially* decoded —
+ * so its leading bytes can contain fragments of what a user typed. Logs get
+ * shipped, aggregated and retained, which would quietly turn a crash log into a
+ * content leak.
+ *
+ * A one-way digest keeps the property that actually matters for triage: the same
+ * frame sent twice yields the same identity, so a repeated or automated attack is
+ * visible in the log without the log holding the payload.
+ *
+ * Honest limit, stated rather than hidden: for a very short frame the digest is
+ * reversible by brute force. That is acceptable precisely because a four-byte
+ * frame cannot contain document content — and the frames long enough to carry
+ * any are far too large to enumerate.
+ */
+function frameDigest(frame: Uint8Array): string {
+  return createHash('sha256').update(frame).digest('hex').slice(0, FRAME_DIGEST_CHARS);
+}
+
+/**
+ * The protocol discriminator, when it can be read without decoding anything else.
+ *
+ * Structural metadata, not content: it is one of a handful of fixed protocol
+ * constants (sync / awareness / custom event / clear cache) and says nothing about
+ * what any user typed. It is also the first thing worth knowing when triaging —
+ * a broken awareness frame implicates a different code path than a broken sync
+ * frame. A varuint whose first byte has the continuation bit set is multi-byte and
+ * is reported as such rather than guessed at.
+ */
+function frameMessageType(frame: Uint8Array): number | 'empty' | 'multibyte' {
+  const first = frame.at(0);
+  if (first === undefined) return 'empty';
+  return first < 0x80 ? first : 'multibyte';
+}
+
+/**
+ * TRO-276 / ERR-10 — a malformed frame must never take down the process.
+ *
+ * Frame handling decodes attacker-controlled bytes with raw lib0 readers, which
+ * throw on truncated or malformed input (`Unexpected end of array`,
+ * `Invalid typed array length: N`). The call site is a `ws` 'message' listener —
+ * an I/O callback — so a synchronous throw there escapes to the process. With
+ * nothing listening for `uncaughtException`, Node's default applies and the
+ * process terminates: one frame from any authenticated user took the API down
+ * for everyone.
+ *
+ * Every inbound frame runs through here. The offending socket is closed (the Yjs
+ * sync protocol has no mid-stream resync, so a peer whose bytes we cannot decode
+ * has nothing useful left to say, and its client will reconnect); every other
+ * connection is untouched.
+ *
+ * Note on the log: frame identity is recorded *because the stack trace lies*.
+ * lib0 builds `errorUnexpectedEndOfArray` as a module-scope singleton Error whose
+ * stack is captured at module load, so `err.stack` points at whatever first
+ * imported lib0 rather than at the throw site. The digest, length and message type
+ * are the usable evidence — and, unlike the raw bytes, they carry no user content.
+ */
+// Exported for the ERR-10 regression test, which pins the async-escape branch
+// below — there is no async call site to exercise it through, and defensive code
+// nothing can reach is defensive code that rots. Same rationale as the exports of
+// revalidateLiveSessions()/closeSocketsForSession() above.
+export function runFrameHandler(
+  ws: WebSocket,
+  frame: Uint8Array,
+  context: Record<string, unknown>,
+  handler: () => void
+): void {
+  try {
+    const result: unknown = handler();
+
+    // TypeScript cannot express "not async" here: a function returning
+    // `Promise<void>` is assignable to `() => void`, so an `async` handler added
+    // later would compile silently, reject *after* this try/catch had already
+    // exited, and escape the guard entirely — reintroducing ERR-10 by the back
+    // door as an unhandled rejection. Contain it rather than merely discourage it.
+    if (isThenable(result)) {
+      result.then(undefined, (err: unknown) => reportFrameFailure(ws, frame, context, err));
+    }
+  } catch (err) {
+    reportFrameFailure(ws, frame, context, err);
+  }
+}
+
+/** Log a frame failure and hang up on the peer that caused it. Must never throw. */
+function reportFrameFailure(
+  ws: WebSocket,
+  frame: Uint8Array,
+  context: Record<string, unknown>,
+  err: unknown
+): void {
+  console.error('[Collaboration] Unhandled error while processing a WebSocket frame; closing that socket', {
+    ...context,
+    error: err instanceof Error ? { name: err.name, message: err.message } : String(err),
+    // Identity, not content. See frameDigest() for why the bytes are not here.
+    frameBytes: frame.length,
+    frameDigest: frameDigest(frame),
+    frameMessageType: frameMessageType(frame),
+    stackIsUnreliable: 'lib0 decoding errors are module-scope singletons; err.stack is not the throw site',
+  });
+
+  try {
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close(WS_CLOSE_PROTOCOL_ERROR, 'Malformed frame');
+    }
+  } catch {
+    // The socket is already gone. Nothing further to do, and this must not
+    // throw either — it runs on the same I/O callback stack.
+  }
+}
+
+function isThenable(value: unknown): value is PromiseLike<unknown> {
+  return typeof value === 'object' && value !== null && 'then' in value && typeof value.then === 'function';
+}
+
+/** Narrow an arbitrary parsed JSON value to the events channel's keepalive ping. */
+function isPingMessage(message: unknown): boolean {
+  return typeof message === 'object' && message !== null && 'type' in message && message.type === 'ping';
+}
+
+/**
+ * TRO-276 / ERR-10 — a socket-level error must not take down the process either.
+ *
+ * `ws` reports transport and framing failures by emitting 'error' on the
+ * WebSocket. `EventEmitter` throws an unhandled 'error' event, so a socket with
+ * no listener is the same crash vector by another route.
+ */
+function attachSocketErrorHandler(ws: WebSocket, context: Record<string, unknown>): void {
+  ws.on('error', (err: Error) => {
+    console.error('[Collaboration] WebSocket transport error; terminating that socket', {
+      ...context,
+      error: { name: err.name, message: err.message },
+    });
+    try {
+      ws.terminate();
+    } catch {
+      // Already destroyed.
+    }
+  });
 }
 
 export interface WebSocketSession {
@@ -845,6 +1000,14 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
   });
 
   wss.on('connection', async (ws: WebSocket, _request: IncomingMessage, docName: string, sessionData: WebSocketSession) => {
+    // ERR-10: FIRST statement, before any await. This handler is async and the
+    // document load below is a database round trip, so anything registered after
+    // it leaves the socket unguarded for the whole of that window — and a peer
+    // that writes a protocol-violating frame the instant the handshake completes
+    // lands squarely inside it. Verified: a frame with RSV1 set during the load
+    // window produced an uncaught RangeError until this moved up here.
+    attachSocketErrorHandler(ws, { docName, userId: sessionData.userId });
+
     const doc = await getOrCreateDoc(docName);
     const aw = getAwareness(docName, doc);
 
@@ -887,39 +1050,46 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
     }
 
     ws.on('message', (data: Buffer) => {
-      // ERR-2: the session backing this socket was revoked/expired and the socket
-      // is closing. Drop anything still arriving rather than persisting it.
-      if (conns.get(ws)?.revoked) {
-        return;
-      }
-
-      // DDoS protection: Defense-in-depth size check (WS server also enforces maxPayload)
-      if (data.length > MAX_WS_MESSAGE_SIZE) {
-        ws.close(1009, 'Message too large');
-        return;
-      }
-
-      // Rate limit messages to prevent message floods
-      if (isMessageRateLimited(ws)) {
-        // DDoS protection: Track violations and apply progressive penalties
-        const violations = (rateLimitViolations.get(ws) || 0) + 1;
-        rateLimitViolations.set(ws, violations);
-
-        // After repeated violations, terminate the connection
-        if (violations >= RATE_LIMIT_VIOLATION_THRESHOLD) {
-          ws.close(1008, 'Rate limit exceeded');
+      // ERR-10: the whole body is guarded, not just handleMessage(). The rate
+      // limiter and the revocation check are cheap and unlikely to throw, but
+      // "unlikely" is what this finding is about — nothing reachable from an
+      // inbound frame may escape to the process.
+      runFrameHandler(ws, data, { docName, userId: sessionData.userId }, () => {
+        // ERR-2: the session backing this socket was revoked/expired and the socket
+        // is closing. Drop anything still arriving rather than persisting it.
+        // Checked first, inside the guard, so a revoked socket is not even decoded.
+        if (conns.get(ws)?.revoked) {
           return;
         }
 
-        // Drop message silently - client will retry via Yjs sync protocol
-        return;
-      }
+        // DDoS protection: Defense-in-depth size check (WS server also enforces maxPayload)
+        if (data.length > MAX_WS_MESSAGE_SIZE) {
+          ws.close(1009, 'Message too large');
+          return;
+        }
 
-      // Reset violation count on successful (non-rate-limited) messages
-      rateLimitViolations.delete(ws);
-      recordMessage(ws);
+        // Rate limit messages to prevent message floods
+        if (isMessageRateLimited(ws)) {
+          // DDoS protection: Track violations and apply progressive penalties
+          const violations = (rateLimitViolations.get(ws) || 0) + 1;
+          rateLimitViolations.set(ws, violations);
 
-      handleMessage(ws, new Uint8Array(data), docName, doc, aw);
+          // After repeated violations, terminate the connection
+          if (violations >= RATE_LIMIT_VIOLATION_THRESHOLD) {
+            ws.close(1008, 'Rate limit exceeded');
+            return;
+          }
+
+          // Drop message silently - client will retry via Yjs sync protocol
+          return;
+        }
+
+        // Reset violation count on successful (non-rate-limited) messages
+        rateLimitViolations.delete(ws);
+        recordMessage(ws);
+
+        handleMessage(ws, new Uint8Array(data), docName, doc, aw);
+      });
     });
 
     ws.on('close', () => {
@@ -964,6 +1134,16 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
 
   // Handle events WebSocket connections (for real-time notifications)
   eventsWss.on('connection', (ws: WebSocket, sessionData: WebSocketSession) => {
+    // ERR-10: first statement, before anything that touches the socket — the same
+    // rule as the collaboration handler above. Note this is defence in depth
+    // rather than a live fix: `ws.send()` with no callback does not emit 'error'
+    // on a closed socket (`sendAfterClose` only builds the error `if (cb)`), and
+    // this handler is synchronous, so nothing could currently slip in ahead of a
+    // later registration. The point is that "error listener first" is a cheaper
+    // invariant to hold than to re-derive — and the collaboration handler proved
+    // what late registration costs once someone makes the function async.
+    attachSocketErrorHandler(ws, { channel: 'events', userId: sessionData.userId });
+
     eventConns.set(ws, {
       userId: sessionData.userId,
       workspaceId: sessionData.workspaceId,
@@ -977,35 +1157,47 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
 
     // Handle ping/pong for keepalive with rate limiting
     ws.on('message', (data: Buffer) => {
-      // ERR-2: revoked session — stop serving this socket immediately.
-      if (eventConns.get(ws)?.revoked) {
-        return;
-      }
-
-      // DDoS protection: Rate limit events WebSocket messages
-      if (isMessageRateLimited(ws)) {
-        const violations = (rateLimitViolations.get(ws) || 0) + 1;
-        rateLimitViolations.set(ws, violations);
-
-        if (violations >= RATE_LIMIT_VIOLATION_THRESHOLD) {
-          console.log(`[Events] Rate limit violations exceeded for user ${sessionData.userId}, closing connection`);
-          ws.close(1008, 'Rate limit exceeded');
+      // ERR-10: same guard as the collaboration socket.
+      runFrameHandler(ws, data, { channel: 'events', userId: sessionData.userId }, () => {
+        // ERR-2: revoked session — stop serving this socket immediately.
+        if (eventConns.get(ws)?.revoked) {
+          return;
         }
-        return;
-      }
 
-      // Reset violations on successful message
-      rateLimitViolations.delete(ws);
-      recordMessage(ws);
+        // DDoS protection: Rate limit events WebSocket messages
+        if (isMessageRateLimited(ws)) {
+          const violations = (rateLimitViolations.get(ws) || 0) + 1;
+          rateLimitViolations.set(ws, violations);
 
-      try {
-        const message = JSON.parse(data.toString());
-        if (message.type === 'ping') {
+          if (violations >= RATE_LIMIT_VIOLATION_THRESHOLD) {
+            console.log(`[Events] Rate limit violations exceeded for user ${sessionData.userId}, closing connection`);
+            ws.close(1008, 'Rate limit exceeded');
+          }
+          return;
+        }
+
+        // Reset violations on successful message
+        rateLimitViolations.delete(ws);
+        recordMessage(ws);
+
+        // The catch covers exactly what its comment claims — parsing — and
+        // nothing else. It previously wrapped the response too, so any error
+        // raised while replying was silently discarded instead of reaching
+        // runFrameHandler's log-and-close path: a `catch {}` that spans more than
+        // it says is how a guarded handler quietly stops being guarded.
+        let message: unknown;
+        try {
+          message = JSON.parse(data.toString());
+        } catch {
+          // Malformed JSON on this channel is expected noise from clients, not a
+          // frame worth logging or closing the socket over.
+          return;
+        }
+
+        if (isPingMessage(message)) {
           ws.send(JSON.stringify({ type: 'pong' }));
         }
-      } catch {
-        // Ignore invalid messages
-      }
+      });
     });
 
     ws.on('close', () => {
