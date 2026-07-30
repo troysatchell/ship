@@ -98,7 +98,10 @@ describe('vi.clearAllMocks does not drain queued once-values (the TEST-12 mechan
 describe('api suite mock-isolation invariant', () => {
   it('finds api test files to scan', () => {
     // Guard against the scan silently passing because it matched nothing.
-    expect(testFilesUnder(API_SRC).length).toBeGreaterThan(20);
+    // Deliberately >0, not a suite-size count: a threshold tied to the current
+    // file count (e.g. 20) breaks whenever tests are consolidated or moved,
+    // for a reason unrelated to what this guard actually checks.
+    expect(testFilesUnder(API_SRC).length).toBeGreaterThan(0);
   });
 
   it('has no test file that combines clearAllMocks with a once-queue', () => {

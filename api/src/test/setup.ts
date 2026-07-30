@@ -34,7 +34,20 @@ const LOCK_ID = 0x54455354 // 'TEST'
 
 // A whole test file may hold the lock, and the slowest file in this suite runs
 // ~15s, so a waiting process needs to tolerate more than one file's duration.
-const LOCK_TIMEOUT_MS = Number(process.env.API_TEST_LOCK_TIMEOUT_MS ?? 120_000)
+//
+// Validated rather than a bare Number(...): an invalid or empty override (e.g.
+// API_TEST_LOCK_TIMEOUT_MS="" or "abc") would otherwise produce NaN or 0. NaN
+// makes every `Date.now() >= deadline` check below false forever — the "hard
+// deadline" this lock depends on silently stops existing and a stuck process
+// hangs instead of throwing the diagnosable error below. 0 does the opposite:
+// the deadline is already past, so the very first non-acquisition throws
+// immediately. Falling back to the default keeps the deadline finite either way.
+const DEFAULT_LOCK_TIMEOUT_MS = 120_000
+const parsedLockTimeoutMs = Number(process.env.API_TEST_LOCK_TIMEOUT_MS)
+const LOCK_TIMEOUT_MS =
+  Number.isFinite(parsedLockTimeoutMs) && parsedLockTimeoutMs > 0
+    ? parsedLockTimeoutMs
+    : DEFAULT_LOCK_TIMEOUT_MS
 const LOCK_POLL_MS = 50
 
 let lockClient: pg.Client | null = null
