@@ -8,7 +8,9 @@
 
 import { Router, Request, Response } from 'express';
 import { authMiddleware } from '../middleware/auth.js';
-import { analyzePlan, analyzeRetro, isAiAvailable, checkRateLimit } from '../services/ai-analysis.js';
+import { analyzePlan, analyzeRetro, isAiAvailable, checkRateLimit, RATE_LIMIT } from '../services/ai-analysis.js';
+
+const RATE_LIMIT_MESSAGE = `Rate limit exceeded. Max ${RATE_LIMIT} analysis requests per hour.`;
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -31,7 +33,7 @@ router.post('/analyze-plan', authMiddleware, async (req: Request, res: Response)
 
     // Rate limit check
     if (!checkRateLimit(userId)) {
-      res.status(429).json({ error: 'Rate limit exceeded. Max 10 analysis requests per hour.' });
+      res.status(429).json({ error: RATE_LIMIT_MESSAGE });
       return;
     }
 
@@ -61,7 +63,7 @@ router.post('/analyze-retro', authMiddleware, async (req: Request, res: Response
 
     // Rate limit check
     if (!checkRateLimit(userId)) {
-      res.status(429).json({ error: 'Rate limit exceeded. Max 10 analysis requests per hour.' });
+      res.status(429).json({ error: RATE_LIMIT_MESSAGE });
       return;
     }
 
