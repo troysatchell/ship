@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach, Mock } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { renderHook, act } from '@testing-library/react';
 import { useSessionTimeout } from './useSessionTimeout';
 
@@ -17,8 +17,64 @@ const ABSOLUTE_SESSION_TIMEOUT_MS = 12 * 60 * 60 * 1000; // 12 hours
 const ABSOLUTE_WARNING_THRESHOLD_MS = 5 * 60 * 1000; // 5 minutes before absolute timeout
 const ACTIVITY_THROTTLE_MS = 30 * 1000; // 30 seconds
 
-// Mock fetch globally
-const mockFetch = vi.fn();
+/**
+ * The parts of a response a test in this file actually chooses. Everything else —
+ * notably `headers` — is supplied by `toResponse()` below, which builds a real
+ * `Response`. Tests describe intent; the harness supplies fidelity.
+ */
+interface ResponseStub {
+  ok?: boolean;
+  status?: number;
+  json?: () => Promise<unknown>;
+}
+
+// Mock fetch globally. Typed against the stub shape so a malformed stub is a
+// compile error rather than a runtime TypeError swallowed by resetTimer().
+const mockFetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<ResponseStub>>();
+
+/**
+ * `lib/api.ts` does not only read `.ok` and `.json()` off a response — its
+ * `isJsonResponse()` helper reads `response.headers.get('content-type')`, both in
+ * `ensureCsrfToken()` and again on the POST that follows. A bare `{ ok, json }`
+ * object therefore throws a TypeError inside `apiPost`, and `resetTimer()` treats
+ * *any* throw as "network error - force logout".
+ *
+ * That is what made "does NOT call onTimeout if dismissed before 0" fail: the hook
+ * behaved exactly as designed, and the stub was not a Response. Rather than
+ * hand-rolling the one property that was missing, these helpers hand the code under
+ * test a **real** `Response`, so there is no second shape to keep in sync.
+ */
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'content-type': 'application/json' },
+  });
+}
+
+/**
+ * Build a fresh `Response` from a test's stub.
+ *
+ * Fresh per call, deliberately: a `Response` body can only be read once, so a
+ * single shared instance would throw on the second read — which the
+ * mount/unmount loop below does ten times.
+ */
+async function toResponse(stub: ResponseStub): Promise<Response> {
+  const status = stub.status ?? (stub.ok === false ? 500 : 200);
+  return jsonResponse(stub.json ? await stub.json() : {}, status);
+}
+
+/**
+ * Install `global.fetch`. The CSRF handshake that lib/api.ts performs before every
+ * POST is answered here, so each test only has to stub the endpoint under test.
+ */
+function installFetch() {
+  global.fetch = async (input, init) => {
+    if (String(input).includes('/api/csrf-token')) {
+      return jsonResponse({ token: 'test-csrf-token' });
+    }
+    return toResponse(await mockFetch(input, init));
+  };
+}
 
 describe('useSessionTimeout', () => {
   beforeEach(() => {
@@ -37,7 +93,7 @@ describe('useSessionTimeout', () => {
         },
       }),
     });
-    global.fetch = mockFetch;
+    installFetch();
     // Mock document event listeners
     vi.spyOn(document, 'addEventListener');
     vi.spyOn(document, 'removeEventListener');
@@ -168,6 +224,48 @@ describe('useSessionTimeout', () => {
       });
 
       expect(onTimeout).not.toHaveBeenCalled();
+    });
+
+    /**
+     * Counterpart to the test above, and the reason the fix there had to be in the
+     * stub rather than in the hook: dismissing the warning must NOT log you out,
+     * but a session that genuinely cannot be extended MUST. Without these two, a
+     * "fix" that simply stopped calling onTimeout would look correct.
+     */
+    it('DOES call onTimeout when extend-session is rejected by the server', async () => {
+      const onTimeout = vi.fn();
+      mockFetch.mockImplementation(input =>
+        Promise.resolve(
+          String(input).includes('/api/auth/extend-session')
+            ? { ok: false, status: 401, json: async () => ({ success: false }) }
+            : { ok: true, json: async () => ({ success: true }) }
+        )
+      );
+
+      const { result } = renderHook(() => useSessionTimeout(onTimeout));
+
+      await act(async () => {
+        await result.current.resetTimer();
+      });
+
+      expect(onTimeout).toHaveBeenCalledTimes(1);
+    });
+
+    it('DOES call onTimeout when extend-session fails with a network error', async () => {
+      const onTimeout = vi.fn();
+      mockFetch.mockImplementation(input =>
+        String(input).includes('/api/auth/extend-session')
+          ? Promise.reject(new Error('Network error'))
+          : Promise.resolve({ ok: true, json: async () => ({ success: true }) })
+      );
+
+      const { result } = renderHook(() => useSessionTimeout(onTimeout));
+
+      await act(async () => {
+        await result.current.resetTimer();
+      });
+
+      expect(onTimeout).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -717,7 +815,8 @@ describe('useSessionTimeout', () => {
 describe('useSessionTimeout - Edge Cases', () => {
   beforeEach(() => {
     vi.useFakeTimers();
-    const mockFetch = vi.fn().mockResolvedValue({
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
       ok: true,
       json: async () => ({
         success: true,
@@ -728,7 +827,7 @@ describe('useSessionTimeout - Edge Cases', () => {
         },
       }),
     });
-    global.fetch = mockFetch;
+    installFetch();
   });
 
   afterEach(() => {
@@ -776,7 +875,7 @@ describe('useSessionTimeout - Edge Cases', () => {
 
   it('handles resetTimer called when not showing warning', async () => {
     const onTimeout = vi.fn();
-    (global.fetch as Mock).mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
 
     const { result } = renderHook(() => useSessionTimeout(onTimeout));
 
@@ -792,7 +891,7 @@ describe('useSessionTimeout - Edge Cases', () => {
 
   it('handles multiple resetTimer calls in quick succession', async () => {
     const onTimeout = vi.fn();
-    (global.fetch as Mock).mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
+    mockFetch.mockResolvedValue({ ok: true, json: async () => ({ success: true }) });
 
     const { result } = renderHook(() => useSessionTimeout(onTimeout));
 

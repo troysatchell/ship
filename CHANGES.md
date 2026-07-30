@@ -8,6 +8,175 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-223 (TEST-1) — the web unit suite is green, and `pnpm test` now actually runs it
+
+**13 web unit tests failed, in 3 files, and the root `pnpm test` never ran them.** Root `"test"` was
+`pnpm --filter @ship/api test`, so `pnpm test` reported green while those 13 stayed red. CI *did*
+run the web suite (`.github/workflows/ci.yml:105-118`, under `continue-on-error` with a quarantine
+diff), so the failures were visible there — they were invisible to anyone running the suite locally,
+which is where they needed to be caught. The suite
+was 151 tests when the factory captured its baseline and 172 by the time this branch measured it —
+the same 13 failing in both. They were five months of accumulated drift that a suite nobody ran
+could not catch.
+
+**The judgement this ticket turned on: for each failure, was the test wrong or the source wrong?**
+It was not uniform, and it did not fall the convenient way. Of the 13: **11 were stale
+assertions**, **1 was a source defect**, and **1 was a defect in the test harness**.
+
+*Stale tests — 11 (source was right, assertions were corrected — a correction, not a weakening):*
+
+- **`sprints` → `weeks` (5 assertions).** `7713ef0` renamed the tab id in both the project and
+  program configs. `e2e/project-weeks.spec.ts:121` navigates to `/documents/:id/weeks`, confirming
+  the new id is the live contract. Tests still asserted `'sprints'`.
+- **Project tabs reordered (1 assertion).** `b1e4c5a` ("streamline navigation") moved `details`
+  below `issues`, so a project opens on its issue list. The test asserted `details` was first.
+- **Sprint documents gained tabs (2 assertions).** `9f77237` added a status-aware sprint tab set,
+  landing *after* the test file was written. The tests asserted sprints had none.
+- **`DetailsExtension` content model (1 assertion) and schema construction (2 errors).** The node's
+  `content` is `'detailsSummary detailsContent'`; the test asserted `'block+'` and built an `Editor`
+  without the two child nodes, so ProseMirror threw `No node type or group 'detailsSummary' found`.
+  `Editor.tsx:628-630` registers all three together — the test now does the same.
+
+*Source defect — 1 (the test was right; the product was fixed):*
+
+- **`web/src/lib/document-tabs.tsx` — the project Weeks tab stopped showing its count.** In one
+  hunk, `7713ef0` renamed the id *and* collapsed `label` from a count function to the bare string
+  `'Weeks'` — while leaving the identical function intact on the program tab beside it. That
+  asymmetry inside a single commit is the fingerprint of an accident, and
+  `UnifiedDocumentPage.tsx:133,141` still fetches project weeks and computes `weeks:
+  projectWeeks.length` for a consumer that no longer existed. Label function restored; the two
+  callbacks are now byte-identical.
+
+*Test-harness defect — 1 (no product code changed):*
+
+- **`web/src/hooks/useSessionTimeout.test.ts` — the stub, not the hook, caused the phantom logout.**
+  `lib/api.ts` reads `response.headers.get('content-type')`; the stub had no `headers`, so `apiPost`
+  threw a `TypeError`, and `resetTimer` catches every throw as "network error — force logout".
+  Observed, not inferred: stderr printed `Network error extending session - forcing logout` — the
+  `catch` branch — and never `Failed to extend session`, the `!response.ok` branch. **The assertion
+  was correct and is untouched, and the hook's fail-closed logout was deliberately left alone**: a
+  session that cannot be extended *should* end. Only the stubs changed — they now hand the code
+  under test a real `Response`. Two new tests assert the logout still fires when extend-session
+  returns non-ok or rejects, so "fixed the stub" and "neutered the logout" cannot be confused.
+
+**Also changed.** Root `"test"` is now `test:api && test:web`, with `test:api`/`test:web` for
+single suites. CI already ran both (`.github/workflows/ci.yml:105-118`) and diffs them against the
+quarantine baseline, so this closes the *local* gap only — it does not duplicate CI. All 13
+entries were removed from `audit/factory/quarantine.json`; both suites are now green on arrival.
+`README.md:43`, which documented this finding as open, is updated.
+
+**Run it.**
+
+```bash
+pnpm test:web                    # 345 passed / 345 total, 33 files
+pnpm test                        # api (needs DATABASE_URL), then web
+scripts/factory/gate.sh          # full evidence gate
+```
+
+Those totals are measured on this branch *after* merging `main` a second time (`main` moved from
+`84f05ff` to `f7b15c9`, nine more PRs, including route-level code splitting and a deferred editor).
+That merge brought in another round of web test files written by other tickets. Sequence of
+measurements on this branch: 186 tests before the first `main` merge, 214/214 across 24 files
+after it, 345/345 across 33 files after this second one — the 13 identities this ticket fixes did
+not change across any of those merges, only the file count around them did.
+
+15 test cases were added to the three repaired files: sprint status-aware tab selection (previously
+uncovered — which is how `getTabsForDocumentType('sprint')` drifted from `[]` to four tabs
+unnoticed), project/program week count-label symmetry, the zero-count convention asserted across
+every count-aware label, a guard that no config exposes a `'sprints'` id again, `setDetails`
+document structure, and the two session fail-closed tests. Assertions in the three repaired files
+went from 131 to 147.
+
+**Correction post-merge.** The `fix(web): drop test-side casts` commit's message claimed both
+test-side casts flagged by CodeRabbit were removed. Only the `useSessionTimeout.test.ts` fetch cast
+was; `DetailsExtension.test.ts`'s pre-existing `(editor.commands as any).setDetails` — inside the
+same quarantined test this ticket claims to have fixed, `should allow inserting details via
+command` — was untouched and still present after merging `main`. Removed now (no cast needed:
+`setDetails` is typed via module augmentation, same as the sibling test already relied on).
+`node scripts/factory/review-patterns.mjs main` reports clean before and after, because the cast
+predates this branch and G7b only diffs added lines — it would not have caught this on its own.
+
+**Roll back.** `git revert` the commits on `fix/test-1-web-suite-green`. Reverting restores the 13
+failures, so the `knownFailing` list in `audit/factory/quarantine.json` must come back too —
+otherwise the gate reads them as new regressions and fails every branch.
+
+`previousCapture` now carries the 13 identities directly, under `previousCapture.webKnownFailing`.
+Copy them back into `packages.web.knownFailing`; no git archaeology required.
+
+Two traps were found while writing this, both worth knowing:
+
+- `previousCapture` originally held only `capturedAt`, `capturedAtCommit` and `totals` — so the
+  earlier instruction to "restore from `previousCapture`" pointed at data that was not there.
+- The obvious replacement was equally wrong. `capturedAtCommit` (`ae2a00e`) is the commit the
+  **measurement** was taken against; `audit/factory/quarantine.json` **did not exist yet** at that
+  commit, so `git show ae2a00e:…` fails outright. The file was introduced at `ea2dcd3`, now recorded
+  as `previousCapture.fileAtCommit`.
+
+That is why the identities are stored inline rather than referenced: a rollback instruction is read
+under pressure, and two successive versions of this one pointed somewhere that could not answer.
+
+---
+
+## TRO-282 — [TEST-13] Program Weeks tab linked to a dead `/sprints/` route and bounced the user out
+
+**Reproduced first, as the ticket required.** The finding was derived (read from `main.tsx` and
+`UnifiedDocumentPage.tsx`, "nobody has reproduced this in a browser"). A component test rendering the
+real route tree (`documents/:id/*` -> `UnifiedDocumentPage` -> the real program tab config -> the
+real `ProgramWeeksTab`) and clicking a week card confirmed it: the app logged
+`Invalid tab "sprints" for document type "program", redirecting to base URL` and the location became
+the bare `/documents/:id` — no tab, no selected week. The bug was real, not rescued by a fallback.
+
+**Root cause.** `web/src/components/document-tabs/ProgramWeeksTab.tsx` (lines 28, 34, 71 as of this
+branch) navigated to `/documents/:id/sprints/:sprintId` on selecting or opening a week, and back to
+`/documents/:id/sprints` from the week detail view. Commit 7713ef0 renamed the program tab's id from
+`sprints` to `weeks` in `web/src/lib/document-tabs.tsx`, but the tab's own navigation calls were never
+updated. `UnifiedDocumentPage.tsx`'s tab-validation effect (~line 93-102) treats any URL tab segment
+absent from `tabConfig` as invalid and redirects to the bare document URL — so every click bounced.
+Same root commit as five of the thirteen TEST-1 failures; TRO-223 fixed the tab *label* half, this is
+the navigation half, which no unit test covered.
+
+**What changed.**
+
+- `ProgramWeeksTab.tsx` — all three navigate targets now point at `weeks` instead of `sprints`.
+- `UnifiedDocumentPage.tsx` — added a small `LEGACY_TAB_ALIASES` map (`{ program: { sprints: 'weeks' } }`)
+  consulted by the invalid-tab effect. A URL segment matching a known legacy alias now redirects to
+  the tab's current id (preserving any nested path, e.g. the sprint/week id) instead of being treated
+  as a plain invalid tab and dropped to the document root.
+
+**Decision: redirect, not 404, for old `/sprints/` links.** The rename already shipped, so a bookmark
+or shared link from before it is a normal, expected case — a 404 would be a second, quieter defect (a
+link that silently stopped working) layered on top of the first. Redirecting keeps those links alive
+with the same behavior a fresh rename-aware click gets.
+
+**Regression test — `web/src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx`** (vitest, run by the
+gate; this is the tier that actually executes, per `ship-qa`). Two cases:
+
+1. Clicking a week card lands on `/documents/:id/weeks/:sprintId`, not the document root.
+2. A bookmarked `/documents/:id/sprints/:sprintId` URL redirects to the equivalent `/weeks/` URL.
+
+Confirmed red first, for the right reason: both cases failed with
+`AssertionError: expected '/documents/prog-1' to be '/documents/prog-1/weeks/a1b2c3d4-…'`, and the
+console carried the real `Invalid tab "sprints"...redirecting to base URL` warning — not a crash, not
+a bad selector. After the fix, both pass with no warning.
+
+**Also updated, additive only.** `e2e/program-mode-week-ux.spec.ts:369-417` asserted the stale
+`/sprints/` URL after clicking/double-clicking a week card; updated to expect `/weeks/`. This suite is
+not run by the gate or CI (`ship-qa`), which is exactly why the stale assertions never caught the
+break — the vitest test above is the actual proof.
+
+**How to run it.**
+
+```bash
+cd <worktree> && source .factory-env
+pnpm --filter @ship/web test -- src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx
+```
+
+**Roll back.** `git checkout main -- web/src/components/document-tabs/ProgramWeeksTab.tsx
+web/src/pages/UnifiedDocumentPage.tsx e2e/program-mode-week-ux.spec.ts && git rm
+web/src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx` and drop this entry.
+
+---
+
 ## TRO-288 — [TEST-15] session-activity-race's "did the burst race" precondition was a scheduling hope, not a guarantee
 
 **Not one of the audit report's 68 baseline findings** — a merge-queue blocker introduced by the
@@ -88,66 +257,6 @@ of that reproduction.
 
 **How to roll it back.** Revert this commit; the prior test file returns with the same
 scheduling-dependent precondition. No production code, migration, or other file changes to undo.
-
----
-
-## TRO-282 — [TEST-13] Program Weeks tab linked to a dead `/sprints/` route and bounced the user out
-
-**Reproduced first, as the ticket required.** The finding was derived (read from `main.tsx` and
-`UnifiedDocumentPage.tsx`, "nobody has reproduced this in a browser"). A component test rendering the
-real route tree (`documents/:id/*` -> `UnifiedDocumentPage` -> the real program tab config -> the
-real `ProgramWeeksTab`) and clicking a week card confirmed it: the app logged
-`Invalid tab "sprints" for document type "program", redirecting to base URL` and the location became
-the bare `/documents/:id` — no tab, no selected week. The bug was real, not rescued by a fallback.
-
-**Root cause.** `web/src/components/document-tabs/ProgramWeeksTab.tsx` (lines 28, 34, 71 as of this
-branch) navigated to `/documents/:id/sprints/:sprintId` on selecting or opening a week, and back to
-`/documents/:id/sprints` from the week detail view. Commit 7713ef0 renamed the program tab's id from
-`sprints` to `weeks` in `web/src/lib/document-tabs.tsx`, but the tab's own navigation calls were never
-updated. `UnifiedDocumentPage.tsx`'s tab-validation effect (~line 93-102) treats any URL tab segment
-absent from `tabConfig` as invalid and redirects to the bare document URL — so every click bounced.
-Same root commit as five of the thirteen TEST-1 failures; TRO-223 fixed the tab *label* half, this is
-the navigation half, which no unit test covered.
-
-**What changed.**
-
-- `ProgramWeeksTab.tsx` — all three navigate targets now point at `weeks` instead of `sprints`.
-- `UnifiedDocumentPage.tsx` — added a small `LEGACY_TAB_ALIASES` map (`{ program: { sprints: 'weeks' } }`)
-  consulted by the invalid-tab effect. A URL segment matching a known legacy alias now redirects to
-  the tab's current id (preserving any nested path, e.g. the sprint/week id) instead of being treated
-  as a plain invalid tab and dropped to the document root.
-
-**Decision: redirect, not 404, for old `/sprints/` links.** The rename already shipped, so a bookmark
-or shared link from before it is a normal, expected case — a 404 would be a second, quieter defect (a
-link that silently stopped working) layered on top of the first. Redirecting keeps those links alive
-with the same behavior a fresh rename-aware click gets.
-
-**Regression test — `web/src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx`** (vitest, run by the
-gate; this is the tier that actually executes, per `ship-qa`). Two cases:
-
-1. Clicking a week card lands on `/documents/:id/weeks/:sprintId`, not the document root.
-2. A bookmarked `/documents/:id/sprints/:sprintId` URL redirects to the equivalent `/weeks/` URL.
-
-Confirmed red first, for the right reason: both cases failed with
-`AssertionError: expected '/documents/prog-1' to be '/documents/prog-1/weeks/a1b2c3d4-…'`, and the
-console carried the real `Invalid tab "sprints"...redirecting to base URL` warning — not a crash, not
-a bad selector. After the fix, both pass with no warning.
-
-**Also updated, additive only.** `e2e/program-mode-week-ux.spec.ts:369-417` asserted the stale
-`/sprints/` URL after clicking/double-clicking a week card; updated to expect `/weeks/`. This suite is
-not run by the gate or CI (`ship-qa`), which is exactly why the stale assertions never caught the
-break — the vitest test above is the actual proof.
-
-**How to run it.**
-
-```bash
-cd <worktree> && source .factory-env
-pnpm --filter @ship/web test -- src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx
-```
-
-**Roll back.** `git checkout main -- web/src/components/document-tabs/ProgramWeeksTab.tsx
-web/src/pages/UnifiedDocumentPage.tsx e2e/program-mode-week-ux.spec.ts && git rm
-web/src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx` and drop this entry.
 
 ---
 
