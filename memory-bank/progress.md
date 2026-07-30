@@ -28,13 +28,147 @@
 | Screen-reader pass (Cat 7) | ✅ done (2026-07-28) — A11Y-1 escalated to Urgent |
 | Ticket factory harness | ✅ built + self-tested + committed (2026-07-29) — `feat/ticket-factory-harness` @ `ea2dcd3` |
 | CI pipeline (`TRO-244`, rule 4) | ✅ written (2026-07-29) — `.github/workflows/ci.yml`; first real run is the harness PR |
-| **Improvement phase (Phase 2)** | 🟡 **underway (2026-07-29/30)** — 19 tickets worked, **4 merged**, 12 in review across 8 PRs |
-| Post-baseline findings from remediation | 🟡 12 filed — `TRO-276`–`TRO-287`, all marked post-baseline (1 cancelled after investigation) |
+| **Improvement phase (Phase 2)** | 🟡 **underway (2026-07-29/30)** — 26 audit tickets Done (was 5), 16 PRs merged this run, **1 PR open** (#11, blocked on TRO-288) |
+| Post-baseline findings from remediation | 🟡 13 filed — `TRO-276`–`TRO-288`, all marked post-baseline (1 cancelled after investigation, 1 High and in flight) |
 | Demo-video companion artifact | ✅ published (2026-07-28) — before/after slots now have real numbers, see log |
 | Discovery write-up · demo video · AI cost analysis · social post | ⬜ Sun Aug 2 |
 | Final polish + presentation | ⬜ Sun Aug 2 |
 
 ## Log
+
+### 2026-07-30 (Thu) — Phase 2, wave 3: 16 PRs merged, main at `319e1af`
+
+**`main` went `4d74602` → `319e1af`, verified via `git log --oneline --merges`. 16 PRs merged, both
+remotes in sync.** Audit tickets Done: 5 → **26**, counted directly against Linear this session
+(filtered to the ShipShape Audit Remediation ID range so the workspace's unrelated projects don't
+inflate it). Merged: #14, #8, #20, #19, #13, #12, #24, #17, #22, #23, #29, #30 (21 tickets) plus
+tooling #26, #27, #28, #31.
+
+**Headline results below are as measured and recorded by the implementing agents in `CHANGES.md` /
+PR bodies — this session did not re-run the benchmarks, only confirmed the PRs merged and the
+tickets they claim:**
+
+| PR | Tickets | Headline result |
+|---|---|---|
+| #14 | TRO-197/198/199/200/202 (BUN-1,2,3,4,6) | `/login` 601 → 117 kB gzip (−80.5%) |
+| #8 | TRO-178 (DB-1) | migration runner applies 42/42 or exits non-zero |
+| #20 | TRO-174 (API-3) | `/api/issues` 379,907 → 25,050 B (15.17×) |
+| #19 | TRO-173/182 (API-2/DB-5) | payload 380 → 241 kB; p95 90.4 → 59.1 ms; one pre-existing `as any` deleted |
+| #13 | TRO-179/177 (DB-2/API-6) | session write throttled; 10 row versions → 1 |
+| #12 | TRO-276 (ERR-10) | malformed frame closes its socket, not the process |
+| #24 | TRO-224/225 (TEST-2/3) | the stored-XSS spec now actually tests sanitization |
+| #17 | TRO-240 (DB-11) | one SSL decision shared by every pool |
+| #22 | TRO-226 (TEST-4) | concurrent Yjs merge coverage |
+| #23 | TRO-277 (TEST-12) | api flake 6/20 → 1/20 under load |
+| #29 | TRO-181/176 (DB-4/API-5) | dashboard fan-out: 5 requests → 1, 30 queries → 6 (−80% each) |
+| #30 | TRO-192/195 (ERR-5/ERR-8) | malformed path/query params return 400/404 instead of 500 |
+
+**Verified by the orchestrator directly against the integrated `main`** (not self-reported by the
+ticket agents) — dockerised postgres 15 on `:5433`, database `ship_factory_integration`: typecheck
+clean, build clean, api **533/533** then **592/592**, web failures exactly the quarantined
+identities with zero new (`testdiff.mjs`), and 42/42 migrations against a fresh database. Checked
+twice, once per verification pass over the combined merge result.
+
+**Merge method matters and is now the documented one.** Merging PRs one at a time through GitHub
+re-conflicted every other open branch on `CHANGES.md`, so the queue could not drain. What worked:
+integrate locally with `git merge --no-ff` in sequence, resolve each `CHANGES.md` with
+`scripts/factory/merge-changes.mjs` (reports "entry integrity OK — all N entries byte-identical to
+source"), union each append-only `.jsonl`, then verify the *combined* result before one push. Two
+merges were deliberately **aborted** rather than auto-resolved because they were real code
+conflicts needing judgement, not text ones — #17 vs #8 in `api/src/db/migrate.ts`, #23 vs #13 in
+`api/src/__tests__/auth.test.ts` — both then hand-resolved by agents instructed to preserve both
+fixes.
+
+**Four factory tooling defects found and fixed** (confirmed by reading `scripts/factory/gate.sh` and
+`.factory-env` directly):
+1. G9 (`coderabbit review`) had **no timeout** and hung 11+ minutes at 2.6s CPU under concurrent
+   load. Now wrapped in `timeout`/`gtimeout` (`CR_TIMEOUT`, default 360s) — `gate.sh:277-335`.
+2. G9 **overwrote a completed `.factory/coderabbit.json` with a rate-limit error stub**, destroying a
+   captured 10-finding review. Now captures to a temp file and keeps older findings on timeout,
+   reporting `KEPT n finding(s) from an earlier run`.
+3. `FACTORY_BASE_REF` **could not be overridden** — `.factory-env` hardcodes `main` and `set -a; .`
+   clobbered the caller's exported value (`gate.sh:39-51`). Local `main` is one shared ref across
+   worktrees and had lagged `origin/main` by three merges mid-session.
+4. The `check-attr` rule in `lessons.md` **was wrong** and is now corrected — see watch-outs below.
+
+**`lessons.md` gained rules 21–25**: type the boundaries G7b cannot see (`pool.query` rows,
+`response.json()`); never start a background poll and wait on it; run `pnpm install` after merging
+`main`; the api flake's five identities; a commit message claiming a cleanup is not evidence of it.
+
+**Review ledger: 74 findings across 13 tickets**, counted directly this session via
+`node scripts/factory/review-ledger.mjs report` (74 rows in `audit/factory/review-findings.jsonl`,
+confirmed by line count). The file held 38 lines at the start of this run (`git show 4d74602:...`);
+the run's own tracking put the pre-run figure at 50, a gap this session didn't reconcile further.
+The aggregate's headline: type-safety is 8 findings across 6 tickets and still the largest single
+class — but it was **also** filed under `implicit-any` (2), `unsafe-cast` (1), `unsafe-type-cast`
+(1) and `test-cast` (2), so the fragmented taxonomy hid a class of **14**. Record everything in that
+family under the single slug `type-safety` going forward.
+
+**Watch-outs verified this run:**
+
+- **`git check-attr merge -- CHANGES.md` after a merge is NOT a valid check — this reverses the
+  prior rule in this file.** The merge replaces `.gitattributes` with `main`'s version, so it reads
+  `unspecified` even when the union driver just corrupted the file. Two agents independently saw a
+  clean `unspecified` beside a genuinely spliced `CHANGES.md` (17 unbalanced fences in one case, 13
+  plus a spliced command block in the other). Only `merge-changes.mjs --check` catches it.
+- **After `git merge main`, run `pnpm install`.** PR #20 added `compression`; a stale `node_modules`
+  fails at module load, so ~19 api test files fail at once plus typecheck errors. Three agents read
+  this as a catastrophic regression from their merge. Tell: failures in files the diff never
+  touched, module-resolution errors rather than assertion errors.
+- **Agents stall if they start a background poll and wait on it.** Six did, on CI checks, gate runs
+  and monitors. Nothing wakes them; each had to be nudged to produce a report it had already earned.
+- **The load-sensitive api flake now has five identities**: `backlinks.test.ts`, `rate-limit.test.ts`,
+  `weeks.test.ts::should reject review approval without rating`,
+  `session-activity-race.test.ts::modifies the session row exactly once…`, and a candidate
+  `workspaces.test.ts::should archive person document`. All fail inside a full gate run and pass
+  standalone — five unrelated identities is the evidence for one shared mechanism, not five flaky
+  tests.
+
+**New architectural pattern, verified in code and now in `systemPatterns.md`.** Three agents
+independently hit the same class in `api/src/collaboration/index.ts`'s connection handler: async
+work between making a socket reachable and making it able to respond. Read directly:
+`getOrCreateDoc()` (line 227) publishes a new `Y.Doc` into the shared `docs` map **before** its
+`await pool.query(...)` (line 233) loads real state — a second concurrent connection during that
+window gets the still-empty doc (ERR-12, `TRO-285`). Separately, the connection handler (line 1009)
+`await`s that same `getOrCreateDoc()` call (line 1018) **before** attaching `ws.on('message', ...)`
+(line 1059) — inbound frames arriving in that window have no listener yet and are dropped (ERR-11,
+`TRO-284`). ERR-10 (the `'error'` listener, line 1016) was the first instance of this class and is
+already fixed by moving the listener to the first statement in the handler, before any `await`.
+
+**Current state:**
+
+- **Open PRs: #11 only** (TRO-223 / TEST-1). Gate-green (CodeRabbit pass, CI pass), pushed, and
+  empties the quarantine entirely — `web.knownFailing: 0`, `api.knownFailing: 0` in the merged tree.
+  **Web suite: 346/346, 0 failed** — observed by the orchestrator directly on branch
+  `fix/test-1-web-suite-green` at `580ca13`, `pnpm --filter @ship/web test`, dockerised postgres 15
+  on `:5433` (2026-07-30). **Two prior figures in this log entry were wrong and are both superseded:**
+  neither the original 345/345 nor the subsequent "186/186, branch behind at `84f05ff`" correction is
+  current. The second correction checked the PR *description*, which the author never updated
+  through three later `main` merges — the branch itself (`git merge-base --is-ancestor` against both
+  `319e1af` and `f7b15c9` returns true) is fully caught up with all 16 PRs from this run. The PR
+  description is a stale artifact; the branch is the authority. #11 is still unmerged, blocked on
+  TRO-288, so 346/346 describes the branch, not `main`. Its own work found 1 genuine product
+  regression (a count-aware tab label dropped by an earlier commit, `UnifiedDocumentPage.tsx:133,141`)
+  among 12 stale tests, plus a second regression filed separately (`ProgramWeeksTab.tsx` navigates to
+  a now-dead `sprints` tab id), plus a commit message that falsely claimed two cast removals when only
+  one happened (this is `lessons.md` rule 25).
+- **New ticket: `TRO-288` [TEST-15], High, In Progress** (confirmed in Linear) —
+  `session-activity-race.test.ts` asserts exactly-once under a concurrent burst and fails CI on
+  branches that don't touch auth, blocking the merge queue. Hit CI on #29 (passed on a plain re-run
+  of the same commit) and on #11. Acceptance bar: 10 consecutive runs under deliberate load, still
+  red against the pre-DB-2 unconditional write.
+- **In flight:** `TRO-284` + `TRO-285` (ERR-11/ERR-12, both confirmed "In Progress" in Linear) — the
+  collaboration load-window pair described above. ERR-11's regression test is confirmed red for the
+  documented signature (frame sequence `[3,0,1,1]`).
+- **Maintainer decisions this run:** merge #17 now and read the SSM `DATABASE_URL` before the next
+  deploy; merge #13 without a separate human auth read; installing CodeRabbit's GitHub App for the
+  repo to remove the review rate-limit bottleneck.
+
+**Still owed to a human:** read the production SSM `DATABASE_URL` before the next deploy (PR #17
+makes the API refuse to start if it resolves to `sslmode=disable`, and there's no `aws` CLI here to
+check it); VoiceOver on `TRO-215` and `TRO-281` (still nobody has *heard* either); a decision on
+PR #30's ordering change (`router.param` now fires before `authMiddleware`, so a malformed id from
+an unauthenticated request returns 400 where it used to return 401).
 
 ### 2026-07-29 (Wed) night → 2026-07-30 — Phase 2, three factory waves
 

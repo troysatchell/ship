@@ -91,6 +91,66 @@ scheduling-dependent precondition. No production code, migration, or other file 
 
 ---
 
+## TRO-282 — [TEST-13] Program Weeks tab linked to a dead `/sprints/` route and bounced the user out
+
+**Reproduced first, as the ticket required.** The finding was derived (read from `main.tsx` and
+`UnifiedDocumentPage.tsx`, "nobody has reproduced this in a browser"). A component test rendering the
+real route tree (`documents/:id/*` -> `UnifiedDocumentPage` -> the real program tab config -> the
+real `ProgramWeeksTab`) and clicking a week card confirmed it: the app logged
+`Invalid tab "sprints" for document type "program", redirecting to base URL` and the location became
+the bare `/documents/:id` — no tab, no selected week. The bug was real, not rescued by a fallback.
+
+**Root cause.** `web/src/components/document-tabs/ProgramWeeksTab.tsx` (lines 28, 34, 71 as of this
+branch) navigated to `/documents/:id/sprints/:sprintId` on selecting or opening a week, and back to
+`/documents/:id/sprints` from the week detail view. Commit 7713ef0 renamed the program tab's id from
+`sprints` to `weeks` in `web/src/lib/document-tabs.tsx`, but the tab's own navigation calls were never
+updated. `UnifiedDocumentPage.tsx`'s tab-validation effect (~line 93-102) treats any URL tab segment
+absent from `tabConfig` as invalid and redirects to the bare document URL — so every click bounced.
+Same root commit as five of the thirteen TEST-1 failures; TRO-223 fixed the tab *label* half, this is
+the navigation half, which no unit test covered.
+
+**What changed.**
+
+- `ProgramWeeksTab.tsx` — all three navigate targets now point at `weeks` instead of `sprints`.
+- `UnifiedDocumentPage.tsx` — added a small `LEGACY_TAB_ALIASES` map (`{ program: { sprints: 'weeks' } }`)
+  consulted by the invalid-tab effect. A URL segment matching a known legacy alias now redirects to
+  the tab's current id (preserving any nested path, e.g. the sprint/week id) instead of being treated
+  as a plain invalid tab and dropped to the document root.
+
+**Decision: redirect, not 404, for old `/sprints/` links.** The rename already shipped, so a bookmark
+or shared link from before it is a normal, expected case — a 404 would be a second, quieter defect (a
+link that silently stopped working) layered on top of the first. Redirecting keeps those links alive
+with the same behavior a fresh rename-aware click gets.
+
+**Regression test — `web/src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx`** (vitest, run by the
+gate; this is the tier that actually executes, per `ship-qa`). Two cases:
+
+1. Clicking a week card lands on `/documents/:id/weeks/:sprintId`, not the document root.
+2. A bookmarked `/documents/:id/sprints/:sprintId` URL redirects to the equivalent `/weeks/` URL.
+
+Confirmed red first, for the right reason: both cases failed with
+`AssertionError: expected '/documents/prog-1' to be '/documents/prog-1/weeks/a1b2c3d4-…'`, and the
+console carried the real `Invalid tab "sprints"...redirecting to base URL` warning — not a crash, not
+a bad selector. After the fix, both pass with no warning.
+
+**Also updated, additive only.** `e2e/program-mode-week-ux.spec.ts:369-417` asserted the stale
+`/sprints/` URL after clicking/double-clicking a week card; updated to expect `/weeks/`. This suite is
+not run by the gate or CI (`ship-qa`), which is exactly why the stale assertions never caught the
+break — the vitest test above is the actual proof.
+
+**How to run it.**
+
+```bash
+cd <worktree> && source .factory-env
+pnpm --filter @ship/web test -- src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx
+```
+
+**Roll back.** `git checkout main -- web/src/components/document-tabs/ProgramWeeksTab.tsx
+web/src/pages/UnifiedDocumentPage.tsx e2e/program-mode-week-ux.spec.ts && git rm
+web/src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx` and drop this entry.
+
+---
+
 ## TRO-240 — [DB-11] The application's database pool negotiated no TLS while migrate and seed did
 
 **What was broken.** Three pools connect to Ship's database with three different SSL policies.

@@ -23,15 +23,18 @@ export default function ProgramSprintsTab({ documentId, nestedPath }: DocumentTa
   const selectedSprintId = isUuid ? nestedPath : null;
 
   // Handle sprint selection from timeline
+  // NOTE: the program tab's id is `weeks` (web/src/lib/document-tabs.tsx), not
+  // `sprints` — TRO-282. Navigating to `/sprints/:id` is not a valid tab
+  // segment and gets redirected away by UnifiedDocumentPage.
   const handleSelectSprint = useCallback((_sprintNumber: number, sprint: Sprint | null) => {
     if (sprint) {
-      navigate(`/documents/${documentId}/sprints/${sprint.id}`);
+      navigate(`/documents/${documentId}/weeks/${sprint.id}`);
     }
   }, [documentId, navigate]);
 
   // Handle sprint open (double-click or direct navigation)
   const handleOpenSprint = useCallback((sprintId: string) => {
-    navigate(`/documents/${documentId}/sprints/${sprintId}`);
+    navigate(`/documents/${documentId}/weeks/${sprintId}`);
   }, [documentId, navigate]);
 
   if (loading) {
@@ -68,7 +71,7 @@ export default function ProgramSprintsTab({ documentId, nestedPath }: DocumentTa
           <WeekDetailView
             sprintId={selectedSprintId}
             programId={documentId}
-            onBack={() => navigate(`/documents/${documentId}/sprints`)}
+            onBack={() => navigate(`/documents/${documentId}/weeks`)}
           />
         ) : (
           <EmptySprintState

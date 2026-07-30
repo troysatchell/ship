@@ -375,9 +375,12 @@ test.describe('Phase 2: Weeks Tab UI', () => {
 
     if (cardCount > 0) {
       await sprintCard.click()
-      // Clicking a sprint card navigates to /documents/{id}/sprints/{sprintId}
+      // Clicking a week card navigates to /documents/{id}/weeks/{sprintId}.
+      // TRO-282: this used to assert the stale /sprints/ URL, which the
+      // program tab id was renamed away from (commit 7713ef0) — the route
+      // never actually worked, it just bounced to the document root.
       // Wait for URL to update which indicates selection worked
-      await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+\/sprints\/[a-f0-9-]+/, { timeout: 5000 })
+      await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+\/weeks\/[a-f0-9-]+/, { timeout: 5000 })
       // After navigation, verify a card shows as selected
       await expect(page.locator('button[data-selected="true"]')).toBeVisible({ timeout: 5000 })
     } else {
@@ -395,8 +398,8 @@ test.describe('Phase 2: Weeks Tab UI', () => {
 
     if (cardCount > 0) {
       await sprintCard.dblclick()
-      // Application navigates to /documents/{programId}/sprints/{sprintId}
-      await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+\/sprints\/[a-f0-9-]+/, { timeout: 5000 })
+      // Application navigates to /documents/{programId}/weeks/{sprintId} (TRO-282)
+      await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+\/weeks\/[a-f0-9-]+/, { timeout: 5000 })
     } else {
       // No sprint documents - verify timeline displays week windows
       await expect(page.getByText(/Week of/).first()).toBeVisible()
@@ -411,8 +414,8 @@ test.describe('Phase 2: Weeks Tab UI', () => {
 
     if (await completedCard.isVisible().catch(() => false)) {
       await completedCard.dblclick()
-      // Application navigates to /documents/{programId}/sprints/{sprintId}
-      await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+\/sprints\/[a-f0-9-]+/, { timeout: 5000 })
+      // Application navigates to /documents/{programId}/weeks/{sprintId} (TRO-282)
+      await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+\/weeks\/[a-f0-9-]+/, { timeout: 5000 })
     }
     // If no completed sprint exists, test passes (conditional test)
   })
