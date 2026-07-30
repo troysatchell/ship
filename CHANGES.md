@@ -381,6 +381,111 @@ storing the doc directly instead of its load promise.
 
 ---
 
+## TRO-279 — [DB-12] Concurrent `pnpm db:migrate` is broken — 5 of 6 simultaneous schema applies failed
+
+**What was broken.** `CREATE TABLE IF NOT EXISTS` (and `CREATE INDEX IF NOT EXISTS`) is
+check-then-create, not atomic. Two `pnpm db:migrate` processes racing against the same database
+could both pass the existence check and both attempt the create; one loses on the catalog's unique
+index. `Dockerfile:35` runs migrations on every container boot, so a rolling deploy, a scale-out, or
+a crash-restart overlapping a fresh boot runs this concurrently against one database — this is not a
+theoretical race, it is the normal shape of this deployment.
+
+**Why it was worse than a failed deploy.** `applySchema` runs `schema.sql` as one simple query, so
+Postgres executes it as a single implicit transaction: a duplicate-object error at statement *k*
+rolls back statements 1..*k*-1 too. PR #8 (TRO-178) put `42710` in the tolerated-error set and added
+a retry, which recovers *that* case — but the raw race mostly raises **23505** (`unique_violation` on
+`pg_type_typname_nsp_index`), which is deliberately *not* tolerated (23505 is the generic
+unique-violation code; tolerating it would also swallow a genuine data conflict). Left unfixed, a
+losing run under a still-tolerant retry policy could apply nothing and still exit 0 — DB-1's exact
+failure mode, reachable only through this race.
+
+**What changed.** `api/src/db/migrationRunner.ts` — `runMigrations` now takes one Postgres
+**session-level advisory lock** (`pg_advisory_lock` / `pg_advisory_unlock` on a fixed key,
+`MIGRATION_ADVISORY_LOCK_KEY = 0x53686970`, spelling "Ship" in hex) around the entire run: `applySchema`,
+`ensureMigrationsTable`, and the migration loop in `runPendingMigrations`. The lock is acquired
+**before** anything else touches the database — in particular before `runPendingMigrations`' first
+query, the `schema_migrations` read — because locking after that read would preserve the exact race
+this closes.
+
+- A single `PoolClient`, checked out once for the whole run, now flows through
+  `applySchema`/`ensureMigrationsTable`/`runPendingMigrations` instead of each call going through
+  `pool.query(...)` independently. `runPendingMigrations` no longer opens its own connection per
+  migration file; each migration's transaction now runs sequentially on the one client that holds
+  the lock. This means the fix does not depend on the pool having a second connection free while the
+  lock-holder is checked out — it works even against a pool sized for exactly one connection.
+- The lock is released in a `finally` on every exit path, success or failure. The unlock call is
+  wrapped in its own inner `try/catch` so that if unlocking itself fails, it cannot mask a real error
+  already propagating from the migration work. If the explicit unlock did not run or failed, the
+  connection is force-destroyed (`client.release(true)`) instead of returned to the pool — ending the
+  session is the backstop that still releases the lock even when the explicit unlock command could
+  not be sent.
+- **Concurrency argument.** A second `pnpm db:migrate` process blocks at `pg_advisory_lock` until the
+  first releases (or its session ends), so the two runs' critical sections cannot overlap in time —
+  this closes the window rather than narrowing it. A runner that dies while holding the lock does not
+  wedge every future run: session-level advisory locks are released when their session ends, cleanly
+  or otherwise (documented Postgres behaviour), and this is verified directly — not just assumed —
+  by a test that opens a lock, ends that connection without unlocking, and confirms a second
+  connection can then acquire it immediately.
+- **`applySchema`'s duplicate-object retry (from PR #8) is left in place, not removed.** With the
+  lock held, only one session is ever inside `applySchema` at a time, so the concurrent case it was
+  added for should no longer reach it — but it is still the correct response to a genuine
+  non-concurrent duplicate-object error (a stray manual `psql` session, a future caller that bypasses
+  the lock), and removing a defensive path that is merely believed-unreachable is out of scope here.
+- **The tolerated-error set is unchanged — 23505 is still not in it.** Widening it would swallow a
+  real data conflict the day `schema.sql` stops having zero DML; the lock removes the need to
+  tolerate the concurrent case at all, which is the point of fixing this at the actual race instead
+  of widening what errors are forgiven.
+- Regression tests: `api/src/db/__tests__/migrationLock.test.ts` (new). `MIGRATION_ADVISORY_LOCK_KEY`
+  is now exported from `migrationRunner.ts` so tests can assert the lock is actually free via
+  `pg_try_advisory_lock`, rather than only inferring release from a second run's success.
+
+**How to run it.**
+
+```bash
+source .factory-env                      # or otherwise point DATABASE_URL at the target
+pnpm db:migrate
+pnpm --filter @ship/api test src/db/__tests__/migrationLock.test.ts
+pnpm --filter @ship/api test src/db/__tests__/migrationRunner.test.ts   # DB-1 regressions, unaffected
+```
+
+**Verified**, all against PostgreSQL 15 in the `ship-audit-pg`-style container on `:5433`, using the
+real `tsx src/db/migrate.ts` entry point (what `pnpm db:migrate` invokes) unless noted:
+
+- **Before the fix** (pre-fix `migrationRunner.ts` restored from `main`, six `tsx src/db/migrate.ts`
+  processes launched concurrently against one fresh throwaway database): 1 of 6 exited 0, 5 of 6
+  exited 1, all five with SQLSTATE `23505` on `pg_type_typname_nsp_index` — reproducing the ticket's
+  numbers with this branch's own harness before trusting it.
+- **After the fix**, same harness, a fresh throwaway database: all six processes exited 0,
+  `schema_migrations` held exactly 42 distinct rows, no duplicate-object or unique-violation output
+  in any of the six logs.
+- A single, non-concurrent `tsx src/db/migrate.ts` against a fresh throwaway database: exit 0, 42/42
+  migrations recorded.
+- A genuine failure (a deliberately broken migration file added temporarily, removed immediately
+  after) via the real CLI: exit 1, naming the failure — DB-1's exit-non-zero guarantee still holds
+  and is unaffected by this change (`migrate.ts` itself was not modified).
+- `api/src/db/__tests__/migrationLock.test.ts`, run against the **pre-fix** runner first: the
+  six-concurrent-runs test failed with five real `23505` `unique_violation` errors (red for the
+  right reason); the two lock-semantics tests failed too, but because `MIGRATION_ADVISORY_LOCK_KEY`
+  does not exist on the pre-fix module — expected, since those tests exercise a lock that does not
+  exist yet. Restoring the fix turned all three green.
+- `pnpm --filter @ship/api test` (full suite, factory database `ship_wt_tro_279`): 43 files, 595
+  tests, all green.
+- `pnpm --filter @ship/api exec tsc --noEmit`: clean.
+
+**Not verified.** No run against PostgreSQL 16 (production; CI and this work run pg15 — see the pin
+in `.github/workflows/ci.yml`), and no run against production or shadow. The advisory-lock mechanism
+itself is standard Postgres behaviour independent of major version, but this was not measured against
+16 directly.
+
+**Rollback.** `git revert` the commit(s) on `fix/db-12-migrate-advisory-lock`, or restore
+`api/src/db/migrationRunner.ts` from `main` and delete `api/src/db/__tests__/migrationLock.test.ts`.
+Rolling back returns `pnpm db:migrate` to PR #8's retry-only mitigation — `42710` recovers, `23505`
+does not, and the race described above is live again. No database state is affected by rolling back;
+the lock itself leaves no persistent artifact (advisory locks are session-scoped, never written to
+disk).
+
+---
+
 ## TRO-240 — [DB-11] The application's database pool negotiated no TLS while migrate and seed did
 
 **What was broken.** Three pools connect to Ship's database with three different SSL policies.
