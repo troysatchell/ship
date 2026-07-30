@@ -61,6 +61,43 @@ throughout the run. Hooks fire in both.
 Unrelated but worth stating plainly: `comply` is not installed in this environment, so the secrets
 scan warns and passes. **A successful commit is not evidence that scan ran.**
 
+**Part 4 — CodeRabbit review triage on PR #40.** 22 line comments, all real defects in code this PR
+touched, none out of scope — every finding was either fixed here or dismissed with a written reason
+in the ledger (`audit/factory/review-findings.jsonl`), never silently dropped.
+
+Six were Majors that reintroduced the exact defect class this ticket exists to fix: two fixed
+`waitForTimeout` sleeps standing in for synchronization (`admin-workspace-members.spec.ts`,
+`program-mode-week-ux.spec.ts`, plus siblings in `issue-display-id.spec.ts` and
+`status-colors-accessibility.spec.ts`), the swallowed-failure pattern
+`isVisible().catch(() => false)` in an availability-indicator check, a `dashCount === rowCount`
+comparison that could pass while filtering nothing correctly (`td` filtered by `—` also matches
+assignee/estimate/due-date cells), a near-tautological "highlight" check that matched every card in
+the timeline regardless of active state, and non-deterministic fixture restoration in the carol/Test
+Space cleanup (`isVisible().catch(() => false)` could silently skip removing her, leaving the next
+test in the worker to find her already attached).
+
+Fixing finding 18 (point-in-time `rows.count()` preconditions) surfaced three tests in
+`program-mode-week-ux.spec.ts` — "issue row has quick menu (⋮) button" and its two siblings — that
+assert a per-row hover-revealed actions button. Traced the full render path
+(`IssuesList.tsx` → `IssueRowContent` → `SelectableList.tsx`): no such button exists in list view,
+only a right-click context menu and the bulk "Move to Week" toolbar action already covered
+elsewhere. TRO-286 Part 1 had already tightened these from "passes whether the feature exists or
+not" to a real assertion, which would now fail hard, not vacuously — same shape as the
+team-directory quick-menu gap already `test.fixme()`'d in `context-menus.spec.ts`. Marked
+`test.fixme()` with the same reasoning rather than left to fail.
+
+One finding was dismissed rather than fixed: WCAG 3.3.3 recovery guidance on the login-error test.
+The message is exactly `"Invalid email or password"` (`api/src/routes/auth.ts`), a deliberate
+security choice, and `Login.tsx` has no recovery link at all — tightening the assertion would only
+ever fail without a UI change, which is a product accessibility gap, not a test bug. Filed as a
+follow-up rather than fixed here.
+
+One derived claim was checked and found not to transfer: CodeRabbit's suggested fix for the fixed
+sleeps in `program-mode-week-ux.spec.ts` was `page.waitForResponse(...)` on `/api/issues`. Traced
+`IssuesList.tsx:569-570` — the sprint filter dropdown filters already-fetched issues client-side; no
+new request fires when it changes. Used a retrying DOM assertion instead, which is what the
+mechanism actually calls for.
+
 **How to run it.**
 
 ```bash
