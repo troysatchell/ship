@@ -20,12 +20,19 @@ async function main() {
   // Now import app after secrets are loaded
   const { createApp } = await import('./app.js');
   const { setupCollaboration } = await import('./collaboration/index.js');
+  const { installProcessSafetyNet } = await import('./process-safety.js');
 
   const PORT = process.env.PORT || 3000;
   const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
 
   const app = createApp(CORS_ORIGIN);
   const server = createServer(app);
+
+  // TRO-276 / ERR-10: last resort for anything that escapes every guard. Installed
+  // in the entrypoint, not in a library module, so importing the app (tests, the
+  // MCP server) never hijacks the host process's error handling. See
+  // process-safety.ts for why this exits rather than continuing.
+  installProcessSafetyNet({ server });
 
   // DDoS protection: Set server-wide timeouts to prevent slow-read attacks (Slowloris)
   server.timeout = 60000; // 60 seconds max request duration

@@ -158,36 +158,86 @@ test.describe('File Attachments', () => {
     setTimeout(() => { try { fs.unlinkSync(tmpPath); } catch {} }, 5000);
   });
 
+  /**
+   * Rewritten for audit finding TEST-2 (TRO-224).
+   *
+   * This test previously contained **no `expect()` at all** — it uploaded a
+   * `.exe`, slept 1 s, listed three acceptable outcomes in a comment, and
+   * ended. It reported green whatever the app did, and it duplicated
+   * "should block dangerous executable files (.exe)" below while asserting
+   * strictly less than nothing.
+   *
+   * Rather than duplicate that test's DOM check, this now pins the property
+   * nothing else covers: for a blocked extension the bytes **never leave the
+   * browser**. `FileAttachment.tsx:222` refuses before `uploadFile` is called,
+   * so no request reaches `/api/files/*`. The server rejects too
+   * (`api/src/routes/files.test.ts` — "rejects blocked file types", which the
+   * gate runs); this is the client half of that defence.
+   */
   test('should validate file type', async ({ page }) => {
     await createNewDocument(page);
 
     const editor = page.locator('.ProseMirror');
     await editor.click();
-    await page.waitForTimeout(300);
 
-    // Type /file
     await page.keyboard.type('/file');
-    await page.waitForTimeout(500);
+    const fileButton = page.getByRole('button', { name: /^File Upload a file attachment/i });
+    await expect(fileButton, 'the /file slash command should offer a File option').toBeVisible({
+      timeout: 10000,
+    });
 
-    // Create a potentially restricted file type (e.g., .exe)
+    // Record every dialog and every /api/files request, then assert on the
+    // records. Asserting inside an event handler is the same hole as asserting
+    // inside an `if` — if the event never fires, nothing is checked.
+    const dialogMessages: string[] = [];
+    page.on('dialog', async (dialog) => {
+      dialogMessages.push(dialog.message());
+      await dialog.dismiss();
+    });
+
+    const fileRequests: string[] = [];
+    page.on('request', (req) => {
+      if (req.url().includes('/api/files')) {
+        fileRequests.push(`${req.method()} ${req.url()}`);
+      }
+    });
+
     const tmpPath = createTestFile('potentially-dangerous.exe', 'Not really an exe');
 
-    const fileChooserPromise = page.waitForEvent('filechooser');
-    await page.getByRole('button', { name: /^File Upload a file attachment/i }).click();
-    const fileChooser = await fileChooserPromise;
-    await fileChooser.setFiles(tmpPath);
+    try {
+      const fileChooserPromise = page.waitForEvent('filechooser');
+      await fileButton.click();
+      const fileChooser = await fileChooserPromise;
+      await fileChooser.setFiles(tmpPath);
 
-    // Wait a moment for validation
-    await page.waitForTimeout(1000);
+      // Positive control: the validation code path demonstrably ran. Without
+      // this, "the file chooser silently did nothing" would also pass.
+      await expect
+        .poll(() => dialogMessages.length, {
+          message:
+            'selecting a .exe should raise a blocked-file dialog ' +
+            '(web/src/components/editor/FileAttachment.tsx:222)',
+          timeout: 10000,
+        })
+        .toBeGreaterThan(0);
+      expect(dialogMessages.join(' | '), 'the dialog should name the rejected extension').toContain(
+        '.exe'
+      );
 
-    // Either:
-    // 1. File is rejected (no attachment appears)
-    // 2. File is accepted but sanitized
-    // 3. Error message appears
-    // This test just verifies that validation happens
+      // The actual claim: nothing was sent.
+      expect(
+        fileRequests,
+        'a blocked extension must be refused client-side; the bytes must never ' +
+          'reach /api/files'
+      ).toEqual([]);
 
-    // Cleanup
-    setTimeout(() => { try { fs.unlinkSync(tmpPath); } catch {} }, 5000);
+      await expect(
+        editor.locator('[data-file-attachment]'),
+        'no attachment node should be inserted for a refused file'
+      ).toHaveCount(0);
+    } finally {
+      try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+    }
   });
 
   test('should persist file attachment after reload', async ({ page }) => {
@@ -420,40 +470,58 @@ test.describe('File Attachments', () => {
   });
 
   test('should block dangerous executable files (.exe)', async ({ page }) => {
-    // Test that executables are blocked by the blocklist
+    // Test that executables are blocked by the blocklist.
+    //
+    // TRO-224: the two `expect`s on the dialog message used to live *inside* the
+    // `page.on('dialog')` handler. If the dialog never appeared they never ran,
+    // and the only surviving check was "no attachment is visible" — which an
+    // empty editor satisfies for free. The messages are collected and asserted
+    // outside the handler now, and the fixed sleeps are gone.
     await createNewDocument(page);
 
     const editor = page.locator('.ProseMirror');
     await editor.click();
-    await page.waitForTimeout(300);
 
     await page.keyboard.type('/file');
-    await page.waitForTimeout(500);
+    const fileButton = page.getByRole('button', { name: /^File Upload a file attachment/i });
+    await expect(fileButton, 'the /file slash command should offer a File option').toBeVisible({
+      timeout: 10000,
+    });
 
     // Create an .exe file (should be blocked)
     const tmpPath = createTestFile('malware.exe', 'Not really an executable');
 
-    // Listen for alert dialog
+    const dialogMessages: string[] = [];
     page.on('dialog', async (dialog) => {
-      expect(dialog.message()).toContain('.exe');
-      expect(dialog.message()).toContain('blocked');
+      dialogMessages.push(dialog.message());
       await dialog.accept();
     });
 
-    const fileChooserPromise = page.waitForEvent('filechooser');
-    await page.getByRole('button', { name: /^File Upload a file attachment/i }).click();
-    const fileChooser = await fileChooserPromise;
-    await fileChooser.setFiles(tmpPath);
+    try {
+      const fileChooserPromise = page.waitForEvent('filechooser');
+      await fileButton.click();
+      const fileChooser = await fileChooserPromise;
+      await fileChooser.setFiles(tmpPath);
 
-    // Wait for dialog to be handled
-    await page.waitForTimeout(1000);
+      await expect
+        .poll(() => dialogMessages.length, {
+          message: 'selecting a .exe should raise a blocked-file dialog',
+          timeout: 10000,
+        })
+        .toBeGreaterThan(0);
 
-    // File attachment should NOT appear (upload was blocked)
-    const fileAttachment = editor.locator('[data-file-attachment]');
-    await expect(fileAttachment).not.toBeVisible({ timeout: 2000 });
+      const message = dialogMessages.join(' | ');
+      expect(message, 'the dialog should name the rejected extension').toContain('.exe');
+      expect(message, 'the dialog should say the file type is blocked').toContain('blocked');
 
-    // Cleanup
-    setTimeout(() => { try { fs.unlinkSync(tmpPath); } catch {} }, 5000);
+      // File attachment should NOT appear (upload was blocked)
+      await expect(
+        editor.locator('[data-file-attachment]'),
+        'a blocked file must not produce an attachment node'
+      ).toHaveCount(0, { timeout: 5000 });
+    } finally {
+      try { fs.unlinkSync(tmpPath); } catch { /* best effort */ }
+    }
   });
 
 

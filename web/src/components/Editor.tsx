@@ -9,7 +9,7 @@ import Link from '@tiptap/extension-link';
 import { ResizableImage } from './editor/ResizableImage';
 import Dropcursor from '@tiptap/extension-dropcursor';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
-import { common, createLowlight } from 'lowlight';
+import { lowlight } from './editor/lowlight';
 import Table from '@tiptap/extension-table';
 import TableRow from '@tiptap/extension-table-row';
 import TableCell from '@tiptap/extension-table-cell';
@@ -39,12 +39,10 @@ import { CommentMark } from './editor/CommentMark';
 import { CommentDisplayExtension } from './editor/CommentDisplay';
 import { AIScoringDisplayExtension } from './editor/AIScoringDisplay';
 import { PlanReferenceBlockExtension } from './editor/PlanReferenceBlock';
+import { LINK_HREF_POLICY } from './editor/linkOptions';
 import { useCommentsQuery, useCreateComment, useUpdateComment } from '@/hooks/useCommentsQuery';
 import { BubbleMenu } from '@tiptap/react';
 import 'tippy.js/dist/tippy.css';
-
-// Create lowlight instance with common languages
-const lowlight = createLowlight(common);
 
 interface EditorProps {
   documentId: string;
@@ -586,6 +584,7 @@ export function Editor({
     Placeholder.configure({ placeholder }),
     Collaboration.configure({ document: ydoc }),
     Link.configure({
+      ...LINK_HREF_POLICY,
       openOnClick: true,
       HTMLAttributes: {
         class: 'text-accent hover:underline cursor-pointer',

@@ -5,7 +5,9 @@
 -- between the authorization redirect and the callback. Using the database instead
 -- of in-memory session ensures the flow survives server restarts.
 
-CREATE TABLE oauth_state (
+-- IF NOT EXISTS: schema.sql:90 also creates oauth_state, so on any database
+-- where schema.sql has been applied this table is already present.
+CREATE TABLE IF NOT EXISTS oauth_state (
   state_id TEXT PRIMARY KEY,
   nonce TEXT NOT NULL,
   code_verifier TEXT NOT NULL,
@@ -14,7 +16,7 @@ CREATE TABLE oauth_state (
 );
 
 -- Index for cleanup queries
-CREATE INDEX idx_oauth_state_expires_at ON oauth_state(expires_at);
+CREATE INDEX IF NOT EXISTS idx_oauth_state_expires_at ON oauth_state(expires_at);
 
 -- Comment for documentation
 COMMENT ON TABLE oauth_state IS 'Temporary storage for OAuth PKCE flow state. Entries auto-expire after 10 minutes.';
