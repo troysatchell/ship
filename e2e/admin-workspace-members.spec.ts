@@ -215,17 +215,15 @@ test.describe('Admin User Search', () => {
   })
 
   test('user search shows results when typing', async ({ page }) => {
-    // Navigate to a workspace with few members (test space has 1 member after our test)
+    // Navigate to a workspace with few members (test space has 1 member: the seeded admin)
     await page.goto('/admin')
 
-    // Find a workspace that might have available users to add
     const workspaceLink = page.getByRole('link').filter({ hasText: /test space/i }).first()
-    if (await workspaceLink.isVisible()) {
-      await workspaceLink.click()
-    } else {
-      // Fall back to Ship Workspace
-      await page.getByRole('link', { name: /Test Workspace/i }).first().click()
-    }
+    await expect(
+      workspaceLink,
+      'Seed data should include a "Test Space" workspace for admin user-search tests. See e2e/fixtures/isolated-env.ts (seedAdminUserSearchFixtures).'
+    ).toBeVisible({ timeout: 5000 })
+    await workspaceLink.click()
 
     // Type in search box
     await page.getByPlaceholder('Search by email...').fill('dev')
@@ -245,23 +243,27 @@ test.describe('Admin User Search', () => {
 
     // Go to test space (fewer members, more users to add)
     const testSpaceLink = page.getByRole('link').filter({ hasText: /test space/i }).first()
-    if (await testSpaceLink.isVisible()) {
-      await testSpaceLink.click()
+    await expect(
+      testSpaceLink,
+      'Seed data should include a "Test Space" workspace. See e2e/fixtures/isolated-env.ts (seedAdminUserSearchFixtures).'
+    ).toBeVisible({ timeout: 5000 })
+    await testSpaceLink.click()
 
-      // Search for a user
-      await page.getByPlaceholder('Search by email...').fill('bob')
-      await page.waitForTimeout(500)
+    // Search for a user. bob.martinez is a member of "Test Workspace" but not
+    // "Test Space", so the workspace-scoped search should surface him as addable.
+    await page.getByPlaceholder('Search by email...').fill('bob')
+    await page.waitForTimeout(500)
 
-      // If results show, click one
-      const userResult = page.locator('button').filter({ hasText: /bob/i }).first()
-      if (await userResult.isVisible()) {
-        await userResult.click()
+    const userResult = page.locator('button').filter({ hasText: /bob/i }).first()
+    await expect(
+      userResult,
+      'Search for "bob" should surface bob.martinez@ship.local as addable to Test Space'
+    ).toBeVisible({ timeout: 3000 })
+    await userResult.click()
 
-        // Add User button should now be enabled
-        const addButton = page.getByRole('button', { name: 'Add User' })
-        await expect(addButton).not.toBeDisabled()
-      }
-    }
+    // Add User button should now be enabled
+    const addButton = page.getByRole('button', { name: 'Add User' })
+    await expect(addButton).not.toBeDisabled()
   })
 
   test('can add existing user to workspace', async ({ page }) => {
@@ -269,25 +271,50 @@ test.describe('Admin User Search', () => {
 
     // Go to test space
     const testSpaceLink = page.getByRole('link').filter({ hasText: /test space/i }).first()
-    if (await testSpaceLink.isVisible()) {
-      await testSpaceLink.click()
+    await expect(
+      testSpaceLink,
+      'Seed data should include a "Test Space" workspace. See e2e/fixtures/isolated-env.ts (seedAdminUserSearchFixtures).'
+    ).toBeVisible({ timeout: 5000 })
+    await testSpaceLink.click()
 
-      // Get initial member count
-      const memberHeading = page.getByRole('heading', { name: /Members \((\d+)\)/ })
-      const headingText = await memberHeading.textContent()
-      const initialCount = parseInt(headingText?.match(/\d+/)?.[0] || '0')
+    // Get initial member count
+    const memberHeading = page.getByRole('heading', { name: /Members \((\d+)\)/ })
+    const headingText = await memberHeading.textContent()
+    const initialCount = parseInt(headingText?.match(/\d+/)?.[0] || '0')
 
-      // Search for a user not in the workspace
+    // isolated-env's DB is worker-scoped (shared across every test file this
+    // worker runs), and carol is seeded with no workspace membership anywhere
+    // specifically so this search always finds her. Adding her to Test Space
+    // without restoring afterward would make this test pass only once per
+    // worker -- a retry, or a re-run in the same worker, would no longer find
+    // her addable. Restore in `finally`, mirroring the role-change test above.
+    try {
+      // Search for carol, who is seeded with no workspace membership at all,
+      // so she should always be addable here.
       await page.getByPlaceholder('Search by email...').fill('carol')
       await page.waitForTimeout(500)
 
       const userResult = page.locator('button').filter({ hasText: /carol/i }).first()
-      if (await userResult.isVisible()) {
-        await userResult.click()
-        await page.getByRole('button', { name: 'Add User' }).click()
+      await expect(
+        userResult,
+        'Search for "carol" should surface carol@ship.local as addable to Test Space'
+      ).toBeVisible({ timeout: 3000 })
+      await userResult.click()
+      await page.getByRole('button', { name: 'Add User' }).click()
 
-        // Member count should increase
-        await expect(page.getByRole('heading', { name: /Members \((\d+)\)/ })).toContainText(`(${initialCount + 1})`, { timeout: 5000 })
+      // Member count should increase
+      await expect(page.getByRole('heading', { name: /Members \((\d+)\)/ })).toContainText(
+        `(${initialCount + 1})`,
+        { timeout: 5000 }
+      )
+    } finally {
+      // Best-effort restore: remove carol from Test Space so the fixture's
+      // "no membership anywhere" invariant holds for the next run in this
+      // worker. If the try block failed before she was added, this is a no-op.
+      const carolRow = page.locator('tr').filter({ hasText: /carol/i }).first()
+      if (await carolRow.isVisible().catch(() => false)) {
+        page.once('dialog', (dialog) => dialog.accept())
+        await carolRow.getByRole('button', { name: 'Remove' }).click()
       }
     }
   })
