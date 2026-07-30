@@ -19,6 +19,17 @@ export interface SyncStatusIndicatorProps {
   isSynced: boolean;
   /** True until the socket has connected for the first time (initial page load). */
   isInitialConnect?: boolean;
+  /**
+   * True when the most recent direct document write (a title or property
+   * PATCH, outside the Yjs body-content socket) was rejected and has not
+   * since been superseded by a successful one (TRO-190/ERR-3).
+   *
+   * `isSynced` only proves the collaborative body content reached the
+   * server - probe6.1/6.2 forced a 429/500 on a rename and found the
+   * indicator kept reading "Saved" because it never looked at this path at
+   * all. A doc can be fully Yjs-synced while its title write was dropped.
+   */
+  hasFailedWrite?: boolean;
 }
 
 type Tone = 'ok' | 'pending' | 'error';
@@ -54,6 +65,7 @@ export function deriveSyncIndicator({
   isBrowserOnline,
   isSynced,
   isInitialConnect = false,
+  hasFailedWrite = false,
 }: SyncStatusIndicatorProps): IndicatorView {
   if (!isBrowserOnline) {
     return {
@@ -61,6 +73,13 @@ export function deriveSyncIndicator({
       detail: 'You are offline. Changes are held locally and are not saved to the server yet.',
       tone: 'pending',
     };
+  }
+
+  // ERR-3/ERR-4: a rejected or gone-document write is independent of the Yjs
+  // body-content socket, and overrides it - the socket being `synced` is not
+  // evidence that THIS write reached the server.
+  if (hasFailedWrite) {
+    return UNSYNCED;
   }
 
   if (isSynced) {

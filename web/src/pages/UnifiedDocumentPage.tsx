@@ -238,10 +238,21 @@ export function UnifiedDocumentPage() {
     mutationFn: async ({ documentId, updates }: { documentId: string; updates: Partial<DocumentResponse> }) => {
       const response = await apiPatch(`/api/documents/${documentId}`, updates);
       if (!response.ok) {
-        throw new Error('Failed to update document');
+        // Attach the real HTTP status (TRO-190/ERR-3, TRO-191/ERR-4) so the
+        // shared retry policy (`shouldRetryRequest`) can tell a throttled 429
+        // from a permanent 404, and so `isNotFoundError` can tell the editor
+        // the document itself is gone rather than just "the write failed".
+        const error = new Error(
+          response.status === 404 ? 'Document not found' : 'Failed to update document'
+        ) as Error & { status: number };
+        error.status = response.status;
+        throw error;
       }
-      return response.json();
+      return response.json() as Promise<DocumentResponse>;
     },
+    // documentId here (not the per-call variable) drives Editor.tsx's
+    // subscribeToDocumentWriteOutcome filter - see queryClient.ts.
+    meta: { operation: 'update document', documentId: id },
     onMutate: async ({ documentId, updates }) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: ['document', documentId] });

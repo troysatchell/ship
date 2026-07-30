@@ -167,3 +167,93 @@ describe('SyncStatusIndicator (TRO-188 / ERR-1)', () => {
     expect(region).toHaveAttribute('aria-live', 'polite');
   });
 });
+
+/**
+ * TRO-190 / ERR-3 — a rejected or gone document write is a DIFFERENT failure
+ * mode than the one ERR-1 fixed above: it happens on the title/property REST
+ * PATCH path, which is entirely independent of the Yjs body-content socket
+ * `isSynced` tracks. Before this fix the indicator had no input at all for
+ * that path, so a socket that was fully synced (`isSynced: true`) still read
+ * "Saved" while a rename/property write had been rejected.
+ *
+ * Observed in the audit's raw artifacts:
+ *   - probe6-mixed.json (6.1/6.2): forced 429 then 500 on a rename; DB title
+ *     unchanged both times, indicator still read "Saved".
+ *   - probe7-retry-and-revocation.json (7a): 14 PATCH attempts, a transient
+ *     "Failed to update document" toast fires, but "sync indicator says:
+ *     Saved" throughout.
+ *
+ * These tests were confirmed red against the pre-fix `deriveSyncIndicator`
+ * (which did not accept `hasFailedWrite` at all): with `isSynced: true` and
+ * `hasFailedWrite: true`, the pre-fix component ignored the unknown prop and
+ * rendered "Saved" - the exact ERR-3 lie - failing
+ * `expect(text).not.toMatch(/\bSaved\b/)` with an actual value of "Saved".
+ */
+describe('SyncStatusIndicator (TRO-190 / ERR-3)', () => {
+  function statusText(): string {
+    return screen.getByTestId('sync-status').textContent ?? '';
+  }
+
+  it('does NOT claim "Saved" when a direct write failed, even with a fully synced socket', () => {
+    // probe6.1/6.2: the collaboration socket can be perfectly synced while a
+    // rename PATCH was rejected with 429/500 - these are independent paths.
+    render(
+      <SyncStatusIndicator
+        syncStatus="synced"
+        isSynced
+        isInitialConnect={false}
+        isBrowserOnline
+        hasFailedWrite
+      />
+    );
+
+    const text = statusText();
+    expect(
+      text,
+      'a rejected title/property write must not be masked by an unrelated synced socket - the ERR-3 lie'
+    ).not.toMatch(/\bSaved\b/);
+    expect(text, 'the user must be told the write did not persist').toMatch(/not saved/i);
+  });
+
+  it('marks the failed-write state as an error, not a neutral state', () => {
+    const { container } = render(
+      <SyncStatusIndicator
+        syncStatus="synced"
+        isSynced
+        isInitialConnect={false}
+        isBrowserOnline
+        hasFailedWrite
+      />
+    );
+
+    const dot = container.querySelector('[aria-hidden="true"]');
+    expect(dot?.className, 'a rejected write must not read as fine (green/blue)').not.toMatch(/bg-(green|blue)-/);
+    expect(dot?.className).toMatch(/bg-red-/);
+  });
+
+  it('returns to "Saved" once hasFailedWrite clears and the socket is synced', () => {
+    // A later write succeeding (e.g. after the 429 backoff window rolls over)
+    // must un-stick the indicator - it is not a one-way, permanent trip.
+    render(
+      <SyncStatusIndicator
+        syncStatus="synced"
+        isSynced
+        isInitialConnect={false}
+        isBrowserOnline
+        hasFailedWrite={false}
+      />
+    );
+
+    expect(statusText()).toContain('Saved');
+  });
+
+  it('defaults to the ERR-1 behavior when hasFailedWrite is omitted', () => {
+    // Backward compatibility: every other caller of this component does not
+    // know about the write-status path yet and must be unaffected.
+    render(
+      <SyncStatusIndicator syncStatus="synced" isSynced isInitialConnect={false} isBrowserOnline />
+    );
+
+    expect(statusText()).toContain('Saved');
+  });
+});

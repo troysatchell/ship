@@ -32,6 +32,7 @@ import { ImageUploadExtension } from './editor/ImageUpload';
 import { FileAttachmentExtension } from './editor/FileAttachment';
 import { DetailsExtension, DetailsSummary, DetailsContent } from './editor/DetailsExtension';
 import { SyncStatusIndicator, type SyncStatus } from './editor/SyncStatusIndicator';
+import { useDocumentWriteStatus } from '@/hooks/useDocumentWriteStatus';
 import { EmojiExtension } from './editor/EmojiExtension';
 import { TableOfContentsExtension } from './editor/TableOfContents';
 import { HypothesisBlockExtension } from './editor/HypothesisBlockExtension';
@@ -88,6 +89,14 @@ interface EditorProps {
   /** Suffix displayed after the title in the header (e.g., author name) */
   titleSuffix?: string;
 }
+
+// TRO-191 / ERR-4: shown once when this document's own write path reports the
+// document is gone (HTTP 404 on a PATCH - probe4c: another user deleted it
+// while this user kept typing into what is now a ghost editor). Same
+// blocking-`alert()` pattern already used above for access-revoked (4403) and
+// document-converted (4100) - not a new recovery UI.
+const DOCUMENT_GONE_MESSAGE =
+  'This document was deleted by someone else. Your changes here were not saved - copy anything you want to keep before leaving this page.';
 
 // Generate a consistent color from a string
 function stringToColor(str: string): string {
@@ -230,6 +239,11 @@ export function Editor({
   // "connected and failing to sync".
   const [isSynced, setIsSynced] = useState(false);
   const [isInitialConnect, setIsInitialConnect] = useState(true);
+  // TRO-190/ERR-3, TRO-191/ERR-4: independent of the Yjs socket above - true
+  // when the most recent title/property PATCH for this document was rejected
+  // and no later write has succeeded since. Also raises the one-time
+  // "document is gone" notice when a write 404s.
+  const { hasFailedWrite } = useDocumentWriteStatus(documentId, () => alert(DOCUMENT_GONE_MESSAGE));
   const [isBrowserOnline, setIsBrowserOnline] = useState(navigator.onLine);
   const [connectedUsers, setConnectedUsers] = useState<{ name: string; color: string }[]>([]);
   const [rightSidebarCollapsed, setRightSidebarCollapsed] = useState(() => {
@@ -882,6 +896,7 @@ export function Editor({
             isBrowserOnline={isBrowserOnline}
             isSynced={isSynced}
             isInitialConnect={isInitialConnect}
+            hasFailedWrite={hasFailedWrite}
           />
 
 
