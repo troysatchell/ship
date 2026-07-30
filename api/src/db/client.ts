@@ -2,6 +2,7 @@ import pg from 'pg';
 import { config } from 'dotenv';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { resolveDatabaseSsl } from './ssl.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -16,6 +17,10 @@ const isProduction = process.env.NODE_ENV === 'production';
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  // TLS decision shared with migrate.ts and seed.ts — see ./ssl.ts. Omitting this
+  // is what made the app pool connect in plaintext while those two scripts, which
+  // run either side of it, negotiated TLS (DB-11 / TRO-240).
+  ssl: resolveDatabaseSsl(),
   // Production-ready pool configuration
   max: isProduction ? 20 : 10, // Max connections (default is 10)
   idleTimeoutMillis: 30000, // Close idle connections after 30 seconds

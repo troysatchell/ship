@@ -80,6 +80,46 @@ export function useActiveWeeksQuery() {
   });
 }
 
+// A standup as returned by the batched /api/weeks/standups endpoint.
+export interface RecentStandup {
+  id: string;
+  sprint_id: string;
+  title: string;
+  content: unknown;
+  author_id: string;
+  author_name: string | null;
+  author_email: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Fetch the 10 most recent standups across a set of active weeks in a single
+// batched request. Replaces the former one-request-per-week fan-out
+// (audit findings DB-4 / API-5, tickets TRO-181 / TRO-176).
+async function fetchRecentStandups(weekIds: string[]): Promise<RecentStandup[]> {
+  const params = new URLSearchParams({ week_ids: weekIds.join(',') });
+  const res = await apiGet(`/api/weeks/standups?${params.toString()}`);
+  if (!res.ok) {
+    const error = new Error('Failed to fetch recent standups') as Error & { status: number };
+    error.status = res.status;
+    throw error;
+  }
+  return res.json();
+}
+
+// Hook to get the most recent standups across a set of active weeks in one
+// request. Pass the active weeks' ids (e.g. from useActiveWeeksQuery); the
+// query is disabled when there are none.
+export function useRecentStandupsQuery(weekIds: string[]) {
+  const sortedIds = [...weekIds].sort();
+  return useQuery({
+    queryKey: [...sprintKeys.all, 'recentStandups', sortedIds],
+    queryFn: () => fetchRecentStandups(sortedIds),
+    enabled: sortedIds.length > 0,
+    staleTime: 1000 * 60, // 1 minute - standups change more often than sprint metadata
+  });
+}
+
 // Fetch sprints for a program
 async function fetchSprints(programId: string): Promise<SprintsResponse> {
   const res = await apiGet(`/api/programs/${programId}/sprints`);

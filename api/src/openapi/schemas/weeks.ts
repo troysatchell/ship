@@ -479,6 +479,45 @@ registry.registerPath({
 });
 
 registry.registerPath({
+  method: 'get',
+  path: '/weeks/standups',
+  tags: ['Weeks'],
+  summary: 'Get recent standups across multiple weeks (batched)',
+  description: 'Returns up to the 10 most recent standups across the given set of week/sprint ids in a single request, newest first. Replaces calling GET /weeks/{id}/standups once per active week (the DB-4/API-5 client-side fan-out fix).',
+  request: {
+    query: z.object({
+      week_ids: z.string().openapi({
+        description: 'Comma-separated list of week/sprint UUIDs',
+        example: '550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8',
+      }),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'Up to 10 most recent standups across the requested weeks, newest first',
+      content: {
+        'application/json': {
+          schema: z.array(z.object({
+            id: UuidSchema,
+            sprint_id: UuidSchema,
+            title: z.string(),
+            content: z.record(z.unknown()).nullable(),
+            author_id: UuidSchema,
+            author_name: z.string().nullable(),
+            author_email: z.string().nullable(),
+            created_at: z.string(),
+            updated_at: z.string(),
+          })),
+        },
+      },
+    },
+    400: {
+      description: 'week_ids missing or contains a non-UUID value',
+    },
+  },
+});
+
+registry.registerPath({
   method: 'post',
   path: '/weeks/{id}/standups',
   tags: ['Weeks'],

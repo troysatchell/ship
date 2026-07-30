@@ -8,9 +8,13 @@ vi.mock('../db/client.js', () => ({
 }));
 
 // Mock visibility middleware
+// The implementation is passed to vi.fn() rather than chained on as
+// .mockResolvedValue(...): vi.resetAllMocks() (used below) restores the
+// implementation given to vi.fn(impl) but wipes one that was chained on, which
+// would silently turn these into undefined-returning stubs.
 vi.mock('../middleware/visibility.js', () => ({
-  getVisibilityContext: vi.fn().mockResolvedValue({ isAdmin: false }),
-  VISIBILITY_FILTER_SQL: vi.fn().mockReturnValue('1=1'),
+  getVisibilityContext: vi.fn(async () => ({ isAdmin: false })),
+  VISIBILITY_FILTER_SQL: vi.fn(() => '1=1'),
 }));
 
 // Mock auth middleware
@@ -31,7 +35,10 @@ describe('Iterations API', () => {
   let app: express.Express;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    // resetAllMocks, not the clear-only variant: clearing mocks leaves unconsumed
+    // mockResolvedValueOnce values queued, which leak into later tests
+    // (TRO-277 / TEST-12).
+    vi.resetAllMocks();
     app = express();
     app.use(express.json());
     app.use('/api/weeks', iterationsRouter);

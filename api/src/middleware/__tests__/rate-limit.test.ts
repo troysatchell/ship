@@ -12,6 +12,7 @@
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import request from 'supertest'
+import { createServer } from 'http'
 import type { Express, Request } from 'express'
 import {
   apiRateLimitKey,
@@ -87,13 +88,30 @@ describe('API-1: /api rate limiter', () => {
       expect(limit).toBeLessThanOrEqual(SANE_CEILING_PER_MINUTE)
     })
 
+    /**
+     * 320 sequential requests, against ONE bound server.
+     *
+     * `request(app)` binds a throwaway server per call, so the burst used to
+     * create and tear down 320 of them. Under concurrent build load that churn —
+     * not the limiter — was the most frequent failure in the whole api suite:
+     * `socket hang up` and 5s-testTimeout, three times in 20 runs
+     * (TRO-277 / TEST-12). Binding once measures the limiter instead of the
+     * ephemeral-port supply. The assertion is unchanged: still 320 requests on
+     * one session key, still zero tolerated 429s.
+     */
     it('serves a realistic navigation burst with zero 429s', async () => {
       const statuses: number[] = []
-      for (let i = 0; i < WORST_CASE_BURST_PER_MINUTE; i++) {
-        const res = await request(prodApp)
-          .get('/api/csrf-token')
-          .set('Cookie', `session_id=${sessionIdLike('c')}`)
-        statuses.push(res.status)
+      const server = createServer(prodApp)
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+      try {
+        for (let i = 0; i < WORST_CASE_BURST_PER_MINUTE; i++) {
+          const res = await request(server)
+            .get('/api/csrf-token')
+            .set('Cookie', `session_id=${sessionIdLike('c')}`)
+          statuses.push(res.status)
+        }
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()))
       }
 
       const throttled = statuses.filter((s) => s === 429).length

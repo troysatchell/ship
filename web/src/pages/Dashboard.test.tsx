@@ -16,6 +16,10 @@ vi.mock('@/hooks/useWeeksQuery', () => ({
     data: { sprints: [], days_remaining: 5 },
     isLoading: false,
   }),
+  useRecentStandupsQuery: () => ({
+    data: [],
+    isLoading: false,
+  }),
 }));
 
 vi.mock('@/contexts/ProjectsContext', () => ({
