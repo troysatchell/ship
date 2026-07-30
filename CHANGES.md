@@ -788,6 +788,119 @@ already below that threshold, so they would not have caught either one regardles
 
 ---
 
+## TRO-193 (ERR-6) / TRO-227 (TEST-5) — Abandoning a pending inline comment now always removes its highlight mark
+
+Starting a comment via the bubble menu or `Cmd+Shift+M` sets a `commentMark` — a TipTap **Mark**,
+i.e. persisted, Yjs-synced document content (`web/src/components/editor/CommentMark.ts:69`), not a
+decoration — before any comment row exists. Only an explicit `unsetComment` call removes it. Before
+this fix, the *only* path that ever called `unsetComment` was the pending input's own `keydown`
+handler seeing `Escape` with the input itself as `event.target`
+(`CommentDisplay.tsx`'s `handleDOMEvents.keydown`, previously ~line 322) — which requires the input
+to already hold focus. It is focused in a `requestAnimationFrame` scheduled after the widget mounts
+(`CommentDisplay.tsx:259-263`).
+
+**Two confirmed mechanisms, one root cause (unset-on-abandon had no owner):**
+
+- **ERR-6 — blur / click away had no handler at all**, not a race. Grepping
+  `CommentDisplay.tsx`/`Editor.tsx` for any blur, click-outside, or `focusout` handling around the
+  pending comment found none. `audit/error-handling/raw/probe8-comment-orphan-blur.json` confirms
+  this end-to-end: the mark is written into persisted content with **0** backing comment rows and
+  survives a reload.
+- **TEST-5 — Escape genuinely races the auto-focus `requestAnimationFrame`.** Confirmed, not just
+  hypothesized: `e2e/inline-comments.spec.ts:118` failed both attempts in 2 of 3 audit runs
+  (`audit/test-quality/runs/e2e-run1-failures.txt`, `-run3-failures.txt`) with the highlight still
+  present after `page.keyboard.press('Escape')`, which sends the key to whatever currently has
+  focus — not to the not-yet-focused pending input.
+
+**The fix.** Rather than patch each dismissal path separately, `CommentDisplay.tsx`'s
+`commentDisplay` ProseMirror plugin gets a `view()` lifecycle that is the single owner of the
+"abandon a pending comment" invariant: document-level capture-phase listeners for `keydown`
+(Escape) and `mousedown` (outside click), plus a `focusout` listener for a real blur/Tab-away, all
+gated only on `storage.pendingCommentId` — never on the event's target or on whether focus has
+reached the input. A `destroy()` callback abandons any still-pending comment when the editor itself
+goes away (component unmount, or a route change that recreates the editor for a different
+document). Submitted comments are tracked (`onSubmitComment` marks the id before clearing
+`pendingCommentId`), so `onCancelComment` is a no-op for a comment that was actually created —
+the invariant is "a mark may only remain if its comment was created," in both directions. The
+Escape branch in `handleDOMEvents.keydown` was removed as dead/duplicate code now that the
+document-level listener supersedes it; Enter-to-submit is unchanged.
+
+**Provenance on route-change/unmount:** verified, not just reasoned about. `Editor.destroy()` ->
+`EditorView.destroy()` calls `destroyPluginViews()` (which invokes our `destroy()`) *before* it nulls
+`docView`, so `editor.commands.unsetComment(...)` still dispatches correctly from inside that
+callback (confirmed empirically — see the regression test below, not just read from
+`prosemirror-view`'s source).
+
+**Regression tests — `web/src/components/editor/CommentDisplay.test.ts`** (new, vitest, driving a
+real `@tiptap/core` `Editor` with the real `CommentMark` + `CommentDisplayExtension`, same pattern as
+`DetailsExtension.test.ts`/`MentionExtension.test.ts`):
+
+1. Blur/outside-click (`mousedown` outside the widget) dismissal leaves no `commentMark` in the doc
+   JSON (ERR-6).
+2. A genuine `focusout` on the pending input itself, to something outside the widget, also leaves no
+   mark — exercised directly rather than assuming `mousedown` coverage implies it (see CodeRabbit
+   triage below).
+3. Escape dispatched with focus still on `document.body` — the pending input rendered via a forced
+   decorations recompute but its `requestAnimationFrame` focus callback deliberately never flushed —
+   leaves no mark (TEST-5's exact race, reproduced without fake timers by simply never yielding to
+   let the rAF run).
+4. A normally-submitted comment keeps its mark, including through a subsequent outside click/Escape
+   (the "don't strip a real comment" half of the invariant).
+5. Bonus: destroying the editor while a comment is still pending (route change/unmount) also
+   removes the mark.
+
+**Red before green.** All of 1/3/5 failed against the pre-fix `CommentDisplay.tsx` (copied aside via
+`git show HEAD:...`, never `git stash`) with `AssertionError: expected true to be false` on
+`hasCommentMark(editor)` — the exact behavior claimed, not an import error or a crash. Case 4 (happy
+path) passed both before and after, confirming it was never broken and isn't a false positive. Case 2
+was added afterward (see below) and verified red by temporarily disabling only the `focusout`
+listener registration — that one test failed while the other four stayed green, confirming it
+exercises that listener specifically rather than being redundant with the `mousedown` case. All five
+pass against the fix.
+
+**CodeRabbit review (G9), triaged:**
+
+- **Major, applied** — a real click-away fires both the capture-phase `mousedown` and (as its native
+  consequence) a `focusout` on the pending input before `storage.pendingCommentId` round-trips back
+  to `null` via the React state update that clears it, so both listeners could call
+  `onCancelComment` for the same id. Added an `abandonedPendingId` guard so it fires exactly once per
+  pending comment — harmless today given `unsetComment`'s idempotency, but a real sharp edge for any
+  future non-idempotent `onCancelComment`.
+- **Minor, applied (corrected)** — added test case 2 above for direct `focusout` coverage. The
+  suggested diff dispatched the event on `editor.view.dom`, which does not satisfy
+  `isInsidePendingWidget(event.target)` and would not have exercised the intended branch; dispatched
+  on the pending input itself instead, and verified it actually reds when that listener is disabled.
+- **Minor, applied** — the "click elsewhere" test target is a plain `div`, not a `button` (no
+  interactive semantics needed for an arbitrary outside-click target).
+- **Minor, applied** — the e2e reload assertion now waits for the actual persisted text to reappear
+  before asserting the highlight is gone, and asserts a DOM count of `0` rather than
+  `not.toBeVisible()` (see e2e section below).
+
+**e2e:** `e2e/inline-comments.spec.ts:118` (`canceling a comment removes the highlight`) already
+asserted the right thing (`.comment-highlight` not visible after Escape) and needed no strengthening.
+Added `dismissing a comment by clicking away removes the highlight` for ERR-6, which had zero e2e
+coverage before, including a reload check matching probe8's persistence finding — waits for the
+actual persisted text to reappear before asserting the highlight is gone (not just the editor shell
+being visible, which could pass vacuously while content is still loading), and asserts a DOM count of
+`0` rather than `not.toBeVisible()` (CodeRabbit finding, applied). Not executed as part of this
+change — no prebuilt `api`/`web` `dist` exists in this worktree, so `e2e/global-setup.ts` would
+trigger a full fresh build of both packages; the jsdom unit tests above already give real
+red-before-green proof of both mechanisms, so that cost wasn't justified here.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/components/editor/CommentDisplay.test.ts
+pnpm --filter @ship/web exec tsc --noEmit -p tsconfig.json
+```
+
+**Rollback.** `git checkout main -- web/src/components/editor/CommentDisplay.tsx
+e2e/inline-comments.spec.ts && git rm web/src/components/editor/CommentDisplay.test.ts` and drop
+this entry. No schema or API change accompanies this fix.
+
+---
+
 ## TRO-208 — [TS-3] The Yjs <-> TipTap converter — the persistence path for every document's content — was fully untyped
 
 `api/src/utils/yjsConverter.ts` carried 12 `any` in 245 lines, the highest any-per-line density of

@@ -136,12 +136,36 @@ function escapeHtml(str: string): string {
   return div.innerHTML;
 }
 
+/** True when `target` is inside the pending-comment widget itself (the input,
+ * its label, or its hint text) — interacting with those must not count as
+ * "dismissing" the pending comment. */
+function isInsidePendingWidget(target: EventTarget | null): boolean {
+  return target instanceof HTMLElement && target.closest('.comment-pending-input') !== null;
+}
+
 /**
  * CommentDisplay extension - Renders inline comment threads as widget decorations.
  *
  * Comments appear as bordered cards between content blocks, pushing content down
  * (like GitHub code review). The extension reads comment data from its storage,
  * which is updated by the parent Editor component via React Query.
+ *
+ * Pending-comment lifecycle (TRO-193 / ERR-6, TRO-227 / TEST-5): `comment-highlight`
+ * is a Mark — document content (CommentMark.ts), not a decoration — so once
+ * `addComment()` sets it, only an explicit `unsetComment` removes it from the
+ * persisted, Yjs-synced doc. A comment mark must never outlive an abandoned
+ * pending comment. Rather than patch each dismissal path where it happens to be
+ * handled today (previously: only Escape landing on the focused pending input),
+ * the plugin's own `view()` lifecycle below is the single owner of that
+ * invariant: it watches every Escape keypress and every mousedown/focusout
+ * *anywhere in the document*, gated only on `storage.pendingCommentId` — never
+ * on where the event landed or whether focus has reached the input yet — plus
+ * a `destroy()` that abandons any still-pending comment when the editor itself
+ * goes away (unmount, or a route change that recreates the editor). That
+ * decoupling from focus timing is what fixes the `requestAnimationFrame`
+ * auto-focus race (the pending input is focused in a rAF below); the
+ * always-on document listeners are what fixes blur/outside-click never having
+ * been handled at all.
  */
 export const CommentDisplayExtension = Extension.create<Record<string, never>, CommentDisplayStorage>({
   name: 'commentDisplay',
@@ -163,6 +187,62 @@ export const CommentDisplayExtension = Extension.create<Record<string, never>, C
     return [
       new Plugin({
         key: commentDisplayPluginKey,
+        view() {
+          // A single real "click away" fires both a capture-phase mousedown
+          // and (as its native consequence) a focusout on the pending input —
+          // `storage.pendingCommentId` is reset to null via a React state
+          // round-trip, not synchronously, so both handlers can still see it
+          // truthy for the same dismissal. Track the id already abandoned so
+          // `onCancelComment` fires exactly once per pending comment.
+          let abandonedPendingId: string | null = null;
+
+          const abandonPending = () => {
+            const pendingId = storage.pendingCommentId;
+            if (!pendingId || pendingId === abandonedPendingId) return;
+            abandonedPendingId = pendingId;
+            storage.onCancelComment?.(pendingId);
+          };
+
+          const handleKeyDown = (event: KeyboardEvent) => {
+            if (event.key !== 'Escape' || !storage.pendingCommentId) return;
+            event.preventDefault();
+            event.stopPropagation();
+            abandonPending();
+          };
+
+          const handleMouseDown = (event: MouseEvent) => {
+            if (!storage.pendingCommentId) return;
+            if (isInsidePendingWidget(event.target)) return;
+            abandonPending();
+          };
+
+          const handleFocusOut = (event: FocusEvent) => {
+            if (!storage.pendingCommentId) return;
+            // Only the pending input losing focus is a "blur dismiss"; other
+            // elements inside the editor losing focus is unrelated.
+            if (!isInsidePendingWidget(event.target)) return;
+            // Focus moving to another part of the same widget (label/hint) is
+            // not a dismissal.
+            if (isInsidePendingWidget(event.relatedTarget)) return;
+            abandonPending();
+          };
+
+          document.addEventListener('keydown', handleKeyDown, true);
+          document.addEventListener('mousedown', handleMouseDown, true);
+          document.addEventListener('focusout', handleFocusOut);
+
+          return {
+            destroy() {
+              document.removeEventListener('keydown', handleKeyDown, true);
+              document.removeEventListener('mousedown', handleMouseDown, true);
+              document.removeEventListener('focusout', handleFocusOut);
+              // The editor itself is going away with a comment still pending
+              // (component unmount, or a route change that recreates the
+              // editor for a different document) — same invariant applies.
+              abandonPending();
+            },
+          };
+        },
         props: {
           decorations: (state) => {
             const { doc } = state;
@@ -305,7 +385,10 @@ export const CommentDisplayExtension = Extension.create<Record<string, never>, C
             keydown: (view, event) => {
               const target = event.target as HTMLElement;
 
-              // Handle Enter/Escape on pending comment input
+              // Handle Enter on pending comment input. Escape is handled
+              // centrally by the plugin's view() lifecycle above (TRO-193 /
+              // TRO-227), so cancellation never depends on this input having
+              // received focus yet.
               if (target.classList.contains('comment-pending-field')) {
                 const input = target as HTMLInputElement;
                 const commentId = input.dataset.pendingCommentId;
@@ -319,15 +402,8 @@ export const CommentDisplayExtension = Extension.create<Record<string, never>, C
                   return true;
                 }
 
-                if (event.key === 'Escape') {
-                  if (commentId && storage.onCancelComment) {
-                    storage.onCancelComment(commentId);
-                  }
-                  event.preventDefault();
-                  return true;
-                }
-
-                // Prevent other keys from propagating to ProseMirror
+                // Prevent other keys (including Escape, already handled
+                // centrally) from propagating to ProseMirror's own keymap.
                 event.stopPropagation();
                 return true;
               }
