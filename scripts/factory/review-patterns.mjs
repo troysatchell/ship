@@ -62,6 +62,18 @@ const RULES = [
     files: /\.(ts|tsx)$/,
   },
   {
+    // Added after this checker MISSED a Major finding: a reviewer flagged
+    // `function extractIssueListItemFromRow(row: any)` on TRO-173 while G7b
+    // reported clean, because the original rule only matched `as any`. An
+    // annotation is the more consequential form — `as any` silences one
+    // expression, `: any` silences every use of the value, so a projection
+    // change stops being type-checked at all.
+    id: 'any-annotation',
+    re: /:\s*any\b(?!\s*\[\s*\]\s*\)\s*=>)/,
+    why: 'new `: any` annotation — silences every use of the value, so schema/projection drift stops being type-checked (TS-2)',
+    files: /\.(ts|tsx)$/,
+  },
+  {
     id: 'as-unknown-as',
     re: /\bas\s+unknown\s+as\b/,
     why: 'new `as unknown as` cast — TS-8: test casts decouple tests from the shapes they claim to verify',

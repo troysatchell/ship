@@ -131,3 +131,22 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   "N more…" link) or **zero** (empty state). Default seed data has 5, so axe reports **C0/S0** and a
   re-measurement on stock seed would wrongly conclude the finding never existed. Check the data
   precondition before reporting a finding as unreproducible.
+- 2026-07-30 (TRO-174) — **The scratchpad is SHARED across concurrent agents. Never use a generic
+  temp filename.** Two agents independently chose `ours-CHANGES.md`; one clobbered the other, and the
+  first re-merge produced a `CHANGES.md` with the **wrong ticket at the top and the right one absent
+  entirely**. Caught only by checking entry headings against git rather than trusting the tool's
+  "1 ours-new + 1 theirs-new" summary. Prefix every scratch file with your ticket ID, and verify
+  intermediate files came from where you think. Same class as the shared `refs/stash`: worktrees are
+  isolated, everything around them is not.
+- 2026-07-30 (TRO-174) — **git reads merge attributes from the PRE-MERGE working tree.** Removing
+  `CHANGES.md merge=union` from `main` did **not** protect any open branch: each branch still carried
+  the attribute in its own tree, so the union driver stayed live for that branch's next merge and
+  damaged three more files *after* the removal landed. `git merge` reported *"Auto-merging CHANGES.md
+  — Automatic merge went well."* It was not well. **After merging `main`, run
+  `git check-attr merge -- CHANGES.md`** and expect `unspecified`; if it still says `union`, redo the
+  `CHANGES.md` resolution with `merge-changes.mjs`.
+- 2026-07-30 (TRO-173) — **A tool improvement that is not committed protects nothing.** A G7b rule
+  added to catch `: any` annotations sat uncommitted in the orchestrator's working tree, so every
+  branch gating against `main` kept running the weaker checker. Found because an agent reconciled a
+  contradiction — the orchestrator reported 2 violations, the agent's own run said `clean` — instead
+  of assuming one side was wrong. **When two runs of the same check disagree, diff the checkers.**
