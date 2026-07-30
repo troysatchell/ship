@@ -815,10 +815,18 @@ async function seedAdminUserSearchFixtures(
   adminUserId: string,
   passwordHash: string
 ): Promise<void> {
+  // Use UTC throughout to match the API's date math (team.ts parses as UTC),
+  // rather than CURRENT_DATE which is evaluated in PostgreSQL's session
+  // timezone and can diverge from API/UI UTC date handling around midnight.
+  const nowUtc = new Date();
+  const todayUtcStr = new Date(Date.UTC(nowUtc.getUTCFullYear(), nowUtc.getUTCMonth(), nowUtc.getUTCDate()))
+    .toISOString()
+    .split('T')[0];
   const testSpaceResult = await pool.query(
     `INSERT INTO workspaces (name, sprint_start_date)
-     VALUES ('Test Space', CURRENT_DATE)
-     RETURNING id`
+     VALUES ('Test Space', $1)
+     RETURNING id`,
+    [todayUtcStr]
   );
   const testSpaceId = testSpaceResult.rows[0].id;
 
