@@ -3,6 +3,7 @@ import { pool } from '../db/client.js';
 import { z } from 'zod';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
 import { authMiddleware } from '../middleware/auth.js';
+import { validateUuidParam } from '../middleware/paramValidation.js';
 import {
   transformIssueLinks,
   extractTicketNumbersFromContents,
@@ -14,6 +15,12 @@ import { extractText } from '../utils/document-content.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
+
+// ERR-5: guard every `:id` route in this router against a malformed uuid
+// (e.g. `GET /api/weeks/not-a-number`, which is actually this sprint
+// document's uuid path param), which previously reached Postgres as an
+// invalid cast and surfaced as an uncaught 500.
+router.param('id', validateUuidParam);
 
 /**
  * Look up the reports_to user_id for a sprint's owner.

@@ -495,6 +495,90 @@ either.
 
 ---
 
+## TRO-192 (ERR-5) + TRO-195 (ERR-8) — malformed path/query params returned 500 instead of 400/404
+
+Both findings are one root cause: request **bodies** are validated up front with zod and return a
+clean 400 (`createDocumentSchema.safeParse(req.body)` in `routes/documents.ts`), but path and query
+params bypassed that layer entirely. `GET /api/documents/not-a-uuid` reached Postgres, failed an
+`invalid input syntax for type uuid` cast, and surfaced as an uncaught 500
+(`audit/error-handling/raw/probe3-api.txt`) — same for `GET /api/documents/:id/backlinks`,
+`GET /api/weeks/:id`, and `?type=bogus` on the documents list (ERR-5). Separately, `?limit=-1` and
+`?limit=999999999` on the documents list both returned the full ~300 KB payload, because the route
+never read `limit` from the query at all (ERR-8).
+
+**What changed.**
+
+- **`api/src/middleware/paramValidation.ts` (new)** — the shared fix, extending the repo's existing
+  body-validation pattern to params/query instead of inventing a new one:
+  - `validateUuidParam` — an Express `router.param` callback. Registered once per router
+    (`router.param('id', validateUuidParam)`), it guards **every** route using `:id` in that router
+    against a malformed uuid, returning `{ error: 'Invalid input', details: [...] }` (the same shape
+    body validation already used) instead of letting the pg cast error reach the client as a 500. A
+    well-formed but nonexistent id is untouched and still falls through to the route's own 404.
+  - `limitQuerySchema(max)` — a zod schema for an optional `limit` query param. Absent → unchanged
+    behavior (no default cap introduced, so callers that never pass `limit` are unaffected).
+    Non-numeric or non-positive (`-1`, `0`, `"abc"`) → fails validation (400). Above `max` → clamped
+    down to `max` rather than rejected (ERR-8's "cap at a sane maximum").
+- **`api/src/routes/documents.ts`** — `router.param('id', validateUuidParam)` guards `GET /:id`,
+  `GET /:id/content`, `PATCH /:id/content`, `PATCH /:id`, `DELETE /:id`, `POST /:id/convert`,
+  `POST /:id/undo-conversion`. `GET /` (list) gets a `listDocumentsQuerySchema` validating `type`
+  against the full `document_type` Postgres enum (10 values, matching the already-registered
+  OpenAPI `DocumentTypeSchema` — **not** the narrower 8-value set `createDocumentSchema` accepts for
+  creation, since `standup`/`weekly_review` documents are created via their own routes but are real
+  rows this filter already matched) and `limit` via `limitQuerySchema(100)`. When `limit` is
+  provided, it is now applied as a real SQL `LIMIT`; `parent_id` handling is untouched.
+- **`api/src/routes/backlinks.ts`** — `router.param('id', validateUuidParam)` guards
+  `GET /:id/backlinks` and `POST /:id/links`.
+- **`api/src/routes/weeks.ts`** — `router.param('id', validateUuidParam)` guards all 18 `:id` routes
+  (`GET/PATCH/DELETE /:id`, `/:id/plan`, `/:id/issues`, `/:id/standups`, `/:id/review`,
+  `/:id/carryover`, `/:id/approve-*`, `/:id/request-*-changes`, `/:id/scope-changes`, `/:id/start`).
+  The probe's literal `GET /api/weeks/not-a-number` targets this same uuid path param — "number" was
+  the malformed test string, not the field's real type.
+- **`api/src/openapi/schemas/documents.ts`** — added `limit` to `GET /documents`'s documented query
+  params and a `400` response, since that param is new. The `:id` uuid path params were already
+  typed `UuidSchema` in every registration touched here (documents, backlinks, weeks) — the
+  documented contract didn't change, only the runtime now enforces what was already promised.
+  Regenerated `api/openapi.yaml` / `api/openapi.json` (additive only — `git diff --stat` shows +92/-0).
+
+**Left alone on purpose.** `api/src/routes/issues.ts` has the identical `GET /:id` gap
+(`GET /api/issues/not-a-uuid` also 500s per the probe) but was **not** touched: it has an open PR
+against it right now, and both findings are fully covered by the routers above without it. Same
+root cause, same fix (`router.param('id', validateUuidParam)`) would apply as a fast-follow.
+`api/src/routes/associations.ts` (mounted at `/api/documents`) has the same `:id` gap and is outside
+the audit's reproduced evidence — also not touched here.
+
+**Frontend impact: none.** The only call site for `/api/documents?type=` sends `type=wiki`
+(`web/src/hooks/useDocumentsQuery.ts:29`) — a valid enum value, still 200. No web code sends
+`limit` to this endpoint, so the new validation and the `LIMIT` clause only activate for a query
+string no current caller sends.
+
+**How to run it.**
+
+```bash
+source .factory-env                       # api tests TRUNCATE 16 tables; use the worktree database
+pnpm --filter @ship/api exec vitest run src/routes/param-validation-regression.test.ts
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/paramValidation.test.ts
+scripts/factory/gate.sh
+```
+
+`param-validation-regression.test.ts` hits the live routes via supertest (not the middleware in
+isolation), covering both tickets: malformed uuid → 400 on `/api/documents/:id`,
+`/api/documents/:id/backlinks`, and `/api/weeks/:id`; well-formed-but-absent uuid → 404 on the same
+two GET-by-id routes (unaffected by this change); `?type=bogus` → 400 and `?type=wiki` → 200 on the
+list; `?limit=-1`/`0`/`abc` → 400; `?limit=5` against 12 seeded documents → exactly 5 rows back
+(proving the `LIMIT` is real, not just accepted); `?limit=999999999` → 200, no crash.
+`paramValidation.test.ts` unit-tests the two helpers directly, including clamping against a small
+`max` to prove the cap logic independent of the 100-row default.
+
+**Rollback.** Revert the commits on `fix/err-5-err-8-param-validation`, or by hand: remove the three
+`router.param('id', validateUuidParam)` lines (documents.ts, backlinks.ts, weeks.ts), remove
+`listDocumentsQuerySchema`'s use in `documents.ts`'s `GET /` (restore the raw `req.query`
+destructure and drop the `LIMIT` clause), delete `api/src/middleware/paramValidation.ts` and its
+three imports, and revert the `limit`/`400` additions in
+`api/src/openapi/schemas/documents.ts` (then re-run `pnpm --filter @ship/api openapi:generate`).
+
+---
+
 ## TRO-197 (BUN-1) + TRO-198 (BUN-2) + TRO-199 (BUN-3) + TRO-200 (BUN-4) + TRO-202 (BUN-6) — the app stops shipping as one 2 MB file
 
 Five findings, one root cause: `web/dist/index.html` referenced exactly **one** module script —
