@@ -276,7 +276,6 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
     let ws: WebSocket | null = null
     const framesSeen: number[] = []
     const closeEvents: string[] = []
-    let requestedServerState = false
 
     // Local edits go to the server; frames that came FROM the server do not.
     doc.on('update', (update: Uint8Array, origin: unknown) => {
@@ -319,29 +318,6 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
             current.send(encoding.toUint8Array(encoder))
           }
         }
-        // Ask for the server's state only once we have proof the server is
-        // listening, i.e. after its first frame.
-        //
-        // WHY NOT ON 'open' (this cost an hour, and it is a real property of the
-        // server): `wss.on('connection')` in api/src/collaboration/index.ts
-        // `await`s getOrCreateDoc() — a database round trip — and registers
-        // `ws.on('message')` only afterwards. A frame that arrives during that
-        // window has no listener and is dropped by the EventEmitter, so the
-        // server never answers the client's sync step 1 and the client never
-        // learns the server's state. Observed here on loopback, where the
-        // client's step 1 beats the DB read: frames received were [3,0,1,1] —
-        // cache-clear, the server's own step 1, two awareness updates, and no
-        // step 2, forever. The server sends its step 1 in the same synchronous
-        // block that attaches the listener, so replying to that frame is
-        // race-free. Reported separately; not this ticket's fix.
-        if (!requestedServerState) {
-          requestedServerState = true
-          const current = ws
-          if (current && current.readyState === WebSocket.OPEN) {
-            current.send(encodeSyncStep1(doc))
-          }
-        }
-
         // Step 2 carries the server's state; once applied, this replica has
         // everything the server had at handshake time.
         if (syncType === SYNC_STEP_2) onSynced()
@@ -365,7 +341,6 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
       // was closed with code 4401 instead.
       framesSeen.length = 0
       closeEvents.length = 0
-      requestedServerState = false
 
       let markSynced: (() => void) | null = null
       let failHandshake: ((error: Error) => void) | null = null
@@ -418,7 +393,26 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
 
       try {
         await new Promise<void>((resolve, reject) => {
-          socket.on('open', () => resolve())
+          // TRO-284 / ERR-11: send sync step 1 synchronously, in the SAME tick
+          // as 'open' — no waiting for proof the server is listening first.
+          //
+          // This used to be impossible to do safely: `wss.on('connection')` in
+          // api/src/collaboration/index.ts awaited a database round trip
+          // (getOrCreateDoc()) before registering `ws.on('message')`, so a
+          // frame sent this early had no listener and was dropped by the
+          // EventEmitter — silently, forever. Observed here on loopback before
+          // the fix: frames received were [3,0,1,1] (cache-clear, the server's
+          // own step 1, two awareness updates) and no step 2, ever. The
+          // workaround was to wait for the server's first frame before
+          // replying with our own step 1, which sidestepped the race instead
+          // of exercising it — real clients still raced. Now that the server
+          // buffers inbound frames until its document load finishes and drains
+          // them in order, sending immediately on 'open' is exactly what a
+          // real y-websocket client does, and this test asserts it is safe.
+          socket.on('open', () => {
+            socket.send(encodeSyncStep1(doc))
+            resolve()
+          })
           socket.on('error', reject)
         })
       } catch (error) {
@@ -426,8 +420,6 @@ describe('Concurrent multi-client editing / Yjs merge (TRO-226 / TEST-4)', () =>
         throw error
       }
 
-      // The step 1 we owe the server is sent from handleFrame, once the server
-      // has proved it is listening. See the comment there.
       await synced
     }
 
