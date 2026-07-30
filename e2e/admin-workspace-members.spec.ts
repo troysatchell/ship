@@ -251,10 +251,11 @@ test.describe('Admin User Search', () => {
 
     // Search for a user. bob.martinez is a member of "Test Workspace" but not
     // "Test Space", so the workspace-scoped search should surface him as addable.
+    // The result assertion below already retries against the debounced (300ms)
+    // search state, so no fixed sleep is needed here.
     await page.getByPlaceholder('Search by email...').fill('bob')
-    await page.waitForTimeout(500)
 
-    const userResult = page.locator('button').filter({ hasText: /bob/i }).first()
+    const userResult = page.getByRole('button', { name: /bob/i }).first()
     await expect(
       userResult,
       'Search for "bob" should surface bob.martinez@ship.local as addable to Test Space'
@@ -288,22 +289,31 @@ test.describe('Admin User Search', () => {
     // without restoring afterward would make this test pass only once per
     // worker -- a retry, or a re-run in the same worker, would no longer find
     // her addable. Restore in `finally`, mirroring the role-change test above.
+    //
+    // `carolAdded` tracks whether the "Add User" click actually fired, so the
+    // finally block only attempts removal when there is something to remove --
+    // and, when it does, waits for the row and the dialog explicitly rather
+    // than swallowing a missing-row failure with `isVisible().catch(() =>
+    // false)` (which could silently skip cleanup and leave carol attached for
+    // the next test in this worker).
+    let carolAdded = false
     try {
       // Search for carol, who is seeded with no workspace membership at all,
-      // so she should always be addable here.
+      // so she should always be addable here. The result assertion below
+      // already retries against the debounced (300ms) search state.
       await page.getByPlaceholder('Search by email...').fill('carol')
-      await page.waitForTimeout(500)
 
-      const userResult = page.locator('button').filter({ hasText: /carol/i }).first()
+      const userResult = page.getByRole('button', { name: /carol/i }).first()
       await expect(
         userResult,
         'Search for "carol" should surface carol@ship.local as addable to Test Space'
       ).toBeVisible({ timeout: 3000 })
       await userResult.click()
       await page.getByRole('button', { name: 'Add User' }).click()
+      carolAdded = true
 
       // Member count should increase
-      await expect(page.getByRole('heading', { name: /Members \((\d+)\)/ })).toContainText(
+      await expect(memberHeading).toContainText(
         `(${initialCount + 1})`,
         { timeout: 5000 }
       )
@@ -311,10 +321,13 @@ test.describe('Admin User Search', () => {
       // Best-effort restore: remove carol from Test Space so the fixture's
       // "no membership anywhere" invariant holds for the next run in this
       // worker. If the try block failed before she was added, this is a no-op.
-      const carolRow = page.locator('tr').filter({ hasText: /carol/i }).first()
-      if (await carolRow.isVisible().catch(() => false)) {
-        page.once('dialog', (dialog) => dialog.accept())
+      if (carolAdded) {
+        const carolRow = page.locator('tr').filter({ hasText: /carol/i }).first()
+        await expect(carolRow).toBeVisible({ timeout: 5000 })
+        const dialog = page.waitForEvent('dialog')
         await carolRow.getByRole('button', { name: 'Remove' }).click()
+        await (await dialog).accept()
+        await expect(memberHeading).toContainText(`(${initialCount})`, { timeout: 5000 })
       }
     }
   })
