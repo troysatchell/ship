@@ -8,6 +8,169 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-183 (DB-6) + TRO-184 (DB-7) + TRO-185 (DB-8) + TRO-187 (DB-10) — the query planner was starved of indexes and honest estimates
+
+Four findings, one root cause: the planner either had no index to use, or had one and could not
+see enough to pick it. All four are measured against the audit's seeded volume (500 documents / 20
+users / 813 `document_associations` rows, `postgres:15-alpine` on the `ship-audit-pg:5433` Docker
+container, via `pnpm db:seed` + `audit/seed-augment.ts`) unless stated otherwise.
+
+**TRO-183 / DB-6 — `GET /api/weeks` collapsed 3 correlated subqueries into 1 indexed lookup.**
+
+`api/src/routes/weeks.ts` computed `has_retro` / `retro_outcome` / `retro_id` (and four more
+duplicate blocks at the single-sprint GET, the two PATCH re-queries, and the start-sprint
+re-query — five identical occurrences total) with three separate correlated subqueries against
+`document_associations`, all sharing the join `related_id = d.id AND relationship_type = 'sprint'`.
+Two of the three (`retro_outcome`, `retro_id`) used `LIMIT 1`, and confirmed by EXPLAIN: that LIMIT
+made the planner favor a zero-startup-cost `Seq Scan` over the existing
+`idx_document_associations_related_type` index — `Rows Removed by Filter: 803`, twice, on every
+row, `loops=5` — even though the third subquery (`has_retro`, no `LIMIT`) used that same index
+correctly via a `Bitmap Heap Scan`.
+
+**Fix.** All five occurrences now compute all three fields from one `LEFT JOIN LATERAL`, using
+`MAX()` instead of `LIMIT 1`. This is deliberate, not cosmetic: an aggregate has to see every
+matching row regardless of how many there are, so its cost model prefers the index the same way
+`has_retro`'s aggregate always did — a plain `LIMIT 1` rewrite (tried first) removed the duplicate
+scan but still picked `Seq Scan` for the same startup-cost reason as before. `MAX(rt.id::text)::uuid`
+is required because Postgres has no built-in `MAX(uuid)` aggregate. Correctness rests on a
+uniqueness invariant enforced elsewhere in this file (`POST /:id/review` returns 409 if a
+`weekly_review` already exists for a sprint), so at most one row can ever match — `MAX()` over
+0-or-1 rows is exactly `LIMIT 1`'s result.
+
+**Before/after (EXPLAIN ANALYZE, BUFFERS, sprint_number=14, this workspace's 5 matching sprints):**
+
+| | before | after |
+|---|---|---|
+| Buffers | 1181 shared hit | 749 shared hit (-36.6%) |
+| SubPlans | 8 correlated, `loops=5` each | 5 (retro folded into the main join tree, not a SubPlan) |
+| `document_associations` seq scans for retro | 2 (`Rows Removed by Filter: 803` each) | 0 |
+| retro access path | `Seq Scan` | `Bitmap Heap Scan` via `idx_document_associations_related_type` |
+
+Note for whoever re-measures this: the augmented seed data has **zero** documents matching the
+`outcome IS NOT NULL` predicate at all — `outcome` is written nowhere in the current codebase
+(only ever read), so `has_retro` is always `false` today. The buffer savings above are real and
+independent of that (Postgres still has to scan for a match whether or not one exists), but the
+regression tests below had to insert a synthetic matching row by hand to exercise the "found a
+retro" branch at all.
+
+**TRO-184 / DB-7 — no index on `documents.ticket_number`; issue permalinks seq-scanned the whole table.**
+
+`GET /api/issues/by-ticket/:number` (`issues.ts`, `WHERE d.ticket_number = $1 AND d.workspace_id =
+$2 AND d.document_type = 'issue'`) had no supporting index, so every lookup scanned the full
+workspace regardless of issue count.
+
+**Fix.** Migration `038_documents_ticket_number_index.sql` adds
+`idx_documents_ticket_number ON documents (workspace_id, ticket_number) WHERE document_type =
+'issue'` — a partial index matching the route's exact predicate.
+
+**Before/after (EXPLAIN ANALYZE, BUFFERS, `ticket_number = 16`, 5 matching rows in this seed):**
+
+| | before | after |
+|---|---|---|
+| Plan | `Seq Scan` | `Index Scan using idx_documents_ticket_number` |
+| Buffers | 66 shared hit | 5 hit + 1 read |
+| Rows removed by filter | 495 | 0 |
+
+**TRO-185 / DB-8 — the association batch's `= ANY($1)` misestimated cardinality by 28x.**
+
+`getBelongsToAssociationsBatch` (`api/src/utils/document-crud.ts`, called from `issues.ts`'s list
+route) filtered `document_associations` with `da.document_id = ANY($1)`. Postgres cannot see an
+array parameter's length at plan time, so it falls back to a fixed low-selectivity guess: measured
+at `rows=25` estimated vs `rows=707` actual (this workspace's full 254-issue batch) — a 28x
+underestimate — which left `idx_document_associations_document_id` unused in favor of a sequential
+scan. The batch itself is correct design (it is what keeps `/api/issues` at a handful of queries
+instead of one per issue) — the fix had to keep it, not remove it.
+
+**Both candidates in DB-8's own wording were measured, not guessed:**
+
+- `unnest($1::uuid[]) JOIN` — rejected. Postgres defaults a `Function Scan` on an unnested array to
+  a flat `rows=10` estimate regardless of the array's real length, so the misestimate is not fixed
+  at all (still `rows=10` vs `rows=707`), and in this measurement it also flipped a downstream join
+  from `Hash Join` to a per-row `Nested Loop` + `Index Scan`, raising buffers to 2146 (vs 91 before).
+- `JOIN (VALUES ...)` — adopted. A `VALUES` list gives the planner the batch's literal size, so the
+  estimate becomes accurate: `rows=635` vs `707` actual (1.1x, down from 28x). At a realistic page
+  size (20 ids, matching the opt-in `limit` PR #19/TRO-173 added), buffers fell **90 -> 59 (-34%)**.
+  At this workspace's full 254-id batch (an edge case — nearly every issue in one call), the more
+  accurate estimate led the planner to a `Nested Loop` + `Memoize`-cached `Index Scan` for the
+  `documents` join instead of hashing the whole table once, which cost more buffers in that one
+  scenario (91 -> 155) despite fixing the estimate DB-8 is actually about. Recorded here rather
+  than hidden: the realistic-page-size case is the one this batch runs at in practice.
+
+Implementation builds the `VALUES` list as `$1::uuid, $2::uuid, ...` — one bind parameter per id,
+never interpolated — and de-dupes the input array first, since a repeated id in a `VALUES` join
+would (unlike `= ANY`, a set-membership test) multiply output rows.
+
+**TRO-187 / DB-10 — no index on `documents.updated_at` despite `ORDER BY updated_at DESC` in seven route modules.**
+
+`issues.ts`, `documents.ts`, `weeks.ts`, `projects.ts`, `programs.ts`, `dashboard.ts` and
+`search.ts` all sort by `updated_at DESC` with no supporting index — invisible at 500 rows (an
+unsupported quicksort costs microseconds) but exactly what makes `LIMIT` cheap once a list route
+paginates. That sequencing is no longer hypothetical: **API-2/DB-5's opt-in pagination merged as
+PR #19** (`limit`/`offset` on `GET /api/issues`, no default limit, verified via `gh pr view 19`),
+so this index now has an actual consumer, not just a future one.
+
+**Fix.** Migration `039_documents_updated_at_index.sql` adds
+`idx_documents_workspace_updated_at ON documents (workspace_id, updated_at DESC)`.
+
+**Before/after** (representative query: `WHERE workspace_id = $1 AND archived_at IS NULL AND
+deleted_at IS NULL ORDER BY updated_at DESC LIMIT 20`; "before" reproduced in the same session via
+`SET enable_indexscan/enable_bitmapscan = off` rather than dropping the index):
+
+| | before | after |
+|---|---|---|
+| Plan | `Seq Scan` + top-N heapsort | `Index Scan using idx_documents_workspace_updated_at` |
+| Buffers | 69 shared hit | 4 hit + 2 read |
+
+**Regression tests.**
+
+- **`api/src/db/__tests__/db-6-7-8-10-indexes.test.ts`** (DB-7, DB-10) — index-existence, genuinely
+  red-before-green: builds a throwaway database, copies every real migration file *except*
+  038/039 into a fixture directory, applies it, and asserts both indexes are absent — then applies
+  the real (full) migrations directory on the same database and asserts both exist with the
+  expected definition (`workspace_id`, `ticket_number`/`updated_at DESC`, and the partial index's
+  `document_type = 'issue'` predicate). Confirmed red first: the first `it()` failed
+  (`idx_documents_ticket_number` / `idx_documents_workspace_updated_at` both `undefined`) before
+  038/039 existed.
+- **`api/src/routes/weeks-retro-lookup.test.ts`** (DB-6) — NOT red-before-green; behavior must not
+  change, so this pins it. Runs the pre-TRO-183 3-subquery SQL and the new `LATERAL` SQL side by
+  side against the same seeded sprint and asserts identical results, for both a sprint with a
+  synthetic matching `weekly_review` (`outcome` set, associated via `relationship_type = 'sprint'`)
+  and one without (the common case in real data today).
+- **`api/src/utils/__tests__/document-crud.test.ts`** (DB-8) — also a pin, not red-before-green.
+  Runs the pre-TRO-183 `= ANY($1)` query and the new `VALUES`-join function side by side across a
+  document with two associations, one with one, and one with zero, plus a duplicate-id input case
+  (proving the de-dupe keeps `= ANY`'s set-membership semantics), and asserts identical `Map`
+  contents.
+- **Full `api` suite** (`pnpm --filter @ship/api test`, against the worktree's own database):
+  48 files / 609 tests, all green, including the pre-existing 46 `weeks.test.ts` and 27
+  `issues.test.ts` cases unchanged by this branch.
+- **Plan-shape assertion for DB-7 (EXPLAIN showing `Index Scan`), judged too brittle to automate:**
+  each api test file's `beforeAll` truncates `documents` and this file's own tests insert only a
+  handful of rows before running — a table that small will correctly get a `Seq Scan` regardless of
+  the partial index (small-table cost, not a planner bug), so an `EXPLAIN`-based assertion in the
+  gate's own environment would be flaky-to-false rather than a real signal. The captured
+  EXPLAIN ANALYZE evidence above (at the audit's 500-row seed) is the evidence of record instead.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run \
+  src/db/__tests__/db-6-7-8-10-indexes.test.ts \
+  src/routes/weeks-retro-lookup.test.ts \
+  src/utils/__tests__/document-crud.test.ts \
+  src/routes/weeks.test.ts \
+  src/routes/issues.test.ts
+```
+
+**Rollback.** Revert the two migrations (both pure additions — `DROP INDEX
+idx_documents_ticket_number` / `DROP INDEX idx_documents_workspace_updated_at`, no data changes,
+safe to drop anytime) and revert the `weeks.ts` / `document-crud.ts` query changes. No schema
+changes to existing columns, no backfill, nothing to undo beyond the two `CREATE INDEX` statements
+and the query text.
+
+---
+
 ## TRO-208 — [TS-3] The Yjs <-> TipTap converter — the persistence path for every document's content — was fully untyped
 
 `api/src/utils/yjsConverter.ts` carried 12 `any` in 245 lines, the highest any-per-line density of
