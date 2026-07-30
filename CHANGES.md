@@ -8,6 +8,111 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-218 (A11Y-4) + TRO-222 (A11Y-8) — /issues Radix popovers open unnamed, and the selection column header is empty
+
+Both are the last two accessibility gaps on /issues, the improvement target for Category 7
+(all Critical/Serious axe violations fixed on the 3 most important pages). A11Y-4 was the last
+open Serious; A11Y-8 the remaining Minor.
+
+**What was broken — A11Y-4.** axe's "issues menu open" scan reported a Serious `aria-dialog-name`
+violation: `<div data-state="open" role="dialog" id="radix-:rj:" class="z-50 w-[var(--radix-...">`
+(`audit/a11y/axe/issues_menu_expanded_state.json`). Radix's `Popover.Content` defaults to
+`role="dialog"` (`@radix-ui/react-popover` dist/index.mjs:243) with no name unless one is supplied.
+`web/src/components/ui/Combobox.tsx:68` (the `Popover.Content` this class string belongs to) never
+passed `aria-label`/`aria-labelledby`, so the popover the axe scan actually opened — the "Filter
+issues by program" combobox, confirmed by inspecting the live DOM after the click — announced only
+as an unnamed dialog.
+
+**The mechanism is a shared wrapper, not a one-off.** `Combobox` is consumed by
+`IssuesList.tsx` (program/project/sprint filters), `DocumentListToolbar.tsx` (the sort dropdown —
+itself reused by `/issues`, `/projects`, `/programs`, and `/documents`), `IssueSidebar.tsx`
+(assignee, week pickers), and `WeekSidebar.tsx` (owner picker). Fixing the one component clears the
+unnamed-dialog defect on all of those surfaces. Every existing call site already passes
+`aria-label` (verified: `grep -n "<Combobox" -A 12` across all 5 consumer files), so this is a
+complete fix in practice; the fallback below is defense for any future caller that omits it.
+
+A second, separate `Popover.Content` on the same page — the "Customize columns" picker inline in
+`DocumentListToolbar.tsx:147` — is not the `Combobox` wrapper and had the identical defect
+independently (its own unnamed Radix dialog). It shares the same page and the same missing-name
+mechanism, so it is fixed alongside rather than left as a second unnamed dialog on /issues.
+
+**What changed — A11Y-4.**
+- `web/src/components/ui/Combobox.tsx:69` — `Popover.Content` now gets
+  `aria-label={ariaLabel || placeholder}`, naming the dialog from the caller's label (or, if a
+  future caller omits it, the always-present placeholder text) instead of leaving it unnamed.
+- `web/src/components/DocumentListToolbar.tsx:148` — the column-picker's own `Popover.Content`
+  gets `aria-label="Customize columns"`, matching its trigger button's existing label.
+
+**What was broken — A11Y-8.** The same scan reported a Minor `empty-table-header` violation:
+`<th class="w-10 px-2 py-2" aria-label="Selection"></th>` (same JSON file). The `<th>` already
+carried `aria-label="Selection"` — but axe's `empty-table-header` rule checks only the
+`has-visible-text` alternative (axe-core 4.11.1 `axe.js`: `{ id: 'empty-table-header', any:
+['has-visible-text'] }` — no `aria-label`/`aria-labelledby` fallback, unlike most other
+name-required rules in the same file). That check's evaluator (`hasTextContentEvaluate` →
+`subtree_text_default`) walks the element's rendered subtree text; an `aria-label` attribute never
+populates it. The header needed actual (visually-hidden) text content, not just an ARIA attribute.
+
+**What changed — A11Y-8.** `web/src/components/SelectableList.tsx:134` — the selection column
+`<th>` now wraps a `<span className="sr-only">Select</span>` instead of carrying only
+`aria-label="Selection"`. `sr-only` is the repo's existing visually-hidden utility class (already
+used nearby, in this same file's selection announcer at line ~192).
+
+**Evidence.** Both measured on this branch, same conditions: worktree ports (`.factory-env`,
+API `:3413` / web `:5586`), seeded via `pnpm db:seed` (104 issues), authenticated as
+`dev@ship.local` via a fresh `session_id` obtained through `/api/csrf-token` + `/api/auth/login`,
+axe-core 4.11.1 via `@axe-core/playwright`, Chromium (Playwright 1.57.0's bundled build), scanning
+`/issues` static and after clicking the first `button[aria-haspopup], [aria-expanded]` control
+(the same selector `audit/a11y/axe-scan.mjs` uses for its "issues menu/expanded state"). "Before"
+was measured by copying the three fixed files aside, `git checkout --` reverting them to `HEAD`,
+scanning, then restoring the copies — never `git stash` (this repo's shared-stash hazard, see
+`lessons.md`).
+
+| Measurement — /issues | Before | After |
+|---|---|---|
+| static: all severities | C0 S0 M0 **m1** | C0 S0 M0 **m0** |
+| static: `empty-table-header` | 1 node (`th[aria-label="Selection"]`) | absent |
+| menu open: all severities | C0 **S1** M0 **m1** | C0 S0 M0 m0 |
+| menu open: `aria-dialog-name` | **Serious**, 1 node | absent |
+| menu open: `empty-table-header` | Minor, 1 node | absent |
+
+**Regression tests.**
+- `web/src/components/ui/Combobox.test.tsx` — renders the real `Combobox`, opens the popover, and
+  asserts the `role="dialog"` element has an accessible name (one test with an explicit
+  `aria-label`, one exercising the placeholder fallback). Needed two jsdom environment shims
+  (`ResizeObserver`, `Element.prototype.scrollIntoView`) that `cmdk` requires and jsdom doesn't
+  implement — same class of shim as `EmojiPicker.test.tsx`'s `IntersectionObserver` stub, not a
+  stub of the component under test. Confirmed red first: before the fix, both tests failed with
+  `Error: expect(element).toHaveAccessibleName() — Received: ""` — not an environment error (the
+  shims were already in place at that point) or an import failure.
+- `web/src/components/SelectableList.test.tsx` — renders `SelectableList` with `selectable` and
+  asserts the selection `<th>`'s `textContent` is non-empty, deliberately checking subtree text
+  rather than accessible name so the test fails for the same reason axe's rule does. Confirmed red
+  first: `AssertionError: expected '' not to be ''`.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test -- src/components/ui/Combobox.test.tsx src/components/SelectableList.test.tsx
+pnpm --filter @ship/web exec tsc --noEmit
+```
+
+To re-measure against a browser: start the worktree's API and Vite, log in for a fresh
+`session_id` (via `/api/csrf-token` then `/api/auth/login`), open `/issues`, run an axe scan, then
+click the program-filter (or sort, or column-picker) button and scan again.
+
+**Roll back.** Revert the three `aria-label`/`sr-only` additions (`git revert` the commit on
+`fix/a11y-4-8-issues-page`), or drop them individually — `Combobox.tsx:69`,
+`DocumentListToolbar.tsx:148`, `SelectableList.tsx:134-138`. The regression tests fail immediately
+if any of them come back unnamed/empty.
+
+**Not established.** What a screen reader actually announces for either fix — this closes the axe
+contract violations (a name exists, and discernible text exists), but no human ran VoiceOver
+against either surface. The repo's three Playwright a11y specs were not re-run here (not executed
+by the factory gate; they also only assert `impact === 'critical'`, and both these findings were
+already below that threshold, so they would not have caught either one regardless).
+
+---
+
 ## TRO-208 — [TS-3] The Yjs <-> TipTap converter — the persistence path for every document's content — was fully untyped
 
 `api/src/utils/yjsConverter.ts` carried 12 `any` in 245 lines, the highest any-per-line density of
