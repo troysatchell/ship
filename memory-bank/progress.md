@@ -36,6 +36,46 @@
 
 ## Log
 
+### 2026-07-30 (Thu) late night — Cat 4 db-query formal compare done
+
+Branch `measure/db-query-compare-jul30` @ `a9c482f` (off `main` 34a0aeb, all 6 merged DB fixes
+present — DB-2/API-6, DB-4/API-5, DB-5, DB-6, DB-7/DB-10, DB-8), pushed, no PR (measurement-only,
+same pattern as the already-merged api-perf compare branch). Artifact:
+`audit/db-query/compare-phase2-jul30/`. Worktree `Ship-wt-db_compare`, exclusive db
+`ship_wt_db_compare` on the shared `ship-audit-pg` container, seeded to the exact baseline volume
+(500/20/813, verified by row count). Logging scoped **per-database** (`ALTER DATABASE ... SET
+log_statement`), not `ALTER SYSTEM` — sibling worktrees were running concurrently on the same
+container; verified `ship_dev`'s logging stayed untouched throughout, reverted after.
+
+**Target cleared two independent ways.** (1) `List issues`, one of the 5 required flows: steady
+17→13 queries, −23.5%. (2) The slowest-query route: baseline's #1 slowest statement overall
+(`UPDATE sessions SET last_activity`, max 4.764ms, 121 executions in one capture) drops to max
+0.614ms (−87.1%) and 14 executions in an equivalent capture — DB-2's 60s throttle removing the
+concurrent-write row-lock contention baseline's own EXPLAIN had already isolated as the cause.
+
+**Correction, filed plainly per the provenance rule:** this file's prior entry said "dashboard
+30→6 queries" for Cat 4 — not reproduced by this measurement, and the two flows it conflates are
+different. "Load main page" (`/`) redirects to `/my-week` — confirmed via `git show
+076a183:web/src/main.tsx` that this was **already true at baseline**, not something that changed.
+DB-4's fix lives entirely in `Dashboard.tsx` (`/dashboard`), a separate, non-required flow that
+baseline itself added as a bonus row for exactly this reason. That bonus flow: steady 42→13
+(−69.0%), N+1 flag YES→NO — the real DB-4 evidence, just not on the flow the prior note named.
+"Load main page" itself only gets DB-2's benefit and lands at −19.2%, just under the 20% bar.
+
+**DB-6/DB-7/DB-8 confirmed via EXPLAIN ANALYZE**, current query shapes (not baseline's old SQL
+text, which DB-5/DB-6 changed): weeks-aggregate buffers 1182→750 (−36.5%), two independent
+`Seq Scan`s on `document_associations` replaced by one `LEFT JOIN LATERAL` on an existing index;
+ticket-number lookup `Seq Scan`→`Index Scan` (buffers 66→6); association-batch cardinality
+estimate error 28.3x-under → 1.11x-under (execution −22.8% at baseline's exact 254-id scale,
+though Planning Time got **+143.6% worse** at that unrealistic batch size — cheap at the 20-id
+page size the code actually uses, reported as a genuine trade-off, not smoothed over). DB-5
+confirmed via row width only (−67.3%, 1023→335 bytes) — raw ms did not improve, exactly matching
+how baseline itself framed that fix ("payload evidence, not query-count").
+
+Full test suite (55 api files/662 tests + 49 web files/420 tests) run after all measurements
+captured (it `TRUNCATE`s the worktree db) — all passed. Worktree left clean; servers killed;
+per-database logging reverted and verified.
+
 ### 2026-07-30 (Thu) night — deliverable push: 13 more PRs merged (25 tickets today), Cat 7 banked, measurement pass running
 
 **Merged after the evening entry:** #45 #46 #48 #49 #50 #51 #52 #53 #54 #55 #56 #58 #59 — TS-1/2/3/4,
