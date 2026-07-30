@@ -8,6 +8,89 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-288 — [TEST-15] session-activity-race's "did the burst race" precondition was a scheduling hope, not a guarantee
+
+**Not one of the audit report's 68 baseline findings** — a merge-queue blocker introduced by the
+DB-2/API-6 work (TRO-179/TRO-177, PR #13) that landed on `main` afterward.
+
+**What was broken.** `api/src/middleware/__tests__/session-activity-race.test.ts` fires a burst of
+10 concurrent `authMiddleware()` calls via `Promise.all` and expects all 10 to read the session's
+stale `last_activity` before any of them writes it. On an idle box `Promise.all` starting all 10
+calls in the same synchronous tick is normally enough. It is not a guarantee: this repo's CI job
+runs on a 2-vCPU `ubuntu-latest` runner with Postgres as a co-located service container sharing
+those same 2 vCPUs (`.github/workflows/ci.yml`) — a far more contended environment than a dev
+box — where connection acquisition and query dispatch can serialize enough that a later request's
+SELECT lands after an earlier request's UPDATE has already committed. That request then correctly
+reads the just-refreshed row and correctly skips writing, collapsing `updateStatements` to 1 and
+failing the test's own "did the burst actually race" precondition
+(`session-activity-race.test.ts:216-219`, `toBeGreaterThan(1)`). Because the test lives on `main`,
+the factory gate compared this against the quarantine baseline and reported it as a *new* failure on
+branches that never touch auth — observed blocking PR #29 (failed CI, then passed on a plain re-run
+of the identical commit) and PR #11 (failed CI on this single identity, `newFailures: 1`).
+
+**Correcting the ticket's own framing.** The ticket (and this test's name) describes the fragile
+half as "modifies the session row exactly once." Confirmed directly, not inferred: reproducing the
+non-overlapping case (a throwaway experiment invoking the burst fully sequentially instead of via
+`Promise.all`, deleted before this commit) produced `updateStatements=1, rowsModified=1` —
+the *precondition* check failed while the *exactly-once* check still passed. The exactly-once
+assertion held in every timing pattern tried (fully concurrent, half-staggered, fully sequential);
+Postgres's `WHERE ... AND last_activity < $3` predicate arbitrates correctly regardless of arrival
+order, exactly as DB-2 intended. The fragile half was never "exactly once" — it was "did the burst
+race at all."
+
+**What changed — `api/src/middleware/__tests__/session-activity-race.test.ts` only.** Added
+`createArrivalBarrier()`, installed as a plain property reassignment of `pool.query` *underneath*
+the existing `vi.spyOn` (not through `mockImplementation`, which would collapse `pool.query`'s
+overloaded signature to its last — callback-style — form, the wrong shape for this codebase's
+promise-based calls). Also added two dedicated, database-free unit tests for the barrier helper
+itself (`describe('createArrivalBarrier ...')`) — the release-on-count-reached behavior and the
+passthrough for non-matching SQL — so a regression in the barrier's own logic fails fast rather than
+only showing up as a reintroduced flake in the concurrent-burst test. The barrier holds every
+session-lookup SELECT until all 10 concurrent callers
+have asked to send one, then releases them together.
+
+**Concurrency argument.** While any of the 10 calls is waiting at the barrier, none of them has yet
+sent its SELECT, so none has read anything, so none can have decided a write is due, so no UPDATE
+can exist yet. That makes it structurally impossible for any of the 10 SELECTs to observe anything
+other than the original stale `last_activity` — not "unlikely under contention" but unreachable by
+construction, independent of how slow or reordered the surrounding scheduling is. Validated by
+instrumenting the barrier with an arrival counter and confirming all 10 arrivals fire before release
+(temporary, removed before this commit) — the mechanism engages on the real SQL, it is not a no-op.
+
+No fixed sleep was added or would help — this is a timing-determinism fix, and a sleep only
+narrows a race, it does not close it.
+
+**Not touched:** `api/src/middleware/auth.ts` — the throttle and its `WHERE`-clause predicate are
+correct and unchanged. Verified by temporarily reverting the predicate to the pre-DB-2 unconditional
+`UPDATE sessions SET last_activity = $1 WHERE id = $2` (file copied aside, never `git stash`d, and
+restored — `git diff` against this branch shows zero changes to `auth.ts`): the barriered test goes
+red for the right reason, `AssertionError: expected 10 to be 1`, i.e. all 10 requests now
+deterministically raced and all 10 landed a write against the broken code. Restored immediately
+after.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/session-activity-race.test.ts
+```
+10 consecutive runs passed under deliberate load: 14 CPU-bound busy-loop worker processes (pure
+`Math.sqrt` summation, no I/O) saturating all 14 physical cores of the host (load average
+~40-54 on a 14-core machine), plus 3 concurrent full `pnpm --filter @ship/api test` suite runs
+against a separate scratch database on the shared `ship-audit-pg` container, generating simultaneous
+Postgres contention alongside the CPU load. All scratch load (busy-loop processes, the extra
+database) was torn down after measurement. Standalone (no artificial load) and the full local api
+suite (592/592) also pass. **Not verified**: reproducing the original CI failure directly on this
+14-core dev machine — 20+ standalone/loaded attempts under busy-loop and concurrent-suite load did
+not reproduce a failure against the pre-fix test, consistent with the mechanism needing CI's
+specific 2-vCPU-shared-with-Postgres constraint rather than raw CPU contention on a larger box. The
+fully-sequential white-box experiment (above) is the direct confirmation of the failure mode in lieu
+of that reproduction.
+
+**How to roll it back.** Revert this commit; the prior test file returns with the same
+scheduling-dependent precondition. No production code, migration, or other file changes to undo.
+
+---
+
 ## TRO-240 — [DB-11] The application's database pool negotiated no TLS while migrate and seed did
 
 **What was broken.** Three pools connect to Ship's database with three different SSL policies.
