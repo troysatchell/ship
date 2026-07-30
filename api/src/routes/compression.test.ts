@@ -201,4 +201,29 @@ describe('Compression exclusions (API-3)', () => {
     expect(isCompressionExcluded(undefined, ['application/octet-stream'])).toBe(true)
     expect(isCompressionExcluded(undefined, ['application/json'])).toBe(false)
   })
+
+  // CodeRabbit review on PR #20 (api/src/app.ts:116): the exclusion match was a
+  // substring test over the *whole* Content-Type header, parameters included. A
+  // media type has to be parsed out before `;` and compared by equality —
+  // otherwise a parameter that happens to contain one of the excluded media
+  // type strings decides the outcome instead of the actual media type.
+  describe('a decoy media type inside Content-Type parameters must not decide the match', () => {
+    it('does not exclude a compressible type whose parameters mention octet-stream', () => {
+      expect(
+        isCompressionExcluded(undefined, 'text/plain; note="application/octet-stream"')
+      ).toBe(false)
+    })
+
+    it('does not exclude a compressible type whose parameters mention event-stream', () => {
+      expect(
+        isCompressionExcluded(undefined, 'application/json; note="text/event-stream"')
+      ).toBe(false)
+    })
+
+    it('still excludes a genuine octet-stream media type that also carries parameters', () => {
+      expect(
+        isCompressionExcluded(undefined, 'application/octet-stream; name="file.bin"')
+      ).toBe(true)
+    })
+  })
 })

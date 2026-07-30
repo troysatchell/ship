@@ -142,7 +142,7 @@ without re-compressing it.
 `Content-Encoding` header on a deployed response. The deployed-stack claim above rests on config
 plus documented behaviour only.
 
-**Regression test.** `api/src/routes/compression.test.ts` — 14 cases, in a vitest file the gate
+**Regression test.** `api/src/routes/compression.test.ts` — 17 cases, in a vitest file the gate
 actually executes (an `e2e/*.spec.ts` would satisfy the gate's added-test grep while never running).
 
 Three integration cases over the real app via supertest: `Content-Encoding: gzip` appears on
@@ -151,10 +151,26 @@ Three integration cases over the real app via supertest: `Content-Encoding: gzip
 decoded body is intact, because a `Content-Encoding` header over a corrupted body would otherwise
 read as a pass.
 
-Eleven unit cases over `isCompressionExcluded`, exported from `app.ts` as a test seam: both guarded
-types in four case variants each, the `x-no-compression` opt-out, ordinary compressible types
-(which must fall *through* to mime-db, so over-excluding would lose the whole fix), and absent /
-numeric / array `Content-Type` values.
+Fourteen unit cases over `isCompressionExcluded`, exported from `app.ts` as a test seam: both
+guarded types in four case variants each, the `x-no-compression` opt-out, ordinary compressible
+types (which must fall *through* to mime-db, so over-excluding would lose the whole fix), absent /
+numeric / array `Content-Type` values, and three decoy-parameter cases (below).
+
+**Review fix — media type must be matched by equality, not substring.** CodeRabbit's review of PR
+#20 caught that the exclusion check compared the excluded media types against the **whole**
+`Content-Type` header via `.includes()`, parameters and all. A value like
+`text/plain; note="application/octet-stream"` is genuinely `text/plain` and should compress, but the
+old check saw `application/octet-stream` inside the parameter text and wrongly excluded it —
+matching the parameter, not the media type. Fixed by splitting on the first `;`, trimming, and
+comparing the resulting media type by exact equality (mirrored per-element for array `Content-Type`
+values, since Express can in principle return one). Three new cases cover it: a `text/plain` decoy
+mentioning `application/octet-stream`, an `application/json` decoy mentioning `text/event-stream`,
+and — the mirror case, so the fix isn't just "never exclude anything" — a genuine
+`application/octet-stream` that also carries parameters, which must still be excluded. Confirmed red
+first: against the substring-matching code, the two decoy cases failed with
+`AssertionError: expected true to be false` (the decoy in the parameters was wrongly triggering
+exclusion), while the genuine-octet-stream-with-parameters case already passed — proof the two new
+assertions were exercising the actual bug and not some unrelated setup problem.
 
 One deliberate design choice: the negative case additionally asserts the uncompressed
 `Content-Length` **exceeds** the 1024-byte threshold, with an actionable failure message. If a

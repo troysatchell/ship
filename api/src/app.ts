@@ -108,13 +108,23 @@ export function isCompressionExcluded(
   // `Application/Octet-Stream` are legitimate headers a client or proxy may send.
   // Compare against a normalised value — otherwise a client that declares a
   // mixed-case type chooses whether these guards apply to it.
-  const mediaType = (Array.isArray(contentTypeHeader)
-    ? contentTypeHeader.join(',')
-    : String(contentTypeHeader ?? '')
-  ).toLowerCase();
-  if (mediaType.includes('text/event-stream')) return true;
-  if (mediaType.includes('application/octet-stream')) return true;
-  return false;
+  //
+  // Compare by equality against the media type only, not `includes` on the whole
+  // header: `Content-Type` can carry parameters after a `;` (charset, boundary,
+  // an arbitrary caller-supplied note, ...), and a substring match over the full
+  // header value lets a decoy in the *parameters* decide the outcome — e.g.
+  // `text/plain; note="application/octet-stream"` is real `text/plain` and
+  // should compress, but its parameter text contains the excluded media type
+  // (CodeRabbit review on PR #20, api/src/app.ts:116).
+  const headerValues = Array.isArray(contentTypeHeader)
+    ? contentTypeHeader
+    : [contentTypeHeader];
+  const mediaTypes = headerValues.map((value) =>
+    String(value ?? '').split(';', 1)[0].trim().toLowerCase()
+  );
+  return mediaTypes.some(
+    (mediaType) => mediaType === 'text/event-stream' || mediaType === 'application/octet-stream'
+  );
 }
 
 export function createApp(corsOrigin: string = 'http://localhost:5173'): express.Express {
