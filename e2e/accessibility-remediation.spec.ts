@@ -365,25 +365,41 @@ test.describe('Phase 1: Critical Violations', () => {
 
         // Get the focused element. document.activeElement is only ever null
         // for a document with no body, which cannot happen on a loaded page --
-        // it defaults to document.body, so this always has a real element to
-        // check.
+        // it defaults to document.body, so a null/BODY check alone can't tell
+        // "nothing is focused" from "a real control is focused". Also reject
+        // document.body explicitly, and confirm the element isn't obscured by
+        // checking elementFromPoint() at its center rather than trusting a
+        // non-zero bounding rect alone (a covered element still has one).
         const focused = await page.evaluate(() => {
           const el = document.activeElement as HTMLElement | null
           const tagName = el?.tagName ?? null
           const rect = el?.getBoundingClientRect() ?? null
+          const visible = !!rect && rect.width > 0 && rect.height > 0
+          let unobscured = false
+          if (el && rect && visible) {
+            const centerX = rect.left + rect.width / 2
+            const centerY = rect.top + rect.height / 2
+            const topElement = document.elementFromPoint(centerX, centerY)
+            unobscured = !!topElement && (topElement === el || el.contains(topElement) || topElement.contains(el))
+          }
           return {
             tagName,
-            visible: !!rect && rect.width > 0 && rect.height > 0,
+            visible,
+            unobscured,
           }
         })
 
         expect(
-          focused.tagName,
-          `Tab press ${i + 1}: document.activeElement should be a real element`
+          focused.tagName && focused.tagName !== 'BODY',
+          `Tab press ${i + 1}: a real, non-body element should receive focus`
         ).toBeTruthy()
         expect(
           focused.visible,
           `Tab press ${i + 1}: the focused <${focused.tagName}> should not be hidden by an overlay`
+        ).toBeTruthy()
+        expect(
+          focused.unobscured,
+          `Tab press ${i + 1}: the focused <${focused.tagName}> should not be covered by another element at its center point`
         ).toBeTruthy()
       }
     })
@@ -624,7 +640,30 @@ test.describe('Phase 2: Serious Violations', () => {
         // Check aria-label/aria-labelledby regardless of whether the input has
         // an id -- an id-less input can still be labelled this way, and the
         // previous version of this test skipped id-less inputs entirely.
-        let hasLabel = !!(ariaLabel || ariaLabelledBy)
+        // aria-labelledby only counts if every referenced id resolves to an
+        // existing element with usable text -- a dangling reference (or one
+        // pointing at empty elements) is not a real label.
+        let hasLabel = !!ariaLabel
+        if (!hasLabel && ariaLabelledBy) {
+          const ids = ariaLabelledBy.split(/\s+/).filter(Boolean)
+          let allResolve = ids.length > 0
+          for (const refId of ids) {
+            // Attribute selector rather than `#id` -- this runs in the Node.js
+            // test process, not a browser, so CSS.escape isn't available, and
+            // an attribute-value match avoids needing to escape the id as a
+            // CSS identifier. Check existence via count() (no wait) before
+            // reading text, so a dangling id fails fast instead of waiting out
+            // textContent()'s actionability timeout.
+            const referenced = page.locator(`[id="${refId}"]`)
+            const exists = (await referenced.count()) > 0
+            const text = exists ? (await referenced.first().textContent())?.trim() : null
+            if (!text) {
+              allResolve = false
+              break
+            }
+          }
+          hasLabel = allResolve
+        }
         if (id && !hasLabel) {
           const label = page.locator(`label[for="${id}"]`)
           hasLabel = (await label.count()) > 0
@@ -632,7 +671,7 @@ test.describe('Phase 2: Serious Violations', () => {
 
         expect(
           hasLabel,
-          `input ${i} (id="${id ?? 'none'}") should have a <label for>, aria-label, or aria-labelledby`
+          `input ${i} (id="${id ?? 'none'}") should have a <label for>, aria-label, or an aria-labelledby that resolves to real text`
         ).toBeTruthy()
       }
     })
@@ -1350,10 +1389,13 @@ test.describe('Phase 3: Moderate Violations', () => {
       await tooltipTrigger.hover()
       await expect(tooltipOnHover, 'Hovering the tooltip trigger should show a role="tooltip" element').toBeVisible({ timeout: 3000 })
 
-      // Move the mouse away, then focus via the keyboard instead of hovering.
-      // The actual claim under test: the same tooltip that hover reveals must
-      // ALSO be revealed by focus, not just by a mouse pointer.
+      // Move the mouse away and wait for the hover tooltip to actually close
+      // before focusing -- otherwise the final assertion could pass merely
+      // because the hover tooltip never closed, without focus having caused
+      // anything. The actual claim under test: the same tooltip that hover
+      // reveals must ALSO be revealed by focus, not just by a mouse pointer.
       await page.mouse.move(0, 0)
+      await expect(tooltipOnHover, 'Moving the mouse away should hide the hover tooltip').toBeHidden({ timeout: 3000 })
       await tooltipTrigger.focus()
       await expect(tooltipOnHover, 'The same tooltip must also appear when the trigger receives keyboard focus').toBeVisible({ timeout: 3000 })
     })
@@ -1420,14 +1462,13 @@ test.describe('Phase 3: Moderate Violations', () => {
       const mainContent = page.locator('main, [role="main"], #main-content, .main-content')
       await expect(mainContent.first(), 'Every document editor page should render a main content landmark (4-panel layout)').toBeVisible({ timeout: 5000 })
 
-      // Test portrait-like viewport (narrow)
+      // Test portrait-like viewport (narrow). toBeVisible() already retries
+      // after the resize, so a fixed delay here only adds latency.
       await page.setViewportSize({ width: 375, height: 812 })
-      await page.waitForTimeout(200)
       await expect(mainContent.first(), 'Main content should remain visible in a portrait viewport').toBeVisible()
 
       // Test landscape-like viewport (wide)
       await page.setViewportSize({ width: 1024, height: 768 })
-      await page.waitForTimeout(200)
       await expect(mainContent.first(), 'Main content should remain visible in a landscape viewport').toBeVisible()
 
       // Content should NOT require specific orientation
