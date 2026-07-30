@@ -119,9 +119,13 @@ export function isCompressionExcluded(
   const headerValues = Array.isArray(contentTypeHeader)
     ? contentTypeHeader
     : [contentTypeHeader];
-  const mediaTypes = headerValues.map((value) =>
-    String(value ?? '').split(';', 1)[0].trim().toLowerCase()
-  );
+  const mediaTypes = headerValues.map((value) => {
+    // Destructure with a default rather than indexing `[0]` directly: under
+    // `noUncheckedIndexedAccess`, TS types a plain index as possibly `undefined`
+    // even though `split` always returns at least one element.
+    const [mediaType = ''] = String(value ?? '').split(';', 1);
+    return mediaType.trim().toLowerCase();
+  });
   return mediaTypes.some(
     (mediaType) => mediaType === 'text/event-stream' || mediaType === 'application/octet-stream'
   );
