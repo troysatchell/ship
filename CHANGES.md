@@ -634,6 +634,101 @@ they scanned the focused-editor state — they scan static viewports only).
 
 ---
 
+## TRO-207 (TS-2) — the database-to-HTTP response path is no longer implicitly `any`
+
+`@types/pg`'s `query()` defaults its row generic to `any`, and in `api/src` production code
+essentially no call site supplied it — so every `.rows` access was implicitly `any` all the way
+into the HTTP response. A column rename or a `properties->>'x'` typo would produce `undefined` in a
+live API response with zero compile-time signal anywhere in the chain. The only translation layer
+between raw rows and the JSON contract the frontend consumes was seven hand-written mappers, all
+declared `(row: any)`.
+
+**Verified before touching anything:** the audit's "seven `(row: any)` mappers" claim was accurate
+for six; `issues.ts`'s `extractIssueFromRow` had already been typed by an earlier ticket. That fix
+was structurally inert, though — none of that file's ~59 `pool.query()` call sites supplied a
+generic, so an `any`-typed row satisfied the mapper's typed parameter silently at every call site
+(assigning `any` to a typed parameter is always allowed). The real gap wasn't the mapper signature,
+it was the query call sites feeding it.
+
+**What changed** — `api/src/routes/{feedback,programs,projects,issues,weeks}.ts`:
+
+- All seven mappers now take a real row interface instead of `any`: `extractProjectFromRow` /
+  `extractSprintFromRow` (`projects.ts`), `extractIssueFromRow` (`issues.ts`, parameter now actually
+  enforced), `extractProgramFromRow` (`programs.ts`), `extractFeedbackFromRow` (`feedback.ts`),
+  `extractSprintFromRow` / `formatStandupResponse` (`weeks.ts`).
+- `pool.query<Row>(...)` / `client.query<Row>(...)` added across the five files: **154 call sites**
+  newly typed (1 was already typed, in `issues.ts`; 155 of 225 call sites in these files now carry
+  an explicit generic). The remaining 70 are bare DML (`INSERT`/`UPDATE`/`DELETE` with no
+  `RETURNING`) or transaction control (`BEGIN`/`COMMIT`/`ROLLBACK`) where no `.rows` field is ever
+  read downstream — typing the generic there would add nothing, since `.rowCount`'s type doesn't
+  depend on it.
+- Row interfaces are local to each file (or reuse `api/src/routes/rowTypes.ts`, new — a small shared
+  `DocumentRow` plus `document_type`-narrowed variants whose `properties` field is typed against the
+  matching `@ship/shared` type: `ProjectProperties`, `IssueProperties`, `ProgramProperties`,
+  `WeekProperties`). Verified against `api/src/db/schema.sql` and each query's actual `SELECT` list,
+  not guessed. Two facts checked empirically against this project's own Postgres rather than
+  assumed: `DATE`/`TIMESTAMP`/`TIMESTAMPTZ` columns come back as real JS `Date` objects, and
+  `COUNT(*)`/`SUM(...)` aggregates come back as `string` (bigint/numeric are stringified to avoid
+  precision loss) — both now modeled honestly instead of falling through `any`.
+- Downstream callbacks fixed: the `.filter((i: any) => ...)` issue-rollup blocks in `projects.ts` —
+  **6 sites, not the audit's stated 4** (two identical three-filter blocks, verified by re-counting
+  rather than trusting the cited number), plus a 7th, untagged occurrence of the same defect
+  (`!['done','cancelled'].includes(i.state)` with no `any` annotation at all, inside
+  `generatePrefilledRetroContent`) found and fixed in the same pass. Two more `.filter((i: any) =>
+  ...)` in `weeks.ts`'s `/my-week` grouping, plus several `values: any[]` / `params: any[]`
+  query-parameter arrays across all five files, now typed to their real unions.
+- A handful of `: any` in TipTap-content-building helpers (`generatePrefilledRetroContent` in
+  `projects.ts`, `generatePrefilledReviewContent` in `weeks.ts`) were deliberately left — modeling
+  TipTap's node structure is finding TS-3, out of this ticket's scope.
+
+**Two narrow, behavior-preserving side effects of typing honestly, not scope creep:**
+
+- Several `row.x === true || row.x === 't'` defensive checks (`has_plan`, `has_retro` in
+  `programs.ts`/`weeks.ts`) simplified to `row.x`: once the column is honestly typed `boolean` (SQL
+  `CASE WHEN...THEN true ELSE false END` / `COUNT(*) > 0` always return a real JS boolean, never the
+  string `'t'`), the `'t'` branch is a compile error (no overlap between `boolean` and a string
+  literal) — verified unreachable, not just assumed.
+- Two new `client.query('ROLLBACK')` calls in `issues.ts`'s `POST /` (paired with `noUncheckedIndexedAccess`
+  guards on `ticketResult`/`createdRow`, which could not previously be written as `!` under G7b).
+  Before this fix, an undefined row here would throw and be caught by the route's own `catch`
+  block, which already calls `ROLLBACK` and releases the client — so the observable behavior
+  (500 response, rolled-back transaction, released connection) is identical; the path is just
+  explicit now instead of relying on an uncaught-property-read exception.
+
+**Remainder — explicitly out of scope, for a follow-up ticket:** ~559 bare `pool.query(`/
+`client.query(` call sites remain untyped elsewhere in `api/src` (down from ~710), covering routes
+outside `projects`/`issues`/`programs`/`weeks`/`feedback` (e.g. `workspaces.ts`, `documents.ts`,
+`team.ts`, `dashboard.ts`, `standups.ts`, `admin.ts`, `weekly-plans.ts`, `claude.ts`). None were
+touched here per the orchestrator's scope decision.
+
+**How to run it.** `pnpm --filter @ship/api exec tsc --noEmit -p tsconfig.json` (or `pnpm
+type-check`) and `pnpm --filter @ship/api test`.
+
+**Measurement (cheap tier — `type-safety-audit`'s counting method, BSD grep, same patterns as
+`audit/type-safety/baseline.md`):**
+
+| Metric | Before | After |
+|---|---|---|
+| `(row\|r): any` mapper signatures | 6 (of 7 — 1 already fixed but inert) | **0** |
+| Typed `pool/client.query<...>` call sites, 5 touched files | 1 | **155** (of 225) |
+| `pool/client/db.query(` untyped, whole `api/src` prod | 710 | 559 |
+| `pool/client/db.query<` typed, whole `api/src` prod | 3 | 157 (158 raw — 1 is the grep matching the phrase "`pool.query<T>(...)`" inside `rowTypes.ts`'s own doc comment, not code) |
+| `.rows` accesses, whole `api/src` prod | 771 | 711 |
+| `explicit_any` (`count.sh`), whole `api` package | 76 | **55** |
+| `as_any`, whole `api` package | 128 | 128 (unchanged — none added, none removed) |
+| non-null assertions (tracked pattern), whole `api` package | 42 | 42 (unchanged — none added) |
+
+`as_assertions` moved 1059 → 1086 (+27); verified by grepping the diff's added lines that every one
+of those is inside a comment/docstring or an `AS <alias>` SQL clause quoted in a comment (e.g. "COUNT(*)
+subqueries — node-postgres returns bigint aggregates **as** strings"), not a real type assertion —
+consistent with the baseline's own documented ~15-20% over-count on this pattern.
+
+**Rollback.** Revert the five route files and delete `api/src/routes/rowTypes.ts` and
+`api/src/routes/rowTypes.test.ts`. No schema or migration changes; no behavior changes beyond the
+two narrow cases documented above.
+
+---
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write

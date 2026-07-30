@@ -1,4 +1,5 @@
 import { Router, Request, Response } from 'express';
+import type { QueryResult } from 'pg';
 import { pool } from '../db/client.js';
 import { z } from 'zod';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
@@ -107,6 +108,13 @@ type IssueRowProperties = {
   is_system_generated?: boolean;
   accountability_target_id?: string | null;
   accountability_type?: string | null;
+  // Not read by the extractors below, but written back into `properties` by
+  // PATCH /:id (claude_metadata: Claude Code attribution; carryover_from_sprint_id:
+  // set when an issue moves out of a completed sprint). Declared here — rather
+  // than left for `newProps` to fall back to `any` — now that the PATCH route's
+  // pre-update row is typed against this interface (TS-2 / TRO-207).
+  claude_metadata?: Record<string, unknown>;
+  carryover_from_sprint_id?: string | null;
 };
 
 /**
@@ -149,6 +157,127 @@ type IssueListRow = {
 type IssueDetailRow = IssueListRow & {
   content: Record<string, unknown> | null;
 };
+
+// --- Additional per-query row shapes (TS-2 / TRO-207) -----------------------
+// IssueListRow/IssueDetailRow cover the list/detail projections above. These
+// describe every other `pool.query`/`client.query` call site in this file whose
+// projection differs, verified against the SQL text and schema.sql — not guessed.
+
+/** `by-ticket/:number` and `GET /:id` also select the redirect-on-convert column,
+ * which the list/detail projections above don't need. */
+type IssueDetailWithConversionRow = IssueDetailRow & {
+  converted_to_id: string | null;
+};
+
+/** `SELECT id FROM documents ...` existence/lookup checks used throughout this file. */
+interface IdOnlyRow {
+  id: string;
+}
+
+/** `SELECT id, title FROM documents ...` (issue existence check before logging an iteration). */
+interface IdTitleRow {
+  id: string;
+  title: string;
+}
+
+/** Redirect target lookup after following `converted_to_id`. */
+interface ConvertedDocRow {
+  id: string;
+  document_type: string;
+}
+
+/** GET /action-items — computed/aliased scalar columns, not the whole `properties` object. */
+interface ActionItemRow {
+  id: string;
+  title: string;
+  state: string | null;
+  priority: string | null;
+  ticket_number: number | null;
+  due_date: string | null;
+  is_system_generated: boolean | null;
+  accountability_type: string | null;
+  accountability_target_id: string | null;
+  target_title: string | null;
+}
+
+/** `SELECT COALESCE(MAX(ticket_number), 0) + 1 as next_number ...` — ticket_number is
+ * an INTEGER (int4) column, so node-postgres parses this back as a JS number,
+ * unlike the bigint COUNT(*)/SUM(...) aggregates below. */
+interface NextTicketNumberRow {
+  next_number: number;
+}
+
+/** `SELECT COUNT(*) as count ...` — bigint aggregate, comes back as a string. */
+interface CountRow {
+  count: string;
+}
+
+/** PATCH /:id — the pre-update row this route reads title/properties from. */
+type IssueTitlePropertiesRow = Pick<IssueListRow, 'id' | 'title' | 'properties'>;
+
+/** PATCH /:id — incomplete-children check when closing a parent issue. */
+interface ChildStateRow {
+  id: string;
+  title: string;
+  ticket_number: number | null;
+  state: string | null;
+}
+
+/** PATCH /:id — sprint-carryover check: the old sprint's number plus the
+ * workspace's sprint_start_date (DATE column — a real JS Date, not a string). */
+interface OldSprintRow {
+  sprint_number: string | null;
+  sprint_start_date: Date;
+}
+
+/** DELETE /:id, POST /:id/accept, POST /:id/reject — id + properties only. */
+type IdPropertiesRow = Pick<IssueListRow, 'id' | 'properties'>;
+
+/** POST /bulk — archive/delete/restore/update all `RETURNING *` and also read
+ * archived_at/deleted_at back out, which aren't part of the list/detail projection. */
+type BulkIssueRow = IssueDetailRow & {
+  archived_at: Date | null;
+  deleted_at: Date | null;
+};
+
+/** `issue_iterations` row (schema.sql) returned by `RETURNING *` / `i.*`. */
+interface IssueIterationRow {
+  id: string;
+  issue_id: string;
+  workspace_id: string;
+  status: 'pass' | 'fail' | 'in_progress';
+  what_attempted: string | null;
+  blockers_encountered: string | null;
+  author_id: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** GET /:id/iterations — iteration row joined to its author. */
+interface IssueIterationWithAuthorRow extends IssueIterationRow {
+  author_name: string;
+  author_email: string;
+}
+
+/** `SELECT id, name, email FROM users WHERE id = $1` — iteration author lookup. */
+interface UserBasicRow {
+  id: string;
+  name: string;
+  email: string;
+}
+
+/** GET /:id/history — document_history joined to the user who made the change.
+ * document_history.id is SERIAL (int4), not a UUID — see schema.sql. */
+interface DocumentHistoryRow {
+  id: number;
+  field: string;
+  old_value: string | null;
+  new_value: string | null;
+  created_at: Date;
+  automated_by: string | null;
+  changed_by_id: string | null;
+  changed_by_name: string | null;
+}
 
 // Helper to extract the fields shared by the list and detail issue projections.
 // The TipTap document body is NOT included here: measured on 254 issues it is
@@ -362,7 +491,7 @@ router.get('/action-items', authMiddleware, async (req: Request, res: Response) 
     const workspaceId = req.workspaceId!;
 
     // Get person document ID for the user
-    const personResult = await pool.query(
+    const personResult = await pool.query<IdOnlyRow>(
       `SELECT id FROM documents
        WHERE workspace_id = $1 AND document_type = 'person'
          AND properties->>'user_id' = $2`,
@@ -371,7 +500,7 @@ router.get('/action-items', authMiddleware, async (req: Request, res: Response) 
     const personDocId = personResult.rows[0]?.id;
 
     // Get action items: issues with source='action_items' assigned to current user, not done
-    const result = await pool.query(
+    const result = await pool.query<ActionItemRow>(
       `SELECT
          d.id,
          d.title,
@@ -460,7 +589,7 @@ router.get('/by-ticket/:number', authMiddleware, async (req: Request, res: Respo
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
-    const result = await pool.query(
+    const result = await pool.query<IssueDetailWithConversionRow>(
       `SELECT d.id, d.title, d.properties, d.ticket_number,
               d.content,
               d.created_at, d.updated_at, d.created_by,
@@ -480,23 +609,22 @@ router.get('/by-ticket/:number', authMiddleware, async (req: Request, res: Respo
       [ticketNumber, workspaceId, userId, isAdmin]
     );
 
-    if (result.rows.length === 0) {
+    const row = result.rows[0];
+    if (!row) {
       res.status(404).json({ error: 'Issue not found' });
       return;
     }
 
-    const row = result.rows[0];
-
     // Check if issue was converted - redirect to new document
     if (row.converted_to_id) {
       // Fetch the new document to determine its type for proper routing
-      const newDocResult = await pool.query(
+      const newDocResult = await pool.query<ConvertedDocRow>(
         'SELECT id, document_type FROM documents WHERE id = $1 AND workspace_id = $2',
         [row.converted_to_id, workspaceId]
       );
 
-      if (newDocResult.rows.length > 0) {
-        const newDoc = newDocResult.rows[0];
+      const newDoc = newDocResult.rows[0];
+      if (newDoc) {
         // Return 301 with Location header to the new document's API endpoint
         res.set('X-Converted-Type', newDoc.document_type);
         res.set('X-Converted-To', newDoc.id);
@@ -529,7 +657,7 @@ router.get('/:id/children', authMiddleware, async (req: Request, res: Response) 
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify parent issue exists and user can access it
-    const parentCheck = await pool.query(
+    const parentCheck = await pool.query<IdOnlyRow>(
       `SELECT id FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'issue'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -543,7 +671,7 @@ router.get('/:id/children', authMiddleware, async (req: Request, res: Response) 
 
     // Query junction table for sub-issues
     // Sub-issues have document_id pointing to this issue's id via relationship_type='parent'
-    const result = await pool.query(
+    const result = await pool.query<IssueDetailRow>(
       `SELECT d.id, d.title, d.properties, d.ticket_number,
               d.content,
               d.created_at, d.updated_at, d.created_by,
@@ -606,7 +734,7 @@ router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
-    const result = await pool.query(
+    const result = await pool.query<IssueDetailWithConversionRow>(
       `SELECT d.id, d.title, d.properties, d.ticket_number,
               d.content,
               d.created_at, d.updated_at, d.created_by,
@@ -626,23 +754,22 @@ router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (result.rows.length === 0) {
+    const row = result.rows[0];
+    if (!row) {
       res.status(404).json({ error: 'Issue not found' });
       return;
     }
 
-    const row = result.rows[0];
-
     // Check if issue was converted - redirect to new document
     if (row.converted_to_id) {
       // Fetch the new document to determine its type for proper routing
-      const newDocResult = await pool.query(
+      const newDocResult = await pool.query<ConvertedDocRow>(
         'SELECT id, document_type FROM documents WHERE id = $1 AND workspace_id = $2',
         [row.converted_to_id, workspaceId]
       );
 
-      if (newDocResult.rows.length > 0) {
-        const newDoc = newDocResult.rows[0];
+      const newDoc = newDocResult.rows[0];
+      if (newDoc) {
         // Return 301 with Location header to the new document's API endpoint
         // Include X-Converted-Type header so frontend knows the target type for routing
         res.set('X-Converted-Type', newDoc.document_type);
@@ -699,13 +826,19 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     await client.query('SELECT pg_advisory_xact_lock($1)', [lockKey]);
 
     // Now safely get next ticket number - we hold the lock until transaction ends
-    const ticketResult = await client.query(
+    const ticketResult = await client.query<NextTicketNumberRow>(
       `SELECT COALESCE(MAX(ticket_number), 0) + 1 as next_number
        FROM documents
        WHERE workspace_id = $1 AND document_type = 'issue'`,
       [req.workspaceId]
     );
-    const ticketNumber = ticketResult.rows[0].next_number;
+    const ticketRow = ticketResult.rows[0];
+    if (!ticketRow) {
+      await client.query('ROLLBACK');
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
+    const ticketNumber = ticketRow.next_number;
 
     // Build properties JSONB
     const properties = {
@@ -721,14 +854,20 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
       accountability_type: accountability_type || null,
     };
 
-    const result = await client.query(
+    const result = await client.query<IssueDetailRow>(
       `INSERT INTO documents (workspace_id, document_type, title, properties, ticket_number, created_by)
        VALUES ($1, 'issue', $2, $3, $4, $5)
        RETURNING *`,
       [req.workspaceId, title, JSON.stringify(properties), ticketNumber, req.userId]
     );
 
-    const newIssueId = result.rows[0].id;
+    const createdRow = result.rows[0];
+    if (!createdRow) {
+      await client.query('ROLLBACK');
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
+    const newIssueId = createdRow.id;
 
     // Create associations from belongs_to array
     for (const assoc of belongs_to) {
@@ -746,12 +885,12 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     const sprintAssociations = belongs_to.filter(bt => bt.type === 'sprint');
     for (const sprintAssoc of sprintAssociations) {
       // Check if this is the first issue in the sprint
-      const issueCountResult = await pool.query(
+      const issueCountResult = await pool.query<CountRow>(
         `SELECT COUNT(*) as count FROM document_associations
          WHERE related_id = $1 AND relationship_type = 'sprint'`,
         [sprintAssoc.id]
       );
-      const issueCount = parseInt(issueCountResult.rows[0].count, 10);
+      const issueCount = parseInt(issueCountResult.rows[0]?.count ?? '0', 10);
 
       // Broadcast celebration when first issue is added to sprint
       if (issueCount === 1) {
@@ -762,8 +901,7 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     // Get the belongs_to associations with display info
     const belongsToResult = await getBelongsToAssociations(newIssueId);
 
-    const row = result.rows[0];
-    const issue = extractIssueFromRow(row);
+    const issue = extractIssueFromRow(createdRow);
     res.status(201).json({
       ...issue,
       display_id: `#${ticketNumber}`,
@@ -796,7 +934,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Get full existing issue for history tracking (with visibility check)
-    const existing = await client.query(
+    const existing = await client.query<IssueTitlePropertiesRow>(
       `SELECT id, title, properties
        FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'issue'
@@ -804,15 +942,15 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (existing.rows.length === 0) {
+    const existingIssue = existing.rows[0];
+    if (!existingIssue) {
       res.status(404).json({ error: 'Issue not found' });
       return;
     }
 
-    const existingIssue = existing.rows[0];
     const currentProps = existingIssue.properties || {};
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: string[] = [];
     let paramIndex = 1;
 
     const data = parsed.data;
@@ -835,7 +973,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
 
     if (isClosingIssue && wasNotClosed) {
       // Check if this issue has any children via junction table
-      const childrenResult = await client.query(
+      const childrenResult = await client.query<ChildStateRow>(
         `SELECT d.id, d.title, d.ticket_number, d.properties->>'state' as state
          FROM documents d
          JOIN document_associations da ON da.document_id = d.id
@@ -959,7 +1097,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
 
         if (oldSprintAssoc && newSprintAssoc && oldSprintAssoc.id !== newSprintAssoc.id && currentProps.state !== 'done') {
           // Check if the old sprint is completed (based on end date)
-          const oldSprintResult = await client.query(
+          const oldSprintResult = await client.query<OldSprintRow>(
             `SELECT properties->>'sprint_number' as sprint_number, w.sprint_start_date
              FROM documents d
              JOIN workspaces w ON d.workspace_id = w.id
@@ -967,9 +1105,12 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
             [oldSprintAssoc.id]
           );
 
-          if (oldSprintResult.rows[0]) {
-            const sprintNumber = parseInt(oldSprintResult.rows[0].sprint_number, 10);
-            const rawStartDate = oldSprintResult.rows[0].sprint_start_date;
+          const oldSprintRow = oldSprintResult.rows[0];
+          if (oldSprintRow) {
+            // String(...) reproduces the same implicit ToString coercion parseInt
+            // already applied when this value was untyped (and could be null).
+            const sprintNumber = parseInt(String(oldSprintRow.sprint_number), 10);
+            const rawStartDate = oldSprintRow.sprint_start_date;
             const sprintDuration = 7; // 1-week sprints
 
             let startDate: Date;
@@ -1060,7 +1201,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     }
 
     // Fetch the updated issue
-    const result = await client.query(
+    const result = await client.query<IssueDetailRow>(
       `SELECT * FROM documents WHERE id = $1 AND workspace_id = $2`,
       [id, req.workspaceId]
     );
@@ -1076,12 +1217,12 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
       const addedSprintIds = newSprintIds.filter(sprintId => !oldSprintIds.includes(sprintId));
 
       for (const sprintId of addedSprintIds) {
-        const issueCountResult = await pool.query(
+        const issueCountResult = await pool.query<CountRow>(
           `SELECT COUNT(*) as count FROM document_associations
            WHERE related_id = $1 AND relationship_type = 'sprint'`,
           [sprintId]
         );
-        const issueCount = parseInt(issueCountResult.rows[0].count, 10);
+        const issueCount = parseInt(issueCountResult.rows[0]?.count ?? '0', 10);
 
         if (issueCount === 1) {
           broadcastToUser(req.userId!, 'accountability:updated', { type: 'week_issues', targetId: sprintId });
@@ -1089,7 +1230,15 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
       }
     }
 
+    // The row is always present here: this SELECT re-reads the same document we
+    // just verified exists and updated within the transaction above. Guarded
+    // rather than `!`-asserted per noUncheckedIndexedAccess, and to keep this a
+    // 500 (an invariant violation) instead of a silent crash.
     const row = result.rows[0];
+    if (!row) {
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
     const displayId = `#${row.ticket_number}`;
 
     const issue = extractIssueFromRow(row);
@@ -1100,7 +1249,13 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
       const props = row.properties || {};
       if (props.source === 'action_items') {
         const assigneeId = props.assignee_id || req.userId;
-        broadcastToUser(assigneeId, 'accountability:updated', { issueId: id, state: data.state });
+        // assigneeId is `string | undefined` now that props.assignee_id has a real
+        // type (previously this was `any` and could reach broadcastToUser as
+        // `undefined` silently). authMiddleware guarantees req.userId on every
+        // authenticated request, so this is always defined in practice.
+        if (assigneeId) {
+          broadcastToUser(assigneeId, 'accountability:updated', { issueId: id, state: data.state });
+        }
       }
     }
 
@@ -1125,7 +1280,7 @@ router.get('/:id/history', authMiddleware, async (req: Request, res: Response) =
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify issue exists and user can access it
-    const issueCheck = await pool.query(
+    const issueCheck = await pool.query<IdOnlyRow>(
       `SELECT id FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'issue'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -1137,7 +1292,7 @@ router.get('/:id/history', authMiddleware, async (req: Request, res: Response) =
       return;
     }
 
-    const result = await pool.query(
+    const result = await pool.query<DocumentHistoryRow>(
       `SELECT h.id, h.field, h.old_value, h.new_value, h.created_at, h.automated_by,
               u.id as changed_by_id, u.name as changed_by_name
        FROM document_history h
@@ -1193,7 +1348,7 @@ router.post('/:id/history', authMiddleware, async (req: Request, res: Response) 
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify issue exists and user can access it
-    const issueCheck = await pool.query(
+    const issueCheck = await pool.query<IdOnlyRow>(
       `SELECT id FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'issue'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -1252,7 +1407,7 @@ router.post('/bulk', authMiddleware, async (req: Request, res: Response) => {
     await client.query('BEGIN');
 
     // Verify all issues exist and user has access
-    const accessCheck = await client.query(
+    const accessCheck = await client.query<IdOnlyRow>(
       `SELECT id FROM documents
        WHERE id = ANY($1) AND workspace_id = $2 AND document_type = 'issue'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -1276,11 +1431,11 @@ router.post('/bulk', authMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
-    let result;
+    let result: QueryResult<BulkIssueRow>;
 
     switch (action) {
       case 'archive':
-        result = await client.query(
+        result = await client.query<BulkIssueRow>(
           `UPDATE documents SET archived_at = NOW(), updated_at = NOW()
            WHERE id = ANY($1) AND workspace_id = $2
            RETURNING *`,
@@ -1289,7 +1444,7 @@ router.post('/bulk', authMiddleware, async (req: Request, res: Response) => {
         break;
 
       case 'delete':
-        result = await client.query(
+        result = await client.query<BulkIssueRow>(
           `UPDATE documents SET deleted_at = NOW(), updated_at = NOW()
            WHERE id = ANY($1) AND workspace_id = $2
            RETURNING *`,
@@ -1298,7 +1453,7 @@ router.post('/bulk', authMiddleware, async (req: Request, res: Response) => {
         break;
 
       case 'restore':
-        result = await client.query(
+        result = await client.query<BulkIssueRow>(
           `UPDATE documents SET archived_at = NULL, deleted_at = NULL, updated_at = NOW()
            WHERE id = ANY($1) AND workspace_id = $2
            RETURNING *`,
@@ -1314,7 +1469,7 @@ router.post('/bulk', authMiddleware, async (req: Request, res: Response) => {
         }
 
         const setClauses: string[] = ['updated_at = NOW()'];
-        const values: any[] = [validIds, workspaceId];
+        const values: (string | string[])[] = [validIds, workspaceId];
         let paramIdx = 3;
 
         if (updates.state !== undefined) {
@@ -1333,7 +1488,7 @@ router.post('/bulk', authMiddleware, async (req: Request, res: Response) => {
           paramIdx++;
         }
 
-        result = await client.query(
+        result = await client.query<BulkIssueRow>(
           `UPDATE documents SET ${setClauses.join(', ')}
            WHERE id = ANY($1) AND workspace_id = $2
            RETURNING *`,
@@ -1352,7 +1507,7 @@ router.post('/bulk', authMiddleware, async (req: Request, res: Response) => {
           // Add new project associations if project_id is not null
           if (updates.project_id !== null) {
             // Verify the project exists and user has access
-            const projectCheck = await client.query(
+            const projectCheck = await client.query<IdOnlyRow>(
               `SELECT id FROM documents
                WHERE id = $1 AND workspace_id = $2 AND document_type = 'project'
                  AND deleted_at IS NULL`,
@@ -1384,7 +1539,7 @@ router.post('/bulk', authMiddleware, async (req: Request, res: Response) => {
           // Add new sprint associations if sprint_id is not null
           if (updates.sprint_id !== null) {
             // Verify the sprint exists and user has access
-            const sprintCheck = await client.query(
+            const sprintCheck = await client.query<IdOnlyRow>(
               `SELECT id FROM documents
                WHERE id = $1 AND workspace_id = $2 AND document_type = 'sprint'
                  AND deleted_at IS NULL`,
@@ -1446,19 +1601,20 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // First verify user can access the issue and check if system-generated
-    const accessCheck = await pool.query(
+    const accessCheck = await pool.query<IdPropertiesRow>(
       `SELECT id, properties FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'issue'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (accessCheck.rows.length === 0) {
+    const accessRow = accessCheck.rows[0];
+    if (!accessRow) {
       res.status(404).json({ error: 'Issue not found' });
       return;
     }
 
-    const props = accessCheck.rows[0].properties || {};
+    const props = accessRow.properties || {};
 
     // Block deletion of system-generated accountability issues
     if (props.is_system_generated) {
@@ -1493,19 +1649,20 @@ router.post('/:id/accept', authMiddleware, async (req: Request, res: Response) =
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Get the issue
-    const existing = await pool.query(
+    const existing = await pool.query<IdPropertiesRow>(
       `SELECT id, properties FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'issue'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (existing.rows.length === 0) {
+    const existingRow = existing.rows[0];
+    if (!existingRow) {
       res.status(404).json({ error: 'Issue not found' });
       return;
     }
 
-    const props = existing.rows[0].properties || {};
+    const props = existingRow.properties || {};
 
     // Verify the issue is in triage state
     if (props.state !== 'triage') {
@@ -1515,7 +1672,7 @@ router.post('/:id/accept', authMiddleware, async (req: Request, res: Response) =
 
     // Update state to backlog
     const newProps = { ...props, state: 'backlog' };
-    const result = await pool.query(
+    const result = await pool.query<IssueDetailRow>(
       `UPDATE documents
        SET properties = $3, updated_at = now()
        WHERE id = $1 AND workspace_id = $2
@@ -1526,7 +1683,12 @@ router.post('/:id/accept', authMiddleware, async (req: Request, res: Response) =
     // Log the state change
     await logDocumentChange(id!, 'state', 'triage', 'backlog', req.userId!);
 
-    const issue = extractIssueFromRow(result.rows[0]);
+    const updatedRow = result.rows[0];
+    if (!updatedRow) {
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
+    const issue = extractIssueFromRow(updatedRow);
     res.json({ ...issue, display_id: `#${issue.ticket_number}` });
   } catch (err) {
     console.error('Accept issue error:', err);
@@ -1565,7 +1727,7 @@ router.post('/:id/iterations', authMiddleware, async (req: Request, res: Respons
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify issue exists and user can access it
-    const issueCheck = await pool.query(
+    const issueCheck = await pool.query<IdTitleRow>(
       `SELECT id, title FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'issue'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -1579,7 +1741,7 @@ router.post('/:id/iterations', authMiddleware, async (req: Request, res: Respons
 
     const { status, what_attempted, blockers_encountered } = parsed.data;
 
-    const result = await pool.query(
+    const result = await pool.query<IssueIterationRow>(
       `INSERT INTO issue_iterations
        (issue_id, workspace_id, status, what_attempted, blockers_encountered, author_id)
        VALUES ($1, $2, $3, $4, $5, $6)
@@ -1588,13 +1750,17 @@ router.post('/:id/iterations', authMiddleware, async (req: Request, res: Respons
     );
 
     // Get author info
-    const authorResult = await pool.query(
+    const authorResult = await pool.query<UserBasicRow>(
       'SELECT id, name, email FROM users WHERE id = $1',
       [userId]
     );
 
     const iteration = result.rows[0];
     const author = authorResult.rows[0];
+    if (!iteration || !author) {
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
 
     res.status(201).json({
       id: iteration.id,
@@ -1631,7 +1797,7 @@ router.get('/:id/iterations', authMiddleware, async (req: Request, res: Response
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify issue exists and user can access it
-    const issueCheck = await pool.query(
+    const issueCheck = await pool.query<IdOnlyRow>(
       `SELECT id FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'issue'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -1662,7 +1828,7 @@ router.get('/:id/iterations', authMiddleware, async (req: Request, res: Response
     // Sort by timestamp descending (most recent first)
     query += ' ORDER BY i.created_at DESC';
 
-    const result = await pool.query(query, params);
+    const result = await pool.query<IssueIterationWithAuthorRow>(query, params);
 
     const iterations = result.rows.map(row => ({
       id: row.id,
@@ -1705,19 +1871,20 @@ router.post('/:id/reject', authMiddleware, async (req: Request, res: Response) =
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Get the issue
-    const existing = await pool.query(
+    const existing = await pool.query<IdPropertiesRow>(
       `SELECT id, properties FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'issue'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (existing.rows.length === 0) {
+    const existingRow = existing.rows[0];
+    if (!existingRow) {
       res.status(404).json({ error: 'Issue not found' });
       return;
     }
 
-    const props = existing.rows[0].properties || {};
+    const props = existingRow.properties || {};
 
     // Verify the issue is in triage state
     if (props.state !== 'triage') {
@@ -1727,7 +1894,7 @@ router.post('/:id/reject', authMiddleware, async (req: Request, res: Response) =
 
     // Update state to cancelled and store rejection reason
     const newProps = { ...props, state: 'cancelled', rejection_reason: reason };
-    const result = await pool.query(
+    const result = await pool.query<IssueDetailRow>(
       `UPDATE documents
        SET properties = $3, cancelled_at = NOW(), updated_at = now()
        WHERE id = $1 AND workspace_id = $2
@@ -1735,10 +1902,16 @@ router.post('/:id/reject', authMiddleware, async (req: Request, res: Response) =
       [id, workspaceId, JSON.stringify(newProps)]
     );
 
+    const updatedRow = result.rows[0];
+    if (!updatedRow) {
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
+
     // Log the state change
     await logDocumentChange(id!, 'state', 'triage', 'cancelled', req.userId!);
 
-    const issue = extractIssueFromRow(result.rows[0]);
+    const issue = extractIssueFromRow(updatedRow);
     res.json({ ...issue, display_id: `#${issue.ticket_number}` });
   } catch (err) {
     console.error('Reject issue error:', err);
