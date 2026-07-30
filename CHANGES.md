@@ -95,10 +95,11 @@ vitest run <file>` against the branch's own worktree database
 | `workspaces.ts:1021` → `workspaceAdminMiddleware` removed from `GET /:id/audit-logs` | **3 failed / 25 passed**, each `expected 200 to be 403`. Includes the foreign-workspace case, i.e. without the middleware the handler itself does no scoping. |
 | both reverted | 27/27 and 28/28 pass. |
 
-**Expected gate result, stated up front.** `scripts/factory/gate.sh` reports
-`tests:not-weakened FAIL — 6 removed test/assertion line(s)`. That check greps the diff for removed
-`expect(` lines, and cannot distinguish deleting an assertion from *replacing a vacuous one*. All six
-are the vacuous assertions this ticket exists to delete:
+**Gate result, and how it got there.** Before this branch merged `main`, `scripts/factory/gate.sh`
+reported `tests:not-weakened FAIL — 6 removed test/assertion line(s)`. That check counted removed
+`expect(` lines with no comparison to added ones, so it could not distinguish deleting an assertion
+from *replacing a vacuous one*. All six removed lines were the vacuous assertions this ticket exists
+to delete:
 
 ```
 e2e/authorization.spec.ts    expect(response.status()).toBe(403)        # was inside two nested ifs
@@ -110,10 +111,19 @@ e2e/security.spec.ts         expect(href).not.toContain('<script')           # w
 ```
 
 Each is replaced by a stronger unconditional assertion in the same test; `regression-test` reports 13
-added cases. Every other gate is green, including `review-patterns` (G7b) and both vitest projects.
-Two earlier gate runs failed `tests:api` on a *different* untouched test each time
-(`backlinks.test.ts`, then `rate-limit.test.ts`); both pass standalone and the full api suite is
-472/472 — that is TRO-277's load-sensitive flake, not this branch.
+added cases. After merging `main` (`86b5231`), `gate.sh`'s G5 had independently been changed to a net
+comparison of removed vs. added test lines — motivated by this exact false-positive class on other
+tickets (TRO-223, TRO-179) — and now reports `tests:not-weakened PASS — -6 / +51 test line(s) — net
+gain, reviewer should confirm the removals are corrections`. No edit to `gate.sh` was made on this
+branch; the fix landed on `main` independently and this entry is corrected to match the gate this PR
+actually merges against. Every other gate is green, including `review-patterns` (G7b, also new from
+`main`) and both vitest projects.
+
+Three separate gate runs have each failed `tests:api` on a *different* untouched test
+(`backlinks.test.ts`, `rate-limit.test.ts`, then `weeks.test.ts`'s "should reject review approval
+without rating"); all three pass standalone and the full api suite is 472/472 each time — that is
+TRO-277's load-sensitive flake (documented to appear under CPU load, right after `type-check` +
+`build`), not this branch.
 
 **Attempted, then reverted — and it found two bugs.** `e2e/ai-analysis-api.spec.ts:209`
 *"POST /api/ai/analyze-plan returns 429 after 10 rapid requests"* guards its assertions with
