@@ -8,6 +8,99 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-235 (TF-2) — prod had two divergent Terraform roots; converged onto the flat root
+
+**HOLD FOR HUMAN APPROVAL.** This entry documents a deletion of tracked infra config
+(`terraform/environments/prod`), which is an escalation-gate-2 item. The PR carries the same
+banner; nothing here has been applied to real infrastructure — no `terraform apply`/`destroy`/
+live `init` was run, per the hard safety rules for this ticket.
+
+**The problem.** Prod was managed by two independent Terraform root configs with separate state:
+the flat `terraform/*.tf` (74 resource blocks) and the modular `terraform/environments/prod` +
+`terraform/modules/*` (66 resource blocks). They had already drifted — the flat root had a WAF
+(`waf.tf`) and CloudFront realtime logging (`cloudfront-logging.tf`) the modular path lacked
+entirely — and nothing prevented both from being applied to the same AWS account, which would
+collide on hard-coded resource names. `audit/AUDIT_REPORT.md` (TF-2) and
+`audit/terraform/baseline.md` have the full analysis.
+
+**What changed.**
+
+- Deleted `terraform/environments/prod/` (5 files, including its own `.terraform.lock.hcl`) —
+  the actual TF-2 duplicate. Confirmed unused by any deploy tooling first: `scripts/deploy.sh`,
+  `scripts/deploy-web.sh`, and `scripts/terraform.sh` all route `prod` to the flat `terraform/`
+  root unconditionally and never reference `environments/prod`.
+- Diffed every one of the 66 modular resource blocks against the flat root by type+name before
+  deleting (full reconciliation table in the PR body). Three genuinely missing security-hardening
+  arguments were found and ported into the flat root instead of silently dropped:
+  - `database.tf` — 5 Aurora parameter-group settings (`max_connections`,
+    `idle_in_transaction_session_timeout`, `statement_timeout`, `log_connections`,
+    `log_disconnections`) that `modules/aurora/main.tf` had and `database.tf` did not.
+  - `elastic-beanstalk.tf` — 8 CPU-based autoscaling trigger/cooldown settings that
+    `modules/elastic-beanstalk/main.tf` had and `elastic-beanstalk.tf` did not.
+  - `ssm.tf` — `secretsmanager:PutSecretValue` on the EB instance role's Secrets Manager policy.
+    Without it, `saveCAIACredentials()` (`api/src/services/secrets-manager.ts:136`) gets
+    `AccessDenied` from `PutSecretValueCommand` the first time it updates an *existing* CAIA
+    secret under prod's real IAM role — `CreateSecret`/`UpdateSecret` alone do not cover it. This
+    is a real, currently-live bug in the flat root that the modular path had already fixed.
+- **`terraform/environments/dev`, `terraform/environments/shadow`, and `terraform/modules/*` are
+  kept — this is a deliberate deviation from "remove environments/ + modules/ entirely."** TF-2's
+  finding is specifically that prod is managed by two configs; dev and shadow are different,
+  non-overlapping AWS environments the flat root cannot deploy at all (its resource names are
+  hard-coded for prod). `scripts/deploy.sh`/`scripts/deploy-web.sh`/`scripts/terraform.sh`
+  currently route dev and shadow exclusively through `terraform/environments/$ENV`, and
+  `CLAUDE.md` documents shadow as an active step in the merge workflow ("Deploy to shadow ...
+  before merging to master"). Deleting modules/dev/shadow would have silently broken that live
+  tooling for no TF-2 benefit — it was never part of the "same infrastructure" collision. See the
+  PR body for the full reasoning; this is flagged prominently for human review, not buried.
+- `scripts/check-single-tf-root.sh` (new) — fails if a second AWS Terraform root (a directory with
+  a `.tf` file declaring `provider "aws"`) exists outside the allowed set (`terraform`,
+  `terraform/bootstrap`, `terraform/environments/dev`, `terraform/environments/shadow`), or if
+  `terraform/environments/prod` specifically reappears. Wired into `.github/workflows/ci.yml` as
+  a step in the `verify` job, right after checkout (pure bash/grep, no dependencies).
+- `terraform/README.md` — new "Authoritative config for prod" section explaining the convergence,
+  why, and what happened to the modular path (including the dev/shadow exception above); directory
+  structure diagram, multi-environment rationale, and Quick Start updated to match (prod is no
+  longer under "Environment Directories").
+
+**What did NOT change.** No flat-root resource files were rewritten beyond the three additions
+above (`database.tf`, `elastic-beanstalk.tf`, `ssm.tf`); `security-groups.tf` was read for the
+reconciliation but not touched (a sibling ticket, TF-7, is editing it concurrently). No provider
+version pin or lock file changed (TF-3/TF-4 are separate tickets).
+
+**How to run it.**
+
+```bash
+# Terraform binary: temp-downloaded 1.9.8 (matches audit/terraform/baseline.md; the repo's pinned
+# 1.6.0 cannot `init` at all — TF-3, expired provider-signing key). Not committed to the repo.
+cd terraform
+terraform init -backend=false -input=false
+terraform validate
+terraform fmt -check -recursive .
+rm -rf .terraform .terraform.lock.hcl   # leaves git status terraform/ clean, per audit methodology
+
+./scripts/check-single-tf-root.sh   # should print "OK: single authoritative Terraform root confirmed"
+```
+
+**Verification note.** `terraform validate` was run on the flat root before AND after this change
+with the same 1.9.8 binary: both report `Success!` with the same single pre-existing warning
+(TF-5, `s3-cloudfront.tf:426`'s uploads lifecycle rule) — this change introduces no new warnings or
+errors. `terraform/environments/dev` and `terraform/environments/shadow` were also validated
+post-change (unaffected, since neither was edited) and both still pass with the same TF-5 warning.
+The guard script was verified to actually fail: tested with a simulated re-added
+`terraform/environments/prod` (caught) and a simulated new sibling root directory outside
+`terraform/` entirely (also caught), both removed before committing. The audit's cloud-free
+drift-demo (`audit/terraform/drift-demo/`) was not re-run — it demonstrates local-provider drift
+detection unrelated to this ticket's root-convergence change, so re-running it would not verify
+anything this PR touches.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf-2-unify-terraform-roots`. This restores
+`terraform/environments/prod` and reverts the three ported arguments in `database.tf`,
+`elastic-beanstalk.tf`, and `ssm.tf` — returning to the pre-TRO-235 two-root state (i.e.
+un-fixing TF-2). It does not touch any live AWS state, since no `apply` was ever run against
+either root.
+
+---
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write
