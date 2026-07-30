@@ -8,6 +8,63 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-211 (TS-6) — a real ESLint config; `pnpm lint` stops being a silent no-op
+
+**Before, observed by running it.** `pnpm lint` printed `None of the selected packages has a
+"lint" script` and exited 0 — no `.eslintrc*` or `eslint.config.*` existed anywhere outside
+`node_modules`, and none of `api`, `web`, `shared` defined a `lint` script for root's
+`pnpm --recursive run lint` to dispatch to. `.github/workflows/ci.yml` did not call `pnpm lint` at
+all; a comment there said explicitly to wire it in "when TRO-211 lands."
+
+**What changed.**
+
+- Added `eslint.config.mjs` at the repo root: ESLint 9.39.5 flat config + `typescript-eslint`
+  8.65.0, covering `api/src`, `web/src`, `shared/src` only — not `e2e/`, not config/script files
+  (`web/tsconfig.node.json` / build-script coverage is the separate, still-open TS-9).
+- Added `"lint": "eslint src"` to `api/package.json`, `web/package.json`, `shared/package.json`.
+  Root's `"lint": "pnpm --recursive run lint"` needed no change — it was already the right
+  dispatcher, just dispatching to nothing.
+- Wired a `Lint` step into `.github/workflows/ci.yml`'s `verify` job, right after `Type check` and
+  before `Build all packages`.
+
+**Ruleset — ERROR vs WARN, and why, with baseline counts** (`api` / `web` / `shared`, before any
+fix):
+
+| Rule | Severity | Baseline (api/web/shared) | Why |
+|---|---|---|---|
+| `eqeqeq` (`always`, `{null:'ignore'}`) | **error** | 4 / 2 / 0 → **0 / 0 / 0** | All 6 raw hits were the `== null` / `!= null` idiom (e.g. `api/src/collaboration/index.ts:330`, `web/src/components/ActionItems.tsx:67`). Forcing `=== null` would exclude `undefined` and change behavior — that is a bug, not a fix. Configured ESLint's standard exception instead of touching code; every other `==`/`!=` is still an error. |
+| `no-fallthrough` | **error** | 0 / 0 / 0 | Passes clean today (tsc's `noFallthroughCasesInSwitch` already covers most of this; ESLint is belt-and-suspenders, catches cases tsc's flag doesn't). |
+| `@typescript-eslint/no-floating-promises` | **warn** | 4 / 209 / 0 (213 total) | Real correctness bugs, but far past "few (<~15) and mechanical" — mostly React event handlers across `web/src/pages/*.tsx`. 4 of the api sites are inside `api/src/collaboration/index.ts`, which `ship-backend`'s own brief flags as a stop-for-human zone with a documented history of async-ordering bugs (ERR-1/ERR-2/ERR-10/ERR-11/ERR-12). Fixing those under a lint-config ticket is exactly the drive-by this ticket was told not to do — follow-up ticket material. |
+| `@typescript-eslint/no-misused-promises` | **warn** | 5 / 180 / 0 (185 total) | Same call, same reasoning. |
+| `@typescript-eslint/no-explicit-any` | warn | 209 / 31 / 0 (240 total) | Per orchestrator scope: the audit's counted, open finding (TS-1/TS-2/TS-8), already being burned down by dedicated tickets and blocked from growing by G7b. Not this ticket's job to fix. |
+| `@typescript-eslint/no-non-null-assertion` | warn | 295 / 33 / 0 (328 total) | Same call — the counted, open TS-4 class. |
+
+**Result.** `pnpm lint` now exits **0** with **0 errors, 966 warnings** (513 api + 453 web + 0
+shared) — a real check that passes today, not a vacuous one.
+
+**How to run it.**
+```bash
+pnpm lint                     # all three packages (what CI runs)
+pnpm --filter @ship/api lint  # single package
+```
+
+**Demonstrated the gate actually gates (not committed).** Appended a scratch function to
+`web/src/lib/api.ts` with `if (a == 1) { ... }`, ran `pnpm --filter @ship/web lint`: exit **1**,
+`eqeqeq` error reported (`454 problems (1 error, 453 warnings)`). Reverted with
+`git checkout -- web/src/lib/api.ts`; re-ran: exit 0, back to 453 warnings, 0 errors.
+
+**Not fixed here — follow-up.** `no-floating-promises` (213 sites) and `no-misused-promises` (185
+sites) at warn, counts above. Two safe, mechanical-looking candidates outside the hazard file:
+`api/src/db/migrate.ts:58` and `api/src/db/seed.ts:1259` both call an async `main()`/`seed()` at
+top level with no `.catch`. The four sites inside `api/src/collaboration/index.ts` should go
+through the same review weight as ERR-1/ERR-2, not a mechanical batch fix.
+
+**Rollback.** Delete `eslint.config.mjs`; remove the `lint` script from `api/package.json`,
+`web/package.json`, `shared/package.json`; remove the `eslint`/`typescript-eslint` root
+devDependencies; remove the `Lint` step from `ci.yml`.
+
+---
+
 ## TRO-286 (TEST-14) — no e2e test can pass without executing an assertion any more
 
 TEST-2 (TRO-224) fixed the 8 vacuous tests that gave false *security* assurance and deliberately
