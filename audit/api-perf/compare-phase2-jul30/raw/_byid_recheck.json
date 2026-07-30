@@ -1,0 +1,29 @@
+[
+  {
+    "concurrency": 10,
+    "p50": 2.619,
+    "p95": 4.595,
+    "p99": 10.57,
+    "errors": 0,
+    "non2xx": 0,
+    "status2xx": 900
+  },
+  {
+    "concurrency": 25,
+    "p50": 6.632,
+    "p95": 10.105,
+    "p99": 27.046,
+    "errors": 0,
+    "non2xx": 0,
+    "status2xx": 900
+  },
+  {
+    "concurrency": 50,
+    "p50": 14.479,
+    "p95": 20.03,
+    "p99": 30.046,
+    "errors": 0,
+    "non2xx": 0,
+    "status2xx": 900
+  }
+]

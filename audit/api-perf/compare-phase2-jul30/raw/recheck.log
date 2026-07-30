@@ -1,0 +1,9 @@
+=== documents-byid-recheck c=10 attempt 1 2026-07-30T21:38:53.337Z
+    p50=2.619 p95=4.595 p99=10.57 2xx=900
+=== documents-byid-recheck c=25 attempt 1 2026-07-30T21:38:55.411Z
+    waiting 60s (remaining=18)
+    p50=6.632 p95=10.105 p99=27.046 2xx=900
+=== documents-byid-recheck c=50 attempt 1 2026-07-30T21:39:56.467Z
+    waiting 61s (remaining=98)
+    p50=14.479 p95=20.03 p99=30.046 2xx=900
+=== DONE 2026-07-30T21:40:58.515Z
