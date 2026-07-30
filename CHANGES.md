@@ -126,6 +126,84 @@ schema, route, or runtime-behavior change accompanies this fix, so rollback is t
 
 ---
 
+## TRO-206 (TS-1) — `web/tsconfig.json` now extends the root config; 156 latent type errors fixed
+
+`web/tsconfig.json` re-declared `strict: true` standalone instead of extending `../tsconfig.json`,
+so it silently ran without the root's `noUncheckedIndexedAccess`, `noImplicitReturns`, and
+`noFallthroughCasesInSwitch` — the only two packages that extend the root (`api`, `shared`) had
+them; `web` did not. `research/configs/web/tsconfig.json` (a reference copy in the repo) already
+`extends: "../tsconfig.json"`, confirming this was drift, not an intentional divergence.
+
+**Ticket hypothesis vs. observed.** The audit (measured at commit `076a183`) recorded 102 errors
+under the restored flags. Reproducing the identical command
+(`cd web && ./node_modules/.bin/tsc -p tsconfig.json --noEmit --noUncheckedIndexedAccess
+--noImplicitReturns --noFallthroughCasesInSwitch`) on this branch's base — `main` had gained ~30
+merged tickets since the audit, adding new files (`lib/contrast.ts`, `lib/contrast.test.ts`,
+`pages/MyWeekPage.contrast.test.tsx` from TRO-217, plus other unrelated changes) — produced **156**
+errors, not 102: 63 TS2532, 41 TS18048, 26 TS2345, 17 TS2322, 8 TS7030, 1 TS18047, across 29 files.
+The fix direction held; the count was stale. All 156 are fixed, not just the original 102.
+
+**What changed.**
+
+- `web/tsconfig.json` — added `"extends": "../tsconfig.json"`; kept web's `target`/`lib`/`module`/
+  `moduleResolution`/`jsx`/`noEmit`/`baseUrl`/`paths` overrides (all of which differ from or add to
+  the root, e.g. `module: "ESNext"` + `moduleResolution: "bundler"` vs. the root's `NodeNext`, and
+  `lib` adding `DOM`/`DOM.Iterable`). Dropped the overrides that were byte-identical to the root
+  (`strict`, `skipLibCheck`, `esModuleInterop`, `allowSyntheticDefaultImports`,
+  `forceConsistentCasingInFileNames`, `isolatedModules`) since inheriting them is the whole point.
+- `web/tailwind.config.d.ts` — the hand-written ambient type for `tailwind.config.js` typed
+  `colors` as a bare `Record<string, string>`, so every dot-accessed token (`palette.background`,
+  `palette.muted`, ...) came back `string | undefined` under the restored flag. Gave the six tokens
+  actually dot-accessed by `contrast.ts`/`contrast.test.ts`/`MyWeekPage.contrast.test.tsx` explicit
+  (non-optional) properties, kept a `[key: string]: string` index signature so dynamic lookups
+  (`palette[name]`) stay honestly optional.
+- 28 source files fixed with genuine narrowing — destructure-then-check, explicit `undefined`
+  guards, or an `?? null`/`?? ''` fallback at the point a nullable value crosses into a non-nullable
+  slot. No `!`, `as any`, `as unknown as`, or `: any` anywhere in the diff (`node
+  scripts/factory/review-patterns.mjs` — G7b — reports clean). Densest: `CommandPalette.tsx` (13),
+  `hooks/useSelection.ts` (12), `editor/CommentDisplay.tsx` (12), `editor/AIScoringDisplay.tsx` (12),
+  `lib/cn.ts` (12).
+- `pages/ReviewsPage.tsx` — the one fix that is more than type-satisfying. Three optimistic-update
+  handlers (`approvePlan`, `requestChanges`, `rateRetro`) did
+  `updated.reviews[personId][weekNumber] = { ...updated.reviews[personId][weekNumber], patch }`.
+  Spreading `undefined` is legal JS and this type-checked before the fix, but for a person/week
+  pair with no prior review row it silently produced a `ReviewCell` missing every field except the
+  one just patched (`hasPlan`/`hasRetro`/`sprintId`/`planDocId`/`retroDocId` all `undefined` instead
+  of their contract). Extracted `emptyReviewCell`/`mergeReviewCellPatch` (both exported) so all
+  three handlers merge over a real default instead of a possibly-missing lookup.
+  **Reachability, checked rather than assumed:** every UI path that can call these three handlers
+  (`ReviewsPage.tsx:919-935`, `:1115`) is gated on `cell.hasPlan`/`cell.hasRetro` already being
+  `true`, which requires an already-fetched cell — so this specific corruption was not reachable
+  through today's UI. It is a genuine type-safety fix against a real invariant gap, not a
+  demonstrated production crash; recorded as such rather than oversold.
+
+**What did NOT change.** No product behavior. `pnpm --filter @ship/web test` is 37 files / 366
+tests green before and after (quarantine is already empty per TEST-1); the fixes are narrowing,
+not behavior changes, with the one exception above, which changes nothing observable given the
+current gating.
+
+**How to run it.**
+
+```bash
+source .factory-env
+# Reproduce the flag-restoration count (should be 0 now that tsconfig extends root):
+cd web && ./node_modules/.bin/tsc -p tsconfig.json --noEmit \
+  --noUncheckedIndexedAccess --noImplicitReturns --noFallthroughCasesInSwitch
+# Or just the normal check, since the flags are now inherited permanently:
+pnpm --filter @ship/web type-check
+# Regression test for the ReviewsPage fix:
+pnpm --filter @ship/web exec vitest run src/pages/ReviewsPage.reviewCellMerge.test.ts
+```
+
+**Rollback.** Revert the commits on `fix/ts-1-web-tsconfig`. Reverting just
+`web/tsconfig.json`'s `extends` line restores the pre-fix (silently non-strict) behavior without
+touching the 29 narrowed files, which remain correct either way since the narrowing is a strict
+superset of the original logic. `emptyReviewCell`/`mergeReviewCellPatch` can be reverted
+independently by inlining the old spread in the three `ReviewsPage.tsx` handlers, which restores
+the (unreached, per above) invariant gap.
+
+---
+
 ## TRO-286 (TEST-14) — no e2e test can pass without executing an assertion any more
 
 TEST-2 (TRO-224) fixed the 8 vacuous tests that gave false *security* assurance and deliberately

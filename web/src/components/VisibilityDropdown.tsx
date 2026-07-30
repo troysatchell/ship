@@ -8,9 +8,19 @@ interface VisibilityDropdownProps {
   disabled?: boolean;
 }
 
-const options = [
-  { value: 'private' as const, label: 'Private', icon: LockIcon },
-  { value: 'workspace' as const, label: 'Workspace', icon: GlobeIcon },
+interface VisibilityOption {
+  value: 'private' | 'workspace';
+  label: string;
+  icon: (props: { className?: string }) => React.JSX.Element;
+}
+
+// Typed as a 2-tuple (not `VisibilityOption[]`) so `options[1]` below is a
+// guaranteed `VisibilityOption`, not `VisibilityOption | undefined` — this
+// array's length is a real invariant of the two-option toggle, not an
+// assumption.
+const options: [VisibilityOption, VisibilityOption] = [
+  { value: 'private', label: 'Private', icon: LockIcon },
+  { value: 'workspace', label: 'Workspace', icon: GlobeIcon },
 ];
 
 export function VisibilityDropdown({ value, onChange, disabled = false }: VisibilityDropdownProps) {

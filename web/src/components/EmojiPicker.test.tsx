@@ -44,7 +44,9 @@ beforeAll(() => {
  */
 describe('EmojiPickerPopover (TRO-200 / BUN-4)', () => {
   const openPicker = async () => {
-    fireEvent.click(screen.getAllByRole('button')[0]);
+    const [trigger] = screen.getAllByRole('button');
+    if (!trigger) throw new Error('expected a trigger button to be rendered');
+    fireEvent.click(trigger);
     // findBy* waits out the dynamic import. If the lazy chunk never resolves,
     // or the module stops having a usable default export, this is where it
     // shows up.

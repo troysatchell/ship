@@ -19,6 +19,7 @@ import {
   parseHex,
   relativeLuminance,
   resolveContrastPairs,
+  type ContrastPair,
 } from './contrast';
 
 const palette = tailwindConfig.theme.extend.colors;
@@ -95,18 +96,28 @@ describe('agrees with the axe-core numbers recorded in audit/a11y/axe/', () => {
   });
 });
 
+/** Destructures the first pair and asserts it exists, so array indexing under
+ * `noUncheckedIndexedAccess` doesn't force `?.` on every assertion below. */
+function firstPair(pairs: ContrastPair[]): ContrastPair {
+  const [pair] = pairs;
+  if (!pair) throw new Error('expected at least one resolved contrast pair');
+  return pair;
+}
+
 describe('DOM resolution', () => {
   it('reads a plain text token against the page background', () => {
     const { pairs } = resolve('<p class="text-foreground">hello</p>');
     expect(pairs).toHaveLength(1);
-    expect(pairs[0].foreground).toBe(palette.foreground);
-    expect(pairs[0].background).toBe(BG);
+    const pair = firstPair(pairs);
+    expect(pair.foreground).toBe(palette.foreground);
+    expect(pair.background).toBe(BG);
   });
 
   it('applies an alpha modifier to the foreground', () => {
     const { pairs } = resolve('<span class="text-muted/50">1.</span>');
-    expect(pairs[0].foreground).toBe('#4c4c4c');
-    expect(pairs[0].ratio).toBeCloseTo(2.26, 2);
+    const pair = firstPair(pairs);
+    expect(pair.foreground).toBe('#4c4c4c');
+    expect(pair.ratio).toBeCloseTo(2.26, 2);
   });
 
   it('inherits opacity-* down the tree and multiplies it into the text', () => {
@@ -114,21 +125,23 @@ describe('DOM resolution', () => {
       '<div class="opacity-40"><span class="text-muted">Upcoming</span></div>'
     );
     expect(pairs).toHaveLength(1);
-    expect(pairs[0].foreground).toBe('#3f3f3f');
+    expect(firstPair(pairs).foreground).toBe('#3f3f3f');
   });
 
   it('composites an ancestor fill so nested text measures against the real colour', () => {
     const { pairs } = resolve(
       '<div class="bg-accent/5"><span class="text-accent">Mon</span></div>'
     );
-    expect(pairs[0].background).toBe('#0c1114');
-    expect(pairs[0].ratio).toBeCloseTo(2.82, 2);
+    const pair = firstPair(pairs);
+    expect(pair.background).toBe('#0c1114');
+    expect(pair.ratio).toBeCloseTo(2.82, 2);
   });
 
   it('measures an element against its own fill', () => {
     const { pairs } = resolve('<span class="bg-accent/20 text-accent">Current</span>');
-    expect(pairs[0].background).toBe('#0a1d2b');
-    expect(pairs[0].ratio).toBeCloseTo(2.55, 2);
+    const pair = firstPair(pairs);
+    expect(pair.background).toBe('#0a1d2b');
+    expect(pair.ratio).toBeCloseTo(2.55, 2);
   });
 
   it('emits one pair per element that renders its own text, not per wrapper', () => {
@@ -142,7 +155,7 @@ describe('DOM resolution', () => {
     const { pairs } = resolve(
       '<span class="text-muted hover:text-foreground placeholder:text-muted/50">Tue</span>'
     );
-    expect(pairs[0].foreground).toBe(palette.muted);
+    expect(firstPair(pairs).foreground).toBe(palette.muted);
   });
 
   it('reports a colour class it cannot resolve instead of guessing', () => {
@@ -150,6 +163,6 @@ describe('DOM resolution', () => {
     // it paints nothing. Surfacing it beats silently inheriting a colour.
     const { pairs, unresolved } = resolve('<div class="bg-surface text-muted">x</div>');
     expect(unresolved).toContain('bg-surface');
-    expect(pairs[0].background).toBe(BG);
+    expect(firstPair(pairs).background).toBe(BG);
   });
 });

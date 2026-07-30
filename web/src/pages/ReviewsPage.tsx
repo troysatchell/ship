@@ -49,6 +49,42 @@ function needsRetroReview(cell: ReviewCell | undefined): boolean {
   return approvalState !== 'approved' && approvalState !== 'changes_requested';
 }
 
+/**
+ * A fully-populated `ReviewCell` for a person/week pair that has no review
+ * data yet. Optimistic updates below spread the existing cell over this
+ * default rather than over a possibly-`undefined` lookup — spreading
+ * `undefined` type-checked before (an empty object silently satisfies no
+ * particular shape) but produced a `ReviewCell` missing every field except
+ * the one just being set, which is exactly the "undefined slips into a
+ * required field" bug class this ticket exists to catch.
+ */
+export function emptyReviewCell(sprintId: string): ReviewCell {
+  return {
+    planApproval: null,
+    reviewApproval: null,
+    reviewRating: null,
+    hasPlan: false,
+    hasRetro: false,
+    sprintId,
+    planDocId: null,
+    retroDocId: null,
+  };
+}
+
+/**
+ * Applies an optimistic patch to a person/week review cell that may not exist
+ * yet, without ever producing a `ReviewCell` with an `undefined` field.
+ * Exported so the invariant is unit-testable independent of rendering the
+ * page and driving its optimistic-update handlers through the UI.
+ */
+export function mergeReviewCellPatch(
+  existing: ReviewCell | undefined,
+  sprintId: string,
+  patch: Partial<ReviewCell>
+): ReviewCell {
+  return { ...(existing ?? emptyReviewCell(sprintId)), ...patch };
+}
+
 interface Week {
   number: number;
   name: string;
@@ -212,16 +248,16 @@ export function ReviewsPage() {
     setData(prev => {
       if (!prev) return prev;
       const updated = { ...prev, reviews: { ...prev.reviews } };
-      updated.reviews[personId] = { ...updated.reviews[personId] };
-      updated.reviews[personId][weekNumber] = {
-        ...updated.reviews[personId][weekNumber],
+      const personReviews = { ...updated.reviews[personId] };
+      personReviews[weekNumber] = mergeReviewCellPatch(personReviews[weekNumber], sprintId, {
         planApproval: {
           state: 'approved',
           approved_by: null,
           approved_at: new Date().toISOString(),
           comment: comment?.trim() || null,
         },
-      };
+      });
+      updated.reviews[personId] = personReviews;
       return updated;
     });
 
@@ -245,11 +281,11 @@ export function ReviewsPage() {
     setData(prev => {
       if (!prev) return prev;
       const updated = { ...prev, reviews: { ...prev.reviews } };
-      updated.reviews[personId] = { ...updated.reviews[personId] };
-      updated.reviews[personId][weekNumber] = {
-        ...updated.reviews[personId][weekNumber],
+      const personReviews = { ...updated.reviews[personId] };
+      personReviews[weekNumber] = mergeReviewCellPatch(personReviews[weekNumber], sprintId, {
         [approvalField]: { state: 'changes_requested', approved_by: null, approved_at: new Date().toISOString(), feedback },
-      };
+      });
+      updated.reviews[personId] = personReviews;
       return updated;
     });
 
@@ -270,9 +306,8 @@ export function ReviewsPage() {
     setData(prev => {
       if (!prev) return prev;
       const updated = { ...prev, reviews: { ...prev.reviews } };
-      updated.reviews[personId] = { ...updated.reviews[personId] };
-      updated.reviews[personId][weekNumber] = {
-        ...updated.reviews[personId][weekNumber],
+      const personReviews = { ...updated.reviews[personId] };
+      personReviews[weekNumber] = mergeReviewCellPatch(personReviews[weekNumber], sprintId, {
         reviewApproval: {
           state: 'approved',
           approved_by: null,
@@ -280,7 +315,8 @@ export function ReviewsPage() {
           comment: comment?.trim() || null,
         },
         reviewRating: { value: rating, rated_by: '', rated_at: new Date().toISOString() },
-      };
+      });
+      updated.reviews[personId] = personReviews;
       return updated;
     });
 
