@@ -8,6 +8,124 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-208 — [TS-3] The Yjs <-> TipTap converter — the persistence path for every document's content — was fully untyped
+
+`api/src/utils/yjsConverter.ts` carried 12 `any` in 245 lines, the highest any-per-line density of
+any production file, on the only code path that translates collaborative CRDT state into the
+durable `documents.content` column: `collaboration/index.ts:151` (`persistDocument()`, right before
+the write) and `routes/documents.ts:456` (content served over REST). `api/src/types/y-protocols.d.ts`
+added 7 more `any` on the awareness/sync surface underneath. Every exported signature was untyped —
+`yjsToJson(fragment): any`, `jsonToYjs(doc, fragment, content: any)`,
+`loadContentFromYjsState(yjsState): any | null` — so a shape regression here would silently corrupt
+or drop user-authored content with nothing failing to compile.
+
+**What changed — types only, no behavior change.**
+
+- **`api/src/types/tiptap.ts` (new).** One recursive TipTap/ProseMirror JSON node type —
+  `TipTapNode` (`type`, optional `attrs`/`content`/`marks`/`text`), `TipTapMark`, `TipTapDoc`, and the
+  `TipTapAttrValue` union (`string | number | boolean | null`) node/mark attributes actually hold.
+  Kept API-local by design (see "Not done" below).
+- **`yjsConverter.ts`** — all five signatures now use these types instead of `any`:
+  `yjsToJson(fragment): TipTapDoc`, `jsonToYjs(doc, fragment, content: TipTapNode): void`,
+  `loadContentFromYjsState(yjsState): TipTapDoc | null`, plus the internal
+  `extractTextWithMarks`/`yjsElementToJson`. A new `typeAttributes()` helper centralizes the one
+  existing `Record<string, unknown>` -> typed-attrs conversion (unchanged logic, just typed); a new
+  `setAttributeValue()` helper centralizes the one real, documented gap this fix could not type away:
+  Yjs's own ambient `XmlElement.setAttribute` pins attribute values to `string`, but this codebase has
+  always written some attributes (a numeric heading `level`) using their real JS type and relies on
+  Yjs's runtime not enforcing that — a `value as string` assertion there is the one non-`any` cast in
+  the diff, isolated and commented rather than repeated at each of the two call sites it used to
+  appear at.
+- **`y-protocols.d.ts`** — `any` replaced with `unknown` throughout (transaction origins, awareness
+  state records, event callback args), except `Awareness.on`/`off`, which gained a real overload for
+  the one event this codebase actually listens for (`AwarenessChange { added, updated, removed }`)
+  plus a loose `unknown[]` fallback for anything else — a fully untyped variadic callback would have
+  accepted a mistyped `'update'` handler just as silently as a correct one.
+- **`collaboration/index.ts`** — two type-only edits, no control-flow change: `isTipTapDocContent`'s
+  type predicate now asserts `value is TipTapDoc` instead of an inline `{ type: 'doc'; content:
+  unknown[] }`, so its narrowed value satisfies `jsonToYjs`'s new parameter type.
+- **`collaboration/__tests__/api-content-preservation.test.ts`** — this pre-existing test file calls
+  `yjsToJson`/`loadContentFromYjsState` directly and, once they stopped returning `any`, tripped real
+  `noUncheckedIndexedAccess` errors on chained array indexing (`convertedBack.content[0].content[0].text`)
+  that `any` had been silently swallowing. Fixed with optional chaining (`?.`) and one narrowing
+  `if (!result) throw ...` for the nullable `loadContentFromYjsState` case — no assertion was
+  loosened; all 18 cases in the file still pass unchanged.
+
+**Found, not fixed (out of scope for a types-only ticket).** Writing the round-trip regression test
+below surfaced a real, pre-existing behavioral quirk: `jsonToYjs`/`jsonToYjsChildren` apply text
+marks via Yjs's native `YXmlText.format()`, but `yjsToJson`'s read side only recognizes marks
+represented as nested `Y.XmlElement` wrapper tags (e.g. `<bold>...</bold>`), which is how the actual
+browser TipTap/y-prosemirror binding represents them — not how `.format()` does. `YXmlText.toString()`
+(`node_modules/yjs/src/types/YXmlText.js:68-100`) serializes format-delta attributes back as literal
+pseudo-XML baked into the plain-text string, so round-tripping a marked text node through
+`jsonToYjs` -> `yjsToJson` produces `{ type: 'text', text: '<bold>bold</bold>' }`, not a `marks` array.
+This only fires on the one-time JSON->Yjs migration path for documents created via the API and never
+opened in the collaborative editor before their first collaboration-server load
+(`collaboration/index.ts`'s `loadDoc()`) — verified present, byte-for-byte identical, on both the
+unfixed and fixed code (see measurement below), so it predates this ticket and this fix does not
+touch it. Worth a follow-up finding; not attempted here per the ticket's explicit "types-only, no
+behavior change" scope.
+
+**Not done.** Promoting `TipTapNode`/`TipTapDoc` to `shared/` so the frontend imports the identical
+type is a natural next step but is TS-5's business (the `shared/` contract is a separate, open
+finding), not this ticket's.
+
+**Regression test — `api/src/utils/__tests__/yjsConverter.test.ts`** (new, vitest, run by the gate).
+Two independent parts, per the ticket:
+
+1. Six `expectTypeOf` assertions (`yjsToJson`/`jsonToYjs`/`loadContentFromYjsState` each `.not.toBeAny()`
+   plus `.toEqualTypeOf<...>()`) proving the exported signatures are real types. These are
+   compile-time-only — `vitest run` transpiles via esbuild and does not evaluate them, so they pass
+   silently either way at runtime; verified red **only** via `tsc --noEmit`, by temporarily restoring
+   the pre-fix `yjsConverter.ts`/`y-protocols.d.ts`/`collaboration/index.ts` (backed up first, no
+   `git stash`) and re-running `pnpm --filter @ship/api exec tsc --noEmit`. Against the unfixed code
+   it fails with real, on-point errors — `TS2349: This expression is not callable` on each
+   `.not.toBeAny()`, and `TS2344: Type 'TipTapDoc' does not satisfy the constraint 'never'` on each
+   `.toEqualTypeOf<...>()` — not an import error or a typo. Restoring the fix returns `tsc --noEmit`
+   to clean.
+2. Two runtime round-trip tests: a representative document (heading with a numeric `level` attr,
+   a paragraph with bold text and a link mark, a nested 2-item bullet list) through
+   `jsonToYjs` -> `yjsToJson`, and a second through a real binary Yjs update via
+   `loadContentFromYjsState`. Both pin the exact output observed by running the conversion directly
+   (`tsx`, no DB) against both the unfixed and fixed `yjsConverter.ts` and diffing — byte-for-byte
+   identical — proving the types change altered nothing at runtime, including the marks quirk noted
+   above.
+
+**Measurement** (`~/.claude/skills/type-safety-audit/scripts/count.sh`, the audit's own method —
+`explicit_any` pattern `:\s*any\b|<any>|\bany\[\]|Array<any>`, BSD grep, counts matching lines):
+
+| Scope | Before | After |
+|---|---|---|
+| `api/src/utils/yjsConverter.ts` | 12 | **0** |
+| `api/src/types/y-protocols.d.ts` | 7 | **0** |
+| `api/` package-wide (`explicit_any`) | 78 | **59** (-19) |
+
+The api-wide before (78) matches `audit/type-safety/baseline.json`'s tracked `perPackage.api.anyTotal`
+exactly; the -19 delta is precisely the two files' combined reduction, confirmed by isolated
+before/after counts on every other file this diff touches (`collaboration/index.ts` and
+`api-content-preservation.test.ts` are unchanged on every tracked metric — `explicit_any`,
+`as_assertions`, `as_any`, `non_null_assertions` — before vs after). The regex undercounts by its own
+documented blind spot (`Record<string, any>` doesn't match `:\s*any\b|<any>`, since `any` isn't
+preceded directly by `:`): two such sites in each of `yjsConverter.ts` and `y-protocols.d.ts` were
+fixed too and are real reductions the tracked number doesn't reflect.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec tsc --noEmit
+pnpm --filter @ship/api exec vitest run \
+  src/utils/__tests__/yjsConverter.test.ts \
+  src/collaboration/__tests__/api-content-preservation.test.ts
+```
+
+**Rollback.** `git checkout main -- api/src/utils/yjsConverter.ts api/src/types/y-protocols.d.ts
+api/src/collaboration/index.ts api/src/collaboration/__tests__/api-content-preservation.test.ts &&
+git rm api/src/types/tiptap.ts api/src/utils/__tests__/yjsConverter.test.ts` and drop this entry. No
+schema, route, or runtime-behavior change accompanies this fix, so rollback is type-signature-only.
+
+---
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write
