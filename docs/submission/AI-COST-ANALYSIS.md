@@ -30,22 +30,44 @@ factory merged PRs in three separate batches recorded in `memory-bank/progress.m
 figure — `activeContext.md` flags it should be **recounted directly against Linear before quoting
 precisely** in the final submission, which is worth doing before this number goes in a deck.
 
-[FILL: exact ticket/PR count as of submission, recounted directly in Linear rather than from the log]
+**Recounted 2026-07-30 (submission-eve), directly against the sources:** **65 tickets Done** in the
+Linear project (46 of the 68 audit findings, plus 19 rules/deploy/post-baseline tickets), and
+**75 unique PRs merged** into `main` (`git log --merges`, unique `Merge #N` / `Merge pull request #N`
+references).
 
 ## 2. Spend
 
+**Method — measured, not estimated.** Every Claude Code session logs per-request token usage to
+local transcripts. All 91 transcript files for this project (2026-07-27 → 2026-07-30, **21,413 API
+requests** — orchestrator sessions and every ticket agent) were parsed and summed by model, then
+priced at Anthropic's current list rates (cache reads at 0.1× input; cache writes at 1.25× for the
+standard 5-minute TTL, with the 2× 1-hour-TTL rate shown as the upper bound; Claude Sonnet 5 at its
+introductory $2/$10 per MTok, in effect through 2026-08-31).
+
+| Model | Output tokens | Cache writes | Cache reads | API-equivalent cost |
+|---|---:|---:|---:|---:|
+| Claude Opus 5 (orchestrator, most sessions) | 7.00M | 54.0M | 1,580.6M | **$1,303** |
+| Claude Sonnet 5 (ticket agents) | 4.30M | 49.0M | 2,106.7M | **$587** |
+| Claude Fable 5 (final-day orchestrator) | 1.27M | 4.6M | 252.1M | **$373** |
+| Claude Opus 4.8 (earlier sessions) | 0.94M | 5.0M | 132.5M | **$121** |
+| **Total** | **13.5M** | **112.6M** | **4,071.9M** | **≈ $2,385** (upper bound ≈ $2,714 at 1-hour cache-write rates) |
+
 | | |
 |---|---|
-| Total Anthropic API spend, full sprint (audit + remediation) | `[FILL: $___]` |
-| Tickets completed | `[FILL: ___]` (recount against Linear; log estimate ≈40 of 68 as of 2026-07-30 night) |
-| PRs merged | `[FILL: ___]` (≥32 on 2026-07-30 alone, per above; total across the sprint needs a `git log --merges` count) |
-| Cost per completed ticket | `[FILL: $___ / ___ tickets = $___]` |
-| Cost per merged PR | `[FILL: $___ / ___ PRs = $___]` |
-| Orchestrator session time vs. ticket-agent compute (rough split, if billing separates them) | `[FILL]` |
+| Total API-equivalent cost, full sprint (audit + remediation) | **≈ $2,385–$2,714** at list rates |
+| Actual out-of-pocket | `[FILL: if on a Claude Max/Pro subscription, the subscription fee — the figure above is then the API-equivalent *value* consumed; if on API billing, the console figure]` |
+| Tickets completed | **65** (46 of the 68 audit findings + 19 rules/post-baseline) |
+| PRs merged | **75** |
+| Cost per completed ticket | ≈ $2,385 / 65 = **~$37** (upper bound ~$42) |
+| Cost per merged PR | ≈ $2,385 / 75 = **~$32** (upper bound ~$36) |
+| Sonnet ticket-agent share vs. Opus-tier orchestration | Sonnet ≈ $587 (25%) did the ticket implementation; Opus-tier + Fable orchestration ≈ $1,797 (75%) — the orchestrator's cost is dominated by re-reading context across 21k requests, not by writing code |
 
-[FILL: any note on where the spend concentrated — e.g., did retries/re-runs from the GitHub webhook
-outage or CodeRabbit rate-limiting (both logged below) burn a disproportionate share, or was it flat
-per ticket?]
+**Where the spend concentrated:** cache reads — **~$1,530 of ~$2,385 (64%)** — which is the cost
+signature of the factory pattern itself: many parallel agents each re-reading large shared context
+(the audit report, the lessons file, the role briefs) on every request. Raw output tokens were only
+~$305 (13%). By day: 2026-07-30 (the big remediation push) accounts for 13,506 of 21,413 requests
+(63%). The GitHub webhook outage and CodeRabbit rate-limiting cost wall-clock time and re-dispatched
+CI runs, but their token cost was noise against the cache-read baseline.
 
 ## 3. Effectiveness — what the AI did well, and where it didn't replace a human
 
@@ -124,7 +146,9 @@ edit freely]
   webhook outage) become the day's critical path without a documented fallback decided in advance** —
   both were worked around in the moment (`workflow_dispatch`, merging on the documented "degraded
   service" judgment), but that was improvised, not planned.
-- [FILL: anything about spend efficiency once the real numbers are in — e.g., was Sonnet-per-ticket
-  actually cheaper than fewer, larger sessions on a stronger model, given the retries logged above?]
+- **The Sonnet-for-ticket-agents call was validated by the numbers.** Ticket implementation (the
+  majority of merged code) consumed ~25% of total spend; the expensive part was orchestration
+  context, not agent intelligence. The next optimization target is cache-read volume — tighter
+  briefs and smaller shared-context footprints per agent — not a cheaper model.
 
 > — Zim: "I must go, my planet needs me."
