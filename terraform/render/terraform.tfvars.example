@@ -1,0 +1,33 @@
+# Copy this file to terraform.tfvars and fill in real values.
+# terraform.tfvars is gitignored (see repo-root .gitignore, "TF-10" section) —
+# never commit it with real values in place.
+#
+# render_api_key is NOT listed here on purpose: leave it out of tfvars
+# entirely and export RENDER_API_KEY in your shell instead
+# (`set -a; source .env; set +a`). The provider reads that env var
+# automatically. Only add render_api_key below if you specifically need to
+# override the environment for one run.
+
+session_secret = "REPLACE_WITH_A_REAL_SECRET"   # e.g. output of: openssl rand -hex 32
+
+# Everything else below has a working default in variables.tf that
+# reproduces the existing live service; override only what you need to
+# change.
+
+# render_owner_id        = "tea-d9kevetg1s2s73807n5g"
+# region                 = "oregon"
+
+# service_name           = "ship"
+# service_plan           = "free"
+# repo_url               = "https://github.com/troysatchell/ship"
+# git_branch             = "main"
+# dockerfile_path        = "./Dockerfile"
+# docker_context         = "."
+# health_check_path      = "/health"
+# cors_origin            = "https://ship-rr6m.onrender.com"
+
+# database_service_name  = "ship-db"
+# database_plan          = "free"
+# database_version       = "16"
+# database_name          = "ship"
+# database_user          = "ship"
