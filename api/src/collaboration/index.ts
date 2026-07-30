@@ -8,6 +8,7 @@ import * as decoding from 'lib0/decoding';
 import { pool } from '../db/client.js';
 import { extractHypothesisFromContent, extractSuccessCriteriaFromContent, extractVisionFromContent, extractGoalsFromContent } from '../utils/extractHypothesis.js';
 import { yjsToJson, jsonToYjs } from '../utils/yjsConverter.js';
+import type { TipTapDoc } from '../types/tiptap.js';
 import { ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
 import { SESSION_INACTIVITY_LIMIT_MS } from '../middleware/auth.js';
 import cookie from 'cookie';
@@ -229,7 +230,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** Narrows the `documents.content` JSONB column to the shape jsonToYjs() expects. */
-function isTipTapDocContent(value: unknown): value is { type: 'doc'; content: unknown[] } {
+function isTipTapDocContent(value: unknown): value is TipTapDoc {
   return isRecord(value) && value.type === 'doc' && Array.isArray(value.content);
 }
 
