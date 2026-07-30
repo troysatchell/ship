@@ -82,10 +82,12 @@ describe('TableOfContentsExtension', () => {
     });
 
     expect(headings).toHaveLength(2);
-    expect(headings[0].text).toBe('First Heading');
-    expect(headings[0].level).toBe(1);
-    expect(headings[1].text).toBe('Second Heading');
-    expect(headings[1].level).toBe(2);
+    const [firstHeading, secondHeading] = headings;
+    if (!firstHeading || !secondHeading) throw new Error('expected two headings');
+    expect(firstHeading.text).toBe('First Heading');
+    expect(firstHeading.level).toBe(1);
+    expect(secondHeading.text).toBe('Second Heading');
+    expect(secondHeading.level).toBe(2);
 
     editor.destroy();
   });
@@ -235,9 +237,11 @@ describe('TableOfContentsExtension', () => {
     });
 
     expect(headings).toHaveLength(3);
-    expect(headings[0].level).toBe(1);
-    expect(headings[1].level).toBe(2);
-    expect(headings[2].level).toBe(3);
+    const [h1, h2, h3] = headings;
+    if (!h1 || !h2 || !h3) throw new Error('expected three headings');
+    expect(h1.level).toBe(1);
+    expect(h2.level).toBe(2);
+    expect(h3.level).toBe(3);
 
     editor.destroy();
   });

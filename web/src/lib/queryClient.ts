@@ -242,10 +242,12 @@ export function retryDelayMs(failureCount: number, error: unknown): number {
   if (isThrottleError(error)) {
     const index = Math.min(Math.max(failureCount, 0), THROTTLE_RETRY_DELAYS_MS.length - 1);
     const base = THROTTLE_RETRY_DELAYS_MS[index];
-    // Jitter is additive only, so a page's worth of throttled requests don't
-    // retry in lockstep and re-exhaust the budget the instant the window rolls
-    // over - and so the schedule can never come in under the 60 s window.
-    return Math.round(base * (1 + Math.random() * 0.5));
+    if (base !== undefined) {
+      // Jitter is additive only, so a page's worth of throttled requests don't
+      // retry in lockstep and re-exhaust the budget the instant the window rolls
+      // over - and so the schedule can never come in under the 60 s window.
+      return Math.round(base * (1 + Math.random() * 0.5));
+    }
   }
   // React Query's default exponential backoff for everything else.
   return Math.min(1000 * 2 ** failureCount, 30000);

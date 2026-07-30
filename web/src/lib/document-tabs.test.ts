@@ -288,6 +288,7 @@ describe('weeks tab count labels', () => {
 
     for (const { type, tab } of countAware) {
       const [resolved] = resolveTabLabels([tab], doc(type), zero);
+      if (!resolved) throw new Error(`resolveTabLabels returned nothing for ${type}.${tab.id}`);
       expect(resolved.label, `${type}.${tab.id} should render no "(0)"`).not.toMatch(/\(\d+\)/);
     }
   });

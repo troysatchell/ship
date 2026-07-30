@@ -59,7 +59,10 @@ export function staticValueImports(source: string): string[] {
   const clean = stripComments(source);
   const found = new Set<string>();
 
-  for (const m of clean.matchAll(BARE)) found.add(m[1]);
+  for (const m of clean.matchAll(BARE)) {
+    const spec = m[1];
+    if (spec !== undefined) found.add(spec);
+  }
   for (const re of [WITH_CLAUSE, RE_EXPORT]) {
     for (const m of clean.matchAll(re)) {
       // `import { type A, type B } from 'x'` is fully erased even though it is
@@ -68,7 +71,8 @@ export function staticValueImports(source: string): string[] {
       const clause = m[1] ?? '';
       const braces = clause.match(/\{([\s\S]*)\}/);
       if (braces) {
-        const bindings = braces[1]
+        const inner = braces[1] ?? '';
+        const bindings = inner
           .split(',')
           .map((b) => b.trim())
           .filter(Boolean);
@@ -77,7 +81,8 @@ export function staticValueImports(source: string): string[] {
           continue;
         }
       }
-      found.add(m[2]);
+      const spec = m[2];
+      if (spec !== undefined) found.add(spec);
     }
   }
 

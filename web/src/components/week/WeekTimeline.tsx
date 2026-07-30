@@ -335,6 +335,9 @@ export function WeekTimeline({
 
     windows.forEach((window) => {
       const monthName = monthNames[window.start_date.getMonth()];
+      // getMonth() is always 0-11 and monthNames has all 12 entries; this can
+      // never actually trigger, but the type checker can't derive that.
+      if (monthName === undefined) return;
       const year = window.start_date.getFullYear();
 
       if (!currentGroup || currentGroup.month !== monthName || currentGroup.year !== year) {
@@ -364,6 +367,7 @@ export function WeekTimeline({
     if (windowIndex === -1) return null; // Today is not visible in current range
 
     const window = windows[windowIndex];
+    if (!window) return null;
     const windowStart = new Date(window.start_date);
     windowStart.setHours(0, 0, 0, 0);
 
