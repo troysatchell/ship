@@ -172,8 +172,8 @@ describe('Issues API', () => {
 
   // Regression coverage for the shared root cause behind TRO-173 (API-2) and
   // TRO-182 (DB-5): the list and detail views used one SELECT projection, so
-  // GET /api/issues shipped every issue's TipTap body (72% of the 379,907-byte
-  // payload measured on 254 issues) and had no LIMIT/OFFSET at all.
+  // GET /api/issues shipped every issue's TipTap body (38.4% of the 379,907-byte
+  // payload measured on 254 issues, 146,015 B) and had no LIMIT/OFFSET at all.
   describe('GET /api/issues list projection (TRO-173 / TRO-182)', () => {
     // A recognizable string inside the document body. If it appears anywhere in
     // the list response, the body was serialized onto the wire.
