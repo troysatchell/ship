@@ -11,6 +11,11 @@ resource "render_web_service" "ship" {
   plan   = var.service_plan
   region = var.region
 
+  # The live service sits in a Render environment (project grouping). Omitting
+  # this made the post-import plan propose detaching it (environment_id ->
+  # null) — declared so the plan is honest about membership.
+  environment_id = var.environment_id
+
   runtime_source = {
     docker = {
       repo_url        = var.repo_url
@@ -19,6 +24,19 @@ resource "render_web_service" "ship" {
       context         = var.docker_context
       auto_deploy     = true
     }
+  }
+
+  # Render assigns these itself (or computes them post-apply); the config
+  # deliberately does not manage them. Without this, every plan after import
+  # shows "(known after apply)" churn on fields no one here sets.
+  lifecycle {
+    ignore_changes = [
+      notification_override,
+      previews,
+      pull_request_previews_enabled,
+      root_directory,
+      runtime_source.docker.auto_deploy_trigger,
+    ]
   }
 
   health_check_path = var.health_check_path

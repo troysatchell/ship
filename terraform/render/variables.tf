@@ -135,14 +135,26 @@ variable "database_version" {
 
 variable "database_name" {
   description = <<-EOT
-    Name of the database inside the Postgres instance. Not secret. The live
-    hand-built instance has an auto-suffixed name (`ship_34oc`) that Render
-    generated at dashboard-creation time; a Terraform-created instance gets
-    whatever is set here instead, so this intentionally does not try to
-    reproduce that auto-generated value.
+    Name of the database inside the Postgres instance. Not secret. The default
+    matches the LIVE, imported instance's auto-suffixed name (`ship_34oc`),
+    which Render generated at dashboard-creation time. This field forces
+    REPLACEMENT (destroy + recreate = data loss) if it differs from the live
+    value, so after the 2026-07-30 import the default was reconciled to
+    reality. A fresh clean-machine deployment may override this with any name.
   EOT
   type        = string
-  default     = "ship"
+  default     = "ship_34oc"
+}
+
+variable "environment_id" {
+  description = <<-EOT
+    Render environment (project grouping) the web service belongs to. Not
+    secret. Default is the live service's verified environment; a fresh
+    deployment on a clean machine may set this to another environment id or
+    null (no grouping).
+  EOT
+  type        = string
+  default     = "evm-d9kf2t7avr4c73asbmig"
 }
 
 variable "database_user" {
