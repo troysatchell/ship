@@ -10,6 +10,10 @@
 
 ## Held for the maintainer (decision queue — batch-answer these)
 
+- **PR (TF-10/TRO-299)** — new `terraform/render/` config (Render provider, pinned 1.9.1), plan-only
+  (no apply/import). Decision needed: `terraform import` the existing hand-built `ship`/`ship-db`
+  vs. a clean-machine `apply` that creates a parallel service — memo + recommendation (import) in
+  `terraform/render/README.md`.
 - **PR #41 (TF-2)** — deletes tracked infra config (gate 2). Agent corrected the ticket: only `environments/prod` was an unused duplicate (deleted); `dev`/`shadow` are the live TF path (kept). Ports include a real IAM fix (`PutSecretValue` missing from flat-root policy).
 - **PR #47 (TF-7)** — gate 2+6. Pair that must land together: ALB SG → CloudFront prefix list + `trust proxy` 1→2. **Discovery: under `trust proxy 1`, `req.ip` was CloudFront's edge IP for ALL traffic** — the API-1 flood floor has been keying on edge IPs. Before apply: TRO-295 (SG rule quota, High), TRO-294 (doc health-check URL breaks).
 - **Render image-deploy switch** — runbook in `docs/deployment-artifact-lifecycle.md` (RULE-5), not executed.
