@@ -11,10 +11,18 @@ Assignment rule 5. This document is the third leg of a three-step progression:
 3. **The Render switch** (this ticket prepares it; a human executes it — see
    [Render switch runbook](#render-switch-runbook-human-executed--held)) changes the `ship` service
    from *building the Dockerfile itself on Render's infrastructure* to *pulling and running the exact
-   image CI already built and tested*. Until that switch happens, Render performs its own,
+   image CI already built from source that had already passed `verify` (typecheck, full build, unit
+   tests vs. the quarantine baseline)*. Until that switch happens, Render performs its own,
    independent build of the same Dockerfile — same source, but a **different build**, run in a
    different environment, at a different time, than the one CI verified. That gap is what "build
    once" closes.
+
+   **What this does NOT establish:** `verify` checks the source; it does not boot the built
+   container and probe it. Neither this ticket nor `verify` adds a container-level smoke test (e.g.,
+   `docker run` the image and hit `/health`) — the image is *built from tested source*, not itself
+   *tested as a running container*, in CI. That gap is real and pre-existing (it applies equally to
+   Render's own current build-and-run today); closing it would be a `docker run` + health-check step
+   added to `build-image`, which is a reasonable follow-up but is not part of this ticket's scope.
 
 ## CI builds and pushes the image
 
@@ -114,13 +122,16 @@ visibility (below) is decided.
 
 Pick one:
 
-- **Public (recommended).** Ship's GitHub repo is already public by deliberate decision (see
-  `memory-bank/progress.md`, 2026-07-28), so a public GHCR package for it is consistent, not a new
-  exposure, and needs no credential wiring on Render's side at all.
+- **Public.** Simpler — needs no credential wiring on Render's side at all — but it is a one-way,
+  human decision, not an automatic consequence of the repo already being public: the repo's
+  visibility decision was about source code, this is about a built artifact, and they are not
+  necessarily the same call. Before doing this, have a human actually look at what the image
+  contains (this Dockerfile does not bake in `DATABASE_URL`/`SESSION_SECRET` — those are runtime env
+  vars set on the container, not build args — but confirm that's still true before publishing, not
+  after) and confirm publishing it is acceptable. If so:
   GitHub UI → repo → **Packages** (right sidebar) → `ship` package → **Package settings** (gear) →
   **Danger Zone** → **Change visibility** → **Public** → confirm by typing the package name.
   **This is one-way** — GitHub's own docs state a public package cannot be made private again.
-  Confirm that's acceptable (it should be, given the repo itself) before doing it.
 - **Private, with a registry credential on Render.** Render dashboard → **Workspace Settings** →
   **Container Registry Credentials** → **Add credential**: registry `ghcr.io`, username a GitHub
   username, password a GitHub PAT (classic or fine-grained) scoped `read:packages` against
@@ -175,7 +186,11 @@ URL. Do not delete the existing service as part of this runbook without that con
 
 ### Step 4 — verify
 
-- `curl https://ship-rr6m.onrender.com/health` returns healthy.
+- `curl <active-service-url>/health` returns healthy, where `<active-service-url>` is
+  `https://ship-rr6m.onrender.com` if you took the in-place PATCH path, or the **new** service's own
+  auto-assigned `onrender.com` URL if you took the fallback dashboard path — do not curl the old
+  `ship-rr6m` URL expecting it to reflect a fallback-path deploy, since in that case it's still the
+  untouched, unconverted original service.
 - In the Render dashboard, confirm the service's **Deploys** tab now shows an image-based deploy
   (an image digest/tag, not "building commit `<sha>`..."). This is the actual proof the switch took
   — a git-build service keeps showing build logs even when nothing else about it changed, so "it's

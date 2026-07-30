@@ -254,16 +254,38 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The SHA tag alone is always valid. The branch tag is only added when we
+      # are actually pushing (main only): `github.ref_name` is safe there
+      # ("main"), but for a `pull_request` event it resolves to something like
+      # `42/merge` — a slash, which is not a legal Docker tag — and Docker
+      # rejects the whole `-t` list even though push is false. Computing the
+      # list in a step keeps that invalid string out of build-push-action's
+      # `tags:` input entirely instead of relying on push:false to make it
+      # harmless.
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          TAGS="${IMAGE}:${GITHUB_SHA}"
+          if [ "${SHOULD_PUSH}" = "true" ]; then
+            TAGS="${TAGS}
+          ${IMAGE}:${GITHUB_REF_NAME}"
+          fi
+          {
+            echo "list<<TAGEOF"
+            echo "$TAGS"
+            echo "TAGEOF"
+          } >> "$GITHUB_OUTPUT"
+
       # Tags: the full git SHA (immutable — this is the artifact identity the
-      # rollback runbook promotes/demotes by) plus a moving tag for the branch
-      # (`main` on every push there, since pushing is main-only for now).
+      # rollback runbook promotes/demotes by) plus, only on a push to main, a
+      # moving tag for the branch (always `main`, since pushing is main-only
+      # for now).
       - name: Build image (push only on a main push)
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           push: ${{ env.SHOULD_PUSH == 'true' }}
-          tags: |
-            ${{ env.IMAGE }}:${{ github.sha }}
-            ${{ env.IMAGE }}:${{ github.ref_name }}
+          tags: ${{ steps.tags.outputs.list }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

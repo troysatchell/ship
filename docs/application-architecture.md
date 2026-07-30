@@ -479,8 +479,8 @@ CMD ["node", "dist/index.js"]
 - **Files**: S3 (attachments)
 
 > This section describes the original AWS-only design. The submission target actually running today
-> is Render (`https://ship-rr6m.onrender.com`, docker runtime) — see
-> `memory-bank/techContext.md`'s Render section for current, verified facts, and
+> is Render (`https://ship-rr6m.onrender.com`, docker runtime) — see the Render section in
+> [`memory-bank/techContext.md`](../memory-bank/techContext.md) for current, verified facts, and
 > [`docs/deployment-artifact-lifecycle.md`](./deployment-artifact-lifecycle.md) for how the
 > container image is built once in CI, stored in GHCR, and promoted to Render by SHA (rule 5,
 > TRO-246).

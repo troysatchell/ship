@@ -64,7 +64,8 @@ docker build -t ship:tro-246-local -f Dockerfile .
 docker images ship:tro-246-local   # 482 MB, observed this session
 
 # YAML-validate the workflow (repo's own transitive js-yaml dep, no actionlint installed):
-node -e "require('js-yaml_absolute_path').load(require('fs').readFileSync('.github/workflows/ci.yml','utf8'))"
+node -e "require('./node_modules/.pnpm/js-yaml@4.1.1/node_modules/js-yaml') \
+  .load(require('fs').readFileSync('.github/workflows/ci.yml','utf8')); console.log('ok')"
 
 # The real test of the CI behavior itself is derived, not run here — the first push to `main`
 # after this merges is the live test of build-image actually pushing to GHCR.
