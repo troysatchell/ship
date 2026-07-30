@@ -189,6 +189,11 @@ resource "aws_iam_role_policy" "eb_secrets_manager_access" {
         Effect = "Allow"
         Action = [
           "secretsmanager:GetSecretValue",
+          # Ported from modules/ssm/main.tf (TRO-235 / TF-2): saveCAIACredentials()
+          # in api/src/services/secrets-manager.ts:136 calls PutSecretValueCommand
+          # to update an existing secret. Without this action that call fails with
+          # AccessDenied under this role — CreateSecret/UpdateSecret do not cover it.
+          "secretsmanager:PutSecretValue",
           "secretsmanager:CreateSecret",
           "secretsmanager:UpdateSecret",
           "secretsmanager:TagResource"
