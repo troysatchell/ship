@@ -132,6 +132,35 @@ test.describe('Inline Comments', () => {
     await expect(page.locator('.comment-highlight')).not.toBeVisible({ timeout: 10000 })
   })
 
+  // ERR-6 / TRO-193: dismissing the pending comment by clicking away (not
+  // Escape) previously left the mark orphaned in persisted content with no
+  // backing comment row (audit/error-handling/raw/probe8-comment-orphan-blur.json).
+  test('dismissing a comment by clicking away removes the highlight', async ({ page }) => {
+    await createDocumentWithText(page, 'This text will have a comment dismissed by clicking away.')
+
+    await selectText(page, 'dismissed by clicking away')
+
+    await page.getByRole('button', { name: 'Comment' }).click()
+
+    const commentInput = page.getByRole('textbox', { name: 'Write a comment...' })
+    await expect(commentInput).toBeVisible({ timeout: 3000 })
+
+    // Click away from the pending input — outside the comment widget entirely
+    // — rather than pressing Escape or submitting.
+    await page.locator('[data-testid="tiptap-editor"]').click({ position: { x: 5, y: 5 } })
+
+    // Highlight should be removed (auto-retries until timeout)
+    await expect(page.locator('.comment-highlight')).not.toBeVisible({ timeout: 10000 })
+
+    // The document must not still be carrying the mark once dismissed —
+    // reload and confirm it does not come back (this is exactly what
+    // probe8-comment-orphan-blur.json found broken: the mark survived reload
+    // with 0 backing comment rows).
+    await page.reload()
+    await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 5000 })
+    await expect(page.locator('.comment-highlight')).not.toBeVisible({ timeout: 5000 })
+  })
+
   test('inline comment card shows quoted text, author, and timestamp', async ({ page }) => {
     await createDocumentWithText(page, 'The quoted text should appear in the comment card.')
 
