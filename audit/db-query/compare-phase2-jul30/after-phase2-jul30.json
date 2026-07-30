@@ -1,0 +1,134 @@
+{
+  "category": "db-query",
+  "mode": "compare",
+  "label": "phase2-jul30",
+  "commit": "34a0aeb36fa96c4a81081486b706c23ca58773bd",
+  "dirty": false,
+  "date": "2026-07-30T22:10:00Z",
+  "baselineRef": "../baseline.json",
+  "environment": {
+    "hardware": "Apple Mac16,7 — 14 cores, 24 GB RAM (arm64)",
+    "os": "Darwin 25.5.0 arm64 / macOS 26.5.1",
+    "node": "v23.2.0",
+    "dataVolume": "500 documents (254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project / 6 standup / 5 program), 20 users, 813 document_associations — verified via SELECT before measuring, byte-identical to baseline (deterministic seed-augment.ts, fixed LCG/epoch)",
+    "concurrency": "1 (serial, single headless browser session) — matches baseline; this category measures query shape, not throughput",
+    "scaffolding": [
+      "Isolated worktree Ship-wt-db_compare, branch measure/db-query-compare-jul30, at main 34a0aeb (contains all merged DB fixes: DB-2/API-6, DB-4/API-5, DB-5, DB-6, DB-7/DB-10, DB-8).",
+      "Exclusive database ship_wt_db_compare on the same ship-audit-pg (postgres:15-alpine, :5433) container baseline used — same PG major version, so EXPLAIN plans are comparable.",
+      "Statement logging scoped PER-DATABASE (ALTER DATABASE ship_wt_db_compare SET log_statement='all'/log_min_duration_statement=0), not ALTER SYSTEM — the container is shared with concurrent sibling-worktree factory agents, verified that ship_dev's log_statement stayed 'none' throughout. log_line_prefix ('%m [%p] ') was already set container-wide from a prior run and was left untouched (its GUC context is 'sighup', not settable per-database, and no change was needed). REVERTED at end of run via ALTER DATABASE ... RESET on both settings + verified back to log_statement=none, log_min_duration_statement=-1.",
+      "pnpm db:seed then ./api/node_modules/.bin/tsx audit/seed-augment.ts, verified row counts match baseline exactly (500 docs / 20 users / 813 associations, identical per-type breakdown).",
+      "Suppressed the Action Items modal via localStorage 'ship:disableActionItemsModal' (page.addInitScript) — it reopens on every full-page navigation and would otherwise block the Search flow's Meta+K interaction; purely client-side, fires no additional queries.",
+      "Flow-capture harness run THREE full times (not baseline's one run of 2 iterations) to separate genuine steady-state from timing-dependent background-refetch noise (see 'Methodology note on jitter' below). Reported per-flow numbers are the majority value across the 3 runs' iter1(cold)/iter2(steady) pairs.",
+      "API server: tsx watch src/index.ts, api/.env.local (PORT=3082). Web: vite dev server, VITE_PORT=5255 API_PORT=3082. Both killed at end of run.",
+      "Full test suite (pnpm test: 55 API files/662 tests + 49 web files/420 tests) run AFTER all query/EXPLAIN measurements were captured, since it TRUNCATEs this worktree's database by design. All 1082 tests passed, 0 failures — behavior preserved."
+    ]
+  },
+  "metrics": {
+    "flow_load_main_page_queries_steady": 21,
+    "flow_load_main_page_queries_cold": 21,
+    "flow_load_main_page_slowest_ms": 0.776,
+    "flow_load_main_page_n_plus_one": "no",
+    "flow_load_main_page_delta_steady_pct": -19.23,
+
+    "flow_view_a_document_queries_steady": 41,
+    "flow_view_a_document_queries_cold": 35,
+    "flow_view_a_document_slowest_ms": 1.277,
+    "flow_view_a_document_n_plus_one": "no",
+    "flow_view_a_document_delta_steady_pct": -8.89,
+    "flow_view_a_document_delta_cold_pct": -20.45,
+
+    "flow_list_issues_queries_steady": 13,
+    "flow_list_issues_queries_cold": 14,
+    "flow_list_issues_slowest_ms": 0.787,
+    "flow_list_issues_n_plus_one": "no",
+    "flow_list_issues_delta_steady_pct": -23.53,
+    "flow_list_issues_delta_cold_pct": -17.65,
+
+    "flow_load_sprint_board_queries_steady": 41,
+    "flow_load_sprint_board_queries_cold": 55,
+    "flow_load_sprint_board_slowest_ms": 1.325,
+    "flow_load_sprint_board_n_plus_one": "no",
+    "flow_load_sprint_board_delta_steady_pct": -19.61,
+    "flow_load_sprint_board_delta_cold_pct": -15.38,
+
+    "flow_search_content_queries_steady": 38,
+    "flow_search_content_queries_cold": 24,
+    "flow_search_content_slowest_ms": 5.165,
+    "flow_search_content_n_plus_one": "no",
+    "flow_search_content_delta_steady_pct": -13.64,
+    "flow_search_content_delta_cold_pct": -20.0,
+
+    "flow_load_week_dashboard_queries_steady": 13,
+    "flow_load_week_dashboard_queries_cold": 30,
+    "flow_load_week_dashboard_slowest_ms": 0.682,
+    "flow_load_week_dashboard_n_plus_one": "no (was YES at baseline — DB-4 fix confirmed; not one of the 5 required userFlows, kept as the direct SQL-layer confirmation of DB-4/API-5, same as baseline included it)",
+    "flow_load_week_dashboard_delta_steady_pct": -69.05,
+    "flow_load_week_dashboard_delta_cold_pct": -48.28,
+
+    "session_update_max_ms_baseline": 4.764,
+    "session_update_max_ms_compare": 0.614,
+    "session_update_delta_pct": -87.11,
+    "session_update_executions_in_capture_baseline": 121,
+    "session_update_executions_in_capture_compare_run3": 14,
+
+    "explain_q1_issues_list_width_baseline": 1023,
+    "explain_q1_issues_list_width_compare": 335,
+    "explain_q1_width_delta_pct": -67.25,
+    "explain_q1_planning_ms_baseline_cold": 3.058,
+    "explain_q1_planning_ms_compare_steady_avg": 2.153,
+    "explain_q1_execution_ms_baseline_cold": 1.409,
+    "explain_q1_execution_ms_compare_steady_avg": 0.81,
+
+    "explain_q2_documents_list_execution_ms_baseline": 0.538,
+    "explain_q2_documents_list_execution_ms_compare": 0.488,
+    "explain_q2_documents_list_plan_shape": "Seq Scan + quicksort in both baseline and compare (unchanged — not targeted by any merged fix; sorts by position/created_at, not the DB-10 index's updated_at DESC)",
+
+    "explain_q3_assoc_batch_estimate_baseline_rows": 25,
+    "explain_q3_assoc_batch_actual_baseline_rows": 707,
+    "explain_q3_assoc_batch_estimate_compare_rows": 635,
+    "explain_q3_assoc_batch_actual_compare_rows": 707,
+    "explain_q3_estimate_error_baseline_x": 28.28,
+    "explain_q3_estimate_error_compare_x": 1.11,
+    "explain_q3_execution_ms_baseline_full254": 1.168,
+    "explain_q3_execution_ms_compare_full254": 0.902,
+    "explain_q3_execution_delta_full254_pct": -22.78,
+    "explain_q3_planning_ms_baseline_full254": 0.753,
+    "explain_q3_planning_ms_compare_full254": 1.834,
+    "explain_q3_planning_delta_full254_pct": 143.56,
+    "explain_q3_execution_ms_compare_realistic20": 0.301,
+    "explain_q3_planning_ms_compare_realistic20": 0.648,
+
+    "explain_q4_weeks_aggregate_buffers_baseline": 1182,
+    "explain_q4_weeks_aggregate_buffers_compare": 750,
+    "explain_q4_buffers_delta_pct": -36.55,
+    "explain_q4_execution_ms_baseline": 1.192,
+    "explain_q4_execution_ms_compare": 0.798,
+    "explain_q4_execution_delta_pct": -33.05,
+    "explain_q4_plan_shape_change": "2 independent Seq Scans on document_associations (SubPlan 7/8, Rows Removed by Filter: 803 each, loops=5 = 8130 rows read) replaced by 1 LEFT JOIN LATERAL using Bitmap Index Scan on idx_document_associations_related_type",
+
+    "explain_q5_ticket_lookup_plan_baseline": "Seq Scan, Rows Removed by Filter: 499, Buffers: shared hit=66",
+    "explain_q5_ticket_lookup_plan_compare": "Index Scan using idx_documents_ticket_number, Buffers: shared hit=6",
+    "explain_q5_buffers_delta_pct": -90.91,
+
+    "test_suite_api_files_passed": 55,
+    "test_suite_api_tests_passed": 662,
+    "test_suite_web_files_passed": 49,
+    "test_suite_web_tests_passed": 420,
+    "test_suite_failures": 0
+  },
+  "targetVerdict": {
+    "target": "≥20% query-count reduction on ≥1 flow, OR ≥50% improvement on the slowest query, with before/after EXPLAIN ANALYZE",
+    "met": true,
+    "clearingEvidence": [
+      "List issues (one of the 5 required userFlows): steady-state 17 → 13 queries, -23.5%, reproducible in 3 of 4 samples across 2 independent full harness runs.",
+      "Slowest-query route: baseline's #1 slowest statement overall (UPDATE sessions SET last_activity, max 4.764ms, 121 executions across the capture) is reduced to max 0.614ms (-87.1%) and 14 executions across an equivalent 3-run capture — DB-2's throttle working exactly as designed, confirmed structurally via EXPLAIN (isolated execution 0.178ms at baseline, matching the new steady-state closely, meaning the 4.764ms was row-lock/WAL contention from concurrent duplicate writes that no longer happens).",
+      "Bonus flow Load week dashboard (not required, but the flow baseline itself added to confirm DB-4 at the SQL layer): steady-state 42 → 13 queries, -69.0%, and N+1 flips from YES to NO — the clearest single confirmation of DB-4 in this report."
+    ],
+    "contradictingExpectation": [
+      "The task brief's expectation framed 'the dashboard/main-page flow' as one thing, citing '30→6 queries' for DB-4. These are two different flows in this methodology: 'Load main page' navigates to '/' which redirects to /my-week (confirmed unchanged since baseline commit 076a183), NOT /dashboard. DB-4's fix (web/src/pages/Dashboard.tsx) only touches /dashboard, which is the separate 'Load week dashboard' flow — not one of the 5 required userFlows. 'Load main page' itself only benefits from DB-2 and misses the 20% bar (-19.2%, both cold and steady). The '30→6' figure does not match this report's or baseline's own numbers for either flow and was not independently reproduced; it likely comes from a different (endpoint-level, not full-flow) measurement referenced in memory-bank/activeContext.md.",
+      "Q1 (/api/issues list, DB-5): row width dropped -67.3% (1023→335) as expected, but raw Planning/Execution ms did NOT improve — compare's 3-run steady average (2.15ms planning / 0.81ms execution) is nominally higher than baseline's reported 3-run average (~1.76ms / ~0.53ms). DB-5's evidence is payload/width, not latency — consistent with baseline's own framing of this fix as 'payload evidence, not query-count' — but the raw ms numbers should not be read as an execution-time win.",
+      "Q3 (association batch, DB-8) at baseline's own full-254-id scale: Planning Time got WORSE, +143.6% (0.753ms → 1.834ms), because parsing a literal 254-row VALUES list costs more than a single array parameter. Execution time and estimate accuracy both improved (-22.8% execution; estimate error 28.3x-under → 1.11x-under). At the realistic page size the production code actually uses (20 ids, per the PR's own stated measurement), both Planning (0.648ms) and Execution (0.301ms) are cheap in absolute terms — the planning-time regression is specific to an unrealistically large single batch.",
+      "The overall slowest statement in the compare capture is no longer the session UPDATE (now fast and rare) but /api/documents' unfiltered list query (Q2), which is NOT nominally faster than baseline (3.193ms baseline max vs 3.585-5.165ms across 3 compare runs) — untouched by any merged fix, sorts by position/created_at rather than the column DB-10's new index covers (updated_at DESC), so no regression is claimed, but no improvement either."
+    ]
+  }
+}

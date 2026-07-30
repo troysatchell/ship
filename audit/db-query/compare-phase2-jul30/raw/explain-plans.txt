@@ -1,0 +1,294 @@
+################ Q1  GET /api/issues  (CURRENT list query - DB-5: d.content dropped)
+                                                                                         QUERY PLAN                                                                                          
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=157.41..158.06 rows=258 width=335) (actual time=1.121..1.131 rows=254 loops=1)
+   Sort Key: (CASE (d.properties ->> 'priority'::text) WHEN 'urgent'::text THEN 1 WHEN 'high'::text THEN 2 WHEN 'medium'::text THEN 3 WHEN 'low'::text THEN 4 ELSE 5 END), d.updated_at DESC
+   Sort Method: quicksort  Memory: 111kB
+   Buffers: shared hit=79
+   ->  Hash Left Join  (cost=64.31..147.08 rows=258 width=335) (actual time=0.097..0.917 rows=254 loops=1)
+         Hash Cond: ((d.workspace_id = person_doc.workspace_id) AND ((d.properties ->> 'assignee_id'::text) = (person_doc.properties ->> 'user_id'::text)))
+         Buffers: shared hit=73
+         ->  Hash Left Join  (cost=15.40..90.81 rows=258 width=346) (actual time=0.043..0.752 rows=254 loops=1)
+               Hash Cond: (((d.properties ->> 'assignee_id'::text))::uuid = u.id)
+               Buffers: shared hit=68
+               ->  Seq Scan on documents d  (cost=0.00..74.62 rows=258 width=314) (actual time=0.013..0.516 rows=254 loops=1)
+                     Filter: ((archived_at IS NULL) AND (deleted_at IS NULL) AND (workspace_id = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0'::uuid) AND (document_type = 'issue'::document_type))
+                     Rows Removed by Filter: 246
+                     Buffers: shared hit=67
+               ->  Hash  (cost=12.40..12.40 rows=240 width=48) (actual time=0.014..0.015 rows=20 loops=1)
+                     Buckets: 1024  Batches: 1  Memory Usage: 10kB
+                     Buffers: shared hit=1
+                     ->  Seq Scan on users u  (cost=0.00..12.40 rows=240 width=48) (actual time=0.007..0.008 rows=20 loops=1)
+                           Buffers: shared hit=1
+         ->  Hash  (cost=48.61..48.61 rows=20 width=195) (actual time=0.045..0.045 rows=20 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 12kB
+               Buffers: shared hit=5
+               ->  Bitmap Heap Scan on documents person_doc  (cost=4.30..48.61 rows=20 width=195) (actual time=0.013..0.035 rows=20 loops=1)
+                     Recheck Cond: (document_type = 'person'::document_type)
+                     Filter: (workspace_id = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0'::uuid)
+                     Heap Blocks: exact=4
+                     Buffers: shared hit=5
+                     ->  Bitmap Index Scan on idx_documents_document_type  (cost=0.00..4.30 rows=20 width=0) (actual time=0.010..0.010 rows=30 loops=1)
+                           Index Cond: (document_type = 'person'::document_type)
+                           Buffers: shared hit=1
+ Planning:
+   Buffers: shared hit=698
+ Planning Time: 2.545 ms
+ Execution Time: 1.237 ms
+(34 rows)
+
+################ Q2  GET /api/documents  (unfiltered document list - UNCHANGED shape, control)
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=96.18..97.45 rows=508 width=300) (actual time=0.432..0.450 rows=500 loops=1)
+   Sort Key: "position", created_at DESC
+   Sort Method: quicksort  Memory: 190kB
+   Buffers: shared hit=67
+   ->  Seq Scan on documents  (cost=0.00..73.35 rows=508 width=300) (actual time=0.004..0.099 rows=500 loops=1)
+         Filter: ((archived_at IS NULL) AND (deleted_at IS NULL) AND (workspace_id = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0'::uuid))
+         Buffers: shared hit=67
+ Planning:
+   Buffers: shared hit=13
+ Planning Time: 0.223 ms
+ Execution Time: 0.488 ms
+(11 rows)
+
+################ Q3  association batch (CURRENT - DB-8: VALUES join replacing = ANY)
+                                                                   QUERY PLAN                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=57.28..57.40 rows=50 width=103) (actual time=0.266..0.269 rows=60 loops=1)
+   Sort Key: da.document_id, da.relationship_type, da.created_at
+   Sort Method: quicksort  Memory: 31kB
+   Buffers: shared hit=44
+   ->  Nested Loop Left Join  (cost=0.78..55.87 rows=50 width=103) (actual time=0.062..0.224 rows=60 loops=1)
+         Buffers: shared hit=36
+         ->  Hash Join  (cost=0.50..24.18 rows=50 width=44) (actual time=0.048..0.174 rows=60 loops=1)
+               Hash Cond: (da.document_id = "*VALUES*".column1)
+               Buffers: shared hit=12
+               ->  Seq Scan on document_associations da  (cost=0.00..20.13 rows=813 width=44) (actual time=0.019..0.107 rows=813 loops=1)
+                     Buffers: shared hit=12
+               ->  Hash  (cost=0.25..0.25 rows=20 width=16) (actual time=0.009..0.009 rows=20 loops=1)
+                     Buckets: 1024  Batches: 1  Memory Usage: 9kB
+                     ->  Values Scan on "*VALUES*"  (cost=0.00..0.25 rows=20 width=16) (actual time=0.001..0.003 rows=20 loops=1)
+         ->  Memoize  (cost=0.28..0.65 rows=1 width=214) (actual time=0.001..0.001 rows=1 loops=60)
+               Cache Key: da.related_id
+               Cache Mode: logical
+               Hits: 52  Misses: 8  Evictions: 0  Overflows: 0  Memory Usage: 5kB
+               Buffers: shared hit=24
+               ->  Index Scan using documents_pkey on documents d  (cost=0.27..0.64 rows=1 width=214) (actual time=0.003..0.003 rows=1 loops=8)
+                     Index Cond: (id = da.related_id)
+                     Buffers: shared hit=24
+ Planning:
+   Buffers: shared hit=150
+ Planning Time: 0.648 ms
+ Execution Time: 0.301 ms
+(26 rows)
+
+################ Q4  GET /api/weeks  (CURRENT - DB-6: LATERAL join replacing 3 correlated subqueries)
+                                                                                              QUERY PLAN                                                                                              
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Sort  (cost=311.78..311.78 rows=1 width=519) (actual time=0.543..0.546 rows=5 loops=1)
+   Sort Key: p.title
+   Sort Method: quicksort  Memory: 27kB
+   Buffers: shared hit=750
+   ->  Nested Loop Left Join  (cost=57.27..311.77 rows=1 width=519) (actual time=0.196..0.518 rows=5 loops=1)
+         Buffers: shared hit=747
+         ->  Nested Loop Left Join  (cost=57.11..125.81 rows=1 width=492) (actual time=0.056..0.160 rows=5 loops=1)
+               Buffers: shared hit=208
+               ->  Nested Loop Left Join  (cost=4.97..73.63 rows=1 width=444) (actual time=0.028..0.055 rows=5 loops=1)
+                     Buffers: shared hit=35
+                     ->  Nested Loop Left Join  (cost=4.69..72.39 rows=1 width=246) (actual time=0.022..0.044 rows=5 loops=1)
+                           Buffers: shared hit=20
+                           ->  Bitmap Heap Scan on documents d  (cost=4.42..64.08 rows=1 width=230) (actual time=0.014..0.022 rows=5 loops=1)
+                                 Recheck Cond: (document_type = 'sprint'::document_type)
+                                 Filter: ((workspace_id = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0'::uuid) AND (((properties ->> 'sprint_number'::text))::integer = 14))
+                                 Rows Removed by Filter: 30
+                                 Heap Blocks: exact=4
+                                 Buffers: shared hit=5
+                                 ->  Bitmap Index Scan on idx_documents_document_type  (cost=0.00..4.42 rows=36 width=0) (actual time=0.006..0.006 rows=35 loops=1)
+                                       Index Cond: (document_type = 'sprint'::document_type)
+                                       Buffers: shared hit=1
+                           ->  Index Scan using idx_document_associations_document_type on document_associations prog_da  (cost=0.28..8.29 rows=1 width=32) (actual time=0.004..0.004 rows=1 loops=5)
+                                 Index Cond: ((document_id = d.id) AND (relationship_type = 'program'::relationship_type))
+                                 Buffers: shared hit=15
+                     ->  Index Scan using documents_pkey on documents p  (cost=0.27..1.24 rows=1 width=214) (actual time=0.002..0.002 rows=1 loops=5)
+                           Index Cond: (id = prog_da.related_id)
+                           Buffers: shared hit=15
+               ->  Aggregate  (cost=52.15..52.16 rows=1 width=48) (actual time=0.020..0.021 rows=1 loops=5)
+                     Buffers: shared hit=173
+                     ->  Nested Loop  (cost=4.47..52.08 rows=5 width=187) (actual time=0.020..0.020 rows=0 loops=5)
+                           Buffers: shared hit=173
+                           ->  Bitmap Heap Scan on document_associations rda  (cost=4.20..14.59 rows=5 width=16) (actual time=0.004..0.006 rows=10 loops=5)
+                                 Recheck Cond: ((related_id = d.id) AND (relationship_type = 'sprint'::relationship_type))
+                                 Heap Blocks: exact=12
+                                 Buffers: shared hit=17
+                                 ->  Bitmap Index Scan on idx_document_associations_related_type  (cost=0.00..4.20 rows=5 width=0) (actual time=0.003..0.003 rows=10 loops=5)
+                                       Index Cond: ((related_id = d.id) AND (relationship_type = 'sprint'::relationship_type))
+                                       Buffers: shared hit=5
+                           ->  Index Scan using documents_pkey on documents rt  (cost=0.27..7.49 rows=1 width=187) (actual time=0.001..0.001 rows=0 loops=52)
+                                 Index Cond: (id = rda.document_id)
+                                 Filter: ((properties ->> 'outcome'::text) IS NOT NULL)
+                                 Rows Removed by Filter: 1
+                                 Buffers: shared hit=156
+         ->  Index Scan using users_pkey on users u  (cost=0.15..8.17 rows=1 width=80) (actual time=0.001..0.001 rows=0 loops=5)
+               Index Cond: (id = (((d.properties -> 'assignee_ids'::text) ->> 0))::uuid)
+               Buffers: shared hit=5
+         SubPlan 1
+           ->  Result  (cost=0.28..8.30 rows=1 width=32) (actual time=0.002..0.002 rows=0 loops=5)
+                 One-Time Filter: ((d.properties ->> 'owner_id'::text) IS NOT NULL)
+                 Buffers: shared hit=10
+                 ->  Index Scan using documents_pkey on documents op  (cost=0.28..8.30 rows=1 width=171) (actual time=0.001..0.001 rows=0 loops=5)
+                       Index Cond: (id = ((d.properties ->> 'owner_id'::text))::uuid)
+                       Filter: ((document_type = 'person'::document_type) AND (workspace_id = d.workspace_id))
+                       Buffers: shared hit=10
+         SubPlan 2
+           ->  Aggregate  (cost=52.12..52.13 rows=1 width=8) (actual time=0.016..0.016 rows=1 loops=5)
+                 Buffers: shared hit=173
+                 ->  Nested Loop  (cost=4.47..52.11 rows=3 width=0) (actual time=0.007..0.015 rows=10 loops=5)
+                       Buffers: shared hit=173
+                       ->  Bitmap Heap Scan on document_associations ida  (cost=4.20..14.59 rows=5 width=16) (actual time=0.003..0.004 rows=10 loops=5)
+                             Recheck Cond: ((related_id = d.id) AND (relationship_type = 'sprint'::relationship_type))
+                             Heap Blocks: exact=12
+                             Buffers: shared hit=17
+                             ->  Bitmap Index Scan on idx_document_associations_related_type  (cost=0.00..4.20 rows=5 width=0) (actual time=0.002..0.002 rows=10 loops=5)
+                                   Index Cond: ((related_id = d.id) AND (relationship_type = 'sprint'::relationship_type))
+                                   Buffers: shared hit=5
+                       ->  Index Scan using documents_pkey on documents i  (cost=0.27..7.49 rows=1 width=16) (actual time=0.001..0.001 rows=1 loops=52)
+                             Index Cond: (id = ida.document_id)
+                             Filter: (document_type = 'issue'::document_type)
+                             Rows Removed by Filter: 0
+                             Buffers: shared hit=156
+         SubPlan 3
+           ->  Aggregate  (cost=52.20..52.21 rows=1 width=8) (actual time=0.021..0.021 rows=1 loops=5)
+                 Buffers: shared hit=173
+                 ->  Nested Loop  (cost=4.48..52.20 rows=1 width=0) (actual time=0.009..0.021 rows=3 loops=5)
+                       Buffers: shared hit=173
+                       ->  Bitmap Heap Scan on document_associations ida_1  (cost=4.20..14.59 rows=5 width=16) (actual time=0.003..0.004 rows=10 loops=5)
+                             Recheck Cond: ((related_id = d.id) AND (relationship_type = 'sprint'::relationship_type))
+                             Heap Blocks: exact=12
+                             Buffers: shared hit=17
+                             ->  Bitmap Index Scan on idx_document_associations_related_type  (cost=0.00..4.20 rows=5 width=0) (actual time=0.003..0.003 rows=10 loops=5)
+                                   Index Cond: ((related_id = d.id) AND (relationship_type = 'sprint'::relationship_type))
+                                   Buffers: shared hit=5
+                       ->  Memoize  (cost=0.28..7.51 rows=1 width=16) (actual time=0.001..0.001 rows=0 loops=52)
+                             Cache Key: ida_1.document_id
+                             Cache Mode: logical
+                             Hits: 0  Misses: 52  Evictions: 0  Overflows: 0  Memory Usage: 5kB
+                             Buffers: shared hit=156
+                             ->  Index Scan using documents_pkey on documents i_1  (cost=0.27..7.50 rows=1 width=16) (actual time=0.001..0.001 rows=0 loops=52)
+                                   Index Cond: (id = ida_1.document_id)
+                                   Filter: ((document_type = 'issue'::document_type) AND ((properties ->> 'state'::text) = 'done'::text))
+                                   Rows Removed by Filter: 1
+                                   Buffers: shared hit=156
+         SubPlan 4
+           ->  Aggregate  (cost=52.20..52.21 rows=1 width=8) (actual time=0.022..0.022 rows=1 loops=5)
+                 Buffers: shared hit=173
+                 ->  Nested Loop  (cost=4.48..52.20 rows=1 width=0) (actual time=0.010..0.022 rows=3 loops=5)
+                       Buffers: shared hit=173
+                       ->  Bitmap Heap Scan on document_associations ida_2  (cost=4.20..14.59 rows=5 width=16) (actual time=0.003..0.004 rows=10 loops=5)
+                             Recheck Cond: ((related_id = d.id) AND (relationship_type = 'sprint'::relationship_type))
+                             Heap Blocks: exact=12
+                             Buffers: shared hit=17
+                             ->  Bitmap Index Scan on idx_document_associations_related_type  (cost=0.00..4.20 rows=5 width=0) (actual time=0.002..0.002 rows=10 loops=5)
+                                   Index Cond: ((related_id = d.id) AND (relationship_type = 'sprint'::relationship_type))
+                                   Buffers: shared hit=5
+                       ->  Memoize  (cost=0.28..7.51 rows=1 width=16) (actual time=0.001..0.001 rows=0 loops=52)
+                             Cache Key: ida_2.document_id
+                             Cache Mode: logical
+                             Hits: 0  Misses: 52  Evictions: 0  Overflows: 0  Memory Usage: 5kB
+                             Buffers: shared hit=156
+                             ->  Index Scan using documents_pkey on documents i_2  (cost=0.27..7.50 rows=1 width=16) (actual time=0.001..0.001 rows=0 loops=52)
+                                   Index Cond: (id = ida_2.document_id)
+                                   Filter: ((document_type = 'issue'::document_type) AND ((properties ->> 'state'::text) = ANY ('{in_progress,in_review}'::text[])))
+                                   Rows Removed by Filter: 1
+                                   Buffers: shared hit=156
+         SubPlan 5
+           ->  Aggregate  (cost=12.83..12.85 rows=1 width=1) (actual time=0.005..0.005 rows=1 loops=5)
+                 Buffers: shared hit=5
+                 ->  Bitmap Heap Scan on documents pl  (cost=8.82..12.83 rows=1 width=0) (actual time=0.005..0.005 rows=0 loops=5)
+                       Recheck Cond: ((parent_id = d.id) AND (document_type = 'weekly_plan'::document_type))
+                       Buffers: shared hit=5
+                       ->  BitmapAnd  (cost=8.82..8.82 rows=1 width=0) (actual time=0.004..0.004 rows=0 loops=5)
+                             Buffers: shared hit=5
+                             ->  Bitmap Index Scan on idx_documents_parent_id  (cost=0.00..4.17 rows=3 width=0) (actual time=0.004..0.004 rows=0 loops=5)
+                                   Index Cond: (parent_id = d.id)
+                                   Buffers: shared hit=5
+                             ->  Bitmap Index Scan on idx_documents_document_type  (cost=0.00..4.39 rows=33 width=0) (never executed)
+                                   Index Cond: (document_type = 'weekly_plan'::document_type)
+ Planning:
+   Buffers: shared hit=121
+ Planning Time: 1.180 ms
+ Execution Time: 0.798 ms
+(132 rows)
+
+################ Q5  GET /api/issues/by-ticket/:number  (DB-7: ticket_number index)
+                                                                                QUERY PLAN                                                                                 
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop Left Join  (cost=25.84..60.45 rows=3 width=1067) (actual time=0.093..0.106 rows=5 loops=1)
+   Buffers: shared hit=18
+   ->  Hash Right Join  (cost=25.70..39.93 rows=3 width=1082) (actual time=0.059..0.068 rows=5 loops=1)
+         Hash Cond: (u.id = ((d.properties ->> 'assignee_id'::text))::uuid)
+         Buffers: shared hit=8
+         ->  Seq Scan on users u  (cost=0.00..12.40 rows=240 width=48) (actual time=0.003..0.004 rows=20 loops=1)
+               Buffers: shared hit=1
+         ->  Hash  (cost=25.66..25.66 rows=3 width=1050) (actual time=0.050..0.052 rows=5 loops=1)
+               Buckets: 1024  Batches: 1  Memory Usage: 10kB
+               Buffers: shared hit=7
+               ->  Hash Right Join  (cost=11.74..25.66 rows=3 width=1050) (actual time=0.039..0.041 rows=5 loops=1)
+                     Hash Cond: (creator.id = d.created_by)
+                     Buffers: shared hit=7
+                     ->  Seq Scan on users creator  (cost=0.00..12.40 rows=240 width=48) (actual time=0.003..0.004 rows=20 loops=1)
+                           Buffers: shared hit=1
+                     ->  Hash  (cost=11.71..11.71 rows=3 width=1018) (actual time=0.027..0.027 rows=5 loops=1)
+                           Buckets: 1024  Batches: 1  Memory Usage: 10kB
+                           Buffers: shared hit=6
+                           ->  Index Scan using idx_documents_ticket_number on documents d  (cost=0.14..11.71 rows=3 width=1018) (actual time=0.015..0.021 rows=5 loops=1)
+                                 Index Cond: ((workspace_id = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0'::uuid) AND (ticket_number = 1))
+                                 Buffers: shared hit=6
+   ->  Index Scan using idx_documents_person_user_id on documents person_doc  (cost=0.14..6.83 rows=1 width=195) (actual time=0.007..0.007 rows=1 loops=5)
+         Index Cond: ((properties ->> 'user_id'::text) = (d.properties ->> 'assignee_id'::text))
+         Filter: ((workspace_id = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0'::uuid) AND (workspace_id = d.workspace_id))
+         Buffers: shared hit=10
+ Planning:
+   Buffers: shared hit=22
+ Planning Time: 0.319 ms
+ Execution Time: 0.158 ms
+(29 rows)
+
+################ Q6  auth middleware session lookup (UNCHANGED, runs on every request)
+                                                           QUERY PLAN                                                            
+---------------------------------------------------------------------------------------------------------------------------------
+ Nested Loop  (cost=0.32..16.43 rows=1 width=89) (actual time=0.034..0.035 rows=1 loops=1)
+   Buffers: shared hit=5
+   InitPlan 1 (returns $0)
+     ->  Limit  (cost=0.00..0.03 rows=1 width=32) (actual time=0.012..0.013 rows=1 loops=1)
+           Buffers: shared hit=1
+           ->  Seq Scan on sessions  (cost=0.00..14.50 rows=450 width=32) (actual time=0.012..0.012 rows=1 loops=1)
+                 Buffers: shared hit=1
+   ->  Index Scan using sessions_pkey on sessions s  (cost=0.15..8.17 rows=1 width=88) (actual time=0.026..0.026 rows=1 loops=1)
+         Index Cond: (id = $0)
+         Buffers: shared hit=3
+   ->  Index Scan using users_pkey on users u  (cost=0.14..8.16 rows=1 width=17) (actual time=0.007..0.007 rows=1 loops=1)
+         Index Cond: (id = s.user_id)
+         Buffers: shared hit=2
+ Planning:
+   Buffers: shared hit=74
+ Planning Time: 0.287 ms
+ Execution Time: 0.053 ms
+(17 rows)
+
+################ SIZE CONTEXT
+        relname        | n_live_tup | total_size 
+-----------------------+------------+------------
+ document_associations |        813 | 416 kB
+ documents             |        500 | 1048 kB
+ users                 |         20 | 112 kB
+ sessions              |          3 | 80 kB
+(4 rows)
+
+################ documents column bloat: content / yjs_state share
+ content_bytes | yjs_bytes | properties_bytes | whole_row_bytes 
+---------------+-----------+------------------+-----------------
+ 342 kB        | 673 bytes | 84 kB            | 500 kB
+(1 row)
+
