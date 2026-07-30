@@ -100,6 +100,21 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     hostile case; reusing one that an earlier case closed asserts against a dead socket and proves
     nothing (TRO-276).
 
+21. **Type the boundaries that hand you `any` without saying so. G7b cannot see these.**
+    Every rule above about `as any` and `: any` greps for a token in your diff. These have no token,
+    which is exactly why they keep landing after a green gate:
+    - **`pool.query(...)` rows.** Untyped, the row is `any` and every field access after it is
+      unchecked. Write `pool.query<MyRow>(...)` with a small local interface. (TRO-178, TRO-226.)
+    - **`response.json()` / `res.json()`.** Returns `any`/`Promise<any>`. Define a response-body
+      interface and narrow before touching fields — including in tests and e2e specs.
+      (TRO-226 ×3 call sites, TRO-224.)
+    Reviewers filed **8 type-safety findings across 6 tickets**, and that undercounts it: the same
+    defect also got filed as `implicit-any`, `unsafe-cast`, `unsafe-type-cast` and `test-cast`.
+    Normalized, it is roughly **14 findings** and by a wide margin the largest recurring class in
+    this project — against an audit (TS-2) whose whole point is that 707 pg queries are untyped.
+    **When you record a finding in the ledger, use the slug `type-safety`** for anything in this
+    family; a fragmented taxonomy hides recurrence and is why this took six tickets to see.
+
 ## Log
 
 *Append dated entries as the factory learns. One line each, with the ticket that taught it.*
