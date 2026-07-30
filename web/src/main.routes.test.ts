@@ -86,3 +86,39 @@ describe('route-level code splitting (TRO-197 / BUN-1)', () => {
     expect(appSource).toContain('<Suspense fallback={<RouteFallback variant="panel" />}>');
   });
 });
+
+/**
+ * Regression test for TRO-219 / audit finding A11Y-5.
+ *
+ * `AppRoutes` had no `path="*"` route, so an unmatched path under `/` (the
+ * audit scanned `/search` and `/weeks`, neither of which is or ever was a
+ * real page - see NotFound.tsx) didn't match this parent `<Route path="/">`
+ * either. `<Routes>` rendered nothing at all: no `<main>`, no `<h1>`, no
+ * content - `audit/error-handling/raw/probe1b-routes.json` records
+ * `bodyTextLength: 0` for both, identical to a path picked because it's
+ * guaranteed not to exist (`/this-route-does-not-exist`).
+ *
+ * These assertions pin the catch-all as a *sibling* of the other authenticated
+ * routes (`dashboard`, `my-week`, ...), inside the same parent `<Route
+ * path="/">` that renders `<AppLayout />`. That placement matters: it's what
+ * makes the catch-all inherit `AppLayout`'s persistent `<main id="main-content">`
+ * (pages/App.tsx:542) for free, rather than needing (and risking duplicating)
+ * its own landmark.
+ */
+describe('catch-all route for unmatched paths (A11Y-5 / TRO-219)', () => {
+  const appRoutesSource = mainSource.slice(mainSource.indexOf('function AppRoutes()'));
+  const authenticatedRouteBlock = appRoutesSource.slice(
+    appRoutesSource.indexOf('<AppLayout />'),
+    appRoutesSource.indexOf('</Routes>', appRoutesSource.indexOf('<AppLayout />'))
+  );
+
+  it('declares a wildcard route as a sibling of the other authenticated routes', () => {
+    expect(authenticatedRouteBlock).toMatch(/<Route\s+path="\*"\s+element=\{<NotFoundPage\s*\/>\}\s*\/>/);
+  });
+
+  it('lazy-loads the not-found page like every other route (not statically imported)', () => {
+    expect(mainSource).toMatch(
+      /const NotFoundPage = React\.lazy\(\(\)\s*=>\s*import\('@\/pages\/NotFound'\)\.then\(\(m\)\s*=>\s*\(\{\s*default:\s*m\.NotFoundPage\s*\}\)\)\);/
+    );
+  });
+});
