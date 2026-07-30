@@ -8,6 +8,125 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-278 — [TF-7] ALB security group locked to CloudFront's prefix list; `trust proxy` corrected to the real 2-hop chain
+
+**HOLD FOR HUMAN REVIEW — security semantics (gate 6) + infra change (gate 2).** This changes a
+production security group and the trust boundary `req.ip` is computed from. See the post-deploy
+checklist below; several DoD items need live AWS traffic this environment cannot produce (no
+credentials, no `apply`).
+
+**Observed** (`terraform/security-groups.tf`, before this change): the ALB security group allowed
+ports 80/443 from `0.0.0.0/0` — not restricted to CloudFront — while `api/src/app.ts` set
+`trust proxy 1`. Filed from TRO-172's rate-limiter work, whose per-source-IP flood floor
+(`perSourceIpLimiter` in `api/src/middleware/rate-limit.ts`) depends on `req.ip` being unspoofable.
+
+**What changed — the security group (`terraform/security-groups.tf`).**
+
+- Added `data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing"`, looked up by AWS's
+  well-known name `com.amazonaws.global.cloudfront.origin-facing`.
+- The `aws_security_group.alb` ingress rules for ports 80 and 443 now use
+  `prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id]` instead of
+  `cidr_blocks = ["0.0.0.0/0"]`. Egress and every other resource in the file are untouched.
+- **Does anything else legitimately reach the ALB directly?** EB's own health checks travel
+  ALB -> EC2 target *inside* the VPC and are unaffected (`aws_security_group.eb_instance`'s
+  ingress-from-ALB rule is untouched). The automated deploy monitor
+  (`.claude/skills/ship-deploy/SKILL.md`) polls `aws elasticbeanstalk describe-environments`, an
+  AWS-API call, not an HTTP hit on the ALB — also unaffected. **DERIVED, breaks after this
+  deploys:** `.claude/CLAUDE.md`'s documented manual health check,
+  `http://ship-api-prod.eba-xsaqsg9h.us-east-1.elasticbeanstalk.com/health`, is a direct external
+  request to the ALB's own DNS name, bypassing CloudFront entirely — it will stop resolving from a
+  human's machine once this SG is live. CloudFront already proxies `/health` to `EB-API`
+  (`terraform/s3-cloudfront.tf`), so the equivalent check post-deploy is the CloudFront-fronted URL
+  instead. Not fixed here (out of this ticket's scope: only `terraform/security-groups.tf` plus the
+  `app.ts` hop count); flagged for the human reviewer to decide whether to update that doc.
+- **Residual limitation, DERIVED, not fixable by an SG alone:** a prefix-list rule authorizes by
+  *network origin*, not by *distribution identity* — any CloudFront distribution, including one an
+  attacker creates in their own AWS account with this ALB's public DNS name as a custom origin,
+  egresses from the same prefix-list ranges. The standard supplementary control is a shared-secret
+  header the app validates, checked only against *this* distribution. Not implemented here — it is
+  a defense-in-depth addition beyond this ticket's stated fix direction, not a gap this PR claims to
+  close.
+
+**What changed — the trust-proxy hop count (`api/src/app.ts`).**
+
+`terraform/s3-cloudfront.tf` puts the ALB behind CloudFront as a custom origin (`EB-API`), so the
+real chain is `client -> CloudFront -> ALB -> Express`: **two** reverse-proxy hops, not one.
+`trust proxy 1` under-counted by one hop — verified by reading the installed `proxy-addr`/
+`forwarded` packages (not by assumption): with N trusted hops, `req.ip` resolves to the (N+1)-th
+`X-Forwarded-For` entry counting from the end, because each honest proxy appends exactly one entry.
+At N=1, `req.ip` for **all** legitimate CloudFront-routed traffic resolved to CloudFront's own
+edge-server IP, never the real client — a correctness bug independent of the security-group finding.
+`app.set('trust proxy', 1)` is now `app.set('trust proxy', 2)`.
+
+**DERIVED, not verified against live traffic** (no AWS credentials/apply available here): AWS's
+documented behavior is that the ALB always appends the peer it directly observed to
+`X-Forwarded-For` (creating the header if absent), and CloudFront always sets `X-Forwarded-For`
+itself with the real viewer IP it observed for a custom origin, regardless of the origin request
+policy's header allow-list. Both are load-bearing assumptions behind trusting exactly 2 hops; a
+human with AWS access should confirm them post-deploy (checklist below).
+
+**The two changes are paired, not independent.** Raising the trusted hop count to 2 is only safe
+*because* the ALB is now unreachable except from CloudFront's ranges. Proven mechanically (not just
+asserted) by the third test below: with N=2 and only one real proxy hop actually present — i.e. the
+security group *not* enforcing this — a client's own forged `X-Forwarded-For` entry gets trusted as
+though it were CloudFront's. Under the previous N=1, the same forged header does **not** work: the
+ALB's own honest append is always what N=1 selects, regardless of any decoy entries in front of it.
+That means the finding's literal framing ("a client reaching the ALB directly can choose `req.ip`")
+was **not yet true under the code as it stood** (`trust proxy 1`) — it becomes true only once the
+hop count is raised to 2, which is exactly why the SG restriction has to land in the same change and
+not be treated as optional hardening.
+
+**How to run it.** Regression tests live in `api/src/app.test.ts` (new),
+`describe('TF-7: trust proxy hop count')`:
+
+```bash
+source .factory-env
+pnpm --filter @ship/api test src/app.test.ts
+```
+
+1. `recovers the real client IP through the CloudFront -> ALB chain, not an intermediate hop` — a
+   synthetic 2-entry `X-Forwarded-For` (real client, then a CloudFront-edge stand-in) must resolve to
+   the real client. **Red before** (`trust proxy 1`): `AssertionError: expected '203.0.113.10' to be
+   '198.51.100.42'` — resolved to the CloudFront-edge stand-in, matching the derived mechanism
+   exactly, not an import/typo failure. **Green after** (`trust proxy 2`).
+2. `still resolves correctly when only one proxy hop is present` — a pin; passes both before and
+   after (single-hop shape is unaffected by the hop-count change).
+3. `would trust a forged entry if a client ever reached the ALB directly (why the security-group fix
+   is required)` — characterizes the coupling above, not a defect being fixed here. **Fails before**
+   (N=1 doesn't fall for the forgery: `expected '203.0.113.200' to be '192.0.2.99'`) and **passes
+   after** (N=2 does) — its "pass" state documents an accepted, SG-gated risk, not a resolved one.
+
+All three pass together post-fix; the full api suite (46 files / 605 tests) still passes standalone.
+
+**Verification performed here.** `terraform fmt -check` (clean) and `terraform validate` (clean
+except the pre-existing, unrelated TF-5 lifecycle warning) against a temp-downloaded
+**Terraform v1.9.8** (darwin_arm64; the pinned 1.6.0 cannot `init` — TF-3) with
+`init -backend=false`. No `plan`/`apply` — no AWS credentials, no S3 backend access, and the hard
+safety rule for this ticket forbids both regardless.
+
+**NOT verified — post-deploy human checklist:**
+
+- [ ] A direct HTTP request to the ALB (bypassing CloudFront) is refused at the network layer
+      (connection refused/timeout), not merely 4xx'd by the app.
+- [ ] A real request through CloudFront shows `req.ip` (log it temporarily, or check via
+      `X-Forwarded-For` in application logs) equal to the actual client IP, not a CloudFront edge IP.
+- [ ] Confirm CloudFront really does insert the true viewer IP into `X-Forwarded-For` for the
+      `EB-API` origin regardless of `allViewerAndWhitelistCloudFront`, and that the ALB really does
+      append rather than trust incoming XFF content — both assumed from AWS's published behavior,
+      not observed here.
+- [ ] Decide whether to update `.claude/CLAUDE.md`'s direct-EB-URL health check to the
+      CloudFront-fronted `/health` path, since the direct one will stop working.
+- [ ] `pnpm db:migrate`/deploy itself is unaffected (no schema change here) — this is purely
+      infra + one app.ts line.
+
+**Rollback.** `git revert` this commit. By hand: in `terraform/security-groups.tf`, remove the
+`cloudfront_origin_facing` data source and restore both ALB ingress rules to
+`cidr_blocks = ["0.0.0.0/0"]`; in `api/src/app.ts`, restore `app.set('trust proxy', 1)`. The two
+must be reverted together — `trust proxy 2` alone (SG still open) is the spoofable configuration
+described above, and is strictly worse than either the pre-fix state or this fix.
+
+---
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write
