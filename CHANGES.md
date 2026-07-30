@@ -8,6 +8,89 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
+
+Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write
+(429/500 on a PATCH). ERR-4 is a write against a document someone else already deleted (404).
+Neither reaches the Yjs collaboration socket `SyncStatusIndicator` (TRO-188/ERR-1) watches — title
+and properties are not CRDT content, they go straight over REST — so both used to leave the
+indicator reading "Saved" with a rejected value still sitting in the field. `probe6-mixed.json`
+(6.1/6.2): forced 429 then 500 on a rename, DB title unchanged both times, indicator stayed
+"Saved". `probe7-retry-and-revocation.json` (7a): 14 PATCH attempts, a transient "Failed to update
+document" toast fires, indicator still "Saved". `probe4-concurrency.json` (4c): another user
+deletes the open document; this user's own typing keeps failing with 404, with **no** notice beyond
+a console error on backlinks the user never sees.
+
+**What changed.**
+
+- `web/src/lib/queryClient.ts` gains `isNotFoundError`/`NOT_FOUND_STATUS` (same shape as the
+  existing `isThrottleError`/`THROTTLE_STATUS` from API-1) and a small document-write-outcome bus
+  (`subscribeToDocumentWriteOutcome`), fed from the real `MutationCache`'s `onError` (extended) and a
+  new `onSuccess`, for any mutation tagged `meta.documentId`.
+- `web/src/hooks/useDocumentWriteStatus.ts` (new) subscribes to that bus filtered to one
+  `documentId`, exposing `hasFailedWrite` and calling `onDocumentGone` exactly once per document
+  when a write 404s — so a retry storm (probe7a's 14 attempts) cannot open 14 blocking alerts.
+- `web/src/components/editor/SyncStatusIndicator.tsx` — reused, not replaced: `deriveSyncIndicator`
+  gains one optional input, `hasFailedWrite`, checked ahead of `isSynced`. A rejected write now
+  overrides an otherwise-fully-synced Yjs socket and returns the exact same "Not saved" (red) view
+  ERR-1 already built. No new state, no new copy in the indicator itself.
+- `web/src/components/Editor.tsx` calls `useDocumentWriteStatus(documentId, () => alert(...))` and
+  passes `hasFailedWrite` into the indicator. The one-time notice reuses the exact `alert()` pattern
+  already in this file for the 4403 (access revoked) and 4100 (document converted) WebSocket close
+  codes — not a new toast/modal system.
+- `web/src/pages/UnifiedDocumentPage.tsx`'s `updateMutation` now attaches `.status` to the thrown
+  error (it previously threw a bare `Error`, so `errorStatus()` could not see 429 vs 404 vs 500 at
+  all) and tags `meta: { operation: 'update document', documentId: id }` so the bus above fires for
+  it.
+
+**New user-facing copy** — `Editor.tsx`, shown once per document, via the same blocking `alert()`
+ERR-1's sibling fixes already use for this class of event:
+
+> This document was deleted by someone else. Your changes here were not saved - copy anything you
+> want to keep before leaving this page.
+
+No other new copy or flow. The indicator itself reuses ERR-1's existing "Not saved" label and
+detail text verbatim — this PR adds no new indicator copy.
+
+**What did NOT change.** The field keeping the user's typed-but-unsaved text is pre-existing
+`Editor.tsx` behaviour (`hasLocalChangesRef` / the `initialTitle` sync effect) and is untouched here
+— rolling back the optimistic query-cache entry on a failed write never overwrote it, before or
+after this fix. This PR only changes what the indicator is allowed to claim.
+
+**Correcting TRO-190's own cross-reference.** TRO-190 describes ERR-3 as blocked on API-1's retry
+predicates returning `false` for every 429/500. API-1 (TRO-172) is merged and that is no longer
+true: `shouldRetryRequest` (`web/src/lib/queryClient.ts`) already retries 429 up to 4 times (delays
+summing past the 60s rate-limit window) and plain 5xx/network errors up to 3 times, globally, as
+the default for every mutation. The gap this PR closes is downstream of that: once retries
+genuinely exhaust, nothing told the indicator. Separately, `UnifiedDocumentPage.tsx`'s mutation had
+no `.status` on its thrown error, so a 429 hitting *this* mutation specifically fell back to the
+generic 3-retry/1-2-4s schedule instead of the tuned one — too short to outlast the 60s window —
+which this PR also fixes as part of attaching `.status` for the 404 case.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run \
+  src/components/editor/SyncStatusIndicator.test.tsx \
+  src/hooks/useDocumentWriteStatus.test.ts \
+  src/lib/queryClient.test.ts
+scripts/factory/gate.sh
+```
+
+**Verification note.** `probe6.1/6.2/7a/4c` need a live app with forced 429/500/404 responses; they
+were not re-run here. The tests above drive the real `queryClient` `MutationCache` config directly
+(the same technique `MutationErrorToast.test.tsx` already used for API-1) rather than a mock or a
+mounted page, so they prove the actual production wiring reacts correctly — that is mutation-layer
+proof, not a rerun of the original browser-level probes.
+
+**Rollback.** Revert the commit(s) on `fix/err-3-err-4-silent-write-failure`. To disable
+independently: pass `hasFailedWrite={false}` (or omit it) from `Editor.tsx` to restore ERR-1's
+original indicator behaviour without touching `UnifiedDocumentPage.tsx`; or remove the
+`meta: { documentId }` line there to stop the bus from ever firing for document writes.
+
+---
+
 ## TRO-240 — [DB-11] The application's database pool negotiated no TLS while migrate and seed did
 
 **What was broken.** Three pools connect to Ship's database with three different SSL policies.
