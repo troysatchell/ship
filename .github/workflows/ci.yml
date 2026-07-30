@@ -52,6 +52,12 @@ jobs:
         with:
           fetch-depth: 0   # source-code inventory reports commit history depth
 
+      # TF-2 (TRO-235): fails the build if a second AWS Terraform root
+      # reappears (e.g. terraform/environments/prod) alongside the flat
+      # terraform/ root. Pure bash/grep — no dependencies, so it runs first.
+      - name: Guard against a second Terraform root
+        run: ./scripts/check-single-tf-root.sh
+
       # Pinned to a full commit SHA, not a tag: a mutable tag on a third-party
       # action can be repointed at malicious code without the ref changing here.
       # b906aff is the commit behind the v4 annotated tag. actions/* below are

@@ -168,6 +168,59 @@ resource "aws_elastic_beanstalk_environment" "api" {
     value     = "4"
   }
 
+  # DDoS protection: Auto-scaling triggers based on CPU utilization
+  # Scale up at 70% CPU to absorb DDoS traffic with additional capacity
+  # Ported from modules/elastic-beanstalk/main.tf (TRO-235 / TF-2) — present in
+  # the modular path's environment but missing here before this change.
+  setting {
+    namespace = "aws:autoscaling:trigger"
+    name      = "MeasureName"
+    value     = "CPUUtilization"
+  }
+
+  setting {
+    namespace = "aws:autoscaling:trigger"
+    name      = "Statistic"
+    value     = "Average"
+  }
+
+  setting {
+    namespace = "aws:autoscaling:trigger"
+    name      = "Unit"
+    value     = "Percent"
+  }
+
+  setting {
+    namespace = "aws:autoscaling:trigger"
+    name      = "UpperThreshold"
+    value     = "70"
+  }
+
+  setting {
+    namespace = "aws:autoscaling:trigger"
+    name      = "UpperBreachScaleIncrement"
+    value     = "1"
+  }
+
+  setting {
+    namespace = "aws:autoscaling:trigger"
+    name      = "LowerThreshold"
+    value     = "20"
+  }
+
+  setting {
+    namespace = "aws:autoscaling:trigger"
+    name      = "LowerBreachScaleIncrement"
+    value     = "-1"
+  }
+
+  # Cooldown period to prevent scaling thrashing (6 minutes)
+  setting {
+    namespace = "aws:autoscaling:asg"
+    name      = "Cooldown"
+    value     = "360"
+  }
+
   # Load Balancer
   setting {
     namespace = "aws:elasticbeanstalk:environment"

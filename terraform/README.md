@@ -2,15 +2,66 @@
 
 This directory contains all infrastructure as code for deploying Ship to AWS.
 
+## Authoritative config for prod (TRO-235 / TF-2)
+
+**The flat `terraform/*.tf` root is the single, authoritative Terraform config for prod.**
+
+Until TRO-235, prod was managed by *two* independent root configs with separate
+state: this flat root, and `terraform/environments/prod` (composed from
+`terraform/modules/*`). They had already drifted — the flat root had a WAF
+(`waf.tf`) and CloudFront realtime logging (`cloudfront-logging.tf`) that the
+modular `environments/prod` did not — and applying either one against the
+wrong assumption about which was "real" risked colliding on hard-coded
+resource names or reverting a security control the other had added. See
+`audit/AUDIT_REPORT.md` (finding TF-2) and `audit/terraform/baseline.md` for
+the full analysis.
+
+**Resolution:** `terraform/environments/prod` (and its `.terraform.lock.hcl`)
+has been deleted. `terraform/*.tf` is now the only config that may manage prod.
+Before deleting it, `environments/prod`'s module composition was diffed
+resource-by-resource against the flat root (see the reconciliation table in
+the TRO-235 PR). Three genuinely missing security-hardening arguments were
+found and ported into the flat root rather than dropped:
+
+- Aurora `aws_rds_cluster_parameter_group` DDoS-protection/forensics params
+  (`max_connections`, `idle_in_transaction_session_timeout`,
+  `statement_timeout`, `log_connections`, `log_disconnections`) — `database.tf`.
+- Elastic Beanstalk CPU-based autoscaling triggers + cooldown — `elastic-beanstalk.tf`.
+- `secretsmanager:PutSecretValue` on the EB instance role — `ssm.tf`. Without
+  it, `saveCAIACredentials()` in `api/src/services/secrets-manager.ts` gets
+  `AccessDenied` the first time it updates an existing CAIA secret.
+
+A CI check (`scripts/check-single-tf-root.sh`, wired into
+`.github/workflows/ci.yml`) fails the build if a second AWS Terraform root
+(e.g. a re-added `environments/prod`) reappears.
+
+**`terraform/environments/dev` and `terraform/environments/shadow` are kept —
+they are not part of this convergence.** TF-2 is specifically about prod being
+managed by two configs; dev and shadow are different, non-overlapping AWS
+environments that the flat root cannot deploy at all (every flat-root resource
+name is hard-coded for prod, e.g. `elastic-beanstalk.tf`'s
+`"${var.project_name}-api-prod"`). They remain the only Terraform-backed
+deploy path for those two environments: `scripts/deploy.sh`,
+`scripts/deploy-web.sh`, and `scripts/terraform.sh` all hard-code "prod uses
+`terraform/`, dev/shadow use `terraform/environments/$ENV`". Deleting them
+would have silently broken those scripts for no TF-2 benefit, so
+`terraform/modules/*` (which dev and shadow are composed from) is also kept.
+One pre-existing, out-of-scope gap worth flagging: `modules/aurora` and
+`modules/elastic-beanstalk` still lack the three arguments ported above, and
+`modules/cloudfront-s3` still lacks the flat root's WAF/realtime-logging
+association — so dev and shadow do not yet have the same security posture as
+prod. That is a real follow-up, not something TF-2 covers (TF-2 is about prod's
+duplicate root, not about bringing dev/shadow to prod's posture).
+
 ## Directory Structure
 
 ```
 terraform/
-├── *.tf                    # Root config (legacy flat structure, prod-only)
+├── *.tf                    # Root config — THE authoritative config, prod only
 ├── environments/
-│   ├── dev/                # Dev environment - uses shared VPC
-│   └── prod/               # Prod environment - creates dedicated VPC
-├── modules/                # Reusable Terraform modules
+│   ├── dev/                # Dev environment - uses shared VPC + modules/*
+│   └── shadow/             # Shadow/UAT environment - uses shared VPC + modules/*
+├── modules/                # Reusable Terraform modules (used by dev/shadow only)
 │   ├── vpc/
 │   ├── aurora/
 │   ├── elastic-beanstalk/
@@ -20,19 +71,24 @@ terraform/
 └── bootstrap/              # One-time setup (S3 state bucket)
 ```
 
-## Multi-Environment Architecture
+## Multi-Environment Architecture (dev / shadow)
+
+`environments/dev` and `environments/shadow` share the pattern described
+below. Prod is no longer part of this scheme — see "Authoritative config for
+prod" above.
 
 ### Why Separate Directories Instead of .tfvars?
 
-We use separate `environments/dev/` and `environments/prod/` directories instead of a single configuration with different `.tfvars` files because **the infrastructure code paths differ**, not just the values.
+Dev and shadow use `environments/<env>/` directories composed from
+`modules/*` instead of a single configuration with different `.tfvars` files
+because **the infrastructure code paths differ**, not just the values — both
+read their VPC from SSM parameters set by `treasury-shared-infra` rather than
+creating their own (that pattern is what prod used to do too, back when it
+also lived under `environments/`; see the git history of
+`environments/prod/main.tf` prior to TRO-235 if you need it).
 
-| Aspect | Dev | Prod |
-|--------|-----|------|
-| **VPC** | Reads from SSM (shared VPC) | Creates its own VPC |
-| **State** | `environments/dev/.terraform/` | `environments/prod/.terraform/` |
-| **Dependencies** | Depends on treasury-shared-infra | Self-contained |
-
-**Dev environment** reads VPC configuration from SSM parameters set by `treasury-shared-infra`:
+**Dev/shadow** read VPC configuration from SSM parameters set by
+`treasury-shared-infra`:
 ```hcl
 # environments/dev/main.tf
 data "aws_ssm_parameter" "vpc_id" {
@@ -40,16 +96,10 @@ data "aws_ssm_parameter" "vpc_id" {
 }
 ```
 
-**Prod environment** creates its own isolated VPC:
-```hcl
-# environments/prod/main.tf
-module "vpc" {
-  source = "../../modules/vpc"
-  ...
-}
-```
-
-This isn't a "same code, different values" situation—it's fundamentally different infrastructure patterns. Using `.tfvars` alone would require complex conditional logic that's harder to understand and maintain.
+This isn't a "same code, different values" situation—it's fundamentally
+different infrastructure patterns from prod's dedicated VPC. Using `.tfvars`
+alone would require complex conditional logic that's harder to understand and
+maintain.
 
 ### When to Use Each Approach
 
@@ -77,43 +127,26 @@ This isn't a "same code, different values" situation—it's fundamentally differ
 - ✗ Shared state risk (unless using workspaces)
 - ✗ Changes affect all environments at once
 
-### Shared VPC Rationale (Dev)
+### Shared VPC Rationale (Dev / Shadow)
 
-Dev uses a shared VPC from `treasury-shared-infra` because:
+Dev and shadow use a shared VPC from `treasury-shared-infra` because:
 1. **Cost savings** - Single NAT Gateway (~$33/mo) shared across dev services
 2. **Network consistency** - All dev services can communicate within same VPC
 3. **Simpler peering** - One VPC to connect to on-prem resources
 
-Prod creates its own VPC because:
+Prod creates its own VPC (in the flat root, `vpc.tf`) because:
 1. **Isolation** - Production shouldn't share network with dev services
 2. **Independent scaling** - Prod VPC can be sized for production traffic
 3. **Blast radius** - Issues in shared infrastructure don't affect prod
 
 ## Quick Start
 
-### Using Environment Directories (Recommended)
+### Prod: Root Directory (Authoritative)
 
 ```bash
-# 1. Verify AWS credentials
-aws sts get-caller-identity
+# 0. Run from the terraform/ directory (repo root/terraform)
+cd terraform
 
-# 2. Navigate to environment
-cd terraform/environments/dev   # or prod
-
-# 3. Sync config from SSM (creates terraform.tfvars)
-../../scripts/sync-terraform-config.sh dev
-
-# 4. Initialize Terraform
-terraform init
-
-# 5. Plan and apply
-terraform plan -out=tfplan
-terraform apply tfplan
-```
-
-### Using Root Directory (Legacy - Prod Only)
-
-```bash
 # 1. Verify AWS credentials (must have access to the team's AWS account)
 aws sts get-caller-identity
 
@@ -131,7 +164,32 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-> **Note:** The root-level `*.tf` files are the original flat structure. New environments should use the `environments/` directories which leverage shared modules.
+### Dev / Shadow: Environment Directories
+
+```bash
+# 1. Verify AWS credentials
+aws sts get-caller-identity
+
+# 2. Navigate to environment
+cd terraform/environments/dev   # or shadow
+
+# 3. Sync config from SSM (creates terraform.tfvars)
+../../scripts/sync-terraform-config.sh dev
+
+# 4. Initialize Terraform
+terraform init
+
+# 5. Plan and apply
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+> **Note:** The root-level `*.tf` files are the only config that may manage
+> prod (see "Authoritative config for prod" above). `environments/dev` and
+> `environments/shadow` remain for those two environments only — do not add a
+> new `environments/prod` or any other second root that manages prod
+> resources; `scripts/check-single-tf-root.sh` (run in CI) will fail the build
+> if one appears.
 
 ## Infrastructure Components
 
@@ -436,13 +494,28 @@ All environment configuration lives in SSM. A new developer only needs AWS crede
 /ship/{env}/caia-credentials  # JSON: issuer_url, client_id, client_secret
 ```
 
-### Bootstrapping a New Environment
+### Bootstrapping dev or shadow from scratch
 
-To set up a new environment from scratch:
+This walks through (re)provisioning **`dev` or `shadow` only** — the two
+`environments/<env>/` directories composed from `modules/*` that
+`scripts/check-single-tf-root.sh` allows in CI. Prod is bootstrapped from the
+flat `terraform/*.tf` root instead — see "Prod: Root Directory (Authoritative)"
+above.
+
+**This is not a template for adding a third environment.** Introducing a new
+`environments/<env>/` directory (anything other than `dev` or `shadow`) needs
+its `provider "aws"` root added to the allowlist in
+`scripts/check-single-tf-root.sh` first, or CI will fail it — and, more
+importantly, a decision that it genuinely doesn't overlap with what
+`terraform/*.tf` manages for prod (that overlap is exactly what TF-2 removed).
+`environments/prod` specifically must never come back; the guard enforces
+that unconditionally, regardless of the allowlist.
+
+To set up dev or shadow from scratch:
 
 ```bash
 # 1. Create terraform config parameters
-ENV=dev
+ENV=dev   # or shadow
 aws ssm put-parameter --name /ship/terraform-config/$ENV/environment --value $ENV --type String
 
 # 2. Create app runtime parameters
