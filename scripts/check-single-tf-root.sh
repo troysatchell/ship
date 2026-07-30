@@ -29,7 +29,13 @@
 # would have silently broken those scripts. terraform/bootstrap is a one-time,
 # intentionally separate root that creates the shared state bucket.
 
-set -euo pipefail
+set -uo pipefail
+# Deliberately no `-e`: the scan below is a multi-stage pipe assigned to a
+# variable, and under `set -e` a failure partway through a pipe substitution
+# can be swallowed (or abort with no useful message) rather than being
+# reported. Every exit status that matters is checked explicitly instead, and
+# the script fails closed (see "zero roots found" below) rather than risk a
+# broken scan silently printing OK.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -52,21 +58,49 @@ if [ -d "terraform/environments/prod" ]; then
   fail=1
 fi
 
-# Find every directory (repo-wide, excluding VCS/dependency/terraform-cache
-# dirs) that declares its own provider "aws" block, i.e. every AWS Terraform
-# root that currently exists.
+# Enumerate every .tf file in the repo (excluding VCS/dependency/terraform-cache
+# dirs). Checked explicitly rather than trusted blind, since a `find` failure
+# here (e.g. a permissions error) must not be read as "no files, therefore
+# nothing to flag".
+tf_files=$(find . \
+  -type d \( -name ".git" -o -name "node_modules" -o -name ".terraform" \) -prune -o \
+  -type f -name "*.tf" -print)
+find_status=$?
+if [ "$find_status" -ne 0 ] || [ -z "$tf_files" ]; then
+  echo "ERROR: could not enumerate .tf files in the repo (find exited $find_status)."
+  echo "       Treating this as a failed scan, not a clean repo."
+  exit 1
+fi
+
+# Every directory (repo-wide) that declares its own `provider "aws" {` block,
+# i.e. every AWS Terraform root that currently exists. Root modules configure
+# providers; child modules (terraform/modules/*) never do — they receive
+# everything via input variables — so this correctly ignores shared module
+# code and the cloud-free audit/terraform/drift-demo fixture (provider
+# "local", never "aws"). Anchored to a real block opener (leading whitespace
+# only, then the literal brace) so a comment or string mentioning
+# `provider "aws"` cannot masquerade as a root.
+found_roots_raw=$(printf '%s\n' "$tf_files" \
+  | xargs grep -l '^[[:space:]]*provider[[:space:]]*"aws"[[:space:]]*{' 2>/dev/null \
+  | xargs -n1 dirname \
+  | sed 's|^\./||' \
+  | sort -u)
+
 found_roots=()
 while IFS= read -r dir; do
-  found_roots+=("$dir")
-done < <(
-  find . \
-    -type d \( -name ".git" -o -name "node_modules" -o -name ".terraform" \) -prune -o \
-    -type f -name "*.tf" -print \
-    | xargs grep -l 'provider[[:space:]]*"aws"' 2>/dev/null \
-    | xargs -n1 dirname \
-    | sed 's|^\./||' \
-    | sort -u
-)
+  if [ -n "$dir" ]; then
+    found_roots+=("$dir")
+  fi
+done <<< "$found_roots_raw"
+
+# terraform/ itself must always match — if the scan finds nothing at all, the
+# scan is broken (wrong cwd, grep pattern regressed, etc.), not evidence the
+# repo is clean. Fail loudly rather than let that read as "OK".
+if [ "${#found_roots[@]}" -eq 0 ]; then
+  echo "ERROR: scan found zero AWS Terraform roots, but terraform/ must always be one."
+  echo "       This means the scan itself is broken — failing closed instead of reporting OK."
+  exit 1
+fi
 
 for root in "${found_roots[@]}"; do
   allowed=0

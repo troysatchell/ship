@@ -77,8 +77,9 @@ terraform init -backend=false -input=false
 terraform validate
 terraform fmt -check -recursive .
 rm -rf .terraform .terraform.lock.hcl   # leaves git status terraform/ clean, per audit methodology
+cd ..
 
-./scripts/check-single-tf-root.sh   # should print "OK: single authoritative Terraform root confirmed"
+./scripts/check-single-tf-root.sh   # run from repo root; should print "OK: single authoritative Terraform root confirmed"
 ```
 
 **Verification note.** `terraform validate` was run on the flat root before AND after this change

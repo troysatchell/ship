@@ -144,6 +144,9 @@ Prod creates its own VPC (in the flat root, `vpc.tf`) because:
 ### Prod: Root Directory (Authoritative)
 
 ```bash
+# 0. Run from the terraform/ directory (repo root/terraform)
+cd terraform
+
 # 1. Verify AWS credentials (must have access to the team's AWS account)
 aws sts get-caller-identity
 
@@ -491,19 +494,28 @@ All environment configuration lives in SSM. A new developer only needs AWS crede
 /ship/{env}/caia-credentials  # JSON: issuer_url, client_id, client_secret
 ```
 
-### Bootstrapping a New Environment
+### Bootstrapping dev or shadow from scratch
 
-This walks through a new dev/shadow-style environment (its own `environments/<env>/`
-directory composed from `modules/*`). Prod is bootstrapped from the flat
-`terraform/*.tf` root instead — see "Prod: Root Directory (Authoritative)"
-above — and must not gain a new `environments/prod` directory
-(`scripts/check-single-tf-root.sh` enforces this in CI).
+This walks through (re)provisioning **`dev` or `shadow` only** — the two
+`environments/<env>/` directories composed from `modules/*` that
+`scripts/check-single-tf-root.sh` allows in CI. Prod is bootstrapped from the
+flat `terraform/*.tf` root instead — see "Prod: Root Directory (Authoritative)"
+above.
 
-To set up a new environment from scratch:
+**This is not a template for adding a third environment.** Introducing a new
+`environments/<env>/` directory (anything other than `dev` or `shadow`) needs
+its `provider "aws"` root added to the allowlist in
+`scripts/check-single-tf-root.sh` first, or CI will fail it — and, more
+importantly, a decision that it genuinely doesn't overlap with what
+`terraform/*.tf` manages for prod (that overlap is exactly what TF-2 removed).
+`environments/prod` specifically must never come back; the guard enforces
+that unconditionally, regardless of the allowlist.
+
+To set up dev or shadow from scratch:
 
 ```bash
 # 1. Create terraform config parameters
-ENV=dev
+ENV=dev   # or shadow
 aws ssm put-parameter --name /ship/terraform-config/$ENV/environment --value $ENV --type String
 
 # 2. Create app runtime parameters
