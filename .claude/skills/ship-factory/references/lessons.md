@@ -55,6 +55,51 @@ Seeded 2026-07-29 from failures already documented in this project.
 15. **Run `db-query-audit` after `api-perf-audit`, never concurrently.** The statement logging one
     enables skews the other's timings.
 
+## Recurring review findings
+
+*Derived from `node scripts/factory/review-ledger.mjs report`, not from memory. Each class below was
+filed by a reviewer on **two or more separate tickets** after `gate.sh` had already passed. That is
+the bar for appearing here: one finding is feedback, two is a missing rule.*
+
+16. **Never add a non-null `!`, `as any`, or `as unknown as` — including in tests.**
+    5 findings across 4 tickets (TRO-188, TRO-178, TRO-276, TRO-179). This is the single largest
+    recurring class. TS-4 counts 236 non-null assertions as a **measured number we are graded on
+    reducing**; TS-8 is specifically that test-side casts decouple tests from the shapes they claim to
+    verify. Adding one while fixing an audit that counts them moves the metric backwards.
+    `gate.sh` now checks this mechanically (G7b). To allow a specific line, write
+    `// review-pattern-ok: <reason>` and justify it in the PR. Do not bypass silently.
+    For mocks: return **real** `Response`/object instances, or define a small test-local type. For
+    indexed access under `noUncheckedIndexedAccess`, destructure and assert explicitly.
+17. **Never add a fixed sleep to a test. Await an observable event.**
+    3 findings across 3 tickets (TRO-215, TRO-188, TRO-276). TEST-11 (TRO-233) is the open finding
+    that 619 fixed sleeps cause this repo's flakes; adding more while that ticket is open is
+    self-defeating. Also checked by G7b.
+    Asserting an *absence* genuinely needs a window — for that, poll for the duration and assert the
+    value never changes, and tie the window to a real constant (a debounce interval), not a round
+    number. A sampled stability check is a **stronger** assertion than sleep-then-check, because it
+    catches a value that appears and is then overwritten.
+18. **Anything periodic or read-then-write needs a concurrency argument.**
+    3 findings across 3 tickets (TRO-188, TRO-178, TRO-179), all Major, none machine-detectable —
+    which is why this one is a rule and not a gate check. Before shipping:
+    - A `setInterval` that starts async work needs an **in-flight guard**, or invocations stack
+      exactly when the thing they call is already slow (TRO-188).
+    - A decision made in application code and then applied as an unconditional write is a
+      **lost update**. Push the predicate into the `WHERE` clause so the database decides (TRO-179).
+    - A read-then-apply sequence over shared state needs a **lock** (TRO-178 → TRO-279).
+    State the argument in the PR. "It is unlikely to happen" is not one.
+19. **`CHANGES.md` claims get checked against the diff.**
+    4 findings across 3 tickets (TRO-178, TRO-223, TRO-179): a count that contradicted itself, a
+    test-harness fix filed as a source defect, an entry title that overstated the result, and a
+    stated ordering guarantee the runner did not provide. Before committing an entry, re-read it
+    against what you actually changed — the rollback paragraph especially, since that is what someone
+    reads under pressure. Run `node scripts/factory/merge-changes.mjs --check CHANGES.md`.
+20. **Tests must not share mutable resources or reuse a spent connection.**
+    2 findings across 2 tickets, one **Critical**. Derive database names from `randomBytes`, never a
+    deterministic string, and never use `DROP DATABASE ... FORCE` — it converts "something is still
+    connected" into a silent disconnect (TRO-178). In socket tests, open a **fresh** connection per
+    hostile case; reusing one that an earlier case closed asserts against a dead socket and proves
+    nothing (TRO-276).
+
 ## Log
 
 *Append dated entries as the factory learns. One line each, with the ticket that taught it.*
@@ -86,3 +131,22 @@ Seeded 2026-07-29 from failures already documented in this project.
   "N more…" link) or **zero** (empty state). Default seed data has 5, so axe reports **C0/S0** and a
   re-measurement on stock seed would wrongly conclude the finding never existed. Check the data
   precondition before reporting a finding as unreproducible.
+- 2026-07-30 (TRO-174) — **The scratchpad is SHARED across concurrent agents. Never use a generic
+  temp filename.** Two agents independently chose `ours-CHANGES.md`; one clobbered the other, and the
+  first re-merge produced a `CHANGES.md` with the **wrong ticket at the top and the right one absent
+  entirely**. Caught only by checking entry headings against git rather than trusting the tool's
+  "1 ours-new + 1 theirs-new" summary. Prefix every scratch file with your ticket ID, and verify
+  intermediate files came from where you think. Same class as the shared `refs/stash`: worktrees are
+  isolated, everything around them is not.
+- 2026-07-30 (TRO-174) — **git reads merge attributes from the PRE-MERGE working tree.** Removing
+  `CHANGES.md merge=union` from `main` did **not** protect any open branch: each branch still carried
+  the attribute in its own tree, so the union driver stayed live for that branch's next merge and
+  damaged three more files *after* the removal landed. `git merge` reported *"Auto-merging CHANGES.md
+  — Automatic merge went well."* It was not well. **After merging `main`, run
+  `git check-attr merge -- CHANGES.md`** and expect `unspecified`; if it still says `union`, redo the
+  `CHANGES.md` resolution with `merge-changes.mjs`.
+- 2026-07-30 (TRO-173) — **A tool improvement that is not committed protects nothing.** A G7b rule
+  added to catch `: any` annotations sat uncommitted in the orchestrator's working tree, so every
+  branch gating against `main` kept running the weaker checker. Found because an agent reconciled a
+  contradiction — the orchestrator reported 2 violations, the agent's own run said `clean` — instead
+  of assuming one side was wrong. **When two runs of the same check disagree, diff the checkers.**
