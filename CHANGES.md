@@ -351,142 +351,6 @@ harmless. Note that rollback does **not** un-apply migrations already recorded i
 
 ---
 
-## TRO-217 — [A11Y-3] `/my-week` failed colour contrast, the landing page of the app
-
-**What was broken.** `/` redirects to `/my-week`, and it was the only key page Lighthouse failed on
-accessibility: **95**, one failing audit, `color-contrast`. axe reported it **Serious** on 18 nodes
-(24 in the audit baseline; the count tracks how many future standup rows the current week still
-has, so it moves with the weekday).
-
-The finding named two causes. There were **three**, and one of the two named was misattributed:
-
-| Cause | Nodes | Resolved colour | Ratio |
-|---|---|---|---|
-| `opacity-40` on future standup rows (`MyWeekPage.tsx:339`) | 12 | `#3f3f3f` on `#0d0d0d` | **1.84:1** |
-| `text-muted/50` on the 11px plan/retro ordinals | 4 | `#4c4c4c` on `#0d0d0d` | **2.26:1** |
-| `text-accent` used as a *foreground* colour | 2 | `#005ea2` on `#0a1d2b` / `#0c1114` | **2.55:1** / 2.82:1 |
-
-The dominant cause — two thirds of the nodes — was `opacity-40`, which the finding never mentioned.
-And `bg-accent/20`, which the finding did blame, is not the defect: `accent` (`#005ea2`) is
-**2.89:1 as text on the page background before any badge is involved**; the translucent fill only
-takes it from 2.89 to 2.55. The fill was fine. Using a fill colour as text was not.
-
-A **fourth** pair, in neither the finding nor either axe run: the "Unsubmitted" badge puts
-`text-muted` on a `bg-border` fill at **4.38:1**. It renders only when a plan or retro has content,
-is unsubmitted, and is not yet due — a state neither scan happened to hit. It is not a guess: axe
-recorded that identical pair on the command palette's `esc` key
-(`audit/a11y/axe/command_palette_open.json`).
-
-**What changed.**
-
-- `web/tailwind.config.js` — added `accent-text: #2491ff` (USWDS blue-40v, verified against
-  `@uswds/uswds/.../tokens/color/_blue.scss`): **6.08:1** on `background`, 5.37:1 on a
-  `bg-accent/20` badge, 5.94:1 on `bg-accent/5`. `accent` itself is **unchanged**, so every
-  `bg-accent` fill in the app looks exactly as it did. blue-50v (`#0076d6`) was tried and rejected —
-  4.22:1, still failing. Also corrected the `muted` comment, which claimed 5.1:1 where the
-  arithmetic gives 5.63:1, and recorded the `bg-border` caveat next to it.
-- `web/src/pages/MyWeekPage.tsx` — `opacity-40` removed from future rows in favour of a dimmer
-  border; `text-muted/50` → `text-muted` on the two ordinals; `text-accent` → `text-accent-text` on
-  the "Current" badge and today's day label; `text-muted` → `text-foreground` on the two
-  "Unsubmitted" badges.
-
-**Why the levels differ, since a global token change was the obvious move.**
-
-- `opacity-40` was **page-level** because `MyWeekPage.tsx:339` was its *only* occurrence in
-  `web/src`. Nothing else could be affected.
-- `text-muted/50` was **page-level** because 10 of its 12 occurrences are on other pages
-  (`PlanQualityBanner`, `DashboardVariantC` at `/dashboard`, `WorkspaceSettings`,
-  `AdminWorkspaceDetail`, `Programs`, `MergeProgramDialog`, `HypothesisBlockComponent`). They fail
-  too — 2.26:1 is a property of the token pair, not of this page — but they are outside A11Y-3 and
-  are filed as a follow-up rather than swept in silently.
-- `accent-text` was added at **token level** but applied only here. Adding a token cannot regress a
-  page that currently passes; mutating `accent` could, because `accent` is a fill under white text
-  in 80 places across 45 files. That mutation is a visual-identity decision, not a contrast fix.
-
-**The tradeoff, stated because it is visible.** Future standup rows are no longer ghosted. They now
-read as ordinary muted rows, distinguished by a dimmer border, the italic "Upcoming" label and the
-absent status dot. This was not avoidable by tuning the opacity value: `text-muted` only clears
-4.5:1 above roughly **86%** opacity, at which point nothing looks dimmed at all. Likewise the
-ordinals lost their extra-quiet tier — on `#0d0d0d`, AA bottoms out around `#7a7a7a`, a 16-step
-band below `muted`, so a perceptibly quieter *compliant* grey does not exist on this background.
-Contrast won, as the ticket directed.
-
-**Evidence.** Both ends measured on this branch, same conditions, not inherited from the audit:
-`http://localhost:5683`, Chrome for Testing headless, 1440×900, `--preset=desktop`,
-`--only-categories=accessibility`, authenticated as `dev@ship.local`, 523 seeded documents,
-`ship_wt_tro_217`. Flags identical to `audit/a11y/run-lighthouse.sh` and `audit/a11y/axe-scan.mjs`.
-
-| Measurement on `/my-week` | Before | After |
-|---|---|---|
-| Lighthouse accessibility | **95** | **100** |
-| Lighthouse failing audits | 1 (`color-contrast`, 18 items) | **0** |
-| axe `color-contrast` nodes | **18 Serious** | **0** |
-| axe all severities | C0 **S1** M0 m0 | C0 S0 M0 m0 |
-
-The audit baseline recorded 24 nodes and the ticket said 25; **18** is what the same page produced
-here. The gap is the weekday (four remaining future days instead of six), not a different defect —
-the per-node causes and ratios match the baseline artifact exactly.
-
-**Regression test.** `web/src/pages/MyWeekPage.contrast.test.tsx` resolves the effective foreground
-and background *colours* out of the rendered DOM and asserts the WCAG ratio, rather than asserting
-a class string — so it survives a markup refactor and fails if a palette hex drifts back under
-4.5:1. It renders four data states, because three of the page's pairs only exist under specific
-data; a single-state check would have declared the page fixed while the 4.38:1 badge sat behind a
-common plan state. `web/src/lib/contrast.test.ts` pins the resolver against numbers this project
-did not compute — the exact `fgColor`/`bgColor`/`contrastRatio` values axe recorded in
-`audit/a11y/axe/`.
-
-Confirmed red first on the unfixed page: 6 failures, every one an `AssertionError` on the ratio
-(21 of 39 pairs below 4.5:1 in the first state; named failures at 2.26:1, 1.85:1, 2.82:1, 4.38:1).
-No import or locator errors.
-
-**How to run it.**
-
-```bash
-pnpm --filter @ship/web test        # 24 new tests; 13 known failures are TEST-1/TRO-223, unchanged
-pnpm --filter @ship/web type-check
-```
-
-To re-measure against a browser, start the worktree's API and Vite, log in for a fresh
-`session_id` (sessions expire in 15 minutes), then run Lighthouse and axe with the flags above.
-
-**Roll back.** `git revert` the commits on `fix/a11y-3-contrast`, or by hand: restore `opacity-40`
-on the future-row branch of `rowClass`, put back `text-muted/50` on the two ordinals,
-`text-accent` on the "Current" badge and today's day label, `text-muted` on the two "Unsubmitted"
-badges, and drop `accent-text` from the palette. The two new spec files fail if any of it comes
-back, which is the point.
-
-**Not established.** That a low-vision user can now read the page. Contrast ratios and axe output
-are measured; the user-facing benefit is *derived* from them, and no human with low vision has
-looked at this build. Also not established: that the repo's three Playwright a11y specs still pass
-— they are not run by the factory gate and were not run here. One of them,
-`e2e/accessibility-remediation.spec.ts:738` ("no color contrast violations on main pages"), runs
-axe right after login, which lands on `/my-week`; it was almost certainly failing before this
-change and should now pass, but that is a prediction, not a result.
-
-**Found and not fixed** (filed as follow-ups, all measured):
-
-1. `text-muted` on a `bg-border` fill is **4.38:1** and co-occurs in ~109 places in `web/src`.
-   Raising `muted` from `#8a8a8a` to `#929292` (4.86:1 on `#262626`, 6.25:1 on `#0d0d0d`) fixes the
-   whole class in one line and cannot lower contrast on any dark surface. Out of scope here because
-   it is an app-wide tone change driven by pairs outside this page.
-2. `text-accent` is **2.89:1** as small text on the page background wherever it renders — 80
-   occurrences in 45 files. Only the two on `/my-week` were observed failing by axe; the rest is
-   computed from the token, so treat the count as derived. `accent-text` now exists for them.
-3. `bg-surface` is used in three files including `MyWeekPage.tsx`, but `surface` is **not a palette
-   token**, so the class generates no CSS and those "cards" are painted with the page background.
-   Harmless today; it silently changes the contrast maths for anything inside them if `surface` is
-   ever defined.
-4. `getContrastTextColor` in `web/src/lib/cn.ts` carries a second copy of the WCAG luminance
-   formula now also in `web/src/lib/contrast.ts`. Collapsing them changes a shipped helper's
-   behaviour on malformed input, so it was left alone.
-5. `pnpm db:migrate` stopped after `010_oauth_state.sql` on a partially-migrated database and still
-   reported success, leaving 10 of 42 migrations applied — the swallowed `already exists` catch at
-   `api/src/db/migrate.ts:103-110`. This is **DB-1** reproducing; worked around by cloning a
-   fully-migrated database rather than by touching the runner.
-
----
-
 ## TRO-276 (ERR-10) — one malformed WebSocket frame no longer kills the API for everyone
 
 **The user-facing cost.** Any authenticated user could send four bytes down a collaboration socket
@@ -713,6 +577,264 @@ burst), `api/src/routes/documents-query-count.test.ts` (statements per authentic
 
 **Rollback:** revert the commits on `fix/db-2-api-6-session-write`. No migration, no schema change,
 no data change — sessions written under either version are interpreted correctly by the other.
+
+---
+
+## TRO-173 (API-2) + TRO-182 (DB-5) — the issue list stops shipping every issue's document body
+
+Two findings, one cause, one change. API-2 measured it at the socket (`GET /api/issues` was the
+slowest endpoint at every concurrency level and sent 379,907 bytes for 254 issues); DB-5 measured
+the same thing in the planner (`width=1023` per row, against `width=300` for the `/api/documents`
+projection that omits `content`). The list and detail views shared **one** SELECT projection
+(`api/src/routes/issues.ts:126`, `content: row.content` at `:99`), so the list carried each issue's
+full TipTap body, and there was no `LIMIT`/`OFFSET` anywhere in the file.
+
+**Not a query problem.** The handler already batches associations in one `ANY($1)` query
+(`api/src/utils/document-crud.ts:148-180`) — no N+1 — and the plan is a seq scan over 254 rows
+costing ~142. The cost was `JSON.stringify` plus socket writes. No index was added; none was
+missing.
+
+**What changed.**
+
+- `extractIssueFromRow` split into `extractIssueListItemFromRow` (shared fields) plus a thin
+  `extractIssueFromRow` wrapper that adds `content` back. `GET /api/issues/:id`,
+  `/by-ticket/:number` and `/:id/children` still return the body and are byte-identical.
+- `d.content` removed from the list SELECT.
+- `limit` (1-500) and `offset` (0-100,000) added to `GET /api/issues`. Both are bounded at both
+  ends: unparseable, negative, fractional or over-maximum values get **400**, never silent
+  truncation. `offset` is capped because an unbounded one is scanned and discarded inside Postgres —
+  `OFFSET 1e9` buys a full scan that returns nothing.
+- The route validates with `IssueListPaginationSchema` **imported from the OpenAPI schema module**,
+  not a second copy, so the bounds Swagger advertises and the bounds the route enforces cannot
+  drift.
+- Both extractors take declared row types (`IssueListRow` / `IssueDetailRow`) instead of `any`. From
+  PR review: an `any` *annotation* silences every field read, which on a projection extractor meant
+  the exact thing this change touched — which columns the SELECT returns — was the one part not
+  type-checked. Verified by introducing `row.titel` and getting
+  `TS2551: Property 'titel' does not exist on type 'IssueListRow'`; under `any` that compiled.
+  What it does not buy: TypeScript still cannot read the SQL string, so deleting a column from a
+  query is not a compile error.
+
+**The pagination contract, stated deliberately: there is NO default limit.** Omit both params and
+you get every matching row, in the same order, exactly as before. That is not laziness — two
+consumers read the response as a complete set, and a default limit would have returned *wrong*
+lists rather than shorter ones:
+
+- `web/src/hooks/useIssuesQuery.ts:137-143` filters by project **client-side** over the whole array
+  (the API has no `project_id` filter — see the follow-up below).
+- `web/src/components/IssuesList.tsx:310-330` groups, counts and merges the full array, including
+  the "Show All Issues" path.
+
+No web caller passes `limit` or `offset` today, so no existing caller changes behaviour. New
+callers (and the generated MCP tool) can now bound a response; a caller knows it has the last page
+when it receives fewer rows than it asked for.
+
+**Contract change is registered with OpenAPI.** `GET /issues` now responds with a new
+`IssueListItem` component — `Issue` minus `content` — and documents `limit`, `offset` and the 400.
+`api/openapi.{json,yaml}` regenerated, so Swagger and the runtime-generated MCP tools describe the
+shape the route actually returns. `Issue` (27 properties, with `content`) still backs the detail
+paths.
+
+**Evidence.** Same machine, same worktree, same deterministic dataset for every number below:
+PostgreSQL 15-alpine in Docker (`ship-audit-pg`, `:5433`), API on `:3155` via `tsx watch` with
+`NODE_ENV=development`, `pnpm db:seed` + `audit/seed-augment.ts` → **500 documents / 254 issues /
+20 users** (the audit's volumes; the seed is fixed-seed so before and after ran against identical
+bytes — `sum(pg_column_size(content))` = 158 kB / 64.5% of issue row bytes both times, matching
+DB-5's figure). Before/after were measured by swapping only `api/src/routes/issues.ts`.
+
+| | before | after | |
+|---|---|---|---|
+| `GET /api/issues` payload (254 issues) | 379,907 B | **241,338 B** | 1.57× smaller |
+| `EXPLAIN` row width | `width=1023` | **`width=335`** | 3.05× narrower |
+| p95 @ c=10 | 42.0 ms | **28.6 ms** | |
+| p95 @ c=25 | 90.4 ms | **59.1 ms** | |
+| p95 @ c=50 | 184.0 ms | **107.9 ms** | |
+| p99 @ c=50 | 228.4 ms | **161.2 ms** | |
+| throughput ceiling (Little's law) | ~311-325 rps | **~490-546 rps** | |
+| `GET /api/issues?limit=50` | 379,907 B (ignored) | **47,608 B** | |
+| `GET /api/issues/:id` | 1,802 B | 1,802 B | unchanged |
+
+Latency: autocannon 8.0.0 installed into a session scratchpad (never into the repo), 600 requests
+per level — a fixed request count rather than a duration, because
+`api/src/middleware/rate-limit.ts:89` caps one session identity at 1000 requests / 60 s in
+development. Each level logged in fresh for its own bucket; `non2xx=0, errors=0` on every level, so
+no 429 is hiding in these numbers. Percentiles come from per-response latencies on autocannon's
+`response` event. A second `after` run put p95 @ c=25 at 55.5 ms and @ c=50 at 110.2 ms, so read
+these as ±5%. The `before` column reproduces the audit baseline (its c=25 p95 was 94.5 ms, c=50 p95
+182.0 ms), which is the reason to trust the `after` column.
+
+**Where the ticket's estimate was wrong.** TRO-173 predicted ~2.6× payload shrink and p95 @ c=25
+falling to 35-40 ms. Actual: 1.57× and 59 ms. The estimate applied content's **database** share
+(64.5% of row bytes) to the **JSON** payload, but in the response body `content` was only 146,015 of
+379,907 bytes — **38.4%**. The other 25 fields carry per-row overhead (UUIDs, ISO timestamps,
+repeated key names) that dominates at 254 rows. The mechanism held exactly; the magnitude did not.
+The largest remaining component is now `belongs_to` at 80,900 bytes (**33.5%** of the response) —
+association objects carrying `title` for every program/project/sprint/parent. That is the next
+payload win on this endpoint and it has no ticket.
+
+**How to run it.**
+
+```bash
+source .factory-env                                   # api tests TRUNCATE 16 tables
+pnpm --filter @ship/api test -- src/routes/issues.test.ts
+pnpm type-check
+pnpm --filter @ship/api openapi:generate              # should be a no-op diff
+```
+
+**Roll back.** `git revert` the commits on `fix/api-2-db-5-issues-payload`. By hand: put
+`d.content,` back in the list SELECT, call `extractIssueFromRow` instead of
+`extractIssueListItemFromRow` in the list handler, drop `listPaginationSchema` and the
+`LIMIT`/`OFFSET` block, restore `z.array(IssueResponseSchema)` on the `/issues` 200 response, and
+regenerate the spec. The five new cases in `api/src/routes/issues.test.ts` fail if the body comes
+back or pagination stops being honoured.
+
+**Not verified.** Only api-tier tests and this endpoint were exercised — no browser pass confirms
+the issues list still renders correctly against the narrower payload (it should: the web `Issue`
+interface at `web/src/hooks/useIssuesQuery.ts:25-48` never declared `content`, and no `.tsx` reads
+it off an issue). `/api/issues/:id/children` still returns `content` for sub-issues; it has the
+same shape of waste, bounded by children per issue, and was left alone deliberately rather than
+widening this change.
+
+**Found, not fixed.** `web/src/components/sidebars/ProjectContextSidebar.tsx:148` requests
+`/api/issues?project_id=<id>`, but the list route never reads `project_id` — the parameter is
+silently ignored and that sidebar receives every issue in the workspace. Pre-existing, unrelated to
+these two findings, and worth its own ticket.
+
+---
+
+## TRO-217 — [A11Y-3] `/my-week` failed colour contrast, the landing page of the app
+
+**What was broken.** `/` redirects to `/my-week`, and it was the only key page Lighthouse failed on
+accessibility: **95**, one failing audit, `color-contrast`. axe reported it **Serious** on 18 nodes
+(24 in the audit baseline; the count tracks how many future standup rows the current week still
+has, so it moves with the weekday).
+
+The finding named two causes. There were **three**, and one of the two named was misattributed:
+
+| Cause | Nodes | Resolved colour | Ratio |
+|---|---|---|---|
+| `opacity-40` on future standup rows (`MyWeekPage.tsx:339`) | 12 | `#3f3f3f` on `#0d0d0d` | **1.84:1** |
+| `text-muted/50` on the 11px plan/retro ordinals | 4 | `#4c4c4c` on `#0d0d0d` | **2.26:1** |
+| `text-accent` used as a *foreground* colour | 2 | `#005ea2` on `#0a1d2b` / `#0c1114` | **2.55:1** / 2.82:1 |
+
+The dominant cause — two thirds of the nodes — was `opacity-40`, which the finding never mentioned.
+And `bg-accent/20`, which the finding did blame, is not the defect: `accent` (`#005ea2`) is
+**2.89:1 as text on the page background before any badge is involved**; the translucent fill only
+takes it from 2.89 to 2.55. The fill was fine. Using a fill colour as text was not.
+
+A **fourth** pair, in neither the finding nor either axe run: the "Unsubmitted" badge puts
+`text-muted` on a `bg-border` fill at **4.38:1**. It renders only when a plan or retro has content,
+is unsubmitted, and is not yet due — a state neither scan happened to hit. It is not a guess: axe
+recorded that identical pair on the command palette's `esc` key
+(`audit/a11y/axe/command_palette_open.json`).
+
+**What changed.**
+
+- `web/tailwind.config.js` — added `accent-text: #2491ff` (USWDS blue-40v, verified against
+  `@uswds/uswds/.../tokens/color/_blue.scss`): **6.08:1** on `background`, 5.37:1 on a
+  `bg-accent/20` badge, 5.94:1 on `bg-accent/5`. `accent` itself is **unchanged**, so every
+  `bg-accent` fill in the app looks exactly as it did. blue-50v (`#0076d6`) was tried and rejected —
+  4.22:1, still failing. Also corrected the `muted` comment, which claimed 5.1:1 where the
+  arithmetic gives 5.63:1, and recorded the `bg-border` caveat next to it.
+- `web/src/pages/MyWeekPage.tsx` — `opacity-40` removed from future rows in favour of a dimmer
+  border; `text-muted/50` → `text-muted` on the two ordinals; `text-accent` → `text-accent-text` on
+  the "Current" badge and today's day label; `text-muted` → `text-foreground` on the two
+  "Unsubmitted" badges.
+
+**Why the levels differ, since a global token change was the obvious move.**
+
+- `opacity-40` was **page-level** because `MyWeekPage.tsx:339` was its *only* occurrence in
+  `web/src`. Nothing else could be affected.
+- `text-muted/50` was **page-level** because 10 of its 12 occurrences are on other pages
+  (`PlanQualityBanner`, `DashboardVariantC` at `/dashboard`, `WorkspaceSettings`,
+  `AdminWorkspaceDetail`, `Programs`, `MergeProgramDialog`, `HypothesisBlockComponent`). They fail
+  too — 2.26:1 is a property of the token pair, not of this page — but they are outside A11Y-3 and
+  are filed as a follow-up rather than swept in silently.
+- `accent-text` was added at **token level** but applied only here. Adding a token cannot regress a
+  page that currently passes; mutating `accent` could, because `accent` is a fill under white text
+  in 80 places across 45 files. That mutation is a visual-identity decision, not a contrast fix.
+
+**The tradeoff, stated because it is visible.** Future standup rows are no longer ghosted. They now
+read as ordinary muted rows, distinguished by a dimmer border, the italic "Upcoming" label and the
+absent status dot. This was not avoidable by tuning the opacity value: `text-muted` only clears
+4.5:1 above roughly **86%** opacity, at which point nothing looks dimmed at all. Likewise the
+ordinals lost their extra-quiet tier — on `#0d0d0d`, AA bottoms out around `#7a7a7a`, a 16-step
+band below `muted`, so a perceptibly quieter *compliant* grey does not exist on this background.
+Contrast won, as the ticket directed.
+
+**Evidence.** Both ends measured on this branch, same conditions, not inherited from the audit:
+`http://localhost:5683`, Chrome for Testing headless, 1440×900, `--preset=desktop`,
+`--only-categories=accessibility`, authenticated as `dev@ship.local`, 523 seeded documents,
+`ship_wt_tro_217`. Flags identical to `audit/a11y/run-lighthouse.sh` and `audit/a11y/axe-scan.mjs`.
+
+| Measurement on `/my-week` | Before | After |
+|---|---|---|
+| Lighthouse accessibility | **95** | **100** |
+| Lighthouse failing audits | 1 (`color-contrast`, 18 items) | **0** |
+| axe `color-contrast` nodes | **18 Serious** | **0** |
+| axe all severities | C0 **S1** M0 m0 | C0 S0 M0 m0 |
+
+The audit baseline recorded 24 nodes and the ticket said 25; **18** is what the same page produced
+here. The gap is the weekday (four remaining future days instead of six), not a different defect —
+the per-node causes and ratios match the baseline artifact exactly.
+
+**Regression test.** `web/src/pages/MyWeekPage.contrast.test.tsx` resolves the effective foreground
+and background *colours* out of the rendered DOM and asserts the WCAG ratio, rather than asserting
+a class string — so it survives a markup refactor and fails if a palette hex drifts back under
+4.5:1. It renders four data states, because three of the page's pairs only exist under specific
+data; a single-state check would have declared the page fixed while the 4.38:1 badge sat behind a
+common plan state. `web/src/lib/contrast.test.ts` pins the resolver against numbers this project
+did not compute — the exact `fgColor`/`bgColor`/`contrastRatio` values axe recorded in
+`audit/a11y/axe/`.
+
+Confirmed red first on the unfixed page: 6 failures, every one an `AssertionError` on the ratio
+(21 of 39 pairs below 4.5:1 in the first state; named failures at 2.26:1, 1.85:1, 2.82:1, 4.38:1).
+No import or locator errors.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test        # 24 new tests; 13 known failures are TEST-1/TRO-223, unchanged
+pnpm --filter @ship/web type-check
+```
+
+To re-measure against a browser, start the worktree's API and Vite, log in for a fresh
+`session_id` (sessions expire in 15 minutes), then run Lighthouse and axe with the flags above.
+
+**Roll back.** `git revert` the commits on `fix/a11y-3-contrast`, or by hand: restore `opacity-40`
+on the future-row branch of `rowClass`, put back `text-muted/50` on the two ordinals,
+`text-accent` on the "Current" badge and today's day label, `text-muted` on the two "Unsubmitted"
+badges, and drop `accent-text` from the palette. The two new spec files fail if any of it comes
+back, which is the point.
+
+**Not established.** That a low-vision user can now read the page. Contrast ratios and axe output
+are measured; the user-facing benefit is *derived* from them, and no human with low vision has
+looked at this build. Also not established: that the repo's three Playwright a11y specs still pass
+— they are not run by the factory gate and were not run here. One of them,
+`e2e/accessibility-remediation.spec.ts:738` ("no color contrast violations on main pages"), runs
+axe right after login, which lands on `/my-week`; it was almost certainly failing before this
+change and should now pass, but that is a prediction, not a result.
+
+**Found and not fixed** (filed as follow-ups, all measured):
+
+1. `text-muted` on a `bg-border` fill is **4.38:1** and co-occurs in ~109 places in `web/src`.
+   Raising `muted` from `#8a8a8a` to `#929292` (4.86:1 on `#262626`, 6.25:1 on `#0d0d0d`) fixes the
+   whole class in one line and cannot lower contrast on any dark surface. Out of scope here because
+   it is an app-wide tone change driven by pairs outside this page.
+2. `text-accent` is **2.89:1** as small text on the page background wherever it renders — 80
+   occurrences in 45 files. Only the two on `/my-week` were observed failing by axe; the rest is
+   computed from the token, so treat the count as derived. `accent-text` now exists for them.
+3. `bg-surface` is used in three files including `MyWeekPage.tsx`, but `surface` is **not a palette
+   token**, so the class generates no CSS and those "cards" are painted with the page background.
+   Harmless today; it silently changes the contrast maths for anything inside them if `surface` is
+   ever defined.
+4. `getContrastTextColor` in `web/src/lib/cn.ts` carries a second copy of the WCAG luminance
+   formula now also in `web/src/lib/contrast.ts`. Collapsing them changes a shipped helper's
+   behaviour on malformed input, so it was left alone.
+5. `pnpm db:migrate` stopped after `010_oauth_state.sql` on a partially-migrated database and still
+   reported success, leaving 10 of 42 migrations applied — the swallowed `already exists` catch at
+   `api/src/db/migrate.ts:103-110`. This is **DB-1** reproducing; worked around by cloning a
+   fully-migrated database rather than by touching the runner.
 
 ---
 

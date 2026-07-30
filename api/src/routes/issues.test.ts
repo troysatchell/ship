@@ -170,6 +170,166 @@ describe('Issues API', () => {
     })
   })
 
+  // Regression coverage for the shared root cause behind TRO-173 (API-2) and
+  // TRO-182 (DB-5): the list and detail views used one SELECT projection, so
+  // GET /api/issues shipped every issue's TipTap body (38.4% of the 379,907-byte
+  // payload measured on 254 issues, 146,015 B) and had no LIMIT/OFFSET at all.
+  describe('GET /api/issues list projection (TRO-173 / TRO-182)', () => {
+    // A recognizable string inside the document body. If it appears anywhere in
+    // the list response, the body was serialized onto the wire.
+    const BODY_SENTINEL = 'TRO173-DOCUMENT-BODY-MUST-NOT-BE-LISTED'
+    const bodyFor = (n: number) => ({
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: `${BODY_SENTINEL} #${n} ${'filler prose. '.repeat(60)}` }],
+        },
+      ],
+    })
+
+    // 5 issues so the 3-row pagination assertions have N+2 rows to work with.
+    const PAGE_FIXTURE_COUNT = 5
+    const pagedIssueIds: string[] = []
+
+    // Live count of what an unpaginated GET /api/issues must return for this
+    // workspace: the route's own filters (type, archived, deleted) applied to
+    // the fixture data, computed at assertion time so sibling suites that add
+    // or archive issues cannot make these tests order-dependent.
+    const countVisibleIssues = async (): Promise<number> => {
+      const { rows } = await pool.query(
+        `SELECT count(*)::int AS n FROM documents
+         WHERE workspace_id = $1 AND document_type = 'issue'
+           AND archived_at IS NULL AND deleted_at IS NULL`,
+        [testWorkspaceId]
+      )
+      return rows[0].n
+    }
+
+    beforeAll(async () => {
+      // priority 'urgent' + distinct updated_at makes these rows sort first, in
+      // a fixed order, under the route's ORDER BY (priority CASE, updated_at DESC).
+      // No other suite in this file creates an urgent issue.
+      for (let n = 0; n < PAGE_FIXTURE_COUNT; n++) {
+        const inserted = await pool.query(
+          `INSERT INTO documents
+             (workspace_id, document_type, title, visibility, created_by, properties, content, updated_at)
+           VALUES ($1, 'issue', $2, 'workspace', $3, $4, $5, now() - ($6 || ' minutes')::interval)
+           RETURNING id`,
+          [
+            testWorkspaceId,
+            `Projection Fixture ${n}`,
+            testUserId,
+            JSON.stringify({ state: 'backlog', priority: 'urgent' }),
+            JSON.stringify(bodyFor(n)),
+            String(n),
+          ]
+        )
+        pagedIssueIds.push(inserted.rows[0].id)
+      }
+    })
+
+    it('omits the document body from the list response (TRO-173 / API-2)', async () => {
+      const res = await request(app)
+        .get('/api/issues')
+        .set('Cookie', sessionCookie)
+
+      expect(res.status).toBe(200)
+      const listed = res.body.find((i: { id: string }) => i.id === pagedIssueIds[0])
+      expect(listed, 'projection fixture issue should appear in the list').toBeDefined()
+
+      // Absent, not null: `content: null` would claim the issue has no body.
+      expect(Object.prototype.hasOwnProperty.call(listed, 'content')).toBe(false)
+
+      // The strong form of the same claim — the body text is not in the bytes.
+      expect(res.text).not.toContain(BODY_SENTINEL)
+
+      // The list still carries what the list UI renders.
+      expect(listed.title).toBe('Projection Fixture 0')
+      expect(listed.state).toBe('backlog')
+      expect(listed.priority).toBe('urgent')
+      expect(listed.belongs_to).toBeInstanceOf(Array)
+    })
+
+    it('still returns the document body from the detail route (TRO-173)', async () => {
+      const res = await request(app)
+        .get(`/api/issues/${pagedIssueIds[0]}`)
+        .set('Cookie', sessionCookie)
+
+      expect(res.status).toBe(200)
+      expect(res.body.content).toEqual(bodyFor(0))
+    })
+
+    it('returns every matching issue when no limit is given (TRO-182 contract)', async () => {
+      const expected = await countVisibleIssues()
+      expect(expected, 'fixtures should provide issues to list').toBeGreaterThanOrEqual(
+        PAGE_FIXTURE_COUNT
+      )
+
+      const res = await request(app)
+        .get('/api/issues')
+        .set('Cookie', sessionCookie)
+
+      expect(res.status).toBe(200)
+      // No default limit: callers that filter or aggregate client-side over the
+      // full list must not be silently truncated.
+      expect(res.body.length).toBe(expected)
+    })
+
+    it('caps rows with limit and skips them with offset (TRO-182 / DB-5)', async () => {
+      const first = await request(app)
+        .get('/api/issues?limit=3')
+        .set('Cookie', sessionCookie)
+
+      expect(first.status).toBe(200)
+      expect(first.body.length).toBe(3)
+      expect(first.body.map((i: { id: string }) => i.id)).toEqual(pagedIssueIds.slice(0, 3))
+
+      const offset = await request(app)
+        .get('/api/issues?limit=3&offset=1')
+        .set('Cookie', sessionCookie)
+
+      expect(offset.status).toBe(200)
+      expect(offset.body.length).toBe(3)
+      expect(offset.body.map((i: { id: string }) => i.id)).toEqual(pagedIssueIds.slice(1, 4))
+    })
+
+    it('rejects pagination params it cannot honour (TRO-182)', async () => {
+      // Both bounds are checked from both ends. A naive `> max` test passes
+      // negative input, which is the classic bypass, so -1 is here explicitly.
+      const rejected = [
+        'limit=0',
+        'limit=-1',
+        'limit=abc',
+        'limit=501',
+        'limit=1.5',
+        'offset=-1',
+        'offset=x',
+        'offset=100001',
+      ]
+      for (const qs of rejected) {
+        const res = await request(app)
+          .get(`/api/issues?${qs}`)
+          .set('Cookie', sessionCookie)
+
+        expect(res.status, `?${qs} should be rejected, not silently ignored`).toBe(400)
+      }
+    })
+
+    it('accepts the documented pagination bounds (TRO-182)', async () => {
+      // The inclusive edges must pass, or the bound is off by one and the
+      // OpenAPI contract (limit 1-500, offset 0-100000) is wrong.
+      for (const qs of ['limit=1', 'limit=500', 'offset=0', 'offset=100000', 'limit=500&offset=100000']) {
+        const res = await request(app)
+          .get(`/api/issues?${qs}`)
+          .set('Cookie', sessionCookie)
+
+        expect(res.status, `?${qs} is a documented bound and must be accepted`).toBe(200)
+        expect(Array.isArray(res.body), `?${qs} should still return an array`).toBe(true)
+      }
+    })
+  })
+
   describe('GET /api/issues/:id', () => {
     let testIssueId: string
 

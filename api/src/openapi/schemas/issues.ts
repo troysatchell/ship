@@ -3,7 +3,7 @@
  */
 
 import { z, registry } from '../registry.js';
-import { UuidSchema, DateTimeSchema, DateSchema, BelongsToEntrySchema, BelongsToResponseSchema, UserReferenceSchema } from './common.js';
+import { UuidSchema, DateTimeSchema, DateSchema, BelongsToEntrySchema, BelongsToResponseSchema, UserReferenceSchema, ErrorResponseSchema } from './common.js';
 
 // ============== Issue Enums ==============
 
@@ -108,6 +108,41 @@ export const IssueResponseSchema = z.object({
 }).openapi('Issue');
 
 registry.register('Issue', IssueResponseSchema);
+
+// ============== Issue List Item ==============
+
+// GET /issues returns this shape, not `Issue`: the list projection omits the
+// TipTap document body (TRO-173 / API-2 — measured at 146,015 of 379,907 payload
+// bytes for 254 issues, read by no list consumer). Fetch GET /issues/{id} for it.
+export const IssueListItemSchema = IssueResponseSchema
+  .omit({ content: true })
+  .openapi('IssueListItem', {
+    description: 'An issue as returned by the list endpoint, without the document body (`content`).',
+  });
+
+registry.register('IssueListItem', IssueListItemSchema);
+
+// ============== Issue List Pagination ==============
+
+// THE source of truth for GET /issues pagination bounds. `api/src/routes/issues.ts`
+// imports this exact schema to validate `req.query`, so Swagger, the generated MCP
+// tool and the route can never disagree about what is accepted — the drift this
+// project has been bitten by before (see /ship-openapi-endpoints).
+//
+// Both parameters are bounded at both ends. `offset` has a maximum because an
+// unbounded one is scanned and discarded by Postgres: OFFSET 1e9 costs a full
+// scan to return nothing. 100,000 is far above real volume (254 issues in the
+// audit dataset) and still refuses a scan-the-table request with a 400.
+export const IssueListPaginationSchema = z.object({
+  limit: z.coerce.number().int().min(1).max(500).optional().openapi({
+    description: 'Maximum issues to return (1-500). Omit for every matching issue — there is no default limit.',
+    example: 50,
+  }),
+  offset: z.coerce.number().int().min(0).max(100000).optional().openapi({
+    description: 'Number of issues to skip, applied after ordering (0-100000). Use with `limit` to page.',
+    example: 50,
+  }),
+});
 
 // ============== Create Issue ==============
 
@@ -235,7 +270,7 @@ registry.registerPath({
   path: '/issues',
   tags: ['Issues'],
   summary: 'List issues',
-  description: 'List issues with optional filtering by state, priority, assignee, program, sprint, and more.',
+  description: 'List issues with optional filtering by state, priority, assignee, program, sprint, and more. Items omit the `content` document body — fetch an individual issue for that. Pagination is opt-in: omit `limit` and `offset` to receive every matching issue.',
   request: {
     query: z.object({
       state: z.string().optional().openapi({
@@ -252,14 +287,22 @@ registry.registerPath({
       parent_filter: z.enum(['top_level', 'has_children', 'is_sub_issue']).optional().openapi({
         description: 'Filter by parent/child relationship',
       }),
-    }),
+    }).merge(IssueListPaginationSchema),
   },
   responses: {
     200: {
-      description: 'List of issues',
+      description: 'List of issues, without the `content` document body',
       content: {
         'application/json': {
-          schema: z.array(IssueResponseSchema),
+          schema: z.array(IssueListItemSchema),
+        },
+      },
+    },
+    400: {
+      description: 'Invalid pagination parameter (`limit` outside 1-500, negative `offset`, non-numeric value)',
+      content: {
+        'application/json': {
+          schema: ErrorResponseSchema,
         },
       },
     },
