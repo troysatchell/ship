@@ -151,7 +151,52 @@ run_tests() { # run_tests <pkg>
       record "tests:${pkg}" pass "no new failures vs baseline"
     fi
   else
-    record "tests:${pkg}" fail "new failure(s) — see .factory/${pkg}-testdiff.txt"
+    # A new failure is a FAIL. But this repo has a documented load-sensitive
+    # mechanism (TEST-12 / TRO-277) with at least nine known identities, all of
+    # which fail inside a full gate run — which carries typecheck + build, and
+    # often runs alongside sibling worktrees — and pass standalone. Every agent
+    # in the 2026-07-30 run had to re-run failures by hand to tell load noise
+    # from a real regression, which is slow and easy to skip.
+    #
+    # So do that re-run here and REPORT it. Deliberately NOT downgraded to a
+    # warn: "fails in the suite, passes alone" is also the signature of a
+    # genuine test-isolation bug, which is precisely what TEST-12 turned out to
+    # be. Auto-passing it would hide the class this project keeps finding. The
+    # verdict stays fail; the operator gets the diagnosis for free.
+    local files standalone_pass=0 standalone_total=0
+    files="$(node -e '
+      const fs = require("fs");
+      try {
+        const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+        const out = new Set();
+        for (const s of j.testResults || [])
+          for (const a of s.assertionResults || [])
+            if (a.status === "failed") out.add(s.name);
+        process.stdout.write([...out].join("\n"));
+      } catch { /* no report, nothing to re-run */ }
+    ' "$json" 2>/dev/null)"
+
+    if [ -n "$files" ]; then
+      : > "$OUT_DIR/${pkg}-standalone.txt"
+      while IFS= read -r tf; do
+        [ -z "$tf" ] && continue
+        standalone_total=$((standalone_total + 1))
+        if (cd "${WT_ROOT}/${pkg}" && npx vitest run "$tf" > /dev/null 2>&1); then
+          standalone_pass=$((standalone_pass + 1))
+          echo "PASSED standalone: $tf" >> "$OUT_DIR/${pkg}-standalone.txt"
+        else
+          echo "FAILED standalone: $tf" >> "$OUT_DIR/${pkg}-standalone.txt"
+        fi
+      done <<< "$files"
+    fi
+
+    if [ "$standalone_total" -gt 0 ] && [ "$standalone_pass" -eq "$standalone_total" ]; then
+      record "tests:${pkg}" fail "new failure(s), but ALL ${standalone_total} passed standalone — load-sensitive (TRO-277) or a test-isolation bug; see .factory/${pkg}-standalone.txt"
+    elif [ "$standalone_total" -gt 0 ]; then
+      record "tests:${pkg}" fail "new failure(s) — ${standalone_pass}/${standalone_total} passed standalone; the rest are REAL. See .factory/${pkg}-standalone.txt"
+    else
+      record "tests:${pkg}" fail "new failure(s) — see .factory/${pkg}-testdiff.txt"
+    fi
   fi
 }
 run_tests api

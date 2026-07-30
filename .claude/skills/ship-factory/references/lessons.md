@@ -87,6 +87,21 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
       **lost update**. Push the predicate into the `WHERE` clause so the database decides (TRO-179).
     - A read-then-apply sequence over shared state needs a **lock** (TRO-178 → TRO-279).
     State the argument in the PR. "It is unlikely to happen" is not one.
+
+    **Updated 2026-07-30 — now 6 findings across 4 tickets, worst severity CRITICAL.** This is the
+    most *dangerous* recurring class in the project, and it has one dominant shape:
+    **async work between making something reachable and making it able to respond.** Four instances,
+    all in `api/src/collaboration/index.ts`: the `'error'` listener attached after an `await`
+    (ERR-10); the `'message'` listener attached after an `await`, dropping sync step 1 (ERR-11); a
+    `Y.Doc` published into the shared map before its content loaded (ERR-12); and a socket that
+    closed *during* an `await` still being registered in `conns` with no `'close'` listener — a
+    permanent leak that also replayed buffered frames into a live broadcast (found in review on
+    ERR-11's own fix, i.e. the pattern recurred **inside the PR that was fixing it**).
+    Before you `await` anything in a connection or cache path, ask: *between this line and the one
+    that finishes setup, what can arrive, and where does it go?* If the answer is "nowhere" or "into
+    a half-built object", that is this bug. The fixes that work are **buffer-then-drain**, **cache
+    the load promise rather than the object**, and **re-check liveness after every await**.
+    `memory-bank/systemPatterns.md` records the pattern; read it before touching that file.
 19. **`CHANGES.md` claims get checked against the diff.**
     4 findings across 3 tickets (TRO-178, TRO-223, TRO-179): a count that contradicted itself, a
     test-harness fix filed as a source defect, an entry title that overstated the result, and a
@@ -135,7 +150,19 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     `pnpm install` cleared all of it — the lockfile was already correct, so nothing else was wrong.
     Symptom to recognise: failures in files your diff never touched, all reporting import or
     module-resolution errors rather than assertion failures.
-24. **The load-sensitive api flake has at least five identities. Name yours; never quarantine it.**
+24. **The load-sensitive api flake has at least NINE identities, and the quarantine is now empty.**
+    Added 2026-07-30: `concurrent-merge.test.ts::merges concurrent inserts from two clients into the
+    SAME text region`, `documents-visibility.test.ts::returns private docs only to creator`,
+    `documents-visibility.test.ts::returns private docs to workspace admins`,
+    `search.test.ts::returns people with correct structure` — joining the five below.
+    **This matters more than it used to.** TEST-1 emptied `quarantine.json` entirely, so there is no
+    longer any list absorbing a red test: one flake now fails a gate and a CI run outright. `gate.sh`
+    therefore re-runs each new failure standalone and reports the result, so you no longer have to do
+    it by hand — but it still records `fail`, deliberately. "Fails in the suite, passes alone" is
+    equally the signature of a real test-isolation bug, which is exactly what TEST-12 turned out to
+    be, so auto-passing it would hide the class this project keeps finding.
+    Read `.factory/<pkg>-standalone.txt` and judge. Concurrency across worktrees is the usual cause —
+    check `ps` for sibling gates before concluding anything.
     `backlinks.test.ts`, `rate-limit.test.ts`, `weeks.test.ts::should reject review approval without
     rating`, `session-activity-race.test.ts::modifies the session row exactly once when a concurrent
     burst crosses the threshold`, and a candidate `workspaces.test.ts::should archive person

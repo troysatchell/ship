@@ -90,8 +90,13 @@ function recordMessage(ws: WebSocket): void {
   messageTimestamps.set(ws, recentTimestamps);
 }
 
-// Store documents and awareness by room name
-const docs = new Map<string, Y.Doc>();
+// Store documents and awareness by room name.
+//
+// ERR-12: the value is the LOAD PROMISE, not the Y.Doc itself. See
+// getOrCreateDoc()/loadDoc() below for why that is the whole fix. Everywhere
+// else in this file only touches this map's KEYS (docs.forEach over doc
+// names, docs.delete) so widening the value type does not disturb them.
+const docs = new Map<string, Promise<Y.Doc>>();
 const awareness = new Map<string, awarenessProtocol.Awareness>();
 
 // Per-connection metadata. `sessionId` is what lets the server re-check, on a
@@ -219,75 +224,45 @@ function schedulePersist(docName: string, doc: Y.Doc) {
 // Browser should clear its IndexedDB cache when connecting to these docs
 const freshFromJsonDocs = new Set<string>();
 
-async function getOrCreateDoc(docName: string): Promise<Y.Doc> {
-  let doc = docs.get(docName);
-  if (doc) return doc;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
 
-  doc = new Y.Doc();
-  docs.set(docName, doc);
+/** Narrows the `documents.content` JSONB column to the shape jsonToYjs() expects. */
+function isTipTapDocContent(value: unknown): value is { type: 'doc'; content: unknown[] } {
+  return isRecord(value) && value.type === 'doc' && Array.isArray(value.content);
+}
 
-  // Load existing state from database (all document types use the unified documents table)
-  const docId = parseDocId(docName);
+/**
+ * Load one document's content from the database into a fresh Y.Doc.
+ *
+ * ERR-12 lives here, in two requirements that are both load-bearing:
+ *
+ * 1. `doc.on('update')` is attached BEFORE the database read / JSON→Yjs
+ *    conversion below, not after. `jsonToYjs()` mutates `doc` synchronously to
+ *    replay the JSON content as Yjs operations, and that mutation itself fires
+ *    'update'. Attaching the listener afterwards means that very first update —
+ *    the one that actually carries the loaded content — fires with nobody
+ *    listening and is lost, the same shape of bug as a dropped WebSocket frame.
+ * 2. A DATABASE READ failure PROPAGATES. The `pool.query()` call below is
+ *    deliberately not wrapped in a try/catch that swallows the error the way
+ *    the old single-function version did. getOrCreateDoc() below relies on
+ *    the rejection to evict a failed load from the `docs` map, so the next
+ *    connection retries instead of reusing a doc that silently stayed empty
+ *    forever. A malformed STORED VALUE (corrupt `yjs_state`, unparsable JSON
+ *    `content`) is NOT the same kind of failure — retrying would decode the
+ *    exact same bytes again — so those two branches each keep their own
+ *    try/catch and fall back to an empty document, matching this function's
+ *    pre-ERR-12 behavior for corrupted data.
+ */
 
-  try {
-    const result = await pool.query(
-      'SELECT yjs_state, content FROM documents WHERE id = $1',
-      [docId]
-    );
+async function loadDoc(docName: string): Promise<Y.Doc> {
+  const doc = new Y.Doc();
 
-    if (result.rows[0]?.yjs_state) {
-      // Load from binary Yjs state (preferred path - content was previously synced)
-      console.log(`[Collaboration] Loading ${docName} from yjs_state`);
-      Y.applyUpdate(doc, result.rows[0].yjs_state);
-    } else if (result.rows[0]?.content) {
-      // Fallback: convert JSON content to Yjs (for API-created documents)
-      console.log(`[Collaboration] Converting JSON content to Yjs for ${docName}`);
-      try {
-        let jsonContent = result.rows[0].content;
-        const originalContent = jsonContent;
-
-        // Parse if it's a string (might be JSON string or XML-like from old toJSON)
-        if (typeof jsonContent === 'string') {
-          // Skip if it looks like XML from XmlFragment.toJSON() (starts with <)
-          if (jsonContent.trim().startsWith('<')) {
-            console.log(`[Collaboration] Skipping XML-like content for ${docName}, starting with empty document`);
-            jsonContent = null;
-          } else {
-            jsonContent = JSON.parse(jsonContent);
-          }
-        }
-
-        if (jsonContent && jsonContent.type === 'doc' && Array.isArray(jsonContent.content)) {
-          const fragment = doc.getXmlFragment('default');
-          jsonToYjs(doc, fragment, jsonContent);
-          console.log(`[Collaboration] Successfully converted content for ${docName}: ${jsonContent.content.length} top-level nodes`);
-          // Mark this doc as freshly loaded from JSON - clients should clear their cache
-          freshFromJsonDocs.add(docName);
-          // Persist the converted state so this only happens once
-          schedulePersist(docName, doc);
-        } else {
-          // Log why conversion was skipped to help diagnose issues
-          console.warn(`[Collaboration] Content conversion skipped for ${docName}:`, {
-            hasContent: !!jsonContent,
-            type: jsonContent?.type,
-            isContentArray: Array.isArray(jsonContent?.content),
-            contentSample: typeof originalContent === 'string' ? originalContent.substring(0, 100) : JSON.stringify(originalContent).substring(0, 100),
-          });
-        }
-      } catch (parseErr) {
-        console.error(`[Collaboration] Failed to parse JSON content for ${docName}:`, parseErr);
-        // Start with empty document if content is corrupted
-      }
-    } else {
-      console.log(`[Collaboration] No content found for ${docName}, starting with empty document`);
-    }
-  } catch (err) {
-    console.error(`[Collaboration] Failed to load document ${docName}:`, err);
-  }
-
-  // Set up persistence and broadcast on changes
-  doc.on('update', (update: Uint8Array, origin: any) => {
-    schedulePersist(docName, doc!);
+  // Set up persistence and broadcast on changes. Attached before the load below
+  // — see the doc comment above for why the ordering matters.
+  doc.on('update', (update: Uint8Array, origin: unknown) => {
+    schedulePersist(docName, doc);
 
     // Broadcast update to all other clients in this room (except sender)
     const encoder = encoding.createEncoder();
@@ -302,7 +277,108 @@ async function getOrCreateDoc(docName: string): Promise<Y.Doc> {
     });
   });
 
+  // Load existing state from database (all document types use the unified documents table)
+  const docId = parseDocId(docName);
+
+  const result = await pool.query<{ yjs_state: Buffer | null; content: unknown }>(
+    'SELECT yjs_state, content FROM documents WHERE id = $1',
+    [docId]
+  );
+
+  if (result.rows[0]?.yjs_state) {
+    // Load from binary Yjs state (preferred path - content was previously synced)
+    console.log(`[Collaboration] Loading ${docName} from yjs_state`);
+    try {
+      Y.applyUpdate(doc, result.rows[0].yjs_state);
+    } catch (applyErr) {
+      console.error(`[Collaboration] Failed to apply stored yjs_state for ${docName}:`, applyErr);
+      // Same reasoning as the JSON-parse catch below: corrupted STORED DATA is
+      // not a transient failure — retrying the load would decode the exact
+      // same bytes again — so this is swallowed rather than rejecting the
+      // whole load and evicting the cache entry. The document starts empty,
+      // matching this branch's pre-ERR-12 behavior.
+    }
+  } else if (result.rows[0]?.content) {
+    // Fallback: convert JSON content to Yjs (for API-created documents)
+    console.log(`[Collaboration] Converting JSON content to Yjs for ${docName}`);
+    try {
+      const originalContent: unknown = result.rows[0].content;
+      let jsonContent: unknown = originalContent;
+
+      // Parse if it's a string (might be JSON string or XML-like from old toJSON)
+      if (typeof jsonContent === 'string') {
+        // Skip if it looks like XML from XmlFragment.toJSON() (starts with <)
+        if (jsonContent.trim().startsWith('<')) {
+          console.log(`[Collaboration] Skipping XML-like content for ${docName}, starting with empty document`);
+          jsonContent = null;
+        } else {
+          jsonContent = JSON.parse(jsonContent);
+        }
+      }
+
+      if (isTipTapDocContent(jsonContent)) {
+        const fragment = doc.getXmlFragment('default');
+        jsonToYjs(doc, fragment, jsonContent);
+        console.log(`[Collaboration] Successfully converted content for ${docName}: ${jsonContent.content.length} top-level nodes`);
+        // Mark this doc as freshly loaded from JSON - clients should clear their cache
+        freshFromJsonDocs.add(docName);
+        // Persist the converted state so this only happens once
+        schedulePersist(docName, doc);
+      } else {
+        // Log why conversion was skipped to help diagnose issues
+        console.warn(`[Collaboration] Content conversion skipped for ${docName}:`, {
+          hasContent: jsonContent != null,
+          type: isRecord(jsonContent) ? jsonContent.type : undefined,
+          isContentArray: isRecord(jsonContent) ? Array.isArray(jsonContent.content) : false,
+          contentSample: typeof originalContent === 'string' ? originalContent.substring(0, 100) : JSON.stringify(originalContent).substring(0, 100),
+        });
+      }
+    } catch (parseErr) {
+      console.error(`[Collaboration] Failed to parse JSON content for ${docName}:`, parseErr);
+      // Start with empty document if content is corrupted. Not re-thrown: this
+      // is malformed data, not a transient failure, so retrying the load would
+      // just hit the same bytes again — see the function doc comment.
+    }
+  } else {
+    console.log(`[Collaboration] No content found for ${docName}, starting with empty document`);
+  }
+
   return doc;
+}
+
+/**
+ * Get (or start loading) the shared Y.Doc for a room — exactly one load per
+ * doc name, even under concurrent callers.
+ *
+ * ERR-12: the map stores the LOAD PROMISE, not the eventual doc. A second
+ * caller arriving while the first is still loading awaits that SAME promise
+ * and therefore gets back a doc that is guaranteed fully loaded — there is no
+ * intermediate step at which an unloaded doc is ever handed to anyone. This is
+ * the standard fix for a cache stampede (publish the promise, not the value)
+ * and it removes the window rather than narrowing it, per the ticket.
+ */
+export async function getOrCreateDoc(docName: string): Promise<Y.Doc> {
+  const existing = docs.get(docName);
+  if (existing) return existing;
+
+  const loadPromise = loadDoc(docName).catch((err) => {
+    // Evict THIS failed load, and only if it is still the current entry. A
+    // caller that arrived after this one failed may already have started a
+    // fresh load and published its own (newer) promise in the meantime; an
+    // unconditional delete here could tear down that unrelated in-flight
+    // attempt instead of the one that actually failed.
+    if (docs.get(docName) === loadPromise) {
+      docs.delete(docName);
+    }
+    console.error(
+      `[Collaboration] Failed to load document ${docName}, evicting from cache so the next connection retries:`,
+      err
+    );
+    throw err;
+  });
+
+  docs.set(docName, loadPromise);
+  return loadPromise;
 }
 
 function getAwareness(docName: string, doc: Y.Doc): awarenessProtocol.Awareness {
@@ -377,6 +453,24 @@ function handleMessage(ws: WebSocket, message: Uint8Array, docName: string, doc:
  * Not 1011 ("internal error"), which would blame the server for the client's bytes.
  */
 export const WS_CLOSE_PROTOCOL_ERROR = 1002;
+
+/**
+ * WebSocket close code used when a connection's document failed to load
+ * (ERR-12 — the load promise rejected). RFC 6455 §7.4.1: 1011 "internal error"
+ * — this is a server-side failure (a transient database error), not something
+ * the client did wrong, so it gets the opposite code from WS_CLOSE_PROTOCOL_ERROR.
+ */
+export const WS_CLOSE_LOAD_FAILED = 1011;
+
+/**
+ * WebSocket close code used when a socket floods more than
+ * MAX_PRELOAD_BUFFER_BYTES of frames before its document finishes loading
+ * (ERR-11). In the 4000-4999 application range, like the other
+ * connection-lifecycle codes in this file (WS_CLOSE_SESSION_INVALID, etc.), so
+ * it is distinguishable in logs from a standard protocol-level close.
+ * Mnemonic: HTTP 429 "Too Many Requests".
+ */
+export const WS_CLOSE_PRELOAD_BUFFER_FULL = 4429;
 
 /** Digest length in hex characters. Long enough to distinguish frames, short enough to read. */
 const FRAME_DIGEST_CHARS = 16;
@@ -916,6 +1010,31 @@ export function broadcastToUser(userId: string, eventType: string, data?: Record
 // DDoS protection: Max WebSocket message size (10MB, matches REST API limit)
 const MAX_WS_MESSAGE_SIZE = 10 * 1024 * 1024;
 
+/**
+ * Bound on inbound bytes buffered for one socket while its document is still
+ * loading (ERR-11).
+ *
+ * The bound exists because this handler receives attacker-controlled bytes
+ * before anything about their CONTENT can be validated (ERR-10's finding) —
+ * an unbounded queue here would let one socket hold arbitrarily much memory
+ * for as long as it can keep the load in flight, and the load window widens
+ * under a slow or contended database (observed on loopback; see the ERR-11
+ * ticket). Bounded by total buffered BYTES, not just frame count, because
+ * MAX_WS_MESSAGE_SIZE (10MB) already allows a single frame alone to be large —
+ * counting frames would let a handful of max-size frames through.
+ *
+ * The number: a real y-websocket client sends only a handful of frames before
+ * the server can reply (sync step 1, maybe one or two awareness updates),
+ * typically a few hundred bytes each. 1 MiB is roughly two orders of magnitude
+ * over that — generous headroom for a contended database — while still
+ * capping the worst case for one loading socket to a small, fixed amount
+ * rather than letting it grow without limit.
+ *
+ * Exported so the regression test can assert against the exact bound instead
+ * of duplicating the number.
+ */
+export const MAX_PRELOAD_BUFFER_BYTES = 1024 * 1024; // 1 MiB
+
 export interface CollaborationOptions {
   /**
    * How often live sockets are re-checked against the sessions table.
@@ -1015,7 +1134,80 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
     // window produced an uncaught RangeError until this moved up here.
     attachSocketErrorHandler(ws, { docName, userId: sessionData.userId });
 
-    const doc = await getOrCreateDoc(docName);
+    // ERR-11: register a 'message' listener and start BUFFERING before the
+    // document load below (a database round trip) has any chance to run. A
+    // frame arriving between here and the point the doc is ready has nowhere
+    // to go otherwise — Node's EventEmitter silently discards a 'message'
+    // event with no listener, and a y-websocket client sends its sync step 1
+    // on the very first tick after 'open'. Observed on loopback: that step 1
+    // consistently beats the DB read, so the server never replies with step 2
+    // and the client never learns the server's state.
+    //
+    // Buffering, not just early attachment, matters: attaching the real
+    // handler this early would run sync-protocol logic against a `doc` (and
+    // `Awareness`) that do not exist yet. Buffer raw frames instead and drain
+    // them, in order, once loading is done.
+    const preloadBuffer: Buffer[] = [];
+    let preloadBufferedBytes = 0;
+
+    function bufferPreloadFrame(data: Buffer): void {
+      if (preloadBufferedBytes + data.length > MAX_PRELOAD_BUFFER_BYTES) {
+        // Bounded: a socket that floods frames faster than its document can
+        // load is closed, not allowed to grow the queue without limit (this
+        // handler sees attacker-controlled bytes before anything about their
+        // content can be validated — see MAX_PRELOAD_BUFFER_BYTES).
+        console.warn('[Collaboration] Preload buffer overflow; closing socket before its document finished loading', {
+          docName,
+          userId: sessionData.userId,
+          bufferedBytes: preloadBufferedBytes,
+          incomingBytes: data.length,
+        });
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close(WS_CLOSE_PRELOAD_BUFFER_FULL, 'Too many messages before the document finished loading');
+        }
+        return;
+      }
+      preloadBuffer.push(data);
+      preloadBufferedBytes += data.length;
+    }
+
+    ws.on('message', bufferPreloadFrame);
+
+    let doc: Y.Doc;
+    try {
+      doc = await getOrCreateDoc(docName);
+    } catch (err) {
+      // ERR-12: the load promise rejected (see loadDoc()/getOrCreateDoc()).
+      // The map entry was already evicted by getOrCreateDoc's own catch, so
+      // the next connection attempt retries the load rather than reusing a
+      // permanently-broken entry. This connection cannot proceed without a
+      // doc, so it is closed rather than left open with nothing listening.
+      console.error(`[Collaboration] Document load failed for ${docName}; closing socket`, err);
+      preloadBuffer.length = 0;
+      ws.removeListener('message', bufferPreloadFrame);
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close(WS_CLOSE_LOAD_FAILED, 'Failed to load document');
+      }
+      return;
+    }
+
+    // The load above is a real database round trip; the peer may have gone
+    // away during it — either it disconnected on its own, or the preload
+    // buffer overflow guard above already closed it (`ws.close()` only starts
+    // the closing handshake, so overflow can fire and this line can still be
+    // reached before the socket actually finishes closing). Either way,
+    // `ws.on('close')` already fired (or is about to, with nothing registered
+    // for it yet — the real handler is below), so treating this socket as
+    // live from here on would register a `conns` entry that never gets
+    // cleaned up, and would replay any buffered frames — from a socket we
+    // already decided not to trust — against a doc that broadcasts to other,
+    // genuinely live connections.
+    if (ws.readyState !== WebSocket.OPEN) {
+      preloadBuffer.length = 0;
+      ws.removeListener('message', bufferPreloadFrame);
+      return;
+    }
+
     const aw = getAwareness(docName, doc);
 
     // Track this connection with user info for visibility change handling
@@ -1056,7 +1248,7 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
       ws.send(encoding.toUint8Array(awarenessEncoder));
     }
 
-    ws.on('message', (data: Buffer) => {
+    function processCollabFrame(data: Buffer): void {
       // ERR-10: the whole body is guarded, not just handleMessage(). The rate
       // limiter and the revocation check are cheap and unlikely to throw, but
       // "unlikely" is what this finding is about — nothing reachable from an
@@ -1097,7 +1289,23 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
 
         handleMessage(ws, new Uint8Array(data), docName, doc, aw);
       });
-    });
+    }
+
+    // ERR-11: swap the buffering listener for the real one, THEN drain
+    // whatever arrived during the load — in that order and in one
+    // synchronous block. `removeListener` before `on` means a frame the
+    // buffering listener is mid-handling cannot be followed by a second,
+    // live-registered listener also seeing it; there is no `await` between
+    // here and the end of the drain loop, so nothing else can run in between
+    // on this single thread either.
+    ws.removeListener('message', bufferPreloadFrame);
+    ws.on('message', processCollabFrame);
+
+    const drained = preloadBuffer.splice(0, preloadBuffer.length);
+    preloadBufferedBytes = 0;
+    for (const frame of drained) {
+      processCollabFrame(frame);
+    }
 
     ws.on('close', () => {
       const conn = conns.get(ws);
