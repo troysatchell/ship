@@ -36,6 +36,44 @@
 
 ## Log
 
+### 2026-07-30 (Thu) evening — factory resumed: recovery, 3 merges, 8 agents in flight
+
+**Recovery first, per `/ship-orchestrator` §4:** reconciled disk/branches/Linear. Found `main` had
+already advanced past this file's previous entry (PRs #34 TEST-15, #38 ERR-3/4, #39 tooling were
+merged); 19 worktrees were stale leftovers of Done tickets — removed, databases dropped. TEST-15's
+worktree branch had zero unique commits (its work merged via PR #34); verified before deleting.
+
+**Merged this session (local `--no-ff` sequence, combined verify, single push; main
+`3bc90ed` → `9a15f43`, all remotes identical):**
+- **#40** TEST-14/TRO-286 — the 22-finding CodeRabbit round fixed first (ledger 82→104); api
+  604/604, web 363/363 at gate.
+- **#42** RULE-5/TRO-246 — CI builds the image once → GHCR tagged by SHA; Render switch is a held
+  runbook. Gate honestly failed only `regression-test`; orchestrator judged it inapplicable
+  (CI+docs deliverable) and recorded the judgment rather than gaming a test.
+- **#43** A11Y-2/TRO-216 — root cause was tippy.js `aria: {expanded: 'auto'}` on the BubbleMenu
+  anchor, not app markup; live axe editor-focused C1→C0.
+
+**Combined verify note:** api suite failed once inside the full run under 8-agent load and passed
+46/46 on re-run; first capture truncated the identity (orchestrator script bug — `tail -8`), so it
+is recorded as load-transient with identity unknown, plainly.
+
+**Held for human:** PR #41 (TF-2 — ticket premise partially wrong: only `environments/prod` was a
+true duplicate; dev/shadow kept; live IAM `PutSecretValue` gap ported), PR #47 (TF-7 — `trust
+proxy 1` meant `req.ip` was CloudFront's edge IP for ALL traffic; SG prefix-list lock + hop-count
+2 must land together; TRO-295 quota check before apply).
+
+**Open PRs in fix rounds:** #45 (TS-3; converter any 12→0, api explicit-any 78→59; recursive-guard
+finding) and #46 (TS-1; 156 latent errors fixed — the audit's 102 had drifted; ReviewsPage
+invariant gap found+tested).
+
+**New tickets:** TRO-291 (login recovery guidance), TRO-292 (committed tfplan, strings-scan
+clean), TRO-293 (fixme'd quick-menu tests), TRO-294 (doc ALB health-check URL), TRO-295 (SG
+prefix-list quota, High), TRO-296 (converter marks round-trip asymmetry).
+
+**Process:** all ticket agents on Sonnet per standing decision; wave sizing kept to ~8 with gates
+staggered; wave-1 briefs omitted the ledger-recording instruction (orchestrator recorded 15 rows
+after the fact — instruction now included in later briefs).
+
 ### 2026-07-30 (Thu) — Phase 2, wave 3: 16 PRs merged, main at `319e1af`
 
 **`main` went `4d74602` → `319e1af`, verified via `git log --oneline --merges`. 16 PRs merged, both

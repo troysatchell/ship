@@ -204,3 +204,88 @@ jobs:
           name: source-inventory-${{ github.sha }}
           path: inventory/
           retention-days: 90
+
+  build-image:
+    name: build · push image (GHCR)
+    runs-on: ubuntu-latest
+    # Assignment rule 5: build once, promote the artifact. This job builds the
+    # SAME root Dockerfile `verify` already proved buildable-and-tested code goes
+    # into (TRO-242 made the image build from source), and never rebuilds it
+    # again downstream — Render is switched (TRO-246, tracked separately; see
+    # docs/deployment-artifact-lifecycle.md) to deploy the exact image pushed
+    # here, by digest-stable SHA tag, instead of building its own from the repo.
+    # `needs: verify` so a doomed PR/commit never spends minutes on a docker
+    # build, and so main never pushes an image for code that failed its own gate.
+    needs: verify
+    timeout-minutes: 20
+
+    # Job-level `permissions:` REPLACES the workflow default for this job, it
+    # does not add to it — so `contents: read` must be restated alongside the
+    # `packages: write` this job alone needs to push to GHCR.
+    permissions:
+      contents: read
+      packages: write
+
+    env:
+      IMAGE: ghcr.io/troysatchell/ship
+      # True only for an actual push to main. Never for a pull_request — even
+      # one opened against main — and never for a workflow_dispatch run against
+      # some other branch. PR runs still build (below), unauthenticated and
+      # without pushing, to prove the Dockerfile a change touched stays
+      # buildable from a clean checkout; that's the whole value of this job
+      # running on PRs at all, since nothing there is promoted anywhere.
+      SHOULD_PUSH: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      # Only authenticate when we're actually about to push. A fork PR's
+      # GITHUB_TOKEN has no write scope regardless of the permissions block
+      # above (GitHub enforces that for forked-repo runs), so this would fail
+      # there anyway — skipping it is also what keeps a PR run from needing
+      # any registry credential at all.
+      - name: Log in to GHCR
+        if: env.SHOULD_PUSH == 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The SHA tag alone is always valid. The branch tag is only added when we
+      # are actually pushing (main only): `github.ref_name` is safe there
+      # ("main"), but for a `pull_request` event it resolves to something like
+      # `42/merge` — a slash, which is not a legal Docker tag — and Docker
+      # rejects the whole `-t` list even though push is false. Computing the
+      # list in a step keeps that invalid string out of build-push-action's
+      # `tags:` input entirely instead of relying on push:false to make it
+      # harmless.
+      - name: Compute image tags
+        id: tags
+        run: |
+          set -euo pipefail
+          TAGS="${IMAGE}:${GITHUB_SHA}"
+          if [ "${SHOULD_PUSH}" = "true" ]; then
+            TAGS="${TAGS}
+          ${IMAGE}:${GITHUB_REF_NAME}"
+          fi
+          {
+            echo "list<<TAGEOF"
+            echo "$TAGS"
+            echo "TAGEOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # Tags: the full git SHA (immutable — this is the artifact identity the
+      # rollback runbook promotes/demotes by) plus, only on a push to main, a
+      # moving tag for the branch (always `main`, since pushing is main-only
+      # for now).
+      - name: Build image (push only on a main push)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          push: ${{ env.SHOULD_PUSH == 'true' }}
+          tags: ${{ steps.tags.outputs.list }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

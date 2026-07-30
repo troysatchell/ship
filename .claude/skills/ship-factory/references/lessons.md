@@ -257,6 +257,7 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   472/472 for the suite. Three distinct identities is the evidence that this is one shared
   load-sensitive mechanism (TRO-277), not three flaky tests. Re-run standalone before believing it,
   and report the identity so the set keeps growing.
+- 2026-07-30 (TRO-208, TRO-206) — **The stash rule keeps being violated at the same moment: A/B-testing a fix for red/green proof.** Two agents in one session ran `git stash` mid-task despite reading the rule; both caught themselves and recovered. The failure shape is always "I need the pre-fix code back for a minute." Do it with `git show HEAD:<path> > TRO-XXX-before.<ext>` or copy the files aside — decide HOW you'll do the before/after comparison *before* you start it, not at the moment you need the old code.
 - 2026-07-30 (TRO-173) — **A tool improvement that is not committed protects nothing.** A G7b rule
   added to catch `: any` annotations sat uncommitted in the orchestrator's working tree, so every
   branch gating against `main` kept running the weaker checker. Found because an agent reconciled a

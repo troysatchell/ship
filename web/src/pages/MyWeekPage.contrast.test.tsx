@@ -81,7 +81,11 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 
 function dayName(offsetDays: number): string {
   const d = new Date(isoDate(offsetDays) + 'T00:00:00Z');
-  return DAY_NAMES[d.getUTCDay()];
+  const name = DAY_NAMES[d.getUTCDay()];
+  // getUTCDay() is always 0-6 and DAY_NAMES has all 7 entries; this can never
+  // actually trigger, but the type checker can't derive that.
+  if (name === undefined) throw new Error(`unexpected day index ${d.getUTCDay()}`);
+  return name;
 }
 
 /** Yesterday (written), today (unwritten), and three future slots. */
@@ -171,6 +175,11 @@ const STATES: Array<{ name: string; data: MyWeekResponse }> = [
   },
 ];
 
+const [FIRST_STATE] = STATES;
+if (!FIRST_STATE) {
+  throw new Error('STATES must have at least one fixture');
+}
+
 function renderState(data: MyWeekResponse): HTMLElement {
   mockUseMyWeekQuery.mockReturnValue({ data, isLoading: false, error: null });
   const { container } = render(
@@ -221,7 +230,7 @@ describe('/my-week colour contrast (TRO-217 / A11Y-3)', () => {
   it('keeps the numbered plan/retro items legible', () => {
     // The 11px ordinals were the `text-muted/50` pair axe measured at 2.26:1.
     // Asserted separately so a regression here is named, not buried in a list.
-    const root = renderState(STATES[0].data);
+    const root = renderState(FIRST_STATE.data);
     const { pairs } = resolveContrastPairs(root, {
       colors: COLORS,
       rootBackground: palette.background,
@@ -239,7 +248,7 @@ describe('/my-week colour contrast (TRO-217 / A11Y-3)', () => {
     // Future rows carried `opacity-40`, which dragged their `text-muted` labels to
     // 1.84:1 — 12 of the 18 nodes axe reported. Opacity dims text and chrome
     // together, so this pair cannot be fixed by tuning the opacity value.
-    const root = renderState(STATES[0].data);
+    const root = renderState(FIRST_STATE.data);
     const { pairs } = resolveContrastPairs(root, {
       colors: COLORS,
       rootBackground: palette.background,

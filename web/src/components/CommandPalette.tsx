@@ -19,6 +19,22 @@ interface SearchableDocument {
 
 type ConvertibleDocumentType = 'wiki' | 'issue' | 'project' | 'sprint';
 
+/**
+ * Named so the six known buckets resolve as plain `SearchableDocument[]` (not
+ * `... | undefined`) under `noUncheckedIndexedAccess` when accessed by name
+ * (`groupedDocuments.issue`), while the index signature keeps the dynamic
+ * `document_type` lookup honestly optional.
+ */
+interface GroupedDocuments {
+  issue: SearchableDocument[];
+  wiki: SearchableDocument[];
+  program: SearchableDocument[];
+  project: SearchableDocument[];
+  sprint: SearchableDocument[];
+  person: SearchableDocument[];
+  [key: string]: SearchableDocument[];
+}
+
 interface CommandPaletteProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -78,16 +94,16 @@ export function CommandPalette({ open, onOpenChange, currentDocument, onConvertD
         nextIndex = currentIndex >= focusableElements.length - 1 ? 0 : currentIndex + 1;
       }
 
-      focusableElements[nextIndex].focus();
+      const nextElement = focusableElements[nextIndex];
+      nextElement?.focus();
     };
 
     // Fallback: if focus escapes to anywhere outside dialog, bring it back immediately
     const handleFocusIn = (e: FocusEvent) => {
       if (!dialog.contains(e.target as Node)) {
         const focusableElements = getFocusableElements();
-        if (focusableElements.length > 0) {
-          focusableElements[0].focus();
-        }
+        const first = focusableElements[0];
+        first?.focus();
       }
     };
 
@@ -166,8 +182,8 @@ export function CommandPalette({ open, onOpenChange, currentDocument, onConvertD
   }, [open]);
 
   // Group documents by type for display
-  const groupedDocuments = useMemo(() => {
-    const groups: Record<string, SearchableDocument[]> = {
+  const groupedDocuments = useMemo((): GroupedDocuments => {
+    const groups: GroupedDocuments = {
       issue: [],
       wiki: [],
       program: [],
@@ -177,8 +193,9 @@ export function CommandPalette({ open, onOpenChange, currentDocument, onConvertD
     };
 
     for (const doc of documents) {
-      if (groups[doc.document_type]) {
-        groups[doc.document_type].push(doc);
+      const bucket = groups[doc.document_type];
+      if (bucket) {
+        bucket.push(doc);
       }
     }
 
