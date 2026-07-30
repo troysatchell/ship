@@ -90,6 +90,28 @@ interface EditorProps {
   titleSuffix?: string;
 }
 
+// TRO-216 / A11Y-2: tippy.js (which @tiptap/extension-bubble-menu's
+// BubbleMenuPlugin uses under the hood for the comment bubble menu below)
+// anchors itself on `editor.options.element` - the plain <div> that
+// @tiptap/react's <EditorContent> renders to host the ProseMirror view, i.e.
+// `.tiptap-wrapper > div`. With `interactive: true` and tippy's default
+// `aria.expanded: 'auto'`, tippy calls
+// `referenceEl.setAttribute('aria-expanded', ...)` on that div unconditionally
+// (tippy.js's handleAriaExpandedAttribute) the first time the selection or
+// doc changes after mount - even though the div has no role and isn't itself
+// a disclosure widget; it is only tippy's positioning anchor for the floating
+// "Comment" button. That produced axe's Critical `aria-allowed-attr` on the
+// core editing surface. `aria: { expanded: false }` tells tippy never to
+// manage that attribute on the reference element; nothing about the div
+// itself expands or collapses, so removal (not a role) is the correct fix.
+// Exported so the regression test (Editor.bubbleMenuAria.test.tsx) exercises
+// the real production config rather than a copy of it.
+export const commentBubbleMenuTippyOptions = {
+  placement: 'top' as const,
+  duration: 150,
+  aria: { expanded: false as const },
+};
+
 // TRO-191 / ERR-4: shown once when this document's own write path reports the
 // document is gone (HTTP 404 on a PATCH - probe4c: another user deleted it
 // while this user kept typing into what is now a ghost editor). Same
@@ -1014,7 +1036,7 @@ export function Editor({
                   if ($from.parent.type.name === 'codeBlock') return false;
                   return true;
                 }}
-                tippyOptions={{ placement: 'top', duration: 150 }}
+                tippyOptions={commentBubbleMenuTippyOptions}
               >
                 <button
                   onClick={() => editor.commands.addComment()}

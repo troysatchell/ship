@@ -86,6 +86,273 @@ the (unreached, per above) invariant gap.
 
 ---
 
+## TRO-286 (TEST-14) — no e2e test can pass without executing an assertion any more
+
+TEST-2 (TRO-224) fixed the 8 vacuous tests that gave false *security* assurance and deliberately
+stopped, reporting the boundary. This finishes the job and clears two adjacent defects it surfaced.
+
+**Part 1 — the remaining conditional-only tests: 62 → 0.**
+
+Measured with the repo's own detector, `audit/test-quality/runs/vacuous.mjs`, which finds tests
+whose every `expect()` sits inside a conditional branch — i.e. tests that pass with zero assertions
+executed. On `main` (`c4e92c2`) it reports `testsWithOnlyConditionalExpects: 62`. On this branch it
+reports **0**, across the same 870 scanned test blocks.
+
+Every `if (await x.isVisible()) { …expects… }` became an assertion carrying an actionable message,
+per the pattern already in `bulk-selection.spec.ts:793`. Converted tests also record *why* the
+precondition holds, so the next reader does not re-derive it — seed data creates sprints from
+`currentSprintNumber-2` through `+2` (`e2e/fixtures/isolated-env.ts`), so completed sprints always
+exist; `cleanupExtraSprints` in `beforeEach` guarantees an empty future week window.
+
+By file: `program-mode-week-ux.spec.ts` (33), `accessibility-remediation.spec.ts` (6),
+`context-menus.spec.ts` (6), `features-real.spec.ts` (5), `performance.spec.ts` (2),
+`admin-workspace-members.spec.ts` (2), `ai-analysis-api.spec.ts` (1), plus 7 more not named in the
+ticket's table that the detector caught.
+
+Two of these were more than a mechanical conversion. `admin-workspace-members.spec.ts` needed the
+fixture work the ticket flagged as risky — `isolated-env.ts` now seeds a second workspace and an
+unattached user — and the workspace-switcher and admin-dashboard specs were checked for fallout.
+`features-real.spec.ts` turned out to be hiding a **real file-chooser race** behind its guard, which
+is exactly the failure mode a silently-passing test conceals.
+
+**Part 2 — a user was being told the wrong rate limit.** `api/src/services/ai-analysis.ts` enforces
+`RATE_LIMIT = 120`/hour while `api/src/routes/ai.ts` told the user "Max 10 analysis requests per
+hour" — off by 12×. Rather than pick a number, the message is now derived from the constant
+(`RATE_LIMIT_MESSAGE`), so the two cannot drift apart again, and `api/src/routes/ai.test.ts` (new)
+asserts the 429 body reports the enforced limit.
+
+The e2e test that provoked this is marked `test.fixme()` **with a written reason** rather than left
+lying. Asserting the real limit needs either 121 requests — 120 of which attempt Bedrock, blowing
+the 60s timeout — or an injectable limit, which is a production seam added solely to enable a test.
+That is a maintainer's call, not the factory's, and is left open deliberately.
+
+**Part 3 — `.husky/pre-commit` is now `100755` in the index**, where it was `100644`. It *did* still
+run, because `core.hooksPath` is `.husky/_` and husky v9's wrapper **sources** the hook rather than
+exec'ing it — but that made the mode a latent trap: if the wrapper ever exec'd instead, every
+pre-commit check would stop running silently, including the compliance scan.
+
+The ticket carried an unreproduced report that hooks do not fire in a linked worktree. **That is
+now disproved**: committing from `Ship-wt-tro_286` (a linked worktree) fired `check-empty-tests.sh`
+and `check-api-coverage.sh` and printed their output, as did every commit from the main checkout
+throughout the run. Hooks fire in both.
+
+Unrelated but worth stating plainly: `comply` is not installed in this environment, so the secrets
+scan warns and passes. **A successful commit is not evidence that scan ran.**
+
+**Part 4 — CodeRabbit review triage on PR #40.** 22 line comments, all real defects in code this PR
+touched, none out of scope — every finding was either fixed here or dismissed with a written reason
+in the ledger (`audit/factory/review-findings.jsonl`), never silently dropped.
+
+Six were Majors that reintroduced the exact defect class this ticket exists to fix: two fixed
+`waitForTimeout` sleeps standing in for synchronization (`admin-workspace-members.spec.ts`,
+`program-mode-week-ux.spec.ts`, plus siblings in `issue-display-id.spec.ts` and
+`status-colors-accessibility.spec.ts`), the swallowed-failure pattern
+`isVisible().catch(() => false)` in an availability-indicator check, a `dashCount === rowCount`
+comparison that could pass while filtering nothing correctly (`td` filtered by `—` also matches
+assignee/estimate/due-date cells), a near-tautological "highlight" check that matched every card in
+the timeline regardless of active state, and non-deterministic fixture restoration in the carol/Test
+Space cleanup (`isVisible().catch(() => false)` could silently skip removing her, leaving the next
+test in the worker to find her already attached).
+
+Fixing finding 18 (point-in-time `rows.count()` preconditions) surfaced three tests in
+`program-mode-week-ux.spec.ts` — "issue row has quick menu (⋮) button" and its two siblings — that
+assert a per-row hover-revealed actions button. Traced the full render path
+(`IssuesList.tsx` → `IssueRowContent` → `SelectableList.tsx`): no such button exists in list view,
+only a right-click context menu and the bulk "Move to Week" toolbar action already covered
+elsewhere. TRO-286 Part 1 had already tightened these from "passes whether the feature exists or
+not" to a real assertion, which would now fail hard, not vacuously — same shape as the
+team-directory quick-menu gap already `test.fixme()`'d in `context-menus.spec.ts`. Marked
+`test.fixme()` with the same reasoning rather than left to fail.
+
+One finding was dismissed rather than fixed: WCAG 3.3.3 recovery guidance on the login-error test.
+The message is exactly `"Invalid email or password"` (`api/src/routes/auth.ts`), a deliberate
+security choice, and `Login.tsx` has no recovery link at all — tightening the assertion would only
+ever fail without a UI change, which is a product accessibility gap, not a test bug. Filed as a
+follow-up rather than fixed here.
+
+One derived claim was checked and found not to transfer: CodeRabbit's suggested fix for the fixed
+sleeps in `program-mode-week-ux.spec.ts` was `page.waitForResponse(...)` on `/api/issues`. Traced
+`IssuesList.tsx:569-570` — the sprint filter dropdown filters already-fetched issues client-side; no
+new request fires when it changes. Used a retrying DOM assertion instead, which is what the
+mechanism actually calls for.
+
+**How to run it.**
+
+```bash
+node audit/test-quality/runs/vacuous.mjs        # expect testsWithOnlyConditionalExpects: 0
+git ls-files -s .husky/pre-commit               # expect mode 100755
+pnpm --filter @ship/api test src/routes/ai.test.ts
+```
+
+The Playwright specs themselves need a live app — use `/e2e-test-runner`, never `pnpm test:e2e`
+directly, which produces enough output to crash the session.
+
+**Roll back.** `git revert` this merge commit. The conditional guards return (and with them the 62
+silently-passing tests), the 429 message goes back to quoting 10/hour against 120/hour enforcement,
+and `.husky/pre-commit` reverts to mode `100644`. No schema, API surface, or product behaviour is
+touched by any of it — the only production change is the text of one error message.
+
+---
+
+## TRO-246 (rule 5) — CI builds the image once and pushes it by SHA; Render still rebuilds it a second time (switch prepared, not executed)
+
+TRO-242 made the root `Dockerfile` buildable from a clean checkout (multi-stage: builds
+`shared`→`api`→`web` inside the image, instead of requiring pre-built `dist/` in the build context).
+That closed the "build on a laptop" problem but not the "build once" one: CI verified the source, and
+then Render separately built the *same* Dockerfile itself, on its own infrastructure, at its own
+time — two independent builds of the same commit, never proven to be the same artifact.
+
+**What changed.**
+
+- `.github/workflows/ci.yml` gains a `build-image` job that builds the root `Dockerfile` with
+  `docker/build-push-action` and pushes to `ghcr.io/troysatchell/ship`, authenticated with the
+  workflow's own `GITHUB_TOKEN` (job-scoped `permissions: packages: write`). `needs: verify`, so it
+  never runs on code that failed typecheck/build/the test-regression check.
+  - Tags: the full git SHA (immutable — the identity a rollback promotes/demotes by) and a moving
+    `main` tag.
+  - Pushes only on an actual push to `main` (`SHOULD_PUSH` gate). Every pull request still **builds**
+    (unauthenticated, no push) — this proves the Dockerfile stays buildable from whatever the PR
+    changed, without ever needing registry credentials (which a fork PR's `GITHUB_TOKEN` doesn't have
+    write scope for anyway).
+  - Third-party actions (`docker/setup-buildx-action`, `docker/login-action`,
+    `docker/build-push-action`) are pinned to full commit SHAs, matching this file's existing
+    convention for non-`actions/*` steps.
+- `docs/deployment-artifact-lifecycle.md` (new): what's built, where it's stored, the tagging
+  scheme, and — the actual "promote" and "roll back to a previous SHA" procedures — plus a
+  ready-to-run Render switch runbook.
+- `docs/application-architecture.md`: one-line pointer from the (stale, AWS-only) Deployment section
+  to the new doc and to `memory-bank/techContext.md`'s Render facts, so the two don't silently
+  diverge further. The AWS-only diagram/infra list itself is untouched — out of scope here.
+
+**What did NOT change — the Render switch itself is prepared, not executed.** Changing the live
+`ship` service (`srv-d9kf2t942hec73aofrt0`, currently `runtime: docker` building the Dockerfile on
+Render's own infrastructure) from a repo-build to an image-deploy is an outward-facing, largely
+irreversible action against the graded submission URL (`https://ship-rr6m.onrender.com`) —
+escalation gate 2. No Render API call was made, no credential was read or moved, and the repo-root
+`.env` was not touched. `docs/deployment-artifact-lifecycle.md`'s runbook is the exact procedure for
+whoever runs it, including the parts that could not be independently verified from here (Render's
+`image` field on the Update Service API is documented to exist but its full sub-schema was not
+reachable this session — flagged explicitly, with a documented dashboard fallback that needs no
+schema guessing).
+
+**Regression test: honestly, none applies.** This ticket's deliverable is a CI workflow change plus
+documentation — there is no application code path for a vitest regression test to exercise, and
+`scripts/factory/gate.sh`'s regression-test check (G6, which counts added `it(`/`test(` cases in
+`*.test.ts`/`*.test.tsx`/`*.spec.ts`) is expected to fail honestly rather than be satisfied by a
+manufactured, vacuous test. YAML validity of the workflow file was checked instead — see PR body for
+the exact method (the repo's own `js-yaml` dependency, since `actionlint` is not installed here).
+
+**How to run it.**
+
+```bash
+# Local build proof — same Dockerfile path CI runs, from a clean tree:
+docker build -t ship:tro-246-local -f Dockerfile .
+docker images ship:tro-246-local   # 482 MB, observed this session
+
+# YAML-validate the workflow (repo's own transitive js-yaml dep, no actionlint installed):
+node -e "require('./node_modules/.pnpm/js-yaml@4.1.1/node_modules/js-yaml') \
+  .load(require('fs').readFileSync('.github/workflows/ci.yml','utf8')); console.log('ok')"
+
+# The real test of the CI behavior itself is derived, not run here — the first push to `main`
+# after this merges is the live test of build-image actually pushing to GHCR.
+```
+
+**How to roll it back.**
+
+- CI job: revert the `build-image` addition to `.github/workflows/ci.yml`; `verify`/`inventory` are
+  untouched and keep running exactly as before.
+- Docs: delete `docs/deployment-artifact-lifecycle.md` and revert the one-line pointer in
+  `docs/application-architecture.md`.
+- Nothing to roll back on Render — the switch was never executed.
+
+---
+
+## TRO-216 — [A11Y-2] `aria-expanded` on a plain `<div>` in the editor wrapper
+
+**What was broken.** axe reported a Critical `aria-allowed-attr` violation on `.tiptap-wrapper >
+div`: `<div style="position: relative;" aria-expanded="false">` — a plain `<div>` with no role,
+carrying an ARIA attribute that role does not support. It only appeared in the "editor focused"
+state, which is why the repo's own axe specs (which scan static viewports) never caught it.
+
+**The mechanism — found, not guessed.** `.tiptap-wrapper > div` is the `<div>` `@tiptap/react`'s
+`<EditorContent>` renders to host the ProseMirror view; once mounted it is also
+`editor.options.element`. The comment `<BubbleMenu>` in `Editor.tsx` (~line 1008) is implemented by
+`@tiptap/extension-bubble-menu`'s `BubbleMenuPlugin`, whose `BubbleMenuView.createTooltip()`
+(2.27.2, `dist/index.js:122-136`) calls `tippy(editorElement, { interactive: true, ... })` the
+first time the selection or doc changes after mount — i.e. `editorElement` **is**
+`editor.options.element`, the same div. tippy's default `aria: { expanded: 'auto' }` combined with
+`interactive: true` makes it call `referenceEl.setAttribute('aria-expanded', ...)` on that div
+unconditionally (`tippy.js`'s `handleAriaExpandedAttribute`, `dist/tippy.cjs.js:801-813`), whether
+or not the bubble menu is ever shown. The `position: relative;` inline style on the same node is a
+second, independent library write to the identical element — `DragHandleExtension`
+(`web/src/components/editor/DragHandle.tsx:206`) sets it on `view.dom.parentElement`, which is the
+same wrapper — confirming both clues in the axe `html` string point at one node for two unrelated
+reasons.
+
+The div itself does not expand or collapse anything; it is only tippy's positioning anchor for the
+floating "Comment" button. This is subtraction, not a role fix — there was never a widget here.
+
+**What changed.** `web/src/components/Editor.tsx`: the comment `<BubbleMenu>`'s `tippyOptions` is
+now a named export, `commentBubbleMenuTippyOptions`, with `aria: { expanded: false }` added. That
+tells tippy never to manage `aria-expanded` on its reference element for this instance. No
+behavioural change: the bubble menu still shows and hides identically on selection; only the
+ARIA bookkeeping attribute on the unrelated wrapper div is suppressed. The element does not become
+focusable and no keyboard behaviour changes, so this does not require the escalation path for a
+user-perceivable interaction change.
+
+**Evidence.** Both ends measured on this branch, same conditions: `http://localhost:5906`
+(worktree ports), Chrome for Testing (Playwright 1217 build) headless, 1440×900, axe-core 4.11
+(`@axe-core/playwright`), authenticated as `dev@ship.local` via a fresh `session_id`, wiki document
+`7b254b07-e251-46bc-8e14-d4e10b76dd2b` ("Welcome to Ship"), editor focused by clicking into
+`.ProseMirror`. Each measurement restarted the Vite dev server first and the served module content
+was diffed directly (`curl .../src/components/Editor.tsx`) to confirm which code path was live
+before scanning — Vite's dev transform cache does not always invalidate on save alone.
+
+| Measurement — "document editor focused" | Before | After |
+|---|---|---|
+| axe `aria-allowed-attr` | **Critical, 1 node** (`.tiptap-wrapper > div`) | **absent** |
+| axe all severities | **C1** S0 M0 m0 | **C0** S0 M0 m0 |
+
+**Regression test.** `web/src/components/Editor.bubbleMenuAria.test.tsx` imports the real
+`commentBubbleMenuTippyOptions` from `Editor.tsx` (not a copy) and calls the same `tippy(...)`
+invocation `BubbleMenuView.createTooltip()` makes, against a stand-in `.tiptap-wrapper > div`,
+asserting no element carries `aria-expanded`. It does not mount the real `<BubbleMenu>` +
+`<EditorContent>` + a driven selection change: `@tiptap/extension-bubble-menu` is only a transitive
+dependency of `web` (not resolvable directly from a test file), and its prebuilt ESM bundle's own
+`import tippy from 'tippy.js'` does not interop cleanly through vitest's module runner reached via
+that path — confirmed by direct experiment (`tippy` resolves to the whole CJS exports object, not
+the callable, only through that nested import chain; a direct `import tippy from 'tippy.js'`
+in a test file resolves correctly). That is a pre-existing environment limitation of this
+dependency chain, not a defect under test — the same class `LazyEditor.test.tsx` already documents
+("mounting real TipTap + Yjs in jsdom proves ... a great deal about jsdom").
+
+Confirmed red first, for the right reason: with the unfixed (no `aria` key) options object, the
+test failed with `AssertionError: Expected the element not to have attribute: aria-expanded /
+Received: aria-expanded="false"` — not an import error or a locator failure.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test src/components/Editor.bubbleMenuAria.test.tsx
+pnpm --filter @ship/web exec tsc --noEmit
+```
+
+To re-measure against a browser: start the worktree's API and Vite (`.factory-env` ports), log in
+for a fresh `session_id`, open a wiki document, click into `.ProseMirror` to focus the editor, then
+run an axe scan and check `aria-allowed-attr` is absent.
+
+**Roll back.** Remove `aria: { expanded: false }` from `commentBubbleMenuTippyOptions` in
+`Editor.tsx` (or `git revert` the commit on `fix/a11y-2-editor-aria`). The regression test fails
+immediately if it comes back.
+
+**Not established.** What a screen reader announces about the comment bubble menu — this fix only
+removes an invalid ARIA attribute axe can detect; no human ran VoiceOver against it. The repo's
+three Playwright a11y specs were not re-run here (not executed by the factory gate; they also only
+assert `impact === 'critical'`, which this finding already was, so they would have caught it had
+they scanned the focused-editor state — they scan static viewports only).
+
+---
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write

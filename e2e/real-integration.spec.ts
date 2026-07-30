@@ -145,12 +145,15 @@ test.describe('Real Integration - API Health', () => {
     // Access file serve endpoint (even if 404, check headers)
     const response = await page.request.get(`${apiServer.url}/api/files/test-id/serve`);
 
-    // REAL VERIFICATION: cross-origin-resource-policy should be 'cross-origin'
+    // REAL VERIFICATION: cross-origin-resource-policy should be 'cross-origin'.
+    // helmet() is mounted globally in api/src/app.ts (not scoped to a route),
+    // so this header is set on every response, including a 404 for an unknown
+    // file id -- there is no code path where it would be legitimately absent.
     const headers = response.headers();
-    const corpHeader = headers['cross-origin-resource-policy'];
-    if (corpHeader) {
-      expect(corpHeader).toBe('cross-origin');
-    }
+    expect(
+      headers['cross-origin-resource-policy'],
+      'helmet() should set cross-origin-resource-policy on every response, including 404s'
+    ).toBe('cross-origin');
   });
 });
 

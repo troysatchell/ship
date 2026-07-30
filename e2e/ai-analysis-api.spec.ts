@@ -206,10 +206,39 @@ test.describe('AI Analyze Retro API', () => {
 });
 
 test.describe('AI Rate Limiting', () => {
-  test('POST /api/ai/analyze-plan returns 429 after 10 rapid requests', async ({ page, apiServer }) => {
+  /**
+   * Deliberately left as test.fixme() -- TRO-286 (TEST-14) Part 2.
+   *
+   * This test's premise was never true: it sent 11 rapid requests expecting a
+   * 429, but api/src/services/ai-analysis.ts:39 enforces RATE_LIMIT = 120/hour,
+   * not 10. Observed: 200 x 11, no 429 at all. The `if (!allSucceeded)` guard
+   * around the one meaningful assertion meant that observation still reported
+   * green -- exactly the vacuous-test pattern this ticket exists to remove.
+   *
+   * The user-facing copy that inspired "10" was itself a bug (fixed in this same
+   * ticket: api/src/routes/ai.ts said "Max 10 analysis requests per hour" against
+   * a real limit of 120; see api/src/routes/ai.test.ts for the corrected,
+   * non-vacuous regression coverage of that fix, run by the factory gate).
+   *
+   * Asserting the *real* 429 truthfully from here needs one of:
+   *   1. 121 rapid requests, 120 of which would each attempt a real AWS Bedrock
+   *      call (analyzePlan() runs before the limiter rejects a request) --
+   *      likely blowing this suite's 60s test timeout and flaking on network
+   *      variance, or
+   *   2. An injectable/configurable rate limit (e.g. an env var or test-only
+   *      override) added to production code purely so this test can exercise
+   *      it quickly.
+   *
+   * Both are product/architecture decisions, not test-authoring ones -- (2) in
+   * particular adds a seam to production code to serve a test, which this
+   * factory run is not authorized to add unilaterally. TRO-224 reached the same
+   * conclusion and reverted its attempt here rather than ship a test that lies.
+   * This entry remains a written, reasoned deferral rather than a silent one;
+   * see CHANGES.md (TRO-286) for the recommendation to a maintainer.
+   */
+  test.fixme('POST /api/ai/analyze-plan returns 429 after exceeding the real rate limit', async ({ page, apiServer }) => {
     const { csrfToken } = await loginAsAdmin(page, apiServer.url);
 
-    // Send 10 requests rapidly to hit the rate limit
     const requests = [];
     for (let i = 0; i < 11; i++) {
       requests.push(
@@ -222,23 +251,8 @@ test.describe('AI Rate Limiting', () => {
 
     const responses = await Promise.all(requests);
     const statuses = responses.map(r => r.status());
-
-    // At least one response should be 429 (rate limited)
-    // Note: depending on implementation timing, some may succeed
     const has429 = statuses.some(s => s === 429);
-    const allSucceeded = statuses.every(s => s === 200);
 
-    // If all requests return 200, AI might be unavailable (catches before rate limit)
-    // or rate limit window is per-hour and 11 isn't enough. Mark as soft check.
-    if (!allSucceeded) {
-      expect(has429, 'At least one request should be rate-limited (429)').toBe(true);
-    }
-
-    // Verify the 429 response body mentions rate limit
-    const rateLimitedResponse = responses.find(r => r.status() === 429);
-    if (rateLimitedResponse) {
-      const body = await rateLimitedResponse.json();
-      expect(body.error, 'Rate limit error should mention rate limit').toContain('Rate limit');
-    }
+    expect(has429, 'At least one request should be rate-limited (429)').toBe(true);
   });
 });
