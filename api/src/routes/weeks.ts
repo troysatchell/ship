@@ -342,18 +342,31 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
                JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint'
                WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count,
               (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan,
-              (SELECT COUNT(*) > 0 FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL) as has_retro,
-              (SELECT rt.properties->>'outcome' FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_outcome,
-              (SELECT rt.id FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_id
+              (retro.id IS NOT NULL) as has_retro,
+              retro.outcome as retro_outcome,
+              retro.id as retro_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
+       -- DB-6: single indexed lookup replacing 3 correlated subqueries
+       -- (has_retro/retro_outcome/retro_id), each of which independently
+       -- scanned document_associations for the same predicate. A sprint has
+       -- at most one weekly_review with a non-null outcome (enforced at
+       -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is
+       -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is
+       -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq
+       -- Scan over idx_document_associations_related_type because it only
+       -- needs to find one match cheaply; an aggregate has to see every
+       -- matching row regardless, so its cost model prefers the index -
+       -- exactly like the has_retro/issue-count subqueries above, which were
+       -- never affected because they aggregate instead of using LIMIT.
+       LEFT JOIN LATERAL (
+         SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome
+         FROM document_associations rda
+         JOIN documents rt ON rt.id = rda.document_id
+         WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint'
+           AND rt.properties->>'outcome' IS NOT NULL
+       ) retro ON true
        LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id
        WHERE d.workspace_id = $1 AND d.document_type = 'sprint'
          AND (d.properties->>'sprint_number')::int = $2
@@ -865,18 +878,31 @@ router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
                JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint'
                WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count,
               (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan,
-              (SELECT COUNT(*) > 0 FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL) as has_retro,
-              (SELECT rt.properties->>'outcome' FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_outcome,
-              (SELECT rt.id FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_id
+              (retro.id IS NOT NULL) as has_retro,
+              retro.outcome as retro_outcome,
+              retro.id as retro_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
+       -- DB-6: single indexed lookup replacing 3 correlated subqueries
+       -- (has_retro/retro_outcome/retro_id), each of which independently
+       -- scanned document_associations for the same predicate. A sprint has
+       -- at most one weekly_review with a non-null outcome (enforced at
+       -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is
+       -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is
+       -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq
+       -- Scan over idx_document_associations_related_type because it only
+       -- needs to find one match cheaply; an aggregate has to see every
+       -- matching row regardless, so its cost model prefers the index -
+       -- exactly like the has_retro/issue-count subqueries above, which were
+       -- never affected because they aggregate instead of using LIMIT.
+       LEFT JOIN LATERAL (
+         SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome
+         FROM document_associations rda
+         JOIN documents rt ON rt.id = rda.document_id
+         WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint'
+           AND rt.properties->>'outcome' IS NOT NULL
+       ) retro ON true
        JOIN workspaces w ON d.workspace_id = w.id
        LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id
        WHERE d.id = $1 AND d.workspace_id = $2 AND d.document_type = 'sprint'
@@ -1272,18 +1298,31 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
                JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint'
                WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count,
               (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan,
-              (SELECT COUNT(*) > 0 FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL) as has_retro,
-              (SELECT rt.properties->>'outcome' FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_outcome,
-              (SELECT rt.id FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_id
+              (retro.id IS NOT NULL) as has_retro,
+              retro.outcome as retro_outcome,
+              retro.id as retro_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
+       -- DB-6: single indexed lookup replacing 3 correlated subqueries
+       -- (has_retro/retro_outcome/retro_id), each of which independently
+       -- scanned document_associations for the same predicate. A sprint has
+       -- at most one weekly_review with a non-null outcome (enforced at
+       -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is
+       -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is
+       -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq
+       -- Scan over idx_document_associations_related_type because it only
+       -- needs to find one match cheaply; an aggregate has to see every
+       -- matching row regardless, so its cost model prefers the index -
+       -- exactly like the has_retro/issue-count subqueries above, which were
+       -- never affected because they aggregate instead of using LIMIT.
+       LEFT JOIN LATERAL (
+         SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome
+         FROM document_associations rda
+         JOIN documents rt ON rt.id = rda.document_id
+         WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint'
+           AND rt.properties->>'outcome' IS NOT NULL
+       ) retro ON true
        JOIN workspaces w ON d.workspace_id = w.id
        LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id
        WHERE d.id = $1 AND d.document_type = 'sprint'`,
@@ -1374,18 +1413,31 @@ router.post('/:id/start', authMiddleware, async (req: Request, res: Response) =>
                JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint'
                WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count,
               (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan,
-              (SELECT COUNT(*) > 0 FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL) as has_retro,
-              (SELECT rt.properties->>'outcome' FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_outcome,
-              (SELECT rt.id FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_id
+              (retro.id IS NOT NULL) as has_retro,
+              retro.outcome as retro_outcome,
+              retro.id as retro_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
+       -- DB-6: single indexed lookup replacing 3 correlated subqueries
+       -- (has_retro/retro_outcome/retro_id), each of which independently
+       -- scanned document_associations for the same predicate. A sprint has
+       -- at most one weekly_review with a non-null outcome (enforced at
+       -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is
+       -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is
+       -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq
+       -- Scan over idx_document_associations_related_type because it only
+       -- needs to find one match cheaply; an aggregate has to see every
+       -- matching row regardless, so its cost model prefers the index -
+       -- exactly like the has_retro/issue-count subqueries above, which were
+       -- never affected because they aggregate instead of using LIMIT.
+       LEFT JOIN LATERAL (
+         SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome
+         FROM document_associations rda
+         JOIN documents rt ON rt.id = rda.document_id
+         WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint'
+           AND rt.properties->>'outcome' IS NOT NULL
+       ) retro ON true
        JOIN workspaces w ON d.workspace_id = w.id
        LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id
        WHERE d.id = $1 AND d.document_type = 'sprint'`,
@@ -1582,18 +1634,31 @@ router.patch('/:id/plan', authMiddleware, async (req: Request, res: Response) =>
                JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint'
                WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count,
               (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan,
-              (SELECT COUNT(*) > 0 FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL) as has_retro,
-              (SELECT rt.properties->>'outcome' FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_outcome,
-              (SELECT rt.id FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_id
+              (retro.id IS NOT NULL) as has_retro,
+              retro.outcome as retro_outcome,
+              retro.id as retro_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
+       -- DB-6: single indexed lookup replacing 3 correlated subqueries
+       -- (has_retro/retro_outcome/retro_id), each of which independently
+       -- scanned document_associations for the same predicate. A sprint has
+       -- at most one weekly_review with a non-null outcome (enforced at
+       -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is
+       -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is
+       -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq
+       -- Scan over idx_document_associations_related_type because it only
+       -- needs to find one match cheaply; an aggregate has to see every
+       -- matching row regardless, so its cost model prefers the index -
+       -- exactly like the has_retro/issue-count subqueries above, which were
+       -- never affected because they aggregate instead of using LIMIT.
+       LEFT JOIN LATERAL (
+         SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome
+         FROM document_associations rda
+         JOIN documents rt ON rt.id = rda.document_id
+         WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint'
+           AND rt.properties->>'outcome' IS NOT NULL
+       ) retro ON true
        JOIN workspaces w ON d.workspace_id = w.id
        LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id
        WHERE d.id = $1 AND d.document_type = 'sprint'`,
