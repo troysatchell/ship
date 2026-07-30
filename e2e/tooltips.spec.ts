@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures/isolated-env'
+import { hoverWithRetry } from './fixtures/test-helpers'
 
 // Helper to log in before tests that need auth
 async function login(page: import('@playwright/test').Page) {
@@ -68,14 +69,17 @@ test.describe('Icon Tooltips', () => {
       docItem,
       'Seed data should include at least one wiki document in the tree. Run: pnpm db:seed'
     ).toBeVisible({ timeout: 5000 })
-    await docItem.hover()
 
-    // Find and hover over delete button
+    // Find and hover over delete button. hoverWithRetry re-runs the hover
+    // itself (not just the visibility poll) if the delete button doesn't
+    // appear on the first attempt.
     const deleteButton = page.locator('[data-testid="delete-document-button"]').first()
-    await expect(
-      deleteButton,
-      'Document tree item should expose a delete button on hover'
-    ).toBeVisible({ timeout: 3000 })
+    await hoverWithRetry(docItem, async () => {
+      await expect(
+        deleteButton,
+        'Document tree item should expose a delete button on hover'
+      ).toBeVisible({ timeout: 3000 })
+    })
     await deleteButton.hover()
 
     // Wait for tooltip to appear
