@@ -17,33 +17,46 @@ import { ArchivedPersonsProvider } from '@/contexts/ArchivedPersonsContext';
 import { CurrentDocumentProvider } from '@/contexts/CurrentDocumentContext';
 import { UploadProvider } from '@/contexts/UploadContext';
 import { LoginPage } from '@/pages/Login';
-import { AppLayout } from '@/pages/App';
-import { DocumentsPage } from '@/pages/Documents';
-import { IssuesPage } from '@/pages/Issues';
-import { ProgramsPage } from '@/pages/Programs';
-import { TeamModePage } from '@/pages/TeamMode';
-import { TeamDirectoryPage } from '@/pages/TeamDirectory';
-import { PersonEditorPage } from '@/pages/PersonEditor';
-import { FeedbackEditorPage } from '@/pages/FeedbackEditor';
-import { PublicFeedbackPage } from '@/pages/PublicFeedback';
-import { ProjectsPage } from '@/pages/Projects';
-import { DashboardPage } from '@/pages/Dashboard';
-import { MyWeekPage } from '@/pages/MyWeekPage';
-import { AdminDashboardPage } from '@/pages/AdminDashboard';
-import { AdminWorkspaceDetailPage } from '@/pages/AdminWorkspaceDetail';
-import { WorkspaceSettingsPage } from '@/pages/WorkspaceSettings';
-import { ConvertedDocumentsPage } from '@/pages/ConvertedDocuments';
-import { UnifiedDocumentPage } from '@/pages/UnifiedDocumentPage';
-import { StatusOverviewPage } from '@/pages/StatusOverviewPage';
-import { ReviewsPage } from '@/pages/ReviewsPage';
-import { OrgChartPage } from '@/pages/OrgChartPage';
 import { ReviewQueueProvider } from '@/contexts/ReviewQueueContext';
-
-import { InviteAcceptPage } from '@/pages/InviteAccept';
-import { SetupPage } from '@/pages/Setup';
 import { ToastProvider } from '@/components/ui/Toast';
 import { MutationErrorToast } from '@/components/MutationErrorToast';
+import { RouteFallback } from '@/components/RouteFallback';
 import './index.css';
+
+/**
+ * Route-level code splitting (BUN-1 / TRO-197).
+ *
+ * Every page except `LoginPage` is loaded on demand. `LoginPage` stays static
+ * because it is the first paint for an unauthenticated visitor: deferring it
+ * would trade one oversized download for two round trips before the form
+ * appears, which is the problem BUN-1 exists to fix, not a fix for it.
+ *
+ * Most pages use named exports, hence the `.then(m => ({ default: m.X }))`
+ * shape. Adding default exports purely to shorten this would change 20+ files
+ * and their importers for no runtime benefit.
+ */
+const AppLayout = React.lazy(() => import('@/pages/App').then((m) => ({ default: m.AppLayout })));
+const DocumentsPage = React.lazy(() => import('@/pages/Documents').then((m) => ({ default: m.DocumentsPage })));
+const IssuesPage = React.lazy(() => import('@/pages/Issues').then((m) => ({ default: m.IssuesPage })));
+const ProgramsPage = React.lazy(() => import('@/pages/Programs').then((m) => ({ default: m.ProgramsPage })));
+const TeamModePage = React.lazy(() => import('@/pages/TeamMode').then((m) => ({ default: m.TeamModePage })));
+const TeamDirectoryPage = React.lazy(() => import('@/pages/TeamDirectory').then((m) => ({ default: m.TeamDirectoryPage })));
+const PersonEditorPage = React.lazy(() => import('@/pages/PersonEditor').then((m) => ({ default: m.PersonEditorPage })));
+const FeedbackEditorPage = React.lazy(() => import('@/pages/FeedbackEditor').then((m) => ({ default: m.FeedbackEditorPage })));
+const PublicFeedbackPage = React.lazy(() => import('@/pages/PublicFeedback').then((m) => ({ default: m.PublicFeedbackPage })));
+const ProjectsPage = React.lazy(() => import('@/pages/Projects').then((m) => ({ default: m.ProjectsPage })));
+const DashboardPage = React.lazy(() => import('@/pages/Dashboard').then((m) => ({ default: m.DashboardPage })));
+const MyWeekPage = React.lazy(() => import('@/pages/MyWeekPage').then((m) => ({ default: m.MyWeekPage })));
+const AdminDashboardPage = React.lazy(() => import('@/pages/AdminDashboard').then((m) => ({ default: m.AdminDashboardPage })));
+const AdminWorkspaceDetailPage = React.lazy(() => import('@/pages/AdminWorkspaceDetail').then((m) => ({ default: m.AdminWorkspaceDetailPage })));
+const WorkspaceSettingsPage = React.lazy(() => import('@/pages/WorkspaceSettings').then((m) => ({ default: m.WorkspaceSettingsPage })));
+const ConvertedDocumentsPage = React.lazy(() => import('@/pages/ConvertedDocuments').then((m) => ({ default: m.ConvertedDocumentsPage })));
+const UnifiedDocumentPage = React.lazy(() => import('@/pages/UnifiedDocumentPage').then((m) => ({ default: m.UnifiedDocumentPage })));
+const StatusOverviewPage = React.lazy(() => import('@/pages/StatusOverviewPage').then((m) => ({ default: m.StatusOverviewPage })));
+const ReviewsPage = React.lazy(() => import('@/pages/ReviewsPage').then((m) => ({ default: m.ReviewsPage })));
+const OrgChartPage = React.lazy(() => import('@/pages/OrgChartPage').then((m) => ({ default: m.OrgChartPage })));
+const InviteAcceptPage = React.lazy(() => import('@/pages/InviteAccept').then((m) => ({ default: m.InviteAcceptPage })));
+const SetupPage = React.lazy(() => import('@/pages/Setup').then((m) => ({ default: m.SetupPage })));
 
 /**
  * Redirect component for type-specific routes to canonical /documents/:id
@@ -131,26 +144,32 @@ function SuperAdminRoute({ children }: { children: React.ReactNode }) {
 
 function App() {
   return (
-    <Routes>
-      {/* Truly public routes - no AuthProvider wrapper */}
-      <Route
-        path="/feedback/:programId"
-        element={<PublicFeedbackPage />}
-      />
-      {/* Routes that need AuthProvider (even if some are public) */}
-      <Route
-        path="/*"
-        element={
-          <WorkspaceProvider>
-            <AuthProvider>
-              <RealtimeEventsProvider>
-                <AppRoutes />
-              </RealtimeEventsProvider>
-            </AuthProvider>
-          </WorkspaceProvider>
-        }
-      />
-    </Routes>
+    // Outermost boundary: catches the lazy chunks for the standalone routes
+    // (public feedback, setup, invite, admin) and for AppLayout itself. Routes
+    // rendered *inside* AppLayout are caught by the nested boundary in
+    // pages/App.tsx, so the 4-panel shell never unmounts for a page load.
+    <React.Suspense fallback={<RouteFallback variant="screen" />}>
+      <Routes>
+        {/* Truly public routes - no AuthProvider wrapper */}
+        <Route
+          path="/feedback/:programId"
+          element={<PublicFeedbackPage />}
+        />
+        {/* Routes that need AuthProvider (even if some are public) */}
+        <Route
+          path="/*"
+          element={
+            <WorkspaceProvider>
+              <AuthProvider>
+                <RealtimeEventsProvider>
+                  <AppRoutes />
+                </RealtimeEventsProvider>
+              </AuthProvider>
+            </WorkspaceProvider>
+          }
+        />
+      </Routes>
+    </React.Suspense>
   );
 }
 

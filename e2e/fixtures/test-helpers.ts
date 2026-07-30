@@ -99,3 +99,61 @@ export async function waitForTableData(
   await expect(page.locator(tableSelector).first()).toBeVisible({ timeout: 15000 });
   await page.waitForLoadState('networkidle');
 }
+
+/** True for an object with the string `id`/`title` fields a doc summary needs. */
+function isDocSummary(d: unknown): d is { id: string; title: string } {
+  return (
+    typeof d === 'object' &&
+    d !== null &&
+    typeof (d as { id?: unknown }).id === 'string' &&
+    typeof (d as { title?: unknown }).title === 'string'
+  );
+}
+
+/**
+ * Open a seeded fixture document by its exact title and wait for the editor.
+ *
+ * Added for audit finding TEST-2 (TRO-224). Specs that need to assert on
+ * *rendered content* were previously typing that content into a new document,
+ * which meant a failure to type produced an empty page — and an empty page made
+ * every loop-and-assert-inside body pass. Reading a seeded document instead
+ * gives the spec a positive control it can insist on.
+ *
+ * Resolves the id through `GET /api/documents` rather than clicking the sidebar,
+ * because sidebar ordering and overflow ("N more...") are not this spec's
+ * subject and would reintroduce a conditional.
+ *
+ * @param page - The Playwright page, already logged in
+ * @param title - Exact document title, e.g. `FIXTURE_DOC_LINK_SANITIZATION`
+ * @returns The document id
+ */
+export async function openFixtureDocument(page: Page, title: string): Promise<string> {
+  const res = await page.request.get('/api/documents?type=wiki');
+  expect(
+    res.status(),
+    `GET /api/documents?type=wiki must succeed to locate the "${title}" fixture`,
+  ).toBe(200);
+
+  const body: unknown = await res.json();
+  const rawList: unknown[] = Array.isArray(body)
+    ? body
+    : Array.isArray((body as { data?: unknown }).data)
+      ? ((body as { data: unknown[] }).data)
+      : [];
+  // Narrow with a runtime guard rather than casting the parsed JSON straight
+  // to the expected shape — a cast here would decouple this helper from the
+  // API response it claims to read, the same defect class TEST-2 exists to
+  // remove, just moved into test infrastructure instead of a test body.
+  const docs = rawList.filter(isDocSummary);
+  const id = docs.find((d) => d.title === title)?.id ?? '';
+  expect(
+    id,
+    `Seed data should provide a wiki document titled "${title}". ` +
+      `Add it to e2e/fixtures/isolated-env.ts (seedRenderingFixtures). ` +
+      `Got: ${docs.map((d) => d.title).join(', ') || '<none>'}`,
+  ).not.toBe('');
+
+  await page.goto(`/documents/${id}`);
+  await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 15000 });
+  return id;
+}

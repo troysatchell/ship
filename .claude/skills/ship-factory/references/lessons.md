@@ -131,3 +131,45 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   "N more…" link) or **zero** (empty state). Default seed data has 5, so axe reports **C0/S0** and a
   re-measurement on stock seed would wrongly conclude the finding never existed. Check the data
   precondition before reporting a finding as unreproducible.
+- 2026-07-30 (TRO-174) — **The scratchpad is SHARED across concurrent agents. Never use a generic
+  temp filename.** Two agents independently chose `ours-CHANGES.md`; one clobbered the other, and the
+  first re-merge produced a `CHANGES.md` with the **wrong ticket at the top and the right one absent
+  entirely**. Caught only by checking entry headings against git rather than trusting the tool's
+  "1 ours-new + 1 theirs-new" summary. Prefix every scratch file with your ticket ID, and verify
+  intermediate files came from where you think. Same class as the shared `refs/stash`: worktrees are
+  isolated, everything around them is not.
+- 2026-07-30 (TRO-174) — **git reads merge attributes from the PRE-MERGE working tree.** Removing
+  `CHANGES.md merge=union` from `main` did **not** protect any open branch: each branch still carried
+  the attribute in its own tree, so the union driver stayed live for that branch's next merge and
+  damaged three more files *after* the removal landed. `git merge` reported *"Auto-merging CHANGES.md
+  — Automatic merge went well."* It was not well.
+- 2026-07-30 (TRO-224) — **`git check-attr` AFTER the merge does not detect this, and the earlier
+  version of this rule told you to use it. That was wrong.** The merge itself replaces
+  `.gitattributes` with `main`'s version, so `check-attr merge -- CHANGES.md` reads `unspecified`
+  *even when the union driver just ran and corrupted the file*. A clean `unspecified` is therefore
+  not evidence of anything. The only check that caught it was
+  **`node scripts/factory/merge-changes.mjs --check CHANGES.md`**, which found 17 unbalanced fences
+  and one entry's command block spliced into another. **Always run `--check` after merging `main`,
+  whatever `check-attr` says.** To inspect the attribute meaningfully you must read it from the
+  pre-merge tree (`git check-attr merge -- CHANGES.md` *before* `git merge`, or
+  `git show HEAD:.gitattributes`). Recovery: redo the resolution from the pre-merge `--ours`/
+  `--theirs` snapshots with `merge-changes.mjs --expect <TICKET>`.
+- 2026-07-30 (TRO-197) — **`coderabbit review` has no internal deadline and hangs under concurrent
+  factory load.** Observed 11+ minutes of wall time against 2.6s of CPU — blocked on I/O, not
+  working — while sibling worktrees ran the same command. Since gate check G9 can only record
+  pass/warn/skip, a hang can never change the verdict; it just stalls the gate until someone kills
+  the subprocess, which an unattended run cannot absorb. `gate.sh` now wraps the call in
+  `timeout` (`CR_TIMEOUT`, default 360s) and records `warn: review timed out`. **If your gate sits
+  on a `coderabbit` subprocess, kill it and treat G9 as `warn`** — then triage the PR-level review,
+  which `triage.md` already prefers because it sees the full branch diff.
+- 2026-07-30 (TRO-224) — **A third load-sensitive api flake identity: `weeks.test.ts::should reject
+  review approval without rating`** (joining `backlinks.test.ts` and `rate-limit.test.ts`). Same
+  signature every time: fails inside a full gate run, then passes standalone — 41/41 for the file,
+  472/472 for the suite. Three distinct identities is the evidence that this is one shared
+  load-sensitive mechanism (TRO-277), not three flaky tests. Re-run standalone before believing it,
+  and report the identity so the set keeps growing.
+- 2026-07-30 (TRO-173) — **A tool improvement that is not committed protects nothing.** A G7b rule
+  added to catch `: any` annotations sat uncommitted in the orchestrator's working tree, so every
+  branch gating against `main` kept running the weaker checker. Found because an agent reconciled a
+  contradiction — the orchestrator reported 2 violations, the agent's own run said `clean` — instead
+  of assuming one side was wrong. **When two runs of the same check disagree, diff the checkers.**

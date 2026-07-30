@@ -98,6 +98,59 @@ failures).
 **Still owed to a human:** VoiceOver on `TRO-215`/`TRO-281`; Terraform tickets need escalation gate 2
 before any `apply`.
 
+#### Review-triage round — what the reviews found after the gates had passed
+
+Every open PR was triaged. Findings are in `audit/factory/review-findings.jsonl` (47 rows);
+`node scripts/factory/review-ledger.mjs report` groups them by recurrence.
+
+**Two were live defects, not nits:**
+
+- **DB-11 / PR #17 — the connection string overrides the resolved `ssl` object.** `?sslmode=disable`
+  in `DATABASE_URL` discards it entirely and puts the socket on plaintext, so the whole DB-11 fix
+  could be defeated by the one thing most likely to arrive copy-pasted from a dashboard. Established
+  from pg source (`connection-parameters.js:56` — `parse()` is the last source and overwrites the
+  caller's `ssl`), then measured across all six `sslmode` values; `disable` is the **only** one that
+  defeats it. The guard now **refuses to start** in production rather than rewriting the URL —
+  silently editing an operator's explicit instruction is the same defect as the original bug.
+  **⚠️ Deployment precondition: if production SSM already has `sslmode=disable`, this converts a
+  working deploy into a startup failure. Nobody could read SSM. Check it before rolling out.**
+- **API-3 / PR #20 — case-sensitive exclusions.** With the library filter alone, **both**
+  `Text/Event-Stream` and `Application/Octet-Stream` compress. The two guards were the only thing
+  stopping them and case defeated both; for octet-stream the bypass was **client-controlled**, since
+  `files.ts:309` echoes a client-declared mime type validated only against a filename blocklist. Also
+  verified that `compression.filter`'s own mime-db lookup **is** case-insensitive, so only the
+  additions needed normalizing — recorded so nobody "fixes" the library path later.
+
+**One correction reversed an orchestrator conclusion.** On PR #8 I concluded the rolled-back-batch
+path was unreachable because `schema.sql` is fully idempotent (17/17 tables, 59/59 indexes, both
+enums guarded — the agent confirmed those counts by hand). **Wrong, because
+`CREATE TABLE IF NOT EXISTS` is check-then-create and not atomic.** Raced: 12 sessions × 40 rounds →
+**434 × `23505`** on `pg_type_typname_nsp_index`; the real `schema.sql` from 6 connections → **5 of 6
+failed**. `42710` was in the tolerated set, so that path swallowed a full rollback and reported
+success. I answered the *category* (is the file idempotent?) and not the *case* (what happens
+concurrently?) — the exact `.claude/CLAUDE.md` rule I had been citing at agents. TRO-279 escalated to
+High with the numbers.
+
+**A test I had defended was encoding the bug.** I flagged
+`still tolerates duplicate-object errors raised by schema.sql itself` as the guard against "fixing
+this by deleting the tolerance". It passed *precisely because nothing was applied and nobody was
+told*. Replaced with one that asserts a dropped table is **not** recreated.
+
+**The headline bundle number survived scrutiny.** A reviewer found `routePayload()` walked only `.js`
+imports, so lazy-chunk CSS was omitted and every route read smaller than it was. Re-measured against
+Vite's manifest graph: `/login` **601.47 → 117.34 kB gzip, −80.5%** — the fix moved it by 0.05 kB,
+because this app's only lazy stylesheet hangs off `vendor-editor` and was never in a *static* closure.
+The method was still wrong and the fix is what stops the next CSS-bearing lazy chunk going unmeasured.
+The same review exposed that the static-import guard was **vacuous against 7 of 7 forms** — the old
+regex missed every one, the new detector catches all seven.
+
+**Three more shared-state failures**, all the same class as the `refs/stash` collision: the shared
+scratchpad clobbering a merge input (integrity passed on the *wrong* source — byte-identity cannot
+prove the inputs were intended, hence `merge-changes --expect`), git reading merge attributes from the
+**pre-merge** tree (so removing `merge=union` protected nothing until each branch merged it, damaging
+three more files while reporting success), and a G7b rule left **uncommitted** in the orchestrator's
+tree so every branch ran the weaker checker. All three are now rules in `lessons.md`.
+
 ### 2026-07-29 (Wed) — Day 3 — ticket factory built and proven on itself
 
 **No audit tickets were worked today.** What was built is the machinery to work them
