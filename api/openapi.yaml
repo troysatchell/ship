@@ -4174,6 +4174,15 @@ paths:
                     required: false
                     name: parent_id
                     in: query
+        - schema:
+                      type: integer
+                      minimum: 0
+                      exclusiveMinimum: true
+                      description: Maximum number of documents to return (capped at 100). Omit for the full unfiltered list.
+                      example: 20
+                    required: false
+                    name: limit
+                    in: query
       responses:
         200:
           description: List of documents
@@ -4183,6 +4192,32 @@ paths:
                 type: array
                 items:
                   $ref: "#/components/schemas/DocumentListItem"
+        400:
+          description: Invalid type, parent_id, or limit
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        path:
+                          type: array
+                          items:
+                            anyOf:
+                              - type: string
+                              - type: number
+                        message:
+                          type: string
+                      required:
+                        - message
+                required:
+                  - error
         401:
           description: Unauthorized
           content:
