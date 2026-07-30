@@ -105,6 +105,23 @@ function notifyDocumentWriteOutcome(outcome: DocumentWriteOutcome) {
   documentWriteListeners.forEach(l => l(outcome));
 }
 
+/**
+ * TRO-290/ERR-14 - the READ path's counterpart to the write-outcome notice
+ * above. `UnifiedDocumentPage.tsx`'s top-level document query doesn't
+ * override `refetchOnWindowFocus`, so a background refetch (e.g. the user
+ * returning to a tab) can 404 after another user deletes the document while
+ * this tab had it open. That is not a write failure - nothing was written -
+ * but it is the same underlying fact ERR-4 already has a notice for, so it
+ * goes through the same bus instead of a second "document deleted" channel.
+ * Call this once per document id when a background refetch 404s while
+ * cached data still exists; `useDocumentWriteStatus`'s own one-shot guard
+ * keeps the user-facing notice (`Editor.tsx`'s alert) to a single firing even
+ * if the query keeps retrying the failed refetch.
+ */
+export function notifyDocumentGoneOnRead(documentId: string): void {
+  notifyDocumentWriteOutcome({ documentId, status: 'error', documentGone: true });
+}
+
 /** Mutations opt into document-write tracking via `meta.documentId`. */
 function documentIdFromMeta(mutation: { options: { meta?: Record<string, unknown> } }): string | undefined {
   const value = mutation.options.meta?.documentId;
@@ -242,10 +259,12 @@ export function retryDelayMs(failureCount: number, error: unknown): number {
   if (isThrottleError(error)) {
     const index = Math.min(Math.max(failureCount, 0), THROTTLE_RETRY_DELAYS_MS.length - 1);
     const base = THROTTLE_RETRY_DELAYS_MS[index];
-    // Jitter is additive only, so a page's worth of throttled requests don't
-    // retry in lockstep and re-exhaust the budget the instant the window rolls
-    // over - and so the schedule can never come in under the 60 s window.
-    return Math.round(base * (1 + Math.random() * 0.5));
+    if (base !== undefined) {
+      // Jitter is additive only, so a page's worth of throttled requests don't
+      // retry in lockstep and re-exhaust the budget the instant the window rolls
+      // over - and so the schedule can never come in under the 60 s window.
+      return Math.round(base * (1 + Math.random() * 0.5));
+    }
   }
   // React Query's default exponential backoff for everything else.
   return Math.min(1000 * 2 ** failureCount, 30000);

@@ -142,6 +142,1862 @@ described above, and is strictly worse than either the pre-fix state or this fix
 
 ---
 
+## TRO-209 — [TS-4] 236 non-null assertions on request auth context, all from one optional declaration
+
+`api/src/middleware/auth.ts:11-12` augmented Express's `Request` with `userId?: string` /
+`workspaceId?: string` — optional, so every authenticated handler re-asserted `req.userId!` /
+`req.workspaceId!`: **236** occurrences across 21 route files. Worse than hygiene: a route
+registered *without* `authMiddleware` type-checked identically to one wired up correctly, so a
+middleware-ordering mistake would send `undefined` into a query as a user/workspace id rather than
+failing to compile.
+
+**What changed — types only, no runtime-behavior change.**
+
+- **`api/src/middleware/auth.ts` (new exports)** — `AuthenticatedRequest` (extends `Request`,
+  `userId`/`workspaceId` required `string`), and `authed(handler)`, a wrapper that narrows a plain
+  `Request` handler to one whose auth fields are guaranteed present. Register it **after**
+  `authMiddleware` (directly, or behind a `router.use(authMiddleware, …)`); `authed()` does not
+  authenticate the request itself. Internally it uses a type-guard function
+  (`req is AuthenticatedRequest`), not a cast — no `as` of any kind appears in the new code.
+  Both `sessions.workspace_id` (`schema.sql`) and `api_tokens.workspace_id`
+  (`migrations/014_api_tokens.sql`) are `NOT NULL` columns, and `authMiddleware` always sets both
+  fields together before calling `next()` (the API-token branch, the session-cookie branch) — so on
+  every currently-registered route the guard inside `authed()` never rejects a real request; it
+  exists only so a *future* route wired up without `authMiddleware` fails closed (401) instead of
+  silently forwarding `undefined`. Observable behavior for every existing route is unchanged; this
+  is stated rather than assumed because the escalation gate on auth changes requires it, and it was
+  verified two ways (see Regression tests, runtime pin).
+- **21 route files** (`accountability`, `activity`, `admin-credentials`, `admin`, `ai`,
+  `api-tokens`, `auth`, `backlinks`, `comments`, `dashboard`, `documents`, `issues`, `iterations`,
+  `programs`, `projects`, `search`, `standups`, `team`, `weekly-plans`, `weeks`, `workspaces`) —
+  every handler that used to assert `req.userId!`/`req.workspaceId!` is now wrapped in `authed(...)`,
+  with the `!` removed and the handler's `req`/`res` parameter types left to contextual inference
+  (an explicit `req: Request` annotation on a wrapped handler would silently defeat the narrowing).
+  Mechanical, AST-driven change (TypeScript compiler API located every `req.userId!`/`req.workspaceId!`
+  node and its enclosing handler; only that handler's wrapping/annotations were touched) — no
+  drive-by refactors. 4 test files that fully replace (`vi.mock`) `../middleware/auth.js` needed a
+  matching `authed: (handler: unknown) => handler` passthrough added to their mock, since their fake
+  `authMiddleware` already sets both fields before `next()` the same way the real one does.
+
+**Regression tests (`api/src/**/*.test.ts`, run by the gate).**
+
+1. **Compile-time** (`api/src/__tests__/auth.test.ts`, new `describe` blocks) — `expectTypeOf`
+   proves `AuthenticatedRequest['userId']`/`['workspaceId']` are `string`, and that a handler passed
+   to `authed()` receives them already narrowed. A third case pins a `@ts-expect-error` on
+   `const userId: string = req.userId` inside a plain (unwrapped) handler. Verified red for the
+   right reason: temporarily deleting that suppression comment and running
+   `pnpm --filter @ship/api type-check` fails with `TS2322: Type 'string | undefined' is not
+   assignable to type 'string'` at that exact line; restoring the comment returns it to clean. (No
+   prior version of `authed()` exists to regress against — it's a new type, not a bug fix to an
+   existing one — so this direct compile-error demonstration is the red/green proof.)
+2. **Runtime, `authed()` itself** (same file) — invokes the wrapped handler when
+   `userId`/`workspaceId` are present, and returns 401 without calling the handler when they are
+   missing (the defense-in-depth backstop, unreachable on any current route per above).
+3. **Runtime pin, a real route** (`api/src/routes/auth.test.ts`) — `POST /api/auth/extend-session`
+   is one of the wrapped handlers. Added `should reject extend-session without a session` (401,
+   new); the existing, unmodified `should extend session expiry` test already covers the 200 case.
+   Both pass after wrapping, pinning that `authed()` changed nothing observable on a real endpoint.
+
+**Measurement.** The audit's own methodology (`audit/AUDIT_REPORT.md`, TS-4 / Type Safety
+Methodology section) defines **three different counts** here, and they move very differently — the
+gap matters and is reported rather than smoothed over:
+
+| Metric | Command | Before (`main` @ `42e60d9`) | After |
+|---|---|---|---|
+| `req.userId!` / `req.workspaceId!` occurrences | `grep -rEn 'req\.(userId\|workspaceId)!' api/src` | **236** | **0** |
+| Corrected non-null, `api` (audit's own de-bugged pattern) | `grep -rEn '[a-zA-Z0-9_)]]?!(\.\|\[\|\)\|,\|;\|\s*$)' api` | 286 | **53** |
+| Tracked non-null, `api` (`count.sh`'s pattern, the one the 1535-total/384-target is defined on) | `bash ~/.claude/skills/type-safety-audit/scripts/count.sh api` | 42 | **42 (unchanged)** |
+
+All three commands were run with `/usr/bin/grep` explicitly (or via `bash script.sh`, which resolves
+`grep` the same way) — the audit's own methodology warns that pasting these into an interactive zsh
+resolves `grep` to a `ugrep` shim that parses bracket expressions differently and returns wrong
+numbers for the bracket-heavy patterns; confirmed directly (`echo 'req.userId!;' | grep -E
+'<tracked-pattern>'` matches under the zsh shim, does not match under real `/usr/bin/grep`).
+
+**The corrected-count delta is -233, not -236**, because 3 of the 236 fixed lines
+(`issues.ts:1171,1684,1912`) also contain an unrelated, pre-existing `id!` assertion earlier on the
+same line (`logDocumentChange(id!, ...)`), and both the tracked and corrected patterns count
+*matching lines*, not occurrences — those 3 lines still match after `req.userId!` is removed, for a
+reason this ticket doesn't touch.
+
+**The tracked count is unchanged, and this contradicts the audit's own improvement-plan table and
+this ticket's brief — both should be corrected.** The audit's Methodology section documents that
+BSD grep's bracket expression in the tracked `non_null_assertions` pattern
+(`[a-zA-Z0-9_\)\]]!(\.|\[|\)|,|;|\s*$)`) treats the escaped `)`/`]` inside `[...]` literally, closing
+the class early so the pattern effectively requires a literal `]` immediately before `!` — meaning
+`req.userId!`/`req.workspaceId!` (no `]` before the `!`) were **never counted by the tracked
+pattern in the first place**, before this fix touched them. The audit's own recommended-improvement
+table lists "TS-4 | 236" as violations retired toward the 1535-total/384-target, and this ticket's
+brief inherited that framing ("TS-1 + TS-4 alone clear the 384-site bar") — both are describing the
+*corrected*-metric significance of TS-4 (which the finding's own prose does: "82% of api's 288
+corrected non-null assertions") as if it were the *tracked* metric the target is literally defined
+on. Measured directly: it is not. This ticket retires all 236 real occurrences and closes the
+authz-scoping compile-time hole described in the finding — that result stands — but it moves the
+audit's literal 1535/384 tracked-total arithmetic by zero.
+
+A live re-run of `count.sh` across `web api shared` on `main` @ `42e60d9` (i.e., with TS-1/TS-2/TS-3/
+TS-6 already merged, before this fix) gives a tracked total of **1747** (60 `any` + 1639 `as` + 47
+non-null-tracked + 1 ts-ignore) — *higher* than the audit's original 1535 baseline, because ~30+
+unrelated tickets merged since the audit snapshot (confirmed independently by TRO-206/TS-1's own
+CHANGES.md entry, which found the same drift reproducing *its* command: 102 baseline errors became
+156). This means a live "current total vs. 1535" snapshot cannot cleanly demonstrate the category's
+cumulative progress — unrelated development moves it in both directions — so each ticket's
+contribution has to be read from its own controlled before/after diff. This ticket's diff, read that
+way: 236 real assertions retired (occurrence-exact), 0 movement on the metric the 384 target is
+literally defined on, `explicit_any`/`as_any` unchanged (36/128, `api`), and `as_assertions` moved
+1107 → 1112 (`api`, +5) — verified by diffing the *content* of every newly-matching line (not just
+the line-number-prefixed text, which shifts when unrelated lines above are inserted): all 5 are
+comment/test-description prose ("as its own type", "as a required string", …), the same
+over-count class the audit's own methodology documents (~15-20% of raw `as` hits are imports/
+comments), not real type assertions — `git diff` for `\bas any\b|: any\b|as unknown as` is empty.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api type-check
+pnpm --filter @ship/api exec vitest run \
+  src/__tests__/auth.test.ts \
+  src/routes/auth.test.ts
+pnpm test   # full api suite
+```
+
+**Rollback.** Revert the commits on `fix/ts-4-nonnull-auth-context`. `authed`/`AuthenticatedRequest`
+are additive exports in `api/src/middleware/auth.ts`; reverting the 21 route files and the 4 test
+mocks alongside them fully restores the pre-fix `req.userId!`/`req.workspaceId!` state. No schema,
+migration, or middleware-ordering change accompanies this fix, so rollback is signature-only.
+
+---
+
+## TRO-183 (DB-6) + TRO-184 (DB-7) + TRO-185 (DB-8) + TRO-187 (DB-10) — the query planner was starved of indexes and honest estimates
+
+Four findings, one root cause: the planner either had no index to use, or had one and could not
+see enough to pick it. All four are measured against the audit's seeded volume (500 documents / 20
+users / 813 `document_associations` rows, `postgres:15-alpine` on the `ship-audit-pg:5433` Docker
+container, via `pnpm db:seed` + `audit/seed-augment.ts`) unless stated otherwise.
+
+**TRO-183 / DB-6 — `GET /api/weeks` collapsed 3 correlated subqueries into 1 indexed lookup.**
+
+`api/src/routes/weeks.ts` computed `has_retro` / `retro_outcome` / `retro_id` (and four more
+duplicate blocks at the single-sprint GET, the two PATCH re-queries, and the start-sprint
+re-query — five identical occurrences total) with three separate correlated subqueries against
+`document_associations`, all sharing the join `related_id = d.id AND relationship_type = 'sprint'`.
+Two of the three (`retro_outcome`, `retro_id`) used `LIMIT 1`, and confirmed by EXPLAIN: that LIMIT
+made the planner favor a zero-startup-cost `Seq Scan` over the existing
+`idx_document_associations_related_type` index — `Rows Removed by Filter: 803`, twice, on every
+row, `loops=5` — even though the third subquery (`has_retro`, no `LIMIT`) used that same index
+correctly via a `Bitmap Heap Scan`.
+
+**Fix.** All five occurrences now compute all three fields from one `LEFT JOIN LATERAL`, using
+`MAX()` instead of `LIMIT 1`. This is deliberate, not cosmetic: an aggregate has to see every
+matching row regardless of how many there are, so its cost model prefers the index the same way
+`has_retro`'s aggregate always did — a plain `LIMIT 1` rewrite (tried first) removed the duplicate
+scan but still picked `Seq Scan` for the same startup-cost reason as before. `MAX(rt.id::text)::uuid`
+is required because Postgres has no built-in `MAX(uuid)` aggregate. Correctness rests on a
+uniqueness invariant enforced elsewhere in this file (`POST /:id/review` returns 409 if a
+`weekly_review` already exists for a sprint), so at most one row can ever match — `MAX()` over
+0-or-1 rows is exactly `LIMIT 1`'s result.
+
+**Before/after (EXPLAIN ANALYZE, BUFFERS, sprint_number=14, this workspace's 5 matching sprints):**
+
+| | before | after |
+|---|---|---|
+| Buffers | 1181 shared hit | 749 shared hit (-36.6%) |
+| SubPlans | 8 correlated, `loops=5` each | 5 (retro folded into the main join tree, not a SubPlan) |
+| `document_associations` seq scans for retro | 2 (`Rows Removed by Filter: 803` each) | 0 |
+| retro access path | `Seq Scan` | `Bitmap Heap Scan` via `idx_document_associations_related_type` |
+
+Note for whoever re-measures this: the augmented seed data has **zero** documents matching the
+`outcome IS NOT NULL` predicate at all — `outcome` is written nowhere in the current codebase
+(only ever read), so `has_retro` is always `false` today. The buffer savings above are real and
+independent of that (Postgres still has to scan for a match whether or not one exists), but the
+regression tests below had to insert a synthetic matching row by hand to exercise the "found a
+retro" branch at all.
+
+**TRO-184 / DB-7 — no index on `documents.ticket_number`; issue permalinks seq-scanned the whole table.**
+
+`GET /api/issues/by-ticket/:number` (`issues.ts`, `WHERE d.ticket_number = $1 AND d.workspace_id =
+$2 AND d.document_type = 'issue'`) had no supporting index, so every lookup scanned the full
+workspace regardless of issue count.
+
+**Fix.** Migration `038_documents_ticket_number_index.sql` adds
+`idx_documents_ticket_number ON documents (workspace_id, ticket_number) WHERE document_type =
+'issue'` — a partial index matching the route's exact predicate.
+
+**Before/after (EXPLAIN ANALYZE, BUFFERS, `ticket_number = 16`, 5 matching rows in this seed):**
+
+| | before | after |
+|---|---|---|
+| Plan | `Seq Scan` | `Index Scan using idx_documents_ticket_number` |
+| Buffers | 66 shared hit | 5 hit + 1 read |
+| Rows removed by filter | 495 | 0 |
+
+**TRO-185 / DB-8 — the association batch's `= ANY($1)` misestimated cardinality by 28x.**
+
+`getBelongsToAssociationsBatch` (`api/src/utils/document-crud.ts`, called from `issues.ts`'s list
+route) filtered `document_associations` with `da.document_id = ANY($1)`. Postgres cannot see an
+array parameter's length at plan time, so it falls back to a fixed low-selectivity guess: measured
+at `rows=25` estimated vs `rows=707` actual (this workspace's full 254-issue batch) — a 28x
+underestimate — which left `idx_document_associations_document_id` unused in favor of a sequential
+scan. The batch itself is correct design (it is what keeps `/api/issues` at a handful of queries
+instead of one per issue) — the fix had to keep it, not remove it.
+
+**Both candidates in DB-8's own wording were measured, not guessed:**
+
+- `unnest($1::uuid[]) JOIN` — rejected. Postgres defaults a `Function Scan` on an unnested array to
+  a flat `rows=10` estimate regardless of the array's real length, so the misestimate is not fixed
+  at all (still `rows=10` vs `rows=707`), and in this measurement it also flipped a downstream join
+  from `Hash Join` to a per-row `Nested Loop` + `Index Scan`, raising buffers to 2146 (vs 91 before).
+- `JOIN (VALUES ...)` — adopted. A `VALUES` list gives the planner the batch's literal size, so the
+  estimate becomes accurate: `rows=635` vs `707` actual (1.1x, down from 28x). At a realistic page
+  size (20 ids, matching the opt-in `limit` PR #19/TRO-173 added), buffers fell **90 -> 59 (-34%)**.
+  At this workspace's full 254-id batch (an edge case — nearly every issue in one call), the more
+  accurate estimate led the planner to a `Nested Loop` + `Memoize`-cached `Index Scan` for the
+  `documents` join instead of hashing the whole table once, which cost more buffers in that one
+  scenario (91 -> 155) despite fixing the estimate DB-8 is actually about. Recorded here rather
+  than hidden: the realistic-page-size case is the one this batch runs at in practice.
+
+Implementation builds the `VALUES` list as `$1::uuid, $2::uuid, ...` — one bind parameter per id,
+never interpolated — and de-dupes the input array first, since a repeated id in a `VALUES` join
+would (unlike `= ANY`, a set-membership test) multiply output rows.
+
+**TRO-187 / DB-10 — no index on `documents.updated_at` despite `ORDER BY updated_at DESC` in seven route modules.**
+
+`issues.ts`, `documents.ts`, `weeks.ts`, `projects.ts`, `programs.ts`, `dashboard.ts` and
+`search.ts` all sort by `updated_at DESC` with no supporting index — invisible at 500 rows (an
+unsupported quicksort costs microseconds) but exactly what makes `LIMIT` cheap once a list route
+paginates. That sequencing is no longer hypothetical: **API-2/DB-5's opt-in pagination merged as
+PR #19** (`limit`/`offset` on `GET /api/issues`, no default limit, verified via `gh pr view 19`),
+so this index now has an actual consumer, not just a future one.
+
+**Fix.** Migration `039_documents_updated_at_index.sql` adds
+`idx_documents_workspace_updated_at ON documents (workspace_id, updated_at DESC)`.
+
+**Before/after** (representative query: `WHERE workspace_id = $1 AND archived_at IS NULL AND
+deleted_at IS NULL ORDER BY updated_at DESC LIMIT 20`; "before" reproduced in the same session via
+`SET enable_indexscan/enable_bitmapscan = off` rather than dropping the index):
+
+| | before | after |
+|---|---|---|
+| Plan | `Seq Scan` + top-N heapsort | `Index Scan using idx_documents_workspace_updated_at` |
+| Buffers | 69 shared hit | 4 hit + 2 read |
+
+**Regression tests.**
+
+- **`api/src/db/__tests__/db-6-7-8-10-indexes.test.ts`** (DB-7, DB-10) — index-existence, genuinely
+  red-before-green: builds a throwaway database, copies every real migration file *except*
+  038/039 into a fixture directory, applies it, and asserts both indexes are absent — then applies
+  the real (full) migrations directory on the same database and asserts both exist with the
+  expected definition (`workspace_id`, `ticket_number`/`updated_at DESC`, and the partial index's
+  `document_type = 'issue'` predicate). Confirmed red first: the first `it()` failed
+  (`idx_documents_ticket_number` / `idx_documents_workspace_updated_at` both `undefined`) before
+  038/039 existed.
+- **`api/src/routes/weeks-retro-lookup.test.ts`** (DB-6) — NOT red-before-green; behavior must not
+  change, so this pins it. Runs the pre-TRO-183 3-subquery SQL and the new `LATERAL` SQL side by
+  side against the same seeded sprint and asserts identical results, for both a sprint with a
+  synthetic matching `weekly_review` (`outcome` set, associated via `relationship_type = 'sprint'`)
+  and one without (the common case in real data today).
+- **`api/src/utils/__tests__/document-crud.test.ts`** (DB-8) — also a pin, not red-before-green.
+  Runs the pre-TRO-183 `= ANY($1)` query and the new `VALUES`-join function side by side across a
+  document with two associations, one with one, and one with zero, plus a duplicate-id input case
+  (proving the de-dupe keeps `= ANY`'s set-membership semantics), and asserts identical `Map`
+  contents.
+- **Full `api` suite** (`pnpm --filter @ship/api test`, against the worktree's own database):
+  48 files / 609 tests, all green, including the pre-existing 46 `weeks.test.ts` and 27
+  `issues.test.ts` cases unchanged by this branch.
+- **Plan-shape assertion for DB-7 (EXPLAIN showing `Index Scan`), judged too brittle to automate:**
+  each api test file's `beforeAll` truncates `documents` and this file's own tests insert only a
+  handful of rows before running — a table that small will correctly get a `Seq Scan` regardless of
+  the partial index (small-table cost, not a planner bug), so an `EXPLAIN`-based assertion in the
+  gate's own environment would be flaky-to-false rather than a real signal. The captured
+  EXPLAIN ANALYZE evidence above (at the audit's 500-row seed) is the evidence of record instead.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run \
+  src/db/__tests__/db-6-7-8-10-indexes.test.ts \
+  src/routes/weeks-retro-lookup.test.ts \
+  src/utils/__tests__/document-crud.test.ts \
+  src/routes/weeks.test.ts \
+  src/routes/issues.test.ts
+```
+
+**Rollback.** Revert the two migrations (both pure additions — `DROP INDEX
+idx_documents_ticket_number` / `DROP INDEX idx_documents_workspace_updated_at`, no data changes,
+safe to drop anytime) and revert the `weeks.ts` / `document-crud.ts` query changes. No schema
+changes to existing columns, no backfill, nothing to undo beyond the two `CREATE INDEX` statements
+and the query text.
+
+---
+
+## TRO-207 (TS-2) — the database-to-HTTP response path is no longer implicitly `any`
+
+`@types/pg`'s `query()` defaults its row generic to `any`, and in `api/src` production code
+essentially no call site supplied it — so every `.rows` access was implicitly `any` all the way
+into the HTTP response. A column rename or a `properties->>'x'` typo would produce `undefined` in a
+live API response with zero compile-time signal anywhere in the chain. The only translation layer
+between raw rows and the JSON contract the frontend consumes was seven hand-written mappers, all
+declared `(row: any)`.
+
+**Verified before touching anything:** the audit's "seven `(row: any)` mappers" claim was accurate
+for six; `issues.ts`'s `extractIssueFromRow` had already been typed by an earlier ticket. That fix
+was structurally inert, though — none of that file's ~59 `pool.query()` call sites supplied a
+generic, so an `any`-typed row satisfied the mapper's typed parameter silently at every call site
+(assigning `any` to a typed parameter is always allowed). The real gap wasn't the mapper signature,
+it was the query call sites feeding it.
+
+**What changed** — `api/src/routes/{feedback,programs,projects,issues,weeks}.ts`:
+
+- All seven mappers now take a real row interface instead of `any`: `extractProjectFromRow` /
+  `extractSprintFromRow` (`projects.ts`), `extractIssueFromRow` (`issues.ts`, parameter now actually
+  enforced), `extractProgramFromRow` (`programs.ts`), `extractFeedbackFromRow` (`feedback.ts`),
+  `extractSprintFromRow` / `formatStandupResponse` (`weeks.ts`).
+- `pool.query<Row>(...)` / `client.query<Row>(...)` added across the five files: **154 call sites**
+  newly typed (1 was already typed, in `issues.ts`; 155 of 225 call sites in these files now carry
+  an explicit generic). The remaining 70 are bare DML (`INSERT`/`UPDATE`/`DELETE` with no
+  `RETURNING`) or transaction control (`BEGIN`/`COMMIT`/`ROLLBACK`) where no `.rows` field is ever
+  read downstream — typing the generic there would add nothing, since `.rowCount`'s type doesn't
+  depend on it.
+- Row interfaces are local to each file (or reuse `api/src/routes/rowTypes.ts`, new — a small shared
+  `DocumentRow` plus `document_type`-narrowed variants whose `properties` field is typed against the
+  matching `@ship/shared` type: `ProjectProperties`, `IssueProperties`, `ProgramProperties`,
+  `WeekProperties`). Verified against `api/src/db/schema.sql` and each query's actual `SELECT` list,
+  not guessed. Two facts checked empirically against this project's own Postgres rather than
+  assumed: `DATE`/`TIMESTAMP`/`TIMESTAMPTZ` columns come back as real JS `Date` objects, and
+  `COUNT(*)`/`SUM(...)` aggregates come back as `string` (bigint/numeric are stringified to avoid
+  precision loss) — both now modeled honestly instead of falling through `any`.
+- Downstream callbacks fixed: the `.filter((i: any) => ...)` issue-rollup blocks in `projects.ts` —
+  **6 sites, not the audit's stated 4** (two identical three-filter blocks, verified by re-counting
+  rather than trusting the cited number), plus a 7th, untagged occurrence of the same defect
+  (`!['done','cancelled'].includes(i.state)` with no `any` annotation at all, inside
+  `generatePrefilledRetroContent`) found and fixed in the same pass. Two more `.filter((i: any) =>
+  ...)` in `weeks.ts`'s `/my-week` grouping, plus several `values: any[]` / `params: any[]`
+  query-parameter arrays across all five files, now typed to their real unions.
+- A handful of `: any` in TipTap-content-building helpers (`generatePrefilledRetroContent` in
+  `projects.ts`, `generatePrefilledReviewContent` in `weeks.ts`) were deliberately left — modeling
+  TipTap's node structure is finding TS-3, out of this ticket's scope.
+
+**Two narrow, behavior-preserving side effects of typing honestly, not scope creep:**
+
+- Several `row.x === true || row.x === 't'` defensive checks (`has_plan`, `has_retro` in
+  `programs.ts`/`weeks.ts`) simplified to `row.x`: once the column is honestly typed `boolean` (SQL
+  `CASE WHEN...THEN true ELSE false END` / `COUNT(*) > 0` always return a real JS boolean, never the
+  string `'t'`), the `'t'` branch is a compile error (no overlap between `boolean` and a string
+  literal) — verified unreachable, not just assumed.
+- Two new `client.query('ROLLBACK')` calls in `issues.ts`'s `POST /` (paired with `noUncheckedIndexedAccess`
+  guards on `ticketResult`/`createdRow`, which could not previously be written as `!` under G7b).
+  Before this fix, an undefined row here would throw and be caught by the route's own `catch`
+  block, which already calls `ROLLBACK` and releases the client — so the observable behavior
+  (500 response, rolled-back transaction, released connection) is identical; the path is just
+  explicit now instead of relying on an uncaught-property-read exception.
+
+**Remainder — explicitly out of scope, for a follow-up ticket:** ~559 bare `pool.query(`/
+`client.query(` call sites remain untyped elsewhere in `api/src` (down from ~710), covering routes
+outside `projects`/`issues`/`programs`/`weeks`/`feedback` (e.g. `workspaces.ts`, `documents.ts`,
+`team.ts`, `dashboard.ts`, `standups.ts`, `admin.ts`, `weekly-plans.ts`, `claude.ts`). None were
+touched here per the orchestrator's scope decision.
+
+**How to run it.** `pnpm --filter @ship/api exec tsc --noEmit -p tsconfig.json` (or `pnpm
+type-check`) and `pnpm --filter @ship/api test`.
+
+**Measurement (cheap tier — `type-safety-audit`'s counting method, BSD grep, same patterns as
+`audit/type-safety/baseline.md`):**
+
+| Metric | Before | After |
+|---|---|---|
+| `(row\|r): any` mapper signatures | 6 (of 7 — 1 already fixed but inert) | **0** |
+| Typed `pool/client.query<...>` call sites, 5 touched files | 1 | **155** (of 225) |
+| `pool/client/db.query(` untyped, whole `api/src` prod | 710 | 559 |
+| `pool/client/db.query<` typed, whole `api/src` prod | 3 | 157 (158 raw — 1 is the grep matching the phrase "`pool.query<T>(...)`" inside `rowTypes.ts`'s own doc comment, not code) |
+| `.rows` accesses, whole `api/src` prod | 771 | 711 |
+| `explicit_any` (`count.sh`), whole `api` package | 76 | **55** |
+| `as_any`, whole `api` package | 128 | 128 (unchanged — none added, none removed) |
+| non-null assertions (tracked pattern), whole `api` package | 42 | 42 (unchanged — none added) |
+
+`as_assertions` moved 1059 → 1086 (+27); verified by grepping the diff's added lines that every one
+of those is inside a comment/docstring or an `AS <alias>` SQL clause quoted in a comment (e.g. "COUNT(*)
+subqueries — node-postgres returns bigint aggregates **as** strings"), not a real type assertion —
+consistent with the baseline's own documented ~15-20% over-count on this pattern.
+
+**Rollback.** Revert the five route files and delete `api/src/routes/rowTypes.ts` and
+`api/src/routes/rowTypes.test.ts`. No schema or migration changes; no behavior changes beyond the
+two narrow cases documented above.
+
+---
+
+## TRO-289 (ERR-13) — PersonEditor saved title/properties with no error handling at all
+
+**Confirmed against the code, not just the ticket.** `web/src/pages/PersonEditor.tsx` saved the
+title (via `useAutoSave`'s `onSave`) and every sidebar property change (`onUpdateProperties`) with a
+bare `await apiPatch(...)` — no `.ok` check, no thrown error, no `.status`, no `useMutation`, and no
+tag into the write-outcome bus `web/src/hooks/useDocumentWriteStatus.ts` (TRO-190/ERR-3) already
+drives every OTHER document type's `SyncStatusIndicator` from. A rejected or throttled person-document
+write vanished with zero observable effect: no console error, no toast, no change to the "Saved"
+indicator, and (for `onUpdateProperties`) the local optimistic state update happened unconditionally,
+even on failure, since nothing ever checked the response.
+
+**What changed.** `web/src/pages/PersonEditor.tsx` gains one `useMutation` (`updatePersonMutation`),
+built exactly like `UnifiedDocumentPage.tsx`'s real `updateMutation`:
+
+- `mutationFn` throws an `Error & { status: number }` on a non-ok response (`error.status =
+  response.status`), so the shared retry policy (`shouldRetryRequest`/`retryDelayMs` in
+  `queryClient.ts`) can back a throttled 429 off on its tuned schedule instead of dropping it, and so
+  `isNotFoundError` can tell a 404 apart from any other failure.
+- `meta: { operation: 'update person', documentId: id }` tags it into the same document-write-outcome
+  bus every other document type's mutation already reports through — no new bus, no new subscriber;
+  `Editor.tsx`'s existing `useDocumentWriteStatus(documentId, ...)` call picks it up unchanged and
+  flips this document's own `SyncStatusIndicator` to "Not saved" (and raises the existing one-shot
+  "document was deleted" notice on a 404), because `PersonEditorPage` already renders through the
+  same shared `Editor` (`LazyEditor`).
+- The title save (`throttledTitleSave`'s `onSave`) and the property save (`onUpdateProperties`) both
+  call `updatePersonMutation.mutateAsync(...)` instead of the bare `apiPatch`. `onUpdateProperties`
+  now applies its local optimistic state update only after the write actually succeeds — it is a
+  fire-and-forget event handler (`PersonCombobox`'s `onChange` doesn't await it), so the catch also
+  swallows the rejection there rather than letting it escape as an unhandled rejection; failure is
+  still visible via the shared indicator.
+
+**Regression tests — `web/src/pages/PersonEditor.test.tsx`** (vitest, run by the gate). Renders the
+real `PersonEditorPage` against the app's actual `queryClient` singleton (mocking only the
+`@/lib/api` network boundary and the lightweight `useAuth`/`useDocuments`/`useWorkspace` context
+hooks), paired with a second, independent `useDocumentWriteStatus` subscriber on the SAME
+`queryClient` — the same "drive real mutations, don't cast mutation-cache internals" technique
+`useDocumentWriteStatus.test.tsx` uses (see commit 9510f8e). Five cases:
+
+1. A successful property save leaves `hasFailedWrite` false.
+2. A rejected (400) property save flips `hasFailedWrite` true.
+3. A rejected (400) title save (the `useAutoSave`-throttled path) also flips `hasFailedWrite` true.
+4. A 404 property save calls the shared `onDocumentGone` notice exactly once, reusing the ERR-4
+   deletion notice rather than inventing a second one.
+5. A 429 property save is retried on the throttle schedule (`THROTTLE_RETRY_DELAYS_MS`, first retry
+   at ≥2s) rather than the generic ~1s exponential schedule any other retryable error gets — confirmed
+   under `vi.useFakeTimers()` by asserting no second attempt lands by 1.5s, then that one has by 3s.
+
+Confirmed red first, for the right reason: reverting `PersonEditor.tsx` to its pre-fix version and
+re-running this same test file failed 4 of 5 cases with real `AssertionError`s (`hasFailedWrite`
+stayed `false`, `onGone` was called 0 times, the 429 case never issued a second `apiPatch` call at
+all because there was no mutation/retry policy in play) — not an import error or a typo.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/pages/PersonEditor.test.tsx
+```
+
+**Rollback.** Revert the commit(s) on `fix/err-13-err-14-editor-save-paths` touching
+`PersonEditor.tsx`. `queryClient.ts` and `UnifiedDocumentPage.tsx` are unaffected by this ticket's
+half of the branch (see TRO-290 below).
+
+---
+
+## TRO-290 (ERR-14) — a window-focus refetch on a deleted document unmounted the editor and discarded in-progress text
+
+**Reproduced first, as directed — this is the headline claim.** Wrote a jsdom test rendering the
+real `UnifiedDocumentPage` route against the app's actual `queryClient` singleton (so `staleTime` and
+the default retry policy are exactly production's, not a relaxed test client), loaded a `wiki`
+document successfully, marked the `['document', id]` query stale via `queryClient.invalidateQueries({
+refetchType: 'none' })` (stale, but no auto-refetch yet — isolates the trigger), then dispatched a
+real `window.dispatchEvent(new Event('visibilitychange'))` — the exact event
+`@tanstack/query-core`'s `focusManager` listens for. React-query's own focus-refetch machinery fired
+a second fetch, mocked to return 404 (another user deleted the document). **Observed:** the second
+`apiGet` call landed, and the mocked editor (`data-testid="editor-mounted"`, holding text standing in
+for an in-progress, unsaved draft) disappeared from the DOM, replaced by the "Document not found"
+screen. This is REPRODUCED, not derived — the failure was watched happening, not inferred from
+reading the code.
+
+**Root cause.** `web/src/pages/UnifiedDocumentPage.tsx`'s top-level `useQuery(['document', id])`
+never overrode `refetchOnWindowFocus`, so it gets react-query's default background refetch on window
+focus. React-query does not clear cached `data` just because a later background fetch failed — `data`
+stays the last good snapshot while `error` becomes set. The render, though, checked
+`if (error || !document)` — truthy `error` alone was enough to bail into the "not found" screen,
+regardless of whether `document` still held a perfectly good, cached copy — unmounting the entire
+editor tree and destroying whatever local (Yjs/TipTap/title) state it held.
+
+**What changed — preferred fix from the ticket: one deletion story, not two.**
+
+- The query's `queryFn` now attaches `.status` to its thrown error (same pattern as ERR-3/ERR-4's
+  write-path fix), so a 404 can be told apart from any other fetch failure.
+- `web/src/lib/queryClient.ts` gains `notifyDocumentGoneOnRead(documentId)`, a thin wrapper around the
+  existing (private) `notifyDocumentWriteOutcome` — the READ-path counterpart to the write-outcome
+  bus TRO-190/ERR-3 built. No new bus, no new subscriber.
+- `UnifiedDocumentPage.tsx` adds one effect: when a background refetch's `error` is a 404
+  (`isNotFoundError`) while `document` (cached data) still exists, it calls
+  `notifyDocumentGoneOnRead(id)` — routing the read-path deletion through the exact same bus and
+  user-facing notice (`Editor.tsx`'s `alert(DOCUMENT_GONE_MESSAGE)`) ERR-4 already gives a failed
+  *write* against a deleted document. `useDocumentWriteStatus`'s existing one-shot guard keeps the
+  alert to a single firing even if the query keeps re-attempting the failed refetch.
+- The render's error branch changed from `if (error || !document)` to `if (!document)` — a background
+  refetch failure (404 or otherwise) no longer unmounts the editor as long as a cached document
+  exists; a hard failure on the very first load (no cached data at all) still shows the "not found"
+  screen exactly as before.
+
+**Regression tests — `web/src/pages/UnifiedDocumentPage.deletedFocusRefetch.test.tsx`** (vitest, run
+by the gate). Same real-`queryClient` / real-focus-event technique as the reproduction above:
+
+1. After the focus-triggered 404, the editor stays mounted with its original in-progress text intact,
+   the shared bus's `onGone` fires exactly once and `hasFailedWrite` becomes true, and the doc is
+   fetched exactly twice (no retry storm, no repeated notice).
+2. A hard 404 with no cached document at all (first load) still shows "Document not found" — the
+   existing behavior for that case is unchanged.
+
+Confirmed red first, for the right reason: reverting `UnifiedDocumentPage.tsx` to its pre-fix version
+and re-running case 1 failed with `expected "vi.fn()" to be called 1 times, but got 0 times` (the
+notice never fired) and the DOM showing "Document not found" — exactly the reproduced bug, not an
+import error.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/pages/UnifiedDocumentPage.deletedFocusRefetch.test.tsx
+```
+
+**Rollback.** Revert the commit(s) on `fix/err-13-err-14-editor-save-paths` touching
+`UnifiedDocumentPage.tsx` and the `notifyDocumentGoneOnRead` addition in `queryClient.ts`.
+`PersonEditor.tsx` (TRO-289 above) is unaffected.
+
+---
+
+## TRO-219 (A11Y-5) + TRO-220 (A11Y-6) + TRO-221 (A11Y-7) — page-shell landmark and heading structure
+
+Three findings, one shared root cause per the assignment: missing landmark/heading structure in the
+page shells. Each turned out to need a different fix once actually diagnosed.
+
+**A11Y-5 was mis-filed as a landmark bug on two working pages. It is not: `/search` and `/weeks` are
+not routes.** The finding assumed real pages missing `<main>`/`<h1>`. Checking
+`audit/error-handling/raw/probe1b-routes.json` first (as the ticket required) showed both routes with
+`bodyTextLength: 0` - byte-for-byte identical to `/this-route-does-not-exist`, which was included in
+that probe specifically because it's guaranteed not to exist. `web/src/main.tsx` had no
+`path="/search"` or `path="/weeks"` entry, and there is no `SearchPage`/`WeeksPage` anywhere in
+`web/src/pages/` - `/api/weeks` and `/api/search/mentions` are backend endpoints the audit's route
+list conflated with frontend pages. `AppRoutes`'s `<Routes>` had no wildcard fallback, so an unmatched
+path under `/` didn't match the parent `<Route path="/">` either and the whole tree rendered nothing -
+not a page missing a landmark, a routing gap with no landmark, heading, or content of any kind.
+Papering `<main>` around that emptiness would have been decoration; a real catch-all is the fix that
+also happens to clear the axe rules the finding named.
+
+**What changed - A11Y-5.**
+
+- `web/src/pages/NotFound.tsx` (new) - a real "Page not found" view with its own `<h1>` and a link
+  back to `/docs`. It does *not* render its own `<main>`: every route nested under `AppLayout` already
+  gets one for free (`pages/App.tsx:542`), and a second `<main>` would be a duplicate landmark - its
+  own axe violation.
+- `web/src/main.tsx` - added `<Route path="*" element={<NotFoundPage />} />` as the last child of the
+  same `<Route path="/">` that renders `<AppLayout />`, lazy-loaded like every other page (BUN-1
+  convention). Placement matters: as a sibling of `dashboard`, `my-week`, etc., it inherits
+  `AppLayout`'s persistent `<main>` instead of needing its own.
+
+**A11Y-6: the skip is page chrome, not user-authored TipTap content.** A document view's only
+page-level heading is the title `<h1>` (`Editor.tsx:888`). `WikiSidebar` renders nothing but
+`<label>` property rows and `BacklinksPanel`, whose "Backlinks" header was an `<h3>` with no `<h2>`
+anywhere in the chrome - an h1 -> h3 skip, reproduced on a real seeded wiki document with zero body
+headings (`audit/a11y/axe/document_view.json`: `heading-order` targeting `h3`; re-confirmed live
+against this worktree's own dev server with the same result). Because it reproduces with no user
+content at all, this cannot be a TipTap-authored skip, so the fix does not touch the editor's Heading
+extension or constrain what levels a user can type into their own document - only the chrome.
+`web/src/components/sidebars/PropertiesPanel.tsx`'s `WeeklyDocumentSidebar` had the identical pattern
+(an `<h3>` "Weekly Plan"/"Weekly Retro" header with no `<h2>` above it) for weekly_plan/weekly_retro
+documents - same root cause, different document type, fixed alongside it.
+
+**What changed - A11Y-6.**
+
+- `web/src/components/editor/BacklinksPanel.tsx` - all three "Backlinks" headers (loading/error/loaded
+  states) promoted from `<h3>` to `<h2>`, the first real section heading under the page's single
+  `<h1>`.
+- `web/src/components/sidebars/PropertiesPanel.tsx` - `WeeklyDocumentSidebar`'s "Weekly Plan"/"Weekly
+  Retro" header promoted the same way, and the function is now exported (was module-private) so its
+  own regression test can render it without also mocking `useAuth`/`useWorkspace`, which the exported
+  `PropertiesPanel` wrapper calls unconditionally regardless of document type.
+
+**A11Y-7: straightforward - wrap the form in `<main>`.** The entire login page (logo, form, dev-hint)
+sat in a plain `<div>` with no landmark anywhere on the page. axe reported `landmark-one-main` and
+`region` (five separate un-landmarked blocks, including both form field wrappers) -
+`audit/a11y/axe/login_unauth.json`. `web/src/pages/Login.tsx`'s single wrapping `<div
+className="w-full max-w-[360px]">` is now a `<main>` with the same class - no visual change, since
+Tailwind classes fully control the box's appearance and `<main>`/`<div>` carry no differing default
+styles.
+
+**Process note the ticket also asked about.** The repo's e2e a11y specs (`e2e/accessibility.spec.ts`)
+filter every assertion to `expect(violations.filter(v => v.impact === 'critical' || v.impact ===
+'serious')).toHaveLength(0)` - Moderate violations (all three of these rules) pass those specs by
+construction, which is exactly how A11Y-5/6/7 went unnoticed by CI. This PR does **not** tighten that
+filter - live-measured before/after below (Serious+ column) shows it would stay green on `/search`,
+`/weeks`, and `/login` after this fix, but `document view` already carried a pre-existing Serious
+`color-contrast` finding unrelated to this ticket (see below), so tightening the filter repo-wide is a
+separate decision for a human, not a side effect of this PR.
+
+**Regression tests** (`web/src/**/*.test.tsx`, run by `pnpm --filter @ship/web test`, the tier the
+gate actually executes):
+
+- `web/src/pages/NotFound.test.tsx` - renders an `<h1>`, offers a link back to `/docs`, and does
+  *not* render its own `<main>`.
+- `web/src/main.routes.test.ts` (extended) - pins the catch-all as a lazy-loaded sibling route inside
+  the `AppLayout`-wrapping `<Route path="/">`, not a bare top-level route.
+- `web/src/components/editor/BacklinksPanel.test.tsx` - asserts the "Backlinks" heading is `h2` in
+  both the loading and loaded states.
+- `web/src/components/sidebars/PropertiesPanel.test.tsx` - asserts `WeeklyDocumentSidebar`'s header is
+  `h2` for both weekly_plan and weekly_retro.
+- `web/src/pages/Login.test.tsx` - asserts the sign-in form, both inputs, and the submit button are
+  all reachable inside a single `<main>`.
+
+Every test above was confirmed red first (against the pre-fix markup, restored via file copies -
+never `git stash`, per this project's standing rule) for the reason claimed - missing `<main>`/`h1`,
+or the wrong heading level - then green after the fix, with no other change to the assertion.
+
+**Measurement (a11y DoD).** axe-core 4.11.0 via `@axe-core/playwright`, tags
+`wcag2a,wcag2aa,wcag21a,wcag21aa,best-practice`, Chromium 1217 headless, 1440x900, against this
+worktree's own dev servers (`web :5995`, `api :3822`, seeded fresh), authenticated as `dev@ship.local`
+except where noted. The seeded user's "Action Items" modal auto-opens on every navigation and was
+dismissed after each one before scanning - an earlier pass here that dismissed it only once (right
+after login) produced a false-clean reading on the document view, because the modal was still
+covering the page for that scan; re-scanning with the modal dismissed on every navigation reproduced
+the real `heading-order` violation and is what these numbers reflect.
+
+| Page / state | Before (C/S/M/m, rules) | After (C/S/M/m, rules) |
+|---|---|---|
+| `/login` (unauthenticated) | 0/0/2/0 - `landmark-one-main`, `region` | 0/0/0/0 |
+| `/search` | 0/0/2/0 - `landmark-one-main`, `page-has-heading-one` | 0/1/0/0 - `color-contrast` (see below) |
+| `/weeks` | 0/0/2/0 - `landmark-one-main`, `page-has-heading-one` | 0/1/0/0 - `color-contrast` (see below) |
+| document view (seeded wiki doc) | 0/0/1/0 - `heading-order` | 0/0/0/0 |
+
+All four of the named axe rules (`landmark-one-main`, `page-has-heading-one`, `heading-order`,
+`region`) clear. `/login` and document view are fully clean after the fix.
+
+**New, honestly-reported: `/search` and `/weeks` now surface a pre-existing Serious `color-contrast`
+finding that was never reachable before.** Before this fix those two URLs rendered nothing at all, so
+they trivially had zero violations of every kind, not just the two landmark/heading ones. Once
+`AppLayout` actually mounts there (via the new catch-all), they inherit the same 4-panel chrome every
+other authenticated page uses - and `getActiveMode()` (`pages/App.tsx`) has no match for `/search` or
+`/weeks`, so it falls through to its `'dashboard'` default, highlighting the "My Work" nav item in
+`DashboardSidebar.tsx:36` (and a second item at line 51) with `bg-accent/10 text-accent` - `accent`
+(#005ea2) is a *fill* color, documented in `web/tailwind.config.js` as only 2.89:1 as text, the exact
+A11Y-3/TRO-217 failure mode. This exact element is never flagged on the real `/my-week` page only
+because that one page hides its whole contextual sidebar (`hideLeftSidebar` in `pages/App.tsx`) for
+unrelated layout reasons - the defect was always there, just never visible. This is pre-existing
+chrome, not something this PR added, and swapping its color token is a visible change to unrelated,
+already-shipped UI - out of a landmark/heading ticket's scope per this project's "no visual redesign;
+escalate a visible fix" rule, so it is reported here rather than fixed. Recommend a follow-up finding
+(`DashboardSidebar.tsx:36,51`, same class as A11Y-3) rather than silently expanding this PR.
+`NotFoundPage.tsx`'s own new "Go to Documents" link had the identical mistake (`text-accent` copied
+from `UnifiedDocumentPage.tsx`'s existing, equally-affected "Go to Documents" button) and *was* fixed
+here, since it's this PR's own new code: swapped to `text-accent-text` (6.08:1), the token this
+codebase already defines for accent-colored text.
+
+**Unverified.** Everything above is DOM/axe evidence (observed) or code-read (derived and marked as
+such). No claim is made about what a screen reader announces; VoiceOver verification of the new
+`<main>`/`<h1>` structure is owed to a human, per this project's standing rule that only a human
+listening can confirm announcement behavior.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run \
+  src/pages/NotFound.test.tsx \
+  src/main.routes.test.ts \
+  src/components/editor/BacklinksPanel.test.tsx \
+  src/components/sidebars/PropertiesPanel.test.tsx \
+  src/pages/Login.test.tsx
+scripts/factory/gate.sh
+```
+
+**Rollback.** Revert the commit(s) on `fix/a11y-5-6-7-landmarks`. The three fixes are independent:
+reverting `web/src/main.tsx`'s catch-all route and deleting `NotFound.tsx` undoes A11Y-5 alone;
+reverting the two heading-level changes undoes A11Y-6 alone; reverting `Login.tsx`'s `<main>` undoes
+A11Y-7 alone.
+
+---
+
+## TRO-211 (TS-6) — a real ESLint config; `pnpm lint` stops being a silent no-op
+
+**Before, observed by running it.** `pnpm lint` printed `None of the selected packages has a
+"lint" script` and exited 0 — no `.eslintrc*` or `eslint.config.*` existed anywhere outside
+`node_modules`, and none of `api`, `web`, `shared` defined a `lint` script for root's
+`pnpm --recursive run lint` to dispatch to. `.github/workflows/ci.yml` did not call `pnpm lint` at
+all; a comment there said explicitly to wire it in "when TRO-211 lands."
+
+**What changed.**
+
+- Added `eslint.config.mjs` at the repo root: ESLint 9.39.5 flat config + `typescript-eslint`
+  8.65.0, covering `api/src`, `web/src`, `shared/src` only — not `e2e/`, not config/script files
+  (`web/tsconfig.node.json` / build-script coverage is the separate, still-open TS-9).
+- Added `"lint": "eslint src"` to `api/package.json`, `web/package.json`, `shared/package.json`.
+  Root's `"lint": "pnpm --recursive run lint"` needed no change — it was already the right
+  dispatcher, just dispatching to nothing.
+- Wired a `Lint` step into `.github/workflows/ci.yml`'s `verify` job, right after `Type check` and
+  before `Build all packages`.
+
+**Ruleset — ERROR vs WARN, and why, with baseline counts** (`api` / `web` / `shared`, before any
+fix):
+
+| Rule | Severity | Baseline (api/web/shared) | Why |
+|---|---|---|---|
+| `eqeqeq` (`always`, `{null:'ignore'}`) | **error** | 4 / 2 / 0 → **0 / 0 / 0** | All 6 raw hits were the `== null` / `!= null` idiom (e.g. `api/src/collaboration/index.ts:330`, `web/src/components/ActionItems.tsx:67`). Forcing `=== null` would exclude `undefined` and change behavior — that is a bug, not a fix. Configured ESLint's standard exception instead of touching code; every other `==`/`!=` is still an error. |
+| `no-fallthrough` | **error** | 0 / 0 / 0 | Passes clean today (tsc's `noFallthroughCasesInSwitch` already covers most of this; ESLint is belt-and-suspenders, catches cases tsc's flag doesn't). |
+| `@typescript-eslint/no-floating-promises` | **warn** | 4 / 209 / 0 (213 total) | Real correctness bugs, but far past "few (<~15) and mechanical" — mostly React event handlers across `web/src/pages/*.tsx`. 4 of the api sites are inside `api/src/collaboration/index.ts`, which `ship-backend`'s own brief flags as a stop-for-human zone with a documented history of async-ordering bugs (ERR-1/ERR-2/ERR-10/ERR-11/ERR-12). Fixing those under a lint-config ticket is exactly the drive-by this ticket was told not to do — follow-up ticket material. |
+| `@typescript-eslint/no-misused-promises` | **warn** | 5 / 180 / 0 (185 total) | Same call, same reasoning. |
+| `@typescript-eslint/no-explicit-any` | warn | 209 / 31 / 0 (240 total) | Per orchestrator scope: the audit's counted, open finding (TS-1/TS-2/TS-8), already being burned down by dedicated tickets and blocked from growing by G7b. Not this ticket's job to fix. |
+| `@typescript-eslint/no-non-null-assertion` | warn | 295 / 33 / 0 (328 total) | Same call — the counted, open TS-4 class. |
+
+**Result.** `pnpm lint` now exits **0** with **0 errors, 966 warnings** (513 api + 453 web + 0
+shared) — a real check that passes today, not a vacuous one.
+
+**How to run it.**
+```bash
+pnpm lint                     # all three packages (what CI runs)
+pnpm --filter @ship/api lint  # single package
+```
+
+**Demonstrated the gate actually gates (not committed).** Appended a scratch function to
+`web/src/lib/api.ts` with `if (a == 1) { ... }`, ran `pnpm --filter @ship/web lint`: exit **1**,
+`eqeqeq` error reported (`454 problems (1 error, 453 warnings)`). Reverted with
+`git checkout -- web/src/lib/api.ts`; re-ran: exit 0, back to 453 warnings, 0 errors.
+
+**Not fixed here — follow-up.** `no-floating-promises` (213 sites) and `no-misused-promises` (185
+sites) at warn, counts above. Two safe, mechanical-looking candidates outside the hazard file:
+`api/src/db/migrate.ts:58` and `api/src/db/seed.ts:1259` both call an async `main()`/`seed()` at
+top level with no `.catch`. The four sites inside `api/src/collaboration/index.ts` should go
+through the same review weight as ERR-1/ERR-2, not a mechanical batch fix.
+
+**Rollback.** Delete `eslint.config.mjs`; remove the `lint` script from `api/package.json`,
+`web/package.json`, `shared/package.json`; remove the `eslint`/`typescript-eslint` root
+devDependencies; remove the `Lint` step from `ci.yml`.
+
+---
+
+## TRO-203 (BUN-7) + TRO-204 (BUN-8) — an unused dependency and a duplicated Radix version leave the tree
+
+Two Low-severity dependency-hygiene findings, one root cause (drift between what
+`web/package.json` declares and what pnpm actually resolves), fixed on one branch.
+
+**BUN-7 — `@tanstack/query-sync-storage-persister` was declared and never used.** Re-verified
+against current code, not the audit snapshot, because the ticket flagged `web/src/lib/queryClient.ts`
+as recently touched by TRO-190/ERR-3: it imports only the **types** `PersistedClient`/`Persister`
+from `@tanstack/react-query-persist-client` and implements its own IndexedDB persister with
+`idb-keyval` — it never reaches the sync-storage package. `grep -rE "from
+'@tanstack/query-sync-storage-persister" web/src --include="*.ts" --include="*.tsx"` returns 0,
+matching the audit exactly. Removed from `web/package.json` `dependencies`; `pnpm install`
+re-resolved it out of `pnpm-lock.yaml`. 0 shipped-byte change, as predicted — it was never in any
+emitted chunk to begin with.
+
+**BUN-8 — `@radix-ui/react-primitive` and `@radix-ui/react-slot` each resolved to two versions.**
+Cause, confirmed by reading both packages' own `package.json`s out of the pnpm store: `cmdk@1.1.1`
+declares `"@radix-ui/react-primitive": "^2.0.2"` (a caret range), which pnpm resolves to the newest
+match — 2.1.4, pulling in `react-slot@1.2.4` — while `@radix-ui/react-dialog`/`-popover`/`-tooltip`
+each pin the **exact** older `2.1.3`/`1.2.3` internally. Neither side is a range pnpm can widen on
+its own, so both trees shipped. Fixed with a `pnpm.overrides` entry in the root `package.json`
+(with an explanatory `"// overrides (BUN-8 / TRO-204)"` comment key beside it, since a real override
+key can't hold prose) forcing every consumer onto the newer pair. Converging *up* rather than down
+to 2.1.3/1.2.3 was checked, not assumed: diffing the built `dist/index.mjs` for both version pairs
+shows `react-primitive`'s logic is byte-identical between 2.1.3 and 2.1.4, and `react-slot` 1.2.4
+only *adds* `React.lazy`-child support over 1.2.3 — a strict superset, not a behaviour change.
+
+**Where the audit's own location claim no longer holds on this branch.** BUN-8 was measured against
+the pre-BUN-1..6 tree, where the whole app was one entry chunk, so "both copies land in the entry
+chunk" was true then. After TRO-197..202 shipped route/vendor splitting, `web/vite.config.ts`'s
+`manualChunks` deliberately leaves Radix/cmdk/dnd-kit out of any vendor group (grouping them was
+measured to cost 15 kB gzip on `/docs` and `/documents/:id`, because a route needing one primitive
+then downloaded all of them), so Rollup's default splitting places them. Today the duplicate bytes
+sit in a lazily-loaded **shared** chunk (`assets/index-CmtDBcUa.js` in this build, reached from
+`Editor.tsx`, `App.tsx`, `Documents.tsx` and the document-tab components) — not the true entry chunk
+`index.html` references. `/login`'s initial payload is therefore untouched by this fix; only `/docs`
+and `/documents/:id` shrink, and only once (it's one physical file), not per route.
+
+**Measured**: `pnpm build:web` from the repo root, `node audit/bundle/measure.mjs`, gzip level 9,
+kB = 1000 bytes, Node v23.2.0, pnpm 10.27.0 — this branch vs. `main`@`9a15f43` built in an isolated
+`git worktree add --detach` copy (never stashed):
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| Total dist (raw / gzip) | 3,365.80 / 1,771.39 kB | 3,364.02 / 1,771.31 kB | −1.78 kB raw / −0.08 kB gzip |
+| `/login` initial payload (gzip) | 117.49 kB | 117.47 kB | −0.02 kB |
+| `/docs` route closure (gzip) | 182.07 kB | 181.98 kB | −0.09 kB |
+| `/documents/:id` route closure (gzip) | 211.72 kB | 211.63 kB | −0.09 kB |
+
+Matches the audit's own estimate (~2.1 kB raw / <1 kB gzip) in order of magnitude — this was always
+a hygiene fix, not a payload fix, and is reported as one.
+
+**Duplicate-gone proof**: `pnpm why @radix-ui/react-primitive --recursive` and `pnpm why
+@radix-ui/react-slot --recursive` (repo root) show a single resolved version — `2.1.4` and `1.2.4`
+respectively — on every path, including through `cmdk`. Parsing `pnpm-lock.yaml`'s `packages:` block
+for all 25 `@radix-ui/*` entries confirms zero remaining duplicates (down from the 2 named above).
+
+**Regression guard** (BUN-8 has one; BUN-7 removing an unimported package needs no behavioural test):
+`web/src/lib/radixVersionDedupe.test.ts` (new) reads the real `pnpm-lock.yaml` and asserts every
+`@radix-ui/*` package resolves to exactly one version — scoped to that family, not a blanket claim
+about the whole tree, since other packages legitimately carry two majors. Confirmed it fails for the
+right reason: run against a copy of the pre-fix lockfile it reports `@radix-ui/react-primitive
+resolved to 2 version(s) (2.1.3, 2.1.4)` and the same for `react-slot` (1.2.3, 1.2.4), then passes
+clean once the fixed lockfile is restored. Runs inside `pnpm --filter @ship/web test`, which the
+factory gate executes.
+
+**Verified nothing broke**: `pnpm install`, `pnpm --filter @ship/web test` (38 files / 390 tests),
+`pnpm test` (api: 46 files / 604 tests), `pnpm build` (shared + api + web), `pnpm run type-check` —
+all green.
+
+**Rollback**: revert the two `package.json` edits — restore the
+`"@tanstack/query-sync-storage-persister": "^5.90.18"` line to `web/package.json`'s `dependencies`,
+delete the `"pnpm"."overrides"` block from the root `package.json` — then `pnpm install` to
+regenerate `pnpm-lock.yaml`. Delete `web/src/lib/radixVersionDedupe.test.ts`.
+
+---
+
+## TRO-218 (A11Y-4) + TRO-222 (A11Y-8) — /issues Radix popovers open unnamed, and the selection column header is empty
+
+Both are the last two accessibility gaps on /issues, the improvement target for Category 7
+(all Critical/Serious axe violations fixed on the 3 most important pages). A11Y-4 was the last
+open Serious; A11Y-8 the remaining Minor.
+
+**What was broken — A11Y-4.** axe's "issues menu open" scan reported a Serious `aria-dialog-name`
+violation: `<div data-state="open" role="dialog" id="radix-:rj:" class="z-50 w-[var(--radix-...">`
+(`audit/a11y/axe/issues_menu_expanded_state.json`). Radix's `Popover.Content` defaults to
+`role="dialog"` (`@radix-ui/react-popover` dist/index.mjs:243) with no name unless one is supplied.
+`web/src/components/ui/Combobox.tsx:68` (the `Popover.Content` this class string belongs to) never
+passed `aria-label`/`aria-labelledby`, so the popover the axe scan actually opened — the "Filter
+issues by program" combobox, confirmed by inspecting the live DOM after the click — announced only
+as an unnamed dialog.
+
+**The mechanism is a shared wrapper, not a one-off.** `Combobox` is consumed by
+`IssuesList.tsx` (program/project/sprint filters), `DocumentListToolbar.tsx` (the sort dropdown —
+itself reused by `/issues`, `/projects`, `/programs`, and `/documents`), `IssueSidebar.tsx`
+(assignee, week pickers), and `WeekSidebar.tsx` (owner picker). Fixing the one component clears the
+unnamed-dialog defect on all of those surfaces. Every existing call site already passes
+`aria-label` (verified: `grep -n "<Combobox" -A 12` across all 5 consumer files), so this is a
+complete fix in practice; the fallback below is defense for any future caller that omits it.
+
+A second, separate `Popover.Content` on the same page — the "Customize columns" picker inline in
+`DocumentListToolbar.tsx:147` — is not the `Combobox` wrapper and had the identical defect
+independently (its own unnamed Radix dialog). It shares the same page and the same missing-name
+mechanism, so it is fixed alongside rather than left as a second unnamed dialog on /issues.
+
+**What changed — A11Y-4.**
+- `web/src/components/ui/Combobox.tsx:69` — `Popover.Content` now gets
+  `aria-label={ariaLabel || placeholder}`, naming the dialog from the caller's label (or, if a
+  future caller omits it, the always-present placeholder text) instead of leaving it unnamed.
+- `web/src/components/DocumentListToolbar.tsx:148` — the column-picker's own `Popover.Content`
+  gets `aria-label="Customize columns"`, matching its trigger button's existing label.
+
+**What was broken — A11Y-8.** The same scan reported a Minor `empty-table-header` violation:
+`<th class="w-10 px-2 py-2" aria-label="Selection"></th>` (same JSON file). The `<th>` already
+carried `aria-label="Selection"` — but axe's `empty-table-header` rule checks only the
+`has-visible-text` alternative (axe-core 4.11.1 `axe.js`: `{ id: 'empty-table-header', any:
+['has-visible-text'] }` — no `aria-label`/`aria-labelledby` fallback, unlike most other
+name-required rules in the same file). That check's evaluator (`hasTextContentEvaluate` →
+`subtree_text_default`) walks the element's rendered subtree text; an `aria-label` attribute never
+populates it. The header needed actual (visually-hidden) text content, not just an ARIA attribute.
+
+**What changed — A11Y-8.** `web/src/components/SelectableList.tsx:134` — the selection column
+`<th>` now wraps a `<span className="sr-only">Select</span>` instead of carrying only
+`aria-label="Selection"`. `sr-only` is the repo's existing visually-hidden utility class (already
+used nearby, in this same file's selection announcer at line ~192).
+
+**Evidence.** Both measured on this branch, same conditions: worktree ports (`.factory-env`,
+API `:3413` / web `:5586`), seeded via `pnpm db:seed` (104 issues), authenticated as
+`dev@ship.local` via a fresh `session_id` obtained through `/api/csrf-token` + `/api/auth/login`,
+axe-core 4.11.1 via `@axe-core/playwright`, Chromium (Playwright 1.57.0's bundled build), scanning
+`/issues` static and after clicking the first `button[aria-haspopup], [aria-expanded]` control
+(the same selector `audit/a11y/axe-scan.mjs` uses for its "issues menu/expanded state"). "Before"
+was measured by copying the three fixed files aside, `git checkout --` reverting them to `HEAD`,
+scanning, then restoring the copies — never `git stash` (this repo's shared-stash hazard, see
+`lessons.md`).
+
+| Measurement — /issues | Before | After |
+|---|---|---|
+| static: all severities | C0 S0 M0 **m1** | C0 S0 M0 **m0** |
+| static: `empty-table-header` | 1 node (`th[aria-label="Selection"]`) | absent |
+| menu open: all severities | C0 **S1** M0 **m1** | C0 S0 M0 m0 |
+| menu open: `aria-dialog-name` | **Serious**, 1 node | absent |
+| menu open: `empty-table-header` | Minor, 1 node | absent |
+
+**Regression tests.**
+- `web/src/components/ui/Combobox.test.tsx` — renders the real `Combobox`, opens the popover, and
+  asserts the `role="dialog"` element has an accessible name (one test with an explicit
+  `aria-label`, one exercising the placeholder fallback). Needed two jsdom environment shims
+  (`ResizeObserver`, `Element.prototype.scrollIntoView`) that `cmdk` requires and jsdom doesn't
+  implement — same class of shim as `EmojiPicker.test.tsx`'s `IntersectionObserver` stub, not a
+  stub of the component under test. Confirmed red first: before the fix, both tests failed with
+  `Error: expect(element).toHaveAccessibleName() — Received: ""` — not an environment error (the
+  shims were already in place at that point) or an import failure.
+- `web/src/components/SelectableList.test.tsx` — renders `SelectableList` with `selectable` and
+  asserts the selection `<th>`'s `textContent` is non-empty, deliberately checking subtree text
+  rather than accessible name so the test fails for the same reason axe's rule does. Confirmed red
+  first: `AssertionError: expected '' not to be ''`.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test -- src/components/ui/Combobox.test.tsx src/components/SelectableList.test.tsx
+pnpm --filter @ship/web exec tsc --noEmit
+```
+
+To re-measure against a browser: start the worktree's API and Vite, log in for a fresh
+`session_id` (via `/api/csrf-token` then `/api/auth/login`), open `/issues`, run an axe scan, then
+click the program-filter (or sort, or column-picker) button and scan again.
+
+**Roll back.** Revert the three `aria-label`/`sr-only` additions (`git revert` the commit on
+`fix/a11y-4-8-issues-page`), or drop them individually — `Combobox.tsx:69`,
+`DocumentListToolbar.tsx:148`, `SelectableList.tsx:134-138`. The regression tests fail immediately
+if any of them come back unnamed/empty.
+
+**Not established.** What a screen reader actually announces for either fix — this closes the axe
+contract violations (a name exists, and discernible text exists), but no human ran VoiceOver
+against either surface. The repo's three Playwright a11y specs were not re-run here (not executed
+by the factory gate; they also only assert `impact === 'critical'`, and both these findings were
+already below that threshold, so they would not have caught either one regardless).
+
+---
+
+## TRO-193 (ERR-6) / TRO-227 (TEST-5) — Abandoning a pending inline comment now always removes its highlight mark
+
+Starting a comment via the bubble menu or `Cmd+Shift+M` sets a `commentMark` — a TipTap **Mark**,
+i.e. persisted, Yjs-synced document content (`web/src/components/editor/CommentMark.ts:69`), not a
+decoration — before any comment row exists. Only an explicit `unsetComment` call removes it. Before
+this fix, the *only* path that ever called `unsetComment` was the pending input's own `keydown`
+handler seeing `Escape` with the input itself as `event.target`
+(`CommentDisplay.tsx`'s `handleDOMEvents.keydown`, previously ~line 322) — which requires the input
+to already hold focus. It is focused in a `requestAnimationFrame` scheduled after the widget mounts
+(`CommentDisplay.tsx:259-263`).
+
+**Two confirmed mechanisms, one root cause (unset-on-abandon had no owner):**
+
+- **ERR-6 — blur / click away had no handler at all**, not a race. Grepping
+  `CommentDisplay.tsx`/`Editor.tsx` for any blur, click-outside, or `focusout` handling around the
+  pending comment found none. `audit/error-handling/raw/probe8-comment-orphan-blur.json` confirms
+  this end-to-end: the mark is written into persisted content with **0** backing comment rows and
+  survives a reload.
+- **TEST-5 — Escape genuinely races the auto-focus `requestAnimationFrame`.** Confirmed, not just
+  hypothesized: `e2e/inline-comments.spec.ts:118` failed both attempts in 2 of 3 audit runs
+  (`audit/test-quality/runs/e2e-run1-failures.txt`, `-run3-failures.txt`) with the highlight still
+  present after `page.keyboard.press('Escape')`, which sends the key to whatever currently has
+  focus — not to the not-yet-focused pending input.
+
+**The fix.** Rather than patch each dismissal path separately, `CommentDisplay.tsx`'s
+`commentDisplay` ProseMirror plugin gets a `view()` lifecycle that is the single owner of the
+"abandon a pending comment" invariant: document-level capture-phase listeners for `keydown`
+(Escape) and `mousedown` (outside click), plus a `focusout` listener for a real blur/Tab-away, all
+gated only on `storage.pendingCommentId` — never on the event's target or on whether focus has
+reached the input. A `destroy()` callback abandons any still-pending comment when the editor itself
+goes away (component unmount, or a route change that recreates the editor for a different
+document). Submitted comments are tracked (`onSubmitComment` marks the id before clearing
+`pendingCommentId`), so `onCancelComment` is a no-op for a comment that was actually created —
+the invariant is "a mark may only remain if its comment was created," in both directions. The
+Escape branch in `handleDOMEvents.keydown` was removed as dead/duplicate code now that the
+document-level listener supersedes it; Enter-to-submit is unchanged.
+
+**Provenance on route-change/unmount:** verified, not just reasoned about. `Editor.destroy()` ->
+`EditorView.destroy()` calls `destroyPluginViews()` (which invokes our `destroy()`) *before* it nulls
+`docView`, so `editor.commands.unsetComment(...)` still dispatches correctly from inside that
+callback (confirmed empirically — see the regression test below, not just read from
+`prosemirror-view`'s source).
+
+**Regression tests — `web/src/components/editor/CommentDisplay.test.ts`** (new, vitest, driving a
+real `@tiptap/core` `Editor` with the real `CommentMark` + `CommentDisplayExtension`, same pattern as
+`DetailsExtension.test.ts`/`MentionExtension.test.ts`):
+
+1. Blur/outside-click (`mousedown` outside the widget) dismissal leaves no `commentMark` in the doc
+   JSON (ERR-6).
+2. A genuine `focusout` on the pending input itself, to something outside the widget, also leaves no
+   mark — exercised directly rather than assuming `mousedown` coverage implies it (see CodeRabbit
+   triage below).
+3. Escape dispatched with focus still on `document.body` — the pending input rendered via a forced
+   decorations recompute but its `requestAnimationFrame` focus callback deliberately never flushed —
+   leaves no mark (TEST-5's exact race, reproduced without fake timers by simply never yielding to
+   let the rAF run).
+4. A normally-submitted comment keeps its mark, including through a subsequent outside click/Escape
+   (the "don't strip a real comment" half of the invariant).
+5. Bonus: destroying the editor while a comment is still pending (route change/unmount) also
+   removes the mark.
+
+**Red before green.** All of 1/3/5 failed against the pre-fix `CommentDisplay.tsx` (copied aside via
+`git show HEAD:...`, never `git stash`) with `AssertionError: expected true to be false` on
+`hasCommentMark(editor)` — the exact behavior claimed, not an import error or a crash. Case 4 (happy
+path) passed both before and after, confirming it was never broken and isn't a false positive. Case 2
+was added afterward (see below) and verified red by temporarily disabling only the `focusout`
+listener registration — that one test failed while the other four stayed green, confirming it
+exercises that listener specifically rather than being redundant with the `mousedown` case. All five
+pass against the fix.
+
+**CodeRabbit review (G9), triaged:**
+
+- **Major, applied** — a real click-away fires both the capture-phase `mousedown` and (as its native
+  consequence) a `focusout` on the pending input before `storage.pendingCommentId` round-trips back
+  to `null` via the React state update that clears it, so both listeners could call
+  `onCancelComment` for the same id. Added an `abandonedPendingId` guard so it fires exactly once per
+  pending comment — harmless today given `unsetComment`'s idempotency, but a real sharp edge for any
+  future non-idempotent `onCancelComment`.
+- **Minor, applied (corrected)** — added test case 2 above for direct `focusout` coverage. The
+  suggested diff dispatched the event on `editor.view.dom`, which does not satisfy
+  `isInsidePendingWidget(event.target)` and would not have exercised the intended branch; dispatched
+  on the pending input itself instead, and verified it actually reds when that listener is disabled.
+- **Minor, applied** — the "click elsewhere" test target is a plain `div`, not a `button` (no
+  interactive semantics needed for an arbitrary outside-click target).
+- **Minor, applied** — the e2e reload assertion now waits for the actual persisted text to reappear
+  before asserting the highlight is gone, and asserts a DOM count of `0` rather than
+  `not.toBeVisible()` (see e2e section below).
+
+**e2e:** `e2e/inline-comments.spec.ts:118` (`canceling a comment removes the highlight`) already
+asserted the right thing (`.comment-highlight` not visible after Escape) and needed no strengthening.
+Added `dismissing a comment by clicking away removes the highlight` for ERR-6, which had zero e2e
+coverage before, including a reload check matching probe8's persistence finding — waits for the
+actual persisted text to reappear before asserting the highlight is gone (not just the editor shell
+being visible, which could pass vacuously while content is still loading), and asserts a DOM count of
+`0` rather than `not.toBeVisible()` (CodeRabbit finding, applied). Not executed as part of this
+change — no prebuilt `api`/`web` `dist` exists in this worktree, so `e2e/global-setup.ts` would
+trigger a full fresh build of both packages; the jsdom unit tests above already give real
+red-before-green proof of both mechanisms, so that cost wasn't justified here.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/components/editor/CommentDisplay.test.ts
+pnpm --filter @ship/web exec tsc --noEmit -p tsconfig.json
+```
+
+**Rollback.** `git checkout main -- web/src/components/editor/CommentDisplay.tsx
+e2e/inline-comments.spec.ts && git rm web/src/components/editor/CommentDisplay.test.ts` and drop
+this entry. No schema or API change accompanies this fix.
+
+---
+
+## TRO-247 — [RULE-6] One-command local start from a clean checkout
+
+**What changed.** `./start.sh` at the repo root: from a genuinely clean checkout, one command
+installs dependencies if needed, ensures the database exists, runs every migration, seeds sample
+data, finds free ports, starts both servers, and prints the resolved URLs. Re-running it is safe —
+every step is idempotent, so a second run heals a partially-set-up checkout instead of assuming
+yesterday's state still holds.
+
+`start.sh` is a thin preflight (Node/pnpm on PATH, with actionable install instructions if not) that
+hands off to `scripts/dev.sh`, which now does the actual database bootstrap unconditionally (not
+only when `api/.env.local` is missing, as before) and is also what `pnpm dev` runs — one
+implementation, not two that can drift apart.
+
+`scripts/dev.sh` previously shelled out to `psql`/`createdb` to create the database, which are
+absent on any machine that only runs Postgres via Docker with the port published to the host (this
+project's own factory machine is one — `ship-audit-pg` on `:5433`). New `api/src/db/ensureDatabase.ts`
+replaces that with a plain `pg` connection to the server's `postgres` maintenance database, which
+works identically over TCP for a native install or a Docker container — no shell dependency either
+way, and it fails with an actionable message ("start it, then re-run — here's the native command and
+the Docker command") when Postgres is unreachable at all, rather than a bare `createdb` error.
+
+New `api/src/db/verifyMigrations.ts` makes the DB-1 (TRO-178) fix's "42/42 applied" claim an
+executed check rather than a trusted exit code: it reuses `migrationRunner.ts`'s own
+`listMigrationFiles()` — the exact file discovery the fixed runner uses — and compares it against
+`schema_migrations`, printing `Migrations: 42/42 applied` or failing loudly, naming the missing
+files, if the runner's guarantee is ever violated. `migrate.ts`/`migrationRunner.ts` themselves are
+unchanged; DB-1's fix (throw-on-any-failure) was independently re-confirmed live in this tree by
+running `migrationRunner.test.ts`'s real-migration-set suite against a throwaway database (7/7
+passing) rather than only re-reading the code.
+
+DATABASE_URL resolution (documented in `scripts/dev.sh`'s header): an explicit `DATABASE_URL` env var
+always wins; otherwise an existing `api/.env.local` keeps its own value (a plain re-run never
+silently switches databases under a configured worktree); otherwise the same default as before
+(`postgresql://localhost/$DB_NAME`, native Postgres, no password). The README's new "Cold start"
+section documents both bundled Docker Postgres options (`docker-compose.yml` on :5432,
+`docker-compose.local.yml` on :5433) with the exact `DATABASE_URL` override for each.
+
+README also corrects one stale claim while updating this: the fork banner's hazard list still
+described root `pnpm test` as silently skipping `web/` (TEST-1). That was already fixed by TRO-223
+(PR #11, `pnpm run test:api && pnpm run test:web`) — the banner text already said "resolved" in one
+place but the "Getting Started" section had not been reconciled with `start.sh`. Both now describe
+current behavior only.
+
+**Regression tests.** `api/src/db/__tests__/ensureDatabase.test.ts` (9 cases: identifier validation,
+create-when-missing, idempotent no-op, and the actionable unreachable-Postgres message — confirmed
+red-before-green by temporarily removing the `CREATE DATABASE` call and observing the exact two
+tests fail for the right reason) and `api/src/db/__tests__/verifyMigrations.test.ts` (2 cases: a
+fully-migrated database reports N/N, and a DB-1-shaped gap — a `schema_migrations` row deleted out
+from under an otherwise-complete database — is detected and named). No `!`, `as any`, or fixed
+sleeps anywhere in the diff; the one bounded wait (Postgres connection) uses a `connectionTimeoutMillis`
+on the client, not a sleep.
+
+**How to run it.** `./start.sh` from a clean checkout. To target Docker Postgres instead of a native
+install: `docker compose -f docker-compose.local.yml up -d postgres && DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_dev ./start.sh`.
+A throwaway database name works the same way: `DATABASE_URL=.../a_new_name ./start.sh`.
+
+**Rollback.** Revert the merge of `fix/rule-6-one-command-start`. `scripts/dev.sh` reverts to only
+bootstrapping the database when `api/.env.local` is absent, and back to requiring `psql`/`createdb`
+on PATH; `pnpm dev`/`pnpm db:migrate`/`pnpm db:seed` are unaffected as standalone commands either way.
+
+---
+
+## TRO-248 — [RULE-7] Retries, timeouts and circuit breakers on outbound calls
+
+Assignment rule 7 asks for an assessment of every outbound-call boundary in the ticket's table,
+not just a pile of new retry code — several rows had already been addressed by other merged
+tickets since the table was written, and re-verifying that against current code is itself part of
+the deliverable.
+
+**Row-by-row verdicts (current code, re-checked, not taken from the ticket text):**
+
+1. **`api/src/db/client.ts:24` `connectionTimeoutMillis: 2000`, hardcoded pool `max` 10/20.**
+   Confirmed still hardcoded. **Gap — fixed.** See below.
+2. **`statement_timeout: 30000` hardcoded.** Confirmed. **Assessed, no change.** This is a
+   runaway-query/DDoS guard (its own comment says so), the same category as `index.ts`'s server
+   timeouts below — not a "waiting on a dependency that might be slow" value, so the tunability
+   argument for row 1 doesn't apply to it.
+3. **`api/src/index.ts:31-33` server timeouts (Slowloris protection).** Confirmed unchanged,
+   confirmed deliberate (inline comment says so). **Assessed, no change**, per the ticket's own
+   steer.
+4. **`web/src/lib/queryClient.ts` 429 handling.** The ticket's premise — "429 is never retried" —
+   is **stale**. `shouldRetryRequest`/`retryDelayMs` (added under TRO-172/API-1, commit
+   `9f3885c`, well before TRO-248 was written) already retry HTTP 429 with a jittered backoff
+   schedule (`THROTTLE_RETRY_DELAYS_MS = [2000, 8000, 20000, 45000]`, summing past the server's
+   60s rate-limit window) for **both** `queries` and `mutations` — the client's
+   `defaultOptions.mutations.retry`/`retryDelay` are wired to the same predicate, not left on
+   react-query's default (which does treat every 4xx, including 429, as permanent). Every other
+   4xx (400/401/403/404/409/422) is still correctly treated as permanent.
+   `web/src/lib/queryClient.test.ts` (pre-existing, 11 cases) already pins this for both query and
+   mutation defaults, including "still retries 5xx", "gives up on 429 eventually", and "backs off
+   past the rate-limit window". Checked PR #51 (`fix/err-13-err-14-editor-save-paths`, open) for
+   collision: it edits `queryClient.ts` too, but only to add `notifyDocumentGoneOnRead()` after the
+   write-outcome bus — it does not touch the retry-policy section, so there is no conflict.
+   **No code change; verified only.**
+   One adjacent, narrower gap noticed but out of this ticket's table and not fixed here:
+   `UnifiedDocumentPage.tsx:79` sets `retry: false` on the top-level document-by-id query, and its
+   `queryFn` throws plain `Error`s with no `.status` attached — so even without the override, a
+   429 on that specific fetch wouldn't be recognized as throttling by `shouldRetryRequest`. Worth
+   its own ticket; not touched here (drive-by fixes outside this ticket's table are out of scope).
+5. **`api/src/config/ssm.ts` — no timeout, no retry.** Confirmed: `getSSMSecret` awaited
+   `client.send(command)` directly. TRO-243 (`11e93b6`) added a fallback to env-supplied secrets
+   *after* a failure, but nothing bounded how long a single attempt could hang or retried a
+   transient one. **Gap — fixed.** See below.
+6. **Circuit breakers: none, strongest candidate the collaboration WebSocket.** Checked whether
+   ERR-1/ERR-2's merged fix already does this job. Two things verified in the current tree, not
+   assumed:
+   - `y-websocket`'s `WebsocketProvider` (the client the editor uses,
+     `node_modules/y-websocket/src/y-websocket.js:158-167`) already reconnects on exponential
+     backoff (`2^wsUnsuccessfulReconnects * 100ms`, capped at `maxBackoffTime` = 2500ms by
+     default) — a bounded retry schedule already exists for the transient case, from the library,
+     with no code in this repo re-deriving it.
+   - ERR-1/ERR-2's merged fix (`Editor.tsx:441-495`) sets `wsProvider.shouldConnect = false` on
+     the three permanent-failure close codes (4401 session invalid, 4403 access revoked, 4100
+     document converted) — i.e. it **opens the breaker and leaves it open** on exactly the
+     conditions where retrying could never succeed, rather than reconnecting forever against a
+     doomed socket. `SyncStatusIndicator` (ERR-1) then reports the true unsynced state instead of
+     a false "Saved". Together, bounded-backoff-for-transient plus stop-forever-for-permanent plus
+     truthful state surfacing **is** the behavior a circuit breaker is for.
+   **Assessed, no change** — building a second breaker here would duplicate a job already done,
+   which the ticket itself flagged as the risk to check for.
+
+**What changed.**
+
+- **`api/src/db/poolConfig.ts` (new).** Pure `resolvePoolTiming(env)` — same pattern as the
+  existing `ssl.ts`/`resolveDatabaseSsl` decision file — resolving `connectionTimeoutMillis` from
+  `DB_POOL_CONNECTION_TIMEOUT_MS` and pool `max` from `DB_POOL_MAX` (production) /
+  `DB_POOL_MAX_DEV` (else), each falling back to today's hardcoded values (2000ms, 20/10) for any
+  unset, empty, non-numeric, zero, negative, **or fractional** override — `Number.isInteger`, not
+  just `Number.isFinite`, because a pool size or millisecond timeout of `1.5` is as meaningless as
+  `"abc"` (CodeRabbit caught the original version accepting fractional overrides). `client.ts` now
+  calls it instead of inlining the numbers; **defaults are unchanged**, so behavior does not change
+  unless an operator sets one of the three env vars. Failure mode this protects against: `ssl.ts`'s
+  own file header already documents what a fixed 2000ms timeout does against a managed Postgres
+  with a slow cold start — every connection attempt in that window fails and, under
+  restart-on-crash infra, the process crash-loops before the database is ever actually reachable.
+- **`api/src/config/ssm.ts`.** `getSSMSecret` now runs each SSM call through `sendWithRetry`: a
+  5s per-attempt timeout (`AbortController` passed as `send`'s `abortSignal`, per the
+  `@aws-sdk/client-ssm` `HttpHandlerOptions` shape) and up to 3 total attempts, backing off between
+  them with full jitter capped at 2000ms (`Math.random() * min(200 * 2^attempt, 2000)`) so that
+  the five parameters `loadProductionSecrets` fetches concurrently (`Promise.all`) don't retry in
+  lockstep if they all fail on the same underlying blip. The `SSMClient` is now constructed with
+  `maxAttempts: 1`, so this file's loop is the **only** retry layer — the SDK's own default
+  (`maxAttempts: 3` with its own internal backoff) would otherwise silently compound with it,
+  making "3 total attempts" untrue and applying this file's jitter schedule to the wrong layer
+  (CodeRabbit caught the first version missing this). `ParameterNotFound` — what the real SSM API
+  actually rejects with for a genuinely missing name, not a resolved-with-empty-value response as
+  the first version of this fix assumed — is classified as non-retryable and propagates on the
+  first attempt; a resolved-but-empty-value response (belt-and-braces, in case that shape is ever
+  possible) is also not retried, for the same reason. Exhausting the retryable attempts re-throws
+  into the existing `loadProductionSecrets` catch block unchanged, so the already-correct
+  fallback-to-env-vars behavior from TRO-243 is untouched. Concurrency note (rule 18): this is a
+  bounded, one-shot retry inside a single awaited call, not a `setInterval` —
+  `loadProductionSecrets()` is invoked exactly once, in `index.ts`'s `main()`, before the app is
+  created, so there is no in-flight-guard question.
+
+**Regression tests (new).**
+
+- `api/src/db/__tests__/poolConfig.test.ts` — 15 cases: defaults match the previous hardcoded
+  values; `DB_POOL_CONNECTION_TIMEOUT_MS`/`DB_POOL_MAX`/`DB_POOL_MAX_DEV` overrides apply
+  independently per `NODE_ENV`; malformed overrides (empty/non-numeric/zero/negative/**fractional**)
+  fall back to the default rather than propagating `NaN` or an unsafe pool size. New capability
+  with unchanged defaults, not a bug fix — no pre-existing broken behavior to reproduce red for;
+  confirmed green against the implementation.
+- `api/src/config/ssm.test.ts` — 7 cases against a mocked `SSMClient`, fake timers driving the
+  timeout/backoff (no real waiting): success-first-try; retries-then-succeeds; exhausts all 3
+  attempts and throws the last transient error; a hung call is bounded by the per-attempt timeout
+  and then retries; a successful-but-"not found" response is never retried; **the real
+  `ParameterNotFound` rejection** the live API actually throws is never retried either (1 `send`
+  call only); the `SSMClient` is constructed with `maxAttempts: 1`.
+  **Confirmed red before the fix**, for the right reason: reverted `ssm.ts` to the pre-fix version
+  (copied aside, not stashed — the `git stash` ref is shared across every worktree in this repo per
+  `lessons.md`) and re-ran the same test file. 3 of 5 cases present at that point failed: "retries a
+  transient failure" failed with the raw `ECONNRESET` propagating (no retry existed); "gives up
+  after exhausting attempts" failed on `expected 3 calls, got 1`; "bounds a hung call" failed with a
+  `TypeError` reading `abortSignal` off `undefined`, because the old code never passed a second
+  argument to `send` at all — a faithful demonstration that no timeout wiring existed, not a typo
+  in the test. The other 2 cases passed unchanged on old code (a first-try success and a "not
+  found" response were never going to exercise retry logic either way). Restored the fix; all 7
+  (after the `ParameterNotFound`/`maxAttempts` additions below) pass.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run \
+  src/db/__tests__/poolConfig.test.ts \
+  src/config/ssm.test.ts \
+  src/db/__tests__/ssl.test.ts
+```
+
+**Rollback.** Revert this ticket's commits. `client.ts` and `ssm.ts` return to their previous
+inline values with no functional loss elsewhere — nothing else imports `poolConfig.ts`, and
+`loadProductionSecrets`'s fallback behavior (TRO-243) is untouched either way.
+
+---
+
+## TRO-235 (TF-2) — prod had two divergent Terraform roots; converged onto the flat root
+
+**HOLD FOR HUMAN APPROVAL.** This entry documents a deletion of tracked infra config
+(`terraform/environments/prod`), which is an escalation-gate-2 item. The PR carries the same
+banner; nothing here has been applied to real infrastructure — no `terraform apply`/`destroy`/
+live `init` was run, per the hard safety rules for this ticket.
+
+**The problem.** Prod was managed by two independent Terraform root configs with separate state:
+the flat `terraform/*.tf` (74 resource blocks) and the modular `terraform/environments/prod` +
+`terraform/modules/*` (66 resource blocks). They had already drifted — the flat root had a WAF
+(`waf.tf`) and CloudFront realtime logging (`cloudfront-logging.tf`) the modular path lacked
+entirely — and nothing prevented both from being applied to the same AWS account, which would
+collide on hard-coded resource names. `audit/AUDIT_REPORT.md` (TF-2) and
+`audit/terraform/baseline.md` have the full analysis.
+
+**What changed.**
+
+- Deleted `terraform/environments/prod/` (5 files, including its own `.terraform.lock.hcl`) —
+  the actual TF-2 duplicate. Confirmed unused by any deploy tooling first: `scripts/deploy.sh`,
+  `scripts/deploy-web.sh`, and `scripts/terraform.sh` all route `prod` to the flat `terraform/`
+  root unconditionally and never reference `environments/prod`.
+- Diffed every one of the 66 modular resource blocks against the flat root by type+name before
+  deleting (full reconciliation table in the PR body). Three genuinely missing security-hardening
+  arguments were found and ported into the flat root instead of silently dropped:
+  - `database.tf` — 5 Aurora parameter-group settings (`max_connections`,
+    `idle_in_transaction_session_timeout`, `statement_timeout`, `log_connections`,
+    `log_disconnections`) that `modules/aurora/main.tf` had and `database.tf` did not.
+  - `elastic-beanstalk.tf` — 8 CPU-based autoscaling trigger/cooldown settings that
+    `modules/elastic-beanstalk/main.tf` had and `elastic-beanstalk.tf` did not.
+  - `ssm.tf` — `secretsmanager:PutSecretValue` on the EB instance role's Secrets Manager policy.
+    Without it, `saveCAIACredentials()` (`api/src/services/secrets-manager.ts:136`) gets
+    `AccessDenied` from `PutSecretValueCommand` the first time it updates an *existing* CAIA
+    secret under prod's real IAM role — `CreateSecret`/`UpdateSecret` alone do not cover it. This
+    is a real, currently-live bug in the flat root that the modular path had already fixed.
+- **`terraform/environments/dev`, `terraform/environments/shadow`, and `terraform/modules/*` are
+  kept — this is a deliberate deviation from "remove environments/ + modules/ entirely."** TF-2's
+  finding is specifically that prod is managed by two configs; dev and shadow are different,
+  non-overlapping AWS environments the flat root cannot deploy at all (its resource names are
+  hard-coded for prod). `scripts/deploy.sh`/`scripts/deploy-web.sh`/`scripts/terraform.sh`
+  currently route dev and shadow exclusively through `terraform/environments/$ENV`, and
+  `CLAUDE.md` documents shadow as an active step in the merge workflow ("Deploy to shadow ...
+  before merging to master"). Deleting modules/dev/shadow would have silently broken that live
+  tooling for no TF-2 benefit — it was never part of the "same infrastructure" collision. See the
+  PR body for the full reasoning; this is flagged prominently for human review, not buried.
+- `scripts/check-single-tf-root.sh` (new) — fails if a second AWS Terraform root (a directory with
+  a `.tf` file declaring `provider "aws"`) exists outside the allowed set (`terraform`,
+  `terraform/bootstrap`, `terraform/environments/dev`, `terraform/environments/shadow`), or if
+  `terraform/environments/prod` specifically reappears. Wired into `.github/workflows/ci.yml` as
+  a step in the `verify` job, right after checkout (pure bash/grep, no dependencies).
+- `terraform/README.md` — new "Authoritative config for prod" section explaining the convergence,
+  why, and what happened to the modular path (including the dev/shadow exception above); directory
+  structure diagram, multi-environment rationale, and Quick Start updated to match (prod is no
+  longer under "Environment Directories").
+
+**What did NOT change.** No flat-root resource files were rewritten beyond the three additions
+above (`database.tf`, `elastic-beanstalk.tf`, `ssm.tf`); `security-groups.tf` was read for the
+reconciliation but not touched (a sibling ticket, TF-7, is editing it concurrently). No provider
+version pin or lock file changed (TF-3/TF-4 are separate tickets).
+
+**How to run it.**
+
+```bash
+# Terraform binary: temp-downloaded 1.9.8 (matches audit/terraform/baseline.md; the repo's pinned
+# 1.6.0 cannot `init` at all — TF-3, expired provider-signing key). Not committed to the repo.
+cd terraform
+terraform init -backend=false -input=false
+terraform validate
+terraform fmt -check -recursive .
+rm -rf .terraform .terraform.lock.hcl   # leaves git status terraform/ clean, per audit methodology
+cd ..
+
+./scripts/check-single-tf-root.sh   # run from repo root; should print "OK: single authoritative Terraform root confirmed"
+```
+
+**Verification note.** `terraform validate` was run on the flat root before AND after this change
+with the same 1.9.8 binary: both report `Success!` with the same single pre-existing warning
+(TF-5, `s3-cloudfront.tf:426`'s uploads lifecycle rule) — this change introduces no new warnings or
+errors. `terraform/environments/dev` and `terraform/environments/shadow` were also validated
+post-change (unaffected, since neither was edited) and both still pass with the same TF-5 warning.
+The guard script was verified to actually fail: tested with a simulated re-added
+`terraform/environments/prod` (caught) and a simulated new sibling root directory outside
+`terraform/` entirely (also caught), both removed before committing. The audit's cloud-free
+drift-demo (`audit/terraform/drift-demo/`) was not re-run — it demonstrates local-provider drift
+detection unrelated to this ticket's root-convergence change, so re-running it would not verify
+anything this PR touches.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf-2-unify-terraform-roots`. This restores
+`terraform/environments/prod` and reverts the three ported arguments in `database.tf`,
+`elastic-beanstalk.tf`, and `ssm.tf` — returning to the pre-TRO-235 two-root state (i.e.
+un-fixing TF-2). It does not touch any live AWS state, since no `apply` was ever run against
+either root.
+
+---
+
+## TRO-299 — [TF-10] Render-provider Terraform config for the deployed fork
+
+Ship's Render deployment (`ship` / `srv-d9kf2t942hec73aofrt0`, `ship-db` /
+`dpg-d9kgth6417fc7386hhh0-a`) was hand-built via the dashboard and one-off API calls — the last
+piece of Category 8 not backed by Terraform (`memory-bank/techContext.md`: "Not yet
+Terraform-managed — the service and database were created by hand and API call."). This adds a
+config that can reproduce it.
+
+**What changed.**
+
+- **`terraform/render/`** (new): `versions.tf` pins `render-oss/render` `1.9.1` (verified latest
+  stable on the public registry) and `required_version >= 1.9.0`; `postgres.tf`/`web_service.tf`
+  declare `render_postgres.ship` (pg16, oregon, free) and `render_web_service.ship` (docker
+  runtime, this repo/`main`, oregon, free, health check `/health`); `variables.tf` gives every
+  input a description, with `render_api_key`/`session_secret` marked `sensitive = true` and no
+  real default. `DATABASE_URL` is derived from `render_postgres.ship.connection_info.internal_connection_string`
+  (a resource reference, never a literal). `outputs.tf` deliberately omits anything sensitive.
+- **`terraform/render/terraform.tfvars.example`** (new): placeholders only.
+- Root `.gitignore` gains `terraform/render/*.tfplan` and `terraform/render/tfplan` — the one
+  genuine gap: no existing pattern covered a captured plan file under this new directory.
+  `terraform/.gitignore`'s pre-existing, unrelated `*.tfvars` / `.terraform/` / `*.tfstate*`
+  patterns (no leading slash, so unanchored — they already apply recursively under `terraform/`)
+  turn out to **already cover** `terraform/render/`'s `.terraform/` cache, `terraform.tfvars`, and
+  state files, verified empirically against the pre-this-ticket version of that file. **This
+  corrects `memory-bank/techContext.md`**, which asserted "a new `terraform/render/terraform.tfvars`
+  would NOT be ignored" — that check looked only at the root file's `terraform/`-specific lines and
+  missed the nested file's blanket coverage; filed as a memory-bank correction rather than silently
+  treated as a non-issue. One negation, `!render/.terraform.lock.hcl` (added to the nested file),
+  so this directory's provider lock file is committed — deliberately unlike every other `terraform/*`
+  subdirectory, none of which commit theirs (the gap TF-4 flagged for the flat root specifically).
+- **`terraform/render/README.md`** (new): verified-vs-on-record fact table, why this directory
+  sits inside `terraform/` given PR #41's single-root guard (it wouldn't be flagged either way —
+  the guard greps for `provider "aws"`, and this declares `provider "render"`), confirmation that
+  `audit/terraform/drift-demo/` already satisfies the local-provider deliverable (2 pinned
+  `local_file` resources — no changes needed there), and the import-vs-apply adoption memo.
+- **`terraform/render/plan/plan-annotated.md`** (new): the captured, redacted `terraform plan`
+  output plus one-sentence-per-resource blast-radius annotations.
+
+**Verified live against the Render API (2026-07-30)**, via `GET /v1/services/{id}`,
+`/v1/postgres/{id}`, `/v1/services/{id}/env-vars` (names only), `/v1/owners` — not re-derived from
+the memory bank: service id/name/region/runtime/plan/URL, health check path (now set to `/health`,
+newer than an older memory-bank note calling it unset), repo/branch/auto-deploy/Dockerfile path,
+database id/name/region/version/plan, owner id, and that the three expected env var names
+(`DATABASE_URL`, `SESSION_SECRET`, `CORS_ORIGIN`) are the only ones set. One fact only *partially*
+confirmed: Postgres `ipAllowList` reads `null` via the API, not `[]` — functionally equivalent per
+the provider's docs but not a byte-for-byte match, called out as such in the README rather than
+rounded up to "verified."
+
+**What did NOT change / was not run — hard safety rules.** No `terraform apply` or
+`terraform import` ran against the live account; `terraform plan` is read-only and was run with
+real credentials (`RENDER_API_KEY` sourced from the gitignored repo-root `.env`, never printed,
+echoed, or committed). The plan shows `2 to add, 0 to change, 0 to destroy` — Terraform proposing
+brand-new resources, because nothing was imported; this is the expected "hand-built resource, empty
+state" collision the ticket anticipated, not a defect, and is not "fixed" here. The
+adoption-path decision (import vs. a clean-machine apply that creates a parallel service) is a
+human call — see the PR body's **"HOLD FOR HUMAN: apply/import decision (gate 2)"** and the memo in
+`terraform/render/README.md`.
+
+**Regression test: honestly, none applies.** This ticket's deliverable is Terraform configuration
+and documentation — there is no `api/**/*.test.ts` or `web/**/*.test.tsx` change for
+`scripts/factory/gate.sh`'s regression-test check (G6) to find, and it is expected to fail
+honestly rather than be satisfied by a manufactured vitest case with nothing to regress-test. The
+real verification is `terraform validate` (clean, no warnings) + `terraform fmt -check -recursive`
+(clean, after one formatting pass) + the live `terraform plan` capture referenced above, all shown
+in the PR body.
+
+**How to run it.**
+
+```bash
+cd terraform/render
+terraform init -input=false          # downloads render-oss/render 1.9.1
+terraform validate
+terraform fmt -check -recursive .
+cp terraform.tfvars.example terraform.tfvars   # fill in session_secret; gitignored
+set -a; source ../../.env; set +a              # RENDER_API_KEY
+terraform plan -var-file=terraform.tfvars -input=false
+```
+
+**How to roll it back.** Delete `terraform/render/`, revert the two `.gitignore` edits. Nothing on
+Render itself needs rolling back — no `apply`/`import` ever touched the live account.
+
+---
+
+## TRO-208 — [TS-3] The Yjs <-> TipTap converter — the persistence path for every document's content — was fully untyped
+
+`api/src/utils/yjsConverter.ts` carried 12 `any` in 245 lines, the highest any-per-line density of
+any production file, on the only code path that translates collaborative CRDT state into the
+durable `documents.content` column: `collaboration/index.ts:151` (`persistDocument()`, right before
+the write) and `routes/documents.ts:456` (content served over REST). `api/src/types/y-protocols.d.ts`
+added 7 more `any` on the awareness/sync surface underneath. Every exported signature was untyped —
+`yjsToJson(fragment): any`, `jsonToYjs(doc, fragment, content: any)`,
+`loadContentFromYjsState(yjsState): any | null` — so a shape regression here would silently corrupt
+or drop user-authored content with nothing failing to compile.
+
+**What changed — types only, no behavior change.**
+
+- **`api/src/types/tiptap.ts` (new).** One recursive TipTap/ProseMirror JSON node type —
+  `TipTapNode` (`type`, optional `attrs`/`content`/`marks`/`text`), `TipTapMark`, `TipTapDoc`, and the
+  `TipTapAttrValue` union (`string | number | boolean | null`) node/mark attributes actually hold.
+  Kept API-local by design (see "Not done" below).
+- **`yjsConverter.ts`** — all five signatures now use these types instead of `any`:
+  `yjsToJson(fragment): TipTapDoc`, `jsonToYjs(doc, fragment, content: TipTapNode): void`,
+  `loadContentFromYjsState(yjsState): TipTapDoc | null`, plus the internal
+  `extractTextWithMarks`/`yjsElementToJson`. A new `typeAttributes()` helper centralizes the one
+  existing `Record<string, unknown>` -> typed-attrs conversion (unchanged logic, just typed); a new
+  `setAttributeValue()` helper centralizes the one real, documented gap this fix could not type away:
+  Yjs's own ambient `XmlElement.setAttribute` pins attribute values to `string`, but this codebase has
+  always written some attributes (a numeric heading `level`) using their real JS type and relies on
+  Yjs's runtime not enforcing that — a `value as string` assertion there is the one non-`any` cast in
+  the diff, isolated and commented rather than repeated at each of the two call sites it used to
+  appear at.
+- **`y-protocols.d.ts`** — `any` replaced with `unknown` throughout (transaction origins, awareness
+  state records, event callback args), except `Awareness.on`/`off`, which gained a real overload for
+  the one event this codebase actually listens for (`AwarenessChange { added, updated, removed }`)
+  plus a loose `unknown[]` fallback for anything else — a fully untyped variadic callback would have
+  accepted a mistyped `'update'` handler just as silently as a correct one.
+- **`collaboration/index.ts`** — two type-only edits, no control-flow change: `isTipTapDocContent`'s
+  type predicate now asserts `value is TipTapDoc` instead of an inline `{ type: 'doc'; content:
+  unknown[] }`, so its narrowed value satisfies `jsonToYjs`'s new parameter type.
+- **`collaboration/__tests__/api-content-preservation.test.ts`** — this pre-existing test file calls
+  `yjsToJson`/`loadContentFromYjsState` directly and, once they stopped returning `any`, tripped real
+  `noUncheckedIndexedAccess` errors on chained array indexing (`convertedBack.content[0].content[0].text`)
+  that `any` had been silently swallowing. Fixed with optional chaining (`?.`) and one narrowing
+  `if (!result) throw ...` for the nullable `loadContentFromYjsState` case — no assertion was
+  loosened; all 18 cases in the file still pass unchanged.
+
+**Found, not fixed (out of scope for a types-only ticket).** Writing the round-trip regression test
+below surfaced a real, pre-existing behavioral quirk: `jsonToYjs`/`jsonToYjsChildren` apply text
+marks via Yjs's native `YXmlText.format()`, but `yjsToJson`'s read side only recognizes marks
+represented as nested `Y.XmlElement` wrapper tags (e.g. `<bold>...</bold>`), which is how the actual
+browser TipTap/y-prosemirror binding represents them — not how `.format()` does. `YXmlText.toString()`
+(`node_modules/yjs/src/types/YXmlText.js:68-100`) serializes format-delta attributes back as literal
+pseudo-XML baked into the plain-text string, so round-tripping a marked text node through
+`jsonToYjs` -> `yjsToJson` produces `{ type: 'text', text: '<bold>bold</bold>' }`, not a `marks` array.
+This only fires on the one-time JSON->Yjs migration path for documents created via the API and never
+opened in the collaborative editor before their first collaboration-server load
+(`collaboration/index.ts`'s `loadDoc()`) — verified present, byte-for-byte identical, on both the
+unfixed and fixed code (see measurement below), so it predates this ticket and this fix does not
+touch it. Worth a follow-up finding; not attempted here per the ticket's explicit "types-only, no
+behavior change" scope.
+
+**Not done.** Promoting `TipTapNode`/`TipTapDoc` to `shared/` so the frontend imports the identical
+type is a natural next step but is TS-5's business (the `shared/` contract is a separate, open
+finding), not this ticket's.
+
+**Regression test — `api/src/utils/__tests__/yjsConverter.test.ts`** (new, vitest, run by the gate).
+Two independent parts, per the ticket:
+
+1. Six `expectTypeOf` assertions (`yjsToJson`/`jsonToYjs`/`loadContentFromYjsState` each `.not.toBeAny()`
+   plus `.toEqualTypeOf<...>()`) proving the exported signatures are real types. These are
+   compile-time-only — `vitest run` transpiles via esbuild and does not evaluate them, so they pass
+   silently either way at runtime; verified red **only** via `tsc --noEmit`, by temporarily restoring
+   the pre-fix `yjsConverter.ts`/`y-protocols.d.ts`/`collaboration/index.ts` (backed up first, no
+   `git stash`) and re-running `pnpm --filter @ship/api exec tsc --noEmit`. Against the unfixed code
+   it fails with real, on-point errors — `TS2349: This expression is not callable` on each
+   `.not.toBeAny()`, and `TS2344: Type 'TipTapDoc' does not satisfy the constraint 'never'` on each
+   `.toEqualTypeOf<...>()` — not an import error or a typo. Restoring the fix returns `tsc --noEmit`
+   to clean.
+2. Two runtime round-trip tests: a representative document (heading with a numeric `level` attr,
+   a paragraph with bold text and a link mark, a nested 2-item bullet list) through
+   `jsonToYjs` -> `yjsToJson`, and a second through a real binary Yjs update via
+   `loadContentFromYjsState`. Both pin the exact output observed by running the conversion directly
+   (`tsx`, no DB) against both the unfixed and fixed `yjsConverter.ts` and diffing — byte-for-byte
+   identical — proving the types change altered nothing at runtime, including the marks quirk noted
+   above.
+
+**Measurement** (`~/.claude/skills/type-safety-audit/scripts/count.sh`, the audit's own method —
+`explicit_any` pattern `:\s*any\b|<any>|\bany\[\]|Array<any>`, BSD grep, counts matching lines):
+
+| Scope | Before | After |
+|---|---|---|
+| `api/src/utils/yjsConverter.ts` | 12 | **0** |
+| `api/src/types/y-protocols.d.ts` | 7 | **0** |
+| `api/` package-wide (`explicit_any`) | 78 | **59** (-19) |
+
+The api-wide before (78) matches `audit/type-safety/baseline.json`'s tracked `perPackage.api.anyTotal`
+exactly; the -19 delta is precisely the two files' combined reduction, confirmed by isolated
+before/after counts on every other file this diff touches (`collaboration/index.ts` and
+`api-content-preservation.test.ts` are unchanged on every tracked metric — `explicit_any`,
+`as_assertions`, `as_any`, `non_null_assertions` — before vs after). The regex undercounts by its own
+documented blind spot (`Record<string, any>` doesn't match `:\s*any\b|<any>`, since `any` isn't
+preceded directly by `:`): two such sites in each of `yjsConverter.ts` and `y-protocols.d.ts` were
+fixed too and are real reductions the tracked number doesn't reflect.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec tsc --noEmit
+pnpm --filter @ship/api exec vitest run \
+  src/utils/__tests__/yjsConverter.test.ts \
+  src/collaboration/__tests__/api-content-preservation.test.ts
+```
+
+**Rollback.** `git checkout main -- api/src/utils/yjsConverter.ts api/src/types/y-protocols.d.ts
+api/src/collaboration/index.ts api/src/collaboration/__tests__/api-content-preservation.test.ts &&
+git rm api/src/types/tiptap.ts api/src/utils/__tests__/yjsConverter.test.ts` and drop this entry. No
+schema, route, or runtime-behavior change accompanies this fix, so rollback is type-signature-only.
+
+---
+
+## TRO-206 (TS-1) — `web/tsconfig.json` now extends the root config; 156 latent type errors fixed
+
+`web/tsconfig.json` re-declared `strict: true` standalone instead of extending `../tsconfig.json`,
+so it silently ran without the root's `noUncheckedIndexedAccess`, `noImplicitReturns`, and
+`noFallthroughCasesInSwitch` — the only two packages that extend the root (`api`, `shared`) had
+them; `web` did not. `research/configs/web/tsconfig.json` (a reference copy in the repo) already
+`extends: "../tsconfig.json"`, confirming this was drift, not an intentional divergence.
+
+**Ticket hypothesis vs. observed.** The audit (measured at commit `076a183`) recorded 102 errors
+under the restored flags. Reproducing the identical command
+(`cd web && ./node_modules/.bin/tsc -p tsconfig.json --noEmit --noUncheckedIndexedAccess
+--noImplicitReturns --noFallthroughCasesInSwitch`) on this branch's base — `main` had gained ~30
+merged tickets since the audit, adding new files (`lib/contrast.ts`, `lib/contrast.test.ts`,
+`pages/MyWeekPage.contrast.test.tsx` from TRO-217, plus other unrelated changes) — produced **156**
+errors, not 102: 63 TS2532, 41 TS18048, 26 TS2345, 17 TS2322, 8 TS7030, 1 TS18047, across 29 files.
+The fix direction held; the count was stale. All 156 are fixed, not just the original 102.
+
+**What changed.**
+
+- `web/tsconfig.json` — added `"extends": "../tsconfig.json"`; kept web's `target`/`lib`/`module`/
+  `moduleResolution`/`jsx`/`noEmit`/`baseUrl`/`paths` overrides (all of which differ from or add to
+  the root, e.g. `module: "ESNext"` + `moduleResolution: "bundler"` vs. the root's `NodeNext`, and
+  `lib` adding `DOM`/`DOM.Iterable`). Dropped the overrides that were byte-identical to the root
+  (`strict`, `skipLibCheck`, `esModuleInterop`, `allowSyntheticDefaultImports`,
+  `forceConsistentCasingInFileNames`, `isolatedModules`) since inheriting them is the whole point.
+- `web/tailwind.config.d.ts` — the hand-written ambient type for `tailwind.config.js` typed
+  `colors` as a bare `Record<string, string>`, so every dot-accessed token (`palette.background`,
+  `palette.muted`, ...) came back `string | undefined` under the restored flag. Gave the six tokens
+  actually dot-accessed by `contrast.ts`/`contrast.test.ts`/`MyWeekPage.contrast.test.tsx` explicit
+  (non-optional) properties, kept a `[key: string]: string` index signature so dynamic lookups
+  (`palette[name]`) stay honestly optional.
+- 28 source files fixed with genuine narrowing — destructure-then-check, explicit `undefined`
+  guards, or an `?? null`/`?? ''` fallback at the point a nullable value crosses into a non-nullable
+  slot. No `!`, `as any`, `as unknown as`, or `: any` anywhere in the diff (`node
+  scripts/factory/review-patterns.mjs` — G7b — reports clean). Densest: `CommandPalette.tsx` (13),
+  `hooks/useSelection.ts` (12), `editor/CommentDisplay.tsx` (12), `editor/AIScoringDisplay.tsx` (12),
+  `lib/cn.ts` (12).
+- `pages/ReviewsPage.tsx` — the one fix that is more than type-satisfying. Three optimistic-update
+  handlers (`approvePlan`, `requestChanges`, `rateRetro`) did
+  `updated.reviews[personId][weekNumber] = { ...updated.reviews[personId][weekNumber], patch }`.
+  Spreading `undefined` is legal JS and this type-checked before the fix, but for a person/week
+  pair with no prior review row it silently produced a `ReviewCell` missing every field except the
+  one just patched (`hasPlan`/`hasRetro`/`sprintId`/`planDocId`/`retroDocId` all `undefined` instead
+  of their contract). Extracted `emptyReviewCell`/`mergeReviewCellPatch` (both exported) so all
+  three handlers merge over a real default instead of a possibly-missing lookup.
+  **Reachability, checked rather than assumed:** every UI path that can call these three handlers
+  (`ReviewsPage.tsx:919-935`, `:1115`) is gated on `cell.hasPlan`/`cell.hasRetro` already being
+  `true`, which requires an already-fetched cell — so this specific corruption was not reachable
+  through today's UI. It is a genuine type-safety fix against a real invariant gap, not a
+  demonstrated production crash; recorded as such rather than oversold.
+
+**What did NOT change.** No product behavior. `pnpm --filter @ship/web test` is 37 files / 366
+tests green before and after (quarantine is already empty per TEST-1); the fixes are narrowing,
+not behavior changes, with the one exception above, which changes nothing observable given the
+current gating.
+
+**How to run it.**
+
+```bash
+source .factory-env
+# Reproduce the flag-restoration count (should be 0 now that tsconfig extends root):
+cd web && ./node_modules/.bin/tsc -p tsconfig.json --noEmit \
+  --noUncheckedIndexedAccess --noImplicitReturns --noFallthroughCasesInSwitch
+# Or just the normal check, since the flags are now inherited permanently:
+pnpm --filter @ship/web type-check
+# Regression test for the ReviewsPage fix:
+pnpm --filter @ship/web exec vitest run src/pages/ReviewsPage.reviewCellMerge.test.ts
+```
+
+**Rollback.** Revert the commits on `fix/ts-1-web-tsconfig`. Reverting just
+`web/tsconfig.json`'s `extends` line restores the pre-fix (silently non-strict) behavior without
+touching the 29 narrowed files, which remain correct either way since the narrowing is a strict
+superset of the original logic. `emptyReviewCell`/`mergeReviewCellPatch` can be reverted
+independently by inlining the old spread in the three `ReviewsPage.tsx` handlers, which restores
+the (unreached, per above) invariant gap.
+
+---
+
+## TRO-286 (TEST-14) — no e2e test can pass without executing an assertion any more
+
+TEST-2 (TRO-224) fixed the 8 vacuous tests that gave false *security* assurance and deliberately
+stopped, reporting the boundary. This finishes the job and clears two adjacent defects it surfaced.
+
+**Part 1 — the remaining conditional-only tests: 62 → 0.**
+
+Measured with the repo's own detector, `audit/test-quality/runs/vacuous.mjs`, which finds tests
+whose every `expect()` sits inside a conditional branch — i.e. tests that pass with zero assertions
+executed. On `main` (`c4e92c2`) it reports `testsWithOnlyConditionalExpects: 62`. On this branch it
+reports **0**, across the same 870 scanned test blocks.
+
+Every `if (await x.isVisible()) { …expects… }` became an assertion carrying an actionable message,
+per the pattern already in `bulk-selection.spec.ts:793`. Converted tests also record *why* the
+precondition holds, so the next reader does not re-derive it — seed data creates sprints from
+`currentSprintNumber-2` through `+2` (`e2e/fixtures/isolated-env.ts`), so completed sprints always
+exist; `cleanupExtraSprints` in `beforeEach` guarantees an empty future week window.
+
+By file: `program-mode-week-ux.spec.ts` (33), `accessibility-remediation.spec.ts` (6),
+`context-menus.spec.ts` (6), `features-real.spec.ts` (5), `performance.spec.ts` (2),
+`admin-workspace-members.spec.ts` (2), `ai-analysis-api.spec.ts` (1), plus 7 more not named in the
+ticket's table that the detector caught.
+
+Two of these were more than a mechanical conversion. `admin-workspace-members.spec.ts` needed the
+fixture work the ticket flagged as risky — `isolated-env.ts` now seeds a second workspace and an
+unattached user — and the workspace-switcher and admin-dashboard specs were checked for fallout.
+`features-real.spec.ts` turned out to be hiding a **real file-chooser race** behind its guard, which
+is exactly the failure mode a silently-passing test conceals.
+
+**Part 2 — a user was being told the wrong rate limit.** `api/src/services/ai-analysis.ts` enforces
+`RATE_LIMIT = 120`/hour while `api/src/routes/ai.ts` told the user "Max 10 analysis requests per
+hour" — off by 12×. Rather than pick a number, the message is now derived from the constant
+(`RATE_LIMIT_MESSAGE`), so the two cannot drift apart again, and `api/src/routes/ai.test.ts` (new)
+asserts the 429 body reports the enforced limit.
+
+The e2e test that provoked this is marked `test.fixme()` **with a written reason** rather than left
+lying. Asserting the real limit needs either 121 requests — 120 of which attempt Bedrock, blowing
+the 60s timeout — or an injectable limit, which is a production seam added solely to enable a test.
+That is a maintainer's call, not the factory's, and is left open deliberately.
+
+**Part 3 — `.husky/pre-commit` is now `100755` in the index**, where it was `100644`. It *did* still
+run, because `core.hooksPath` is `.husky/_` and husky v9's wrapper **sources** the hook rather than
+exec'ing it — but that made the mode a latent trap: if the wrapper ever exec'd instead, every
+pre-commit check would stop running silently, including the compliance scan.
+
+The ticket carried an unreproduced report that hooks do not fire in a linked worktree. **That is
+now disproved**: committing from `Ship-wt-tro_286` (a linked worktree) fired `check-empty-tests.sh`
+and `check-api-coverage.sh` and printed their output, as did every commit from the main checkout
+throughout the run. Hooks fire in both.
+
+Unrelated but worth stating plainly: `comply` is not installed in this environment, so the secrets
+scan warns and passes. **A successful commit is not evidence that scan ran.**
+
+**Part 4 — CodeRabbit review triage on PR #40.** 22 line comments, all real defects in code this PR
+touched, none out of scope — every finding was either fixed here or dismissed with a written reason
+in the ledger (`audit/factory/review-findings.jsonl`), never silently dropped.
+
+Six were Majors that reintroduced the exact defect class this ticket exists to fix: two fixed
+`waitForTimeout` sleeps standing in for synchronization (`admin-workspace-members.spec.ts`,
+`program-mode-week-ux.spec.ts`, plus siblings in `issue-display-id.spec.ts` and
+`status-colors-accessibility.spec.ts`), the swallowed-failure pattern
+`isVisible().catch(() => false)` in an availability-indicator check, a `dashCount === rowCount`
+comparison that could pass while filtering nothing correctly (`td` filtered by `—` also matches
+assignee/estimate/due-date cells), a near-tautological "highlight" check that matched every card in
+the timeline regardless of active state, and non-deterministic fixture restoration in the carol/Test
+Space cleanup (`isVisible().catch(() => false)` could silently skip removing her, leaving the next
+test in the worker to find her already attached).
+
+Fixing finding 18 (point-in-time `rows.count()` preconditions) surfaced three tests in
+`program-mode-week-ux.spec.ts` — "issue row has quick menu (⋮) button" and its two siblings — that
+assert a per-row hover-revealed actions button. Traced the full render path
+(`IssuesList.tsx` → `IssueRowContent` → `SelectableList.tsx`): no such button exists in list view,
+only a right-click context menu and the bulk "Move to Week" toolbar action already covered
+elsewhere. TRO-286 Part 1 had already tightened these from "passes whether the feature exists or
+not" to a real assertion, which would now fail hard, not vacuously — same shape as the
+team-directory quick-menu gap already `test.fixme()`'d in `context-menus.spec.ts`. Marked
+`test.fixme()` with the same reasoning rather than left to fail.
+
+One finding was dismissed rather than fixed: WCAG 3.3.3 recovery guidance on the login-error test.
+The message is exactly `"Invalid email or password"` (`api/src/routes/auth.ts`), a deliberate
+security choice, and `Login.tsx` has no recovery link at all — tightening the assertion would only
+ever fail without a UI change, which is a product accessibility gap, not a test bug. Filed as a
+follow-up rather than fixed here.
+
+One derived claim was checked and found not to transfer: CodeRabbit's suggested fix for the fixed
+sleeps in `program-mode-week-ux.spec.ts` was `page.waitForResponse(...)` on `/api/issues`. Traced
+`IssuesList.tsx:569-570` — the sprint filter dropdown filters already-fetched issues client-side; no
+new request fires when it changes. Used a retrying DOM assertion instead, which is what the
+mechanism actually calls for.
+
+**How to run it.**
+
+```bash
+node audit/test-quality/runs/vacuous.mjs        # expect testsWithOnlyConditionalExpects: 0
+git ls-files -s .husky/pre-commit               # expect mode 100755
+pnpm --filter @ship/api test src/routes/ai.test.ts
+```
+
+The Playwright specs themselves need a live app — use `/e2e-test-runner`, never `pnpm test:e2e`
+directly, which produces enough output to crash the session.
+
+**Roll back.** `git revert` this merge commit. The conditional guards return (and with them the 62
+silently-passing tests), the 429 message goes back to quoting 10/hour against 120/hour enforcement,
+and `.husky/pre-commit` reverts to mode `100644`. No schema, API surface, or product behaviour is
+touched by any of it — the only production change is the text of one error message.
+
+---
+
+## TRO-246 (rule 5) — CI builds the image once and pushes it by SHA; Render still rebuilds it a second time (switch prepared, not executed)
+
+TRO-242 made the root `Dockerfile` buildable from a clean checkout (multi-stage: builds
+`shared`→`api`→`web` inside the image, instead of requiring pre-built `dist/` in the build context).
+That closed the "build on a laptop" problem but not the "build once" one: CI verified the source, and
+then Render separately built the *same* Dockerfile itself, on its own infrastructure, at its own
+time — two independent builds of the same commit, never proven to be the same artifact.
+
+**What changed.**
+
+- `.github/workflows/ci.yml` gains a `build-image` job that builds the root `Dockerfile` with
+  `docker/build-push-action` and pushes to `ghcr.io/troysatchell/ship`, authenticated with the
+  workflow's own `GITHUB_TOKEN` (job-scoped `permissions: packages: write`). `needs: verify`, so it
+  never runs on code that failed typecheck/build/the test-regression check.
+  - Tags: the full git SHA (immutable — the identity a rollback promotes/demotes by) and a moving
+    `main` tag.
+  - Pushes only on an actual push to `main` (`SHOULD_PUSH` gate). Every pull request still **builds**
+    (unauthenticated, no push) — this proves the Dockerfile stays buildable from whatever the PR
+    changed, without ever needing registry credentials (which a fork PR's `GITHUB_TOKEN` doesn't have
+    write scope for anyway).
+  - Third-party actions (`docker/setup-buildx-action`, `docker/login-action`,
+    `docker/build-push-action`) are pinned to full commit SHAs, matching this file's existing
+    convention for non-`actions/*` steps.
+- `docs/deployment-artifact-lifecycle.md` (new): what's built, where it's stored, the tagging
+  scheme, and — the actual "promote" and "roll back to a previous SHA" procedures — plus a
+  ready-to-run Render switch runbook.
+- `docs/application-architecture.md`: one-line pointer from the (stale, AWS-only) Deployment section
+  to the new doc and to `memory-bank/techContext.md`'s Render facts, so the two don't silently
+  diverge further. The AWS-only diagram/infra list itself is untouched — out of scope here.
+
+**What did NOT change — the Render switch itself is prepared, not executed.** Changing the live
+`ship` service (`srv-d9kf2t942hec73aofrt0`, currently `runtime: docker` building the Dockerfile on
+Render's own infrastructure) from a repo-build to an image-deploy is an outward-facing, largely
+irreversible action against the graded submission URL (`https://ship-rr6m.onrender.com`) —
+escalation gate 2. No Render API call was made, no credential was read or moved, and the repo-root
+`.env` was not touched. `docs/deployment-artifact-lifecycle.md`'s runbook is the exact procedure for
+whoever runs it, including the parts that could not be independently verified from here (Render's
+`image` field on the Update Service API is documented to exist but its full sub-schema was not
+reachable this session — flagged explicitly, with a documented dashboard fallback that needs no
+schema guessing).
+
+**Regression test: honestly, none applies.** This ticket's deliverable is a CI workflow change plus
+documentation — there is no application code path for a vitest regression test to exercise, and
+`scripts/factory/gate.sh`'s regression-test check (G6, which counts added `it(`/`test(` cases in
+`*.test.ts`/`*.test.tsx`/`*.spec.ts`) is expected to fail honestly rather than be satisfied by a
+manufactured, vacuous test. YAML validity of the workflow file was checked instead — see PR body for
+the exact method (the repo's own `js-yaml` dependency, since `actionlint` is not installed here).
+
+**How to run it.**
+
+```bash
+# Local build proof — same Dockerfile path CI runs, from a clean tree:
+docker build -t ship:tro-246-local -f Dockerfile .
+docker images ship:tro-246-local   # 482 MB, observed this session
+
+# YAML-validate the workflow (repo's own transitive js-yaml dep, no actionlint installed):
+node -e "require('./node_modules/.pnpm/js-yaml@4.1.1/node_modules/js-yaml') \
+  .load(require('fs').readFileSync('.github/workflows/ci.yml','utf8')); console.log('ok')"
+
+# The real test of the CI behavior itself is derived, not run here — the first push to `main`
+# after this merges is the live test of build-image actually pushing to GHCR.
+```
+
+**How to roll it back.**
+
+- CI job: revert the `build-image` addition to `.github/workflows/ci.yml`; `verify`/`inventory` are
+  untouched and keep running exactly as before.
+- Docs: delete `docs/deployment-artifact-lifecycle.md` and revert the one-line pointer in
+  `docs/application-architecture.md`.
+- Nothing to roll back on Render — the switch was never executed.
+
+---
+
+## TRO-216 — [A11Y-2] `aria-expanded` on a plain `<div>` in the editor wrapper
+
+**What was broken.** axe reported a Critical `aria-allowed-attr` violation on `.tiptap-wrapper >
+div`: `<div style="position: relative;" aria-expanded="false">` — a plain `<div>` with no role,
+carrying an ARIA attribute that role does not support. It only appeared in the "editor focused"
+state, which is why the repo's own axe specs (which scan static viewports) never caught it.
+
+**The mechanism — found, not guessed.** `.tiptap-wrapper > div` is the `<div>` `@tiptap/react`'s
+`<EditorContent>` renders to host the ProseMirror view; once mounted it is also
+`editor.options.element`. The comment `<BubbleMenu>` in `Editor.tsx` (~line 1008) is implemented by
+`@tiptap/extension-bubble-menu`'s `BubbleMenuPlugin`, whose `BubbleMenuView.createTooltip()`
+(2.27.2, `dist/index.js:122-136`) calls `tippy(editorElement, { interactive: true, ... })` the
+first time the selection or doc changes after mount — i.e. `editorElement` **is**
+`editor.options.element`, the same div. tippy's default `aria: { expanded: 'auto' }` combined with
+`interactive: true` makes it call `referenceEl.setAttribute('aria-expanded', ...)` on that div
+unconditionally (`tippy.js`'s `handleAriaExpandedAttribute`, `dist/tippy.cjs.js:801-813`), whether
+or not the bubble menu is ever shown. The `position: relative;` inline style on the same node is a
+second, independent library write to the identical element — `DragHandleExtension`
+(`web/src/components/editor/DragHandle.tsx:206`) sets it on `view.dom.parentElement`, which is the
+same wrapper — confirming both clues in the axe `html` string point at one node for two unrelated
+reasons.
+
+The div itself does not expand or collapse anything; it is only tippy's positioning anchor for the
+floating "Comment" button. This is subtraction, not a role fix — there was never a widget here.
+
+**What changed.** `web/src/components/Editor.tsx`: the comment `<BubbleMenu>`'s `tippyOptions` is
+now a named export, `commentBubbleMenuTippyOptions`, with `aria: { expanded: false }` added. That
+tells tippy never to manage `aria-expanded` on its reference element for this instance. No
+behavioural change: the bubble menu still shows and hides identically on selection; only the
+ARIA bookkeeping attribute on the unrelated wrapper div is suppressed. The element does not become
+focusable and no keyboard behaviour changes, so this does not require the escalation path for a
+user-perceivable interaction change.
+
+**Evidence.** Both ends measured on this branch, same conditions: `http://localhost:5906`
+(worktree ports), Chrome for Testing (Playwright 1217 build) headless, 1440×900, axe-core 4.11
+(`@axe-core/playwright`), authenticated as `dev@ship.local` via a fresh `session_id`, wiki document
+`7b254b07-e251-46bc-8e14-d4e10b76dd2b` ("Welcome to Ship"), editor focused by clicking into
+`.ProseMirror`. Each measurement restarted the Vite dev server first and the served module content
+was diffed directly (`curl .../src/components/Editor.tsx`) to confirm which code path was live
+before scanning — Vite's dev transform cache does not always invalidate on save alone.
+
+| Measurement — "document editor focused" | Before | After |
+|---|---|---|
+| axe `aria-allowed-attr` | **Critical, 1 node** (`.tiptap-wrapper > div`) | **absent** |
+| axe all severities | **C1** S0 M0 m0 | **C0** S0 M0 m0 |
+
+**Regression test.** `web/src/components/Editor.bubbleMenuAria.test.tsx` imports the real
+`commentBubbleMenuTippyOptions` from `Editor.tsx` (not a copy) and calls the same `tippy(...)`
+invocation `BubbleMenuView.createTooltip()` makes, against a stand-in `.tiptap-wrapper > div`,
+asserting no element carries `aria-expanded`. It does not mount the real `<BubbleMenu>` +
+`<EditorContent>` + a driven selection change: `@tiptap/extension-bubble-menu` is only a transitive
+dependency of `web` (not resolvable directly from a test file), and its prebuilt ESM bundle's own
+`import tippy from 'tippy.js'` does not interop cleanly through vitest's module runner reached via
+that path — confirmed by direct experiment (`tippy` resolves to the whole CJS exports object, not
+the callable, only through that nested import chain; a direct `import tippy from 'tippy.js'`
+in a test file resolves correctly). That is a pre-existing environment limitation of this
+dependency chain, not a defect under test — the same class `LazyEditor.test.tsx` already documents
+("mounting real TipTap + Yjs in jsdom proves ... a great deal about jsdom").
+
+Confirmed red first, for the right reason: with the unfixed (no `aria` key) options object, the
+test failed with `AssertionError: Expected the element not to have attribute: aria-expanded /
+Received: aria-expanded="false"` — not an import error or a locator failure.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test src/components/Editor.bubbleMenuAria.test.tsx
+pnpm --filter @ship/web exec tsc --noEmit
+```
+
+To re-measure against a browser: start the worktree's API and Vite (`.factory-env` ports), log in
+for a fresh `session_id`, open a wiki document, click into `.ProseMirror` to focus the editor, then
+run an axe scan and check `aria-allowed-attr` is absent.
+
+**Roll back.** Remove `aria: { expanded: false }` from `commentBubbleMenuTippyOptions` in
+`Editor.tsx` (or `git revert` the commit on `fix/a11y-2-editor-aria`). The regression test fails
+immediately if it comes back.
+
+**Not established.** What a screen reader announces about the comment bubble menu — this fix only
+removes an invalid ARIA attribute axe can detect; no human ran VoiceOver against it. The repo's
+three Playwright a11y specs were not re-run here (not executed by the factory gate; they also only
+assert `impact === 'critical'`, which this finding already was, so they would have caught it had
+they scanned the focused-editor state — they scan static viewports only).
+
+---
+
 ## TRO-190 (ERR-3) + TRO-191 (ERR-4) — the sync indicator stops claiming "Saved" over a write it never confirmed
 
 Both findings are the same lie from two different causes. ERR-3 is a rejected title/property write

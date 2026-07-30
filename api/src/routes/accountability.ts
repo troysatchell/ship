@@ -6,7 +6,7 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { checkMissingAccountability } from '../services/accountability.js';
 
 const router = Router();
@@ -26,10 +26,10 @@ const router = Router();
  * - due_date: when the item is due (if applicable)
  * - days_overdue: positive if past due, 0 if due today, negative if upcoming
  */
-router.get('/action-items', authMiddleware, async (req: Request, res: Response) => {
+router.get('/action-items', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get all missing accountability items via inference
     const missingItems = await checkMissingAccountability(userId, workspaceId);
@@ -100,6 +100,6 @@ router.get('/action-items', authMiddleware, async (req: Request, res: Response) 
     console.error('Get accountability action items error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 export default router;

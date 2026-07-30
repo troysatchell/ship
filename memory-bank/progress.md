@@ -36,6 +36,113 @@
 
 ## Log
 
+### 2026-07-30 (Thu) night — deliverable push: 13 more PRs merged (25 tickets today), Cat 7 banked, measurement pass running
+
+**Merged after the evening entry:** #45 #46 #48 #49 #50 #51 #52 #53 #54 #55 #56 #58 #59 — TS-1/2/3/4,
+TS-6, DB-6/7/8/10, ERR-6+TEST-5, ERR-13/14, A11Y-4/5/6/7/8, BUN-7/8, RULE-6, RULE-7. Method: the
+documented local `--no-ff` sequence + merge-changes/jsonl-union + combined verify per batch + single
+push. Two integration repairs caught by the combined verify, both from strict-flags-vs-parallel-
+authorship: radixVersionDedupe.test captures (fixed on main) and nothing else.
+
+**Category 7 banked** (compare-phase2-jul30, merged to main): all 8 baseline findings resolved,
+C/S = 0 on the three key pages across all states, my-week Lighthouse 95→100. New Serious on
+/weeks+/search is TRO-298 (DashboardSidebar contrast, newly reachable via the A11Y-5 wildcard-route
+fix — `getActiveMode()` fallback mounts DashboardSidebar there).
+
+**Category 1's metric corrected (TS-4 agent):** `count.sh`'s non-null pattern has a BSD-grep bracket
+bug — the 236 `req.userId!` sites were never in the tracked count, and live totals grew with the
+codebase (1747 now vs 1535 baseline). Category progress is provable ONLY as controlled per-ticket
+diffs: ~130+45+19+233 ≈ 427 sites retired ≥ 384 target. Corrected api non-null: 286 → 53.
+
+**Infra fights:** GitHub dropped pull_request webhook events 19:33–19:43 (no Actions runs created;
+status page clean) — close/reopen did NOT re-trigger; empty commits didn't either; workflow_dispatch
+DID and became the session's CI path. CodeRabbit was rate-limited org-wide all evening — merged the
+green queue on the documented degraded-service judgment; deferred triage sweep owed when reviews
+land. session-activity-race flaked CI 4× today post-TEST-15-fix → TRO-300 (High).
+
+**New tickets today:** TRO-291..301 (login recovery guidance, tfplan hygiene, quick-menu fixmes,
+ALB doc URL, SG quota High, marks round-trip, floating promises 398, DashboardSidebar contrast,
+Render TF config→PR #57, TEST-16 flake, doc-read retry). Session end state: backlog no longer has
+Urgent/High audit items unstarted except human-held TF work.
+
+### 2026-07-30 (Thu) evening — TRO-299 (TF-10): Render-provider Terraform config, PR opened (gate-2 hold)
+
+`terraform/render/` (new): `render-oss/render` 1.9.1 pinned, `render_web_service.ship` (docker,
+oregon, free, `/health`) + `render_postgres.ship` (pg16, oregon, free). `DATABASE_URL` derived from
+`render_postgres.ship.connection_info.internal_connection_string` (resource reference, never a
+literal); `render_api_key`/`session_secret` are `sensitive = true` variables. Verified live against
+the Render API (not re-derived from the memory bank): service/db id/region/runtime/plan/URL,
+health check path (now actually set to `/health` — newer than techContext's older "unset" note),
+repo/branch, owner id, the three env var names. One fact only partially confirmed: Postgres
+`ipAllowList` reads `null` via the API, not `[]` — functionally equivalent per the provider docs,
+not byte-identical.
+
+**Real `terraform plan` run against the live account** (temp Terraform 1.9.8, `RENDER_API_KEY`
+from the gitignored repo-root `.env`, never printed): `validate` clean (no warnings, unlike the AWS
+root's TF-5), `fmt -check` clean after one pass, plan = `2 to add, 0 to change, 0 to destroy` —
+expected, since nothing was imported (no `apply`/`import` ran, per hard safety rules). Captured,
+annotated, and redaction-checked at `terraform/render/plan/plan-annotated.md`. Notable pitfall
+found and avoided: `terraform show -json` embeds the *real* sensitive value in plain text (only a
+parallel boolean map marks it sensitive) — unlike the human-readable plan renderer, which prints
+`(sensitive value)`. The committed capture was built from the redacted text renderer; the JSON
+capture (which briefly existed in the session scratchpad, containing the real generated
+`session_secret`) was shredded, never touched the repo.
+
+**Correction to `memory-bank/techContext.md`:** its claim that a new `terraform/render/terraform.tfvars`
+"would not be ignored" was checked and found false — a pre-existing, unrelated nested
+`terraform/.gitignore` (present since `2c1c633`, untouched by this ticket) already covers it via an
+unanchored `*.tfvars` pattern. Verified by testing `git check-ignore` against the pre-TRO-299
+gitignore files directly (copied aside, not stashed). The one real gap was `*.tfplan`/`tfplan`,
+closed in the root `.gitignore`. techContext.md corrected in place with the verified fact.
+
+Adoption memo (import vs. clean-machine apply) written in `terraform/render/README.md` and the PR
+body; recommends import, since apply creates a second live parallel service/db needing a manual
+CORS/DNS/data-migration follow-up. Confirmed `audit/terraform/drift-demo/` already satisfies the
+local-provider deliverable (2 pinned `local_file` resources) — no changes needed, just referenced.
+Gate: `typecheck`/`build`/`tests:api`/`tests:web`/`tests:not-weakened`/`changes-md`/`review-patterns`
+pass; `regression-test` fails honestly (Terraform-only diff, no vitest case — same as PR #41's
+precedent); `coderabbit` found 2 (both about the same gitignore/CHANGES.md wording mismatch above,
+fixed by making the actual `.gitignore` rule match the accurate wording rather than the reverse).
+PR opened with **"HOLD FOR HUMAN: apply/import decision (gate 2)"** — not merged.
+
+### 2026-07-30 (Thu) evening — factory resumed: recovery, 3 merges, 8 agents in flight
+
+**Recovery first, per `/ship-orchestrator` §4:** reconciled disk/branches/Linear. Found `main` had
+already advanced past this file's previous entry (PRs #34 TEST-15, #38 ERR-3/4, #39 tooling were
+merged); 19 worktrees were stale leftovers of Done tickets — removed, databases dropped. TEST-15's
+worktree branch had zero unique commits (its work merged via PR #34); verified before deleting.
+
+**Merged this session (local `--no-ff` sequence, combined verify, single push; main
+`3bc90ed` → `9a15f43`, all remotes identical):**
+- **#40** TEST-14/TRO-286 — the 22-finding CodeRabbit round fixed first (ledger 82→104); api
+  604/604, web 363/363 at gate.
+- **#42** RULE-5/TRO-246 — CI builds the image once → GHCR tagged by SHA; Render switch is a held
+  runbook. Gate honestly failed only `regression-test`; orchestrator judged it inapplicable
+  (CI+docs deliverable) and recorded the judgment rather than gaming a test.
+- **#43** A11Y-2/TRO-216 — root cause was tippy.js `aria: {expanded: 'auto'}` on the BubbleMenu
+  anchor, not app markup; live axe editor-focused C1→C0.
+
+**Combined verify note:** api suite failed once inside the full run under 8-agent load and passed
+46/46 on re-run; first capture truncated the identity (orchestrator script bug — `tail -8`), so it
+is recorded as load-transient with identity unknown, plainly.
+
+**Held for human:** PR #41 (TF-2 — ticket premise partially wrong: only `environments/prod` was a
+true duplicate; dev/shadow kept; live IAM `PutSecretValue` gap ported), PR #47 (TF-7 — `trust
+proxy 1` meant `req.ip` was CloudFront's edge IP for ALL traffic; SG prefix-list lock + hop-count
+2 must land together; TRO-295 quota check before apply).
+
+**Open PRs in fix rounds:** #45 (TS-3; converter any 12→0, api explicit-any 78→59; recursive-guard
+finding) and #46 (TS-1; 156 latent errors fixed — the audit's 102 had drifted; ReviewsPage
+invariant gap found+tested).
+
+**New tickets:** TRO-291 (login recovery guidance), TRO-292 (committed tfplan, strings-scan
+clean), TRO-293 (fixme'd quick-menu tests), TRO-294 (doc ALB health-check URL), TRO-295 (SG
+prefix-list quota, High), TRO-296 (converter marks round-trip asymmetry).
+
+**Process:** all ticket agents on Sonnet per standing decision; wave sizing kept to ~8 with gates
+staggered; wave-1 briefs omitted the ledger-recording instruction (orchestrator recorded 15 rows
+after the fact — instruction now included in later briefs).
+
 ### 2026-07-30 (Thu) — Phase 2, wave 3: 16 PRs merged, main at `319e1af`
 
 **`main` went `4d74602` → `319e1af`, verified via `git log --oneline --merges`. 16 PRs merged, both

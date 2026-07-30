@@ -2,64 +2,90 @@
 # Dev server wrapper that finds available ports for multi-worktree development
 #
 # Strategy:
-# 1. Scan actual port usage (not files) to find what's in use
-# 2. Pick first available port pair (API: 3000+, Web: 5173+)
-# 3. Write .ports file for reference (which worktree is where)
-# 4. Start dev servers with those ports
+# 1. Ensure deps/shared are built, the database exists, is migrated (verified,
+#    not just trusted) and seeded — idempotent, so this runs on EVERY start,
+#    not only the first one (TRO-247 / RULE-6: a one-command start has to be
+#    self-healing, not "correct once").
+# 2. Scan actual port usage (not files) to find what's in use
+# 3. Pick first available port pair (API: 3000+, Web: 5173+)
+# 4. Write .ports file for reference (which worktree is where)
+# 5. Start dev servers with those ports
+#
+# DATABASE_URL resolution (supports both a native Postgres install and a
+# Docker one — see README "Cold start" for why both exist):
+#   1. An explicit `DATABASE_URL` in the environment always wins.
+#   2. Otherwise, an existing `api/.env.local` keeps its own value (so a plain
+#      re-run never silently switches databases underneath a configured
+#      worktree).
+#   3. Otherwise, default exactly as before: postgresql://localhost/$DB_NAME,
+#      where DB_NAME defaults to a name derived from this directory, or the
+#      `DB_NAME` env var if set.
+# Postgres itself does not have to be local: `ensureDatabase.ts` connects over
+# plain TCP, which is all a Docker Postgres with its port published to the
+# host (e.g. `docker-compose.local.yml`, :5433) needs — no `psql`/`createdb`
+# dependency either way.
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 
-# Ensure api/.env.local exists
-if [ ! -f "$ROOT_DIR/api/.env.local" ]; then
-  # Derive database name from worktree/directory name
+# --- 1. dependencies ---------------------------------------------------------
+if [ ! -d "$ROOT_DIR/node_modules" ]; then
+  echo "Installing dependencies..."
+  (cd "$ROOT_DIR" && pnpm install)
+fi
+if [ ! -d "$ROOT_DIR/shared/dist" ]; then
+  echo "Building shared package..."
+  (cd "$ROOT_DIR" && pnpm build:shared)
+fi
+
+# --- 2. resolve DATABASE_URL --------------------------------------------------
+EXISTING_DB_URL=""
+if [ -f "$ROOT_DIR/api/.env.local" ]; then
+  EXISTING_DB_URL="$(grep '^DATABASE_URL=' "$ROOT_DIR/api/.env.local" | head -1 | cut -d= -f2-)"
+fi
+
+if [ -n "${DATABASE_URL:-}" ]; then
+  RESOLVED_DATABASE_URL="$DATABASE_URL"
+elif [ -n "$EXISTING_DB_URL" ]; then
+  RESOLVED_DATABASE_URL="$EXISTING_DB_URL"
+else
   WORKTREE_NAME=$(basename "$ROOT_DIR")
   # Convert to valid postgres db name (lowercase, replace non-alphanumeric with _)
-  DB_NAME="ship_$(echo "$WORKTREE_NAME" | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]' '_' | sed 's/_*$//')"
+  DEFAULT_DB_NAME="ship_$(echo "$WORKTREE_NAME" | tr '[:upper:]' '[:lower:]' | tr -c '[:alnum:]' '_' | sed 's/_*$//')"
+  RESOLVED_DATABASE_URL="postgresql://localhost/${DB_NAME:-$DEFAULT_DB_NAME}"
+fi
 
-  echo "Creating api/.env.local with DATABASE_URL for $DB_NAME..."
-
-  # Check if database exists, create if not
-  NEEDS_SEED=false
-  if ! psql -lqt | cut -d \| -f 1 | grep -qw "$DB_NAME"; then
-    echo "Creating database $DB_NAME..."
-    createdb "$DB_NAME" 2>/dev/null || {
-      echo "ERROR: Could not create database $DB_NAME"
-      echo "Please create it manually: createdb $DB_NAME"
-      exit 1
-    }
-    NEEDS_SEED=true
-  fi
-
+# Ensure api/.env.local exists (only when missing — never overwrite a
+# worktree's existing configuration).
+if [ ! -f "$ROOT_DIR/api/.env.local" ]; then
+  echo "Creating api/.env.local..."
   cat > "$ROOT_DIR/api/.env.local" << EOF
-DATABASE_URL=postgresql://localhost/$DB_NAME
+DATABASE_URL=$RESOLVED_DATABASE_URL
 SESSION_SECRET=dev-secret-change-in-production
 EOF
-  echo "Created api/.env.local"
-
-  # Setup fresh database (schema + seed)
-  if [ "$NEEDS_SEED" = true ]; then
-    echo "Setting up fresh database..."
-    cd "$ROOT_DIR"
-
-    # Ensure dependencies are installed
-    if [ ! -d "node_modules" ]; then
-      echo "Installing dependencies..."
-      pnpm install
-    fi
-
-    pnpm build:shared
-
-    # Run migrations (applies schema.sql + all migrations), then seed
-    cd "$ROOT_DIR/api"
-    DATABASE_URL="postgresql://localhost/$DB_NAME" npx tsx src/db/migrate.ts
-    DATABASE_URL="postgresql://localhost/$DB_NAME" npx tsx src/db/seed.ts
-    cd "$ROOT_DIR"
-    echo "Database setup complete!"
-  fi
 fi
+
+# --- 3. database: exists, migrated (verified), seeded ------------------------
+# All four steps are idempotent (ensureDatabase/migrate/seed no-op when
+# already done; verifyMigrations is read-only) and run every invocation, so a
+# re-run heals a partially-set-up environment instead of assuming yesterday's
+# state is still true. `set -e` means any failure here — including
+# `ensureDatabase.ts`'s actionable "Postgres unreachable" message, or
+# `verifyMigrations.ts` catching a DB-1-shaped gap — stops the script instead
+# of starting servers against a database that is not actually ready.
+echo "Ensuring database exists..."
+(cd "$ROOT_DIR/api" && DATABASE_URL="$RESOLVED_DATABASE_URL" npx tsx src/db/ensureDatabase.ts)
+
+echo "Running migrations..."
+(cd "$ROOT_DIR/api" && DATABASE_URL="$RESOLVED_DATABASE_URL" npx tsx src/db/migrate.ts)
+
+echo "Verifying migrations..."
+(cd "$ROOT_DIR/api" && DATABASE_URL="$RESOLVED_DATABASE_URL" npx tsx src/db/verifyMigrations.ts)
+
+echo "Seeding database..."
+(cd "$ROOT_DIR/api" && DATABASE_URL="$RESOLVED_DATABASE_URL" npx tsx src/db/seed.ts)
 
 # Base ports
 API_BASE=3000

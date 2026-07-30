@@ -7,8 +7,10 @@
  */
 
 import { Router, Request, Response } from 'express';
-import { authMiddleware } from '../middleware/auth.js';
-import { analyzePlan, analyzeRetro, isAiAvailable, checkRateLimit } from '../services/ai-analysis.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
+import { analyzePlan, analyzeRetro, isAiAvailable, checkRateLimit, RATE_LIMIT } from '../services/ai-analysis.js';
+
+const RATE_LIMIT_MESSAGE = `Rate limit exceeded. Max ${RATE_LIMIT} analysis requests per hour.`;
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -19,9 +21,9 @@ router.get('/status', authMiddleware, (_req: Request, res: Response) => {
 });
 
 // POST /api/ai/analyze-plan - Analyze weekly plan quality
-router.post('/analyze-plan', authMiddleware, async (req: Request, res: Response) => {
+router.post('/analyze-plan', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
+    const userId = req.userId;
     const { content } = req.body;
 
     if (!content) {
@@ -31,7 +33,7 @@ router.post('/analyze-plan', authMiddleware, async (req: Request, res: Response)
 
     // Rate limit check
     if (!checkRateLimit(userId)) {
-      res.status(429).json({ error: 'Rate limit exceeded. Max 10 analysis requests per hour.' });
+      res.status(429).json({ error: RATE_LIMIT_MESSAGE });
       return;
     }
 
@@ -41,12 +43,12 @@ router.post('/analyze-plan', authMiddleware, async (req: Request, res: Response)
     console.error('Analyze plan error:', err);
     res.json({ error: 'ai_unavailable' });
   }
-});
+}));
 
 // POST /api/ai/analyze-retro - Analyze weekly retro quality
-router.post('/analyze-retro', authMiddleware, async (req: Request, res: Response) => {
+router.post('/analyze-retro', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
+    const userId = req.userId;
     const { retro_content, plan_content } = req.body;
 
     if (!retro_content) {
@@ -61,7 +63,7 @@ router.post('/analyze-retro', authMiddleware, async (req: Request, res: Response
 
     // Rate limit check
     if (!checkRateLimit(userId)) {
-      res.status(429).json({ error: 'Rate limit exceeded. Max 10 analysis requests per hour.' });
+      res.status(429).json({ error: RATE_LIMIT_MESSAGE });
       return;
     }
 
@@ -71,6 +73,6 @@ router.post('/analyze-retro', authMiddleware, async (req: Request, res: Response
     console.error('Analyze retro error:', err);
     res.json({ error: 'ai_unavailable' });
   }
-});
+}));
 
 export default router;

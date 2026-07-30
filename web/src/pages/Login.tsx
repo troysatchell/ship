@@ -179,7 +179,7 @@ export function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
-      <div className="w-full max-w-[360px]">
+      <main className="w-full max-w-[360px]">
         {/* Logo / Brand */}
         <div className="mb-8 text-center">
           <img
@@ -366,7 +366,7 @@ export function LoginPage() {
             </div>
           </div>
         )}
-      </div>
+      </main>
     </div>
   );
 }

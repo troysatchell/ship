@@ -8,7 +8,21 @@ declare const config: {
   content: string[];
   theme: {
     extend: {
-      colors: Record<string, string>;
+      // Named so the known tokens resolve as plain `string` (not
+      // `string | undefined`) under `noUncheckedIndexedAccess` — this file
+      // both dot-accesses specific tokens (`palette.background`) and looks
+      // arbitrary ones up dynamically (`palette[name]`), and the index
+      // signature keeps the latter honestly `string | undefined`.
+      colors: {
+        background: string;
+        foreground: string;
+        muted: string;
+        border: string;
+        accent: string;
+        'accent-hover': string;
+        'accent-text': string;
+        [key: string]: string;
+      };
       [key: string]: unknown;
     };
   };

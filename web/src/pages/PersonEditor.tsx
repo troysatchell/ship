@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { useMutation } from '@tanstack/react-query';
 import { LazyEditor as Editor } from '@/components/LazyEditor';
 import { useAuth } from '@/hooks/useAuth';
 import { useDocuments } from '@/contexts/DocumentsContext';
@@ -116,12 +117,41 @@ export function PersonEditorPage() {
     fetchSprintMetrics();
   }, [id]);
 
+  // TRO-289/ERR-13: title and property saves used to go through a bare
+  // `apiPatch` with no error handling at all - a rejected or throttled write
+  // vanished silently, the same defect ERR-3 fixed for UnifiedDocumentPage's
+  // updateMutation. Routing through `useMutation` against the app's actual
+  // `queryClient` gets three things for free: the shared retry policy
+  // (`shouldRetryRequest`/`retryDelayMs` in queryClient.ts) backs off a 429
+  // instead of dropping it, the thrown error carries `.status` so that policy
+  // and `isNotFoundError` can read it, and tagging `meta.documentId` feeds the
+  // same write-outcome bus Editor.tsx's `useDocumentWriteStatus` already
+  // subscribes to - so a failed save here flips this document's own
+  // SyncStatusIndicator to "Not saved" with no further wiring needed.
+  const updatePersonMutation = useMutation({
+    mutationFn: async (updates: { title?: string; properties?: Record<string, unknown> }) => {
+      const response = await apiPatch(`/api/documents/${id}`, updates);
+      if (!response.ok) {
+        const error = new Error(
+          response.status === 404 ? 'Document not found' : 'Failed to update person'
+        ) as Error & { status: number };
+        error.status = response.status;
+        throw error;
+      }
+      return response.json();
+    },
+    // documentId here drives Editor.tsx's useDocumentWriteStatus filter,
+    // exactly like UnifiedDocumentPage.tsx's real updateMutation - see
+    // queryClient.ts.
+    meta: { operation: 'update person', documentId: id },
+  });
+
   // Throttled title save with stale response handling
   const throttledTitleSave = useAutoSave({
     onSave: async (newTitle: string) => {
       if (!id) return;
       const title = newTitle || 'Untitled';
-      await apiPatch(`/api/documents/${id}`, { title });
+      await updatePersonMutation.mutateAsync({ title });
     },
   });
 
@@ -169,8 +199,18 @@ export function PersonEditorPage() {
           people={teamMembers || []}
           isAdmin={isWorkspaceAdmin}
           onUpdateProperties={async (updates) => {
-            await apiPatch(`/api/documents/${id}`, { properties: updates });
-            setPerson(prev => prev ? { ...prev, properties: { ...prev.properties, ...updates } } : prev);
+            try {
+              await updatePersonMutation.mutateAsync({ properties: updates });
+              // Only apply the optimistic local update once the write
+              // actually succeeded - PersonCombobox's onChange doesn't await
+              // this, so a rejected write must not leave local state ahead
+              // of what the server actually has.
+              setPerson(prev => prev ? { ...prev, properties: { ...prev.properties, ...updates } } : prev);
+            } catch {
+              // Failure is surfaced via the shared write-status bus (this
+              // document's SyncStatusIndicator, TRO-190/ERR-3) - swallow here
+              // so it doesn't throw into a fire-and-forget event handler.
+            }
           }}
           metricsVisible={metricsVisible}
           sprintMetrics={sprintMetrics}

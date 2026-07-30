@@ -145,6 +145,7 @@ export function DocumentListToolbar({
           </Popover.Trigger>
           <Popover.Portal>
             <Popover.Content
+              aria-label="Customize columns"
               className="z-50 w-48 rounded-md border border-border bg-background p-2 shadow-lg"
               sideOffset={4}
               align="end"

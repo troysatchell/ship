@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db/client.js';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { computeICEScore } from '@ship/shared';
 import { extractText } from '../utils/document-content.js';
 
@@ -39,10 +39,10 @@ interface WorkItem {
  * - Projects owned by current user
  * - Sprints owned by current user (active ones only, not action items)
  */
-router.get('/my-work', authMiddleware, async (req: Request, res: Response) => {
+router.get('/my-work', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -263,7 +263,7 @@ router.get('/my-work', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get my work error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============== My Focus ==============
 
@@ -315,10 +315,10 @@ function extractPlanItems(content: unknown): PlanItem[] {
  * - Current and previous week plans with parsed items
  * - Recent activity (issues updated in last 7 days) per project
  */
-router.get('/my-focus', authMiddleware, async (req: Request, res: Response) => {
+router.get('/my-focus', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // 1. Look up the user's person document
     const personResult = await pool.query(
@@ -483,7 +483,7 @@ router.get('/my-focus', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get my focus error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 /**
  * GET /api/dashboard/my-week
@@ -495,10 +495,10 @@ router.get('/my-focus', authMiddleware, async (req: Request, res: Response) => {
  * - Standups (7 slots, one per day, nulls for missing)
  * - Project allocations for the week
  */
-router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
+router.get('/my-week', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // 1. Look up the user's person document
     const personResult = await pool.query(
@@ -726,6 +726,6 @@ router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get my-week error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 export default router;

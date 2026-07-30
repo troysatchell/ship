@@ -16,6 +16,10 @@ vi.mock('../middleware/auth.js', () => ({
     req.userId = 'test-user-id';
     next();
   },
+  // authMiddleware above always sets both fields before `next()`, so the real
+  // authed() guard would never reject here either — this is a plain passthrough
+  // matching that behavior, not a weakening of it (TRO-209 / TS-4).
+  authed: (handler: unknown) => handler,
 }));
 
 import activityRouter from '../routes/activity.js';

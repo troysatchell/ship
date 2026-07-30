@@ -22,6 +22,18 @@ export interface BelongsToEntry {
 }
 
 /**
+ * Row shape returned by the getBelongsToAssociationsBatch query (rule 21:
+ * pool.query rows must be typed, not left as implicit `any`).
+ */
+interface BelongsToAssociationBatchRow {
+  document_id: string;
+  id: string;
+  type: 'program' | 'project' | 'sprint' | 'parent';
+  title: string | null;
+  color: string | null;
+}
+
+/**
  * Fields that are tracked in document_history for audit trail
  */
 export const TRACKED_FIELDS = [
@@ -152,24 +164,47 @@ export async function getBelongsToAssociationsBatch(
     return new Map();
   }
 
-  const result = await pool.query(
+  // De-dupe defensively: a VALUES row per id would otherwise multiply output
+  // rows for a repeated id, where `= ANY($1)` (a set-membership test) would
+  // not. No current caller passes duplicates (both call sites build this list
+  // from a prior SELECT's unique primary keys), but this keeps the rewrite
+  // byte-identical to the old query regardless.
+  const uniqueIds = Array.from(new Set(documentIds));
+
+  // DB-8: `document_id = ANY($1)` gives the planner no way to see how many
+  // ids are in the array at plan time, so it falls back to a fixed
+  // low-selectivity guess - measured at rows=25 estimated vs rows=707 actual
+  // (28x under) at audit volume, which is exactly what let it pick a
+  // sequential scan over the unused idx_document_associations_document_id
+  // index. A `VALUES (...)` list gives the planner the literal row count of
+  // the batch: the same measurement brought the estimate to rows=635 vs 707
+  // actual, and at a realistic page size (20 ids) cut buffer reads ~34%
+  // (90 -> 59; see PR body for full before/after EXPLAIN). `unnest($1)` was
+  // also measured and rejected - Postgres defaults a Function Scan on an
+  // unnest'd array to a flat rows=10 estimate regardless of actual array
+  // length, so it does not fix the misestimate at all.
+  const valuesClause = uniqueIds.map((_, i) => `($${i + 1}::uuid)`).join(', ');
+
+  const result = await pool.query<BelongsToAssociationBatchRow>(
     `SELECT da.document_id, da.related_id as id, da.relationship_type as type,
             d.title, d.properties->>'color' as color
-     FROM document_associations da
+     FROM (VALUES ${valuesClause}) AS ids(document_id)
+     JOIN document_associations da ON da.document_id = ids.document_id
      LEFT JOIN documents d ON da.related_id = d.id
-     WHERE da.document_id = ANY($1)
      ORDER BY da.document_id, da.relationship_type, da.created_at`,
-    [documentIds]
+    uniqueIds
   );
 
   // Group results by document_id
   const associationsMap = new Map<string, BelongsToEntry[]>();
   for (const row of result.rows) {
     const docId = row.document_id;
-    if (!associationsMap.has(docId)) {
-      associationsMap.set(docId, []);
+    let entries = associationsMap.get(docId);
+    if (!entries) {
+      entries = [];
+      associationsMap.set(docId, entries);
     }
-    associationsMap.get(docId)!.push({
+    entries.push({
       id: row.id,
       type: row.type,
       title: row.title || undefined,

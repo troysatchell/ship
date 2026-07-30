@@ -32,12 +32,14 @@ function channelLuminance(value8bit: number): number {
 export function parseHex(color: string): [number, number, number] | null {
   const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim());
   if (!match) return null;
-  const hex = match[1];
+  const [, hex] = match;
+  if (hex === undefined) return null;
   if (hex.length === 3) {
-    const r = parseInt(hex[0] + hex[0], 16);
-    const g = parseInt(hex[1] + hex[1], 16);
-    const b = parseInt(hex[2] + hex[2], 16);
-    return [r, g, b];
+    const r0 = hex[0];
+    const g0 = hex[1];
+    const b0 = hex[2];
+    if (r0 === undefined || g0 === undefined || b0 === undefined) return null;
+    return [parseInt(r0 + r0, 16), parseInt(g0 + g0, 16), parseInt(b0 + b0, 16)];
   }
   return [
     parseInt(hex.slice(0, 2), 16),
@@ -170,6 +172,7 @@ export function resolveContrastPairs(root: Element, options: ResolveOptions): Re
       const match = COLOR_CLASS.exec(token);
       if (!match) continue;
       const [, channel, name, alphaRaw] = match;
+      if (name === undefined) continue;
       const hex = lookup(name);
       if (!hex) {
         unresolved.add(token);

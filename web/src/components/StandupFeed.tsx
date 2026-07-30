@@ -408,10 +408,12 @@ function groupByDate(standups: Standup[]): { label: string; standups: Standup[] 
       label = date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
     }
 
-    if (!groups[label]) {
-      groups[label] = [];
+    let bucket = groups[label];
+    if (!bucket) {
+      bucket = [];
+      groups[label] = bucket;
     }
-    groups[label].push(standup);
+    bucket.push(standup);
   }
 
   // Convert to array and maintain order (most recent first)

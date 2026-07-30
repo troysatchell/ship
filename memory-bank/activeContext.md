@@ -2,45 +2,36 @@
 
 *The most-updated file in the bank. Read this first every session; rewrite it whenever focus shifts. Keep it under a screen — move finished work to progress.md.*
 
-**Last updated:** 2026-07-30, day 4 · **Phase 2: 26 audit tickets Done, 16 PRs merged this run, 1 PR open.** Phase 2 due **Fri Jul 31**.
+**Last updated:** 2026-07-30, day 4 night · **Phase 2 nearly banked: 25 tickets Done today, 13 PRs merged, measurement pass in progress.** Phase 2 due **Fri Jul 31**.
 
 ## Where we are
 
-`main` went `4d74602` → `319e1af` this run — 16 PRs merged (12 carrying 21 audit tickets, 4 tooling), both remotes (GitLab + GitHub) in sync. Audit tickets Done: 5 → **26**, verified directly against Linear this session (filtered to the ShipShape Audit Remediation range — the day-2 deploy/CI tickets aren't counted).
+`main` at `15e6cb0`+a11y-artifacts merge, all remotes synced. Today's merges: #40 #42 #43 #45 #46 #48 #49 #50 #51 #52 #53 #54 #55 #56 #58 #59. Audit-68 Done ≈ **40** (27 + TS-1/2/3/4, DB-6/7/8/10, A11Y-4/5/6/7/8, TS-6, ERR-6, TEST-5, BUN-7/8 — recount against Linear before quoting precisely).
 
-| | |
-|---|---|
-| Merged this run | #14 #8 #20 #19 #13 #12 #24 #17 #22 #23 #29 #30 (tickets) + #26 #27 #28 #31 (tooling) |
-| **Open PRs** | **#11 only** (TRO-223 TEST-1) — gate-green, empties the quarantine, blocked solely by TRO-288 |
-| Review ledger | **74** findings / 13 tickets (`node scripts/factory/review-ledger.mjs report`) |
-| Type-safety family | **14** once `type-safety` + `implicit-any` + `unsafe-cast` + `unsafe-type-cast` + `test-cast` are summed — file everything there as `type-safety` going forward, the split taxonomy hid the size of the class |
+## Category-target status (the graded 40%)
 
-Per-PR headline results, the four factory-tooling defects fixed, and the merge mechanics that actually drained the queue are in `progress.md`'s 2026-07-30 entry — not duplicated here.
+- **Cat 2 bundle** ✅ banked (−80.5% /login, earlier run).
+- **Cat 5 tests** ✅ banked (far past 3-tests/3-flakes).
+- **Cat 6 errors** ✅ banked (ERR-1 data-loss headline + 10 more; screenshot/recording pass still owed for the write-up).
+- **Cat 7 a11y** ✅ **banked today** — compare-phase2-jul30: all 8 baseline findings resolved; C/S = 0 on my-week, document view, issues (all states). Known new Serious on /weeks+/search = TRO-298 (not key pages). Lighthouse my-week 95→100.
+- **Cat 4 db** ✅ evidence merged (dashboard 30→6 queries; #50's four EXPLAIN pairs); formal db-query compare runs AFTER api-perf.
+- **Cat 3 api-perf** 🟡 **compare running now** (worktree Ship-wt-api_compare, branch measure/api-perf-compare-jul30, bench-runner.mjs unchanged, 500/100/20 seed). Need ≥2 endpoints at −20% P95; /api/issues already proven, dashboard expected.
+- **Cat 1 type-safety** ✅ by per-ticket deltas: ~130 (TS-1) + ~45 (TS-2) + 19 (TS-3) + 233 (TS-4 corrected count 286→53) ≈ **427 ≥ 384 target**. **Critical nuance (TS-4 discovery): the tracked count.sh metric has a BSD-grep bracket bug that never counted property!-assertions, and live totals grew with the codebase (1747 vs 1535) — present Cat-1 evidence as controlled per-ticket diffs, never a naive live re-count.**
+- **Cat 8 terraform** ✅ artifact exists (PR #57, held): pinned Render provider 1.9.1 + live plan + adoption memo; local-provider + drift demo pre-existing.
 
-## Needs a human before the next deploy
+## Held for the maintainer (batch-answer)
 
-- **Read production SSM `DATABASE_URL`.** PR #17 (DB-11) merged: the API now refuses to start in production if the resolved connection string carries `sslmode=disable`. No `aws` CLI access from here to check it.
-- **VoiceOver on TRO-215 and TRO-281.** Still nobody has *heard* either; both PRs claim only DOM semantics + axe.
-- **#30 inverted an ordering and it's awaiting a decision.** Express `router.param` now fires before `authMiddleware`, so an unauthenticated request with a malformed id returns 400 where it used to return 401. Nothing sensitive is exposed, but it inverts the repo's auth-then-validate convention.
+PR #41 (TF-2, deletes environments/prod; dev/shadow kept — premise corrected), PR #47 (TF-7 pair: SG prefix-list + trust proxy 2; TRO-295 quota check first; discovery: req.ip was CloudFront's edge IP for ALL traffic), PR #57 (TF-10: import vs apply), Render image-switch runbook (RULE-5), prod SSM DATABASE_URL read, VoiceOver (TRO-215/281 + today's a11y fixes), PR #30 ordering decision.
 
-## Current focus (max 3)
+## In flight / next
 
-1. **TRO-288 [TEST-15] determinism fix, in flight.** `session-activity-race.test.ts` asserts exactly-once under a concurrent burst and fails CI on branches that never touch auth — it hit #29 and blocks #11 now. Bar: 10 consecutive runs under deliberate load, still red against the pre-DB-2 unconditional write.
-2. **Merge PR #11** the moment TRO-288 lands — it's the sole blocker. Takes the web quarantine from 13 entries to 0.
-3. **TRO-284 (ERR-11) + TRO-285 (ERR-12)**, the collaboration load-window pair — same mechanism as the already-fixed ERR-10, now recorded as a pattern in `systemPatterns.md` so a fourth agent doesn't rediscover it. ERR-11's regression test is confirmed red for the documented reason (frame sequence `[3,0,1,1]`).
+1. api-perf compare (running) → then **db-query compare** (never concurrent, same worktree pattern) → merge both artifact branches.
+2. **Deferred CodeRabbit triage sweep**: reviews never landed for #48–#59 (service rate-limited all evening); when they appear on merged PRs, triage as follow-ups. GitHub also dropped pull_request events 19:33–19:43 — workflow_dispatch was the workaround.
+3. TRO-300 (TEST-16, High): session-activity-race flaked CI 4× today post-TEST-15-fix — needs the CI-constrained repro.
+4. Sunday deliverables: improvement docs per category, discovery write-up, demo video, AI cost analysis, social post, Cat-6 screenshots.
 
-## Decisions made 2026-07-30
+## Session lessons already in lessons.md
 
-- Merge #17 (DB-11) now; read the SSM value before the next deploy rather than gating the merge on it.
-- Merge #13 (DB-2/API-6) without a separate human auth read.
-- Maintainer is installing CodeRabbit's GitHub App for the repo — removes the review rate-limit bottleneck that forced this run's local-merge workaround.
-
-## Watch-outs verified this run (two supersede prior guidance)
-
-- **`git check-attr merge -- CHANGES.md` after a merge is NOT a valid check — this reverses what was written here before.** The merge replaces `.gitattributes` with `main`'s version first, so it reads `unspecified` even over a genuinely corrupted file. Two agents independently saw clean `unspecified` beside spliced `CHANGES.md` (17 and 13 unbalanced fences). Only `merge-changes.mjs --check` catches it.
-- **After `git merge main`, run `pnpm install`.** PR #20 added `compression`; a stale `node_modules` fails ~19 api test files at module load — three agents read this as a catastrophic regression from their own merge. Tell: failures in files the diff never touched, module-resolution errors not assertion errors.
-- **Never start a background poll and then wait on it.** Six agents stalled this way this run (CI checks, gate runs, monitors) — nothing wakes them.
-- **The load-sensitive api flake (TEST-12/TRO-277) now has five identities**, all failing only inside a full `gate.sh` run: `backlinks.test.ts`, `rate-limit.test.ts`, `weeks.test.ts::should reject review approval without rating`, `session-activity-race.test.ts::…exactly once…`, candidate `workspaces.test.ts::should archive person document`.
-- **The merge method that actually drains the queue:** integrate locally with `git merge --no-ff` in sequence, resolve `CHANGES.md` with `merge-changes.mjs`, union the append-only `.jsonl`s, verify the *combined* result once, then a single push. Merging one PR at a time through GitHub re-conflicts every other open branch on `CHANGES.md` and the queue never drains. Two merges were deliberately aborted and hand-resolved instead (#17×#8 in `migrate.ts`, #23×#13 in `auth.test.ts`) because they were real code conflicts, not text ones.
+Stash-at-A/B-test moment (2 agents); programWeeksNav new web flake identity; zsh no-word-split in orchestrator Bash loops.
 
 > — GIR: "I'm gonna sing the doom song now."

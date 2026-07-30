@@ -2,15 +2,40 @@ import { Router, Request, Response } from 'express';
 import { pool } from '../db/client.js';
 import { z } from 'zod';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { logAuditEvent } from '../services/audit.js';
+import type { ProgramDocumentRow, ProjectDocumentRow, IssueDocumentRow, SprintDocumentRow } from './rowTypes.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
 
+/**
+ * Row shape read by `extractProgramFromRow`. `owner_*`/`issue_count`/
+ * `sprint_count` come from the list/get/merge-result queries' joins and
+ * subqueries; the create/update queries don't select them, so they stay
+ * optional (matches those call sites, which fill in `issue_count`/
+ * `sprint_count`/`owner` explicitly afterwards).
+ */
+export interface ProgramRow {
+  id: string;
+  title: string;
+  properties: ProgramDocumentRow['properties'];
+  archived_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+  owner_id?: string | null;
+  owner_name?: string | null;
+  owner_email?: string | null;
+  // COUNT(*) subqueries — node-postgres returns bigint aggregates as strings.
+  issue_count?: string;
+  sprint_count?: string;
+}
+
 // Helper to extract program from row
-function extractProgramFromRow(row: any) {
-  const props = row.properties || {};
+// Exported for TRO-207's regression test (rowTypes.test.ts), which pins this
+// mapper's parameter/return types as not-`any` and its output shape.
+export function extractProgramFromRow(row: ProgramRow) {
+  const props = row.properties;
   return {
     id: row.id,
     name: row.title,
@@ -33,6 +58,64 @@ function extractProgramFromRow(row: any) {
     consulted_ids: props.consulted_ids || [],
     informed_ids: props.informed_ids || [],
   };
+}
+
+/** `GET /:id/issues` row — issue documents joined to their assignee/sprint. */
+interface ProgramIssueRow {
+  id: string;
+  title: string;
+  properties: IssueDocumentRow['properties'];
+  ticket_number: number;
+  created_at: Date;
+  updated_at: Date;
+  created_by: string | null;
+  assignee_name: string | null;
+  assignee_archived: boolean;
+  sprint_id: string | null;
+}
+
+/** `GET /:id/projects` row — project documents joined to their owner + counts. */
+interface ProgramProjectRow {
+  id: string;
+  title: string;
+  properties: ProjectDocumentRow['properties'];
+  program_id: string;
+  archived_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+  owner_id: string | null;
+  owner_name: string | null;
+  owner_email: string | null;
+  // COUNT(*) subqueries — bigint aggregates come back from node-postgres as strings.
+  sprint_count: string;
+  issue_count: string;
+}
+
+/** `GET /:id/sprints` row — sprint ("Week") documents joined to owner + issue rollups. */
+interface ProgramSprintRow {
+  id: string;
+  name: string;
+  properties: SprintDocumentRow['properties'];
+  owner_id: string | null;
+  owner_name: string | null;
+  owner_email: string | null;
+  issue_count: string;
+  completed_count: string;
+  started_count: string;
+  // SUM(...numeric) — node-postgres returns numeric aggregates as strings too.
+  total_estimate_hours: string;
+  has_plan: boolean;
+  has_retro: boolean;
+  plan_created_at: Date | null;
+  retro_created_at: Date | null;
+}
+
+/** Minimal projection used by the program-merge endpoints to compare two programs. */
+interface ProgramMergeCandidateRow {
+  id: string;
+  title: string;
+  properties: ProgramDocumentRow['properties'];
+  archived_at: Date | null;
 }
 
 // Validation schemas
@@ -58,11 +141,11 @@ const updateProgramSchema = z.object({
 });
 
 // List programs (documents with document_type = 'program')
-router.get('/', authMiddleware, async (req: Request, res: Response) => {
+router.get('/', authMiddleware, authed(async (req, res) => {
   try {
     const includeArchived = req.query.archived === 'true';
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -91,26 +174,26 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
 
     query += ` ORDER BY d.created_at DESC`;
 
-    const result = await pool.query(query, params);
+    const result = await pool.query<ProgramRow>(query, params);
     res.json(result.rows.map(extractProgramFromRow));
   } catch (err) {
     console.error('List programs error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get single program
-router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // owner_id in properties takes precedence over created_by
-    const result = await pool.query(
+    const result = await pool.query<ProgramRow>(
       `SELECT d.id, d.title, d.properties, d.archived_at, d.created_at, d.updated_at,
               COALESCE((d.properties->>'owner_id')::uuid, d.created_by) as owner_id,
               u.name as owner_name, u.email as owner_email,
@@ -127,17 +210,18 @@ router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (result.rows.length === 0) {
+    const programRow = result.rows[0];
+    if (!programRow) {
       res.status(404).json({ error: 'Program not found' });
       return;
     }
 
-    res.json(extractProgramFromRow(result.rows[0]));
+    res.json(extractProgramFromRow(programRow));
   } catch (err) {
     console.error('Get program error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Create program (creates a document with document_type = 'program')
 router.post('/', authMiddleware, async (req: Request, res: Response) => {
@@ -162,22 +246,28 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
       properties.emoji = emoji;
     }
 
-    const result = await pool.query(
+    const result = await pool.query<ProgramRow>(
       `INSERT INTO documents (workspace_id, document_type, title, properties, created_by)
        VALUES ($1, 'program', $2, $3, $4)
        RETURNING id, title, properties, archived_at, created_at, updated_at`,
       [req.workspaceId, title, JSON.stringify(properties), req.userId]
     );
 
+    const createdRow = result.rows[0];
+    if (!createdRow) {
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
+
     // Get user info for owner response
-    const userResult = await pool.query(
+    const userResult = await pool.query<{ id: string; name: string; email: string }>(
       'SELECT id, name, email FROM users WHERE id = $1',
       [req.userId]
     );
     const user = userResult.rows[0];
 
     res.status(201).json({
-      ...extractProgramFromRow(result.rows[0]),
+      ...extractProgramFromRow(createdRow),
       issue_count: 0,
       sprint_count: 0,
       owner: user ? {
@@ -193,11 +283,11 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
 });
 
 // Update program
-router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = updateProgramSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -209,21 +299,22 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify program exists and user can access it
-    const existing = await pool.query(
+    const existing = await pool.query<Pick<ProgramDocumentRow, 'id' | 'properties'>>(
       `SELECT id, properties FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'program'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (existing.rows.length === 0) {
+    const existingRow = existing.rows[0];
+    if (!existingRow) {
       res.status(404).json({ error: 'Program not found' });
       return;
     }
 
-    const currentProps = existing.rows[0].properties || {};
+    const currentProps = existingRow.properties;
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: (string | null)[] = [];
     let paramIndex = 1;
 
     const data = parsed.data;
@@ -293,7 +384,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     );
 
     // Re-query to get full program with owner info
-    const result = await pool.query(
+    const result = await pool.query<ProgramRow>(
       `SELECT d.id, d.title, d.properties, d.archived_at, d.created_at, d.updated_at,
               COALESCE((d.properties->>'owner_id')::uuid, d.created_by) as owner_id,
               u.name as owner_name, u.email as owner_email
@@ -303,25 +394,31 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
       [id]
     );
 
-    res.json(extractProgramFromRow(result.rows[0]));
+    const updatedRow = result.rows[0];
+    if (!updatedRow) {
+      res.status(404).json({ error: 'Program not found' });
+      return;
+    }
+
+    res.json(extractProgramFromRow(updatedRow));
   } catch (err) {
     console.error('Update program error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Delete program
-router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.delete('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // First verify user can access the program
-    const accessCheck = await pool.query(
+    const accessCheck = await pool.query<{ id: string }>(
       `SELECT id FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'program'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -350,20 +447,20 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Delete program error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get program issues
-router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/issues', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify program exists and user can access it
-    const programExists = await pool.query(
+    const programExists = await pool.query<{ id: string }>(
       `SELECT id FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'program'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -376,7 +473,7 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
     }
 
     // Also filter the issues by visibility - join via document_associations
-    const result = await pool.query(
+    const result = await pool.query<ProgramIssueRow>(
       `SELECT d.id, d.title, d.properties, d.ticket_number,
               d.created_at, d.updated_at, d.created_by,
               u.name as assignee_name,
@@ -405,7 +502,7 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
 
     // Add display_id to each issue and extract properties
     const issues = result.rows.map(row => {
-      const props = row.properties || {};
+      const props = row.properties;
       return {
         id: row.id,
         title: row.title,
@@ -419,7 +516,7 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
         updated_at: row.updated_at,
         created_by: row.created_by,
         assignee_name: row.assignee_name,
-        assignee_archived: row.assignee_archived || false,
+        assignee_archived: row.assignee_archived,
         display_id: `#${row.ticket_number}`
       };
     });
@@ -429,20 +526,20 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
     console.error('Get program issues error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get program projects (documents with document_type = 'project' that belong to this program)
-router.get('/:id/projects', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/projects', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify program exists and user can access it
-    const programExists = await pool.query(
+    const programExists = await pool.query<{ id: string }>(
       `SELECT id FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'program'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -455,7 +552,7 @@ router.get('/:id/projects', authMiddleware, async (req: Request, res: Response) 
     }
 
     // Fetch projects belonging to this program via document_associations
-    const result = await pool.query(
+    const result = await pool.query<ProgramProjectRow>(
       `SELECT d.id, d.title, d.properties, $1::uuid as program_id, d.archived_at, d.created_at, d.updated_at,
               (d.properties->>'owner_id')::uuid as owner_id,
               u.name as owner_name, u.email as owner_email,
@@ -478,7 +575,7 @@ router.get('/:id/projects', authMiddleware, async (req: Request, res: Response) 
 
     // Transform rows to project format
     const projects = result.rows.map(row => {
-      const props = row.properties || {};
+      const props = row.properties;
       const impact = props.impact ?? 3;
       const confidence = props.confidence ?? 3;
       const ease = props.ease ?? 3;
@@ -511,21 +608,21 @@ router.get('/:id/projects', authMiddleware, async (req: Request, res: Response) 
     console.error('Get program projects error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get program sprints (documents with document_type = 'sprint' that belong to this program)
 // Returns sprints with sprint_number and owner_id - dates/status computed on frontend
-router.get('/:id/sprints', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/sprints', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify program exists and user can access it
-    const programCheck = await pool.query(
+    const programCheck = await pool.query<{ id: string; sprint_start_date: Date }>(
       `SELECT d.id, w.sprint_start_date
        FROM documents d
        JOIN workspaces w ON d.workspace_id = w.id
@@ -534,16 +631,17 @@ router.get('/:id/sprints', authMiddleware, async (req: Request, res: Response) =
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (programCheck.rows.length === 0) {
+    const programRow = programCheck.rows[0];
+    if (!programRow) {
       res.status(404).json({ error: 'Program not found' });
       return;
     }
 
-    const sprintStartDate = programCheck.rows[0].sprint_start_date;
+    const sprintStartDate = programRow.sprint_start_date;
 
     // Also filter sprints by visibility - join via document_associations
     // Include subqueries for weekly_plan and weekly_retro existence
-    const result = await pool.query(
+    const result = await pool.query<ProgramSprintRow>(
       `SELECT d.id, d.title as name, d.properties,
               u.id as owner_id, u.name as owner_name, u.email as owner_email,
               (SELECT COUNT(*) FROM documents i
@@ -573,7 +671,7 @@ router.get('/:id/sprints', authMiddleware, async (req: Request, res: Response) =
 
     // Extract sprint properties - dates/status computed by frontend
     const sprints = result.rows.map(row => {
-      const props = row.properties || {};
+      const props = row.properties;
       return {
         id: row.id,
         name: row.name,
@@ -588,8 +686,8 @@ router.get('/:id/sprints', authMiddleware, async (req: Request, res: Response) =
         completed_count: parseInt(row.completed_count) || 0,
         started_count: parseInt(row.started_count) || 0,
         total_estimate_hours: parseFloat(row.total_estimate_hours) || 0,
-        has_plan: row.has_plan === true || row.has_plan === 't',
-        has_retro: row.has_retro === true || row.has_retro === 't',
+        has_plan: row.has_plan,
+        has_retro: row.has_retro,
         plan_created_at: row.plan_created_at || null,
         retro_created_at: row.retro_created_at || null,
         // Plan tracking - what will we learn/validate?
@@ -605,17 +703,17 @@ router.get('/:id/sprints', authMiddleware, async (req: Request, res: Response) =
     console.error('Get program sprints error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============== Program Merge ==============
 
 // Merge preview - returns counts of entities that will be moved
-router.get('/:id/merge-preview', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/merge-preview', authMiddleware, authed(async (req, res) => {
   try {
     const sourceId = req.params.id;
     const targetId = req.query.target_id as string;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     if (!targetId) {
       res.status(400).json({ error: 'target_id query parameter is required' });
@@ -630,7 +728,7 @@ router.get('/:id/merge-preview', authMiddleware, async (req: Request, res: Respo
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Fetch both programs
-    const programsResult = await pool.query(
+    const programsResult = await pool.query<ProgramMergeCandidateRow>(
       `SELECT id, title, properties, archived_at
        FROM documents
        WHERE id = ANY($1) AND workspace_id = $2 AND document_type = 'program'
@@ -659,7 +757,7 @@ router.get('/:id/merge-preview', authMiddleware, async (req: Request, res: Respo
     }
 
     // Count child entities via document_associations
-    const countsResult = await pool.query(
+    const countsResult = await pool.query<{ document_type: string; count: string }>(
       `SELECT d.document_type, COUNT(*) as count
        FROM documents d
        JOIN document_associations da ON da.document_id = d.id AND da.related_id = $1 AND da.relationship_type = 'program'
@@ -668,7 +766,7 @@ router.get('/:id/merge-preview', authMiddleware, async (req: Request, res: Respo
     );
 
     // Count direct child documents (parent_id pointing at source program)
-    const childDocsResult = await pool.query(
+    const childDocsResult = await pool.query<{ count: string }>(
       `SELECT COUNT(*) as count FROM documents WHERE parent_id = $1`,
       [sourceId]
     );
@@ -677,7 +775,7 @@ router.get('/:id/merge-preview', authMiddleware, async (req: Request, res: Respo
       projects: 0,
       issues: 0,
       sprints: 0,
-      wikis: parseInt(childDocsResult.rows[0]?.count) || 0,
+      wikis: parseInt(childDocsResult.rows[0]?.count ?? '0') || 0,
     };
 
     for (const row of countsResult.rows) {
@@ -688,12 +786,12 @@ router.get('/:id/merge-preview', authMiddleware, async (req: Request, res: Respo
 
     // Check for conflicts
     const conflicts: Array<{ type: string; message: string }> = [];
-    const sourcePrefix = sourceProgram.properties?.prefix;
-    const targetPrefix = targetProgram.properties?.prefix;
+    const sourcePrefix = sourceProgram.properties.prefix;
+    const targetPrefix = targetProgram.properties.prefix;
     if (sourcePrefix && targetPrefix) {
       conflicts.push({
         type: 'prefix_conflict',
-        message: `Both programs have prefixes set (source: "${sourcePrefix}", target: "${targetPrefix}"). The source prefix will be cleared during merge.`,
+        message: `Both programs have prefixes set (source: "${String(sourcePrefix)}", target: "${String(targetPrefix)}"). The source prefix will be cleared during merge.`,
       });
     }
 
@@ -707,7 +805,7 @@ router.get('/:id/merge-preview', authMiddleware, async (req: Request, res: Respo
     console.error('Merge preview error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Merge execution - re-parents all children, archives source
 const mergeProgramSchema = z.object({
@@ -715,12 +813,12 @@ const mergeProgramSchema = z.object({
   confirm_name: z.string().min(1),
 });
 
-router.post('/:id/merge', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/merge', authMiddleware, authed(async (req, res) => {
   const client = await pool.connect();
   try {
     const sourceId = String(req.params.id);
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = mergeProgramSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -738,7 +836,7 @@ router.post('/:id/merge', authMiddleware, async (req: Request, res: Response) =>
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Fetch both programs
-    const programsResult = await pool.query(
+    const programsResult = await pool.query<ProgramMergeCandidateRow>(
       `SELECT id, title, properties, archived_at
        FROM documents
        WHERE id = ANY($1) AND workspace_id = $2 AND document_type = 'program'
@@ -775,7 +873,7 @@ router.post('/:id/merge', authMiddleware, async (req: Request, res: Response) =>
     await client.query('BEGIN');
 
     // 1. Get all child document IDs before re-parenting (for history logging)
-    const childrenResult = await client.query(
+    const childrenResult = await client.query<{ document_id: string; document_type: string }>(
       `SELECT da.document_id, d.document_type
        FROM document_associations da
        JOIN documents d ON d.id = da.document_id
@@ -863,7 +961,7 @@ router.post('/:id/merge', authMiddleware, async (req: Request, res: Response) =>
     await client.query('COMMIT');
 
     // Return updated target program
-    const result = await pool.query(
+    const result = await pool.query<ProgramRow>(
       `SELECT d.id, d.title, d.properties, d.archived_at, d.created_at, d.updated_at,
               COALESCE((d.properties->>'owner_id')::uuid, d.created_by) as owner_id,
               u.name as owner_name, u.email as owner_email,
@@ -879,7 +977,13 @@ router.post('/:id/merge', authMiddleware, async (req: Request, res: Response) =>
       [targetId]
     );
 
-    res.json(extractProgramFromRow(result.rows[0]));
+    const mergedRow = result.rows[0];
+    if (!mergedRow) {
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
+
+    res.json(extractProgramFromRow(mergedRow));
   } catch (err) {
     await client.query('ROLLBACK');
     console.error('Merge program error:', err);
@@ -887,6 +991,6 @@ router.post('/:id/merge', authMiddleware, async (req: Request, res: Response) =>
   } finally {
     client.release();
   }
-});
+}));
 
 export default router;

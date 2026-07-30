@@ -57,6 +57,7 @@ const ReviewsPage = React.lazy(() => import('@/pages/ReviewsPage').then((m) => (
 const OrgChartPage = React.lazy(() => import('@/pages/OrgChartPage').then((m) => ({ default: m.OrgChartPage })));
 const InviteAcceptPage = React.lazy(() => import('@/pages/InviteAccept').then((m) => ({ default: m.InviteAcceptPage })));
 const SetupPage = React.lazy(() => import('@/pages/Setup').then((m) => ({ default: m.SetupPage })));
+const NotFoundPage = React.lazy(() => import('@/pages/NotFound').then((m) => ({ default: m.NotFoundPage })));
 
 /**
  * Redirect component for type-specific routes to canonical /documents/:id
@@ -262,6 +263,13 @@ function AppRoutes() {
         <Route path="feedback/:id" element={<FeedbackEditorPage />} />
         <Route path="settings" element={<WorkspaceSettingsPage />} />
         <Route path="settings/conversions" element={<ConvertedDocumentsPage />} />
+        {/*
+          Catch-all (A11Y-5 / TRO-219). Without this, an unmatched path under
+          "/" didn't match this Route's index/children either, so <Routes>
+          rendered nothing at all - no landmark, no heading, no content. See
+          NotFound.tsx for the full history.
+        */}
+        <Route path="*" element={<NotFoundPage />} />
       </Route>
     </Routes>
   );

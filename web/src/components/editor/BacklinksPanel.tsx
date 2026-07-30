@@ -157,7 +157,7 @@ export function BacklinksPanel({ documentId }: BacklinksPanelProps) {
   if (loading) {
     return (
       <div className="space-y-2 p-4">
-        <h3 className="text-xs font-medium text-muted">Backlinks</h3>
+        <h2 className="text-xs font-medium text-muted">Backlinks</h2>
         <div className="text-xs text-muted">Loading...</div>
       </div>
     );
@@ -166,7 +166,7 @@ export function BacklinksPanel({ documentId }: BacklinksPanelProps) {
   if (error) {
     return (
       <div className="space-y-2 p-4">
-        <h3 className="text-xs font-medium text-muted">Backlinks</h3>
+        <h2 className="text-xs font-medium text-muted">Backlinks</h2>
         <div className="text-xs text-red-500">{error}</div>
       </div>
     );
@@ -174,7 +174,7 @@ export function BacklinksPanel({ documentId }: BacklinksPanelProps) {
 
   return (
     <div className="space-y-2 p-4">
-      <h3 className="text-xs font-medium text-muted">Backlinks</h3>
+      <h2 className="text-xs font-medium text-muted">Backlinks</h2>
 
       {backlinks.length === 0 ? (
         <div className="text-xs text-muted">No backlinks</div>

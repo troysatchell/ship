@@ -224,8 +224,12 @@ const OPM_RATINGS = [
  * WeeklyDocumentSidebar - Renders sidebar for weekly_plan/weekly_retro documents
  * with human-readable names instead of UUIDs.
  * In review mode (?review=true&sprintId=X), actions move to the sub-nav.
+ *
+ * Exported (rather than kept module-private) so PropertiesPanel.test.tsx can
+ * render it directly without also mocking useAuth/useWorkspace, which the
+ * exported PropertiesPanel wrapper calls unconditionally.
  */
-function WeeklyDocumentSidebar({
+export function WeeklyDocumentSidebar({
   document,
   weeklyReviewState,
 }: {
@@ -259,9 +263,9 @@ function WeeklyDocumentSidebar({
     <div className="space-y-4 p-4">
       {/* Header */}
       <div className="border-b border-border pb-3">
-        <h3 className="text-sm font-medium text-foreground">
+        <h2 className="text-sm font-medium text-foreground">
           {isRetro ? 'Weekly Retro' : 'Weekly Plan'}
-        </h3>
+        </h2>
         {weekNumber && (
           <p className="text-sm text-muted mt-1">Week {weekNumber}</p>
         )}

@@ -24,6 +24,10 @@ vi.mock('../middleware/auth.js', () => ({
     req.workspaceId = 'ws-123';
     next();
   }),
+  // authMiddleware above always sets both fields before `next()`, so the real
+  // authed() guard would never reject here either — this is a plain passthrough
+  // matching that behavior, not a weakening of it (TRO-209 / TS-4).
+  authed: (handler: unknown) => handler,
 }));
 
 import { pool } from '../db/client.js';

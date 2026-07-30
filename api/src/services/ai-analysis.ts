@@ -36,7 +36,7 @@ function getClient(): BedrockRuntimeClient | null {
 
 // Simple in-memory rate limiter with periodic cleanup
 const rateLimits = new Map<string, { count: number; resetAt: number }>();
-const RATE_LIMIT = 120; // max requests per hour per user (polling every 5s, but only analyzes on content change)
+export const RATE_LIMIT = 120; // max requests per hour per user (polling every 5s, but only analyzes on content change)
 const RATE_WINDOW = 60 * 60 * 1000; // 1 hour in ms
 const MAX_CONTENT_TEXT_LENGTH = 50_000; // 50KB max extracted text sent to Bedrock
 

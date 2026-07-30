@@ -8,6 +8,7 @@ import * as decoding from 'lib0/decoding';
 import { pool } from '../db/client.js';
 import { extractHypothesisFromContent, extractSuccessCriteriaFromContent, extractVisionFromContent, extractGoalsFromContent } from '../utils/extractHypothesis.js';
 import { yjsToJson, jsonToYjs } from '../utils/yjsConverter.js';
+import type { TipTapDoc, TipTapNode } from '../types/tiptap.js';
 import { ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
 import { SESSION_INACTIVITY_LIMIT_MS } from '../middleware/auth.js';
 import cookie from 'cookie';
@@ -228,9 +229,65 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+// TipTap/ProseMirror documents nest a handful of levels deep in practice
+// (list > listItem > paragraph > mark, maybe twice over). This bound exists
+// only to stop a pathological/malicious stored value from recursing until a
+// stack overflow — it is never reached by real content.
+const MAX_TIPTAP_NODE_DEPTH = 200;
+
+/**
+ * Validates one TipTap/ProseMirror node, recursively. `isTipTapDocContent()`
+ * below claims (via its `value is TipTapDoc` return type) that every entry of
+ * `.content`, at every depth, is a well-formed `TipTapNode` — so it has to
+ * actually check that, not just the root shape.
+ *
+ * This matters beyond type honesty: `jsonToYjs()`/`jsonToYjsChildren()` in
+ * `yjsConverter.ts` mutate the live `Y.Doc` node-by-node as they walk the
+ * tree (`fragment.push([element])` before recursing into that element's
+ * children). A malformed node discovered only once conversion is already
+ * underway does not fail cleanly — it leaves a partially-built, garbage
+ * fragment already spliced into the shared document (and, since `doc.on
+ * ('update')` above is what schedules persistence/broadcast, that garbage
+ * can be saved and sent to other clients before anyone notices). Rejecting
+ * the whole document up front, before `jsonToYjs()` ever runs, keeps the
+ * existing "skip conversion, start empty" fallback the only outcome for bad
+ * data.
+ *
+ * Cost: O(nodes in the document), the same order `jsonToYjs()` itself
+ * already pays converting it. This only runs on the JSON-fallback path
+ * (`content` with no `yjs_state` yet) — once per document, the first time it
+ * is loaded into a room — not on every keystroke or every persist, so this
+ * doubles a cold, once-per-document cost rather than adding one to a hot
+ * path.
+ */
+function isTipTapNode(value: unknown, depth = 0): value is TipTapNode {
+  if (depth > MAX_TIPTAP_NODE_DEPTH) return false;
+  if (!isRecord(value)) return false;
+  if (typeof value.type !== 'string') return false;
+
+  if (value.content !== undefined) {
+    if (!Array.isArray(value.content)) return false;
+    if (!value.content.every((child) => isTipTapNode(child, depth + 1))) return false;
+  }
+
+  if (value.marks !== undefined) {
+    if (!Array.isArray(value.marks)) return false;
+    if (!value.marks.every((mark) => isRecord(mark) && typeof mark.type === 'string')) return false;
+  }
+
+  if (value.text !== undefined && typeof value.text !== 'string') return false;
+
+  return true;
+}
+
 /** Narrows the `documents.content` JSONB column to the shape jsonToYjs() expects. */
-function isTipTapDocContent(value: unknown): value is { type: 'doc'; content: unknown[] } {
-  return isRecord(value) && value.type === 'doc' && Array.isArray(value.content);
+function isTipTapDocContent(value: unknown): value is TipTapDoc {
+  return (
+    isRecord(value) &&
+    value.type === 'doc' &&
+    Array.isArray(value.content) &&
+    value.content.every((child) => isTipTapNode(child))
+  );
 }
 
 /**

@@ -58,8 +58,8 @@ export function ProjectCombobox({
   const sortedProgramKeys = Object.keys(projectsByProgram).sort((a, b) => {
     if (a === '__unassigned__') return 1;
     if (b === '__unassigned__') return -1;
-    const nameA = projectsByProgram[a][0]?.programName || '';
-    const nameB = projectsByProgram[b][0]?.programName || '';
+    const nameA = projectsByProgram[a]?.[0]?.programName || '';
+    const nameB = projectsByProgram[b]?.[0]?.programName || '';
     return nameA.localeCompare(nameB);
   });
 
@@ -222,6 +222,7 @@ export function ProjectCombobox({
               {/* Projects grouped by program */}
               {sortedProgramKeys.map((programKey) => {
                 const programProjects = projectsByProgram[programKey];
+                if (!programProjects) return null;
                 const firstProject = programProjects[0];
                 const programName = programKey === '__unassigned__'
                   ? 'Not assigned to a program'

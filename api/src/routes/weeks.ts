@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { pool } from '../db/client.js';
 import { z } from 'zod';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { validateUuidParam } from '../middleware/paramValidation.js';
 import {
   transformIssueLinks,
@@ -12,9 +12,308 @@ import {
 import { logDocumentChange, getLatestDocumentFieldHistory } from '../utils/document-crud.js';
 import { broadcastToUser } from '../collaboration/index.js';
 import { extractText } from '../utils/document-content.js';
+import type { StandupProperties, WeeklyReviewProperties } from '@ship/shared';
+import type { IssueDocumentRow, SprintDocumentRow } from './rowTypes.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
+
+// ============================================================
+// Row types for the `pool.query<T>()`/`client.query<T>()` calls below.
+// TS-2 (TRO-207): see `api/src/routes/rowTypes.ts` for the shared
+// `DocumentRow`/`*DocumentRow` family these build on. Interfaces here
+// describe projections specific to this file's routes, verified against
+// the SQL text and `api/src/db/schema.sql` - not guessed.
+// ============================================================
+
+/** `SELECT sprint_start_date FROM workspaces WHERE id = $1` - repeated
+ *  verbatim across several routes to compute the current sprint number. */
+interface WorkspaceStartDateRow {
+  sprint_start_date: Date;
+}
+
+/** Minimal existence-check / id-collection projection - callers only ever
+ *  read `.rows.length` or `.rows.map(r => r.id)`. */
+interface IdRow {
+  id: string;
+}
+
+/** `SELECT id, title FROM documents WHERE ...` - person lookup and
+ *  carryover sprint-name lookup both select just these two columns. */
+interface IdTitleRow {
+  id: string;
+  title: string;
+}
+
+/** `SELECT id, properties FROM documents WHERE ... document_type = 'sprint'`
+ *  - GET /lookup, the plan-update existence check, and the review POST's
+ *  sprint check all select this exact pair. */
+interface SprintIdPropertiesRow {
+  id: string;
+  properties: SprintDocumentRow['properties'];
+}
+
+/**
+ * Row shape read by `extractSprintFromRow`. Shared by every route that
+ * re-queries the full sprint-with-rollups projection: list (GET /), get
+ * (GET /:id), update (PATCH /:id), start (POST /:id/start), and plan update
+ * (PATCH /:id/plan) all select this exact column list. `workspace_sprint_start_date`
+ * comes from a parameterized `::timestamp` cast in the list query and a
+ * `w.sprint_start_date` join everywhere else - same runtime type (a DATE
+ * column, or a Date parameter cast to timestamp) either way.
+ */
+interface SprintDetailRow {
+  id: string;
+  title: string;
+  properties: SprintDocumentRow['properties'];
+  program_id: string | null;
+  program_name: string | null;
+  program_prefix: string | null;
+  program_accountable_id: string | null;
+  owner_reports_to: string | null;
+  workspace_sprint_start_date: Date;
+  owner_id: string | null;
+  owner_name: string | null;
+  owner_email: string | null;
+  // COUNT(*) subqueries - node-postgres returns bigint aggregates as strings.
+  issue_count: string;
+  completed_count: string;
+  started_count: string;
+  has_plan: boolean;
+  has_retro: boolean;
+  retro_outcome: string | null;
+  retro_id: string | null;
+}
+
+/** `GET /my-action-items` - sprints owned by the caller needing plan/retro. */
+interface ActionItemSprintRow {
+  id: string;
+  title: string;
+  properties: SprintDocumentRow['properties'];
+  program_id: string | null;
+  program_name: string | null;
+  // `(properties->>'sprint_number')::int` - an int4 cast, comes back as a
+  // real JS number (unlike the bigint/numeric aggregates elsewhere here).
+  sprint_number: number;
+  has_plan: boolean;
+  has_retro: boolean;
+}
+
+/** `GET /my-week` - one issue row joined to its sprint/program/assignee. */
+interface MyWeekIssueRow {
+  issue_id: string;
+  issue_title: string;
+  issue_properties: IssueDocumentRow['properties'];
+  ticket_number: number;
+  issue_created_at: Date;
+  issue_updated_at: Date;
+  sprint_id: string;
+  sprint_name: string;
+  sprint_properties: SprintDocumentRow['properties'];
+  program_id: string | null;
+  program_name: string | null;
+  program_prefix: string | null;
+  assignee_name: string | null;
+  assignee_archived: boolean;
+}
+
+/** Issue summary grouped under each sprint in `GET /my-week`'s response. */
+interface MyWeekIssueSummary {
+  id: string;
+  title: string;
+  state: string;
+  priority: string;
+  assignee_id: string | null;
+  assignee_name: string | null;
+  assignee_archived: boolean;
+  estimate: number | null;
+  ticket_number: number;
+  display_id: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** Batched + per-sprint standup listing; also `formatStandupResponse`'s input. */
+interface StandupRow {
+  id: string;
+  parent_id: string | null;
+  title: string;
+  content: unknown;
+  created_at: Date;
+  updated_at: Date;
+  author_id: string | null;
+  author_name: string | null;
+  author_email: string | null;
+}
+
+/** `INSERT INTO documents (... 'standup' ...) RETURNING id, parent_id, title,
+ *  content, properties, created_at, updated_at`. */
+interface CreatedStandupRow {
+  id: string;
+  parent_id: string | null;
+  title: string;
+  content: unknown;
+  properties: StandupProperties;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** `SELECT name, email FROM users WHERE id = $1`. */
+interface UserNameEmailRow {
+  name: string;
+  email: string;
+}
+
+/** `SELECT id, name, email FROM users WHERE id = $1` (sprint/program owner lookup). */
+interface UserBasicRow {
+  id: string;
+  name: string;
+  email: string;
+}
+
+/** `SELECT properties->>'user_id' as user_id FROM documents WHERE id = $1`
+ *  - resolves a person document to its linked user account, if any. */
+interface UserIdLookupRow {
+  user_id: string | null;
+}
+
+/** `SELECT d.id, d.properties, prog_da.related_id as program_id, w.sprint_start_date
+ *  FROM documents d JOIN workspaces w ...` - shared by PATCH /:id and POST /:id/start. */
+interface SprintWithProgramRow {
+  id: string;
+  properties: SprintDocumentRow['properties'];
+  program_id: string | null;
+  sprint_start_date: Date;
+}
+
+/** `GET /:id/issues` - one sprint issue joined to its assignee. */
+interface SprintIssueRow {
+  id: string;
+  title: string;
+  properties: IssueDocumentRow['properties'];
+  ticket_number: number;
+  created_at: Date;
+  updated_at: Date;
+  created_by: string | null;
+  assignee_name: string | null;
+  assignee_archived: boolean;
+}
+
+/** `GET /:id/scope-changes` - sprint number (text extraction, no cast) +
+ *  workspace start date. */
+interface SprintScopeInfoRow {
+  id: string;
+  sprint_number: string;
+  workspace_sprint_start_date: Date;
+}
+
+/** Issue id + its estimate (numeric cast - comes back as a string). */
+interface IssueEstimateRow {
+  id: string;
+  estimate: string;
+}
+
+/** Estimate-only projection for a single issue looked up by id. */
+interface EstimateOnlyRow {
+  estimate: string;
+}
+
+/** `document_history` rows tracking when an issue entered/left a sprint. */
+interface DocumentHistoryRow {
+  document_id: string;
+  created_at: Date;
+  old_value: string | null;
+  new_value: string | null;
+}
+
+/** Sprint data passed into `generatePrefilledReviewContent`. */
+interface PrefilledReviewSprintData {
+  sprint_number: number;
+  program_name: string | null;
+  plan: string | null;
+}
+
+/** Issue projection consumed by `generatePrefilledReviewContent`. */
+interface ReviewIssueRow {
+  id: string;
+  title: string;
+  properties: IssueDocumentRow['properties'];
+  ticket_number: number;
+}
+
+/** `GET /:id/review` - sprint + program name, used to build a draft review. */
+interface SprintReviewInfoRow {
+  id: string;
+  title: string;
+  properties: SprintDocumentRow['properties'];
+  program_id: string | null;
+  program_name: string | null;
+}
+
+/** A `weekly_review` document joined to its owner. Shared by the
+ *  existing-review lookup in GET /:id/review and the re-query in
+ *  PATCH /:id/review. */
+interface WeeklyReviewRow {
+  id: string;
+  title: string;
+  content: unknown;
+  properties: WeeklyReviewProperties;
+  created_at: Date;
+  updated_at: Date;
+  owner_name: string | null;
+  owner_email: string | null;
+}
+
+/** `{ content: unknown }` projection used to extract plain text from
+ *  weekly_plan documents when building a prefilled review. */
+interface PlanContentRow {
+  content: unknown;
+}
+
+/** `INSERT INTO documents (... 'weekly_review' ...) RETURNING id, title,
+ *  content, properties, created_at, updated_at`. */
+interface CreatedWeeklyReviewRow {
+  id: string;
+  title: string;
+  content: unknown;
+  properties: WeeklyReviewProperties;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** `SELECT d.id, d.properties, d.content FROM documents d ... document_type = 'weekly_review'`. */
+interface WeeklyReviewIdPropsContentRow {
+  id: string;
+  properties: WeeklyReviewProperties;
+  content: unknown;
+}
+
+/** `SELECT d.id, d.title, d.properties FROM documents d WHERE ... document_type = 'sprint'`
+ *  - source/target sprint lookups in POST /:id/carryover, and the create-sprint
+ *  `RETURNING id, title, properties`. */
+interface SprintTitlePropsRow {
+  id: string;
+  title: string;
+  properties: SprintDocumentRow['properties'];
+}
+
+/** Sprint + approval authorization context: owner id and program's
+ *  accountable_id. Shared by approve-plan, approve-review,
+ *  request-plan-changes and request-retro-changes. */
+interface SprintApprovalInfoRow {
+  id: string;
+  properties: SprintDocumentRow['properties'];
+  sprint_owner_id: string | null;
+  program_accountable_id: string | null;
+}
+
+/** Same as `SprintApprovalInfoRow` but without `sprint_owner_id` - what
+ *  unapprove-plan actually selects. */
+interface SprintAccountableOnlyRow {
+  id: string;
+  properties: SprintDocumentRow['properties'];
+  program_accountable_id: string | null;
+}
 
 // ERR-5: guard every `:id` route in this router against a malformed uuid
 // (e.g. `GET /api/weeks/not-a-number`, which is actually this sprint
@@ -27,7 +326,7 @@ router.param('id', validateUuidParam);
  * The sprint's owner_id is a person document ID; this resolves their supervisor's user_id.
  */
 async function getSprintOwnerReportsTo(sprintId: string, workspaceId: string): Promise<string | null> {
-  const result = await pool.query(
+  const result = await pool.query<{ reports_to: string | null }>(
     `SELECT owner_person.properties->>'reports_to' as reports_to
      FROM documents d
      LEFT JOIN documents owner_person
@@ -81,7 +380,7 @@ async function broadcastAccountabilityUpdateToSprintOwner(
 ): Promise<void> {
   if (!sprintOwnerId) return;
 
-  const ownerUserResult = await pool.query(
+  const ownerUserResult = await pool.query<UserIdLookupRow>(
     `SELECT properties->>'user_id' as user_id FROM documents WHERE id = $1`,
     [sprintOwnerId]
   );
@@ -92,9 +391,9 @@ async function broadcastAccountabilityUpdateToSprintOwner(
 }
 
 // GET /api/weeks/lookup-person - Find person document by user_id
-router.get('/lookup-person', authMiddleware, async (req: Request, res: Response) => {
+router.get('/lookup-person', authMiddleware, authed(async (req, res) => {
   try {
-    const workspaceId = req.workspaceId!;
+    const workspaceId = req.workspaceId;
     const userId = req.query.user_id as string;
 
     if (!userId) {
@@ -102,7 +401,7 @@ router.get('/lookup-person', authMiddleware, async (req: Request, res: Response)
       return;
     }
 
-    const result = await pool.query(
+    const result = await pool.query<IdTitleRow>(
       `SELECT id, title FROM documents
        WHERE workspace_id = $1 AND document_type = 'person'
          AND (properties->>'user_id') = $2
@@ -120,13 +419,13 @@ router.get('/lookup-person', authMiddleware, async (req: Request, res: Response)
     console.error('Person lookup error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/weeks/lookup - Find sprint by project_id + sprint_number
 // Returns the sprint document with its approval properties
-router.get('/lookup', authMiddleware, async (req: Request, res: Response) => {
+router.get('/lookup', authMiddleware, authed(async (req, res) => {
   try {
-    const workspaceId = req.workspaceId!;
+    const workspaceId = req.workspaceId;
     const projectId = req.query.project_id as string;
     const sprintNumber = parseInt(req.query.sprint_number as string, 10);
 
@@ -135,7 +434,7 @@ router.get('/lookup', authMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
-    const result = await pool.query(
+    const result = await pool.query<SprintIdPropertiesRow>(
       `SELECT d.id, d.properties
        FROM documents d
        JOIN document_associations da ON da.document_id = d.id
@@ -156,7 +455,7 @@ router.get('/lookup', authMiddleware, async (req: Request, res: Response) => {
     console.error('Sprint lookup error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Validation schemas
 // Sprint properties: sprint_number, assignee_ids (array), and plan fields
@@ -190,7 +489,7 @@ const updatePlanSchema = z.object({
 
 // Helper to extract sprint from row
 // Dates and status are computed on frontend from sprint_number + workspace.sprint_start_date
-function extractSprintFromRow(row: any) {
+function extractSprintFromRow(row: SprintDetailRow) {
   const props = row.properties || {};
   return {
     id: row.id,
@@ -211,8 +510,13 @@ function extractSprintFromRow(row: any) {
     issue_count: parseInt(row.issue_count) || 0,
     completed_count: parseInt(row.completed_count) || 0,
     started_count: parseInt(row.started_count) || 0,
-    has_plan: row.has_plan === true || row.has_plan === 't',
-    has_retro: row.has_retro === true || row.has_retro === 't',
+    // `has_plan`/`has_retro` are `COUNT(*) > 0` - real booleans, not the
+    // 't'/'f' text pg used to hand back for boolean columns pre-parsing.
+    // Once typed honestly this `=== 't'` comparison has no overlap with
+    // `boolean` and is a compile error, so it's simplified to the boolean
+    // itself (identical runtime behavior).
+    has_plan: row.has_plan,
+    has_retro: row.has_retro,
     // Retro outcome summary (populated if retro exists)
     retro_outcome: row.retro_outcome || null,
     retro_id: row.retro_id || null,
@@ -269,7 +573,7 @@ function isSprintActive(sprintNumber: number, workspaceStartDate: Date | string)
 
 // Take a snapshot of current issues in the sprint
 async function takeSprintSnapshot(sprintId: string): Promise<string[]> {
-  const result = await pool.query(
+  const result = await pool.query<IdRow>(
     `SELECT d.id FROM documents d
      JOIN document_associations da ON da.document_id = d.id
      WHERE da.related_id = $1 AND da.relationship_type = 'sprint' AND d.document_type = 'issue'`,
@@ -280,26 +584,27 @@ async function takeSprintSnapshot(sprintId: string): Promise<string[]> {
 
 // Get all active sprints across the workspace
 // Active = sprint_number matches the current 7-day window based on workspace.sprint_start_date
-router.get('/', authMiddleware, async (req: Request, res: Response) => {
+router.get('/', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // First, get the workspace sprint_start_date to calculate current sprint number
-    const workspaceResult = await pool.query(
+    const workspaceResult = await pool.query<WorkspaceStartDateRow>(
       `SELECT sprint_start_date FROM workspaces WHERE id = $1`,
       [workspaceId]
     );
 
-    if (workspaceResult.rows.length === 0) {
+    const workspaceRow = workspaceResult.rows[0];
+    if (!workspaceRow) {
       res.status(404).json({ error: 'Workspace not found' });
       return;
     }
 
-    const rawStartDate = workspaceResult.rows[0].sprint_start_date;
+    const rawStartDate = workspaceRow.sprint_start_date;
     const sprintDuration = 7; // 7-day sprints
 
     // Calculate the current sprint number
@@ -325,7 +630,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     const daysRemaining = Math.max(0, Math.ceil((currentSprintEnd.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) + 1);
 
     // Get all sprints that match the current sprint number - join via document_associations
-    const result = await pool.query(
+    const result = await pool.query<SprintDetailRow>(
       `SELECT d.id, d.title, d.properties, prog_da.related_id as program_id,
               p.title as program_name, p.properties->>'prefix' as program_prefix,
               p.properties->>'accountable_id' as program_accountable_id,
@@ -342,18 +647,31 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
                JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint'
                WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count,
               (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan,
-              (SELECT COUNT(*) > 0 FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL) as has_retro,
-              (SELECT rt.properties->>'outcome' FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_outcome,
-              (SELECT rt.id FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_id
+              (retro.id IS NOT NULL) as has_retro,
+              retro.outcome as retro_outcome,
+              retro.id as retro_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
+       -- DB-6: single indexed lookup replacing 3 correlated subqueries
+       -- (has_retro/retro_outcome/retro_id), each of which independently
+       -- scanned document_associations for the same predicate. A sprint has
+       -- at most one weekly_review with a non-null outcome (enforced at
+       -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is
+       -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is
+       -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq
+       -- Scan over idx_document_associations_related_type because it only
+       -- needs to find one match cheaply; an aggregate has to see every
+       -- matching row regardless, so its cost model prefers the index -
+       -- exactly like the has_retro/issue-count subqueries above, which were
+       -- never affected because they aggregate instead of using LIMIT.
+       LEFT JOIN LATERAL (
+         SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome
+         FROM document_associations rda
+         JOIN documents rt ON rt.id = rda.document_id
+         WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint'
+           AND rt.properties->>'outcome' IS NOT NULL
+       ) retro ON true
        LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id
        WHERE d.workspace_id = $1 AND d.document_type = 'sprint'
          AND (d.properties->>'sprint_number')::int = $2
@@ -379,27 +697,28 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get active sprints error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get action items for current user (sprints needing docs)
 // Returns sprints owned by the user that need plan or retro
-router.get('/my-action-items', authMiddleware, async (req: Request, res: Response) => {
+router.get('/my-action-items', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get workspace sprint configuration
-    const workspaceResult = await pool.query(
+    const workspaceResult = await pool.query<WorkspaceStartDateRow>(
       `SELECT sprint_start_date FROM workspaces WHERE id = $1`,
       [workspaceId]
     );
 
-    if (workspaceResult.rows.length === 0) {
+    const workspaceRow = workspaceResult.rows[0];
+    if (!workspaceRow) {
       res.status(404).json({ error: 'Workspace not found' });
       return;
     }
 
-    const rawStartDate = workspaceResult.rows[0].sprint_start_date;
+    const rawStartDate = workspaceRow.sprint_start_date;
     const sprintDuration = 7; // 7-day sprints
 
     // Calculate the current sprint number
@@ -420,7 +739,7 @@ router.get('/my-action-items', authMiddleware, async (req: Request, res: Respons
     // Get sprints owned by this user that need either plan or retro - join via document_associations
     // Include current sprint (for plans) and previous sprint (for retros)
     // Plans/retros are matched by week_number property and created_by user
-    const result = await pool.query(
+    const result = await pool.query<ActionItemSprintRow>(
       `SELECT d.id, d.title, d.properties, prog_da.related_id as program_id,
               p.title as program_name,
               (d.properties->>'sprint_number')::int as sprint_number,
@@ -451,8 +770,9 @@ router.get('/my-action-items', authMiddleware, async (req: Request, res: Respons
       type: 'plan' | 'retro';
       sprint_id: string;
       sprint_title: string;
-      program_id: string;
-      program_name: string;
+      // LEFT JOINed to the sprint's program - sprints can be programless.
+      program_id: string | null;
+      program_name: string | null;
       sprint_number: number;
       urgency: 'overdue' | 'due_today' | 'due_soon' | 'upcoming';
       days_until_due: number;
@@ -462,9 +782,16 @@ router.get('/my-action-items', authMiddleware, async (req: Request, res: Respons
     const actionItems: ActionItem[] = [];
 
     for (const row of result.rows) {
-      const sprintNumber = parseInt(row.sprint_number, 10);
-      const hasPlan = row.has_plan === true || row.has_plan === 't';
-      const hasRetro = row.has_retro === true || row.has_retro === 't';
+      // `(properties->>'sprint_number')::int` is an int4 cast - node-postgres
+      // already hands this back as a real number, so the old `parseInt` call
+      // (written when this was untyped `any`) was redundant; simplified to
+      // the value itself (identical result: `parseInt(5, 10) === 5`).
+      const sprintNumber = row.sprint_number;
+      // `has_plan`/`has_retro` are `COUNT(*) > 0` - real booleans. See the
+      // matching note in `extractSprintFromRow` for why the `=== 't'` half
+      // of this check is dead code once honestly typed.
+      const hasPlan = row.has_plan;
+      const hasRetro = row.has_retro;
 
       // Calculate sprint dates
       const sprintStart = new Date(workspaceStartDate);
@@ -547,32 +874,33 @@ router.get('/my-action-items', authMiddleware, async (req: Request, res: Respons
     console.error('Get my action items error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get "My Week" view - aggregates issues from all active sprints
 // Virtual aggregation: no 'week' document created, purely computed
 // Supports historical week viewing via sprint_number query param
-router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
+router.get('/my-week', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const { state, assignee, show_mine, sprint_number: requestedSprintNumber } = req.query;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Get workspace sprint_start_date to calculate current sprint number
-    const workspaceResult = await pool.query(
+    const workspaceResult = await pool.query<WorkspaceStartDateRow>(
       `SELECT sprint_start_date FROM workspaces WHERE id = $1`,
       [workspaceId]
     );
 
-    if (workspaceResult.rows.length === 0) {
+    const workspaceRow = workspaceResult.rows[0];
+    if (!workspaceRow) {
       res.status(404).json({ error: 'Workspace not found' });
       return;
     }
 
-    const rawStartDate = workspaceResult.rows[0].sprint_start_date;
+    const rawStartDate = workspaceRow.sprint_start_date;
     const sprintDuration = 7;
 
     // Calculate current sprint number
@@ -613,7 +941,7 @@ router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
     const daysRemaining = isHistorical ? 0 : Math.max(0, Math.ceil((targetSprintEnd.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)) + 1);
 
     // Build dynamic WHERE clause for issue filters
-    const params: any[] = [workspaceId, targetSprintNumber, userId, isAdmin];
+    const params: (string | number | boolean)[] = [workspaceId, targetSprintNumber, userId, isAdmin];
     let filterConditions = '';
 
     if (state && typeof state === 'string') {
@@ -630,7 +958,7 @@ router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
     }
 
     // Get all issues from all active sprints, grouped by sprint - join via document_associations
-    const result = await pool.query(
+    const result = await pool.query<MyWeekIssueRow>(
       `SELECT
         i.id as issue_id, i.title as issue_title, i.properties as issue_properties,
         i.ticket_number, i.created_at as issue_created_at, i.updated_at as issue_updated_at,
@@ -670,8 +998,8 @@ router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
     // Group issues by sprint/program
     const groupedData: Record<string, {
       sprint: { id: string; name: string; sprint_number: number };
-      program: { id: string; name: string; prefix: string } | null;
-      issues: any[];
+      program: { id: string; name: string | null; prefix: string | null } | null;
+      issues: MyWeekIssueSummary[];
     }> = {};
 
     for (const row of result.rows) {
@@ -716,9 +1044,9 @@ router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
     // Calculate totals
     const totalIssues = groups.reduce((sum, g) => sum + g.issues.length, 0);
     const completedIssues = groups.reduce((sum, g) =>
-      sum + g.issues.filter((i: any) => i.state === 'done').length, 0);
+      sum + g.issues.filter((i) => i.state === 'done').length, 0);
     const inProgressIssues = groups.reduce((sum, g) =>
-      sum + g.issues.filter((i: any) => i.state === 'in_progress' || i.state === 'in_review').length, 0);
+      sum + g.issues.filter((i) => i.state === 'in_progress' || i.state === 'in_review').length, 0);
 
     res.json({
       groups,
@@ -741,7 +1069,7 @@ router.get('/my-week', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get my-week error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============================================
 // Batched standups across multiple weeks (TRO-181 / TRO-176, audit findings
@@ -786,7 +1114,7 @@ router.get('/standups', authMiddleware, async (req: Request, res: Response) => {
     // Narrow to the sprints that exist in this workspace and are visible to
     // the user - the same access check the per-week route ran once per
     // request, run once here for every requested id.
-    const accessibleSprints = await pool.query(
+    const accessibleSprints = await pool.query<IdRow>(
       `SELECT id FROM documents
        WHERE id = ANY($1) AND workspace_id = $2 AND document_type = 'sprint'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -803,7 +1131,7 @@ router.get('/standups', authMiddleware, async (req: Request, res: Response) => {
     // first, capped at 10 - the client only ever rendered the 10 most
     // recent across all active weeks, but the old per-week query shipped
     // every row's full content with no LIMIT at all.
-    const result = await pool.query(
+    const result = await pool.query<StandupRow>(
       `SELECT d.id, d.parent_id, d.title, d.content, d.created_at, d.updated_at,
               d.properties->>'author_id' as author_id,
               u.name as author_name, u.email as author_email
@@ -839,16 +1167,16 @@ router.get('/standups', authMiddleware, async (req: Request, res: Response) => {
 
 // Get single sprint
 // Automatically takes a plan snapshot when sprint becomes active (start_date reached)
-router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
-    const result = await pool.query(
+    const result = await pool.query<SprintDetailRow>(
       `SELECT d.id, d.title, d.properties, prog_da.related_id as program_id,
               p.title as program_name, p.properties->>'prefix' as program_prefix,
               p.properties->>'accountable_id' as program_accountable_id,
@@ -865,18 +1193,31 @@ router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
                JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint'
                WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count,
               (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan,
-              (SELECT COUNT(*) > 0 FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL) as has_retro,
-              (SELECT rt.properties->>'outcome' FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_outcome,
-              (SELECT rt.id FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_id
+              (retro.id IS NOT NULL) as has_retro,
+              retro.outcome as retro_outcome,
+              retro.id as retro_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
+       -- DB-6: single indexed lookup replacing 3 correlated subqueries
+       -- (has_retro/retro_outcome/retro_id), each of which independently
+       -- scanned document_associations for the same predicate. A sprint has
+       -- at most one weekly_review with a non-null outcome (enforced at
+       -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is
+       -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is
+       -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq
+       -- Scan over idx_document_associations_related_type because it only
+       -- needs to find one match cheaply; an aggregate has to see every
+       -- matching row regardless, so its cost model prefers the index -
+       -- exactly like the has_retro/issue-count subqueries above, which were
+       -- never affected because they aggregate instead of using LIMIT.
+       LEFT JOIN LATERAL (
+         SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome
+         FROM document_associations rda
+         JOIN documents rt ON rt.id = rda.document_id
+         WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint'
+           AND rt.properties->>'outcome' IS NOT NULL
+       ) retro ON true
        JOIN workspaces w ON d.workspace_id = w.id
        LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id
        WHERE d.id = $1 AND d.workspace_id = $2 AND d.document_type = 'sprint'
@@ -884,12 +1225,12 @@ router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (result.rows.length === 0) {
+    const row = result.rows[0];
+    if (!row) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
 
-    const row = result.rows[0];
     const props = row.properties || {};
     const sprintNumber = props.sprint_number || 1;
     const workspaceStartDate = row.workspace_sprint_start_date;
@@ -923,15 +1264,15 @@ router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Create sprint (creates a document with document_type = 'sprint')
 // Only stores sprint_number and owner_id - dates/status computed from sprint_number
 // program_id is optional - allows creating projectless sprints for ad-hoc work
-router.post('/', authMiddleware, async (req: Request, res: Response) => {
+router.post('/', authMiddleware, authed(async (req, res) => {
   try {
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = createSprintSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -945,21 +1286,22 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Get workspace info (always needed for sprint_start_date)
-    const workspaceResult = await pool.query(
+    const workspaceResult = await pool.query<WorkspaceStartDateRow>(
       `SELECT sprint_start_date FROM workspaces WHERE id = $1`,
       [workspaceId]
     );
 
-    if (workspaceResult.rows.length === 0) {
+    const workspaceRow = workspaceResult.rows[0];
+    if (!workspaceRow) {
       res.status(404).json({ error: 'Workspace not found' });
       return;
     }
 
-    const sprintStartDate = workspaceResult.rows[0].sprint_start_date;
+    const sprintStartDate = workspaceRow.sprint_start_date;
 
     // If program_id provided, verify it belongs to workspace and user can access it
     if (program_id) {
-      const programCheck = await pool.query(
+      const programCheck = await pool.query<IdRow>(
         `SELECT d.id
          FROM documents d
          WHERE d.id = $1 AND d.workspace_id = $2 AND d.document_type = 'program'
@@ -973,7 +1315,7 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
       }
 
       // Check if sprint already exists for this program + sprint_number
-      const existingCheck = await pool.query(
+      const existingCheck = await pool.query<IdRow>(
         `SELECT d.id FROM documents d
          JOIN document_associations da ON da.document_id = d.id
          WHERE da.related_id = $1 AND da.relationship_type = 'program'
@@ -987,7 +1329,7 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
       }
     } else {
       // For projectless sprints, check workspace-wide uniqueness (sprints without program association)
-      const existingCheck = await pool.query(
+      const existingCheck = await pool.query<IdRow>(
         `SELECT d.id FROM documents d
          WHERE d.workspace_id = $1
            AND d.document_type = 'sprint'
@@ -1006,9 +1348,9 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     }
 
     // Verify owner exists in workspace (if provided)
-    let ownerData = null;
+    let ownerData: UserBasicRow | null | undefined = null;
     if (owner_id) {
-      const ownerCheck = await pool.query(
+      const ownerCheck = await pool.query<UserBasicRow>(
         `SELECT u.id, u.name, u.email FROM users u
          JOIN workspace_memberships wm ON wm.user_id = u.id
          WHERE u.id = $1 AND wm.workspace_id = $2`,
@@ -1071,14 +1413,19 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
       ]
     };
 
-    const result = await pool.query(
+    const result = await pool.query<SprintTitlePropsRow>(
       `INSERT INTO documents (workspace_id, document_type, title, properties, created_by, content)
        VALUES ($1, 'sprint', $2, $3, $4, $5)
        RETURNING id, title, properties`,
       [workspaceId, title, JSON.stringify(properties), userId, JSON.stringify(defaultContent)]
     );
 
-    const sprintId = result.rows[0].id;
+    const createdRow = result.rows[0];
+    if (!createdRow) {
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
+    const sprintId = createdRow.id;
 
     // Create document_association to link sprint to program (required for queries that join via associations)
     if (program_id) {
@@ -1090,8 +1437,8 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     }
 
     res.status(201).json({
-      id: result.rows[0].id,
-      name: result.rows[0].title,
+      id: createdRow.id,
+      name: createdRow.title,
       sprint_number,
       owner: ownerData ? {
         id: ownerData.id,
@@ -1113,15 +1460,15 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     console.error('Create sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Update sprint - title, owner_id, and sprint_number can be updated
 // When sprint_number changes, the plan snapshot is cleared and will be retaken when the new date arrives
-router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = updateSprintSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1133,7 +1480,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists and user can access it, also get workspace start date
-    const existing = await pool.query(
+    const existing = await pool.query<SprintWithProgramRow>(
       `SELECT d.id, d.properties, prog_da.related_id as program_id, w.sprint_start_date
        FROM documents d
        JOIN workspaces w ON d.workspace_id = w.id
@@ -1143,15 +1490,21 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (existing.rows.length === 0) {
+    const existingRow = existing.rows[0];
+    if (!existingRow) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
 
-    const currentProps = existing.rows[0].properties || {};
-    const programId = existing.rows[0].program_id;
+    // Typed as `Record<string, unknown>` rather than `WeekProperties`: this
+    // patch object intentionally sets `owner_id` back to `null` below to
+    // clear the owner, which `WeekProperties.owner_id` (a required `string`)
+    // doesn't allow - that field is "required" for a *complete* sprint, not
+    // for every intermediate patch state written here.
+    const currentProps: Record<string, unknown> = existingRow.properties || {};
+    const programId = existingRow.program_id;
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: string[] = [];
     let paramIndex = 1;
 
     const data = parsed.data;
@@ -1163,14 +1516,14 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     }
 
     // Handle owner_id and sprint_number updates (in properties)
-    const newProps = { ...currentProps };
+    const newProps: Record<string, unknown> = { ...currentProps };
     let propsChanged = false;
 
     if (data.owner_id !== undefined) {
       // Only validate if owner_id is not null (i.e., setting a new owner, not clearing)
       if (data.owner_id) {
         // Verify owner exists in workspace
-        const ownerCheck = await pool.query(
+        const ownerCheck = await pool.query<IdRow>(
           `SELECT u.id FROM users u
            JOIN workspace_memberships wm ON wm.user_id = u.id
            WHERE u.id = $1 AND wm.workspace_id = $2`,
@@ -1194,7 +1547,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     if (data.sprint_number !== undefined && data.sprint_number !== currentProps.sprint_number) {
       // Check if new sprint_number already exists for this program
       if (programId) {
-        const existingCheck = await pool.query(
+        const existingCheck = await pool.query<IdRow>(
           `SELECT d.id FROM documents d
            JOIN document_associations da ON da.document_id = d.id AND da.related_id = $1 AND da.relationship_type = 'program'
            WHERE d.document_type = 'sprint' AND d.id != $2 AND (d.properties->>'sprint_number')::int = $3`,
@@ -1207,7 +1560,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
         }
       } else {
         // For programless sprints, check workspace-wide uniqueness (sprints with no program association)
-        const existingCheck = await pool.query(
+        const existingCheck = await pool.query<IdRow>(
           `SELECT d.id FROM documents d
            WHERE d.workspace_id = $1 AND d.document_type = 'sprint' AND d.id != $2
              AND (d.properties->>'sprint_number')::int = $3
@@ -1255,7 +1608,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     );
 
     // Re-query to get full sprint with owner info
-    const result = await pool.query(
+    const result = await pool.query<SprintDetailRow>(
       `SELECT d.id, d.title, d.properties, prog_da.related_id as program_id,
               p.title as program_name, p.properties->>'prefix' as program_prefix,
               p.properties->>'accountable_id' as program_accountable_id,
@@ -1272,44 +1625,63 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
                JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint'
                WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count,
               (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan,
-              (SELECT COUNT(*) > 0 FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL) as has_retro,
-              (SELECT rt.properties->>'outcome' FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_outcome,
-              (SELECT rt.id FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_id
+              (retro.id IS NOT NULL) as has_retro,
+              retro.outcome as retro_outcome,
+              retro.id as retro_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
+       -- DB-6: single indexed lookup replacing 3 correlated subqueries
+       -- (has_retro/retro_outcome/retro_id), each of which independently
+       -- scanned document_associations for the same predicate. A sprint has
+       -- at most one weekly_review with a non-null outcome (enforced at
+       -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is
+       -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is
+       -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq
+       -- Scan over idx_document_associations_related_type because it only
+       -- needs to find one match cheaply; an aggregate has to see every
+       -- matching row regardless, so its cost model prefers the index -
+       -- exactly like the has_retro/issue-count subqueries above, which were
+       -- never affected because they aggregate instead of using LIMIT.
+       LEFT JOIN LATERAL (
+         SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome
+         FROM document_associations rda
+         JOIN documents rt ON rt.id = rda.document_id
+         WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint'
+           AND rt.properties->>'outcome' IS NOT NULL
+       ) retro ON true
        JOIN workspaces w ON d.workspace_id = w.id
        LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id
        WHERE d.id = $1 AND d.document_type = 'sprint'`,
       [id]
     );
 
-    res.json(extractSprintFromRow(result.rows[0]));
+    const updatedRow = result.rows[0];
+    if (!updatedRow) {
+      res.status(404).json({ error: 'Week not found' });
+      return;
+    }
+
+    res.json(extractSprintFromRow(updatedRow));
   } catch (err) {
     console.error('Update sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Start sprint - manually activate a planning sprint with scope snapshot
 // POST /api/weeks/:id/start
-router.post('/:id/start', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/start', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists and user can access it
-    const existing = await pool.query(
+    const existing = await pool.query<SprintWithProgramRow>(
       `SELECT d.id, d.properties, prog_da.related_id as program_id, w.sprint_start_date
        FROM documents d
        JOIN workspaces w ON d.workspace_id = w.id
@@ -1319,12 +1691,13 @@ router.post('/:id/start', authMiddleware, async (req: Request, res: Response) =>
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (existing.rows.length === 0) {
+    const existingRow = existing.rows[0];
+    if (!existingRow) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
 
-    const currentProps = existing.rows[0].properties || {};
+    const currentProps = existingRow.properties || {};
     const currentStatus = currentProps.status || 'planning';
 
     // Only allow starting a sprint that's in planning status
@@ -1354,10 +1727,10 @@ router.post('/:id/start', authMiddleware, async (req: Request, res: Response) =>
     );
 
     // Broadcast celebration when sprint is started
-    broadcastToUser(req.userId!, 'accountability:updated', { type: 'week_start', targetId: id as string });
+    broadcastToUser(req.userId, 'accountability:updated', { type: 'week_start', targetId: id as string });
 
     // Re-query to get full sprint with owner info
-    const result = await pool.query(
+    const result = await pool.query<SprintDetailRow>(
       `SELECT d.id, d.title, d.properties, prog_da.related_id as program_id,
               p.title as program_name, p.properties->>'prefix' as program_prefix,
               p.properties->>'accountable_id' as program_accountable_id,
@@ -1374,25 +1747,43 @@ router.post('/:id/start', authMiddleware, async (req: Request, res: Response) =>
                JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint'
                WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count,
               (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan,
-              (SELECT COUNT(*) > 0 FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL) as has_retro,
-              (SELECT rt.properties->>'outcome' FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_outcome,
-              (SELECT rt.id FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_id
+              (retro.id IS NOT NULL) as has_retro,
+              retro.outcome as retro_outcome,
+              retro.id as retro_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
+       -- DB-6: single indexed lookup replacing 3 correlated subqueries
+       -- (has_retro/retro_outcome/retro_id), each of which independently
+       -- scanned document_associations for the same predicate. A sprint has
+       -- at most one weekly_review with a non-null outcome (enforced at
+       -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is
+       -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is
+       -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq
+       -- Scan over idx_document_associations_related_type because it only
+       -- needs to find one match cheaply; an aggregate has to see every
+       -- matching row regardless, so its cost model prefers the index -
+       -- exactly like the has_retro/issue-count subqueries above, which were
+       -- never affected because they aggregate instead of using LIMIT.
+       LEFT JOIN LATERAL (
+         SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome
+         FROM document_associations rda
+         JOIN documents rt ON rt.id = rda.document_id
+         WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint'
+           AND rt.properties->>'outcome' IS NOT NULL
+       ) retro ON true
        JOIN workspaces w ON d.workspace_id = w.id
        LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id
        WHERE d.id = $1 AND d.document_type = 'sprint'`,
       [id]
     );
 
-    const sprint = extractSprintFromRow(result.rows[0]);
+    const startedRow = result.rows[0];
+    if (!startedRow) {
+      res.status(404).json({ error: 'Week not found' });
+      return;
+    }
+    const sprint = extractSprintFromRow(startedRow);
 
     res.json({
       ...sprint,
@@ -1402,20 +1793,20 @@ router.post('/:id/start', authMiddleware, async (req: Request, res: Response) =>
     console.error('Start sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Delete sprint
-router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.delete('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists and user can access it
-    const existing = await pool.query(
+    const existing = await pool.query<IdRow>(
       `SELECT id FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'sprint'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -1443,15 +1834,15 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Delete sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Update sprint plan (append mode - preserves history)
 // PATCH /api/weeks/:id/plan
-router.patch('/:id/plan', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id/plan', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = updatePlanSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1463,19 +1854,20 @@ router.patch('/:id/plan', authMiddleware, async (req: Request, res: Response) =>
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists and user can access it, get current properties
-    const existing = await pool.query(
+    const existing = await pool.query<SprintIdPropertiesRow>(
       `SELECT id, properties FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'sprint'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (existing.rows.length === 0) {
+    const existingRow = existing.rows[0];
+    if (!existingRow) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
 
-    const currentProps = existing.rows[0].properties || {};
+    const currentProps = existingRow.properties || {};
     const newProps = { ...currentProps };
     const data = parsed.data;
     const now = new Date().toISOString();
@@ -1561,11 +1953,11 @@ router.patch('/:id/plan', authMiddleware, async (req: Request, res: Response) =>
 
     // Broadcast celebration when plan is added
     if (data.plan && data.plan.trim() !== '') {
-      broadcastToUser(req.userId!, 'accountability:updated', { type: 'weekly_plan', targetId: id as string });
+      broadcastToUser(req.userId, 'accountability:updated', { type: 'weekly_plan', targetId: id as string });
     }
 
     // Re-query to get full sprint with owner info
-    const result = await pool.query(
+    const result = await pool.query<SprintDetailRow>(
       `SELECT d.id, d.title, d.properties, prog_da.related_id as program_id,
               p.title as program_name, p.properties->>'prefix' as program_prefix,
               p.properties->>'accountable_id' as program_accountable_id,
@@ -1582,43 +1974,62 @@ router.patch('/:id/plan', authMiddleware, async (req: Request, res: Response) =>
                JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint'
                WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count,
               (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan,
-              (SELECT COUNT(*) > 0 FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL) as has_retro,
-              (SELECT rt.properties->>'outcome' FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_outcome,
-              (SELECT rt.id FROM documents rt
-               JOIN document_associations rda ON rda.document_id = rt.id AND rda.related_id = d.id AND rda.relationship_type = 'sprint'
-               WHERE rt.properties->>'outcome' IS NOT NULL LIMIT 1) as retro_id
+              (retro.id IS NOT NULL) as has_retro,
+              retro.outcome as retro_outcome,
+              retro.id as retro_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
+       -- DB-6: single indexed lookup replacing 3 correlated subqueries
+       -- (has_retro/retro_outcome/retro_id), each of which independently
+       -- scanned document_associations for the same predicate. A sprint has
+       -- at most one weekly_review with a non-null outcome (enforced at
+       -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is
+       -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is
+       -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq
+       -- Scan over idx_document_associations_related_type because it only
+       -- needs to find one match cheaply; an aggregate has to see every
+       -- matching row regardless, so its cost model prefers the index -
+       -- exactly like the has_retro/issue-count subqueries above, which were
+       -- never affected because they aggregate instead of using LIMIT.
+       LEFT JOIN LATERAL (
+         SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome
+         FROM document_associations rda
+         JOIN documents rt ON rt.id = rda.document_id
+         WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint'
+           AND rt.properties->>'outcome' IS NOT NULL
+       ) retro ON true
        JOIN workspaces w ON d.workspace_id = w.id
        LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id
        WHERE d.id = $1 AND d.document_type = 'sprint'`,
       [id]
     );
 
-    res.json(extractSprintFromRow(result.rows[0]));
+    const updatedRow = result.rows[0];
+    if (!updatedRow) {
+      res.status(404).json({ error: 'Week not found' });
+      return;
+    }
+
+    res.json(extractSprintFromRow(updatedRow));
   } catch (err) {
     console.error('Update sprint plan error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get sprint issues
-router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/issues', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists, user can access it, and get program info
-    const sprintResult = await pool.query(
+    const sprintResult = await pool.query<{ id: string; prefix: string | null }>(
       `SELECT d.id, p.properties->>'prefix' as prefix FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
        LEFT JOIN documents p ON prog_da.related_id = p.id
@@ -1632,7 +2043,7 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
       return;
     }
 
-    const result = await pool.query(
+    const result = await pool.query<SprintIssueRow>(
       `SELECT d.id, d.title, d.properties, d.ticket_number,
               d.created_at, d.updated_at, d.created_by,
               u.name as assignee_name,
@@ -1665,7 +2076,7 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
     let carryoverSprintNames: Record<string, string> = {};
     if (carryoverSprintIds.length > 0) {
       const uniqueIds = [...new Set(carryoverSprintIds)];
-      const sprintNamesResult = await pool.query(
+      const sprintNamesResult = await pool.query<IdTitleRow>(
         `SELECT id, title FROM documents WHERE id = ANY($1) AND document_type = 'sprint'`,
         [uniqueIds]
       );
@@ -1676,7 +2087,11 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
 
     const issues = result.rows.map(row => {
       const props = row.properties || {};
-      const carryoverFromSprintId = props.carryover_from_sprint_id || null;
+      // `carryover_from_sprint_id` isn't a named `IssueProperties` field (just
+      // an index-signature entry, typed `unknown`) - narrow it to a real
+      // sprint id (a string) before using it as a lookup key below.
+      const rawCarryoverId = props.carryover_from_sprint_id;
+      const carryoverFromSprintId = typeof rawCarryoverId === 'string' ? rawCarryoverId : null;
       return {
         id: row.id,
         title: row.title,
@@ -1703,21 +2118,21 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
     console.error('Get sprint issues error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get sprint scope changes
 // Returns: { originalScope, currentScope, scopeChangePercent, scopeChanges }
-router.get('/:id/scope-changes', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/scope-changes', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Get sprint info including sprint_number and workspace start date
-    const sprintResult = await pool.query(
+    const sprintResult = await pool.query<SprintScopeInfoRow>(
       `SELECT d.id, d.properties->>'sprint_number' as sprint_number,
               w.sprint_start_date as workspace_sprint_start_date
        FROM documents d
@@ -1727,13 +2142,14 @@ router.get('/:id/scope-changes', authMiddleware, async (req: Request, res: Respo
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (sprintResult.rows.length === 0) {
+    const sprintRow = sprintResult.rows[0];
+    if (!sprintRow) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
 
-    const sprintNumber = parseInt(sprintResult.rows[0].sprint_number, 10);
-    const rawStartDate = sprintResult.rows[0].workspace_sprint_start_date;
+    const sprintNumber = parseInt(sprintRow.sprint_number, 10);
+    const rawStartDate = sprintRow.workspace_sprint_start_date;
     const sprintDuration = 7; // 1-week sprints
 
     // Calculate sprint start date
@@ -1750,7 +2166,7 @@ router.get('/:id/scope-changes', authMiddleware, async (req: Request, res: Respo
     sprintStartDate.setUTCDate(sprintStartDate.getUTCDate() + (sprintNumber - 1) * sprintDuration);
 
     // Get all issues currently in the sprint with their estimates
-    const issuesResult = await pool.query(
+    const issuesResult = await pool.query<IssueEstimateRow>(
       `SELECT d.id, COALESCE((d.properties->>'estimate')::numeric, 0) as estimate
        FROM documents d
        JOIN document_associations da ON da.document_id = d.id AND da.related_id = $1 AND da.relationship_type = 'sprint'
@@ -1760,7 +2176,7 @@ router.get('/:id/scope-changes', authMiddleware, async (req: Request, res: Respo
 
     // Get when each issue was added to this sprint from document_history
     // field = 'sprint_id' and new_value = sprint_id means issue was added to sprint
-    const historyResult = await pool.query(
+    const historyResult = await pool.query<DocumentHistoryRow>(
       `SELECT document_id, created_at, old_value, new_value
        FROM document_history
        WHERE field = 'sprint_id' AND new_value = $1
@@ -1825,7 +2241,7 @@ router.get('/:id/scope-changes', authMiddleware, async (req: Request, res: Respo
     }
 
     // Also check for issues removed from sprint (sprint_id changed away from this sprint)
-    const removedResult = await pool.query(
+    const removedResult = await pool.query<DocumentHistoryRow>(
       `SELECT document_id, created_at, old_value, new_value
        FROM document_history
        WHERE field = 'sprint_id' AND old_value = $1 AND created_at > $2
@@ -1837,7 +2253,7 @@ router.get('/:id/scope-changes', authMiddleware, async (req: Request, res: Respo
       // We need the estimate of the issue at time of removal
       // For simplicity, we'll use the current estimate (or 0 if issue no longer in sprint)
       // In a real system, you might want to track historical estimates
-      const issueResult = await pool.query(
+      const issueResult = await pool.query<EstimateOnlyRow>(
         `SELECT COALESCE((properties->>'estimate')::numeric, 0) as estimate
          FROM documents WHERE id = $1`,
         [row.document_id]
@@ -1876,7 +2292,7 @@ router.get('/:id/scope-changes', authMiddleware, async (req: Request, res: Respo
     console.error('Get sprint scope changes error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============================================
 // Standup Endpoints - Comment-like entries on sprints
@@ -1891,7 +2307,7 @@ const createStandupSchema = z.object({
 });
 
 // Helper to format standup response
-function formatStandupResponse(row: any) {
+function formatStandupResponse(row: StandupRow) {
   return {
     id: row.id,
     sprint_id: row.parent_id,
@@ -1931,17 +2347,17 @@ function formatStandupResponse(row: any) {
  *       404:
  *         description: Sprint not found
  */
-router.get('/:id/standups', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/standups', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists and user can access it
-    const sprintCheck = await pool.query(
+    const sprintCheck = await pool.query<IdRow>(
       `SELECT id FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'sprint'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -1954,7 +2370,7 @@ router.get('/:id/standups', authMiddleware, async (req: Request, res: Response) 
     }
 
     // Get all standups for this sprint (parent_id = sprint.id)
-    const result = await pool.query(
+    const result = await pool.query<StandupRow>(
       `SELECT d.id, d.parent_id, d.title, d.content, d.created_at, d.updated_at,
               d.properties->>'author_id' as author_id,
               u.name as author_name, u.email as author_email
@@ -1985,7 +2401,7 @@ router.get('/:id/standups', authMiddleware, async (req: Request, res: Response) 
     console.error('Get sprint standups error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 /**
  * @swagger
@@ -2024,11 +2440,11 @@ router.get('/:id/standups', authMiddleware, async (req: Request, res: Response) 
  *       404:
  *         description: Sprint not found
  */
-router.post('/:id/standups', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/standups', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = createStandupSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -2056,7 +2472,7 @@ router.post('/:id/standups', authMiddleware, async (req: Request, res: Response)
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists and user can access it
-    const sprintCheck = await pool.query(
+    const sprintCheck = await pool.query<IdRow>(
       `SELECT id FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'sprint'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
@@ -2072,7 +2488,7 @@ router.post('/:id/standups', authMiddleware, async (req: Request, res: Response)
     // parent_id = sprint.id, properties.author_id = current user
     const properties = { author_id: userId };
 
-    const result = await pool.query(
+    const result = await pool.query<CreatedStandupRow>(
       `INSERT INTO documents (workspace_id, document_type, title, content, parent_id, properties, created_by, visibility)
        VALUES ($1, 'standup', $2, $3, $4, $5, $6, 'workspace')
        RETURNING id, parent_id, title, content, properties, created_at, updated_at`,
@@ -2080,12 +2496,16 @@ router.post('/:id/standups', authMiddleware, async (req: Request, res: Response)
     );
 
     // Get author info
-    const authorResult = await pool.query(
+    const authorResult = await pool.query<UserNameEmailRow>(
       `SELECT name, email FROM users WHERE id = $1`,
       [userId]
     );
 
     const standup = result.rows[0];
+    if (!standup) {
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
     const author = authorResult.rows[0];
 
     // Broadcast celebration when standup is created
@@ -2106,7 +2526,7 @@ router.post('/:id/standups', authMiddleware, async (req: Request, res: Response)
     console.error('Create standup error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============================================
 // Sprint Review Endpoints - One per sprint with plan validation
@@ -2120,7 +2540,7 @@ const sprintReviewSchema = z.object({
 });
 
 // Helper to generate pre-filled sprint review content
-async function generatePrefilledReviewContent(sprintData: any, issues: any[]) {
+async function generatePrefilledReviewContent(sprintData: PrefilledReviewSprintData, issues: ReviewIssueRow[]) {
   // Categorize issues
   const issuesPlanned = issues.filter(i => {
     const props = i.properties || {};
@@ -2255,17 +2675,17 @@ async function generatePrefilledReviewContent(sprintData: any, issues: any[]) {
 }
 
 // GET /api/weeks/:id/review - Get or generate pre-filled sprint review
-router.get('/:id/review', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/review', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists and user can access it
-    const sprintResult = await pool.query(
+    const sprintResult = await pool.query<SprintReviewInfoRow>(
       `SELECT d.id, d.title, d.properties, prog_da.related_id as program_id,
               p.title as program_name
        FROM documents d
@@ -2276,17 +2696,16 @@ router.get('/:id/review', authMiddleware, async (req: Request, res: Response) =>
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (sprintResult.rows.length === 0) {
+    const sprint = sprintResult.rows[0];
+    if (!sprint) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
-
-    const sprint = sprintResult.rows[0];
     const sprintProps = sprint.properties || {};
 
     // Check if a weekly_review already exists for this sprint
     // Note: weekly_review documents use document_associations to link to sprint
-    const existingReview = await pool.query(
+    const existingReview = await pool.query<WeeklyReviewRow>(
       `SELECT d.id, d.title, d.content, d.properties, d.created_at, d.updated_at,
               u.name as owner_name, u.email as owner_email
        FROM documents d
@@ -2298,9 +2717,9 @@ router.get('/:id/review', authMiddleware, async (req: Request, res: Response) =>
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (existingReview.rows.length > 0) {
+    const review = existingReview.rows[0];
+    if (review) {
       // Return existing review
-      const review = existingReview.rows[0];
       const reviewProps = review.properties || {};
       res.json({
         id: review.id,
@@ -2320,7 +2739,7 @@ router.get('/:id/review', authMiddleware, async (req: Request, res: Response) =>
 
     // No existing review - generate pre-filled draft
     // Get issues for this sprint
-    const issuesResult = await pool.query(
+    const issuesResult = await pool.query<ReviewIssueRow>(
       `SELECT d.id, d.title, d.properties, d.ticket_number
        FROM documents d
        JOIN document_associations da ON da.document_id = d.id AND da.related_id = $1 AND da.relationship_type = 'sprint'
@@ -2329,7 +2748,7 @@ router.get('/:id/review', authMiddleware, async (req: Request, res: Response) =>
     );
 
     // Fetch weekly_plan documents for this sprint (plans are now separate documents, not sprint properties)
-    const weeklyPlansResult = await pool.query(
+    const weeklyPlansResult = await pool.query<PlanContentRow>(
       `SELECT content FROM documents
        WHERE document_type = 'weekly_plan'
          AND (properties->>'week_number')::int = $1
@@ -2366,14 +2785,14 @@ router.get('/:id/review', authMiddleware, async (req: Request, res: Response) =>
     console.error('Get sprint review error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/review - Create finalized sprint review
-router.post('/:id/review', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/review', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = sprintReviewSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -2387,20 +2806,21 @@ router.post('/:id/review', authMiddleware, async (req: Request, res: Response) =
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists and user can access it
-    const sprintCheck = await pool.query(
+    const sprintCheck = await pool.query<SprintIdPropertiesRow>(
       `SELECT id, properties FROM documents
        WHERE id = $1 AND workspace_id = $2 AND document_type = 'sprint'
          AND ${VISIBILITY_FILTER_SQL('documents', '$3', '$4')}`,
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (sprintCheck.rows.length === 0) {
+    const sprintRow = sprintCheck.rows[0];
+    if (!sprintRow) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
 
     // Check if a weekly_review already exists
-    const existingCheck = await pool.query(
+    const existingCheck = await pool.query<IdRow>(
       `SELECT d.id FROM documents d
        JOIN document_associations da ON da.document_id = d.id AND da.related_id = $1 AND da.relationship_type = 'sprint'
        WHERE d.document_type = 'weekly_review'
@@ -2413,7 +2833,7 @@ router.post('/:id/review', authMiddleware, async (req: Request, res: Response) =
       return;
     }
 
-    const sprintProps = sprintCheck.rows[0].properties || {};
+    const sprintProps = sprintRow.properties || {};
 
     // Create the weekly_review document
     const properties = {
@@ -2425,22 +2845,28 @@ router.post('/:id/review', authMiddleware, async (req: Request, res: Response) =
     const reviewTitle = title || `Week ${sprintProps.sprint_number || 'N'} Review`;
     const reviewContent = content || { type: 'doc', content: [{ type: 'paragraph' }] };
 
-    const result = await pool.query(
+    const result = await pool.query<CreatedWeeklyReviewRow>(
       `INSERT INTO documents (workspace_id, document_type, title, content, properties, created_by, visibility)
        VALUES ($1, 'weekly_review', $2, $3, $4, $5, 'workspace')
        RETURNING id, title, content, properties, created_at, updated_at`,
       [workspaceId, reviewTitle, JSON.stringify(reviewContent), JSON.stringify(properties), userId]
     );
 
+    const review = result.rows[0];
+    if (!review) {
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
+
     // Create document_association to link weekly_review to sprint
     await pool.query(
       `INSERT INTO document_associations (document_id, related_id, relationship_type)
        VALUES ($1, $2, 'sprint')`,
-      [result.rows[0].id, id]
+      [review.id, id]
     );
 
     // Get owner info
-    const ownerResult = await pool.query(
+    const ownerResult = await pool.query<UserNameEmailRow>(
       `SELECT name, email FROM users WHERE id = $1`,
       [userId]
     );
@@ -2449,7 +2875,6 @@ router.post('/:id/review', authMiddleware, async (req: Request, res: Response) =
     broadcastToUser(userId, 'accountability:updated', { type: 'weekly_review', targetId: id as string });
 
     // Log initial review content to document_history for approval workflow tracking
-    const review = result.rows[0];
     if (reviewContent) {
       await logDocumentChange(
         review.id,
@@ -2479,14 +2904,14 @@ router.post('/:id/review', authMiddleware, async (req: Request, res: Response) =
     console.error('Create sprint review error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // PATCH /api/weeks/:id/review - Update existing sprint review
-router.patch('/:id/review', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id/review', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = sprintReviewSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -2500,7 +2925,7 @@ router.patch('/:id/review', authMiddleware, async (req: Request, res: Response) 
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Find existing weekly_review for this sprint
-    const existing = await pool.query(
+    const existing = await pool.query<WeeklyReviewIdPropsContentRow>(
       `SELECT d.id, d.properties, d.content FROM documents d
        JOIN document_associations da ON da.document_id = d.id AND da.related_id = $1 AND da.relationship_type = 'sprint'
        WHERE d.document_type = 'weekly_review'
@@ -2509,14 +2934,15 @@ router.patch('/:id/review', authMiddleware, async (req: Request, res: Response) 
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (existing.rows.length === 0) {
+    const existingRow = existing.rows[0];
+    if (!existingRow) {
       res.status(404).json({ error: 'Weekly review not found. Use POST to create.' });
       return;
     }
 
-    const reviewId = existing.rows[0].id;
-    const currentProps = existing.rows[0].properties || {};
-    const currentContent = existing.rows[0].content;
+    const reviewId = existingRow.id;
+    const currentProps = existingRow.properties || {};
+    const currentContent = existingRow.content;
 
     // Check if user is owner or admin
     const ownerId = currentProps.owner_id;
@@ -2527,7 +2953,7 @@ router.patch('/:id/review', authMiddleware, async (req: Request, res: Response) 
 
     // Build update query
     const updates: string[] = [];
-    const values: any[] = [];
+    const values: string[] = [];
     let paramIndex = 1;
 
     if (content !== undefined) {
@@ -2586,12 +3012,13 @@ router.patch('/:id/review', authMiddleware, async (req: Request, res: Response) 
     const reviewFieldsChanged = content !== undefined || plan_validated !== undefined;
     if (reviewFieldsChanged) {
       // Fetch parent sprint to check review_approval state
-      const sprintResult = await pool.query(
+      const sprintResult = await pool.query<{ properties: SprintDocumentRow['properties'] }>(
         `SELECT properties FROM documents WHERE id = $1 AND document_type = 'sprint'`,
         [id]
       );
-      if (sprintResult.rows.length > 0) {
-        const sprintProps = sprintResult.rows[0].properties || {};
+      const sprintPropsRow = sprintResult.rows[0];
+      if (sprintPropsRow) {
+        const sprintProps = sprintPropsRow.properties || {};
         if (sprintProps.review_approval?.state === 'approved') {
           const newSprintProps = {
             ...sprintProps,
@@ -2611,7 +3038,7 @@ router.patch('/:id/review', authMiddleware, async (req: Request, res: Response) 
 
     // Re-query to get full review with owner info
     // Note: weekly_review documents use owner_id (not assignee_ids like sprint docs)
-    const result = await pool.query(
+    const result = await pool.query<WeeklyReviewRow>(
       `SELECT d.id, d.title, d.content, d.properties, d.created_at, d.updated_at,
               u.name as owner_name, u.email as owner_email
        FROM documents d
@@ -2621,6 +3048,10 @@ router.patch('/:id/review', authMiddleware, async (req: Request, res: Response) 
     );
 
     const review = result.rows[0];
+    if (!review) {
+      res.status(500).json({ error: 'Internal server error' });
+      return;
+    }
     const reviewProps = review.properties || {};
 
     res.json({
@@ -2640,7 +3071,7 @@ router.patch('/:id/review', authMiddleware, async (req: Request, res: Response) 
     console.error('Update sprint review error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Carryover schema
 const carryoverSchema = z.object({
@@ -2649,11 +3080,11 @@ const carryoverSchema = z.object({
 });
 
 // POST /api/weeks/:id/carryover - Move incomplete issues to another sprint
-router.post('/:id/carryover', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/carryover', authMiddleware, authed(async (req, res) => {
   try {
     const { id: sourceSprintId } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = carryoverSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -2667,34 +3098,32 @@ router.post('/:id/carryover', authMiddleware, async (req: Request, res: Response
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // 1. Validate source sprint exists
-    const sourceSprintResult = await pool.query(
+    const sourceSprintResult = await pool.query<SprintTitlePropsRow>(
       `SELECT d.id, d.title, d.properties FROM documents d
        WHERE d.id = $1 AND d.workspace_id = $2 AND d.document_type = 'sprint'
          AND ${VISIBILITY_FILTER_SQL('d', '$3', '$4')}`,
       [sourceSprintId, workspaceId, userId, isAdmin]
     );
 
-    if (sourceSprintResult.rows.length === 0) {
+    const sourceSprint = sourceSprintResult.rows[0];
+    if (!sourceSprint) {
       res.status(404).json({ error: 'Source week not found' });
       return;
     }
 
-    const sourceSprint = sourceSprintResult.rows[0];
-
     // 2. Validate target sprint exists and is planning/active
-    const targetSprintResult = await pool.query(
+    const targetSprintResult = await pool.query<SprintTitlePropsRow>(
       `SELECT d.id, d.title, d.properties FROM documents d
        WHERE d.id = $1 AND d.workspace_id = $2 AND d.document_type = 'sprint'
          AND ${VISIBILITY_FILTER_SQL('d', '$3', '$4')}`,
       [target_sprint_id, workspaceId, userId, isAdmin]
     );
 
-    if (targetSprintResult.rows.length === 0) {
+    const targetSprint = targetSprintResult.rows[0];
+    if (!targetSprint) {
       res.status(404).json({ error: 'Target week not found' });
       return;
     }
-
-    const targetSprint = targetSprintResult.rows[0];
     const targetProps = targetSprint.properties || {};
     const targetStatus = targetProps.status || 'planning';
 
@@ -2704,7 +3133,7 @@ router.post('/:id/carryover', authMiddleware, async (req: Request, res: Response
     }
 
     // 3. Verify all issue_ids belong to the source sprint and user has access
-    const issueCheckResult = await pool.query(
+    const issueCheckResult = await pool.query<IdRow>(
       `SELECT d.id FROM documents d
        JOIN document_associations da ON da.document_id = d.id AND da.related_id = $1 AND da.relationship_type = 'sprint'
        WHERE d.id = ANY($2) AND d.document_type = 'issue' AND d.workspace_id = $3
@@ -2779,14 +3208,14 @@ router.post('/:id/carryover', authMiddleware, async (req: Request, res: Response
     console.error('Week carryover error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/approve-plan - Approve sprint plan
-router.post('/:id/approve-plan', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/approve-plan', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const parsedComment = parseApprovalComment(req.body);
     if (parsedComment.error) {
       res.status(400).json({ error: parsedComment.error });
@@ -2797,7 +3226,7 @@ router.post('/:id/approve-plan', authMiddleware, async (req: Request, res: Respo
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists, get properties and program's accountable_id
-    const sprintResult = await pool.query(
+    const sprintResult = await pool.query<SprintApprovalInfoRow>(
       `SELECT d.id, d.properties, d.properties->>'owner_id' as sprint_owner_id,
               prog.properties->>'accountable_id' as program_accountable_id
        FROM documents d
@@ -2808,12 +3237,11 @@ router.post('/:id/approve-plan', authMiddleware, async (req: Request, res: Respo
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (sprintResult.rows.length === 0) {
+    const sprint = sprintResult.rows[0];
+    if (!sprint) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
-
-    const sprint = sprintResult.rows[0];
     const programAccountableId = sprint.program_accountable_id;
 
     // Check authorization: must be program's accountable_id, supervisor (reports_to), OR workspace admin
@@ -2879,18 +3307,18 @@ router.post('/:id/approve-plan', authMiddleware, async (req: Request, res: Respo
     console.error('Approve sprint plan error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/unapprove-plan - Revoke plan approval (logged to history)
-router.post('/:id/unapprove-plan', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/unapprove-plan', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
-    const sprintResult = await pool.query(
+    const sprintResult = await pool.query<SprintAccountableOnlyRow>(
       `SELECT d.id, d.properties, prog.properties->>'accountable_id' as program_accountable_id
        FROM documents d
        LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program'
@@ -2900,12 +3328,11 @@ router.post('/:id/unapprove-plan', authMiddleware, async (req: Request, res: Res
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (sprintResult.rows.length === 0) {
+    const sprint = sprintResult.rows[0];
+    if (!sprint) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
-
-    const sprint = sprintResult.rows[0];
     const ownerReportsTo = await getSprintOwnerReportsTo(id as string, workspaceId);
     if (sprint.program_accountable_id !== userId && ownerReportsTo !== userId && !isAdmin) {
       res.status(403).json({ error: 'Only the supervisor, program accountable person, or admin can unapprove plans' });
@@ -2938,15 +3365,15 @@ router.post('/:id/unapprove-plan', authMiddleware, async (req: Request, res: Res
     console.error('Unapprove sprint plan error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/approve-review - Approve sprint review (rating required)
-router.post('/:id/approve-review', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/approve-review', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
     const { rating } = req.body || {};
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
     const parsedComment = parseApprovalComment(req.body);
     if (parsedComment.error) {
       res.status(400).json({ error: parsedComment.error });
@@ -2968,7 +3395,7 @@ router.post('/:id/approve-review', authMiddleware, async (req: Request, res: Res
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists, get properties and program's accountable_id
-    const sprintResult = await pool.query(
+    const sprintResult = await pool.query<SprintApprovalInfoRow>(
       `SELECT d.id, d.properties, d.properties->>'owner_id' as sprint_owner_id,
               prog.properties->>'accountable_id' as program_accountable_id
        FROM documents d
@@ -2979,12 +3406,11 @@ router.post('/:id/approve-review', authMiddleware, async (req: Request, res: Res
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (sprintResult.rows.length === 0) {
+    const sprint = sprintResult.rows[0];
+    if (!sprint) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
-
-    const sprint = sprintResult.rows[0];
     const programAccountableId = sprint.program_accountable_id;
 
     // Check authorization: must be program's accountable_id, supervisor (reports_to), OR workspace admin
@@ -2995,7 +3421,7 @@ router.post('/:id/approve-review', authMiddleware, async (req: Request, res: Res
     }
 
     // Find the weekly_review document to get its version history
-    const reviewResult = await pool.query(
+    const reviewResult = await pool.query<IdRow>(
       `SELECT d.id FROM documents d
        JOIN document_associations da ON da.document_id = d.id AND da.related_id = $1 AND da.relationship_type = 'sprint'
        WHERE d.document_type = 'weekly_review' AND d.workspace_id = $2`,
@@ -3003,9 +3429,9 @@ router.post('/:id/approve-review', authMiddleware, async (req: Request, res: Res
     );
 
     let versionId: number | null = null;
-    if (reviewResult.rows.length > 0) {
-      const reviewId = reviewResult.rows[0].id;
-      const historyEntry = await getLatestDocumentFieldHistory(reviewId, 'review_content');
+    const reviewRow = reviewResult.rows[0];
+    if (reviewRow) {
+      const historyEntry = await getLatestDocumentFieldHistory(reviewRow.id, 'review_content');
       versionId = historyEntry?.id || null;
     }
 
@@ -3067,15 +3493,15 @@ router.post('/:id/approve-review', authMiddleware, async (req: Request, res: Res
     console.error('Approve sprint review error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/request-plan-changes - Request changes on sprint plan
-router.post('/:id/request-plan-changes', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/request-plan-changes', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
     const { feedback } = req.body || {};
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Validate feedback is provided and not too long
     if (!feedback || typeof feedback !== 'string' || feedback.trim().length === 0) {
@@ -3090,7 +3516,7 @@ router.post('/:id/request-plan-changes', authMiddleware, async (req: Request, re
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists and get authorization info
-    const sprintResult = await pool.query(
+    const sprintResult = await pool.query<SprintApprovalInfoRow>(
       `SELECT d.id, d.properties, d.properties->>'owner_id' as sprint_owner_id,
               prog.properties->>'accountable_id' as program_accountable_id
        FROM documents d
@@ -3101,12 +3527,11 @@ router.post('/:id/request-plan-changes', authMiddleware, async (req: Request, re
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (sprintResult.rows.length === 0) {
+    const sprint = sprintResult.rows[0];
+    if (!sprint) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
-
-    const sprint = sprintResult.rows[0];
     const programAccountableId = sprint.program_accountable_id;
 
     // Check authorization: must be program's accountable_id, supervisor (reports_to), OR workspace admin
@@ -3139,7 +3564,7 @@ router.post('/:id/request-plan-changes', authMiddleware, async (req: Request, re
     const sprintOwnerId = sprint.sprint_owner_id;
     if (sprintOwnerId) {
       // Find the user_id for this person document
-      const ownerUserResult = await pool.query(
+      const ownerUserResult = await pool.query<UserIdLookupRow>(
         `SELECT properties->>'user_id' as user_id FROM documents WHERE id = $1`,
         [sprintOwnerId]
       );
@@ -3160,15 +3585,15 @@ router.post('/:id/request-plan-changes', authMiddleware, async (req: Request, re
     console.error('Request plan changes error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/weeks/:id/request-retro-changes - Request changes on sprint retro
-router.post('/:id/request-retro-changes', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/request-retro-changes', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
     const { feedback } = req.body || {};
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Validate feedback is provided and not too long
     if (!feedback || typeof feedback !== 'string' || feedback.trim().length === 0) {
@@ -3183,7 +3608,7 @@ router.post('/:id/request-retro-changes', authMiddleware, async (req: Request, r
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // Verify sprint exists and get authorization info
-    const sprintResult = await pool.query(
+    const sprintResult = await pool.query<SprintApprovalInfoRow>(
       `SELECT d.id, d.properties, d.properties->>'owner_id' as sprint_owner_id,
               prog.properties->>'accountable_id' as program_accountable_id
        FROM documents d
@@ -3194,12 +3619,11 @@ router.post('/:id/request-retro-changes', authMiddleware, async (req: Request, r
       [id, workspaceId, userId, isAdmin]
     );
 
-    if (sprintResult.rows.length === 0) {
+    const sprint = sprintResult.rows[0];
+    if (!sprint) {
       res.status(404).json({ error: 'Week not found' });
       return;
     }
-
-    const sprint = sprintResult.rows[0];
     const programAccountableId = sprint.program_accountable_id;
 
     // Check authorization: must be program's accountable_id, supervisor (reports_to), OR workspace admin
@@ -3231,7 +3655,7 @@ router.post('/:id/request-retro-changes', authMiddleware, async (req: Request, r
     // Notify the sprint owner that changes were requested
     const sprintOwnerId = sprint.sprint_owner_id;
     if (sprintOwnerId) {
-      const ownerUserResult = await pool.query(
+      const ownerUserResult = await pool.query<UserIdLookupRow>(
         `SELECT properties->>'user_id' as user_id FROM documents WHERE id = $1`,
         [sprintOwnerId]
       );
@@ -3252,6 +3676,6 @@ router.post('/:id/request-retro-changes', authMiddleware, async (req: Request, r
     console.error('Request retro changes error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 export default router;

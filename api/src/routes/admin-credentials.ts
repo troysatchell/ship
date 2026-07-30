@@ -7,7 +7,7 @@
 
 import { Router, Request, Response } from 'express';
 import type { Router as RouterType } from 'express';
-import { authMiddleware, superAdminMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed, superAdminMiddleware } from '../middleware/auth.js';
 import { logAuditEvent } from '../services/audit.js';
 import {
   isCAIAConfigured,
@@ -464,7 +464,7 @@ router.get('/', authMiddleware, superAdminMiddleware, async (_req: Request, res:
 /**
  * POST /api/admin/credentials/save - Save credentials via JSON API
  */
-router.post('/save', authMiddleware, superAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/save', authMiddleware, superAdminMiddleware, authed(async (req, res): Promise<void> => {
   const { issuer_url, client_id, client_secret } = req.body;
   const submittedIssuerUrl = (issuer_url || '').trim();
   const submittedClientId = (client_id || '').trim();
@@ -540,7 +540,7 @@ router.post('/save', authMiddleware, superAdminMiddleware, async (req: Request, 
 
     // Audit log the change
     await logAuditEvent({
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'admin.update_caia_credentials',
       details: {
         changedFields,
@@ -566,7 +566,7 @@ router.post('/save', authMiddleware, superAdminMiddleware, async (req: Request, 
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
 
     await logAuditEvent({
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'admin.update_caia_credentials_failed',
       details: {
         error: errorMessage,
@@ -580,12 +580,12 @@ router.post('/save', authMiddleware, superAdminMiddleware, async (req: Request, 
       error: { message: `Failed to save credentials: ${errorMessage}` },
     });
   }
-});
+}));
 
 /**
  * POST /api/admin/credentials/test-api - Test CAIA connection via JSON API
  */
-router.post('/test-api', authMiddleware, superAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/test-api', authMiddleware, superAdminMiddleware, authed(async (req, res): Promise<void> => {
   const configured = await isCAIAConfigured();
   if (!configured) {
     res.status(400).json({
@@ -609,7 +609,7 @@ router.post('/test-api', authMiddleware, superAdminMiddleware, async (req: Reque
     );
 
     await logAuditEvent({
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'admin.test_caia_connection',
       details: { success: true, issuer },
       req,
@@ -623,7 +623,7 @@ router.post('/test-api', authMiddleware, superAdminMiddleware, async (req: Reque
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
 
     await logAuditEvent({
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'admin.test_caia_connection',
       details: { success: false, error: errorMessage },
       req,
@@ -634,12 +634,12 @@ router.post('/test-api', authMiddleware, superAdminMiddleware, async (req: Reque
       error: { message: `CAIA connection failed: ${errorMessage}` },
     });
   }
-});
+}));
 
 /**
  * POST /api/admin/credentials/test - Legacy redirect-based test (kept for compatibility)
  */
-router.post('/test', authMiddleware, superAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/test', authMiddleware, superAdminMiddleware, authed(async (req, res): Promise<void> => {
   const configured = await isCAIAConfigured();
   if (!configured) {
     res.redirect('/api/admin/credentials?error=' + encodeURIComponent('CAIA is not configured. Save credentials first.'));
@@ -659,7 +659,7 @@ router.post('/test', authMiddleware, superAdminMiddleware, async (req: Request, 
     );
 
     await logAuditEvent({
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'admin.test_caia_connection',
       details: { success: true, issuer },
       req,
@@ -670,7 +670,7 @@ router.post('/test', authMiddleware, superAdminMiddleware, async (req: Request, 
     const errorMessage = err instanceof Error ? err.message : 'Unknown error';
 
     await logAuditEvent({
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'admin.test_caia_connection',
       details: { success: false, error: errorMessage },
       req,
@@ -678,7 +678,7 @@ router.post('/test', authMiddleware, superAdminMiddleware, async (req: Request, 
 
     res.redirect('/api/admin/credentials?error=' + encodeURIComponent(`CAIA connection failed: ${errorMessage}`));
   }
-});
+}));
 
 /**
  * GET /api/admin/credentials/status - API endpoint for credential status

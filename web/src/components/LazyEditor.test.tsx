@@ -34,6 +34,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 
 const editorProps = vi.fn();
 
+/** Destructures the first call's first argument, asserting the mock was actually invoked. */
+function firstEditorProps(): Record<string, unknown> {
+  const [call] = editorProps.mock.calls;
+  if (!call) throw new Error('Editor mock was never called');
+  const [props] = call;
+  return props;
+}
+
 vi.mock('@/components/Editor', () => ({
   Editor: (props: Record<string, unknown>) => {
     editorProps(props);
@@ -75,7 +83,7 @@ describe('LazyEditor (TRO-198 / BUN-2)', () => {
     await screen.findByTestId('editor-mounted');
     // Not "Untitled Document", not trimmed to "", not defaulted away.
     expect(screen.getByTestId('editor-mounted')).toHaveTextContent(/^Untitled$/);
-    expect(editorProps.mock.calls[0][0]).toMatchObject({ initialTitle: 'Untitled' });
+    expect(firstEditorProps()).toMatchObject({ initialTitle: 'Untitled' });
   });
 
   it('forwards every prop unchanged, including the collaboration room prefix', async () => {
@@ -96,7 +104,7 @@ describe('LazyEditor (TRO-198 / BUN-2)', () => {
     // roomPrefix and documentId together select the collaboration room
     // (/collaboration/{docType}:{docId}); dropping either would connect the
     // editor to the wrong document, which no size measurement would catch.
-    expect(editorProps.mock.calls[0][0]).toMatchObject({
+    expect(firstEditorProps()).toMatchObject({
       documentId: 'doc-42',
       userName: 'Ada',
       roomPrefix: 'person',
