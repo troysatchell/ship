@@ -1,0 +1,192 @@
+{
+  "results": [
+    {
+      "label": "dashboard (my-week)",
+      "url": "http://localhost:5648/my-week",
+      "counts": {
+        "critical": 0,
+        "serious": 0,
+        "moderate": 0,
+        "minor": 0
+      },
+      "violations": []
+    },
+    {
+      "label": "issues list",
+      "url": "http://localhost:5648/issues",
+      "counts": {
+        "critical": 0,
+        "serious": 0,
+        "moderate": 0,
+        "minor": 0
+      },
+      "violations": []
+    },
+    {
+      "label": "weeks board",
+      "url": "http://localhost:5648/weeks",
+      "counts": {
+        "critical": 0,
+        "serious": 1,
+        "moderate": 0,
+        "minor": 0
+      },
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "help": "Elements must meet minimum color contrast ratio thresholds",
+          "nodes": 1,
+          "targets": [
+            ".bg-accent\\/10"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "search",
+      "url": "http://localhost:5648/search",
+      "counts": {
+        "critical": 0,
+        "serious": 1,
+        "moderate": 0,
+        "minor": 0
+      },
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "help": "Elements must meet minimum color contrast ratio thresholds",
+          "nodes": 1,
+          "targets": [
+            ".bg-accent\\/10"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "document view",
+      "url": "http://localhost:5648/documents/ac935f2c-5eb4-4ef7-bbf3-5741bd034031",
+      "counts": {
+        "critical": 0,
+        "serious": 0,
+        "moderate": 0,
+        "minor": 0
+      },
+      "violations": []
+    },
+    {
+      "label": "document editor focused",
+      "url": "http://localhost:5648/documents/ac935f2c-5eb4-4ef7-bbf3-5741bd034031",
+      "counts": {
+        "critical": 0,
+        "serious": 0,
+        "moderate": 0,
+        "minor": 0
+      },
+      "violations": []
+    },
+    {
+      "label": "command palette open",
+      "url": "http://localhost:5648/documents/ac935f2c-5eb4-4ef7-bbf3-5741bd034031",
+      "counts": {
+        "critical": 0,
+        "serious": 1,
+        "moderate": 0,
+        "minor": 0
+      },
+      "violations": [
+        {
+          "id": "color-contrast",
+          "impact": "serious",
+          "help": "Elements must meet minimum color contrast ratio thresholds",
+          "nodes": 1,
+          "targets": [
+            ".ml-3:nth-child(5)"
+          ]
+        }
+      ]
+    },
+    {
+      "label": "issues menu/expanded state",
+      "url": "http://localhost:5648/issues",
+      "counts": {
+        "critical": 0,
+        "serious": 0,
+        "moderate": 0,
+        "minor": 0
+      },
+      "violations": []
+    },
+    {
+      "label": "login (unauth)",
+      "url": "http://localhost:5648/login",
+      "counts": {
+        "critical": 0,
+        "serious": 0,
+        "moderate": 0,
+        "minor": 0
+      },
+      "violations": []
+    }
+  ],
+  "keyboard": [
+    {
+      "page": "issues",
+      "path": "/issues",
+      "focusableCount": 790,
+      "tabStops": 45,
+      "uniqueStops": 45,
+      "focusRingSeen": 45,
+      "focusRingRatio": 1
+    },
+    {
+      "page": "dashboard",
+      "path": "/my-week",
+      "focusableCount": 23,
+      "tabStops": 44,
+      "uniqueStops": 23,
+      "focusRingSeen": 43,
+      "focusRingRatio": 0.98
+    }
+  ],
+  "tree": {
+    "landmarks": [
+      "navigation",
+      "aside",
+      "main",
+      "status",
+      "aside"
+    ],
+    "headings": [
+      2,
+      1,
+      2,
+      3,
+      3,
+      3,
+      3,
+      2,
+      3,
+      3,
+      3,
+      3,
+      2,
+      3,
+      3,
+      3,
+      3,
+      2,
+      2
+    ],
+    "h1Count": 1,
+    "imgsNoAlt": 0,
+    "svgNoLabel": 21,
+    "inputsNoLabel": 1,
+    "liveRegions": 3
+  },
+  "modalDismiss": {
+    "escapeClosed": true,
+    "hadModal": 9
+  }
+}
