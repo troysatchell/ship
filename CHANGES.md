@@ -8,6 +8,121 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-302 — [API-8] The suspected SHA-256 rate-limiter hash was not the cause of the reported P95 regression
+
+Linear ticket TRO-302 (API-8) asked to confirm and fix a hypothesis from the api-perf compare run
+(`audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md`): that `fingerprint()`'s per-request
+SHA-256 hash of the session cookie (`api/src/middleware/rate-limit.ts`) explained a +12-18% P95
+regression on cheap endpoints at c=25. The compare report itself flagged this as an unverified
+hypothesis, not a measurement ("not confirmed with a profiler or a rate-limiter-disabled control
+run"). This ticket did that verification. **Verdict: acquitted, on three independent lines of
+evidence. No production behavior changed.**
+
+**1. Microbenchmark** (isolated, realistic 64-char session-id cookie): `crypto.createHash('sha256')`
+costs **~310 ns/op**; the full `apiRateLimitKey()` path (cookie parse + hash) costs **~650 ns/op** —
+about **0.008%** of a 4 ms request.
+
+**2. Live CPU profile** (`node --cpu-prof`, this server, the compare run's own c=25 autocannon load
+against `/api/weeks`, 9,000 clean 200-response requests): the server spent **>99% of wall-clock time
+idle** (I/O-bound — Postgres round trips dominate, not CPU). Of the small non-idle sliver, functions
+matching `fingerprint`/`Hash`/`createHash`/rate-limit accounted for **~0.15%** — smaller than the
+tsx/ESM module-loading overhead left over from server startup, itself captured in the same profile.
+No `express`/`pg`/`zod`/`compression`/`helmet` function registered meaningfully either.
+
+**3. Controlled live A/B** (same running server, same c=25 autocannon load, back-to-back, on
+`documents/:id` / `documents?type=wiki` / `weeks`): three configurations — (a) the real SHA-256
+hash, (b) `fingerprint()` patched to a no-op slice (diagnostic only, reverted immediately via
+`git checkout`, never committed), (c) **both** rate limiters removed from the chain entirely (also
+diagnostic-only, reverted) — produced statistically indistinguishable P50/P97.5/P99. The difference
+between any two configurations was smaller than the rep-to-rep noise of *the same unmodified
+configuration measured against itself* three times in a row (e.g. `documents/:id` P97.5 ranged
+13-31 ms across three consecutive reps of identical code).
+
+**Why the original compare run saw +12-18%: most likely shared-machine measurement noise, not a
+code defect.** Supporting evidence, all from artifacts that already existed or were reproduced here:
+
+- The compare report's own recheck of `documents/:id` c=25 swung **+38.4% -> +10.4%** on
+  byte-identical code and conditions, same session, minutes apart.
+- A fresh, full re-benchmark run in this ticket (below) — same runner methodology, same seed
+  data, same code as `main` (nothing changed) — shows P95 deltas **against the phase2-jul30
+  compare's own numbers** ranging **-27.2% to +34.8%** across the 18 endpoint/concurrency
+  combinations, on code that did not change between the two measurements. That range is as large
+  as, or larger than, the originally-reported "regression."
+- The regressions were never monotonic with concurrency (present at c10/c25, reversed at c50) and
+  not consistent between P50 and P95 (P50 sometimes improved while P95 regressed) — not the
+  signature of a fixed per-request CPU cost.
+- The machine this ships from is a shared 14-core dev box running 6-10 sibling worktree API
+  servers plus this session's own tooling throughout, exactly as both compare runs documented.
+
+**What changed.**
+
+- **No functional/production code changed.** `api/src/middleware/rate-limit.ts`'s `fingerprint()`
+  is untouched — a doc comment was added recording this finding (so a future engineer doesn't
+  re-chase the same lead; see the DB-1 precedent in this same file for why that matters).
+- **Regression-guard tests only** (`api/src/middleware/__tests__/rate-limit.test.ts`, new
+  `describe('TRO-302: fingerprint cost stays negligible')`), **pins, not red-before-green** — there
+  is no behavior change to prove red first:
+  1. `apiRateLimitKey` is synchronous and returns a plain string, not a `Promise` — guards the
+     documented design decision that the key generator never verifies the session against the
+     database (that would cost a round trip). An `async` key generator would be the first sign that
+     decision had quietly been reversed, and would reintroduce a *real* per-request cost.
+  2. 100,000 calls to `apiRateLimitKey` complete within a 3000 ms ceiling (measured ~65 ms
+     unloaded — >45x headroom, deliberately generous given this suite's documented load-sensitive
+     flakes, `ship-factory/references/lessons.md` rule 24). Fails only for a gross regression (a
+     slow KDF, a synchronous I/O call), never for ordinary scheduler jitter.
+- Full api suite after the change: **664/664 passed** (`pnpm --filter @ship/api test`), up from 662
+  — the +2 are the new pins above.
+
+**Re-benchmark — same 6 endpoints, c=10/25/50, `bench-runner-compare.mjs`'s own methodology**
+(window-synchronised 900-request bursts, autocannon 8.0.0, 500/20 seed data verified byte-identical
+to the compare run's own — `254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20
+person / 15 project / 15 weekly_review / 6 standup / 5 program`). No code differs from `main` in
+this run — the point is to check whether phase2-jul30's regressions reproduce on a fresh
+measurement, not to prove a fix:
+
+| Endpoint | c | Baseline P95 | Phase2-compare P95 (Δ vs baseline) | TRO-302 remeasure P95 (Δ vs phase2) |
+|---|---|---|---|---|
+| `documents?type=wiki` | 10 | 8.45 | 8.83 (+4.5%) | 9.85 (+11.6%) |
+| `documents?type=wiki` | 25 | 17.33 | 20.44 (+17.9%) | 19.50 (-4.6%) |
+| `documents?type=wiki` | 50 | 44.93 | 37.86 (-15.7%) | 35.69 (-5.7%) |
+| `issues` | 10 | 38.78 | 26.66 (-31.3%) | 26.64 (-0.1%) |
+| `issues` | 25 | 94.47 | 65.48 (-30.7%) | 62.62 (-4.4%) |
+| `issues` | 50 | 182.00 | 110.26 (-39.4%) | 107.52 (-2.5%) |
+| `documents` | 10 | 34.01 | 39.30 (+15.6%) | 40.55 (+3.2%) |
+| `documents` | 25 | 75.75 | 85.25 (+12.5%) | 85.98 (+0.9%) |
+| `documents` | 50 | 146.54 | 144.51 (-1.4%) | 154.98 (+7.2%) |
+| `documents/:id` | 10 | 4.84 | 4.64 (-4.1%) | 6.26 (**+34.8%**) |
+| `documents/:id` | 25 | 9.16 | 12.67 (+38.3%) | 12.79 (+0.9%) |
+| `documents/:id` | 50 | 46.16 | 30.12 (-34.7%) | 38.54 (**+27.9%**) |
+| `team/assignments` | 10 | 11.05 | 12.67 (+14.7%) | 10.82 (-14.6%) |
+| `team/assignments` | 25 | 22.89 | 22.15 (-3.2%) | 21.41 (-3.3%) |
+| `team/assignments` | 50 | 57.28 | 55.03 (-3.9%) | 45.70 (-16.9%) |
+| `weeks` | 10 | 7.06 | 8.02 (+13.6%) | 6.46 (**-19.5%**) |
+| `weeks` | 25 | 14.18 | 15.09 (+6.4%) | 10.99 (**-27.2%**) |
+| `weeks` | 50 | 41.80 | 41.58 (-0.5%) | 36.38 (-12.5%) |
+
+The rightmost column is the load-bearing one: it compares two measurements of **identical code**,
+days apart, same machine, same methodology. If the rate limiter's hash (or anything else in the
+middleware chain) were a real, fixed per-request cost, this column should hover near 0%. Instead it
+ranges **-27.2% to +34.8%** — wider than the +12-18% this ticket was opened to explain.
+
+**Verified against:** `ship-audit-pg` (postgres:15-alpine, `:5433`), `ship_wt_tro_302`, query
+logging off (`log_statement=none`, `log_min_duration_statement=-1`), `NODE_ENV=development` (no
+`E2E_TEST` override) for the re-benchmark, matching the compare run's own documented conditions.
+Background load average 3.2-6.5 across 14 cores throughout, 10 sibling worktree API dev servers
+present (idle), consistent with both prior measurement sessions.
+
+**Not verified.** No profiler/A/B run against production-mode (`NODE_ENV=production`) limits — the
+key-generation code path is identical regardless of `NODE_ENV`, so this is not expected to matter,
+but it was not measured directly. No repeated (n>3) statistical re-run of the full 18-combination
+sweep — a single fresh re-measurement is what's reported, deliberately not smoothed into a
+multi-run average, so the noise is visible rather than hidden.
+
+**Rollback.** Nothing to roll back functionally — `git revert` on this branch removes only the doc
+comment and the two new pin tests.
+
+---
+
 ## TRO-209 — [TS-4] 236 non-null assertions on request auth context, all from one optional declaration
 
 `api/src/middleware/auth.ts:11-12` augmented Express's `Request` with `userId?: string` /

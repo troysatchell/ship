@@ -223,6 +223,75 @@ describe('API-1: /api rate limiter', () => {
     })
   })
 
+  /**
+   * TRO-302 (API-8) — the api-perf compare run (`audit/api-perf/compare-phase2-jul30`)
+   * hypothesized that `fingerprint()`'s per-request SHA-256 hash explained a
+   * +12-18% P95 regression on cheap endpoints. Measured, not assumed:
+   *
+   *  - Microbench: `crypto.createHash('sha256')` on a 64-char session id costs
+   *    ~310 ns/op; the full `apiRateLimitKey()` path (cookie parse + hash)
+   *    costs ~650 ns/op — about 0.008% of a 4 ms request.
+   *  - A live `--cpu-prof` capture of this server under the compare run's own
+   *    c=25 autocannon load attributed ~0.15% of *active* (non-idle) CPU
+   *    samples to anything hash/rate-limit-related; the server spent >99% of
+   *    wall-clock time idle (I/O-bound), so that 0.15% is a slice of a sliver.
+   *  - A controlled live A/B on this same server, same load, seconds apart:
+   *    the real hash, a no-op hash, and the *entire* rate-limiter chain
+   *    removed all produced statistically indistinguishable P50/P97.5/P99 —
+   *    differences smaller than the rep-to-rep noise of the *unmodified* code
+   *    measured against itself.
+   *
+   * Verdict: the hash is not the cause of the reported regression. The
+   * regression is most plausibly shared-machine measurement noise — the
+   * compare report's own recheck of one endpoint swung +38.4% -> +10.4% on
+   * byte-identical code and conditions. No production code changed as a
+   * result of this ticket. The tests below are pins, not red-before-green:
+   * nothing here reproduces a bug. They exist so a *future* change (e.g. an
+   * async session-verification lookup inside the key generator — explicitly
+   * ruled out by the comment above `apiRateLimitKey` — or a swap to a slower
+   * KDF) can't quietly reintroduce a real per-request cost without a test
+   * noticing.
+   */
+  describe('TRO-302: fingerprint cost stays negligible', () => {
+    const asRequest = (headers: Record<string, string>, ip = '203.0.113.7') =>
+      ({ headers, ip, socket: { remoteAddress: ip } }) as unknown as Request
+
+    it('computes the bucket key synchronously — no await, no I/O', () => {
+      // Guards the design decision documented on `apiRateLimitKey`: verifying
+      // the session against the database would cost a round trip and is
+      // deliberately not done here. An `async` key generator, or one that
+      // returns a Promise, would be the first sign that decision had quietly
+      // been reversed.
+      expect(apiRateLimitKey.constructor.name).not.toBe('AsyncFunction')
+
+      const result = apiRateLimitKey(asRequest({ cookie: `session_id=${sessionIdLike('a')}` }))
+      expect(result).not.toBeInstanceOf(Promise)
+      expect(typeof result).toBe('string')
+    })
+
+    it('stays well under a generous cost ceiling for 100,000 calls', () => {
+      // ~650 ns/op measured standalone (TRO-302 microbench) -> 100,000 calls
+      // is ~65 ms of real work. The ceiling below leaves >45x headroom for a
+      // loaded CI machine (this suite already has known load-sensitive flakes
+      // elsewhere — see ship-factory/references/lessons.md rule 24 — so the
+      // margin is deliberate: this should fail only for a genuine, gross
+      // regression, e.g. a slow KDF or a synchronous I/O call, never for
+      // ordinary scheduler jitter).
+      const req = asRequest({ cookie: `session_id=${sessionIdLike('a')}` })
+      const iterations = 100_000
+      const ceilingMs = 3000
+
+      const start = performance.now()
+      for (let i = 0; i < iterations; i++) apiRateLimitKey(req)
+      const elapsedMs = performance.now() - start
+
+      expect(
+        elapsedMs,
+        `${iterations} calls took ${elapsedMs.toFixed(1)}ms (ceiling ${ceilingMs}ms) — investigate what made bucket-key generation slow`
+      ).toBeLessThan(ceilingMs)
+    })
+  })
+
   describe('readSessionIdCookie', () => {
     it('finds session_id among other cookies and rejects malformed values', () => {
       const sessionId = sessionIdLike('a')
