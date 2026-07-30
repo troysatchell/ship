@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import request from 'supertest'
 import crypto from 'crypto'
 import { createApp } from '../app.js'
@@ -178,6 +178,120 @@ describe('Sprints API', () => {
         .set('Cookie', sessionCookie)
 
       expect(res.status).toBe(404)
+    })
+  })
+
+  describe('GET /api/weeks/standups (batched, TRO-181 / TRO-176)', () => {
+    // DB-4 / API-5: the dashboard used to call GET /api/weeks/:id/standups
+    // once per active week (a client-side N+1 fan-out). This endpoint
+    // batches that into one request; these tests assert both the batched
+    // response shape and that the query count does not scale with the
+    // number of weeks requested - the regression this exists to catch.
+    const weekCount = 5
+    let sprintIds: string[] = []
+
+    beforeAll(async () => {
+      for (let i = 0; i < weekCount; i++) {
+        const sprintResult = await pool.query(
+          `INSERT INTO documents (workspace_id, document_type, title, visibility, created_by, properties)
+           VALUES ($1, 'sprint', $2, 'workspace', $3, $4)
+           RETURNING id`,
+          [
+            testWorkspaceId,
+            `Batched Standups Sprint ${i}`,
+            testUserId,
+            JSON.stringify({ sprint_number: 300 + i }),
+          ]
+        )
+        const sprintId: string = sprintResult.rows[0].id
+        sprintIds.push(sprintId)
+
+        await pool.query(
+          `INSERT INTO documents (workspace_id, document_type, title, content, parent_id, created_by, properties)
+           VALUES ($1, 'standup', $2, $3, $4, $5, $6)
+           RETURNING id`,
+          [
+            testWorkspaceId,
+            `Standup for sprint ${i}`,
+            JSON.stringify({ type: 'doc', content: [] }),
+            sprintId,
+            testUserId,
+            JSON.stringify({ author_id: testUserId }),
+          ]
+        )
+      }
+    })
+
+    it('returns standups from every requested week in a single request', async () => {
+      const res = await request(app)
+        .get(`/api/weeks/standups?week_ids=${sprintIds.join(',')}`)
+        .set('Cookie', sessionCookie)
+
+      expect(res.status).toBe(200)
+      expect(res.body).toBeInstanceOf(Array)
+
+      const returnedSprintIds = new Set(res.body.map((s: { sprint_id: string }) => s.sprint_id))
+      for (const sprintId of sprintIds) {
+        expect(returnedSprintIds.has(sprintId)).toBe(true)
+      }
+    })
+
+    it('does not scale query count with the number of weeks requested (no N+1)', async () => {
+      const [firstSprintId] = sprintIds
+      if (!firstSprintId) {
+        throw new Error('test setup should have created at least one sprint')
+      }
+
+      const querySpy = vi.spyOn(pool, 'query')
+
+      querySpy.mockClear()
+      await request(app)
+        .get(`/api/weeks/standups?week_ids=${firstSprintId}`)
+        .set('Cookie', sessionCookie)
+      const queryCountForOneWeek = querySpy.mock.calls.length
+
+      querySpy.mockClear()
+      await request(app)
+        .get(`/api/weeks/standups?week_ids=${sprintIds.join(',')}`)
+        .set('Cookie', sessionCookie)
+      const queryCountForFiveWeeks = querySpy.mock.calls.length
+
+      querySpy.mockRestore()
+
+      // Pre-fix, the client called the per-week handler once per active
+      // week, so 5 weeks cost ~5x the queries of 1 (access check +
+      // standups SELECT + auth trio, each). Batched server-side, going
+      // from 1 to 5 weeks in the same request must not add any queries.
+      expect(queryCountForOneWeek).toBeGreaterThan(0)
+      expect(queryCountForFiveWeeks).toBe(queryCountForOneWeek)
+    })
+
+    it('rejects a non-UUID week id with 400', async () => {
+      const res = await request(app)
+        .get('/api/weeks/standups?week_ids=not-a-uuid')
+        .set('Cookie', sessionCookie)
+
+      expect(res.status).toBe(400)
+    })
+
+    it('rejects a missing week_ids param with 400', async () => {
+      const res = await request(app)
+        .get('/api/weeks/standups')
+        .set('Cookie', sessionCookie)
+
+      expect(res.status).toBe(400)
+    })
+
+    it('rejects an unauthenticated request', async () => {
+      const [firstSprintId] = sprintIds
+      if (!firstSprintId) {
+        throw new Error('test setup should have created at least one sprint')
+      }
+
+      const res = await request(app)
+        .get(`/api/weeks/standups?week_ids=${firstSprintId}`)
+
+      expect(res.status).toBe(401)
     })
   })
 

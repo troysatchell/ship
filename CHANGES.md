@@ -421,6 +421,80 @@ converted files are self-contained; nothing in `api/src` production code changed
 
 ---
 
+## TRO-181 (DB-4) + TRO-176 (API-5) — dashboard standups collapsed from one request per active week to one
+
+Both findings are the same client-side fan-out seen from two sides — DB-4 from the SQL layer, API-5
+from the HTTP layer — and share one fix.
+
+**What was broken.** `web/src/pages/Dashboard.tsx:69-85` mapped the 5 active weeks returned by
+`GET /api/weeks` to one `fetch('/api/weeks/${sprint.id}/standups')` each inside a `Promise.all` — 5
+of the dashboard's 12 requests, each returning exactly 2 bytes (`[]`), and 25 of the flow's 42
+steady-state queries (5x sprint access check, 5x standups `SELECT`, 5x the auth trio). The audit's
+hypothesis held on direct inspection: the handler originally at `api/src/routes/weeks.ts:1833`
+(now `:1927`, shifted down by the new route added above it) already batches issue-link lookups via
+`batchLookupIssues` — the N+1 was entirely client-side, not a server defect. The per-week query also had no `LIMIT` and
+shipped every standup's full `content`, though `Dashboard.tsx:92` immediately discarded everything
+but the 10 most recent across all weeks.
+
+**What changed.**
+
+- `api/src/routes/weeks.ts` — new `GET /api/weeks/standups?week_ids=uuid,uuid,...`, registered
+  *before* `GET /api/weeks/:id` so Express doesn't swallow `standups` as an `:id`. `week_ids` is
+  validated with zod (`.split(',')` piped through `z.array(z.string().uuid()).min(1).max(50)`),
+  rejecting anything malformed with **400** before it reaches SQL — the ids are only ever bound via
+  parameterized `= ANY($1)`, never interpolated. One query narrows the requested ids to sprints that
+  exist and are visible to the caller; one query fetches standups for all of them via
+  `parent_id = ANY($1)`, `ORDER BY created_at DESC LIMIT 10` — server-side, so the endpoint stops
+  shipping rows the client only ever discarded. Issue-link transformation reuses the existing
+  `batchLookupIssues`/`transformIssueLinks` helpers, now batched once across every sprint's standups
+  instead of once per sprint.
+- `api/src/openapi/schemas/weeks.ts` — registered `GET /weeks/standups` (schema + zod, tags,
+  summary/description) so Swagger and the generated MCP tool both pick it up.
+- `web/src/hooks/useWeeksQuery.ts` — new `useRecentStandupsQuery(weekIds)`, one `react-query` call
+  to the batched endpoint instead of the page doing its own fan-out.
+- `web/src/pages/Dashboard.tsx` — replaced the `useState`/`useEffect`/`Promise.all` fan-out with
+  `useRecentStandupsQuery`; `sprint_title`/`program_name` are now attached client-side from the
+  already-fetched `activeWeeks` list (unchanged UI, unchanged `Standup` shape).
+- The old `GET /api/weeks/:id/standups` route is untouched — nothing else that calls it (if
+  anything does) is affected.
+
+**How to run it.**
+
+```bash
+source .factory-env                       # api tests TRUNCATE 16 tables; use the worktree database
+pnpm --filter @ship/api exec vitest run src/routes/weeks.test.ts -t "batched"
+pnpm --filter @ship/web exec vitest run src/pages/Dashboard.standupsFanout.test.tsx src/pages/Dashboard.test.tsx
+scripts/factory/gate.sh
+```
+
+The api tests assert the batched response shape, that a non-UUID or missing `week_ids` 400s, that
+an unauthenticated call 401s, and that hitting the endpoint with 1 vs. 5 week ids costs the same
+number of `pool.query` calls (spied directly — no query-count scaling with the number of weeks
+requested). The web test does not mock `useWeeksQuery`; it lets the real hooks run against a mocked
+`global.fetch` and asserts exactly one request matches `/api/weeks/standups`, and fails the test if
+any request matches the old per-week shape.
+
+**Measured, same seeded database (`ship_wt_tro_181`, postgres:15-alpine in the `ship-audit-pg`
+Docker container on `:5433`), 5 active weeks x 1 standup each, one session, sequential requests, no
+concurrent load from the measurement itself.** Because the old per-week route was left in place,
+both sides were measured against the same running server rather than estimated: 5 sequential
+`GET /api/weeks/:id/standups` calls (the old client behaviour) cost **5 requests / 30 queries**; one
+`GET /api/weeks/standups` call for the same 5 ids costs **1 request / 6 queries** — an 80% cut in
+both, for the standups portion of the flow specifically. The audit's own baseline (12 total dashboard
+requests, 5 of them this fan-out; 42 total flow queries, 25 of them this fan-out) was not
+re-measured end-to-end here — combining it with this delta (12 − 5 + 1 = 8 requests) reproduces the
+audit's projected 8, which is a consistency check on the audit's number, not an independent
+re-verification of the other 7 requests.
+
+**Rollback.** Revert the commits on `fix/db-4-api-5-dashboard-fanout`. To roll back just the client
+(keeping the server endpoint): revert the `Dashboard.tsx`/`useWeeksQuery.ts` changes only — the old
+`GET /api/weeks/:id/standups` route still exists and still works. To remove the endpoint entirely:
+delete the `router.get('/standups', ...)` block in `api/src/routes/weeks.ts` and its
+`registry.registerPath` counterpart in `api/src/openapi/schemas/weeks.ts` — nothing else depends on
+either.
+
+---
+
 ## TRO-197 (BUN-1) + TRO-198 (BUN-2) + TRO-199 (BUN-3) + TRO-200 (BUN-4) + TRO-202 (BUN-6) — the app stops shipping as one 2 MB file
 
 Five findings, one root cause: `web/dist/index.html` referenced exactly **one** module script —

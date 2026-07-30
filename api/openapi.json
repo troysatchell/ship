@@ -8440,6 +8440,100 @@
         }
       }
     },
+    "/weeks/standups": {
+      "get": {
+        "tags": [
+          "Weeks"
+        ],
+        "summary": "Get recent standups across multiple weeks (batched)",
+        "description": "Returns up to the 10 most recent standups across the given set of week/sprint ids in a single request, newest first. Replaces calling GET /weeks/{id}/standups once per active week (the DB-4/API-5 client-side fan-out fix).",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Comma-separated list of week/sprint UUIDs",
+              "example": "550e8400-e29b-41d4-a716-446655440000,6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+            },
+            "required": true,
+            "name": "week_ids",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Up to 10 most recent standups across the requested weeks, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "UUID identifier",
+                        "example": "550e8400-e29b-41d4-a716-446655440000"
+                      },
+                      "sprint_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "UUID identifier",
+                        "example": "550e8400-e29b-41d4-a716-446655440000"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "content": {
+                        "type": "object",
+                        "nullable": true,
+                        "additionalProperties": {
+                          "nullable": true
+                        }
+                      },
+                      "author_id": {
+                        "type": "string",
+                        "format": "uuid",
+                        "description": "UUID identifier",
+                        "example": "550e8400-e29b-41d4-a716-446655440000"
+                      },
+                      "author_name": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "author_email": {
+                        "type": "string",
+                        "nullable": true
+                      },
+                      "created_at": {
+                        "type": "string"
+                      },
+                      "updated_at": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "id",
+                      "sprint_id",
+                      "title",
+                      "content",
+                      "author_id",
+                      "author_name",
+                      "author_email",
+                      "created_at",
+                      "updated_at"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "week_ids missing or contains a non-UUID value"
+          }
+        }
+      }
+    },
     "/weeks/{id}/start": {
       "post": {
         "tags": [
