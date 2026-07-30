@@ -56,7 +56,23 @@ test.describe('Status Colors Accessibility', () => {
         'Seed data should include at least one program to navigate into. Run: pnpm db:seed'
       ).toBeVisible({ timeout: 5000 });
       await programLink.click();
-      await page.waitForTimeout(1000);
+      await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+/, { timeout: 5000 });
+
+      // Status badges render inside the Issues tab (ProgramIssuesTab), not the
+      // "Overview" tab a program document lands on by default
+      // (web/src/lib/document-tabs.tsx).
+      const issuesTab = page.getByRole('tab', { name: /issues/i });
+      await expect(issuesTab, 'Program document view should have an Issues tab').toBeVisible({ timeout: 5000 });
+      await issuesTab.click();
+
+      // Positive control: at least one status badge must actually be on
+      // screen (StatusBadge renders `data-status-indicator`, IssuesList.tsx),
+      // otherwise the low-contrast check below passes vacuously -- zero
+      // badges of any kind trivially satisfies "zero low-contrast badges".
+      await expect(
+        page.locator('[data-status-indicator]').first(),
+        'Seed data should include at least one issue with a status badge'
+      ).toBeVisible({ timeout: 5000 });
 
       // Verify no low-contrast status colors
       const lowContrastBadges = page.locator('[class*="text-gray-400"], [class*="text-blue-400"], [class*="text-yellow-400"], [class*="text-green-400"]');
@@ -75,7 +91,19 @@ test.describe('Status Colors Accessibility', () => {
         'Seed data should include at least one program to navigate into. Run: pnpm db:seed'
       ).toBeVisible({ timeout: 5000 });
       await programLink.click();
-      await page.waitForTimeout(1000);
+      await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+/, { timeout: 5000 });
+
+      // Sprint status badges (active/upcoming/completed) render inside the
+      // Weeks tab (WeekTimeline.tsx), not the default Overview tab.
+      const weeksTab = page.getByRole('tab', { name: /weeks/i });
+      await expect(weeksTab, 'Program document view should have a Weeks tab').toBeVisible({ timeout: 5000 });
+      await weeksTab.click();
+
+      // Positive control: at least one sprint card should show its status label.
+      await expect(
+        page.locator('span').filter({ hasText: /^(Active|Upcoming|Completed)$/ }).first(),
+        'Seed data should include at least one week/sprint with a status label'
+      ).toBeVisible({ timeout: 5000 });
 
       // Sprint status (planned/active/completed) should use accessible colors
       const sprintStatusLowContrast = page.locator('[class*="text-gray-400"], [class*="text-green-400"], [class*="text-blue-400"]').filter({ hasText: /planned|active|completed/i });
