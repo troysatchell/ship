@@ -138,10 +138,16 @@ already fixed by moving the listener to the first statement in the handler, befo
 **Current state:**
 
 - **Open PRs: #11 only** (TRO-223 / TEST-1). Gate-green (CodeRabbit pass, CI pass), pushed, and
-  empties the quarantine entirely — all 13 web entries removed. **Correction to this run's own
-  summary:** its PR body (checked directly, 2026-07-30) states web **138/151 → 186/186**, not
-  345/345 — the branch has only merged `main` up to `84f05ff`, not the 16 PRs that landed after,
-  so 186/186 is the number to carry forward until it's rebased. Its own work found 1 genuine product
+  empties the quarantine entirely — `web.knownFailing: 0`, `api.knownFailing: 0` in the merged tree.
+  **Web suite: 346/346, 0 failed** — observed by the orchestrator directly on branch
+  `fix/test-1-web-suite-green` at `580ca13`, `pnpm --filter @ship/web test`, dockerised postgres 15
+  on `:5433` (2026-07-30). **Two prior figures in this log entry were wrong and are both superseded:**
+  neither the original 345/345 nor the subsequent "186/186, branch behind at `84f05ff`" correction is
+  current. The second correction checked the PR *description*, which the author never updated
+  through three later `main` merges — the branch itself (`git merge-base --is-ancestor` against both
+  `319e1af` and `f7b15c9` returns true) is fully caught up with all 16 PRs from this run. The PR
+  description is a stale artifact; the branch is the authority. #11 is still unmerged, blocked on
+  TRO-288, so 346/346 describes the branch, not `main`. Its own work found 1 genuine product
   regression (a count-aware tab label dropped by an earlier commit, `UnifiedDocumentPage.tsx:133,141`)
   among 12 stale tests, plus a second regression filed separately (`ProgramWeeksTab.tsx` navigates to
   a now-dead `sprints` tab id), plus a commit message that falsely claimed two cast removals when only
