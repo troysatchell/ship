@@ -373,5 +373,9 @@ test.describe('Authorization - Audit Log Access', () => {
       'reading a foreign workspace audit log must be refused (403) or not found (404), never 200'
     ).not.toBe(200)
     expect([403, 404]).toContain(response.status())
+
+    // Matches the sibling test's leak check above: a refusal must not carry logs.
+    const body = await response.text()
+    expect(body, 'a refusal must not leak audit log entries').not.toContain('"logs"')
   })
 })

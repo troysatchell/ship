@@ -118,27 +118,44 @@ test.describe('Admin Workspace Member Management', () => {
     const currentRole = await roleSelect.inputValue()
     const newRole = currentRole === 'admin' ? 'member' : 'admin'
 
-    await roleSelect.selectOption(newRole)
-    await expect(roleSelect, 'the control should show the newly selected role').toHaveValue(newRole, {
-      timeout: 10000,
-    })
+    // bob.martinez's role is shared, seeded state: other specs in this worker's
+    // database (e2e/authorization.spec.ts's member-only checks, in particular)
+    // assume it is 'member'. If an assertion between the change and the restore
+    // below throws, an un-guarded test would leave the role changed for every
+    // test that runs after it in this worker. try/finally makes the restore run
+    // regardless of which assertion failed.
+    try {
+      await roleSelect.selectOption(newRole)
+      await expect(roleSelect, 'the control should show the newly selected role').toHaveValue(
+        newRole,
+        { timeout: 10000 }
+      )
 
-    // The real claim: the change reached the server. Re-reading after a reload is
-    // the only way to tell that apart from a purely local <select> update.
-    await page.reload()
-    const reloadedRow = page.locator('tr').filter({ hasText: /bob\.martinez/i }).first()
-    await expect(
-      reloadedRow,
-      'the member row should still be present after reload'
-    ).toBeVisible({ timeout: 15000 })
-    await expect(
-      reloadedRow.locator('select'),
-      'the role change must persist across a reload, not just in local state'
-    ).toHaveValue(newRole, { timeout: 15000 })
-
-    // Restore the seeded role so later tests in this worker see the fixture state.
-    await reloadedRow.locator('select').selectOption(currentRole)
-    await expect(reloadedRow.locator('select')).toHaveValue(currentRole, { timeout: 10000 })
+      // The real claim: the change reached the server. Re-reading after a reload
+      // is the only way to tell that apart from a purely local <select> update.
+      await page.reload()
+      const reloadedRow = page.locator('tr').filter({ hasText: /bob\.martinez/i }).first()
+      await expect(
+        reloadedRow,
+        'the member row should still be present after reload'
+      ).toBeVisible({ timeout: 15000 })
+      await expect(
+        reloadedRow.locator('select'),
+        'the role change must persist across a reload, not just in local state'
+      ).toHaveValue(newRole, { timeout: 15000 })
+    } finally {
+      // Restore the seeded role so later tests in this worker see the fixture
+      // state. Re-navigate rather than reuse `reloadedRow`: if the try block
+      // failed before the reload, that locator was never resolved.
+      await page.goto('/admin')
+      await page.getByRole('link', { name: /Test Workspace/i }).first().click()
+      const restoreRow = page.locator('tr').filter({ hasText: /bob\.martinez/i }).first()
+      await expect(restoreRow, 'the member row must still exist to restore its role').toBeVisible({
+        timeout: 15000,
+      })
+      await restoreRow.locator('select').selectOption(currentRole)
+      await expect(restoreRow.locator('select')).toHaveValue(currentRole, { timeout: 10000 })
+    }
   })
 
   test('can send invite to new email', async ({ page }) => {

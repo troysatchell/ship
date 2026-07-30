@@ -137,7 +137,13 @@ async function typeIntoTemplateList(
         '). This is COLLAB-RACE, not a test bug — see this file\'s header and ' +
         'api/src/collaboration/index.ts:220-226.'
     ).toBeVisible({ timeout: 8000 })
-  }).toPass({ timeout: 32000, intervals: [500] })
+    // Worst case per attempt: 10s editor wait + 8s heading wait = 18s, and a
+    // second attempt adds a reload on top. 32s left no headroom for two full
+    // attempts, so `toPass`'s own timeout could fire mid-attempt-two with a
+    // generic timeout error instead of the actionable COLLAB-RACE message
+    // above — the same "assertion never gets to run" shape this file exists to
+    // remove. 45s covers 2 x 18s plus reload overhead.
+  }).toPass({ timeout: 45000, intervals: [500] })
 
   const firstListItem = editor.locator('li').first()
   await expect(
@@ -215,8 +221,15 @@ test.describe('My Week - stale data after editing plan/retro', () => {
     await typeIntoTemplateList(page, PLAN_TEMPLATE_HEADING, PLAN_TEXT)
 
     // "Saved" means the WebSocket synced; the API poll below is what proves the
-    // content column was written.
-    await expect(page.getByText('Saved')).toBeVisible({ timeout: 10000 })
+    // content column was written. Playwright's string getByText matches
+    // case-insensitively and by substring, so a bare `getByText('Saved')` would
+    // also match the indicator's own failure state, "Not saved"
+    // (SyncStatusIndicator.tsx) — exactly the kind of assertion that reports
+    // success while observing the opposite this ticket exists to remove.
+    // Target the indicator by its stable test id and require an exact label.
+    await expect(page.getByTestId('sync-status').getByText('Saved', { exact: true })).toBeVisible({
+      timeout: 10000,
+    })
     await waitForMyWeekToContain(page, 'plan', PLAN_TEXT)
 
     // Navigate back with client-side routing (Dashboard icon in the rail).
@@ -240,7 +253,11 @@ test.describe('My Week - stale data after editing plan/retro', () => {
 
     await typeIntoTemplateList(page, RETRO_TEMPLATE_HEADING, RETRO_TEXT)
 
-    await expect(page.getByText('Saved')).toBeVisible({ timeout: 10000 })
+    // See the plan test above: exact match against the stable test id, not a
+    // substring match that "Not saved" would also satisfy.
+    await expect(page.getByTestId('sync-status').getByText('Saved', { exact: true })).toBeVisible({
+      timeout: 10000,
+    })
     await waitForMyWeekToContain(page, 'retro', RETRO_TEXT)
 
     await page.getByRole('button', { name: 'Dashboard' }).click()

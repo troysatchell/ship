@@ -100,6 +100,16 @@ export async function waitForTableData(
   await page.waitForLoadState('networkidle');
 }
 
+/** True for an object with the string `id`/`title` fields a doc summary needs. */
+function isDocSummary(d: unknown): d is { id: string; title: string } {
+  return (
+    typeof d === 'object' &&
+    d !== null &&
+    typeof (d as { id?: unknown }).id === 'string' &&
+    typeof (d as { title?: unknown }).title === 'string'
+  );
+}
+
 /**
  * Open a seeded fixture document by its exact title and wait for the editor.
  *
@@ -125,10 +135,16 @@ export async function openFixtureDocument(page: Page, title: string): Promise<st
   ).toBe(200);
 
   const body: unknown = await res.json();
-  const docs = (Array.isArray(body) ? body : (body as { data?: unknown[] })?.data ?? []) as Array<{
-    id: string;
-    title: string;
-  }>;
+  const rawList: unknown[] = Array.isArray(body)
+    ? body
+    : Array.isArray((body as { data?: unknown }).data)
+      ? ((body as { data: unknown[] }).data)
+      : [];
+  // Narrow with a runtime guard rather than casting the parsed JSON straight
+  // to the expected shape — a cast here would decouple this helper from the
+  // API response it claims to read, the same defect class TEST-2 exists to
+  // remove, just moved into test infrastructure instead of a test body.
+  const docs = rawList.filter(isDocSummary);
   const id = docs.find((d) => d.title === title)?.id ?? '';
   expect(
     id,
