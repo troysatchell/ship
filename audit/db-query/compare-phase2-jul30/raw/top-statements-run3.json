@@ -1,0 +1,86 @@
+[
+  {
+    "sql": "SELECT id, workspace_id, document_type, title, parent_id, position, ticket_number, properties, created_at, updated_at, created_by, visibility FROM documents WHERE workspace_id = $1 AND archived_at IS NULL AND deleted_at IS NULL AND (visibility = 'workspace' OR created_by = $2 OR $3 = TRUE) ORDER BY position ASC, created_at DESC",
+    "n": 2,
+    "maxMs": 5.165,
+    "totalMs": 8.025,
+    "sampleParams": "$1 = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0', $2 = '750c43f9-a503-45be-a852-6f4a82d17b35', $3 = 't'"
+  },
+  {
+    "sql": "UPDATE documents SET yjs_state = $1, content = $2, properties = $3, updated_at = now() WHERE id = $4",
+    "n": 2,
+    "maxMs": 1.081,
+    "totalMs": 1.637,
+    "sampleParams": "$1 = '\\x010dad8585b3030007010764656661756c74030768656164696e672800ad8585b30300056c6576656c017d020700ad8585b30300060400ad8585b303022741554449542057696b69203030313a2073657373696f6e206578706972792068616e646c696e6787ad8585b3030003097061726167726170680700ad8585b3032a060400ad8585b3032b9d0150617261677261706820312e20576562536f636b6574207265636f6e6e656374206261636b6f666620e2809420636f6e7465787420636170747572656420647572696e672061756469742073656564696e6720746f206769766520646f63756d656e7473207265616c697374696320626f64792077656967687420666f7220717565727920616e64207061796c6f6164206d6561737572656d656e742e87ad8585b3032a03097061726167726170680700ad8585b303c701060400ad8585b303c801950150617261677261706820322e206175646974206c6f6720726574656e74696f6e20e2809420636f6e7465787420636170747572656420647572696e672061756469742073656564696e6720746f206769766520646f63756d656e7473207265616c697374696320626f64792077656967687420666f7220717565727920616e64207061796c6f6164206d6561737572656d656e742e87ad8585b303c70103097061726167726170680700ad8585b303dc02060400ad8585b303dd02910150617261677261706820332e20656469746f72206175746f7361766520e2809420636f6e7465787420636170747572656420647572696e672061756469742073656564696e6720746f206769766520646f63756d656e7473207265616c697374696320626f64792077656967687420666f7220717565727920616e64207061796c6f6164206d6561737572656d656e742e00', $2 = '{\"type\": \"doc\", \"content\": [{\"type\": \"heading\", \"attrs\": {\"level\": 2}, \"content\": [{\"text\": \"AUDIT Wiki 001: session expiry handling\", \"type\": \"text\"}]}, {\"type\": \"paragraph\", \"content\": [{\"text\": \"Paragraph 1. WebSocket reconnect backoff — context captured during audit seeding to give documents realistic body weight for query and payload measurement.\", \"type\": \"text\"}]}, {\"type\": \"paragraph\", \"content\": [{\"text\": \"Paragraph 2. audit log retention — context captured during audit seeding to give documents realistic body weight for query and payload measurement.\", \"type\": \"text\"}]}, {\"type\": \"paragraph\", \"content\": [{\"text\": \"Paragraph 3. editor autosave — context captured during audit seeding to give documents realistic body weight for query and payload measurement.\", \"type\": \"text\"}]}]}', $3 = '{\"plan\": null, \"goals\": null, \"vision\": null, \"success_criteria\": null}', $4 = 'ea61bde5-331e-473c-8ee5-f40aafb64640'"
+  },
+  {
+    "sql": "SELECT id, workspace_id, document_type, title, parent_id, position, ticket_number, properties, created_at, updated_at, created_by, visibility FROM documents WHERE workspace_id = $1 AND archived_at IS NULL AND deleted_at IS NULL AND (visibility = 'workspace' OR created_by = $2 OR $3 = TRUE) AND document_type = $4 ORDER BY position ASC, created_at DESC",
+    "n": 12,
+    "maxMs": 1.07,
+    "totalMs": 7.413,
+    "sampleParams": "$1 = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0', $2 = '750c43f9-a503-45be-a852-6f4a82d17b35', $3 = 't', $4 = 'wiki'"
+  },
+  {
+    "sql": "SELECT i.properties->>'assignee_id' as assignee_id, da_project.related_id as project_id, proj.title as project_name, proj.properties->>'color' as project_color, proj_prog_da.related_id as program_id, prog.title as program_name, prog.properties->>'emoji' as program_emoji, prog.properties->>'color' as program_color, s.properties->>'start_date' as sprint_start FROM documents i JOIN document_associations da_sprint ON da_sprint.document_id = i.id AND da_sprint.relationship_type = 'sprint' JOIN documents s ON s.id = da_sprint.related_id JOIN document_associations da_project ON da_project.document_id = i.id AND da_project.relationship_type = 'project' JOIN documents proj ON proj.id = da_project.related_id LEFT JOIN document_associations proj_prog_da ON proj.id = proj_prog_da.document_id AND proj_prog_da.relationship_type = 'program' LEFT JOIN documents prog ON proj_prog_da.related_id = prog.id AND prog.document_type = 'program' WHERE i.workspace_id = $1 AND i.document_type = 'issue' AND i.properties->>'assignee_id' IS NOT NULL AND (i.visibility = 'workspace' OR i.created_by = $2 OR $3 = TRUE)",
+    "n": 4,
+    "maxMs": 0.872,
+    "totalMs": 2.56,
+    "sampleParams": "$1 = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0', $2 = '750c43f9-a503-45be-a852-6f4a82d17b35', $3 = 't'"
+  },
+  {
+    "sql": "SELECT d.id, d.title, d.properties, prog_da.related_id as program_id, p.title as program_name, p.properties->>'prefix' as program_prefix, p.properties->>'accountable_id' as program_accountable_id, (SELECT op.properties->>'reports_to' FROM documents op WHERE d.properties->>'owner_id' IS NOT NULL AND op.id = (d.properties->>'owner_id')::uuid AND op.document_type = 'person' AND op.workspace_id = d.workspace_id) as owner_reports_to, $5::timestamp as workspace_sprint_start_date, u.id as owner_id, u.name as owner_name, u.email as owner_email, (SELECT COUNT(*) FROM documents i JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint' WHERE i.document_type = 'issue') as issue_count, (SELECT COUNT(*) FROM documents i JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint' WHERE i.document_type = 'issue' AND i.properties->>'state' = 'done') as completed_count, (SELECT COUNT(*) FROM documents i JOIN document_associations ida ON ida.document_id = i.id AND ida.related_id = d.id AND ida.relationship_type = 'sprint' WHERE i.document_type = 'issue' AND i.properties->>'state' IN ('in_progress', 'in_review')) as started_count, (SELECT COUNT(*) > 0 FROM documents pl WHERE pl.parent_id = d.id AND pl.document_type = 'weekly_plan') as has_plan, (retro.id IS NOT NULL) as has_retro, retro.outcome as retro_outcome, retro.id as retro_id FROM documents d LEFT JOIN document_associations prog_da ON prog_da.document_id = d.id AND prog_da.relationship_type = 'program' LEFT JOIN documents p ON prog_da.related_id = p.id -- DB-6: single indexed lookup replacing 3 correlated subqueries -- (has_retro/retro_outcome/retro_id), each of which independently -- scanned document_associations for the same predicate. A sprint has -- at most one weekly_review with a non-null outcome (enforced at -- creation, weeks.ts POST /:id/review), so MAX() over 0-or-1 rows is -- equivalent to the old LIMIT-1 pick. MAX() (not LIMIT 1) is -- deliberate: LIMIT 1 makes the planner favor a zero-startup-cost Seq -- Scan over idx_document_associations_related_type because it only -- needs to find one match cheaply; an aggregate has to see every -- matching row regardless, so its cost model prefers the index - -- exactly like the has_retro/issue-count subqueries above, which were -- never affected because they aggregate instead of using LIMIT. LEFT JOIN LATERAL ( SELECT MAX(rt.id::text)::uuid AS id, MAX(rt.properties->>'outcome') AS outcome FROM document_associations rda JOIN documents rt ON rt.id = rda.document_id WHERE rda.related_id = d.id AND rda.relationship_type = 'sprint' AND rt.properties->>'outcome' IS NOT NULL ) retro ON true LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid = u.id WHERE d.workspace_id = $1 AND d.document_type = 'sprint' AND (d.properties->>'sprint_number')::int = $2 AND (d.visibility = 'workspace' OR d.created_by = $3 OR $4 = TRUE) ORDER BY (d.properties->>'sprint_number')::int, p.title",
+    "n": 1,
+    "maxMs": 0.75,
+    "totalMs": 0.75,
+    "sampleParams": "$1 = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0', $2 = '14', $3 = '750c43f9-a503-45be-a852-6f4a82d17b35', $4 = 't', $5 = '2026-04-27 00:00:00'"
+  },
+  {
+    "sql": "SELECT i.id, i.title, da_sprint.related_id as sprint_id, i.properties->>'assignee_id' as assignee_id, i.properties->>'state' as state, i.ticket_number, s.properties->>'start_date' as sprint_start, s.properties->>'end_date' as sprint_end, prog_da.related_id as program_id, p.title as program_name, p.properties->>'emoji' as program_emoji, p.properties->>'color' as program_color FROM documents i JOIN document_associations da_sprint ON da_sprint.document_id = i.id AND da_sprint.relationship_type = 'sprint' JOIN documents s ON s.id = da_sprint.related_id LEFT JOIN document_associations prog_da ON i.id = prog_da.document_id AND prog_da.relationship_type = 'program' LEFT JOIN documents p ON prog_da.related_id = p.id AND p.document_type = 'program' WHERE i.workspace_id = $1 AND i.document_type = 'issue' AND i.properties->>'assignee_id' IS NOT NULL AND (i.visibility = 'workspace' OR i.created_by = $2 OR $3 = TRUE)",
+    "n": 4,
+    "maxMs": 0.663,
+    "totalMs": 2.252,
+    "sampleParams": "$1 = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0', $2 = '750c43f9-a503-45be-a852-6f4a82d17b35', $3 = 't'"
+  },
+  {
+    "sql": "SELECT jsonb_array_elements_text(s.properties->'assignee_ids') as person_id, (s.properties->>'sprint_number')::int as sprint_number, s.properties->>'project_id' as project_id, proj.title as project_name, proj.properties->>'color' as project_color, COALESCE(prog_da.related_id, sprint_prog_da.related_id) as program_id, COALESCE(prog.title, sprint_prog.title) as program_name, COALESCE(prog.properties->>'emoji', sprint_prog.properties->>'emoji') as program_emoji, COALESCE(prog.properties->>'color', sprint_prog.properties->>'color') as program_color FROM documents s LEFT JOIN documents proj ON (s.properties->>'project_id')::uuid = proj.id LEFT JOIN document_associations prog_da ON proj.id = prog_da.document_id AND prog_da.relationship_type = 'program' LEFT JOIN documents prog ON prog_da.related_id = prog.id AND prog.document_type = 'program' LEFT JOIN document_associations sprint_prog_da ON s.id = sprint_prog_da.document_id AND sprint_prog_da.relationship_type = 'program' LEFT JOIN documents sprint_prog ON sprint_prog_da.related_id = sprint_prog.id AND sprint_prog.document_type = 'program' WHERE s.workspace_id = $1 AND s.document_type = 'sprint' AND jsonb_array_length(COALESCE(s.properties->'assignee_ids', '[]'::jsonb)) > 0 AND (s.visibility = 'workspace' OR s.created_by = $2 OR $3 = TRUE)",
+    "n": 4,
+    "maxMs": 0.593,
+    "totalMs": 1.436,
+    "sampleParams": "$1 = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0', $2 = '750c43f9-a503-45be-a852-6f4a82d17b35', $3 = 't'"
+  },
+  {
+    "sql": "SELECT s.id, s.user_id, s.workspace_id, s.expires_at, s.last_activity, s.created_at, u.is_super_admin FROM sessions s JOIN users u ON s.user_id = u.id WHERE s.id = $1",
+    "n": 80,
+    "maxMs": 0.395,
+    "totalMs": 4.502000000000001,
+    "sampleParams": "$1 = 'd4eec1f9240f6cb11c59d277253b5ee2e2ab86e7ea0d4a0170c62f3e710b9fdc'"
+  },
+  {
+    "sql": "SELECT s.id, s.title, s.properties, COUNT(i.id) as issue_count FROM documents i JOIN document_associations da ON da.document_id = i.id AND da.relationship_type = 'sprint' JOIN documents s ON s.id = da.related_id AND s.document_type = 'sprint' WHERE i.workspace_id = $1 AND i.document_type = 'issue' AND (i.properties->>'assignee_id')::uuid = $2 AND (s.properties->>'sprint_number')::int = $3 AND s.deleted_at IS NULL GROUP BY s.id, s.title, s.properties",
+    "n": 3,
+    "maxMs": 0.332,
+    "totalMs": 0.911,
+    "sampleParams": "$1 = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0', $2 = '750c43f9-a503-45be-a852-6f4a82d17b35', $3 = '14'"
+  },
+  {
+    "sql": "UPDATE sessions SET last_activity = $1 WHERE id = $2",
+    "n": 14,
+    "maxMs": 0.325,
+    "totalMs": 2.1180000000000003,
+    "sampleParams": "$1 = '2026-07-30 22:02:30.401+00', $2 = 'd4eec1f9240f6cb11c59d277253b5ee2e2ab86e7ea0d4a0170c62f3e710b9fdc'"
+  },
+  {
+    "sql": "SELECT DISTINCT ON (project_id) project_id, project_name FROM ( -- Explicit sprint assignee_ids SELECT (s.properties->>'project_id')::uuid as project_id, proj.title as project_name FROM documents s JOIN documents proj ON (s.properties->>'project_id')::uuid = proj.id WHERE s.workspace_id = $1 AND s.document_type = 'sprint' AND (s.properties->>'sprint_number')::int = $3 AND s.properties->'assignee_ids' @> to_jsonb($2::text) AND s.deleted_at IS NULL AND proj.deleted_at IS NULL UNION -- Issue-based inference SELECT proj_da.related_id as project_id, proj.title as project_name FROM documents i JOIN document_associations sprint_da ON sprint_da.document_id = i.id AND sprint_da.relationship_type = 'sprint' JOIN documents s ON s.id = sprint_da.related_id AND s.document_type = 'sprint' JOIN document_associations proj_da ON proj_da.document_id = s.id AND proj_da.relationship_type = 'project' JOIN documents proj ON proj.id = proj_da.related_id AND proj.document_type = 'project' WHERE i.workspace_id = $1 AND i.document_type = 'issue' AND (i.properties->>'assignee_id')::uuid = $4 AND (s.properties->>'sprint_number')::int = $3 AND i.deleted_at IS NULL AND s.deleted_at IS NULL AND proj.deleted_at IS NULL ) allocations ORDER BY project_id",
+    "n": 6,
+    "maxMs": 0.227,
+    "totalMs": 1.0130000000000001,
+    "sampleParams": "$1 = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0', $2 = '4df81449-01d3-4769-8cc2-afb318ffd8e2', $3 = '14', $4 = '750c43f9-a503-45be-a852-6f4a82d17b35'"
+  },
+  {
+    "sql": "SELECT d.id as \"personId\", d.properties->>'user_id' as id, d.title as name, COALESCE(d.properties->>'email', u.email) as email, CASE WHEN d.archived_at IS NOT NULL THEN true ELSE false END as \"isArchived\", CASE WHEN d.properties->>'pending' = 'true' THEN true ELSE false END as \"isPending\", d.properties->>'reports_to' as \"reportsTo\" FROM documents d LEFT JOIN users u ON u.id = (d.properties->>'user_id')::uuid WHERE d.workspace_id = $1 AND d.document_type = 'person' AND ($4 OR d.archived_at IS NULL) AND (d.visibility = 'workspace' OR d.created_by = $2 OR $3 = TRUE) ORDER BY d.archived_at NULLS FIRST, d.title",
+    "n": 4,
+    "maxMs": 0.133,
+    "totalMs": 0.332,
+    "sampleParams": "$1 = 'fe82ac70-ee0b-4bb7-af44-5ba0a4abdbe0', $2 = '750c43f9-a503-45be-a852-6f4a82d17b35', $3 = 't', $4 = 'f'"
+  }
+]
