@@ -64,7 +64,10 @@ describe('staticValueImports', () => {
     expect(importsStatically(source, 'emoji-picker-react')).toBe(false);
   });
 
-  it('returns every specifier in source order without duplicates', () => {
+  it('returns every specifier without duplicates, grouped by import form rather than source order', () => {
+    // 'b' is textually second in the source below but is a bare import, and
+    // bare imports are collected before named imports and re-exports — so it
+    // comes first in the result. See the docstring on staticValueImports.
     const src = [
       "import { a } from './a';",
       "import 'b';",

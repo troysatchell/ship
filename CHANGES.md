@@ -228,6 +228,7 @@ which includes test files, so utility classes that exist only in a test inflate 
 stylesheet — the tests added by this branch grew `index-*.css` by 0.32 kB raw / 0.04 kB gzip. The fix
 is to narrow the glob (e.g. exclude `*.test.*`), but `tailwind.config.js` was just modified by
 TRO-217 and this is not the branch to contend for it. Filed rather than folded in.
+
 ## TRO-217 — [A11Y-3] `/my-week` failed colour contrast, the landing page of the app
 
 **What was broken.** `/` redirects to `/my-week`, and it was the only key page Lighthouse failed on

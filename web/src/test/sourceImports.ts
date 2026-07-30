@@ -50,7 +50,10 @@ const RE_EXPORT = /(?:^|[\s;}])export\s+(?!type\s)([^;'"]*?)\s*from\s*['"]([^'"]
 
 /**
  * Every module specifier `source` statically imports at value level.
- * Order is source order; duplicates are collapsed.
+ * Grouped by import form (bare imports, then default/named imports and
+ * re-exports), not true source order, with duplicates collapsed. Do not
+ * rely on the returned order reflecting where each import appears in the
+ * file if a source mixes import forms.
  */
 export function staticValueImports(source: string): string[] {
   const clean = stripComments(source);
