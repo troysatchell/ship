@@ -802,6 +802,83 @@ devDependencies; remove the `Lint` step from `ci.yml`.
 
 ---
 
+## TRO-203 (BUN-7) + TRO-204 (BUN-8) — an unused dependency and a duplicated Radix version leave the tree
+
+Two Low-severity dependency-hygiene findings, one root cause (drift between what
+`web/package.json` declares and what pnpm actually resolves), fixed on one branch.
+
+**BUN-7 — `@tanstack/query-sync-storage-persister` was declared and never used.** Re-verified
+against current code, not the audit snapshot, because the ticket flagged `web/src/lib/queryClient.ts`
+as recently touched by TRO-190/ERR-3: it imports only the **types** `PersistedClient`/`Persister`
+from `@tanstack/react-query-persist-client` and implements its own IndexedDB persister with
+`idb-keyval` — it never reaches the sync-storage package. `grep -rE "from
+'@tanstack/query-sync-storage-persister" web/src --include="*.ts" --include="*.tsx"` returns 0,
+matching the audit exactly. Removed from `web/package.json` `dependencies`; `pnpm install`
+re-resolved it out of `pnpm-lock.yaml`. 0 shipped-byte change, as predicted — it was never in any
+emitted chunk to begin with.
+
+**BUN-8 — `@radix-ui/react-primitive` and `@radix-ui/react-slot` each resolved to two versions.**
+Cause, confirmed by reading both packages' own `package.json`s out of the pnpm store: `cmdk@1.1.1`
+declares `"@radix-ui/react-primitive": "^2.0.2"` (a caret range), which pnpm resolves to the newest
+match — 2.1.4, pulling in `react-slot@1.2.4` — while `@radix-ui/react-dialog`/`-popover`/`-tooltip`
+each pin the **exact** older `2.1.3`/`1.2.3` internally. Neither side is a range pnpm can widen on
+its own, so both trees shipped. Fixed with a `pnpm.overrides` entry in the root `package.json`
+(with an explanatory `"// overrides (BUN-8 / TRO-204)"` comment key beside it, since a real override
+key can't hold prose) forcing every consumer onto the newer pair. Converging *up* rather than down
+to 2.1.3/1.2.3 was checked, not assumed: diffing the built `dist/index.mjs` for both version pairs
+shows `react-primitive`'s logic is byte-identical between 2.1.3 and 2.1.4, and `react-slot` 1.2.4
+only *adds* `React.lazy`-child support over 1.2.3 — a strict superset, not a behaviour change.
+
+**Where the audit's own location claim no longer holds on this branch.** BUN-8 was measured against
+the pre-BUN-1..6 tree, where the whole app was one entry chunk, so "both copies land in the entry
+chunk" was true then. After TRO-197..202 shipped route/vendor splitting, `web/vite.config.ts`'s
+`manualChunks` deliberately leaves Radix/cmdk/dnd-kit out of any vendor group (grouping them was
+measured to cost 15 kB gzip on `/docs` and `/documents/:id`, because a route needing one primitive
+then downloaded all of them), so Rollup's default splitting places them. Today the duplicate bytes
+sit in a lazily-loaded **shared** chunk (`assets/index-CmtDBcUa.js` in this build, reached from
+`Editor.tsx`, `App.tsx`, `Documents.tsx` and the document-tab components) — not the true entry chunk
+`index.html` references. `/login`'s initial payload is therefore untouched by this fix; only `/docs`
+and `/documents/:id` shrink, and only once (it's one physical file), not per route.
+
+**Measured**: `pnpm build:web` from the repo root, `node audit/bundle/measure.mjs`, gzip level 9,
+kB = 1000 bytes, Node v23.2.0, pnpm 10.27.0 — this branch vs. `main`@`9a15f43` built in an isolated
+`git worktree add --detach` copy (never stashed):
+
+| | Before | After | Change |
+|---|---:|---:|---:|
+| Total dist (raw / gzip) | 3,365.80 / 1,771.39 kB | 3,364.02 / 1,771.31 kB | −1.78 kB raw / −0.08 kB gzip |
+| `/login` initial payload (gzip) | 117.49 kB | 117.47 kB | −0.02 kB |
+| `/docs` route closure (gzip) | 182.07 kB | 181.98 kB | −0.09 kB |
+| `/documents/:id` route closure (gzip) | 211.72 kB | 211.63 kB | −0.09 kB |
+
+Matches the audit's own estimate (~2.1 kB raw / <1 kB gzip) in order of magnitude — this was always
+a hygiene fix, not a payload fix, and is reported as one.
+
+**Duplicate-gone proof**: `pnpm why @radix-ui/react-primitive --recursive` and `pnpm why
+@radix-ui/react-slot --recursive` (repo root) show a single resolved version — `2.1.4` and `1.2.4`
+respectively — on every path, including through `cmdk`. Parsing `pnpm-lock.yaml`'s `packages:` block
+for all 25 `@radix-ui/*` entries confirms zero remaining duplicates (down from the 2 named above).
+
+**Regression guard** (BUN-8 has one; BUN-7 removing an unimported package needs no behavioural test):
+`web/src/lib/radixVersionDedupe.test.ts` (new) reads the real `pnpm-lock.yaml` and asserts every
+`@radix-ui/*` package resolves to exactly one version — scoped to that family, not a blanket claim
+about the whole tree, since other packages legitimately carry two majors. Confirmed it fails for the
+right reason: run against a copy of the pre-fix lockfile it reports `@radix-ui/react-primitive
+resolved to 2 version(s) (2.1.3, 2.1.4)` and the same for `react-slot` (1.2.3, 1.2.4), then passes
+clean once the fixed lockfile is restored. Runs inside `pnpm --filter @ship/web test`, which the
+factory gate executes.
+
+**Verified nothing broke**: `pnpm install`, `pnpm --filter @ship/web test` (38 files / 390 tests),
+`pnpm test` (api: 46 files / 604 tests), `pnpm build` (shared + api + web), `pnpm run type-check` —
+all green.
+
+**Rollback**: revert the two `package.json` edits — restore the
+`"@tanstack/query-sync-storage-persister": "^5.90.18"` line to `web/package.json`'s `dependencies`,
+delete the `"pnpm"."overrides"` block from the root `package.json` — then `pnpm install` to
+regenerate `pnpm-lock.yaml`. Delete `web/src/lib/radixVersionDedupe.test.ts`.
+
+---
+
 ## TRO-286 (TEST-14) — no e2e test can pass without executing an assertion any more
 
 TEST-2 (TRO-224) fixed the 8 vacuous tests that gave false *security* assurance and deliberately
