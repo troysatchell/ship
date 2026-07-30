@@ -61,17 +61,17 @@
     },
     "web": {
       "totals": {
-        "tests": 214,
-        "passed": 214,
+        "tests": 345,
+        "passed": 345,
         "failed": 0,
-        "files": 24
+        "files": 33
       },
       "resolved": {
         "linearTicket": "TRO-223",
         "auditFinding": "TEST-1",
         "on": "2026-07-29",
         "note": "All 13 entries removed because the tests now pass, not because they were reclassified. One was a source defect (the project 'weeks' tab lost its count label in 7713ef0), one was a test-harness defect (a fetch stub without headers, which made resetTimer force a logout), and 11 were assertions left behind by the sprint->week rename (7713ef0), the project tab reorder (b1e4c5a) and the sprint-tabs feature (9f77237).",
-        "counts": "151 tests at the previous capture and 172 when this branch re-measured (the suite grew on main in between). This branch adds 15 test-case declarations, some via it.each, and merging main brought in 5 further test files from other tickets. Measured on the branch after that merge: 214 tests across 24 files, 0 failing. Assertions in the three repaired files went from 131 to 147; no test was skipped and none deleted."
+        "counts": "151 tests at the previous capture and 172 when this branch first re-measured (the suite grew on main in between). This branch adds 15 test-case declarations, some via it.each. Main was merged into this branch twice: after the first merge (84f05ff), 214 tests across 24 files, 0 failing; after the second (f7b15c9 -- nine more PRs, including route-level code splitting and a deferred editor), 345 tests across 33 files, 0 failing. The 13 identities this ticket fixes did not change across either merge. Assertions in the three repaired files went from 131 to 147; no test was skipped and none deleted. A residual `(editor.commands as any)` cast inside the quarantined `DetailsExtension.test.ts` test, left behind by an earlier commit that claimed to have removed it, was found and removed during the second merge -- see CHANGES.md."
       },
       "knownFailing": []
     }

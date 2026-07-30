@@ -68,19 +68,33 @@ entries were removed from `audit/factory/quarantine.json`; both suites are now g
 **Run it.**
 
 ```bash
-pnpm test:web                    # 214 passed / 214 total, 24 files
-pnpm test                        # api 469/469 (needs DATABASE_URL), then web
+pnpm test:web                    # 345 passed / 345 total, 33 files
+pnpm test                        # api (needs DATABASE_URL), then web
 scripts/factory/gate.sh          # full evidence gate
 ```
 
-Those totals are measured on this branch *after* merging `main`, which brought in 5 further test
-files from other tickets; the web suite was 186 tests before that merge.
+Those totals are measured on this branch *after* merging `main` a second time (`main` moved from
+`84f05ff` to `f7b15c9`, nine more PRs, including route-level code splitting and a deferred editor).
+That merge brought in another round of web test files written by other tickets. Sequence of
+measurements on this branch: 186 tests before the first `main` merge, 214/214 across 24 files
+after it, 345/345 across 33 files after this second one — the 13 identities this ticket fixes did
+not change across any of those merges, only the file count around them did.
 
-15 test cases were added: sprint status-aware tab selection (previously uncovered — which is how
-`getTabsForDocumentType('sprint')` drifted from `[]` to four tabs unnoticed), project/program week
-count-label symmetry, the zero-count convention asserted across every count-aware label, a guard
-that no config exposes a `'sprints'` id again, `setDetails` document structure, and the two session
-fail-closed tests. Assertions in the three repaired files went from 131 to 147.
+15 test cases were added to the three repaired files: sprint status-aware tab selection (previously
+uncovered — which is how `getTabsForDocumentType('sprint')` drifted from `[]` to four tabs
+unnoticed), project/program week count-label symmetry, the zero-count convention asserted across
+every count-aware label, a guard that no config exposes a `'sprints'` id again, `setDetails`
+document structure, and the two session fail-closed tests. Assertions in the three repaired files
+went from 131 to 147.
+
+**Correction post-merge.** The `fix(web): drop test-side casts` commit's message claimed both
+test-side casts flagged by CodeRabbit were removed. Only the `useSessionTimeout.test.ts` fetch cast
+was; `DetailsExtension.test.ts`'s pre-existing `(editor.commands as any).setDetails` — inside the
+same quarantined test this ticket claims to have fixed, `should allow inserting details via
+command` — was untouched and still present after merging `main`. Removed now (no cast needed:
+`setDetails` is typed via module augmentation, same as the sibling test already relied on).
+`node scripts/factory/review-patterns.mjs main` reports clean before and after, because the cast
+predates this branch and G7b only diffs added lines — it would not have caught this on its own.
 
 **Roll back.** `git revert` the commits on `fix/test-1-web-suite-green`. Reverting restores the 13
 failures, so the `knownFailing` list in `audit/factory/quarantine.json` must come back too —

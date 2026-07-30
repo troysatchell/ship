@@ -81,9 +81,11 @@ describe('DetailsExtension', () => {
       content: '<p>Test content</p>',
     });
 
-    // Check that the command exists
-    expect((editor.commands as any).setDetails).toBeDefined();
-    expect(typeof (editor.commands as any).setDetails).toBe('function');
+    // Check that the command exists. No cast: DetailsExtension.ts declares
+    // setDetails via module augmentation on @tiptap/core's Commands interface,
+    // so importing it types this call.
+    expect(editor.commands.setDetails).toBeDefined();
+    expect(typeof editor.commands.setDetails).toBe('function');
 
     editor.destroy();
   });
