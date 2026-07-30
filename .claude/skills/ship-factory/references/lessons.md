@@ -162,6 +162,18 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   `timeout` (`CR_TIMEOUT`, default 360s) and records `warn: review timed out`. **If your gate sits
   on a `coderabbit` subprocess, kill it and treat G9 as `warn`** — then triage the PR-level review,
   which `triage.md` already prefers because it sees the full branch diff.
+- 2026-07-30 (TRO-226) — **Do not re-run the gate's CodeRabbit step once you have findings in hand.**
+  G9 used to redirect the CLI straight over `.factory/coderabbit.json`, so a failed run replaced a
+  completed review with its error stub: a 21-line file holding 10 findings became a 5-line
+  `rate_limit` object. `gate.sh` now captures to a temp file and keeps the older findings when the
+  new run produced none, reporting `KEPT n finding(s) from an earlier run`. Belt and braces though —
+  **transcribe findings into your report as you triage them**, because the file is gitignored and has
+  no history to recover from. Use `--skip-review` on re-runs.
+- 2026-07-30 (TRO-226) — **`BASE_REF` is the local `main`, which lags `origin/main` at factory pace.**
+  Local `main` is one shared ref across every worktree, and it sat three merges behind `origin/main`
+  during a single session. Triple-dot diffs still resolve via merge-base, so a stale base is *quiet*
+  rather than loud. `.factory-env` used to clobber a caller's override; it no longer does, so
+  `FACTORY_BASE_REF=origin/main scripts/factory/gate.sh` now works when you need certainty.
 - 2026-07-30 (TRO-224) — **A third load-sensitive api flake identity: `weeks.test.ts::should reject
   review approval without rating`** (joining `backlinks.test.ts` and `rate-limit.test.ts`). Same
   signature every time: fails inside a full gate run, then passes standalone — 41/41 for the file,
