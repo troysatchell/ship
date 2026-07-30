@@ -100,6 +100,56 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     hostile case; reusing one that an earlier case closed asserts against a dead socket and proves
     nothing (TRO-276).
 
+21. **Type the boundaries that hand you `any` without saying so. G7b cannot see these.**
+    Every rule above about `as any` and `: any` greps for a token in your diff. These have no token,
+    which is exactly why they keep landing after a green gate:
+    - **`pool.query(...)` rows.** Untyped, the row is `any` and every field access after it is
+      unchecked. Write `pool.query<MyRow>(...)` with a small local interface. (TRO-178, TRO-226.)
+    - **`response.json()` / `res.json()`.** Returns `any`/`Promise<any>`. Define a response-body
+      interface and narrow before touching fields — including in tests and e2e specs.
+      (TRO-226 ×3 call sites, TRO-224.)
+    Reviewers filed **8 type-safety findings across 6 tickets**, and that undercounts it: the same
+    defect also got filed as `implicit-any`, `unsafe-cast`, `unsafe-type-cast` and `test-cast`.
+    Normalized, it is roughly **14 findings** and by a wide margin the largest recurring class in
+    this project — against an audit (TS-2) whose whole point is that 707 pg queries are untyped.
+    **When you record a finding in the ledger, use the slug `type-safety`** for anything in this
+    family; a fragmented taxonomy hides recurrence and is why this took six tickets to see.
+
+22. **Never start a background poll or monitor and then wait for it. Nothing will wake you.**
+    Six agents in one run stalled this way — on CI polls, on gate runs, on a "monitor" that was
+    going to notify them. Each burned wall-clock doing nothing and had to be nudged by the
+    orchestrator to produce a report it had already earned. Run what you need in the **foreground**
+    and read the result, or make one synchronous check and move on.
+    Concretely: `gh pr checks <n>` once, not a loop. `scripts/factory/gate.sh` in the foreground, or
+    read `.factory/gate-result.json` after it returns.
+    **CI is the orchestrator's gate, not yours.** "CI queued at time of report" is a complete and
+    acceptable answer — an unsent report is not. Finish, write it up, stop.
+
+23. **After `git merge main`, run `pnpm install` before you believe any failure.**
+    `main` gains dependencies. When it does, your worktree's `node_modules` is stale and the import
+    fails at module load — so **every** test file that imports the app fails at once. The cascade
+    looks like a catastrophic regression from your merge; it is one missing package.
+    Observed three times in one hour, on TRO-277, TRO-240 and TRO-181, all from PR #20 adding
+    `compression`: ~19 api file-level failures, a web failure, and typecheck errors
+    (`Cannot find module 'compression'`, then `TS7006` on the untyped params downstream). One
+    `pnpm install` cleared all of it — the lockfile was already correct, so nothing else was wrong.
+    Symptom to recognise: failures in files your diff never touched, all reporting import or
+    module-resolution errors rather than assertion failures.
+24. **The load-sensitive api flake has at least five identities. Name yours; never quarantine it.**
+    `backlinks.test.ts`, `rate-limit.test.ts`, `weeks.test.ts::should reject review approval without
+    rating`, `session-activity-race.test.ts::modifies the session row exactly once when a concurrent
+    burst crosses the threshold`, and a candidate `workspaces.test.ts::should archive person
+    document`. Every one fails inside a full `gate.sh` run — which carries typecheck + build, so CPU
+    is loaded — and passes standalone. Five identities across files unrelated to each other is the
+    evidence that this is **one shared mechanism** (TRO-277), not five flaky tests. Re-run standalone
+    before believing it, report the identity so the set keeps growing, and never widen the quarantine.
+25. **A commit message that claims a cleanup is not evidence the cleanup happened.**
+    A commit on TRO-223 asserted it had removed two `as any` casts; only one was removed, and the
+    survivor sat in a file the branch otherwise edited. `review-patterns.mjs` (G7b) could not catch
+    it because it only inspects **added** lines — a pre-existing violation inside a file you touch is
+    a structural blind spot. When you claim to have removed casts, `grep` the file afterwards and
+    quote the result.
+
 ## Log
 
 *Append dated entries as the factory learns. One line each, with the ticket that taught it.*
@@ -162,6 +212,18 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   `timeout` (`CR_TIMEOUT`, default 360s) and records `warn: review timed out`. **If your gate sits
   on a `coderabbit` subprocess, kill it and treat G9 as `warn`** — then triage the PR-level review,
   which `triage.md` already prefers because it sees the full branch diff.
+- 2026-07-30 (TRO-226) — **Do not re-run the gate's CodeRabbit step once you have findings in hand.**
+  G9 used to redirect the CLI straight over `.factory/coderabbit.json`, so a failed run replaced a
+  completed review with its error stub: a 21-line file holding 10 findings became a 5-line
+  `rate_limit` object. `gate.sh` now captures to a temp file and keeps the older findings when the
+  new run produced none, reporting `KEPT n finding(s) from an earlier run`. Belt and braces though —
+  **transcribe findings into your report as you triage them**, because the file is gitignored and has
+  no history to recover from. Use `--skip-review` on re-runs.
+- 2026-07-30 (TRO-226) — **`BASE_REF` is the local `main`, which lags `origin/main` at factory pace.**
+  Local `main` is one shared ref across every worktree, and it sat three merges behind `origin/main`
+  during a single session. Triple-dot diffs still resolve via merge-base, so a stale base is *quiet*
+  rather than loud. `.factory-env` used to clobber a caller's override; it no longer does, so
+  `FACTORY_BASE_REF=origin/main scripts/factory/gate.sh` now works when you need certainty.
 - 2026-07-30 (TRO-224) — **A third load-sensitive api flake identity: `weeks.test.ts::should reject
   review approval without rating`** (joining `backlinks.test.ts` and `rate-limit.test.ts`). Same
   signature every time: fails inside a full gate run, then passes standalone — 41/41 for the file,
