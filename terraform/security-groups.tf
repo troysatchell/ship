@@ -1,3 +1,34 @@
+# CloudFront's origin-facing managed prefix list — the IP ranges CloudFront edge
+# locations use when connecting to a custom origin. Looked up by AWS's well-known
+# name rather than hardcoded, so it tracks CloudFront's ranges as AWS updates them.
+# Used below to restrict the ALB security group instead of 0.0.0.0/0 (finding TF-7 /
+# TRO-278): the ALB is a `custom_origin_config` behind the `EB-API` CloudFront
+# behavior (terraform/s3-cloudfront.tf), so CloudFront is the only legitimate way
+# to reach it — direct internet access to the ALB bypasses CloudFront's WAF
+# (waf.tf) and lets a client's own X-Forwarded-For reach the ALB unmediated.
+data "aws_ec2_managed_prefix_list" "cloudfront_origin_facing" {
+  name = "com.amazonaws.global.cloudfront.origin-facing"
+}
+
+# CAUTION (CodeRabbit finding on this PR, not yet mitigated — see CHANGES.md's
+# TRO-278 post-deploy checklist and the follow-up ticket it references): AWS
+# counts a security-group rule that references a prefix list against the
+# "rules per security group" quota as though it were expanded to
+# `data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.max_entries`
+# separate rules, not as one rule. The two ingress rules below both reference
+# this same prefix list (ports 80 and 443), so the ALB security group alone
+# could consume roughly 2x that entry count against the default quota of 60
+# rules per security group — plausibly exceeding it on its own, before AWS's
+# CloudFront IP-range growth over time is even considered. NOT verified here
+# (no AWS credentials, and the exact current `max_entries` value and quota
+# code are not looked up live): before `apply`, check the account's actual
+# "Rules per security group" quota in the VPC section of the Service Quotas
+# console (or `aws service-quotas list-service-quotas --service-code vpc` and
+# find it by name — do not trust a hardcoded quota code without confirming it
+# against that account), and either request an increase or split these two
+# rules across separate security groups attached to the ALB if the prefix
+# list's entry count would exceed the limit.
+
 # Aurora Security Group
 resource "aws_security_group" "aurora" {
   name        = "${var.project_name}-aurora"
@@ -57,22 +88,29 @@ resource "aws_security_group" "alb" {
   description = "ALB security group - public access"
   vpc_id      = aws_vpc.main.id
 
-  # Allow HTTP from anywhere
+  # Allow HTTP from CloudFront only (origin-facing managed prefix list, not
+  # 0.0.0.0/0 — TF-7/TRO-278). CloudFront redirects viewer HTTP to HTTPS
+  # (`viewer_protocol_policy = "redirect-to-https"` in s3-cloudfront.tf), and the
+  # CloudFront->origin leg itself uses `origin_protocol_policy = "http-only"`, so
+  # port 80 here carries CloudFront's own origin traffic, not viewer HTTP.
   ingress {
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow HTTP from anywhere"
+    from_port       = 80
+    to_port         = 80
+    protocol        = "tcp"
+    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id]
+    description     = "Allow HTTP from CloudFront origin-facing ranges only"
   }
 
-  # Allow HTTPS from anywhere
+  # Allow HTTPS from CloudFront only (same prefix list). Kept even though the
+  # custom origin config only uses http_port/origin_protocol_policy=http-only
+  # today, so a future switch to origin_protocol_policy=https-only doesn't also
+  # require reopening this security group.
   ingress {
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-    description = "Allow HTTPS from anywhere"
+    from_port       = 443
+    to_port         = 443
+    protocol        = "tcp"
+    prefix_list_ids = [data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.id]
+    description     = "Allow HTTPS from CloudFront origin-facing ranges only"
   }
 
   # Allow all outbound

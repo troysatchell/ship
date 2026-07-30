@@ -131,12 +131,57 @@ export function isCompressionExcluded(
   );
 }
 
+/**
+ * Resolves the Express `trust proxy` hop count from `TRUST_PROXY_HOPS`
+ * (finding TF-7 / TRO-278). `trust proxy` is a hop COUNT, not "trust the
+ * header": with N trusted hops, `req.ip` (via `proxy-addr`) resolves to the
+ * (N+1)-th `X-Forwarded-For` entry counting from the end, because each
+ * honest proxy appends exactly one entry.
+ *
+ * A single hard-coded number cannot be correct for both of this repo's
+ * deployment targets, which is why it moved out of the source file:
+ *
+ *   - **Render (the actual live deployment, maintainer-confirmed 2026-07-30)**
+ *     and local dev: `client -> Render's proxy -> Express` — ONE hop.
+ *     `TRUST_PROXY_HOPS` is unset there (see `terraform/render/web_service.tf`),
+ *     so this defaults to **1**, preserving today's live behaviour exactly.
+ *   - **AWS** (`terraform/s3-cloudfront.tf`'s `EB-API` custom origin behind
+ *     CloudFront, then the ALB): `client -> CloudFront -> ALB -> here` — TWO
+ *     hops. `terraform/elastic-beanstalk.tf` sets `TRUST_PROXY_HOPS = "2"` for
+ *     that environment. Trusting 2 hops there is only safe paired with
+ *     `terraform/security-groups.tf` restricting the ALB security group to
+ *     CloudFront's origin-facing managed prefix list (same PR): with the ALB
+ *     reachable only from CloudFront, hop 0 is always the ALB and hop 1 is
+ *     always a genuine CloudFront edge node, so the remaining (3rd) entry is
+ *     the real client IP. If the ALB were ever reachable directly, 2 would let
+ *     a client's own forged `X-Forwarded-For` entry be trusted as though it
+ *     were CloudFront's.
+ *
+ * An unset, empty, non-numeric, non-integer, or non-positive value falls back
+ * to 1 (the safe, currently-live default) rather than crashing the process or
+ * trusting an attacker-influenced hop count. See the regression tests in
+ * `api/src/app.test.ts`.
+ */
+export function resolveTrustProxyHops(rawValue: string | undefined): number {
+  if (rawValue === undefined || rawValue.trim() === '') return 1;
+  const parsed = Number(rawValue);
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    console.warn(
+      `TRUST_PROXY_HOPS="${rawValue}" is not a positive integer; falling back to 1 (the Render/local-dev default).`,
+    );
+    return 1;
+  }
+  return parsed;
+}
+
 export function createApp(corsOrigin: string = 'http://localhost:5173'): express.Express {
   const app = express();
 
-  // Trust proxy headers (CloudFront) for secure cookies and correct protocol detection
+  // Trust proxy headers (CloudFront/Render) for secure cookies and correct
+  // protocol detection. See `resolveTrustProxyHops` above for why the hop
+  // count is environment-configurable rather than a hard-coded constant.
   if (process.env.NODE_ENV === 'production') {
-    app.set('trust proxy', 1);
+    app.set('trust proxy', resolveTrustProxyHops(process.env.TRUST_PROXY_HOPS));
 
     // CloudFront with viewer_protocol_policy="redirect-to-https" always serves viewers over HTTPS.
     // However, CloudFront -> EB uses HTTP (origin_protocol_policy="http-only"), so CloudFront
