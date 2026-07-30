@@ -28,7 +28,7 @@
  * the per-identity budget rather than the flood ceiling.
  */
 import crypto from 'node:crypto';
-import type { Request, RequestHandler } from 'express';
+import type { RequestHandler } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 
 /** All `/api/` limits are evaluated over a rolling one-minute window. */
@@ -164,6 +164,19 @@ function fingerprint(prefix: string, credential: string): string {
 }
 
 /**
+ * The exact shape `apiRateLimitKey` reads — nothing more. Express's `Request`
+ * satisfies this structurally, so every production call site (the
+ * `keyGenerator` below) needs no change, but a test can build a plain literal
+ * that satisfies it directly, with no `as unknown as Request` cast (TS-8: a
+ * cast like that decouples the test from the shape it claims to verify).
+ */
+export interface RateLimitKeyRequest {
+  headers?: { cookie?: string; authorization?: string };
+  ip?: string;
+  socket?: { remoteAddress?: string };
+}
+
+/**
  * Bucket key for the per-identity limiter.
  *
  * Session cookie -> API token -> source IP. Note that the session id is not
@@ -171,7 +184,7 @@ function fingerprint(prefix: string, credential: string): string {
  * auth), so a client that rotates forged cookies gets fresh buckets — which is
  * precisely what `perSourceIpLimiter` is for.
  */
-export function apiRateLimitKey(req: Request): string {
+export function apiRateLimitKey(req: RateLimitKeyRequest): string {
   const sessionId = readSessionIdCookie(req.headers?.cookie);
   if (sessionId) return fingerprint('s', sessionId);
 

@@ -13,12 +13,13 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import request from 'supertest'
 import { createServer } from 'http'
-import type { Express, Request } from 'express'
+import type { Express } from 'express'
 import {
   apiRateLimitKey,
   createApiRateLimiters,
   readSessionIdCookie,
   resolveApiRateLimits,
+  type RateLimitKeyRequest,
 } from '../rate-limit.js'
 
 /**
@@ -179,8 +180,8 @@ describe('API-1: /api rate limiter', () => {
   })
 
   describe('apiRateLimitKey', () => {
-    const asRequest = (headers: Record<string, string>, ip = '203.0.113.7') =>
-      ({ headers, ip, socket: { remoteAddress: ip } }) as unknown as Request
+    const asRequest = (headers: Record<string, string>, ip = '203.0.113.7'): RateLimitKeyRequest =>
+      ({ headers, ip, socket: { remoteAddress: ip } })
 
     it('separates two sessions arriving from the same IP', () => {
       const a = apiRateLimitKey(asRequest({ cookie: `session_id=${sessionIdLike('a')}` }))
@@ -253,8 +254,8 @@ describe('API-1: /api rate limiter', () => {
    * noticing.
    */
   describe('TRO-302: fingerprint cost stays negligible', () => {
-    const asRequest = (headers: Record<string, string>, ip = '203.0.113.7') =>
-      ({ headers, ip, socket: { remoteAddress: ip } }) as unknown as Request
+    const asRequest = (headers: Record<string, string>, ip = '203.0.113.7'): RateLimitKeyRequest =>
+      ({ headers, ip, socket: { remoteAddress: ip } })
 
     it('computes the bucket key synchronously — no await, no I/O', () => {
       // Guards the design decision documented on `apiRateLimitKey`: verifying
