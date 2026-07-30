@@ -232,7 +232,10 @@ test.describe('Programs', () => {
       'Seed data should include at least one program row. Run: pnpm db:seed'
     ).toBeVisible({ timeout: 5000 })
 
-    const badge = row.locator('div.rounded-md')
+    // .first() guards against a strict-mode violation if the row ever gains
+    // another `rounded-md` div (badge, checkbox wrapper, status pill) --
+    // `rounded-md` is a common Tailwind utility, not a unique marker.
+    const badge = row.locator('div.rounded-md').first()
     await expect(badge, 'Program name cell should show a colored emoji/initial badge').toBeVisible({ timeout: 2000 })
     const badgeText = (await badge.textContent())?.trim()
     expect(badgeText, 'Badge should contain an emoji or initial character').toBeTruthy()
