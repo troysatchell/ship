@@ -309,6 +309,341 @@ code.
 
 ---
 
+## TRO-277 — [TEST-12] Load-sensitive api flake: leaking mock queues and an unguarded shared test database
+
+**What was broken.** The api suite failed an otherwise-good branch four times in one day, on a
+different test each time, and passed on standalone re-run. `audit/factory/quarantine.json` records
+api as `knownFailing: 0`, so each occurrence burned a gate attempt against the 3-retry cap. One
+occurrence was on a branch touching only `web/` and `vite.config.ts`, which cannot break an api
+DELETE test — so the cause was never in the ticket's diff. Two independent defects were found.
+
+**Defect 1 — `vi.clearAllMocks()` does not drain queued once-values.** Confirmed on vitest 4.0.17:
+`clearAllMocks` wipes call records but leaves unconsumed `mockResolvedValueOnce` responses queued.
+A test that queues more responses than its handler consumes therefore leaves one behind, and the
+next test receives that stale response first — shifting every subsequent mock in that test by one
+and surfacing as a failure in an unrelated place. Five api test files combined the two.
+
+**Defect 2 — nothing stopped two api suites from sharing one database.**
+`api/src/test/setup.ts` `TRUNCATE`s 16 tables in the `beforeAll` of *every* api test file, and each
+file then builds fixtures it depends on for the rest of the file. `fileParallelism: false` makes
+that safe within one process and does nothing across processes. Two suites on one `DATABASE_URL`
+delete each other's fixtures mid-file. Reproduced deliberately by running two suites against one
+database: **18 and 20 failures**, dominated by `expected 401 to be 200` (the session row was
+truncated away) and `violates foreign key constraint "documents_workspace_id_fkey"` in nested
+`beforeAll` hooks — the exact shapes of all four recorded flakes.
+
+**This also explains the phantom skips.** Two full runs had previously reported
+`450 passed | 6 skipped (456)` with no `.skip`/`.todo`/`.fixme` marker anywhere in
+`api/src/**/*.test.ts`. When a `beforeAll` hook fails, vitest reports that describe's tests as
+**skipped, not failed** — an intermittently-absent assertion that reads as a pass. The two-suite
+run reproduced it at scale: **11 and 33 skipped**, same zero markers.
+
+**What changed.**
+
+- `api/src/test/setup.ts` — takes a session-level Postgres advisory lock, held for the duration of
+  each test file, before truncating. Concurrent suites now serialize at file granularity instead of
+  corrupting each other; on timeout it fails with a message naming the cause rather than producing a
+  mystery 401. Advisory lock spaces are per-database, so worktrees with their own database never
+  contend, and the lock is released on disconnect so a crashed run cannot wedge the next one. The
+  hook timeout is raised above the lock deadline deliberately: a hook that vitest abandons keeps
+  running and would truncate outside vitest's control — that hole caused a residual failure in
+  testing before it was closed.
+- `api/src/routes/issues-history.test.ts`, `api/src/routes/iterations.test.ts`,
+  `api/src/__tests__/activity.test.ts`, `api/src/__tests__/auth.test.ts`,
+  `api/src/__tests__/transformIssueLinks.test.ts` — `resetAllMocks` in place of the clear-only
+  variant. Mock factories in the first two were rewritten from `vi.fn().mockResolvedValue(x)` to
+  `vi.fn(impl)`, because `resetAllMocks` restores an implementation passed to `vi.fn()` but wipes one
+  chained on afterwards; a naive conversion would have turned those mocks into undefined-returning
+  stubs. `issues-history.test.ts` also drops three now-redundant re-establishment lines, one of
+  which was an `as any` cast.
+- `api/src/__tests__/mock-isolation.test.ts` — new. Pins the four vitest semantics the fix rests on,
+  and scans every api test file to fail the suite if the clear-plus-once-queue combination returns.
+
+**Defect 3 — deadlines sized for an idle machine.** With the two mechanisms above fixed, 20 api runs
+under concurrent build load still failed 6 times, and half of those failed on nothing but
+`Test timed out in 5000ms` — on tests that take 10-70ms unloaded. A deadline 80x a test's normal
+duration says nothing about correctness on an oversubscribed machine, and it cost a gate attempt each
+time. Separately, `rate-limit.test.ts`'s 320-request burst was the single most frequent failure in
+the suite, because `request(app)` binds a throwaway server per call and the burst created 320 of
+them; it failed as `socket hang up` and as a 5s timeout.
+
+- `api/vitest.config.ts` — `testTimeout` 5s → 15s, `hookTimeout` 10s → 30s. No assertion is raised or
+  removed and nothing is skipped. The hook deadline is the more consequential one, because a hook
+  that merely misses its deadline reports its describe's tests as *skipped* — silently dropping
+  assertions instead of flagging anything.
+- `api/src/middleware/__tests__/rate-limit.test.ts` — the burst binds one server for all 320
+  requests, measuring the limiter instead of the ephemeral-port supply. The assertion is byte-for-byte
+  unchanged: still 320 requests on one session key, still zero tolerated 429s.
+
+**Evidence.** Red-before-green for the guard test: with two pre-fix files restored it fails with an
+`AssertionError` naming `__tests__/activity.test.ts` and `routes/issues-history.test.ts`. Everything
+else here is proven by repetition, since converting a mock-reset call has no meaningful unit test.
+
+| Condition | Before | After |
+|---|---|---|
+| Two api suites, one database | 18 and 20 failures; 11 and 33 phantom skips | 1 failure in 950 tests; **0 skips** |
+| 20 api runs under concurrent build load (load avg ~29 on 14 cores) | 6 runs failed | **1 run failed** |
+| Phantom skips across those 20 runs | — | **0, in all 20** |
+| `rate-limit.test.ts` alone, 25 runs under the same load | failed 3 times in 20 full runs | 25/25 |
+
+**What is still broken, and is not fixed here.** Two residual failures remain, each seen once, and
+neither is the mechanism above:
+
+- `sprint-reviews.test.ts > POST /api/weeks/:id/review > returns 403 without auth (CSRF check first)`
+  exceeded even the 15s deadline once in 20 runs — a hung request, not a slow one, so a larger
+  deadline is not the answer.
+- `workspaces.test.ts > POST /api/admin/workspaces > should return 403 for non-super-admin` returned
+  **200** once in the two-suite run. An authorization assertion failing open deserves its own
+  investigation on its own merits, separately from any flake question.
+
+Both need their own ticket. Neither was reproduced twice, so no mechanism is claimed for either.
+
+**How to run it.**
+
+```bash
+source .factory-env    # api tests TRUNCATE 16 tables; never run them without this
+
+# The guard, and the four vitest semantics the fix rests on.
+pnpm --filter @ship/api test --run src/__tests__/mock-isolation.test.ts
+
+# Defect 2, directly: two suites against one database. Both must now pass.
+# Before the lock they reported 18 and 20 failures, and 11 and 33 phantom skips.
+pnpm --filter @ship/api test --run & (sleep 4; pnpm --filter @ship/api test --run); wait
+
+# The repetition the flake actually needed: build load in parallel with the suite.
+for i in 1 2 3 4; do (while :; do pnpm --filter @ship/api type-check; done >/dev/null 2>&1) & done
+for n in $(seq 1 20); do pnpm --filter @ship/api test --run >/dev/null 2>&1 || echo "run $n FAILED"; done
+kill %1 %2 %3 %4
+```
+
+**Rollback.** `git revert` the commits. The lock is confined to the test setup file and the
+converted files are self-contained; nothing in `api/src` production code changed.
+
+---
+
+## TRO-197 (BUN-1) + TRO-198 (BUN-2) + TRO-199 (BUN-3) + TRO-200 (BUN-4) + TRO-202 (BUN-6) — the app stops shipping as one 2 MB file
+
+Five findings, one root cause: `web/dist/index.html` referenced exactly **one** module script —
+2,074.98 kB raw / 588.62 kB gzip — because nothing in the app split at a route boundary. Everything
+else followed from that. There was no seam at which to defer the editor (BUN-2), the syntax
+grammars (BUN-3) or the emoji picker (BUN-4), and no vendor chunk to cache (BUN-6). They ship as one
+branch because fixing any one of them alone moves almost nothing.
+
+**What a user actually downloads now**, by route. This is the static-import closure of the entry
+chunk plus that route's chunk — not the `index.html` figure, which code splitting improves by
+construction and therefore flatters any change of this kind:
+
+| Route | Before | After | Change |
+|---|---:|---:|---:|
+| `/login` (unauthenticated first paint) | 601.47 kB gzip | **117.34 kB** | −484.13 (−80.5%) |
+| `/docs` (4-panel layout + list) | 601.47 kB gzip | **181.92 kB** | −419.55 (−69.8%) |
+| `/documents/:id` (layout + editor shell) | 601.47 kB gzip | **211.39 kB** | −390.08 (−64.9%) |
+
+The audit's target was 600.75 → ≤ 480.60 kB gzip. Every route clears it. Total emitted bytes are
+essentially unchanged (1,761.82 → 1,770.55 kB gzip, +0.5%) — as the audit predicted, this moves
+bytes rather than deleting them, and total-bundle size is the wrong yardstick for it.
+
+**The metric itself was corrected before these numbers were trusted.** The first version of
+`audit/bundle/measure.mjs` derived each route's closure by walking `import "./x.js"` specifiers out
+of the emitted chunks. That walk cannot see stylesheets, so CSS belonging to a lazy chunk was
+omitted and every route read smaller than it is — the replacement for a flattering metric was
+flattering in the same direction (CodeRabbit finding 1 on PR #14). It now reads
+`dist/.vite/manifest.json` and follows `imports` while collecting `css` at every node, which is the
+same graph Vite uses to emit modulepreload and stylesheet links.
+
+Re-measured, the correction moves the numbers by **+0.05 kB gzip on `/login`, +0.02 on `/docs`,
++0.05 on `/documents/:id`** — the 80.5% headline stands. It is small for a specific reason worth
+recording rather than glossing: this app's only lazy stylesheet is `assets/vendor-editor-*.css`
+(1.41 kB raw / 0.53 kB gzip, the editor's Tippy styles), and it hangs off `vendor-editor`, which is
+reachable only through the editor's dynamic import — so it was never inside any route's *static*
+closure, and the entry stylesheet was already counted via the `index.html` `<link>`. The old method
+was wrong; today's answer happened to be nearly right. The fix is what stops the next CSS-bearing
+lazy chunk from going unmeasured silently.
+
+**Conditions** (all figures): Node v23.2.0, pnpm 10.27.0, gzip level 9, kB = 1000 bytes, baseline
+`main` at `4d74602`. Reproduce from the repository root:
+
+```bash
+cd web && pnpm build && cd .. && node audit/bundle/measure.mjs web/dist
+# deploy churn also needs a previous dist to compare against:
+#   node audit/bundle/measure.mjs web/dist --baseline /path/to/previous/dist
+```
+
+**Build from `web/`, not the repo root** — Tailwind's `content` globs resolve against the CWD, so
+building from the root silently under-generates the CSS. The `cd ..` matters too: the script's paths
+are relative to the repository root, so running it from `web/` cannot find `web/dist`.
+
+The baseline was rebuilt from `main` in an isolated `git archive` copy rather than by mutating this
+worktree, so every before/after pair comes from the same tool and the same machine.
+
+**TRO-197 / BUN-1 — route-level code splitting** (`web/src/main.tsx`, `web/src/pages/App.tsx`,
+`web/src/components/RouteFallback.tsx`). All 23 page components were statically imported, so a
+visitor on `/login` downloaded the admin dashboard, the org chart, the reviews queue and the whole
+TipTap/Yjs stack before the login form could paint. Every page is now `React.lazy`; most use named
+exports, hence `.then(m => ({ default: m.X }))`. **`LoginPage` deliberately stays static** — it is
+the first paint for an unauthenticated visitor, and deferring it would trade one oversized download
+for two round trips before the form appears.
+
+Two Suspense boundaries, and the placement is the whole risk: the outer one (in `main.tsx`) covers
+the standalone routes and `AppLayout` itself; the inner one sits **inside `<main>` in
+`pages/App.tsx`**, so the Icon Rail, Contextual Sidebar and Properties Sidebar stay mounted while a
+page chunk loads. A single boundary above `AppLayout` would tear the 4-panel layout down and rebuild
+it on every navigation — the flash the audit warned about.
+
+Measured on its own (2, 3, 4 and 6 reverted on the final tree): /login 601.47 → 112.40 (−489.07),
+/docs 601.47 → 176.86 (−424.61), /documents/:id 601.47 → 530.49 (−70.98) kB gzip.
+
+**TRO-198 / BUN-2 — the editor loads when an editor is shown** (`web/src/components/LazyEditor.tsx`;
+consumers `UnifiedEditor.tsx`, `pages/PersonEditor.tsx`). `@tiptap/*` + `prosemirror-*` + `yjs` +
+`lib0` + `y-*` + `linkifyjs` are 726.5 kB raw / 208.7 kB gzip and were pulled statically by every
+route that *could* show an editor — including project, program and week documents, which render a
+tab component and never mount one. `LazyEditor` is **not a second editor**: it is the same shared
+`components/Editor` behind a dynamic import, with the prop type derived from it so the contract
+cannot drift.
+
+Safe because `Editor` creates its own `Y.Doc`, `WebsocketProvider` and `IndexeddbPersistence` inside
+its own effects and neither consumer holds a ref to it — deferring the mount defers the whole
+collaboration setup as a unit rather than interleaving it. `initialTitle` is forwarded verbatim, so
+the `"Untitled"` placeholder contract is untouched. Measured on its own (static import restored on
+the final tree): **/documents/:id 442.95 → 211.39 kB gzip, −231.56**, the largest single win here.
+
+**TRO-199 / BUN-3 — 37 syntax grammars down to 12** (`web/src/components/editor/lowlight.ts`,
+`Editor.tsx:12`). `createLowlight(common)` registered arduino, vbnet, objectivec, r, lua, perl,
+wasm and 30 others. Kept: **bash, css, diff, javascript, json, markdown, python, shell, sql,
+typescript, xml (covers html), yaml**. Verified no seeded document is affected: zero of the 523
+documents in the seeded database contain a `codeBlock` node (in `content` or in `yjs_state`), and
+neither `api/src/db/seed.ts` nor `welcomeDocument.ts` emits one; the only language named anywhere in
+the repo is `javascript`, in `e2e/syntax-highlighting.spec.ts`.
+
+**Correction to what this entry first claimed.** It said a dropped language "renders as plain
+monospace rather than throwing". That was inferred from a grep of the extension's guard, not from
+running it, and it is wrong. Reading `getDecorations` in
+`node_modules/@tiptap/extension-code-block-lowlight/dist/index.js` in full, the fallback is
+`lowlight.highlightAuto(text)`, not "no highlighting":
+
+```js
+const nodes = language && (languages.includes(language) || registered(language) || lowlight.registered?.(language))
+  ? getHighlightNodes(lowlight.highlight(language, text))
+  : getHighlightNodes(lowlight.highlightAuto(text));
+```
+
+So a code block tagged `arduino` is **still highlighted**, by auto-detection among the grammars we
+kept — observed, not derived: rendering that block through the real extension produces
+`<span class="hljs-keyword">void</span>`. The degradation is better than reported, and the regression
+risk of BUN-3 is correspondingly lower. Two further things that grep hid: `registered()` consults
+highlight.js's *own* singleton bundled inside the extension, not our instance, so
+`languages.includes()` off `lowlight.listLanguages()` is the check that actually carries our curated
+list; and the author's `language-arduino` class is preserved on the `<code>` element, so re-adding a
+grammar later restores exact highlighting. All three facts are now pinned by tests that drive
+`CodeBlockLowlight` itself rather than the raw lowlight instance (CodeRabbit finding 2).
+
+Measured on its own: the grammar chunk drops 52.22 → 22.56 kB gzip (−29.66), and total emitted bytes
+fall 29.52 kB. It does not move any route's payload (211.38 vs 211.39 on `/documents/:id`, i.e. noise),
+because BUN-2 already moved the editor off every route's static closure — BUN-3's win is in the chunk
+that arrives when the editor mounts.
+
+**TRO-200 / BUN-4 — the emoji picker loads on click** (`web/src/components/EmojiPickerBody.tsx`,
+`EmojiPicker.tsx`). `emoji-picker-react` shipped on every page load, `/login` included, for one
+consumer: the project-icon `PropertyRow` in `ProjectSidebar`. The package import now lives in its
+own module — that, not the `React.lazy` call, is what creates the boundary; naming the package at
+value level in `EmojiPicker.tsx` (for its `Theme` enum, say) would pull it all back while the code
+still looked correct. The fallback is sized 300×350 so the popover does not resize under the cursor.
+Measured on its own (static import restored on the final tree): **/documents/:id 274.75 → 211.39 kB
+gzip, −63.36**, for a component behind a click.
+
+**TRO-202 / BUN-6 — a vendor split, judged on bytes changed per deploy** (`web/vite.config.ts`).
+The config had no `build` key at all, so stable dependency code shared a content hash with volatile
+app source. **This does not reduce the initial payload — it costs about 5 kB gzip per route** — and
+scoring it on `initialGzipKb` would read as a no-op or a regression. The right measurement is what a
+returning user with a warm cache re-downloads after a routine deploy. Editing one string in
+`web/src/pages/Login.tsx` and rebuilding:
+
+| Route | Before | BUN-1..4 only | After (with BUN-6) |
+|---|---:|---:|---:|
+| `/login` | 588.61 kB gzip (97.9% of route) | 99.87 kB (88.9%) | **31.70 kB (27.0%)** |
+| `/docs` | 588.61 kB gzip (97.9%) | 164.09 kB (92.8%) | **67.23 kB (37.0%)** |
+| `/documents/:id` | 588.61 kB gzip (97.9%) | 193.13 kB (93.6%) | **96.31 kB (45.6%)** |
+
+BUN-6's own contribution is the last column against the middle one: **−68.17 kB on `/login`, −96.86
+on `/docs`, −96.82 on `/documents/:id`** per deploy, for +4.96 to +5.09 kB on a first visit
+(/login 112.40 → 117.34, /docs 176.86 → 181.92, /documents/:id 206.30 → 211.39).
+
+Two rules are encoded in the config and both were found by measuring, not by reasoning. **Never
+merge a lazily-reachable package into an eagerly-reachable chunk** — a manual chunk loads as soon as
+anything in it is statically reachable, so a catch-all `vendor` would have silently undone BUN-2 and
+BUN-4 while the split still existed on disk. And **Rollup's CommonJS interop helpers must be pinned**:
+left unassigned they landed in `vendor-highlight`, which every chunk then imported, dragging 22.6 kB
+gzip of syntax grammars back into first paint. A `vendor-ui` group for Radix/cmdk/dnd-kit was tried
+and **rejected on measurement** — it cost 15.0 kB gzip on `/docs` and `/documents/:id`, because a
+route needing one primitive then downloads all of them.
+
+**Build config also now emits a manifest.** `build.manifest: true` is what lets
+`audit/bundle/measure.mjs` see the CSS graph. It ships `dist/.vite/manifest.json` to S3/CloudFront
+with the rest of `dist`; it exposes chunk names, which are already enumerable from the entry chunk,
+and no source paths beyond the module ids already present in the bundle. Keeping it on means the
+build that is measured is the build that is deployed.
+
+**New dependency:** `highlight.js` is now an explicit dependency of `@ship/web`. It was already in
+the tree via `lowlight`, but importing individual grammars from it without declaring it would be a
+phantom dependency. No new package entered the lockfile's resolution set.
+
+**Regression tests** (all in `web/src/**`, so `scripts/factory/gate.sh` actually executes them — an
+`e2e/` spec satisfies the gate's "test added" check while never running):
+
+- `web/src/test/sourceImports.ts` + `sourceImports.test.ts` — **the guard behind the guards.** Three
+  tests below assert that a module is never statically imported, which is the only thing keeping a
+  split boundary from silently re-merging. Each originally carried its own narrow regex, and review
+  found two of them (CodeRabbit findings 3 and 4) matched only the single form that was written at
+  the time. Verified by injecting a static page import into `main.tsx` in seven forms — named with
+  double quotes, default, namespace, multi-line braces, side-effect, relative path, re-export: **the
+  old regex missed all seven; the shared detector catches all seven.** 30 tests cover the forms it
+  claims to catch and the type-only/dynamic/commented forms it must ignore.
+- `web/src/main.routes.test.ts` — no page may be statically imported except `Login`; every lazy
+  loader names a real export; the child-route Suspense boundary stays inside `<main>`. **Red before
+  the fix** (4 assertion failures against `main`'s `main.tsx`/`App.tsx`).
+- `web/src/components/editor/lowlight.test.ts` — two blocks. The registry block asserts the grammar
+  list is exactly the curated 12: **red before the fix** (9 assertion failures against
+  `createLowlight(common)`). The integration block drives a real `Editor` with
+  `CodeBlockLowlight.configure({ lowlight })` and asserts on rendered DOM, because nothing in the
+  registry block proved the extension ever reaches our registry (CodeRabbit finding 2). Its
+  discriminating case: for `+added line`, the `diff` grammar emits `hljs-addition` while
+  auto-detection emits `hljs-selector-tag`, so a silent fall-through to `highlightAuto` fails the
+  test where a language-class check would pass. It also pins that a dropped language does not throw
+  and that the code survives byte-for-byte. Regression guard, not red-before-green — `common`
+  contains those grammars too.
+- `web/src/components/EmojiPicker.test.tsx` — picker opens on click, closes on Escape, clears
+  through `onChange`, the package import stays out of `EmojiPicker.tsx` and stays in
+  `EmojiPickerBody.tsx`. The import assertions were **red before the fix**; the interaction tests are
+  regression guards and passed both ways, which is their purpose.
+- `web/src/components/LazyEditor.test.tsx` — the editor still mounts, `"Untitled"` is forwarded
+  verbatim, `documentId`/`roomPrefix` reach the editor unchanged, and the fallback is the panel
+  variant. Regression guards.
+- `web/src/components/RouteFallback.test.tsx` — the surrounding 4-panel chrome stays mounted while a
+  lazy child resolves. Regression guard for the layout-flash risk.
+
+**Rollback.** Per finding, in decreasing order of risk: revert `LazyEditor.tsx` and repoint
+`UnifiedEditor.tsx`/`PersonEditor.tsx` at `@/components/Editor` (BUN-2); delete
+`build.rollupOptions` and the `manualChunks` function in `web/vite.config.ts` — but **keep
+`build.manifest: true`**, which is measurement infrastructure rather than part of BUN-6, and without
+which `audit/bundle/measure.mjs` cannot run (BUN-6); restore `createLowlight(common)` in `Editor.tsx` and delete
+`components/editor/lowlight.ts` (BUN-3); restore the static `emoji-picker-react` import in
+`EmojiPicker.tsx` (BUN-4); replace the `React.lazy` declarations in `main.tsx` with static imports
+and drop both Suspense boundaries (BUN-1). BUN-1 must be reverted last — the others depend on the
+seam it creates.
+
+**Still open, deliberately.** Vite still prints its >500 kB warning: `vendor-editor` is 577.5 kB raw.
+The warning limit was *not* raised — silencing it would remove the only signal in the build about
+this class of problem. BUN-5 (245 icon chunks, 209 unreferenced), BUN-7, BUN-8 and BUN-9 are
+untouched and remain open.
+
+**Found while measuring, not fixed here.** `web/tailwind.config.js` scans `./src/**/*.{js,ts,jsx,tsx}`,
+which includes test files, so utility classes that exist only in a test inflate the shipped
+stylesheet — the tests added by this branch grew `index-*.css` by 0.32 kB raw / 0.04 kB gzip. The fix
+is to narrow the glob (e.g. exclude `*.test.*`), but `tailwind.config.js` was just modified by
+TRO-217 and this is not the branch to contend for it. Filed rather than folded in.
+
+---
+
 ## TRO-178 — [DB-1] `pnpm db:migrate` silently skipped 32 of 42 migrations and exited 0
 
 **What was broken.** `api/src/db/migrate.ts:103-111` wrapped *both* the `schema.sql` application
@@ -1291,229 +1626,6 @@ pnpm exec playwright test e2e/my-week-stale-data.spec.ts --workers=1 --retries=0
 
 **Rollback.** `git revert` the branch. `playwright.config.ts` changes are comment-only, so reverting
 restores the previous behaviour exactly.
-
----
-
-## TRO-197 (BUN-1) + TRO-198 (BUN-2) + TRO-199 (BUN-3) + TRO-200 (BUN-4) + TRO-202 (BUN-6) — the app stops shipping as one 2 MB file
-
-Five findings, one root cause: `web/dist/index.html` referenced exactly **one** module script —
-2,074.98 kB raw / 588.62 kB gzip — because nothing in the app split at a route boundary. Everything
-else followed from that. There was no seam at which to defer the editor (BUN-2), the syntax
-grammars (BUN-3) or the emoji picker (BUN-4), and no vendor chunk to cache (BUN-6). They ship as one
-branch because fixing any one of them alone moves almost nothing.
-
-**What a user actually downloads now**, by route. This is the static-import closure of the entry
-chunk plus that route's chunk — not the `index.html` figure, which code splitting improves by
-construction and therefore flatters any change of this kind:
-
-| Route | Before | After | Change |
-|---|---:|---:|---:|
-| `/login` (unauthenticated first paint) | 601.47 kB gzip | **117.34 kB** | −484.13 (−80.5%) |
-| `/docs` (4-panel layout + list) | 601.47 kB gzip | **181.92 kB** | −419.55 (−69.8%) |
-| `/documents/:id` (layout + editor shell) | 601.47 kB gzip | **211.39 kB** | −390.08 (−64.9%) |
-
-The audit's target was 600.75 → ≤ 480.60 kB gzip. Every route clears it. Total emitted bytes are
-essentially unchanged (1,761.82 → 1,770.55 kB gzip, +0.5%) — as the audit predicted, this moves
-bytes rather than deleting them, and total-bundle size is the wrong yardstick for it.
-
-**The metric itself was corrected before these numbers were trusted.** The first version of
-`audit/bundle/measure.mjs` derived each route's closure by walking `import "./x.js"` specifiers out
-of the emitted chunks. That walk cannot see stylesheets, so CSS belonging to a lazy chunk was
-omitted and every route read smaller than it is — the replacement for a flattering metric was
-flattering in the same direction (CodeRabbit finding 1 on PR #14). It now reads
-`dist/.vite/manifest.json` and follows `imports` while collecting `css` at every node, which is the
-same graph Vite uses to emit modulepreload and stylesheet links.
-
-Re-measured, the correction moves the numbers by **+0.05 kB gzip on `/login`, +0.02 on `/docs`,
-+0.05 on `/documents/:id`** — the 80.5% headline stands. It is small for a specific reason worth
-recording rather than glossing: this app's only lazy stylesheet is `assets/vendor-editor-*.css`
-(1.41 kB raw / 0.53 kB gzip, the editor's Tippy styles), and it hangs off `vendor-editor`, which is
-reachable only through the editor's dynamic import — so it was never inside any route's *static*
-closure, and the entry stylesheet was already counted via the `index.html` `<link>`. The old method
-was wrong; today's answer happened to be nearly right. The fix is what stops the next CSS-bearing
-lazy chunk from going unmeasured silently.
-
-**Conditions** (all figures): Node v23.2.0, pnpm 10.27.0, gzip level 9, kB = 1000 bytes, baseline
-`main` at `4d74602`. Reproduce from the repository root:
-
-```bash
-cd web && pnpm build && cd .. && node audit/bundle/measure.mjs web/dist
-# deploy churn also needs a previous dist to compare against:
-#   node audit/bundle/measure.mjs web/dist --baseline /path/to/previous/dist
-```
-
-**Build from `web/`, not the repo root** — Tailwind's `content` globs resolve against the CWD, so
-building from the root silently under-generates the CSS. The `cd ..` matters too: the script's paths
-are relative to the repository root, so running it from `web/` cannot find `web/dist`.
-
-The baseline was rebuilt from `main` in an isolated `git archive` copy rather than by mutating this
-worktree, so every before/after pair comes from the same tool and the same machine.
-
-**TRO-197 / BUN-1 — route-level code splitting** (`web/src/main.tsx`, `web/src/pages/App.tsx`,
-`web/src/components/RouteFallback.tsx`). All 23 page components were statically imported, so a
-visitor on `/login` downloaded the admin dashboard, the org chart, the reviews queue and the whole
-TipTap/Yjs stack before the login form could paint. Every page is now `React.lazy`; most use named
-exports, hence `.then(m => ({ default: m.X }))`. **`LoginPage` deliberately stays static** — it is
-the first paint for an unauthenticated visitor, and deferring it would trade one oversized download
-for two round trips before the form appears.
-
-Two Suspense boundaries, and the placement is the whole risk: the outer one (in `main.tsx`) covers
-the standalone routes and `AppLayout` itself; the inner one sits **inside `<main>` in
-`pages/App.tsx`**, so the Icon Rail, Contextual Sidebar and Properties Sidebar stay mounted while a
-page chunk loads. A single boundary above `AppLayout` would tear the 4-panel layout down and rebuild
-it on every navigation — the flash the audit warned about.
-
-Measured on its own (2, 3, 4 and 6 reverted on the final tree): /login 601.47 → 112.40 (−489.07),
-/docs 601.47 → 176.86 (−424.61), /documents/:id 601.47 → 530.49 (−70.98) kB gzip.
-
-**TRO-198 / BUN-2 — the editor loads when an editor is shown** (`web/src/components/LazyEditor.tsx`;
-consumers `UnifiedEditor.tsx`, `pages/PersonEditor.tsx`). `@tiptap/*` + `prosemirror-*` + `yjs` +
-`lib0` + `y-*` + `linkifyjs` are 726.5 kB raw / 208.7 kB gzip and were pulled statically by every
-route that *could* show an editor — including project, program and week documents, which render a
-tab component and never mount one. `LazyEditor` is **not a second editor**: it is the same shared
-`components/Editor` behind a dynamic import, with the prop type derived from it so the contract
-cannot drift.
-
-Safe because `Editor` creates its own `Y.Doc`, `WebsocketProvider` and `IndexeddbPersistence` inside
-its own effects and neither consumer holds a ref to it — deferring the mount defers the whole
-collaboration setup as a unit rather than interleaving it. `initialTitle` is forwarded verbatim, so
-the `"Untitled"` placeholder contract is untouched. Measured on its own (static import restored on
-the final tree): **/documents/:id 442.95 → 211.39 kB gzip, −231.56**, the largest single win here.
-
-**TRO-199 / BUN-3 — 37 syntax grammars down to 12** (`web/src/components/editor/lowlight.ts`,
-`Editor.tsx:12`). `createLowlight(common)` registered arduino, vbnet, objectivec, r, lua, perl,
-wasm and 30 others. Kept: **bash, css, diff, javascript, json, markdown, python, shell, sql,
-typescript, xml (covers html), yaml**. Verified no seeded document is affected: zero of the 523
-documents in the seeded database contain a `codeBlock` node (in `content` or in `yjs_state`), and
-neither `api/src/db/seed.ts` nor `welcomeDocument.ts` emits one; the only language named anywhere in
-the repo is `javascript`, in `e2e/syntax-highlighting.spec.ts`.
-
-**Correction to what this entry first claimed.** It said a dropped language "renders as plain
-monospace rather than throwing". That was inferred from a grep of the extension's guard, not from
-running it, and it is wrong. Reading `getDecorations` in
-`node_modules/@tiptap/extension-code-block-lowlight/dist/index.js` in full, the fallback is
-`lowlight.highlightAuto(text)`, not "no highlighting":
-
-```js
-const nodes = language && (languages.includes(language) || registered(language) || lowlight.registered?.(language))
-  ? getHighlightNodes(lowlight.highlight(language, text))
-  : getHighlightNodes(lowlight.highlightAuto(text));
-```
-
-So a code block tagged `arduino` is **still highlighted**, by auto-detection among the grammars we
-kept — observed, not derived: rendering that block through the real extension produces
-`<span class="hljs-keyword">void</span>`. The degradation is better than reported, and the regression
-risk of BUN-3 is correspondingly lower. Two further things that grep hid: `registered()` consults
-highlight.js's *own* singleton bundled inside the extension, not our instance, so
-`languages.includes()` off `lowlight.listLanguages()` is the check that actually carries our curated
-list; and the author's `language-arduino` class is preserved on the `<code>` element, so re-adding a
-grammar later restores exact highlighting. All three facts are now pinned by tests that drive
-`CodeBlockLowlight` itself rather than the raw lowlight instance (CodeRabbit finding 2).
-
-Measured on its own: the grammar chunk drops 52.22 → 22.56 kB gzip (−29.66), and total emitted bytes
-fall 29.52 kB. It does not move any route's payload (211.38 vs 211.39 on `/documents/:id`, i.e. noise),
-because BUN-2 already moved the editor off every route's static closure — BUN-3's win is in the chunk
-that arrives when the editor mounts.
-
-**TRO-200 / BUN-4 — the emoji picker loads on click** (`web/src/components/EmojiPickerBody.tsx`,
-`EmojiPicker.tsx`). `emoji-picker-react` shipped on every page load, `/login` included, for one
-consumer: the project-icon `PropertyRow` in `ProjectSidebar`. The package import now lives in its
-own module — that, not the `React.lazy` call, is what creates the boundary; naming the package at
-value level in `EmojiPicker.tsx` (for its `Theme` enum, say) would pull it all back while the code
-still looked correct. The fallback is sized 300×350 so the popover does not resize under the cursor.
-Measured on its own (static import restored on the final tree): **/documents/:id 274.75 → 211.39 kB
-gzip, −63.36**, for a component behind a click.
-
-**TRO-202 / BUN-6 — a vendor split, judged on bytes changed per deploy** (`web/vite.config.ts`).
-The config had no `build` key at all, so stable dependency code shared a content hash with volatile
-app source. **This does not reduce the initial payload — it costs about 5 kB gzip per route** — and
-scoring it on `initialGzipKb` would read as a no-op or a regression. The right measurement is what a
-returning user with a warm cache re-downloads after a routine deploy. Editing one string in
-`web/src/pages/Login.tsx` and rebuilding:
-
-| Route | Before | BUN-1..4 only | After (with BUN-6) |
-|---|---:|---:|---:|
-| `/login` | 588.61 kB gzip (97.9% of route) | 99.87 kB (88.9%) | **31.70 kB (27.0%)** |
-| `/docs` | 588.61 kB gzip (97.9%) | 164.09 kB (92.8%) | **67.23 kB (37.0%)** |
-| `/documents/:id` | 588.61 kB gzip (97.9%) | 193.13 kB (93.6%) | **96.31 kB (45.6%)** |
-
-BUN-6's own contribution is the last column against the middle one: **−68.17 kB on `/login`, −96.86
-on `/docs`, −96.82 on `/documents/:id`** per deploy, for +4.96 to +5.09 kB on a first visit
-(/login 112.40 → 117.34, /docs 176.86 → 181.92, /documents/:id 206.30 → 211.39).
-
-Two rules are encoded in the config and both were found by measuring, not by reasoning. **Never
-merge a lazily-reachable package into an eagerly-reachable chunk** — a manual chunk loads as soon as
-anything in it is statically reachable, so a catch-all `vendor` would have silently undone BUN-2 and
-BUN-4 while the split still existed on disk. And **Rollup's CommonJS interop helpers must be pinned**:
-left unassigned they landed in `vendor-highlight`, which every chunk then imported, dragging 22.6 kB
-gzip of syntax grammars back into first paint. A `vendor-ui` group for Radix/cmdk/dnd-kit was tried
-and **rejected on measurement** — it cost 15.0 kB gzip on `/docs` and `/documents/:id`, because a
-route needing one primitive then downloads all of them.
-
-**Build config also now emits a manifest.** `build.manifest: true` is what lets
-`audit/bundle/measure.mjs` see the CSS graph. It ships `dist/.vite/manifest.json` to S3/CloudFront
-with the rest of `dist`; it exposes chunk names, which are already enumerable from the entry chunk,
-and no source paths beyond the module ids already present in the bundle. Keeping it on means the
-build that is measured is the build that is deployed.
-
-**New dependency:** `highlight.js` is now an explicit dependency of `@ship/web`. It was already in
-the tree via `lowlight`, but importing individual grammars from it without declaring it would be a
-phantom dependency. No new package entered the lockfile's resolution set.
-
-**Regression tests** (all in `web/src/**`, so `scripts/factory/gate.sh` actually executes them — an
-`e2e/` spec satisfies the gate's "test added" check while never running):
-
-- `web/src/test/sourceImports.ts` + `sourceImports.test.ts` — **the guard behind the guards.** Three
-  tests below assert that a module is never statically imported, which is the only thing keeping a
-  split boundary from silently re-merging. Each originally carried its own narrow regex, and review
-  found two of them (CodeRabbit findings 3 and 4) matched only the single form that was written at
-  the time. Verified by injecting a static page import into `main.tsx` in seven forms — named with
-  double quotes, default, namespace, multi-line braces, side-effect, relative path, re-export: **the
-  old regex missed all seven; the shared detector catches all seven.** 30 tests cover the forms it
-  claims to catch and the type-only/dynamic/commented forms it must ignore.
-- `web/src/main.routes.test.ts` — no page may be statically imported except `Login`; every lazy
-  loader names a real export; the child-route Suspense boundary stays inside `<main>`. **Red before
-  the fix** (4 assertion failures against `main`'s `main.tsx`/`App.tsx`).
-- `web/src/components/editor/lowlight.test.ts` — two blocks. The registry block asserts the grammar
-  list is exactly the curated 12: **red before the fix** (9 assertion failures against
-  `createLowlight(common)`). The integration block drives a real `Editor` with
-  `CodeBlockLowlight.configure({ lowlight })` and asserts on rendered DOM, because nothing in the
-  registry block proved the extension ever reaches our registry (CodeRabbit finding 2). Its
-  discriminating case: for `+added line`, the `diff` grammar emits `hljs-addition` while
-  auto-detection emits `hljs-selector-tag`, so a silent fall-through to `highlightAuto` fails the
-  test where a language-class check would pass. It also pins that a dropped language does not throw
-  and that the code survives byte-for-byte. Regression guard, not red-before-green — `common`
-  contains those grammars too.
-- `web/src/components/EmojiPicker.test.tsx` — picker opens on click, closes on Escape, clears
-  through `onChange`, the package import stays out of `EmojiPicker.tsx` and stays in
-  `EmojiPickerBody.tsx`. The import assertions were **red before the fix**; the interaction tests are
-  regression guards and passed both ways, which is their purpose.
-- `web/src/components/LazyEditor.test.tsx` — the editor still mounts, `"Untitled"` is forwarded
-  verbatim, `documentId`/`roomPrefix` reach the editor unchanged, and the fallback is the panel
-  variant. Regression guards.
-- `web/src/components/RouteFallback.test.tsx` — the surrounding 4-panel chrome stays mounted while a
-  lazy child resolves. Regression guard for the layout-flash risk.
-
-**Rollback.** Per finding, in decreasing order of risk: revert `LazyEditor.tsx` and repoint
-`UnifiedEditor.tsx`/`PersonEditor.tsx` at `@/components/Editor` (BUN-2); delete
-`build.rollupOptions` and the `manualChunks` function in `web/vite.config.ts` — but **keep
-`build.manifest: true`**, which is measurement infrastructure rather than part of BUN-6, and without
-which `audit/bundle/measure.mjs` cannot run (BUN-6); restore `createLowlight(common)` in `Editor.tsx` and delete
-`components/editor/lowlight.ts` (BUN-3); restore the static `emoji-picker-react` import in
-`EmojiPicker.tsx` (BUN-4); replace the `React.lazy` declarations in `main.tsx` with static imports
-and drop both Suspense boundaries (BUN-1). BUN-1 must be reverted last — the others depend on the
-seam it creates.
-
-**Still open, deliberately.** Vite still prints its >500 kB warning: `vendor-editor` is 577.5 kB raw.
-The warning limit was *not* raised — silencing it would remove the only signal in the build about
-this class of problem. BUN-5 (245 icon chunks, 209 unreferenced), BUN-7, BUN-8 and BUN-9 are
-untouched and remain open.
-
-**Found while measuring, not fixed here.** `web/tailwind.config.js` scans `./src/**/*.{js,ts,jsx,tsx}`,
-which includes test files, so utility classes that exist only in a test inflate the shipped
-stylesheet — the tests added by this branch grew `index-*.css` by 0.32 kB raw / 0.04 kB gzip. The fix
-is to narrow the glob (e.g. exclude `*.test.*`), but `tailwind.config.js` was just modified by
-TRO-217 and this is not the branch to contend for it. Filed rather than folded in.
 
 ---
 

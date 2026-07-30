@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // Mock pool before importing routes
+// Implementations are passed to vi.fn() rather than chained on as
+// .mockResolvedValue(...): vi.resetAllMocks() (used below) restores the
+// implementation given to vi.fn(impl) but wipes one that was chained on, which
+// would silently turn these into undefined-returning stubs.
 const { mockClient } = vi.hoisted(() => {
   const mockClient = {
-    query: vi.fn().mockResolvedValue({ rows: [] }),
+    query: vi.fn(async () => ({ rows: [] })),
     release: vi.fn(),
   };
   return { mockClient };
@@ -11,14 +15,14 @@ const { mockClient } = vi.hoisted(() => {
 vi.mock('../db/client.js', () => ({
   pool: {
     query: vi.fn(),
-    connect: vi.fn().mockResolvedValue(mockClient),
+    connect: vi.fn(async () => mockClient),
   },
 }));
 
 // Mock visibility middleware
 vi.mock('../middleware/visibility.js', () => ({
-  getVisibilityContext: vi.fn().mockResolvedValue({ isAdmin: false }),
-  VISIBILITY_FILTER_SQL: vi.fn().mockReturnValue('1=1'),
+  getVisibilityContext: vi.fn(async () => ({ isAdmin: false })),
+  VISIBILITY_FILTER_SQL: vi.fn(() => '1=1'),
 }));
 
 // Mock auth middleware
@@ -39,11 +43,15 @@ describe('Issues History API', () => {
   let app: express.Express;
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    // Reset mockClient defaults after clearAllMocks
-    mockClient.query.mockResolvedValue({ rows: [] } as any);
-    mockClient.release.mockReturnValue(undefined);
-    vi.mocked(pool).connect = vi.fn().mockResolvedValue(mockClient) as any;
+    // resetAllMocks, not the clear-only variant: clearing mocks wipes call records but
+    // leaves unconsumed mockResolvedValueOnce values queued, so a test that
+    // queues more responses than its handler consumes shifts every later test's
+    // mocks by one. This file was the most frequent flaker (TRO-277 / TEST-12).
+    //
+    // Re-establishing the mock defaults here is no longer needed: the factories
+    // above pass their implementations to vi.fn(impl), which resetAllMocks
+    // restores.
+    vi.resetAllMocks();
     app = express();
     app.use(express.json());
     app.use('/api/issues', issuesRouter);

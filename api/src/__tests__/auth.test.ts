@@ -41,10 +41,11 @@ function createMockReqRes(cookies: Record<string, string> = {}) {
 
 describe('authMiddleware', () => {
   beforeEach(() => {
-    // resetAllMocks, not clearAllMocks: clearing only wipes recorded calls, so an
-    // unconsumed `mockResolvedValueOnce` survives into the next test and silently
-    // shifts its query sequence by one. That is a live hazard now that the middleware
-    // issues a variable number of queries (the last_activity write is throttled).
+    // resetAllMocks, not the clear-only variant: clearing only wipes recorded calls, so
+    // an unconsumed mockResolvedValueOnce survives into the next test and silently
+    // shifts its query sequence by one (TRO-277 / TEST-12). That hazard is now live on
+    // every case, not just a hypothetical one, because the middleware issues a variable
+    // number of queries — the last_activity write is throttled (TRO-179 / API-6).
     vi.resetAllMocks();
   });
 
