@@ -509,12 +509,10 @@ test.describe('Phase 3: Week Creation UX', () => {
     ).toBeVisible({ timeout: 3000 })
 
     // Should see availability indicators (✓ Available or ⚠ X sprints) in the modal
-    const hasAvailable = await modal.getByText('✓ Available').first().isVisible().catch(() => false)
-    const hasWarning = await modal.getByText(/⚠ \d+ sprint/).first().isVisible().catch(() => false)
-    expect(
-      hasAvailable || hasWarning,
+    await expect(
+      modal.getByText('✓ Available').or(modal.getByText(/⚠ \d+ sprint/)).first(),
       'Owner-selection modal should show at least one availability indicator (✓ Available or ⚠ N sprints)'
-    ).toBeTruthy()
+    ).toBeVisible({ timeout: 3000 })
   })
 
   test('selecting owner and clicking Create creates sprint', async ({ page }) => {
@@ -664,14 +662,17 @@ test.describe('Phase 4: Issues Tab Filtering', () => {
     await select.selectOption('backlog')
 
     // All visible issues should show "—" in Sprint column (no sprint)
-    const sprintCells = page.locator('td').filter({ hasText: '—' })
     const rows = page.locator('tbody tr')
+    await expect(rows.first(), 'Seed data should include at least one backlog issue (e2e/fixtures/isolated-env.ts)').toBeVisible({ timeout: 5000 })
     const rowCount = await rows.count()
 
-    // If there are rows, they should all have "—" for sprint
-    if (rowCount > 0) {
-      const dashCount = await sprintCells.count()
-      expect(dashCount).toBe(rowCount)
+    // Assert per-row on the sprint column (second-to-last cell) rather than
+    // comparing counts across the whole table: `td` filtered by '—' also
+    // matches other columns (assignee, estimate, due date) that render an
+    // em dash, so a global count can coincidentally equal rowCount even when
+    // filtering is wrong.
+    for (let i = 0; i < rowCount; i++) {
+      await expect(rows.nth(i).locator('td:nth-last-child(2)')).toHaveText('—')
     }
   })
 
@@ -734,45 +735,71 @@ test.describe('Phase 4: Issues Tab Filtering', () => {
     const select = page.locator('select').first()
     await expect(select, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
 
-    // Filter to backlog to find issues without sprint
+    // Filter to backlog to find issues without sprint. The sprint filter is
+    // applied client-side over already-fetched issues (IssuesList.tsx filters
+    // by sprintFilter state, not a new query), so there is no network request
+    // to wait on here -- wait on the rendered result instead.
     await select.selectOption('backlog')
-    await page.waitForTimeout(500) // Wait for filter to apply
 
     const rows = page.locator('tbody tr')
-    const rowCount = await rows.count()
+    await expect(rows.first(), 'Seed data should include at least one backlog issue (e2e/fixtures/isolated-env.ts)').toBeVisible({ timeout: 5000 })
 
-    if (rowCount > 0) {
-      // Select first backlog issue
-      const firstRow = rows.first()
-      await firstRow.hover()
-      const checkbox = page.locator('td').getByRole('checkbox').first()
-      await expect(checkbox, 'Issue row should expose a selection checkbox on hover').toBeVisible({ timeout: 3000 })
-      await checkbox.click()
+    // Select first backlog issue
+    const firstRow = rows.first()
+    await firstRow.hover()
+    const checkbox = page.locator('td').getByRole('checkbox').first()
+    await expect(checkbox, 'Issue row should expose a selection checkbox on hover').toBeVisible({ timeout: 3000 })
+    await checkbox.click()
 
-      // Use Move to Week dropdown (second select)
-      const moveDropdown = page.locator('select').nth(1)
-      await expect(moveDropdown, 'Bulk action bar should show a "Move to Week" dropdown').toBeVisible({ timeout: 3000 })
+    // Use Move to Week dropdown (second select)
+    const moveDropdown = page.locator('select').nth(1)
+    await expect(moveDropdown, 'Bulk action bar should show a "Move to Week" dropdown').toBeVisible({ timeout: 3000 })
 
-      // Get available sprint options
-      const options = await moveDropdown.locator('option').allTextContents()
-      const sprintOption = options.find(opt => opt.match(/Week \d+|Week of/))
-      if (!sprintOption) {
-        throw new Error(`"Move to Week" dropdown should list at least one sprint option, got: ${options.join(', ')}`)
-      }
-
-      // Wait for API response when moving
-      const [response] = await Promise.all([
-        page.waitForResponse(resp => resp.url().includes('/api/issues/') && resp.request().method() === 'PATCH'),
-        moveDropdown.selectOption({ label: sprintOption })
-      ])
-
-      // API returns 200 for success, 400 if issue has no estimate
-      expect([200, 400]).toContain(response.status())
+    // Get available sprint options
+    const options = await moveDropdown.locator('option').allTextContents()
+    const sprintOption = options.find(opt => opt.match(/Week \d+|Week of/))
+    if (!sprintOption) {
+      throw new Error(`"Move to Week" dropdown should list at least one sprint option, got: ${options.join(', ')}`)
     }
-    // A backlog with zero issues is a valid data state, not a feature gap.
+
+    // Wait for API response when moving
+    const [response] = await Promise.all([
+      page.waitForResponse(resp => resp.url().includes('/api/issues/') && resp.request().method() === 'PATCH'),
+      moveDropdown.selectOption({ label: sprintOption })
+    ])
+
+    // API returns 200 for success, 400 if issue has no estimate
+    expect([200, 400]).toContain(response.status())
   })
 
-  test('issue row has quick menu (⋮) button', async ({ page }) => {
+  /**
+   * Deliberately left as test.fixme() -- TRO-286 (TEST-14) CodeRabbit follow-up.
+   *
+   * These three tests describe a per-row hover-revealed "⋮" / actions quick-menu
+   * on the Issues tab table. Traced the full render path in
+   * web/src/components/IssuesList.tsx: `renderIssueRow` returns only
+   * `<IssueRowContent .../>` (columns: id, title, status, source, program,
+   * sprint, priority, assignee, updated -- no actions column), and
+   * `SelectableRow` (web/src/components/SelectableList.tsx) only prepends a
+   * checkbox `<td>` (aria-label "Select item {id}") before those columns.
+   * Grepping web/src for the "⋮" character and for any `aria-label` containing
+   * "menu" or "actions" on this row turns up nothing. The only way to open a
+   * context menu on an issue row in list view is right-click
+   * (`onContextMenu`, handled by `handleContextMenu`); "Move to Week" exists
+   * only as a bulk-action (checkbox + toolbar dropdown, already covered by
+   * "bulk \"Move to Week\" updates issues" above) and inside that right-click
+   * menu's submenu, not as a standalone per-row quick-menu button.
+   *
+   * This is the same class of gap as the team-directory quick-menu case in
+   * e2e/context-menus.spec.ts: not a stale selector but a product affordance
+   * that does not exist. These three tests previously read "expect(x ||
+   * true).toBeTruthy()" (passed whether the button existed or not); TRO-286
+   * Part 1 tightened that to a real assertion, which would now fail hard on
+   * every run, not vacuously. Converting these to real assertions requires
+   * building the UI affordance, which is out of scope for a test-quality
+   * ticket -- filed as a follow-up (see PR #40 review triage / CHANGES.md).
+   */
+  test.fixme('issue row has quick menu (⋮) button', async ({ page }) => {
     await clickIssuesTab(page)
 
     const firstRow = page.locator('tbody tr').first()
@@ -785,7 +812,7 @@ test.describe('Phase 4: Issues Tab Filtering', () => {
     await expect(menuButton, 'Issue row should expose a quick-menu (⋮) button on hover').toBeVisible({ timeout: 3000 })
   })
 
-  test('quick menu has "Assign to Week" option', async ({ page }) => {
+  test.fixme('quick menu has "Assign to Week" option', async ({ page }) => {
     await clickIssuesTab(page)
 
     const firstRow = page.locator('tbody tr').first()
@@ -800,7 +827,7 @@ test.describe('Phase 4: Issues Tab Filtering', () => {
     await expect(page.getByText(/Assign to Week|Move to Week/i).first()).toBeVisible({ timeout: 3000 })
   })
 
-  test('quick menu "Assign to Week" shows available sprints', async ({ page }) => {
+  test.fixme('quick menu "Assign to Week" shows available sprints', async ({ page }) => {
     await clickIssuesTab(page)
 
     const firstRow = page.locator('tbody tr').first()
@@ -822,43 +849,39 @@ test.describe('Phase 4: Issues Tab Filtering', () => {
     await expect(page.getByRole('menuitem', { name: /Week of|Backlog/i }).first()).toBeVisible({ timeout: 3000 })
   })
 
-  test('quick menu can assign issue to a sprint (full flow)', async ({ page }) => {
+  test.fixme('quick menu can assign issue to a sprint (full flow)', async ({ page }) => {
     await clickIssuesTab(page)
 
     // Filter to active sprint issues (they have estimates, which is required for sprint assignment)
     const selectElement = page.locator('select').first()
     await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
     await selectElement.selectOption('active')
-    await page.waitForTimeout(500)
 
     const rows = page.locator('tbody tr')
-    const count = await rows.count()
+    await expect(rows.first(), 'Seed data should include at least one active-sprint issue (e2e/fixtures/isolated-env.ts)').toBeVisible({ timeout: 5000 })
 
-    if (count > 0) {
-      const firstRow = rows.first()
-      await firstRow.hover()
-      const menuButton = firstRow.locator('button').filter({ hasText: '⋮' }).or(
-        firstRow.locator('[aria-label*="menu"], [aria-label*="actions"]')
-      ).first()
-      await expect(menuButton, 'Issue row should expose a quick-menu (⋮) button on hover').toBeVisible({ timeout: 2000 })
-      await menuButton.click()
+    const firstRow = rows.first()
+    await firstRow.hover()
+    const menuButton = firstRow.locator('button').filter({ hasText: '⋮' }).or(
+      firstRow.locator('[aria-label*="menu"], [aria-label*="actions"]')
+    ).first()
+    await expect(menuButton, 'Issue row should expose a quick-menu (⋮) button on hover').toBeVisible({ timeout: 2000 })
+    await menuButton.click()
 
-      // Hover over "Assign to Week" to open submenu
-      const assignOption = page.getByRole('menuitem', { name: /Assign to Week/i })
-      await expect(assignOption, 'Quick menu should have an "Assign to Week" option').toBeVisible({ timeout: 2000 })
-      await assignOption.hover()
+    // Hover over "Assign to Week" to open submenu
+    const assignOption = page.getByRole('menuitem', { name: /Assign to Week/i })
+    await expect(assignOption, 'Quick menu should have an "Assign to Week" option').toBeVisible({ timeout: 2000 })
+    await assignOption.hover()
 
-      // Wait for submenu and click a sprint option (different from current)
-      const sprintOption = page.getByRole('menuitem', { name: /Week of/ }).first()
-      await expect(sprintOption, 'Assign-to-Week submenu should list at least one sprint option').toBeVisible({ timeout: 2000 })
-      const [response] = await Promise.all([
-        page.waitForResponse(resp => resp.url().includes('/api/issues/') && resp.request().method() === 'PATCH'),
-        sprintOption.click()
-      ])
+    // Wait for submenu and click a sprint option (different from current)
+    const sprintOption = page.getByRole('menuitem', { name: /Week of/ }).first()
+    await expect(sprintOption, 'Assign-to-Week submenu should list at least one sprint option').toBeVisible({ timeout: 2000 })
+    const [response] = await Promise.all([
+      page.waitForResponse(resp => resp.url().includes('/api/issues/') && resp.request().method() === 'PATCH'),
+      sprintOption.click()
+    ])
 
-      expect(response.status()).toBe(200)
-    }
-    // Zero issues in the active sprint is a valid data state, not a feature gap.
+    expect(response.status()).toBe(200)
   })
 })
 
@@ -987,10 +1010,16 @@ test.describe('Phase 2 Continued: Progress Graph & Visual Details', () => {
     const activeCard = page.locator('[data-active="true"]').filter({ hasText: /Week of/ }).first()
     await expect(activeCard, 'Seed data should include a currently-active sprint').toBeVisible({ timeout: 5000 })
 
-    // Verify it has some form of highlighting (border, ring, or distinct background)
+    // Verify it has the active-state highlight specifically. Every card in
+    // this list (active, completed, upcoming) carries a base "border" class
+    // and a "hover:bg-border/30" class, so checking for 'border' or 'bg-'
+    // alone matches every card and can never detect a loss of highlighting.
+    // WeekTimeline.tsx applies 'border-accent/50 border' only when
+    // status === 'active' (or 'border-accent border-2 bg-accent/10' when
+    // selected) -- 'border-accent' is the distinguishing class.
     const classes = await activeCard.getAttribute('class')
-    const hasHighlight = classes?.includes('ring') || classes?.includes('border') || classes?.includes('bg-')
-    expect(hasHighlight, `Active sprint card should have a highlight class, got: ${classes}`).toBeTruthy()
+    const hasHighlight = classes?.includes('border-accent')
+    expect(hasHighlight, `Active sprint card should have the border-accent highlight class, got: ${classes}`).toBeTruthy()
   })
 
   test('timeline cards show mini progress bar', async ({ page }) => {
@@ -1216,14 +1245,14 @@ test.describe('Phase 4 Continued: Filter Functionality', () => {
     const selectElement = page.locator('select').first()
     await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
     await selectElement.selectOption('active')
-    await page.waitForTimeout(500)
 
-    // Verify issues shown are in the active sprint (not backlog, not other sprints)
+    // Verify issues shown are in the active sprint (not backlog, not other sprints).
+    // Seed data guarantees active-sprint issues (e2e/fixtures/isolated-env.ts), so
+    // require at least one row rather than silently skipping the check below.
     const rows = page.locator('tbody tr')
+    await expect(rows.first(), 'Seed data should include at least one active-sprint issue').toBeVisible({ timeout: 5000 })
     const count = await rows.count()
 
-    // If there are rows, they should have a sprint assigned (not "—"). Zero
-    // issues in the active sprint is a valid data state, not a feature gap.
     for (let i = 0; i < Math.min(count, 5); i++) {
       const sprintCell = rows.nth(i).locator('td').last()
       const text = await sprintCell.textContent()
@@ -1237,17 +1266,14 @@ test.describe('Phase 4 Continued: Filter Functionality', () => {
     const selectElement = page.locator('select').first()
     await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
     await selectElement.selectOption('upcoming')
-    await page.waitForTimeout(500)
 
+    // Seed data guarantees an upcoming-sprint issue (e2e/fixtures/isolated-env.ts).
     const rows = page.locator('tbody tr')
-    const count = await rows.count()
+    await expect(rows.first(), 'Seed data should include at least one upcoming-sprint issue').toBeVisible({ timeout: 5000 })
 
-    // If there are rows, they should have sprint assigned
-    if (count > 0) {
-      const firstSprintCell = rows.first().locator('td').last()
-      const text = await firstSprintCell.textContent()
-      expect(text).not.toBe('—')
-    }
+    const firstSprintCell = rows.first().locator('td').last()
+    const text = await firstSprintCell.textContent()
+    expect(text).not.toBe('—')
   })
 
   test('filtering by "Completed Weeks" shows only issues in completed sprints', async ({ page }) => {
@@ -1256,17 +1282,14 @@ test.describe('Phase 4 Continued: Filter Functionality', () => {
     const selectElement = page.locator('select').first()
     await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
     await selectElement.selectOption('completed')
-    await page.waitForTimeout(500)
 
+    // Seed data guarantees a completed-sprint issue (e2e/fixtures/isolated-env.ts).
     const rows = page.locator('tbody tr')
-    const count = await rows.count()
+    await expect(rows.first(), 'Seed data should include at least one completed-sprint issue').toBeVisible({ timeout: 5000 })
 
-    // If there are rows, they should have sprint assigned
-    if (count > 0) {
-      const firstSprintCell = rows.first().locator('td').last()
-      const text = await firstSprintCell.textContent()
-      expect(text).not.toBe('—')
-    }
+    const firstSprintCell = rows.first().locator('td').last()
+    const text = await firstSprintCell.textContent()
+    expect(text).not.toBe('—')
   })
 
   test('sprint filter has specific sprint options', async ({ page }) => {
@@ -1306,9 +1329,9 @@ test.describe('Phase 4 Continued: Filter Functionality', () => {
     }
 
     await selectElement.selectOption({ label: sprintOption })
-    await page.waitForTimeout(500)
 
     const rows = page.locator('tbody tr')
+    await expect(rows.first(), `Seed data should include at least one issue in sprint "${sprintOption}"`).toBeVisible({ timeout: 5000 })
     const count = await rows.count()
 
     // All visible issues should be in that specific sprint
@@ -1380,8 +1403,12 @@ test.describe('Integration: Full User Flows', () => {
     await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
     await selectElement.selectOption('backlog')
 
-    // Verify filtered results
+    // Verify filtered results. Seed data guarantees backlog issues
+    // (e2e/fixtures/isolated-env.ts), so require at least one row rather than
+    // letting an empty table make this loop -- and the assertions inside it --
+    // a no-op.
     const rows = page.locator('tbody tr')
+    await expect(rows.first(), 'Seed data should include at least one backlog issue').toBeVisible({ timeout: 5000 })
     const count = await rows.count()
 
     for (let i = 0; i < count; i++) {
