@@ -1,7 +1,3 @@
-> **DRAFT / SKELETON** — structure and everything derivable from the repo is filled in and cited.
-> `[FILL: ...]` marks the only slots that need real spend figures only Troy has (Anthropic console /
-> billing). Personalize the voice before submitting; keep the citations if you edit the numbers.
-
 # AI Cost Analysis
 
 ## 1. Tooling used
