@@ -266,21 +266,39 @@ test.describe('Phase 1: Critical Violations', () => {
 
   test.describe('1.7 SVG Icon Accessibility (WCAG 4.1.2)', () => {
     test('decorative icons are hidden from screen readers', async ({ page }) => {
+      // Scoped to the Icon Rail (nav[aria-label="Primary navigation"],
+      // web/src/pages/App.tsx) rather than sampling arbitrary icons anywhere on
+      // the page. An earlier version of this fix tried the broad "first 10
+      // button/a svg on whatever page login() lands on" and found the pattern
+      // (decorative icon inside an already-labelled control, not aria-hidden)
+      // widespread across the app -- e.g. AccountabilityBanner.tsx had two
+      // instances, fixed alongside this ticket. Fixing every instance app-wide
+      // is a separate accessibility remediation, not a test-quality fix; see
+      // CHANGES.md (TRO-286) for that as a follow-up. This test instead pins a
+      // small, fixed, always-present, and now-fixed set: the 6 RailIcon nav
+      // buttons (Dashboard/Docs/Programs/Projects/Team/Settings), which all
+      // carry aria-label and now render their icon with aria-hidden="true".
       await login(page)
       await page.waitForLoadState('networkidle')
 
-      // Icons inside buttons should be aria-hidden
-      const buttonsWithIcons = page.locator('button svg, a svg')
-      const count = await buttonsWithIcons.count()
+      const railIcons = page.locator('nav[aria-label="Primary navigation"] button[aria-label] svg')
+      const count = await railIcons.count()
+      expect(count, 'Expected the 6 Icon Rail nav buttons (Dashboard/Docs/Programs/Projects/Team/Settings) to each render an icon').toBeGreaterThanOrEqual(6)
 
-      for (let i = 0; i < Math.min(count, 10); i++) {
-        const icon = buttonsWithIcons.nth(i)
-        const ariaHidden = await icon.getAttribute('aria-hidden')
-        // SVGs in buttons should generally be aria-hidden="true"
-        // unless they're the only content
-        if (ariaHidden !== null) {
-          expect(ariaHidden).toBe('true')
-        }
+      for (let i = 0; i < count; i++) {
+        const icon = railIcons.nth(i)
+        // aria-hidden cascades to descendants, so check the icon's own
+        // attribute or an ancestor's, up to the labelled button.
+        const isHidden = await icon.evaluate((svg) => {
+          const button = svg.closest('button[aria-label]')
+          let node: Element | null = svg
+          while (node && node !== button?.parentElement) {
+            if (node.getAttribute('aria-hidden') === 'true') return true
+            node = node.parentElement
+          }
+          return false
+        })
+        expect(isHidden, `Icon Rail icon ${i} is decorative (its button already has aria-label) and must be aria-hidden`).toBe(true)
       }
     })
   })
@@ -345,17 +363,44 @@ test.describe('Phase 1: Critical Violations', () => {
         await page.keyboard.press('Tab')
         await page.waitForTimeout(100)
 
-        // Get the focused element
+        // Get the focused element. document.activeElement is only ever null
+        // for a document with no body, which cannot happen on a loaded page --
+        // it defaults to document.body, so a null/BODY check alone can't tell
+        // "nothing is focused" from "a real control is focused". Also reject
+        // document.body explicitly, and confirm the element isn't obscured by
+        // checking elementFromPoint() at its center rather than trusting a
+        // non-zero bounding rect alone (a covered element still has one).
         const focused = await page.evaluate(() => {
-          const el = document.activeElement
-          if (!el) return null
-          const rect = el.getBoundingClientRect()
-          return { top: rect.top, left: rect.left, visible: rect.width > 0 && rect.height > 0 }
+          const el = document.activeElement as HTMLElement | null
+          const tagName = el?.tagName ?? null
+          const rect = el?.getBoundingClientRect() ?? null
+          const visible = !!rect && rect.width > 0 && rect.height > 0
+          let unobscured = false
+          if (el && rect && visible) {
+            const centerX = rect.left + rect.width / 2
+            const centerY = rect.top + rect.height / 2
+            const topElement = document.elementFromPoint(centerX, centerY)
+            unobscured = !!topElement && (topElement === el || el.contains(topElement) || topElement.contains(el))
+          }
+          return {
+            tagName,
+            visible,
+            unobscured,
+          }
         })
 
-        if (focused) {
-          expect(focused.visible).toBeTruthy()
-        }
+        expect(
+          focused.tagName && focused.tagName !== 'BODY',
+          `Tab press ${i + 1}: a real, non-body element should receive focus`
+        ).toBeTruthy()
+        expect(
+          focused.visible,
+          `Tab press ${i + 1}: the focused <${focused.tagName}> should not be hidden by an overlay`
+        ).toBeTruthy()
+        expect(
+          focused.unobscured,
+          `Tab press ${i + 1}: the focused <${focused.tagName}> should not be covered by another element at its center point`
+        ).toBeTruthy()
       }
     })
   })
@@ -577,22 +622,57 @@ test.describe('Phase 2: Serious Violations', () => {
     test('form inputs have visible labels', async ({ page }) => {
       await page.goto('/login')
 
+      // The login page renders client-side after a setup-vs-login check
+      // (see the shared login() helper above); without waiting for the form,
+      // `inputs.count()` can race that check and read 0.
+      await expect(page.locator('#email')).toBeVisible({ timeout: 10000 })
+
       const inputs = page.locator('input:not([type="hidden"])')
       const count = await inputs.count()
+      expect(count, 'Expected at least one non-hidden input on the login page').toBeGreaterThan(0)
 
       for (let i = 0; i < count; i++) {
         const input = inputs.nth(i)
         const id = await input.getAttribute('id')
+        const ariaLabel = await input.getAttribute('aria-label')
+        const ariaLabelledBy = await input.getAttribute('aria-labelledby')
 
-        if (id) {
-          // Check for associated label
-          const label = page.locator(`label[for="${id}"]`)
-          const ariaLabel = await input.getAttribute('aria-label')
-          const ariaLabelledBy = await input.getAttribute('aria-labelledby')
-
-          const hasLabel = await label.count() > 0 || ariaLabel || ariaLabelledBy
-          expect(hasLabel).toBeTruthy()
+        // Check aria-label/aria-labelledby regardless of whether the input has
+        // an id -- an id-less input can still be labelled this way, and the
+        // previous version of this test skipped id-less inputs entirely.
+        // aria-labelledby only counts if every referenced id resolves to an
+        // existing element with usable text -- a dangling reference (or one
+        // pointing at empty elements) is not a real label.
+        let hasLabel = !!ariaLabel
+        if (!hasLabel && ariaLabelledBy) {
+          const ids = ariaLabelledBy.split(/\s+/).filter(Boolean)
+          let allResolve = ids.length > 0
+          for (const refId of ids) {
+            // Attribute selector rather than `#id` -- this runs in the Node.js
+            // test process, not a browser, so CSS.escape isn't available, and
+            // an attribute-value match avoids needing to escape the id as a
+            // CSS identifier. Check existence via count() (no wait) before
+            // reading text, so a dangling id fails fast instead of waiting out
+            // textContent()'s actionability timeout.
+            const referenced = page.locator(`[id="${refId}"]`)
+            const exists = (await referenced.count()) > 0
+            const text = exists ? (await referenced.first().textContent())?.trim() : null
+            if (!text) {
+              allResolve = false
+              break
+            }
+          }
+          hasLabel = allResolve
         }
+        if (id && !hasLabel) {
+          const label = page.locator(`label[for="${id}"]`)
+          hasLabel = (await label.count()) > 0
+        }
+
+        expect(
+          hasLabel,
+          `input ${i} (id="${id ?? 'none'}") should have a <label for>, aria-label, or an aria-labelledby that resolves to real text`
+        ).toBeTruthy()
       }
     })
   })
@@ -766,14 +846,18 @@ test.describe('Phase 2: Serious Violations', () => {
       await page.locator('#password').fill('wrongpassword')
       await page.getByRole('button', { name: 'Sign in', exact: true }).click()
 
-      await page.waitForTimeout(1000)
+      const errorMessage = page.locator('[role="alert"], .error').first()
+      await expect(
+        errorMessage,
+        'A login error message should appear after submitting invalid credentials'
+      ).toBeVisible({ timeout: 3000 })
 
-      // Error message should provide helpful suggestion
-      const errorText = await page.locator('[role="alert"], .error').textContent()
-      if (errorText) {
-        // Should have more than just "Error" - should suggest action
-        expect(errorText.length).toBeGreaterThan(10)
-      }
+      // Error message should provide helpful suggestion, not just "Error"
+      const errorText = await errorMessage.textContent()
+      expect(
+        (errorText ?? '').length,
+        `Error message text was: "${errorText}"`
+      ).toBeGreaterThan(10)
     })
   })
 
@@ -1278,41 +1362,42 @@ test.describe('Phase 3: Moderate Violations', () => {
     })
 
     test('tooltips shown on hover also appear on focus', async ({ page }) => {
+      // The generic `[aria-describedby], [data-tooltip], [title]` selector this
+      // test used to start from resolves, on /docs, to the workspace switcher's
+      // native `title="Test Workspace"` button -- a browser-native tooltip with
+      // no DOM node to check, so the "was it visible on hover" branch below was
+      // always false and the real Radix-tooltip claim was never exercised.
+      // Target a known Radix `<Tooltip>` trigger instead (KanbanBoard's
+      // "More actions" button, web/src/components/KanbanBoard.tsx), which is
+      // exactly the kind of custom tooltip WCAG 2.1.1 focus-visibility cares
+      // about -- native `title` tooltips get keyboard access for free.
       await login(page)
+      await page.goto('/issues')
       await page.waitForLoadState('networkidle')
+      await page.getByRole('button', { name: 'Kanban view' }).click()
 
-      // Find an element with tooltip (aria-describedby, title, or data-tooltip)
-      const tooltipTrigger = page.locator('[aria-describedby], [data-tooltip], [title]').first()
+      const card = page.locator('[data-issue]').first()
+      await expect(card, 'Seed data should include at least one issue to render as a kanban card. Run: pnpm db:seed').toBeVisible({ timeout: 5000 })
+      await card.hover()
 
-      // This test only applies if there are tooltip triggers
-      const triggerCount = await tooltipTrigger.count()
-      if (triggerCount > 0) {
-        // First, hover to show tooltip
-        await tooltipTrigger.hover()
-        await page.waitForTimeout(300)
+      const tooltipTrigger = card.getByRole('button', { name: /actions/i })
+      await expect(tooltipTrigger, 'Kanban card should expose a "More actions" tooltip trigger on hover').toBeVisible({ timeout: 3000 })
 
-        const tooltipOnHover = page.locator('[role="tooltip"], .tooltip')
-        const visibleOnHover = await tooltipOnHover.isVisible().catch(() => false)
+      const tooltipOnHover = page.getByRole('tooltip')
 
-        // Now focus the element
-        await tooltipTrigger.focus()
-        await page.waitForTimeout(300)
+      // Hover shows the tooltip.
+      await tooltipTrigger.hover()
+      await expect(tooltipOnHover, 'Hovering the tooltip trigger should show a role="tooltip" element').toBeVisible({ timeout: 3000 })
 
-        // If tooltip was visible on hover, it MUST also be visible on focus
-        if (visibleOnHover) {
-          await expect(tooltipOnHover).toBeVisible()
-        }
-
-        // Verify title attribute elements have proper keyboard access
-        const titleAttr = await tooltipTrigger.getAttribute('title')
-        if (titleAttr) {
-          // Elements with title should be focusable
-          const isFocusable = await tooltipTrigger.evaluate((el) => {
-            return el.tabIndex >= 0 || ['A', 'BUTTON', 'INPUT', 'SELECT', 'TEXTAREA'].includes(el.tagName)
-          })
-          expect(isFocusable).toBeTruthy()
-        }
-      }
+      // Move the mouse away and wait for the hover tooltip to actually close
+      // before focusing -- otherwise the final assertion could pass merely
+      // because the hover tooltip never closed, without focus having caused
+      // anything. The actual claim under test: the same tooltip that hover
+      // reveals must ALSO be revealed by focus, not just by a mouse pointer.
+      await page.mouse.move(0, 0)
+      await expect(tooltipOnHover, 'Moving the mouse away should hide the hover tooltip').toBeHidden({ timeout: 3000 })
+      await tooltipTrigger.focus()
+      await expect(tooltipOnHover, 'The same tooltip must also appear when the trigger receives keyboard focus').toBeVisible({ timeout: 3000 })
     })
 
     test('images do not have redundant alt text', async ({ page }) => {
@@ -1374,24 +1459,17 @@ test.describe('Phase 3: Moderate Violations', () => {
       await page.goto('/docs')
       await page.waitForLoadState('networkidle')
 
-      // Test portrait-like viewport (narrow)
-      await page.setViewportSize({ width: 375, height: 812 })
-      await page.waitForTimeout(200)
-
-      // Content MUST still be visible and not clipped
       const mainContent = page.locator('main, [role="main"], #main-content, .main-content')
-      if (await mainContent.count() > 0) {
-        await expect(mainContent.first()).toBeVisible()
-      }
+      await expect(mainContent.first(), 'Every document editor page should render a main content landmark (4-panel layout)').toBeVisible({ timeout: 5000 })
+
+      // Test portrait-like viewport (narrow). toBeVisible() already retries
+      // after the resize, so a fixed delay here only adds latency.
+      await page.setViewportSize({ width: 375, height: 812 })
+      await expect(mainContent.first(), 'Main content should remain visible in a portrait viewport').toBeVisible()
 
       // Test landscape-like viewport (wide)
       await page.setViewportSize({ width: 1024, height: 768 })
-      await page.waitForTimeout(200)
-
-      // Content MUST still be visible
-      if (await mainContent.count() > 0) {
-        await expect(mainContent.first()).toBeVisible()
-      }
+      await expect(mainContent.first(), 'Main content should remain visible in a landscape viewport').toBeVisible()
 
       // Content should NOT require specific orientation
       // (WCAG 1.3.4 - Orientation restriction is not allowed unless essential)

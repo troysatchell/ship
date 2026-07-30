@@ -409,15 +409,19 @@ test.describe('Phase 2: Weeks Tab UI', () => {
   test('double-clicking completed sprint card navigates to SprintView (read-only history)', async ({ page }) => {
     await clickSprintsTab(page)
 
-    // Find a completed sprint card (button with data-active and "Completed" text)
+    // Find a completed sprint card (button with data-active and "Completed" text).
+    // Seed data creates sprints from currentSprintNumber-2 through +2
+    // (e2e/fixtures/isolated-env.ts), so 2 past (completed) sprints always exist.
     const completedCard = page.locator('button[data-active]').filter({ has: page.getByText('Completed') }).first()
-
-    if (await completedCard.isVisible().catch(() => false)) {
-      await completedCard.dblclick()
-      // Application navigates to /documents/{programId}/weeks/{sprintId} (TRO-282)
-      await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+\/weeks\/[a-f0-9-]+/, { timeout: 5000 })
-    }
-    // If no completed sprint exists, test passes (conditional test)
+    await expect(
+      completedCard,
+      'Seed data creates past sprints for the current program; expected at least one Completed sprint card'
+    ).toBeVisible({ timeout: 5000 })
+    await completedCard.dblclick()
+    // Application navigates to /documents/{programId}/weeks/{sprintId} (TRO-282
+    // renamed this route from /sprints/; the old one redirects but this asserts
+    // the current target directly).
+    await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+\/weeks\/[a-f0-9-]+/, { timeout: 5000 })
   })
 
   test('timeline shows empty future windows with "+ Create sprint"', async ({ page }) => {
@@ -471,21 +475,20 @@ test.describe('Phase 3: Week Creation UX', () => {
   test('clicking empty future window opens owner selection prompt', async ({ page }) => {
     await clickSprintsTab(page)
 
-    // Click an empty future week window
+    // Click an empty future week window. cleanupExtraSprints (beforeEach)
+    // guarantees this exists on every run.
     const emptyWindow = page.locator('[data-active]').filter({ hasText: /Week of/ }).first()
-    const windowVisible = await emptyWindow.isVisible().catch(() => false)
+    await expect(
+      emptyWindow,
+      'cleanupExtraSprints should keep an empty future week window available'
+    ).toBeVisible({ timeout: 5000 })
+    await emptyWindow.click()
 
-    if (windowVisible) {
-      await emptyWindow.click()
-
-      // Should see owner selection prompt (if feature is implemented)
-      const modalVisible = await page.getByText(/Create Week|Who should own/).isVisible({ timeout: 3000 }).catch(() => false)
-
-      if (modalVisible) {
-        await expect(page.getByText(/Who should own/)).toBeVisible()
-      }
-      // If modal doesn't appear, test passes (feature may not be implemented yet)
-    }
+    // Should see owner selection prompt
+    await expect(
+      page.getByText(/Who should own/),
+      'Clicking an empty week window should open the owner-selection prompt'
+    ).toBeVisible({ timeout: 3000 })
   })
 
   test('owner selection shows availability indicators', async ({ page }) => {
@@ -493,23 +496,23 @@ test.describe('Phase 3: Week Creation UX', () => {
 
     // Click an empty future window
     const emptyWindow = page.locator('[data-active]').filter({ hasText: /Week of/ }).first()
-    const windowVisible = await emptyWindow.isVisible().catch(() => false)
+    await expect(
+      emptyWindow,
+      'cleanupExtraSprints should keep an empty future week window available'
+    ).toBeVisible({ timeout: 5000 })
+    await emptyWindow.click()
 
-    if (windowVisible) {
-      await emptyWindow.click()
+    const modal = page.locator('.fixed.inset-0')
+    await expect(
+      modal.getByText(/Create Week|Who should own/),
+      'Owner-selection modal should open when an empty week window is clicked'
+    ).toBeVisible({ timeout: 3000 })
 
-      // Check if modal appears (feature may not be implemented)
-      const modal = page.locator('.fixed.inset-0')
-      const modalVisible = await modal.getByText(/Create Week|Who should own/).isVisible({ timeout: 3000 }).catch(() => false)
-
-      if (modalVisible) {
-        // Should see availability indicators (✓ Available or ⚠ X sprints) in the modal
-        const hasAvailable = await modal.getByText('✓ Available').first().isVisible().catch(() => false)
-        const hasWarning = await modal.getByText(/⚠ \d+ sprint/).first().isVisible().catch(() => false)
-        expect(hasAvailable || hasWarning).toBeTruthy()
-      }
-    }
-    // Test passes if feature not implemented
+    // Should see availability indicators (✓ Available or ⚠ X sprints) in the modal
+    await expect(
+      modal.getByText('✓ Available').or(modal.getByText(/⚠ \d+ sprint/)).first(),
+      'Owner-selection modal should show at least one availability indicator (✓ Available or ⚠ N sprints)'
+    ).toBeVisible({ timeout: 3000 })
   })
 
   test('selecting owner and clicking Create creates sprint', async ({ page }) => {
@@ -517,34 +520,34 @@ test.describe('Phase 3: Week Creation UX', () => {
 
     // Find an empty window and click it
     const emptyWindow = page.locator('[data-active]').filter({ hasText: /Week of/ }).first()
-    const windowVisible = await emptyWindow.isVisible().catch(() => false)
+    await expect(
+      emptyWindow,
+      'cleanupExtraSprints should keep an empty future week window available'
+    ).toBeVisible({ timeout: 5000 })
+    await emptyWindow.click()
 
-    if (windowVisible) {
-      await emptyWindow.click()
+    const modal = page.locator('.fixed.inset-0')
+    await expect(
+      modal.getByText(/Create Week|Who should own/),
+      'Owner-selection modal should open when an empty week window is clicked'
+    ).toBeVisible({ timeout: 3000 })
 
-      // Check if modal appears (feature may not be implemented)
-      const modal = page.locator('.fixed.inset-0')
-      const modalVisible = await modal.getByText(/Create Week|Who should own/).isVisible({ timeout: 3000 }).catch(() => false)
+    // Select first available owner (button inside modal with person name)
+    const ownerOption = modal.locator('button').filter({ hasText: /[A-Z][a-z]+ [A-Z][a-z]+/ }).first()
+    await expect(ownerOption, 'Seed data should include at least one candidate owner').toBeVisible({ timeout: 3000 })
+    await ownerOption.click()
 
-      if (modalVisible) {
-        // Select first available owner (button inside modal with person name)
-        const ownerOption = modal.locator('button').filter({ hasText: /[A-Z][a-z]+ [A-Z][a-z]+/ }).first()
-        await ownerOption.click()
+    // Click Create & Open (inside modal)
+    const [response] = await Promise.all([
+      page.waitForResponse(resp => resp.url().includes('/api/weeks') && resp.request().method() === 'POST'),
+      modal.getByRole('button', { name: /Create & Open/ }).click()
+    ])
 
-        // Click Create & Open (inside modal)
-        const [response] = await Promise.all([
-          page.waitForResponse(resp => resp.url().includes('/api/weeks') && resp.request().method() === 'POST'),
-          modal.getByRole('button', { name: /Create & Open/ }).click()
-        ])
+    // Should create sprint successfully
+    expect(response.status()).toBe(201)
 
-        // Should create sprint successfully
-        expect(response.status()).toBe(201)
-
-        // Should navigate to sprint view
-        await expect(page).toHaveURL(/\/sprints\/[a-f0-9-]+\/view/, { timeout: 10000 })
-      }
-    }
-    // Test passes if feature not implemented
+    // Should navigate to sprint view
+    await expect(page).toHaveURL(/\/sprints\/[a-f0-9-]+\/view/, { timeout: 10000 })
   })
 
   test('can cancel owner selection', async ({ page }) => {
@@ -590,98 +593,87 @@ test.describe('Phase 4: Issues Tab Filtering', () => {
   test('Issues tab has sprint filter dropdown', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Check if filter exists (feature may not be implemented)
-    const selectVisible = await page.locator('select').first().isVisible({ timeout: 3000 }).catch(() => false)
-
-    if (selectVisible) {
-      // Options inside closed select are hidden - check existence with toBeAttached
-      await expect(page.locator('option').filter({ hasText: 'All Weeks' })).toBeAttached()
-    }
-    // Test passes if filter not implemented
+    const select = page.locator('select').first()
+    await expect(select, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
+    // Options inside closed select are hidden - check existence with toBeAttached
+    await expect(page.locator('option').filter({ hasText: 'All Weeks' })).toBeAttached()
   })
 
   test('sprint filter has "All Weeks" as default option', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Check if filter exists (feature may not be implemented)
     const select = page.locator('select').first()
-    const selectVisible = await select.isVisible({ timeout: 3000 }).catch(() => false)
+    await expect(select, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
 
-    if (selectVisible) {
-      // Check that All Weeks is selected by default
-      const selectedValue = await select.inputValue()
-      expect(selectedValue === '' || selectedValue === 'all').toBeTruthy()
-    }
-    // Test passes if filter not implemented
+    // Check that All Weeks is selected by default
+    const selectedValue = await select.inputValue()
+    expect(
+      selectedValue === '' || selectedValue === 'all',
+      `Default sprint filter value should be empty/"all", got "${selectedValue}"`
+    ).toBeTruthy()
   })
 
   test('sprint filter has "Backlog (No Week)" option', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Check if filter exists (feature may not be implemented)
-    const hasOptions = await page.locator('option').first().count().then(c => c > 0).catch(() => false)
-    if (hasOptions) {
-      // Options inside closed select are hidden - check existence with toBeAttached
-      await expect(page.locator('option').filter({ hasText: /Backlog|No Week/ })).toBeAttached()
-    }
-    // Test passes if filter not implemented
+    await expect(
+      page.locator('select').first(),
+      'Issues tab should have a sprint filter <select>'
+    ).toBeVisible({ timeout: 3000 })
+    // Options inside closed select are hidden - check existence with toBeAttached
+    await expect(page.locator('option').filter({ hasText: /Backlog|No Week/ })).toBeAttached()
   })
 
   test('sprint filter has "Active Week" option', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Check if filter exists (feature may not be implemented)
-    const hasOptions = await page.locator('option').first().count().then(c => c > 0).catch(() => false)
-    if (hasOptions) {
-      await expect(page.locator('option').filter({ hasText: 'Active Week' })).toBeAttached()
-    }
-    // Test passes if filter not implemented
+    await expect(
+      page.locator('select').first(),
+      'Issues tab should have a sprint filter <select>'
+    ).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('option').filter({ hasText: 'Active Week' })).toBeAttached()
   })
 
   test('sprint filter has "Upcoming Weeks" option', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Check if filter exists (feature may not be implemented)
-    const hasOptions = await page.locator('option').first().count().then(c => c > 0).catch(() => false)
-    if (hasOptions) {
-      await expect(page.locator('option').filter({ hasText: 'Upcoming' })).toBeAttached()
-    }
-    // Test passes if filter not implemented
+    await expect(
+      page.locator('select').first(),
+      'Issues tab should have a sprint filter <select>'
+    ).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('option').filter({ hasText: 'Upcoming' })).toBeAttached()
   })
 
   test('sprint filter has "Completed Weeks" option', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Check if filter exists (feature may not be implemented)
-    const hasOptions = await page.locator('option').first().count().then(c => c > 0).catch(() => false)
-    if (hasOptions) {
-      await expect(page.locator('option').filter({ hasText: 'Completed' })).toBeAttached()
-    }
-    // Test passes if filter not implemented
+    await expect(
+      page.locator('select').first(),
+      'Issues tab should have a sprint filter <select>'
+    ).toBeVisible({ timeout: 3000 })
+    await expect(page.locator('option').filter({ hasText: 'Completed' })).toBeAttached()
   })
 
   test('filtering by "Backlog" shows only issues without sprint', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Check if filter exists (feature may not be implemented)
-    const selectVisible = await page.locator('select').first().isVisible({ timeout: 3000 }).catch(() => false)
+    const select = page.locator('select').first()
+    await expect(select, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
+    await select.selectOption('backlog')
 
-    if (selectVisible) {
-      // Select Backlog filter (first <select> element)
-      await page.locator('select').first().selectOption('backlog')
+    // All visible issues should show "—" in Sprint column (no sprint)
+    const rows = page.locator('tbody tr')
+    await expect(rows.first(), 'Seed data should include at least one backlog issue (e2e/fixtures/isolated-env.ts)').toBeVisible({ timeout: 5000 })
+    const rowCount = await rows.count()
 
-      // All visible issues should show "—" in Sprint column (no sprint)
-      const sprintCells = page.locator('td').filter({ hasText: '—' })
-      const rows = page.locator('tbody tr')
-      const rowCount = await rows.count()
-
-      // If there are rows, they should all have "—" for sprint
-      if (rowCount > 0) {
-        const dashCount = await sprintCells.count()
-        expect(dashCount).toBe(rowCount)
-      }
+    // Assert per-row on the sprint column (second-to-last cell) rather than
+    // comparing counts across the whole table: `td` filtered by '—' also
+    // matches other columns (assignee, estimate, due date) that render an
+    // em dash, so a global count can coincidentally equal rowCount even when
+    // filtering is wrong.
+    for (let i = 0; i < rowCount; i++) {
+      await expect(rows.nth(i).locator('td:nth-last-child(2)')).toHaveText('—')
     }
-    // Test passes if filter not implemented
   })
 
   test('issues table has checkbox column for bulk selection', async ({ page }) => {
@@ -702,191 +694,194 @@ test.describe('Phase 4: Issues Tab Filtering', () => {
   test('selecting issues shows bulk action bar', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Check if checkbox exists (feature may not be implemented)
+    // Checkboxes are hidden until row hover (see "issues table has checkbox
+    // column for bulk selection" above, which establishes this precondition).
+    const firstRow = page.locator('tbody tr').first()
+    await expect(firstRow, 'Seed data should include at least one issue row').toBeVisible({ timeout: 5000 })
+    await firstRow.hover()
+
     const checkbox = page.locator('td').getByRole('checkbox').first()
-    const checkboxVisible = await checkbox.isVisible({ timeout: 3000 }).catch(() => false)
+    await expect(checkbox, 'Issue row should expose a selection checkbox on hover').toBeVisible({ timeout: 3000 })
+    await checkbox.click()
 
-    if (checkboxVisible) {
-      await checkbox.click()
-
-      // Should see bulk action bar with selection count
-      const barVisible = await page.getByText(/\d+ issue[s]? selected/).isVisible({ timeout: 3000 }).catch(() => false)
-      expect(barVisible || true).toBeTruthy() // Pass if bulk action implemented or not
-    }
-    // Test passes if feature not implemented
+    // Should see bulk action bar with selection count
+    await expect(
+      page.getByText(/\d+ issue[s]? selected/),
+      'Selecting an issue should show the bulk action bar with a selection count'
+    ).toBeVisible({ timeout: 3000 })
   })
 
   test('bulk action bar has "Move to Week" dropdown', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Check if checkbox exists (feature may not be implemented)
+    const firstRow = page.locator('tbody tr').first()
+    await expect(firstRow, 'Seed data should include at least one issue row').toBeVisible({ timeout: 5000 })
+    await firstRow.hover()
+
     const checkbox = page.locator('td').getByRole('checkbox').first()
-    const checkboxVisible = await checkbox.isVisible({ timeout: 3000 }).catch(() => false)
+    await expect(checkbox, 'Issue row should expose a selection checkbox on hover').toBeVisible({ timeout: 3000 })
+    await checkbox.click()
 
-    if (checkboxVisible) {
-      await checkbox.click()
-
-      // Should see Move to Week dropdown (second select element after sprint filter)
-      const dropdownVisible = await page.locator('select').nth(1).isVisible({ timeout: 3000 }).catch(() => false)
-      expect(dropdownVisible || true).toBeTruthy()
-    }
-    // Test passes if feature not implemented
+    // Should see Move to Week dropdown (second select element after sprint filter)
+    await expect(
+      page.locator('select').nth(1),
+      'Bulk action bar should show a "Move to Week" dropdown once an issue is selected'
+    ).toBeVisible({ timeout: 3000 })
   })
 
   test('bulk "Move to Week" updates issues', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Check if filter exists (feature may not be implemented)
-    const selectVisible = await page.locator('select').first().isVisible({ timeout: 3000 }).catch(() => false)
+    const select = page.locator('select').first()
+    await expect(select, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
 
-    if (selectVisible) {
-      // Filter to backlog to find issues without sprint
-      await page.locator('select').first().selectOption('backlog')
-      await page.waitForTimeout(500) // Wait for filter to apply
+    // Filter to backlog to find issues without sprint. The sprint filter is
+    // applied client-side over already-fetched issues (IssuesList.tsx filters
+    // by sprintFilter state, not a new query), so there is no network request
+    // to wait on here -- wait on the rendered result instead.
+    await select.selectOption('backlog')
 
-      const rows = page.locator('tbody tr')
-      const rowCount = await rows.count()
+    const rows = page.locator('tbody tr')
+    await expect(rows.first(), 'Seed data should include at least one backlog issue (e2e/fixtures/isolated-env.ts)').toBeVisible({ timeout: 5000 })
 
-      if (rowCount > 0) {
-        // Select first backlog issue
-        const checkbox = page.locator('td').getByRole('checkbox').first()
-        const checkboxVisible = await checkbox.isVisible({ timeout: 3000 }).catch(() => false)
+    // Select first backlog issue
+    const firstRow = rows.first()
+    await firstRow.hover()
+    const checkbox = page.locator('td').getByRole('checkbox').first()
+    await expect(checkbox, 'Issue row should expose a selection checkbox on hover').toBeVisible({ timeout: 3000 })
+    await checkbox.click()
 
-        if (checkboxVisible) {
-          await checkbox.click()
+    // Use Move to Week dropdown (second select)
+    const moveDropdown = page.locator('select').nth(1)
+    await expect(moveDropdown, 'Bulk action bar should show a "Move to Week" dropdown').toBeVisible({ timeout: 3000 })
 
-          // Use Move to Week dropdown (second select)
-          const moveDropdown = page.locator('select').nth(1)
-          const moveVisible = await moveDropdown.isVisible({ timeout: 3000 }).catch(() => false)
-
-          if (moveVisible) {
-            // Get available sprint options
-            const options = await moveDropdown.locator('option').allTextContents()
-            const sprintOption = options.find(opt => opt.match(/Week \d+|Week of/))
-
-            if (sprintOption) {
-              // Wait for API response when moving
-              const [response] = await Promise.all([
-                page.waitForResponse(resp => resp.url().includes('/api/issues/') && resp.request().method() === 'PATCH'),
-                moveDropdown.selectOption({ label: sprintOption })
-              ])
-
-              // API returns 200 for success, 400 if issue has no estimate
-              expect([200, 400]).toContain(response.status())
-            }
-          }
-        }
-      }
+    // Get available sprint options
+    const options = await moveDropdown.locator('option').allTextContents()
+    const sprintOption = options.find(opt => opt.match(/Week \d+|Week of/))
+    if (!sprintOption) {
+      throw new Error(`"Move to Week" dropdown should list at least one sprint option, got: ${options.join(', ')}`)
     }
-    // Test passes if feature not implemented
+
+    // Wait for API response when moving
+    const [response] = await Promise.all([
+      page.waitForResponse(resp => resp.url().includes('/api/issues/') && resp.request().method() === 'PATCH'),
+      moveDropdown.selectOption({ label: sprintOption })
+    ])
+
+    // API returns 200 for success, 400 if issue has no estimate
+    expect([200, 400]).toContain(response.status())
   })
 
-  test('issue row has quick menu (⋮) button', async ({ page }) => {
+  /**
+   * Deliberately left as test.fixme() -- TRO-286 (TEST-14) CodeRabbit follow-up.
+   *
+   * These three tests describe a per-row hover-revealed "⋮" / actions quick-menu
+   * on the Issues tab table. Traced the full render path in
+   * web/src/components/IssuesList.tsx: `renderIssueRow` returns only
+   * `<IssueRowContent .../>` (columns: id, title, status, source, program,
+   * sprint, priority, assignee, updated -- no actions column), and
+   * `SelectableRow` (web/src/components/SelectableList.tsx) only prepends a
+   * checkbox `<td>` (aria-label "Select item {id}") before those columns.
+   * Grepping web/src for the "⋮" character and for any `aria-label` containing
+   * "menu" or "actions" on this row turns up nothing. The only way to open a
+   * context menu on an issue row in list view is right-click
+   * (`onContextMenu`, handled by `handleContextMenu`); "Move to Week" exists
+   * only as a bulk-action (checkbox + toolbar dropdown, already covered by
+   * "bulk \"Move to Week\" updates issues" above) and inside that right-click
+   * menu's submenu, not as a standalone per-row quick-menu button.
+   *
+   * This is the same class of gap as the team-directory quick-menu case in
+   * e2e/context-menus.spec.ts: not a stale selector but a product affordance
+   * that does not exist. These three tests previously read "expect(x ||
+   * true).toBeTruthy()" (passed whether the button existed or not); TRO-286
+   * Part 1 tightened that to a real assertion, which would now fail hard on
+   * every run, not vacuously. Converting these to real assertions requires
+   * building the UI affordance, which is out of scope for a test-quality
+   * ticket -- filed as a follow-up (see PR #40 review triage / CHANGES.md).
+   */
+  test.fixme('issue row has quick menu (⋮) button', async ({ page }) => {
     await clickIssuesTab(page)
 
     const firstRow = page.locator('tbody tr').first()
-    const rowVisible = await firstRow.isVisible({ timeout: 5000 }).catch(() => false)
+    await expect(firstRow, 'Seed data should include at least one issue row').toBeVisible({ timeout: 5000 })
+    await firstRow.hover()
 
-    if (rowVisible) {
-      const menuButton = firstRow.locator('button').filter({ hasText: '⋮' }).or(
-        firstRow.locator('[aria-label*="menu"], [aria-label*="actions"]')
-      ).first()
-
-      const menuVisible = await menuButton.isVisible({ timeout: 3000 }).catch(() => false)
-      // Test passes whether menu exists or not
-      expect(menuVisible || true).toBeTruthy()
-    }
-  })
-
-  test('quick menu has "Assign to Week" option', async ({ page }) => {
-    await clickIssuesTab(page)
-
-    const firstRow = page.locator('tbody tr').first()
-    const rowVisible = await firstRow.isVisible({ timeout: 5000 }).catch(() => false)
-
-    if (rowVisible) {
-      const menuButton = firstRow.locator('button').filter({ hasText: '⋮' }).or(
-        firstRow.locator('[aria-label*="menu"], [aria-label*="actions"]')
-      ).first()
-
-      const menuVisible = await menuButton.isVisible({ timeout: 3000 }).catch(() => false)
-      if (menuVisible) {
-        await menuButton.click()
-        await expect(page.getByText(/Assign to Week|Move to Week/i).first()).toBeVisible({ timeout: 3000 })
-      }
-    }
-    // Test passes if feature not implemented
-  })
-
-  test('quick menu "Assign to Week" shows available sprints', async ({ page }) => {
-    await clickIssuesTab(page)
-
-    const firstRow = page.locator('tbody tr').first()
     const menuButton = firstRow.locator('button').filter({ hasText: '⋮' }).or(
       firstRow.locator('[aria-label*="menu"], [aria-label*="actions"]')
     ).first()
-
-    const menuVisible = await menuButton.isVisible({ timeout: 3000 }).catch(() => false)
-    if (menuVisible) {
-      await menuButton.click()
-
-      // Hover over "Assign to Week" to open submenu
-      const assignOption = page.getByRole('menuitem', { name: /Assign to Week/i })
-      const assignVisible = await assignOption.isVisible({ timeout: 2000 }).catch(() => false)
-      if (assignVisible) {
-        await assignOption.hover()
-
-        // Look for sprint options in the submenu (role="menu" contains menuitem children)
-        await expect(page.getByRole('menuitem', { name: /Week of|Backlog/i }).first()).toBeVisible({ timeout: 3000 })
-      }
-    }
-    // Test passes if feature not implemented
+    await expect(menuButton, 'Issue row should expose a quick-menu (⋮) button on hover').toBeVisible({ timeout: 3000 })
   })
 
-  test('quick menu can assign issue to a sprint (full flow)', async ({ page }) => {
+  test.fixme('quick menu has "Assign to Week" option', async ({ page }) => {
+    await clickIssuesTab(page)
+
+    const firstRow = page.locator('tbody tr').first()
+    await expect(firstRow, 'Seed data should include at least one issue row').toBeVisible({ timeout: 5000 })
+    await firstRow.hover()
+
+    const menuButton = firstRow.locator('button').filter({ hasText: '⋮' }).or(
+      firstRow.locator('[aria-label*="menu"], [aria-label*="actions"]')
+    ).first()
+    await expect(menuButton, 'Issue row should expose a quick-menu (⋮) button on hover').toBeVisible({ timeout: 3000 })
+    await menuButton.click()
+    await expect(page.getByText(/Assign to Week|Move to Week/i).first()).toBeVisible({ timeout: 3000 })
+  })
+
+  test.fixme('quick menu "Assign to Week" shows available sprints', async ({ page }) => {
+    await clickIssuesTab(page)
+
+    const firstRow = page.locator('tbody tr').first()
+    await expect(firstRow, 'Seed data should include at least one issue row').toBeVisible({ timeout: 5000 })
+    await firstRow.hover()
+
+    const menuButton = firstRow.locator('button').filter({ hasText: '⋮' }).or(
+      firstRow.locator('[aria-label*="menu"], [aria-label*="actions"]')
+    ).first()
+    await expect(menuButton, 'Issue row should expose a quick-menu (⋮) button on hover').toBeVisible({ timeout: 3000 })
+    await menuButton.click()
+
+    // Hover over "Assign to Week" to open submenu
+    const assignOption = page.getByRole('menuitem', { name: /Assign to Week/i })
+    await expect(assignOption, 'Quick menu should have an "Assign to Week" option').toBeVisible({ timeout: 2000 })
+    await assignOption.hover()
+
+    // Look for sprint options in the submenu (role="menu" contains menuitem children)
+    await expect(page.getByRole('menuitem', { name: /Week of|Backlog/i }).first()).toBeVisible({ timeout: 3000 })
+  })
+
+  test.fixme('quick menu can assign issue to a sprint (full flow)', async ({ page }) => {
     await clickIssuesTab(page)
 
     // Filter to active sprint issues (they have estimates, which is required for sprint assignment)
     const selectElement = page.locator('select').first()
-    const selectExists = await selectElement.count().then(c => c > 0).catch(() => false)
-    if (selectExists) {
-      await selectElement.selectOption('active')
-      await page.waitForTimeout(500)
-    }
+    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
+    await selectElement.selectOption('active')
 
     const rows = page.locator('tbody tr')
-    const count = await rows.count()
+    await expect(rows.first(), 'Seed data should include at least one active-sprint issue (e2e/fixtures/isolated-env.ts)').toBeVisible({ timeout: 5000 })
 
-    if (count > 0) {
-      const firstRow = rows.first()
-      const menuButton = firstRow.locator('button').filter({ hasText: '⋮' }).or(
-        firstRow.locator('[aria-label*="menu"], [aria-label*="actions"]')
-      ).first()
+    const firstRow = rows.first()
+    await firstRow.hover()
+    const menuButton = firstRow.locator('button').filter({ hasText: '⋮' }).or(
+      firstRow.locator('[aria-label*="menu"], [aria-label*="actions"]')
+    ).first()
+    await expect(menuButton, 'Issue row should expose a quick-menu (⋮) button on hover').toBeVisible({ timeout: 2000 })
+    await menuButton.click()
 
-      const menuVisible = await menuButton.isVisible({ timeout: 2000 }).catch(() => false)
-      if (menuVisible) {
-        await menuButton.click()
+    // Hover over "Assign to Week" to open submenu
+    const assignOption = page.getByRole('menuitem', { name: /Assign to Week/i })
+    await expect(assignOption, 'Quick menu should have an "Assign to Week" option').toBeVisible({ timeout: 2000 })
+    await assignOption.hover()
 
-        // Hover over "Assign to Week" to open submenu
-        const assignOption = page.getByRole('menuitem', { name: /Assign to Week/i })
-        const assignVisible = await assignOption.isVisible({ timeout: 2000 }).catch(() => false)
-        if (assignVisible) {
-          await assignOption.hover()
+    // Wait for submenu and click a sprint option (different from current)
+    const sprintOption = page.getByRole('menuitem', { name: /Week of/ }).first()
+    await expect(sprintOption, 'Assign-to-Week submenu should list at least one sprint option').toBeVisible({ timeout: 2000 })
+    const [response] = await Promise.all([
+      page.waitForResponse(resp => resp.url().includes('/api/issues/') && resp.request().method() === 'PATCH'),
+      sprintOption.click()
+    ])
 
-          // Wait for submenu and click a sprint option (different from current)
-          const sprintOption = page.getByRole('menuitem', { name: /Week of/ }).first()
-          if (await sprintOption.isVisible({ timeout: 2000 })) {
-            const [response] = await Promise.all([
-              page.waitForResponse(resp => resp.url().includes('/api/issues/') && resp.request().method() === 'PATCH'),
-              sprintOption.click()
-            ])
-
-            expect(response.status()).toBe(200)
-          }
-        }
-      }
-    }
-    // Test passes if feature not implemented
+    expect(response.status()).toBe(200)
   })
 })
 
@@ -903,16 +898,14 @@ test.describe('Phase 2 Continued: Progress Graph & Visual Details', () => {
   test('active sprint shows Linear-style progress graph', async ({ page }) => {
     await clickSprintsTab(page)
 
-    // Should see the progress stats (Scope, Started, Completed)
-    const scopeVisible = await page.getByText(/Scope:/).first().isVisible({ timeout: 5000 }).catch(() => false)
-    if (scopeVisible) {
-      await expect(page.getByText(/Started:/).first()).toBeVisible()
-      await expect(page.getByText(/Completed:/).first()).toBeVisible()
+    // Seed data creates a sprint at the current sprint number (e2e/fixtures/
+    // isolated-env.ts), so an active sprint -- and its progress stats -- always exist.
+    await expect(page.getByText(/Scope:/).first(), 'Active sprint should show Scope/Started/Completed progress stats').toBeVisible({ timeout: 5000 })
+    await expect(page.getByText(/Started:/).first()).toBeVisible()
+    await expect(page.getByText(/Completed:/).first()).toBeVisible()
 
-      // Should see days remaining text
-      await expect(page.getByText(/\d+ days? left/).first()).toBeVisible()
-    }
-    // Test passes if progress graph not implemented
+    // Should see days remaining text
+    await expect(page.getByText(/\d+ days? left/).first()).toBeVisible()
   })
 
   test('progress graph shows predicted completion line and estimate', async ({ page }) => {
@@ -1007,32 +1000,40 @@ test.describe('Phase 2 Continued: Progress Graph & Visual Details', () => {
   test('active sprint is highlighted in timeline', async ({ page }) => {
     await clickSprintsTab(page)
 
-    // The active sprint card should have visual distinction (ring, border, or background)
-    // Look for the active sprint card with highlighting classes
-    const activeCard = page.locator('[data-active]').filter({ hasText: /Week of/ }).first()
-    const cardVisible = await activeCard.isVisible({ timeout: 5000 }).catch(() => false)
-    if (cardVisible) {
-      // Verify it has some form of highlighting (border, ring, or distinct background)
-      const classes = await activeCard.getAttribute('class')
-      const hasHighlight = classes?.includes('ring') || classes?.includes('border') || classes?.includes('bg-')
-      expect(hasHighlight).toBeTruthy()
-    }
-    // Test passes if no active sprint found
+    // The active sprint card should have visual distinction (ring, border, or background).
+    // data-active is a boolean *value* on every card (web/src/components/week/
+    // WeekTimeline.tsx: `data-active={status === 'active'}`), not presence --
+    // `[data-active]` alone matches every card (active, completed, upcoming,
+    // and even empty windows), so `.first()` was not actually the active card.
+    // Seed data creates a sprint at the current sprint number, so exactly one
+    // card should match `[data-active="true"]`.
+    const activeCard = page.locator('[data-active="true"]').filter({ hasText: /Week of/ }).first()
+    await expect(activeCard, 'Seed data should include a currently-active sprint').toBeVisible({ timeout: 5000 })
+
+    // Verify it has the active-state highlight specifically. Every card in
+    // this list (active, completed, upcoming) carries a base "border" class
+    // and a "hover:bg-border/30" class, so checking for 'border' or 'bg-'
+    // alone matches every card and can never detect a loss of highlighting.
+    // WeekTimeline.tsx applies 'border-accent/50 border' only when
+    // status === 'active' (or 'border-accent border-2 bg-accent/10' when
+    // selected) -- 'border-accent' is the distinguishing class.
+    const classes = await activeCard.getAttribute('class')
+    const hasHighlight = classes?.includes('border-accent')
+    expect(hasHighlight, `Active sprint card should have the border-accent highlight class, got: ${classes}`).toBeTruthy()
   })
 
   test('timeline cards show mini progress bar', async ({ page }) => {
     await clickSprintsTab(page)
 
-    // Sprint cards show "X/Y done" stats and a progress bar (rounded-full div with bg-border)
-    // Look for the stats text which accompanies the progress bar
+    // Sprint cards show "X/Y done" stats and a progress bar (rounded-full div with bg-border).
+    // Seed data creates real sprint documents (with issues) for the current
+    // program, so at least one card should show this.
     const doneText = page.getByText(/\d+\/\d+ done/).first()
-    const doneVisible = await doneText.isVisible({ timeout: 5000 }).catch(() => false)
-    if (doneVisible) {
-      // The progress bar is a rounded-full div - check it exists within sprint card area
-      const progressContainer = page.locator('[class*="rounded-full"][class*="bg-"]').first()
-      await expect(progressContainer).toBeVisible()
-    }
-    // Test passes if no sprint cards with progress bars exist
+    await expect(doneText, 'At least one sprint card should show "X/Y done" progress stats').toBeVisible({ timeout: 5000 })
+
+    // The progress bar is a rounded-full div - check it exists within sprint card area
+    const progressContainer = page.locator('[class*="rounded-full"][class*="bg-"]').first()
+    await expect(progressContainer).toBeVisible()
   })
 
   test('timeline centers on active sprint initially', async ({ page }) => {
@@ -1076,15 +1077,27 @@ test.describe('Phase 2: Empty States', () => {
     expect(hasActive || hasNoActive || hasTimeline).toBeTruthy()
   })
 
-  test('shows "Next sprint starts" info when no active sprint', async ({ page }) => {
+  /**
+   * Deliberately left as test.fixme() -- TRO-286 (TEST-14) Part 1.
+   *
+   * Unlike the other conversions in this file, this precondition genuinely
+   * cannot be satisfied by the current fixture: e2e/fixtures/isolated-env.ts
+   * always creates a sprint at the current sprint number (see
+   * seedMinimalTestData), so `[data-active="true"]` always matches and "No
+   * active sprint" never renders. Testing the gap-between-sprints empty state
+   * truthfully needs a program seeded WITHOUT a current-week sprint document
+   * -- new fixture work, not a selector fix, and risks the same kind of
+   * cross-spec disruption flagged for the admin-workspace-members fixture (a
+   * program every other test in this file assumes has a normal active
+   * sprint). Left as a written, reasoned deferral rather than reintroducing
+   * the `if (hasNoActive)` guard.
+   */
+  test.fixme('shows "Next sprint starts" info when no active sprint', async ({ page }) => {
     await navigateToProgram(page)
     await clickSprintsTab(page)
 
-    // If there's no active sprint, should show next sprint info
-    const hasNoActive = await page.getByText(/No active sprint/i).isVisible().catch(() => false)
-    if (hasNoActive) {
-      await expect(page.getByText(/Next sprint.*starts/i)).toBeVisible()
-    }
+    await expect(page.getByText(/No active sprint/i)).toBeVisible()
+    await expect(page.getByText(/Next sprint.*starts/i)).toBeVisible()
   })
 })
 
@@ -1130,89 +1143,89 @@ test.describe('Phase 3 Continued: Past Windows & Validation', () => {
   test('created sprint has correct week matching clicked window', async ({ page }) => {
     await clickSprintsTab(page)
 
-    // Find an empty week window (shows "Week of [Date]" text)
+    // Find an empty week window (shows "Week of [Date]" text). cleanupExtraSprints
+    // (beforeEach) guarantees one exists.
     const emptyWindow = page.locator('[data-active]').filter({ hasText: /Week of/ }).first()
+    await expect(
+      emptyWindow,
+      'cleanupExtraSprints should keep an empty future week window available'
+    ).toBeVisible({ timeout: 5000 })
 
-    if (await emptyWindow.isVisible().catch(() => false)) {
-      // Get the week date from the window
-      const windowText = await emptyWindow.textContent()
-      const dateMatch = windowText?.match(/Week of (\w+ \d+)/)
-      const expectedWeekDate = dateMatch ? dateMatch[1] : null
+    // NOTE: this test's name promises verifying the created sprint's week
+    // matches the clicked window's date, but neither the pre-existing code
+    // nor this fix does that comparison -- the pre-existing version computed
+    // `expectedWeekDate` from the window text and then never referenced it
+    // again. Actually completing that needs the POST /api/weeks response
+    // shape investigated (api/src/routes/weeks.ts), which is out of scope for
+    // this pass; see CHANGES.md (TRO-286). What's fixed here is only the
+    // vacuous `if (modalVisible)` guard around the assertion that already existed.
+    await emptyWindow.click()
 
-      await emptyWindow.click()
+    const modal = page.locator('.fixed.inset-0')
+    await expect(modal.getByText(/Who should own/), 'Clicking an empty week window should open the owner-selection modal').toBeVisible({ timeout: 3000 })
 
-      // Wait for create modal
-      const modal = page.locator('.fixed.inset-0')
-      const modalVisible = await modal.isVisible().catch(() => false)
-
-      if (modalVisible) {
-        // Modal should show week creation options
-        const hasOwnerSelection = await modal.getByText(/Who should own/).isVisible().catch(() => false)
-        expect(hasOwnerSelection).toBeTruthy()
-
-        // Cancel to clean up
-        await modal.getByRole('button', { name: 'Cancel' }).click()
-      }
-    }
-    // Test passes if no empty window is visible (conditional test)
+    // Cancel to clean up
+    await modal.getByRole('button', { name: 'Cancel' }).click()
   })
 
   test('owner availability shows warning for busy owners', async ({ page }) => {
     await clickSprintsTab(page)
 
     const emptyWindow = page.locator('[data-active]').filter({ hasText: /Week of/ }).first()
-    const windowVisible = await emptyWindow.isVisible().catch(() => false)
-    if (windowVisible) {
-      await emptyWindow.click()
+    await expect(
+      emptyWindow,
+      'cleanupExtraSprints should keep an empty future week window available'
+    ).toBeVisible({ timeout: 5000 })
+    await emptyWindow.click()
 
-      const modal = page.locator('.fixed.inset-0')
-      const modalVisible = await modal.isVisible({ timeout: 3000 }).catch(() => false)
-      if (modalVisible) {
-        // Should see at least one owner with availability indicator
-        // Either "✓ Available" or "⚠ X sprints"
-        const availableCount = await modal.getByText('✓ Available').count()
-        const warningCount = await modal.getByText(/⚠ \d+ sprint/).count()
+    const modal = page.locator('.fixed.inset-0')
+    await expect(modal, 'Owner-selection modal should open when an empty week window is clicked').toBeVisible({ timeout: 3000 })
 
-        // Should have at least one indicator visible
-        expect(availableCount + warningCount).toBeGreaterThan(0)
+    // Should see at least one owner with availability indicator
+    // Either "✓ Available" or "⚠ X sprints"
+    const availableCount = await modal.getByText('✓ Available').count()
+    const warningCount = await modal.getByText(/⚠ \d+ sprint/).count()
 
-        await modal.getByRole('button', { name: 'Cancel' }).click()
-      }
-    }
-    // Test passes if feature not implemented
+    // Should have at least one indicator visible
+    expect(availableCount + warningCount, 'Modal should show at least one owner availability indicator').toBeGreaterThan(0)
+
+    await modal.getByRole('button', { name: 'Cancel' }).click()
   })
 
   test('created sprint has correct owner_id in API response', async ({ page }) => {
     await clickSprintsTab(page)
 
     const emptyWindow = page.locator('[data-active]').filter({ hasText: /Week of/ }).first()
-    const windowVisible = await emptyWindow.isVisible().catch(() => false)
-    if (windowVisible) {
-      await emptyWindow.click()
+    await expect(
+      emptyWindow,
+      'cleanupExtraSprints should keep an empty future week window available'
+    ).toBeVisible({ timeout: 5000 })
+    await emptyWindow.click()
 
-      const modal = page.locator('.fixed.inset-0')
-      const modalVisible = await modal.isVisible({ timeout: 3000 }).catch(() => false)
-      if (modalVisible) {
-        // Select first owner
-        const ownerOption = modal.locator('button').filter({ hasText: /[A-Z][a-z]+ [A-Z][a-z]+/ }).first()
-        await ownerOption.click()
+    const modal = page.locator('.fixed.inset-0')
+    await expect(modal, 'Owner-selection modal should open when an empty week window is clicked').toBeVisible({ timeout: 3000 })
 
-        // Capture the API response
-        const [response] = await Promise.all([
-          page.waitForResponse(resp => resp.url().includes('/api/weeks') && resp.request().method() === 'POST'),
-          modal.getByRole('button', { name: /Create & Open/ }).click()
-        ])
+    // Select first owner
+    const ownerOption = modal.locator('button').filter({ hasText: /[A-Z][a-z]+ [A-Z][a-z]+/ }).first()
+    await expect(ownerOption, 'Seed data should include at least one candidate owner').toBeVisible({ timeout: 3000 })
+    await ownerOption.click()
 
-        const data = await response.json()
+    // Capture the API response
+    const [response] = await Promise.all([
+      page.waitForResponse(resp => resp.url().includes('/api/weeks') && resp.request().method() === 'POST'),
+      modal.getByRole('button', { name: /Create & Open/ }).click()
+    ])
 
-        // Verify owner is set in the response (API returns owner object with id, name, email)
-        expect(data.owner).toBeDefined()
-        expect(data.owner.id).toBeDefined()
-        expect(typeof data.owner.id).toBe('string')
-        expect(data.owner.id.length).toBeGreaterThan(0)
-      }
+    interface CreateWeekResponseBody {
+      owner?: { id?: string; name?: string; email?: string }
     }
-    // Test passes if feature not implemented
+    const data: CreateWeekResponseBody = await response.json()
+
+    // Verify owner is set in the response (API returns owner object with id, name, email)
+    expect(data.owner).toBeDefined()
+    expect(data.owner?.id).toBeDefined()
+    expect(typeof data.owner?.id).toBe('string')
+    expect((data.owner?.id ?? '').length).toBeGreaterThan(0)
   })
 })
 
@@ -1229,147 +1242,129 @@ test.describe('Phase 4 Continued: Filter Functionality', () => {
   test('filtering by "Active Week" shows only issues in active sprint', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Select Active Week filter (if select exists)
     const selectElement = page.locator('select').first()
-    const selectExists = await selectElement.count().then(c => c > 0).catch(() => false)
-    if (selectExists) {
-      await selectElement.selectOption('active')
-      await page.waitForTimeout(500)
+    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
+    await selectElement.selectOption('active')
 
-      // Verify issues shown are in the active sprint (not backlog, not other sprints)
-      const rows = page.locator('tbody tr')
-      const count = await rows.count()
+    // Verify issues shown are in the active sprint (not backlog, not other sprints).
+    // Seed data guarantees active-sprint issues (e2e/fixtures/isolated-env.ts), so
+    // require at least one row rather than silently skipping the check below.
+    const rows = page.locator('tbody tr')
+    await expect(rows.first(), 'Seed data should include at least one active-sprint issue').toBeVisible({ timeout: 5000 })
+    const count = await rows.count()
 
-      if (count > 0) {
-        // All visible issues should have a sprint assigned (not "—")
-        for (let i = 0; i < Math.min(count, 5); i++) {
-          const sprintCell = rows.nth(i).locator('td').last()
-          const text = await sprintCell.textContent()
-          expect(text).not.toBe('—')
-        }
-      }
+    for (let i = 0; i < Math.min(count, 5); i++) {
+      const sprintCell = rows.nth(i).locator('td').last()
+      const text = await sprintCell.textContent()
+      expect(text).not.toBe('—')
     }
-    // Test passes if feature not implemented
   })
 
   test('filtering by "Upcoming Weeks" shows only issues in upcoming sprints', async ({ page }) => {
     await clickIssuesTab(page)
 
     const selectElement = page.locator('select').first()
-    const selectExists = await selectElement.count().then(c => c > 0).catch(() => false)
-    if (selectExists) {
-      await selectElement.selectOption('upcoming')
-      await page.waitForTimeout(500)
+    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
+    await selectElement.selectOption('upcoming')
 
-      const rows = page.locator('tbody tr')
-      const count = await rows.count()
+    // Seed data guarantees an upcoming-sprint issue (e2e/fixtures/isolated-env.ts).
+    const rows = page.locator('tbody tr')
+    await expect(rows.first(), 'Seed data should include at least one upcoming-sprint issue').toBeVisible({ timeout: 5000 })
 
-      // If there are rows, they should have sprint assigned
-      if (count > 0) {
-        const firstSprintCell = rows.first().locator('td').last()
-        const text = await firstSprintCell.textContent()
-        expect(text).not.toBe('—')
-      }
-    }
-    // Test passes if feature not implemented
+    const firstSprintCell = rows.first().locator('td').last()
+    const text = await firstSprintCell.textContent()
+    expect(text).not.toBe('—')
   })
 
   test('filtering by "Completed Weeks" shows only issues in completed sprints', async ({ page }) => {
     await clickIssuesTab(page)
 
     const selectElement = page.locator('select').first()
-    const selectExists = await selectElement.count().then(c => c > 0).catch(() => false)
-    if (selectExists) {
-      await selectElement.selectOption('completed')
-      await page.waitForTimeout(500)
+    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
+    await selectElement.selectOption('completed')
 
-      const rows = page.locator('tbody tr')
-      const count = await rows.count()
+    // Seed data guarantees a completed-sprint issue (e2e/fixtures/isolated-env.ts).
+    const rows = page.locator('tbody tr')
+    await expect(rows.first(), 'Seed data should include at least one completed-sprint issue').toBeVisible({ timeout: 5000 })
 
-      // If there are rows, they should have sprint assigned
-      if (count > 0) {
-        const firstSprintCell = rows.first().locator('td').last()
-        const text = await firstSprintCell.textContent()
-        expect(text).not.toBe('—')
-      }
-    }
-    // Test passes if feature not implemented
+    const firstSprintCell = rows.first().locator('td').last()
+    const text = await firstSprintCell.textContent()
+    expect(text).not.toBe('—')
   })
 
   test('sprint filter has specific sprint options', async ({ page }) => {
     await clickIssuesTab(page)
 
     const selectElement = page.locator('select').first()
-    const selectExists = await selectElement.count().then(c => c > 0).catch(() => false)
-    if (selectExists) {
-      // Wait for sprints to load by checking for option elements with sprint names
-      const weekOption = page.locator('option').filter({ hasText: /Week of/ }).first()
-      const hasWeekOptions = await weekOption.count().then(c => c > 0).catch(() => false)
-      if (hasWeekOptions) {
-        // Should see individual sprint options in the dropdown
-        const options = await selectElement.locator('option').allTextContents()
+    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
 
-        // Should have specific sprint names beyond just the category filters
-        const sprintOptions = options.filter(opt => opt.match(/Week of/))
-        expect(sprintOptions.length).toBeGreaterThan(0)
-      }
-    }
-    // Test passes if feature not implemented
+    // Wait for sprints to load by checking for option elements with sprint names.
+    // Seed data creates 5 real sprint documents per program (current-2..+2).
+    const weekOption = page.locator('option').filter({ hasText: /Week of/ }).first()
+    await expect(weekOption, 'Sprint filter should list individual "Week of" sprint options').toBeAttached({ timeout: 5000 })
+
+    // Should see individual sprint options in the dropdown
+    const options = await selectElement.locator('option').allTextContents()
+
+    // Should have specific sprint names beyond just the category filters
+    const sprintOptions = options.filter(opt => opt.match(/Week of/))
+    expect(sprintOptions.length).toBeGreaterThan(0)
   })
 
   test('filtering by specific sprint shows only that sprint\'s issues', async ({ page }) => {
     await clickIssuesTab(page)
 
     const selectElement = page.locator('select').first()
-    const selectExists = await selectElement.count().then(c => c > 0).catch(() => false)
-    if (selectExists) {
-      // Wait for sprints to load by checking for option elements with sprint names
-      const weekOption = page.locator('option').filter({ hasText: /Week of/ }).first()
-      const hasWeekOptions = await weekOption.count().then(c => c > 0).catch(() => false)
-      if (hasWeekOptions) {
-        // Get sprint options
-        const options = await selectElement.locator('option').allTextContents()
-        const sprintOption = options.find(opt => opt.match(/Week of/))
+    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
 
-        if (sprintOption) {
-          await selectElement.selectOption({ label: sprintOption })
-          await page.waitForTimeout(500)
+    // Wait for sprints to load by checking for option elements with sprint names
+    const weekOption = page.locator('option').filter({ hasText: /Week of/ }).first()
+    await expect(weekOption, 'Sprint filter should list individual "Week of" sprint options').toBeAttached({ timeout: 5000 })
 
-          const rows = page.locator('tbody tr')
-          const count = await rows.count()
-
-          // All visible issues should be in that specific sprint
-          // Sprint column is second-to-last (before actions column)
-          for (let i = 0; i < Math.min(count, 3); i++) {
-            const sprintCell = rows.nth(i).locator('td:nth-last-child(2)')
-            await expect(sprintCell).toContainText(/Week of/)
-          }
-        }
-      }
+    // Get sprint options
+    const options = await selectElement.locator('option').allTextContents()
+    const sprintOption = options.find(opt => opt.match(/Week of/))
+    if (!sprintOption) {
+      throw new Error(`Expected at least one "Week of" sprint option, got: ${options.join(', ')}`)
     }
-    // Test passes if feature not implemented
+
+    await selectElement.selectOption({ label: sprintOption })
+
+    const rows = page.locator('tbody tr')
+    await expect(rows.first(), `Seed data should include at least one issue in sprint "${sprintOption}"`).toBeVisible({ timeout: 5000 })
+    const count = await rows.count()
+
+    // All visible issues should be in that specific sprint
+    // Sprint column is second-to-last (before actions column)
+    for (let i = 0; i < Math.min(count, 3); i++) {
+      const sprintCell = rows.nth(i).locator('td:nth-last-child(2)')
+      await expect(sprintCell).toContainText(/Week of/)
+    }
   })
 
   test('deselecting all issues clears bulk action bar', async ({ page }) => {
     await clickIssuesTab(page)
 
-    // Select first issue
+    // Checkboxes are hidden until row hover.
+    const firstRow = page.locator('tbody tr').first()
+    await expect(firstRow, 'Seed data should include at least one issue row').toBeVisible({ timeout: 5000 })
+    await firstRow.hover()
+
     const checkbox = page.locator('td').getByRole('checkbox').first()
-    const checkboxExists = await checkbox.count().then(c => c > 0).catch(() => false)
-    if (checkboxExists) {
-      await checkbox.click()
+    await expect(checkbox, 'Issue row should expose a selection checkbox on hover').toBeVisible({ timeout: 3000 })
+    await checkbox.click()
 
-      // Verify bulk action bar appears
-      const bulkBarVisible = await page.getByText(/\d+ issue[s]? selected/).isVisible({ timeout: 3000 }).catch(() => false)
-      if (bulkBarVisible) {
-        // Deselect
-        await checkbox.click()
+    // Verify bulk action bar appears
+    await expect(
+      page.getByText(/\d+ issue[s]? selected/),
+      'Selecting an issue should show the bulk action bar'
+    ).toBeVisible({ timeout: 3000 })
 
-        // Bulk action bar should disappear
-        await expect(page.getByText(/\d+ issue[s]? selected/)).not.toBeVisible()
-      }
-    }
-    // Test passes if feature not implemented
+    // Deselect
+    await checkbox.click()
+
+    // Bulk action bar should disappear
+    await expect(page.getByText(/\d+ issue[s]? selected/)).not.toBeVisible()
   })
 
 })
@@ -1405,50 +1400,50 @@ test.describe('Integration: Full User Flows', () => {
 
     // Apply backlog filter (first <select> element)
     const selectElement = page.locator('select').first()
-    const selectExists = await selectElement.count().then(c => c > 0).catch(() => false)
-    if (selectExists) {
-      await selectElement.selectOption('backlog')
+    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
+    await selectElement.selectOption('backlog')
 
-      // Verify filtered results
-      const rows = page.locator('tbody tr')
-      const count = await rows.count()
+    // Verify filtered results. Seed data guarantees backlog issues
+    // (e2e/fixtures/isolated-env.ts), so require at least one row rather than
+    // letting an empty table make this loop -- and the assertions inside it --
+    // a no-op.
+    const rows = page.locator('tbody tr')
+    await expect(rows.first(), 'Seed data should include at least one backlog issue').toBeVisible({ timeout: 5000 })
+    const count = await rows.count()
 
-      for (let i = 0; i < count; i++) {
-        // Sprint column is second-to-last (last is action menu with ⋮)
-        const cells = rows.nth(i).locator('td')
-        const cellCount = await cells.count()
-        const sprintCell = cells.nth(cellCount - 2)
-        await expect(sprintCell).toHaveText('—')
-      }
+    for (let i = 0; i < count; i++) {
+      // Sprint column is second-to-last (last is action menu with ⋮)
+      const cells = rows.nth(i).locator('td')
+      const cellCount = await cells.count()
+      const sprintCell = cells.nth(cellCount - 2)
+      await expect(sprintCell).toHaveText('—')
     }
-    // Test passes if feature not implemented
   })
 
   test('sprint creation flow: click window → select owner → navigate to sprint', async ({ page }) => {
     await navigateToProgram(page)
     await clickSprintsTab(page)
 
-    // Find empty future window
+    // Find empty future window. cleanupExtraSprints (beforeEach) guarantees one exists.
     const emptyWindow = page.locator('[data-active]').filter({ hasText: /Week of/ }).first()
-    const windowVisible = await emptyWindow.isVisible().catch(() => false)
+    await expect(
+      emptyWindow,
+      'cleanupExtraSprints should keep an empty future week window available'
+    ).toBeVisible({ timeout: 5000 })
+    await emptyWindow.click()
 
-    if (windowVisible) {
-      await emptyWindow.click()
+    // Wait for modal and select owner (scoped to modal)
+    const modal = page.locator('.fixed.inset-0')
+    await expect(modal, 'Owner-selection modal should open when an empty week window is clicked').toBeVisible({ timeout: 3000 })
 
-      // Wait for modal and select owner (scoped to modal)
-      const modal = page.locator('.fixed.inset-0')
-      const modalVisible = await modal.isVisible({ timeout: 3000 }).catch(() => false)
-      if (modalVisible) {
-        const ownerOption = modal.locator('button').filter({ hasText: /[A-Z][a-z]+ [A-Z][a-z]+/ }).first()
-        await ownerOption.click()
+    const ownerOption = modal.locator('button').filter({ hasText: /[A-Z][a-z]+ [A-Z][a-z]+/ }).first()
+    await expect(ownerOption, 'Seed data should include at least one candidate owner').toBeVisible({ timeout: 3000 })
+    await ownerOption.click()
 
-        // Create sprint (inside modal)
-        await modal.getByRole('button', { name: /Create & Open/ }).click()
+    // Create sprint (inside modal)
+    await modal.getByRole('button', { name: /Create & Open/ }).click()
 
-        // Should navigate to sprint
-        await expect(page).toHaveURL(/\/sprints\/[a-f0-9-]+\/view/, { timeout: 10000 })
-      }
-    }
-    // Test passes if feature not implemented
+    // Should navigate to sprint
+    await expect(page).toHaveURL(/\/sprints\/[a-f0-9-]+\/view/, { timeout: 10000 })
   })
 })
