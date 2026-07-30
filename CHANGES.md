@@ -62,6 +62,94 @@ file's header says so.
 event — is awaited by re-reading the row until a predicate holds, with a 50ms gap between reads and
 a hard deadline. Every wait is a condition, never a duration guessed to be long enough (TEST-11 /
 TRO-233).
+## TRO-217 — [A11Y-3] `/my-week` failed colour contrast, the landing page of the app
+
+**What was broken.** `/` redirects to `/my-week`, and it was the only key page Lighthouse failed on
+accessibility: **95**, one failing audit, `color-contrast`. axe reported it **Serious** on 18 nodes
+(24 in the audit baseline; the count tracks how many future standup rows the current week still
+has, so it moves with the weekday).
+
+The finding named two causes. There were **three**, and one of the two named was misattributed:
+
+| Cause | Nodes | Resolved colour | Ratio |
+|---|---|---|---|
+| `opacity-40` on future standup rows (`MyWeekPage.tsx:339`) | 12 | `#3f3f3f` on `#0d0d0d` | **1.84:1** |
+| `text-muted/50` on the 11px plan/retro ordinals | 4 | `#4c4c4c` on `#0d0d0d` | **2.26:1** |
+| `text-accent` used as a *foreground* colour | 2 | `#005ea2` on `#0a1d2b` / `#0c1114` | **2.55:1** / 2.82:1 |
+
+The dominant cause — two thirds of the nodes — was `opacity-40`, which the finding never mentioned.
+And `bg-accent/20`, which the finding did blame, is not the defect: `accent` (`#005ea2`) is
+**2.89:1 as text on the page background before any badge is involved**; the translucent fill only
+takes it from 2.89 to 2.55. The fill was fine. Using a fill colour as text was not.
+
+A **fourth** pair, in neither the finding nor either axe run: the "Unsubmitted" badge puts
+`text-muted` on a `bg-border` fill at **4.38:1**. It renders only when a plan or retro has content,
+is unsubmitted, and is not yet due — a state neither scan happened to hit. It is not a guess: axe
+recorded that identical pair on the command palette's `esc` key
+(`audit/a11y/axe/command_palette_open.json`).
+
+**What changed.**
+
+- `web/tailwind.config.js` — added `accent-text: #2491ff` (USWDS blue-40v, verified against
+  `@uswds/uswds/.../tokens/color/_blue.scss`): **6.08:1** on `background`, 5.37:1 on a
+  `bg-accent/20` badge, 5.94:1 on `bg-accent/5`. `accent` itself is **unchanged**, so every
+  `bg-accent` fill in the app looks exactly as it did. blue-50v (`#0076d6`) was tried and rejected —
+  4.22:1, still failing. Also corrected the `muted` comment, which claimed 5.1:1 where the
+  arithmetic gives 5.63:1, and recorded the `bg-border` caveat next to it.
+- `web/src/pages/MyWeekPage.tsx` — `opacity-40` removed from future rows in favour of a dimmer
+  border; `text-muted/50` → `text-muted` on the two ordinals; `text-accent` → `text-accent-text` on
+  the "Current" badge and today's day label; `text-muted` → `text-foreground` on the two
+  "Unsubmitted" badges.
+
+**Why the levels differ, since a global token change was the obvious move.**
+
+- `opacity-40` was **page-level** because `MyWeekPage.tsx:339` was its *only* occurrence in
+  `web/src`. Nothing else could be affected.
+- `text-muted/50` was **page-level** because 10 of its 12 occurrences are on other pages
+  (`PlanQualityBanner`, `DashboardVariantC` at `/dashboard`, `WorkspaceSettings`,
+  `AdminWorkspaceDetail`, `Programs`, `MergeProgramDialog`, `HypothesisBlockComponent`). They fail
+  too — 2.26:1 is a property of the token pair, not of this page — but they are outside A11Y-3 and
+  are filed as a follow-up rather than swept in silently.
+- `accent-text` was added at **token level** but applied only here. Adding a token cannot regress a
+  page that currently passes; mutating `accent` could, because `accent` is a fill under white text
+  in 80 places across 45 files. That mutation is a visual-identity decision, not a contrast fix.
+
+**The tradeoff, stated because it is visible.** Future standup rows are no longer ghosted. They now
+read as ordinary muted rows, distinguished by a dimmer border, the italic "Upcoming" label and the
+absent status dot. This was not avoidable by tuning the opacity value: `text-muted` only clears
+4.5:1 above roughly **86%** opacity, at which point nothing looks dimmed at all. Likewise the
+ordinals lost their extra-quiet tier — on `#0d0d0d`, AA bottoms out around `#7a7a7a`, a 16-step
+band below `muted`, so a perceptibly quieter *compliant* grey does not exist on this background.
+Contrast won, as the ticket directed.
+
+**Evidence.** Both ends measured on this branch, same conditions, not inherited from the audit:
+`http://localhost:5683`, Chrome for Testing headless, 1440×900, `--preset=desktop`,
+`--only-categories=accessibility`, authenticated as `dev@ship.local`, 523 seeded documents,
+`ship_wt_tro_217`. Flags identical to `audit/a11y/run-lighthouse.sh` and `audit/a11y/axe-scan.mjs`.
+
+| Measurement on `/my-week` | Before | After |
+|---|---|---|
+| Lighthouse accessibility | **95** | **100** |
+| Lighthouse failing audits | 1 (`color-contrast`, 18 items) | **0** |
+| axe `color-contrast` nodes | **18 Serious** | **0** |
+| axe all severities | C0 **S1** M0 m0 | C0 S0 M0 m0 |
+
+The audit baseline recorded 24 nodes and the ticket said 25; **18** is what the same page produced
+here. The gap is the weekday (four remaining future days instead of six), not a different defect —
+the per-node causes and ratios match the baseline artifact exactly.
+
+**Regression test.** `web/src/pages/MyWeekPage.contrast.test.tsx` resolves the effective foreground
+and background *colours* out of the rendered DOM and asserts the WCAG ratio, rather than asserting
+a class string — so it survives a markup refactor and fails if a palette hex drifts back under
+4.5:1. It renders four data states, because three of the page's pairs only exist under specific
+data; a single-state check would have declared the page fixed while the 4.38:1 badge sat behind a
+common plan state. `web/src/lib/contrast.test.ts` pins the resolver against numbers this project
+did not compute — the exact `fgColor`/`bgColor`/`contrastRatio` values axe recorded in
+`audit/a11y/axe/`.
+
+Confirmed red first on the unfixed page: 6 failures, every one an `AssertionError` on the ratio
+(21 of 39 pairs below 4.5:1 in the first state; named failures at 2.26:1, 1.85:1, 2.82:1, 4.38:1).
+No import or locator errors.
 
 **How to run it.**
 
@@ -142,6 +230,47 @@ attaches the listener.
 **Roll back.** `git rm api/src/collaboration/__tests__/concurrent-merge.test.ts
 e2e/concurrent-editing.spec.ts` and drop this entry. Nothing else on this branch touches product
 code.
+pnpm --filter @ship/web test        # 24 new tests; 13 known failures are TEST-1/TRO-223, unchanged
+pnpm --filter @ship/web type-check
+```
+
+To re-measure against a browser, start the worktree's API and Vite, log in for a fresh
+`session_id` (sessions expire in 15 minutes), then run Lighthouse and axe with the flags above.
+
+**Roll back.** `git revert` the commits on `fix/a11y-3-contrast`, or by hand: restore `opacity-40`
+on the future-row branch of `rowClass`, put back `text-muted/50` on the two ordinals,
+`text-accent` on the "Current" badge and today's day label, `text-muted` on the two "Unsubmitted"
+badges, and drop `accent-text` from the palette. The two new spec files fail if any of it comes
+back, which is the point.
+
+**Not established.** That a low-vision user can now read the page. Contrast ratios and axe output
+are measured; the user-facing benefit is *derived* from them, and no human with low vision has
+looked at this build. Also not established: that the repo's three Playwright a11y specs still pass
+— they are not run by the factory gate and were not run here. One of them,
+`e2e/accessibility-remediation.spec.ts:738` ("no color contrast violations on main pages"), runs
+axe right after login, which lands on `/my-week`; it was almost certainly failing before this
+change and should now pass, but that is a prediction, not a result.
+
+**Found and not fixed** (filed as follow-ups, all measured):
+
+1. `text-muted` on a `bg-border` fill is **4.38:1** and co-occurs in ~109 places in `web/src`.
+   Raising `muted` from `#8a8a8a` to `#929292` (4.86:1 on `#262626`, 6.25:1 on `#0d0d0d`) fixes the
+   whole class in one line and cannot lower contrast on any dark surface. Out of scope here because
+   it is an app-wide tone change driven by pairs outside this page.
+2. `text-accent` is **2.89:1** as small text on the page background wherever it renders — 80
+   occurrences in 45 files. Only the two on `/my-week` were observed failing by axe; the rest is
+   computed from the token, so treat the count as derived. `accent-text` now exists for them.
+3. `bg-surface` is used in three files including `MyWeekPage.tsx`, but `surface` is **not a palette
+   token**, so the class generates no CSS and those "cards" are painted with the page background.
+   Harmless today; it silently changes the contrast maths for anything inside them if `surface` is
+   ever defined.
+4. `getContrastTextColor` in `web/src/lib/cn.ts` carries a second copy of the WCAG luminance
+   formula now also in `web/src/lib/contrast.ts`. Collapsing them changes a shipped helper's
+   behaviour on malformed input, so it was left alone.
+5. `pnpm db:migrate` stopped after `010_oauth_state.sql` on a partially-migrated database and still
+   reported success, leaving 10 of 42 migrations applied — the swallowed `already exists` catch at
+   `api/src/db/migrate.ts:103-110`. This is **DB-1** reproducing; worked around by cloning a
+   fully-migrated database rather than by touching the runner.
 
 ---
 
