@@ -219,11 +219,12 @@ describe('Collaboration preload message buffer (TRO-284 / ERR-11)', () => {
     })
     openSockets.push(ws)
 
-    let closeCode: number | null = null
-    let closeReason = ''
-    ws.on('close', (code: number, reason: Buffer) => {
-      closeCode = code
-      closeReason = reason.toString()
+    // Awaited directly below rather than polled: the socket's own 'close'
+    // event is the observable this test actually cares about.
+    const closePromise = new Promise<{ code: number; reason: string }>((resolve) => {
+      ws.on('close', (code: number, reason: Buffer) => {
+        resolve({ code, reason: reason.toString() })
+      })
     })
 
     await new Promise<void>((resolve, reject) => {
@@ -241,18 +242,24 @@ describe('Collaboration preload message buffer (TRO-284 / ERR-11)', () => {
       ws.on('error', reject)
     })
 
-    const deadline = Date.now() + 15_000
-    while (Date.now() < deadline && closeCode === null) {
-      // Bounded poll on the socket's own 'close' handler having fired, not a
-      // fixed wait: exits the instant closeCode is set — same shape as
-      // waitForClose() in session-revocation.test.ts.
-      // review-pattern-ok: bounded poll, see comment above
-      await delay(100)
+    // A bounded ceiling on the wait itself, not a substitute for the event:
+    // if 'close' never fires this fails with a clear timeout marker rather
+    // than hanging for the test's own default timeout.
+    const timedOut = Symbol('preload-buffer-close-timeout')
+    const raced: { code: number; reason: string } | typeof timedOut = await Promise.race([
+      closePromise,
+      delay(15_000).then((): typeof timedOut => timedOut),
+    ])
+
+    if (raced === timedOut) {
+      throw new Error(
+        'socket should have been closed for exceeding the preload buffer bound — it was still open after 15s'
+      )
     }
 
     expect(
-      closeCode,
-      `socket should have been closed for exceeding the preload buffer bound; observed close reason: ${closeReason}`
+      raced.code,
+      `socket should have been closed for exceeding the preload buffer bound; observed close reason: ${raced.reason}`
     ).toBe(collab.WS_CLOSE_PRELOAD_BUFFER_FULL)
   }, 30_000)
 })

@@ -147,10 +147,23 @@ describe('Collaboration concurrent document load (TRO-285 / ERR-12)', () => {
       })
       openSockets.push(ws)
 
+      let settled = false
       const timer = setTimeout(() => {
+        settled = true
         reject(new Error(`timed out waiting for sync step 2 for doc ${docId}`))
       }, timeoutMs)
       timer.unref?.()
+
+      ws.on('close', (code: number, reason: Buffer) => {
+        // Reject immediately on an unexpected close instead of waiting out the
+        // full timeout — a closed socket can never deliver sync step 2, so
+        // there's no reason to wait, and the close code/reason is a much more
+        // actionable failure message than a bare timeout.
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        reject(new Error(`socket closed before sync step 2 arrived (code=${code}, reason=${reason.toString()})`))
+      })
 
       ws.on('message', (data: Buffer) => {
         const decoder = decoding.createDecoder(new Uint8Array(data))
@@ -163,6 +176,7 @@ describe('Collaboration concurrent document load (TRO-285 / ERR-12)', () => {
         try {
           syncType = syncProtocol.readSyncMessage(decoder, encoder, doc, REMOTE_ORIGIN)
         } catch (error) {
+          settled = true
           clearTimeout(timer)
           reject(error instanceof Error ? error : new Error(String(error)))
           return
@@ -171,11 +185,13 @@ describe('Collaboration concurrent document load (TRO-285 / ERR-12)', () => {
           ws.send(encoding.toUint8Array(encoder))
         }
         if (syncType === SYNC_STEP_2) {
+          settled = true
           clearTimeout(timer)
           resolve(doc.getXmlFragment('default').toString())
         }
       })
       ws.on('error', (err: Error) => {
+        settled = true
         clearTimeout(timer)
         reject(err)
       })

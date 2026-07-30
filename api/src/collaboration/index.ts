@@ -224,6 +224,15 @@ function schedulePersist(docName: string, doc: Y.Doc) {
 // Browser should clear its IndexedDB cache when connecting to these docs
 const freshFromJsonDocs = new Set<string>();
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/** Narrows the `documents.content` JSONB column to the shape jsonToYjs() expects. */
+function isTipTapDocContent(value: unknown): value is { type: 'doc'; content: unknown[] } {
+  return isRecord(value) && value.type === 'doc' && Array.isArray(value.content);
+}
+
 /**
  * Load one document's content from the database into a fresh Y.Doc.
  *
@@ -246,21 +255,13 @@ const freshFromJsonDocs = new Set<string>();
  *    try/catch and fall back to an empty document, matching this function's
  *    pre-ERR-12 behavior for corrupted data.
  */
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-/** Narrows the `documents.content` JSONB column to the shape jsonToYjs() expects. */
-function isTipTapDocContent(value: unknown): value is { type: 'doc'; content: unknown[] } {
-  return isRecord(value) && value.type === 'doc' && Array.isArray(value.content);
-}
 
 async function loadDoc(docName: string): Promise<Y.Doc> {
   const doc = new Y.Doc();
 
   // Set up persistence and broadcast on changes. Attached before the load below
   // — see the doc comment above for why the ordering matters.
-  doc.on('update', (update: Uint8Array, origin: any) => {
+  doc.on('update', (update: Uint8Array, origin: unknown) => {
     schedulePersist(docName, doc);
 
     // Broadcast update to all other clients in this room (except sender)
@@ -1189,6 +1190,24 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
       }
       return;
     }
+
+    // The load above is a real database round trip; the peer may have gone
+    // away during it — either it disconnected on its own, or the preload
+    // buffer overflow guard above already closed it (`ws.close()` only starts
+    // the closing handshake, so overflow can fire and this line can still be
+    // reached before the socket actually finishes closing). Either way,
+    // `ws.on('close')` already fired (or is about to, with nothing registered
+    // for it yet — the real handler is below), so treating this socket as
+    // live from here on would register a `conns` entry that never gets
+    // cleaned up, and would replay any buffered frames — from a socket we
+    // already decided not to trust — against a doc that broadcasts to other,
+    // genuinely live connections.
+    if (ws.readyState !== WebSocket.OPEN) {
+      preloadBuffer.length = 0;
+      ws.removeListener('message', bufferPreloadFrame);
+      return;
+    }
+
     const aw = getAwareness(docName, doc);
 
     // Track this connection with user info for visibility change handling
