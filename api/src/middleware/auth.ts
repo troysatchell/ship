@@ -17,6 +17,68 @@ declare global {
 }
 
 /**
+ * A request that has passed through {@link authMiddleware}: `userId` and
+ * `workspaceId` are guaranteed present, not optional.
+ *
+ * Both `sessions.workspace_id` (schema.sql) and `api_tokens.workspace_id`
+ * (migrations/014_api_tokens.sql) are `NOT NULL` columns, and `authMiddleware`
+ * always sets both fields together — the API-token branch at :118-119, the
+ * session-cookie branch at :285-286 — before calling `next()`. So every request
+ * that reaches a handler wrapped in {@link authed} already satisfies this shape;
+ * this type documents a runtime guarantee that already existed, it does not add one.
+ */
+export interface AuthenticatedRequest extends Request {
+  userId: string;
+  workspaceId: string;
+}
+
+type AuthedRouteHandler = (
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+) => void | Promise<void>;
+
+function isAuthenticatedRequest(req: Request): req is AuthenticatedRequest {
+  return typeof req.userId === 'string' && typeof req.workspaceId === 'string';
+}
+
+/**
+ * Wraps a route handler so `req.userId` / `req.workspaceId` are typed as required
+ * `string`s rather than `string | undefined` — this is what retires the non-null
+ * assertions on those two fields across the route files (TS-4 / TRO-209). Register
+ * it AFTER `authMiddleware` (directly, or via a `router.use(authMiddleware, …)`
+ * ahead of the route) — `authed()` does not authenticate the request itself, it
+ * only narrows the type of an already authenticated one.
+ *
+ * The `isAuthenticatedRequest` check is a type guard, not a new authorization
+ * decision: on every route in this codebase `authed()` sits downstream of
+ * `authMiddleware`, which always populates both fields before calling `next()` (see
+ * {@link AuthenticatedRequest}) — so the guard never rejects a real request today,
+ * and observable behavior for every currently-registered route is unchanged. It
+ * exists so a *future* route wired up without `authMiddleware` fails closed (401)
+ * instead of silently forwarding `undefined` into a query — the exact hole TS-4
+ * describes — where before this change it would instead type-check identically to
+ * an authenticated route and forward `undefined` at runtime.
+ */
+export function authed(
+  handler: AuthedRouteHandler
+): (req: Request, res: Response, next: NextFunction) => void | Promise<void> {
+  return (req, res, next) => {
+    if (!isAuthenticatedRequest(req)) {
+      res.status(HTTP_STATUS.UNAUTHORIZED).json({
+        success: false,
+        error: {
+          code: ERROR_CODES.UNAUTHORIZED,
+          message: 'Authentication required',
+        },
+      });
+      return;
+    }
+    return handler(req, res, next);
+  };
+}
+
+/**
  * How often an authenticated request is allowed to rewrite `sessions.last_activity`.
  *
  * The sliding-cookie refresh below has always been throttled at this interval

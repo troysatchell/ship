@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { pool } from '../db/client.js';
 import { z } from 'zod';
 import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visibility.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { DEFAULT_PROJECT_PROPERTIES, computeICEScore } from '@ship/shared';
 import { checkDocumentCompleteness } from '../utils/extractHypothesis.js';
 import { logDocumentChange, getLatestDocumentFieldHistory } from '../utils/document-crud.js';
@@ -458,13 +458,13 @@ async function generatePrefilledRetroContent(projectData: ProjectRetroSourceRow,
 const VALID_SORT_FIELDS = ['ice_score', 'impact', 'confidence', 'ease', 'title', 'updated_at', 'created_at'];
 
 // List projects (documents with document_type = 'project')
-router.get('/', authMiddleware, async (req: Request, res: Response) => {
+router.get('/', authMiddleware, authed(async (req, res) => {
   try {
     const includeArchived = req.query.archived === 'true';
     const sortField = (req.query.sort as string) || 'ice_score';
     const sortDir = (req.query.dir as string) === 'asc' ? 'ASC' : 'DESC';
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Validate sort field to prevent SQL injection
     if (!VALID_SORT_FIELDS.includes(sortField)) {
@@ -562,14 +562,14 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     console.error('List projects error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Get single project
-router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -659,7 +659,7 @@ router.get('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Get project error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Create project (creates a document with document_type = 'project')
 router.post('/', authMiddleware, async (req: Request, res: Response) => {
@@ -751,11 +751,11 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
 });
 
 // Update project
-router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = updateProjectSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1016,14 +1016,14 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Update project error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // Delete project
-router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
+router.delete('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -1058,14 +1058,14 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
     console.error('Delete project error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/projects/:id/retro - Returns pre-filled draft or existing retro
-router.get('/:id/retro', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/retro', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -1157,14 +1157,14 @@ router.get('/:id/retro', authMiddleware, async (req: Request, res: Response) => 
     console.error('Get project retro error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/projects/:id/retro - Creates finalized project retro
-router.post('/:id/retro', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/retro', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = projectRetroSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1256,7 +1256,7 @@ router.post('/:id/retro', authMiddleware, async (req: Request, res: Response) =>
     console.error('Create project retro error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============================================
 // Sprint Endpoints - Sprints under projects
@@ -1301,11 +1301,11 @@ function extractSprintFromRow(row: SprintRow) {
 }
 
 // GET /api/projects/:id/issues - List issues for a project
-router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/issues', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -1372,15 +1372,15 @@ router.get('/:id/issues', authMiddleware, async (req: Request, res: Response) =>
     console.error('Get project issues error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/projects/:id/weeks - List weeks (sprints) for a project
 // Note: "weeks" is the user-facing terminology, "sprints" is internal
-router.get('/:id/weeks', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/weeks', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -1432,14 +1432,14 @@ router.get('/:id/weeks', authMiddleware, async (req: Request, res: Response) => 
     console.error('Get project weeks error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // GET /api/projects/:id/sprints - List sprints for a project (deprecated, use /weeks)
-router.get('/:id/sprints', authMiddleware, async (req: Request, res: Response) => {
+router.get('/:id/sprints', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for filtering
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -1491,14 +1491,14 @@ router.get('/:id/sprints', authMiddleware, async (req: Request, res: Response) =
     console.error('Get project sprints error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/projects/:id/sprints - Create a sprint associated with a project
-router.post('/:id/sprints', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/sprints', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = createProjectSprintSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1667,14 +1667,14 @@ router.post('/:id/sprints', authMiddleware, async (req: Request, res: Response) 
     console.error('Create project sprint error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // PATCH /api/projects/:id/retro - Updates existing project retro
-router.patch('/:id/retro', authMiddleware, async (req: Request, res: Response) => {
+router.patch('/:id/retro', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = projectRetroSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -1791,14 +1791,14 @@ router.patch('/:id/retro', authMiddleware, async (req: Request, res: Response) =
     console.error('Update project retro error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/projects/:id/approve-plan - Approve project plan
-router.post('/:id/approve-plan', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/approve-plan', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for admin check
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -1855,14 +1855,14 @@ router.post('/:id/approve-plan', authMiddleware, async (req: Request, res: Respo
     console.error('Approve project plan error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/projects/:id/approve-retro - Approve project retro
-router.post('/:id/approve-retro', authMiddleware, async (req: Request, res: Response) => {
+router.post('/:id/approve-retro', authMiddleware, authed(async (req, res) => {
   try {
     const { id } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Get visibility context for admin check
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
@@ -1919,6 +1919,6 @@ router.post('/:id/approve-retro', authMiddleware, async (req: Request, res: Resp
     console.error('Approve project retro error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 export default router;

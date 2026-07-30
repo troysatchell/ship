@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db/client.js';
 import { z } from 'zod';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 
 type RouterType = ReturnType<typeof Router>;
 
@@ -16,10 +16,10 @@ const createCommentSchema = z.object({
 });
 
 // GET /api/documents/:id/comments
-documentCommentsRouter.get('/:id/comments', authMiddleware, async (req: Request, res: Response) => {
+documentCommentsRouter.get('/:id/comments', authMiddleware, authed(async (req, res) => {
   try {
     const { id: documentId } = req.params;
-    const workspaceId = req.workspaceId!;
+    const workspaceId = req.workspaceId;
 
     const result = await pool.query(
       `SELECT c.*, u.name as author_name, u.email as author_email
@@ -51,14 +51,14 @@ documentCommentsRouter.get('/:id/comments', authMiddleware, async (req: Request,
     console.error('List comments error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // POST /api/documents/:id/comments
-documentCommentsRouter.post('/:id/comments', authMiddleware, async (req: Request, res: Response) => {
+documentCommentsRouter.post('/:id/comments', authMiddleware, authed(async (req, res) => {
   try {
     const { id: documentId } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = createCommentSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -125,7 +125,7 @@ documentCommentsRouter.post('/:id/comments', authMiddleware, async (req: Request
     console.error('Create comment error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // ============== Comment-scoped routes (/api/comments/:id) ==============
 
@@ -137,11 +137,11 @@ const updateCommentSchema = z.object({
 });
 
 // PATCH /api/comments/:id
-commentsRouter.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
+commentsRouter.patch('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id: commentId } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const parsed = updateCommentSchema.safeParse(req.body);
     if (!parsed.success) {
@@ -221,14 +221,14 @@ commentsRouter.patch('/:id', authMiddleware, async (req: Request, res: Response)
     console.error('Update comment error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // DELETE /api/comments/:id
-commentsRouter.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
+commentsRouter.delete('/:id', authMiddleware, authed(async (req, res) => {
   try {
     const { id: commentId } = req.params;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     const result = await pool.query(
       'DELETE FROM comments WHERE id = $1 AND workspace_id = $2 AND author_id = $3 RETURNING id',
@@ -245,4 +245,4 @@ commentsRouter.delete('/:id', authMiddleware, async (req: Request, res: Response
     console.error('Delete comment error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));

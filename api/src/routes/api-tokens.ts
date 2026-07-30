@@ -3,7 +3,7 @@ import type { Router as RouterType } from 'express';
 import crypto from 'crypto';
 import { z } from 'zod';
 import { pool } from '../db/client.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { ERROR_CODES, HTTP_STATUS } from '@ship/shared';
 import { logAuditEvent } from '../services/audit.js';
 
@@ -29,7 +29,7 @@ const createTokenSchema = z.object({
 });
 
 // POST /api/api-tokens - Generate a new API token
-router.post('/', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/', authMiddleware, authed(async (req, res): Promise<void> => {
   const parseResult = createTokenSchema.safeParse(req.body);
 
   if (!parseResult.success) {
@@ -79,7 +79,7 @@ router.post('/', authMiddleware, async (req: Request, res: Response): Promise<vo
 
     await logAuditEvent({
       workspaceId: req.workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'api_token.created',
       resourceType: 'api_token',
       resourceId: result.rows[0].id,
@@ -110,7 +110,7 @@ router.post('/', authMiddleware, async (req: Request, res: Response): Promise<vo
       },
     });
   }
-});
+}));
 
 // GET /api/api-tokens - List user's API tokens (never returns the actual token)
 router.get('/', authMiddleware, async (req: Request, res: Response): Promise<void> => {
@@ -149,7 +149,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<voi
 });
 
 // DELETE /api/api-tokens/:id - Revoke an API token
-router.delete('/:id', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.delete('/:id', authMiddleware, authed(async (req, res): Promise<void> => {
   const id = String(req.params.id);
 
   try {
@@ -179,7 +179,7 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response): Promi
 
     await logAuditEvent({
       workspaceId: req.workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'api_token.revoked',
       resourceType: 'api_token',
       resourceId: id,
@@ -201,6 +201,6 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response): Promi
       },
     });
   }
-});
+}));
 
 export default router;

@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { pool } from '../db/client.js';
 import { z } from 'zod';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { isWorkspaceAdmin } from '../middleware/visibility.js';
 import { validateUuidParam, limitQuerySchema } from '../middleware/paramValidation.js';
 import { handleVisibilityChange, handleDocumentConversion, invalidateDocumentCache, broadcastToUser } from '../collaboration/index.js';
@@ -126,7 +126,7 @@ const updateDocumentSchema = z.object({
 });
 
 // List documents
-router.get('/', authMiddleware, async (req: Request, res: Response) => {
+router.get('/', authMiddleware, authed(async (req, res) => {
   try {
     // ERR-5 (`?type=bogus`) / ERR-8 (`?limit=-1`, `?limit=999999999`): validate
     // up front instead of letting a bogus type silently filter out every row
@@ -138,8 +138,8 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     }
     const { type, limit } = parsedQuery.data;
     const { parent_id } = req.query;
-    const userId = req.userId!;
-    const workspaceId = req.workspaceId!;
+    const userId = req.userId;
+    const workspaceId = req.workspaceId;
 
     // Check if user is admin (admins can see all documents)
     const isAdmin = await isWorkspaceAdmin(userId, workspaceId);
@@ -202,7 +202,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response) => {
     console.error('List documents error:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
-});
+}));
 
 // List converted documents (archived originals that were converted to another type)
 router.get('/converted/list', authMiddleware, async (req: Request, res: Response) => {
@@ -553,7 +553,7 @@ router.patch('/:id/content', authMiddleware, async (req: Request, res: Response)
 });
 
 // Create document
-router.post('/', authMiddleware, async (req: Request, res: Response) => {
+router.post('/', authMiddleware, authed(async (req, res) => {
   const client = await pool.connect();
   try {
     const parsed = createDocumentSchema.safeParse(req.body);
@@ -628,7 +628,7 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     // Sprint plans clear the "write sprint plan" action item
     // Documents with outcome property linked to sprints clear the "write retro" action item
     if (document_type === 'weekly_plan' || (properties && 'outcome' in properties)) {
-      broadcastToUser(req.userId!, 'accountability:updated', { documentId: newDoc.id, documentType: document_type });
+      broadcastToUser(req.userId, 'accountability:updated', { documentId: newDoc.id, documentType: document_type });
     }
 
     res.status(201).json(newDoc);
@@ -639,7 +639,7 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
   } finally {
     client.release();
   }
-});
+}));
 
 // Update document
 router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {

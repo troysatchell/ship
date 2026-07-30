@@ -3,7 +3,7 @@ import type { Router as RouterType } from 'express';
 import bcrypt from 'bcryptjs';
 import crypto from 'crypto';
 import { pool } from '../db/client.js';
-import { authMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed } from '../middleware/auth.js';
 import { ERROR_CODES, HTTP_STATUS, SESSION_TIMEOUT_MS, ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
 import { logAuditEvent } from '../services/audit.js';
 import { closeSocketsForSession } from '../collaboration/index.js';
@@ -229,11 +229,11 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 });
 
 // POST /api/auth/logout
-router.post('/logout', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/logout', authMiddleware, authed(async (req, res): Promise<void> => {
   try {
     await logAuditEvent({
       workspaceId: req.workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'auth.logout',
       req,
     });
@@ -267,7 +267,7 @@ router.post('/logout', authMiddleware, async (req: Request, res: Response): Prom
       },
     });
   }
-});
+}));
 
 // GET /api/auth/me
 router.get('/me', authMiddleware, async (req: Request, res: Response): Promise<void> => {
@@ -353,7 +353,7 @@ router.get('/me', authMiddleware, async (req: Request, res: Response): Promise<v
 });
 
 // POST /api/auth/extend-session - Explicitly extend session (called by "Stay Logged In" button)
-router.post('/extend-session', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/extend-session', authMiddleware, authed(async (req, res): Promise<void> => {
   try {
     const now = new Date();
     const expiresAt = new Date(now.getTime() + SESSION_TIMEOUT_MS);
@@ -366,7 +366,7 @@ router.post('/extend-session', authMiddleware, async (req: Request, res: Respons
 
     await logAuditEvent({
       workspaceId: req.workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'auth.extend_session',
       req,
     });
@@ -397,7 +397,7 @@ router.post('/extend-session', authMiddleware, async (req: Request, res: Respons
       },
     });
   }
-});
+}));
 
 // GET /api/auth/session - Get session info for timeout tracking
 router.get('/session', authMiddleware, async (req: Request, res: Response): Promise<void> => {

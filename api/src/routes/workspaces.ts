@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import type { Router as RouterType } from 'express';
 import { pool } from '../db/client.js';
-import { authMiddleware, workspaceAdminMiddleware } from '../middleware/auth.js';
+import { authMiddleware, authed, workspaceAdminMiddleware } from '../middleware/auth.js';
 import { ERROR_CODES, HTTP_STATUS } from '@ship/shared';
 import { logAuditEvent } from '../services/audit.js';
 
@@ -141,7 +141,7 @@ router.get('/current', authMiddleware, async (req: Request, res: Response): Prom
 });
 
 // POST /api/workspaces/:id/switch - Switch to a workspace
-router.post('/:id/switch', authMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/:id/switch', authMiddleware, authed(async (req, res): Promise<void> => {
   const workspaceId = String(req.params.id);
 
   try {
@@ -211,7 +211,7 @@ router.post('/:id/switch', authMiddleware, async (req: Request, res: Response): 
 
     await logAuditEvent({
       workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'workspace.switch',
       resourceType: 'workspace',
       resourceId: workspaceId,
@@ -232,7 +232,7 @@ router.post('/:id/switch', authMiddleware, async (req: Request, res: Response): 
       },
     });
   }
-});
+}));
 
 // GET /api/workspaces/:id/members - List workspace members (admin only)
 router.get('/:id/members', authMiddleware, workspaceAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
@@ -322,7 +322,7 @@ router.get('/:id/members', authMiddleware, workspaceAdminMiddleware, async (req:
 });
 
 // POST /api/workspaces/:id/members - Add member to workspace (admin only)
-router.post('/:id/members', authMiddleware, workspaceAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/:id/members', authMiddleware, workspaceAdminMiddleware, authed(async (req, res): Promise<void> => {
   const workspaceId = String(req.params.id);
   const { userId, role = 'member' } = req.body;
 
@@ -386,7 +386,7 @@ router.post('/:id/members', authMiddleware, workspaceAdminMiddleware, async (req
 
     await logAuditEvent({
       workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'membership.create',
       resourceType: 'user',
       resourceId: userId,
@@ -418,10 +418,10 @@ router.post('/:id/members', authMiddleware, workspaceAdminMiddleware, async (req
       },
     });
   }
-});
+}));
 
 // PATCH /api/workspaces/:id/members/:userId - Update member role (admin only)
-router.patch('/:id/members/:userId', authMiddleware, workspaceAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.patch('/:id/members/:userId', authMiddleware, workspaceAdminMiddleware, authed(async (req, res): Promise<void> => {
   const workspaceId = String(req.params.id);
   const userId = String(req.params.userId);
   const { role } = req.body;
@@ -487,7 +487,7 @@ router.patch('/:id/members/:userId', authMiddleware, workspaceAdminMiddleware, a
 
     await logAuditEvent({
       workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'membership.update',
       resourceType: 'user',
       resourceId: userId,
@@ -509,10 +509,10 @@ router.patch('/:id/members/:userId', authMiddleware, workspaceAdminMiddleware, a
       },
     });
   }
-});
+}));
 
 // DELETE /api/workspaces/:id/members/:userId - Remove member (admin only)
-router.delete('/:id/members/:userId', authMiddleware, workspaceAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.delete('/:id/members/:userId', authMiddleware, workspaceAdminMiddleware, authed(async (req, res): Promise<void> => {
   const workspaceId = String(req.params.id);
   const userId = String(req.params.userId);
 
@@ -588,7 +588,7 @@ router.delete('/:id/members/:userId', authMiddleware, workspaceAdminMiddleware, 
 
     await logAuditEvent({
       workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'membership.delete',
       resourceType: 'user',
       resourceId: userId,
@@ -606,10 +606,10 @@ router.delete('/:id/members/:userId', authMiddleware, workspaceAdminMiddleware, 
       },
     });
   }
-});
+}));
 
 // POST /api/workspaces/:id/members/:userId/restore - Restore archived member (admin only)
-router.post('/:id/members/:userId/restore', authMiddleware, workspaceAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/:id/members/:userId/restore', authMiddleware, workspaceAdminMiddleware, authed(async (req, res): Promise<void> => {
   const workspaceId = String(req.params.id);
   const userId = String(req.params.userId);
 
@@ -670,7 +670,7 @@ router.post('/:id/members/:userId/restore', authMiddleware, workspaceAdminMiddle
 
     await logAuditEvent({
       workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'membership.restore',
       resourceType: 'user',
       resourceId: userId,
@@ -688,7 +688,7 @@ router.post('/:id/members/:userId/restore', authMiddleware, workspaceAdminMiddle
       },
     });
   }
-});
+}));
 
 // GET /api/workspaces/:id/invites - List pending invites (admin only)
 router.get('/:id/invites', authMiddleware, workspaceAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
@@ -734,7 +734,7 @@ router.get('/:id/invites', authMiddleware, workspaceAdminMiddleware, async (req:
 // POST /api/workspaces/:id/invites - Create invite (admin only)
 // Email is always required (it's the login identifier)
 // x509SubjectDn is optional - for PIV certificate matching when cert doesn't contain email
-router.post('/:id/invites', authMiddleware, workspaceAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.post('/:id/invites', authMiddleware, workspaceAdminMiddleware, authed(async (req, res): Promise<void> => {
   const workspaceId = String(req.params.id);
   const { email, x509SubjectDn, role = 'member' } = req.body;
 
@@ -858,7 +858,7 @@ router.post('/:id/invites', authMiddleware, workspaceAdminMiddleware, async (req
 
       await logAuditEvent({
         workspaceId,
-        actorUserId: req.userId!,
+        actorUserId: req.userId,
         action: 'member.add',
         resourceType: 'user',
         resourceId: existingUser.id,
@@ -930,7 +930,7 @@ router.post('/:id/invites', authMiddleware, workspaceAdminMiddleware, async (req
 
     await logAuditEvent({
       workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'invite.create',
       resourceType: 'invite',
       resourceId: result.rows[0].id,
@@ -962,10 +962,10 @@ router.post('/:id/invites', authMiddleware, workspaceAdminMiddleware, async (req
       },
     });
   }
-});
+}));
 
 // DELETE /api/workspaces/:id/invites/:inviteId - Revoke invite (admin only)
-router.delete('/:id/invites/:inviteId', authMiddleware, workspaceAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
+router.delete('/:id/invites/:inviteId', authMiddleware, workspaceAdminMiddleware, authed(async (req, res): Promise<void> => {
   const workspaceId = String(req.params.id);
   const inviteId = String(req.params.inviteId);
 
@@ -997,7 +997,7 @@ router.delete('/:id/invites/:inviteId', authMiddleware, workspaceAdminMiddleware
 
     await logAuditEvent({
       workspaceId,
-      actorUserId: req.userId!,
+      actorUserId: req.userId,
       action: 'invite.delete',
       resourceType: 'invite',
       resourceId: inviteId,
@@ -1015,7 +1015,7 @@ router.delete('/:id/invites/:inviteId', authMiddleware, workspaceAdminMiddleware
       },
     });
   }
-});
+}));
 
 // GET /api/workspaces/:id/audit-logs - Get workspace audit logs (admin only)
 router.get('/:id/audit-logs', authMiddleware, workspaceAdminMiddleware, async (req: Request, res: Response): Promise<void> => {
