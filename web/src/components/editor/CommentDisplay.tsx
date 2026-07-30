@@ -188,11 +188,19 @@ export const CommentDisplayExtension = Extension.create<Record<string, never>, C
       new Plugin({
         key: commentDisplayPluginKey,
         view() {
+          // A single real "click away" fires both a capture-phase mousedown
+          // and (as its native consequence) a focusout on the pending input —
+          // `storage.pendingCommentId` is reset to null via a React state
+          // round-trip, not synchronously, so both handlers can still see it
+          // truthy for the same dismissal. Track the id already abandoned so
+          // `onCancelComment` fires exactly once per pending comment.
+          let abandonedPendingId: string | null = null;
+
           const abandonPending = () => {
             const pendingId = storage.pendingCommentId;
-            if (pendingId) {
-              storage.onCancelComment?.(pendingId);
-            }
+            if (!pendingId || pendingId === abandonedPendingId) return;
+            abandonedPendingId = pendingId;
+            storage.onCancelComment?.(pendingId);
           };
 
           const handleKeyDown = (event: KeyboardEvent) => {

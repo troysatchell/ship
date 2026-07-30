@@ -155,10 +155,17 @@ test.describe('Inline Comments', () => {
     // The document must not still be carrying the mark once dismissed —
     // reload and confirm it does not come back (this is exactly what
     // probe8-comment-orphan-blur.json found broken: the mark survived reload
-    // with 0 backing comment rows).
+    // with 0 backing comment rows). Wait for the actual persisted text to
+    // reappear (not just the editor shell) before asserting the highlight is
+    // gone — otherwise the assertion could pass vacuously while content is
+    // still loading. A count of 0 (not `not.toBeVisible`) confirms the mark
+    // doesn't exist in the DOM at all, not merely that it's hidden.
     await page.reload()
-    await expect(page.locator('.ProseMirror')).toBeVisible({ timeout: 5000 })
-    await expect(page.locator('.comment-highlight')).not.toBeVisible({ timeout: 5000 })
+    await expect(page.locator('.ProseMirror')).toContainText(
+      'This text will have a comment dismissed by clicking away.',
+      { timeout: 5000 }
+    )
+    await expect(page.locator('.comment-highlight')).toHaveCount(0, { timeout: 5000 })
   })
 
   test('inline comment card shows quoted text, author, and timestamp', async ({ page }) => {

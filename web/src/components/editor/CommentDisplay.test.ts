@@ -134,13 +134,39 @@ describe('CommentDisplay pending-comment lifecycle (TRO-193 / TRO-227)', () => {
     expect(hasCommentMark(editor)).toBe(true);
     expect(ext.storage.pendingCommentId).not.toBeNull();
 
-    // "Clicking away": a mousedown target that is not the pending widget.
-    // Deliberately NOT dispatched on the pending input, and not preceded by
-    // any focus() call — this reproduces "dismissed by blur" without relying
-    // on a blur event ever having fired.
-    const elsewhere = document.createElement('button');
+    // "Clicking away": a mousedown target that is not the pending widget, and
+    // not itself interactive (a plain page element, not a control) — this
+    // reproduces "dismissed by blur" without relying on a blur event ever
+    // having fired, and without depending on any focus() call having happened.
+    const elsewhere = document.createElement('div');
     document.body.appendChild(elsewhere);
     elsewhere.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+
+    expect(hasCommentMark(editor)).toBe(false);
+    expect(ext.storage.pendingCommentId).toBeNull();
+  });
+
+  it('unsets the mark when the pending input itself loses focus to something outside the widget (blur)', () => {
+    const { editor, ext } = setupEditor();
+    mount(editor);
+
+    selectAllText(editor);
+    editor.commands.addComment();
+    editor.view.updateState(editor.view.state);
+
+    const pendingInput = editor.view.dom.querySelector('.comment-pending-field');
+    expect(pendingInput).toBeTruthy();
+
+    const outside = document.createElement('div');
+    document.body.appendChild(outside);
+
+    // A genuine focusout on the pending input, moving focus to an element
+    // outside the widget — this exercises the focusout listener directly
+    // (mousedown alone does not prove focusout's own guard is correct: it
+    // must fire for the *input* losing focus, not any editor descendant).
+    pendingInput?.dispatchEvent(
+      new FocusEvent('focusout', { bubbles: true, relatedTarget: outside })
+    );
 
     expect(hasCommentMark(editor)).toBe(false);
     expect(ext.storage.pendingCommentId).toBeNull();
