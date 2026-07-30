@@ -74,11 +74,14 @@ jobs:
       - name: Type check
         run: pnpm type-check
 
-      # NOTE: `pnpm lint` is deliberately NOT run here. Audit finding TS-6
-      # (TRO-211) established that no ESLint config exists anywhere in the repo,
-      # so the script exits 0 having checked nothing. Adding it would make CI
-      # report a passing quality gate that does not exist. Wire it in when
-      # TRO-211 lands.
+      # TRO-211 (TS-6): `pnpm lint` now runs a real flat ESLint config
+      # (`eslint.config.mjs`) over `api/src`, `web/src`, `shared/src` instead of
+      # silently matching zero package scripts. Error-level rules today are
+      # `eqeqeq`, `no-fallthrough`, and the two type-aware promise-correctness
+      # rules are WARN (not error) pending a dedicated burn-down — see
+      # eslint.config.mjs and CHANGES.md for the counts and rationale.
+      - name: Lint
+        run: pnpm lint
 
       - name: Build all packages
         run: pnpm build
