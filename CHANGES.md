@@ -616,6 +616,106 @@ it.
 
 ---
 
+## TRO-179 (DB-2) + TRO-177 (API-6) — authenticated reads stop rewriting the session row once per request
+
+One statement, measured from two sides. `authMiddleware` ran
+`UPDATE sessions SET last_activity = $1 WHERE id = $2` **unconditionally on every authenticated
+request** (`api/src/middleware/auth.ts:205-208` on `main`), so a page that only *reads* still
+produced one row-locking, WAL-generating write per request — and a single page load fires 5-13 of
+them, all against the same row.
+
+- **TRO-179 / DB-2 (SQL side):** three statements ran before any application data — a session+user
+  SELECT, a workspace-membership SELECT, and the write. That was 16 of 17 queries on "List issues"
+  and 34 of 51 on "Load sprint board". The write ran 121 times during capture and was the slowest
+  statement in five of six flows (peak 4.764 ms) against an isolated EXPLAIN of 0.178 ms.
+- **TRO-177 / API-6 (HTTP side):** `GET /api/documents/:id` returned ~2.2 KB from one indexed PK
+  lookup yet cost P50 2.6 ms / P95 4.8 ms at c=10.
+
+**What changed.** The fix was already written three lines below the bug: the sliding-cookie refresh
+had always been throttled to once per 60s ("throttled to avoid overhead"); the same threshold was
+simply never applied to the database write. Both halves of the sliding expiration now share one
+throttle (`SESSION_ACTIVITY_UPDATE_THRESHOLD_MS`, 60s).
+
+**Precisely what the throttle does and does not do.** Reads *within* the 60s window issue no write
+at all. The first read *after* the window still refreshes `last_activity` — the sliding expiration is
+intact, so a session in continuous use never expires. What is gone is the one-write-per-request
+pattern, not the write.
+
+**The throttle is enforced twice, and both placements are load-bearing.** The application-side check
+uses the value the request already SELECTed, so when it says "not due" no statement is sent — that is
+what removes the query from the hot path. But that value can already be stale: a page load fires 5-13
+requests in parallel, and when the burst straddles the threshold they all read the same pre-write
+`last_activity` and all conclude the write is due. So the predicate is repeated in SQL —
+`UPDATE ... WHERE id = $2 AND last_activity < $3` — and Postgres arbitrates: under READ COMMITTED the
+losers re-evaluate the qualification against the committed row version, fail it, and affect zero
+rows. Measured below: without the SQL predicate a 10-request burst produced **10** row versions;
+with it, **1**. Dropping either placement re-opens half the finding.
+
+The expiry invariant survives the conditional write. A no-op leaves the row at its previous value,
+and the UPDATE no-ops *only* when `last_activity >= now - threshold` failed the predicate — which is
+exactly the bound the grace below assumes. In all three cases (application check skipped, write
+applied, write no-opped) the stored `last_activity` is `>= requestTime - threshold`, so the lag is
+still capped at one threshold. The conditional form is in fact strictly stronger: the unconditional
+version could move `last_activity` *backwards* when two concurrent requests wrote timestamps captured
+microseconds apart.
+
+**Session expiry semantics — read this before changing the threshold.** Throttling the write means
+the recorded `last_activity` trails real request activity by up to 60s. Comparing a lagging value
+against a bare `SESSION_TIMEOUT_MS` would end sessions *early* — a user idle 14:01 could be logged
+out of a 15-minute window. That is the unsafe direction, for two reasons:
+
+1. The web client runs its own 15-minute idle timer off real user interaction
+   (`web/src/hooks/useSessionTimeout.ts:295-305`) and does not heartbeat the server. A server window
+   that can close before 15 minutes produces an unexplained 401 while the client still believes it
+   is logged in.
+2. The collaboration server reads `last_activity` on a 30s sweep and deliberately never refreshes it
+   (see TRO-189 below). A tighter bound there would tear down the socket of a user whose REST
+   requests are still being served — and the socket is where unsaved editor state lives.
+
+So the enforced inactivity window is `SESSION_INACTIVITY_LIMIT_MS = SESSION_TIMEOUT_MS +
+SESSION_ACTIVITY_UPDATE_THRESHOLD_MS` (16 min), applied identically by the REST middleware, the
+refreshed cookie's `maxAge`, and the collaboration server's `isSessionRowValid()`. **True idle
+logout now lands in [15:00, 16:00] instead of [14:00, 15:00]** — the rounding error extends a
+session rather than ending one. The 12-hour absolute cap (`ABSOLUTE_SESSION_TIMEOUT_MS`) is
+untouched, and 16 minutes remains well inside NIST SP 800-63B AAL2's 30-minute inactivity guidance.
+
+**Measured** — `GET /api/documents/:id`, 12 sequential authenticated reads inside the throttle
+window, `NODE_ENV=test`, vitest + supertest, concurrency 1, worktree PostgreSQL 15:
+
+| | statements | per request | `last_activity` writes | auth share |
+|---|---|---|---|---|
+| before (`main`) | 60 | 5.00 | 12 | 60% |
+| after | 48 | 4.00 | **0** | 50% |
+
+20% fewer statements per read; the session-row write is gone from the hot path entirely. This is a
+query-**count** measurement — the audit's c=10/c=50 latency numbers need a running server and a load
+generator, and were not reproduced here.
+
+**Measured, concurrent** — 10 parallel authenticated requests on one session parked 61s back, so the
+whole burst straddles the threshold. Same conditions, plus a pre-warmed connection pool (a cold pool
+serializes the burst and hides the effect entirely):
+
+| | UPDATE statements | row versions written |
+|---|---|---|
+| application-side gate only | 10 | 10 |
+| gate + SQL predicate | 10 | **1** |
+
+The statement count is identical — all ten requests read the same stale row and all ten ask — but
+only one row version, and therefore one row lock and one WAL record, results. Row-lock and WAL
+contention on this single shared row is what the audit measured as the 0.178 ms → 4.764 ms gap.
+
+**Files:** `api/src/middleware/auth.ts` (throttle + the two window constants),
+`api/src/collaboration/index.ts` (mirrors the window).
+**Tests:** `api/src/middleware/__tests__/session-activity-throttle.test.ts` (write skipped inside the
+window, written after it, the SQL predicate's shape, and both expiry boundaries),
+`api/src/middleware/__tests__/session-activity-race.test.ts` (one row version under a concurrent
+burst), `api/src/routes/documents-query-count.test.ts` (statements per authenticated read).
+
+**Rollback:** revert the commits on `fix/db-2-api-6-session-write`. No migration, no schema change,
+no data change — sessions written under either version are interpreted correctly by the other.
+
+---
+
 ## TRO-215 — [A11Y-1] Navigation sidebars claimed `role="tree"` without a tree keyboard model
 
 **What was broken.** `web/src/pages/App.tsx:637` declared
