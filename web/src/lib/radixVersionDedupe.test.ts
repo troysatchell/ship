@@ -46,11 +46,15 @@ const lockfile = readFileSync(resolve(here, '../../../pnpm-lock.yaml'), 'utf8');
 function resolvedVersionsFor(packageName: string): string[] {
   const escaped = packageName.replace(/[/]/g, '\\/');
   const pattern = new RegExp(`^ {2}'${escaped}@([^'(]+)':$`, 'gm');
-  return [...lockfile.matchAll(pattern)].map((m) => m[1]);
+  return [...lockfile.matchAll(pattern)].flatMap((m) => (m[1] === undefined ? [] : [m[1]]));
 }
 
 const radixPackagesInLockfile = [
-  ...new Set([...lockfile.matchAll(/^ {2}'(@radix-ui\/[a-z-]+)@[^'(]+':$/gm)].map((m) => m[1])),
+  ...new Set(
+    [...lockfile.matchAll(/^ {2}'(@radix-ui\/[a-z-]+)@[^'(]+':$/gm)].flatMap((m) =>
+      m[1] === undefined ? [] : [m[1]]
+    )
+  ),
 ];
 
 describe('Radix dependency dedupe (TRO-204 / BUN-8)', () => {
