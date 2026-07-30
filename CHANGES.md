@@ -913,6 +913,309 @@ not pass through CloudFront at all.
 
 ---
 
+## TRO-224 — [TEST-2] 68 e2e tests could pass without executing a single assertion
+
+**What was broken.** A brace-scan of 866 static test blocks found **3 tests with no `expect()` at
+all** and **65 whose every `expect()` sat inside a conditional** — 7.9% of the suite reporting
+success while observing nothing (`audit/test-quality/runs/e2e-vacuous-tests.txt`). Two of them were
+the only automated coverage of a security control:
+
+- `security.spec.ts:217` *XSS via data: URI in links* typed `[Click](data:text/html,…)` into a new
+  document, then looped over `editor.locator('a')` asserting only inside
+  `if (href?.startsWith('data:'))`. **TipTap ships no markdown-link input rule**, so the typed text
+  stayed literal, zero `<a>` elements existed, and the loop body never ran. Its sibling *XSS via
+  markdown link injection* (`:197`) had the same hole without the `if`. Neither could tell "the app
+  sanitised the URI" from "the app rendered nothing" — and the truth was the latter, for the whole
+  life of both tests.
+- `authorization.spec.ts:299` *workspace member cannot view workspace audit logs* buried
+  `expect(response.status()).toBe(403)` inside `if (wsResponse.status() === 200)` inside
+  `if (workspaceId)`. Any hiccup fetching `/api/workspaces/current` skipped the entire authorization
+  check silently.
+
+The guards had been added to stop tests failing on missing seed data — the same failure mode
+`.claude/CLAUDE.md` already forbids for `test.skip()`. The rule was written for `test.skip()` and
+never extended to `if`, so the practice migrated instead of stopping.
+
+**What changed.** Nine vacuous tests rewritten, three new tests added, and — because
+`gate.sh` runs neither vitest project over `e2e/` — the two security properties were **also** pinned
+in tiers the gate executes.
+
+*Security, non-negotiable (both proven red-first — see Evidence):*
+
+- `web/src/components/editor/linkOptions.ts` **(new)** — the app's link-href policy, named and
+  exported: `protocols: []` plus an explicit `isAllowedUri` that denies
+  `javascript`/`data`/`vbscript`/`file`/`blob` after `defaultValidate`. Behaviourally a **no-op
+  today**: `@tiptap/extension-link` 2.27.2 already rejects all five in its default `isAllowedUri`
+  and strips the `href` during `renderHTML`. The point is that the protection was *inherited
+  silently* — adding a scheme to `protocols`, or overriding `isAllowedUri`, would have removed it
+  with no test failing anywhere. Wired into `web/src/components/Editor.tsx:588` and all three
+  `Link.configure` calls in `web/src/components/StandupFeed.tsx`.
+- `web/src/components/editor/linkOptions.test.ts` **(new, 27 cases, runs in the gate)** — content
+  loaded as TipTap **JSON**, which is the stored-XSS path (`Mark.fromJSON` does not run
+  `parseHTML`'s href guard). Asserts a benign `https` href survives *and* that
+  `javascript:` / `data:text/html` / `data:image/svg+xml` do not, plus scheme-obfuscation cases
+  (`jav\tascript:`, `java\nscript:`, `j a v a s c r i p t:`).
+- `api/src/routes/workspaces.test.ts` — three cases added beside the existing member→403 check: the
+  403 body must not carry `"logs"`, an unauthenticated request is refused, and a member is refused
+  the audit log of a workspace they are not a member of.
+- `e2e/security.spec.ts` — the two link tests are replaced by *stored dangerous link hrefs are not
+  rendered live*, which opens a seeded document whose `content` already holds link marks with
+  dangerous hrefs and asserts unconditionally; plus *markdown link syntax does not create a link at
+  all*, which pins the fact the old tests were unknowingly relying on, so that adding a
+  markdown-link input rule later fails loudly instead of silently re-opening the vector.
+- `e2e/authorization.spec.ts` — every precondition is its own assertion with an actionable message,
+  so a setup failure now fails *as a setup failure*; plus a companion test for a foreign workspace's
+  audit log.
+
+*The rest, working outward from security:*
+
+| file | test | was |
+|---|---|---|
+| `e2e/file-attachments.spec.ts:161` | should validate file type | **0 `expect()`** — uploaded a `.exe`, slept 1 s, listed three acceptable outcomes in a comment. Now asserts the blocked-file dialog fired, that **no request reached `/api/files`** (the bytes never leave the browser), and that no attachment node was inserted. |
+| `e2e/file-attachments.spec.ts:422` | should block dangerous executable files (.exe) | assertions lived *inside* `page.on('dialog')`, so they never ran if the dialog never fired. Messages are collected and asserted outside the handler. |
+| `e2e/check-aria.spec.ts` | check aria-expanded elements | **0 `expect()`** — a diagnostic script with 19 `console.log`s and `return`-on-missing-data. Now asserts the A11Y-1 contract: `aria-expanded` sits on a real `<button>`, is named, and (new second test) tracks the children and survives navigating into one. |
+| `e2e/accessibility-remediation.spec.ts:1398` | code blocks have language indication | **0 `expect()`** — ran on `/docs`, which renders no code block, and discarded the computed result. Now opens a seeded document with one code block and asserts count **and** language. |
+| `e2e/admin-workspace-members.spec.ts:87` | can change member role | whole body inside `if (await roleSelect.isVisible())`. Now asserts the seeded member row exists, and reloads to prove the PATCH reached the server rather than only moving a local `<select>`. |
+
+**Fixture work, never a conditional skip.** `e2e/fixtures/isolated-env.ts` gains
+`seedRenderingFixtures()`: a *Link Sanitization Fixture* document (one benign control href + three
+dangerous ones stored as link marks) and a *Code Block Fixture* document (one code block with
+`language: 'javascript'`). Both are seeded at `position` 90/91 so they sort last and never become
+the document `/docs` auto-opens. Titles and hrefs are exported as constants so a rename cannot
+orphan a spec. `e2e/fixtures/test-helpers.ts` gains `openFixtureDocument(page, title)`, which
+resolves the id through `GET /api/documents` and asserts the fixture exists with an actionable
+message.
+
+**The positive control is the mechanism.** Every rewritten test that inspects rendered elements now
+asserts *first* that the thing it will inspect is present. Without that, "the page rendered nothing"
+is indistinguishable from "the check passed", which is exactly what 68 tests were doing.
+
+**Evidence.** Red-before-green, both security properties, under `pnpm --filter @ship/{web,api} exec
+vitest run <file>` against the branch's own worktree database
+(`postgresql://…@localhost:5433/ship_wt_tro_224`):
+
+| deliberate break | result |
+|---|---|
+| `linkOptions.ts` → `isAllowedUri: () => true` + `protocols: ['javascript','data']` | **4 failed / 23 passed.** `AssertionError: javascript: must not survive into a rendered href`, same for `data:text/html` and `data:image/svg+xml`, plus `"javascript" must never be an allowed link protocol`. The benign-control case stayed **green**, which is what shows the failure is the vulnerability and not a broken test. |
+| `workspaces.ts:1021` → `workspaceAdminMiddleware` removed from `GET /:id/audit-logs` | **3 failed / 25 passed**, each `expected 200 to be 403`. Includes the foreign-workspace case, i.e. without the middleware the handler itself does no scoping. |
+| both reverted | 27/27 and 28/28 pass. |
+
+**Gate result, and how it got there.** Before this branch merged `main`, `scripts/factory/gate.sh`
+reported `tests:not-weakened FAIL — 6 removed test/assertion line(s)`. That check counted removed
+`expect(` lines with no comparison to added ones, so it could not distinguish deleting an assertion
+from *replacing a vacuous one*. All six removed lines were the vacuous assertions this ticket exists
+to delete:
+
+```
+e2e/authorization.spec.ts    expect(response.status()).toBe(403)        # was inside two nested ifs
+e2e/file-attachments.spec.ts expect(dialog.message()).toContain('.exe')      # was inside page.on('dialog')
+e2e/file-attachments.spec.ts expect(dialog.message()).toContain('blocked')   # was inside page.on('dialog')
+e2e/security.spec.ts         expect(href).not.toContain('javascript:')       # was inside a loop over 0 elements
+e2e/security.spec.ts         expect(href).not.toContain('text/html')         # was inside `if (href?.startsWith('data:'))`
+e2e/security.spec.ts         expect(href).not.toContain('<script')           # was inside `if (href?.startsWith('data:'))`
+```
+
+Each is replaced by a stronger unconditional assertion in the same test; `regression-test` reports 13
+added cases. After merging `main` (`86b5231`), `gate.sh`'s G5 had independently been changed to a net
+comparison of removed vs. added test lines — motivated by this exact false-positive class on other
+tickets (TRO-223, TRO-179) — and now reports `tests:not-weakened PASS — -6 / +51 test line(s) — net
+gain, reviewer should confirm the removals are corrections`. No edit to `gate.sh` was made on this
+branch; the fix landed on `main` independently and this entry is corrected to match the gate this PR
+actually merges against. Every other gate is green, including `review-patterns` (G7b, also new from
+`main`) and both vitest projects.
+
+Three separate gate runs have each failed `tests:api` on a *different* untouched test
+(`backlinks.test.ts`, `rate-limit.test.ts`, then `weeks.test.ts`'s "should reject review approval
+without rating"); all three pass standalone and the full api suite is 472/472 each time — that is
+TRO-277's load-sensitive flake (documented to appear under CPU load, right after `type-check` +
+`build`), not this branch.
+
+**Attempted, then reverted — and it found two bugs.** `e2e/ai-analysis-api.spec.ts:209`
+*"POST /api/ai/analyze-plan returns 429 after 10 rapid requests"* guards its assertions with
+`if (!allSucceeded)`, so the single outcome it exists to catch — the limiter doing nothing — is the
+one outcome it excuses. Making the assertion unconditional produced, **observed**,
+`Got: 200, 200, 200, 200, 200, 200, 200, 200, 200, 200, 200` — eleven admissions, no `429`. Two
+findings fall out, neither of them a test bug:
+
+1. **The test's premise is false.** `api/src/services/ai-analysis.ts:39` sets `RATE_LIMIT = 120`
+   per hour, not 10. Eleven requests cannot trip it, and never could.
+2. **The user is told the wrong number.** `api/src/routes/ai.ts:34` returns *"Rate limit exceeded.
+   Max 10 analysis requests per hour."* while 120 is enforced. Whoever hits the ceiling is given a
+   figure off by 12×.
+
+The file is reverted to its original state. Asserting truthfully would need 121 requests — 120 of
+which each attempt a Bedrock call and would likely blow the 60 s test timeout — or making the limit
+injectable, which is a production change to enable a test. Neither belongs in a test-integrity
+ticket. The 10-vs-120 inconsistency needs its own ticket; the vacuous guard stays on the TEST-2 list
+until it does.
+
+**Not done, deliberately.** 60 of the 68 remain. `program-mode-week-ux.spec.ts` alone holds 33
+(sprint-filter and quick-menu UX, no security content); `accessibility-remediation.spec.ts` has 6
+more, `context-menus.spec.ts` 6, `features-real.spec.ts` 5, `performance.spec.ts` 2, and
+`ai-analysis-api.spec.ts` keeps 1 (see above), and
+`admin-workspace-members.spec.ts` keeps 2 (`selecting user from search…`, `can add existing user…`)
+which are guarded on a **"test space" workspace and a "carol" user that the isolated fixture does
+not create** — converting those guards needs a second seeded workspace and more users, which risks
+the workspace-switcher and admin-dashboard specs and belongs in its own ticket. See TRO-225's entry
+for the retries decision.
+
+**How to run it.**
+
+```bash
+source .factory-env                       # api tests TRUNCATE 16 tables; use the worktree database
+
+# The tiers the factory gate actually executes
+pnpm --filter @ship/web exec vitest run src/components/editor/linkOptions.test.ts   # 27 pass
+pnpm --filter @ship/api exec vitest run src/routes/workspaces.test.ts               # 28 pass
+
+# The e2e specs, targeted. Never the whole suite: 600+ tests, per-worker containers.
+pnpm exec playwright test e2e/security.spec.ts       --workers=1 --retries=0        # 18 pass
+pnpm exec playwright test e2e/authorization.spec.ts  --workers=2 --retries=0        # 18 pass
+pnpm exec playwright test e2e/file-attachments.spec.ts --workers=2 --retries=0      # 13 pass
+pnpm exec playwright test e2e/check-aria.spec.ts e2e/admin-workspace-members.spec.ts --workers=2 --retries=0
+pnpm exec playwright test e2e/accessibility-remediation.spec.ts --workers=2 --retries=0 \
+  -g "code blocks have language indication"                                          # 1 pass
+```
+
+To see the security tests fail, reintroduce the vulnerability: set
+`isAllowedUri: () => true` in `web/src/components/editor/linkOptions.ts`, or drop
+`workspaceAdminMiddleware` from `api/src/routes/workspaces.ts:1021`.
+
+**Rollback.** `git revert` the branch. The only production code touched is the new
+`linkOptions.ts` and the four `Link.configure` call sites that spread it; reverting restores
+reliance on `@tiptap/extension-link`'s default `isAllowedUri`, which blocks the same five schemes
+today.
+
+---
+
+## TRO-225 — [TEST-3] Retries hid a test that failed first-attempt in 100% of runs
+
+**What was broken.** `playwright.config.ts:60` sets `retries: process.env.CI ? 2 : 1`. Across three
+identical 869-test runs, counting **first attempts only**, 8 / 5 / 3 tests failed; after retries the
+runner reported 1 / 0 / 1. Retries erased 7 / 5 / 2 failures
+(`audit/test-quality/runs/e2e-flake-union.txt`). The worst case,
+`my-week-stale-data.spec.ts › retro edits are visible on /my-week after navigating back`, **failed or
+timed out on the first attempt in all three runs and was reported as passing all three times.**
+
+**The recorded diagnosis was wrong.** That spec's header blamed Yjs persistence timing — "the retro
+document IS created … but its Yjs content isn't persisted … even with a 10s wait … Needs
+investigation on a separate branch." Two runs settle it (observed, `--workers=1 --retries=0`, this
+worktree):
+
+| invocation | result |
+|---|---|
+| `playwright test e2e/my-week-stale-data.spec.ts` | plan **passes**, retro **fails** — `getByText('Completed the API refactoring')` never appears |
+| `playwright test e2e/my-week-stale-data.spec.ts -g "retro edits"` | retro **passes** (22.5 s) |
+
+The retro test does not fail on its own merits. It fails **because the plan test ran first in the
+same worker's database** — the "shared state inside a worker's database" root cause the finding
+names, demonstrated rather than inferred.
+
+**Mechanism** (read from the code, consistent with the above). When a weekly plan already exists for
+the same person+week, `POST /api/weekly-retros` (`api/src/routes/weekly-plans.ts:641-656`) swaps
+`WEEKLY_RETRO_TEMPLATE` for `buildRetroTemplateWithPlanItems(...)`: heading, then a `planReference`
+node plus an empty `paragraph` per plan item, then an "Unplanned work" heading and a 3-item bullet
+list. The old test clicked the editor's **centre**, so in that taller document the caret landed in a
+top-level paragraph rather than inside a list item — and `extractPlanItems`
+(`api/src/routes/dashboard.ts:279-309`) collects only `listItem`/`taskItem` text. The typed line
+never reached the `/my-week` card. The failure screenshot confirms it: the retro card renders as a
+**link** to a real document (so the document exists) whose body still reads "+ Create retro for this
+week" (so `items` is empty).
+
+**What changed** in `e2e/my-week-stale-data.spec.ts`:
+
+1. **The cross-test dependency is gone.** `typeIntoFirstListItem()` places the caret in the first
+   empty list item explicitly, so the typed text lands in the node type `/my-week` reads whichever
+   template the API produced. Both tests use it.
+2. **The fixed sleep is gone.** `await page.waitForTimeout(3000)` — a guess at how long persistence
+   takes, and the second root-cause smell the finding lists — is replaced by
+   `waitForMyWeekToContain()`, which polls `GET /api/dashboard/my-week` until the item is actually
+   readable. This also *localises* the failure: a genuine persistence problem now fails at the poll
+   with the API's own payload in the message, not 15 s later at a DOM assertion.
+3. **Assertions are scoped to their card.** `myWeekSection(page, 'Weekly Retro')` prevents the retro
+   assertion from being satisfied by the plan card.
+4. The misleading "KNOWN FLAKY / needs investigation" header is replaced by the two-run evidence
+   above.
+
+**Decision on `retries`: left at `CI ? 2 : 1`, and here is why.** This branch fixed **1 of the 11**
+tests on the flake list. Lowering retries — or setting `failOnFlakyTests: true`, which is the better
+end state because it keeps the retry's trace artifact while refusing to score a retry-rescued test
+as a pass — would immediately turn a misleadingly-green suite into a permanently-red one with ten
+root causes still outstanding, and a permanently-red suite gets ignored exactly as fast as a
+falsely-green one. It is a one-line change that costs nothing to defer and belongs with the *last*
+flake fix, not the first. What has changed is that the choice is no longer invisible:
+`playwright.config.ts` now carries the 8/5/3-vs-1/0/1 measurement, the pointer to
+`e2e-flake-union.txt`, and the exact switch to flip. **No claim is made that the other ten flakes
+are fixed.** They are:
+
+`inline-comments.spec.ts › canceling a comment removes the highlight` (failed final in 2 of 3 runs —
+the strongest remaining candidate), `mentions.spec.ts › should sync mentions between collaborators`,
+`weekly-accountability.spec.ts › Allocation grid shows person with assigned issues…`,
+`bulk-selection.spec.ts › shift+down then shift+up contracts selection`,
+`my-week-stale-data.spec.ts › plan edits…` (flaky once; its fixed sleep is removed here too),
+`performance.spec.ts › many images do not crash the editor`,
+`programs.spec.ts › program cards show emoji or initial badges`,
+`project-weeks.spec.ts › project link in Properties sidebar navigates back to project`,
+`status-overview-heatmap.spec.ts › displays split cells for plan/retro status`,
+`team-mode.spec.ts › clicking collapsed header expands the group`.
+
+**Second finding, and the more serious one: the editor sometimes never receives a new document's
+content.** Once the test asserted that the template had *arrived* — rather than typing into whatever
+happened to be on screen — it began failing for an entirely different reason. **Observed**, three
+repeat runs at `--workers=1 --retries=0`: run 1 clean, run 2 the *plan* document opened blank, run 3
+the *retro* document opened blank. To a user that is a brand-new weekly plan opening as an empty
+editor instead of the template.
+
+**Derived** from code reading, not instrumented: `getOrCreateDoc`
+(`api/src/collaboration/index.ts:220-226`) publishes the new `Y.Doc` into the shared `docs` map
+*before* awaiting the database read and the `jsonToYjs` conversion at `:231-266`, and registers the
+broadcasting `doc.on('update')` handler only afterwards. A second connection for the same document
+arriving inside that window is handed the empty doc, is sent `writeSyncStep1` from it, and never
+receives the conversion update — and `freshFromJsonDocs.delete(docName)` after the first client means
+it does not get the cache-clear signal either. The shape of the fix is to store the load *promise* in
+the map so concurrent callers await the same load. Needs its own ticket.
+
+This also explains the **other** my-week entry on the flake list (`plan edits are visible on /my-week
+…`, flaky in 1 of 3 audit runs), which the plan/retro template coupling does not — and it is very
+probably what the original file header was reaching for when it blamed "Yjs persistence".
+
+Until it is fixed, `typeIntoTemplateList` tolerates it with **one bounded reload** (`toPass`, the
+construct `e2e/AGENTS.md` sanctions) and a failure message that names the finding and the file:line.
+That is a workaround in the *setup* phase of a test whose subject is something else; it is not a
+guard, because the assertion still has to pass, and it is not silent.
+
+**Third finding, reported not fixed.** `extractPlanItems` exists in three copies with **divergent**
+behaviour: `api/src/routes/dashboard.ts:279-309` collects only `listItem`/`taskItem`, while
+`api/src/routes/weekly-plans.ts:63-95` and `api/src/services/ai-analysis.ts:69` also collect
+top-level paragraphs longer than 10 characters. Consequence for a real user: an auto-populated retro
+puts an empty `paragraph` under each `planReference` block *specifically so you write your update
+there* — and `/my-week` then shows an **empty retro card**, because the dashboard reader ignores
+paragraphs. That is a product bug, not a test bug; fixing it changes what `/my-week` displays, which
+is out of scope for a test-integrity ticket. Needs its own ticket.
+
+**Evidence.** Targeted specs only — the full suite was not run (600+ tests, per-worker containers,
+not in the gate). Commands and results are in the PR body / final report; the decisive pair is the
+two-run table above.
+
+**How to run it.**
+
+```bash
+source .factory-env
+
+# The configuration that reproduced the deterministic failure. 4 consecutive clean runs
+# after the fix; before it, the retro test failed every time this way.
+pnpm exec playwright test e2e/my-week-stale-data.spec.ts --workers=1 --retries=0
+
+# The two-run experiment that identified the cross-test dependency (run against `main`):
+pnpm exec playwright test e2e/my-week-stale-data.spec.ts --workers=1 --retries=0
+pnpm exec playwright test e2e/my-week-stale-data.spec.ts --workers=1 --retries=0 -g "retro edits"
+```
+
+**Rollback.** `git revert` the branch. `playwright.config.ts` changes are comment-only, so reverting
+restores the previous behaviour exactly.
+
+---
+
 ## TRO-217 — [A11Y-3] `/my-week` failed colour contrast, the landing page of the app
 
 **What was broken.** `/` redirects to `/my-week`, and it was the only key page Lighthouse failed on
