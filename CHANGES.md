@@ -8,6 +8,133 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-209 — [TS-4] 236 non-null assertions on request auth context, all from one optional declaration
+
+`api/src/middleware/auth.ts:11-12` augmented Express's `Request` with `userId?: string` /
+`workspaceId?: string` — optional, so every authenticated handler re-asserted `req.userId!` /
+`req.workspaceId!`: **236** occurrences across 21 route files. Worse than hygiene: a route
+registered *without* `authMiddleware` type-checked identically to one wired up correctly, so a
+middleware-ordering mistake would send `undefined` into a query as a user/workspace id rather than
+failing to compile.
+
+**What changed — types only, no runtime-behavior change.**
+
+- **`api/src/middleware/auth.ts` (new exports)** — `AuthenticatedRequest` (extends `Request`,
+  `userId`/`workspaceId` required `string`), and `authed(handler)`, a wrapper that narrows a plain
+  `Request` handler to one whose auth fields are guaranteed present. Register it **after**
+  `authMiddleware` (directly, or behind a `router.use(authMiddleware, …)`); `authed()` does not
+  authenticate the request itself. Internally it uses a type-guard function
+  (`req is AuthenticatedRequest`), not a cast — no `as` of any kind appears in the new code.
+  Both `sessions.workspace_id` (`schema.sql`) and `api_tokens.workspace_id`
+  (`migrations/014_api_tokens.sql`) are `NOT NULL` columns, and `authMiddleware` always sets both
+  fields together before calling `next()` (the API-token branch, the session-cookie branch) — so on
+  every currently-registered route the guard inside `authed()` never rejects a real request; it
+  exists only so a *future* route wired up without `authMiddleware` fails closed (401) instead of
+  silently forwarding `undefined`. Observable behavior for every existing route is unchanged; this
+  is stated rather than assumed because the escalation gate on auth changes requires it, and it was
+  verified two ways (see Regression tests, runtime pin).
+- **21 route files** (`accountability`, `activity`, `admin-credentials`, `admin`, `ai`,
+  `api-tokens`, `auth`, `backlinks`, `comments`, `dashboard`, `documents`, `issues`, `iterations`,
+  `programs`, `projects`, `search`, `standups`, `team`, `weekly-plans`, `weeks`, `workspaces`) —
+  every handler that used to assert `req.userId!`/`req.workspaceId!` is now wrapped in `authed(...)`,
+  with the `!` removed and the handler's `req`/`res` parameter types left to contextual inference
+  (an explicit `req: Request` annotation on a wrapped handler would silently defeat the narrowing).
+  Mechanical, AST-driven change (TypeScript compiler API located every `req.userId!`/`req.workspaceId!`
+  node and its enclosing handler; only that handler's wrapping/annotations were touched) — no
+  drive-by refactors. 4 test files that fully replace (`vi.mock`) `../middleware/auth.js` needed a
+  matching `authed: (handler: unknown) => handler` passthrough added to their mock, since their fake
+  `authMiddleware` already sets both fields before `next()` the same way the real one does.
+
+**Regression tests (`api/src/**/*.test.ts`, run by the gate).**
+
+1. **Compile-time** (`api/src/__tests__/auth.test.ts`, new `describe` blocks) — `expectTypeOf`
+   proves `AuthenticatedRequest['userId']`/`['workspaceId']` are `string`, and that a handler passed
+   to `authed()` receives them already narrowed. A third case pins a `@ts-expect-error` on
+   `const userId: string = req.userId` inside a plain (unwrapped) handler. Verified red for the
+   right reason: temporarily deleting that suppression comment and running
+   `pnpm --filter @ship/api type-check` fails with `TS2322: Type 'string | undefined' is not
+   assignable to type 'string'` at that exact line; restoring the comment returns it to clean. (No
+   prior version of `authed()` exists to regress against — it's a new type, not a bug fix to an
+   existing one — so this direct compile-error demonstration is the red/green proof.)
+2. **Runtime, `authed()` itself** (same file) — invokes the wrapped handler when
+   `userId`/`workspaceId` are present, and returns 401 without calling the handler when they are
+   missing (the defense-in-depth backstop, unreachable on any current route per above).
+3. **Runtime pin, a real route** (`api/src/routes/auth.test.ts`) — `POST /api/auth/extend-session`
+   is one of the wrapped handlers. Added `should reject extend-session without a session` (401,
+   new); the existing, unmodified `should extend session expiry` test already covers the 200 case.
+   Both pass after wrapping, pinning that `authed()` changed nothing observable on a real endpoint.
+
+**Measurement.** The audit's own methodology (`audit/AUDIT_REPORT.md`, TS-4 / Type Safety
+Methodology section) defines **three different counts** here, and they move very differently — the
+gap matters and is reported rather than smoothed over:
+
+| Metric | Command | Before (`main` @ `42e60d9`) | After |
+|---|---|---|---|
+| `req.userId!` / `req.workspaceId!` occurrences | `grep -rEn 'req\.(userId\|workspaceId)!' api/src` | **236** | **0** |
+| Corrected non-null, `api` (audit's own de-bugged pattern) | `grep -rEn '[a-zA-Z0-9_)]]?!(\.\|\[\|\)\|,\|;\|\s*$)' api` | 286 | **53** |
+| Tracked non-null, `api` (`count.sh`'s pattern, the one the 1535-total/384-target is defined on) | `bash ~/.claude/skills/type-safety-audit/scripts/count.sh api` | 42 | **42 (unchanged)** |
+
+All three commands were run with `/usr/bin/grep` explicitly (or via `bash script.sh`, which resolves
+`grep` the same way) — the audit's own methodology warns that pasting these into an interactive zsh
+resolves `grep` to a `ugrep` shim that parses bracket expressions differently and returns wrong
+numbers for the bracket-heavy patterns; confirmed directly (`echo 'req.userId!;' | grep -E
+'<tracked-pattern>'` matches under the zsh shim, does not match under real `/usr/bin/grep`).
+
+**The corrected-count delta is -233, not -236**, because 3 of the 236 fixed lines
+(`issues.ts:1171,1684,1912`) also contain an unrelated, pre-existing `id!` assertion earlier on the
+same line (`logDocumentChange(id!, ...)`), and both the tracked and corrected patterns count
+*matching lines*, not occurrences — those 3 lines still match after `req.userId!` is removed, for a
+reason this ticket doesn't touch.
+
+**The tracked count is unchanged, and this contradicts the audit's own improvement-plan table and
+this ticket's brief — both should be corrected.** The audit's Methodology section documents that
+BSD grep's bracket expression in the tracked `non_null_assertions` pattern
+(`[a-zA-Z0-9_\)\]]!(\.|\[|\)|,|;|\s*$)`) treats the escaped `)`/`]` inside `[...]` literally, closing
+the class early so the pattern effectively requires a literal `]` immediately before `!` — meaning
+`req.userId!`/`req.workspaceId!` (no `]` before the `!`) were **never counted by the tracked
+pattern in the first place**, before this fix touched them. The audit's own recommended-improvement
+table lists "TS-4 | 236" as violations retired toward the 1535-total/384-target, and this ticket's
+brief inherited that framing ("TS-1 + TS-4 alone clear the 384-site bar") — both are describing the
+*corrected*-metric significance of TS-4 (which the finding's own prose does: "82% of api's 288
+corrected non-null assertions") as if it were the *tracked* metric the target is literally defined
+on. Measured directly: it is not. This ticket retires all 236 real occurrences and closes the
+authz-scoping compile-time hole described in the finding — that result stands — but it moves the
+audit's literal 1535/384 tracked-total arithmetic by zero.
+
+A live re-run of `count.sh` across `web api shared` on `main` @ `42e60d9` (i.e., with TS-1/TS-2/TS-3/
+TS-6 already merged, before this fix) gives a tracked total of **1747** (60 `any` + 1639 `as` + 47
+non-null-tracked + 1 ts-ignore) — *higher* than the audit's original 1535 baseline, because ~30+
+unrelated tickets merged since the audit snapshot (confirmed independently by TRO-206/TS-1's own
+CHANGES.md entry, which found the same drift reproducing *its* command: 102 baseline errors became
+156). This means a live "current total vs. 1535" snapshot cannot cleanly demonstrate the category's
+cumulative progress — unrelated development moves it in both directions — so each ticket's
+contribution has to be read from its own controlled before/after diff. This ticket's diff, read that
+way: 236 real assertions retired (occurrence-exact), 0 movement on the metric the 384 target is
+literally defined on, `explicit_any`/`as_any` unchanged (36/128, `api`), and `as_assertions` moved
+1107 → 1112 (`api`, +5) — verified by diffing the *content* of every newly-matching line (not just
+the line-number-prefixed text, which shifts when unrelated lines above are inserted): all 5 are
+comment/test-description prose ("as its own type", "as a required string", …), the same
+over-count class the audit's own methodology documents (~15-20% of raw `as` hits are imports/
+comments), not real type assertions — `git diff` for `\bas any\b|: any\b|as unknown as` is empty.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api type-check
+pnpm --filter @ship/api exec vitest run \
+  src/__tests__/auth.test.ts \
+  src/routes/auth.test.ts
+pnpm test   # full api suite
+```
+
+**Rollback.** Revert the commits on `fix/ts-4-nonnull-auth-context`. `authed`/`AuthenticatedRequest`
+are additive exports in `api/src/middleware/auth.ts`; reverting the 21 route files and the 4 test
+mocks alongside them fully restores the pre-fix `req.userId!`/`req.workspaceId!` state. No schema,
+migration, or middleware-ordering change accompanies this fix, so rollback is signature-only.
+
+---
+
 ## TRO-183 (DB-6) + TRO-184 (DB-7) + TRO-185 (DB-8) + TRO-187 (DB-10) — the query planner was starved of indexes and honest estimates
 
 Four findings, one root cause: the planner either had no index to use, or had one and could not
