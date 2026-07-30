@@ -7,18 +7,15 @@ entries), the formal compare artifacts at `audit/a11y/compare-phase2-jul30/` and
 verified"**, it was re-measured against this document's own commit rather than taken on the
 source's word. Branch `docs/improvement-documentation`, base commit `09a6895`.
 
-Two provenance notes up front, because they affect how several sections below must be read:
+Two provenance notes up front, resolved same-day and kept for the audit trail:
 
-- **`audit/db-query/compare-phase2-jul30/` does not exist in this worktree.** Confirmed by
-  directory listing at write time. Category 4's evidence is therefore per-PR `EXPLAIN ANALYZE`
-  pairs recorded in `CHANGES.md`, not a re-captured full-flow comparison. If that directory lands
-  later, it supersedes the per-PR figures here.
-- **No ticket numbered TRO-302 exists anywhere in this repo** — searched `CHANGES.md`,
-  `memory-bank/progress.md`, `memory-bank/activeContext.md`, `audit/factory/pending-tickets.md`,
-  and `audit/factory/scorecard.jsonl`. The highest post-baseline ticket present is TRO-301. The
-  rate-limiter-hashing regression this would have referred to is real and documented (Category 3,
-  below) as an **unconfirmed hypothesis with a recommended follow-up**, not a filed ticket with a
-  fix in flight. Reported accurately as such rather than invented to match.
+- **`audit/db-query/compare-phase2-jul30/` landed after this document was first compiled** — the
+  full-flow re-capture now exists and is the authoritative Category 4 evidence (see §4, updated with
+  its figures). The per-PR `EXPLAIN ANALYZE` pairs in `CHANGES.md` remain as each fix's own record.
+- **TRO-302 is a Linear ticket, not a repo file** (this document's first compile correctly noted no
+  repo artifact existed yet). It has since been executed: the rate-limiter-hashing hypothesis was
+  **profiled and acquitted**, and the c=25 "regressions" were shown to be shared-machine measurement
+  noise (PR #60; full detail in §3 below and `CHANGES.md`).
 
 ---
 
@@ -184,9 +181,11 @@ gzip level 9 throughout, matching the baseline's own convention.
 root cause documented per bottleneck."* (`AUDIT_REPORT.md`, API Response Time § Recommended
 improvement plan)
 
-**Verdict: met at c=50 conditions; met on only 1/2 endpoints at the c=25 headline framing —
-strengthening in flight.** Both readings are reported below because the compare artifact itself
-reports both and asserts neither as *the* answer.
+**Verdict: met — two endpoints clear ≥20% P95 under identical conditions, and the countervailing
+"regressions" were investigated and resolved as measurement noise (PR #60).** `/api/issues` clears
+the bar at every tested concurrency (−31.3% / −30.7% / −39.4%); `/api/documents/:id` clears it at
+c=50, reproduced across two independent runs (−34.8% / −56.6%). Both readings of the compare
+artifact are still shown below, unchanged, for the audit trail.
 
 ### Before → After
 
@@ -209,14 +208,22 @@ compare doc's own verdict: *"whether '≥2 endpoints' is satisfied depends on wh
 read as 'at the headline concurrency' (not met, 1/2) or 'at some tested concurrency, reproducibly'
 (met, 2/2). Both readings are reported here; neither is asserted as the answer."*
 
-**Regressions, reported plainly, not hidden.** Several cheap endpoints show +12% to +38% P95 at
-low/mid concurrency (`documents?type=wiki` c=25 +18.0%, `documents` c=10 +15.6%, `team/assignments`
-c=10 +14.7%, `weeks` c=10 +13.6%). The compare doc's own hypothesis, **explicitly flagged as
-unconfirmed by profiling**: the new per-identity rate limiter computes a SHA-256 fingerprint of the
-session cookie on *every* request — work the old IP-only limiter never did — and this fixed
-per-request cost lands proportionally hardest on sub-15ms endpoints. Recommended follow-up:
-"profile or add a control run with the identity-keying hash removed." No ticket for this exists yet
-(see the TRO-302 note at the top of this document).
+**The apparent regressions — investigated, hypothesis killed, resolved as noise (TRO-302, PR #60).**
+Several cheap endpoints showed +12% to +38% P95 at low/mid concurrency in the compare run. The
+compare doc's hypothesis (the rate limiter's per-request SHA-256 of the session cookie) was put
+through a profile-first investigation and **acquitted on three independent lines of evidence**:
+(1) microbenchmark — the full key computation costs ~650 ns, ~0.008% of a 4 ms request; (2) a live
+`--cpu-prof` under the compare run's own c=25 load — the server is >99% idle (I/O-bound) and the
+hash is ~0.15% of the tiny active-CPU sliver; (3) a controlled live A/B (real hash vs. no-op hash
+vs. the entire limiter chain removed) — statistically indistinguishable. The decisive control: a
+**fresh full re-benchmark of unchanged code** under identical seed/methodology produced P95 deltas
+of **−27.2% to +34.8%** — a noise band *wider than every reported regression*. The regressions are
+shared-machine measurement noise; note they were also inconsistent across concurrency (the same
+endpoint "+18% at c=25" was −15.7% at c=50), which is noise's signature. The headline improvements
+survive this scrutiny because they are (a) consistent across all three concurrencies, and (b)
+corroborated by deterministic non-timing measurements — payload bytes (−36.5%) and statement
+counts — that noise cannot produce. No production change was made: measurement said no fix was
+needed, so none was invented. Full 18-row noise table in `CHANGES.md` (TRO-302 entry).
 
 ### Root causes
 

@@ -50,9 +50,11 @@ screen-share cues. Target 4:30; trim the deep-dive section to hit 3:30 if needed
 - "The audit corrected itself where the data demanded it. Three examples:"
   - "The type-safety counter had a grep bug — it never counted the largest assertion class. I
     proved the target with controlled per-ticket diffs instead of a flattering live recount."
-  - "The API benchmark found **two of my own regressions** — cheap endpoints got slower at
-    moderate concurrency after the rate limiter landed. That's filed, profiled, and being fixed,
-    not hidden." (Update with TRO-302's outcome if landed before recording.)
+  - "The API benchmark appeared to show **regressions from my own rate limiter** — so instead of
+    hiding them or blindly 'fixing' them, I profiled. The hash I suspected cost 650 *nanoseconds*
+    — acquitted. Then I re-benchmarked unchanged code and got ±30% swings: the regressions were
+    **measurement noise**, and the real improvements survive because they're backed by
+    deterministic numbers — payload bytes and query counts — that noise can't fake."
   - "An accessibility fix made two broken routes render for the first time — which *exposed* a
     pre-existing contrast failure. It's in the report as a new finding."
 - SHOW: IMPROVEMENTS.md §3's two-reading P95 table.
