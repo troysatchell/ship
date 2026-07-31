@@ -224,6 +224,103 @@ produce.
 
 ---
 
+## TRO-303 — Module-version `aws_s3_bucket.uploads` (dev/shadow) had no `prevent_destroy` — same TF-1 gap, second location; Aurora module gap closed in the same PR
+
+**The problem.** TF-1/TRO-234 added `deletion_protection`/`prevent_destroy` to the flat root's
+`aws_rds_cluster.aurora` (`terraform/database.tf`) and `aws_s3_bucket.uploads`
+(`terraform/s3-cloudfront.tf`), but that ticket's own "What did NOT change" section explicitly
+flagged that `terraform/modules/aurora` and `terraform/modules/cloudfront-s3` — the module versions
+consumed by `terraform/environments/dev/main.tf` and `terraform/environments/shadow/main.tf` — carry
+the identical gap, and scoped fixing them out as a follow-up. This ticket is that follow-up.
+
+Confirmed both gaps were still open before touching anything, by `grep`:
+
+```
+$ grep -n 'deletion_protection\|prevent_destroy' terraform/modules/aurora/main.tf terraform/modules/cloudfront-s3/main.tf
+(no output — 0 matches in either file)
+```
+
+- `terraform/modules/cloudfront-s3/main.tf`'s `aws_s3_bucket.uploads` had no `lifecycle` block at
+  all — nothing stops Terraform from destroying the dev/shadow uploads bucket on a forced
+  replacement.
+- `terraform/modules/aurora/main.tf`'s `aws_rds_cluster.aurora` had a `lifecycle` block, but it only
+  carried `ignore_changes = [final_snapshot_identifier]` (ported over for the `final_snapshot_identifier`
+  churn, unrelated to destroy protection) — no `deletion_protection` attribute and no
+  `prevent_destroy`. Same defect as the flat root's pre-TF-1 state, just in the module used by
+  dev/shadow.
+
+**What changed.** Two additions, mirroring TF-1's flat-root pattern exactly, no resource renamed or
+restructured:
+
+- `terraform/modules/cloudfront-s3/main.tf:392-394` — `aws_s3_bucket.uploads` gets a new
+  `lifecycle { prevent_destroy = true }` block (S3 has no `deletion_protection` attribute in the AWS
+  provider, so `prevent_destroy` is the only available guard, same as the flat root).
+- `terraform/modules/aurora/main.tf:70` — `aws_rds_cluster.aurora` gets `deletion_protection = true`
+  (first-class RDS attribute, enforced by the AWS API itself). `terraform/modules/aurora/main.tf:93`
+  — `prevent_destroy = true` merged into the resource's existing `lifecycle` block alongside the
+  pre-existing `ignore_changes = [final_snapshot_identifier]` (one `lifecycle` block per resource,
+  so extended rather than duplicated — same approach TF-1 used on the flat root).
+
+Post-change, both files show exactly the expected new matches:
+
+```
+$ grep -n 'deletion_protection\|prevent_destroy' terraform/modules/aurora/main.tf terraform/modules/cloudfront-s3/main.tf
+terraform/modules/aurora/main.tf:70:  deletion_protection             = true
+terraform/modules/aurora/main.tf:93:    prevent_destroy = true
+terraform/modules/cloudfront-s3/main.tf:393:    prevent_destroy = true
+```
+
+**Scope.** Only these two resources in these two module files changed. The flat root
+(`terraform/database.tf`, `terraform/s3-cloudfront.tf`) already carries this protection from TF-1
+and was not touched. `terraform/environments/dev` and `terraform/environments/shadow` consume the
+modules directly (no vendored copies) so both roots pick up the fix without any change of their own.
+
+**Deliberate consequence, not a surprise** (same shape as TF-1's, now true for dev/shadow too):
+removing `prevent_destroy` from either module resource only permits Terraform to *attempt* deletion,
+not guarantees it succeeds — the uploads bucket has versioning enabled with no `force_destroy`, so an
+operator must still empty it by hand (every object, version, and delete marker) before a destroy can
+complete. For the Aurora cluster, `deletion_protection` and `prevent_destroy` are two independent
+safeguards — one Terraform-side, one enforced by the AWS API directly — and an intentional teardown
+must remove both, flipping `deletion_protection = false` and applying *before* attempting the destroy.
+
+**How to run it.**
+
+```bash
+# Terraform binary: v1.15.8 (from an existing scratch cache; not committed to the repo)
+cd terraform/environments/dev
+terraform init -backend=false -input=false   # Terraform has been successfully initialized!
+terraform validate                           # Success! The configuration is valid.
+cd ../shadow
+terraform init -backend=false -input=false   # Terraform has been successfully initialized!
+terraform validate                           # Success! The configuration is valid.
+cd ../..
+terraform fmt -check -recursive terraform/   # exit 0 before AND after this change — no diff
+```
+
+**Verification note.** `terraform validate` and `terraform fmt -check -recursive` were run on both
+consuming roots (`terraform/environments/dev`, `terraform/environments/shadow`) before and after
+this change: both report `Success!` with no warnings and no diagnostics, before and after — this
+change introduces no new warnings or errors on either root. `terraform plan` was attempted on
+`dev` (after `rm -rf .terraform` to force a fresh backend init) and fails with
+`Error: Backend initialization required, please run "terraform init"` (backend `"s3"`) — no S3
+backend or AWS credentials are available in this environment, the same documented failure mode
+TF-1/TF-2/TF-3 recorded. **No `terraform apply` was run against any account, live or otherwise.**
+
+**No vitest regression test applies.** Same precedent as TF-1/TF-3/TF-4/TF-5/TF-9: this is a
+Terraform-only config change with no application code path to exercise. The evidence is the `grep`
+before/after above (0 matches → 3 matches, each attributable to a specific line) plus the
+`validate`/`fmt` output showing the config stays syntactically valid on both consuming roots.
+`gate.sh`'s regression-test check is expected to fail honestly here rather than have a fake test
+manufactured to satisfy it.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf1-module-prevent-destroy`. This removes
+`deletion_protection` and both `prevent_destroy` additions from the two module files, returning
+`terraform/modules/aurora` and `terraform/modules/cloudfront-s3` to their pre-TRO-303 unprotected
+state (dev/shadow only — the flat root is unaffected either way). No live AWS state is touched,
+since no `apply` was ever run.
+
+---
+
 ## TRO-244 (RULE-4) — CI pipeline was missing 3 of the 7 required checks (coverage, dependency audit, security scan)
 
 **What was broken.** Assignment rule 4 requires exactly 7 CI checks: build, lint, type-check, test,

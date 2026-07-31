@@ -394,6 +394,10 @@ resource "aws_s3_bucket" "uploads" {
   tags = {
     Name = "${var.project_name}-${var.environment}-uploads"
   }
+
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 # Block all public access (files served via presigned URLs)
