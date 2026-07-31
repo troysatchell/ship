@@ -88,6 +88,75 @@ existed from A11Y-3 and is unchanged here.
 
 ---
 
+## TRO-301 (ERR-17) — the document-by-id query hardcoded `retry: false`, so a throttled (429) read failed permanently on the first attempt
+
+**Not one of the original 68 audit findings** — a post-baseline Linear ticket, no
+`audit/AUDIT_REPORT.md` section.
+
+**The ticket's premise, checked against the file before acting on it.** The ticket described
+`UnifiedDocumentPage.tsx`'s document query as throwing a plain `Error` with no `.status`, so even
+without `retry: false` the shared `errorStatus()`/`shouldRetryRequest` predicate (queryClient.ts,
+built for TRO-172/API-1) couldn't classify a 429 as throttling. That part of the premise is
+**stale**: PR #51 (`51f6c2e`, TRO-290/ERR-14) already attached `.status` to the thrown error, as a
+side effect of telling a 404 apart from other fetch failures for the deletion-notice fix. Reading
+the current file (`git show 51f6c2e -- web/src/pages/UnifiedDocumentPage.tsx`) confirms it. The
+**only** remaining defect is `UnifiedDocumentPage.tsx:86`'s own `retry: false`, which overrides
+that shared policy regardless of what the thrown error carries.
+
+**Root cause.** `web/src/pages/UnifiedDocumentPage.tsx`'s top-level `useQuery(['document', id])` set
+`retry: false` as a per-query override. `queryClient`'s `defaultOptions.queries.retry` is
+`shouldRetryRequest`, which backs a 429 off across the server's 60s rate-limit window
+(`THROTTLE_RETRY_DELAYS_MS`) instead of dropping it — exactly the policy TRO-190/ERR-3 already gives
+every mutation. The per-query `retry: false` silently opted this one read out of it, so a throttled
+document load failed for good on the very first attempt.
+
+**What changed.** Removed the `retry: false` override from the query options (no `retry`/`retryDelay`
+set at all — same pattern `PersonEditor.tsx`'s `updatePersonMutation` already uses for its write
+path). The query now inherits `queryClient`'s shared policy: a 429 retries with backoff, and every
+other 4xx (including 404) is still treated as permanent on the first attempt. The `queryFn`'s
+`.status` attachment was not touched — it was already correct.
+
+**Preserved: ERR-14's deleted-document handling (PR #51).** `isNotFoundError` classifies 404 as a
+permanent 4xx under `shouldRetryRequest`, so a deleted document still fails immediately with no
+retry storm, and the existing effect that routes a 404 into `notifyDocumentGoneOnRead` /
+`useDocumentWriteStatus`'s one-shot deletion notice is unchanged. Verified explicitly: reran
+`UnifiedDocumentPage.deletedFocusRefetch.test.tsx` after this fix — both cases still pass (2/2).
+
+**Regression test — `web/src/pages/UnifiedDocumentPage.throttledRead.test.tsx`** (vitest, run by the
+gate). Drives the real `queryClient` singleton and real timers, like the ERR-14 test:
+
+1. A 429 on the first fetch, then a 200 on the retry — asserts the editor eventually mounts and the
+   document was fetched more than once (real backoff, ~2-3s, `waitFor` given an 8s window).
+2. A 404 on the first fetch — asserts the "not found" screen appears immediately and the document
+   was fetched exactly once, with no growth in call count across 5 flushed microtask/macrotask
+   turns (a 404 disables retry synchronously, so there's no backoff window to wait out).
+
+Confirmed red first, for the right reason: reverting `UnifiedDocumentPage.tsx`'s query options back
+to `retry: false` (`git checkout HEAD -- web/src/pages/UnifiedDocumentPage.tsx`, since the fix was
+still uncommitted) and rerunning — test 1 failed with the page stuck on "Failed to fetch document"
+and `docCallCount` never advancing past 1 (timed out waiting for `editor-mounted`); test 2 still
+passed, because 404 handling doesn't change with this fix. Restored the fix and reran: both green.
+
+Also checked the ticket's literal premise directly: temporarily combined "no `.status` attached" (the
+pre-ERR14 `queryFn`) with "`retry: false` removed" and reran the 404 case alone — it *did* regress
+into a retry storm (stuck on "Loading...", no `.status` means `shouldRetryRequest` treats the error
+as un-classified and retries up to `DEFAULT_MAX_RETRIES`). That confirms why the (b) test matters as
+a standing regression guard even though it doesn't flip red→green on this specific one-line diff in
+the current, already-`.status`-carrying codebase.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/pages/UnifiedDocumentPage.throttledRead.test.tsx
+```
+
+**Rollback.** Revert the commit on `fix/err-17-document-query-retry` touching
+`UnifiedDocumentPage.tsx`'s query options (re-adds `retry: false`) and delete
+`UnifiedDocumentPage.throttledRead.test.tsx`. No other files changed.
+
+---
+
 ## TRO-294 — direct-to-ALB health check URL in `.claude/CLAUDE.md` corrected to the CloudFront-fronted path
 
 **Docs-only, priority Low, no vitest path applies (regression-test evidence below instead).**
