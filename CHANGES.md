@@ -8,6 +8,66 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-196 (ERR-9) — BacklinksPanel's `console.error` storm on every failed poll buried the real signal
+
+**What was broken.** `web/src/components/editor/BacklinksPanel.tsx`'s `fetchBacklinks()` polls
+`/api/documents/:id/backlinks` every 5 seconds and, on any failure, called `console.error`
+unconditionally in the `catch` block (previously line 56) — once per poll, for as long as the
+failure lasted. The audit's raw evidence
+(`audit/error-handling/raw/probe4-concurrency.json`, `probe6-mixed.json`) shows exactly this: a
+document deleted elsewhere (404) or an expired/revoked session (401) produced a repeating
+`Error fetching backlinks: Error: Failed to fetch backlinks` line every 5 seconds. That is console
+noise during precisely the scenarios (offline, deleted doc, expired session) where a developer
+most needs the console clean — and it buries the one signal that actually matters, the 404 storm
+ERR-4's ghost-editor scenario produces.
+
+**What changed.**
+- Failed responses now throw a `BacklinksFetchError` carrying the HTTP status, so the `catch`
+  block can distinguish failure modes instead of matching on a generic `Error` message.
+- A `lastLoggedFailureModeRef` tracks the failure mode (`'404'`, `'401'`, `'500'`, `'network'`,
+  etc.) of the most recently *logged* failure. A poll that fails the same way as the last logged
+  failure is now silent — no re-log per retry/poll. A successful fetch resets the tracked mode, so
+  a later failure (even the same status, after a recovery) is logged again — this is not a
+  log-once-ever suppression, it is log-once-per-streak.
+- 404 (document deleted elsewhere) and 401 (session expired or revoked) are additionally
+  downgraded from `console.error` to `console.debug` — they are expected states, not bugs. Other
+  failure modes (network errors, 5xx) keep `console.error`, just deduped.
+- No user-visible behavior changed: the panel's `error` state and the "Failed to load backlinks"
+  message still update on every failed poll exactly as before. Only the console-logging cadence
+  and level changed. (Confirmed this does not trip escalation gate 4/6 in
+  `ship-factory/references/escalation.md` — no auth/session semantics were touched, only client
+  logging around an existing 401/404 response.)
+
+**Regression test — `web/src/components/editor/BacklinksPanel.errorLogging.test.tsx`** (vitest,
+run by the gate). Renders the real component with fake timers, mocks `global.fetch` to fail the
+same way across the initial fetch + two 5-second polls, and asserts:
+1. Repeated 404s never call `console.error` (downgraded to `console.debug`).
+2. Repeated 401s never call `console.error` (downgraded to `console.debug`).
+3. Repeated network failures (fetch throws) call `console.error` at most once across 3 attempts,
+   not once per attempt.
+4. A failure → success → failure sequence logs twice, not once — proving the suppression is
+   per-streak, not a blanket "log only the first failure ever."
+
+Confirmed red first, for the right reason: copied the pre-fix `BacklinksPanel.tsx` (`git show
+HEAD:...`) into place and re-ran the suite — 3 of 4 cases failed with
+`expected "error" to not be called at all, but actually been called 3 times` (404/401 cases) and
+`expected "error" to be called 1 times, but got 3 times` (network case), i.e. the exact storm
+being fixed, not an import error. Restored the fix and the same run went green
+(`4 tests passed`), alongside the pre-existing `BacklinksPanel.test.tsx` (A11Y-6 heading-level
+test, unaffected — 2 tests still passing).
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/components/editor/BacklinksPanel.errorLogging.test.tsx
+```
+
+**Rollback.** Revert the commit(s) on `fix/err-9-backlinkspanel-console-storm` touching
+`BacklinksPanel.tsx` and remove `BacklinksPanel.errorLogging.test.tsx`.
+
+---
+
 ## TRO-281 — [A11Y-9] Project context sidebar lists have no accessible name
 
 **POST-BASELINE** — found incidentally while fixing A11Y-1 (TRO-215, PR #6), not one of the

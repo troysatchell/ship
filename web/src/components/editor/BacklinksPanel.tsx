@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { ContextMenu, ContextMenuItem } from '@/components/ui/ContextMenu';
 import { useToast } from '@/components/ui/Toast';
@@ -13,6 +13,25 @@ interface Backlink {
   display_id?: string;
 }
 
+/**
+ * Carries the HTTP status (when there was a response) so the catch block can
+ * tell an expected state (404 deleted doc, 401 expired/revoked session) apart
+ * from a genuine failure, without re-parsing the error message.
+ */
+class BacklinksFetchError extends Error {
+  status?: number;
+  constructor(message: string, status?: number) {
+    super(message);
+    this.name = 'BacklinksFetchError';
+    this.status = status;
+  }
+}
+
+/** Statuses that are expected, routine states rather than bugs. */
+function isExpectedFailureStatus(status: number | undefined): boolean {
+  return status === 404 || status === 401;
+}
+
 interface BacklinksPanelProps {
   documentId: string;
 }
@@ -25,10 +44,22 @@ export function BacklinksPanel({ documentId }: BacklinksPanelProps) {
   const navigate = useNavigate();
   const { showToast } = useToast();
 
+  // Tracks the failure mode (HTTP status, or 'network' when the request never
+  // got a response) of the most recently *logged* failure. Retries/polls that
+  // keep failing the same way stay silent — only a new failure mode (or the
+  // first failure after a recovery) gets logged again. Without this, a
+  // sustained outage or a deleted/expired-session document logs once per
+  // 5-second poll forever, burying the one signal (e.g. ERR-4's 404 storm on
+  // a ghost editor) console noise would otherwise surface. (ERR-9)
+  const lastLoggedFailureModeRef = useRef<string | null>(null);
+
   useEffect(() => {
     if (!documentId) return;
 
     let cancelled = false;
+    // New document, new failure history — the first failure against it should
+    // always be logged even if the previous document ended on the same mode.
+    lastLoggedFailureModeRef.current = null;
 
     async function fetchBacklinks() {
       try {
@@ -43,17 +74,34 @@ export function BacklinksPanel({ documentId }: BacklinksPanelProps) {
         });
 
         if (!response.ok) {
-          throw new Error('Failed to fetch backlinks');
+          throw new BacklinksFetchError('Failed to fetch backlinks', response.status);
         }
 
         const data = await response.json();
 
         if (!cancelled) {
           setBacklinks(data);
+          // A successful fetch ends the failure streak — the next failure,
+          // even of the same kind, is a new occurrence worth logging.
+          lastLoggedFailureModeRef.current = null;
         }
       } catch (err) {
         if (!cancelled) {
-          console.error('Error fetching backlinks:', err);
+          const status = err instanceof BacklinksFetchError ? err.status : undefined;
+          const failureMode = status !== undefined ? String(status) : 'network';
+
+          if (lastLoggedFailureModeRef.current !== failureMode) {
+            lastLoggedFailureModeRef.current = failureMode;
+
+            if (isExpectedFailureStatus(status)) {
+              // 404 (document deleted elsewhere) and 401 (session expired or
+              // revoked) are routine states, not bugs — debug level only.
+              console.debug('BacklinksPanel: expected fetch failure', { status, documentId, err });
+            } else {
+              console.error('Error fetching backlinks:', err);
+            }
+          }
+
           setError('Failed to load backlinks');
         }
       } finally {
