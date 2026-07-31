@@ -6,6 +6,7 @@ import { useDashboardActionItems } from '@/hooks/useDashboardActionItems';
 import { cn } from '@/lib/cn';
 import { formatRelativeTime } from '@/lib/date-utils';
 import { DashboardVariantC } from '@/components/dashboard/DashboardVariantC';
+import { RouteFallback } from '@/components/RouteFallback';
 
 type DashboardView = 'my-work' | 'overview';
 
@@ -83,12 +84,13 @@ export function DashboardPage() {
 
   const loading = weeksLoading || projectsLoading;
 
+  // TRO-194/ERR-7: `weeksLoading`/`projectsLoading` are each hook's initial
+  // ("no cached data yet") state, not a background-refetch flag, so this
+  // renders on first paint and does not re-flash on every refetch.
+  // `RouteFallback` matches the same status/live-region affordance already
+  // used for lazy route chunks (BUN-1/TRO-197) instead of inert plain text.
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted">Loading dashboard...</div>
-      </div>
-    );
+    return <RouteFallback variant="panel" label="Loading dashboard…" />;
   }
 
   // Filter overdue items for blocking banner
