@@ -66,7 +66,9 @@ test-results/
 
 # Terraform
 terraform/.terraform/
-terraform/.terraform.lock.hcl
+# terraform/.terraform.lock.hcl is intentionally NOT ignored: it is now committed
+# for the flat root module (TF-4 / TRO-237) so provider versions no longer float
+# between machines/CI. Only the .terraform/ provider binary cache above stays ignored.
 terraform/terraform.tfstate
 terraform/terraform.tfstate.backup
 terraform/*.tfplan
