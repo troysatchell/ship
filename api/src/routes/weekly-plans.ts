@@ -907,6 +907,15 @@ weeklyRetrosRouter.get('/:id', authMiddleware, authed(async (req, res) => {
   }
 }));
 
+// Row shape for the plan/retro lookups inside the allocation grid handler
+// (TRO-228): typed so `.rows` isn't an implicit `any` array at this boundary.
+interface PlanOrRetroRow {
+  person_id: string;
+  week_number: number;
+  id: string;
+  content: unknown;
+}
+
 /**
  * @swagger
  * /project-allocation-grid/{projectId}:
@@ -987,26 +996,41 @@ router.get('/project-allocation-grid/:projectId', authMiddleware, authed(async (
       peopleMap.get(row.person_id)!.allocatedWeeks.add(row.week_number);
     }
 
-    // Get all weekly plans for this project (include content to check if "done")
-    const plansResult = await pool.query(
+    // Get all weekly plans for the people allocated to this project.
+    //
+    // TRO-228: this used to filter by `(properties->>'project_id') = $2`, which
+    // assumes a weekly_plan document is scoped to one project. It isn't: POST
+    // /weekly-plans dedupes strictly on (person_id, week_number) and documents
+    // `project_id` as "legacy field, not used for uniqueness" (weekly-plans.ts
+    // weeklyPlanSchema comment, and the identical plan lookup at the weekly_retro
+    // POST handler above). So a person who already has a week-N plan tagged with
+    // Project A's id will, on a week-N plan request from Project B, get that same
+    // document back (200, not 201) with `properties.project_id` still pointing at
+    // Project A — and this grid's old `= $2` filter would then never find it for
+    // Project B's grid, permanently rendering `planId: null` for a plan that does
+    // exist. Filtering by person_id instead matches the actual identity model.
+    const personIds = Array.from(peopleMap.keys());
+
+    const plansResult = await pool.query<PlanOrRetroRow>(
       `SELECT (properties->>'person_id') as person_id, (properties->>'week_number')::int as week_number, id, content
        FROM documents
        WHERE workspace_id = $1
          AND document_type = 'weekly_plan'
-         AND (properties->>'project_id') = $2
+         AND (properties->>'person_id') = ANY($2::text[])
          AND deleted_at IS NULL`,
-      [workspaceId, projectId]
+      [workspaceId, personIds]
     );
 
-    // Get all weekly retros for this project (include content to check if "done")
-    const retrosResult = await pool.query(
+    // Get all weekly retros for the people allocated to this project (same
+    // person_id-scoped reasoning as plansResult above).
+    const retrosResult = await pool.query<PlanOrRetroRow>(
       `SELECT (properties->>'person_id') as person_id, (properties->>'week_number')::int as week_number, id, content
        FROM documents
        WHERE workspace_id = $1
          AND document_type = 'weekly_retro'
-         AND (properties->>'project_id') = $2
+         AND (properties->>'person_id') = ANY($2::text[])
          AND deleted_at IS NULL`,
-      [workspaceId, projectId]
+      [workspaceId, personIds]
     );
 
     // Helper to extract all text from a TipTap document
