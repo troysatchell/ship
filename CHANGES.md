@@ -157,6 +157,201 @@ without affecting api or web, whose coverage setups this ticket verified but did
 
 ---
 
+## TRO-210 — [TS-5] The shared/ contract is bypassed — 46 exported types, adopted by 13 of 198 web files
+
+**What was broken.** `web/src/lib/api.ts:5` declared its own `interface ApiResponse<T>` (`success`,
+`data?`, and an `error?: { code; message }` with no `details`) even though `shared/src/types/api.ts:2`
+already exports `ApiResponse<T = unknown>` with a proper `ApiError` (`code`, `message`, and an optional
+`details: Record<string, unknown>` the local copy never had). Two hand-maintained guesses at the same
+wire contract, free to drift silently — exactly what TS-5 is about.
+
+**Sequencing constraint honored (per the ticket's own warning: "do this WITH TS-2, not before it").**
+TS-2 (typing the ~707 untyped `pg` query rows in `api/`) has not landed. `shared/src/types/document.ts`
+models the **raw `documents` table row** (`Document`/`ProjectDocument`/`IssueDocument`/etc. — flat
+`content`, `properties: ProjectProperties`, `workspace_id`, `document_type`). The actual list/detail
+routes do not return that shape. Verified by reading the route handlers, not assumed:
+
+- `api/src/routes/projects.ts:534-548` — the `/api/projects` list query flattens `properties` into
+  top-level fields (`impact`, `confidence`, `ease`, `color`, `emoji`, ...), joins in `owner` (name/email),
+  and computes `sprint_count`, `issue_count`, `inferred_status`, `is_complete`, `missing_fields` — none
+  of which exist on `shared`'s `ProjectDocument`. `web/src/hooks/useProjectsQuery.ts:8`'s local `Project`
+  models this response shape, not the raw document row.
+- The same pattern holds for `Sprint`/`Week` (`web/src/hooks/useWeeksQuery.ts:10` — computed
+  `completed_count`, `started_count`, `has_plan`/`has_retro`, joined `owner`), `Program`
+  (`web/src/hooks/useProgramsQuery.ts:10`), `Issue` (`web/src/hooks/useIssuesQuery.ts:25` — joined
+  `assignee_name`, computed `display_id`), `Person` (`web/src/components/PersonCombobox.tsx:6` — a
+  3-field combobox projection), and `WikiDocument` (`web/src/components/sidebars/WikiSidebar.tsx:5` /
+  `web/src/hooks/useDocumentsQuery.ts:4` — partial views with optional fields).
+
+Forcing any of those seven onto `shared/`'s document types today would either not compile (missing
+required fields the API never sends, e.g. `content`, `workspace_id`) or silently paper over the gap
+with optional-everything — the drift-risk the ticket brief warned against. **None of the 7 were
+consolidated.** They're deferred, explicitly, pending TS-2 producing typed route-response interfaces
+that actually match what the API returns — at which point those response types (not the raw
+`*Document` types) are what `web/src` should import.
+
+**What changed — the one verified-safe case.** `ApiResponse`/`ApiError` is different: it isn't a
+document projection, it's the outer HTTP envelope every route already wraps its response in
+identically, and the local declaration was a byte-for-byte subset (missing only the optional
+`details` field). No route-by-route verification needed — this is the JSON-shape `request<T>()` in
+`web/src/lib/api.ts` always produces, and shared's version is a strict superset.
+
+- `web/src/lib/api.ts:1,5-11` — deleted the local `interface ApiResponse<T>`; added
+  `import type { ApiResponse } from '@ship/shared';`. No call-site changes were needed: every existing
+  read of `data.error?.code` / `data.error?.message` still type-checks against the shared `ApiError`,
+  and the `details` field is now reachable (previously a compile error) without changing any runtime
+  behavior — nothing in this file reads it yet.
+
+**How to run it.**
+
+```bash
+pnpm build:shared
+pnpm --filter @ship/web exec tsc --noEmit -p tsconfig.json
+pnpm --filter @ship/web test -- src/lib/api.test.ts
+```
+
+**Regression test.** `web/src/lib/api.test.ts` (new) — a source-text guard (`apiSource` read via
+`readFileSync`) asserting `web/src/lib/api.ts` no longer matches `/\binterface\s+ApiResponse\b/` and
+does match an `import type { ApiResponse ... } from '@ship/shared'` pattern, plus a runtime companion
+mocking `fetch` through `api.auth.me()` to confirm an `ApiError.details` payload survives end to end.
+Confirmed failing on the pre-fix file (both source assertions failed: the interface was present, the
+import was absent) by temporarily swapping in the pre-fix `web/src/lib/api.ts` via `git show
+HEAD:web/src/lib/api.ts`, running the test, then restoring the fixed file — not via `git stash` (shared
+across worktrees). The runtime companion test passed unchanged in both states, as expected: this repo's
+`vitest run` does not type-check, so a type-only fix can only be caught by a source-text assertion, not
+by executing code whose behavior doesn't change.
+
+**Roll back.** `git revert` the commit, or manually: reinstate
+
+```ts
+interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: { code: string; message: string };
+}
+```
+
+at the top of `web/src/lib/api.ts` and remove the `@ship/shared` import; delete
+`web/src/lib/api.test.ts`.
+
+---
+
+## TRO-231 — [TEST-9] `pnpm test` TRUNCATEs whatever database `DATABASE_URL` points at — including your dev database
+
+**What was broken.** `api/src/test/setup.ts` runs, in the `beforeAll` of every one of the 28 api
+test files, `TRUNCATE TABLE workspace_invites, sessions, files, document_links, document_history,
+comments, document_associations, document_snapshots, sprint_iterations, issue_iterations,
+documents, audit_logs, workspace_memberships, users, workspaces CASCADE`. `api/src/db/client.ts`
+unconditionally loaded `api/.env.local` — the exact file `scripts/dev.sh` writes with a developer's
+dev `DATABASE_URL` — before creating the pool. There was no `.env.test` and no test-specific
+override.
+
+**The precise mechanism (not just "it loads the wrong file").** `dotenv`'s `config()` does **not**
+override a `DATABASE_URL` already present in `process.env` unless `override: true` is passed
+(verified directly against this repo's installed `dotenv`: `populate()` only assigns a key when
+`!Object.prototype.hasOwnProperty.call(target, key)`). So the bug did not bite every developer —
+only one who never explicitly `export`ed `DATABASE_URL` in their shell, which is the common case,
+since `pnpm dev` doesn't require one (`scripts/dev.sh` writes it into `.env.local` instead). That
+developer's exact, and exactly documented, sequence: `pnpm dev` (writes `.env.local` with the dev
+DB URL) → `pnpm test` (`client.ts` loads that URL into `process.env` at import time, before
+`setup.ts`'s `beforeAll` ever runs) → the TRUNCATE above fires against the developer's own dev
+database. `.claude/CLAUDE.md`'s "Commands" section walks straight into this: `pnpm dev` is listed
+first, `pnpm test` second, with no warning between them.
+
+**This does NOT affect the ShipShape factory — correction, CodeRabbit (PR #93).** The original
+wording here overstated the guarantee: it is conditional, not unconditional. Every factory
+worktree's `.factory-env` explicitly `export`s a worktree-exclusive `DATABASE_URL` before any test
+command runs, and an exported var always wins over `.env.local`/`.env` — but **only if no
+`api/.env.test` exists in that worktree**. `resolveEnvFilesToLoad` returns `override: true`
+specifically when `.env.test` is present (by design — see the function's own header comment: a
+developer who set one up wants it to be the single source of truth, not silently second-guessed),
+and `client.ts` honors that override, replacing even an already-exported `DATABASE_URL`. No factory
+worktree currently creates or commits an `api/.env.test` (only the tracked, developer-opt-in
+`.env.test.example` template is added by this ticket — `api/.env.test` itself, not the `.example`
+file, is what `.gitignore` excludes), so the factory is unaffected **in practice**
+today — but the correct claim is "safe because no worktree has `.env.test`," not "safe
+unconditionally." A worktree provisioning script that ever copies `.env.test.example` into place
+would need to account for this precedence.
+
+**What changed.**
+
+- `api/src/db/envFile.ts` (new) — `resolveEnvFilesToLoad`, a pure function that decides which
+  dotenv file(s) to load and with what override precedence, given `isVitest` and whether
+  `api/.env.test` exists. Not under vitest: unchanged — loads `.env.local` then `.env`, neither
+  overriding (byte-for-byte `pnpm dev`'s prior behavior). Under vitest with `.env.test` present:
+  loads **only** `.env.test`, with `override: true`, so it's the single source of truth for a test
+  run regardless of a stray shell export or leftover `.env`. Under vitest with `.env.test`
+  **absent**: loads **nothing** — `.env.local` is never even opened, so its `DATABASE_URL` cannot
+  end up in `process.env`, let alone get truncated. `DATABASE_URL` is left to whatever the
+  environment already provided (`.factory-env`, CI's `CI_DATABASE_URL`, or an explicit developer
+  export).
+- `api/src/db/client.ts:1-32` — replaced the two unconditional `config({ path: ... })` calls with a
+  loop over `resolveEnvFilesToLoad(...)`, passing `process.env.VITEST === 'true'` and
+  `existsSync(envTestPath)`.
+- `api/.env.test.example` (new) — mirrors the existing `api/.env.example` pattern. Documents copying
+  it to `api/.env.test` and pointing it at a dedicated, disposable test database — never the dev
+  database `api/.env.local` points at.
+- `.gitignore` — added `.env.test` alongside the existing `.env`/`.env.local`/`.env.*.local`
+  entries. None of those three patterns matched `.env.test` (confirmed: `.env.*.local` requires a
+  `.local` suffix), so without this a developer's real `.env.test` — pointing at a real database
+  URL, however disposable — had no gitignore coverage. `.env.test.example` is unaffected; the
+  pattern is an exact filename, not a glob that would also catch it.
+
+**On `process.env.VITEST` being the right signal (not `NODE_ENV`).** `setup.ts:57` sets
+`process.env.NODE_ENV = 'test'` inside its `beforeAll` — which runs *after* every test file's
+top-level imports, `client.ts`'s included, have already executed. `NODE_ENV` cannot be read early
+enough at `client.ts`'s module-load time to decide this. `process.env.VITEST` can: verified
+directly by reading `node_modules/vitest/dist/chunks/cli-api.*.js`, whose `prepareVitest()` sets
+`process.env.VITEST = 'true'` unconditionally before any test file loads, and separately passes
+`VITEST: 'true'` in the `env` object handed to every worker process it spawns — and independently
+confirmed empirically: this ticket's own regression test asserts `process.env.VITEST === 'true'`
+against a real `vitest run`, and that assertion passes.
+
+**Regression test** (`api/src/db/__tests__/envFile.test.ts`, new, 4 cases) — tests
+`resolveEnvFilesToLoad` directly, no filesystem/dotenv mocking needed, no database touched:
+
+1. `process.env.VITEST` is genuinely `'true'` during a real test run (the empirical check above).
+2. Under vitest with `.env.test` present: plan is exactly `[{ path: <.env.test>, override: true }]`.
+3. Under vitest with `.env.test` absent: plan is `[]` — explicitly asserts neither `.env.local` nor
+   `.env` appears.
+4. Not under vitest: plan is `.env.local` then `.env`, both `override: false`, regardless of
+   whether `.env.test` exists — `pnpm dev`'s behavior is unchanged.
+
+**Confirmed red-for-the-right-reason.** Temporarily reverted `resolveEnvFilesToLoad` to
+unconditionally return `[{ path: envLocalPath, override: false }, { path: envPath, override:
+false }]` (the literal pre-fix `client.ts` behavior) and re-ran this file: cases 2 and 3 above
+failed, both showing `.env.local` present in the plan where it must be absent — the exact TEST-9
+defect. Cases 1 and 4 still passed, as expected (the old behavior never depended on `VITEST` and
+already matched the non-vitest case by coincidence). Restored the real fix immediately after;
+`envFile.ts` in this commit has no trace of the reverted version.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api test src/db/__tests__/envFile.test.ts
+pnpm --filter @ship/api test           # full api suite — confirms client.ts still loads correctly
+```
+
+**Setting up `.env.test` locally (outside the factory).**
+
+```bash
+cp api/.env.test.example api/.env.test
+createdb ship_test   # or point DATABASE_URL in .env.test at any disposable database
+pnpm test
+```
+
+Without this file, `pnpm test` now requires an explicitly exported `DATABASE_URL` (pointed at a
+throwaway database) instead of silently falling back to your dev database.
+
+**Rollback.** Revert the commit(s) on `fix/test-9-test-db-isolation` touching `api/src/db/client.ts`,
+`api/src/db/envFile.ts`, `api/src/db/__tests__/envFile.test.ts`, `api/.env.test.example`, and
+`.gitignore`. This restores the pre-fix, unconditional `.env.local`-then-`.env` load in
+`client.ts` — i.e. restores the TEST-9 hazard this ticket exists to remove. Do not revert this
+without also re-adding a warning at the `pnpm dev` → `pnpm test` sequence in `.claude/CLAUDE.md`.
+
+---
+
 ## TRO-212 (TS-7) — `as any` removed from a destructive bulk-mutation call site and a TipTap command return
 
 **What was broken.** Three production `as any` casts (of the entire codebase's 158 occurrences,
