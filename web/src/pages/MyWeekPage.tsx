@@ -4,6 +4,7 @@ import { useMyWeekQuery, StandupSlot } from '@/hooks/useMyWeekQuery';
 import { apiPost } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { RouteFallback } from '@/components/RouteFallback';
+import { useToast } from '@/components/ui/Toast';
 
 function formatDateRange(startDate: string, endDate: string): string {
   const start = new Date(startDate + 'T00:00:00Z');
@@ -34,6 +35,7 @@ export function MyWeekPage() {
 
   const { data, isLoading, error } = useMyWeekQuery(weekNumber);
   const [creating, setCreating] = useState<string | null>(null);
+  const { showToast } = useToast();
 
   const navigateToWeek = (wn: number) => {
     if (data && wn === data.week.current_week_number) {
@@ -53,8 +55,16 @@ export function MyWeekPage() {
       });
       if (res.ok) {
         const doc = await res.json();
-        navigate(`/documents/${doc.id}`);
+        void navigate(`/documents/${doc.id}`);
+      } else {
+        // Previously: no catch/else at all, so a non-ok response (or a
+        // thrown network error, see catch below) just silently reset
+        // `creating` with no feedback. Route into the app-wide toast used
+        // elsewhere (e.g. TeamDirectory.tsx, OrgChartPage.tsx).
+        showToast('Failed to create weekly plan', 'error');
       }
+    } catch {
+      showToast('Failed to create weekly plan', 'error');
     } finally {
       setCreating(null);
     }
@@ -70,8 +80,12 @@ export function MyWeekPage() {
       });
       if (res.ok) {
         const doc = await res.json();
-        navigate(`/documents/${doc.id}`);
+        void navigate(`/documents/${doc.id}`);
+      } else {
+        showToast('Failed to create weekly retro', 'error');
       }
+    } catch {
+      showToast('Failed to create weekly retro', 'error');
     } finally {
       setCreating(null);
     }
@@ -83,8 +97,12 @@ export function MyWeekPage() {
       const res = await apiPost('/api/standups', { date });
       if (res.ok) {
         const doc = await res.json();
-        navigate(`/documents/${doc.id}`);
+        void navigate(`/documents/${doc.id}`);
+      } else {
+        showToast('Failed to create daily update', 'error');
       }
+    } catch {
+      showToast('Failed to create daily update', 'error');
     } finally {
       setCreating(null);
     }
@@ -188,7 +206,7 @@ export function MyWeekPage() {
                 </Link>
               ) : (
                 <button
-                  onClick={() => handleCreateRetro(previous_retro!.week_number)}
+                  onClick={() => void handleCreateRetro(previous_retro!.week_number)}
                   disabled={creating === 'retro'}
                   className="text-xs font-medium text-orange-300 hover:text-orange-200 underline disabled:opacity-50"
                 >
@@ -249,7 +267,7 @@ export function MyWeekPage() {
               const isDue = week.week_number <= week.current_week_number && projects.length > 0;
               return (
                 <button
-                  onClick={handleCreatePlan}
+                  onClick={() => void handleCreatePlan()}
                   disabled={creating === 'plan'}
                   className={cn(
                     'w-full rounded-lg border border-dashed px-4 py-3 text-sm transition-colors disabled:opacity-50 flex items-center justify-between',
@@ -321,7 +339,7 @@ export function MyWeekPage() {
               const isDue = retroDueForWeek && projects.length > 0;
               return (
                 <button
-                  onClick={() => handleCreateRetro(week.week_number)}
+                  onClick={() => void handleCreateRetro(week.week_number)}
                   disabled={creating === 'retro'}
                   className={cn(
                     'w-full rounded-lg border border-dashed px-4 py-3 text-sm transition-colors disabled:opacity-50 flex items-center justify-between',
@@ -408,7 +426,7 @@ export function MyWeekPage() {
               return (
                 <button
                   key={slot.date}
-                  onClick={() => handleCreateStandup(slot.date)}
+                  onClick={() => void handleCreateStandup(slot.date)}
                   disabled={creating === `standup-${slot.date}`}
                   className={cn(rowClass, 'w-full text-left cursor-pointer disabled:opacity-50')}
                 >
