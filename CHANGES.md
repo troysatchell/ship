@@ -35,14 +35,22 @@ it. Same resource, same defect.)
   attribute in the AWS provider (that concept is RDS-specific), so `prevent_destroy` is the only
   available guard — same pattern already used on the state bucket.
 
-**Deliberate consequence, not a surprise.** `prevent_destroy = true` means a future *intentional*
-teardown of either resource (account decommission, disaster-recovery rebuild, environment
-retirement) will fail at `terraform plan`/`apply` until an operator first removes or flips the
-`lifecycle` block in a config change — i.e. destroying either resource now requires a second,
-deliberate commit, not just a `terraform destroy` or an `apply` that happens to force replacement.
+**Deliberate consequence, not a surprise.** Both resources now require a config change before an
+intentional teardown, but the two guards are independent and **both** must be removed:
+
+- `terraform/s3-cloudfront.tf` (uploads bucket): only `lifecycle { prevent_destroy = true }` — a
+  Terraform-side guard. Removing it from the config and re-`apply`ing is sufficient.
+- `terraform/database.tf` (Aurora cluster): **two separate safeguards**, not one.
+  `lifecycle { prevent_destroy = true }` is Terraform-side, same as the bucket — but
+  `deletion_protection = true` is a distinct, first-class RDS attribute enforced by the **AWS API
+  itself**, independent of Terraform. Removing only `prevent_destroy` from the config is not
+  enough: AWS will still refuse the `DeleteDBCluster` call. An operator must apply a config change
+  that sets `deletion_protection = false` *and* removes `prevent_destroy`, then run the destroy —
+  in that order, since the API-level flag has to flip before AWS will honor a destroy at all.
+
 That extra step is the entire point of this ticket (TF-1's finding is literally "one careless
-apply/destroy from prod data loss"); it is called out here so it isn't rediscovered as a mystery
-blocker during a future teardown.
+apply/destroy from prod data loss"); it is called out here — accurately, for both resources — so
+it isn't rediscovered as a mystery blocker during a future teardown.
 
 **What did NOT change.** No other flat-root resource, and no module. `terraform/modules/aurora`
 (used by `terraform/environments/dev` and `terraform/environments/shadow`, kept per TF-2's
