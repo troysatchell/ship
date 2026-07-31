@@ -45,6 +45,37 @@ import { useCommentsQuery, useCreateComment, useUpdateComment } from '@/hooks/us
 import { BubbleMenu } from '@tiptap/react';
 import 'tippy.js/dist/tippy.css';
 
+/**
+ * TRO-194/ERR-7 follow-up (CodeRabbit, PR #71) — a dedicated transaction
+ * origin for the server-driven "clear cache" reset below, so the
+ * isBodySaving/"Saving" tracker (which watches `ydoc.on('update', ...)` for
+ * locally-originated updates) can tell this apart from a real user edit.
+ * Yjs transactions default their origin to `null` when none is passed, which
+ * is indistinguishable from "no origin was set" - a real Symbol makes the
+ * intent explicit and can't collide with any other origin value in the app
+ * (the collaboration provider's own origin is the `WebsocketProvider`
+ * instance, never this symbol). Exported (not module-private) so it and the
+ * predicate below can be tested directly with a real `Y.Doc`, without
+ * mounting the full Editor component - see the note on
+ * `commentBubbleMenuTippyOptions` below and `Editor.bubbleMenuAria.test.tsx`
+ * for why: real TipTap+Yjs does not mount reliably under jsdom+vitest.
+ */
+export const CACHE_RESET_ORIGIN = Symbol('editor-cache-reset');
+
+/**
+ * True when a Yjs `update` event's origin represents a local edit this
+ * client still needs to get to the server - i.e. neither a remote update we
+ * just received back from the collaboration socket (`origin === provider`)
+ * nor the server-driven cache-reset transaction above
+ * (`origin === CACHE_RESET_ORIGIN`). Used by the isBodySaving tracker to
+ * decide whether to show the "Saving" indicator state.
+ */
+export function isUnflushedLocalUpdateOrigin(origin: unknown, provider: unknown): boolean {
+  if (origin === provider) return false; // a remote update we just received, not a pending local one
+  if (origin === CACHE_RESET_ORIGIN) return false; // a maintenance reset, not a user edit
+  return true;
+}
+
 interface EditorProps {
   documentId: string;
   userName: string;
@@ -261,6 +292,13 @@ export function Editor({
   // "connected and failing to sync".
   const [isSynced, setIsSynced] = useState(false);
   const [isInitialConnect, setIsInitialConnect] = useState(true);
+  // TRO-194/ERR-7: true while a local Yjs update exists that this client has
+  // not yet had a chance to flush to the collaboration server. `isSynced`
+  // only reflects the socket's last completed handshake - it does not
+  // toggle per keystroke - so without this the indicator held on "Saved"
+  // through the audit's whole 6s-of-throttled-typing probe with zero
+  // in-flight feedback. See the effect below for how it is derived.
+  const [isBodySaving, setIsBodySaving] = useState(false);
   // TRO-190/ERR-3, TRO-191/ERR-4: independent of the Yjs socket above - true
   // when the most recent title/property PATCH for this document was rejected
   // and no later write has succeeded since. Also raises the one-time
@@ -381,14 +419,17 @@ export function Editor({
           const data = new Uint8Array(event.data);
           if (data.length > 0 && data[0] === MESSAGE_TYPE_CLEAR_CACHE) {
             console.log(`[Editor] Received cache clear signal for ${documentId}, clearing IndexedDB`);
-            // Clear the Y.Doc to remove any cached content before server sync
+            // Clear the Y.Doc to remove any cached content before server sync.
+            // Tagged with CACHE_RESET_ORIGIN (not the default `null` origin) so
+            // the isBodySaving tracker below does not mistake this
+            // server-driven reset for a local user edit and flash "Saving".
             ydoc.transact(() => {
               const fragment = ydoc.getXmlFragment('default');
               // Delete all content from the fragment
               while (fragment.length > 0) {
                 fragment.delete(0, 1);
               }
-            });
+            }, CACHE_RESET_ORIGIN);
             // Also clear IndexedDB for future visits
             indexeddbProvider.clearData().then(() => {
               console.log(`[Editor] IndexedDB cache cleared for ${documentId} (fresh from JSON)`);
@@ -565,8 +606,38 @@ export function Editor({
       setIsSynced(false);
       setIsInitialConnect(true);
       setSyncStatus('connecting');
+      setIsBodySaving(false);
     };
   }, [documentId, userName, color, ydoc, roomPrefix, onBack, onDocumentConverted]);
+
+  // TRO-194/ERR-7: derive the in-flight "Saving" state from the Yjs doc
+  // itself, rather than a fixed timer. y-websocket applies every update it
+  // receives FROM the server with the provider instance as the transaction
+  // origin (see `readSyncMessage`/`_updateHandler` in y-websocket's source) -
+  // so an update whose origin is NOT the provider (and not the cache-reset
+  // sentinel, see `isUnflushedLocalUpdateOrigin` above) is one this client
+  // just made locally and has not yet had a chance to send out. A short
+  // debounce after the last local update covers the (sub-millisecond, even
+  // under Fast 3G's 750 Kbps up) time it takes the browser to hand the tiny
+  // CRDT delta to the socket; it intentionally does not claim the server has
+  // persisted it - `isSynced` continuing to hold is what keeps that promise.
+  useEffect(() => {
+    if (!provider) return undefined;
+
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+    const handleUpdate = (_update: Uint8Array, origin: unknown) => {
+      if (!isUnflushedLocalUpdateOrigin(origin, provider)) return;
+      setIsBodySaving(true);
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => setIsBodySaving(false), 600);
+    };
+
+    ydoc.on('update', handleUpdate);
+    return () => {
+      clearTimeout(settleTimer);
+      ydoc.off('update', handleUpdate);
+    };
+  }, [ydoc, provider]);
 
   // Create slash commands extension (memoized to avoid recreation)
   // documentId is in deps to ensure fresh AbortSignal when switching documents
@@ -919,6 +990,7 @@ export function Editor({
             isSynced={isSynced}
             isInitialConnect={isInitialConnect}
             hasFailedWrite={hasFailedWrite}
+            isSaving={isBodySaving}
           />
 
 
