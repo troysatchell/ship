@@ -102,6 +102,21 @@ follows the exact pattern this repo already uses for test regressions
   and separately verified the fail path by injecting a synthetic fake GHSA id into a copy of the
   audit JSON, which correctly reported `newAdvisories: ["GHSA-fake-fake-fake"]` and exited 1.
 
+**Caught by the PR's own live CI run, not by local testing — stated plainly because this is exactly
+the kind of gap the claim-provenance rule in `.claude/CLAUDE.md` exists to catch.** The first two
+live runs of this workflow (PR #76, runs `30644101853` and `30644438852`) both failed the audit step
+in ~1.2s with zero output from the diff script. Root cause: GitHub Actions' default shell for `run:`
+is already `bash -e {0}` (confirmed from the job's own `shell: /usr/bin/bash -e {0}` log line) —
+`pnpm audit` exits non-zero on the 135 pre-existing findings *every single run*, and the step's own
+`set -uo pipefail` line does not (and cannot) turn off an `-e` that was already active before the
+script started running. So `pnpm audit`'s expected, harmless non-zero exit aborted the step before
+`dependency-audit-diff.mjs` ever ran. My local verification above never caught this because an
+interactive local shell does not run with `-e` by default — it was "verified," but verified under a
+shell configuration that could not have exercised this failure mode. Fixed by appending `|| true` to
+the `pnpm audit` line, the same idiom the `inventory` job already uses elsewhere in this same file
+for its own known-can-fail commands. Confirmed the fix locally by running the exact step body through
+`bash -e` (not a plain local shell) before pushing again — exit 0, correct JSON output.
+
 Remediating the inherited 135 findings is **explicitly out of scope for this ticket** — that is
 per-advisory dependency upgrade/replacement work, not a CI-pipeline change, and cannot be done safely
 under today's deadline. What changed is that the number is now visible and non-regressing on every

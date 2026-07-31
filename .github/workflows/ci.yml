@@ -154,13 +154,18 @@ jobs:
       # audit` alone exits non-zero on ANY finding, including the 135
       # pre-existing ones this repo inherited (see
       # audit/factory/dependency-audit-baseline.json and CHANGES.md) — that
-      # exit code is deliberately NOT the gate here. No `set -e`: the script
-      # below is the real verdict, evaluated against its own exit code, not
-      # `pnpm audit`'s.
+      # exit code is deliberately NOT the gate here; the diff script's own
+      # exit code is. GitHub Actions' default shell for `run:` is already
+      # `bash -e {0}` (confirmed in this job's own log output) — `|| true`
+      # on the pnpm audit line is required, not optional, or `-e` (inherited,
+      # not something a bare `set -uo pipefail` here would turn off) aborts
+      # the step the instant `pnpm audit` hits its always-true nonzero exit,
+      # before the diff script ever runs. Same idiom the `inventory` job
+      # already uses above for its own known-can-fail commands.
       - name: Dependency audit (pnpm audit) — baseline diff
         run: |
           set -uo pipefail
-          pnpm audit --json > pnpm-audit-current.json
+          pnpm audit --json > pnpm-audit-current.json || true
           node scripts/factory/lib/dependency-audit-diff.mjs \
             --current pnpm-audit-current.json \
             --baseline audit/factory/dependency-audit-baseline.json
