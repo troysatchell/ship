@@ -33,8 +33,62 @@
 | Demo-video companion artifact | ✅ published (2026-07-28) — before/after slots now have real numbers, see log |
 | Discovery write-up · demo video · AI cost analysis · social post | ⬜ Sun Aug 2 |
 | Final polish + presentation | ⬜ Sun Aug 2 |
+| **Post-submission factory wave (Phase 3)** | ✅ **8 tickets done (2026-07-30/31)** — TF-1/TF-3/TF-9, A11Y-9/A11Y-10, ERR-9/ERR-17, TRO-294; PRs #61–#68, all merged. **74 tickets Done total, 84 PRs merged total.** Board empty again; 28 real tickets remain in Backlog, untouched by design (user-directed stop). |
 
 ## Log
+
+### 2026-07-30/31 (Thu night → Fri) — Factory resumed for one wave, then stopped on request
+
+Session resumed the factory (dormant since the "Phase 2 complete" commit `724ed92`) at the user's
+request to work the backlog remainder. Housekeeping first: committed the 3 pending skill
+self-improvement edits (`597c81a` — session-checkpoint discipline + orchestrator-on-Sonnet, both
+already reflected in `ship-factory`/`ship-orchestrator` SKILL.md); left `docs/submission/
+{DEMO-SCRIPT,SOCIAL-POST}.md` edits uncommitted per explicit instruction (internal, not for the
+public repo); left an unrelated `high-end-visual-design` skill install (`skills-lock.json`,
+`.claude/skills/high-end-visual-design/`, `.agents/`) untracked, also per instruction.
+
+**Wave 1 — 8 tickets, dispatched as one parallel batch:** TRO-234 (TF-1, deletion protection),
+TRO-236 (TF-3, terraform version bump — unblocked TF-4), TRO-292 (TF-9, tfplan `.gitignore` gap —
+root cause was the same unanchored-glob class TF-10 already hit once), TRO-294 (stale ALB
+health-check URL, CodeRabbit-filed), TRO-281 (A11Y-9, sidebar accessible names — VoiceOver
+confirmation still owed to a human, not claimed), TRO-298 (A11Y-10, DashboardSidebar contrast,
+same token-swap precedent as A11Y-3), TRO-301 (ERR-17, document-query retry — agent caught the
+ticket's own premise was stale, `.status` already fixed by PR #51/ERR-14, only `retry:false` was
+live), TRO-196 (ERR-9, BacklinksPanel console spam). All 8 gated independently by the orchestrator
+(never trusted self-reports), all CodeRabbit rounds triaged (several real findings fixed: a
+verification-command bug, an incomplete Aurora-teardown doc, an over-claimed 403 inference, a
+`git rm --cached` factual error, a fixed-300ms-sleep anti-pattern replaced with a deterministic
+flush) — full detail in `audit/factory/scorecard.jsonl` (rows appended live, ts 2026-07-31T02:00–
+04:00Z). PRs #61–#68, merged `--merge` (history preserved), 8 worktrees + databases cleaned up
+after.
+
+**Operational finding worth keeping: CHANGES.md merge-conflict cascade.** Landing N PRs together
+where every branch prepends its own entry at the same location in `CHANGES.md` means *every* merge
+re-conflicts *every other* still-open branch — this cost roughly one `merge-changes.mjs` round per
+remaining PR per merge (should have been 7 resolutions for 8 PRs; was closer to 20 across the
+session because each wave of merges reconflicted the rest). `merge-changes.mjs` itself never
+mis-resolved once (entry-integrity check passed clean every time). For a future batch this size,
+either merge serially with a resync immediately before each merge (what ended up happening) or
+accept the cost — there isn't a way to land N append-at-top entries without at least N-1
+re-resolutions somewhere.
+
+**`session-activity-race.test.ts` (TRO-179/TRO-177 burst-threshold case) reproduced in *CI itself*
+three separate times this session** (PRs #62, #63, #66 — three unrelated diffs: terraform-only,
+docs-only, and a CSS token swap, none of which could plausibly cause a session-middleware race).
+Confirms TRO-300's finding isn't just a local-gate-under-load artifact; GitHub's own CI runners hit
+it too. Handled each time by `gh run rerun --failed`, which passed clean on retry every time — never
+by widening the quarantine. TRO-300 (still Backlog, High) is the right ticket to eventually root-cause
+this properly under a CI-equivalent constrained runner, per its own description.
+
+**New load-sensitive-flake identity for the lessons.md rule-24 family:** `api/src/routes/
+weeks.test.ts` (surfaced on TRO-281's gate) and `api/src/db/__tests__/migrationLock.test.ts`
+(surfaced on TRO-294's gate) — both confirmed passed standalone, both diffs incapable of causing
+either. Not yet added to `lessons.md` itself (that file wasn't touched this session past the
+already-committed condensation); worth folding in if this keeps growing.
+
+**Stopped by explicit user instruction** after wave 1 landed clean — no second wave dispatched.
+28 real tickets remain in Backlog (list in `activeContext.md`), Linear board otherwise empty
+(no ticket left in In Progress/In Review).
 
 ### 2026-07-30 (Thu) late night — Cat 4 db-query formal compare done
 
