@@ -49,11 +49,16 @@ terraform init -backend=false -input=false
 terraform validate                 # BEFORE: Success! with 1 warning (filter/prefix, TF-5)
                                     # AFTER:  Success! The configuration is valid. (0 warnings)
 terraform fmt -check -recursive .  # exit 0, no formatting changes needed
+rm -rf .terraform                  # no .terraform.lock.hcl is git-tracked at terraform/ (confirmed
+                                    # via `git ls-files`) — only the generated cache needs removing
 cd environments/shadow             # second root: consumes terraform/modules/cloudfront-s3
 terraform init -backend=false -input=false
 terraform validate                 # BEFORE: Success! with the same warning, module-relative path
                                     # AFTER:  Success! The configuration is valid. (0 warnings)
-rm -rf .terraform .terraform.lock.hcl   # both dirs, leaves `git status terraform/` clean
+rm -rf .terraform                  # same here — no .terraform.lock.hcl is git-tracked in this
+                                    # directory either; do not blanket-delete lock files in other
+                                    # env roots without checking `git ls-files` first, since some
+                                    # (e.g. terraform/modules/*) do commit one
 ```
 
 **Verification performed here — before/after `terraform validate`.**
@@ -116,8 +121,18 @@ vitest file manufactured to satisfy it.
 
 **Rollback.** `git revert` the commit(s) on `fix/tf-5-lifecycle-filter`. This removes the `filter
 {}` block from both `terraform/s3-cloudfront.tf` and `terraform/modules/cloudfront-s3/main.tf`,
-returning to the pre-TRO-238 state (1 validation warning, same implicit all-objects behavior). No
-live AWS state is touched either way, since no `apply` was ever run.
+returning to the pre-TRO-238 state (1 validation warning, same implicit all-objects behavior).
+
+For *this PR's own validation-only work* (the `terraform init -backend=false` / `validate` / `fmt
+-check` runs above), no live AWS state is touched either way, since no `apply` was ever run against
+any account. That is a statement about what happened here, not a general property of `git revert`
+on this file: `filter {}` on an already-empty-scope rule is a no-op against real AWS lifecycle
+config, so if this change is ever `terraform apply`'d to a live account, a later `git revert` alone
+does **not** undo anything on the AWS side — Terraform only reconciles infrastructure when you run
+it. A rollback *after* a real `apply` would additionally require running `terraform plan` and
+`terraform apply` from the affected root(s) (`terraform/`, and `terraform/environments/{dev,shadow}`
+for the module) once the revert commit lands, so AWS is actually updated to match the reverted
+config.
 
 ---
 
