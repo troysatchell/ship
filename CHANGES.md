@@ -41,9 +41,15 @@ reference in the repo (`.claude/CLAUDE.md`'s own "Prod Web" line just below the 
 `audit/AUDIT_REPORT.md`, `memory-bank/techContext.md`, `docs/fpki-auth-client-dcr-analysis.md`'s
 OAuth redirect URI), not by a fresh `terraform output` (no AWS credentials / apply available here,
 same constraint TF-7's own work noted). **Not verified:** whether the ALB SG restriction has
-actually been `apply`'d to the live prod account yet — `memory-bank/progress.md` records prod as
-returning 403/no-response as of 2026-07-28, i.e. not currently reachable either way, so the new URL
-could not be curled end-to-end from here.
+actually been `apply`'d to the live prod account yet. `memory-bank/progress.md` records two
+*separate* 2026-07-28 checks, not one combined result: `ship.awsdev.treasury.gov` (the domain this
+PR's new health-check URL uses) returned **HTTP 403** — the request reached an HTTP endpoint and
+was refused, which is not evidence of an unreachable network path, and is if anything mildly
+consistent with this fix's premise (something is answering behind CloudFront). The old direct-ALB
+hostname (`ship-api-prod...elasticbeanstalk.com`) returned **no response at all** — a different,
+stronger signal, closer to what TF-7's SG restriction would actually produce. Neither result
+confirms the SG restriction is live in prod; the new URL could not be curled end-to-end to verify
+from here.
 
 **Regression-test note.** Pure documentation change; neither vitest project (`api/src/**/*.test.ts`,
 `web/src/**/*.test.ts(x)`) has a path to assert against a markdown string, so no test file is added.
