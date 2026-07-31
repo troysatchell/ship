@@ -88,6 +88,21 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     - A read-then-apply sequence over shared state needs a **lock** (TRO-178 → TRO-279).
     State the argument in the PR. "It is unlikely to happen" is not one.
 
+    **Updated 2026-07-30 — now 6 findings across 4 tickets, worst severity CRITICAL.** This is the
+    most *dangerous* recurring class in the project, and it has one dominant shape:
+    **async work between making something reachable and making it able to respond.** Four instances,
+    all in `api/src/collaboration/index.ts`: the `'error'` listener attached after an `await`
+    (ERR-10); the `'message'` listener attached after an `await`, dropping sync step 1 (ERR-11); a
+    `Y.Doc` published into the shared map before its content loaded (ERR-12); and a socket that
+    closed *during* an `await` still being registered in `conns` with no `'close'` listener — a
+    permanent leak that also replayed buffered frames into a live broadcast (found in review on
+    ERR-11's own fix, i.e. the pattern recurred **inside the PR that was fixing it**).
+    Before you `await` anything in a connection or cache path, ask: *between this line and the one
+    that finishes setup, what can arrive, and where does it go?* If the answer is "nowhere" or "into
+    a half-built object", that is this bug. The fixes that work are **buffer-then-drain**, **cache
+    the load promise rather than the object**, and **re-check liveness after every await**.
+    `memory-bank/systemPatterns.md` records the pattern; read it before touching that file.
+
     **Updated 2026-07-31 (TRO-300 / TEST-16) — a barrier that gates DISPATCH is not the same
     guarantee as one that gates EXECUTION.** TRO-288 made a flaky concurrency test's "the burst
     genuinely raced" precondition structural by holding every caller's query *send* until all
@@ -103,21 +118,6 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     "structural" fix for a race is a barrier, ask which side of the operation it actually
     synchronizes — the side you control leaving your process, or the side you don't, being acted on
     by something else.
-
-    **Updated 2026-07-30 — now 6 findings across 4 tickets, worst severity CRITICAL.** This is the
-    most *dangerous* recurring class in the project, and it has one dominant shape:
-    **async work between making something reachable and making it able to respond.** Four instances,
-    all in `api/src/collaboration/index.ts`: the `'error'` listener attached after an `await`
-    (ERR-10); the `'message'` listener attached after an `await`, dropping sync step 1 (ERR-11); a
-    `Y.Doc` published into the shared map before its content loaded (ERR-12); and a socket that
-    closed *during* an `await` still being registered in `conns` with no `'close'` listener — a
-    permanent leak that also replayed buffered frames into a live broadcast (found in review on
-    ERR-11's own fix, i.e. the pattern recurred **inside the PR that was fixing it**).
-    Before you `await` anything in a connection or cache path, ask: *between this line and the one
-    that finishes setup, what can arrive, and where does it go?* If the answer is "nowhere" or "into
-    a half-built object", that is this bug. The fixes that work are **buffer-then-drain**, **cache
-    the load promise rather than the object**, and **re-check liveness after every await**.
-    `memory-bank/systemPatterns.md` records the pattern; read it before touching that file.
 19. **`CHANGES.md` claims get checked against the diff.**
     4 findings across 3 tickets (TRO-178, TRO-223, TRO-179): a count that contradicted itself, a
     test-harness fix filed as a source defect, an entry title that overstated the result, and a

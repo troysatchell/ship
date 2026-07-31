@@ -45,23 +45,25 @@ collapsing `updateStatements` back toward 1 through a channel TRO-288's dispatch
 gated.
 
 **Reproduction attempted, not achieved — reported honestly rather than asserted.** Per this
-ticket's own escalating-load instructions, tried to reproduce locally across four increasingly
-CI-faithful configurations, all zero-repro:
+ticket's own escalating-load instructions, tried to reproduce locally across five increasingly
+CI-faithful runs, all zero-repro:
 1. Baseline, unconstrained (macOS, 14 cores): 15/15 passed.
 2. Postgres container CPU-pinned to a single core (`docker update --cpuset-cpus=0`) plus 12
    host-side busy-loop processes: 20/20 passed.
 3. Same single-core pin, replacing host busy-loops with 4 `alpine` stress containers pinned to the
    *same* cpuset (confirmed via `docker stats` to be genuinely consuming ~90% of that one core, so
    this is real contention inside the Docker VM, not just host noise): 20/20 passed.
-4. The most CI-faithful attempt: built a throwaway Linux container (`node:23-slim`, fresh
+4. The most CI-faithful setup: built a throwaway Linux container (`node:23-slim`, fresh
    `pnpm install`, own database), pinned it with `--cpuset-cpus=0,1` to the *identical two cores*
    as the also-pinned Postgres container — Node and Postgres genuinely sharing 2 vCPUs, the same
-   topology as `ubuntu-latest` — and ran the exact CI command
-   (`vitest run --reporter=json --outputFile=...`) with `CI=true`: 25/25 passed.
-   105 total local runs, zero reproductions. Consistent with TRO-288's own prior exhaustive attempt
-   (14 busy-loop workers on 14 cores + 3 concurrent full suites, also zero repro) — this specific
-   failure mode appears to need something about actual CI infrastructure that CPU-topology-matching
-   alone does not reproduce on this hardware. That gap is itself part of the finding, not swept
+   topology as `ubuntu-latest` — run with the default `vitest run` invocation: 25/25 passed.
+5. Same container/pinning as (4), switched to the *exact* CI command
+   (`vitest run --reporter=json --outputFile=...`) with `CI=true` set, in case the reporter or
+   CI-mode vitest behavior itself mattered: 25/25 passed.
+   105 total local runs (15 + 20 + 20 + 25 + 25), zero reproductions. Consistent with TRO-288's own
+   prior exhaustive attempt (14 busy-loop workers on 14 cores + 3 concurrent full suites, also zero
+   repro) — this specific failure mode appears to need something about actual CI infrastructure that
+   CPU-topology-matching alone does not reproduce on this hardware. That gap is itself part of the finding, not swept
    under a wider quarantine.
 
 **The fix — `api/src/middleware/__tests__/session-activity-race.test.ts` only, no production code
@@ -77,10 +79,26 @@ one of them has resumed, no UPDATE can exist while any of the 10 SELECTs is stil
 regardless of the real order or speed Postgres actually ran them in. That makes "all 10 SELECTs
 observe the same stale row" true by construction — a strictly stronger guarantee than TRO-288's,
 independent of every layer of scheduling in the stack, not just the client-side dispatch layer
-TRO-288 addressed. `markDone` runs on both the resolve and reject branch of each underlying query
-so one failed query can't hang the other 9 on a barrier that would otherwise never release.
+TRO-288 addressed. A rejected underlying query still counts toward `count` (via a tagged
+`{ ok, value | error }` outcome, never a rejected promise — see the correction below) so one failed
+query can't hang the other 9 on a barrier that would otherwise never release.
 
-**Regression test — deterministic, confirmed red for the right reason before this fix.** The
+**CodeRabbit review correction, same day, before merge.** The first version of this fix fed the
+raw `resultPromise` straight into `Promise.all([resultPromise, allCompleted])`. `Promise.all`
+rejects as soon as *any* input rejects, without waiting for the others — so a rejecting barriered
+call could still settle (with its rejection) before every other barriered call had completed,
+undermining this fix's own correctness claim specifically on the error path. Fixed by never letting
+the tracked promise itself reject: `resultPromise.then((value) => ({ ok: true, value }), (error) =>
+({ ok: false, error }))` produces an `outcome` that always *fulfills*, tagged with whichever really
+happened, so `Promise.all([outcome, allCompleted])` can only settle once both have — on every path —
+and the caller's real result or error is only unwrapped and delivered (or re-thrown) after that
+join. Confirmed red-before-green for this correction too: a dedicated test forces two barriered
+calls (kept pending via deferreds until both are invoked) and rejects one first — against the
+pre-correction code this failed with `AssertionError: a rejection must not settle before every
+barriered call has completed: expected [ 'bad-rejected' ] to deeply equal []`, then passed once the
+tagged-outcome fix was restored.
+
+**Regression tests — deterministic, confirmed red for the right reason before this fix.** The
 `createCompletionBarrier` describe block's first test uses manually-controlled deferred promises
 (no real timers, no real queries) to force 3 barriered calls to settle in a *scrambled,
 out-of-dispatch order* (the 3rd-dispatched call resolves first) and asserts none of the 3 outer
@@ -88,13 +106,16 @@ promises resolve until the *last* one settles. Verified this test fails against 
 `createArrivalBarrier` logic — temporarily swapped back in, then reverted — with
 `AssertionError: must not release before every call has settled: expected [ 2, +0 ] to deeply
 equal []`, i.e. the old barrier lets an early-resolving call leak through exactly as hypothesized
-above. Two more harness tests cover the non-matching-SQL passthrough (carried over from TRO-288)
-and that a rejection still releases the barrier rather than deadlocking the other callers.
+above. A second test (added for the CodeRabbit correction, described above) proves the same
+ordering property specifically for a rejecting call, using a shared settlement-order array and
+deferreds kept pending until both calls are invoked — not two independently-resolved promises,
+which would prove nothing about ordering. A third harness test covers the non-matching-SQL
+passthrough (carried over from TRO-288).
 
 **Verified, locally, both without and with the fix in place:**
 - Fixed test file, standalone, unconstrained: 15/15 passed.
-- Fixed test file, inside the CI-topology-matching pinned Linux container (config 4 above),
-  `CI=true`, exact CI invocation: 15/15 passed.
+- Fixed test file, inside the CI-topology-matching pinned Linux container (run 5 above), `CI=true`,
+  exact CI invocation: 15/15 passed.
 - Full local `api` suite after the fix: **673/673 passed, 56/56 files** — no regression elsewhere.
 - `pnpm --filter @ship/api exec tsc --noEmit -p .`: clean (no `any`/`as unknown as`/non-null `!`
   introduced — `createDeferred`'s resolve function is typed optional and invoked via `?.`, matching

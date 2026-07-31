@@ -131,9 +131,20 @@ const BURST = 10;
  * it is enforced only in this process's own promise resolution, never by observing or
  * assuming anything about how fast or in what order the real queries actually ran.
  *
- * `markDone` is registered on both branches of `resultPromise.then` so a rejected query
- * still counts toward `count` — an error must not leave the other `count - 1` callers
- * hung on a barrier that can never release.
+ * A rejected underlying query still counts toward `count` — an error must not leave the
+ * other `count - 1` callers hung on a barrier that can never release. Reviewer-caught
+ * (CodeRabbit, TRO-300): counting the rejection is not enough on its own. The FIRST
+ * version of this function fed `resultPromise` straight into
+ * `Promise.all([resultPromise, allCompleted])`; `Promise.all` rejects as soon as ANY of
+ * its inputs rejects, without waiting for the others — so a rejecting call could still
+ * settle (with its rejection) before every other barriered call had completed, which is
+ * exactly the "act before everyone else has read" gap this barrier exists to close, just
+ * on the error path instead of the success path. Fixed by never letting the tracked
+ * promise itself reject: `outcome` below always FULFILLS, with a tagged value that
+ * records whether the underlying query resolved or threw. `Promise.all([outcome,
+ * allCompleted])` can then only settle once both genuinely have, on every path, and the
+ * final `.then` re-throws the original error only after that join — preserving each
+ * caller's real result or error, just never delivering it early.
  */
 function createCompletionBarrier(isBarriered: (sql: string) => boolean, count: number) {
   let completed = 0;
@@ -146,13 +157,23 @@ function createCompletionBarrier(isBarriered: (sql: string) => boolean, count: n
     if (!isBarriered(sql)) return dispatch();
 
     const resultPromise = Promise.resolve(dispatch());
-    const markDone = () => {
+    // Never rejects — a thrown error becomes a tagged fulfillment, so it cannot make
+    // `Promise.all` below short-circuit ahead of `allCompleted`.
+    const outcome: Promise<{ ok: true; value: unknown } | { ok: false; error: unknown }> =
+      resultPromise.then(
+        (value) => ({ ok: true, value }),
+        (error: unknown) => ({ ok: false, error })
+      );
+
+    outcome.then(() => {
       completed += 1;
       if (completed === count) releaseFn?.();
-    };
-    resultPromise.then(markDone, markDone);
+    });
 
-    return Promise.all([resultPromise, allCompleted]).then(([result]) => result);
+    return Promise.all([outcome, allCompleted]).then(([settled]) => {
+      if (!settled.ok) throw settled.error;
+      return settled.value;
+    });
   };
 }
 
@@ -319,16 +340,26 @@ describe('concurrent session-activity writes (TRO-179 / TRO-177)', () => {
   });
 });
 
-/** A promise plus its resolve function, exposed for a test to settle on its own schedule. */
-function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
-  // `resolveFn` starts undefined and is populated synchronously by the executor below
-  // (Promise executors always run synchronously) — typed as optional rather than
-  // asserted non-null, matching `createCompletionBarrier`'s `releaseFn` above.
+/** A promise plus its resolve/reject functions, exposed for a test to settle on its own schedule. */
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (error: unknown) => void;
+} {
+  // `resolveFn`/`rejectFn` start undefined and are populated synchronously by the
+  // executor below (Promise executors always run synchronously) — typed as optional
+  // rather than asserted non-null, matching `createCompletionBarrier`'s `releaseFn`.
   let resolveFn: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
+  let rejectFn: ((error: unknown) => void) | undefined;
+  const promise = new Promise<T>((res, rej) => {
     resolveFn = res;
+    rejectFn = rej;
   });
-  return { promise, resolve: (value: T) => resolveFn?.(value) };
+  return {
+    promise,
+    resolve: (value: T) => resolveFn?.(value),
+    reject: (error: unknown) => rejectFn?.(error),
+  };
 }
 
 // TRO-288 / TRO-300 — dedicated coverage for the completion barrier itself, isolated
@@ -412,14 +443,59 @@ describe('createCompletionBarrier (TRO-288 / TRO-300 test-harness helper)', () =
     expect(result).toBe('dispatched-immediately');
   });
 
-  it('still releases every caller if one of the underlying calls rejects', async () => {
-    // A rejection must still count toward `count`, or one failed query would hang
-    // every other concurrent caller on a barrier that can never release.
-    const gate = createCompletionBarrier((sql) => sql === 'MATCH', 2);
-    const ok = gate('MATCH', () => Promise.resolve('fine'));
-    const bad = gate('MATCH', () => Promise.reject(new Error('boom')));
+  it(
+    'does not let a rejecting call settle before every barriered call has completed, ' +
+      'and still delivers every caller its own real outcome',
+    async () => {
+      // TRO-300 / CodeRabbit — this is the case the first version of this fix missed:
+      // `Promise.all([resultPromise, allCompleted])` rejects as soon as ANY input
+      // rejects, so a rejecting call could settle (with its rejection) before every
+      // other barriered call had completed — the same "act before everyone else has
+      // read" gap this barrier exists to close, just reachable through the error path
+      // instead of the success path. Both underlying queries are kept pending (via
+      // deferreds, not real timers) until both calls have been invoked, so this proves
+      // the ordering property directly rather than by chance: reject the "bad" one
+      // first and assert NEITHER caller has settled yet, then resolve the "ok" one and
+      // assert both settle together, each with its own real outcome.
+      const ok = createDeferred<string>();
+      const bad = createDeferred<string>();
+      const settledOrder: string[] = [];
 
-    await expect(bad).rejects.toThrow('boom');
-    await expect(ok).resolves.toBe('fine');
-  });
+      const gate = createCompletionBarrier((sql) => sql === 'MATCH', 2);
+
+      const okResult = (async () => {
+        const value = await gate('MATCH', () => ok.promise);
+        settledOrder.push('ok');
+        return value;
+      })();
+      const badResult = (async () => {
+        try {
+          return await gate('MATCH', () => bad.promise);
+        } catch (error) {
+          settledOrder.push('bad-rejected');
+          throw error;
+        }
+      })();
+      // Both calls are now invoked (both dispatches have fired); avoid an unhandled
+      // rejection warning while `badResult` is deliberately left pending below.
+      badResult.catch(() => {});
+
+      // Reject the "bad" call first. Before the fix, this alone would be enough to
+      // settle `badResult` immediately — short-circuiting the barrier on the error path.
+      bad.reject(new Error('boom'));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(
+        settledOrder,
+        'a rejection must not settle before every barriered call has completed'
+      ).toEqual([]);
+
+      // Only once the "ok" call ALSO completes should either caller see its outcome.
+      ok.resolve('fine');
+      await expect(badResult).rejects.toThrow('boom');
+      await expect(okResult).resolves.toBe('fine');
+      expect(settledOrder.sort()).toEqual(['bad-rejected', 'ok']);
+    }
+  );
 });
