@@ -6,6 +6,94 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add an entry here.
 
+**The `audit-baseline` tag.** Points at `149873a` — verified with `git rev-list -n1 audit-baseline`
+and confirmed as the commit immediately before Phase 2 fixes started landing (it is `bace770`'s
+first parent per `git show bace770 --stat`, and `bace770` is TRO-242 below, the first Phase 2 merge).
+It marks the Phase 1 (audit-only) state so it stays a fixed reference once Phase 2 starts changing
+the source it measured. Every category audit skill's "compare mode" (`/<category>-audit compare
+<label>`) re-measures against this tag under identical conditions to prove a fix's effect —
+documented in `.claude/skills/ship-factory/references/evals.md`; this file's own entries lean on it
+directly (see TRO-174's compression note further down, which warns that a compare-mode run against
+`audit-baseline` looks flat or worse over loopback for a fix that is real). Not itself a ticket, so
+it has no rollback entry of its own — `git tag -d audit-baseline` removes it, which leaves compare
+mode with no fixed reference point.
+
+---
+
+## TRO-249 [RULE-8] — audited every `CHANGES.md` entry against the three-question bar; backfilled TRO-242/TRO-243's rollback caveats and the missing `audit-baseline` tag note
+
+**What this is.** RULE-8 requires that `CHANGES.md` answer, per entry: what was added, how to run
+it, how to roll it back. This ticket predates the now-consistent rich format (it was filed when
+`CHANGES.md` barely existed) — its job was to **verify** the file now actually satisfies the rule
+for every entry, not to write it from scratch. Same class as TRO-245 (RULE-3): an audit of prior
+work, not a new fix, so there is no application code and no regression test.
+
+**Method.** Read every entry (68 total — `node scripts/factory/merge-changes.mjs --check` counts
+66 `TRO-*` headings plus the 2 "no ticket: tooling" sections). Cross-checked by hand against that
+script's own structural validator, which already flags any entry missing its own
+`**How to run it.**`/`**Rollback.**`-style heading — as a non-fatal **warning**, by design, because
+(per the script's comment) a chunk of real entries answer the same question in different prose
+("How to re-capture.", "How to run it / verify.", a verification-methodology paragraph for a
+docs-only change) rather than the one recognized heading. Before this ticket's edits, the check
+reported `68 entries, 134 fences, 7 warning(s)`, 0 fatal.
+
+**Result: all 68 entries substantively answer all three questions; 7 use non-standard phrasing the
+validator warns on but a human read confirms is not a gap.** Manually opened each of the 7 warned
+entries and confirmed real content: TRO-305 (`**How to re-capture.**` + a real `pnpm dev` /
+`vitest run` block), TRO-294 (docs-only; `**How to roll it back.**` present, plus a "How I
+confirmed the new URL" section standing in for "how to run" since there is nothing to run in a
+`.claude/CLAUDE.md` string edit), TRO-292 (`**How to run it / verify.**`, a full shell
+reproduction, plus `**How to roll it back.**`), TRO-302 (`**Rollback.**` present; run/verify
+commands embedded in its "Verified against" prose), TRO-203+TRO-204 (`**Rollback**` present; build
+and test commands embedded in "Verified nothing broke"), TRO-197..202 (`**Rollback.**` present; a
+"Build from `web/`" run instruction plus a named regression-test list), TRO-179+TRO-177
+(`**Rollback:**` present; a `Tests:` line naming exact vitest files plus a full "Measured"
+methodology section). None of the 7 were rewritten — this ticket does not touch entries that are
+already substantively compliant, per its own scope rule.
+
+**TRO-242 and TRO-243, backfilled as this ticket's brief specifically asked.** Both already had a
+`**Rollback.**` line naming a commit SHA, but neither stated the consequence of actually rolling
+back. Verified both SHAs before writing anything:
+
+- `git show bace770 --stat` — a merge commit (`Merge: 149873a 137dcd4`) titled "Merge
+  feat/render-deploy: build image from source, serve SPA from API", touching `Dockerfile` (78
+  lines) and `api/src/app.ts` (28 lines). Matches TRO-242 exactly. `git diff 149873a bace770 --
+  Dockerfile` shows the pre-image copying `shared/dist/` and `api/dist/` straight from the build
+  context (`COPY shared/dist/ ./shared/dist/`, `COPY api/dist/ ./api/dist/`) — both gitignored, so
+  that old image cannot build from a clean checkout. Added to TRO-242's rollback: reverting brings
+  that image back, so **the old image needs a local `pnpm build` before `docker build`**.
+- `git show 5b72a79 --stat` — a merge commit (`Merge: bace770 11e93b6`) titled "Merge
+  fix/ssm-fallback: allow non-AWS hosts to supply secrets directly", touching only
+  `api/src/config/ssm.ts` (41/16 lines). Matches TRO-243 exactly. `git diff bace770 5b72a79 --
+  api/src/config/ssm.ts` shows the fix wraps the SSM calls in `try`/`catch`, falling back to
+  `DATABASE_URL`/`SESSION_SECRET` from the environment and rethrowing only when neither is set.
+  Added to TRO-243's rollback: reverting removes that `catch`, so **it re-breaks non-AWS
+  deployment** — any host without AWS SSM access throws on startup again.
+
+**The `audit-baseline` tag note — genuinely missing from `CHANGES.md`, added.** Checked first
+(per the claim-provenance rule): the tag was already documented in
+`.claude/skills/ship-factory/references/evals.md`, `.claude/skills/ship-factory/SKILL.md`, and
+`memory-bank/progress.md`, but nowhere in `CHANGES.md` itself beyond one passing reference to
+"`audit-baseline`" inside TRO-174's compression note. Added a short paragraph to this file's
+header (above) stating what it points to and why, verified with `git rev-list -n1 audit-baseline`
+(`149873a73193dc73e5c3c825b6a46b8ed6fce1c6`) and `git log --oneline --first-parent 149873a..bace770`
+(confirms `bace770` — TRO-242 — is the sole first-parent commit after the tag, i.e. the first
+Phase 2 merge).
+
+**How to run it.**
+
+```bash
+node scripts/factory/merge-changes.mjs --check CHANGES.md
+```
+
+**Regression test:** none — documentation/audit ticket, no application code changed, same class as
+RULE-3 (TRO-245) and the terraform-only tickets. `gate.sh`'s regression-test check is expected to
+fail here and that failure is not a defect in this work.
+
+**Rollback.** Revert this commit. Restores TRO-242/TRO-243's rollback lines to their pre-audit,
+SHA-only form and removes the `audit-baseline` paragraph from this file's header. No other entry
+was modified.
+
 ---
 
 ## TRO-244 (RULE-4) — CI pipeline was missing 3 of the 7 required checks (coverage, dependency audit, security scan)
@@ -6767,7 +6855,14 @@ and rethrows when they are not. AWS behaviour is unchanged.
 **How to run it.** Set `DATABASE_URL`, `SESSION_SECRET`, and `CORS_ORIGIN` in the environment and
 start with `NODE_ENV=production`.
 
-**Rollback.** Revert the merge of `fix/ssm-fallback` (`5b72a79`).
+**Rollback.** Revert the merge of `fix/ssm-fallback` (`5b72a79`) — verified with
+`git diff bace770 5b72a79 -- api/src/config/ssm.ts`: the merge wraps the SSM calls in a
+`try`/`catch` that falls back to `DATABASE_URL`/`SESSION_SECRET` already present in the
+environment, and rethrows only when neither is set. Reverting removes that `catch` entirely and
+restores the bare `Promise.all([getSSMSecret(...), ...])` call, so **this re-breaks non-AWS
+deployment**: any host without AWS credentials or SSM access (Render, Fly, a plain container)
+throws on startup and never contacts the database again, exactly as TRO-242's Dockerfile changes
+made possible for the first time.
 
 ---
 
@@ -6782,5 +6877,11 @@ WebSocket URL being derived from `window.location.host`.
 **How to run it.** `docker build -t ship . && docker run -p 3000:3000 ship`, or deploy to Render,
 which builds from the repository.
 
-**Rollback.** Revert the merge of `feat/render-deploy` (`bace770`).
+**Rollback.** Revert the merge of `feat/render-deploy` (`bace770`) — verified with
+`git diff 149873a bace770 -- Dockerfile`: the prior single-stage image did
+`COPY shared/dist/ ./shared/dist/` and `COPY api/dist/ ./api/dist/` directly from the build
+context, both gitignored and untracked. Reverting restores that image, which means **the old image
+needs a local `pnpm build` before `docker build`** — it can no longer build from a clean checkout,
+only from a working tree that already has `shared/dist/` and `api/dist/` populated (the
+build-locally-then-ship AWS flow this ticket's own "What changed" section describes).
 
