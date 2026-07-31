@@ -74,6 +74,17 @@ terraform/tfplan
 terraform/terraform.tfvars
 terraform/environments/*/terraform.tfvars
 terraform/environments/*/.terraform.lock.hcl
+
+# Terraform: plan output under terraform/environments/ (TF-9 / TRO-292).
+# terraform/*.tfplan and terraform/tfplan above are anchored one level deep
+# (no `**`), so they never covered terraform/environments/<env>/tfplan —
+# that's how terraform/environments/shadow/tfplan got committed (~28.5KB
+# binary plan, no rewrite of existing history, just closing the gap going
+# forward). Matches the `environments/*/` glob already used for tfvars and
+# lock files two lines up, so it covers every current and future
+# environment (shadow, dev, ...) rather than shadow alone.
+terraform/environments/*/*.tfplan
+terraform/environments/*/tfplan
 terraform/bootstrap/.terraform/
 terraform/bootstrap/.terraform.lock.hcl
 terraform/bootstrap/terraform.tfstate
