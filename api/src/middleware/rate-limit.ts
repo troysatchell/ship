@@ -50,6 +50,7 @@ import {
   createRedisRateLimitStore,
   REDIS_KEY_PREFIX_IDENTITY,
   REDIS_KEY_PREFIX_SOURCE_IP,
+  REDIS_KEY_PREFIX_SPA_STATIC,
 } from './redis-rate-limit-store.js';
 
 /** All `/api/` limits are evaluated over a rolling one-minute window. */
@@ -287,4 +288,94 @@ export function createApiRateLimiters(
   });
 
   return [perSourceIpLimiter, perIdentityLimiter];
+}
+
+export interface SpaStaticLimits {
+  windowMs: number;
+  /** Requests per window per source IP, for the static-SPA/catch-all route. */
+  limit: number;
+}
+
+/**
+ * TRO-308 (js/missing-rate-limiting, `app.ts:440` on main) — the static SPA
+ * section of `app.ts` (`express.static(webDist, ...)` + the `app.get('*', ...)`
+ * fallback) is mounted OUTSIDE the `/api/` prefix `perSourceIpLimiter`/
+ * `perIdentityLimiter` match, so CodeQL correctly flagged it: it had zero
+ * rate-limit coverage. This is a real gap, not a legibility problem like
+ * TRO-307's — the route only activates when `web/dist` exists on disk
+ * (single-origin/single-service deployments), never in local dev or in the
+ * current Render/AWS-blueprint topologies, which is why nothing caught it
+ * before.
+ *
+ * Traffic here is anonymous static-file/page-load requests (`index.html`,
+ * JS/CSS bundles) — most carry no session cookie or bearer token — so
+ * `perIdentityLimiter`'s per-identity shape is wrong for it, and a
+ * per-source-IP-only flood ceiling (`perSourceIpLimiter`'s shape) is right.
+ *
+ * This resolves a SEPARATE limit from `sourceIpLimit` above (own tier, own
+ * bucket via `createSpaStaticLimiter`'s own Redis key prefix), rather than
+ * literally reusing `perSourceIpLimiter`, for two reasons:
+ *  1. A static-asset flood (e.g. a broken client stuck retrying `index.html`)
+ *     and an `/api/*` flood from the same source IP shouldn't be able to
+ *     exhaust each other's budget — they're different failure modes and
+ *     should get independent ceilings.
+ *  2. It gives this route its own small, fast test tier (below) instead of
+ *     inheriting `sourceIpLimit`'s test-tier value of 100,000 — which would
+ *     make a real "hit the limit, get a 429" regression test require 100,001
+ *     sequential HTTP requests to prove.
+ *
+ * Production and dev tiers mirror `resolveApiRateLimits`'s `sourceIpLimit`
+ * numbers directly — same NAT-egress reasoning (this file's top-of-file doc),
+ * same order of magnitude of traffic. The test tier (25) is its own number,
+ * deliberately small: nothing else in this suite drives a non-`/api/`,
+ * non-`/collaboration` request through a real built `web/dist` (this route is
+ * a no-op without one), so a low test ceiling here cannot false-trip any
+ * other test in the suite, and it is what makes
+ * `app.spa-static-rate-limit.test.ts`'s red/green 429 assertion fast (tens of
+ * requests) instead of impractical (the shared tiers would need thousands to
+ * hundreds of thousands).
+ */
+export function resolveSpaStaticLimit(env: RateLimitEnv = process.env): SpaStaticLimits {
+  const isTestEnv = env.NODE_ENV === 'test' || env.E2E_TEST === '1';
+  const isDevEnv = env.NODE_ENV !== 'production';
+
+  return {
+    windowMs: API_RATE_LIMIT_WINDOW_MS,
+    limit: isTestEnv ? 25 : isDevEnv ? 10000 : 6000,
+  };
+}
+
+/**
+ * Build the per-source-IP flood ceiling for the static SPA section of
+ * `app.ts`. See `resolveSpaStaticLimit` above for why this is a separate
+ * limiter from `perSourceIpLimiter`/`perIdentityLimiter` rather than a reuse
+ * of either. No custom `keyGenerator` — like `perSourceIpLimiter`, this keys
+ * on `req.ip` via `express-rate-limit`'s own default, which is exactly the
+ * per-source-IP shape this route needs (anonymous requests have no session or
+ * token to key on).
+ *
+ * `redisClient` defaults from `env.REDIS_URL`, same pattern and same reason
+ * as `createApiRateLimiters` — a per-process `MemoryStore` would silently
+ * multiply this ceiling by the instance count under Elastic Beanstalk
+ * autoscaling (TRO-280 / API-7's problem, applies here identically).
+ */
+export function createSpaStaticLimiter(
+  env: RateLimitEnv = process.env,
+  redisClient: Redis | undefined = createRedisClientFromEnv(env)
+): RequestHandler {
+  const { windowMs, limit } = resolveSpaStaticLimit(env);
+
+  return rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests from this network. Please slow down.' },
+    ...(redisClient
+      ? {
+          store: createRedisRateLimitStore(redisClient, REDIS_KEY_PREFIX_SPA_STATIC),
+          passOnStoreError: true,
+        }
+      : {}),
+  });
 }
