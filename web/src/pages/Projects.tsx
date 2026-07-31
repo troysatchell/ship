@@ -217,7 +217,7 @@ export function ProjectsPage() {
     // Archive each project
     let success = 0;
     for (const id of ids) {
-      const result = await updateProject(id, { archived_at: new Date().toISOString() } as any);
+      const result = await updateProject(id, { archived_at: new Date().toISOString() });
       if (result) success++;
     }
 
@@ -227,8 +227,7 @@ export function ProjectsPage() {
       // voided from a sync wrapper rather than widening that shared type.
       const undoArchive = async () => {
         for (const id of ids) {
-          // review-pattern-ok: pre-existing `as any` (TRO-212's target, not introduced by this fix - only moved by extracting this function)
-          await updateProject(id, { archived_at: null } as any);
+          await updateProject(id, { archived_at: null });
         }
         showToast('Archive undone', 'info');
         // refreshProjects() (useProjectsQuery.ts) wraps react-query's
