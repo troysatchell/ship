@@ -240,10 +240,16 @@ resource "aws_elastic_beanstalk_environment" "api" {
     value     = aws_iam_role.eb_service.arn
   }
 
+  # Both ALB-facing security groups (TRO-295/TF-7 follow-up split the single
+  # `alb` group into `alb` (443) + `alb_http` (80) to keep each group's
+  # CloudFront-prefix-list rule-count expansion under its own quota — see the
+  # CAUTION comment in security-groups.tf). This EB option setting accepts a
+  # comma-separated list, same pattern as `Subnets`/`ELBSubnets` above in this
+  # file.
   setting {
     namespace = "aws:elbv2:loadbalancer"
     name      = "SecurityGroups"
-    value     = aws_security_group.alb.id
+    value     = join(",", [aws_security_group.alb.id, aws_security_group.alb_http.id])
   }
 
   # Rolling Deployment with Additional Batch (zero-downtime)
@@ -386,6 +392,11 @@ output "eb_instance_security_group" {
 }
 
 output "eb_alb_security_group" {
-  description = "Security group for ALB"
+  description = "Security group for ALB (HTTPS/443, CloudFront-only)"
   value       = aws_security_group.alb.id
+}
+
+output "eb_alb_http_security_group" {
+  description = "Security group for ALB (HTTP/80, CloudFront-only — split from eb_alb_security_group by TRO-295/TF-7 for the SG rules-per-group quota; see security-groups.tf)"
+  value       = aws_security_group.alb_http.id
 }
