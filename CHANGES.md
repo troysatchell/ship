@@ -107,8 +107,19 @@ blueprint with no runtime code path to exercise.
 
 **Rollback.** Revert this commit (or the branch's merge commit) — the split is additive/mechanical
 (new resource + a widened setting value), with no schema or state-destructive change, so a plain
-`git revert` restores the single-`alb`-group shape TF-7 shipped. No state exists to reconcile: this
-blueprint has never been `apply`'d (per TF-7/TRO-278).
+`git revert` restores the single-`alb`-group shape TF-7 shipped. No state exists to reconcile today:
+this blueprint has never been `apply`'d (per TF-7/TRO-278).
+
+**If this has since been `apply`'d to a live account, a plain `git revert` is not safe by itself.**
+`git revert` alone reverts `security-groups.tf` (removing `aws_security_group.alb_http` and its
+port-80 rule) and `elastic-beanstalk.tf` (narrowing `SecurityGroups` back to one group) in the same
+commit, so a subsequent `apply` of the reverted code removes both halves together and restores the
+pre-split shape correctly. The danger is a **partial** revert — reverting only one of the two files
+(e.g. removing `alb_http` from `security-groups.tf` while leaving the widened `SecurityGroups`
+setting in `elastic-beanstalk.tf`, or the reverse) would either dangle a security-group reference to
+a resource Terraform is about to destroy, or silently drop port-80 ingress while
+`aws_security_group.alb_http` still exists unattached. Revert both files together in one `apply`,
+never one at a time against live state.
 
 ---
 

@@ -98,7 +98,7 @@ resource "aws_security_group" "eb_instance" {
 # split changes nothing about which traffic reaches the ALB: CloudFront's
 # origin-facing ranges are still the only source allowed on either port.
 resource "aws_security_group" "alb" {
-  name        = "${var.project_name}-alb"
+  name        = "${var.project_name}-alb-https"
   description = "ALB security group - HTTPS (443) from CloudFront only"
   vpc_id      = aws_vpc.main.id
 
@@ -127,7 +127,7 @@ resource "aws_security_group" "alb" {
   }
 
   tags = {
-    Name = "${var.project_name}-alb"
+    Name = "${var.project_name}-alb-https"
   }
 }
 
