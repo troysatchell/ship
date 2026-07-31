@@ -29,7 +29,9 @@ export function ConvertedDocumentsPage() {
 
   useEffect(() => {
     if (!currentWorkspace) return;
-    loadConversions();
+    // loadConversions() catches all errors internally (console.error + setLoading(false))
+    // and never rejects, so there is no user-facing failure path to route to here.
+    void loadConversions();
   }, [currentWorkspace, filter]);
 
   async function loadConversions() {

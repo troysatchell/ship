@@ -31,31 +31,43 @@ export function InviteAcceptPage() {
       return;
     }
 
-    validateInvite();
+    // validateInvite() now catches its own errors and routes them into the
+    // 'error' status/setError state below, so it never rejects.
+    void validateInvite();
   }, [token]);
 
   async function validateInvite() {
     if (!token) return;
 
-    const res = await api.invites.validate(token);
-    if (res.success && res.data) {
-      setInviteInfo(res.data);
-      // Check if user is already a member - invite was auto-consumed
-      if (res.data.alreadyMember) {
-        setStatus('already_member');
+    try {
+      const res = await api.invites.validate(token);
+      if (res.success && res.data) {
+        setInviteInfo(res.data);
+        // Check if user is already a member - invite was auto-consumed
+        if (res.data.alreadyMember) {
+          setStatus('already_member');
+        } else {
+          setStatus('valid');
+        }
       } else {
-        setStatus('valid');
+        const errorMsg = res.error?.message || '';
+        if (errorMsg.includes('expired')) {
+          setStatus('expired');
+        } else if (errorMsg.includes('already accepted') || errorMsg.includes('already used')) {
+          setStatus('accepted');
+        } else {
+          setStatus('invalid');
+        }
+        setError(errorMsg);
       }
-    } else {
-      const errorMsg = res.error?.message || '';
-      if (errorMsg.includes('expired')) {
-        setStatus('expired');
-      } else if (errorMsg.includes('already accepted') || errorMsg.includes('already used')) {
-        setStatus('accepted');
-      } else {
-        setStatus('invalid');
-      }
-      setError(errorMsg);
+    } catch (err) {
+      // api.invites.validate()'s underlying request() layer rejects on a
+      // network failure - previously an unhandled promise rejection that left
+      // the page stuck on "Loading..." forever with no way out. Route into
+      // the 'error' status this file already declared in InviteStatus but
+      // never actually set.
+      setError(err instanceof Error ? err.message : 'Failed to validate invite. Please try again.');
+      setStatus('error');
     }
   }
 
@@ -65,16 +77,26 @@ export function InviteAcceptPage() {
     setAccepting(true);
     setError(null);
 
-    // For new users, pass name and password to create account
-    const data = inviteInfo?.userExists === false
-      ? { name: name || undefined, password }
-      : undefined;
-    const res = await api.invites.accept(token, data);
-    if (res.success) {
-      // Redirect to docs - user is now a member of the workspace
-      navigate('/docs', { replace: true });
-    } else {
-      setError(res.error?.message || 'Failed to accept invite');
+    try {
+      // For new users, pass name and password to create account
+      const data = inviteInfo?.userExists === false
+        ? { name: name || undefined, password }
+        : undefined;
+      const res = await api.invites.accept(token, data);
+      if (res.success) {
+        // Redirect to docs - user is now a member of the workspace
+        void navigate('/docs', { replace: true });
+      } else {
+        setError(res.error?.message || 'Failed to accept invite');
+        setAccepting(false);
+      }
+    } catch (err) {
+      // api.invites.accept()'s underlying request() layer rejects on a
+      // network failure - previously an unhandled rejection that left
+      // `accepting` stuck `true` forever (button spinner with no way to
+      // retry). Route into the same error state the success path already
+      // uses above.
+      setError(err instanceof Error ? err.message : 'Failed to accept invite. Please try again.');
       setAccepting(false);
     }
   }
@@ -99,6 +121,31 @@ export function InviteAcceptPage() {
             <h1 className="text-xl font-semibold text-foreground">Invalid Invite</h1>
             <p className="mt-2 text-sm text-muted">
               This invite link is not valid. It may have been revoked or the URL is incorrect.
+            </p>
+            <Link
+              to="/login"
+              className="mt-6 inline-block px-4 py-2 bg-accent text-white rounded-md hover:bg-accent/90 transition-colors"
+            >
+              Go to Login
+            </Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Unexpected/network failure while validating or accepting the invite
+  if (status === 'error') {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background">
+        <div className="w-full max-w-md px-6">
+          <div className="rounded-lg border border-border bg-surface p-8 text-center">
+            <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-red-500/10">
+              <ErrorIcon className="h-6 w-6 text-red-500" />
+            </div>
+            <h1 className="text-xl font-semibold text-foreground">Something Went Wrong</h1>
+            <p className="mt-2 text-sm text-muted">
+              {error || 'Failed to validate this invite. Please try again.'}
             </p>
             <Link
               to="/login"
@@ -251,7 +298,11 @@ export function InviteAcceptPage() {
                 />
               </div>
               <button
-                onClick={handleAccept}
+                onClick={() => {
+                  // handleAccept() now catches its own errors (see above), so
+                  // it never rejects.
+                  void handleAccept();
+                }}
                 disabled={accepting || password.length < 8}
                 className="w-full px-4 py-2 bg-accent text-white rounded-md hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >
@@ -279,7 +330,9 @@ export function InviteAcceptPage() {
           {user && (
             <div className="mt-6 space-y-3">
               <button
-                onClick={handleAccept}
+                onClick={() => {
+                  void handleAccept();
+                }}
                 disabled={accepting}
                 className="w-full px-4 py-2 bg-accent text-white rounded-md hover:bg-accent/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               >

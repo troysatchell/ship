@@ -38,25 +38,35 @@ export function WorkspaceSettingsPage() {
 
   useEffect(() => {
     if (!currentWorkspace) return;
-    loadData(showArchived);
+    // loadData now catches its own errors (see below) and always resolves
+    // via its finally block, so it never rejects.
+    void loadData(showArchived);
   }, [currentWorkspace, showArchived]);
 
   async function loadData(includeArchived = false) {
     if (!currentWorkspace) return;
     setLoading(true);
 
-    const [membersRes, invitesRes, tokensRes, logsRes] = await Promise.all([
-      api.workspaces.getMembers(currentWorkspace.id, { includeArchived }),
-      api.workspaces.getInvites(currentWorkspace.id),
-      api.apiTokens.list(),
-      api.workspaces.getAuditLogs(currentWorkspace.id, { limit: 50 }),
-    ]);
+    try {
+      const [membersRes, invitesRes, tokensRes, logsRes] = await Promise.all([
+        api.workspaces.getMembers(currentWorkspace.id, { includeArchived }),
+        api.workspaces.getInvites(currentWorkspace.id),
+        api.apiTokens.list(),
+        api.workspaces.getAuditLogs(currentWorkspace.id, { limit: 50 }),
+      ]);
 
-    if (membersRes.success && membersRes.data) setMembers(membersRes.data.members);
-    if (invitesRes.success && invitesRes.data) setInvites(invitesRes.data.invites);
-    if (tokensRes.success && tokensRes.data) setApiTokens(tokensRes.data);
-    if (logsRes.success && logsRes.data) setAuditLogs(logsRes.data.logs);
-    setLoading(false);
+      if (membersRes.success && membersRes.data) setMembers(membersRes.data.members);
+      if (invitesRes.success && invitesRes.data) setInvites(invitesRes.data.invites);
+      if (tokensRes.success && tokensRes.data) setApiTokens(tokensRes.data);
+      if (logsRes.success && logsRes.data) setAuditLogs(logsRes.data.logs);
+    } catch (err) {
+      // Previously: no catch at all, so a network failure during the
+      // initial Promise.all left `loading` stuck `true` forever.
+      console.error('Failed to load workspace settings:', err);
+      alert('Failed to load workspace settings. Please try refreshing the page.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleInvite(e: React.FormEvent) {
@@ -64,26 +74,42 @@ export function WorkspaceSettingsPage() {
     if (!currentWorkspace || !inviteEmail.trim()) return;
 
     setInviting(true);
-    const res = await api.workspaces.createInvite(currentWorkspace.id, {
-      email: inviteEmail.trim(),
-      x509SubjectDn: inviteSubjectDn.trim() || undefined,
-      role: inviteRole,
-    });
-    if (res.success && res.data) {
-      const { invite } = res.data;
-      setInvites(prev => [...prev, invite]);
-      setInviteEmail('');
-      setInviteSubjectDn('');
-      setShowPivField(false);
+    try {
+      const res = await api.workspaces.createInvite(currentWorkspace.id, {
+        email: inviteEmail.trim(),
+        x509SubjectDn: inviteSubjectDn.trim() || undefined,
+        role: inviteRole,
+      });
+      if (res.success && res.data) {
+        const { invite } = res.data;
+        setInvites(prev => [...prev, invite]);
+        setInviteEmail('');
+        setInviteSubjectDn('');
+        setShowPivField(false);
+      } else {
+        // Previously: no catch/else at all, so a failure (or a thrown
+        // network error, see catch below) left `inviting` stuck `true`
+        // forever with no feedback.
+        alert(res.error?.message || 'Failed to create invite');
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to create invite');
+    } finally {
+      setInviting(false);
     }
-    setInviting(false);
   }
 
   async function handleRevokeInvite(inviteId: string) {
     if (!currentWorkspace) return;
-    const res = await api.workspaces.revokeInvite(currentWorkspace.id, inviteId);
-    if (res.success) {
-      setInvites(prev => prev.filter(i => i.id !== inviteId));
+    try {
+      const res = await api.workspaces.revokeInvite(currentWorkspace.id, inviteId);
+      if (res.success) {
+        setInvites(prev => prev.filter(i => i.id !== inviteId));
+      } else if (res.error?.message) {
+        alert(res.error.message);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to revoke invite');
     }
   }
 
@@ -97,9 +123,15 @@ export function WorkspaceSettingsPage() {
       return;
     }
 
-    const res = await api.workspaces.updateMember(currentWorkspace.id, userId, { role: newRole });
-    if (res.success) {
-      setMembers(prev => prev.map(m => m.userId === userId ? { ...m, role: newRole } : m));
+    try {
+      const res = await api.workspaces.updateMember(currentWorkspace.id, userId, { role: newRole });
+      if (res.success) {
+        setMembers(prev => prev.map(m => m.userId === userId ? { ...m, role: newRole } : m));
+      } else if (res.error?.message) {
+        alert(res.error.message);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to update role');
     }
   }
 
@@ -116,23 +148,36 @@ export function WorkspaceSettingsPage() {
 
     if (!confirm(`Archive ${member?.name || 'this member'}? They will lose access immediately.`)) return;
 
-    const res = await api.workspaces.removeMember(currentWorkspace.id, userId);
-    if (res.success) {
-      setMembers(prev => prev.filter(m => m.userId !== userId));
-      // Invalidate archived persons cache so mentions update
-      queryClient.invalidateQueries({ queryKey: archivedPersonsKey });
+    try {
+      const res = await api.workspaces.removeMember(currentWorkspace.id, userId);
+      if (res.success) {
+        setMembers(prev => prev.filter(m => m.userId !== userId));
+        // Invalidate archived persons cache so mentions update
+        void queryClient.invalidateQueries({ queryKey: archivedPersonsKey });
+      } else if (res.error?.message) {
+        alert(res.error.message);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to archive member');
     }
   }
 
   async function handleRestoreMember(userId: string) {
     if (!currentWorkspace) return;
 
-    const res = await api.workspaces.restoreMember(currentWorkspace.id, userId);
-    if (res.success) {
-      // Refresh the members list to get updated data
-      loadData(showArchived);
-      // Invalidate archived persons cache so mentions update
-      queryClient.invalidateQueries({ queryKey: archivedPersonsKey });
+    try {
+      const res = await api.workspaces.restoreMember(currentWorkspace.id, userId);
+      if (res.success) {
+        // Refresh the members list to get updated data. loadData catches its
+        // own errors (see above), so it never rejects.
+        void loadData(showArchived);
+        // Invalidate archived persons cache so mentions update
+        void queryClient.invalidateQueries({ queryKey: archivedPersonsKey });
+      } else if (res.error?.message) {
+        alert(res.error.message);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to restore member');
     }
   }
 
@@ -203,9 +248,9 @@ export function WorkspaceSettingsPage() {
                 currentUserId={user?.id}
                 showArchived={showArchived}
                 onShowArchivedChange={setShowArchived}
-                onUpdateRole={handleUpdateRole}
-                onArchiveMember={handleArchiveMember}
-                onRestoreMember={handleRestoreMember}
+                onUpdateRole={(userId, role) => { void handleUpdateRole(userId, role); }}
+                onArchiveMember={(userId) => { void handleArchiveMember(userId); }}
+                onRestoreMember={(userId) => { void handleRestoreMember(userId); }}
               />
             )}
             {activeTab === 'invites' && (
@@ -220,8 +265,8 @@ export function WorkspaceSettingsPage() {
                 inviteRole={inviteRole}
                 setInviteRole={setInviteRole}
                 inviting={inviting}
-                onInvite={handleInvite}
-                onRevoke={handleRevokeInvite}
+                onInvite={(e) => { void handleInvite(e); }}
+                onRevoke={(id) => { void handleRevokeInvite(id); }}
               />
             )}
             {activeTab === 'tokens' && (
@@ -399,9 +444,15 @@ function InvitesTab({
 
   function handleCopyLink(invite: WorkspaceInvite) {
     const url = `${window.location.origin}/invite/${invite.token}`;
-    navigator.clipboard.writeText(url);
-    setCopiedId(invite.id);
-    setTimeout(() => setCopiedId(null), 2000);
+    // navigator.clipboard.writeText() can reject (e.g. permission denied);
+    // previously this was a floating promise and "Copied!" showed
+    // unconditionally regardless of whether the write actually succeeded.
+    navigator.clipboard.writeText(url).then(() => {
+      setCopiedId(invite.id);
+      setTimeout(() => setCopiedId(null), 2000);
+    }).catch((err: unknown) => {
+      console.error('Failed to copy invite link:', err);
+    });
   }
 
   return (
@@ -540,32 +591,53 @@ function ApiTokensTab({
     if (!tokenName.trim()) return;
 
     setCreating(true);
-    const res = await api.apiTokens.create({
-      name: tokenName.trim(),
-      expires_in_days: expiresInDays ? parseInt(expiresInDays, 10) : undefined,
-    });
-    if (res.success && res.data) {
-      setNewToken(res.data);
-      onTokenCreated(res.data);
-      setTokenName('');
+    try {
+      const res = await api.apiTokens.create({
+        name: tokenName.trim(),
+        expires_in_days: expiresInDays ? parseInt(expiresInDays, 10) : undefined,
+      });
+      if (res.success && res.data) {
+        setNewToken(res.data);
+        onTokenCreated(res.data);
+        setTokenName('');
+      } else {
+        // Previously: no catch/else at all, so a failure (or a thrown
+        // network error, see catch below) left `creating` stuck `true`
+        // forever with no feedback.
+        alert(res.error?.message || 'Failed to create token');
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to create token');
+    } finally {
+      setCreating(false);
     }
-    setCreating(false);
   }
 
   async function handleRevoke(tokenId: string) {
     if (!confirm('Are you sure you want to revoke this token? This cannot be undone.')) return;
 
-    const res = await api.apiTokens.revoke(tokenId);
-    if (res.success) {
-      onTokenRevoked(tokenId);
+    try {
+      const res = await api.apiTokens.revoke(tokenId);
+      if (res.success) {
+        onTokenRevoked(tokenId);
+      } else if (res.error?.message) {
+        alert(res.error.message);
+      }
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Failed to revoke token');
     }
   }
 
   function handleCopy() {
     if (!newToken) return;
-    navigator.clipboard.writeText(newToken.token);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    // See handleCopyLink (InvitesTab) above for why this is a `.then`/
+    // `.catch` chain rather than a bare fire-and-forget call.
+    navigator.clipboard.writeText(newToken.token).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch((err: unknown) => {
+      console.error('Failed to copy token:', err);
+    });
   }
 
   function handleDismissToken() {
@@ -584,7 +656,14 @@ function ApiTokensTab({
           </p>
         </div>
 
-        <form onSubmit={handleCreate} className="flex gap-3 items-end">
+        <form
+          onSubmit={(e) => {
+            // handleCreate now catches its own errors (see above), so it
+            // never rejects.
+            void handleCreate(e);
+          }}
+          className="flex gap-3 items-end"
+        >
           <div className="flex-1 max-w-xs">
             <label className="block text-xs text-muted mb-1">Token Name</label>
             <input
@@ -699,7 +778,7 @@ function ApiTokensTab({
                   <td className="px-4 py-3 text-right">
                     {token.is_active && (
                       <button
-                        onClick={() => handleRevoke(token.id)}
+                        onClick={() => { void handleRevoke(token.id); }}
                         className="text-sm text-red-500 hover:text-red-400 transition-colors"
                       >
                         Revoke

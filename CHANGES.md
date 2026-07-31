@@ -111,6 +111,498 @@ freemem-only calculation and its macOS behavior exactly as it was.
 
 ---
 
+## TRO-228 (TEST-6) — Allocation grid showed `planId: null` right after the plan was created — not a race, a mis-scoped lookup key
+
+**The audit's hypothesis did not hold — traced and overturned, not assumed.** TEST-6 escalated
+`e2e/weekly-accountability.spec.ts:469` as "a real race candidate": `GET
+/api/weekly-plans/project-allocation-grid/:projectId` returned `planId: null` immediately after a
+`POST /api/weekly-plans` that should have created it, reproducibly on the first attempt. The
+hypothesis was that plan creation and its "week assignment" were two separate statements, so a read
+racing the write could observe the plan but not its assignment.
+
+Traced the actual code before touching anything (`api/src/routes/weekly-plans.ts:183-301`):
+`POST /weekly-plans` already inserts the `documents` row and its `document_associations` project
+link inside **one transaction** (`BEGIN` at line 250, `COMMIT` at line 281, both queries in between
+run on the same pooled client), and the `201` response is only written after `COMMIT` resolves.
+Proved this is not a timing issue by reproducing the exact e2e sequence as a single supertest
+request against the real Express app (`api/src/routes/weekly-plans.test.ts`) — it passed cleanly,
+every time, 3/3 runs. There is no window here where the write is half-visible.
+
+**What is actually broken (observed, file:line).** `POST /weekly-plans` deliberately dedupes a
+`weekly_plan` document on `(person_id, week_number)` **only** — `project_id` is documented in the
+route's own `weeklyPlanSchema` comment as "Optional - legacy field, not used for uniqueness"
+(`weekly-plans.ts:143`), and the same person+week-only lookup is reused, unchanged, by the
+`weekly_retro` POST handler when it auto-populates a retro from that week's plan
+(`weekly-plans.ts:642-650`). But the allocation-grid handler's plan/retro lookups
+(`weekly-plans.ts:990-999`, pre-fix) filtered by `(properties->>'project_id') = $2` — treating
+`project_id` as if it reliably scoped a plan to one project, when the create endpoint explicitly
+does not guarantee that.
+
+The failure is deterministic, not probabilistic: a person's first weekly-plan POST for week *N*,
+on *any* project, permanently "claims" that (person, week) pair — its `properties.project_id` is
+whatever project happened to ask first. A **later** POST for the same person+week from a
+**different** project correctly returns that same existing document (`200`, not `201` — idempotent
+by design), but the grid's old `= $2` filter then can never find it for the second project, because
+the document's stored `project_id` still points at the first project. `e2e/weekly-accountability.spec.ts`
+triggers this because every test in the file logs in as the same seeded user (same `person_id`) and
+an earlier test in file order (`weekly-accountability.spec.ts:78`, `week_number: 1`) already claims
+week 1 for a different project before the allocation-grid test (`:469`, also `week_number: 1`) runs
+— but the same shape occurs for a real user assigned to two concurrent projects in the same
+sprint, which is a real (if narrow) production scenario, not just a test-ordering artifact.
+
+**Cross-file note per the ticket's own instruction:** this is query-shaped, not a
+concurrency/transaction bug — flagging plainly rather than forcing a `BEGIN`/`COMMIT` onto a
+mechanism that was already atomic. No `db-query`/`api-perf` action needed beyond what this fix
+already does (see below).
+
+**CodeQL finding, triaged, filed as a new ticket, not fixed here.** PR #94's CodeQL security-scan
+check reported a High-severity "new" `js/missing-rate-limiting` alert at the
+`/project-allocation-grid/:projectId` handler this ticket touches. Verified it is **not new**:
+`git show main:api/src/routes/weekly-plans.ts` shows the same handler already lacked rate-limiting
+middleware before this diff — the `PlanOrRetroRow` interface insertion above it shifted every
+subsequent line number, and CodeQL's PR-vs-base diffing appears to treat the shifted registration as
+newly-introduced code. The repo-wide alert list shows **18 open instances of this same rule in
+`weekly-plans.ts` alone**, plus more in `weeks.ts`, `admin.ts`, and `search.ts` — a systemic gap in
+how `api/src/middleware/rate-limit.ts` (TRO-280) is *applied*, not a defect in this handler
+specifically or something this ticket's narrow query fix should absorb as a drive-by. Filed as
+`TRO-307`, recorded in `audit/factory/review-findings.jsonl` with disposition `new-ticket`.
+
+**The fix — `api/src/routes/weekly-plans.ts`, `project-allocation-grid/:projectId` handler only.**
+Changed the plan/retro lookup queries to filter by `(properties->>'person_id') = ANY($2::text[])`,
+where `$2` is the list of person IDs already allocated to this project (from the preceding
+`allocatedPeopleResult` query), instead of filtering by `project_id`. This matches the actual
+identity model the create endpoints use and enforce elsewhere in this same file, so a person's
+week-*N* plan is found for every project's grid it is relevant to, regardless of which project's
+request happened to create the underlying document first. Also typed the two queries' rows
+(`PlanOrRetroRow`, `weekly-plans.ts:910-916`) instead of leaving `.rows` implicitly `any`.
+
+**Second correction (CodeRabbit, PR #94).** Both queries filtered `deleted_at IS NULL` but not
+`archived_at IS NULL` — pre-existing on `main` before this ticket, not introduced by it, but the
+exact two queries this fix already touches. An archived `weekly_plan`/`weekly_retro` document would
+still populate `planId`/`retroId` in the grid. Added `AND archived_at IS NULL` to both.
+
+**Regression test — `api/src/routes/weekly-plans.test.ts` (new file, 3 cases).** Supertest cases
+against the real Express app:
+1. The straightforward path — POST creates a plan, GET the grid immediately, `planId` matches.
+   This alone does **not** reproduce the bug (confirmed above — it passes against the unfixed code
+   too, because there is no race), which is itself evidence the audit's race hypothesis was wrong.
+2. The actual bug, reproduced deterministically and structurally (no sleep, no timing dependency):
+   POST a week-1 plan for "Other Project", then POST a week-1 plan for the project under test for
+   the **same person** (asserts the idempotent `200` + same `id` first, proving the dedup-by-
+   person+week behavior itself), then GET that project's allocation grid and assert `planId` is the
+   existing plan's id. Confirmed **red before the fix** —
+   `expected null to be '<plan-id>'` — and green after, 3/3 runs.
+3. **Added per CodeRabbit review (PR #94):** the mirror-image case for `weekly_retro`/`retroId`,
+   identical shape to case 2 but through `POST /api/weekly-retros`. The allocation grid applies the
+   same person_id-scoped fix to both lookups, so both need independent coverage — a regression that
+   broke only the retro side would otherwise pass unnoticed.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/routes/weekly-plans.test.ts
+```
+
+**How to roll it back.** Revert this commit. `api/src/routes/weekly-plans.ts`'s
+`project-allocation-grid` handler returns to filtering plan/retro lookups by `project_id`, and
+`api/src/routes/weekly-plans.test.ts` is removed. No schema or migration changes were needed or
+made.
+
+---
+
+## TRO-306 (TS-10 follow-up, batch 1) — `web/src/pages/*`'s 188 floating/misused-promise sites fixed, both rules promoted to `error` for `web/src/pages/**`
+
+**Scope.** TRO-297's own "what's still open" note recommended splitting web's promise-safety
+cleanup into a few `web/src/pages/*` batches rather than one mega-ticket. This ticket is that
+first (and, since every file reached zero, only needed) batch: all 21 files directly under
+`web/src/pages/` that had violations. `web/src/components/**` and `web/src/lib/**` are a separate,
+still-open, uncounted-by-this-ticket population — explicitly out of scope, noted below.
+
+**Live count re-derived, not trusted from the ticket's cache.** The ticket's own text cited "~389"
+sites for web overall (from TRO-297's rough estimate of all of `web/src`, not specifically
+`web/src/pages`). The actual live count, from the command below, was **188 errors across 21
+files** (plus 16 unrelated pre-existing `no-explicit-any`/`no-non-null-assertion` warnings from
+other files, untouched, out of scope).
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec eslint src/pages --rule \
+  '{"@typescript-eslint/no-floating-promises":"error","@typescript-eslint/no-misused-promises":"error"}'
+```
+**Before:** `✖ 204 problems (188 errors, 16 warnings)`.
+**After (same command):** `✖ 16 problems (0 errors, 16 warnings)` — the 16 remaining warnings are
+all pre-existing `no-explicit-any`/`no-non-null-assertion` (TS-1/TS-2/TS-4/TS-8, untouched).
+
+**Per-file breakdown (all 21 reached zero):**
+
+| File | Violations fixed |
+|---|---|
+| App.tsx | 44 |
+| UnifiedDocumentPage.tsx | 19 |
+| Projects.tsx | 13 |
+| WorkspaceSettings.tsx | 13 |
+| AdminWorkspaceDetail.tsx | 11 |
+| PersonEditor.tsx | 10 |
+| ReviewsPage.tsx | 10 |
+| AdminDashboard.tsx | 8 |
+| Documents.tsx | 8 |
+| Programs.tsx | 8 |
+| MyWeekPage.tsx | 7 |
+| TeamMode.tsx | 7 |
+| Login.tsx | 6 |
+| OrgChartPage.tsx | 6 |
+| TeamDirectory.tsx | 5 |
+| InviteAccept.tsx | 4 |
+| Setup.tsx | 4 |
+| FeedbackEditor.tsx | 2 |
+| ConvertedDocuments.tsx | 1 |
+| PublicFeedback.tsx | 1 |
+| UnifiedDocumentPage.deletedFocusRefetch.test.tsx | 1 |
+
+**The fix pattern, applied per-site (never a blanket `void`):**
+
+1. **`navigate(...)` (react-router).** `NavigateFunction`'s type is `(to, options?) => void |
+   Promise<void>`, so every call is technically a floating promise. No established mechanism in
+   this codebase handles a navigation rejection, so every fire-and-forget `navigate(...)` call —
+   by far the largest share of the 188 sites — is `void navigate(...)`, with `onClick={() =>
+   navigate(x)}`-style implicit-return arrows either voided inline or wrapped in a block body.
+2. **Self-contained mutation wrappers.** `createDocument`/`updateDocument`/`deleteDocument`
+   (`useDocumentsQuery.ts`), `createProject`/`updateProject`/`deleteProject`
+   (`useProjectsQuery.ts`), `createProgram`/`updateProgram`/`deleteProgram`
+   (`useProgramsQuery.ts`), and `createIssue`/`updateIssue` (`useIssuesQuery.ts`, with one
+   exception below) all wrap their underlying `mutateAsync` in `try { ... } catch { return
+   null/false; }` and never reject. Handlers built on them, and the shared components that receive
+   them as props (`ContextMenuItem`, `DocumentTreeItem`, `ProgramBulkActionBar`,
+   `ProjectsBulkActionBar`, `SelectableList`'s `onItemClick`, `DocumentListToolbar`'s
+   `createButton`), are `void`d rather than widening those components' declared void-returning
+   prop types.
+3. **`showToast`'s "Undo" action.** `ToastAction.onClick` is typed `() => void`
+   (`components/ui/Toast.tsx`). Three sites (Projects.tsx bulk-archive, App.tsx document-delete,
+   App.tsx program-archive) had passed an inline `async () => {...}` directly as `action.onClick` —
+   each extracted into a named async function, voided from a sync wrapper, rather than widening the
+   toast's own type.
+4. **Real bugs found and fixed while wiring rejection handling, not just satisfying the linter:**
+   - `InviteAccept.tsx`: `api.invites.validate()`/`accept()` can reject on a network failure;
+     unhandled, this left the page stuck on "Loading..." (validate) or the button stuck on
+     "Accepting..." forever (accept — `setAccepting` never reset on the throw path). Now routed
+     into the `'error'` status this file already declared in its own `InviteStatus` type but never
+     actually set, and into the existing `setError`/`setAccepting(false)` failure pattern.
+   - `Login.tsx`: `login()` (`useAuth.tsx`) can reject the same way; `handleSubmit` had no
+     try/catch, so a network failure during login left the button stuck on "Signing in..." with no
+     feedback. Now caught and routed into the existing `error`/`errorField`/`isLoading` state.
+   - `AdminDashboard.tsx` / `AdminWorkspaceDetail.tsx` / `WorkspaceSettings.tsx`: each page's
+     `loadData()` had **no error handling at all** — a network failure during the initial
+     `Promise.all` left `loading` stuck `true` forever with a blank page and no way to recover.
+     All three now catch and report (via a new `loadError` state or this file's own existing
+     `alert()` convention).
+   - `MyWeekPage.tsx`: `handleCreatePlan`/`handleCreateRetro`/`handleCreateStandup` were `try { ...
+     } finally { setCreating(null); }` with **no catch and no else on `!res.ok`** — a rejected
+     `apiPost` or a non-2xx response silently reset the "Creating..." button with zero feedback.
+     Now surfaces an inline `role="alert"` error message (this file has no toast/context
+     dependency, so a local `actionError` state was used instead of pulling in `useToast` — see the
+     regression-test section below for why).
+   - `AdminWorkspaceDetail.tsx` / `WorkspaceSettings.tsx`: `navigator.clipboard.writeText()` calls
+     were floating promises, and the pre-fix code showed "Copied!"/flipped the copied state
+     **unconditionally**, even when the clipboard write itself failed (e.g. permission denied). Now
+     the success state only flips once the write actually resolves.
+   - `App.tsx`'s `IssuesList.handleChangeStatus`/`handleArchive`: `onUpdateIssue`
+     (`updateIssue`, `useIssuesQuery.ts`) is the one function in the self-contained list above that
+     is **not** fully self-contained — it re-throws `CascadeWarningError` instead of swallowing it,
+     since a full confirmation-dialog flow belongs in the issue editor, not this compact context
+     menu. Both handlers now catch it and show a toast instead of leaving a genuine unhandled
+     rejection.
+   - `App.tsx`'s `handleSwitchWorkspace`/`logout`/`endImpersonation` call into
+     `WorkspaceContext.tsx`/`useAuth.tsx` (out of this ticket's `web/src/pages/*` scope, and neither
+     is self-contained). `handleSwitchWorkspace` (in-scope, in App.tsx) got a real try/catch;
+     `logout`/`endImpersonation` (their definitions are out of scope) are caught at the App.tsx call
+     site with a real `.catch()` rather than voided. `useToast` was added to `AppLayout` for this —
+     verified `App.test.tsx` only renders the exported `DocumentsTree` leaf component, not
+     `AppLayout`, so this addition doesn't affect it.
+
+**`eslint.config.mjs`.** Added a `web/src/pages/**` config block (after the general
+`web/src/**` block, so its `error` severity wins for the same rule keys) with a new
+`webPagesCorrectnessRules` promoting both promise rules to `'error'`. Verified with
+`eslint --print-config`: `web/src/pages/App.tsx` resolves both rules to severity `2` (error);
+`web/src/components/Editor.tsx` still resolves to severity `1` (warn) — the override did not leak
+outside `web/src/pages/**`. The header comment block is updated to record this batch, matching
+TRO-297's existing pattern for `api/src`.
+
+**Regression test.** `web/src/pages/MyWeekPage.createPlanError.test.tsx` (new file) — picked
+`MyWeekPage.tsx`'s `handleCreatePlan` as the single most user-impactful fix to prove, over
+e.g. `Projects.tsx`'s bulk-archive (mentioned as an example in the ticket brief): `Projects.tsx`'s
+mutations were already fully self-contained end to end, so there was no user-facing bug left to
+demonstrate there, whereas `MyWeekPage.tsx` had a real, confirmed one (see above). The test mocks
+`apiPost` to reject, clicks "+ Create plan for this week", and asserts (1) an accessible
+`role="alert"` error appears saying the create failed and (2) the button recovers to its idle,
+retryable label instead of staying stuck on "Creating...". **Confirmed red-for-the-right-reason**:
+reverted `handleCreatePlan` to its pre-fix `try { ... } finally { ... }` shape (no catch, no else)
+and re-ran — the promise rejection surfaced as an unhandled rejection in the test's stderr and the
+alert never rendered (`Unable to find an element with the text: /failed to create weekly
+plan/i`), then restored the fix and reconfirmed green (2/2 passing).
+
+A second commit fixed two problems this regression test's own gate run surfaced in the first
+attempt at the `MyWeekPage.tsx` fix: (1) the first attempt used `useToast()` for the new error
+message, which broke two pre-existing, unrelated test files
+(`MyWeekPage.contrast.test.tsx`, `MyWeekPage.loadingAffordance.test.tsx`) that render
+`<MyWeekPage />` standalone with no `ToastProvider` ancestor — replaced with a local `actionError`
+state rendered inline instead of adding a new context dependency; (2) `review-patterns` (gate
+check G7b's automation) flagged `previous_retro!.week_number` as a "new" non-null assertion
+because adding `void` to that line changed its exact text, even though the assertion itself
+pre-dates this ticket (identical assertions two lines above are untouched) — annotated with
+`// review-pattern-ok:` documenting why.
+
+**Verified:**
+```bash
+source .factory-env
+pnpm --filter @ship/web exec tsc --noEmit -p .                # clean, 0 errors
+pnpm --filter @ship/web exec eslint src/pages \
+  --rule '{"@typescript-eslint/no-floating-promises":"error","@typescript-eslint/no-misused-promises":"error"}'
+                                                                 # 0 errors, 16 pre-existing warnings
+pnpm --filter @ship/web exec vitest run \
+  src/pages/MyWeekPage.createPlanError.test.tsx \
+  src/pages/MyWeekPage.contrast.test.tsx src/pages/MyWeekPage.loadingAffordance.test.tsx \
+  src/pages/UnifiedDocumentPage.deletedFocusRefetch.test.tsx \
+  src/pages/UnifiedDocumentPage.throttledRead.test.tsx \
+  src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx \
+  src/pages/App.test.tsx                                        # 34/34 passed
+```
+
+**What's still open.** `web/src/components/**` and `web/src/lib/**` are a separately-uncounted,
+still-open population at `warn` — the header comment and this ticket's own eslint override comment
+both say not to widen the `web/src/pages/**` glob to cover them without independently re-verifying
+that population first, the same caution TRO-297 gives for `shared/src`. `shared/src` itself
+remains untouched by this ticket (still 0 sites at `warn`, per TRO-297).
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/web exec tsc --noEmit -p .
+pnpm --filter @ship/web exec eslint src/pages
+pnpm --filter @ship/web exec vitest run src/pages/MyWeekPage.createPlanError.test.tsx
+```
+
+**How to roll it back.** Revert these commits. `eslint.config.mjs`'s new `web/src/pages/**`
+override block reverts along with the header comment update, all 21 files' fixes revert with it
+(each is additive — a `void`/`.catch`/try-catch/extraction, no removed functionality), and the new
+`MyWeekPage.createPlanError.test.tsx` file is removed.
+
+---
+
+## TRO-229 — [TEST-7] Coverage measurement is broken in api and entirely absent in web and shared
+
+**Scope correction, verified before work began — 2 of the finding's 3 sub-gaps were already fixed.**
+TEST-7 as originally filed described three gaps: `@vitest/coverage-v8` missing for `api`, no
+`coverage` block in `web/vitest.config.ts`, and `shared/` having no test setup at all. TRO-244
+already fixed the first two — confirmed by re-running both packages myself rather than trusting the
+prior ticket's own claim:
+
+- `pnpm --filter @ship/api test:coverage` — exit 0, 712/712 tests passed, **46.28% statement
+  coverage measured**, above the existing 43% floor (`api/vitest.config.ts`'s TRO-244 comment).
+  One run beforehand hit a single failing test (`weeks.test.ts`); a second run passed all 712 —
+  this is the pre-existing order-dependent flake TEST-9 already documents, not a coverage-tooling
+  defect, and untouched here.
+- `pnpm --filter @ship/web test:coverage` — one run exited 1 with **no coverage report written at
+  all** (`web/coverage/coverage-summary.json` did not exist) because a single web test
+  (`UnifiedDocumentPage.programWeeksNav.test.tsx`) failed and `web/vitest.config.ts`'s coverage
+  block has no `coverage.reportOnFailure: true` — exactly the compounding failure mode the original
+  TEST-7 measurement (2026-07-28) described between itself and TEST-1. A second run passed all
+  465 tests and produced **23.41% statement coverage** (`web/coverage/coverage-summary.json`),
+  above the 20% floor. **Noticed but not fixed**: this is a real, currently-live gap — a genuine (not
+  flaky) web test failure would make CI's "Web test coverage" step (`.github/workflows/ci.yml`)
+  report nothing rather than a number, same as TEST-7's original analysis warned. It sits in
+  `web/vitest.config.ts`, which is out of this ticket's scope (narrowed to `shared/` — see below),
+  and the failure observed here was a flake on re-run, not a stable regression, so it wasn't treated
+  as "genuinely broken" under this ticket's verify-first rule. Flagged here as a follow-up rather
+  than fixed.
+
+`shared/package.json` had `build`/`dev`/`clean`/`type-check`/`lint` scripts but no `test` or
+`test:coverage` script, and zero test files existed anywhere under `shared/src/` (0 of 8 source
+files). **This — `shared/` only — was the ticket's actual remaining scope.**
+
+**What `shared/src` actually contains.** Read all 8 files before writing anything. Four have zero
+runtime logic — `types/api.ts`, `types/user.ts`, `types/workspace.ts` are pure `interface`
+declarations; `types/auth.ts` is comment-only (its exports were removed by an earlier ticket, so it
+isn't even an interface file anymore, just two lines of comment) — three interface-only files and
+one comment-only file, verified individually, not assumed from a file-count heuristic. These compile
+to no executable statements, so there is nothing in them to unit-test and nothing for v8 to
+instrument. Two more files have real, testable logic: `constants.ts`
+(`SESSION_TIMEOUT_MS`/`ABSOLUTE_SESSION_TIMEOUT_MS`,
+computed millisecond values backing the session semantics `.claude/CLAUDE.md` documents — 15min
+idle / 12hr absolute, NIST SP 800-63B-4 AAL2 — plus the `HTTP_STATUS`/`ERROR_CODES` literal maps)
+and `types/document.ts` (`computeICEScore()`, a real branching function, plus the
+`DEFAULT_PROJECT_PROPERTIES` constant). The remaining two, `index.ts` and `types/index.ts`, are
+barrels — `export * from './x.js'` chains. **These were originally (wrongly) grouped with the
+four interface-only files as "zero runtime statements"; see the correction below.**
+
+**What changed.**
+
+- `shared/package.json` — added `test` (`vitest run`), `test:watch`, and `test:coverage`
+  (`vitest run --coverage`) scripts, matching api/web's script names exactly. Added
+  `@vitest/coverage-v8` (pinned to the exact `4.0.17` already used by api/web — not a caret range;
+  TRO-244's own CHANGES.md entry explains why a looser range resolves to an incompatible
+  `4.1.10`) and `vitest` (`^4.0.16`, same range as api/web) to devDependencies.
+  `pnpm-lock.yaml` picked up both at the identical resolved versions api/web already use — a
+  6-line lockfile diff, no new package actually downloaded.
+- `shared/vitest.config.ts` (new) — same shape as `api`/`web`'s configs: `provider: 'v8'`,
+  `reporter: ['text', 'html', 'json-summary']`, `environment: 'node'` (no DOM, no DB — shared has
+  neither). No `setupFiles` needed (nothing to set up) and no `fileParallelism`/timeout overrides
+  (no shared mutable state, no DB contention).
+- `shared/src/constants.test.ts` (new) — 7 cases. Asserts `SESSION_TIMEOUT_MS`/
+  `ABSOLUTE_SESSION_TIMEOUT_MS` against independently-computed millisecond literals (900,000 and
+  43,200,000), not against the same `15 * 60 * 1000` expression re-typed, which would just check
+  the file against itself; a relationship check that the absolute timeout exceeds the idle one;
+  `HTTP_STATUS`/`ERROR_CODES` value checks plus a uniqueness check per map (catches a copy-paste
+  collision without hardcoding every literal twice).
+- `shared/src/types/document.test.ts` (new) — 12 cases for `computeICEScore()`: the
+  documented product for a mid-range input, the 1×1×1 floor and 5×5×5 ceiling, null-propagation for
+  each of the three arguments individually and all three together, and a `0` (not `null`) input to
+  prove the null-check doesn't collapse to `if (!impact)`. Plus 4 cases on
+  `DEFAULT_PROJECT_PROPERTIES` confirming it starts with an unset ICE score and no owner.
+- **Proved the tests actually exercise the code, not just import it**: temporarily changed
+  `computeICEScore`'s multiplication to addition and `SESSION_TIMEOUT_MS`'s multiplier from
+  `15 * 60 * 1000` to `15 * 60 * 100`, reran — 5 of 19 tests failed on exactly the mutated lines,
+  confirming red for the right reason — then restored both files and reran clean (19/19 passed
+  again, diffed byte-identical against the pre-mutation copies).
+- **Coverage threshold — corrected after a CodeRabbit review (PR #92), not caught before merge.**
+  The original measurement (100%, 8/8 statements) was taken **without an explicit
+  `coverage.include`**. Vitest 4 defaults `coverage.include` to "files actually imported during the
+  run" — so `types/api.ts`/`auth.ts`/`user.ts`/`workspace.ts` AND both barrel files were never in
+  the denominator at all, imported or not. "100%" only ever meant "100% of the 2 files a test
+  happened to import," not 100% of the package — the exact "invisible denominator" failure mode
+  `docs/IMPROVEMENTS.md`-style audits exist to catch, landing in this ticket's own new file. Verified
+  by adding `include: ['src/**/*.ts']` and re-running: coverage **dropped to 53.33%**, correctly
+  surfacing the two barrel files' real re-export statements as uncovered (they were never even
+  reported before, let alone counted against the threshold).
+  - Fix: `coverage.exclude` now explicitly names the four verified-empty interface files (each read
+    individually, not inferred). The two barrels are **not** excluded — `export * from './x.js'` is
+    a real, executable statement — and `shared/src/index.test.ts` (new, 2 cases) now imports both
+    and asserts real re-exported values/functions (not just "the module loaded"), which is itself a
+    regression test for barrel/source drift (a renamed or deleted export whose barrel line goes
+    stale).
+  - Re-measured after the fix: genuinely **100% statement coverage**, 21/21 tests across 3 files.
+    `coverage.thresholds.statements` stays at **95**, a couple of points below the (now honest)
+    measured number, same convention as api (43 vs. 45.65%) and web (20 vs. ~22.3%). Re-verified the
+    threshold is real, not decorative: temporarily set it to `100.01` and reran — `ERROR: Coverage
+    for statements (100%) does not meet global threshold (100.01%)`, exit 1 — then reverted to 95.
+  - Recorded in `audit/factory/review-findings.jsonl` as two Major findings, both fixed.
+- `.github/workflows/ci.yml` — added a **Shared test coverage** step (`pnpm --filter @ship/shared
+  test:coverage`) to the `verify` job, right after the existing Web test coverage step. Unlike
+  api/web, `shared/` has no pre-existing quarantine baseline and no separate continue-on-error unit
+  test step to isolate this from, so a single `test:coverage` step both runs the suite and enforces
+  the threshold — either kind of failure should genuinely fail the job. Extended the `Coverage
+  summary` step's `coverage-summary.mjs` invocation with `--pkg shared:shared/coverage/coverage-summary.json:95`
+  and added `shared/coverage/coverage-summary.json` to the `Upload coverage + audit reports`
+  artifact path list. Did **not** touch `scripts/factory/gate.sh` — it currently only runs
+  `pnpm --filter @ship/{api,web} test` and has no concept of `shared`'s tests at all, but wiring
+  `shared` into CI satisfies the "gate.sh (or CI)" requirement (this repo's ship-qa role brief) that
+  a regression test live somewhere the pipeline actually runs it. Flagged as a clean, separate
+  follow-up if `gate.sh` itself should also run `shared`'s suite in the factory's local inner loop —
+  out of this ticket's stated file scope (`shared/`, `pnpm-lock.yaml`, `shared/package.json`,
+  `.github/workflows/ci.yml` only).
+
+**Verified, not just claimed.** `pnpm --filter @ship/shared test` — 3 files, 21/21 passed.
+`pnpm --filter @ship/shared test:coverage` — exit 0, genuinely 100% statements (all included files
+covered, four verified-empty files correctly excluded). `pnpm --filter @ship/shared type-check` and
+`pnpm --filter @ship/shared lint` — both clean on the new test files. Full `pnpm type-check` and
+`pnpm build` across all three packages — both clean, confirming the new devDependencies and config
+didn't disturb api/web.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/shared test           # 21 tests, ~1s, no setup required
+pnpm --filter @ship/shared test:coverage  # same, plus the v8 coverage report + 95% floor
+```
+
+**Rollback.** Revert this commit. Removes `shared/vitest.config.ts`,
+`shared/src/constants.test.ts`, `shared/src/types/document.test.ts`, and `shared/src/index.test.ts`;
+restores `shared/package.json` to no `test`/`test:coverage` scripts and no `vitest`/`@vitest/coverage-v8`
+devDependencies; restores `pnpm-lock.yaml`'s prior 6 lines; and removes the `Shared test coverage`
+CI step and its two follow-on references in `.github/workflows/ci.yml`. Reverting drops `shared/`
+back to zero test coverage and zero CI signal for it — the state TEST-7 originally described —
+without affecting api or web, whose coverage setups this ticket verified but did not modify.
+
+---
+
+## TRO-210 — [TS-5] The shared/ contract is bypassed — 46 exported types, adopted by 13 of 198 web files
+
+**What was broken.** `web/src/lib/api.ts:5` declared its own `interface ApiResponse<T>` (`success`,
+`data?`, and an `error?: { code; message }` with no `details`) even though `shared/src/types/api.ts:2`
+already exports `ApiResponse<T = unknown>` with a proper `ApiError` (`code`, `message`, and an optional
+`details: Record<string, unknown>` the local copy never had). Two hand-maintained guesses at the same
+wire contract, free to drift silently — exactly what TS-5 is about.
+
+**Sequencing constraint honored (per the ticket's own warning: "do this WITH TS-2, not before it").**
+TS-2 (typing the ~707 untyped `pg` query rows in `api/`) has not landed. `shared/src/types/document.ts`
+models the **raw `documents` table row** (`Document`/`ProjectDocument`/`IssueDocument`/etc. — flat
+`content`, `properties: ProjectProperties`, `workspace_id`, `document_type`). The actual list/detail
+routes do not return that shape. Verified by reading the route handlers, not assumed:
+
+- `api/src/routes/projects.ts:534-548` — the `/api/projects` list query flattens `properties` into
+  top-level fields (`impact`, `confidence`, `ease`, `color`, `emoji`, ...), joins in `owner` (name/email),
+  and computes `sprint_count`, `issue_count`, `inferred_status`, `is_complete`, `missing_fields` — none
+  of which exist on `shared`'s `ProjectDocument`. `web/src/hooks/useProjectsQuery.ts:8`'s local `Project`
+  models this response shape, not the raw document row.
+- The same pattern holds for `Sprint`/`Week` (`web/src/hooks/useWeeksQuery.ts:10` — computed
+  `completed_count`, `started_count`, `has_plan`/`has_retro`, joined `owner`), `Program`
+  (`web/src/hooks/useProgramsQuery.ts:10`), `Issue` (`web/src/hooks/useIssuesQuery.ts:25` — joined
+  `assignee_name`, computed `display_id`), `Person` (`web/src/components/PersonCombobox.tsx:6` — a
+  3-field combobox projection), and `WikiDocument` (`web/src/components/sidebars/WikiSidebar.tsx:5` /
+  `web/src/hooks/useDocumentsQuery.ts:4` — partial views with optional fields).
+
+Forcing any of those seven onto `shared/`'s document types today would either not compile (missing
+required fields the API never sends, e.g. `content`, `workspace_id`) or silently paper over the gap
+with optional-everything — the drift-risk the ticket brief warned against. **None of the 7 were
+consolidated.** They're deferred, explicitly, pending TS-2 producing typed route-response interfaces
+that actually match what the API returns — at which point those response types (not the raw
+`*Document` types) are what `web/src` should import.
+
+**What changed — the one verified-safe case.** `ApiResponse`/`ApiError` is different: it isn't a
+document projection, it's the outer HTTP envelope every route already wraps its response in
+identically, and the local declaration was a byte-for-byte subset (missing only the optional
+`details` field). No route-by-route verification needed — this is the JSON-shape `request<T>()` in
+`web/src/lib/api.ts` always produces, and shared's version is a strict superset.
+
+- `web/src/lib/api.ts:1,5-11` — deleted the local `interface ApiResponse<T>`; added
+  `import type { ApiResponse } from '@ship/shared';`. No call-site changes were needed: every existing
+  read of `data.error?.code` / `data.error?.message` still type-checks against the shared `ApiError`,
+  and the `details` field is now reachable (previously a compile error) without changing any runtime
+  behavior — nothing in this file reads it yet.
+
+**How to run it.**
+
+```bash
+pnpm build:shared
+pnpm --filter @ship/web exec tsc --noEmit -p tsconfig.json
+pnpm --filter @ship/web test -- src/lib/api.test.ts
+```
+
+**Regression test.** `web/src/lib/api.test.ts` (new) — a source-text guard (`apiSource` read via
+`readFileSync`) asserting `web/src/lib/api.ts` no longer matches `/\binterface\s+ApiResponse\b/` and
+does match an `import type { ApiResponse ... } from '@ship/shared'` pattern, plus a runtime companion
+mocking `fetch` through `api.auth.me()` to confirm an `ApiError.details` payload survives end to end.
+Confirmed failing on the pre-fix file (both source assertions failed: the interface was present, the
+import was absent) by temporarily swapping in the pre-fix `web/src/lib/api.ts` via `git show
+HEAD:web/src/lib/api.ts`, running the test, then restoring the fixed file — not via `git stash` (shared
+across worktrees). The runtime companion test passed unchanged in both states, as expected: this repo's
+`vitest run` does not type-check, so a type-only fix can only be caught by a source-text assertion, not
+by executing code whose behavior doesn't change.
+
+**Roll back.** `git revert` the commit, or manually: reinstate
+
+```ts
+interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: { code: string; message: string };
+}
+```
+
+at the top of `web/src/lib/api.ts` and remove the `@ship/shared` import; delete
+`web/src/lib/api.test.ts`.
+
+---
+
 ## TRO-231 — [TEST-9] `pnpm test` TRUNCATEs whatever database `DATABASE_URL` points at — including your dev database
 
 **What was broken.** `api/src/test/setup.ts` runs, in the `beforeAll` of every one of the 28 api

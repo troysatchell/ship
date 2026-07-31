@@ -49,7 +49,9 @@ export function TeamDirectoryPage() {
   }, []);
 
   useEffect(() => {
-    fetchPeople(showArchived);
+    // fetchPeople catches its own errors (console.error) and always resolves
+    // via its finally block, so it never rejects.
+    void fetchPeople(showArchived);
   }, [fetchPeople, showArchived]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, person: Person) => {
@@ -60,7 +62,7 @@ export function TeamDirectoryPage() {
 
   const handleViewProfile = useCallback(() => {
     if (contextMenu) {
-      navigate(`/team/${contextMenu.person.id}`);
+      void navigate(`/team/${contextMenu.person.id}`);
       setContextMenu(null);
     }
   }, [contextMenu, navigate]);
@@ -99,7 +101,7 @@ export function TeamDirectoryPage() {
         <div className="flex items-center gap-3">
           {isSuperAdmin && (
             <button
-              onClick={() => navigate('/settings')}
+              onClick={() => void navigate('/settings')}
               className="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs text-muted hover:bg-border/50 hover:text-foreground transition-colors"
               title="Manage team settings"
             >
@@ -146,7 +148,7 @@ export function TeamDirectoryPage() {
               {people.map((person) => (
                 <tr
                   key={person.id}
-                  onClick={() => navigate(`/team/${person.id}`)}
+                  onClick={() => void navigate(`/team/${person.id}`)}
                   onContextMenu={(e) => handleContextMenu(e, person)}
                   className={cn(
                     'cursor-pointer transition-colors hover:bg-border/30',
@@ -192,7 +194,14 @@ export function TeamDirectoryPage() {
           {isSuperAdmin && (
             <>
               <ContextMenuSeparator />
-              <ContextMenuItem onClick={handleRemoveMember} destructive>
+              <ContextMenuItem
+                onClick={() => {
+                  // handleRemoveMember() catches its own errors (shows a
+                  // toast) and never rethrows, so it never rejects.
+                  void handleRemoveMember();
+                }}
+                destructive
+              >
                 <RemoveIcon className="h-4 w-4" />
                 Remove from workspace
               </ContextMenuItem>
