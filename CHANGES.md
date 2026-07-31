@@ -104,6 +104,87 @@ config change and safe to keep either way.
 
 ---
 
+## TRO-230 — [TEST-8] Landing page and org chart had zero test coverage; org chart was the real gap
+
+**Scope correction to the ticket brief (verified, not assumed).** TEST-8 names two zero-coverage
+routes: `/dashboard` and `/team/org-chart`. The `/dashboard` half is already closed —
+`web/src/pages/Dashboard.test.tsx` exists, and TEST-1/TRO-223 fixed the root `pnpm test` invocation
+that used to skip the whole `web/` package. Ran it directly to confirm rather than take the ticket
+text on faith: `npx vitest run src/pages/Dashboard.test.tsx` from `web/` → **7/7 pass**. `web/
+vitest.config.ts` has no `include` restriction, so `pnpm --filter @ship/web test` already picks this
+file up today, with no change needed. This ticket's entire scope is therefore
+`web/src/pages/OrgChartPage.tsx`, which genuinely had none: `find web/src -iname '*orgchart*'`
+returned only the page component itself, and `grep -rEl 'org-chart|orgchart' e2e/` returned nothing
+(basic `grep` treats `|` literally rather than as alternation; `-E` is required for this command to
+actually search for either term rather than the single literal string `org-chart|orgchart`).
+`/my-week` (the actual `/` redirect target, flagged separately in TEST-8 for flaky e2e coverage) is
+explicitly out of scope here — that's TEST-3, a separate open ticket.
+
+**What was added.** `web/src/pages/OrgChartPage.test.tsx` — 5 tests, Vitest + Testing Library,
+`@/lib/api`'s `apiGet`/`apiPatch` mocked via `vi.mock` (real `Response` instances built with
+`new Response(...)`, per the TS-8 lesson against `as any`-shaped mocks) and `@/contexts/
+WorkspaceContext`'s `useWorkspace` mocked to `isWorkspaceAdmin: false` (keeps the drag-and-drop
+`DndContext` branch out of scope — that's a separate interaction surface from "does the hierarchy
+render," left uncovered here).
+
+What each test actually asserts, and why it's meaningful rather than vacuous:
+- **Loading → populated transition.** Holds the mocked fetch open, asserts the `Loading...` text and
+  absence of `role="tree"` synchronously, resolves it, then `findByRole('tree', { name:
+  'Organization chart' })` — exercises the real async data flow with Testing Library's polling
+  `findBy*`, no fixed sleep.
+- **Hierarchy correctness.** Three people (two roots, one report), queried by `getByRole('treeitem',
+  { name: /.../  })` — not by class or test id. Asserts `aria-level="1"` on both roots and
+  `aria-level="2"` on the report, which only passes if `buildTree`'s `user_id`-keyed parent lookup
+  actually nests the child under the right parent. Also asserts the role/email text renders inside
+  each person's own `treeitem` (via `within(...)`) and that the header's `"3 people"` count reflects
+  the fetched data.
+- **Empty state.** Empty array from the mocked fetch → asserts `"No reporting hierarchy configured"`
+  and the absence of `role="tree"`.
+- **Error states (two).** A rejected fetch promise, and a resolved-but-non-`ok` (403) response — both
+  assert the page falls back to the same empty-hierarchy message rather than hanging on `Loading...`
+  forever or throwing. This is the component's actual behavior: `OrgChartPage.tsx` has no dedicated
+  error UI, only a `console.error` and a `finally` that clears `loading`; the test locks in that the
+  `finally` still runs on the error path, which is exactly the kind of regression ("someone drops the
+  `finally`, the page spins forever") a from-scratch coverage ticket should catch.
+
+**Red-before-green proof (from-scratch ticket, no existing bug to reproduce).** Wrote the test file
+first and confirmed the intended-passing state, then broke real component logic to prove the
+hierarchy assertion isn't vacuous: temporarily changed `OrgChartPage.tsx`'s `buildTree` parent-lookup
+condition from `if (p.reportsTo)` to `if (false && p.reportsTo)` (every person becomes a root,
+`reportsTo` is ignored). Re-ran the suite — the hierarchy test failed for the right reason
+(`expected aria-level "2", received "1"`), all 4 others still passed. Reverted the change (`git diff`
+confirmed clean) and re-ran — 5/5 green again. This is the red/green evidence for a ticket whose
+"bug" is the absence of any test, not a defect to fix: it demonstrates the new assertion actually
+exercises the tree-nesting logic rather than just checking the container rendered.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test -- src/pages/OrgChartPage.test.tsx   # 5/5 pass
+pnpm --filter @ship/web test                                      # picked up automatically, no include restriction
+```
+
+**Not covered by this ticket (noted, not fixed).** No bug was found in `OrgChartPage.tsx` while
+writing these tests. Drag-and-drop reassignment (`handleDragEnd`, the `DndContext` branch gated on
+`isWorkspaceAdmin`) and the search/debounce/auto-expand-ancestors behavior are real, more complex
+interaction surfaces in this component that remain untested after this ticket — left out
+deliberately to keep this fix scoped to closing TEST-8's "zero coverage" finding (render/populated/
+empty/error), not to reach full component coverage in one pass.
+
+**How to roll it back.** `git revert <this commit>` removes the new test file, this `CHANGES.md`
+entry, and this ticket's `audit/factory/review-findings.jsonl` records — the complete rollback. If
+reverting by hand instead, `git rm web/src/pages/OrgChartPage.test.tsx`, delete this entry (a manual
+removal that leaves this entry in place would describe a test file that no longer exists), and
+remove or explicitly retain the TRO-230 lines in `review-findings.jsonl` (that file is an append-only
+audit log by design — retaining it and just noting the ticket rolled back is also a legitimate
+choice; `git revert` is the version that keeps this decision consistent automatically). No
+production code was changed either way (the `buildTree` edit used for the red/green proof was
+reverted before committing and never shipped). Reverting returns `OrgChartPage` to zero test
+coverage — TEST-8 reopened for the org-chart half only, since the `/dashboard` half's fix (TRO-223)
+lives on a separate commit untouched by this one.
+
+---
+
 ## TRO-232 — [TEST-10] E2E worker auto-sizing collapses to 1 worker on macOS
 
 **What was broken.** `playwright.config.ts`'s `getWorkerCount()` derived local worker count from
