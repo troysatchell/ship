@@ -141,6 +141,16 @@ jobs:
       - name: Web test coverage
         run: pnpm --filter @ship/web test:coverage
 
+      # TRO-229 (TEST-7 remainder): shared/ had zero test files and no test
+      # script before this ticket, so — unlike api/web — there is no
+      # quarantine baseline and no separate continue-on-error unit-test step
+      # to keep this isolated from. `test:coverage` both runs the suite and
+      # enforces shared/vitest.config.ts's threshold in one step; either kind
+      # of failure should genuinely fail this job, same as the reasoning
+      # above for why coverage runs as its own step for api/web.
+      - name: Shared test coverage
+        run: pnpm --filter @ship/shared test:coverage
+
       - name: Coverage summary
         # Runs even if a threshold failed above, so the actual percentages are
         # still visible in the job summary rather than only "it failed."
@@ -148,7 +158,8 @@ jobs:
         run: |
           node scripts/factory/lib/coverage-summary.mjs \
             --pkg api:api/coverage/coverage-summary.json:43 \
-            --pkg web:web/coverage/coverage-summary.json:20
+            --pkg web:web/coverage/coverage-summary.json:20 \
+            --pkg shared:shared/coverage/coverage-summary.json:95
 
       # TRO-244 (assignment rule 4, "dependency audit (pnpm audit)"). `pnpm
       # audit` alone exits non-zero on ANY finding, including the 135
@@ -188,6 +199,7 @@ jobs:
           path: |
             api/coverage/coverage-summary.json
             web/coverage/coverage-summary.json
+            shared/coverage/coverage-summary.json
             pnpm-audit-current.json
           if-no-files-found: warn
           retention-days: 14

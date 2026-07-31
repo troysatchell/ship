@@ -21,6 +21,125 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-229 — [TEST-7] Coverage measurement is broken in api and entirely absent in web and shared
+
+**Scope correction, verified before work began — 2 of the finding's 3 sub-gaps were already fixed.**
+TEST-7 as originally filed described three gaps: `@vitest/coverage-v8` missing for `api`, no
+`coverage` block in `web/vitest.config.ts`, and `shared/` having no test setup at all. TRO-244
+already fixed the first two — confirmed by re-running both packages myself rather than trusting the
+prior ticket's own claim:
+
+- `pnpm --filter @ship/api test:coverage` — exit 0, 712/712 tests passed, **46.28% statement
+  coverage measured**, above the existing 43% floor (`api/vitest.config.ts`'s TRO-244 comment).
+  One run beforehand hit a single failing test (`weeks.test.ts`); a second run passed all 712 —
+  this is the pre-existing order-dependent flake TEST-9 already documents, not a coverage-tooling
+  defect, and untouched here.
+- `pnpm --filter @ship/web test:coverage` — one run exited 1 with **no coverage report written at
+  all** (`web/coverage/coverage-summary.json` did not exist) because a single web test
+  (`UnifiedDocumentPage.programWeeksNav.test.tsx`) failed and `web/vitest.config.ts`'s coverage
+  block has no `coverage.reportOnFailure: true` — exactly the compounding failure mode the original
+  TEST-7 measurement (2026-07-28) described between itself and TEST-1. A second run passed all
+  465 tests and produced **23.41% statement coverage** (`web/coverage/coverage-summary.json`),
+  above the 20% floor. **Noticed but not fixed**: this is a real, currently-live gap — a genuine (not
+  flaky) web test failure would make CI's "Web test coverage" step (`.github/workflows/ci.yml`)
+  report nothing rather than a number, same as TEST-7's original analysis warned. It sits in
+  `web/vitest.config.ts`, which is out of this ticket's scope (narrowed to `shared/` — see below),
+  and the failure observed here was a flake on re-run, not a stable regression, so it wasn't treated
+  as "genuinely broken" under this ticket's verify-first rule. Flagged here as a follow-up rather
+  than fixed.
+
+`shared/package.json` had `build`/`dev`/`clean`/`type-check`/`lint` scripts but no `test` or
+`test:coverage` script, and zero test files existed anywhere under `shared/src/` (0 of 8 source
+files). **This — `shared/` only — was the ticket's actual remaining scope.**
+
+**What `shared/src` actually contains.** Read all 8 files before writing anything. Six are pure
+`interface`/`type` declarations or re-export barrels with zero runtime logic:
+`index.ts`, `types/index.ts`, `types/api.ts`, `types/auth.ts` (now just a comment — its exports
+were removed by an earlier ticket), `types/user.ts`, `types/workspace.ts`. These compile to no
+executable statements, so there is nothing in them to unit-test and nothing for v8 to instrument —
+noted explicitly rather than papered over with a vacuous test. The other two files have real,
+testable logic: `constants.ts` (`SESSION_TIMEOUT_MS`/`ABSOLUTE_SESSION_TIMEOUT_MS`, computed
+millisecond values backing the session semantics `.claude/CLAUDE.md` documents — 15min idle / 12hr
+absolute, NIST SP 800-63B-4 AAL2 — plus the `HTTP_STATUS`/`ERROR_CODES` literal maps) and
+`types/document.ts` (`computeICEScore()`, a real branching function, plus the
+`DEFAULT_PROJECT_PROPERTIES` constant).
+
+**What changed.**
+
+- `shared/package.json` — added `test` (`vitest run`), `test:watch`, and `test:coverage`
+  (`vitest run --coverage`) scripts, matching api/web's script names exactly. Added
+  `@vitest/coverage-v8` (pinned to the exact `4.0.17` already used by api/web — not a caret range;
+  TRO-244's own CHANGES.md entry explains why a looser range resolves to an incompatible
+  `4.1.10`) and `vitest` (`^4.0.16`, same range as api/web) to devDependencies.
+  `pnpm-lock.yaml` picked up both at the identical resolved versions api/web already use — a
+  6-line lockfile diff, no new package actually downloaded.
+- `shared/vitest.config.ts` (new) — same shape as `api`/`web`'s configs: `provider: 'v8'`,
+  `reporter: ['text', 'html', 'json-summary']`, `environment: 'node'` (no DOM, no DB — shared has
+  neither). No `setupFiles` needed (nothing to set up) and no `fileParallelism`/timeout overrides
+  (no shared mutable state, no DB contention).
+- `shared/src/constants.test.ts` (new) — 7 cases. Asserts `SESSION_TIMEOUT_MS`/
+  `ABSOLUTE_SESSION_TIMEOUT_MS` against independently-computed millisecond literals (900,000 and
+  43,200,000), not against the same `15 * 60 * 1000` expression re-typed, which would just check
+  the file against itself; a relationship check that the absolute timeout exceeds the idle one;
+  `HTTP_STATUS`/`ERROR_CODES` value checks plus a uniqueness check per map (catches a copy-paste
+  collision without hardcoding every literal twice).
+- `shared/src/types/document.test.ts` (new) — 12 cases for `computeICEScore()`: the
+  documented product for a mid-range input, the 1×1×1 floor and 5×5×5 ceiling, null-propagation for
+  each of the three arguments individually and all three together, and a `0` (not `null`) input to
+  prove the null-check doesn't collapse to `if (!impact)`. Plus 4 cases on
+  `DEFAULT_PROJECT_PROPERTIES` confirming it starts with an unset ICE score and no owner.
+- **Proved the tests actually exercise the code, not just import it**: temporarily changed
+  `computeICEScore`'s multiplication to addition and `SESSION_TIMEOUT_MS`'s multiplier from
+  `15 * 60 * 1000` to `15 * 60 * 100`, reran — 5 of 19 tests failed on exactly the mutated lines,
+  confirming red for the right reason — then restored both files and reran clean (19/19 passed
+  again, diffed byte-identical against the pre-mutation copies).
+- **Coverage threshold**: measured **100% statement coverage** (8/8 statements, 1/1 functions —
+  `shared/coverage/coverage-summary.json`) on 2026-07-31, because the only executable code in the
+  package is now fully covered and the other six files contribute zero statements either way. Set
+  `coverage.thresholds.statements` to **95**, not 100 — a couple of points below the measured
+  number, same convention as api (43 vs. 45.65%) and web (20 vs. ~22.3%), so a future genuinely
+  type-only addition to `shared/src` doesn't force a config change just to keep the gate green.
+  Verified the threshold is real, not decorative, the same way TRO-244 verified api's: temporarily
+  set it to `100.01` and reran — `ERROR: Coverage for statements (100%) does not meet global
+  threshold (100.01%)`, exit 1 — then reverted to 95.
+- `.github/workflows/ci.yml` — added a **Shared test coverage** step (`pnpm --filter @ship/shared
+  test:coverage`) to the `verify` job, right after the existing Web test coverage step. Unlike
+  api/web, `shared/` has no pre-existing quarantine baseline and no separate continue-on-error unit
+  test step to isolate this from, so a single `test:coverage` step both runs the suite and enforces
+  the threshold — either kind of failure should genuinely fail the job. Extended the `Coverage
+  summary` step's `coverage-summary.mjs` invocation with `--pkg shared:shared/coverage/coverage-summary.json:95`
+  and added `shared/coverage/coverage-summary.json` to the `Upload coverage + audit reports`
+  artifact path list. Did **not** touch `scripts/factory/gate.sh` — it currently only runs
+  `pnpm --filter @ship/{api,web} test` and has no concept of `shared`'s tests at all, but wiring
+  `shared` into CI satisfies the "gate.sh (or CI)" requirement (this repo's ship-qa role brief) that
+  a regression test live somewhere the pipeline actually runs it. Flagged as a clean, separate
+  follow-up if `gate.sh` itself should also run `shared`'s suite in the factory's local inner loop —
+  out of this ticket's stated file scope (`shared/`, `pnpm-lock.yaml`, `shared/package.json`,
+  `.github/workflows/ci.yml` only).
+
+**Verified, not just claimed.** `pnpm --filter @ship/shared test` — 2 files, 19/19 passed.
+`pnpm --filter @ship/shared test:coverage` — exit 0, 100% statements. `pnpm --filter @ship/shared
+type-check` and `pnpm --filter @ship/shared lint` — both clean on the new test files. Full
+`pnpm type-check` and `pnpm build` across all three packages — both clean, confirming the new
+devDependencies and config didn't disturb api/web.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/shared test           # 19 tests, ~1s, no setup required
+pnpm --filter @ship/shared test:coverage  # same, plus the v8 coverage report + 95% floor
+```
+
+**Rollback.** Revert this commit. Removes `shared/vitest.config.ts`,
+`shared/src/constants.test.ts`, and `shared/src/types/document.test.ts`; restores
+`shared/package.json` to no `test`/`test:coverage` scripts and no `vitest`/`@vitest/coverage-v8`
+devDependencies; restores `pnpm-lock.yaml`'s prior 6 lines; and removes the `Shared test coverage`
+CI step and its two follow-on references in `.github/workflows/ci.yml`. Reverting drops `shared/`
+back to zero test coverage and zero CI signal for it — the state TEST-7 originally described —
+without affecting api or web, whose coverage setups this ticket verified but did not modify.
+
+---
+
 ## TRO-280 — [API-7] Rate limits are per-process, so the real ceiling is N instances × configured
 
 **What was broken.** `api/src/middleware/rate-limit.ts`'s `perSourceIpLimiter`/`perIdentityLimiter`
