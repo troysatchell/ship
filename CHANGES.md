@@ -120,6 +120,221 @@ made.
 
 ---
 
+## TRO-229 — [TEST-7] Coverage measurement is broken in api and entirely absent in web and shared
+
+**Scope correction, verified before work began — 2 of the finding's 3 sub-gaps were already fixed.**
+TEST-7 as originally filed described three gaps: `@vitest/coverage-v8` missing for `api`, no
+`coverage` block in `web/vitest.config.ts`, and `shared/` having no test setup at all. TRO-244
+already fixed the first two — confirmed by re-running both packages myself rather than trusting the
+prior ticket's own claim:
+
+- `pnpm --filter @ship/api test:coverage` — exit 0, 712/712 tests passed, **46.28% statement
+  coverage measured**, above the existing 43% floor (`api/vitest.config.ts`'s TRO-244 comment).
+  One run beforehand hit a single failing test (`weeks.test.ts`); a second run passed all 712 —
+  this is the pre-existing order-dependent flake TEST-9 already documents, not a coverage-tooling
+  defect, and untouched here.
+- `pnpm --filter @ship/web test:coverage` — one run exited 1 with **no coverage report written at
+  all** (`web/coverage/coverage-summary.json` did not exist) because a single web test
+  (`UnifiedDocumentPage.programWeeksNav.test.tsx`) failed and `web/vitest.config.ts`'s coverage
+  block has no `coverage.reportOnFailure: true` — exactly the compounding failure mode the original
+  TEST-7 measurement (2026-07-28) described between itself and TEST-1. A second run passed all
+  465 tests and produced **23.41% statement coverage** (`web/coverage/coverage-summary.json`),
+  above the 20% floor. **Noticed but not fixed**: this is a real, currently-live gap — a genuine (not
+  flaky) web test failure would make CI's "Web test coverage" step (`.github/workflows/ci.yml`)
+  report nothing rather than a number, same as TEST-7's original analysis warned. It sits in
+  `web/vitest.config.ts`, which is out of this ticket's scope (narrowed to `shared/` — see below),
+  and the failure observed here was a flake on re-run, not a stable regression, so it wasn't treated
+  as "genuinely broken" under this ticket's verify-first rule. Flagged here as a follow-up rather
+  than fixed.
+
+`shared/package.json` had `build`/`dev`/`clean`/`type-check`/`lint` scripts but no `test` or
+`test:coverage` script, and zero test files existed anywhere under `shared/src/` (0 of 8 source
+files). **This — `shared/` only — was the ticket's actual remaining scope.**
+
+**What `shared/src` actually contains.** Read all 8 files before writing anything. Four have zero
+runtime logic — `types/api.ts`, `types/user.ts`, `types/workspace.ts` are pure `interface`
+declarations; `types/auth.ts` is comment-only (its exports were removed by an earlier ticket, so it
+isn't even an interface file anymore, just two lines of comment) — three interface-only files and
+one comment-only file, verified individually, not assumed from a file-count heuristic. These compile
+to no executable statements, so there is nothing in them to unit-test and nothing for v8 to
+instrument. Two more files have real, testable logic: `constants.ts`
+(`SESSION_TIMEOUT_MS`/`ABSOLUTE_SESSION_TIMEOUT_MS`,
+computed millisecond values backing the session semantics `.claude/CLAUDE.md` documents — 15min
+idle / 12hr absolute, NIST SP 800-63B-4 AAL2 — plus the `HTTP_STATUS`/`ERROR_CODES` literal maps)
+and `types/document.ts` (`computeICEScore()`, a real branching function, plus the
+`DEFAULT_PROJECT_PROPERTIES` constant). The remaining two, `index.ts` and `types/index.ts`, are
+barrels — `export * from './x.js'` chains. **These were originally (wrongly) grouped with the
+four interface-only files as "zero runtime statements"; see the correction below.**
+
+**What changed.**
+
+- `shared/package.json` — added `test` (`vitest run`), `test:watch`, and `test:coverage`
+  (`vitest run --coverage`) scripts, matching api/web's script names exactly. Added
+  `@vitest/coverage-v8` (pinned to the exact `4.0.17` already used by api/web — not a caret range;
+  TRO-244's own CHANGES.md entry explains why a looser range resolves to an incompatible
+  `4.1.10`) and `vitest` (`^4.0.16`, same range as api/web) to devDependencies.
+  `pnpm-lock.yaml` picked up both at the identical resolved versions api/web already use — a
+  6-line lockfile diff, no new package actually downloaded.
+- `shared/vitest.config.ts` (new) — same shape as `api`/`web`'s configs: `provider: 'v8'`,
+  `reporter: ['text', 'html', 'json-summary']`, `environment: 'node'` (no DOM, no DB — shared has
+  neither). No `setupFiles` needed (nothing to set up) and no `fileParallelism`/timeout overrides
+  (no shared mutable state, no DB contention).
+- `shared/src/constants.test.ts` (new) — 7 cases. Asserts `SESSION_TIMEOUT_MS`/
+  `ABSOLUTE_SESSION_TIMEOUT_MS` against independently-computed millisecond literals (900,000 and
+  43,200,000), not against the same `15 * 60 * 1000` expression re-typed, which would just check
+  the file against itself; a relationship check that the absolute timeout exceeds the idle one;
+  `HTTP_STATUS`/`ERROR_CODES` value checks plus a uniqueness check per map (catches a copy-paste
+  collision without hardcoding every literal twice).
+- `shared/src/types/document.test.ts` (new) — 12 cases for `computeICEScore()`: the
+  documented product for a mid-range input, the 1×1×1 floor and 5×5×5 ceiling, null-propagation for
+  each of the three arguments individually and all three together, and a `0` (not `null`) input to
+  prove the null-check doesn't collapse to `if (!impact)`. Plus 4 cases on
+  `DEFAULT_PROJECT_PROPERTIES` confirming it starts with an unset ICE score and no owner.
+- **Proved the tests actually exercise the code, not just import it**: temporarily changed
+  `computeICEScore`'s multiplication to addition and `SESSION_TIMEOUT_MS`'s multiplier from
+  `15 * 60 * 1000` to `15 * 60 * 100`, reran — 5 of 19 tests failed on exactly the mutated lines,
+  confirming red for the right reason — then restored both files and reran clean (19/19 passed
+  again, diffed byte-identical against the pre-mutation copies).
+- **Coverage threshold — corrected after a CodeRabbit review (PR #92), not caught before merge.**
+  The original measurement (100%, 8/8 statements) was taken **without an explicit
+  `coverage.include`**. Vitest 4 defaults `coverage.include` to "files actually imported during the
+  run" — so `types/api.ts`/`auth.ts`/`user.ts`/`workspace.ts` AND both barrel files were never in
+  the denominator at all, imported or not. "100%" only ever meant "100% of the 2 files a test
+  happened to import," not 100% of the package — the exact "invisible denominator" failure mode
+  `docs/IMPROVEMENTS.md`-style audits exist to catch, landing in this ticket's own new file. Verified
+  by adding `include: ['src/**/*.ts']` and re-running: coverage **dropped to 53.33%**, correctly
+  surfacing the two barrel files' real re-export statements as uncovered (they were never even
+  reported before, let alone counted against the threshold).
+  - Fix: `coverage.exclude` now explicitly names the four verified-empty interface files (each read
+    individually, not inferred). The two barrels are **not** excluded — `export * from './x.js'` is
+    a real, executable statement — and `shared/src/index.test.ts` (new, 2 cases) now imports both
+    and asserts real re-exported values/functions (not just "the module loaded"), which is itself a
+    regression test for barrel/source drift (a renamed or deleted export whose barrel line goes
+    stale).
+  - Re-measured after the fix: genuinely **100% statement coverage**, 21/21 tests across 3 files.
+    `coverage.thresholds.statements` stays at **95**, a couple of points below the (now honest)
+    measured number, same convention as api (43 vs. 45.65%) and web (20 vs. ~22.3%). Re-verified the
+    threshold is real, not decorative: temporarily set it to `100.01` and reran — `ERROR: Coverage
+    for statements (100%) does not meet global threshold (100.01%)`, exit 1 — then reverted to 95.
+  - Recorded in `audit/factory/review-findings.jsonl` as two Major findings, both fixed.
+- `.github/workflows/ci.yml` — added a **Shared test coverage** step (`pnpm --filter @ship/shared
+  test:coverage`) to the `verify` job, right after the existing Web test coverage step. Unlike
+  api/web, `shared/` has no pre-existing quarantine baseline and no separate continue-on-error unit
+  test step to isolate this from, so a single `test:coverage` step both runs the suite and enforces
+  the threshold — either kind of failure should genuinely fail the job. Extended the `Coverage
+  summary` step's `coverage-summary.mjs` invocation with `--pkg shared:shared/coverage/coverage-summary.json:95`
+  and added `shared/coverage/coverage-summary.json` to the `Upload coverage + audit reports`
+  artifact path list. Did **not** touch `scripts/factory/gate.sh` — it currently only runs
+  `pnpm --filter @ship/{api,web} test` and has no concept of `shared`'s tests at all, but wiring
+  `shared` into CI satisfies the "gate.sh (or CI)" requirement (this repo's ship-qa role brief) that
+  a regression test live somewhere the pipeline actually runs it. Flagged as a clean, separate
+  follow-up if `gate.sh` itself should also run `shared`'s suite in the factory's local inner loop —
+  out of this ticket's stated file scope (`shared/`, `pnpm-lock.yaml`, `shared/package.json`,
+  `.github/workflows/ci.yml` only).
+
+**Verified, not just claimed.** `pnpm --filter @ship/shared test` — 3 files, 21/21 passed.
+`pnpm --filter @ship/shared test:coverage` — exit 0, genuinely 100% statements (all included files
+covered, four verified-empty files correctly excluded). `pnpm --filter @ship/shared type-check` and
+`pnpm --filter @ship/shared lint` — both clean on the new test files. Full `pnpm type-check` and
+`pnpm build` across all three packages — both clean, confirming the new devDependencies and config
+didn't disturb api/web.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/shared test           # 21 tests, ~1s, no setup required
+pnpm --filter @ship/shared test:coverage  # same, plus the v8 coverage report + 95% floor
+```
+
+**Rollback.** Revert this commit. Removes `shared/vitest.config.ts`,
+`shared/src/constants.test.ts`, `shared/src/types/document.test.ts`, and `shared/src/index.test.ts`;
+restores `shared/package.json` to no `test`/`test:coverage` scripts and no `vitest`/`@vitest/coverage-v8`
+devDependencies; restores `pnpm-lock.yaml`'s prior 6 lines; and removes the `Shared test coverage`
+CI step and its two follow-on references in `.github/workflows/ci.yml`. Reverting drops `shared/`
+back to zero test coverage and zero CI signal for it — the state TEST-7 originally described —
+without affecting api or web, whose coverage setups this ticket verified but did not modify.
+
+---
+
+## TRO-210 — [TS-5] The shared/ contract is bypassed — 46 exported types, adopted by 13 of 198 web files
+
+**What was broken.** `web/src/lib/api.ts:5` declared its own `interface ApiResponse<T>` (`success`,
+`data?`, and an `error?: { code; message }` with no `details`) even though `shared/src/types/api.ts:2`
+already exports `ApiResponse<T = unknown>` with a proper `ApiError` (`code`, `message`, and an optional
+`details: Record<string, unknown>` the local copy never had). Two hand-maintained guesses at the same
+wire contract, free to drift silently — exactly what TS-5 is about.
+
+**Sequencing constraint honored (per the ticket's own warning: "do this WITH TS-2, not before it").**
+TS-2 (typing the ~707 untyped `pg` query rows in `api/`) has not landed. `shared/src/types/document.ts`
+models the **raw `documents` table row** (`Document`/`ProjectDocument`/`IssueDocument`/etc. — flat
+`content`, `properties: ProjectProperties`, `workspace_id`, `document_type`). The actual list/detail
+routes do not return that shape. Verified by reading the route handlers, not assumed:
+
+- `api/src/routes/projects.ts:534-548` — the `/api/projects` list query flattens `properties` into
+  top-level fields (`impact`, `confidence`, `ease`, `color`, `emoji`, ...), joins in `owner` (name/email),
+  and computes `sprint_count`, `issue_count`, `inferred_status`, `is_complete`, `missing_fields` — none
+  of which exist on `shared`'s `ProjectDocument`. `web/src/hooks/useProjectsQuery.ts:8`'s local `Project`
+  models this response shape, not the raw document row.
+- The same pattern holds for `Sprint`/`Week` (`web/src/hooks/useWeeksQuery.ts:10` — computed
+  `completed_count`, `started_count`, `has_plan`/`has_retro`, joined `owner`), `Program`
+  (`web/src/hooks/useProgramsQuery.ts:10`), `Issue` (`web/src/hooks/useIssuesQuery.ts:25` — joined
+  `assignee_name`, computed `display_id`), `Person` (`web/src/components/PersonCombobox.tsx:6` — a
+  3-field combobox projection), and `WikiDocument` (`web/src/components/sidebars/WikiSidebar.tsx:5` /
+  `web/src/hooks/useDocumentsQuery.ts:4` — partial views with optional fields).
+
+Forcing any of those seven onto `shared/`'s document types today would either not compile (missing
+required fields the API never sends, e.g. `content`, `workspace_id`) or silently paper over the gap
+with optional-everything — the drift-risk the ticket brief warned against. **None of the 7 were
+consolidated.** They're deferred, explicitly, pending TS-2 producing typed route-response interfaces
+that actually match what the API returns — at which point those response types (not the raw
+`*Document` types) are what `web/src` should import.
+
+**What changed — the one verified-safe case.** `ApiResponse`/`ApiError` is different: it isn't a
+document projection, it's the outer HTTP envelope every route already wraps its response in
+identically, and the local declaration was a byte-for-byte subset (missing only the optional
+`details` field). No route-by-route verification needed — this is the JSON-shape `request<T>()` in
+`web/src/lib/api.ts` always produces, and shared's version is a strict superset.
+
+- `web/src/lib/api.ts:1,5-11` — deleted the local `interface ApiResponse<T>`; added
+  `import type { ApiResponse } from '@ship/shared';`. No call-site changes were needed: every existing
+  read of `data.error?.code` / `data.error?.message` still type-checks against the shared `ApiError`,
+  and the `details` field is now reachable (previously a compile error) without changing any runtime
+  behavior — nothing in this file reads it yet.
+
+**How to run it.**
+
+```bash
+pnpm build:shared
+pnpm --filter @ship/web exec tsc --noEmit -p tsconfig.json
+pnpm --filter @ship/web test -- src/lib/api.test.ts
+```
+
+**Regression test.** `web/src/lib/api.test.ts` (new) — a source-text guard (`apiSource` read via
+`readFileSync`) asserting `web/src/lib/api.ts` no longer matches `/\binterface\s+ApiResponse\b/` and
+does match an `import type { ApiResponse ... } from '@ship/shared'` pattern, plus a runtime companion
+mocking `fetch` through `api.auth.me()` to confirm an `ApiError.details` payload survives end to end.
+Confirmed failing on the pre-fix file (both source assertions failed: the interface was present, the
+import was absent) by temporarily swapping in the pre-fix `web/src/lib/api.ts` via `git show
+HEAD:web/src/lib/api.ts`, running the test, then restoring the fixed file — not via `git stash` (shared
+across worktrees). The runtime companion test passed unchanged in both states, as expected: this repo's
+`vitest run` does not type-check, so a type-only fix can only be caught by a source-text assertion, not
+by executing code whose behavior doesn't change.
+
+**Roll back.** `git revert` the commit, or manually: reinstate
+
+```ts
+interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: { code: string; message: string };
+}
+```
+
+at the top of `web/src/lib/api.ts` and remove the `@ship/shared` import; delete
+`web/src/lib/api.test.ts`.
+
+---
+
 ## TRO-231 — [TEST-9] `pnpm test` TRUNCATEs whatever database `DATABASE_URL` points at — including your dev database
 
 **What was broken.** `api/src/test/setup.ts` runs, in the `beforeAll` of every one of the 28 api
