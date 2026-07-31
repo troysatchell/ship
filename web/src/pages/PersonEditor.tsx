@@ -65,7 +65,7 @@ export function PersonEditorPage() {
 
   // Navigate to document (for slash commands and mentions)
   const handleNavigateToDocument = useCallback((docId: string) => {
-    navigate(`/documents/${docId}`);
+    void navigate(`/documents/${docId}`);
   }, [navigate]);
   const [sprintMetrics, setSprintMetrics] = useState<SprintMetricsResponse | null>(null);
   const [metricsVisible, setMetricsVisible] = useState(false);
@@ -81,19 +81,21 @@ export function PersonEditorPage() {
             setPerson(data);
           } else {
             // Not a person document, redirect to directory
-            navigate('/team/directory');
+            void navigate('/team/directory');
           }
         } else {
-          navigate('/team/directory');
+          void navigate('/team/directory');
         }
       } catch (error) {
         console.error('Failed to fetch person:', error);
-        navigate('/team/directory');
+        void navigate('/team/directory');
       } finally {
         setLoading(false);
       }
     }
-    fetchPerson();
+    // fetchPerson catches its own errors (redirects away, see above) and
+    // always resolves via its finally block, so it never rejects.
+    void fetchPerson();
   }, [id, navigate]);
 
   // Fetch sprint metrics (only visible to self or admins)
@@ -114,7 +116,9 @@ export function PersonEditorPage() {
         console.error('Failed to fetch sprint metrics:', error);
       }
     }
-    fetchSprintMetrics();
+    // fetchSprintMetrics catches its own errors (console.error) and always
+    // resolves, so it never rejects.
+    void fetchSprintMetrics();
   }, [id]);
 
   // TRO-289/ERR-13: title and property saves used to go through a bare
@@ -161,7 +165,7 @@ export function PersonEditorPage() {
     try {
       const response = await apiDelete(`/api/documents/${id}`);
       if (response.ok) {
-        navigate('/team/directory');
+        void navigate('/team/directory');
       }
     } catch (error) {
       console.error('Failed to delete person:', error);
@@ -186,11 +190,15 @@ export function PersonEditorPage() {
       userName={user?.name || 'Anonymous'}
       initialTitle={person.title}
       onTitleChange={throttledTitleSave}
-      onBack={() => navigate('/team/directory')}
+      onBack={() => void navigate('/team/directory')}
       backLabel="Team Directory"
       roomPrefix="person"
       placeholder="Add bio, contact info, skills..."
-      onDelete={handleDelete}
+      onDelete={() => {
+        // handleDelete catches its own errors (console.error), so it never
+        // rejects.
+        void handleDelete();
+      }}
       onCreateSubDocument={handleCreateSubDocument}
       onNavigateToDocument={handleNavigateToDocument}
       sidebar={
@@ -270,7 +278,7 @@ function PersonSidebar({ person, people, isAdmin, onUpdateProperties, metricsVis
           <PersonCombobox
             people={comboboxPeople}
             value={reportsTo}
-            onChange={(value) => onUpdateProperties({ reports_to: value })}
+            onChange={(value) => void onUpdateProperties({ reports_to: value })}
             placeholder="Select supervisor..."
           />
         ) : (

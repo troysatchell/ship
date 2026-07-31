@@ -21,6 +21,184 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-306 (TS-10 follow-up, batch 1) — `web/src/pages/*`'s 188 floating/misused-promise sites fixed, both rules promoted to `error` for `web/src/pages/**`
+
+**Scope.** TRO-297's own "what's still open" note recommended splitting web's promise-safety
+cleanup into a few `web/src/pages/*` batches rather than one mega-ticket. This ticket is that
+first (and, since every file reached zero, only needed) batch: all 21 files directly under
+`web/src/pages/` that had violations. `web/src/components/**` and `web/src/lib/**` are a separate,
+still-open, uncounted-by-this-ticket population — explicitly out of scope, noted below.
+
+**Live count re-derived, not trusted from the ticket's cache.** The ticket's own text cited "~389"
+sites for web overall (from TRO-297's rough estimate of all of `web/src`, not specifically
+`web/src/pages`). The actual live count, from the command below, was **188 errors across 21
+files** (plus 16 unrelated pre-existing `no-explicit-any`/`no-non-null-assertion` warnings from
+other files, untouched, out of scope).
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec eslint src/pages --rule \
+  '{"@typescript-eslint/no-floating-promises":"error","@typescript-eslint/no-misused-promises":"error"}'
+```
+**Before:** `✖ 204 problems (188 errors, 16 warnings)`.
+**After (same command):** `✖ 16 problems (0 errors, 16 warnings)` — the 16 remaining warnings are
+all pre-existing `no-explicit-any`/`no-non-null-assertion` (TS-1/TS-2/TS-4/TS-8, untouched).
+
+**Per-file breakdown (all 21 reached zero):**
+
+| File | Violations fixed |
+|---|---|
+| App.tsx | 44 |
+| UnifiedDocumentPage.tsx | 19 |
+| Projects.tsx | 13 |
+| WorkspaceSettings.tsx | 13 |
+| AdminWorkspaceDetail.tsx | 11 |
+| PersonEditor.tsx | 10 |
+| ReviewsPage.tsx | 10 |
+| AdminDashboard.tsx | 8 |
+| Documents.tsx | 8 |
+| Programs.tsx | 8 |
+| MyWeekPage.tsx | 7 |
+| TeamMode.tsx | 7 |
+| Login.tsx | 6 |
+| OrgChartPage.tsx | 6 |
+| TeamDirectory.tsx | 5 |
+| InviteAccept.tsx | 4 |
+| Setup.tsx | 4 |
+| FeedbackEditor.tsx | 2 |
+| ConvertedDocuments.tsx | 1 |
+| PublicFeedback.tsx | 1 |
+| UnifiedDocumentPage.deletedFocusRefetch.test.tsx | 1 |
+
+**The fix pattern, applied per-site (never a blanket `void`):**
+
+1. **`navigate(...)` (react-router).** `NavigateFunction`'s type is `(to, options?) => void |
+   Promise<void>`, so every call is technically a floating promise. No established mechanism in
+   this codebase handles a navigation rejection, so every fire-and-forget `navigate(...)` call —
+   by far the largest share of the 188 sites — is `void navigate(...)`, with `onClick={() =>
+   navigate(x)}`-style implicit-return arrows either voided inline or wrapped in a block body.
+2. **Self-contained mutation wrappers.** `createDocument`/`updateDocument`/`deleteDocument`
+   (`useDocumentsQuery.ts`), `createProject`/`updateProject`/`deleteProject`
+   (`useProjectsQuery.ts`), `createProgram`/`updateProgram`/`deleteProgram`
+   (`useProgramsQuery.ts`), and `createIssue`/`updateIssue` (`useIssuesQuery.ts`, with one
+   exception below) all wrap their underlying `mutateAsync` in `try { ... } catch { return
+   null/false; }` and never reject. Handlers built on them, and the shared components that receive
+   them as props (`ContextMenuItem`, `DocumentTreeItem`, `ProgramBulkActionBar`,
+   `ProjectsBulkActionBar`, `SelectableList`'s `onItemClick`, `DocumentListToolbar`'s
+   `createButton`), are `void`d rather than widening those components' declared void-returning
+   prop types.
+3. **`showToast`'s "Undo" action.** `ToastAction.onClick` is typed `() => void`
+   (`components/ui/Toast.tsx`). Three sites (Projects.tsx bulk-archive, App.tsx document-delete,
+   App.tsx program-archive) had passed an inline `async () => {...}` directly as `action.onClick` —
+   each extracted into a named async function, voided from a sync wrapper, rather than widening the
+   toast's own type.
+4. **Real bugs found and fixed while wiring rejection handling, not just satisfying the linter:**
+   - `InviteAccept.tsx`: `api.invites.validate()`/`accept()` can reject on a network failure;
+     unhandled, this left the page stuck on "Loading..." (validate) or the button stuck on
+     "Accepting..." forever (accept — `setAccepting` never reset on the throw path). Now routed
+     into the `'error'` status this file already declared in its own `InviteStatus` type but never
+     actually set, and into the existing `setError`/`setAccepting(false)` failure pattern.
+   - `Login.tsx`: `login()` (`useAuth.tsx`) can reject the same way; `handleSubmit` had no
+     try/catch, so a network failure during login left the button stuck on "Signing in..." with no
+     feedback. Now caught and routed into the existing `error`/`errorField`/`isLoading` state.
+   - `AdminDashboard.tsx` / `AdminWorkspaceDetail.tsx` / `WorkspaceSettings.tsx`: each page's
+     `loadData()` had **no error handling at all** — a network failure during the initial
+     `Promise.all` left `loading` stuck `true` forever with a blank page and no way to recover.
+     All three now catch and report (via a new `loadError` state or this file's own existing
+     `alert()` convention).
+   - `MyWeekPage.tsx`: `handleCreatePlan`/`handleCreateRetro`/`handleCreateStandup` were `try { ...
+     } finally { setCreating(null); }` with **no catch and no else on `!res.ok`** — a rejected
+     `apiPost` or a non-2xx response silently reset the "Creating..." button with zero feedback.
+     Now surfaces an inline `role="alert"` error message (this file has no toast/context
+     dependency, so a local `actionError` state was used instead of pulling in `useToast` — see the
+     regression-test section below for why).
+   - `AdminWorkspaceDetail.tsx` / `WorkspaceSettings.tsx`: `navigator.clipboard.writeText()` calls
+     were floating promises, and the pre-fix code showed "Copied!"/flipped the copied state
+     **unconditionally**, even when the clipboard write itself failed (e.g. permission denied). Now
+     the success state only flips once the write actually resolves.
+   - `App.tsx`'s `IssuesList.handleChangeStatus`/`handleArchive`: `onUpdateIssue`
+     (`updateIssue`, `useIssuesQuery.ts`) is the one function in the self-contained list above that
+     is **not** fully self-contained — it re-throws `CascadeWarningError` instead of swallowing it,
+     since a full confirmation-dialog flow belongs in the issue editor, not this compact context
+     menu. Both handlers now catch it and show a toast instead of leaving a genuine unhandled
+     rejection.
+   - `App.tsx`'s `handleSwitchWorkspace`/`logout`/`endImpersonation` call into
+     `WorkspaceContext.tsx`/`useAuth.tsx` (out of this ticket's `web/src/pages/*` scope, and neither
+     is self-contained). `handleSwitchWorkspace` (in-scope, in App.tsx) got a real try/catch;
+     `logout`/`endImpersonation` (their definitions are out of scope) are caught at the App.tsx call
+     site with a real `.catch()` rather than voided. `useToast` was added to `AppLayout` for this —
+     verified `App.test.tsx` only renders the exported `DocumentsTree` leaf component, not
+     `AppLayout`, so this addition doesn't affect it.
+
+**`eslint.config.mjs`.** Added a `web/src/pages/**` config block (after the general
+`web/src/**` block, so its `error` severity wins for the same rule keys) with a new
+`webPagesCorrectnessRules` promoting both promise rules to `'error'`. Verified with
+`eslint --print-config`: `web/src/pages/App.tsx` resolves both rules to severity `2` (error);
+`web/src/components/Editor.tsx` still resolves to severity `1` (warn) — the override did not leak
+outside `web/src/pages/**`. The header comment block is updated to record this batch, matching
+TRO-297's existing pattern for `api/src`.
+
+**Regression test.** `web/src/pages/MyWeekPage.createPlanError.test.tsx` (new file) — picked
+`MyWeekPage.tsx`'s `handleCreatePlan` as the single most user-impactful fix to prove, over
+e.g. `Projects.tsx`'s bulk-archive (mentioned as an example in the ticket brief): `Projects.tsx`'s
+mutations were already fully self-contained end to end, so there was no user-facing bug left to
+demonstrate there, whereas `MyWeekPage.tsx` had a real, confirmed one (see above). The test mocks
+`apiPost` to reject, clicks "+ Create plan for this week", and asserts (1) an accessible
+`role="alert"` error appears saying the create failed and (2) the button recovers to its idle,
+retryable label instead of staying stuck on "Creating...". **Confirmed red-for-the-right-reason**:
+reverted `handleCreatePlan` to its pre-fix `try { ... } finally { ... }` shape (no catch, no else)
+and re-ran — the promise rejection surfaced as an unhandled rejection in the test's stderr and the
+alert never rendered (`Unable to find an element with the text: /failed to create weekly
+plan/i`), then restored the fix and reconfirmed green (2/2 passing).
+
+A second commit fixed two problems this regression test's own gate run surfaced in the first
+attempt at the `MyWeekPage.tsx` fix: (1) the first attempt used `useToast()` for the new error
+message, which broke two pre-existing, unrelated test files
+(`MyWeekPage.contrast.test.tsx`, `MyWeekPage.loadingAffordance.test.tsx`) that render
+`<MyWeekPage />` standalone with no `ToastProvider` ancestor — replaced with a local `actionError`
+state rendered inline instead of adding a new context dependency; (2) `review-patterns` (gate
+check G7b's automation) flagged `previous_retro!.week_number` as a "new" non-null assertion
+because adding `void` to that line changed its exact text, even though the assertion itself
+pre-dates this ticket (identical assertions two lines above are untouched) — annotated with
+`// review-pattern-ok:` documenting why.
+
+**Verified:**
+```bash
+source .factory-env
+pnpm --filter @ship/web exec tsc --noEmit -p .                # clean, 0 errors
+pnpm --filter @ship/web exec eslint src/pages \
+  --rule '{"@typescript-eslint/no-floating-promises":"error","@typescript-eslint/no-misused-promises":"error"}'
+                                                                 # 0 errors, 16 pre-existing warnings
+pnpm --filter @ship/web exec vitest run \
+  src/pages/MyWeekPage.createPlanError.test.tsx \
+  src/pages/MyWeekPage.contrast.test.tsx src/pages/MyWeekPage.loadingAffordance.test.tsx \
+  src/pages/UnifiedDocumentPage.deletedFocusRefetch.test.tsx \
+  src/pages/UnifiedDocumentPage.throttledRead.test.tsx \
+  src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx \
+  src/pages/App.test.tsx                                        # 34/34 passed
+```
+
+**What's still open.** `web/src/components/**` and `web/src/lib/**` are a separately-uncounted,
+still-open population at `warn` — the header comment and this ticket's own eslint override comment
+both say not to widen the `web/src/pages/**` glob to cover them without independently re-verifying
+that population first, the same caution TRO-297 gives for `shared/src`. `shared/src` itself
+remains untouched by this ticket (still 0 sites at `warn`, per TRO-297).
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/web exec tsc --noEmit -p .
+pnpm --filter @ship/web exec eslint src/pages
+pnpm --filter @ship/web exec vitest run src/pages/MyWeekPage.createPlanError.test.tsx
+```
+
+**How to roll it back.** Revert these commits. `eslint.config.mjs`'s new `web/src/pages/**`
+override block reverts along with the header comment update, all 21 files' fixes revert with it
+(each is additive — a `void`/`.catch`/try-catch/extraction, no removed functionality), and the new
+`MyWeekPage.createPlanError.test.tsx` file is removed.
+
+---
+
 ## TRO-229 — [TEST-7] Coverage measurement is broken in api and entirely absent in web and shared
 
 **Scope correction, verified before work began — 2 of the finding's 3 sub-gaps were already fixed.**

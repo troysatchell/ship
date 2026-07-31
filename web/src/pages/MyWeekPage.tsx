@@ -34,6 +34,11 @@ export function MyWeekPage() {
 
   const { data, isLoading, error } = useMyWeekQuery(weekNumber);
   const [creating, setCreating] = useState<string | null>(null);
+  // Surfaces a create-plan/retro/standup failure inline, the same way this
+  // page already surfaces the top-level query `error` below - not a global
+  // toast, so this component stays renderable without a ToastProvider
+  // ancestor (existing tests render it standalone).
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const navigateToWeek = (wn: number) => {
     if (data && wn === data.week.current_week_number) {
@@ -46,6 +51,7 @@ export function MyWeekPage() {
   const handleCreatePlan = async () => {
     if (!data) return;
     setCreating('plan');
+    setActionError(null);
     try {
       const res = await apiPost('/api/weekly-plans', {
         person_id: data.person_id,
@@ -53,8 +59,15 @@ export function MyWeekPage() {
       });
       if (res.ok) {
         const doc = await res.json();
-        navigate(`/documents/${doc.id}`);
+        void navigate(`/documents/${doc.id}`);
+      } else {
+        // Previously: no catch/else at all, so a non-ok response (or a
+        // thrown network error, see catch below) just silently reset
+        // `creating` with no feedback.
+        setActionError('Failed to create weekly plan');
       }
+    } catch {
+      setActionError('Failed to create weekly plan');
     } finally {
       setCreating(null);
     }
@@ -63,6 +76,7 @@ export function MyWeekPage() {
   const handleCreateRetro = async (weekNum: number) => {
     if (!data) return;
     setCreating('retro');
+    setActionError(null);
     try {
       const res = await apiPost('/api/weekly-retros', {
         person_id: data.person_id,
@@ -70,8 +84,12 @@ export function MyWeekPage() {
       });
       if (res.ok) {
         const doc = await res.json();
-        navigate(`/documents/${doc.id}`);
+        void navigate(`/documents/${doc.id}`);
+      } else {
+        setActionError('Failed to create weekly retro');
       }
+    } catch {
+      setActionError('Failed to create weekly retro');
     } finally {
       setCreating(null);
     }
@@ -79,12 +97,17 @@ export function MyWeekPage() {
 
   const handleCreateStandup = async (date: string) => {
     setCreating(`standup-${date}`);
+    setActionError(null);
     try {
       const res = await apiPost('/api/standups', { date });
       if (res.ok) {
         const doc = await res.json();
-        navigate(`/documents/${doc.id}`);
+        void navigate(`/documents/${doc.id}`);
+      } else {
+        setActionError('Failed to create daily update');
       }
+    } catch {
+      setActionError('Failed to create daily update');
     } finally {
       setCreating(null);
     }
@@ -116,6 +139,11 @@ export function MyWeekPage() {
 
   return (
     <div className="flex h-full flex-col">
+      {actionError && (
+        <div role="alert" className="border-b border-red-500/30 bg-red-500/10 px-6 py-2 text-sm text-red-400">
+          {actionError}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
         <div className="flex items-center gap-2.5">
@@ -188,7 +216,11 @@ export function MyWeekPage() {
                 </Link>
               ) : (
                 <button
-                  onClick={() => handleCreateRetro(previous_retro!.week_number)}
+                  // `previous_retro!` pre-exists this ticket (identical
+                  // assertions two lines up and at line 210 above are
+                  // untouched by this fix) - only the `void` is new here.
+                  // review-pattern-ok: pre-existing non-null assertion, not introduced by this fix
+                  onClick={() => void handleCreateRetro(previous_retro!.week_number)}
                   disabled={creating === 'retro'}
                   className="text-xs font-medium text-orange-300 hover:text-orange-200 underline disabled:opacity-50"
                 >
@@ -249,7 +281,7 @@ export function MyWeekPage() {
               const isDue = week.week_number <= week.current_week_number && projects.length > 0;
               return (
                 <button
-                  onClick={handleCreatePlan}
+                  onClick={() => void handleCreatePlan()}
                   disabled={creating === 'plan'}
                   className={cn(
                     'w-full rounded-lg border border-dashed px-4 py-3 text-sm transition-colors disabled:opacity-50 flex items-center justify-between',
@@ -321,7 +353,7 @@ export function MyWeekPage() {
               const isDue = retroDueForWeek && projects.length > 0;
               return (
                 <button
-                  onClick={() => handleCreateRetro(week.week_number)}
+                  onClick={() => void handleCreateRetro(week.week_number)}
                   disabled={creating === 'retro'}
                   className={cn(
                     'w-full rounded-lg border border-dashed px-4 py-3 text-sm transition-colors disabled:opacity-50 flex items-center justify-between',
@@ -408,7 +440,7 @@ export function MyWeekPage() {
               return (
                 <button
                   key={slot.date}
-                  onClick={() => handleCreateStandup(slot.date)}
+                  onClick={() => void handleCreateStandup(slot.date)}
                   disabled={creating === `standup-${slot.date}`}
                   className={cn(rowClass, 'w-full text-left cursor-pointer disabled:opacity-50')}
                 >

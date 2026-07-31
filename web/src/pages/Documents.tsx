@@ -134,9 +134,11 @@ export function DocumentsPage() {
   async function handleCreateDocument(parentId?: string) {
     setCreating(true);
     try {
+      // createDocument() (useDocumentsQuery.ts) catches its own errors and
+      // resolves to `null` on failure rather than rejecting.
       const doc = await createDocument(parentId);
       if (doc) {
-        navigate(`/documents/${doc.id}`);
+        void navigate(`/documents/${doc.id}`);
       }
     } finally {
       setCreating(false);
@@ -237,7 +239,7 @@ export function DocumentsPage() {
           hiddenCount={hiddenCount}
           showColumnPicker={viewMode === 'list'}
           filterContent={searchFilterContent}
-          createButton={{ label: creating ? 'Creating...' : 'New Document', onClick: () => handleCreateDocument(), disabled: creating }}
+          createButton={{ label: creating ? 'Creating...' : 'New Document', onClick: () => { void handleCreateDocument(); }, disabled: creating }}
         />
       </div>
 
@@ -245,7 +247,12 @@ export function DocumentsPage() {
       {selectedIds.size > 0 ? (
         <DocumentBulkActionBar
           selectedCount={selectedIds.size}
-          onDelete={handleBulkDelete}
+          onDelete={() => {
+            // handleBulkDelete calls deleteDocument() for each id, which
+            // catches its own errors and never rejects (see
+            // useDocumentsQuery.ts), so it never rejects either.
+            void handleBulkDelete();
+          }}
           onClearSelection={() => setSelectedIds(new Set())}
         />
       ) : (
@@ -269,7 +276,7 @@ export function DocumentsPage() {
               <>
                 <p className="text-muted">No documents yet</p>
                 <button
-                  onClick={() => handleCreateDocument()}
+                  onClick={() => void handleCreateDocument()}
                   className="mt-2 text-sm text-accent hover:underline"
                 >
                   Create your first document
@@ -293,8 +300,8 @@ export function DocumentsPage() {
               <DocumentTreeItem
                 key={doc.id}
                 document={doc}
-                onCreateChild={handleCreateDocument}
-                onDelete={handleDeleteWithUndo}
+                onCreateChild={(parentId) => { void handleCreateDocument(parentId); }}
+                onDelete={(id) => { void handleDeleteWithUndo(id); }}
               />
             ))}
           </ul>
@@ -306,7 +313,7 @@ export function DocumentsPage() {
             getItemId={(doc) => doc.id}
             renderRow={(doc, props) => renderDocumentRow(doc, props)}
             columns={columns}
-            onItemClick={(doc) => navigate(`/documents/${doc.id}`)}
+            onItemClick={(doc) => void navigate(`/documents/${doc.id}`)}
             selectable={true}
             onSelectionChange={(ids) => setSelectedIds(ids)}
             onContextMenu={handleContextMenu}
@@ -316,7 +323,7 @@ export function DocumentsPage() {
           {/* Context menu */}
           {contextMenu && (
             <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
-              <ContextMenuItem onClick={handleBulkDelete} destructive>
+              <ContextMenuItem onClick={() => { void handleBulkDelete(); }} destructive>
                 <TrashIcon className="h-4 w-4" />
                 Delete {selectedIds.size > 1 ? `${selectedIds.size} documents` : 'document'}
               </ContextMenuItem>
