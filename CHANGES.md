@@ -122,6 +122,98 @@ itself is also a no-op update in place, not a rotation.
 
 ---
 
+## TRO-307 — [SECURITY] CodeQL: missing rate limiting across api/src/routes
+
+**What CodeQL reported.** `js/missing-rate-limiting` (High) has 352 open alerts as of 2026-07-31
+(`gh api repos/troysatchell/ship/code-scanning/alerts`), spread across nearly every file in
+`api/src/routes/` — 50 in `weeks.ts`, 33 in `workspaces.ts`, 30 in `issues.ts`, 24 in `admin.ts`, 18
+in `weekly-plans.ts`, 6 in `search.ts`, and ~25 more files. This ticket's brief named
+`weekly-plans.ts`, `weeks.ts`, `admin.ts`, `search.ts` (98 of the 352) as the confirmed-pre-existing
+subset to fix.
+
+**What did NOT reproduce, checked against the specific case rather than assumed from the alert
+text.** Every one of those routes is mounted under `/api/` in `api/src/app.ts`, and `app.ts` has
+applied `createApiRateLimiters()`'s two limiters (`perSourceIpLimiter`, `perIdentityLimiter`) to
+every `/api/*` request since TRO-172 (commit `9aa2d1c`) — before any of these alerts existed.
+OBSERVED, not inferred: forcing `NODE_ENV=production` and hammering `GET /api/weekly-plans` (one of
+the exact CodeQL-flagged lines, `weekly-plans.ts:329`) 601 times on one session returns HTTP 429 at
+request #601, exactly matching the documented production `identityLimit` of 600
+(`rate-limit.ts:118`) — with **zero code changes**. Repeated for one representative route in each of
+the other three named files (`weeks.ts:587`, `admin.ts:14`, `search.ts:17`) with the identical
+result. So "these routes previously had no rate limiting" does not hold as a runtime claim; the
+route-level DoS protection the alert cares about was already there.
+
+**What the actual fix is, and its confidence level.** DERIVED, not CodeQL-confirmed — this sandbox
+has no `codeql` CLI to test the query directly. The most likely reason CodeQL still flags routes
+that are, in practice, already protected: `app.ts` built the limiter array in a different file
+(`middleware/rate-limit.ts`, via `createApiRateLimiters()`) and mounted it by **spreading** that
+returned array into one `app.use('/api/', ...)` call — an interprocedural array-return, then a
+spread into a variadic call, one file removed from the `rateLimit()` calls that produced it. That
+indirection is a known-plausible blind spot for static rate-limiter detection. The fix removes it
+without changing behavior:
+- `api/src/middleware/rate-limit.ts`: `createApiRateLimiters`'s return type changed from
+  `RequestHandler[]` to the 2-tuple `[RequestHandler, RequestHandler]`, so destructuring it is fully
+  typed (no `undefined`, no `!`, no `as` needed).
+- `api/src/app.ts`: `const [perSourceIpLimiter, perIdentityLimiter] = createApiRateLimiters(...)`,
+  then two explicit calls — `app.use('/api/', perSourceIpLimiter);` /
+  `app.use('/api/', perIdentityLimiter);` — replacing the single
+  `app.use('/api/', ...apiLimiters)` spread. Same two middleware functions, same path, same order;
+  Express creates one layer per handler function either way. Confirmed behavior-identical: the full
+  pre-existing `rate-limit.test.ts` and `app.test.ts` suites (23 tests) pass unchanged.
+
+**Behavior change for real users, stated plainly.** None from this specific diff — the protection
+already existed and already returns 429 past the documented limits (production: 600 req/min per
+identity, 6,000 req/min per source IP). This ticket does not raise or lower either ceiling.
+
+**Scope not covered — filed as follow-up.** 254 of the 352 open alerts are in route files this
+ticket did not name (`workspaces.ts`, `issues.ts`, `projects.ts`, `programs.ts`, `documents.ts`, and
+~20 others) — same mechanism, same already-covered status expected (all mount under `/api/` after
+the same `app.ts` chain), not independently re-verified per file. A candidate follow-up ticket: audit
+whether the app.ts fix here closes some/all of the 352 once CodeQL re-scans the PR, and only chase
+per-route fixes for whatever, if anything, remains open — do not assume a per-file fix is needed
+before that evidence exists.
+`api/src/app.ts:424-446` (the SPA static-file catch-all, `js/missing-rate-limiting` alert #7) is a
+**genuinely different, unprotected** route — it is registered outside the `/api/` prefix the limiter
+chain matches, so it gets none of this protection. Different root cause (a real gap, not a
+CodeQL-legibility issue) and only reachable when `web/dist` exists (production/deployed builds, not
+local dev/test), so exercising it needs test infrastructure this ticket didn't build. Left for a
+separate ticket.
+`api/src/routes/admin.ts:929`'s separate `js/polynomial-redos` alert (different rule, different root
+cause) was confirmed real by reading the code — `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` doesn't exclude `.`
+from either `[^\s@]+` group, so a string with repeated `.` after the `@` has many ways to split
+across the two groups and the literal `\.`, which is polynomial-time backtracking-prone in a
+backtracking regex engine. Not touched — explicitly out of scope per this ticket's brief.
+
+**Regression coverage — `api/src/middleware/__tests__/rate-limit-coverage.test.ts`.** Two kinds,
+labeled distinctly because only one is red-before-green:
+- *Red-before-green* (`app.ts mounts via explicit non-spread app.use calls`): reads `app.ts`'s
+  source and asserts the `/api/` mount does not spread an array into `app.use`, and that both named
+  limiters are mounted individually. Verified failing for the right reason on unfixed code (`git
+  stash` the `app.ts` edit, rerun — both assertions fail on the spread and the missing explicit
+  calls; `git stash pop` restores the fix, both pass).
+- *Pin, not red-before-green* (`production ceiling already covers the routes CodeQL flagged`):
+  `it.each` over one route per named file (`/api/weekly-plans`, `/api/weeks`,
+  `/api/admin/workspaces`, `/api/search/mentions`), each hammered to 601 requests under
+  `NODE_ENV=production`, asserting 429 at exactly request 601. These already passed on `main` before
+  this ticket's code change — same category as the TRO-302 tests in `rate-limit.test.ts` — and exist
+  so a future change (narrowing the `/api/` mount, or reintroducing a spread that happens to also
+  break coverage) cannot silently remove protection CodeQL is watching for.
+
+**How to run it.**
+```bash
+cd api && source ../.factory-env
+npx vitest run src/middleware/__tests__/rate-limit-coverage.test.ts
+npx vitest run src/middleware/__tests__/rate-limit.test.ts src/app.test.ts  # unchanged-behavior proof
+```
+
+**Rollback.** Revert the commit(s) on `fix/tro-307-rate-limiting` touching `api/src/app.ts` and
+`api/src/middleware/rate-limit.ts`. Restores the single spread-based `app.use('/api/', ...apiLimiters)`
+call and the `RequestHandler[]` return type — functionally identical to the fixed state (both were
+proven behavior-equivalent above), so rollback carries no functional risk; it only returns the code
+to being static-analysis-illegible in the same way it was before this ticket.
+
+---
+
 ## TRO-291 — Login error offered no recovery guidance for invalid credentials (WCAG 3.3.3)
 
 **What was broken.** `api/src/routes/auth.ts:54,89` deliberately returns the exact same message —
