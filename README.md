@@ -282,24 +282,31 @@ Ship uses Playwright for end-to-end testing with 73+ tests covering all major fu
 
 ## Deployment
 
-Ship supports multiple deployment patterns:
-
-| Environment | Recommended Approach |
+| Environment | Approach |
 |-------------|---------------------|
-| **Development** | Local with Docker Compose |
-| **Staging** | AWS Elastic Beanstalk |
-| **Production** | AWS GovCloud with Terraform |
+| **Development** | `./start.sh` / `pnpm dev` — see "Cold start" above |
+| **Shadow (UAT)** | Deploy from `feat/unified-document-model-v2` before merging to master |
+| **Production** | AWS — Elastic Beanstalk (backend) + S3/CloudFront (frontend), provisioned via Terraform |
 
-### Docker
+### Deploy scripts
 
 ```bash
-# Build production images
-docker build -t ship-api ./api
-docker build -t ship-web ./web
-
-# Run with Docker Compose
-docker-compose -f docker-compose.prod.yml up
+./scripts/deploy.sh prod           # Backend → Elastic Beanstalk
+./scripts/deploy-frontend.sh prod  # Frontend → S3/CloudFront
 ```
+
+Run both — they're paired; deploying only one leaves the API and frontend out of sync.
+
+### Post-deploy verification
+
+`curl` can't catch JS errors, so verify with a browser. Health checks:
+
+- **Prod API:** `https://ship.awsdev.treasury.gov/health` — goes through CloudFront, not a direct
+  ALB hit. `terraform/security-groups.tf` restricts the ALB security group to CloudFront's
+  origin-facing prefix list, so a direct connection to the ALB's own DNS name
+  (`ship-api-prod.eba-xsaqsg9h.us-east-1.elasticbeanstalk.com`) will time out once that's live —
+  the name still resolves, but traffic from outside CloudFront's IP ranges is silently dropped.
+- **Prod Web:** `https://ship.awsdev.treasury.gov`
 
 ### Environment Variables
 
