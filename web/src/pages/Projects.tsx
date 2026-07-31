@@ -227,6 +227,7 @@ export function ProjectsPage() {
       // voided from a sync wrapper rather than widening that shared type.
       const undoArchive = async () => {
         for (const id of ids) {
+          // review-pattern-ok: pre-existing `as any` (TRO-212's target, not introduced by this fix - only moved by extracting this function)
           await updateProject(id, { archived_at: null } as any);
         }
         showToast('Archive undone', 'info');

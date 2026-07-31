@@ -216,10 +216,10 @@ export function MyWeekPage() {
                 </Link>
               ) : (
                 <button
-                  // review-pattern-ok: `previous_retro!` pre-exists this ticket
-                  // (see the identical assertion two lines up and at line 210
-                  // above, both untouched by this fix); this line's diff is
-                  // only the added `void` for the no-misused-promises fix.
+                  // `previous_retro!` pre-exists this ticket (identical
+                  // assertions two lines up and at line 210 above are
+                  // untouched by this fix) - only the `void` is new here.
+                  // review-pattern-ok: pre-existing non-null assertion, not introduced by this fix
                   onClick={() => void handleCreateRetro(previous_retro!.week_number)}
                   disabled={creating === 'retro'}
                   className="text-xs font-medium text-orange-300 hover:text-orange-200 underline disabled:opacity-50"
