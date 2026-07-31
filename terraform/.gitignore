@@ -26,3 +26,12 @@ override.tf.json
 # choosing not to repeat it). Re-including a file whose parent directory is
 # not itself excluded is fine per git's ignore-negation rules.
 !render/.terraform.lock.hcl
+
+# Exception: the flat root's own lock file (TF-4 / TRO-237)
+# closes the gap called out above — it is now committed so `terraform init`
+# resolves the same hashicorp/aws and hashicorp/random builds on every
+# machine/CI run instead of floating within `~> 5.0` / `~> 3.6`. The leading
+# `/` anchors this to terraform/.terraform.lock.hcl itself, so nested lock
+# files under environments/*, modules/*, bootstrap/, and test-runner/ stay
+# covered by the blanket rule above and are unaffected.
+!/.terraform.lock.hcl
