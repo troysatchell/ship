@@ -48,6 +48,9 @@ describe('pgResult (typed pool.query mock factory)', () => {
     expect(result.fields).toEqual([]);
   });
 
+  // review-pattern-ok: the test title below names the phrase "as any" as prose
+  // (describing the cast this factory replaces), not a cast itself — the line
+  // has none. See the file header for the real cast this test proves is gone.
   it('rejects a non-array row shape at compile time — the exact mistake `as any` used to hide', () => {
     // @ts-expect-error — pgResult requires an array of rows (`T[]`), not a bare
     // row object. The old `{ rows: mockIteration } as any` pattern accepted this
