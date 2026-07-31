@@ -6,6 +6,222 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add an entry here.
 
+**The `audit-baseline` tag.** Points at `149873a` — verified with `git rev-list -n1 audit-baseline`
+and confirmed as the commit immediately before Phase 2 fixes started landing (it is `bace770`'s
+first parent per `git show bace770 --stat`, and `bace770` is TRO-242 below, the first Phase 2 merge).
+It marks the Phase 1 (audit-only) state so it stays a fixed reference once Phase 2 starts changing
+the source it measured. Every category audit skill's "compare mode" (`/<category>-audit compare
+<label>`) re-measures against this tag under identical conditions to prove a fix's effect —
+documented in `.claude/skills/ship-factory/references/evals.md`; this file's own entries lean on it
+directly (see TRO-174's compression note further down, which warns that a compare-mode run against
+`audit-baseline` looks flat or worse over loopback for a fix that is real). Not itself a ticket, so
+it has no rollback entry of its own — `git tag -d audit-baseline` removes the **local** tag, which
+leaves compare mode with no fixed reference point; a tag already pushed also needs
+`git push origin :refs/tags/audit-baseline` to remove it from the remote.
+
+---
+
+## TRO-249 [RULE-8] — audited every `CHANGES.md` entry against the three-question bar; backfilled TRO-242/TRO-243's rollback caveats and the missing `audit-baseline` tag note
+
+**What this is.** RULE-8 requires that `CHANGES.md` answer, per entry: what was added, how to run
+it, how to roll it back. This ticket predates the now-consistent rich format (it was filed when
+`CHANGES.md` barely existed) — its job was to **verify** the file now actually satisfies the rule
+for every entry, not to write it from scratch. Same class as TRO-245 (RULE-3): an audit of prior
+work, not a new fix, so there is no application code and no regression test.
+
+**Method.** Read every entry (68 total — `node scripts/factory/merge-changes.mjs --check` counts
+66 `TRO-*` headings plus the 2 "no ticket: tooling" sections). Cross-checked by hand against that
+script's own structural validator, which already flags any entry missing its own
+`**How to run it.**`/`**Rollback.**`-style heading — as a non-fatal **warning**, by design, because
+(per the script's comment) a chunk of real entries answer the same question in different prose
+("How to re-capture.", "How to run it / verify.", a verification-methodology paragraph for a
+docs-only change) rather than the one recognized heading. Before this ticket's edits, the check
+reported `68 entries, 134 fences, 7 warning(s)`, 0 fatal.
+
+**Result: all 68 entries substantively answer all three questions; 7 use non-standard phrasing the
+validator warns on but a human read confirms is not a gap.** Manually opened each of the 7 warned
+entries and confirmed real content: TRO-305 (`**How to re-capture.**` + a real `pnpm dev` /
+`vitest run` block), TRO-294 (docs-only; `**How to roll it back.**` present, plus a "How I
+confirmed the new URL" section standing in for "how to run" since there is nothing to run in a
+`.claude/CLAUDE.md` string edit), TRO-292 (`**How to run it / verify.**`, a full shell
+reproduction, plus `**How to roll it back.**`), TRO-302 (`**Rollback.**` present; run/verify
+commands embedded in its "Verified against" prose), TRO-203+TRO-204 (`**Rollback**` present; build
+and test commands embedded in "Verified nothing broke"), TRO-197..202 (`**Rollback.**` present; a
+"Build from `web/`" run instruction plus a named regression-test list), TRO-179+TRO-177
+(`**Rollback:**` present; a `Tests:` line naming exact vitest files plus a full "Measured"
+methodology section). None of the 7 were rewritten — this ticket does not touch entries that are
+already substantively compliant, per its own scope rule.
+
+**TRO-242 and TRO-243, backfilled as this ticket's brief specifically asked.** Both already had a
+`**Rollback.**` line naming a commit SHA, but neither stated the consequence of actually rolling
+back. Verified both SHAs before writing anything:
+
+- `git show bace770 --stat` — a merge commit (`Merge: 149873a 137dcd4`) titled "Merge
+  feat/render-deploy: build image from source, serve SPA from API", touching `Dockerfile` (78
+  lines) and `api/src/app.ts` (28 lines). Matches TRO-242 exactly. `git diff 149873a bace770 --
+  Dockerfile` shows the pre-image copying `shared/dist/` and `api/dist/` straight from the build
+  context (`COPY shared/dist/ ./shared/dist/`, `COPY api/dist/ ./api/dist/`) — both gitignored, so
+  that old image cannot build from a clean checkout. Added to TRO-242's rollback: reverting brings
+  that image back, so **the old image needs a local `pnpm build` before `docker build`**.
+- `git show 5b72a79 --stat` — a merge commit (`Merge: bace770 11e93b6`) titled "Merge
+  fix/ssm-fallback: allow non-AWS hosts to supply secrets directly", touching only
+  `api/src/config/ssm.ts` (41/16 lines). Matches TRO-243 exactly. `git diff bace770 5b72a79 --
+  api/src/config/ssm.ts` shows the fix wraps the SSM calls in `try`/`catch`, falling back to
+  `DATABASE_URL`/`SESSION_SECRET` from the environment and rethrowing only when neither is set.
+  Added to TRO-243's rollback: reverting removes that `catch`, so **it re-breaks non-AWS
+  deployment** — any host without AWS SSM access throws on startup again.
+
+**The `audit-baseline` tag note — genuinely missing from `CHANGES.md`, added.** Checked first
+(per the claim-provenance rule): the tag was already documented in
+`.claude/skills/ship-factory/references/evals.md`, `.claude/skills/ship-factory/SKILL.md`, and
+`memory-bank/progress.md`, but nowhere in `CHANGES.md` itself beyond one passing reference to
+"`audit-baseline`" inside TRO-174's compression note. Added a short paragraph to this file's
+header (above) stating what it points to and why, verified with `git rev-list -n1 audit-baseline`
+(`149873a73193dc73e5c3c825b6a46b8ed6fce1c6`) and `git log --oneline --first-parent 149873a..bace770`
+(confirms `bace770` — TRO-242 — is the sole first-parent commit after the tag, i.e. the first
+Phase 2 merge).
+
+**How to run it.**
+
+```bash
+node scripts/factory/merge-changes.mjs --check CHANGES.md
+```
+
+**Regression test:** none — documentation/audit ticket, no application code changed, same class as
+RULE-3 (TRO-245) and the terraform-only tickets. `gate.sh`'s regression-test check is expected to
+fail here and that failure is not a defect in this work.
+
+**Rollback.** Revert this commit. Restores TRO-242/TRO-243's rollback lines to their pre-audit,
+SHA-only form and removes the `audit-baseline` paragraph from this file's header. No other entry
+was modified.
+
+---
+
+## TRO-283 (TF-8) — CloudFront `compress = true` on `/api/*` was inert; the attached cache policy never enabled Accept-Encoding
+
+**What was broken.** The `/api/*` `ordered_cache_behavior` in both `terraform/s3-cloudfront.tf:154`
+(flat root — deployed to prod, per TF-2/TRO-235's convergence) and
+`terraform/modules/cloudfront-s3/main.tf:169` (shared module, consumed by
+`terraform/environments/dev` and `terraform/environments/shadow`) sets `compress = true`. That
+setting is a no-op unless the cache policy attached to the same behavior
+(`aws_cloudfront_cache_policy.api_no_cache`, `s3-cloudfront.tf:25` /
+`modules/cloudfront-s3/main.tf:27`) explicitly enables `enable_accept_encoding_gzip` and/or
+`enable_accept_encoding_brotli` inside its `parameters_in_cache_key_and_forwarded_to_origin` block
+— this is a documented AWS provider requirement for cache-policy-based behaviors (as opposed to the
+legacy `forwarded_values` style). Neither file set either attribute. **Confirmed by repo-wide
+grep** (`grep -rn "enable_accept_encoding" . --include="*.tf"`, run before making any change):
+zero matches anywhere in the repo — the ticket's claim that these attributes were "genuinely
+absent everywhere" is observed, not assumed.
+
+**What changed.** Added, inside `parameters_in_cache_key_and_forwarded_to_origin` on
+`aws_cloudfront_cache_policy.api_no_cache` in both files:
+
+```hcl
+enable_accept_encoding_gzip   = true
+enable_accept_encoding_brotli = true
+```
+
+Plus a short comment above each resource explaining why the attributes matter, referencing this
+ticket. No other attribute on either cache policy changed — `default_ttl`/`max_ttl`/`min_ttl`
+remain `0` (this policy still disables caching for API routes; only whether CloudFront is allowed
+to vary/compress on `Accept-Encoding` changes).
+
+**curl verification — observed, and what it does and does not show.** Per the ticket, ran
+`curl -H 'Accept-Encoding: gzip' <url>` against the live prod CloudFront domain from this factory
+environment, looking for a `Content-Encoding` response header. **Observed:** every request made —
+`https://ship.awsdev.treasury.gov/health`, `/api/health`, `/api/csrf-token`, `/api/setup/status`,
+and even the plain SPA root `/` — was intercepted at the CloudFront edge before reaching the
+Express origin. `/health` returned `HTTP/2 308` with `x-cache: FunctionGeneratedResponse from
+cloudfront`, redirecting to a different host (`273366117842-prod.awsc.caelum.treasury.gov/health`)
+that itself timed out (`curl -L`, exit 28, 20s timeout — not reachable from this environment).
+Every other path, including the static SPA root, returned an identical CloudFront-generated
+`HTTP/2 403` ("Request blocked. We can't connect to the server...", `content-length: 919`,
+`x-cache: Error from cloudfront`) — same with and without a browser `User-Agent` header. None of
+these responses carried a `Content-Encoding` header or any origin-backend marker; they were
+generated by CloudFront itself (a viewer-request CloudFront Function for `/health`, and
+WAF/edge-level rejection for everything else), not by the API origin.
+
+**Derived, not observed:** getting the *same* CloudFront-generated 403 for every single path
+tested — including the static SPA root, which has nothing to do with this ticket's cache policy —
+points at this sandbox's egress IP being rejected by CloudFront/WAF before cache-behavior or origin
+evaluation ever happens, not at anything caused by the missing `enable_accept_encoding_*`
+attributes. **This curl check did not settle whether responses are compressed in practice** — no
+request in this session ever reached the origin, so `Content-Encoding` could not be observed either
+way. Reporting this plainly rather than inferring a result from an unrelated block: the endpoint
+was not reachable from this environment, for reasons unconnected to the change being made here.
+
+**What the code (read, not curl) does show.** `api/src/app.ts:238` already wraps the whole app in
+the `compression` npm middleware (`threshold: 1024`), added by TRO-174, and the API's own
+`aws_cloudfront_origin_request_policy.api` (`s3-cloudfront.tf:4-22`) uses
+`header_behavior = "allViewerAndWhitelistCloudFront"`, which forwards the viewer's
+`Accept-Encoding` header to the origin unchanged. So a real client's `Accept-Encoding: gzip`
+already reaches the Express origin today, and the origin already gzips qualifying responses,
+independent of this ticket. That supports the ticket's own hypothesis that TRO-174's origin-side
+gzip likely already covers most real traffic — this fix closes a secondary gap: CloudFront's own
+edge-side `compress = true` (a backstop for responses the origin doesn't compress — e.g. below the
+1024-byte threshold, or an excluded content-type) was silently never active because the cache
+policy never told CloudFront that `Accept-Encoding` was relevant. This is a config-correctness fix
+with a plausible but unmeasured secondary benefit, not a fix for a currently-broken client-facing
+compression path.
+
+**How to run it.**
+
+```bash
+# Terraform binary: temp-downloaded 1.15.8 (darwin_arm64), matching the repo's pinned
+# terraform/.terraform-version exactly. Not installed on this machine beforehand; not committed to
+# the repo. Same "download to a scratch dir" precedent as TF-1/TF-3/TF-4/TF-5/TF-9.
+cd terraform
+terraform init -backend=false -input=false
+terraform validate                 # BEFORE and AFTER: Success! The configuration is valid. (0 warnings, both)
+terraform fmt -check -recursive .  # exit 0, no formatting changes needed, both before and after
+git clean -fdx -- .terraform       # removes the generated provider cache this init created; the
+                                    # committed terraform/.terraform.lock.hcl was reused unchanged
+                                    # ("Reusing previous version" in init output), not regenerated
+
+cd environments/dev                # second root: consumes terraform/modules/cloudfront-s3
+terraform init -backend=false -input=false   # generates a fresh .terraform.lock.hcl (none tracked here — the TF-4 gap, untouched by this ticket)
+terraform validate                 # BEFORE and AFTER: Success! The configuration is valid.
+terraform fmt -check -recursive .  # exit 0, both before and after
+git clean -fdx -- .terraform .terraform.lock.hcl   # both gitignored (terraform/.gitignore:2,7); leaves `git status` clean
+
+cd ../shadow                       # third root: also consumes terraform/modules/cloudfront-s3
+terraform init -backend=false -input=false
+terraform validate                 # BEFORE and AFTER: Success! The configuration is valid.
+terraform fmt -check -recursive .  # exit 0, both before and after
+git clean -fdx -- .terraform .terraform.lock.hcl
+```
+
+`terraform plan` was attempted against the flat root and failed with the documented, expected
+error: `Backend initialization required, please run "terraform init"` (backend `"s3"`, no
+credentials available in this environment) — the same outcome as TF-1/TF-3/TF-4/TF-5/TF-9's
+precedent, not a new problem introduced by this change. **`terraform apply` was never run, against
+any account, live or otherwise** — this ticket carries an explicit escalation flag ("Do NOT
+`terraform apply` without an explicit human decision") and that gate was respected throughout:
+config change plus `validate`/`fmt`/`plan`-attempt only.
+
+**No vitest regression test applies.** Pure Terraform config change — same precedent as
+TF-1/TF-3/TF-4/TF-5/TF-9/TRO-303: no application code path exists to exercise this from
+`api/src/**/*.test.ts` or `web/src/**/*.test.ts(x)`. The evidence is the `terraform validate`
+before/after output above (clean both times, on all three consuming roots) plus the diff itself.
+`gate.sh`'s regression-test check is expected to fail honestly here rather than have a fake test
+manufactured to satisfy it.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf-8-cloudfront-compression`. This removes the two
+`enable_accept_encoding_*` lines from both `terraform/s3-cloudfront.tf` and
+`terraform/modules/cloudfront-s3/main.tf`, returning to today's state (edge-side `compress = true`
+inert again, origin-side gzip via TRO-174 unaffected either way). Since `terraform apply` was never
+run against any account in this session, no live AWS state exists to reconcile — reverting this
+commit and reverting a hypothetical future `apply` of it are two different operations; only the
+former is guaranteed to be a no-op against real infrastructure by this entry.
+
+**Follow-up required — not done here, by design.** Applying this change to real CloudFront cache
+policies (dev, shadow, and eventually prod) is a separate, human-gated action: whoever has AWS
+credentials and makes the explicit human decision the ticket requires should run `terraform plan`
+then `terraform apply` against each environment's actual backend, and ideally re-run the
+`curl -H 'Accept-Encoding: gzip'` check from a network path that isn't blocked at the CloudFront
+edge, to get a real `Content-Encoding` observation post-apply — something this session could not
+produce.
+
 ---
 
 ## TRO-303 — Module-version `aws_s3_bucket.uploads` (dev/shadow) had no `prevent_destroy` — same TF-1 gap, second location; Aurora module gap closed in the same PR
@@ -6864,7 +7080,14 @@ and rethrows when they are not. AWS behaviour is unchanged.
 **How to run it.** Set `DATABASE_URL`, `SESSION_SECRET`, and `CORS_ORIGIN` in the environment and
 start with `NODE_ENV=production`.
 
-**Rollback.** Revert the merge of `fix/ssm-fallback` (`5b72a79`).
+**Rollback.** Revert the merge of `fix/ssm-fallback` (`5b72a79`) — verified with
+`git diff bace770 5b72a79 -- api/src/config/ssm.ts`: the merge wraps the SSM calls in a
+`try`/`catch` that falls back to `DATABASE_URL`/`SESSION_SECRET` already present in the
+environment, and rethrows only when neither is set. Reverting removes that `catch` entirely and
+restores the bare `Promise.all([getSSMSecret(...), ...])` call, so **this re-breaks non-AWS
+deployment**: any host without AWS credentials or SSM access (Render, Fly, a plain container)
+throws on startup and never contacts the database again, exactly as TRO-242's Dockerfile changes
+made possible for the first time.
 
 ---
 
@@ -6879,5 +7102,11 @@ WebSocket URL being derived from `window.location.host`.
 **How to run it.** `docker build -t ship . && docker run -p 3000:3000 ship`, or deploy to Render,
 which builds from the repository.
 
-**Rollback.** Revert the merge of `feat/render-deploy` (`bace770`).
+**Rollback.** Revert the merge of `feat/render-deploy` (`bace770`) — verified with
+`git diff 149873a bace770 -- Dockerfile`: the prior single-stage image did
+`COPY shared/dist/ ./shared/dist/` and `COPY api/dist/ ./api/dist/` directly from the build
+context, both gitignored and untracked. Reverting restores that image, which means **the old image
+needs a local `pnpm build` before `docker build`** — it can no longer build from a clean checkout,
+only from a working tree that already has `shared/dist/` and `api/dist/` populated (the
+build-locally-then-ship AWS flow this ticket's own "What changed" section describes).
 
