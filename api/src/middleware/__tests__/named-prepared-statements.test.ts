@@ -53,15 +53,18 @@ import { isWorkspaceAdmin } from '../visibility.js';
 import { Request, Response, NextFunction } from 'express';
 import { pgResult } from '../../test/pg-result.js';
 
+// Typed as Partial<> first, then asserted once (not `as unknown as`) — the members
+// set here are still checked against the real Express shapes. Matches the idiom in
+// session-activity-throttle.test.ts.
 function createMockReqRes(cookies: Record<string, string> = {}) {
-  const req = { cookies } as unknown as Request;
-  const res = {
+  const req: Partial<Request> = { cookies };
+  const res: Partial<Response> = {
     status: vi.fn().mockReturnThis(),
     json: vi.fn().mockReturnThis(),
     cookie: vi.fn().mockReturnThis(),
-  } as unknown as Response;
-  const next = vi.fn() as NextFunction;
-  return { req, res, next };
+  };
+  const next: NextFunction = vi.fn();
+  return { req: req as Request, res: res as Response, next };
 }
 
 describe('named prepared statements (DB-3 / TRO-180)', () => {
