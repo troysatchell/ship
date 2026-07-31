@@ -45,6 +45,7 @@ export function AppLayout() {
   const { currentWorkspace, workspaces, switchWorkspace } = useWorkspace();
   const location = useLocation();
   const navigate = useNavigate();
+  const { showToast } = useToast();
   const { documents, createDocument, updateDocument, deleteDocument } = useDocuments();
   const { programs, updateProgram } = usePrograms();
   const { issues, createIssue, updateIssue } = useIssues();
@@ -98,7 +99,7 @@ export function AppLayout() {
     // After 4 seconds, invalidate query and hide celebration
     celebrationTimeoutRef.current = setTimeout(() => {
       // Invalidate action items to refetch
-      queryClient.invalidateQueries({ queryKey: actionItemsKeys.all });
+      void queryClient.invalidateQueries({ queryKey: actionItemsKeys.all });
       setIsCelebrating(false);
       celebrationTimeoutRef.current = null;
     }, 4000);
@@ -203,28 +204,31 @@ export function AppLayout() {
 
   const handleModeClick = (mode: Mode) => {
     switch (mode) {
-      case 'dashboard': navigate('/my-week'); break;
-      case 'docs': navigate('/docs'); break;
-      case 'issues': navigate('/issues'); break;
-      case 'projects': navigate('/projects'); break;
-      case 'programs': navigate('/programs'); break;
-      case 'sprints': navigate('/sprints'); break;
-      case 'team': navigate('/team'); break;
-      case 'settings': navigate('/settings'); break;
+      case 'dashboard': void navigate('/my-week'); break;
+      case 'docs': void navigate('/docs'); break;
+      case 'issues': void navigate('/issues'); break;
+      case 'projects': void navigate('/projects'); break;
+      case 'programs': void navigate('/programs'); break;
+      case 'sprints': void navigate('/sprints'); break;
+      case 'team': void navigate('/team'); break;
+      case 'settings': void navigate('/settings'); break;
     }
   };
 
   const handleCreateIssue = async () => {
+    // createIssue() (useIssuesQuery.ts) catches its own errors and resolves
+    // to `null` on failure rather than rejecting.
     const issue = await createIssue();
     if (issue) {
-      navigate(`/documents/${issue.id}`);
+      void navigate(`/documents/${issue.id}`);
     }
   };
 
   const handleCreateDocument = async () => {
+    // createDocument() (useDocumentsQuery.ts) is likewise self-contained.
     const doc = await createDocument();
     if (doc) {
-      navigate(`/documents/${doc.id}`);
+      void navigate(`/documents/${doc.id}`);
     }
   };
 
@@ -235,6 +239,7 @@ export function AppLayout() {
 
   const handleProjectSetupSubmit = async (data: ProjectSetupData) => {
     if (!user?.id) return;
+    // createProject() (useProjectsQuery.ts) is likewise self-contained.
     const project = await createProject({
       owner_id: user.id,
       title: data.title,
@@ -244,16 +249,26 @@ export function AppLayout() {
     });
     if (project) {
       setProjectSetupWizardOpen(false);
-      navigate(`/documents/${project.id}`);
+      void navigate(`/documents/${project.id}`);
     }
   };
 
   const handleSwitchWorkspace = async (workspaceId: string) => {
-    const success = await switchWorkspace(workspaceId);
-    if (success) {
-      setWorkspaceSwitcherOpen(false);
-      // Refresh the page to reload all data for new workspace
-      window.location.href = '/docs';
+    try {
+      const success = await switchWorkspace(workspaceId);
+      if (success) {
+        setWorkspaceSwitcherOpen(false);
+        // Refresh the page to reload all data for new workspace
+        window.location.href = '/docs';
+      } else {
+        showToast('Failed to switch workspace', 'error');
+      }
+    } catch (err) {
+      // switchWorkspace (WorkspaceContext.tsx) has no try/catch of its own -
+      // its underlying request() layer can reject on a network failure,
+      // which was previously an unhandled rejection with the workspace
+      // switcher dropdown just silently staying open.
+      showToast(err instanceof Error ? err.message : 'Failed to switch workspace', 'error');
     }
   };
 
@@ -279,7 +294,15 @@ export function AppLayout() {
             Impersonating <strong>{impersonating.userName}</strong>
           </span>
           <button
-            onClick={endImpersonation}
+            onClick={() => {
+              // endImpersonation (useAuth.tsx) is not known to be
+              // self-contained, so its rejection is caught here rather than
+              // voided.
+              endImpersonation().catch((err: unknown) => {
+                console.error('Failed to end impersonation:', err);
+                showToast('Failed to end impersonation', 'error');
+              });
+            }}
             className="rounded bg-yellow-700 px-2 py-0.5 text-xs text-white hover:bg-yellow-800 transition-colors"
           >
             End Session
@@ -320,7 +343,7 @@ export function AppLayout() {
                     {workspaces.map((ws) => (
                       <button
                         key={ws.id}
-                        onClick={() => handleSwitchWorkspace(ws.id)}
+                        onClick={() => { void handleSwitchWorkspace(ws.id); }}
                         className={cn(
                           'flex w-full items-center justify-between rounded-md px-2 py-1.5 text-sm transition-colors',
                           ws.id === currentWorkspace?.id
@@ -338,7 +361,7 @@ export function AppLayout() {
                       <button
                         onClick={() => {
                           setWorkspaceSwitcherOpen(false);
-                          navigate('/admin');
+                          void navigate('/admin');
                         }}
                         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted hover:bg-border/30 hover:text-foreground transition-colors"
                       >
@@ -409,7 +432,14 @@ export function AppLayout() {
               onClick={() => handleModeClick('settings')}
             />
             <button
-              onClick={logout}
+              onClick={() => {
+                // logout (useAuth.tsx) is not known to be self-contained, so
+                // its rejection is caught here rather than voided.
+                logout().catch((err: unknown) => {
+                  console.error('Failed to log out:', err);
+                  showToast('Failed to log out. Please try again.', 'error');
+                });
+              }}
               className="flex h-8 w-8 items-center justify-center rounded-full bg-accent/80 text-xs font-medium text-white hover:bg-accent transition-colors"
               title={`${user?.name} - Click to logout`}
             >
@@ -444,7 +474,7 @@ export function AppLayout() {
                 {activeMode === 'docs' && (
                   <Tooltip content="New document">
                     <button
-                      onClick={handleCreateDocument}
+                      onClick={() => { void handleCreateDocument(); }}
                       className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-border hover:text-foreground transition-colors"
                       aria-label="New document"
                     >
@@ -455,7 +485,7 @@ export function AppLayout() {
                 {activeMode === 'issues' && (
                   <Tooltip content="New issue">
                     <button
-                      onClick={handleCreateIssue}
+                      onClick={() => { void handleCreateIssue(); }}
                       className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-border hover:text-foreground transition-colors"
                       aria-label="New issue"
                     >
@@ -492,7 +522,7 @@ export function AppLayout() {
                 <DocumentsTree
                   documents={documents}
                   activeId={activeDocumentId}
-                  onSelect={(id) => navigate(`/documents/${id}`)}
+                  onSelect={(id) => void navigate(`/documents/${id}`)}
                 />
               )}
               {activeMode === 'issues' && (
@@ -514,7 +544,7 @@ export function AppLayout() {
                 <ProgramsList
                   programs={programs}
                   activeId={activeDocumentId}
-                  onSelect={(id) => navigate(`/documents/${id}`)}
+                  onSelect={(id) => void navigate(`/documents/${id}`)}
                   onUpdateProgram={updateProgram}
                 />
               )}
@@ -565,7 +595,7 @@ export function AppLayout() {
       <ProjectSetupWizard
         open={projectSetupWizardOpen}
         onCancel={() => setProjectSetupWizardOpen(false)}
-        onSubmit={handleProjectSetupSubmit}
+        onSubmit={(data) => { void handleProjectSetupSubmit(data); }}
       />
 
       {/* Session Timeout Warning Modal */}
@@ -780,16 +810,18 @@ function DocumentTreeItem({
   // Action handlers
   const handleCreateSubdocument = useCallback(async () => {
     closeContextMenu();
+    // createDocument() (useDocumentsQuery.ts) catches its own errors and
+    // resolves to `null` on failure rather than rejecting.
     const newDoc = await createDocument(document.id);
     if (newDoc) {
-      navigate(`/documents/${newDoc.id}`);
+      void navigate(`/documents/${newDoc.id}`);
     }
   }, [createDocument, document.id, navigate, closeContextMenu]);
 
   const handleRename = useCallback(() => {
     closeContextMenu();
     // Navigate to document and focus title (the title becomes editable when you click it)
-    navigate(`/documents/${document.id}`);
+    void navigate(`/documents/${document.id}`);
   }, [document.id, navigate, closeContextMenu]);
 
   const handleChangeVisibility = useCallback(async (visibility: string) => {
@@ -817,19 +849,25 @@ function DocumentTreeItem({
         ? `Deleted "${docTitle}" and ${childCount} child document${childCount > 1 ? 's' : ''}`
         : `Deleted "${docTitle}"`;
 
+      // Toast's `action.onClick` is typed `() => void` (see
+      // components/ui/Toast.tsx); the actual undo logic stays async and is
+      // voided from a sync wrapper rather than widening that shared type.
+      const undoDelete = async () => {
+        // Recreate the document (undo). createDocument/updateDocument
+        // (useDocumentsQuery.ts) both catch their own errors and resolve to
+        // `null` on failure rather than rejecting.
+        const restored = await createDocument(docData.parent_id || undefined);
+        if (restored) {
+          await updateDocument(restored.id, {
+            title: docData.title,
+            visibility: docData.visibility,
+          });
+          showToast('Document restored', 'success');
+        }
+      };
       showToast(message, 'info', 5000, {
         label: 'Undo',
-        onClick: async () => {
-          // Recreate the document (undo)
-          const restored = await createDocument(docData.parent_id || undefined);
-          if (restored) {
-            await updateDocument(restored.id, {
-              title: docData.title,
-              visibility: docData.visibility,
-            });
-            showToast('Document restored', 'success');
-          }
-        },
+        onClick: () => { void undoDelete(); },
       });
     }
   }, [document, deleteDocument, createDocument, updateDocument, showToast, closeContextMenu]);
@@ -893,7 +931,7 @@ function DocumentTreeItem({
       {/* Context menu */}
       {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={closeContextMenu}>
-          <ContextMenuItem onClick={handleCreateSubdocument}>
+          <ContextMenuItem onClick={() => { void handleCreateSubdocument(); }}>
             Create sub-document
           </ContextMenuItem>
           <ContextMenuItem onClick={handleRename}>
@@ -903,7 +941,7 @@ function DocumentTreeItem({
             {VISIBILITY_OPTIONS.map((opt) => (
               <ContextMenuItem
                 key={opt.value}
-                onClick={() => handleChangeVisibility(opt.value)}
+                onClick={() => void handleChangeVisibility(opt.value)}
               >
                 {opt.value === 'private' && <LockIcon className="h-3.5 w-3.5 mr-2" />}
                 {opt.value === 'workspace' && <GlobeIcon className="h-3.5 w-3.5 mr-2" />}
@@ -912,7 +950,7 @@ function DocumentTreeItem({
             ))}
           </ContextMenuSubmenu>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleDelete} destructive>
+          <ContextMenuItem onClick={() => { void handleDelete(); }} destructive>
             Delete
           </ContextMenuItem>
         </ContextMenu>
@@ -1040,16 +1078,33 @@ function IssuesList({
   }, []);
 
   const handleChangeStatus = useCallback(async (issue: Issue, state: string) => {
-    const originalState = issue.state;
-    await onUpdateIssue(issue.id, { state });
-    showToast(`Status changed to ${state.replace('_', ' ')}`, 'success');
+    try {
+      await onUpdateIssue(issue.id, { state });
+      showToast(`Status changed to ${state.replace('_', ' ')}`, 'success');
+    } catch (err) {
+      // onUpdateIssue (updateIssue, useIssuesQuery.ts) re-throws
+      // CascadeWarningError instead of swallowing it like its other
+      // failures - a full confirmation flow belongs in the issue editor,
+      // not this compact context menu, so surface it as a toast here rather
+      // than let it become an unhandled rejection.
+      showToast(
+        err instanceof Error ? err.message : 'This change has cascading effects and was not applied',
+        'error'
+      );
+    }
     setContextMenu(null);
   }, [onUpdateIssue, showToast]);
 
   const handleArchive = useCallback(async (issue: Issue) => {
-    const originalState = issue.state;
-    await onUpdateIssue(issue.id, { state: 'cancelled' });
-    showToast('Issue archived', 'success');
+    try {
+      await onUpdateIssue(issue.id, { state: 'cancelled' });
+      showToast('Issue archived', 'success');
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'This change has cascading effects and was not applied',
+        'error'
+      );
+    }
     setContextMenu(null);
   }, [onUpdateIssue, showToast]);
 
@@ -1104,25 +1159,25 @@ function IssuesList({
       {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
           <ContextMenuSubmenu label="Change Status">
-            <ContextMenuItem onClick={() => handleChangeStatus(contextMenu.issue, 'backlog')}>
+            <ContextMenuItem onClick={() => void handleChangeStatus(contextMenu.issue, 'backlog')}>
               <IssueStatusIcon state="backlog" />
               Backlog
             </ContextMenuItem>
-            <ContextMenuItem onClick={() => handleChangeStatus(contextMenu.issue, 'todo')}>
+            <ContextMenuItem onClick={() => void handleChangeStatus(contextMenu.issue, 'todo')}>
               <IssueStatusIcon state="todo" />
               Todo
             </ContextMenuItem>
-            <ContextMenuItem onClick={() => handleChangeStatus(contextMenu.issue, 'in_progress')}>
+            <ContextMenuItem onClick={() => void handleChangeStatus(contextMenu.issue, 'in_progress')}>
               <IssueStatusIcon state="in_progress" />
               In Progress
             </ContextMenuItem>
-            <ContextMenuItem onClick={() => handleChangeStatus(contextMenu.issue, 'done')}>
+            <ContextMenuItem onClick={() => void handleChangeStatus(contextMenu.issue, 'done')}>
               <IssueStatusIcon state="done" />
               Done
             </ContextMenuItem>
           </ContextMenuSubmenu>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => handleArchive(contextMenu.issue)}>
+          <ContextMenuItem onClick={() => void handleArchive(contextMenu.issue)}>
             <ArchiveIcon className="h-4 w-4" />
             Archive
           </ContextMenuItem>
@@ -1379,7 +1434,7 @@ function ProjectsList({
 
       {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
-          <ContextMenuItem onClick={() => handleArchive(contextMenu.project)}>
+          <ContextMenuItem onClick={() => void handleArchive(contextMenu.project)}>
             <ArchiveIcon className="h-4 w-4" />
             Archive
           </ContextMenuItem>
@@ -1473,7 +1528,9 @@ function ProgramsList({
 
   const handleRenameKeyDown = useCallback((e: React.KeyboardEvent, programId: string) => {
     if (e.key === 'Enter') {
-      handleRenameSubmit(programId);
+      // handleRenameSubmit calls onUpdateProgram (useProgramsQuery.ts),
+      // which catches its own errors and never rejects.
+      void handleRenameSubmit(programId);
     } else if (e.key === 'Escape') {
       setEditingId(null);
       setEditingName('');
@@ -1490,12 +1547,16 @@ function ProgramsList({
     setContextMenu(null);
     const originalArchivedAt = program.archived_at;
     await onUpdateProgram(program.id, { archived_at: new Date().toISOString() });
+    // Toast's `action.onClick` is typed `() => void` (see
+    // components/ui/Toast.tsx); the actual undo logic stays async and is
+    // voided from a sync wrapper rather than widening that shared type.
+    const undoArchive = async () => {
+      await onUpdateProgram(program.id, { archived_at: originalArchivedAt });
+      showToast('Archive undone', 'info');
+    };
     showToast('Program archived', 'success', 5000, {
       label: 'Undo',
-      onClick: async () => {
-        await onUpdateProgram(program.id, { archived_at: originalArchivedAt });
-        showToast('Archive undone', 'info');
-      },
+      onClick: () => { void undoArchive(); },
     });
   }, [onUpdateProgram, showToast]);
 
@@ -1527,7 +1588,7 @@ function ProgramsList({
                     type="text"
                     value={editingName}
                     onChange={(e) => setEditingName(e.target.value)}
-                    onBlur={() => handleRenameSubmit(program.id)}
+                    onBlur={() => void handleRenameSubmit(program.id)}
                     onKeyDown={(e) => handleRenameKeyDown(e, program.id)}
                     className="flex-1 bg-transparent border-none outline-none text-sm text-foreground"
                   />
@@ -1578,7 +1639,7 @@ function ProgramsList({
             {PROGRAM_COLORS.map((color) => (
               <ContextMenuItem
                 key={color.value}
-                onClick={() => handleChangeColor(contextMenuProgram.id, color.value)}
+                onClick={() => void handleChangeColor(contextMenuProgram.id, color.value)}
               >
                 <span
                   className="h-3 w-3 rounded-full"
@@ -1589,7 +1650,7 @@ function ProgramsList({
             ))}
           </ContextMenuSubmenu>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={() => handleArchive(contextMenuProgram)}>
+          <ContextMenuItem onClick={() => void handleArchive(contextMenuProgram)}>
             <ArchiveIcon className="h-4 w-4" />
             Archive
           </ContextMenuItem>
@@ -1642,7 +1703,7 @@ function TeamSidebar() {
       <ul className="space-y-0.5">
         <li>
           <button
-            onClick={() => navigate('/team/allocation')}
+            onClick={() => void navigate('/team/allocation')}
             className={cn(
               'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
               isAllocation
@@ -1656,7 +1717,7 @@ function TeamSidebar() {
         </li>
         <li>
           <button
-            onClick={() => navigate('/team/directory')}
+            onClick={() => void navigate('/team/directory')}
             className={cn(
               'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
               isDirectory
@@ -1670,7 +1731,7 @@ function TeamSidebar() {
         </li>
         <li>
           <button
-            onClick={() => navigate('/team/status')}
+            onClick={() => void navigate('/team/status')}
             className={cn(
               'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
               isStatusOverview
@@ -1684,7 +1745,7 @@ function TeamSidebar() {
         </li>
         <li>
           <button
-            onClick={() => navigate('/team/reviews')}
+            onClick={() => void navigate('/team/reviews')}
             className={cn(
               'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
               isReviews
@@ -1698,7 +1759,7 @@ function TeamSidebar() {
         </li>
         <li>
           <button
-            onClick={() => navigate('/team/org-chart')}
+            onClick={() => void navigate('/team/org-chart')}
             className={cn(
               'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
               isOrgChart
@@ -1722,7 +1783,7 @@ function TeamSidebar() {
             {activePeople.map(person => (
               <li key={person.id}>
                 <button
-                  onClick={() => navigate(`/team/${person.id}`)}
+                  onClick={() => void navigate(`/team/${person.id}`)}
                   className={cn(
                     'flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors',
                     personIdFromUrl === person.id
