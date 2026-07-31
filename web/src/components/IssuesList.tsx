@@ -1067,8 +1067,16 @@ export function IssuesList({
     </div>
   ), [handleCreateIssue, canCreateIssue]);
 
+  // TRO-194/ERR-7: the skeleton itself is a purely visual affordance (no
+  // text) - the wrapping status role/live region is what makes "still
+  // loading" perceivable to a screen reader.
   if (loading) {
-    return <IssuesListSkeleton />;
+    return (
+      <div role="status" aria-live="polite">
+        <span className="sr-only">Loading issues…</span>
+        <IssuesListSkeleton />
+      </div>
+    );
   }
 
   // Program filter for toolbar (hidden when locked)
