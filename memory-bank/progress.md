@@ -34,8 +34,74 @@
 | Discovery write-up · demo video · AI cost analysis · social post | ⬜ Sun Aug 2 |
 | Final polish + presentation | ⬜ Sun Aug 2 |
 | **Post-submission factory wave (Phase 3)** | ✅ **8 tickets done (2026-07-30/31)** — TF-1/TF-3/TF-9, A11Y-9/A11Y-10, ERR-9/ERR-17, TRO-294; PRs #61–#68, all merged. **74 tickets Done total, 84 PRs merged total.** Board empty again; 28 real tickets remain in Backlog, untouched by design (user-directed stop). |
+| CI pipeline gap-closed (`TRO-244`, rule 4 — **a different, later ticket reusing the ID from the row above**) | ✅ done (2026-07-31 PM) — coverage + `pnpm audit` baseline-diff + CodeQL added to `.github/workflows/ci.yml`; PR #76 open, mergeable, live CI green |
 
 ## Log
+
+### 2026-07-31 (PM) — TRO-244 (RULE-4): CI pipeline closed to all 7 required checks
+
+`verify` had 4 of 7 assignment-rule-4 checks (build, lint, type-check, test). Added the missing 3
+in worktree `Ship-wt-tro_244` / branch `fix/ci-missing-checks`, PR #76:
+
+- **Coverage**: `@vitest/coverage-v8` added to api (config existed, provider didn't) and web (built
+  from scratch — script, config, provider). Pinned to the exact `vitest` version (`4.0.17`), not a
+  caret — `@vitest/coverage-v8`'s own `peerDependencies` require an exact match, and a caret range
+  resolved to a mismatched `4.1.10` on first `pnpm install`. Generous floor via
+  `coverage.thresholds.statements` (api 43%, web 20%, both ~2-3 points under measured) — confirmed
+  the enforcement is real, not decorative, by temporarily setting api's floor to 99% and watching it
+  fail with the exact expected vitest error.
+- **`pnpm audit`**: baseline-diff, same identity-comparison pattern as the test quarantine
+  (`audit/factory/quarantine.json` / `testdiff.mjs`). Fresh `pnpm audit --json` on `main` reported
+  **135 pre-existing findings (10 low / 64 moderate / 58 high / 3 critical)** — matches the number
+  the ticket brief stated exactly. New `audit/factory/dependency-audit-baseline.json` (124 unique
+  GHSA ids) + `scripts/factory/lib/dependency-audit-diff.mjs` fail the build only on a genuinely new
+  advisory. `scripts/factory/lib/dependency-audit-diff.test.mjs` (`node:test`, 12 cases) covers the
+  diff logic.
+- **Security scan**: new `codeql` job, `github/codeql-action` init+analyze pinned to a commit SHA
+  (`v3.37.4`, per the ticket brief's explicit ask for v3 — note CodeQL v4 exists and v3 gets
+  deprecated December 2026, a future follow-up), `languages: javascript-typescript`,
+  `build-mode: none`.
+
+**Two real bugs the live CI run caught that local testing did not — kept in CHANGES.md and here as
+the actual example of the claim-provenance rule doing its job, not just a citation of it:**
+
+1. GitHub Actions' default shell for `run:` is already `bash -e {0}`. `pnpm audit` exits non-zero on
+   ANY finding (true every run, given the 135 pre-existing ones), and a bare `set -uo pipefail` at
+   the top of the step does **not** turn off an `-e` that was already active — so the audit step
+   aborted in ~1.2s, before the diff script ever ran, on the first two live runs. Local testing never
+   caught this because an interactive shell doesn't run with `-e` by default. Fixed with `|| true` on
+   the `pnpm audit` line, the same idiom the `inventory` job already used for its own known-can-fail
+   commands.
+2. `TRO-300`'s `session-activity-race` test flaked in CI 3 times across this PR's various runs
+   (pre-existing, zero diff overlap with this branch) — once specifically under the new
+   `vitest run --coverage` step, with the assertion message showing the burst genuinely didn't race
+   (`expected 1 to be greater than 1`). Plausible mechanism worth a note for whoever picks up
+   TRO-300: coverage instrumentation's overhead may widen the timing window this test's "burst"
+   depends on, making the race more likely to lose under `--coverage` specifically, not just under
+   general CI load. Cleared every time by `gh run rerun --failed`.
+
+**Ticket-ID collision, confirmed real, not an error on this session's part**: `TRO-244` was already
+used on 2026-07-29 for the *original* `ci.yml` bootstrap (see this file's own 2026-07-29 status-board
+row, "CI pipeline (TRO-244, rule 4) | ✅ written", and `CHANGES.md`'s "TRO-244 — CI pipeline with
+source-code inventory" entry). This session's ticket brief also named `TRO-244` for a *different*,
+later item (RULE-4: add coverage/`pnpm audit`/CodeQL to that same pipeline). Both `CHANGES.md`
+entries are accurate about their own, different work — left both in place rather than editing
+already-merged history. Worth a Linear hygiene pass so the number isn't handed out a third time.
+
+**Operational finding: an unattended process auto-merges `main` into open ticket branches.** This
+worktree's own `git reflog` gained 4 "Merge remote-tracking branch 'origin/main'" commits during
+this session that this agent did not run `git merge`/`git pull` for, each matching a push that
+actually landed on the branch's GitHub ref. Net effect: with `main` this active (dozens of parallel
+factory tickets merging), a `pull_request`-triggered CI run for a still-open PR gets superseded and
+cancelled (`concurrency: cancel-in-progress: true`) before finishing, often repeatedly.
+`workflow_dispatch` against the branch tip directly (not the PR's synthetic merge ref) is the more
+reliable way to get one uninterrupted full run to point at as evidence — used 3 times this session,
+succeeded cleanly on the 2nd attempt each time the audit-step bug wasn't the cause. Final proof for
+PR #76: run `30647402159` at the branch's actual current head, first attempt, all 4 jobs green.
+
+PR: https://github.com/troysatchell/ship/pull/76 (open, mergeable, CI green as of this entry).
+
+---
 
 ### 2026-07-30/31 (Thu night → Fri) — Factory resumed for one wave, then stopped on request
 
