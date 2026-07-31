@@ -181,7 +181,7 @@ export function ProjectsPage() {
     // Create project without owner (unassigned) - owner can be set later
     const project = await createProject({});
     if (project) {
-      navigate(`/documents/${project.id}`);
+      void navigate(`/documents/${project.id}`);
     }
   }, [createProject, navigate, user, showToast]);
 
@@ -222,19 +222,26 @@ export function ProjectsPage() {
     }
 
     if (success > 0) {
+      // Toast's `action.onClick` is typed `() => void` (see
+      // components/ui/Toast.tsx); the actual undo logic stays async and is
+      // voided from a sync wrapper rather than widening that shared type.
+      const undoArchive = async () => {
+        for (const id of ids) {
+          await updateProject(id, { archived_at: null } as any);
+        }
+        showToast('Archive undone', 'info');
+        // refreshProjects() (useProjectsQuery.ts) wraps react-query's
+        // refetch(), which resolves even on a failed fetch rather than
+        // rejecting, so it never rejects either.
+        void refreshProjects();
+      };
       showToast(
         `${success} project${success === 1 ? '' : 's'} archived`,
         'success',
         5000,
         {
           label: 'Undo',
-          onClick: async () => {
-            for (const id of ids) {
-              await updateProject(id, { archived_at: null } as any);
-            }
-            showToast('Archive undone', 'info');
-            refreshProjects();
-          },
+          onClick: () => { void undoArchive(); },
         }
       );
     }
@@ -278,7 +285,7 @@ export function ProjectsPage() {
           queryClient.invalidateQueries({ queryKey: projectKeys.lists() }),
         ]);
         showToast(`Project converted to issue: ${convertingProject.title}`, 'success');
-        navigate(`/documents/${data.id}`, { replace: true });
+        void navigate(`/documents/${data.id}`, { replace: true });
       } else {
         const error = await res.json();
         showToast(error.error || 'Failed to convert project to issue', 'error');
@@ -313,10 +320,12 @@ export function ProjectsPage() {
         return;
       }
 
-      // "c" to create project
+      // "c" to create project. handleCreateProject never rejects (it only
+      // awaits createProject(), which is self-contained - see
+      // useProjectsQuery.ts).
       if (e.key === 'c' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
-        handleCreateProject();
+        void handleCreateProject();
       }
     };
 
@@ -334,7 +343,7 @@ export function ProjectsPage() {
     <div className="text-center">
       <p className="text-muted">No projects yet</p>
       <button
-        onClick={handleCreateProject}
+        onClick={() => void handleCreateProject()}
         className="mt-2 text-sm text-accent hover:underline"
       >
         Create your first project
@@ -388,7 +397,7 @@ export function ProjectsPage() {
           hiddenCount={hiddenCount}
           showColumnPicker={true}
           filterContent={programFilterContent}
-          createButton={{ label: 'New Project', onClick: handleCreateProject }}
+          createButton={{ label: 'New Project', onClick: () => { void handleCreateProject(); } }}
         />
       </div>
 
@@ -397,8 +406,15 @@ export function ProjectsPage() {
         <ProjectsBulkActionBar
           selectedCount={selectedIds.size}
           onClearSelection={clearSelection}
-          onArchive={handleBulkArchive}
-          onDelete={handleBulkDelete}
+          onArchive={() => {
+            // handleBulkArchive/handleBulkDelete call updateProject()/
+            // deleteProject() (useProjectsQuery.ts), which catch their own
+            // errors and never reject.
+            void handleBulkArchive();
+          }}
+          onDelete={() => {
+            void handleBulkDelete();
+          }}
         />
       ) : (
         <FilterTabs
@@ -422,7 +438,7 @@ export function ProjectsPage() {
           renderRow={renderProjectRow}
           columns={columns}
           emptyState={emptyState}
-          onItemClick={(project) => navigate(`/documents/${project.id}`)}
+          onItemClick={(project) => void navigate(`/documents/${project.id}`)}
           onSelectionChange={handleSelectionChange}
           onContextMenu={handleContextMenu}
           ariaLabel="Projects list"
@@ -435,7 +451,7 @@ export function ProjectsPage() {
           <div className="px-3 py-1.5 text-xs text-muted border-b border-border mb-1">
             {Math.max(1, contextMenu.selection.selectedCount)} selected
           </div>
-          <ContextMenuItem onClick={handleBulkArchive}>
+          <ContextMenuItem onClick={() => { void handleBulkArchive(); }}>
             <ArchiveIcon className="h-4 w-4" />
             Archive
           </ContextMenuItem>
@@ -453,7 +469,7 @@ export function ProjectsPage() {
             </>
           )}
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleBulkDelete} destructive>
+          <ContextMenuItem onClick={() => { void handleBulkDelete(); }} destructive>
             <TrashIcon className="h-4 w-4" />
             Delete
           </ContextMenuItem>
@@ -465,7 +481,11 @@ export function ProjectsPage() {
         <ConversionDialog
           isOpen={!!convertingProject}
           onClose={() => setConvertingProject(null)}
-          onConvert={executeConversion}
+          onConvert={() => {
+            // executeConversion catches its own errors (see above), so it
+            // never rejects.
+            void executeConversion();
+          }}
           sourceType="project"
           title={convertingProject.title}
           isConverting={isConverting}
