@@ -30,6 +30,23 @@ export interface SyncStatusIndicatorProps {
    * all. A doc can be fully Yjs-synced while its title write was dropped.
    */
   hasFailedWrite?: boolean;
+  /**
+   * TRO-194/ERR-7 - true while a local edit exists that the collaboration
+   * socket has not yet had a chance to flush to the server.
+   *
+   * `isSynced` only tells you the socket has *ever* completed a full sync
+   * handshake (see the ERR-1 doc above) - it does not toggle on every
+   * keystroke, because y-websocket only re-emits `sync` on a fresh
+   * handshake, not per update. Before this flag existed the audit found
+   * the indicator held on "Saved" through 6s of throttled typing with zero
+   * in-flight feedback (`audit/error-handling/raw/probe5-slow-network.json`:
+   * "during 6s of throttled typing, did the indicator ever leave 'Saved'?
+   * false"). This is a real, observable fact (a local Yjs update has not
+   * yet been superseded by confirmation the outgoing message queue drained),
+   * not a synthetic timer - see `Editor.tsx`'s `ydoc.on('update', ...)`
+   * listener for how it is derived.
+   */
+  isSaving?: boolean;
 }
 
 type Tone = 'ok' | 'pending' | 'error';
@@ -55,6 +72,18 @@ const UNSYNCED: IndicatorView = {
 };
 
 /**
+ * TRO-194/ERR-7 - the missing middle state between "no activity" and
+ * "Saved". Only ever shown when the socket already has a live, completed
+ * sync (see below) - it never claims to be saving on top of a dead
+ * connection, that is still `UNSYNCED`'s job.
+ */
+const SAVING: IndicatorView = {
+  label: 'Saving',
+  detail: 'Saving your latest changes to the server.',
+  tone: 'pending',
+};
+
+/**
  * Decide what the indicator is allowed to claim.
  *
  * The single invariant: "Saved" requires a live, completed sync. Everything
@@ -66,6 +95,7 @@ export function deriveSyncIndicator({
   isSynced,
   isInitialConnect = false,
   hasFailedWrite = false,
+  isSaving = false,
 }: SyncStatusIndicatorProps): IndicatorView {
   if (!isBrowserOnline) {
     return {
@@ -83,6 +113,12 @@ export function deriveSyncIndicator({
   }
 
   if (isSynced) {
+    // TRO-194/ERR-7: a completed sync handshake does not mean the *current*
+    // keystroke has left the browser - only that the connection is good.
+    // `isSaving` is the in-flight signal for the edit that just happened.
+    if (isSaving) {
+      return SAVING;
+    }
     return { label: 'Saved', detail: 'Changes are synced to the server.', tone: 'ok' };
   }
 

@@ -261,6 +261,13 @@ export function Editor({
   // "connected and failing to sync".
   const [isSynced, setIsSynced] = useState(false);
   const [isInitialConnect, setIsInitialConnect] = useState(true);
+  // TRO-194/ERR-7: true while a local Yjs update exists that this client has
+  // not yet had a chance to flush to the collaboration server. `isSynced`
+  // only reflects the socket's last completed handshake - it does not
+  // toggle per keystroke - so without this the indicator held on "Saved"
+  // through the audit's whole 6s-of-throttled-typing probe with zero
+  // in-flight feedback. See the effect below for how it is derived.
+  const [isBodySaving, setIsBodySaving] = useState(false);
   // TRO-190/ERR-3, TRO-191/ERR-4: independent of the Yjs socket above - true
   // when the most recent title/property PATCH for this document was rejected
   // and no later write has succeeded since. Also raises the one-time
@@ -565,8 +572,37 @@ export function Editor({
       setIsSynced(false);
       setIsInitialConnect(true);
       setSyncStatus('connecting');
+      setIsBodySaving(false);
     };
   }, [documentId, userName, color, ydoc, roomPrefix, onBack, onDocumentConverted]);
+
+  // TRO-194/ERR-7: derive the in-flight "Saving" state from the Yjs doc
+  // itself, rather than a fixed timer. y-websocket applies every update it
+  // receives FROM the server with the provider instance as the transaction
+  // origin (see `readSyncMessage`/`_updateHandler` in y-websocket's source) -
+  // so an update whose origin is NOT the provider is one this client just
+  // made locally and has not yet had a chance to send out. A short debounce
+  // after the last local update covers the (sub-millisecond, even under
+  // Fast 3G's 750 Kbps up) time it takes the browser to hand the tiny CRDT
+  // delta to the socket; it intentionally does not claim the server has
+  // persisted it - `isSynced` continuing to hold is what keeps that promise.
+  useEffect(() => {
+    if (!provider) return undefined;
+
+    let settleTimer: ReturnType<typeof setTimeout> | undefined;
+    const handleUpdate = (_update: Uint8Array, origin: unknown) => {
+      if (origin === provider) return; // a remote update we just received, not a pending local one
+      setIsBodySaving(true);
+      clearTimeout(settleTimer);
+      settleTimer = setTimeout(() => setIsBodySaving(false), 600);
+    };
+
+    ydoc.on('update', handleUpdate);
+    return () => {
+      clearTimeout(settleTimer);
+      ydoc.off('update', handleUpdate);
+    };
+  }, [ydoc, provider]);
 
   // Create slash commands extension (memoized to avoid recreation)
   // documentId is in deps to ensure fresh AbortSignal when switching documents
@@ -919,6 +955,7 @@ export function Editor({
             isSynced={isSynced}
             isInitialConnect={isInitialConnect}
             hasFailedWrite={hasFailedWrite}
+            isSaving={isBodySaving}
           />
 
 
