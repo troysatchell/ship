@@ -21,6 +21,113 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-231 — [TEST-9] `pnpm test` TRUNCATEs whatever database `DATABASE_URL` points at — including your dev database
+
+**What was broken.** `api/src/test/setup.ts` runs, in the `beforeAll` of every one of the 28 api
+test files, `TRUNCATE TABLE workspace_invites, sessions, files, document_links, document_history,
+comments, document_associations, document_snapshots, sprint_iterations, issue_iterations,
+documents, audit_logs, workspace_memberships, users, workspaces CASCADE`. `api/src/db/client.ts`
+unconditionally loaded `api/.env.local` — the exact file `scripts/dev.sh` writes with a developer's
+dev `DATABASE_URL` — before creating the pool. There was no `.env.test` and no test-specific
+override.
+
+**The precise mechanism (not just "it loads the wrong file").** `dotenv`'s `config()` does **not**
+override a `DATABASE_URL` already present in `process.env` unless `override: true` is passed
+(verified directly against this repo's installed `dotenv`: `populate()` only assigns a key when
+`!Object.prototype.hasOwnProperty.call(target, key)`). So the bug did not bite every developer —
+only one who never explicitly `export`ed `DATABASE_URL` in their shell, which is the common case,
+since `pnpm dev` doesn't require one (`scripts/dev.sh` writes it into `.env.local` instead). That
+developer's exact, and exactly documented, sequence: `pnpm dev` (writes `.env.local` with the dev
+DB URL) → `pnpm test` (`client.ts` loads that URL into `process.env` at import time, before
+`setup.ts`'s `beforeAll` ever runs) → the TRUNCATE above fires against the developer's own dev
+database. `.claude/CLAUDE.md`'s "Commands" section walks straight into this: `pnpm dev` is listed
+first, `pnpm test` second, with no warning between them.
+
+**This does NOT affect the ShipShape factory.** Every factory worktree's `.factory-env` explicitly
+`export`s a worktree-exclusive `DATABASE_URL` before any test command runs, and an explicitly
+exported var always wins over anything `client.ts` loads from a file — with or without this fix.
+The factory was never the vulnerable case; a regular local dev session following
+`.claude/CLAUDE.md`'s documented command order was.
+
+**What changed.**
+
+- `api/src/db/envFile.ts` (new) — `resolveEnvFilesToLoad`, a pure function that decides which
+  dotenv file(s) to load and with what override precedence, given `isVitest` and whether
+  `api/.env.test` exists. Not under vitest: unchanged — loads `.env.local` then `.env`, neither
+  overriding (byte-for-byte `pnpm dev`'s prior behavior). Under vitest with `.env.test` present:
+  loads **only** `.env.test`, with `override: true`, so it's the single source of truth for a test
+  run regardless of a stray shell export or leftover `.env`. Under vitest with `.env.test`
+  **absent**: loads **nothing** — `.env.local` is never even opened, so its `DATABASE_URL` cannot
+  end up in `process.env`, let alone get truncated. `DATABASE_URL` is left to whatever the
+  environment already provided (`.factory-env`, CI's `CI_DATABASE_URL`, or an explicit developer
+  export).
+- `api/src/db/client.ts:1-32` — replaced the two unconditional `config({ path: ... })` calls with a
+  loop over `resolveEnvFilesToLoad(...)`, passing `process.env.VITEST === 'true'` and
+  `existsSync(envTestPath)`.
+- `api/.env.test.example` (new) — mirrors the existing `api/.env.example` pattern. Documents copying
+  it to `api/.env.test` and pointing it at a dedicated, disposable test database — never the dev
+  database `api/.env.local` points at.
+- `.gitignore` — added `.env.test` alongside the existing `.env`/`.env.local`/`.env.*.local`
+  entries. None of those three patterns matched `.env.test` (confirmed: `.env.*.local` requires a
+  `.local` suffix), so without this a developer's real `.env.test` — pointing at a real database
+  URL, however disposable — had no gitignore coverage. `.env.test.example` is unaffected; the
+  pattern is an exact filename, not a glob that would also catch it.
+
+**On `process.env.VITEST` being the right signal (not `NODE_ENV`).** `setup.ts:57` sets
+`process.env.NODE_ENV = 'test'` inside its `beforeAll` — which runs *after* every test file's
+top-level imports, `client.ts`'s included, have already executed. `NODE_ENV` cannot be read early
+enough at `client.ts`'s module-load time to decide this. `process.env.VITEST` can: verified
+directly by reading `node_modules/vitest/dist/chunks/cli-api.*.js`, whose `prepareVitest()` sets
+`process.env.VITEST = 'true'` unconditionally before any test file loads, and separately passes
+`VITEST: 'true'` in the `env` object handed to every worker process it spawns — and independently
+confirmed empirically: this ticket's own regression test asserts `process.env.VITEST === 'true'`
+against a real `vitest run`, and that assertion passes.
+
+**Regression test** (`api/src/db/__tests__/envFile.test.ts`, new, 4 cases) — tests
+`resolveEnvFilesToLoad` directly, no filesystem/dotenv mocking needed, no database touched:
+
+1. `process.env.VITEST` is genuinely `'true'` during a real test run (the empirical check above).
+2. Under vitest with `.env.test` present: plan is exactly `[{ path: <.env.test>, override: true }]`.
+3. Under vitest with `.env.test` absent: plan is `[]` — explicitly asserts neither `.env.local` nor
+   `.env` appears.
+4. Not under vitest: plan is `.env.local` then `.env`, both `override: false`, regardless of
+   whether `.env.test` exists — `pnpm dev`'s behavior is unchanged.
+
+**Confirmed red-for-the-right-reason.** Temporarily reverted `resolveEnvFilesToLoad` to
+unconditionally return `[{ path: envLocalPath, override: false }, { path: envPath, override:
+false }]` (the literal pre-fix `client.ts` behavior) and re-ran this file: cases 2 and 3 above
+failed, both showing `.env.local` present in the plan where it must be absent — the exact TEST-9
+defect. Cases 1 and 4 still passed, as expected (the old behavior never depended on `VITEST` and
+already matched the non-vitest case by coincidence). Restored the real fix immediately after;
+`envFile.ts` in this commit has no trace of the reverted version.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api test src/db/__tests__/envFile.test.ts
+pnpm --filter @ship/api test           # full api suite — confirms client.ts still loads correctly
+```
+
+**Setting up `.env.test` locally (outside the factory).**
+
+```bash
+cp api/.env.test.example api/.env.test
+createdb ship_test   # or point DATABASE_URL in .env.test at any disposable database
+pnpm test
+```
+
+Without this file, `pnpm test` now requires an explicitly exported `DATABASE_URL` (pointed at a
+throwaway database) instead of silently falling back to your dev database.
+
+**Rollback.** Revert the commit(s) on `fix/test-9-test-db-isolation` touching `api/src/db/client.ts`,
+`api/src/db/envFile.ts`, `api/src/db/__tests__/envFile.test.ts`, `api/.env.test.example`, and
+`.gitignore`. This restores the pre-fix, unconditional `.env.local`-then-`.env` load in
+`client.ts` — i.e. restores the TEST-9 hazard this ticket exists to remove. Do not revert this
+without also re-adding a warning at the `pnpm dev` → `pnpm test` sequence in `.claude/CLAUDE.md`.
+
+---
+
 ## TRO-280 — [API-7] Rate limits are per-process, so the real ceiling is N instances × configured
 
 **What was broken.** `api/src/middleware/rate-limit.ts`'s `perSourceIpLimiter`/`perIdentityLimiter`

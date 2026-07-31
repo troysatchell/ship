@@ -1,16 +1,35 @@
 import pg from 'pg';
 import { config } from 'dotenv';
+import { existsSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { resolveDatabaseSsl } from './ssl.js';
 import { resolvePoolTiming } from './poolConfig.js';
+import { resolveEnvFilesToLoad } from './envFile.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Load environment variables before creating pool
-config({ path: join(__dirname, '../../.env.local') });
-config({ path: join(__dirname, '../../.env') });
+const envLocalPath = join(__dirname, '../../.env.local');
+const envPath = join(__dirname, '../../.env');
+const envTestPath = join(__dirname, '../../.env.test');
+
+// Load environment variables before creating pool.
+//
+// TEST-9 / TRO-231: which file(s) load, and with what precedence, depends on
+// whether this process is running under vitest and whether a dedicated
+// `.env.test` exists — see envFile.ts for the full rationale. Short version:
+// under vitest, `.env.local`'s dev DATABASE_URL must never be the thing
+// `api/src/test/setup.ts`'s beforeAll TRUNCATEs.
+for (const { path, override } of resolveEnvFilesToLoad({
+  isVitest: process.env.VITEST === 'true',
+  envTestExists: existsSync(envTestPath),
+  envLocalPath,
+  envPath,
+  envTestPath,
+})) {
+  config({ path, override });
+}
 
 const { Pool } = pg;
 
