@@ -8,6 +8,61 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-281 — [A11Y-9] Project context sidebar lists have no accessible name
+
+**POST-BASELINE** — found incidentally while fixing A11Y-1 (TRO-215, PR #6), not one of the
+audit report's 68 findings.
+
+**What was broken.** `web/src/components/sidebars/ProjectContextSidebar.tsx` renders two
+navigation lists — the "Weekly Docs" people list (`:290`, formerly unlabelled `<ul>`) and the
+"Issues" list (`:398`, formerly unlabelled `<ul>`) — and neither had an accessible name. TRO-215
+fixed the `role="tree"` problem in this same file (a *role* gap: an implied keyboard model that
+was never implemented) but left this *naming* gap untouched. axe does not flag an unnamed
+`<ul>` — there is no WCAG rule requiring one — which is exactly why the baseline audit never
+caught it.
+
+**What changed.** Each list now has `aria-labelledby` pointing at its existing visible section
+heading, keeping the visible and accessible names in sync per the ticket's fix direction:
+
+- Gave the "Weekly Docs" heading `<div>` and the "Issues" toggle `<button>` each a stable id via
+  `useId()`.
+- Wired `aria-labelledby={weeklyDocsHeadingId}` onto the people `<ul>` and
+  `aria-labelledby={issuesHeadingId}` onto the issues `<ul>`.
+- No visual change, no behavior change — both ids are invisible attributes.
+
+**Sanity-checked, not changed:** the ticket asked to confirm the wording of
+`aria-label="Projects"` added at `App.tsx:1241` (now `:1258`, drifted by unrelated commits) by
+TRO-215. That list is `ProjectsList`'s `<ul>` rendering `projects.map(...)` — the label matches
+what it contains. No inconsistency found, left as-is.
+
+**Evidence.** `web/src/components/sidebars/ProjectContextSidebar.test.tsx` — two new cases in
+describe block `ProjectContextSidebar — list accessible names (A11Y-9 / TRO-281)`, added to the
+existing test file (not a new one) since it already covers this component's accessibility
+tree via Testing Library. Both assert via `getByRole('list', { name: ... })` /
+`findByRole('list', { name: ... })`, i.e. the resolved accessible name in the accessibility
+tree — not an axe scan, since axe would not have caught this class of defect either way.
+Confirmed **red** on the unfixed code (`TestingLibraryElementError: Unable to find role="list"
+and name ...`, both new lists found by role but rejected on name) before writing the fix, and
+**green** after (`pnpm --filter @ship/web test` — 49 files / 422 tests passed, no regressions).
+
+**Still owed — do not mark this fully verified.** Nobody has run VoiceOver against the fixed
+build. What's established here is that the accessible name *resolves correctly in the DOM/
+testing-library accessibility tree* — not what a screen reader actually speaks. Batch this
+verification with the VoiceOver pass already owed on TRO-215 rather than scheduling a second
+session.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test -- --run web/src/components/sidebars/ProjectContextSidebar.test.tsx
+```
+
+**Rollback.** `git revert` the commit(s) on `fix/a11y-9-sidebar-accessible-names`, or by hand:
+remove the two `aria-labelledby` attributes, the two `id`s, and the `useId` import/calls. The two
+new test cases fail if either list's accessible name regresses, which is the point.
+
+---
+
 ## TRO-299 (TF-10) follow-up — live Render deployment adopted into Terraform state via `import`; post-import plan is a clean no-op
 
 **What was added.** Maintainer decision 2026-07-30 resolved the TF-10 entry's HOLD: adopt the

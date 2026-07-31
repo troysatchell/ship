@@ -5,7 +5,7 @@
  * that belong to a project. Helps users understand the context and navigate
  * between related documents.
  */
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '@/lib/api';
@@ -118,6 +118,11 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
   const [projectExpanded, setProjectExpanded] = useState(true);
   const [expandedPeople, setExpandedPeople] = useState<Set<string>>(new Set());
   const [showIssues, setShowIssues] = useState(false);
+  // Accessible names for the two lists below, wired via aria-labelledby to
+  // their existing visible section headings (A11Y-9 / TRO-281). useId keeps
+  // these unique if the sidebar is ever rendered more than once on a page.
+  const weeklyDocsHeadingId = useId();
+  const issuesHeadingId = useId();
 
   // Fetch project details
   const { data: project, isLoading: projectLoading } = useQuery<ProjectData>({
@@ -272,7 +277,10 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
 
       {/* Weekly accountability section */}
       <div className="pt-1">
-        <div className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-muted uppercase tracking-wider">
+        <div
+          id={weeklyDocsHeadingId}
+          className="flex items-center gap-1.5 px-3 py-1 text-xs font-medium text-muted uppercase tracking-wider"
+        >
           <DocumentIcon className="text-muted" />
           Weekly Docs
         </div>
@@ -282,7 +290,7 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
             No team members allocated
           </div>
         ) : (
-          <ul className="space-y-0.5 px-2">
+          <ul className="space-y-0.5 px-2" aria-labelledby={weeklyDocsHeadingId}>
             {gridData.people.map(person => {
               const isExpanded = expandedPeople.has(person.id);
               const hasWeeks = person.weeks && person.weeks.length > 0;
@@ -377,6 +385,7 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
       {/* Issues section (expandable) */}
       <div>
         <button
+          id={issuesHeadingId}
           onClick={() => setShowIssues(prev => !prev)}
           className="flex w-full items-center gap-1.5 px-3 py-1 text-xs font-medium text-muted uppercase tracking-wider hover:text-foreground transition-colors"
         >
@@ -386,7 +395,7 @@ export function ProjectContextSidebar({ projectId, activeDocumentId }: ProjectCo
         </button>
 
         {showIssues && (
-          <ul className="space-y-0.5 px-2 mt-1">
+          <ul className="space-y-0.5 px-2 mt-1" aria-labelledby={issuesHeadingId}>
             {issuesLoading ? (
               <li className="px-2 py-1 text-xs text-muted">Loading...</li>
             ) : issues.length === 0 ? (
