@@ -8,6 +8,103 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-194 (ERR-7) — No loading affordance under slow network; sync indicator never showed an in-flight state
+
+**What was broken.**
+1. `web/index.html` mounted an empty `<div id="root"></div>` with no fallback content. The audit's
+   Fast-3G walk (`audit/error-handling/baseline.md`) recorded `loadingAffordanceInFirst2s=false`
+   on **every** flow it tried and a 61-second idle main page with zero visual signal anything was
+   happening — because nothing can paint until the JS bundle has downloaded, parsed, and
+   executed, and that guarantee holds regardless of how correct any individual page's `isLoading`
+   branch is.
+2. Even once React had mounted, the page-level `isLoading` branches that already existed
+   (`MyWeekPage.tsx:92`, `Dashboard.tsx:86`, `TeamMode.tsx:523`, `UnifiedDocumentPage.tsx:523` and
+   `:583`) rendered plain, roleless `<div>`/`<p>` text — nothing a screen reader would announce,
+   and visually indistinguishable from static text. `RouteFallback.tsx` already existed with the
+   correct `role="status"`/`aria-live="polite"` pattern (built for BUN-1's lazy route chunks) but
+   was never reused for a page's own data-loading state.
+3. `SyncStatusIndicator.tsx` had no state between "no activity" and "Saved". Probe5
+   (`audit/error-handling/raw/probe5-slow-network.json`) typed for 6 seconds under Fast 3G and the
+   indicator held on "Saved" the entire time: `"during 6s of throttled typing, did the indicator
+   ever leave 'Saved'? false (false = no in-flight/unsaved feedback at all)"`. `isSynced` only
+   reflects the collaboration socket's last *completed* sync handshake (y-websocket re-emits
+   `sync` on a fresh handshake, not per keystroke), so a live, healthy connection and an edit that
+   has not yet left the browser were indistinguishable to the user.
+
+**What changed.**
+- `web/index.html` now paints a real, accessible loading affordance (spinner + "Loading Ship…",
+  `role="status"`/`aria-live="polite"`) as static markup inside `#root`, styled by an inline
+  `<style>` block in `<head>` — no external CSS or JS required. `ReactDOM.createRoot(...).render()`
+  replaces `#root`'s children automatically once the app actually mounts, so nothing further is
+  needed to remove it. This is the fix that holds regardless of network speed, bundle size, or a
+  future regression in either.
+- `RouteFallback.tsx` gained an optional `label` prop (default unchanged: `"Loading…"`) so callers
+  can give a page-specific message while reusing the same status/live-region/layout contract.
+- `MyWeekPage.tsx`, `Dashboard.tsx`, `TeamMode.tsx`, and both loading branches in
+  `UnifiedDocumentPage.tsx` now render `<RouteFallback variant="panel" .../>` instead of ad hoc
+  text — matching the existing `flex h-full items-center justify-center` panel-variant shape so
+  the 4-panel shell is respected, not replaced. `IssuesList.tsx`, `Projects.tsx`, and
+  `Documents.tsx` (which already used the dedicated `IssuesListSkeleton`/`DocumentsListSkeleton`
+  components) now wrap those skeletons in a `role="status"`/`aria-live="polite"` container with an
+  `sr-only` label, since the skeletons themselves carry no text.
+- `SyncStatusIndicator.tsx` gained a new `isSaving` prop and a `"Saving"` view, shown only when the
+  socket already has a completed sync (`isSynced`) — it never claims to be saving over a dead
+  connection, `hasFailedWrite`/`UNSYNCED` still wins in that case. `Editor.tsx` derives `isSaving`
+  from the Yjs document itself: y-websocket applies every update it receives from the server with
+  the provider instance as the transaction origin, so `ydoc.on('update', (update, origin) => ...)`
+  firing with `origin !== provider` means this client just made a local edit it has not yet had a
+  chance to flush. A 600ms debounce after the last such local update returns the indicator to
+  "Saved". This is an observed fact about which updates are local, not a synthetic fixed-delay
+  guess dressed up as feedback — and it deliberately does not claim the *server* has persisted the
+  edit, only that the client is in the process of sending it; `isSynced` continuing to hold is what
+  still backs "Saved".
+
+**Regression tests** (vitest, run by the gate):
+- `web/src/appShellLoading.test.tsx` — parses the real `web/index.html`, renders only the markup
+  before the `<script>` tag (i.e. what a browser paints before any JS runs), and asserts an
+  accessible `role="status"` loading affordance is present in it.
+- `web/src/pages/MyWeekPage.loadingAffordance.test.tsx` and
+  `web/src/pages/Dashboard.loadingAffordance.test.tsx` — mock the page's query hook(s) with
+  `isLoading: true` and assert a `role="status"` element renders, then that it disappears once
+  data arrives.
+- `web/src/components/editor/SyncStatusIndicator.test.tsx` — new
+  `describe('SyncStatusIndicator (TRO-194 / ERR-7 — in-flight saving state)')` block: asserts
+  `isSaving` renders a "Saving" state distinct from both "Saved" and the error state, that it is
+  painted pending (yellow), not ok (green) or error (red), that it reverts to "Saved" once
+  `isSaving` clears, that a dead/never-synced socket still wins over `isSaving` (no false
+  reassurance), and that a failed direct write still overrides an in-flight body save.
+
+Confirmed red first, for the right reason, on all of these: reverted each changed file to its
+pre-fix content (`git diff`/`git checkout -- <file>`, then `git apply` to restore — never
+`git stash`), re-ran the corresponding test file, and observed the expected failures —
+`getByRole('status')` throwing "Unable to find an accessible element with the role 'status'" for
+the loading-affordance tests, and `expected 'Saved' not to match /\bSaved\b/` /
+`expected 'Saved' to match /saving/i` for the sync-indicator tests — then reapplied the fix and
+confirmed all suites went green.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run \
+  src/appShellLoading.test.tsx \
+  src/pages/MyWeekPage.loadingAffordance.test.tsx \
+  src/pages/Dashboard.loadingAffordance.test.tsx \
+  src/components/editor/SyncStatusIndicator.test.tsx
+```
+
+**What this does not prove.** The jsdom tests above are evidence about logic/markup, not about
+paint timing on a real network — no live Chrome DevTools Fast-3G run was performed in this
+worktree. The claim that the static `index.html` affordance paints within 2 seconds under a real
+throttled connection is derived from it being part of the initial HTML response (no JS/CSS
+dependency), not independently measured against a live browser.
+
+**Rollback.** Revert the commit(s) on `fix/err-7-loading-affordance` and remove
+`web/src/appShellLoading.test.tsx`, `web/src/pages/MyWeekPage.loadingAffordance.test.tsx`, and
+`web/src/pages/Dashboard.loadingAffordance.test.tsx`.
+
+---
+
 ## TRO-196 (ERR-9) — BacklinksPanel's `console.error` storm on every failed poll buried the real signal
 
 **What was broken.** `web/src/components/editor/BacklinksPanel.tsx`'s `fetchBacklinks()` polls
