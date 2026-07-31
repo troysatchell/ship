@@ -35,10 +35,13 @@ requirements when "current release" is what the finding asked for).
 **How to run it.**
 
 ```bash
-cd terraform && terraform init -backend=false   # flat root — no AWS creds/backend needed to prove init
-cd terraform/environments/dev && terraform init -backend=false
-cd terraform/environments/shadow && terraform init -backend=false
-cd terraform/render && terraform init            # local backend, no -backend=false needed
+# each line runs in its own subshell so `cd` never persists into the next line
+# (a shared `cd terraform` followed by a relative `cd terraform/environments/dev`
+# would resolve to the nonexistent terraform/terraform/environments/dev)
+(cd terraform && terraform init -backend=false)   # flat root — no AWS creds/backend needed to prove init
+(cd terraform/environments/dev && terraform init -backend=false)
+(cd terraform/environments/shadow && terraform init -backend=false)
+(cd terraform/render && terraform init)            # local backend, no -backend=false needed
 ```
 
 All four succeeded with a freshly downloaded `1.15.8` binary (`Terraform has been successfully
