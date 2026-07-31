@@ -102,6 +102,22 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     a half-built object", that is this bug. The fixes that work are **buffer-then-drain**, **cache
     the load promise rather than the object**, and **re-check liveness after every await**.
     `memory-bank/systemPatterns.md` records the pattern; read it before touching that file.
+
+    **Updated 2026-07-31 (TRO-300 / TEST-16) — a barrier that gates DISPATCH is not the same
+    guarantee as one that gates EXECUTION.** TRO-288 made a flaky concurrency test's "the burst
+    genuinely raced" precondition structural by holding every caller's query *send* until all
+    arrived, then releasing them together — provably correct on the client side (traced into
+    `pg-pool`'s source: all sends really do leave the process in the same tick). It still failed
+    in CI three more times with the identical signature. Why: synchronizing when bytes leave your
+    process says nothing about when the *receiving* system (Postgres's own per-connection backend,
+    scheduled by the OS) actually executes the statement — under real contention one connection's
+    whole read-decide-write-commit cycle can finish before another, already-sent, statement is even
+    scheduled to run. The fix was to gate *result delivery* instead of dispatch: hold every caller's
+    response until every barriered call has itself settled, so no caller can act on its read until
+    every read has already happened, regardless of execution order anywhere downstream. If your
+    "structural" fix for a race is a barrier, ask which side of the operation it actually
+    synchronizes — the side you control leaving your process, or the side you don't, being acted on
+    by something else.
 19. **`CHANGES.md` claims get checked against the diff.**
     4 findings across 3 tickets (TRO-178, TRO-223, TRO-179): a count that contradicted itself, a
     test-harness fix filed as a source defect, an entry title that overstated the result, and a
