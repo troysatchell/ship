@@ -66,6 +66,105 @@ apply/revert path. No code, schema, or infra changed by this commit either direc
 
 ---
 
+## TRO-234 — [TF-1] Prod Aurora cluster and uploads bucket had no deletion protection
+
+**The problem.** Of the flat root's 74 resource blocks, only the Terraform **state** bucket
+(`terraform/bootstrap/main.tf:22-23`) carried `lifecycle { prevent_destroy = true }`. The Aurora
+cluster (`terraform/database.tf`, `aws_rds_cluster.aurora`) had neither `deletion_protection` nor
+`prevent_destroy`, and the uploads bucket (`terraform/s3-cloudfront.tf`, `aws_s3_bucket.uploads`)
+had no `prevent_destroy` either. Both are Tier-1 "data loss on replace or destroy" in
+`audit/terraform/baseline.md`'s blast-radius table: a config change that forces replacement of
+either (e.g. `cluster_identifier`, `master_username`, or the bucket-name interpolation) would let
+Terraform proceed straight to destroying the live production database or every uploaded file,
+with no safety stop. (Line numbers in the Linear ticket — `database.tf:34` /
+`s3-cloudfront.tf:374` — were current at audit time; TF-2's convergence, already merged, shifted
+the Aurora cluster resource to `database.tf:63` by porting in 5 parameter-group settings ahead of
+it. Same resource, same defect.)
+
+**What changed.** Two additions, no resource renamed or restructured:
+
+- `terraform/database.tf` — `aws_rds_cluster.aurora` gets `deletion_protection = true`
+  (a first-class RDS attribute: the AWS API itself refuses a destroy while set) plus
+  `prevent_destroy = true` added to its existing `lifecycle` block (which already carried
+  `ignore_changes = [final_snapshot_identifier]` from `TF-7`/`TF-2` work — merged in, not a
+  second `lifecycle` block, since a resource may declare only one).
+- `terraform/s3-cloudfront.tf` — `aws_s3_bucket.uploads` gets a new
+  `lifecycle { prevent_destroy = true }` block. S3 buckets have no `deletion_protection`
+  attribute in the AWS provider (that concept is RDS-specific), so `prevent_destroy` is the only
+  available guard — same pattern already used on the state bucket.
+
+**Deliberate consequence, not a surprise.** Both resources now require a config change before an
+intentional teardown, but the two guards are independent and **both** must be removed:
+
+- `terraform/s3-cloudfront.tf` (uploads bucket): removing `lifecycle { prevent_destroy = true }`
+  only permits Terraform to *attempt* the deletion — it doesn't make the deletion succeed. The
+  bucket has versioning enabled (`aws_s3_bucket_versioning.uploads`) and does not set
+  `force_destroy`, and no Terraform resource manages object cleanup for it. Before destruction, an
+  operator must also empty the bucket by hand: every object, every object version, and every
+  delete marker, or the destroy call fails on a non-empty bucket regardless of `prevent_destroy`.
+- `terraform/database.tf` (Aurora cluster): **two separate safeguards**, not one.
+  `lifecycle { prevent_destroy = true }` is Terraform-side, same as the bucket — but
+  `deletion_protection = true` is a distinct, first-class RDS attribute enforced by the **AWS API
+  itself**, independent of Terraform. Removing only `prevent_destroy` from the config is not
+  enough: AWS will still refuse the `DeleteDBCluster` call. An operator must apply a config change
+  that sets `deletion_protection = false` *and* removes `prevent_destroy`, then run the destroy —
+  in that order, since the API-level flag has to flip before AWS will honor a destroy at all.
+
+That extra step is the entire point of this ticket (TF-1's finding is literally "one careless
+apply/destroy from prod data loss"); it is called out here — accurately, for both resources — so
+it isn't rediscovered as a mystery blocker during a future teardown.
+
+**What did NOT change.** No other flat-root resource, and no module. `terraform/modules/aurora`
+(used by `terraform/environments/dev` and `terraform/environments/shadow`, kept per TF-2's
+convergence decision) has the same gap — no `deletion_protection`/`prevent_destroy` on its own
+`aws_rds_cluster` — but dev/shadow are non-prod, TF-1's finding and the Linear ticket both scope
+explicitly to the flat root's two named resources, and touching the module is out of scope for
+this ticket. Flagging it as a follow-up candidate, not fixing it here.
+
+**How to run it.**
+
+```bash
+# Terraform binary: temp-downloaded 1.9.8 to a scratch dir (matches audit/terraform/baseline.md
+# and the TF-2/TF-3 precedent; the repo's pinned 1.6.0 cannot `init` at all — TF-3, expired
+# provider-signing key). Not committed to the repo.
+cd terraform
+terraform init -backend=false -input=false
+terraform validate       # Success! same single pre-existing TF-5 warning, before and after
+terraform fmt -check -recursive .   # exit 0, no formatting changes needed
+terraform plan            # Error: Backend initialization required (s3) — expected; no AWS
+                           # credentials or remote-state bucket are available here, matching
+                           # audit/terraform/baseline.md's documented "Live plan not runnable"
+rm -rf .terraform .terraform.lock.hcl   # leaves `git status terraform/` clean, per audit methodology
+cd ..
+grep -n 'deletion_protection\|prevent_destroy' terraform/database.tf terraform/s3-cloudfront.tf
+```
+
+**Verification note.** `terraform validate` was run on the flat root before and after this change
+with the same 1.9.8 binary: both report `Success!` with the identical single pre-existing warning
+(TF-5, the uploads-bucket lifecycle-rule `filter`/`prefix` warning) — this change introduces no
+new warnings or errors. `terraform plan` fails identically before and after with "Backend
+initialization required" (no S3 backend/creds available in this environment) — this is the
+documented, expected failure mode from `audit/terraform/baseline.md`, not a regression caused by
+this change. **No `terraform apply` was run against any account, live or otherwise** — this PR is
+config-only, per the escalation-gate-2 rule against irreversible/outward-facing actions.
+
+**No vitest regression test applies.** This is a Terraform-only, infrastructure-as-code change;
+there is no application code path to exercise and nothing importable into `api/src/**/*.test.ts`
+or `web/src/**/*.test.ts(x)`. The evidence for "before: unprotected, after: protected" is the
+`grep` above — 0 matches across these two files before this change; 3 after, each attributable to
+a specific line: `database.tf:72` (`deletion_protection = true`, the Aurora cluster),
+`database.tf:95` (`prevent_destroy = true`, the same Aurora cluster's `lifecycle` block), and
+`s3-cloudfront.tf:382` (`prevent_destroy = true`, the uploads bucket) — plus the
+`terraform validate`/`plan` output showing the config stays syntactically valid. `gate.sh`'s
+regression-test check is expected to fail honestly here, following the TF-2/TF-3 precedent in
+this factory, rather than have a fake vitest file manufactured to satisfy it.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf-1-deletion-protection`. This removes
+`deletion_protection` and both `prevent_destroy` blocks, returning to the pre-TRO-234 unprotected
+state. No live AWS state is touched either way, since no `apply` was ever run.
+
+---
+
 ## TRO-292 (TF-9) — Removed committed binary `tfplan` from `terraform/environments/shadow/`; closed the `.gitignore` gap for the whole `environments/` family
 
 **Post-baseline, not one of the 68 audit findings — no `AUDIT_REPORT.md` section.** Full spec was
