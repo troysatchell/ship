@@ -65,9 +65,54 @@
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+
+    <!--
+      TRO-194 / ERR-7: under Fast 3G the audit measured a completely blank tab
+      for up to 61s with `loadingAffordanceInFirst2s=false` on every flow
+      (audit/error-handling/baseline.md). The React app cannot paint anything
+      until its JS bundle has downloaded, parsed and executed - on a slow
+      link, a slow third-party dependency, or a future bundle-size
+      regression, that can take far longer than 2s no matter how correct any
+      individual page's `isLoading` branch is.
+
+      This inline style + the markup inside #root below are the fix: they are
+      part of the initial HTML document itself, so the browser paints them
+      immediately, before a single byte of the app bundle or its stylesheet
+      has to arrive. `ReactDOM.createRoot(...).render(...)` replaces #root's
+      children as soon as the real app mounts, so nothing further is needed
+      to remove it.
+    -->
+    <style>
+      #app-loading {
+        display: flex;
+        height: 100vh;
+        width: 100%;
+        align-items: center;
+        justify-content: center;
+        gap: 0.625rem;
+        background: #0d0d0d;
+        color: #8a8a8a;
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        font-size: 0.875rem;
+      }
+      #app-loading-spinner {
+        width: 1.125rem;
+        height: 1.125rem;
+        flex-shrink: 0;
+        border-radius: 50%;
+        border: 2px solid #262626;
+        border-top-color: #2491ff;
+        animation: app-loading-spin 0.8s linear infinite;
+      }
+      @keyframes app-loading-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><div id="app-loading" role="status" aria-live="polite"><span id="app-loading-spinner" aria-hidden="true"></span><span>Loading Ship&hellip;</span></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
