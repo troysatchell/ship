@@ -43,11 +43,19 @@ DB URL) → `pnpm test` (`client.ts` loads that URL into `process.env` at import
 database. `.claude/CLAUDE.md`'s "Commands" section walks straight into this: `pnpm dev` is listed
 first, `pnpm test` second, with no warning between them.
 
-**This does NOT affect the ShipShape factory.** Every factory worktree's `.factory-env` explicitly
-`export`s a worktree-exclusive `DATABASE_URL` before any test command runs, and an explicitly
-exported var always wins over anything `client.ts` loads from a file — with or without this fix.
-The factory was never the vulnerable case; a regular local dev session following
-`.claude/CLAUDE.md`'s documented command order was.
+**This does NOT affect the ShipShape factory — correction, CodeRabbit (PR #93).** The original
+wording here overstated the guarantee: it is conditional, not unconditional. Every factory
+worktree's `.factory-env` explicitly `export`s a worktree-exclusive `DATABASE_URL` before any test
+command runs, and an exported var always wins over `.env.local`/`.env` — but **only if no
+`api/.env.test` exists in that worktree**. `resolveEnvFilesToLoad` returns `override: true`
+specifically when `.env.test` is present (by design — see the function's own header comment: a
+developer who set one up wants it to be the single source of truth, not silently second-guessed),
+and `client.ts` honors that override, replacing even an already-exported `DATABASE_URL`. No factory
+worktree currently creates or commits an `api/.env.test` (only the gitignored, developer-opt-in
+`.env.test.example` template is added by this ticket), so the factory is unaffected **in practice**
+today — but the correct claim is "safe because no worktree has `.env.test`," not "safe
+unconditionally." A worktree provisioning script that ever copies `.env.test.example` into place
+would need to account for this precedence.
 
 **What changed.**
 
