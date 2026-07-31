@@ -9,7 +9,7 @@
     "build": "tsc && VITE_API_URL= vite build",
     "preview": "vite preview",
     "clean": "rm -rf dist",
-    "type-check": "tsc --noEmit",
+    "type-check": "tsc --noEmit && tsc --noEmit -p tsconfig.node.json",
     "lint": "eslint src",
     "test": "vitest run",
     "test:watch": "vitest",
