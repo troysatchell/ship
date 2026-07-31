@@ -434,6 +434,13 @@ resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
     id     = "abort-incomplete-multipart"
     status = "Enabled"
 
+    # Empty filter = applies to every object in the bucket (no prefix/tag
+    # scoping was ever intended here — the rule exists purely to clean up
+    # stray incomplete multipart uploads bucket-wide). Explicit filter block
+    # required by the AWS provider; omitting it is a deprecation warning
+    # today and a hard error in a future major version (TF-5).
+    filter {}
+
     abort_incomplete_multipart_upload {
       days_after_initiation = 1
     }
