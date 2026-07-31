@@ -26,10 +26,31 @@
  * Order matters: the IP limiter runs first (cheap, no hashing) and the identity
  * limiter runs second so that the client-facing `RateLimit-*` headers describe
  * the per-identity budget rather than the flood ceiling.
+ *
+ * STORAGE (TRO-280 / API-7): both limiters above still use
+ * `express-rate-limit`'s default `MemoryStore` unless `REDIS_URL` is
+ * configured, and `MemoryStore` lives in one process's heap. Elastic
+ * Beanstalk runs 1-4 instances of this API behind a load balancer with no
+ * session affinity (`terraform/elastic-beanstalk.tf`), so every number in
+ * this file was, until this ticket, actually "configured limit x however
+ * many instances happen to be running" — a ceiling that moves under
+ * autoscaling load, silently, in the direction that defeats the limiter
+ * (more instances -> more real ceiling -> exactly when traffic is high
+ * enough to need the limit). `createApiRateLimiters` now backs both limiters
+ * with a Redis-shared store when `REDIS_URL` is set — see
+ * `redis-rate-limit-store.ts` for the store, the atomicity argument, and the
+ * documented fail-open behavior if Redis is configured but unreachable.
  */
 import crypto from 'node:crypto';
 import type { RequestHandler } from 'express';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import type { Redis } from 'ioredis';
+import {
+  createRedisClientFromEnv,
+  createRedisRateLimitStore,
+  REDIS_KEY_PREFIX_IDENTITY,
+  REDIS_KEY_PREFIX_SOURCE_IP,
+} from './redis-rate-limit-store.js';
 
 /** All `/api/` limits are evaluated over a rolling one-minute window. */
 export const API_RATE_LIMIT_WINDOW_MS = 60 * 1000;
@@ -47,6 +68,14 @@ export const MEASURED_WORST_CASE_BURST_PER_MINUTE = 320;
 export interface RateLimitEnv {
   NODE_ENV?: string;
   E2E_TEST?: string;
+  /**
+   * Connection string for a Redis/Valkey instance (TRO-280 / API-7). When
+   * set, `createApiRateLimiters` backs both limiters with a shared
+   * `RedisStore` so the configured ceiling holds across every process
+   * sharing that Redis instance, not per-process. Unset (the default in
+   * local dev and this suite) keeps the previous per-process `MemoryStore`.
+   */
+  REDIS_URL?: string;
   // Index signature so `process.env` (NodeJS.ProcessEnv) is directly assignable
   // — without it TypeScript rejects it as a weak-type mismatch.
   [key: string]: string | undefined;
@@ -197,8 +226,23 @@ export function apiRateLimitKey(req: RateLimitKeyRequest): string {
 /**
  * Build the `/api/` limiter chain. Mount with
  * `app.use('/api/', ...createApiRateLimiters())`.
+ *
+ * `redisClient` defaults to one built from `env.REDIS_URL` (production, once
+ * `terraform/redis.tf` is applied and its endpoint is plumbed through SSM —
+ * see `config/ssm.ts`'s `loadProductionSecrets`). Passing it explicitly is a
+ * test seam: `__tests__/redis-rate-limit-store.test.ts` constructs two
+ * independent clients pointed at the same Redis to prove counts are shared
+ * across them, which two calls into the same in-process `MemoryStore` could
+ * never prove.
+ *
+ * When neither is set, both limiters fall back to `express-rate-limit`'s
+ * default `MemoryStore` — unchanged from before this ticket, and still what
+ * local dev and every other test in this suite runs against.
  */
-export function createApiRateLimiters(env: RateLimitEnv = process.env): RequestHandler[] {
+export function createApiRateLimiters(
+  env: RateLimitEnv = process.env,
+  redisClient: Redis | undefined = createRedisClientFromEnv(env)
+): RequestHandler[] {
   const { windowMs, identityLimit, sourceIpLimit } = resolveApiRateLimits(env);
 
   const perSourceIpLimiter = rateLimit({
@@ -207,6 +251,14 @@ export function createApiRateLimiters(env: RateLimitEnv = process.env): RequestH
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests from this network. Please slow down.' },
+    ...(redisClient
+      ? {
+          store: createRedisRateLimitStore(redisClient, REDIS_KEY_PREFIX_SOURCE_IP),
+          // Fail OPEN on a Redis-store error — see redis-rate-limit-store.ts's
+          // top-of-file doc for the full reasoning (rule 7).
+          passOnStoreError: true,
+        }
+      : {}),
   });
 
   const perIdentityLimiter = rateLimit({
@@ -216,6 +268,12 @@ export function createApiRateLimiters(env: RateLimitEnv = process.env): RequestH
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests. Please slow down.' },
+    ...(redisClient
+      ? {
+          store: createRedisRateLimitStore(redisClient, REDIS_KEY_PREFIX_IDENTITY),
+          passOnStoreError: true,
+        }
+      : {}),
   });
 
   return [perSourceIpLimiter, perIdentityLimiter];

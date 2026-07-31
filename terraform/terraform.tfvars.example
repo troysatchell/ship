@@ -13,6 +13,9 @@ aurora_max_capacity  = 4
 vpc_cidr            = "10.0.0.0/16"
 enable_nat_gateway  = true
 
+# Redis (rate-limiter shared store, TRO-280 / API-7)
+redis_node_type     = "cache.t4g.micro"
+
 # Custom domains (optional - leave empty to use AWS defaults)
 route53_zone_id     = ""  # e.g., "Z1234567890ABC"
 api_domain_name     = ""  # e.g., "api.example.gov"

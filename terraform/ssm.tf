@@ -65,6 +65,30 @@ resource "aws_ssm_parameter" "db_password" {
   }
 }
 
+# SSM Parameter - Redis connection string for the rate limiter (TRO-280 / API-7).
+# Same plumbing as `aws_ssm_parameter.database_url` above: the app's
+# `api/src/config/ssm.ts` (`loadProductionSecrets`) fetches this at boot and
+# sets `process.env.REDIS_URL`, which `api/src/middleware/rate-limit.ts` and
+# `api/src/app.ts` read to switch their limiters onto the Redis-shared store.
+# Unlike DATABASE_URL, this fetch is best-effort in the app (see ssm.ts) —
+# Redis is opt-in, so a deploy of this Terraform without the app being ready
+# for it (or vice versa) fails soft to the pre-TRO-280 in-memory store rather
+# than crash-looping the container.
+resource "aws_ssm_parameter" "redis_url" {
+  name        = "/${var.project_name}/${var.environment}/REDIS_URL"
+  description = "Redis connection string for the rate limiter's shared store"
+  type        = "SecureString"
+  value = format(
+    "redis://%s:%s",
+    aws_elasticache_cluster.redis.cache_nodes[0].address,
+    aws_elasticache_cluster.redis.cache_nodes[0].port
+  )
+
+  tags = {
+    Name = "${var.project_name}-redis-url"
+  }
+}
+
 # SSM Parameter - CORS Origin (for frontend URL)
 resource "aws_ssm_parameter" "cors_origin" {
   name        = "/${var.project_name}/${var.environment}/CORS_ORIGIN"

@@ -55,7 +55,7 @@ vi.mock('@aws-sdk/client-ssm', () => {
 });
 
 import { SSMClient, ParameterNotFound } from '@aws-sdk/client-ssm';
-import { getSSMSecret } from './ssm.js';
+import { getSSMSecret, loadProductionSecrets } from './ssm.js';
 
 function abortableHang(signal: AbortSignal): Promise<never> {
   return new Promise((_resolve, reject) => {
@@ -163,5 +163,86 @@ describe('getSSMSecret (TRO-248)', () => {
     await getSSMSecret('/ship/prod/DATABASE_URL');
 
     expect(vi.mocked(SSMClient).mock.calls[0]?.[0]).toMatchObject({ maxAttempts: 1 });
+  });
+});
+
+/**
+ * TRO-280 / API-7 — `loadProductionSecrets` fetches REDIS_URL as a SEPARATE,
+ * best-effort step after the five required secrets above, because
+ * `terraform/redis.tf`'s ElastiCache instance has not been applied anywhere
+ * (this ticket only wrote and validated the Terraform) and because Redis is
+ * an opt-in improvement for the rate limiter, not a hard dependency — see
+ * `ssm.ts`'s comment at the REDIS_URL fetch and `middleware/rate-limit.ts`'s
+ * `MemoryStore` fallback. A missing REDIS_URL must never fail boot the way a
+ * missing DATABASE_URL does; these tests pin that.
+ */
+describe('loadProductionSecrets REDIS_URL (TRO-280)', () => {
+  const basePath = '/ship/prod';
+  const requiredValues: Record<string, string> = {
+    [`${basePath}/DATABASE_URL`]: 'postgresql://required-value',
+    [`${basePath}/SESSION_SECRET`]: 'required-session-secret',
+    [`${basePath}/CORS_ORIGIN`]: 'https://example.gov',
+    [`${basePath}/CDN_DOMAIN`]: 'cdn.example.gov',
+    [`${basePath}/APP_BASE_URL`]: 'https://example.gov',
+  };
+  const savedEnv: Record<string, string | undefined> = {};
+  const managedKeys = [
+    'NODE_ENV',
+    'ENVIRONMENT',
+    'DATABASE_URL',
+    'SESSION_SECRET',
+    'CORS_ORIGIN',
+    'CDN_DOMAIN',
+    'APP_BASE_URL',
+    'REDIS_URL',
+  ] as const;
+
+  beforeEach(() => {
+    for (const key of managedKeys) savedEnv[key] = process.env[key];
+    sendMock.mockReset();
+    process.env.NODE_ENV = 'production';
+    process.env.ENVIRONMENT = 'prod';
+    delete process.env.REDIS_URL;
+  });
+
+  afterEach(() => {
+    for (const key of managedKeys) {
+      if (savedEnv[key] === undefined) delete process.env[key];
+      else process.env[key] = savedEnv[key];
+    }
+  });
+
+  function mockRequiredSecrets(
+    redisBehavior: (name: string) => Promise<{ Parameter: { Value: string } | undefined }>
+  ): void {
+    sendMock.mockImplementation(async (command: { input: { Name: string } }) => {
+      const name = command.input.Name;
+      if (name === `${basePath}/REDIS_URL`) return redisBehavior(name);
+      if (name in requiredValues) return parameterResponse(requiredValues[name]);
+      throw new Error(`unexpected SSM parameter requested in test: ${name}`);
+    });
+  }
+
+  it('sets process.env.REDIS_URL when SSM has the parameter, alongside the required secrets', async () => {
+    mockRequiredSecrets(async () => parameterResponse('redis://ship-redis.internal:6379'));
+
+    await loadProductionSecrets();
+
+    expect(process.env.REDIS_URL).toBe('redis://ship-redis.internal:6379');
+    expect(process.env.DATABASE_URL).toBe(requiredValues[`${basePath}/DATABASE_URL`]);
+  });
+
+  it('leaves REDIS_URL unset and does not fail boot when SSM has no REDIS_URL parameter yet', async () => {
+    mockRequiredSecrets(async (name) => {
+      throw new ParameterNotFound({ message: name, $metadata: {} });
+    });
+
+    await expect(loadProductionSecrets()).resolves.toBeUndefined();
+
+    expect(process.env.REDIS_URL).toBeUndefined();
+    // The required secrets must still have loaded — REDIS_URL failing must
+    // not be able to take the rest of the boot down with it.
+    expect(process.env.DATABASE_URL).toBe(requiredValues[`${basePath}/DATABASE_URL`]);
+    expect(process.env.SESSION_SECRET).toBe(requiredValues[`${basePath}/SESSION_SECRET`]);
   });
 });

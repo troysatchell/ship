@@ -163,6 +163,28 @@ export async function loadProductionSecrets(): Promise<void> {
     console.log(`CORS_ORIGIN: ${corsOrigin}`);
     console.log(`CDN_DOMAIN: ${cdnDomain}`);
     console.log(`APP_BASE_URL: ${appBaseUrl}`);
+
+    // REDIS_URL (TRO-280 / API-7) is fetched separately and is OPTIONAL,
+    // unlike the five required secrets above. Two reasons it can't join the
+    // `Promise.all`: (1) `terraform/redis.tf`'s ElastiCache instance has
+    // never been applied in any environment (this ticket only wrote and
+    // validated the Terraform — see CHANGES.md), so the SSM parameter
+    // genuinely does not exist yet anywhere this runs; (2) even once it is
+    // applied, Redis here is an opt-in performance/correctness improvement
+    // for the rate limiter, not a hard dependency — `rate-limit.ts` and
+    // `app.ts` already fall back to the pre-TRO-280 in-memory store when
+    // `REDIS_URL` is unset. A missing REDIS_URL must never fail boot the way
+    // a missing DATABASE_URL does.
+    try {
+      process.env.REDIS_URL = await getSSMSecret(`${basePath}/REDIS_URL`);
+      console.log('REDIS_URL loaded from SSM Parameter Store');
+    } catch (redisErr) {
+      const redisMessage = redisErr instanceof Error ? redisErr.message : String(redisErr);
+      console.log(
+        `REDIS_URL not available from SSM (${redisMessage}) — rate limiter will use its ` +
+        'in-memory store instead of the Redis-shared one.'
+      );
+    }
   } catch (err) {
     // SSM is the AWS delivery mechanism, not the only one. On a platform that
     // injects secrets as environment variables directly (Render, Fly, a plain

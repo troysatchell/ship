@@ -81,3 +81,9 @@ variable "cloudfront_waf_web_acl_id" {
   type        = string
   default     = ""
 }
+
+variable "redis_node_type" {
+  description = "ElastiCache Redis node type (TRO-280 / API-7 rate-limiter store — a small node is sufficient, see terraform/redis.tf)"
+  type        = string
+  default     = "cache.t4g.micro"
+}
