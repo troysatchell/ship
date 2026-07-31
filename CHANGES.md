@@ -21,6 +21,108 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-295 (TF-7 follow-up) — ALB security group split in two to keep the CloudFront-prefix-list rule expansion under AWS's rules-per-group quota
+
+**The finding.** `terraform/security-groups.tf`'s single `aws_security_group.alb` carried both of
+TF-7/TRO-278's CloudFront-only ingress rules (port 80 and port 443), each referencing
+`data.aws_ec2_managed_prefix_list.cloudfront_origin_facing`. AWS counts a security-group rule that
+references a prefix list against the "Rules per security group" quota as though expanded to one
+rule per prefix-list entry, not as a single rule — TF-7's own CAUTION comment (already in the file,
+above the two rules) already documented this and named two possible mitigations: (1) check the
+account's live quota before `apply`, or (2) split the rules across separate security groups. This
+ticket implements mitigation 2; mitigation 1 needs live AWS credentials this environment doesn't
+have and is still a human's job (unchanged from TF-7).
+
+**Premise check: the "two rules on one group" framing held.** Read the file before changing
+anything, per standing rule — confirmed exactly two ingress rules on `aws_security_group.alb`
+(ports 80 and 443), both referencing the one prefix list, nothing else referencing it anywhere else
+in `terraform/`. `terraform/modules/security-groups/main.tf` (the separate module used by
+`environments/dev` and `environments/shadow`) has its own `alb` security group but still uses
+`cidr_blocks = ["0.0.0.0/0"]`, not the prefix list — TF-7's restriction was never ported there, so
+it carries no quota-expansion risk and is out of this ticket's scope (a pre-existing inconsistency,
+not touched here).
+
+**What changed — `terraform/security-groups.tf`.**
+
+- `aws_security_group.alb` now holds only the port-443 (HTTPS) ingress rule, plus its own egress
+  rule (`Allow all outbound`) and a doc comment explaining the split.
+- A new `aws_security_group.alb_http` holds the port-80 (HTTP) ingress rule, moved verbatim from
+  the old `alb` resource, plus its own copy of the egress rule (duplicated rather than relied on
+  via the ALB's shared-ENI rule union, so this group is self-contained). Both groups reference the
+  same `data.aws_ec2_managed_prefix_list.cloudfront_origin_facing` — the split changes which quota
+  bucket each rule's expansion counts against, not which traffic is allowed.
+- **Note on naming vs. traffic reality:** despite the `_http` suffix suggesting a secondary
+  redirect listener, port 80 is the port that actually carries CloudFront's origin traffic today
+  (the `EB-API` custom origin's `origin_protocol_policy` is `http-only`, per `s3-cloudfront.tf`);
+  443 is reserved for a possible future switch. Documented in both resources' comments so a future
+  reader doesn't assume `alb_http` is the low-priority one.
+- `aws_security_group.eb_instance`'s existing ingress-from-ALB rule still references only
+  `aws_security_group.alb.id` (not both). Left as-is with a new comment explaining why: AWS's
+  security-group-reference matching keys off the *source ENI's* group membership, not which group
+  a rule names, so once the ALB's ENI carries both `alb` and `alb_http`, a rule naming either one
+  still matches ALB-originated traffic. Verified against AWS's documented security-group-reference
+  semantics, not run against live infrastructure (no credentials here).
+- The CAUTION comment above the two (now split) resources is narrowed, not removed: it now states
+  the split is done (mitigation 2) and still flags mitigation 1 (the live quota + prefix-list
+  `max_entries` check) as unverified and still a human's job before any real `apply`.
+
+**What changed — `terraform/elastic-beanstalk.tf`.** The `aws:elbv2:loadbalancer` / `SecurityGroups`
+EB option setting (previously `value = aws_security_group.alb.id`) now lists both groups:
+`value = join(",", [aws_security_group.alb.id, aws_security_group.alb_http.id])`. **Syntax
+confirmed against this repo's own precedent, not invented:** this file already uses
+`join(",", ...)` for other multi-value EB option settings on the same resource —
+`aws:ec2:vpc`/`Subnets` (line ~112) and `aws:ec2:vpc`/`ELBSubnets` (line ~118) both build
+comma-separated values the same way, and AWS's own docs for `aws:elbv2:loadbalancer`/`SecurityGroups`
+describe it as accepting a comma-separated list of security group IDs. Also added
+`output "eb_alb_http_security_group"` alongside the existing `eb_alb_security_group` output, and
+added `alb_http_security_group` to the `eb_config_summary` map in `terraform/outputs.tf`, for parity
+with the existing single-group outputs.
+
+**How to run it.** Nothing to `terraform apply` — per this project's Terraform-ticket precedent
+(TF-1/TF-3/TF-4/TF-5/TF-6/TF-8/TF-9/TF-10, TRO-303) and the explicit instruction for this ticket,
+this is a code-only change; the AWS blueprint in this repo is not planned to be applied (see
+TF-7/TRO-278's CHANGES.md entry). **Verification performed here:** downloaded Terraform v1.9.8
+(darwin_arm64, matching TF-7's own precedent of a temp binary since none is installed in this
+environment) and ran, from `terraform/`, with no backend/credentials involved:
+- `terraform fmt -check -diff -recursive .` — clean, no diff.
+- `terraform init -backend=false -input=false` then `terraform validate` — `Success! The
+  configuration is valid.`
+No `plan`/`apply`/`import` run against any real state, per the hard rule for this ticket.
+
+**Regression test: inapplicable, same precedent as every other terraform-only ticket in this
+project** (TF-1/TF-3/TF-4/TF-5/TF-6/TF-8/TF-9/TF-10, TRO-303) — this is an unapplied infrastructure
+blueprint with no runtime code path to exercise.
+
+**NOT verified (unchanged from TF-7, still a human's job before any real `apply`):**
+- The account's actual "Rules per security group" quota (VPC section of Service Quotas console, or
+  `aws service-quotas list-service-quotas --service-code vpc`).
+- The prefix list's live `data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.max_entries`
+  value, and therefore whether even the *split* per-group rule count (not just the pre-split
+  combined count) stays under quota. The split narrows the risk; it does not by itself prove either
+  group is now under the limit.
+- Whether AWS's EB `SecurityGroups` option setting is additive (adds these groups alongside one EB
+  creates) or replaces the group list outright — inferred from this repo's own multi-value-setting
+  convention (`Subnets`/`ELBSubnets` above) and AWS's documented comma-separated-list format for
+  this option, not confirmed against a live `apply`/`describe-environments`.
+
+**Rollback.** Revert this commit (or the branch's merge commit) — the split is additive/mechanical
+(new resource + a widened setting value), with no schema or state-destructive change, so a plain
+`git revert` restores the single-`alb`-group shape TF-7 shipped. No state exists to reconcile today:
+this blueprint has never been `apply`'d (per TF-7/TRO-278).
+
+**If this has since been `apply`'d to a live account, a plain `git revert` is not safe by itself.**
+`git revert` alone reverts `security-groups.tf` (removing `aws_security_group.alb_http` and its
+port-80 rule) and `elastic-beanstalk.tf` (narrowing `SecurityGroups` back to one group) in the same
+commit, so a subsequent `apply` of the reverted code removes both halves together and restores the
+pre-split shape correctly. The danger is a **partial** revert — reverting only one of the two files
+(e.g. removing `alb_http` from `security-groups.tf` while leaving the widened `SecurityGroups`
+setting in `elastic-beanstalk.tf`, or the reverse) would either dangle a security-group reference to
+a resource Terraform is about to destroy, or silently drop port-80 ingress while
+`aws_security_group.alb_http` still exists unattached. Revert both files together in one `apply`,
+never one at a time against live state.
+
+---
+
 ## TRO-293 — three e2e tests asserted a per-row issue quick-menu that IssuesList does not render — deleted, not built
 
 **Decision: dead/speculative tests (path b), not a missing feature.** TRO-286 (TEST-14) Part 1
