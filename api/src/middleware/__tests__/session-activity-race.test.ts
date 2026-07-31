@@ -166,7 +166,12 @@ function createCompletionBarrier(isBarriered: (sql: string) => boolean, count: n
         (error: unknown) => ({ ok: false, error })
       );
 
-    outcome.then(() => {
+    // `void`, not `.catch(...)`: `outcome` is constructed two blocks up to never
+    // reject — a thrown error becomes a tagged `{ ok: false, error }` fulfillment
+    // specifically so this counter can't be short-circuited by a rejection. Adding
+    // a `.catch` here would be dead code that contradicts the invariant the type
+    // signature above already documents.
+    void outcome.then(() => {
       completed += 1;
       if (completed === count) releaseFn?.();
     });
