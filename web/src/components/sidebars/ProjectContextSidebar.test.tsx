@@ -7,7 +7,7 @@
  * which strips them of list semantics (axe Serious `listitem`).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 
@@ -147,5 +147,36 @@ describe('ProjectContextSidebar — native list semantics (A11Y-1 / TRO-215)', (
       throw new Error('Expected the person row to be inside a list item');
     }
     expect(within(item).getByText('Ada Lovelace')).toBeInTheDocument();
+  });
+});
+
+/**
+ * Regression tests for TRO-281 / audit finding A11Y-9.
+ *
+ * TRO-215 removed the `role="tree"` misuse in this file but left both
+ * remaining lists with no accessible name at all — a naming gap axe does
+ * not flag on a plain `<ul>`. Each list has a visible section heading right
+ * next to it ("Weekly Docs", "Issues"); the fix wires that heading in via
+ * `aria-labelledby` so the accessible name matches what's on screen.
+ */
+describe('ProjectContextSidebar — list accessible names (A11Y-9 / TRO-281)', () => {
+  beforeEach(() => {
+    apiGet.mockClear();
+  });
+
+  it('names the weekly docs list after its visible "Weekly Docs" heading', async () => {
+    await renderSidebar();
+
+    const list = screen.getByRole('list', { name: /weekly docs/i });
+    expect(within(list).getByText('Ada Lovelace')).toBeInTheDocument();
+  });
+
+  it('names the issues list after its visible "Issues" toggle', async () => {
+    await renderSidebar();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Issues$/i }));
+
+    const list = await screen.findByRole('list', { name: /^Issues$/i });
+    expect(list).toBeInTheDocument();
   });
 });
