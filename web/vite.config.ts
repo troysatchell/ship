@@ -15,7 +15,8 @@ function getApiPort(): number {
   if (existsSync(portsFile)) {
     const content = readFileSync(portsFile, 'utf-8');
     const match = content.match(/^API=(\d+)/m);
-    if (match) return parseInt(match[1], 10);
+    const capturedPort = match?.[1];
+    if (capturedPort) return parseInt(capturedPort, 10);
   }
   // Fallback to default
   return 3000;

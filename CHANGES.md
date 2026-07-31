@@ -21,6 +21,89 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-214 — [TS-9] web build and script files are never type-checked
+
+**What was broken.** `web/tsconfig.json`'s `include` is `["src"]` only, and `web/tsconfig.node.json`
+— the Vite companion config that would cover build tooling — did not exist. Neither
+`pnpm --filter @ship/web type-check` nor the `tsc && vite build` step in `web/package.json`'s
+`build` script ever type-checked `web/vite.config.ts` or `web/scripts/generate-icon-types.ts` (the
+latter generates the `IconName` union type the rest of `web` depends on, per TRO-201/BUN-5). Effort
+is XS and, per the finding, retires 0 violations — the point is closing the coverage gap, not fixing
+bugs the gap hid.
+
+**What changed.**
+- Added `web/tsconfig.node.json`, extending `../tsconfig.json` like the existing `web/tsconfig.json`
+  does, but targeting Node instead of the browser: `module: "ESNext"`/`moduleResolution: "bundler"`
+  (required for `generate-icon-types.ts`'s `import.meta.url`), `types: ["node"]`, `noEmit: true`.
+  `include` is `["vite.config.ts", "scripts/**/*.ts"]` — exactly the two files/dirs the finding
+  named. Deliberately did **not** add a `references` array to `web/tsconfig.json` — that requires
+  `tsc --build` semantics to actually invoke the referenced project, which `tsc --noEmit` (what
+  `type-check` runs) does not do on its own; verified this empirically before picking the approach
+  below.
+- Changed `web/package.json`'s `type-check` script from `"tsc --noEmit"` to
+  `"tsc --noEmit && tsc --noEmit -p tsconfig.node.json"` — two explicit invocations, so both configs
+  are actually exercised by `pnpm --filter @ship/web type-check` (and by root `pnpm type-check`,
+  which runs it via `pnpm --recursive run type-check`).
+- The new coverage surfaced one real, pre-existing type error (in scope by the ticket's own terms:
+  "if adding type-checking surfaces a real type error... fix it as part of this ticket"):
+  `vite.config.ts:18` called `parseInt(match[1], 10)` where `match[1]` types as `string | undefined`
+  under the root `tsconfig.json`'s `noUncheckedIndexedAccess: true` (inherited by `web/tsconfig.json`
+  and now by `tsconfig.node.json`). The regex's capture group (`(\d+)`) is mandatory, so `match[1]`
+  is always defined whenever `match` itself is truthy — a real latent gap in the compiler's
+  visibility, not a runtime bug. Fixed by binding the captured group to a variable and narrowing
+  with a plain truthy check (no `!`, no `as`):
+  `const capturedPort = match?.[1]; if (capturedPort) return parseInt(capturedPort, 10);`
+- `web/scripts/generate-icon-types.ts` type-checked clean under the new config with no changes — its
+  behavior (the BUN-5 icon-glob generator logic) was not touched.
+
+**Regression proof — procedural, not a vitest file.** This is a build-tooling change with no
+application code path a vitest test could assert against (same class as TRO-292/TRO-294 above, both
+of which used procedural proof for the same reason: no test paths for `.gitignore` rules or Markdown
+strings either). `scripts/factory/gate.sh`'s G6 (regression-test present) is expected to fail on this
+branch for that reason — the evidence is the command sequence below, run against this exact
+worktree:
+
+```bash
+# 1. BEFORE the fix (web/tsconfig.node.json absent), a deliberate type error
+#    injected into vite.config.ts's getApiPort() (string assigned to number) —
+#    proves the gap:
+pnpm --filter @ship/web type-check
+# > tsc --noEmit
+# (exit 0 — the deliberate error is NOT caught; vite.config.ts isn't included
+# by any tsconfig `tsc --noEmit` reads)
+
+# 2. AFTER adding web/tsconfig.node.json and updating the type-check script,
+#    with the SAME deliberate error still in place:
+pnpm --filter @ship/web type-check
+# > tsc --noEmit && tsc --noEmit -p tsconfig.node.json
+# vite.config.ts(11,9): error TS2322: Type 'string' is not assignable to type 'number'.
+# vite.config.ts(21,32): error TS2345: Argument of type 'string | undefined' is not
+#   assignable to parameter of type 'string'.
+# (exit 2 — now caught, plus the real pre-existing `match[1]` error above)
+
+# 3. Removed the deliberate error, fixed the real one, reran:
+pnpm --filter @ship/web type-check
+# (exit 0 — clean)
+```
+
+`git diff` against `web/vite.config.ts` at each step confirms the deliberate error left no residue
+(the file matches its pre-ticket content except for the `capturedPort` fix).
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web type-check   # now runs both tsconfig.json (src) and tsconfig.node.json
+pnpm type-check                       # root, runs it for all packages via --recursive
+pnpm build                            # unaffected — build's own `tsc` step still targets src only
+```
+
+**Rollback.** Revert `web/tsconfig.node.json` (delete it) and `web/package.json`'s `type-check`
+script back to `"tsc --noEmit"`. Also revert the `match[1]` → `capturedPort` change in
+`web/vite.config.ts:14-18` if desired, though that portion is a correctness fix independent of the
+config change and safe to keep either way.
+
+---
+
 ## TRO-280 — [API-7] Rate limits are per-process, so the real ceiling is N instances × configured
 
 **What was broken.** `api/src/middleware/rate-limit.ts`'s `perSourceIpLimiter`/`perIdentityLimiter`
