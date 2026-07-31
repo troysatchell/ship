@@ -28,9 +28,9 @@ async function fetchCommandPaletteDocuments(): Promise<SearchableDocument[]> {
   // this component renders, rather than the full document row.
   const res = await apiGet('/api/search/documents');
   if (!res.ok) {
-    const error = new Error('Failed to fetch documents') as Error & { status: number };
-    error.status = res.status;
-    throw error;
+    // `Object.assign` lets TypeScript infer `Error & { status: number }` from
+    // the two argument shapes, rather than an explicit `as` assertion.
+    throw Object.assign(new Error('Failed to fetch documents'), { status: res.status });
   }
   return res.json();
 }
@@ -77,7 +77,7 @@ export function CommandPalette({ open, onOpenChange, currentDocument, onConvertD
   // while the palette is open" behavior; the query cache (staleTime below,
   // matching the rest of the app's list queries) is what makes a second open
   // within the window free.
-  const { data: documents = [], isLoading: loading } = useQuery({
+  const { data: documents = [], isLoading: loading, isError } = useQuery({
     queryKey: ['command-palette-documents'],
     queryFn: fetchCommandPaletteDocuments,
     enabled: open,
@@ -292,7 +292,11 @@ export function CommandPalette({ open, onOpenChange, currentDocument, onConvertD
 
           <Command.List className="max-h-[400px] overflow-auto p-2">
             <Command.Empty className="px-4 py-8 text-center text-sm text-muted">
-              {loading ? 'Loading...' : 'No results found.'}
+              {isError
+                ? 'Failed to load documents. Try again.'
+                : loading
+                  ? 'Loading...'
+                  : 'No results found.'}
             </Command.Empty>
 
             {/* Issues */}

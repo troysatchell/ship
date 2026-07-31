@@ -19,7 +19,7 @@
  * uses, per the house pattern in
  * UnifiedDocumentPage.deletedFocusRefetch.test.tsx.
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest';
 import { render, screen, waitFor, fireEvent, cleanup } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -30,7 +30,10 @@ import { TooltipProvider } from '@/components/ui/Tooltip';
 // which cmdk uses internally (sizing the list, scrolling the active item
 // into view) unrelated to anything this test asserts on. Stub them locally
 // rather than touching the shared web/src/test/setup.ts, since CommandPalette
-// is the first component under test that pulls in cmdk.
+// is the first component under test that pulls in cmdk. Both are reverted in
+// `afterAll` below so they don't leak into other test files run in the same
+// worker.
+const originalScrollIntoView = Element.prototype.scrollIntoView;
 class ResizeObserverStub {
   observe(): void {}
   unobserve(): void {}
@@ -38,6 +41,11 @@ class ResizeObserverStub {
 }
 vi.stubGlobal('ResizeObserver', ResizeObserverStub);
 Element.prototype.scrollIntoView = vi.fn();
+
+afterAll(() => {
+  vi.unstubAllGlobals();
+  Element.prototype.scrollIntoView = originalScrollIntoView;
+});
 
 let documentsFetchCount = 0;
 
@@ -82,6 +90,7 @@ vi.mock('@/lib/api', () => ({
 }));
 
 // Imported after the mock so the component picks up the stubbed network layer.
+import { apiGet } from '@/lib/api';
 import { CommandPalette } from './CommandPalette';
 
 function paletteTree(open: boolean, onOpenChange: () => void = vi.fn()) {
@@ -144,5 +153,37 @@ describe('TRO-175 / API-4: command palette document cache', () => {
     // Typing filters the already-fetched list locally - it must not trigger
     // another network request.
     expect(documentsFetchCount).toBe(1);
+  });
+
+  // CodeRabbit review finding (TRO-175 / API-4): a failed fetch was
+  // indistinguishable from a genuinely empty result - both rendered
+  // "No results found." A 404 (not a 5xx) is used deliberately: it's a
+  // permanent client error under this app's retry policy
+  // (web/src/lib/queryClient.ts's shouldRetryRequest), so `isError` becomes
+  // true after the first attempt instead of waiting through retry backoff.
+  //
+  // cmdk's <Command.Empty> only mounts when the *entire* registered item
+  // count is zero - the static "Create"/"Navigate" commands always register,
+  // so with no search text there's never an empty state to distinguish. A
+  // non-matching search term is required to drive cmdk's own count to zero
+  // and actually surface the message.
+  it('shows a distinguishable error message when the fetch fails, not "No results found"', async () => {
+    vi.mocked(apiGet).mockImplementationOnce(() =>
+      Promise.resolve(
+        new Response(JSON.stringify({ error: 'Failed to fetch documents' }), {
+          status: 404,
+          headers: { 'content-type': 'application/json' },
+        })
+      )
+    );
+
+    render(paletteTree(true));
+
+    fireEvent.change(await screen.findByRole('combobox'), {
+      target: { value: 'zzz-matches-nothing-zzz' },
+    });
+
+    expect(await screen.findByText(/failed to load documents/i)).toBeInTheDocument();
+    expect(screen.queryByText(/no results found/i)).not.toBeInTheDocument();
   });
 });

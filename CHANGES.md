@@ -89,12 +89,57 @@ byte counts against the audit's 294 KB figure):**
   `schema.sql:367`) via an Index Scan, 0.25ms execution time — no sequential scan introduced.
 
 **API-side test — `api/src/routes/search.test.ts`**, new `describe('Search Documents API (TRO-175
-/ API-4)', …)` block (7 cases): 401 without auth; browse excludes a `standup` document (a real
-type, not one of the six the palette groups by); `ticket_number` present on issue rows; `q`
-filters by title; and three visibility cases (creator sees own private doc, another member does
-not, admin sees any member's private doc) — covered here rather than only in the frontend test,
-since the frontend test mocks this endpoint and would not catch a server-side visibility
-regression.
+/ API-4)', …)` block (originally 7 cases, now 8 — see Post-review fixes below): 401 without auth;
+browse excludes a `standup` document (a real type, not one of the six the palette groups by);
+`ticket_number` present on issue rows; `q` filters by title; three visibility cases (creator sees
+own private doc, another member does not, admin sees any member's private doc) — covered here
+rather than only in the frontend test, since the frontend test mocks this endpoint and would not
+catch a server-side visibility regression; and the browse-all cap case added below.
+
+**Post-review fixes (CodeRabbit, same PR, before merge).** Four findings, all addressed:
+
+1. **MAJOR — the browse-all (no `q`) path had no result cap.** `api/src/routes/search.ts`'s new
+   query had no `LIMIT` at all when `q` is omitted — a workspace that grows past whatever a given
+   seed happens to have would regress right back into an unbounded-corpus fetch, undermining the
+   point of this ticket for that path. Added `export const DOCUMENT_SEARCH_LIMIT = 500` and a
+   `LIMIT $n` applied unconditionally (both browse and search paths), after the existing
+   `ORDER BY`, with visibility/type-filtering unchanged. This is a **disclosed behavior change**:
+   a workspace with more than 500 palette-relevant documents will see a truncated "browse all"
+   list until the user types a query, at which point server-side `title ILIKE` filtering is
+   unaffected by the cap in practice. New test: `caps the browse-all (no q) result set at
+   DOCUMENT_SEARCH_LIMIT` — bulk-inserts `DOCUMENT_SEARCH_LIMIT + 1` rows via a single
+   `generate_series` INSERT (fast, no per-row round trips) and asserts the response is exactly
+   `DOCUMENT_SEARCH_LIMIT` rows, not "some smaller number."
+2. **Minor — missing error state.** `CommandPalette.tsx`'s `useQuery` destructuring only pulled
+   `data`/`isLoading`; a failed fetch rendered the same "No results found." as a genuinely empty
+   result. Added `isError` and a `'Failed to load documents. Try again.'` message ahead of the
+   loading/empty fallback. New test confirms this — using a 404 (not 5xx) deliberately, since a
+   5xx is retried under this app's `shouldRetryRequest` policy
+   (`web/src/lib/queryClient.ts`) and would only surface `isError` after retry backoff, while a
+   4xx is treated as permanent and fails fast. Also had to account for a `cmdk` constraint while
+   writing this test: `Command.Empty` only mounts when the *entire* registered item count is
+   zero, and the palette's static "Create"/"Navigate" commands always register — so the error
+   message is only reachable once a non-matching search term is also typed, not on bare open with
+   no search text. Confirmed **red** first: reverted just the `isError` handling and re-ran — the
+   new test timed out waiting for the error text (it stayed on the item list, since `isError` was
+   never wired to a fallback message), not an import error.
+3. **Minor — unsafe error construction.** `fetchCommandPaletteDocuments`'s
+   `new Error(...) as Error & { status: number }` was exactly the assert-and-mutate pattern
+   lessons.md rule 16 and `gate.sh`'s G7b exist to catch — it apparently didn't trip the
+   mechanical check because G7b's pattern list targets `!`/`as any`/`as unknown as`, not this
+   narrower `as Error & {...}` shape. Replaced with
+   `Object.assign(new Error('Failed to fetch documents'), { status: res.status })`, which lets
+   TypeScript infer `Error & { status: number }` from the two argument shapes with no assertion —
+   the same pattern already used in this repo's own tests (`MutationErrorToast.test.tsx`,
+   `useDocumentWriteStatus.test.tsx`, `queryClient.test.ts`).
+4. **Minor — test pollution.** `CommandPalette.test.tsx`'s `vi.stubGlobal('ResizeObserver', …)`
+   and `Element.prototype.scrollIntoView = vi.fn()` were never reverted, so they could leak into
+   other test files sharing the same worker. Added an `afterAll` calling `vi.unstubAllGlobals()`
+   and restoring the captured original `scrollIntoView` descriptor.
+
+Re-ran after all four fixes: `pnpm --filter @ship/web exec vitest run` (full web suite) — 53
+files / 435 tests passed (was 434; +1 net from the new error-state test); `pnpm --filter @ship/api
+test` (full api suite) — 56 files / 680 tests passed; `pnpm type-check` clean across all packages.
 
 **Not fixed here (noticed, out of scope for this ticket):** `cmdk`'s group headings render with
 `aria-hidden="true"` (from the `cmdk` library itself, `Command.Group`), so the "Issues"/

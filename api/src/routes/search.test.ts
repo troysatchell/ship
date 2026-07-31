@@ -3,6 +3,7 @@ import request from 'supertest';
 import crypto from 'crypto';
 import { createApp } from '../app.js';
 import { pool } from '../db/client.js';
+import { DOCUMENT_SEARCH_LIMIT } from './search.js';
 
 describe('Search API', () => {
   const app = createApp('http://localhost:5173');
@@ -463,5 +464,38 @@ describe('Search Documents API (TRO-175 / API-4)', () => {
     expect(res.status).toBe(200);
     expect(res.body).toHaveLength(1);
     expect(res.body[0].title).toBe('Members Only Private Wiki');
+  });
+
+  // CodeRabbit review finding (TRO-175 / API-4): the browse-all (no `q`) path
+  // had no cap, which would let a large workspace regress right back into
+  // shipping an unbounded corpus - the exact problem this ticket exists to
+  // fix. Proves the cap is real by pushing the relevant-type row count past
+  // it with a single set-based INSERT (fast - no per-row round trips) rather
+  // than asserting on the SQL text.
+  it('caps the browse-all (no q) result set at DOCUMENT_SEARCH_LIMIT', async () => {
+    const overflowCount = DOCUMENT_SEARCH_LIMIT + 1;
+    await pool.query(
+      `INSERT INTO documents (workspace_id, document_type, title, content, visibility, created_by)
+       SELECT $1, 'issue', 'Bulk Issue ' || gs, '{}', 'workspace', $2
+       FROM generate_series(1, $3) AS gs`,
+      [testWorkspaceId, memberId, overflowCount]
+    );
+
+    try {
+      const res = await request(app)
+        .get('/api/search/documents')
+        .set('Cookie', memberSessionCookie);
+
+      expect(res.status).toBe(200);
+      // Without the cap this would be overflowCount + the fixtures created in
+      // beforeAll (> DOCUMENT_SEARCH_LIMIT either way) - the cap must bring it
+      // back down to exactly the limit, not just "some smaller number".
+      expect(res.body).toHaveLength(DOCUMENT_SEARCH_LIMIT);
+    } finally {
+      await pool.query(
+        `DELETE FROM documents WHERE workspace_id = $1 AND title LIKE 'Bulk Issue %'`,
+        [testWorkspaceId]
+      );
+    }
   });
 });

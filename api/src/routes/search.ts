@@ -93,6 +93,20 @@ interface DocumentSearchRow {
   ticket_number: number | null;
 }
 
+// CodeRabbit review (TRO-175/API-4): the browse-all path (no `q`) had no
+// result cap, which would let this endpoint regress right back into the
+// unbounded-corpus problem this ticket exists to fix, once a workspace grows
+// past whatever a given seed happens to have. 500 is a fixed ceiling, not a
+// pagination page size - large enough that no realistic single-workspace
+// browse view is currently truncated (the audit's reference environment was
+// 500 *total* documents, of which under 420 are palette-relevant types), but
+// it bounds worst-case payload growth instead of leaving it linear in corpus
+// size. This is a deliberate, disclosed behavior change: a workspace with
+// more than 500 palette-relevant documents will see a truncated "browse all"
+// list until the user types a query, at which point `q` filters server-side
+// and is unaffected by this cap in practice.
+export const DOCUMENT_SEARCH_LIMIT = 500;
+
 // Search or browse documents for UI surfaces like the command palette
 // GET /api/search/documents?q=:query
 searchRouter.get('/documents', authMiddleware, authed(async (req, res) => {
@@ -104,7 +118,7 @@ searchRouter.get('/documents', authMiddleware, authed(async (req, res) => {
     // Check if user is admin for visibility filtering
     const isAdmin = await isWorkspaceAdmin(userId, workspaceId);
 
-    const params: (string | boolean)[] = [workspaceId, userId, isAdmin];
+    const params: (string | boolean | number)[] = [workspaceId, userId, isAdmin];
     let query = `
       SELECT id, document_type, title, ticket_number
       FROM documents
@@ -123,6 +137,9 @@ searchRouter.get('/documents', authMiddleware, authed(async (req, res) => {
     }
 
     query += ` ORDER BY position ASC, created_at DESC`;
+
+    params.push(DOCUMENT_SEARCH_LIMIT);
+    query += ` LIMIT $${params.length}`;
 
     const result = await pool.query<DocumentSearchRow>(query, params);
 
