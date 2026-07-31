@@ -52,17 +52,18 @@ prior ticket's own claim:
 `test:coverage` script, and zero test files existed anywhere under `shared/src/` (0 of 8 source
 files). **This — `shared/` only — was the ticket's actual remaining scope.**
 
-**What `shared/src` actually contains.** Read all 8 files before writing anything. Six are pure
-`interface`/`type` declarations or re-export barrels with zero runtime logic:
-`index.ts`, `types/index.ts`, `types/api.ts`, `types/auth.ts` (now just a comment — its exports
-were removed by an earlier ticket), `types/user.ts`, `types/workspace.ts`. These compile to no
-executable statements, so there is nothing in them to unit-test and nothing for v8 to instrument —
-noted explicitly rather than papered over with a vacuous test. The other two files have real,
-testable logic: `constants.ts` (`SESSION_TIMEOUT_MS`/`ABSOLUTE_SESSION_TIMEOUT_MS`, computed
-millisecond values backing the session semantics `.claude/CLAUDE.md` documents — 15min idle / 12hr
-absolute, NIST SP 800-63B-4 AAL2 — plus the `HTTP_STATUS`/`ERROR_CODES` literal maps) and
-`types/document.ts` (`computeICEScore()`, a real branching function, plus the
-`DEFAULT_PROJECT_PROPERTIES` constant).
+**What `shared/src` actually contains.** Read all 8 files before writing anything. Four are pure
+`interface` declarations with zero runtime logic — `types/api.ts`, `types/auth.ts` (now just a
+comment — its exports were removed by an earlier ticket), `types/user.ts`, `types/workspace.ts` —
+verified individually, not assumed from a file-count heuristic. These compile to no executable
+statements, so there is nothing in them to unit-test and nothing for v8 to instrument. Two more
+files have real, testable logic: `constants.ts` (`SESSION_TIMEOUT_MS`/`ABSOLUTE_SESSION_TIMEOUT_MS`,
+computed millisecond values backing the session semantics `.claude/CLAUDE.md` documents — 15min
+idle / 12hr absolute, NIST SP 800-63B-4 AAL2 — plus the `HTTP_STATUS`/`ERROR_CODES` literal maps)
+and `types/document.ts` (`computeICEScore()`, a real branching function, plus the
+`DEFAULT_PROJECT_PROPERTIES` constant). The remaining two, `index.ts` and `types/index.ts`, are
+barrels — `export * from './x.js'` chains. **These were originally (wrongly) grouped with the
+four interface-only files as "zero runtime statements"; see the correction below.**
 
 **What changed.**
 
@@ -93,15 +94,28 @@ absolute, NIST SP 800-63B-4 AAL2 — plus the `HTTP_STATUS`/`ERROR_CODES` litera
   `15 * 60 * 1000` to `15 * 60 * 100`, reran — 5 of 19 tests failed on exactly the mutated lines,
   confirming red for the right reason — then restored both files and reran clean (19/19 passed
   again, diffed byte-identical against the pre-mutation copies).
-- **Coverage threshold**: measured **100% statement coverage** (8/8 statements, 1/1 functions —
-  `shared/coverage/coverage-summary.json`) on 2026-07-31, because the only executable code in the
-  package is now fully covered and the other six files contribute zero statements either way. Set
-  `coverage.thresholds.statements` to **95**, not 100 — a couple of points below the measured
-  number, same convention as api (43 vs. 45.65%) and web (20 vs. ~22.3%), so a future genuinely
-  type-only addition to `shared/src` doesn't force a config change just to keep the gate green.
-  Verified the threshold is real, not decorative, the same way TRO-244 verified api's: temporarily
-  set it to `100.01` and reran — `ERROR: Coverage for statements (100%) does not meet global
-  threshold (100.01%)`, exit 1 — then reverted to 95.
+- **Coverage threshold — corrected after a CodeRabbit review (PR #92), not caught before merge.**
+  The original measurement (100%, 8/8 statements) was taken **without an explicit
+  `coverage.include`**. Vitest 4 defaults `coverage.include` to "files actually imported during the
+  run" — so `types/api.ts`/`auth.ts`/`user.ts`/`workspace.ts` AND both barrel files were never in
+  the denominator at all, imported or not. "100%" only ever meant "100% of the 2 files a test
+  happened to import," not 100% of the package — the exact "invisible denominator" failure mode
+  `docs/IMPROVEMENTS.md`-style audits exist to catch, landing in this ticket's own new file. Verified
+  by adding `include: ['src/**/*.ts']` and re-running: coverage **dropped to 53.33%**, correctly
+  surfacing the two barrel files' real re-export statements as uncovered (they were never even
+  reported before, let alone counted against the threshold).
+  - Fix: `coverage.exclude` now explicitly names the four verified-empty interface files (each read
+    individually, not inferred). The two barrels are **not** excluded — `export * from './x.js'` is
+    a real, executable statement — and `shared/src/index.test.ts` (new, 2 cases) now imports both
+    and asserts real re-exported values/functions (not just "the module loaded"), which is itself a
+    regression test for barrel/source drift (a renamed or deleted export whose barrel line goes
+    stale).
+  - Re-measured after the fix: genuinely **100% statement coverage**, 21/21 tests across 3 files.
+    `coverage.thresholds.statements` stays at **95**, a couple of points below the (now honest)
+    measured number, same convention as api (43 vs. 45.65%) and web (20 vs. ~22.3%). Re-verified the
+    threshold is real, not decorative: temporarily set it to `100.01` and reran — `ERROR: Coverage
+    for statements (100%) does not meet global threshold (100.01%)`, exit 1 — then reverted to 95.
+  - Recorded in `audit/factory/review-findings.jsonl` as two Major findings, both fixed.
 - `.github/workflows/ci.yml` — added a **Shared test coverage** step (`pnpm --filter @ship/shared
   test:coverage`) to the `verify` job, right after the existing Web test coverage step. Unlike
   api/web, `shared/` has no pre-existing quarantine baseline and no separate continue-on-error unit
@@ -117,22 +131,23 @@ absolute, NIST SP 800-63B-4 AAL2 — plus the `HTTP_STATUS`/`ERROR_CODES` litera
   out of this ticket's stated file scope (`shared/`, `pnpm-lock.yaml`, `shared/package.json`,
   `.github/workflows/ci.yml` only).
 
-**Verified, not just claimed.** `pnpm --filter @ship/shared test` — 2 files, 19/19 passed.
-`pnpm --filter @ship/shared test:coverage` — exit 0, 100% statements. `pnpm --filter @ship/shared
-type-check` and `pnpm --filter @ship/shared lint` — both clean on the new test files. Full
-`pnpm type-check` and `pnpm build` across all three packages — both clean, confirming the new
-devDependencies and config didn't disturb api/web.
+**Verified, not just claimed.** `pnpm --filter @ship/shared test` — 3 files, 21/21 passed.
+`pnpm --filter @ship/shared test:coverage` — exit 0, genuinely 100% statements (all included files
+covered, four verified-empty files correctly excluded). `pnpm --filter @ship/shared type-check` and
+`pnpm --filter @ship/shared lint` — both clean on the new test files. Full `pnpm type-check` and
+`pnpm build` across all three packages — both clean, confirming the new devDependencies and config
+didn't disturb api/web.
 
 **How to run it.**
 
 ```bash
-pnpm --filter @ship/shared test           # 19 tests, ~1s, no setup required
+pnpm --filter @ship/shared test           # 21 tests, ~1s, no setup required
 pnpm --filter @ship/shared test:coverage  # same, plus the v8 coverage report + 95% floor
 ```
 
 **Rollback.** Revert this commit. Removes `shared/vitest.config.ts`,
-`shared/src/constants.test.ts`, and `shared/src/types/document.test.ts`; restores
-`shared/package.json` to no `test`/`test:coverage` scripts and no `vitest`/`@vitest/coverage-v8`
+`shared/src/constants.test.ts`, `shared/src/types/document.test.ts`, and `shared/src/index.test.ts`;
+restores `shared/package.json` to no `test`/`test:coverage` scripts and no `vitest`/`@vitest/coverage-v8`
 devDependencies; restores `pnpm-lock.yaml`'s prior 6 lines; and removes the `Shared test coverage`
 CI step and its two follow-on references in `.github/workflows/ci.yml`. Reverting drops `shared/`
 back to zero test coverage and zero CI signal for it — the state TEST-7 originally described —
