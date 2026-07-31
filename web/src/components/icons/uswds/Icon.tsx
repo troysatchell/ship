@@ -1,11 +1,6 @@
-import {
-  type ComponentType,
-  type SVGProps,
-  lazy,
-  Suspense,
-  useMemo,
-} from 'react';
+import { type ComponentType, type SVGProps } from 'react';
 import { type IconName, isValidIconName } from './types';
+import { iconComponents } from './usedIcons.generated';
 
 export interface IconProps {
   /** The name of the USWDS icon to render */
@@ -18,38 +13,14 @@ export interface IconProps {
 
 type SvgComponent = ComponentType<SVGProps<SVGSVGElement>>;
 
-// Use Vite's glob import to get all USWDS icons as lazy-loadable modules
-// This works because glob imports are resolved at build time
-const iconModules = import.meta.glob<{ default: SvgComponent }>(
-  '/node_modules/@uswds/uswds/dist/img/usa-icons/*.svg',
-  { query: '?react' },
-);
-
-// Build a map from icon name to its loader function
-const iconLoaders = new Map<string, () => Promise<{ default: SvgComponent }>>();
-for (const [path, loader] of Object.entries(iconModules)) {
-  // Extract icon name from path: /node_modules/@uswds/uswds/dist/img/usa-icons/check.svg -> check
-  const name = path.split('/').pop()?.replace('.svg', '');
-
-  if (name) {
-    iconLoaders.set(name, loader);
-  }
-}
-
-// Cache for lazy-loaded icon components
-const iconCache = new Map<string, ReturnType<typeof lazy<SvgComponent>>>();
-
-// Get or create a lazy-loaded icon component
-function getLazyIcon(name: string) {
-  if (!iconCache.has(name)) {
-    const loader = iconLoaders.get(name);
-    if (!loader) return null;
-
-    const LazyIcon = lazy<SvgComponent>(loader);
-    iconCache.set(name, LazyIcon);
-  }
-
-  return iconCache.get(name)!;
+// `iconComponents` (usedIcons.generated.ts) is a static, eager import map
+// covering only the icon names actually passed to `<Icon name="...">`
+// somewhere in web/src — narrowed from a whole-directory `import.meta.glob`
+// that emitted a lazy chunk for all 245 USWDS icons regardless of use
+// (TRO-201 / BUN-5). Referencing a new icon requires re-running
+// `pnpm generate:icon-types` — see CHANGES.md's TRO-201 entry.
+function getIcon(name: string): SvgComponent | undefined {
+  return iconComponents[name];
 }
 
 /**
@@ -88,14 +59,17 @@ export function Icon({
     return null;
   }
 
-  // Memoize the lazy icon component lookup
-  const LazyIcon = useMemo(() => getLazyIcon(name), [name]);
+  const SvgIcon = getIcon(name);
 
-  // Handle case where icon loader wasn't found (shouldn't happen if types are in sync)
-  if (!LazyIcon) {
+  // Handle case where the name is a valid USWDS icon but isn't in the eager
+  // map yet — a new <Icon name="..."> call that hasn't had
+  // `pnpm generate:icon-types` run since it was added. See CHANGES.md's
+  // TRO-201 entry.
+  if (!SvgIcon) {
     if (process.env.NODE_ENV !== 'production') {
       console.warn(
-        `Icon: Could not load icon "${name}". Icon may not be available.`,
+        `Icon: "${name}" is a valid USWDS icon but is not eagerly loaded. ` +
+          `Run "pnpm --filter @ship/web generate:icon-types" after adding a new <Icon name="${name}"> usage.`,
       );
     }
 
@@ -117,13 +91,11 @@ export function Icon({
       };
 
   return (
-    <Suspense fallback={<span className={className} />}>
-      <LazyIcon
-        className={className}
-        fill="currentColor"
-        {...accessibilityProps}
-      />
-    </Suspense>
+    <SvgIcon
+      className={className}
+      fill="currentColor"
+      {...accessibilityProps}
+    />
   );
 }
 

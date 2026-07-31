@@ -391,6 +391,135 @@ produce.
 
 ---
 
+## TRO-201 (BUN-5) — icon glob emitted 245 chunks; only 4 were ever used, not the ~36 estimated
+
+**What was broken.** `web/src/components/icons/uswds/Icon.tsx:23-26` used a whole-directory
+`import.meta.glob('/node_modules/@uswds/uswds/dist/img/usa-icons/*.svg', { query: '?react' })`,
+which makes every USWDS icon SVG a separate lazy chunk regardless of whether anything in the app
+ever renders it. 245 chunks shipped to every deploy; the finding's own methodology (a whole-`web/src`
+grep for any quoted literal matching one of the 245 filenames) counted "36 referenced, 209 not."
+
+**The re-derived number is 4, not ~36 — and here is the disconfirming evidence, checked before
+trusting the cached figure.** Reproducing that same literal-grep methodology live today
+(`grep` every `.ts`/`.tsx` file under `web/src`, excluding `types.ts`, `Icon.tsx`, `__mocks__/`,
+and `*.test.*`, for a quoted string matching one of the 245 icon filenames) finds **35** matches —
+close to the ticket's cached 36, so the numbers had only drifted by one, as expected. But that
+grep counts a name as "referenced" if the *text* appears anywhere as a quoted string, and this
+codebase's `<Icon>` component (`web/src/components/icons/uswds/Icon.tsx`) is imported by **exactly
+one file**: `web/src/pages/Login.tsx`. Grepping for `<Icon\b` across `web/src` (excluding docstring
+examples in `Icon.tsx` itself and `*.test.tsx`) turns up exactly four call sites, all in that one
+file, all inline literals:
+
+```tsx
+<Icon name="check" className="h-3 w-3 text-green-500" title="Check (h-3)" />
+<Icon name="close" className="h-4 w-4 text-red-400" title="Close (h-4)" />
+<Icon name="warning" className="h-5 w-5 text-yellow-500" title="Warning (h-5)" />
+<Icon name="info" className="h-6 w-6 text-accent" title="Info (h-6)" />
+```
+
+The other 31 matches from the whole-file literal grep are coincidental: words like `settings`,
+`person`, `search`, `list`, `home`, `work`, `public`, `menu`, `star`, `delete`, `edit`, `lock`,
+`timer` etc. are quoted strings elsewhere in the app for unrelated reasons (status values, route
+segments, generic identifiers) — and several apparent "icon usages" that surfaced in that search
+(`DocumentTypeIcon`, `StatusIcon`, `ColumnStatusIcon`, `IssueStatusIcon` in
+`ContextTreeNav.tsx`/`IssuesList.tsx`/`KanbanBoard.tsx`/`pages/App.tsx`, plus
+`VisibilityDropdown.tsx`'s `LockIcon`/`GlobeIcon`/`CheckIcon`) turned out on inspection to be
+custom hand-written inline `<svg>` components, entirely unrelated to the USWDS `<Icon>` system.
+Since `<Icon>` has no aliased import and no `name={someVariable}` call site anywhere (every call
+is a literal), there is no code path by which any of those other 31 names could reach the
+component's `name` prop. **`e2e/icons.spec.ts` independently corroborates this**: it was already
+asserting `iconsContainer.locator('svg[role="img"]')` has count **4** on the login page, by name
+(check/close/warning/info), before this ticket touched anything.
+
+**The fix — extending the same generator, not inventing a second mechanism.**
+`web/scripts/generate-icon-types.ts` already scanned `@uswds/uswds/dist/img/usa-icons/` to write
+`types.ts`'s full `IconName` union (unchanged: still all 245 names, for autocomplete/type-safety on
+any icon the sprite ships, whether used yet or not — verified byte-identical before/after this
+change). It now also scans `web/src` for every `<Icon name="...">` call and writes a second file,
+`usedIcons.generated.ts`: a **static, eager** import map (`Record<string, SvgComponent>`) covering
+only the icon names actually found. The scan itself lives in a new shared module,
+`web/src/components/icons/uswds/scanUsedIcons.ts`, so it can never drift from what the regression
+test (below) checks — both call the exact same function. `Icon.tsx` now renders from this map
+instead of the whole-directory glob; `lazy`/`Suspense`/the per-icon module cache are gone entirely,
+since eager, statically-imported components need none of that machinery. A name that's a valid
+USWDS icon but absent from the map (a new `<Icon name="...">` added without re-running the
+generator) renders `null` with a `console.warn` telling the developer to run
+`pnpm generate:icon-types` — same graceful-degradation shape the old "unknown icon name" path
+already had, not a build break.
+
+**Workflow change for adding a new icon (read this before adding one).** Previously, writing
+`<Icon name="whatever">` "just worked" the moment the icon existed in the USWDS sprite, because the
+whole directory was eagerly globbed. **That is no longer true.** After adding a new `<Icon
+name="...">` call, run `pnpm --filter @ship/web generate:icon-types` and commit the regenerated
+`usedIcons.generated.ts` alongside it — otherwise the name still type-checks (it's in `types.ts`'s
+full union) but renders nothing at runtime until the generator is re-run. This is the deliberate
+tradeoff the finding called for: a developer workflow step in exchange for not shipping 209 (now
+potentially more, as the app grows) icons nobody uses. The new regression test below exists
+specifically to catch the failure mode where someone forgets this step and it slips past review.
+
+**Measured, before/after.** Methodology: build with `pnpm build` (`tsc && VITE_API_URL= vite
+build`) run **from `web/`** — this repo's established convention
+(`audit/bundle/baseline.md` §"Fidelity check", repeated in the TRO-197/198/199/200/202 entry above)
+because Tailwind's `content` globs resolve against the build's CWD. "Before" was built from this
+branch's unmodified base commit (`a8f2bb054b4a8b981c98c0b67f8f7a3123449b21`) in an isolated
+`git worktree add --detach` copy with `node_modules`/`shared/dist` symlinked in from this worktree
+(same tool versions, no separate install) — not by mutating this worktree, same precedent as the
+BUN-1..6 entry above. "After" is this worktree with only the 5 files this ticket touches changed
+(confirmed via `git diff --stat` against the before commit). Entry-closure and total-dist figures
+are `node audit/bundle/measure.mjs web/dist <label>` (unmodified, existing tool) at gzip level 9,
+kB = 1000 bytes. Icon-chunk-specific count/bytes use the same filename-stem classification
+`audit/bundle/baseline.md` describes ("everything else lowercase-alphanumeric → USWDS icon
+chunks") via a one-off script, also gzip level 9.
+
+| Metric | Before | After | Change |
+|---|---:|---:|---:|
+| Icon chunks emitted | 245 | **0** | −245 |
+| Icon chunk bytes (raw / gzip) | 106.35 kB / 75.30 kB | **0 / 0** | −106.35 / −75.30 |
+| Total JS chunks emitted | 312 | **67** | −245 |
+| Entry chunk `index-*.js` (raw / gzip) | 118.34 kB / 31.95 kB | **78.12 kB / 23.54 kB** | −40.22 kB / −8.41 kB (−34.0% / −26.3%) |
+| Initial-load closure, `/login` (raw / gzip) | 410.66 kB / 117.61 kB | **370.47 kB / 109.22 kB** | −40.19 kB / −8.39 kB |
+| `/docs` route closure (gzip) | 182.36 kB | **173.97 kB** | −8.39 kB |
+| `/documents/:id` route closure (gzip) | 212.25 kB | **203.84 kB** | −8.41 kB |
+| Total dist, excl. manifest (raw / gzip) | 3370.09 kB / 1774.16 kB | **3223.55 kB / 1690.45 kB** | −146.54 kB / −83.71 kB |
+
+The total-dist delta reconciles exactly: icon-chunk removal (−106.35/−75.30 kB) plus the
+entry-chunk reduction (−40.22/−8.41 kB) sums to −146.57/−83.71 kB, matching the observed total to
+within rounding, confirming no other file changed between the two builds.
+
+**Entry-chunk savings are larger than the original finding estimated (~3.6 kB gzip), and here's
+why.** The old glob didn't just produce a name→string lookup table; each of the 245 entries was a
+`() => import('/node_modules/.../X.svg?react')` closure, and Rollup has to keep bookkeeping for
+every one of those 245 dynamic-import call sites in the chunk that references them (the entry
+chunk, since `Icon.tsx` is itself eagerly reachable from `Login.tsx`). Removing all 245 — not just
+the 4 that survive as static imports — removes that bookkeeping too, not merely a shorter lookup
+table.
+
+**Verification.**
+- `pnpm --filter @ship/web type-check` — clean (the generated `usedIcons.generated.ts` needed one
+  addition: `/// <reference types="vite-plugin-svgr/client" />`, since this repo had never
+  statically imported a `*.svg?react` module before — only ever globbed one — so the ambient
+  `declare module "*.svg?react"` from `vite-plugin-svgr/client.d.ts` had never been pulled in).
+- `pnpm --filter @ship/web test` — 463/463 passed (58 files), including the new regression suite.
+- `pnpm --filter @ship/web lint` — 0 errors in touched files.
+- `pnpm exec playwright test e2e/icons.spec.ts` — 1/1 passed against a real Chromium build,
+  confirming all 4 icons still render as `svg[role="img"]` with `fill="currentColor"` on `/login`.
+
+**Regression test** (`web/src/components/icons/uswds/Icon.test.tsx`, new `describe` block "Icon
+liveness — usedIcons.generated.ts must not drift from web/src"): re-runs the exact same
+`scanUsedIconNames` function the generator uses against the live `web/src` tree, then asserts every
+name it finds is present in `usedIcons.generated.ts`'s map and renders a real `<svg>` without
+throwing. Verified this actually catches the regression it's meant to catch, not just a vacuous
+pass: temporarily removed `close` from the generated map and re-ran — 2 tests failed
+(`expected undefined to be defined` on the map-membership check, `expected null not to be null` on
+the render check) — then restored the file and re-ran clean.
+
+**Rollback.** Revert this commit (`git revert`). That restores the whole-directory
+`import.meta.glob` in `Icon.tsx` and deletes `usedIcons.generated.ts`/`scanUsedIcons.ts`; no schema,
+API, or non-icon frontend code is touched. `types.ts` is untouched by the revert either way (its
+generation logic and output are identical before and after this change).
+
+---
+
 ## TRO-244 (RULE-4) — CI pipeline was missing 3 of the 7 required checks (coverage, dependency audit, security scan)
 
 **What was broken.** Assignment rule 4 requires exactly 7 CI checks: build, lint, type-check, test,
