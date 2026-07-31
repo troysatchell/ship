@@ -68,6 +68,63 @@ The `.gitignore` lines revert normally either way.
 
 ---
 
+## TRO-236 — [TF-3] Pinned Terraform 1.6.0 can no longer `init`; bumped to current 1.15.8
+
+**What was broken.** `terraform/.terraform-version` (`d826517`) pinned Terraform to `1.6.0`.
+HashiCorp's provider-signing key valid at that historical release has since expired, so `terraform
+init` on a clean machine fails installing *any* provider — `hashicorp/random` and `hashicorp/aws`
+both error `error checking signature: openpgp: key expired`. Reproduced verbatim against the flat
+root (`terraform/`) with a freshly downloaded `1.6.0` binary (no cached provider plugins, no prior
+`.terraform/`). Every root config that reads this pin (there is exactly one `.terraform-version`
+file in the repo, and `TRO-235`/TF-2 already converged the flat root as the sole AWS root, so
+`environments/prod` no longer exists to hold a second copy) inherits the same failure via tfenv's
+upward directory search: `terraform/` (flat root), `terraform/environments/dev`,
+`terraform/environments/shadow`, `terraform/bootstrap`, and `terraform/render` (added since the
+baseline audit, by TF-10) all resolve to `terraform/.terraform-version` since none of them carries
+its own copy.
+
+**What changed.** Bumped `terraform/.terraform-version` from `1.6.0` to `1.15.8` — the current
+stable release (verified via `https://checkpoint-api.hashicorp.com/v1/check/terraform` and GitHub's
+`releases/latest`, published 2026-07-08, not a prerelease). No `required_version` constraint
+changed: the flat root, `bootstrap`, `dev`, and `shadow` all declare `>= 1.6.0` (a floor, already
+satisfied), and `terraform/render` declares `>= 1.9.0` (also satisfied by `1.15.8`; a lower bump
+like `1.9.x` would have worked for the AWS roots but this repo also has to satisfy render's higher
+floor, and it made no sense to leave `.terraform-version` sitting mid-way between two roots'
+requirements when "current release" is what the finding asked for).
+
+**How to run it.**
+
+```bash
+# each line runs in its own subshell so `cd` never persists into the next line
+# (a shared `cd terraform` followed by a relative `cd terraform/environments/dev`
+# would resolve to the nonexistent terraform/terraform/environments/dev)
+(cd terraform && terraform init -backend=false)   # flat root — no AWS creds/backend needed to prove init
+(cd terraform/environments/dev && terraform init -backend=false)
+(cd terraform/environments/shadow && terraform init -backend=false)
+(cd terraform/render && terraform init)            # local backend, no -backend=false needed
+```
+
+All four succeeded with a freshly downloaded `1.15.8` binary (`Terraform has been successfully
+initialized!`), each on a clean run with no pre-existing `.terraform/` or lock file for that
+directory (render's pre-existing committed `.terraform.lock.hcl` was reused unchanged — confirmed
+via `git status` showing no diff on it). The same `1.6.0` binary against the same flat root, run
+first, reproduced the reported failure exactly. `.terraform/` caches and the lock files `init`
+generated for the flat root, `dev`, and `shadow` (none of which are committed — see
+`.gitignore:67-77`) were removed afterward so `terraform/` carries only the one-line pin change;
+`git status --short terraform/` shows `M terraform/.terraform-version` and nothing else.
+
+**Not covered by this ticket.** TF-4 (flat root has no committed `.terraform.lock.hcl` — providers
+float) and TF-1 (no deletion protection on prod data stores) are separate findings, untouched here.
+No regression test applies — this is a Terraform CLI/tooling pin, not application code; the
+before/after `terraform init` transcripts above are the evidence in place of a vitest test, per the
+ticket's regression-test note.
+
+**How to roll it back.** `git revert <this commit>` restores `1.6.0` — which will immediately fail
+`init` again on any machine trusting HashiCorp's current provider registry, so there is no
+scenario where reverting is desirable; it exists only as a mechanical undo.
+
+---
+
 ## TRO-299 (TF-10) follow-up — live Render deployment adopted into Terraform state via `import`; post-import plan is a clean no-op
 
 **What was added.** Maintainer decision 2026-07-30 resolved the TF-10 entry's HOLD: adopt the
