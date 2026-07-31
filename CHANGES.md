@@ -8,6 +8,64 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-245 [RULE-3] — verified every Phase 2 bug fix actually shipped the regression test it claimed
+
+**What this is.** RULE-3 is the assignment-implementation rule that every bug fixed in this
+project's remediation must ship with a regression test that would have caught it. It is not one of
+the audit's 68 numbered findings. The 5 highest-value fixes (DB-1, ERR-1, ERR-2, API-1,
+TEST-5/ERR-6) were already marked Done in Linear, meaning each was supposed to have already merged
+with such a test. This ticket's job was to **verify** that claim per-finding — not re-implement any
+fix — and close any gap found.
+
+**Verification method.** For each finding: located the merged fix and its regression test on
+`main`, read the test to confirm it asserts the real invariant (not just "didn't crash"), confirmed
+it lives in a vitest file the gate actually executes (`api/src/**/*.test.ts` /
+`web/src/**/*.test.ts(x)`, never only `e2e/*.spec.ts`), then — wherever feasible — temporarily
+reintroduced the historical bug in the worktree (never committed), re-ran the test, confirmed a
+genuine `AssertionError` (not an import/type error), and restored the file via `git checkout --`.
+All five were verified this way (revert-and-watch), not by reading alone.
+
+| Finding | Ticket | Regression test | Result |
+|---|---|---|---|
+| DB-1 | TRO-178 | `api/src/db/__tests__/migrationRunner.test.ts`, `verifyMigrations.test.ts` | PASS — reintroduced the historical "swallow any *already exists* error" catch in `runPendingMigrations`; 2 tests went red with `AssertionError: promise resolved ... instead of rejecting` (one in `migrationLock.test.ts` too, an unrelated file exercising the same code path). Restored, green again. |
+| ERR-1 | TRO-188 | `web/src/components/editor/SyncStatusIndicator.test.tsx` | PASS — reverted `deriveSyncIndicator` to trust `syncStatus` alone (the pre-fix behavior); 5 tests went red reproducing the exact "Saved"/"Cached" data-loss lie. Restored, green again. |
+| ERR-2 | TRO-189 | `api/src/collaboration/__tests__/session-revocation.test.ts` | PASS — made `revokeConnection` a no-op (session authenticated once at upgrade, never re-checked, matching the historical defect); 4 of 5 tests went red (the control case, which needs no revocation, correctly stayed green) with real socket/database assertions (`closed` stayed `false`, a post-revocation write reached `documents`). Restored, green again. |
+| API-1 | TRO-172 | `api/src/middleware/__tests__/rate-limit.test.ts`, `web/src/lib/queryClient.test.ts`, `web/src/components/MutationErrorToast.test.tsx` | PASS — reverted `shouldRetryRequest` to treat 429 as permanent like every other 4xx: 1 test red directly, 6 more red in dependent files (`PersonEditor.test.tsx`, `UnifiedDocumentPage.throttledRead.test.tsx`) proving the retry policy is exercised broadly. Separately reverted `apiRateLimitKey`/`identityLimit` to the old per-IP/100-per-minute config: 7 tests went red. Restored both files, green again. |
+| TEST-5 / ERR-6 | TRO-227 | `web/src/components/editor/CommentDisplay.test.ts` | PASS — reverted the plugin's `view()` lifecycle to the pre-fix behavior (blur/click-away had no handler; Escape required the input to already have focus); the 3 dismissal-path tests went red (happy-path and destroy-path tests correctly stayed green). Restored, green again. |
+
+**One gap found and closed, precisely scoped.** No test previously spawned the actual `migrate.ts`
+CLI process — `migrationRunner.test.ts`/`verifyMigrations.test.ts` both call `runMigrations()`
+directly as a function, which cannot observe whether `migrate.ts`'s own try/catch actually converts
+a rejection into `process.exit(1)`. Added
+`api/src/db/__tests__/migrateCli.test.ts`: spawns the real `tsx src/db/migrate.ts` (what
+`db:migrate` runs) against an unreachable `DATABASE_URL` and asserts the process exits non-zero and
+reports the failure on stderr.
+
+**Stated precisely, per the claim-provenance rule:** this new test does **not** reproduce DB-1's
+specific historical defect — verified by swapping in the actual pre-DB-1-fix `migrate.ts` (`git
+show <pre-TRO-178 commit>:api/src/db/migrate.ts`, never committed) and re-running it: the test
+**stayed green**, because the old bug only swallowed errors whose message contains "already
+exists", and a refused database connection does not match that string. DB-1's exact shape is what
+`migrationRunner.test.ts`'s revert-and-watch above already proves red at the `runMigrations()`
+level. This new test instead closes the adjacent, previously-unverified gap: that the CLI wrapper
+forwards *any* `runMigrations()` failure — not only DB-1's specific one — into a non-zero exit
+code, which is what "non-zero exit on failure" requires end-to-end and what no prior test checked
+by spawning the real process.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/db/__tests__/migrateCli.test.ts
+```
+
+**No production code changed.** All 5 findings' fixes were confirmed correct as merged; nothing
+was found incomplete.
+
+**Rollback.** Remove `api/src/db/__tests__/migrateCli.test.ts`.
+
+---
+
 ## TRO-238 (TF-5) — uploads S3 lifecycle rule had no `filter`/`prefix`; added an explicit empty `filter {}`
 
 **What was broken.** `aws_s3_bucket_lifecycle_configuration.uploads` — the rule that aborts stray
