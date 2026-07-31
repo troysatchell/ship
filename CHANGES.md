@@ -21,6 +21,94 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-232 — [TEST-10] E2E worker auto-sizing collapses to 1 worker on macOS
+
+**What was broken.** `playwright.config.ts`'s `getWorkerCount()` derived local worker count from
+`os.freemem()`. macOS deliberately keeps reported free memory near zero — spare RAM goes to
+filesystem cache and memory compression instead of being reported "free" — so `os.freemem()` is not
+a meaningful "available memory" signal there. The audit measured this directly on a 24GB/14-core Mac:
+`os.totalmem()` 24.0GB, `os.freemem()` **0.3GB**, giving `memoryBasedLimit =
+floor((0.3 − 2) / 0.5) = −4`, clamped to `Math.max(1, Math.min(-4, 14))` = **1 worker** — a ~4x
+slowdown (measured suite time was ~9 minutes at `PLAYWRIGHT_WORKERS=4`, the value every audit
+measurement pinned) with no error or warning. Re-ran the exact numbers against this worktree's own
+machine (also a 24GB/14-core Mac, `os.freemem()` measured at 0.35GB during this fix) and got the same
+collapse from the old logic — this is not a one-machine anecdote.
+
+**CI is unaffected — observed, not inferred.** `getWorkerCount()` (now `computeE2eWorkerCount()`,
+see below) checks `if (isCI) return 4;` *before* the memory calculation runs at all
+(`playwright.config.ts`'s call site passes `isCI: !!process.env.CI`, matching the original
+`if (process.env.CI)` short-circuit at old `playwright.config.ts:31-33`). CI never reaches the
+buggy code path, with or without this fix. This ticket is a local-developer-experience fix only —
+it does not change, and was never going to change, anything about CI's worker count. A developer who
+already sets `PLAYWRIGHT_WORKERS` explicitly was also unaffected before this fix (that override wins
+over everything, both before and after) and remains unaffected now.
+
+**What changed.** Extracted the calculation out of `playwright.config.ts` into a new pure, exported
+function, `computeE2eWorkerCount()` in `web/src/lib/computeE2eWorkerCount.ts` — chosen over the other
+two ticket-sanctioned approaches (a universal `Math.max(4, ...)` floor, or leaving the calculation
+inline) because a `totalmem()`-based fraction applied only on `darwin` fixes the actual mechanism
+(macOS hides "free" memory, not "total" memory) without hardcoding a fixed worker count that would
+over-provision a genuinely small/low-memory Mac. Non-Darwin platforms (Linux, CI) keep the original
+`os.freemem()`-based math byte-for-byte unchanged — the audit's own text calls that heuristic "sound
+on Linux and wrong on Darwin," so only the wrong half changes.
+
+- On `platform === 'darwin'`: `memoryBasedLimit = floor((totalMemGB * 0.5 − 2) / 0.5)` instead of
+  `floor((freeMemGB − 2) / 0.5)`. On the audit's measured machine this now computes 14 (capped at
+  `cpuCores`), not 1.
+- Every other platform: identical freemem-based formula as before.
+- Result is always clamped to `Math.max(1, Math.min(memoryBasedLimit, cpuCores))` — never 0/negative,
+  never more than `cpuCores` — preserving the file's documented memory-safety intent (the header
+  comment's 8-workers-vs-vite-dev crash history is about `vite dev` vs `vite preview`, unrelated to
+  and unchanged by this fix; the config already uses `vite preview`).
+- `playwright.config.ts`'s `getWorkerCount()` is now a 9-line wrapper that gathers real `os`/
+  `process.env` values and calls the extracted function; behavior for the `PLAYWRIGHT_WORKERS`
+  override and the CI short-circuit is unchanged.
+
+**Why the extraction, not just a fix in place.** `scripts/factory/gate.sh`'s unit-test gate only
+executes `api/src/**/*.test.ts` and `web/src/**/*.test.ts(x)` — `playwright.config.ts` itself (repo
+root, no workspace `tsconfig`/vitest project covers it) is never exercised by any test runner the
+gate calls. Moving the pure calculation to `web/src/lib/computeE2eWorkerCount.ts` (picked up by
+`web/vitest.config.ts`, which has no `include` restriction) gives it real, gate-executed regression
+coverage. The function takes `platform`/`totalMemGB`/`freeMemGB`/`cpuCores`/`isCI`/
+`explicitOverride` as plain parameters rather than reading `os`/`process.env` itself, so tests need
+no mocking.
+
+**Regression test — `web/src/lib/computeE2eWorkerCount.test.ts`.** Includes a verbatim copy of the
+pre-fix freemem-only formula (`oldBuggyCalculation`, not a re-derivation) and asserts it collapses to
+1 on the audit's exact measured Darwin scenario (24GB total / 0.3GB free / 14 cores) — proving the
+bug independently of today's fix. Separately confirmed red-for-the-right-reason before committing:
+temporarily replaced `computeE2eWorkerCount`'s Darwin branch with the old freemem-only formula and
+re-ran the suite — the two Darwin-collapse assertions (`toBeGreaterThanOrEqual(2)`) failed with
+`expected 1 to be greater than or equal to 2`, then restored the fix and re-ran to 9/9 green. Other
+cases cover: never exceeds `cpuCores` on Darwin with abundant memory; never returns 0/negative on a
+low-memory Darwin machine; Linux/freemem-based path numerically unchanged (including a genuinely
+low-freemem Linux case, which correctly still collapses toward 1 — that heuristic is sound there and
+deliberately untouched); `isCI` returns 4 regardless of platform/memory; an explicit
+`PLAYWRIGHT_WORKERS` override wins over everything; a garbage override string falls through to the
+normal calculation.
+
+**How to verify locally.**
+
+```bash
+pnpm --filter @ship/web run type-check
+cd web && npx vitest run src/lib/computeE2eWorkerCount.test.ts
+cd .. && npx playwright test --list   # confirms the relative import resolves under Playwright's own loader
+node -e "const os=require('os'); console.log({platform:os.platform(), totalMemGB:os.totalmem()/2**30, freeMemGB:os.freemem()/2**30, cpuCores:os.cpus().length})"
+```
+
+**NOT verified.** Did not run the full `pnpm test:e2e` suite end-to-end at the new higher worker
+count on this machine (out of scope for a config-calculation fix, and the existing suite's own
+flake/timing issues are tracked separately under TEST-3/TEST-11) — verification here is limited to
+the calculation itself (unit-tested) and confirming Playwright successfully loads the config and
+lists all 874 tests with the new import in place.
+
+**Roll back.** Revert this ticket's commits. The change is confined to `playwright.config.ts` (one
+function body replaced by a 9-line wrapper plus one new import) and two new files under
+`web/src/lib/`; no schema, API, or CI change to undo. Reverting restores the original inline
+freemem-only calculation and its macOS behavior exactly as it was.
+
+---
+
 ## TRO-280 — [API-7] Rate limits are per-process, so the real ceiling is N instances × configured
 
 **What was broken.** `api/src/middleware/rate-limit.ts`'s `perSourceIpLimiter`/`perIdentityLimiter`
