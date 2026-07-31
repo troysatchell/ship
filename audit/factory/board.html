@@ -67,11 +67,18 @@
   .row.bad { border-left-color:var(--bad); background:var(--bad-wash); }
   .row.wait { border-left-color:var(--wait); background:var(--wait-wash); }
   .row-head { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
-  .tkt { font-weight:700; letter-spacing:.04em; }
+  /* Title is the primary label — what to go read is more useful at a glance than
+     which numbered bucket it's filed under. The ticket ID survives as a small
+     tag so it's still there to cross-reference against Linear/PRs. */
+  .title { font-family:var(--sans); font-weight:700; font-size:14.5px; flex:1 1 220px; }
+  .tkt { font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.04em;
+         color:var(--muted); border:1px solid var(--line); border-radius:2px; padding:1px 7px; }
   .verdict { color:var(--muted); }
   .row.bad .verdict { color:var(--bad); }
   .row.ok .verdict { color:var(--ok); }
   .commits { margin-left:auto; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  /* What the worktree is doing right now, not just which ticket it's on. */
+  .live { font-family:var(--mono); font-size:12px; color:var(--accent); margin-top:4px; }
   .row-meta { display:flex; flex-wrap:wrap; gap:14px; color:var(--muted); font-size:12px; margin-top:3px; }
   .empty { color:var(--muted); padding:9px 0 9px 15px; }
 
@@ -112,16 +119,16 @@
 <div class="wrap">
   <header>
     <h1>Ship Factory</h1>
-    <span class="stamp">main@126be6e · Wed, 29 Jul 2026 17:30:23 GMT</span>
+    <span class="stamp">main@e9f4a65 · Fri, 31 Jul 2026 17:28:28 GMT</span>
   </header>
 
   <div class="strip">
     <div class="cell"><span class="k">In flight</span><span class="v">0</span></div>
-    <div class="cell"><span class="k">Open PRs</span><span class="v">1</span></div>
+    <div class="cell"><span class="k">Open PRs</span><span class="v">0</span></div>
     <div class="cell"><span class="k">First-attempt pass</span>
-      <span class="v ">1/1</span></div>
+      <span class="v ">14/24</span></div>
     <div class="cell"><span class="k">Spend (est.)</span>
-      <span class="v">$512</span></div>
+      <span class="v">$1330</span></div>
   </div>
 
   <section class="panel">
@@ -131,22 +138,30 @@
 
   <section class="panel">
     <h2>Open pull requests</h2>
-    <ul>
-  <li class="row wait">
-    <div class="row-head">
-      <span class="tkt">#4</span>
-      <span class="pill wait">CI pending</span>
-      
-    </div>
-    <div class="row-meta"><span>feat(factory): status command, published control board, cost analysis</span></div>
-  </li></ul>
+    <ul><li class="empty">No open pull requests.</li></ul>
   </section>
 
   
 <section class="panel">
   <h2>Gate trend</h2>
-  <p class="lede"><strong>1/1</strong> tickets passed the gate on their first attempt (100%).</p>
+  <p class="lede"><strong>14/24</strong> tickets passed the gate on their first attempt (58%).</p>
   
+  <table>
+    <caption>Which gate fails, and how often</caption>
+    <thead><tr><th scope="col">Gate</th><th scope="col">Failures</th><th scope="col"></th></tr></thead>
+    <tbody>
+      <tr><th scope="row">regression-test</th><td class="num">10</td>
+      <td class="barcell"><div class="bar" style="width:100%"></div></td></tr>
+      <tr><th scope="row">tests:api</th><td class="num">3</td>
+      <td class="barcell"><div class="bar" style="width:30%"></div></td></tr>
+      <tr><th scope="row">tests:web</th><td class="num">3</td>
+      <td class="barcell"><div class="bar" style="width:30%"></div></td></tr>
+      <tr><th scope="row">tests:not-weakened</th><td class="num">2</td>
+      <td class="barcell"><div class="bar" style="width:20%"></div></td></tr>
+    </tbody>
+  </table>
+  <p class="note">The same gate failing repeatedly is a defect in the agent brief, not three careless
+     agents. That is the signal this table exists to surface.</p>
 </section>
   
 <section class="panel">
@@ -154,16 +169,16 @@
   <p class="basis">List-rate estimate over observed token counts — <strong>not billed spend</strong>.
      On a subscription plan the marginal cost is zero and this is API-equivalent value.</p>
   <div class="tokens">
-    <div><span class="k">output</span><span class="v">3,871,633</span></div>
-    <div><span class="k">cache write</span><span class="v">27,837,062</span></div>
-    <div><span class="k">cache read</span><span class="v">483,144,046</span></div>
-    <div><span class="k">raw input</span><span class="v">18,184</span></div>
+    <div><span class="k">output</span><span class="v">9,318,264</span></div>
+    <div><span class="k">cache write</span><span class="v">49,048,470</span></div>
+    <div><span class="k">cache read</span><span class="v">1,856,268,825</span></div>
+    <div><span class="k">raw input</span><span class="v">35,079</span></div>
   </div>
   <div class="cachebar" role="img"
-       aria-label="94 percent of token volume is cache reads">
-    <div class="fill" style="width:93.8%"></div>
+       aria-label="97 percent of token volume is cache reads">
+    <div class="fill" style="width:96.9%"></div>
   </div>
-  <p class="note">94% of all token volume is cache reads, billed at one tenth
+  <p class="note">97% of all token volume is cache reads, billed at one tenth
      the input rate. The economics of this workflow are prompt-cache economics.</p>
 </section>
   
