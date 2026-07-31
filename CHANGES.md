@@ -21,6 +21,439 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-186 (DB-9) — Sprint board and document view fired byte-identical requests two and three times
+
+**What was broken.** Two unrelated components shared one root cause: a `useEffect` that called
+`apiGet`/`fetch` directly, with no cleanup to cancel the request React 18 `StrictMode` discards.
+
+- `web/src/pages/TeamMode.tsx`'s initial-load effect (previously lines 203-209) ran
+  `Promise.all([fetchTeamGrid(...), fetchProjects(), fetchAssignments()])` with no cleanup function
+  at all. `StrictMode` (dev only) mounts every component twice — setup, cleanup, setup again — to
+  surface exactly this class of bug. With nothing to cancel the first mount's three requests, the
+  browser sent them anyway: `GET /api/team/grid`, `GET /api/team/projects`, and
+  `GET /api/team/assignments` each fired twice per page load. `audit/db-query/raw/flow-requests.json`
+  ("Load sprint board") caught this directly.
+- `web/src/components/editor/BacklinksPanel.tsx`'s poll effect (`fetchBacklinks()`, called on mount
+  and every 5s via `setInterval`) already tracked a `cancelled` flag from the TRO-196/ERR-9 fix, but
+  that flag only suppressed the *state update* from a stale response — it never cancelled the
+  underlying `fetch`, so the discarded first mount's request still reached the server. Audit
+  evidence: `GET /api/documents/:id/backlinks` fired 3x on one document view (2x from the
+  `StrictMode` double-mount, plus one legitimate 5-second poll tick landing inside the 5s
+  observation window the audit's harness waits before moving on).
+
+Both are genuinely a frontend duplicate-request bug, not a server issue: the API returns exactly
+one response per request it receives (confirmed by reading `api/src/routes/team.ts` and
+`api/src/routes/backlinks.ts` — each handler runs once per HTTP request, no fan-out).
+
+**What changed — one fix pattern, applied to both.** Neither file was migrated to `@tanstack/react-query`
+(the codebase's usual dedup mechanism for 13 other `use*Query.ts` hooks): `TeamMode.tsx`'s
+grid/projects/assignments fetches carry pagination and optimistic-assignment state that would need a
+real redesign to move onto query-cache semantics, and `BacklinksPanel.tsx`'s poll-plus-failure-mode-
+throttling behavior (TRO-196/ERR-9's `lastLoggedFailureModeRef`) is asserted exactly, line-for-line
+call-count, by `BacklinksPanel.errorLogging.test.tsx` — routing its errors through react-query's
+global `QueryCache.onError` would reintroduce the console-error storm that ticket fixed. Instead,
+both effects now create an `AbortController`, thread its `signal` into the fetch call(s), and call
+`controller.abort()` in the effect's cleanup — the same cancellation idiom React's own docs recommend
+for exactly this failure mode, and a natural extension of `BacklinksPanel.tsx`'s existing (state-only)
+`cancelled` guard rather than a new pattern.
+
+- `web/src/lib/api.ts`: `apiGet(endpoint)` → `apiGet(endpoint, options?: { signal?: AbortSignal })`,
+  backward compatible (all 51 pre-existing call sites pass no second argument).
+- `web/src/pages/TeamMode.tsx`: `fetchTeamGrid`/`fetchProjects`/`fetchAssignments` each take an
+  optional `signal`, forward it to `apiGet`, and treat a resulting `AbortError` as a silent no-op
+  (added `isAbortError`) rather than surfacing `setError`. The initial-load effect creates one
+  `AbortController`, passes its signal into all three calls, and aborts it on cleanup; a `cancelled`
+  guard (same idiom as `BacklinksPanel.tsx`) stops the discarded first mount's `Promise.all(...)
+  .finally()` from calling `setLoading(false)` before the real (second) mount's fetches resolve.
+  Other call sites (`showArchived` toggle, infinite-scroll `fetchMoreSprints`) are unaffected — they
+  are user-triggered, not part of the `StrictMode` double-mount, and were never duplicated.
+- `web/src/components/editor/BacklinksPanel.tsx`: added an `AbortController`, passed its `signal`
+  into the `fetch(...)` call, and call `controller.abort()` in the existing cleanup alongside the
+  pre-existing `cancelled = true` and `clearInterval(intervalId)`. No other line changed — the
+  existing `if (!cancelled)` guards already wrapping every state update and every
+  `console.debug`/`console.error` call in `fetchBacklinks()` (the TRO-196/ERR-9 fix) already no-op
+  correctly for an aborted request; this only stops the wasted request from reaching the server in
+  the first place.
+
+**Regression tests** (vitest, run by the gate):
+- `web/src/pages/TeamMode.duplicateRequests.test.tsx`
+- `web/src/components/editor/BacklinksPanel.duplicateRequests.test.tsx`
+
+Both wrap the component in `<React.StrictMode>` — a single ordinary mount (what
+`BacklinksPanel.test.tsx` and `.errorLogging.test.tsx` already use) never exercises this bug, since
+React only double-invokes effects under `StrictMode`; a test that didn't force it would pass
+unchanged on the pre-fix code and prove nothing. Both mocks are `AbortSignal`-aware: a mock that
+always resolves regardless of `signal` would report "2 calls" whether or not the fix is present,
+because the discarded first mount's `fetchTeamGrid()`/`fetchBacklinks()` call still *happens* either
+way under `StrictMode` — only whether its request reaches a response changes. Each test asserts
+three things: the endpoint really was invoked twice (proves the test forces the double-mount),
+the first mount's request really was aborted, and exactly one request settles with a real response
+(the proxy for "one request reaches the server and runs its DB queries," which is what DB-9 measures).
+
+Confirmed red-before-green on both, without `git stash` (forbidden — the stash stack is shared
+across concurrent factory worktrees on this machine): saved the fix as a patch
+(`git diff > fix.patch`), `git checkout --` the three source files back to `main`'s state, re-ran —
+`TeamMode.duplicateRequests.test.tsx` failed with `expected +0 to be 1` (no aborted request) and
+`BacklinksPanel.duplicateRequests.test.tsx` failed the same way — then `git apply`'d the patch back
+and confirmed both green, alongside the pre-existing `BacklinksPanel.test.tsx` (2 tests, A11Y-6) and
+`BacklinksPanel.errorLogging.test.tsx` (4 tests, ERR-9), unaffected.
+
+**Measured before/after.**
+
+*Conditions.* Factory worktree `ship_wt_tro_186`, dedicated Postgres (`ship-audit-pg` container,
+`localhost:5433`), seeded via `pnpm db:seed` + `npx tsx audit/seed-augment.ts` to the audit's exact
+target volume — verified 500 documents (254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27
+weekly_retro / 20 person / 15 weekly_review / 15 project / 6 standup / 5 program), 20 users, 813
+`document_associations`, matching `audit/db-query/baseline.md` byte-for-byte. Dev servers on the
+worktree's own ports (API 3352, web 5525). Logged in as `dev@ship.local`.
+
+*HTTP-request level (Playwright, `audit/db-query/raw/flow-capture.mjs` adapted to these ports —
+clean signal, scoped to this worktree's own web server, unaffected by any other worktree's traffic).
+One run pre-fix, three separate runs post-fix, each with 2 iterations (cold/steady) per
+`flow-capture.mjs`'s own convention:*
+
+| Flow | Endpoint | Before | After |
+|---|---|---|---|
+| Load sprint board | `GET /api/team/grid` | 2x (both iterations, both runs) | **1x** (both iterations, all 3 runs — deterministic) |
+| Load sprint board | `GET /api/team/projects` | 2x (both iterations, both runs) | **1x** (both iterations, all 3 runs — deterministic) |
+| Load sprint board | `GET /api/team/assignments` | 2x (both iterations, both runs) | **1x** (both iterations, all 3 runs — deterministic) |
+| View a document | `GET /api/documents/:id/backlinks` | 3x (both iterations) | **2x** in 2 of 3 runs, **1x** in 1 of 3 runs |
+
+The sprint-board reduction is exact and deterministic every time: those three fetches only ever ran
+once per mount, so removing the `StrictMode`-only duplicate takes them cleanly to 1x. Backlinks is
+not fully deterministic because it also polls every 5s — the fix removes the guaranteed
+`StrictMode` duplicate every time (3x → at most 2x, confirmed: never observed above 2x post-fix
+across 3 runs), but whether the count lands at 2x or 1x depends on whether the interval's next
+legitimate tick happens to fall inside the flow's 5-second observation window, which is timing
+noise inherent to the poll, not something this fix controls or should try to control.
+
+*DB query count.* The audit's own methodology (statement logging + marker-bracketed capture) turned
+out to be **unreliable on this shared machine**: `ship-audit-pg` is one Postgres instance shared by
+every concurrent factory worktree, and a repeat of the capture during this measurement caught
+unrelated activity from other worktrees inside the same time-sliced window — a `document_type='wiki'`
+insert titled "Malformed frame async handler doc" (a different ticket's test fixture) landed inside
+my "View a document" slice, and a later attempt caught `Ship-wt-tro_296` running
+`CREATE DATABASE`/`DROP DATABASE`/`TRUNCATE TABLE` mid-capture, inflating one flow's reported count
+from a real ~40 to 588. Both are verifiable in the raw log by their foreign document titles / database
+names, not this worktree's data. Rather than report a contaminated number, per-endpoint query cost
+was instead read directly from source (deterministic, not sensitive to what else is running):
+
+| Endpoint | Source | Non-auth queries | + auth (typical duplicate: session `SELECT` only, `UPDATE` already throttled by DB-2) |
+|---|---|---|---|
+| `GET /api/team/grid` | `api/src/routes/team.ts:14-200` (`getVisibilityContext` + users + workspace + sprints + issues) | 5 | 6 |
+| `GET /api/team/projects` | `api/src/routes/team.ts:200-238` (`getVisibilityContext` + projects) | 2 | 3 |
+| `GET /api/team/assignments` | `api/src/routes/team.ts:265-457` (`getVisibilityContext` + explicit + workspace + issues) | 4 | 5 |
+| `GET /api/documents/:id/backlinks` | `api/src/routes/backlinks.ts:22-73` (`getVisibilityContext` + existence check + backlinks select) | 3 | 4 |
+
+`authMiddleware`'s session-activity `UPDATE` (`api/src/middleware/auth.ts:356-360`) is throttled to
+once per 60s per session since DB-2 (already on `main` before this ticket started) — a duplicate
+call landing seconds after the first never re-pays it, only the session `SELECT`
+(`auth.ts:239-247`) always runs. **Eliminating one duplicate grid + one duplicate projects + one
+duplicate assignments call removes 6+3+5 = 14 DB queries per sprint-board page load** — a fact
+derived from source, not measured live, but exact regardless of concurrent load on the shared
+database, unlike the statement-log approach above. Eliminating backlinks' guaranteed duplicate
+removes a minimum of 4 more per document view (up to 8 when timing also avoids the poll window).
+
+**Correcting the ticket's own estimate.** DB-9's brief cited "Sprint board 51 → ~40 (-22%)" from
+`audit/db-query/baseline.md`. That 51-query baseline predates DB-2 (TRO-179, session-write
+throttling), which already landed on `main` before this ticket started and independently reduced
+the flow's per-request auth cost — the absolute counts do not carry over. Re-running this ticket's
+own (uncontaminated) capture of "Load sprint board" cold-load against the *current* `main` showed
+**42 total queries before this fix**; the 14-query reduction derived above is **-33%** of that
+figure — the same direction as the ticket's estimate and clearing the same ≥20% target, but a
+larger percentage against a smaller (already-improved) baseline, not the same arithmetic.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/pages/TeamMode.duplicateRequests.test.tsx
+pnpm --filter @ship/web exec vitest run src/components/editor/BacklinksPanel.duplicateRequests.test.tsx
+```
+
+**Rollback.** Revert the commit(s) on `fix/db-9-duplicate-requests` touching `TeamMode.tsx`,
+`BacklinksPanel.tsx`, and `api.ts`'s `apiGet` signature (the added second parameter is additive and
+optional, so reverting it is safe independent of the other two), and delete
+`TeamMode.duplicateRequests.test.tsx` and `BacklinksPanel.duplicateRequests.test.tsx`.
+
+---
+
+## TRO-297 (TS-10) — `api/`'s 10 floating/misused-promise sites fixed, both rules promoted to `error` for `api/` only
+
+**Scope, deliberately narrower than the ticket's own definition of done.** The Linear ticket asks
+for `@typescript-eslint/no-floating-promises` and `@typescript-eslint/no-misused-promises` at
+`error` in **all three** packages (api, web, shared), citing ~398 sites total. That is too large
+for one reviewable PR — web alone is ~389 sites across many files. This ticket covers **`api/` only**.
+web and shared stay at `warn`; see "What's still open" below for the recommended follow-up split.
+
+**Live count re-derived, not trusted from the ticket's cache.** The ticket's own text says api has 9
+sites (4 floating + 5 misused). The actual live count, from the command below, was **10** (5
+floating + 5 misused) — one more than cached, because the ticket's count predates
+`session-activity-race.test.ts`'s TRO-300 rewrite, which added a new floating-promise site
+(`createCompletionBarrier`'s counter increment) after the ticket was filed.
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec eslint src --rule \
+  '{"@typescript-eslint/no-floating-promises":"error","@typescript-eslint/no-misused-promises":"error"}'
+```
+**Before:** `✖ 222 problems (10 errors, 212 warnings)`.
+**After (same command):** `✖ 212 problems (0 errors, 212 warnings)` — the 212 remaining warnings are
+all `no-explicit-any`/`no-non-null-assertion` (TS-1/TS-2/TS-4/TS-8, untouched, out of scope here).
+
+**The 10 sites and what each one got, grouped by real decision made (never a blanket `void`):**
+
+1. **`api/src/db/migrate.ts:58`** and **`api/src/db/seed.ts:1259`** — the known top-level
+   `migrate();` / `seed();` calls. Both functions' OWN try/catch only wraps the body *after*
+   `await loadProductionSecrets()` — a call that genuinely throws in production when SSM is
+   unreachable and no `DATABASE_URL`/`SESSION_SECRET` fallback is set (`ssm.ts`'s documented
+   crash-loop path). That rejection escaped both functions' internal error handling entirely and
+   reached the bare top-level call as an unhandled rejection. **Fix: `.catch(...)`** routing through
+   the exact same "log and `process.exit(1)`" shape each function's own try/catch already uses
+   (`Database migration failed:` / `❌ Seed failed:`) — not a new error-reporting convention, the
+   existing one extended to cover the one gap in it.
+2. **`api/src/db/client.ts:40,47`** (`no-misused-promises`, 2 sites) — `process.on('SIGTERM', async
+   () => { ...; await pool.end(); ... })` and the `SIGINT` twin. `process.on()`/`EventEmitter` never
+   awaits a listener's return value, so a `pool.end()` failure during shutdown was an unhandled
+   rejection instead of a clean exit. **Fix:** listeners are now plain (non-async) functions;
+   `pool.end().then(...).catch(...)` routes both outcomes through an explicit `process.exit(0)` /
+   `process.exit(1)`.
+3. **`api/src/collaboration/index.ts:219,1388`** (`no-floating-promises`, `schedulePersist`'s
+   `setTimeout` callback and the `ws.on('close', ...)` final-persist call) — `persistDocument(...)`
+   already catches everything inside its own try/catch and never rethrows; these two call sites only
+   needed `.catch(...)` to cover the narrow case where something throws **before** that try block
+   (e.g. `Y.encodeStateAsUpdate` on a corrupted doc). **Fix:** `.catch()` logging
+   `[Collaboration] Unexpected error scheduling/persisting ... :`.
+4. **`api/src/collaboration/index.ts:1112,1185`** (`no-misused-promises`, 2 sites) —
+   `server.on('upgrade', async (request, socket, head) => {...})` and
+   `wss.on('connection', async (ws, ...) => {...})`, this ticket's stop-for-human file
+   (ERR-1/2/10/11/12's async-ordering hazard). **Read the hazard pattern first, then verified this
+   fix does not touch it:** both handlers' bodies and `await` ordering are byte-for-byte unchanged —
+   ERR-10's "attach the error listener before any `await`" and ERR-11's buffering-listener ordering
+   are still the first statements in `handleConnection`. The only change is mechanical: each async
+   body was extracted into a named `async function` (`handleUpgrade` / `handleConnection`), and the
+   actual `.on()` listener is now a thin **synchronous** wrapper that calls it and attaches
+   `.catch(...)`. This is a real fix, not just lint-satisfaction: `handleUpgrade`'s first statement,
+   `new URL(request.url || '', \`http://${request.headers.host}\`)`, throws a `TypeError` for a
+   syntactically invalid `Host` header — and Node's HTTP parser does not validate `Host`'s grammar,
+   it hands the raw client-controlled header value straight through (confirmed directly against a
+   bare `http.createServer`). Before this fix, that throw was an **unhandled rejection that killed
+   the whole process** — the exact same failure class as ERR-10, one layer up, at the HTTP upgrade
+   request instead of the WS frame. See the regression test below, which reproduces this exact
+   attack and confirms it goes red against the pre-fix shape.
+5. **`api/src/middleware/__tests__/session-activity-race.test.ts:169`** (`no-floating-promises`,
+   test-only code) — `outcome.then(() => { completed += 1; ... })` inside `createCompletionBarrier`.
+   `outcome` is constructed two lines up to **never reject** (a thrown error becomes a tagged
+   `{ ok: false, error }` fulfillment, specifically so this counter can't be short-circuited — see
+   TRO-300's entry above). **Fix: `void`**, the one justified case in this ticket — a `.catch` here
+   would be dead code contradicting the type's own documented invariant.
+6. **`api/src/collaboration/__tests__/malformed-frames.test.ts:633`** (`no-misused-promises`,
+   test-only code) — `const asyncHandler: () => void = async () => { throw ... }`. This line is an
+   **existing regression test** (predating this ticket) that deliberately pins the exact hazard
+   `no-misused-promises` exists to catch: TypeScript's structural typing silently accepts a
+   `Promise<void>`-returning function where `() => void` is expected, so `runFrameHandler`'s runtime
+   guard has to defend the case regardless of whether lint catches any *particular* attempt to
+   construct it. **Fix: scoped `eslint-disable-next-line`**, not a rewrite — rewriting this line to
+   satisfy the rule (e.g. an `as` cast) would make the test's own comment ("no cast is needed to
+   express that, which is precisely the hazard") false, and moving the async function inline as a
+   call argument reproduces the identical violation one line over. No `as any`/`as unknown as`/
+   non-null `!` used anywhere in this ticket's changes.
+
+**`eslint.config.mjs`** — `api/src/**/*.ts` split into its own config block with a new
+`apiCorrectnessRules` (spreads the shared `correctnessRules`, overrides both promise rules to
+`'error'`); `shared/src/**/*.ts` now has its own separate block at the original `warn` (previously
+combined with `api/src` in one `files` glob) so a future widening of the `api/src` override can't
+accidentally catch `shared/src` too. `web/src/**/*.ts(x)` unchanged.
+
+**Regression tests added (all in `api/src/**/*.test.ts`, all confirmed red against the pre-fix code
+before being confirmed green — reverted each fix locally, one at a time, re-ran the exact test,
+confirmed the failure, then restored):**
+- `api/src/db/__tests__/migrateCli.test.ts` — new describe block, forces `loadProductionSecrets()`
+  to reject (`NODE_ENV=production`, empty `DATABASE_URL`/`SESSION_SECRET` so `.env.local` can't
+  refill them, `AWS_ENDPOINT_URL_SSM=http://127.0.0.1:1` for a fast deterministic `ECONNREFUSED`
+  with no real AWS calls) and asserts the failure is reported through `migrate.ts`'s own
+  `Database migration failed:` line, not an unhandled rejection. Pre-fix: stderr contains Node's
+  `triggerUncaughtException` trace instead.
+- `api/src/db/__tests__/seedCli.test.ts` (new file) — identical shape for `seed.ts`, asserting on
+  `❌ Seed failed:`.
+- `api/src/db/__tests__/clientShutdown.test.ts` + `fixtures/sigtermRejectsPoolEnd.ts` (new files) —
+  the fixture imports the real `pool` from `client.ts` (registering the real SIGTERM/SIGINT
+  listeners), monkey-patches `pool.end()` to reject, and calls `process.emit('SIGTERM')` (not a real
+  OS signal — this is testing the listener's own logic, not signal delivery). Asserts the rejection
+  is reported through `Error closing database pool on SIGTERM:`.
+- `api/src/collaboration/__tests__/malformed-frames.test.ts` — one new `it` in the existing ERR-10
+  describe block, reusing its server/fixture/`ProcessCrashRecorder` setup: opens a raw `net.Socket`,
+  sends a hand-crafted WS upgrade request with `Host: exam ple.invalid` (a literal space — Node's
+  HTTP parser passes it through unvalidated), and asserts (a) the crash recorder captured nothing,
+  (b) the server closes the connection, and (c) a fresh, well-formed client can still connect and
+  persist a write afterward — the same "not merely un-crashed but still serving" bar this file's
+  other ERR-10 cases already hold. Needed `socket.resume()` on the client side (a `net.Socket`
+  starts in paused mode; without a `'data'` listener or explicit resume it never observes the
+  server's FIN, so `'close'` never fires within any deadline — nothing to do with the server's
+  actual behavior, discovered while first-drafting this test).
+
+**Verified:**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec tsc --noEmit                     # clean
+pnpm --filter @ship/api lint                                  # exit 0, 0 errors, 212 warnings (any/non-null only)
+pnpm --filter @ship/api exec vitest run \
+  src/db/__tests__/migrateCli.test.ts src/db/__tests__/seedCli.test.ts \
+  src/db/__tests__/clientShutdown.test.ts \
+  src/collaboration/__tests__/malformed-frames.test.ts \
+  src/middleware/__tests__/session-activity-race.test.ts       # 21/21 passed
+```
+
+**What's still open — web's ~389 sites.** Recommend splitting into several follow-up tickets by
+directory rather than one mega-ticket, e.g.: `web/src/pages/*` in 2-3 batches (grouped by feature
+area — this is where the bulk of the sites live, mostly React event handlers), then a smaller
+cleanup ticket for `web/src/components/**` and `web/src/lib/**`. `shared/src` is 0 sites today but
+was deliberately **not** promoted to `error` in this ticket — it has no dedicated ticket verifying
+it stays at zero the way this one did for `api/`, so promoting it would be an unverified drive-by
+even though the count happens to already be zero.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api lint
+pnpm --filter @ship/api exec vitest run src/db/__tests__/migrateCli.test.ts src/db/__tests__/seedCli.test.ts src/db/__tests__/clientShutdown.test.ts
+```
+
+**How to roll it back.** Revert this commit. `eslint.config.mjs`'s `api/src` override reverts to
+`warn`, all ten sites' fixes revert with it (each is additive — a `.catch`/`void`/extraction, no
+removed functionality), and the five new/modified test files revert to their pre-ticket state.
+
+---
+
+## TRO-201 (BUN-5) — icon glob emitted 245 chunks; only 4 were ever used, not the ~36 estimated
+
+**What was broken.** `web/src/components/icons/uswds/Icon.tsx:23-26` used a whole-directory
+`import.meta.glob('/node_modules/@uswds/uswds/dist/img/usa-icons/*.svg', { query: '?react' })`,
+which makes every USWDS icon SVG a separate lazy chunk regardless of whether anything in the app
+ever renders it. 245 chunks shipped to every deploy; the finding's own methodology (a whole-`web/src`
+grep for any quoted literal matching one of the 245 filenames) counted "36 referenced, 209 not."
+
+**The re-derived number is 4, not ~36 — and here is the disconfirming evidence, checked before
+trusting the cached figure.** Reproducing that same literal-grep methodology live today
+(`grep` every `.ts`/`.tsx` file under `web/src`, excluding `types.ts`, `Icon.tsx`, `__mocks__/`,
+and `*.test.*`, for a quoted string matching one of the 245 icon filenames) finds **35** matches —
+close to the ticket's cached 36, so the numbers had only drifted by one, as expected. But that
+grep counts a name as "referenced" if the *text* appears anywhere as a quoted string, and this
+codebase's `<Icon>` component (`web/src/components/icons/uswds/Icon.tsx`) is imported by **exactly
+one file**: `web/src/pages/Login.tsx`. Grepping for `<Icon\b` across `web/src` (excluding docstring
+examples in `Icon.tsx` itself and `*.test.tsx`) turns up exactly four call sites, all in that one
+file, all inline literals:
+
+```tsx
+<Icon name="check" className="h-3 w-3 text-green-500" title="Check (h-3)" />
+<Icon name="close" className="h-4 w-4 text-red-400" title="Close (h-4)" />
+<Icon name="warning" className="h-5 w-5 text-yellow-500" title="Warning (h-5)" />
+<Icon name="info" className="h-6 w-6 text-accent" title="Info (h-6)" />
+```
+
+The other 31 matches from the whole-file literal grep are coincidental: words like `settings`,
+`person`, `search`, `list`, `home`, `work`, `public`, `menu`, `star`, `delete`, `edit`, `lock`,
+`timer` etc. are quoted strings elsewhere in the app for unrelated reasons (status values, route
+segments, generic identifiers) — and several apparent "icon usages" that surfaced in that search
+(`DocumentTypeIcon`, `StatusIcon`, `ColumnStatusIcon`, `IssueStatusIcon` in
+`ContextTreeNav.tsx`/`IssuesList.tsx`/`KanbanBoard.tsx`/`pages/App.tsx`, plus
+`VisibilityDropdown.tsx`'s `LockIcon`/`GlobeIcon`/`CheckIcon`) turned out on inspection to be
+custom hand-written inline `<svg>` components, entirely unrelated to the USWDS `<Icon>` system.
+Since `<Icon>` has no aliased import and no `name={someVariable}` call site anywhere (every call
+is a literal), there is no code path by which any of those other 31 names could reach the
+component's `name` prop. **`e2e/icons.spec.ts` independently corroborates this**: it was already
+asserting `iconsContainer.locator('svg[role="img"]')` has count **4** on the login page, by name
+(check/close/warning/info), before this ticket touched anything.
+
+**The fix — extending the same generator, not inventing a second mechanism.**
+`web/scripts/generate-icon-types.ts` already scanned `@uswds/uswds/dist/img/usa-icons/` to write
+`types.ts`'s full `IconName` union (unchanged: still all 245 names, for autocomplete/type-safety on
+any icon the sprite ships, whether used yet or not — verified byte-identical before/after this
+change). It now also scans `web/src` for every `<Icon name="...">` call and writes a second file,
+`usedIcons.generated.ts`: a **static, eager** import map (`Record<string, SvgComponent>`) covering
+only the icon names actually found. The scan itself lives in a new shared module,
+`web/src/components/icons/uswds/scanUsedIcons.ts`, so it can never drift from what the regression
+test (below) checks — both call the exact same function. `Icon.tsx` now renders from this map
+instead of the whole-directory glob; `lazy`/`Suspense`/the per-icon module cache are gone entirely,
+since eager, statically-imported components need none of that machinery. A name that's a valid
+USWDS icon but absent from the map (a new `<Icon name="...">` added without re-running the
+generator) renders `null` with a `console.warn` telling the developer to run
+`pnpm generate:icon-types` — same graceful-degradation shape the old "unknown icon name" path
+already had, not a build break.
+
+**Workflow change for adding a new icon (read this before adding one).** Previously, writing
+`<Icon name="whatever">` "just worked" the moment the icon existed in the USWDS sprite, because the
+whole directory was eagerly globbed. **That is no longer true.** After adding a new `<Icon
+name="...">` call, run `pnpm --filter @ship/web generate:icon-types` and commit the regenerated
+`usedIcons.generated.ts` alongside it — otherwise the name still type-checks (it's in `types.ts`'s
+full union) but renders nothing at runtime until the generator is re-run. This is the deliberate
+tradeoff the finding called for: a developer workflow step in exchange for not shipping 209 (now
+potentially more, as the app grows) icons nobody uses. The new regression test below exists
+specifically to catch the failure mode where someone forgets this step and it slips past review.
+
+**Measured, before/after.** Methodology: build with `pnpm build` (`tsc && VITE_API_URL= vite
+build`) run **from `web/`** — this repo's established convention
+(`audit/bundle/baseline.md` §"Fidelity check", repeated in the TRO-197/198/199/200/202 entry above)
+because Tailwind's `content` globs resolve against the build's CWD. "Before" was built from this
+branch's unmodified base commit (`a8f2bb054b4a8b981c98c0b67f8f7a3123449b21`) in an isolated
+`git worktree add --detach` copy with `node_modules`/`shared/dist` symlinked in from this worktree
+(same tool versions, no separate install) — not by mutating this worktree, same precedent as the
+BUN-1..6 entry above. "After" is this worktree with only the 5 files this ticket touches changed
+(confirmed via `git diff --stat` against the before commit). Entry-closure and total-dist figures
+are `node audit/bundle/measure.mjs web/dist <label>` (unmodified, existing tool) at gzip level 9,
+kB = 1000 bytes. Icon-chunk-specific count/bytes use the same filename-stem classification
+`audit/bundle/baseline.md` describes ("everything else lowercase-alphanumeric → USWDS icon
+chunks") via a one-off script, also gzip level 9.
+
+| Metric | Before | After | Change |
+|---|---:|---:|---:|
+| Icon chunks emitted | 245 | **0** | −245 |
+| Icon chunk bytes (raw / gzip) | 106.35 kB / 75.30 kB | **0 / 0** | −106.35 / −75.30 |
+| Total JS chunks emitted | 312 | **67** | −245 |
+| Entry chunk `index-*.js` (raw / gzip) | 118.34 kB / 31.95 kB | **78.12 kB / 23.54 kB** | −40.22 kB / −8.41 kB (−34.0% / −26.3%) |
+| Initial-load closure, `/login` (raw / gzip) | 410.66 kB / 117.61 kB | **370.47 kB / 109.22 kB** | −40.19 kB / −8.39 kB |
+| `/docs` route closure (gzip) | 182.36 kB | **173.97 kB** | −8.39 kB |
+| `/documents/:id` route closure (gzip) | 212.25 kB | **203.84 kB** | −8.41 kB |
+| Total dist, excl. manifest (raw / gzip) | 3370.09 kB / 1774.16 kB | **3223.55 kB / 1690.45 kB** | −146.54 kB / −83.71 kB |
+
+The total-dist delta reconciles exactly: icon-chunk removal (−106.35/−75.30 kB) plus the
+entry-chunk reduction (−40.22/−8.41 kB) sums to −146.57/−83.71 kB, matching the observed total to
+within rounding, confirming no other file changed between the two builds.
+
+**Entry-chunk savings are larger than the original finding estimated (~3.6 kB gzip), and here's
+why.** The old glob didn't just produce a name→string lookup table; each of the 245 entries was a
+`() => import('/node_modules/.../X.svg?react')` closure, and Rollup has to keep bookkeeping for
+every one of those 245 dynamic-import call sites in the chunk that references them (the entry
+chunk, since `Icon.tsx` is itself eagerly reachable from `Login.tsx`). Removing all 245 — not just
+the 4 that survive as static imports — removes that bookkeeping too, not merely a shorter lookup
+table.
+
+**Verification.**
+- `pnpm --filter @ship/web type-check` — clean (the generated `usedIcons.generated.ts` needed one
+  addition: `/// <reference types="vite-plugin-svgr/client" />`, since this repo had never
+  statically imported a `*.svg?react` module before — only ever globbed one — so the ambient
+  `declare module "*.svg?react"` from `vite-plugin-svgr/client.d.ts` had never been pulled in).
+- `pnpm --filter @ship/web test` — 463/463 passed (58 files), including the new regression suite.
+- `pnpm --filter @ship/web lint` — 0 errors in touched files.
+- `pnpm exec playwright test e2e/icons.spec.ts` — 1/1 passed against a real Chromium build,
+  confirming all 4 icons still render as `svg[role="img"]` with `fill="currentColor"` on `/login`.
+
+**Regression test** (`web/src/components/icons/uswds/Icon.test.tsx`, new `describe` block "Icon
+liveness — usedIcons.generated.ts must not drift from web/src"): re-runs the exact same
+`scanUsedIconNames` function the generator uses against the live `web/src` tree, then asserts every
+name it finds is present in `usedIcons.generated.ts`'s map and renders a real `<svg>` without
+throwing. Verified this actually catches the regression it's meant to catch, not just a vacuous
+pass: temporarily removed `close` from the generated map and re-ran — 2 tests failed
+(`expected undefined to be defined` on the map-membership check, `expected null not to be null` on
+the render check) — then restored the file and re-ran clean.
+
+**Rollback.** Revert this commit (`git revert`). That restores the whole-directory
+`import.meta.glob` in `Icon.tsx` and deletes `usedIcons.generated.ts`/`scanUsedIcons.ts`; no schema,
+API, or non-icon frontend code is touched. `types.ts` is untouched by the revert either way (its
+generation logic and output are identical before and after this change).
+
+---
+
 ## TRO-296 (ERR-15) — `yjsToJson` did not read back marks written via `YXmlText.format()`/`applyDelta()` — round-trip asymmetry in the persistence converter
 
 **Reachability — this is a live, currently-occurring bug, not a latent one.** The finding was
@@ -388,292 +821,6 @@ then `terraform apply` against each environment's actual backend, and ideally re
 `curl -H 'Accept-Encoding: gzip'` check from a network path that isn't blocked at the CloudFront
 edge, to get a real `Content-Encoding` observation post-apply — something this session could not
 produce.
-
----
-
-## TRO-201 (BUN-5) — icon glob emitted 245 chunks; only 4 were ever used, not the ~36 estimated
-
-**What was broken.** `web/src/components/icons/uswds/Icon.tsx:23-26` used a whole-directory
-`import.meta.glob('/node_modules/@uswds/uswds/dist/img/usa-icons/*.svg', { query: '?react' })`,
-which makes every USWDS icon SVG a separate lazy chunk regardless of whether anything in the app
-ever renders it. 245 chunks shipped to every deploy; the finding's own methodology (a whole-`web/src`
-grep for any quoted literal matching one of the 245 filenames) counted "36 referenced, 209 not."
-
-**The re-derived number is 4, not ~36 — and here is the disconfirming evidence, checked before
-trusting the cached figure.** Reproducing that same literal-grep methodology live today
-(`grep` every `.ts`/`.tsx` file under `web/src`, excluding `types.ts`, `Icon.tsx`, `__mocks__/`,
-and `*.test.*`, for a quoted string matching one of the 245 icon filenames) finds **35** matches —
-close to the ticket's cached 36, so the numbers had only drifted by one, as expected. But that
-grep counts a name as "referenced" if the *text* appears anywhere as a quoted string, and this
-codebase's `<Icon>` component (`web/src/components/icons/uswds/Icon.tsx`) is imported by **exactly
-one file**: `web/src/pages/Login.tsx`. Grepping for `<Icon\b` across `web/src` (excluding docstring
-examples in `Icon.tsx` itself and `*.test.tsx`) turns up exactly four call sites, all in that one
-file, all inline literals:
-
-```tsx
-<Icon name="check" className="h-3 w-3 text-green-500" title="Check (h-3)" />
-<Icon name="close" className="h-4 w-4 text-red-400" title="Close (h-4)" />
-<Icon name="warning" className="h-5 w-5 text-yellow-500" title="Warning (h-5)" />
-<Icon name="info" className="h-6 w-6 text-accent" title="Info (h-6)" />
-```
-
-The other 31 matches from the whole-file literal grep are coincidental: words like `settings`,
-`person`, `search`, `list`, `home`, `work`, `public`, `menu`, `star`, `delete`, `edit`, `lock`,
-`timer` etc. are quoted strings elsewhere in the app for unrelated reasons (status values, route
-segments, generic identifiers) — and several apparent "icon usages" that surfaced in that search
-(`DocumentTypeIcon`, `StatusIcon`, `ColumnStatusIcon`, `IssueStatusIcon` in
-`ContextTreeNav.tsx`/`IssuesList.tsx`/`KanbanBoard.tsx`/`pages/App.tsx`, plus
-`VisibilityDropdown.tsx`'s `LockIcon`/`GlobeIcon`/`CheckIcon`) turned out on inspection to be
-custom hand-written inline `<svg>` components, entirely unrelated to the USWDS `<Icon>` system.
-Since `<Icon>` has no aliased import and no `name={someVariable}` call site anywhere (every call
-is a literal), there is no code path by which any of those other 31 names could reach the
-component's `name` prop. **`e2e/icons.spec.ts` independently corroborates this**: it was already
-asserting `iconsContainer.locator('svg[role="img"]')` has count **4** on the login page, by name
-(check/close/warning/info), before this ticket touched anything.
-
-**The fix — extending the same generator, not inventing a second mechanism.**
-`web/scripts/generate-icon-types.ts` already scanned `@uswds/uswds/dist/img/usa-icons/` to write
-`types.ts`'s full `IconName` union (unchanged: still all 245 names, for autocomplete/type-safety on
-any icon the sprite ships, whether used yet or not — verified byte-identical before/after this
-change). It now also scans `web/src` for every `<Icon name="...">` call and writes a second file,
-`usedIcons.generated.ts`: a **static, eager** import map (`Record<string, SvgComponent>`) covering
-only the icon names actually found. The scan itself lives in a new shared module,
-`web/src/components/icons/uswds/scanUsedIcons.ts`, so it can never drift from what the regression
-test (below) checks — both call the exact same function. `Icon.tsx` now renders from this map
-instead of the whole-directory glob; `lazy`/`Suspense`/the per-icon module cache are gone entirely,
-since eager, statically-imported components need none of that machinery. A name that's a valid
-USWDS icon but absent from the map (a new `<Icon name="...">` added without re-running the
-generator) renders `null` with a `console.warn` telling the developer to run
-`pnpm generate:icon-types` — same graceful-degradation shape the old "unknown icon name" path
-already had, not a build break.
-
-**Workflow change for adding a new icon (read this before adding one).** Previously, writing
-`<Icon name="whatever">` "just worked" the moment the icon existed in the USWDS sprite, because the
-whole directory was eagerly globbed. **That is no longer true.** After adding a new `<Icon
-name="...">` call, run `pnpm --filter @ship/web generate:icon-types` and commit the regenerated
-`usedIcons.generated.ts` alongside it — otherwise the name still type-checks (it's in `types.ts`'s
-full union) but renders nothing at runtime until the generator is re-run. This is the deliberate
-tradeoff the finding called for: a developer workflow step in exchange for not shipping 209 (now
-potentially more, as the app grows) icons nobody uses. The new regression test below exists
-specifically to catch the failure mode where someone forgets this step and it slips past review.
-
-**Measured, before/after.** Methodology: build with `pnpm build` (`tsc && VITE_API_URL= vite
-build`) run **from `web/`** — this repo's established convention
-(`audit/bundle/baseline.md` §"Fidelity check", repeated in the TRO-197/198/199/200/202 entry above)
-because Tailwind's `content` globs resolve against the build's CWD. "Before" was built from this
-branch's unmodified base commit (`a8f2bb054b4a8b981c98c0b67f8f7a3123449b21`) in an isolated
-`git worktree add --detach` copy with `node_modules`/`shared/dist` symlinked in from this worktree
-(same tool versions, no separate install) — not by mutating this worktree, same precedent as the
-BUN-1..6 entry above. "After" is this worktree with only the 5 files this ticket touches changed
-(confirmed via `git diff --stat` against the before commit). Entry-closure and total-dist figures
-are `node audit/bundle/measure.mjs web/dist <label>` (unmodified, existing tool) at gzip level 9,
-kB = 1000 bytes. Icon-chunk-specific count/bytes use the same filename-stem classification
-`audit/bundle/baseline.md` describes ("everything else lowercase-alphanumeric → USWDS icon
-chunks") via a one-off script, also gzip level 9.
-
-| Metric | Before | After | Change |
-|---|---:|---:|---:|
-| Icon chunks emitted | 245 | **0** | −245 |
-| Icon chunk bytes (raw / gzip) | 106.35 kB / 75.30 kB | **0 / 0** | −106.35 / −75.30 |
-| Total JS chunks emitted | 312 | **67** | −245 |
-| Entry chunk `index-*.js` (raw / gzip) | 118.34 kB / 31.95 kB | **78.12 kB / 23.54 kB** | −40.22 kB / −8.41 kB (−34.0% / −26.3%) |
-| Initial-load closure, `/login` (raw / gzip) | 410.66 kB / 117.61 kB | **370.47 kB / 109.22 kB** | −40.19 kB / −8.39 kB |
-| `/docs` route closure (gzip) | 182.36 kB | **173.97 kB** | −8.39 kB |
-| `/documents/:id` route closure (gzip) | 212.25 kB | **203.84 kB** | −8.41 kB |
-| Total dist, excl. manifest (raw / gzip) | 3370.09 kB / 1774.16 kB | **3223.55 kB / 1690.45 kB** | −146.54 kB / −83.71 kB |
-
-The total-dist delta reconciles exactly: icon-chunk removal (−106.35/−75.30 kB) plus the
-entry-chunk reduction (−40.22/−8.41 kB) sums to −146.57/−83.71 kB, matching the observed total to
-within rounding, confirming no other file changed between the two builds.
-
-**Entry-chunk savings are larger than the original finding estimated (~3.6 kB gzip), and here's
-why.** The old glob didn't just produce a name→string lookup table; each of the 245 entries was a
-`() => import('/node_modules/.../X.svg?react')` closure, and Rollup has to keep bookkeeping for
-every one of those 245 dynamic-import call sites in the chunk that references them (the entry
-chunk, since `Icon.tsx` is itself eagerly reachable from `Login.tsx`). Removing all 245 — not just
-the 4 that survive as static imports — removes that bookkeeping too, not merely a shorter lookup
-table.
-
-**Verification.**
-- `pnpm --filter @ship/web type-check` — clean (the generated `usedIcons.generated.ts` needed one
-  addition: `/// <reference types="vite-plugin-svgr/client" />`, since this repo had never
-  statically imported a `*.svg?react` module before — only ever globbed one — so the ambient
-  `declare module "*.svg?react"` from `vite-plugin-svgr/client.d.ts` had never been pulled in).
-- `pnpm --filter @ship/web test` — 463/463 passed (58 files), including the new regression suite.
-- `pnpm --filter @ship/web lint` — 0 errors in touched files.
-- `pnpm exec playwright test e2e/icons.spec.ts` — 1/1 passed against a real Chromium build,
-  confirming all 4 icons still render as `svg[role="img"]` with `fill="currentColor"` on `/login`.
-
-**Regression test** (`web/src/components/icons/uswds/Icon.test.tsx`, new `describe` block "Icon
-liveness — usedIcons.generated.ts must not drift from web/src"): re-runs the exact same
-`scanUsedIconNames` function the generator uses against the live `web/src` tree, then asserts every
-name it finds is present in `usedIcons.generated.ts`'s map and renders a real `<svg>` without
-throwing. Verified this actually catches the regression it's meant to catch, not just a vacuous
-pass: temporarily removed `close` from the generated map and re-ran — 2 tests failed
-(`expected undefined to be defined` on the map-membership check, `expected null not to be null` on
-the render check) — then restored the file and re-ran clean.
-
-**Rollback.** Revert this commit (`git revert`). That restores the whole-directory
-`import.meta.glob` in `Icon.tsx` and deletes `usedIcons.generated.ts`/`scanUsedIcons.ts`; no schema,
-API, or non-icon frontend code is touched. `types.ts` is untouched by the revert either way (its
-generation logic and output are identical before and after this change).
-
----
-
-## TRO-186 (DB-9) — Sprint board and document view fired byte-identical requests two and three times
-
-**What was broken.** Two unrelated components shared one root cause: a `useEffect` that called
-`apiGet`/`fetch` directly, with no cleanup to cancel the request React 18 `StrictMode` discards.
-
-- `web/src/pages/TeamMode.tsx`'s initial-load effect (previously lines 203-209) ran
-  `Promise.all([fetchTeamGrid(...), fetchProjects(), fetchAssignments()])` with no cleanup function
-  at all. `StrictMode` (dev only) mounts every component twice — setup, cleanup, setup again — to
-  surface exactly this class of bug. With nothing to cancel the first mount's three requests, the
-  browser sent them anyway: `GET /api/team/grid`, `GET /api/team/projects`, and
-  `GET /api/team/assignments` each fired twice per page load. `audit/db-query/raw/flow-requests.json`
-  ("Load sprint board") caught this directly.
-- `web/src/components/editor/BacklinksPanel.tsx`'s poll effect (`fetchBacklinks()`, called on mount
-  and every 5s via `setInterval`) already tracked a `cancelled` flag from the TRO-196/ERR-9 fix, but
-  that flag only suppressed the *state update* from a stale response — it never cancelled the
-  underlying `fetch`, so the discarded first mount's request still reached the server. Audit
-  evidence: `GET /api/documents/:id/backlinks` fired 3x on one document view (2x from the
-  `StrictMode` double-mount, plus one legitimate 5-second poll tick landing inside the 5s
-  observation window the audit's harness waits before moving on).
-
-Both are genuinely a frontend duplicate-request bug, not a server issue: the API returns exactly
-one response per request it receives (confirmed by reading `api/src/routes/team.ts` and
-`api/src/routes/backlinks.ts` — each handler runs once per HTTP request, no fan-out).
-
-**What changed — one fix pattern, applied to both.** Neither file was migrated to `@tanstack/react-query`
-(the codebase's usual dedup mechanism for 13 other `use*Query.ts` hooks): `TeamMode.tsx`'s
-grid/projects/assignments fetches carry pagination and optimistic-assignment state that would need a
-real redesign to move onto query-cache semantics, and `BacklinksPanel.tsx`'s poll-plus-failure-mode-
-throttling behavior (TRO-196/ERR-9's `lastLoggedFailureModeRef`) is asserted exactly, line-for-line
-call-count, by `BacklinksPanel.errorLogging.test.tsx` — routing its errors through react-query's
-global `QueryCache.onError` would reintroduce the console-error storm that ticket fixed. Instead,
-both effects now create an `AbortController`, thread its `signal` into the fetch call(s), and call
-`controller.abort()` in the effect's cleanup — the same cancellation idiom React's own docs recommend
-for exactly this failure mode, and a natural extension of `BacklinksPanel.tsx`'s existing (state-only)
-`cancelled` guard rather than a new pattern.
-
-- `web/src/lib/api.ts`: `apiGet(endpoint)` → `apiGet(endpoint, options?: { signal?: AbortSignal })`,
-  backward compatible (all 51 pre-existing call sites pass no second argument).
-- `web/src/pages/TeamMode.tsx`: `fetchTeamGrid`/`fetchProjects`/`fetchAssignments` each take an
-  optional `signal`, forward it to `apiGet`, and treat a resulting `AbortError` as a silent no-op
-  (added `isAbortError`) rather than surfacing `setError`. The initial-load effect creates one
-  `AbortController`, passes its signal into all three calls, and aborts it on cleanup; a `cancelled`
-  guard (same idiom as `BacklinksPanel.tsx`) stops the discarded first mount's `Promise.all(...)
-  .finally()` from calling `setLoading(false)` before the real (second) mount's fetches resolve.
-  Other call sites (`showArchived` toggle, infinite-scroll `fetchMoreSprints`) are unaffected — they
-  are user-triggered, not part of the `StrictMode` double-mount, and were never duplicated.
-- `web/src/components/editor/BacklinksPanel.tsx`: added an `AbortController`, passed its `signal`
-  into the `fetch(...)` call, and call `controller.abort()` in the existing cleanup alongside the
-  pre-existing `cancelled = true` and `clearInterval(intervalId)`. No other line changed — the
-  existing `if (!cancelled)` guards already wrapping every state update and every
-  `console.debug`/`console.error` call in `fetchBacklinks()` (the TRO-196/ERR-9 fix) already no-op
-  correctly for an aborted request; this only stops the wasted request from reaching the server in
-  the first place.
-
-**Regression tests** (vitest, run by the gate):
-- `web/src/pages/TeamMode.duplicateRequests.test.tsx`
-- `web/src/components/editor/BacklinksPanel.duplicateRequests.test.tsx`
-
-Both wrap the component in `<React.StrictMode>` — a single ordinary mount (what
-`BacklinksPanel.test.tsx` and `.errorLogging.test.tsx` already use) never exercises this bug, since
-React only double-invokes effects under `StrictMode`; a test that didn't force it would pass
-unchanged on the pre-fix code and prove nothing. Both mocks are `AbortSignal`-aware: a mock that
-always resolves regardless of `signal` would report "2 calls" whether or not the fix is present,
-because the discarded first mount's `fetchTeamGrid()`/`fetchBacklinks()` call still *happens* either
-way under `StrictMode` — only whether its request reaches a response changes. Each test asserts
-three things: the endpoint really was invoked twice (proves the test forces the double-mount),
-the first mount's request really was aborted, and exactly one request settles with a real response
-(the proxy for "one request reaches the server and runs its DB queries," which is what DB-9 measures).
-
-Confirmed red-before-green on both, without `git stash` (forbidden — the stash stack is shared
-across concurrent factory worktrees on this machine): saved the fix as a patch
-(`git diff > fix.patch`), `git checkout --` the three source files back to `main`'s state, re-ran —
-`TeamMode.duplicateRequests.test.tsx` failed with `expected +0 to be 1` (no aborted request) and
-`BacklinksPanel.duplicateRequests.test.tsx` failed the same way — then `git apply`'d the patch back
-and confirmed both green, alongside the pre-existing `BacklinksPanel.test.tsx` (2 tests, A11Y-6) and
-`BacklinksPanel.errorLogging.test.tsx` (4 tests, ERR-9), unaffected.
-
-**Measured before/after.**
-
-*Conditions.* Factory worktree `ship_wt_tro_186`, dedicated Postgres (`ship-audit-pg` container,
-`localhost:5433`), seeded via `pnpm db:seed` + `npx tsx audit/seed-augment.ts` to the audit's exact
-target volume — verified 500 documents (254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27
-weekly_retro / 20 person / 15 weekly_review / 15 project / 6 standup / 5 program), 20 users, 813
-`document_associations`, matching `audit/db-query/baseline.md` byte-for-byte. Dev servers on the
-worktree's own ports (API 3352, web 5525). Logged in as `dev@ship.local`.
-
-*HTTP-request level (Playwright, `audit/db-query/raw/flow-capture.mjs` adapted to these ports —
-clean signal, scoped to this worktree's own web server, unaffected by any other worktree's traffic).
-One run pre-fix, three separate runs post-fix, each with 2 iterations (cold/steady) per
-`flow-capture.mjs`'s own convention:*
-
-| Flow | Endpoint | Before | After |
-|---|---|---|---|
-| Load sprint board | `GET /api/team/grid` | 2x (both iterations, both runs) | **1x** (both iterations, all 3 runs — deterministic) |
-| Load sprint board | `GET /api/team/projects` | 2x (both iterations, both runs) | **1x** (both iterations, all 3 runs — deterministic) |
-| Load sprint board | `GET /api/team/assignments` | 2x (both iterations, both runs) | **1x** (both iterations, all 3 runs — deterministic) |
-| View a document | `GET /api/documents/:id/backlinks` | 3x (both iterations) | **2x** in 2 of 3 runs, **1x** in 1 of 3 runs |
-
-The sprint-board reduction is exact and deterministic every time: those three fetches only ever ran
-once per mount, so removing the `StrictMode`-only duplicate takes them cleanly to 1x. Backlinks is
-not fully deterministic because it also polls every 5s — the fix removes the guaranteed
-`StrictMode` duplicate every time (3x → at most 2x, confirmed: never observed above 2x post-fix
-across 3 runs), but whether the count lands at 2x or 1x depends on whether the interval's next
-legitimate tick happens to fall inside the flow's 5-second observation window, which is timing
-noise inherent to the poll, not something this fix controls or should try to control.
-
-*DB query count.* The audit's own methodology (statement logging + marker-bracketed capture) turned
-out to be **unreliable on this shared machine**: `ship-audit-pg` is one Postgres instance shared by
-every concurrent factory worktree, and a repeat of the capture during this measurement caught
-unrelated activity from other worktrees inside the same time-sliced window — a `document_type='wiki'`
-insert titled "Malformed frame async handler doc" (a different ticket's test fixture) landed inside
-my "View a document" slice, and a later attempt caught `Ship-wt-tro_296` running
-`CREATE DATABASE`/`DROP DATABASE`/`TRUNCATE TABLE` mid-capture, inflating one flow's reported count
-from a real ~40 to 588. Both are verifiable in the raw log by their foreign document titles / database
-names, not this worktree's data. Rather than report a contaminated number, per-endpoint query cost
-was instead read directly from source (deterministic, not sensitive to what else is running):
-
-| Endpoint | Source | Non-auth queries | + auth (typical duplicate: session `SELECT` only, `UPDATE` already throttled by DB-2) |
-|---|---|---|---|
-| `GET /api/team/grid` | `api/src/routes/team.ts:14-200` (`getVisibilityContext` + users + workspace + sprints + issues) | 5 | 6 |
-| `GET /api/team/projects` | `api/src/routes/team.ts:200-238` (`getVisibilityContext` + projects) | 2 | 3 |
-| `GET /api/team/assignments` | `api/src/routes/team.ts:265-457` (`getVisibilityContext` + explicit + workspace + issues) | 4 | 5 |
-| `GET /api/documents/:id/backlinks` | `api/src/routes/backlinks.ts:22-73` (`getVisibilityContext` + existence check + backlinks select) | 3 | 4 |
-
-`authMiddleware`'s session-activity `UPDATE` (`api/src/middleware/auth.ts:356-360`) is throttled to
-once per 60s per session since DB-2 (already on `main` before this ticket started) — a duplicate
-call landing seconds after the first never re-pays it, only the session `SELECT`
-(`auth.ts:239-247`) always runs. **Eliminating one duplicate grid + one duplicate projects + one
-duplicate assignments call removes 6+3+5 = 14 DB queries per sprint-board page load** — a fact
-derived from source, not measured live, but exact regardless of concurrent load on the shared
-database, unlike the statement-log approach above. Eliminating backlinks' guaranteed duplicate
-removes a minimum of 4 more per document view (up to 8 when timing also avoids the poll window).
-
-**Correcting the ticket's own estimate.** DB-9's brief cited "Sprint board 51 → ~40 (-22%)" from
-`audit/db-query/baseline.md`. That 51-query baseline predates DB-2 (TRO-179, session-write
-throttling), which already landed on `main` before this ticket started and independently reduced
-the flow's per-request auth cost — the absolute counts do not carry over. Re-running this ticket's
-own (uncontaminated) capture of "Load sprint board" cold-load against the *current* `main` showed
-**42 total queries before this fix**; the 14-query reduction derived above is **-33%** of that
-figure — the same direction as the ticket's estimate and clearing the same ≥20% target, but a
-larger percentage against a smaller (already-improved) baseline, not the same arithmetic.
-
-**How to run it.**
-
-```bash
-source .factory-env
-pnpm --filter @ship/web exec vitest run src/pages/TeamMode.duplicateRequests.test.tsx
-pnpm --filter @ship/web exec vitest run src/components/editor/BacklinksPanel.duplicateRequests.test.tsx
-```
-
-**Rollback.** Revert the commit(s) on `fix/db-9-duplicate-requests` touching `TeamMode.tsx`,
-`BacklinksPanel.tsx`, and `api.ts`'s `apiGet` signature (the added second parameter is additive and
-optional, so reverting it is safe independent of the other two), and delete
-`TeamMode.duplicateRequests.test.tsx` and `BacklinksPanel.duplicateRequests.test.tsx`.
 
 ---
 

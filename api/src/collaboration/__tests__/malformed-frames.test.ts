@@ -630,6 +630,18 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
     // runFrameHandler the rejection would land *after* its try/catch had exited
     // and resurface as an unhandled rejection: ERR-10 again, by the back door.
     // No cast is needed to express that, which is precisely the hazard.
+    //
+    // TS-10 turns `@typescript-eslint/no-misused-promises` on for api/, and its
+    // whole point is to catch exactly this assignment at lint time. That is a
+    // real improvement (a caller who tries this now gets a lint error instead
+    // of a silent compile), but it does not make the test moot: `runFrameHandler`
+    // has to defend the case anyway, because a real call site can still produce a
+    // rejecting handler without literally writing `async () => {...}` where lint
+    // can see it (a promise-returning function received as a parameter, composed
+    // via `.bind`, or built at runtime). The disable below is this one line
+    // deliberately re-creating the pre-rule hazard so that runtime guard stays
+    // pinned — it is not a workaround for a real bug.
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- intentional: see comment above
     const asyncHandler: () => void = async () => {
       throw new Error('async frame handler rejected')
     }
@@ -702,4 +714,87 @@ describe('Collaboration malformed-frame handling (TRO-276 / ERR-10)', () => {
     victim.ws.close()
     fresh.ws.close()
   }, 60_000)
+
+  it('does not let a malformed Host header crash the process during WebSocket upgrade (TRO-297 / TS-10)', async () => {
+    // `server.on('upgrade', async (request, socket, head) => {...})` used to be
+    // registered directly as the listener — a `@typescript-eslint/no-misused-promises`
+    // violation, promoted from warn to error for api/ by TRO-297's eslint.config.mjs
+    // change. The rule exists precisely because `EventEmitter` never awaits a
+    // listener's return value: a synchronous throw ANYWHERE in the handler body
+    // (not only after an `await`) rejects the promise the async function returns,
+    // and with nothing attached to that promise, the rejection escaped as
+    // unhandled — the same fatal-by-default outcome as ERR-10 (malformed-frames.test.ts
+    // above), just one layer up, at the HTTP upgrade request instead of the WS frame.
+    //
+    // The handler's very first statement is
+    // `new URL(request.url || '', \`http://${request.headers.host}\`)`, which throws a
+    // TypeError for a syntactically invalid Host header. Node's HTTP parser does not
+    // validate Host's grammar — it hands the raw header value through unchanged
+    // (confirmed directly against a bare `http.createServer` before wiring this
+    // test to the real collaboration server) — so a client sending one with a bare
+    // space reaches this throw before validateWebSocketSession/canAccessDocumentForCollab
+    // ever run (both of those already catch internally and cannot reject; this line
+    // runs before either is even called).
+    //
+    // Observed directly, not just inferred: run against the pre-fix shape (the
+    // upgrade listener passed to `server.on('upgrade', ...)` as `async (request,
+    // socket, head) => { ... }` directly, no wrapping `.catch`), this exact request
+    // produces an `unhandledRejection` capture below instead of a clean socket
+    // close — i.e. this test goes red for the right reason against the code this
+    // ticket changed, the same red-before-green check malformed-frames.test.ts's
+    // own header documents doing for ERR-10.
+    const socket = net.createConnection({ host: '127.0.0.1', port })
+    openRawSockets.push(socket)
+
+    await new Promise<void>((resolve, reject) => {
+      socket.once('connect', () => resolve())
+      socket.once('error', reject)
+    })
+
+    // From here a transport error on the CLIENT side is an expected outcome (the
+    // server hanging up), not a test failure — same reasoning as rawUpgrade()'s
+    // socket above.
+    socket.on('error', () => { /* server hung up; that is the point */ })
+
+    // A `net.Socket` starts in paused mode: with no 'data' listener and no
+    // explicit `.resume()`, incoming bytes sit unread and the stream never sees
+    // its own 'end', which in turn can leave 'close' from firing within any
+    // reasonable deadline — nothing to do with whether the server actually
+    // closed its end. This test's assertion is about the SERVER's behavior, so
+    // the client side must actively drain to observe it promptly.
+    socket.resume()
+
+    socket.write(
+      `GET /collaboration/wiki:doesnotmatter HTTP/1.1\r\n` +
+      `Host: exam ple.invalid\r\n` +
+      `Upgrade: websocket\r\n` +
+      `Connection: Upgrade\r\n` +
+      `Sec-WebSocket-Key: ${crypto.randomBytes(16).toString('base64')}\r\n` +
+      `Sec-WebSocket-Version: 13\r\n` +
+      `Cookie: session_id=${sessionId}\r\n\r\n`
+    )
+
+    const socketEnded = await whenRawClosed(socket)
+
+    expect(
+      recorder.summary(),
+      'a malformed Host header during WebSocket upgrade must not reach the process level'
+    ).toBe('none')
+    expect(
+      socketEnded,
+      'the server must close the connection rather than leave it hanging when the upgrade handler fails'
+    ).toBe(true)
+
+    // The server is not merely un-crashed but still serving: a fresh, well-formed
+    // client completes a full write after the malformed upgrade request.
+    const survivorDocId = await createDocument('Malformed Host header post-crash doc')
+    const survivor = await connect(survivorDocId)
+    await expectWriteLands(
+      survivor,
+      survivorDocId,
+      `AFTER_BAD_HOST_${testRunId}`,
+      'the collaboration server must still accept and persist work after a malformed upgrade request — a dead process could not'
+    )
+    survivor.ws.close()
+  }, 40_000)
 })

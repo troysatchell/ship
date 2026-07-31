@@ -55,4 +55,13 @@ async function migrate() {
   }
 }
 
-migrate();
+// `.catch` rather than a bare call: `await loadProductionSecrets()` runs before
+// the try/catch inside migrate(), so a failure there (SSM unreachable, etc.)
+// rejects this promise instead of being caught by migrate()'s own error
+// handling — previously an unhandled rejection at process exit. Routed
+// through the same "log and exit non-zero" shape the try/catch below already
+// uses, so a fresh-deploy migration failure fails loudly either way.
+migrate().catch((error: unknown) => {
+  console.error('Database migration failed:', error);
+  process.exit(1);
+});

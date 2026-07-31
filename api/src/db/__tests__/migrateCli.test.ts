@@ -78,3 +78,88 @@ describe('migrate.ts CLI wrapper (DB-1 / TRO-178, verified by TRO-245)', () => {
     35_000
   );
 });
+
+describe('migrate.ts CLI wrapper — top-level call site (TRO-297 / TS-10)', () => {
+  it(
+    'catches and reports a rejection from BEFORE its own try/catch, instead of an unhandled rejection',
+    () => {
+      // The test above (TRO-245) proves the try/catch inside migrate() converts a
+      // runMigrations() failure into a clean non-zero exit. It does NOT exercise
+      // `await loadProductionSecrets()` (migrate.ts:27), which runs BEFORE that
+      // try/catch — a rejection there used to escape migrate()'s own error
+      // handling entirely and reach the bare top-level `migrate();` call
+      // (migrate.ts's last line) as an unhandled promise rejection. That is a
+      // `@typescript-eslint/no-floating-promises` violation TRO-297 fixes by
+      // adding `.catch(...)` to that call site.
+      //
+      // Forces exactly that path, deterministically and fast:
+      //  - NODE_ENV=production: loadProductionSecrets() is a no-op for any other
+      //    value (ssm.ts), so production is the only way to reach its SSM call.
+      //  - DATABASE_URL='' / SESSION_SECRET='': dotenv's `config()` only fills in
+      //    keys that are NOT already present in process.env (even an empty
+      //    string counts as present), so this blocks migrate.ts's own
+      //    `config({ path: '.env.local' })` from repopulating them from this
+      //    worktree's real dev secrets — which would otherwise let
+      //    loadProductionSecrets()'s catch-block fallback swallow the SSM
+      //    failure instead of rethrowing it (ssm.ts: `if (DATABASE_URL &&
+      //    SESSION_SECRET) { ...; return; }`).
+      //  - AWS_ENDPOINT_URL_SSM=http://127.0.0.1:1: the SDK v3 endpoint override
+      //    env var, pointed at a port that refuses instantly (same trick as the
+      //    unreachable-Postgres case above) — verified directly (a standalone
+      //    script against this exact endpoint) to reject in single-digit
+      //    milliseconds via ECONNREFUSED, so ssm.ts's own retry loop (up to 3
+      //    attempts with jittered backoff) still finishes in well under a
+      //    second and never touches real AWS.
+      //
+      // Both the pre-fix and post-fix code exit non-zero here (Node's default
+      // for an unhandled rejection is also a non-zero exit), so exit code alone
+      // does not distinguish them. What differs is whether the failure is
+      // reported through this file's own "Database migration failed:" log line
+      // (only reachable via the added `.catch`) or escapes as an actual
+      // unhandled rejection — confirmed directly by temporarily reverting
+      // migrate.ts's top-level `.catch` back to a bare `migrate();` call
+      // locally and re-running this exact test: it goes red, with stderr
+      // instead containing Node's own fatal unhandled-rejection trace
+      // (`node:internal/process/promises ... triggerUncaughtException`, on
+      // this repo's Node 23) followed by the raw `ECONNREFUSED` error — never
+      // the "Database migration failed:" line, because that line lives inside
+      // the `.catch` this test is proving exists.
+      const result = spawnSync(TSX_BIN, ['src/db/migrate.ts'], {
+        cwd: API_ROOT,
+        env: {
+          ...process.env,
+          NODE_ENV: 'production',
+          DATABASE_URL: '',
+          SESSION_SECRET: '',
+          AWS_ENDPOINT_URL_SSM: 'http://127.0.0.1:1',
+          AWS_ACCESS_KEY_ID: 'tro297-test-key',
+          AWS_SECRET_ACCESS_KEY: 'tro297-test-secret',
+          AWS_REGION: 'us-east-1',
+          ENVIRONMENT: 'tro297test',
+        },
+        encoding: 'utf-8',
+        timeout: 15_000,
+      });
+
+      expect(
+        result.error,
+        `spawning tsx failed outright (not a migration failure): ${result.error?.message}`
+      ).toBeUndefined();
+      expect(
+        result.status,
+        `migrate.ts must exit non-zero when secrets cannot load. stderr:\n${result.stderr}`
+      ).not.toBe(0);
+      expect(
+        result.stderr,
+        'a rejection from loadProductionSecrets() (before migrate()\'s own try/catch) must be caught and ' +
+        'reported through the same "Database migration failed:" path as an in-try failure — not surface as ' +
+        "Node's generic unhandled-rejection warning"
+      ).toMatch(/Database migration failed/);
+      expect(
+        result.stderr,
+        'must not reach the process as an unhandled rejection'
+      ).not.toMatch(/unhandled ?rejection/i);
+    },
+    20_000
+  );
+});
