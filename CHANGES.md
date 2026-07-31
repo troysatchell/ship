@@ -21,6 +21,173 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-296 (ERR-15) — `yjsToJson` did not read back marks written via `YXmlText.format()`/`applyDelta()` — round-trip asymmetry in the persistence converter
+
+**Reachability — this is a live, currently-occurring bug, not a latent one.** The finding was
+filed as "observed at function level, not via live app" — `api/src/utils/__tests__/yjsConverter.test.ts`
+already pinned that `jsonToYjs` then `yjsToJson` disagreed with each other, but that only proves this
+converter is internally inconsistent, not that a real editing session ever produces the shape that
+trips it. Traced two separate live paths, by reading the actual dependency code shipped in this
+repo's `node_modules`, not by inference from documentation:
+
+1. **The dominant path — any live mark, from any user, in any document.** TipTap's
+   `@tiptap/extension-collaboration` (`web/src/components/Editor.tsx:692`) delegates to
+   `y-prosemirror`. `y-prosemirror/src/plugins/sync-plugin.js`'s `createTypeFromTextNodes` builds
+   each run of a paragraph's inline content as one `Y.XmlText` and calls
+   `.applyDelta([{ insert, attributes: marksToAttributes(node.marks, meta) }])` — Yjs's native
+   text-formatting API, the same one this converter's `jsonToYjs` calls via `.format()`.
+   `YXmlText.toString()` (`yjs/src/types/YXmlText.js:68-100`) serializes both identically as literal
+   pseudo-XML wrapped around the text. `api/src/collaboration/index.ts`'s `persistDocument()` calls
+   `yjsToJson(fragment)` and writes the result into `documents.content` roughly 2 seconds after
+   *every* edit (`schedulePersist`, `doc.on('update')`) for the life of any live-collaborated
+   document — so any user pressing Cmd+B, or adding a link, corrupts that document's `content` JSON
+   backup column into a literal string like `<bold>bold</bold>` within seconds. `documents.yjs_state`
+   itself stays correct (it's the raw CRDT state); the corruption is specifically in the JSON
+   `content` column that `GET /:id/content` (`api/src/routes/documents.ts:491`) reads in preference
+   to converting from `yjs_state`, and that other non-collaborative-socket reads rely on.
+2. **A narrower, also-live path.** `collaboration/index.ts`'s `loadDoc()` calls `jsonToYjs` directly,
+   once, the first time a document with JSON `content` but no `yjs_state` yet is opened in the
+   collaborative editor — e.g. a document written via `PATCH /:id/content` (which explicitly nulls
+   `yjs_state`), or the seeded "Welcome to Ship" document
+   (`api/src/db/welcomeDocument.ts`, dozens of `bold`/`italic` marks) shown to every new workspace.
+
+Reproduced against the real converter (not a mock) in
+`api/src/utils/__tests__/yjsConverter.test.ts`'s new `describe('yjsToJson decodes marks the live
+editor actually writes (TRO-296)')` block — one test builds the Yjs tree exactly the way
+`createTypeFromTextNodes` does (`Y.XmlText.applyDelta`), **never calling this converter's own
+`jsonToYjs` at all**, then runs the real `yjsToJson` against it, proving the bug fires independent of
+this converter's own writer. Confirmed red against the pre-fix code (4 new test cases failed,
+producing literal `<bold>bold</bold>`-style text), green after the fix — see PR for the transcript.
+
+**What changed.** One file: `api/src/utils/yjsConverter.ts`. Kept `jsonToYjs`'s existing write
+representation (`YXmlText.format()`) rather than switching it to wrapper elements, because the live
+editor path (path 1 above) never goes through `jsonToYjs` at all — rewriting only this converter's
+writer would do nothing for the dominant case. Instead, `yjsToJson` (and its two other read sites,
+`yjsElementToJson` and `extractTextWithMarks`) now decode `Y.XmlText.toDelta()` directly instead of
+calling `.toString()`, translating each delta op's `attributes` back into a TipTap `marks` array via
+new helpers `parseTextDelta`, `marksFromDeltaAttributes`, and `xmlTextToNodes`. Delta attribute keys
+are filtered through the existing `MARK_TYPES` allowlist (bold/italic/strike/underline/code/link) and
+defensively stripped of y-prosemirror's `--<hash>` overlapping-mark suffix (mirroring its own
+`yattr2markname`) before matching — a suffix none of this app's marks trigger today, tested anyway
+since it costs nothing and the mapping would otherwise silently drop a mark if that ever changes. A
+mark type outside that allowlist (e.g. TipTap's custom `commentMark`) is dropped rather than
+reconstructed — the same behavior the old wrapper-element path already had for unknown types, and a
+strict improvement over corrupting the surrounding text; extending mark support to comments is a
+separate, out-of-scope concern.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api test -- src/utils/__tests__/yjsConverter.test.ts
+pnpm type-check
+```
+
+8 tests pass, including the updated round-trip test (now a plain `toEqual(original)`, since the
+round trip is symmetric) and the three new TRO-296 tests. Type-check is clean.
+
+**Rollback.** Revert the commit(s) on `fix/err-15-yjs-mark-roundtrip` touching
+`api/src/utils/yjsConverter.ts` and `api/src/utils/__tests__/yjsConverter.test.ts`. No schema,
+migration, or collaboration-server change was made or is required to roll back.
+
+---
+
+## TRO-303 — Module-version `aws_s3_bucket.uploads` (dev/shadow) had no `prevent_destroy` — same TF-1 gap, second location; Aurora module gap closed in the same PR
+
+**The problem.** TF-1/TRO-234 added `deletion_protection`/`prevent_destroy` to the flat root's
+`aws_rds_cluster.aurora` (`terraform/database.tf`) and `aws_s3_bucket.uploads`
+(`terraform/s3-cloudfront.tf`), but that ticket's own "What did NOT change" section explicitly
+flagged that `terraform/modules/aurora` and `terraform/modules/cloudfront-s3` — the module versions
+consumed by `terraform/environments/dev/main.tf` and `terraform/environments/shadow/main.tf` — carry
+the identical gap, and scoped fixing them out as a follow-up. This ticket is that follow-up.
+
+Confirmed both gaps were still open before touching anything, by `grep`:
+
+```
+$ grep -n 'deletion_protection\|prevent_destroy' terraform/modules/aurora/main.tf terraform/modules/cloudfront-s3/main.tf
+(no output — 0 matches in either file)
+```
+
+- `terraform/modules/cloudfront-s3/main.tf`'s `aws_s3_bucket.uploads` had no `lifecycle` block at
+  all — nothing stops Terraform from destroying the dev/shadow uploads bucket on a forced
+  replacement.
+- `terraform/modules/aurora/main.tf`'s `aws_rds_cluster.aurora` had a `lifecycle` block, but it only
+  carried `ignore_changes = [final_snapshot_identifier]` (ported over for the `final_snapshot_identifier`
+  churn, unrelated to destroy protection) — no `deletion_protection` attribute and no
+  `prevent_destroy`. Same defect as the flat root's pre-TF-1 state, just in the module used by
+  dev/shadow.
+
+**What changed.** Two additions, mirroring TF-1's flat-root pattern exactly, no resource renamed or
+restructured:
+
+- `terraform/modules/cloudfront-s3/main.tf:392-394` — `aws_s3_bucket.uploads` gets a new
+  `lifecycle { prevent_destroy = true }` block (S3 has no `deletion_protection` attribute in the AWS
+  provider, so `prevent_destroy` is the only available guard, same as the flat root).
+- `terraform/modules/aurora/main.tf:70` — `aws_rds_cluster.aurora` gets `deletion_protection = true`
+  (first-class RDS attribute, enforced by the AWS API itself). `terraform/modules/aurora/main.tf:93`
+  — `prevent_destroy = true` merged into the resource's existing `lifecycle` block alongside the
+  pre-existing `ignore_changes = [final_snapshot_identifier]` (one `lifecycle` block per resource,
+  so extended rather than duplicated — same approach TF-1 used on the flat root).
+
+Post-change, both files show exactly the expected new matches:
+
+```
+$ grep -n 'deletion_protection\|prevent_destroy' terraform/modules/aurora/main.tf terraform/modules/cloudfront-s3/main.tf
+terraform/modules/aurora/main.tf:70:  deletion_protection             = true
+terraform/modules/aurora/main.tf:93:    prevent_destroy = true
+terraform/modules/cloudfront-s3/main.tf:393:    prevent_destroy = true
+```
+
+**Scope.** Only these two resources in these two module files changed. The flat root
+(`terraform/database.tf`, `terraform/s3-cloudfront.tf`) already carries this protection from TF-1
+and was not touched. `terraform/environments/dev` and `terraform/environments/shadow` consume the
+modules directly (no vendored copies) so both roots pick up the fix without any change of their own.
+
+**Deliberate consequence, not a surprise** (same shape as TF-1's, now true for dev/shadow too):
+removing `prevent_destroy` from either module resource only permits Terraform to *attempt* deletion,
+not guarantees it succeeds — the uploads bucket has versioning enabled with no `force_destroy`, so an
+operator must still empty it by hand (every object, version, and delete marker) before a destroy can
+complete. For the Aurora cluster, `deletion_protection` and `prevent_destroy` are two independent
+safeguards — one Terraform-side, one enforced by the AWS API directly — and an intentional teardown
+must remove both, flipping `deletion_protection = false` and applying *before* attempting the destroy.
+
+**How to run it.**
+
+```bash
+# Terraform binary: v1.15.8 (from an existing scratch cache; not committed to the repo)
+cd terraform/environments/dev
+terraform init -backend=false -input=false   # Terraform has been successfully initialized!
+terraform validate                           # Success! The configuration is valid.
+cd ../shadow
+terraform init -backend=false -input=false   # Terraform has been successfully initialized!
+terraform validate                           # Success! The configuration is valid.
+cd ../..
+terraform fmt -check -recursive terraform/   # exit 0 before AND after this change — no diff
+```
+
+**Verification note.** `terraform validate` and `terraform fmt -check -recursive` were run on both
+consuming roots (`terraform/environments/dev`, `terraform/environments/shadow`) before and after
+this change: both report `Success!` with no warnings and no diagnostics, before and after — this
+change introduces no new warnings or errors on either root. `terraform plan` was attempted on
+`dev` (after `rm -rf .terraform` to force a fresh backend init) and fails with
+`Error: Backend initialization required, please run "terraform init"` (backend `"s3"`) — no S3
+backend or AWS credentials are available in this environment, the same documented failure mode
+TF-1/TF-2/TF-3 recorded. **No `terraform apply` was run against any account, live or otherwise.**
+
+**No vitest regression test applies.** Same precedent as TF-1/TF-3/TF-4/TF-5/TF-9: this is a
+Terraform-only config change with no application code path to exercise. The evidence is the `grep`
+before/after above (0 matches → 3 matches, each attributable to a specific line) plus the
+`validate`/`fmt` output showing the config stays syntactically valid on both consuming roots.
+`gate.sh`'s regression-test check is expected to fail honestly here rather than have a fake test
+manufactured to satisfy it.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf1-module-prevent-destroy`. This removes
+`deletion_protection` and both `prevent_destroy` additions from the two module files, returning
+`terraform/modules/aurora` and `terraform/modules/cloudfront-s3` to their pre-TRO-303 unprotected
+state (dev/shadow only — the flat root is unaffected either way). No live AWS state is touched,
+since no `apply` was ever run.
+
+---
+
 ## TRO-249 [RULE-8] — audited every `CHANGES.md` entry against the three-question bar; backfilled TRO-242/TRO-243's rollback caveats and the missing `audit-baseline` tag note
 
 **What this is.** RULE-8 requires that `CHANGES.md` answer, per entry: what was added, how to run
@@ -221,76 +388,6 @@ then `terraform apply` against each environment's actual backend, and ideally re
 `curl -H 'Accept-Encoding: gzip'` check from a network path that isn't blocked at the CloudFront
 edge, to get a real `Content-Encoding` observation post-apply — something this session could not
 produce.
-
----
-
-## TRO-296 (ERR-15) — `yjsToJson` did not read back marks written via `YXmlText.format()`/`applyDelta()` — round-trip asymmetry in the persistence converter
-
-**Reachability — this is a live, currently-occurring bug, not a latent one.** The finding was
-filed as "observed at function level, not via live app" — `api/src/utils/__tests__/yjsConverter.test.ts`
-already pinned that `jsonToYjs` then `yjsToJson` disagreed with each other, but that only proves this
-converter is internally inconsistent, not that a real editing session ever produces the shape that
-trips it. Traced two separate live paths, by reading the actual dependency code shipped in this
-repo's `node_modules`, not by inference from documentation:
-
-1. **The dominant path — any live mark, from any user, in any document.** TipTap's
-   `@tiptap/extension-collaboration` (`web/src/components/Editor.tsx:692`) delegates to
-   `y-prosemirror`. `y-prosemirror/src/plugins/sync-plugin.js`'s `createTypeFromTextNodes` builds
-   each run of a paragraph's inline content as one `Y.XmlText` and calls
-   `.applyDelta([{ insert, attributes: marksToAttributes(node.marks, meta) }])` — Yjs's native
-   text-formatting API, the same one this converter's `jsonToYjs` calls via `.format()`.
-   `YXmlText.toString()` (`yjs/src/types/YXmlText.js:68-100`) serializes both identically as literal
-   pseudo-XML wrapped around the text. `api/src/collaboration/index.ts`'s `persistDocument()` calls
-   `yjsToJson(fragment)` and writes the result into `documents.content` roughly 2 seconds after
-   *every* edit (`schedulePersist`, `doc.on('update')`) for the life of any live-collaborated
-   document — so any user pressing Cmd+B, or adding a link, corrupts that document's `content` JSON
-   backup column into a literal string like `<bold>bold</bold>` within seconds. `documents.yjs_state`
-   itself stays correct (it's the raw CRDT state); the corruption is specifically in the JSON
-   `content` column that `GET /:id/content` (`api/src/routes/documents.ts:491`) reads in preference
-   to converting from `yjs_state`, and that other non-collaborative-socket reads rely on.
-2. **A narrower, also-live path.** `collaboration/index.ts`'s `loadDoc()` calls `jsonToYjs` directly,
-   once, the first time a document with JSON `content` but no `yjs_state` yet is opened in the
-   collaborative editor — e.g. a document written via `PATCH /:id/content` (which explicitly nulls
-   `yjs_state`), or the seeded "Welcome to Ship" document
-   (`api/src/db/welcomeDocument.ts`, dozens of `bold`/`italic` marks) shown to every new workspace.
-
-Reproduced against the real converter (not a mock) in
-`api/src/utils/__tests__/yjsConverter.test.ts`'s new `describe('yjsToJson decodes marks the live
-editor actually writes (TRO-296)')` block — one test builds the Yjs tree exactly the way
-`createTypeFromTextNodes` does (`Y.XmlText.applyDelta`), **never calling this converter's own
-`jsonToYjs` at all**, then runs the real `yjsToJson` against it, proving the bug fires independent of
-this converter's own writer. Confirmed red against the pre-fix code (4 new test cases failed,
-producing literal `<bold>bold</bold>`-style text), green after the fix — see PR for the transcript.
-
-**What changed.** One file: `api/src/utils/yjsConverter.ts`. Kept `jsonToYjs`'s existing write
-representation (`YXmlText.format()`) rather than switching it to wrapper elements, because the live
-editor path (path 1 above) never goes through `jsonToYjs` at all — rewriting only this converter's
-writer would do nothing for the dominant case. Instead, `yjsToJson` (and its two other read sites,
-`yjsElementToJson` and `extractTextWithMarks`) now decode `Y.XmlText.toDelta()` directly instead of
-calling `.toString()`, translating each delta op's `attributes` back into a TipTap `marks` array via
-new helpers `parseTextDelta`, `marksFromDeltaAttributes`, and `xmlTextToNodes`. Delta attribute keys
-are filtered through the existing `MARK_TYPES` allowlist (bold/italic/strike/underline/code/link) and
-defensively stripped of y-prosemirror's `--<hash>` overlapping-mark suffix (mirroring its own
-`yattr2markname`) before matching — a suffix none of this app's marks trigger today, tested anyway
-since it costs nothing and the mapping would otherwise silently drop a mark if that ever changes. A
-mark type outside that allowlist (e.g. TipTap's custom `commentMark`) is dropped rather than
-reconstructed — the same behavior the old wrapper-element path already had for unknown types, and a
-strict improvement over corrupting the surrounding text; extending mark support to comments is a
-separate, out-of-scope concern.
-
-**How to verify.**
-
-```bash
-pnpm --filter @ship/api test -- src/utils/__tests__/yjsConverter.test.ts
-pnpm type-check
-```
-
-8 tests pass, including the updated round-trip test (now a plain `toEqual(original)`, since the
-round trip is symmetric) and the three new TRO-296 tests. Type-check is clean.
-
-**Rollback.** Revert the commit(s) on `fix/err-15-yjs-mark-roundtrip` touching
-`api/src/utils/yjsConverter.ts` and `api/src/utils/__tests__/yjsConverter.test.ts`. No schema,
-migration, or collaboration-server change was made or is required to roll back.
 
 ---
 
