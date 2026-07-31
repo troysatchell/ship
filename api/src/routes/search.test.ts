@@ -3,6 +3,7 @@ import request from 'supertest';
 import crypto from 'crypto';
 import { createApp } from '../app.js';
 import { pool } from '../db/client.js';
+import { DOCUMENT_SEARCH_LIMIT } from './search.js';
 
 describe('Search API', () => {
   const app = createApp('http://localhost:5173');
@@ -272,5 +273,229 @@ describe('Search Learnings API', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.learnings.length).toBeLessThanOrEqual(1);
+  });
+});
+
+// TRO-175 / API-4: `/api/search/documents` was registered in the OpenAPI
+// schema with no backing route (any caller 404'd). It now backs the command
+// palette's document list - covered here rather than only in the frontend
+// test, since the frontend test mocks this endpoint and would not catch a
+// server-side regression in the shape or visibility rules.
+describe('Search Documents API (TRO-175 / API-4)', () => {
+  const app = createApp('http://localhost:5173');
+  const testRunId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const testWorkspaceName = `Search Documents Test ${testRunId}`;
+
+  let memberSessionCookie: string;
+  let otherMemberSessionCookie: string;
+  let adminSessionCookie: string;
+  let testWorkspaceId: string;
+  let memberId: string;
+  let otherMemberId: string;
+  let adminId: string;
+  let issueDocId: string;
+  let standupDocId: string;
+
+  beforeAll(async () => {
+    const workspaceResult = await pool.query(
+      `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
+      [testWorkspaceName]
+    );
+    testWorkspaceId = workspaceResult.rows[0].id;
+
+    const memberResult = await pool.query(
+      `INSERT INTO users (email, password_hash, name)
+       VALUES ($1, 'test-hash', 'Doc Search Member') RETURNING id`,
+      [`docsearch-member-${testRunId}@ship.local`]
+    );
+    memberId = memberResult.rows[0].id;
+
+    const otherMemberResult = await pool.query(
+      `INSERT INTO users (email, password_hash, name)
+       VALUES ($1, 'test-hash', 'Doc Search Other Member') RETURNING id`,
+      [`docsearch-other-${testRunId}@ship.local`]
+    );
+    otherMemberId = otherMemberResult.rows[0].id;
+
+    const adminResult = await pool.query(
+      `INSERT INTO users (email, password_hash, name)
+       VALUES ($1, 'test-hash', 'Doc Search Admin') RETURNING id`,
+      [`docsearch-admin-${testRunId}@ship.local`]
+    );
+    adminId = adminResult.rows[0].id;
+
+    await pool.query(
+      `INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [testWorkspaceId, memberId]
+    );
+    await pool.query(
+      `INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [testWorkspaceId, otherMemberId]
+    );
+    await pool.query(
+      `INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'admin')`,
+      [testWorkspaceId, adminId]
+    );
+
+    const memberSessionId = crypto.randomBytes(32).toString('hex');
+    await pool.query(
+      `INSERT INTO sessions (id, user_id, workspace_id, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`,
+      [memberSessionId, memberId, testWorkspaceId]
+    );
+    memberSessionCookie = `session_id=${memberSessionId}`;
+
+    const otherMemberSessionId = crypto.randomBytes(32).toString('hex');
+    await pool.query(
+      `INSERT INTO sessions (id, user_id, workspace_id, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`,
+      [otherMemberSessionId, otherMemberId, testWorkspaceId]
+    );
+    otherMemberSessionCookie = `session_id=${otherMemberSessionId}`;
+
+    const adminSessionId = crypto.randomBytes(32).toString('hex');
+    await pool.query(
+      `INSERT INTO sessions (id, user_id, workspace_id, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`,
+      [adminSessionId, adminId, testWorkspaceId]
+    );
+    adminSessionCookie = `session_id=${adminSessionId}`;
+
+    // A palette-relevant type (issue), with a ticket_number set.
+    const issueResult = await pool.query(
+      `INSERT INTO documents (workspace_id, document_type, title, content, ticket_number, visibility, created_by)
+       VALUES ($1, 'issue', 'Fix the search endpoint', '{}', 42, 'workspace', $2)
+       RETURNING id`,
+      [testWorkspaceId, memberId]
+    );
+    issueDocId = issueResult.rows[0].id;
+
+    // A type the command palette never groups/renders - must be excluded.
+    const standupResult = await pool.query(
+      `INSERT INTO documents (workspace_id, document_type, title, content, visibility, created_by)
+       VALUES ($1, 'standup', 'Daily standup notes', '{}', 'workspace', $2)
+       RETURNING id`,
+      [testWorkspaceId, memberId]
+    );
+    standupDocId = standupResult.rows[0].id;
+
+    // A private doc owned by memberId - visible to member + admin, not otherMember.
+    await pool.query(
+      `INSERT INTO documents (workspace_id, document_type, title, content, visibility, created_by)
+       VALUES ($1, 'wiki', 'Members Only Private Wiki', '{}', 'private', $2)`,
+      [testWorkspaceId, memberId]
+    );
+  });
+
+  afterAll(async () => {
+    await pool.query('DELETE FROM documents WHERE workspace_id = $1', [testWorkspaceId]);
+    await pool.query('DELETE FROM sessions WHERE user_id IN ($1, $2, $3)', [memberId, otherMemberId, adminId]);
+    await pool.query('DELETE FROM workspace_memberships WHERE workspace_id = $1', [testWorkspaceId]);
+    await pool.query('DELETE FROM users WHERE id IN ($1, $2, $3)', [memberId, otherMemberId, adminId]);
+    await pool.query('DELETE FROM workspaces WHERE id = $1', [testWorkspaceId]);
+  });
+
+  it('returns 401 without auth', async () => {
+    const res = await request(app).get('/api/search/documents');
+    expect(res.status).toBe(401);
+  });
+
+  it('browses (no q) all palette-relevant document types, excluding types the palette never renders', async () => {
+    const res = await request(app)
+      .get('/api/search/documents')
+      .set('Cookie', memberSessionCookie);
+
+    expect(res.status).toBe(200);
+    const ids = (res.body as Array<{ id: string }>).map((d) => d.id);
+    expect(ids).toContain(issueDocId);
+    // 'standup' is a real document_type but not one of the six the command
+    // palette groups by (issue/wiki/program/project/sprint/person) - it must
+    // never be shipped to the client for this endpoint.
+    expect(ids).not.toContain(standupDocId);
+    for (const doc of res.body as Array<{ document_type: string }>) {
+      expect(['wiki', 'issue', 'program', 'project', 'sprint', 'person']).toContain(doc.document_type);
+    }
+  });
+
+  it('includes ticket_number on issue documents', async () => {
+    const res = await request(app)
+      .get('/api/search/documents')
+      .set('Cookie', memberSessionCookie);
+
+    expect(res.status).toBe(200);
+    const issue = (res.body as Array<{ id: string; ticket_number: number | null }>).find(
+      (d) => d.id === issueDocId
+    );
+    expect(issue).toBeDefined();
+    expect(issue?.ticket_number).toBe(42);
+  });
+
+  it('filters by title when q is provided', async () => {
+    const res = await request(app)
+      .get('/api/search/documents?q=search endpoint')
+      .set('Cookie', memberSessionCookie);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].id).toBe(issueDocId);
+  });
+
+  it('excludes another member\'s private document', async () => {
+    const res = await request(app)
+      .get('/api/search/documents?q=Members Only Private')
+      .set('Cookie', otherMemberSessionCookie);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(0);
+  });
+
+  it('includes the creator\'s own private document', async () => {
+    const res = await request(app)
+      .get('/api/search/documents?q=Members Only Private')
+      .set('Cookie', memberSessionCookie);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].title).toBe('Members Only Private Wiki');
+  });
+
+  it('includes any member\'s private document for an admin', async () => {
+    const res = await request(app)
+      .get('/api/search/documents?q=Members Only Private')
+      .set('Cookie', adminSessionCookie);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toHaveLength(1);
+    expect(res.body[0].title).toBe('Members Only Private Wiki');
+  });
+
+  // CodeRabbit review finding (TRO-175 / API-4): the browse-all (no `q`) path
+  // had no cap, which would let a large workspace regress right back into
+  // shipping an unbounded corpus - the exact problem this ticket exists to
+  // fix. Proves the cap is real by pushing the relevant-type row count past
+  // it with a single set-based INSERT (fast - no per-row round trips) rather
+  // than asserting on the SQL text.
+  it('caps the browse-all (no q) result set at DOCUMENT_SEARCH_LIMIT', async () => {
+    const overflowCount = DOCUMENT_SEARCH_LIMIT + 1;
+    await pool.query(
+      `INSERT INTO documents (workspace_id, document_type, title, content, visibility, created_by)
+       SELECT $1, 'issue', 'Bulk Issue ' || gs, '{}', 'workspace', $2
+       FROM generate_series(1, $3) AS gs`,
+      [testWorkspaceId, memberId, overflowCount]
+    );
+
+    try {
+      const res = await request(app)
+        .get('/api/search/documents')
+        .set('Cookie', memberSessionCookie);
+
+      expect(res.status).toBe(200);
+      // Without the cap this would be overflowCount + the fixtures created in
+      // beforeAll (> DOCUMENT_SEARCH_LIMIT either way) - the cap must bring it
+      // back down to exactly the limit, not just "some smaller number".
+      expect(res.body).toHaveLength(DOCUMENT_SEARCH_LIMIT);
+    } finally {
+      await pool.query(
+        `DELETE FROM documents WHERE workspace_id = $1 AND title LIKE 'Bulk Issue %'`,
+        [testWorkspaceId]
+      );
+    }
   });
 });
