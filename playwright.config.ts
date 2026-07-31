@@ -19,35 +19,31 @@
 
 import { defineConfig, devices } from '@playwright/test';
 import os from 'os';
+import { computeE2eWorkerCount } from './web/src/lib/computeE2eWorkerCount';
 
-// Calculate safe worker count based on available memory
+// Calculate safe worker count based on available memory.
+//
+// TRO-232 / audit finding TEST-10: the actual calculation lives in
+// `web/src/lib/computeE2eWorkerCount.ts` as a pure, testable function — this file
+// just gathers the real `os`/`process.env` inputs and hands them over. It used to be
+// inlined here as `os.freemem()`-based math, which is sound on Linux/CI but wrong on
+// macOS: macOS deliberately keeps reported free memory near zero (spare RAM goes to
+// filesystem cache and memory compression instead), so `os.freemem()` is not a
+// meaningful "available memory" signal there. On a 24GB/14-core Mac this collapsed
+// every local run to a single worker (~4x slower) with no warning. See
+// `computeE2eWorkerCount.ts`'s header comment and its test file for the fix and the
+// regression coverage; this bug never affected CI (the `isCI` branch below is
+// unchanged from before, and still returns 4 immediately when no valid
+// `PLAYWRIGHT_WORKERS` override is set — override handling runs first and wins).
 function getWorkerCount(): number {
-  // Allow explicit override via env var
-  if (process.env.PLAYWRIGHT_WORKERS) {
-    return parseInt(process.env.PLAYWRIGHT_WORKERS, 10);
-  }
-
-  // In CI, use 4 workers (CI runners typically have good resources)
-  if (process.env.CI) {
-    return 4;
-  }
-
-  // Locally, calculate based on available memory
-  // Each worker needs: ~150MB Postgres + ~100MB API + ~50MB preview + ~200MB browser = ~500MB
-  const freeMemGB = os.freemem() / (1024 * 1024 * 1024);
-  const memPerWorker = 0.5; // 500MB per worker
-  const reserveGB = 2; // Keep 2GB free for OS and other apps
-
-  // Calculate memory-based limit
-  const memoryBasedLimit = Math.floor((freeMemGB - reserveGB) / memPerWorker);
-
-  // Also consider CPU cores - no point having more workers than cores
-  const cpuCores = os.cpus().length;
-
-  // Use the smaller of memory limit or CPU cores (no arbitrary cap - CPU cores is the natural limit)
-  const finalCount = Math.max(1, Math.min(memoryBasedLimit, cpuCores));
-
-  return finalCount;
+  return computeE2eWorkerCount({
+    platform: os.platform(),
+    totalMemGB: os.totalmem() / (1024 * 1024 * 1024),
+    freeMemGB: os.freemem() / (1024 * 1024 * 1024),
+    cpuCores: os.cpus().length,
+    isCI: !!process.env.CI,
+    explicitOverride: process.env.PLAYWRIGHT_WORKERS,
+  });
 }
 
 // Calculate workers (logging happens in global-setup to avoid per-worker noise)
