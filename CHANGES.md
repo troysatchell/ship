@@ -21,6 +21,76 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-205 — [BUN-9] First paint blocks on a third-party Google Fonts stylesheet
+
+**What was broken.** `web/index.html` carried two `<link rel="preconnect">`s to
+`fonts.googleapis.com`/`fonts.gstatic.com` plus a render-blocking
+`<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">`
+ahead of the entry script — Vite/Tailwind starter boilerplate that survived into production. Ship is
+deployed at `ship.awsdev.treasury.gov` and is otherwise fully self-hosted (own icons, own CSS, own
+PWA manifest); this was the one remaining third-party runtime dependency on the first-paint critical
+path — a cross-origin round trip to Google from a `.treasury.gov` domain before the browser could
+even start fetching the font.
+
+**What changed.**
+- Added `@fontsource/inter` (^5.3.0, MIT-licensed) as a `web` dependency. It ships the actual woff2/
+  woff files plus pre-written `@font-face` CSS, split one file per weight — the standard way to
+  self-host a Google Font in a Vite app without hand-rolling subsetting.
+- `web/src/index.css` now imports `@fontsource/inter/400.css`, `/500.css`, `/600.css` — the same
+  three weights the removed Google Fonts URL requested (`wght@400;500;600`, no `ital` axis, so
+  normal style only) — ahead of the `@tailwind base/components/utilities` directives, so the
+  `@font-face` rules land ahead of Tailwind's generated layers in the cascade.
+- Removed the two `preconnect` links and the stylesheet `<link>` from `web/index.html`, replacing
+  them with a comment pointing at this ticket and at `src/index.css`.
+- No change needed to `tailwind.config.js` or `body`'s `font-family` in `index.css` — both already
+  named the bare family `'Inter'`, which now resolves to the self-hosted `@font-face` instead of the
+  Google-served one.
+- `@fontsource/inter`'s per-weight CSS files bundle one `@font-face` block per Unicode-range subset
+  (latin, latin-ext, cyrillic, cyrillic-ext, greek, greek-ext, vietnamese) — the same structure
+  Google's own `css2` endpoint returns by default for a `family=Inter` request with no `text=`
+  parameter. Kept that full set rather than switching to the `latin`-only variant: this is a project
+  and issue tracker where user-entered names/content can contain non-Latin-1 characters, and each
+  `@font-face` block is scoped by `unicode-range`, so a browser only downloads the woff2 subset that
+  actually matches the text on the page — derived from standard `unicode-range` browser behavior,
+  not measured with a network trace in this session.
+
+**Evidence.**
+- Regression test: `web/src/selfHostedFonts.test.ts` (6 assertions). Confirmed red first by
+  `git stash push -- web/index.html web/src/index.css` (reverting to the pre-fix state while keeping
+  the new test and the installed `@fontsource/inter` dependency), then
+  `npx vitest run src/selfHostedFonts.test.ts` from `web/`: 4 of 6 failed for the expected reasons
+  (`index.html` still matched `fonts.googleapis.com`/`fonts.gstatic.com`; a `<link>` tag still
+  pointed at `https://fonts.googleapis.com`; `index.css` had no `@fontsource/inter` imports; the
+  cascade-order check had nothing to find). Restored the fix with `git stash pop`; the same command
+  then passed 6/6.
+- Built output: `cd web && pnpm build`, then `grep -rn "fonts.googleapis\|fonts.gstatic" dist/`
+  returned no matches (grep exit code 1). `dist/assets/index-*.css` contains `@font-face` rules
+  referencing content-hashed local files (`inter-latin-400-normal-*.woff2`, etc.), and those files
+  are present under `dist/assets/`.
+- `pnpm --filter @ship/web test`: 66 test files / 492 tests passed (no new failures against the
+  known-empty quarantine in `audit/factory/quarantine.json`).
+- `pnpm --filter @ship/web type-check`: clean.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web build
+grep -rn "fonts.googleapis\|fonts.gstatic" web/dist/   # expect no matches
+pnpm --filter @ship/web test -- src/selfHostedFonts.test.ts
+```
+
+**Not verified.** Actual visual rendering of Inter in a browser, and an observed (vs. derived)
+browser network trace confirming only the `latin` woff2 subset is fetched for English-only content —
+no browser is available in this environment. The regression test and the `dist/` grep are static/
+build-output checks, not a rendered-page observation.
+
+**Rollback.** Revert `web/index.html` (restore the two `preconnect` links and the
+`fonts.googleapis.com/css2?family=Inter...` stylesheet link), revert `web/src/index.css` (remove the
+three `@fontsource/inter` `@import`s), remove `web/src/selfHostedFonts.test.ts`, and run
+`pnpm --filter @ship/web remove @fontsource/inter` to drop the dependency and its lockfile entry.
+
+---
+
 ## TRO-214 — [TS-9] web build and script files are never type-checked
 
 **What was broken.** `web/tsconfig.json`'s `include` is `["src"]` only, and `web/tsconfig.node.json`
