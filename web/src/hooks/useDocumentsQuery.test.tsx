@@ -55,8 +55,7 @@ describe('useDocumentsQuery — explicit full-corpus fetch after TRO-304 default
     await waitFor(() => expect(result.current.isSuccess || result.current.isError).toBe(true));
 
     expect(apiGet).toHaveBeenCalledTimes(1);
-    const [calledPath] = apiGet.mock.calls[0]!;
-    expect(calledPath).toBe('/api/documents?type=wiki&limit=500');
+    expect(apiGet).toHaveBeenCalledWith('/api/documents?type=wiki&limit=500');
   });
 
   it('requests any other document type with the same explicit large limit', async () => {
@@ -64,7 +63,6 @@ describe('useDocumentsQuery — explicit full-corpus fetch after TRO-304 default
 
     await waitFor(() => expect(result.current.isSuccess || result.current.isError).toBe(true));
 
-    const [calledPath] = apiGet.mock.calls[0]!;
-    expect(calledPath).toBe('/api/documents?type=project&limit=500');
+    expect(apiGet).toHaveBeenCalledWith('/api/documents?type=project&limit=500');
   });
 });

@@ -45,7 +45,9 @@ describe('GET /api/documents — pagination (TRO-304 / API-3)', () => {
       `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
       [testWorkspaceName]
     )
-    testWorkspaceId = workspaceResult.rows[0]!.id
+    const workspaceRow = workspaceResult.rows[0]
+    if (!workspaceRow) throw new Error('workspace insert returned no row')
+    testWorkspaceId = workspaceRow.id
 
     const userResult = await pool.query<{ id: string }>(
       `INSERT INTO users (email, password_hash, name)
@@ -53,7 +55,9 @@ describe('GET /api/documents — pagination (TRO-304 / API-3)', () => {
        RETURNING id`,
       [testEmail]
     )
-    testUserId = userResult.rows[0]!.id
+    const userRow = userResult.rows[0]
+    if (!userRow) throw new Error('user insert returned no row')
+    testUserId = userRow.id
 
     await pool.query(
       `INSERT INTO workspace_memberships (workspace_id, user_id, role)
