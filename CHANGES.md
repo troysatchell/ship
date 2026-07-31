@@ -8,6 +8,174 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-180 (DB-3) — Named the three hottest unnamed statements so Postgres can cache their plans
+
+**What was broken.** `api/src/db/client.ts`'s `pool` is a plain `pg.Pool`, and every call site in
+the app called `pool.query(text, values)` — the *unnamed* statement form. Postgres re-parses and
+re-plans an unnamed statement on every single execution; it never gets a chance to cache a plan.
+The audit's evidence (`audit/AUDIT_REPORT.md` DB-3): across one capture, parse (91.5ms) + bind
+(169.5ms) = 261.0ms of planning tax against only 167.2ms of actual execution — 61% of all database
+time. `documents` alone carries 13 indexes plus JSONB expression predicates, which makes its
+queries expensive to (re-)plan. The hypothesis in the ticket ("name the hot statements") held.
+
+**Which statements, and why these three.** The brief pointed at "the issues-list query, the
+session read/write path, the documents fetch path" as candidates and asked me to pick based on
+the evidence. `audit/db-query/raw/pg-statements.log` and `top-statements.json` show the real
+frequency distribution, not just the slowest single execution:
+
+| Statement | Call site | Executions in one capture |
+|---|---|---|
+| `UPDATE sessions SET last_activity ...` | `api/src/middleware/auth.ts` | 121 (pre-DB-2 throttle) / 134 in the raw parse log |
+| `SELECT ... FROM sessions s JOIN users u ...` | `api/src/middleware/auth.ts` | 107–119 |
+| `SELECT role FROM workspace_memberships ...` | `api/src/middleware/visibility.ts` (`isWorkspaceAdmin`) | 64–70 |
+| `/api/issues` list query | `api/src/routes/issues.ts` | 3 |
+| `/api/documents` list query | `api/src/routes/documents.ts` | 5–15 |
+
+I converted the first three — they dwarf any single list-endpoint query in raw execution count
+because they run on **every** authenticated request, regardless of route, not just on list views.
+
+I deliberately did **not** convert the `/api/issues` or `/api/documents` list queries, even though
+DB-3's own EXPLAIN ANALYZE demonstration used `/api/issues` (Planning 1.5–2.2ms vs Execution
+~0.5ms). Both routes build their SQL text conditionally per applied filter/type param (see
+`issues.ts:347-455`, `documents.ts:143+` — `query +=` appended per optional filter). node-postgres
+itself refuses to reuse a statement name for different text on the same connection
+(`api/node_modules/pg/lib/query.js:157-158`: `"Prepared statements must be unique - '<name>' was
+used for a different statement"`, thrown client-side, not server-side). Naming these as literally
+written would work for the very first filter combination a given pooled connection saw and then
+throw a real runtime error the first time that same connection served a *different* filter
+combination for the same route — a correctness regression, not just a missed optimization. Fixing
+that would require restructuring both routes to a filter-invariant SQL shape (e.g.
+`($n::text IS NULL OR col = $n)` for every optional filter), which is a materially larger, riskier
+change than this ticket's "name a handful of hot statements" scope, and both routes have already
+been touched by API-2/DB-5/DB-7/DB-8/TRO-182 — piling a structural rewrite on top belongs in its
+own ticket, not this one.
+
+**What changed.**
+- `api/src/middleware/auth.ts` — the session-lookup `SELECT` (session validation) and the
+  `last_activity` `UPDATE` (the DB-2 throttled write) now call
+  `pool.query({ name: 'auth_session_lookup', text, values })` and
+  `pool.query({ name: 'auth_session_touch_activity', text, values })` respectively, instead of
+  `pool.query(text, values)`. SQL text and parameter order are byte-identical to before.
+- `api/src/middleware/visibility.ts` — `isWorkspaceAdmin`'s role lookup now calls
+  `pool.query({ name: 'workspace_admin_role_lookup', text, values })`. Same SQL text, same
+  parameter order.
+- Added minimal local row types (`SessionAuthLookupRow`, `WorkspaceMembershipRoleRow`) on the two
+  files touched, matching `schema.sql`'s `sessions`/`users`/`workspace_memberships` columns —
+  these `pool.query` calls were implicitly `any` before (TS-2 territory); typing the exact lines
+  this ticket already touched is in scope, retyping the rest of either file is not.
+- No SQL text changed, no parameter changed, no schema change. This is purely a query-shape
+  (unnamed → named) change; behavior is unchanged by construction and confirmed unchanged by the
+  full api test suite (678/678 passing) and the new regression test below.
+- Three existing tests inspected `pool.query`'s first call argument directly
+  (`String(call[0])`, `call[0] as string`) assuming it was always a raw SQL string —
+  true for every call site except the two in `auth.ts` this ticket converted. Added
+  `api/src/test/sql-of.ts` (`sqlOf(arg)`, extracts `.text` from either call shape) and updated
+  `api/src/middleware/__tests__/session-activity-throttle.test.ts`,
+  `api/src/middleware/__tests__/session-activity-race.test.ts`, and
+  `api/src/routes/documents-query-count.test.ts` to use it. Assertions were updated to check the
+  new call shape (including the `name` field), not weakened or removed.
+
+**Regression test — `api/src/middleware/__tests__/named-prepared-statements.test.ts`** (new file,
+vitest, run by the gate). For each of the three converted statements, asserts (a) the call is
+issued as `{ name, text, values }` with the exact stable name, not `(text, values)`, (b) the same
+name is reused verbatim across independent requests, and (c) behavior is unchanged — a valid
+session still authenticates, the cookie still refreshes, `isWorkspaceAdmin` still resolves
+true/false correctly for admin/member/no-membership rows.
+
+Confirmed **red** for the right reason: copied the pre-fix `auth.ts`/`visibility.ts` into place via
+`git show HEAD:<path>` (this ticket's own base commit, before either file was touched), re-ran the
+suite, and 4 of 6 cases failed on exactly the shape assertion — e.g. `expected 'SELECT s.id,
+s.user_id, s.workspace_i…' to match object { name: 'auth_session_lookup', … }` — not an import
+error or a typo. The 2 behavior-only cases (member/no-membership) passed even against the pre-fix
+code, as expected, since behavior was never the thing this ticket changes. Restored the fix and
+all 6 passed. Full command used for the red run is in the PR description.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run \
+  src/middleware/__tests__/named-prepared-statements.test.ts \
+  src/middleware/__tests__/session-activity-throttle.test.ts \
+  src/middleware/__tests__/session-activity-race.test.ts \
+  src/routes/documents-query-count.test.ts
+# Full suite:
+pnpm --filter @ship/api test
+```
+
+**Measurement (Tier 2 — required for this ticket).** Seed volume: 500 documents (254 issue / 91
+wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project /
+6 standup / 5 program), 20 users, per `audit/shipshape.config.yaml` (`pnpm db:migrate && pnpm
+db:seed && ./api/node_modules/.bin/tsx audit/seed-augment.ts` against this worktree's own
+PostgreSQL 15.13). Script and full output kept in the scratchpad
+(`TRO-180-explain.js`, `TRO-180-explain-output.txt`), not committed — this is a one-off
+measurement, not a maintained tool.
+
+*Single dedicated connection* (PREPARE + `EXPLAIN (ANALYZE, BUFFERS) EXECUTE`, 7 executions —
+node-postgres's own named-query path uses the same server-side plan cache as SQL-level `PREPARE`):
+all three statements show `custom_plans: 5, generic_plans: 2` in `pg_prepared_statements` after 7
+executions — i.e. Postgres genuinely switched from a per-execution custom plan to a cached generic
+plan exactly at the 6th execution, confirmed via the catalog view, not inferred from timing alone.
+Planning time on execution 7 (the second generic-plan execution, once the generic plan itself was
+already built) collapsed to ~0.003–0.005ms across all three statements, down from ~0.02–0.09ms on
+the unnamed runs (after JIT/catalog-cache warmup on the first cold run, which read 2.3–3.2ms
+regardless of naming — that first-request cost is unrelated to this fix and unaffected by it).
+
+**Honest caveat on magnitude.** These three statements are cheap to plan even unnamed — small
+tables (`sessions`, `users`, `workspace_memberships`), no JSONB predicates, few indexes to
+consider. The absolute saving observed here (tens of microseconds per execution) is much smaller
+than DB-3's headline `/api/issues` number (Planning ~1.5–2.2ms against the 13-index `documents`
+table) — because, as explained above, `/api/issues` was deliberately not converted. This fix
+removes real, measured planning cost from the three highest-*volume* statements in the app (the
+ones executed on literally every request), not the highest-*latency* one DB-3 used as its
+demonstration query. Both are legitimate readings of "the hot statements"; this entry is explicit
+about which one was chosen and why.
+
+**Connection-pooling reality check (the nuance CLAUDE.md requires, not assumed).** Postgres's
+custom→generic plan cache is per-backend-connection. `api/src/db/client.ts` pools connections
+(`max: 10` dev / `20` prod, `idleTimeoutMillis: 30000`), and `pool.query()` acquires-and-releases a
+connection per call — a request does not keep "its" connection. Whether the cache benefit actually
+lands depends on whether any given pooled connection sees the *same named statement* 5+ times
+before it is recycled or goes idle:
+
+- An early probing attempt (issuing a plain follow-up query through `pool.query()` after a burst)
+  undercounted: `pool.query()`'s own acquire/release pattern tends to hand back the
+  most-recently-released idle connection under low concurrency, so a naive sequential probe kept
+  landing on one connection and looked like execution counts were fragmented. Corrected by
+  checking out a client explicitly (`pool.connect()` / `client.query()` / `release()`) per
+  simulated request and tagging it with `pg_backend_pid()` on the *same* client — the only way to
+  get a true per-connection count.
+- With that corrected method: 60 simulated requests to the admin-role-check statement, at
+  concurrency 10 (= pool max) in 6 bursts, spread evenly across all 10 pooled connections — **all
+  10 connections reached exactly 6 executions each**, i.e. all 10 crossed the 5-execution
+  threshold and would be serving a cached generic plan for anything past their 6th hit.
+- A connection given 7 uninterrupted executions in a row showed cumulative
+  `custom_plans: 5, generic_plans: 8` (13 total — 6 from the burst phase plus 7 more, since
+  `pool.connect()` handed back an already-warmed connection) — consistent with "first 5 ever on a
+  connection are custom, everything after is generic," accumulating correctly across separate
+  calls to the pool, not just within one tight loop.
+
+**So: observed, not assumed — under sustained/bursty traffic against this hot path (which by
+definition fires on every request), the benefit is real and lands on every connection in the pool,
+not just a lucky few.** The caveat that remains genuinely unverified: at *low* request volume
+(sparse traffic spread out over minutes, well below `idleTimeoutMillis`'s 30s window), a
+connection could idle out and be recycled before ever reaching 5 executions of a given name,
+in which case the new connection starts the count over. This ticket did not — and could not,
+without a production traffic trace — measure Ship's actual request rate against this threshold.
+Given these three statements run on literally every authenticated request, any workspace with more
+than a handful of concurrent users should comfortably clear 5 hits per connection well within the
+30s idle window; a single-user, sparse-usage deployment is the case where the benefit is more
+theoretical than realized.
+
+**Roll back.** Revert the commits on `fix/db-3-query-plan-cache` touching `api/src/middleware/auth.ts`
+and `api/src/middleware/visibility.ts` (reverts to plain `pool.query(text, values)` — no schema or
+data changes to undo), and remove `api/src/middleware/__tests__/named-prepared-statements.test.ts`
+and `api/src/test/sql-of.ts`. The three test-file updates that switched to `sqlOf(...)` can be
+reverted alongside, or left in place — `sqlOf` is a superset-compatible extraction that also
+handles the plain-string case, so it is harmless to keep even if the production naming is rolled
+back.
+
+---
+
 ## TRO-196 (ERR-9) — BacklinksPanel's `console.error` storm on every failed poll buried the real signal
 
 **What was broken.** `web/src/components/editor/BacklinksPanel.tsx`'s `fetchBacklinks()` polls
