@@ -109,9 +109,26 @@ resource "aws_ssm_parameter" "app_base_url" {
 }
 
 # Generate random session secret
+#
+# Module counterpart of `random_password.session_secret` in the flat root's
+# `terraform/ssm.tf` — same TF-6 / TRO-239 finding, second location. This
+# module backs `terraform/environments/dev` and `terraform/environments/shadow`
+# (shadow is the UAT stack per `.claude/CLAUDE.md`). Same blast-radius hazard
+# as the module's `random_password.db_password` in `../aurora/main.tf`, but
+# this value signs every `express-session` cookie (`SESSION_SECRET`) for that
+# environment — a silent regeneration (state loss, an accidental `-replace`)
+# logs out every active user of that environment on the next request, with no
+# warning.
+#
+# `keepers = {}` records that nothing currently triggers rotation
+# intentionally. A deliberate rotation should be an announced operation, not
+# a Terraform side effect — if a real rotation workflow is ever needed, it
+# belongs in a runbook, not a keeper value that fires on an ordinary apply.
 resource "random_password" "session_secret" {
   length  = 64
   special = false
+
+  keepers = {}
 }
 
 # SSM Parameter - Session Secret (for express-session)

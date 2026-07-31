@@ -93,6 +93,107 @@ version of the file (or `git show 2a97a2ad:e2e/program-mode-week-ux.spec.ts`) to
 
 ---
 
+## TRO-239 — [TF-6] Secret generators have no `keepers` — regeneration would silently log out every user and rotate the live DB password
+
+**What was broken.** `random_password.db_password` and `random_password.session_secret` had no
+`keepers` argument in either place they're declared:
+
+- `terraform/database.tf:1` (flat root — the authoritative prod config per `terraform/README.md`'s
+  TF-2 resolution) and `terraform/ssm.tf:129`.
+- `terraform/modules/aurora/main.tf:1` and `terraform/modules/ssm/main.tf:112` — the module
+  counterparts consumed by `terraform/environments/dev` and `terraform/environments/shadow`
+  (shadow is the UAT stack per `.claude/CLAUDE.md`). Found by `grep -rn "random_password"
+  terraform/` while scoping the fix — same defect, same finding, second location, same pattern TF-1
+  hit (flat root fixed under TRO-234, module gap closed later under TRO-303). Fixed both in this
+  pass rather than filing a follow-up.
+
+`random_password` only regenerates when its `keepers` change or Terraform state is lost — so this
+was not active churn — but with no `keepers` argument at all, nothing on the resource records that
+the empty trigger set is deliberate. An accidental state loss (bad `terraform state rm`/reimport) or
+an explicit `-replace`/`taint` on either resource would silently rotate the live secret as a side
+effect of an ordinary-looking apply:
+
+- `random_password.db_password` regenerating rotates the live Aurora master password
+  (`master_password` on `aws_rds_cluster.aurora`, mirrored into the `DATABASE_URL`/`DB_PASSWORD` SSM
+  parameters the API reads at boot).
+- `random_password.session_secret` regenerating changes the key that signs every `express-session`
+  cookie (`SESSION_SECRET`, read by `api/src/config/ssm.ts:150` and set into `process.env` at line
+  157) — every existing session's signature check fails on its next request, logging out every
+  active user simultaneously, with no warning.
+
+**What changed.** Four resources, four files — a comment plus `keepers = {}` on each, no other
+argument touched:
+
+- `terraform/database.tf:1-22` (`random_password.db_password`)
+- `terraform/ssm.tf:128-149` (`random_password.session_secret`)
+- `terraform/modules/aurora/main.tf:1-23` (`random_password.db_password`, dev/shadow)
+- `terraform/modules/ssm/main.tf:111-132` (`random_password.session_secret`, dev/shadow)
+
+Each comment records the specific blast radius for that resource (quoted above) and states that
+`keepers = {}` is deliberate — nothing currently triggers rotation — with a note on where a real
+trigger value would go if intentional rotation is ever wanted. The `session_secret` comments also
+record the ticket's second consideration: rotating that secret on purpose should be an announced,
+documented operation (a runbook/maintenance window), not something that rides along as a Terraform
+side effect — not implemented here, just decided against building a rotation mechanism that itself
+becomes a new footgun.
+
+**Verified `keepers = {}` does not itself trigger rotation.** This was the load-bearing risk in this
+change — if adding the argument forced a replace, the fix would cause exactly the incident it's
+meant to prevent. Tested empirically in a throwaway local-backend config (not this repo's state,
+`hashicorp/random` 3.9.0 — same version pinned in `terraform/.terraform.lock.hcl`): created a
+`random_password` with no `keepers`, applied it, then added `keepers = {}` and re-planned/applied.
+
+```
+$ terraform plan   # after adding keepers = {} to an already-applied resource
+  # random_password.test_secret will be updated in-place
+  ~ resource "random_password" "test_secret" {
+        id          = "none"
+      + keepers     = {}
+        # (12 unchanged attributes hidden)
+    }
+Plan: 0 to add, 1 to change, 0 to destroy.
+```
+
+`0 to add, 1 to change, 0 to destroy` — an in-place update, not a replace. Applied it and compared
+the `result` attribute before and after: byte-identical. Going from "no `keepers` argument" to
+`keepers = {}` is a metadata-only change to the resource; it does not read as a keeper-value change
+and does not force new.
+
+**How to run it / verify it.** There is nothing to "run" — this is a documentation and
+default-safety change to existing resource declarations, not new infrastructure. What was actually
+run, using a Terraform binary from a prior job's scratch cache (v1.9.8, satisfies this repo's
+`required_version >= 1.6.0`; not committed to the repo):
+
+```bash
+cd terraform && terraform fmt -check -recursive .   # exit 0, no diff, before and after
+cd terraform && terraform init -backend=false -input=false && terraform validate   # Success!
+cd terraform/environments/dev && terraform init -backend=false -input=false && terraform validate   # Success!
+cd terraform/environments/shadow && terraform init -backend=false -input=false && terraform validate   # Success!
+```
+
+All three consuming roots (flat prod root, `environments/dev`, `environments/shadow`) report
+`Success! The configuration is valid.` with 0 errors and 0 warnings, both before and after this
+change. **No `terraform plan` or `terraform apply` was run against any real backend or AWS
+credentials** — there are none available in this environment (same documented gap as
+TF-1/TF-2/TF-3/TRO-303), and this ticket explicitly prohibits it regardless. The `terraform plan`
+shown above ran against a disposable scratch config to answer one narrow question (does `keepers =
+{}` force-replace an existing resource); it never touched this repo's Terraform state or any live
+credential.
+
+**No vitest regression test applies.** Same precedent as TF-1/TF-3/TF-4/TF-5/TF-9/TRO-303: this is a
+Terraform-only comment-and-argument change with no application code path for vitest to exercise. The
+evidence is the `fmt`/`validate` output above (clean before and after) plus the local `keepers = {}`
+in-place-update proof. `gate.sh`'s `regression-test` check is expected to fail honestly here rather
+than have a fake test manufactured to satisfy it.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf-6-secret-keepers`. This removes the four
+comments and the `keepers = {}` line from all four files, returning the resources to their
+pre-TRO-239 state (no `keepers` argument, no blast-radius comment). No live AWS state or credential
+is touched either way, since no `apply` was ever run — and per the verified test above, the revert
+itself is also a no-op update in place, not a rotation.
+
+---
+
 ## TRO-307 — [SECURITY] CodeQL: missing rate limiting across api/src/routes
 
 **What CodeQL reported.** `js/missing-rate-limiting` (High) has 352 open alerts as of 2026-07-31
