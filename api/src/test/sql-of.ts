@@ -9,11 +9,18 @@
  * re-deriving the same `typeof arg === 'string' ? arg : arg.text` check per file.
  *
  * Usage: `sqlOf(pool.query.mock.calls[i][0])`.
+ *
+ * Throws rather than returning '' on an unrecognized shape (CodeRabbit,
+ * TRO-180): a silent empty string would make a real caller bug (e.g. a query
+ * config lacking `text`, or a `Submittable` stream neither test file here
+ * ever passes) look identical to "no match" in every `.startsWith(...)`
+ * assertion built on top of this — failing loudly here is strictly safer for
+ * a test helper.
  */
 export function sqlOf(arg: unknown): string {
   if (typeof arg === 'string') return arg;
   if (arg && typeof arg === 'object' && 'text' in arg && typeof arg.text === 'string') {
     return arg.text;
   }
-  return '';
+  throw new TypeError(`sqlOf: expected a SQL string or { text: string }, got ${JSON.stringify(arg)}`);
 }
