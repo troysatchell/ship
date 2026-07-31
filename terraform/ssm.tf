@@ -126,9 +126,26 @@ resource "aws_ssm_parameter" "app_base_url" {
 }
 
 # Generate random session secret
+#
+# No `keepers`: same blast-radius hazard as `random_password.db_password` in
+# database.tf (TF-6 / TRO-239), but the cost lands differently — this value
+# signs every `express-session` cookie (the app's `SESSION_SECRET`, read at
+# boot by `api/src/config/ssm.ts`). A silent regeneration (state loss, an
+# accidental `-replace`) invalidates the signature on every existing session
+# cookie on the next request: every active user is logged out simultaneously,
+# with no maintenance window and no warning.
+#
+# `keepers = {}` records that nothing currently triggers rotation
+# intentionally. Deliberately rotating this secret should be an announced
+# operation (a maintenance window, not a Friday deploy that silently logs
+# everyone out) — if a real rotation workflow is ever needed, it belongs in a
+# runbook/documented procedure, not a keeper value that fires on an ordinary
+# apply.
 resource "random_password" "session_secret" {
   length  = 64
   special = false
+
+  keepers = {}
 }
 
 # SSM Parameter - Session Secret (for express-session)

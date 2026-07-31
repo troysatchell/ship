@@ -1,6 +1,25 @@
+# Generate the Aurora master password.
+#
+# Module counterpart of `random_password.db_password` in the flat root's
+# `terraform/database.tf` — same TF-6 / TRO-239 finding, second location.
+# This module backs `terraform/environments/dev` and
+# `terraform/environments/shadow` (shadow is the UAT stack per
+# `.claude/CLAUDE.md`), so the same hazard applies there: no `keepers`, so
+# `random_password` only regenerates on state loss or an explicit
+# `terraform taint`/`-replace`, but nothing records that as deliberate. Either
+# event silently rotates the live dev/shadow Aurora master password (flows
+# into `master_password` on `aws_rds_cluster.aurora` below) as a side effect
+# of an ordinary-looking apply.
+#
+# `keepers = {}` makes that decision explicit: nothing currently triggers
+# rotation. If a deliberate rotation policy is ever wanted, put the trigger
+# value here rather than relying on state loss or `-replace` to do it as a
+# side effect.
 resource "random_password" "db_password" {
   length  = 32
   special = false # Avoid special chars that might cause issues
+
+  keepers = {}
 }
 
 resource "aws_db_subnet_group" "aurora" {

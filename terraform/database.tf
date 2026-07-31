@@ -1,6 +1,24 @@
+# Generate the Aurora master password.
+#
+# No `keepers`: `random_password` only regenerates on state loss or an
+# explicit `terraform taint`/`-replace` — this is not active churn today. But
+# with no `keepers` argument at all, there's nothing on the resource itself
+# recording that the empty trigger set is deliberate rather than an
+# oversight. Either of those events (an accidental `terraform state rm` +
+# botched reimport, a careless `-replace`) silently rotates the *live* Aurora
+# master password (flows into `master_password` on `aws_rds_cluster.aurora`
+# below, and into the mirrored `DATABASE_URL`/`DB_PASSWORD` SSM parameters in
+# ssm.tf) as a side effect of an ordinary-looking apply (TF-6 / TRO-239).
+#
+# `keepers = {}` makes that decision explicit: nothing currently triggers
+# rotation. If a deliberate rotation policy is ever wanted, put the trigger
+# value here (e.g. `keepers = { rotated_on = "2026-Q3" }`, bumped by hand)
+# rather than relying on state loss or `-replace` to do it as a side effect.
 resource "random_password" "db_password" {
   length  = 32
   special = false # Avoid special chars that might cause issues
+
+  keepers = {}
 }
 
 resource "aws_db_subnet_group" "aurora" {
