@@ -50,6 +50,62 @@
  * other than the original stale `last_activity` — not "unlikely under contention", but
  * unreachable by construction, independent of how slow or reordered the surrounding
  * scheduling is.
+ *
+ * TRO-300 — gating DISPATCH order is not the same guarantee as gating READ order.
+ *
+ * TRO-288's barrier above was observed to fail in real CI three separate times after
+ * landing (PRs #62, #63, #66; identical signature each time, pulled from the CI job's
+ * uploaded `api-tests.json`: `AssertionError: the burst did not race ... expected 1 to
+ * be greater than 1` at this file's precondition check — the exact failure mode TRO-288
+ * was written to eliminate). Not reproduced locally despite deliberately escalating
+ * attempts (documented in full in TRO-300's CHANGES.md entry: CPU-pinning the Postgres
+ * container down to a single core, real Docker-VM-level contention from sibling
+ * containers pinned to that same core, and finally running Node itself inside a Linux
+ * container `--cpuset-cpus`-pinned to the identical 2 cores as Postgres — matching this
+ * repo's actual CI topology as closely as this hardware allows — 100+ runs total, zero
+ * repro). That gap between "confirmed real in CI" and "not reproducible on available
+ * dev hardware" is itself the finding this fix responds to, not proof of a specific
+ * trigger.
+ *
+ * The mechanistic gap (derived, not directly observed — no debugger was attached to a
+ * failing CI run): `createArrivalBarrier` only holds each SELECT's DISPATCH (the JS-level
+ * call into `pool.query`) until all `BURST` callers have asked to send one. Tracing
+ * `pg-pool`'s `Pool.prototype.query` → `connect` → `_pulseQueue` (node_modules/.pnpm/
+ * pg-pool@3.10.1/node_modules/pg-pool/index.js), that dispatch step really is
+ * synchronous JS work draining through `process.nextTick`, so all `BURST` SELECTs do
+ * leave the Node process in the same tick, before any of their responses can be
+ * processed — confirmed by reading, not assumed. But leaving Node "together" only
+ * bounds when the bytes are WRITTEN to each connection's socket. It says nothing about
+ * when Postgres's own per-connection backend PROCESS is scheduled to actually READ and
+ * EXECUTE that statement — and per-backend scheduling is arbitrated by the OS, not by
+ * anything this barrier (or any client-side code) controls. Under real contention
+ * (`.github/workflows/ci.yml`'s 2-vCPU runner, Postgres as a co-located service
+ * container sharing those same 2 vCPUs, and — specific to this middleware's actual code
+ * path — an intervening, unbarriered `workspace_memberships` lookup between the
+ * session-lookup SELECT and the eventual UPDATE, inline in `authMiddleware` itself
+ * (`auth.ts`'s `if (session.workspace_id && !session.is_super_admin)` block, which this
+ * fixture's session always satisfies)), one connection's
+ * entire SELECT-membership-check-decide-UPDATE-commit cycle can plausibly finish before
+ * a different, already-dispatched connection's SELECT is ever scheduled to execute —
+ * meaning that SELECT, whenever it finally runs, correctly reads the just-committed
+ * fresh value and correctly declines to write. That collapses `updateStatements` back
+ * toward 1, reproducing this file's original failure through a channel the TRO-288
+ * barrier never gated.
+ *
+ * `createCompletionBarrier` below closes that gap by moving what is held from DISPATCH
+ * to RESULT DELIVERY. Every barriered call's underlying query is sent immediately (no
+ * send-side delay at all — timing of the send no longer matters), but the PROMISE each
+ * caller is awaiting does not settle until every one of the `BURST` calls' underlying
+ * queries has itself settled. Concurrency argument, and this one does not depend on
+ * dispatch order, network timing, or Postgres backend scheduling: no caller can resume
+ * past its `await pool.query(...)` — and therefore no caller can act on its read or
+ * reach the write decision — until literally every other barriered caller's read has
+ * ALSO already completed. Since none of the `BURST` callers can have issued an UPDATE
+ * before every one of them has resumed, no UPDATE can exist while any of the `BURST`
+ * SELECTs is still executing, regardless of the real order or speed at which Postgres
+ * actually ran them. That makes the "all `BURST` SELECTs observe the same stale row"
+ * precondition true by construction, independent of every layer of scheduling in the
+ * stack — not just the client-side dispatch layer TRO-288 addressed.
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import crypto from 'crypto';
@@ -60,22 +116,43 @@ import { pool } from '../../db/client.js';
 const BURST = 10;
 
 /**
- * Holds every call whose SQL satisfies `isBarriered` until `count` such calls have
- * arrived, then releases all of them in the same tick. See the module docblock
- * (TRO-288) for the concurrency argument this exists to make structural.
+ * Holds the RESULT of every call whose SQL satisfies `isBarriered` until all `count`
+ * such calls' underlying queries have themselves settled (resolved OR rejected), then
+ * releases every result together. Each underlying query is dispatched immediately —
+ * nothing about WHEN it is sent is delayed or synchronized — only when its caller is
+ * allowed to see the outcome and act on it.
+ *
+ * See the module docblock (TRO-300) for why this has to gate completion rather than
+ * dispatch: TRO-288's `createArrivalBarrier` (superseded by this function) synchronized
+ * only the client-side send, which this repo's CI runner demonstrated is not the same
+ * guarantee as synchronizing when Postgres actually executes each statement. Gating
+ * completion instead removes that dependency entirely — the concurrency argument holds
+ * regardless of dispatch order, network timing, or database backend scheduling, because
+ * it is enforced only in this process's own promise resolution, never by observing or
+ * assuming anything about how fast or in what order the real queries actually ran.
+ *
+ * `markDone` is registered on both branches of `resultPromise.then` so a rejected query
+ * still counts toward `count` — an error must not leave the other `count - 1` callers
+ * hung on a barrier that can never release.
  */
-function createArrivalBarrier(isBarriered: (sql: string) => boolean, count: number) {
-  let arrived = 0;
+function createCompletionBarrier(isBarriered: (sql: string) => boolean, count: number) {
+  let completed = 0;
   let releaseFn: (() => void) | undefined;
-  const allArrived = new Promise<void>((resolve) => {
+  const allCompleted = new Promise<void>((resolve) => {
     releaseFn = resolve;
   });
 
   return function gate(sql: string, dispatch: () => unknown): unknown {
     if (!isBarriered(sql)) return dispatch();
-    arrived += 1;
-    if (arrived === count) releaseFn?.();
-    return allArrived.then(dispatch);
+
+    const resultPromise = Promise.resolve(dispatch());
+    const markDone = () => {
+      completed += 1;
+      if (completed === count) releaseFn?.();
+    };
+    resultPromise.then(markDone, markDone);
+
+    return Promise.all([resultPromise, allCompleted]).then(([result]) => result);
   };
 }
 
@@ -160,16 +237,16 @@ describe('concurrent session-activity writes (TRO-179 / TRO-177)', () => {
     const warm = await Promise.all(Array.from({ length: BURST }, () => pool.connect()));
     warm.forEach((client) => client.release());
 
-    // TRO-288 — install the arrival barrier UNDERNEATH the spy, not through it.
-    // `pool.query` is overloaded (promise, callback, and stream forms); vitest's
-    // `mockImplementation` collapses an overloaded method to its last signature
-    // (the callback form), which is the wrong shape for how this codebase actually
-    // calls it. Reassigning the property directly sidesteps that entirely: `spy`
-    // below observes and calls through to whatever `pool.query` currently is,
+    // TRO-288 / TRO-300 — install the completion barrier UNDERNEATH the spy, not
+    // through it. `pool.query` is overloaded (promise, callback, and stream forms);
+    // vitest's `mockImplementation` collapses an overloaded method to its last
+    // signature (the callback form), which is the wrong shape for how this codebase
+    // actually calls it. Reassigning the property directly sidesteps that entirely:
+    // `spy` below observes and calls through to whatever `pool.query` currently is,
     // exactly as it did before this change, with the barrier as an invisible layer
     // underneath it.
     const trueQuery = pool.query;
-    const gateArrival = createArrivalBarrier(isSessionLookup, BURST);
+    const gateCompletion = createCompletionBarrier(isSessionLookup, BURST);
     pool.query = function barrieredQuery(...args: unknown[]): unknown {
       const sql = String(args[0]);
       // review-pattern-ok: pool.query's overloads collapse to a single signature
@@ -177,7 +254,7 @@ describe('concurrent session-activity writes (TRO-179 / TRO-177)', () => {
       // to the real implementation this codebase's 1-2 arg promise-based calls
       // actually use; `unknown` types on both sides, not `any`.
       const dispatch = () => (trueQuery as (...a: unknown[]) => unknown).apply(pool, args);
-      return gateArrival(sql, dispatch);
+      return gateCompletion(sql, dispatch);
     } as typeof pool.query;
 
     const spy = vi.spyOn(pool, 'query');
@@ -210,9 +287,12 @@ describe('concurrent session-activity writes (TRO-179 / TRO-177)', () => {
     // The burst must genuinely race, or this test proves nothing: if the requests were
     // serialized, only one would ever judge the write due and the row-count assertion
     // below would pass even against an unconditional UPDATE. Before TRO-288 this was a
-    // hope resting on Promise.all's synchronous dispatch; the arrival barrier above now
-    // makes it structurally true (see the module docblock), so this should never fail —
-    // it stays as the check that would catch it if the barrier itself ever regressed.
+    // hope resting on Promise.all's synchronous dispatch; TRO-288's arrival barrier made
+    // dispatch order structural but (per TRO-300) that is not the same guarantee as
+    // read order under real Postgres scheduling contention. The completion barrier
+    // above makes it structurally true regardless of scheduling anywhere in the stack
+    // (see the module docblock), so this should never fail — it stays as the check that
+    // would catch it if the barrier itself ever regressed.
     expect(
       updateStatements,
       'the burst did not race — every request should have read the same pre-write row'
@@ -239,36 +319,107 @@ describe('concurrent session-activity writes (TRO-179 / TRO-177)', () => {
   });
 });
 
-// TRO-288 — dedicated coverage for the arrival barrier itself, isolated from the
-// database. This is what would catch a regression in the barrier's own logic (e.g.
-// releasing on the wrong count, or failing to pass through non-matching calls) without
-// needing a full concurrent-burst repro to notice.
-describe('createArrivalBarrier (TRO-288 test-harness helper)', () => {
-  it('holds every matching call until `count` have arrived, then releases them together', async () => {
-    const dispatched: string[] = [];
-    const gate = createArrivalBarrier((sql) => sql === 'MATCH', 3);
-    const dispatch = (label: string) => () => {
-      dispatched.push(label);
-      return label;
-    };
-
-    const first = gate('MATCH', dispatch('a'));
-    const second = gate('MATCH', dispatch('b'));
-    // Only 2 of 3 required arrivals — neither may have dispatched yet.
-    expect(dispatched, 'must not release before all `count` calls arrive').toEqual([]);
-
-    const third = gate('MATCH', dispatch('c'));
-    // The 3rd arrival is what releases all three.
-    await Promise.all([first, second, third]);
-    expect(dispatched.slice().sort()).toEqual(['a', 'b', 'c']);
+/** A promise plus its resolve function, exposed for a test to settle on its own schedule. */
+function createDeferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
+  // `resolveFn` starts undefined and is populated synchronously by the executor below
+  // (Promise executors always run synchronously) — typed as optional rather than
+  // asserted non-null, matching `createCompletionBarrier`'s `releaseFn` above.
+  let resolveFn: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((res) => {
+    resolveFn = res;
   });
+  return { promise, resolve: (value: T) => resolveFn?.(value) };
+}
+
+// TRO-288 / TRO-300 — dedicated coverage for the completion barrier itself, isolated
+// from the database. This is what would catch a regression in the barrier's own logic
+// (e.g. releasing on the wrong count, gating dispatch instead of completion, or failing
+// to pass through non-matching calls) without needing a full concurrent-burst repro to
+// notice — and, per the TRO-300 module docblock, a full concurrent-burst repro is
+// exactly what this project could NOT reliably produce on demand even under deliberate
+// load, which is the whole reason this coverage has to be deterministic instead.
+describe('createCompletionBarrier (TRO-288 / TRO-300 test-harness helper)', () => {
+  it(
+    'dispatches every matching call immediately, but holds each result until every ' +
+      'call has settled — even when the underlying queries settle in a scrambled, ' +
+      'out-of-dispatch order',
+    async () => {
+      // This is the TRO-300 regression case: TRO-288's `createArrivalBarrier` only
+      // synchronized DISPATCH, so if the underlying queries settle out of dispatch
+      // order (exactly what real Postgres backend scheduling can do under CI
+      // contention — see the module docblock), the FIRST caller to settle would have
+      // resumed and been able to act while the others were still mid-flight. Run the
+      // old barrier's logic through this same scenario and it fails immediately
+      // (confirmed by hand before this fix landed): the first `.then(dispatch)` to
+      // settle resolves on its own, without waiting for the rest. This test proves the
+      // replacement does not have that gap — deterministically, via manually-controlled
+      // deferreds, with no real timer, real query, or real scheduling involved.
+      const deferred = [createDeferred<string>(), createDeferred<string>(), createDeferred<string>()];
+      const dispatched: number[] = [];
+      const settledOrder: number[] = [];
+
+      const gate = createCompletionBarrier((sql) => sql === 'MATCH', 3);
+      const results = deferred.map((d, i) => {
+        const dispatch = () => {
+          dispatched.push(i);
+          return d.promise;
+        };
+        // `gate(...)` returns `unknown` (it forwards whatever `dispatch` produces), so
+        // this awaits it directly rather than chaining `.then` on an `unknown` value.
+        return (async () => {
+          const value = await gate('MATCH', dispatch);
+          settledOrder.push(i);
+          return value;
+        })();
+      });
+
+      // All 3 underlying queries must be sent immediately — nothing about send timing
+      // is gated. Flush the microtask queue once so the synchronous `dispatch` calls
+      // above have had a chance to run before we assert on them.
+      await Promise.resolve();
+      expect(dispatched.sort(), 'every call must dispatch immediately, not on release').toEqual([
+        0, 1, 2,
+      ]);
+
+      // Resolve deliberately OUT OF DISPATCH ORDER — call 2 first, matching the real
+      // failure shape (a later-dispatched connection's query finishes first). Flushing
+      // microtasks after each one and checking `settledOrder` proves none of the three
+      // outer promises has resolved yet, even though its own underlying query has.
+      deferred[2]?.resolve('c');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settledOrder, 'must not release before every call has settled').toEqual([]);
+
+      deferred[0]?.resolve('a');
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(settledOrder, 'must not release before every call has settled').toEqual([]);
+
+      // The last (2nd-dispatched) call settling is what releases all three together.
+      deferred[1]?.resolve('b');
+      const values = await Promise.all(results);
+      expect(values).toEqual(['a', 'b', 'c']);
+      expect(settledOrder.slice().sort()).toEqual([0, 1, 2]);
+    }
+  );
 
   it('passes non-matching calls straight through without waiting on the barrier', async () => {
     // A barrier that will never see enough matching calls to release — if a
     // non-matching call were (incorrectly) subject to it, this would hang and the
     // test would time out rather than resolve.
-    const gate = createArrivalBarrier((sql) => sql === 'MATCH', 5);
+    const gate = createCompletionBarrier((sql) => sql === 'MATCH', 5);
     const result = await gate('SOMETHING ELSE ENTIRELY', () => 'dispatched-immediately');
     expect(result).toBe('dispatched-immediately');
+  });
+
+  it('still releases every caller if one of the underlying calls rejects', async () => {
+    // A rejection must still count toward `count`, or one failed query would hang
+    // every other concurrent caller on a barrier that can never release.
+    const gate = createCompletionBarrier((sql) => sql === 'MATCH', 2);
+    const ok = gate('MATCH', () => Promise.resolve('fine'));
+    const bad = gate('MATCH', () => Promise.reject(new Error('boom')));
+
+    await expect(bad).rejects.toThrow('boom');
+    await expect(ok).resolves.toBe('fine');
   });
 });
