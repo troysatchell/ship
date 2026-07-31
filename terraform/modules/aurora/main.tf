@@ -67,6 +67,7 @@ resource "aws_rds_cluster" "aurora" {
   master_username                 = "postgres"
   master_password                 = random_password.db_password.result
   storage_encrypted               = true
+  deletion_protection             = true
   skip_final_snapshot             = var.environment != "prod"
   final_snapshot_identifier       = var.environment == "prod" ? "${var.project_name}-final-snapshot-${formatdate("YYYY-MM-DD-hhmm", timestamp())}" : null
   backup_retention_period         = var.environment == "prod" ? 7 : 1
@@ -88,7 +89,8 @@ resource "aws_rds_cluster" "aurora" {
   }
 
   lifecycle {
-    ignore_changes = [final_snapshot_identifier]
+    ignore_changes  = [final_snapshot_identifier]
+    prevent_destroy = true
   }
 }
 
