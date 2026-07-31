@@ -21,6 +21,69 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-291 — Login error offered no recovery guidance for invalid credentials (WCAG 3.3.3)
+
+**What was broken.** `api/src/routes/auth.ts:54,89` deliberately returns the exact same message —
+`"Invalid email or password"` — for both "no such account" and "wrong password," a security choice
+against account enumeration that is correct and **unchanged by this ticket**. `web/src/pages/
+Login.tsx` rendered that string verbatim inside a `role="alert"` div and offered zero recovery
+affordance anywhere on the page. Confirmed by grep rather than assumed: `grep -rni "forgot"
+web/src api/src` matched one unrelated code comment (a CLI test docstring, "caller that forgot
+the..."); `grep -rni "reset.password\|reset_password\|resetpassword" web/src api/src` matched
+nothing; `grep -rni "recovery" web/src api/src` matched only unrelated usages (cache-corruption
+recovery in `queryClient.ts`, error-logging-recovery comments in `BacklinksPanel.*`, a DB-recovery
+test in `ensureDatabase.test.ts`) — none about account/password recovery. Listing every admin/
+invite/password-adjacent endpoint (`grep -n "router\.\(get\|post\|put\|patch\|delete\)"
+api/src/routes/admin.ts api/src/routes/admin-credentials.ts api/src/routes/invites.ts`) shows no
+`/password/reset` or `/forgot-password` route, and `web/src` has no forgot-password page or link.
+That's the WCAG 3.3.3 (Error Suggestions) gap: the error was shown, but nothing told the user what
+to do next.
+
+**What changed.** `web/src/pages/Login.tsx`'s existing error `<div role="alert">` still renders
+`{error}` completely unmodified — the security-sensitive API string is untouched. A new line is
+appended inside the same alert, scoped by an exact string match (`error === 'Invalid email or
+password'`) so it only appears for the credential-failure case and not for client-side validation
+errors ("Email address is required") or network failures ("Failed to sign in..."):
+
+> Don't have an account, or can't remember your password? Contact your workspace admin for help.
+
+This app has no self-service password-reset flow (confirmed by the grep above, and by `grep -n
+"router\.\(get\|post\|put\|patch\|delete\)" api/src/routes/admin.ts api/src/routes/admin-credentials.ts
+api/src/routes/invites.ts`, which lists every admin/invite endpoint and none of them reset an
+existing user's password) — so "contact your workspace admin" is the one real recovery path today,
+not an invented one. `web/src/pages/InviteAccept.tsx:173` already uses the same "contact your
+workspace admin" pattern for its own expired-invite state, so this isn't a new UI idiom for the app.
+
+Also tightened `e2e/accessibility-remediation.spec.ts`'s `'login errors provide recovery
+suggestions'` test (WCAG 3.3.3 describe block), which previously only asserted the error text was
+longer than 10 characters — a proxy weak enough that `"Invalid email or password"` alone (the
+pre-fix, no-guidance state) already satisfied it. It now asserts the alert both still contains
+`'Invalid email or password'` verbatim and matches `/workspace admin/i`.
+
+**Not verified.** Screen-reader announcement of the new text was not checked with an actual screen
+reader (no VoiceOver/NVDA session was run against this change) — this is engineering judgment that
+the added text satisfies WCAG 3.3.3's "suggestion is provided" requirement, not a confirmed
+announcement result. Per the A11Y-1 lesson elsewhere in this file, that gap is real: axe/lint-level
+checks cannot confirm what assistive technology actually speaks.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test -- src/pages/Login.recoveryHint.test.tsx   # 3/3 pass (new)
+pnpm --filter @ship/web test -- src/pages/Login.test.tsx                # 2/2 pass (unaffected)
+pnpm exec playwright test e2e/accessibility-remediation.spec.ts -g "login errors provide recovery suggestions"
+```
+
+**How to roll it back.** `git revert <this commit>` removes the `Login.tsx` recovery line, the new
+`web/src/pages/Login.recoveryHint.test.tsx` regression test, the tightened e2e assertion, and this
+entry. If reverting by hand: restore `Login.tsx`'s error `<div role="alert">{error}</div>` to have
+no additional child content, `git rm web/src/pages/Login.recoveryHint.test.tsx`, revert the e2e
+assertion in `accessibility-remediation.spec.ts` back to the length-only check (or leave the
+stronger version — reverting it is not required for the app to keep working), and delete this
+entry. No API or database change was made — `api/src/routes/auth.ts` is untouched.
+
+---
+
 ## TRO-205 — [BUN-9] First paint blocks on a third-party Google Fonts stylesheet
 
 **What was broken.** `web/index.html` carried two `<link rel="preconnect">`s to
