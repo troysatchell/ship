@@ -68,6 +68,141 @@ pnpm --filter @ship/web exec vitest run src/components/editor/BacklinksPanel.err
 
 ---
 
+## TRO-281 — [A11Y-9] Project context sidebar lists have no accessible name
+
+**POST-BASELINE** — found incidentally while fixing A11Y-1 (TRO-215, PR #6), not one of the
+audit report's 68 findings.
+
+**What was broken.** `web/src/components/sidebars/ProjectContextSidebar.tsx` renders two
+navigation lists — the "Weekly Docs" people list (`:290`, formerly unlabelled `<ul>`) and the
+"Issues" list (`:398`, formerly unlabelled `<ul>`) — and neither had an accessible name. TRO-215
+fixed the `role="tree"` problem in this same file (a *role* gap: an implied keyboard model that
+was never implemented) but left this *naming* gap untouched. axe does not flag an unnamed
+`<ul>` — there is no WCAG rule requiring one — which is exactly why the baseline audit never
+caught it.
+
+**What changed.** Each list now has `aria-labelledby` pointing at its existing visible section
+heading, keeping the visible and accessible names in sync per the ticket's fix direction:
+
+- Gave the "Weekly Docs" heading `<div>` and the "Issues" toggle `<button>` each a stable id via
+  `useId()`.
+- Wired `aria-labelledby={weeklyDocsHeadingId}` onto the people `<ul>` and
+  `aria-labelledby={issuesHeadingId}` onto the issues `<ul>`.
+- No visual change, no behavior change — both ids are invisible attributes.
+
+**Sanity-checked, not changed:** the ticket asked to confirm the wording of
+`aria-label="Projects"` added at `App.tsx:1241` (now `:1258`, drifted by unrelated commits) by
+TRO-215. That list is `ProjectsList`'s `<ul>` rendering `projects.map(...)` — the label matches
+what it contains. No inconsistency found, left as-is.
+
+**Evidence.** `web/src/components/sidebars/ProjectContextSidebar.test.tsx` — two new cases in
+describe block `ProjectContextSidebar — list accessible names (A11Y-9 / TRO-281)`, added to the
+existing test file (not a new one) since it already covers this component's accessibility
+tree via Testing Library. Both assert via `getByRole('list', { name: ... })` /
+`findByRole('list', { name: ... })`, i.e. the resolved accessible name in the accessibility
+tree — not an axe scan, since axe would not have caught this class of defect either way.
+Confirmed **red** on the unfixed code (`TestingLibraryElementError: Unable to find role="list"
+and name ...`, both new lists found by role but rejected on name) before writing the fix, and
+**green** after (`pnpm --filter @ship/web test` — 49 files / 422 tests passed, no regressions).
+
+**Still owed — do not mark this fully verified.** Nobody has run VoiceOver against the fixed
+build. What's established here is that the accessible name *resolves correctly in the DOM/
+testing-library accessibility tree* — not what a screen reader actually speaks. Batch this
+verification with the VoiceOver pass already owed on TRO-215 rather than scheduling a second
+session.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test -- --run web/src/components/sidebars/ProjectContextSidebar.test.tsx
+```
+
+**Rollback.** `git revert` the commit(s) on `fix/a11y-9-sidebar-accessible-names`, or by hand:
+remove the two `aria-labelledby` attributes, the two `id`s, and the `useId` import/calls. The two
+new test cases fail if either list's accessible name regresses, which is the point.
+
+---
+
+## TRO-298 — [A11Y-10] `DashboardSidebar` active nav item fails colour contrast (2.74:1), newly reachable on `/search` and `/weeks`
+
+**What was broken.** `DashboardSidebar.tsx:36,51` used `bg-accent/10 text-accent` for the active
+"My Work" / "Overview" nav item — the same mistake A11Y-3 (TRO-217) fixed on `/my-week`: `accent`
+(`#005ea2`) is documented in `web/tailwind.config.js` as a *fill* colour, only 2.89:1 as text on
+`background`, and worse once composited under the `/10` badge fill. Measured directly from the
+resolved DOM: `text-accent` (`#005ea2`) on the composited `bg-accent/10` badge (`#0c151c`) is
+**2.74:1** — well under the WCAG AA minimum of 4.5:1.
+
+This is not a new defect. `DashboardSidebar` itself never changed. It became reachable only after
+PR #53 made `/search` and `/weeks` render for the first time — previously those routes rendered
+nothing, so axe never got a page to scan. Once `AppLayout` mounts there, `getActiveMode()`
+(`pages/App.tsx`) has no match for `/search` or `/weeks`, falls through to its `'dashboard'`
+default, and highlights "My Work" with the failing pair. axe reported it Serious on both routes
+against branch `fix/a11y-5-6-7-landmarks`. This exact case was flagged and deliberately left
+unfixed in the A11Y-3 PR (see that entry, "New, honestly-reported") specifically because it was
+out of that ticket's landmark/heading scope — TRO-298 is the follow-up filed there.
+
+**What changed.** `web/src/components/DashboardSidebar.tsx:36,51` — `text-accent` → `text-accent-text`
+on both nav buttons (the "My Work" and "Overview" active states). `text-accent-text` (`#2491ff`,
+USWDS blue-40v) is the token `web/tailwind.config.js` already defines for accent-colored text
+(added by A11Y-3): **5.76:1** on the same composited `bg-accent/10` badge background, clearing AA
+with margin. `accent` itself is unchanged, so the badge fill and every `bg-accent` usage elsewhere
+in the app look exactly as before — same fix shape as A11Y-3 (token-level addition, not a mutation
+of `accent`).
+
+**Evidence.** Verified live, not just by class name. Both button elements were rendered on a
+freshly-restarted dev server (`web :5502`, `api :3329`, this worktree's own `ship_wt_tro_298` DB,
+authenticated as `dev@ship.local`) at `/search`, with the computed style read directly via
+`getComputedStyle(...).color`:
+
+| State | Class | Computed `color` | Ratio on `bg-accent/10` |
+|---|---|---|---|
+| Before | `text-accent` | `rgb(0, 94, 162)` (`#005ea2`) | **2.74:1** — fails AA |
+| After | `text-accent-text` | `rgb(36, 145, 255)` (`#2491ff`) | **5.76:1** — passes AA |
+
+Before/after screenshots (cropped to the sidebar) captured in the same session are attached to the
+PR. Each capture followed a full Vite restart (not just HMR/reload) after swapping the source file,
+because an in-place `cp` over a running dev server was observed to serve a stale transform despite
+`Cache-Control: no-cache` — confirmed by `curl`ing the raw module and comparing to the file on disk
+before trusting either screenshot.
+
+**Regression test.** `web/src/components/DashboardSidebar.contrast.test.tsx` — same shape as
+A11Y-3's `MyWeekPage.contrast.test.tsx`: resolves *effective colours* out of the rendered DOM via
+`resolveContrastPairs` (`web/src/lib/contrast.ts`) and asserts the WCAG ratio, not a class string,
+so it survives a markup refactor and fails again if a palette hex drifts back under 4.5:1. Renders
+both view states (`/` → "My Work" active, `/?view=overview` → "Overview" active) since each nav
+item's active-state pair only exists in its own state.
+
+Confirmed red first on the unfixed component (restored via `git show HEAD:<path>` copied aside,
+never `git stash`, per this project's standing rule): 3 of 4 tests failed, every one an
+`AssertionError` at exactly **2.740106658407859**, matching the badge-composited ratio above — not
+an import error or locator failure. Green after the fix, 4/4, with no other assertion changed.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web exec vitest run src/components/DashboardSidebar.contrast.test.tsx
+pnpm --filter @ship/web test        # 424 tests pass, 0 failures — no regressions elsewhere
+pnpm --filter @ship/web type-check  # clean
+```
+
+**Not verified.** That a low-vision user can now read the sidebar — contrast ratios are measured;
+the user-facing benefit is *derived* from them, same caveat A11Y-3 recorded. Also not verified:
+whether the e2e a11y specs' "critical-only" severity filter (`e2e/accessibility-remediation.spec.ts`,
+noted as an A11Y-7 follow-up) should tighten to Serious+ now that this Serious finding exists —
+flagged for the maintainer, not changed here; it is a CI-policy change outside this ticket's scope
+and the e2e specs are not run by the factory gate regardless.
+
+**Found and not fixed.** Nothing new. `getActiveMode()` falling through to `'dashboard'` on
+`/search` and `/weeks` (so an unrelated route highlights "My Work") is a pre-existing routing quirk,
+not an accessibility defect, and out of scope here.
+
+**Roll back.** `git revert` the commit on `fix/a11y-10-dashboardsidebar-contrast`, or by hand:
+restore `text-accent` on both `DashboardSidebar.tsx` nav buttons and delete
+`DashboardSidebar.contrast.test.tsx`. No token or other file changes to undo — `accent-text` already
+existed from A11Y-3 and is unchanged here.
+
+---
+
 ## TRO-301 (ERR-17) — the document-by-id query hardcoded `retry: false`, so a throttled (429) read failed permanently on the first attempt
 
 **Not one of the original 68 audit findings** — a post-baseline Linear ticket, no
