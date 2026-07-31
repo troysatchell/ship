@@ -26,7 +26,14 @@ export const documentKeys = {
 
 // Fetch documents
 async function fetchDocuments(type: string = 'wiki'): Promise<WikiDocument[]> {
-  const res = await apiGet(`/api/documents?type=${type}`);
+  // TRO-304: `GET /api/documents` now defaults to a 100-document page instead
+  // of the full corpus. This hook backs the wiki document tree
+  // (buildDocumentTree in lib/documentTree.ts), which needs every document of
+  // the requested type to build correct parent/child relationships — a
+  // partial page would silently drop whole subtrees. Pass the endpoint's max
+  // explicit `limit` (500, matching the seeded corpus size) to preserve the
+  // pre-existing "every matching document" behavior.
+  const res = await apiGet(`/api/documents?type=${type}&limit=500`);
   if (!res.ok) {
     const error = new Error('Failed to fetch documents') as Error & { status: number };
     error.status = res.status;

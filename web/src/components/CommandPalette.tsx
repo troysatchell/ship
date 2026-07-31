@@ -166,7 +166,12 @@ export function CommandPalette({ open, onOpenChange, currentDocument, onConvertD
     const fetchDocuments = async () => {
       setLoading(true);
       try {
-        const res = await apiGet('/api/documents');
+        // TRO-304: `GET /api/documents` now defaults to a 100-document page
+        // instead of the full corpus. This palette searches client-side over
+        // the entire in-memory list, so it needs completeness, not a page —
+        // pass the endpoint's max explicit `limit` (500, matching the seeded
+        // corpus size) to keep the pre-existing "search everything" behavior.
+        const res = await apiGet('/api/documents?limit=500');
         if (res.ok) {
           const data = await res.json();
           setDocuments(data);
