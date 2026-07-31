@@ -38,6 +38,20 @@ type AuthedRouteHandler = (
   next: NextFunction
 ) => void | Promise<void>;
 
+/** Row shape for the session-lookup SELECT below (DB-3 / TRO-180) — touched while naming
+ * that statement, so it gets a real type instead of the implicit `any` `pool.query` would
+ * otherwise return (RULE-21). `workspace_id`/`expires_at`/`last_activity`/`created_at` all
+ * match schema.sql's `sessions` table (NOT NULL, `last_activity`/`created_at` DEFAULT now()). */
+interface SessionAuthLookupRow {
+  id: string;
+  user_id: string;
+  workspace_id: string;
+  expires_at: Date;
+  last_activity: Date;
+  created_at: Date;
+  is_super_admin: boolean;
+}
+
 function isAuthenticatedRequest(req: Request): req is AuthenticatedRequest {
   return typeof req.userId === 'string' && typeof req.workspaceId === 'string';
 }
@@ -212,15 +226,25 @@ export async function authMiddleware(
   }
 
   try {
-    // Get session and check if it's valid
-    const result = await pool.query(
-      `SELECT s.id, s.user_id, s.workspace_id, s.expires_at, s.last_activity, s.created_at,
+    // Get session and check if it's valid.
+    //
+    // Named (DB-3 / TRO-180): this SELECT runs on every cookie-authenticated
+    // request regardless of route — the single most frequent statement in the
+    // whole app (n=107-121 in one audit capture, versus n=3-15 for any one list
+    // endpoint). node-postgres sent it unnamed, so Postgres re-parsed and
+    // re-planned it every time even though its shape never varies. A stable
+    // name lets Postgres cache the plan after 5 executions ON A GIVEN POOLED
+    // CONNECTION — see CHANGES.md for the measured effect and the pooling
+    // caveat (the cache is per-connection, not global).
+    const result = await pool.query<SessionAuthLookupRow>({
+      name: 'auth_session_lookup',
+      text: `SELECT s.id, s.user_id, s.workspace_id, s.expires_at, s.last_activity, s.created_at,
               u.is_super_admin
        FROM sessions s
        JOIN users u ON s.user_id = u.id
        WHERE s.id = $1`,
-      [sessionId]
-    );
+      values: [sessionId],
+    });
 
     const session = result.rows[0];
 
@@ -326,10 +350,14 @@ export async function authMiddleware(
       // `last_activity IS NULL` cannot reach here — the inactivity check above reads NULL
       // as the epoch and has already rejected the session.
       const activityCutoff = new Date(now.getTime() - SESSION_ACTIVITY_UPDATE_THRESHOLD_MS);
-      await pool.query(
-        'UPDATE sessions SET last_activity = $1 WHERE id = $2 AND last_activity < $3',
-        [now, sessionId, activityCutoff]
-      );
+      // Named (DB-3 / TRO-180) — same fixed shape on every invocation (only the
+      // parameter values change), so it is safe to cache. See auth_session_lookup
+      // above for the general rationale and CHANGES.md for the measured effect.
+      await pool.query({
+        name: 'auth_session_touch_activity',
+        text: 'UPDATE sessions SET last_activity = $1 WHERE id = $2 AND last_activity < $3',
+        values: [now, sessionId, activityCutoff],
+      });
 
       res.cookie('session_id', sessionId, {
         httpOnly: true,
