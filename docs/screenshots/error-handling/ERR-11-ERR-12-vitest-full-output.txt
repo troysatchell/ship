@@ -1,0 +1,228 @@
+
+ RUN  v4.0.17 /Users/troy/repos/GAUNTLET/Ship-wt-tro_305/api
+
+stdout | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11)
+Yjs collaboration server attached
+Events WebSocket server attached
+Collaboration session revalidation every 30000ms
+
+stdout | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > processes a frame sent in the same tick as 'open' instead of dropping it
+[Collaboration] Converting JSON content to Yjs for wiki:32318ef0-3138-41e2-99ba-60c741cf28d5
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > processes a frame sent in the same tick as 'open' instead of dropping it
+[Collaboration] Content conversion skipped for wiki:32318ef0-3138-41e2-99ba-60c741cf28d5: {
+  hasContent: true,
+  type: undefined,
+  isContentArray: false,
+  contentSample: '{"padding":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+}
+
+ ✓ src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > processes a frame sent in the same tick as 'open' instead of dropping it 2513ms
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+stderr | src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound
+[Collaboration] Preload buffer overflow; closing socket before its document finished loading {
+  docName: 'wiki:1937c450-c7e6-4b8b-8e1c-4806a8572587',
+  userId: '54951702-0faf-4a02-8291-b968a5ec5f63',
+  bufferedBytes: 983115,
+  incomingBytes: 65541
+}
+
+ ✓ src/collaboration/__tests__/preload-message-buffer.test.ts > Collaboration preload message buffer (TRO-284 / ERR-11) > closes the socket, rather than growing the buffer, once preload frames exceed the bound 208ms
+stdout | src/collaboration/__tests__/concurrent-doc-load.test.ts > Collaboration concurrent document load (TRO-285 / ERR-12)
+Yjs collaboration server attached
+Events WebSocket server attached
+Collaboration session revalidation every 30000ms
+
+stdout | src/collaboration/__tests__/concurrent-doc-load.test.ts > Collaboration concurrent document load (TRO-285 / ERR-12) > two concurrent loads of the same not-yet-cached document both resolve to a fully loaded doc
+[Collaboration] Converting JSON content to Yjs for wiki:ff7123d4-a755-4889-868c-1e84d9aace6c
+[Collaboration] Successfully converted content for wiki:ff7123d4-a755-4889-868c-1e84d9aace6c: 1 top-level nodes
+
+stderr | src/collaboration/__tests__/concurrent-doc-load.test.ts > Collaboration concurrent document load (TRO-285 / ERR-12) > rejects and evicts a failed load so the next connection retries with a fresh query
+[Collaboration] Failed to load document wiki:not-a-valid-uuid-ms941jqtdhr4, evicting from cache so the next connection retries: error: invalid input syntax for type uuid: "not-a-valid-uuid-ms941jqtdhr4"
+    at /Users/troy/repos/GAUNTLET/Ship-wt-tro_305/node_modules/.pnpm/pg-pool@3.10.1_pg@8.16.3/node_modules/pg-pool/index.js:45:11
+    at processTicksAndRejections (node:internal/process/task_queues:105:5) {
+  length: 161,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '133',
+  routine: 'string_to_uuid'
+}
+
+stderr | src/collaboration/__tests__/concurrent-doc-load.test.ts > Collaboration concurrent document load (TRO-285 / ERR-12) > rejects and evicts a failed load so the next connection retries with a fresh query
+[Collaboration] Failed to load document wiki:not-a-valid-uuid-ms941jqtdhr4, evicting from cache so the next connection retries: error: invalid input syntax for type uuid: "not-a-valid-uuid-ms941jqtdhr4"
+    at /Users/troy/repos/GAUNTLET/Ship-wt-tro_305/node_modules/.pnpm/pg-pool@3.10.1_pg@8.16.3/node_modules/pg-pool/index.js:45:11
+    at processTicksAndRejections (node:internal/process/task_queues:105:5) {
+  length: 161,
+  severity: 'ERROR',
+  code: '22P02',
+  detail: undefined,
+  hint: undefined,
+  position: undefined,
+  internalPosition: undefined,
+  internalQuery: undefined,
+  where: "unnamed portal parameter $1 = '...'",
+  schema: undefined,
+  table: undefined,
+  column: undefined,
+  dataType: undefined,
+  constraint: undefined,
+  file: 'uuid.c',
+  line: '133',
+  routine: 'string_to_uuid'
+}
+
+ ✓ src/collaboration/__tests__/concurrent-doc-load.test.ts > Collaboration concurrent document load (TRO-285 / ERR-12) > two concurrent loads of the same not-yet-cached document both resolve to a fully loaded doc 6ms
+ ✓ src/collaboration/__tests__/concurrent-doc-load.test.ts > Collaboration concurrent document load (TRO-285 / ERR-12) > rejects and evicts a failed load so the next connection retries with a fresh query 9ms
+stdout | src/collaboration/__tests__/concurrent-doc-load.test.ts > Collaboration concurrent document load (TRO-285 / ERR-12) > two clients connecting simultaneously to a not-yet-loaded document both receive full state
+[Collaboration] Converting JSON content to Yjs for wiki:7829c199-9b67-49e0-8605-e6857f054e8d
+[Collaboration] Successfully converted content for wiki:7829c199-9b67-49e0-8605-e6857f054e8d: 1 top-level nodes
+
+stdout | src/collaboration/__tests__/concurrent-doc-load.test.ts > Collaboration concurrent document load (TRO-285 / ERR-12) > two clients connecting simultaneously to a not-yet-loaded document both receive full state
+[Collaboration] Sending cache clear signal for wiki:7829c199-9b67-49e0-8605-e6857f054e8d (loaded fresh from JSON)
+
+ ✓ src/collaboration/__tests__/concurrent-doc-load.test.ts > Collaboration concurrent document load (TRO-285 / ERR-12) > two clients connecting simultaneously to a not-yet-loaded document both receive full state 300ms
+
+ Test Files  2 passed (2)
+      Tests  5 passed (5)
+   Start at  10:41:38
+   Duration  3.67s (transform 81ms, setup 67ms, import 118ms, tests 3.31s, environment 0ms)
+

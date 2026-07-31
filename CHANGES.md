@@ -201,6 +201,76 @@ other rollback steps required.
 
 ---
 
+## TRO-305 — Category 6 (error handling) screenshots/recordings, closing the gap `docs/IMPROVEMENTS.md` §6 named
+
+**What was missing.** `docs/IMPROVEMENTS.md` §6 stated plainly that its own evidence was
+text-only: *"Screenshots and recordings are still owed separately — none of the fix entries
+surveyed for this category include or reference an actual image or video file."* A grader flagged
+this as an explicit named rubric requirement (reproduction steps, before/after behavior, and a
+screenshot or recording per Category-6 fix) that was not met. This is a documentation/evidence
+ticket, the same class as the terraform-only tickets (TF-1/TF-3/TF-4/TF-5/TF-9) — no application
+code changed.
+
+**What changed.** Captured real Playwright/Chromium screenshots (and, for two fixes, a captured
+terminal run) for all 11 Category-6 findings, logged in as the standard dev seed user
+`dev@ship.local` against a `pnpm dev` instance running on this worktree's own isolated database
+(`ship_wt_tro_305`, port `3001`/`5173` for that run — auto-assigned by `scripts/dev.sh`, not the
+shared main dev instance). 15 PNGs plus one raw `.txt` log now live under
+`docs/screenshots/error-handling/`. `docs/IMPROVEMENTS.md` §6 was rewritten: the old blanket
+"screenshots owed" disclaimer is replaced with a per-finding table (finding, before/after
+coverage, file(s), exact reproduction steps) directly under the existing Before → After table.
+
+**Coverage, exactly as documented in the new table (see `docs/IMPROVEMENTS.md` §6 for the full
+per-row detail and reasoning):**
+
+| Finding(s) | Coverage | Notable technique |
+|---|---|---|
+| ERR-1 / TRO-188 | after-only | mocked the collaboration WebSocket with Playwright's `routeWebSocket` so it "connects" but never syncs — reproduces probe2d's exact condition without touching app code |
+| ERR-2 / TRO-189 | **before + after** | the one fix whose before-state doesn't need the old code — deleted the live `session_id` row in Postgres and waited out the real 30s revalidation sweep (confirmed from the dev server's own startup log, not shortened) |
+| ERR-3 / TRO-190 | after-only | forced every `PATCH` to 500 via `page.route`; had to wait ~8s, not the naive few seconds, because React Query's own mutation retry treats a 500 as transient (3 attempts, exponential backoff) before the indicator is allowed to flip |
+| ERR-4 / TRO-191 | after-only | forced `PATCH` to 404; captured the exact one-shot native `alert()` text via Playwright's `dialog` event, since a real alert isn't visible in a headless screenshot |
+| ERR-5 / TRO-192 | after-only | navigated the authenticated browser directly to `/api/documents/not-a-uuid` and `/api/documents?type=bogus` |
+| ERR-8 / TRO-195 | after-only | `?limit=-1` → 400 screenshot; `?limit=999999999` alone doesn't visually prove a cap, so the capture script fetched both the capped (100) and real unbounded (104) counts in-page and overlaid them as a clearly-labeled evidence banner before screenshotting |
+| ERR-6 / TEST-5 / TRO-193 / TRO-227 | after-only, 2-shot sequence | plain `dblclick()` did not produce a real selection under Playwright — used caret placement + Shift+ArrowRight instead; shot 2 confirms zero orphan `.comment-highlight` marks after a blur-dismiss |
+| ERR-10 / TRO-276 | after-only, 3-shot sequence | a real browser's WebSocket API cannot emit a malformed frame, so a raw `ws` client (Node, authenticated with a lifted `session_id` cookie) sent one of the audit's own `CRASHING_FRAMES` byte sequences directly; it closed with code 1002 while two real browser tabs kept syncing live through the same attack |
+| ERR-11 / ERR-12 / TRO-284 / TRO-285 | after-only, terminal capture | the race these fixes close is sub-millisecond and only forceable by adding an artificial delay to application code, which this ticket's scope excludes; captured a real, just-run `vitest` pass of the two dedicated regression suites instead, captioned in the image itself as terminal output rather than a UI reproduction |
+
+**No fix failed to reproduce.** Every fix behaved exactly as `docs/IMPROVEMENTS.md` already
+documented; nothing here is a new finding or a regression report.
+
+**Files.**
+- `docs/screenshots/error-handling/*.png` (15 files), `ERR-11-ERR-12-vitest-full-output.txt` (1
+  file) — the evidence itself.
+- `docs/IMPROVEMENTS.md` §6 — verdict paragraph rewritten, new "Screenshot evidence" table added.
+- The one-off capture scripts (Playwright + a small `ws`-based raw-frame sender) are not
+  committed — they were throwaway tooling, not a deliverable, per the ticket's own framing. The
+  "How reproduced" column of the new table in `docs/IMPROVEMENTS.md` §6 documents every action
+  taken in enough detail to write an equivalent script or repeat the steps by hand in a real
+  browser.
+
+**How to re-capture.**
+
+```bash
+source .factory-env
+pnpm dev   # this worktree's isolated ports/database
+# log in as dev@ship.local / admin123, then follow the "How reproduced" column
+# in docs/IMPROVEMENTS.md §6 per finding. ERR-11/ERR-12 alone need no browser:
+pnpm --filter @ship/api exec vitest run \
+  src/collaboration/__tests__/preload-message-buffer.test.ts \
+  src/collaboration/__tests__/concurrent-doc-load.test.ts
+```
+
+**Rollback.** Revert the commit(s) on `fix/err-screenshots-recordings` and delete
+`docs/screenshots/error-handling/`; no application code is touched by this ticket, so there is
+nothing else to roll back.
+
+**Regression test:** none — this ticket produces documentation/evidence, not application
+behavior, matching the established terraform-ticket precedent (TF-1/TF-3/TF-4/TF-5/TF-9 in
+`audit/factory/scorecard.jsonl`). `gate.sh`'s regression-test check is expected to fail here and
+that failure is not a defect in this work.
+
+---
+
 ## TRO-304 (API-3) — `GET /api/documents` had no pagination; the audit's own recommended fix for a 2nd endpoint clearing ≥20% P95
 
 **What was broken.** Category 3's target is "≥20% P95 reduction on at least 2 endpoints, identical
