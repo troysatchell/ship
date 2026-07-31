@@ -44,8 +44,10 @@ same constraint TF-7's own work noted). **Not verified:** whether the ALB SG res
 actually been `apply`'d to the live prod account yet. `memory-bank/progress.md` records two
 *separate* 2026-07-28 checks, not one combined result: `ship.awsdev.treasury.gov` (the domain this
 PR's new health-check URL uses) returned **HTTP 403** — the request reached an HTTP endpoint and
-was refused, which is not evidence of an unreachable network path, and is if anything mildly
-consistent with this fix's premise (something is answering behind CloudFront). The old direct-ALB
+was refused, which is not evidence of an unreachable network path — but confirms only that the
+viewer-facing hostname returned an HTTP response; it does **not** confirm CloudFront reached the
+`EB-API` origin, since CloudFront or an upstream policy can reject a request before origin access.
+The old direct-ALB
 hostname (`ship-api-prod...elasticbeanstalk.com`) returned **no response at all** — a different,
 stronger signal, closer to what TF-7's SG restriction would actually produce. Neither result
 confirms the SG restriction is live in prod; the new URL could not be curled end-to-end to verify
