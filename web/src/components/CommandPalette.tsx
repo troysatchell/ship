@@ -1,5 +1,6 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Command } from 'cmdk';
 import { cn } from '@/lib/cn';
 import { Tooltip } from '@/components/ui/Tooltip';
@@ -10,11 +11,28 @@ interface SearchableDocument {
   id: string;
   title: string;
   document_type: string;
-  ticket_number?: number | null;
-  properties?: {
-    prefix?: string;
-    state?: string;
-  };
+  ticket_number: number | null;
+}
+
+// TRO-175 / API-4: react-query's default `staleTime`/`gcTime` (5 min / 24h,
+// see web/src/lib/queryClient.ts) already cover re-opens within a session -
+// this constant documents the intent at the call site rather than relying on
+// the implicit default, matching the convention other list queries use (e.g.
+// web/src/hooks/useDocumentsQuery.ts).
+const COMMAND_PALETTE_DOCUMENTS_STALE_TIME_MS = 1000 * 60 * 5;
+
+async function fetchCommandPaletteDocuments(): Promise<SearchableDocument[]> {
+  // Routed through the search router (not the raw, unbounded `/api/documents`
+  // list) - see api/src/routes/search.ts's `/documents` handler. It returns
+  // only the six document types the palette groups by, and only the columns
+  // this component renders, rather than the full document row.
+  const res = await apiGet('/api/search/documents');
+  if (!res.ok) {
+    // `Object.assign` lets TypeScript infer `Error & { status: number }` from
+    // the two argument shapes, rather than an explicit `as` assertion.
+    throw Object.assign(new Error('Failed to fetch documents'), { status: res.status });
+  }
+  return res.json();
 }
 
 type ConvertibleDocumentType = 'wiki' | 'issue' | 'project' | 'sprint';
@@ -50,9 +68,21 @@ interface CommandPaletteProps {
 export function CommandPalette({ open, onOpenChange, currentDocument, onConvertDocument }: CommandPaletteProps) {
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
-  const [documents, setDocuments] = useState<SearchableDocument[]>([]);
-  const [loading, setLoading] = useState(false);
   const dialogRef = useRef<HTMLDivElement>(null);
+
+  // TRO-175 / API-4: this used to be a raw `apiGet('/api/documents')` call
+  // into local `useState`, inside a `useEffect` keyed on `[open]` - which
+  // bypassed the queryClient entirely, so every ⌘K open was a cold ~294 KB
+  // fetch of the full document corpus. `enabled: open` keeps the "only fetch
+  // while the palette is open" behavior; the query cache (staleTime below,
+  // matching the rest of the app's list queries) is what makes a second open
+  // within the window free.
+  const { data: documents = [], isLoading: loading, isError } = useQuery({
+    queryKey: ['command-palette-documents'],
+    queryFn: fetchCommandPaletteDocuments,
+    enabled: open,
+    staleTime: COMMAND_PALETTE_DOCUMENTS_STALE_TIME_MS,
+  });
 
   // Focus trap implementation for WCAG 2.4.3 Focus Order
   useEffect(() => {
@@ -156,29 +186,12 @@ export function CommandPalette({ open, onOpenChange, currentDocument, onConvertD
     }
   };
 
-  // Fetch documents when palette opens
+  // Clear the search text once the palette closes, so it doesn't reappear
+  // pre-filled the next time it opens.
   useEffect(() => {
     if (!open) {
       setSearch('');
-      return;
     }
-
-    const fetchDocuments = async () => {
-      setLoading(true);
-      try {
-        const res = await apiGet('/api/documents');
-        if (res.ok) {
-          const data = await res.json();
-          setDocuments(data);
-        }
-      } catch (err) {
-        console.error('Failed to fetch documents:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    fetchDocuments();
   }, [open]);
 
   // Group documents by type for display
@@ -279,7 +292,11 @@ export function CommandPalette({ open, onOpenChange, currentDocument, onConvertD
 
           <Command.List className="max-h-[400px] overflow-auto p-2">
             <Command.Empty className="px-4 py-8 text-center text-sm text-muted">
-              {loading ? 'Loading...' : 'No results found.'}
+              {isError
+                ? 'Failed to load documents. Try again.'
+                : loading
+                  ? 'Loading...'
+                  : 'No results found.'}
             </Command.Empty>
 
             {/* Issues */}
