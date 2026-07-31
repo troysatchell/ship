@@ -111,6 +111,82 @@ freemem-only calculation and its macOS behavior exactly as it was.
 
 ---
 
+## TRO-212 (TS-7) — `as any` removed from a destructive bulk-mutation call site and a TipTap command return
+
+**What was broken.** Three production `as any` casts (of the entire codebase's 158 occurrences,
+154 of which are in test files): `web/src/pages/Projects.tsx:220` and `:233` cast the update
+payload passed to `updateProject` inside `handleBulkArchive` and its Undo handler —
+`{ archived_at: new Date().toISOString() } as any` / `{ archived_at: null } as any` — and
+`web/src/components/editor/FileAttachment.tsx:139` cast an entire TipTap `addCommands()` return
+value to `any`. `updateProject`'s real signature (`web/src/contexts/ProjectsContext.tsx:21`) is
+`(id: string, updates: Partial<Project>) => Promise<Project | null>`, and `Project.archived_at`
+(`web/src/hooks/useProjectsQuery.ts:38`) is genuinely `string | null` — so both Projects.tsx casts
+were pure dead weight, not masking a real type gap. AUDIT_REPORT.md's own TS-7 section says as
+much ("both assertions are unnecessary today") and names the risk precisely: because they're
+redundant *now*, they would silently absorb a real mismatch the first time the `Project` model
+changes, on a bulk path that mutates every selected project at once.
+
+**Provenance correction — the third cited site was already fixed, out of scope.** TS-7 also cites
+`api/src/routes/issues.ts:155` — `params.push(states as any)` — as a SQL-parameter cast masking a
+genuine element-type gap. Read the current file directly rather than trusting the finding text: at
+today's line 377, the code is `params.push(states);` with **no cast at all**, because `params` is
+now declared `const params: (string | number | boolean | null | string[])[] = [...]` at line 362.
+A prior wave already closed this gap. Verified with `grep -n "as any\|params.push(states\|const
+params:" api/src/routes/issues.ts` — no match for `as any` in the file. Nothing was touched there;
+re-fixing an already-fixed site was explicitly out of this ticket's scope.
+
+**What changed.**
+
+- `web/src/pages/Projects.tsx:220,233` — deleted both `as any` casts. Confirmed with `pnpm
+  type-check` (both `web` and the full monorepo) that removal compiles clean with zero errors,
+  which is the direct proof the casts were dead weight rather than covering a real mismatch.
+- `web/src/components/editor/FileAttachment.tsx` — `addCommands()`'s return value was cast `as
+  any` and its inner `({ commands }: any)` parameter was also bare `any`. Replaced both with the
+  same typed pattern already established in this codebase at
+  `web/src/components/editor/ResizableImage.tsx:132-143`: the returned command map is typed `as
+  Partial<RawCommands>` (imported from `@tiptap/core`, TipTap's own type for a command-factory
+  map) instead of `any`, and the destructured `commands` parameter gets a local inline type
+  (`{ insertContent: (content: { type: string; attrs: typeof options }) => boolean }`) instead of
+  `any`. No new type was invented — this mirrors an existing, already-passing precedent in the same
+  package.
+
+**Regression test — `web/src/pages/Projects.updateProjectTypeSafety.test.ts` (new).** This is a
+type-safety fix with no runtime behavior change (`as any` never affects what code *does*, only what
+the compiler is allowed to check), so the regression test is type-level, using the
+`// @ts-expect-error` form the assignment brief names as acceptable for exactly this case. It
+derives `UpdateProject` from `ReturnType<typeof useProjects>['updateProject']` (the real context,
+not a duplicated signature) and asserts two things `pnpm type-check` now enforces: (1) the exact
+payload shapes used at Projects.tsx:220/:233 satisfy the real signature with zero cast, and (2) a
+payload that does **not** satisfy `Partial<Project>` (`{ archived_at: 12345 }`) is rejected by the
+compiler. Confirmed red-for-the-right-reason by hand: temporarily changing the bad payload to a
+valid one (`archived_at: null`) makes `pnpm --filter @ship/web type-check` fail with `TS2578:
+Unused '@ts-expect-error' directive` — proving the directive is genuinely catching an error, not
+sitting there vacuously. Reverted immediately after confirming; the committed test keeps the
+mismatched payload. No `any`/`as any`/non-null `!` was introduced in the test itself.
+
+**Honest caveat on "red before / green after."** There is no compiler-level red state tied to
+git history here: `as any` never makes `tsc` fail regardless of what's under it, and (per the
+provenance check above) the underlying payload shapes were already assignable to `Partial<Project>`
+before this ticket touched anything — `pnpm type-check` was green before this diff and stays green
+after. What the regression test proves is forward-looking: with the casts removed, a *future*
+`Project.archived_at` type change or call-site typo at these two lines will now be caught at
+compile time, where previously it would have been silently swallowed. That is the exact failure
+mode TS-7 describes, and it's the whole reason deleting these two casts has value despite there
+being no bug present today.
+
+**How to run it.**
+
+```bash
+pnpm type-check
+pnpm --filter @ship/web test -- Projects.updateProjectTypeSafety FileAttachment.test.ts
+```
+
+**Rollback.** Revert this commit. Restores the `as any` casts at `Projects.tsx:220,233` and
+`FileAttachment.tsx:139` (and its inner `any` parameter) and removes the new test file. No schema,
+API, or user-visible behavior changes — this ticket only touches compile-time type annotations.
+
+---
+
 ## TRO-280 — [API-7] Rate limits are per-process, so the real ceiling is N instances × configured
 
 **What was broken.** `api/src/middleware/rate-limit.ts`'s `perSourceIpLimiter`/`perIdentityLimiter`
