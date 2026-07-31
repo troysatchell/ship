@@ -160,6 +160,101 @@ new `describe('Search Documents API (TRO-175 / API-4)', …)` block in
 
 ---
 
+## TRO-237 — [TF-4] Flat root module had no committed provider lock file; providers floated
+
+**What was broken.** `terraform/` (the flat root module, and — since `TRO-235`/TF-2 converged prod
+onto it — the sole AWS root now) declared floating provider constraints
+(`hashicorp/aws ~> 5.0`, `hashicorp/random ~> 3.6`, `terraform/versions.tf:4-13`) with no committed
+`.terraform.lock.hcl`. Two operators, or a laptop vs. CI, running `terraform init` at different
+times could silently resolve different provider builds inside those ranges, with no diff to review
+when it happened. `terraform/modules/*` and `terraform/render/` already commit their own lock
+files; the flat root did not.
+
+**Precondition check (done first, not assumed).** TF-3/TRO-236 claims to have fixed `terraform
+init` at this root by bumping `.terraform-version` from the expired-key `1.6.0` to `1.15.8`. No
+terraform binary was available in this environment (`which terraform` → not found, no `tfenv`/`asdf`
+either), so this was verified rather than taken on faith: downloaded `terraform_1.15.8_darwin_arm64`
+directly from `releases.hashicorp.com`, checked it against the published `SHA256SUMS`
+(`terraform_1.15.8_darwin_arm64.zip: OK`), and ran it fresh. `terraform init -backend=false` from
+`terraform/` succeeded:
+
+```text
+Initializing provider plugins...
+- Finding hashicorp/aws versions matching "~> 5.0"...
+- Finding hashicorp/random versions matching "~> 3.6"...
+- Installing hashicorp/aws v5.100.0...
+- Installed hashicorp/aws v5.100.0 (signed by HashiCorp)
+- Installing hashicorp/random v3.9.0...
+- Installed hashicorp/random v3.9.0 (signed by HashiCorp)
+
+Terraform has created a lock file .terraform.lock.hcl to record the provider
+selections it made above.
+...
+Terraform has been successfully initialized!
+```
+
+TF-3's fix holds at the flat root.
+
+**What changed.**
+- Committed the `.terraform.lock.hcl` the `init` above generated (`hashicorp/aws 5.100.0`,
+  `hashicorp/random 3.9.0`, both with full `h1:`/`zh:` hashes for every platform Terraform
+  recorded).
+- Removed the root `.gitignore`'s `terraform/.terraform.lock.hcl` line — it was anchored to exactly
+  this one file, so removing it does not affect the separate, still-untouched
+  `terraform/environments/*/.terraform.lock.hcl`, `terraform/bootstrap/.terraform.lock.hcl`, or
+  `terraform/test-runner/.terraform.lock.hcl` ignore rules a few lines below it.
+- The nested `terraform/.gitignore` also carries a blanket, unanchored `.terraform.lock.hcl` rule
+  (present since `2c1c633`, predating this ticket) that would otherwise still catch the flat root's
+  file regardless of the root `.gitignore` change. Added `!/.terraform.lock.hcl` — a root-anchored
+  negation, mirroring the existing `!render/.terraform.lock.hcl` exception added for TF-10 — so only
+  `terraform/.terraform.lock.hcl` itself is un-ignored; nested lock files under `environments/*`,
+  `modules/*`, `bootstrap/`, and `test-runner/` stay covered by the blanket rule.
+- `terraform/.terraform/` (the provider binary cache `init` also creates) was **not** committed —
+  confirmed still ignored (`git check-ignore terraform/.terraform/providers` matches
+  `terraform/.gitignore:2:.terraform/`) and absent from `git status --porcelain` after staging.
+
+**Correction to the ticket brief.** The brief asserted "the modular paths (`terraform/
+environments/*`) ARE already properly locked." That is not accurate as of this ticket: neither
+`terraform/environments/dev/` nor `terraform/environments/shadow/` has a committed
+`.terraform.lock.hcl` — `git ls-files terraform/environments/` lists no lock file for either, and
+TF-3's own `CHANGES.md` entry (`TRO-236`) says the same thing explicitly: lock files `init`
+generated for `dev` and `shadow` "none of which are committed." What genuinely *is* already locked
+is `terraform/modules/*/.terraform.lock.hcl` (six modules, all tracked) and
+`terraform/render/.terraform.lock.hcl` (TF-10). Left `environments/*` untouched — closing that gap,
+if wanted, is outside TF-4's declared scope (a flat-root-only fix) and is a separate, currently
+unfiled gap, not this ticket.
+
+**How to run it.**
+
+```bash
+cd terraform
+terraform init -backend=false   # deterministic now: resolves aws 5.100.0 / random 3.9.0 from the lock file
+terraform validate              # Success! 1 pre-existing warning only (TF-5's S3 lifecycle rule, untouched here)
+terraform fmt -check -recursive # exit 0, no output — nothing to reformat
+```
+
+`terraform plan` was not attempted for evidence beyond `-backend=false` `init`: this config's
+backend is S3 with the bucket name in SSM, and there are no AWS credentials in this environment —
+the same documented gap TF-1/TF-3 hit, not new here.
+
+**Not covered by this ticket.** TF-5 (the uploads-bucket lifecycle-rule `validate` warning) and the
+security-groups file (TF-7, already merged) were left untouched, per scope. The
+`terraform/environments/*` lock-file gap identified above is also left untouched — not TF-4's
+declared scope.
+
+**Regression test:** none added — pure Terraform configuration/tooling change, no application code
+path for vitest to exercise. Same "regression-test gate inapplicable" judgment as TF-1/TRO-234,
+TF-3/TRO-236, and TF-9/TRO-292 (`audit/factory/scorecard.jsonl`); the `terraform init`/`validate`/
+`fmt` transcripts above are the evidence in their place.
+
+**How to roll it back.** `git revert <this commit>` deletes `terraform/.terraform.lock.hcl` and
+restores both `.gitignore` rules. That does not reintroduce TF-3's `init` failure (the version pin
+is a separate file, untouched here) — it only re-floats the provider versions within `~> 5.0` /
+`~> 3.6`, i.e. exactly TF-4's original finding, reopened. There is no scenario where reverting is
+desirable; it exists only as a mechanical undo.
+
+---
+
 ## TRO-245 [RULE-3] — verified every Phase 2 bug fix actually shipped the regression test it claimed
 
 **What this is.** RULE-3 is the assignment-implementation rule that every bug fixed in this
