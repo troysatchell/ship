@@ -70,7 +70,7 @@ identically, and the local declaration was a byte-for-byte subset (missing only 
 
 ```bash
 pnpm build:shared
-pnpm --filter @ship/web exec tsc --noEmit -p web/tsconfig.json
+pnpm --filter @ship/web exec tsc --noEmit -p tsconfig.json
 pnpm --filter @ship/web test -- src/lib/api.test.ts
 ```
 
