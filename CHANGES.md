@@ -65,6 +65,18 @@ concurrency/transaction bug — flagging plainly rather than forcing a `BEGIN`/`
 mechanism that was already atomic. No `db-query`/`api-perf` action needed beyond what this fix
 already does (see below).
 
+**CodeQL finding, triaged, filed as a new ticket, not fixed here.** PR #94's CodeQL security-scan
+check reported a High-severity "new" `js/missing-rate-limiting` alert at the
+`/project-allocation-grid/:projectId` handler this ticket touches. Verified it is **not new**:
+`git show main:api/src/routes/weekly-plans.ts` shows the same handler already lacked rate-limiting
+middleware before this diff — the `PlanOrRetroRow` interface insertion above it shifted every
+subsequent line number, and CodeQL's PR-vs-base diffing appears to treat the shifted registration as
+newly-introduced code. The repo-wide alert list shows **18 open instances of this same rule in
+`weekly-plans.ts` alone**, plus more in `weeks.ts`, `admin.ts`, and `search.ts` — a systemic gap in
+how `api/src/middleware/rate-limit.ts` (TRO-280) is *applied*, not a defect in this handler
+specifically or something this ticket's narrow query fix should absorb as a drive-by. Filed as
+`TRO-307`, recorded in `audit/factory/review-findings.jsonl` with disposition `new-ticket`.
+
 **The fix — `api/src/routes/weekly-plans.ts`, `project-allocation-grid/:projectId` handler only.**
 Changed the plan/retro lookup queries to filter by `(properties->>'person_id') = ANY($2::text[])`,
 where `$2` is the list of person IDs already allocated to this project (from the preceding
