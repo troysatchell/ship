@@ -239,6 +239,10 @@ async function waitForPublishedPort(containerName: string, containerPort: string
     lastOutput = stdout.trim()
     const hostPort = lastOutput.split(':').pop()
     if (hostPort) return hostPort
+    // Bounded poll, not a fixed wait: re-checks the real condition (`docker
+    // port`'s own output) every iteration and returns the instant it holds,
+    // same shape as preload-message-buffer.test.ts's waitForYjsText.
+    // review-pattern-ok: bounded poll, see comment above
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
   throw new Error(
@@ -268,6 +272,9 @@ async function waitForRedisReady(url: string, timeoutMs: number): Promise<void> 
       lastErr = err
       probe.disconnect()
     }
+    // Bounded poll, not a fixed wait: re-checks the real condition (a live
+    // PING round trip) every iteration and returns the instant it holds.
+    // review-pattern-ok: bounded poll, see comment above
     await new Promise((resolve) => setTimeout(resolve, 200))
   }
   throw new Error(`Redis at ${url} did not become ready within ${timeoutMs}ms (last error: ${String(lastErr)})`)
