@@ -852,12 +852,21 @@ test.describe('Phase 2: Serious Violations', () => {
         'A login error message should appear after submitting invalid credentials'
       ).toBeVisible({ timeout: 3000 })
 
-      // Error message should provide helpful suggestion, not just "Error"
-      const errorText = await errorMessage.textContent()
-      expect(
-        (errorText ?? '').length,
-        `Error message text was: "${errorText}"`
-      ).toBeGreaterThan(10)
+      // TRO-291: the API deliberately returns the same generic message for
+      // "no such account" and "wrong password" (api/src/routes/auth.ts:54,89)
+      // so a failed login can't be used to enumerate accounts - that string
+      // itself must stay unchanged. But the page must now also tell the user
+      // what to do next: a length-only check (">10 chars") would pass for
+      // "Invalid email or password" alone, which is exactly the pre-fix,
+      // no-recovery-guidance state this test exists to catch. Assert both:
+      // the original message is still there, and real recovery guidance
+      // (pointing at the one actual recovery path - there is no
+      // self-service password reset in this app) has been added next to it.
+      const errorText = (await errorMessage.textContent()) ?? ''
+      expect(errorText, `Error message text was: "${errorText}"`).toContain(
+        'Invalid email or password'
+      )
+      expect(errorText, `Error message text was: "${errorText}"`).toMatch(/workspace admin/i)
     })
   })
 
