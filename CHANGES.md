@@ -78,6 +78,158 @@ that failure is not a defect in this work.
 
 ---
 
+## TRO-175 (API-4) — Command palette (⌘K) re-downloaded the entire document corpus on every open, bypassing react-query's cache
+
+**What was broken.** `web/src/components/CommandPalette.tsx`'s document list lived in local
+`useState`, populated by a `useEffect` keyed on `[open]` (previously lines 159-182) that called
+`apiGet('/api/documents')` directly — bypassing the app's `queryClient` (`staleTime` 5 min /
+`gcTime` 24h, `web/src/lib/queryClient.ts:277-278`) entirely. Every ⌘K open was a cold fetch of
+the full, unfiltered document list (`api/src/routes/documents.ts:129-205`, no `LIMIT`/`OFFSET`
+when the query param is omitted). Confirms the audit's Evidence exactly.
+
+**Correcting the audit's Hypothesis.** API-4's Hypothesis blamed client-side search filtering
+("Search is client-side filtering over the full corpus … rather than a server-side query") for
+requiring the full corpus to be resident. Reading `groupedDocuments` (the useMemo it cited)
+before changing anything: it only buckets already-fetched documents by type — it never filters by
+the `search` string at all. The actual text filtering is `cmdk`'s own built-in fuzzy matching over
+already-rendered `Command.Item`s, which is free (in-memory, zero network) and was never the cost
+driver. The full re-download was caused **exclusively** by the caching bypass on `[open]` — not by
+an absence of server-side search. This does not change the fix (routing through the search router
+plus caching still helps, per below), but it means "add live server-side search-as-you-type" was
+not required to close this ticket, and was deliberately not built (see What was NOT changed).
+
+**What changed.**
+- `api/src/routes/search.ts` — implemented `GET /api/search/documents` (optional `?q=`). Omitting
+  `q` browses the six document types the palette groups by (`wiki`, `issue`, `program`, `project`,
+  `sprint`, `person`), applying the same visibility rule as `GET /api/documents`
+  (`workspace_id` + `archived_at`/`deleted_at IS NULL` + workspace/creator/admin visibility) but
+  projecting only the columns the palette renders (`id`, `document_type`, `title`,
+  `ticket_number`) instead of the full document row. Passing `q` adds a server-side
+  `title ILIKE` filter (reusing this file's existing `escapeLikePattern` wildcard-injection guard).
+  This path was **already registered** in `api/src/openapi/schemas/search.ts` with no backing
+  route — any caller got a 404 — so this also fixes a pre-existing ghost endpoint, not just a new
+  addition.
+- `api/src/openapi/schemas/search.ts` — corrected the `/search/documents` registration to match
+  the real implementation (`DocumentSearchResultSchema`: `id`, `document_type`, `title`,
+  `ticket_number`; `q` now optional) and removed the unimplemented `type`/`limit` params and
+  `content_preview`/`updated_at` fields the ghost registration had claimed.
+- `web/src/components/CommandPalette.tsx` — replaced the raw `apiGet` + `useState` + `useEffect`
+  with `useQuery({ queryKey: ['command-palette-documents'], queryFn: fetchCommandPaletteDocuments,
+  enabled: open, staleTime: 5 min })`, calling `/api/search/documents` (no `q` — see Hypothesis
+  correction above for why typing stays client-side). `enabled: open` preserves "only fetch while
+  the palette is open"; the query cache is what makes a same-session reopen free. Trimmed
+  `SearchableDocument` to the four fields actually used (dropped an always-present but
+  never-read `properties` field).
+- **What was NOT changed:** cmdk's client-side text filtering while typing. It never caused a
+  network request, so wiring per-keystroke server search would add requests where none existed
+  and would need debouncing/race-condition handling for no measured benefit against this ticket's
+  target (open-triggered re-fetching). Left as a documented option for 10x-scale workspaces (the
+  audit's estimated ~2.9 MB/open at 10x seed volume) — flagged below, not fixed here.
+
+**Regression test — `web/src/components/CommandPalette.test.tsx`** (new file, vitest + jsdom +
+Testing Library, run by the gate). Mocks `@/lib/api`'s `apiGet` with a call counter matching
+either `/api/documents` or `/api/search/documents` (so the same test is meaningful against both
+the pre- and post-fix component), renders the real palette against the real `queryClient`
+singleton (same pattern as `UnifiedDocumentPage.deletedFocusRefetch.test.tsx`), opens it, closes
+it, and reopens it — all within the 5 minute `staleTime` window — asserting the fetch count stays
+at 1. A second test confirms typed search still filters the visible list with zero additional
+requests. Both query by role (`option`, `combobox`) and accessible name, not test id.
+
+Confirmed **red** first, for the right reason: copied the pre-fix `CommandPalette.tsx` (`git show
+HEAD:web/src/components/CommandPalette.tsx`) into place and re-ran the suite —
+`expected 2 to be 1` on the reopen assertion, i.e. the exact re-fetch-on-every-open bug, not an
+import error. The typed-search test passed unchanged against the pre-fix code too, consistent
+with the Hypothesis correction above (that behavior was never broken). Restored the fix and both
+tests passed.
+
+**Measurement (observed, this worktree's seed — 257 documents, smaller than the audit's 500-doc
+baseline, so treat only the relative reduction and request counts as comparable, not the absolute
+byte counts against the audit's 294 KB figure):**
+- Request count: 1 request on first open, **0 additional requests on a second open** within the
+  cache window (`CommandPalette.test.tsx`, fetch-call-count assertion) — the actual deliverable.
+- Payload size, measured directly against this worktree's Postgres with the exact SELECTs each
+  route runs: old `GET /api/documents` (unfiltered) = 257 rows / 151,635 bytes; new
+  `GET /api/search/documents` (no `q`) = 177 rows / 21,193 bytes — an 86.0% reduction on this seed,
+  from dropping the four document types (`weekly_plan`, `weekly_retro`, `standup`,
+  `weekly_review`) the palette's `groupedDocuments` silently discards today, plus trimming columns
+  to the four the component reads. `GET /api/search/documents?q=<term>` returned 1 row / 117 bytes
+  for a single-match query, confirming server-side filtering works end to end.
+- `EXPLAIN ANALYZE` on the new query (177-row result from 257 total rows) used
+  `idx_documents_active` (`workspace_id, document_type` partial index,
+  `schema.sql:367`) via an Index Scan, 0.25ms execution time — no sequential scan introduced.
+
+**API-side test — `api/src/routes/search.test.ts`**, new `describe('Search Documents API (TRO-175
+/ API-4)', …)` block (originally 7 cases, now 8 — see Post-review fixes below): 401 without auth;
+browse excludes a `standup` document (a real type, not one of the six the palette groups by);
+`ticket_number` present on issue rows; `q` filters by title; three visibility cases (creator sees
+own private doc, another member does not, admin sees any member's private doc) — covered here
+rather than only in the frontend test, since the frontend test mocks this endpoint and would not
+catch a server-side visibility regression; and the browse-all cap case added below.
+
+**Post-review fixes (CodeRabbit, same PR, before merge).** Four findings, all addressed:
+
+1. **MAJOR — the browse-all (no `q`) path had no result cap.** `api/src/routes/search.ts`'s new
+   query had no `LIMIT` at all when `q` is omitted — a workspace that grows past whatever a given
+   seed happens to have would regress right back into an unbounded-corpus fetch, undermining the
+   point of this ticket for that path. Added `export const DOCUMENT_SEARCH_LIMIT = 500` and a
+   `LIMIT $n` applied unconditionally (both browse and search paths), after the existing
+   `ORDER BY`, with visibility/type-filtering unchanged. This is a **disclosed behavior change**:
+   a workspace with more than 500 palette-relevant documents will see a truncated "browse all"
+   list until the user types a query, at which point server-side `title ILIKE` filtering is
+   unaffected by the cap in practice. New test: `caps the browse-all (no q) result set at
+   DOCUMENT_SEARCH_LIMIT` — bulk-inserts `DOCUMENT_SEARCH_LIMIT + 1` rows via a single
+   `generate_series` INSERT (fast, no per-row round trips) and asserts the response is exactly
+   `DOCUMENT_SEARCH_LIMIT` rows, not "some smaller number."
+2. **Minor — missing error state.** `CommandPalette.tsx`'s `useQuery` destructuring only pulled
+   `data`/`isLoading`; a failed fetch rendered the same "No results found." as a genuinely empty
+   result. Added `isError` and a `'Failed to load documents. Try again.'` message ahead of the
+   loading/empty fallback. New test confirms this — using a 404 (not 5xx) deliberately, since a
+   5xx is retried under this app's `shouldRetryRequest` policy
+   (`web/src/lib/queryClient.ts`) and would only surface `isError` after retry backoff, while a
+   4xx is treated as permanent and fails fast. Also had to account for a `cmdk` constraint while
+   writing this test: `Command.Empty` only mounts when the *entire* registered item count is
+   zero, and the palette's static "Create"/"Navigate" commands always register — so the error
+   message is only reachable once a non-matching search term is also typed, not on bare open with
+   no search text. Confirmed **red** first: reverted just the `isError` handling and re-ran — the
+   new test timed out waiting for the error text (it stayed on the item list, since `isError` was
+   never wired to a fallback message), not an import error.
+3. **Minor — unsafe error construction.** `fetchCommandPaletteDocuments`'s
+   `new Error(...) as Error & { status: number }` was exactly the assert-and-mutate pattern
+   lessons.md rule 16 and `gate.sh`'s G7b exist to catch — it apparently didn't trip the
+   mechanical check because G7b's pattern list targets `!`/`as any`/`as unknown as`, not this
+   narrower `as Error & {...}` shape. Replaced with
+   `Object.assign(new Error('Failed to fetch documents'), { status: res.status })`, which lets
+   TypeScript infer `Error & { status: number }` from the two argument shapes with no assertion —
+   the same pattern already used in this repo's own tests (`MutationErrorToast.test.tsx`,
+   `useDocumentWriteStatus.test.tsx`, `queryClient.test.ts`).
+4. **Minor — test pollution.** `CommandPalette.test.tsx`'s `vi.stubGlobal('ResizeObserver', …)`
+   and `Element.prototype.scrollIntoView = vi.fn()` were never reverted, so they could leak into
+   other test files sharing the same worker. Added an `afterAll` calling `vi.unstubAllGlobals()`
+   and restoring the captured original `scrollIntoView` descriptor.
+
+Re-ran after all four fixes: `pnpm --filter @ship/web exec vitest run` (full web suite) — 53
+files / 435 tests passed (was 434; +1 net from the new error-state test); `pnpm --filter @ship/api
+test` (full api suite) — 56 files / 680 tests passed; `pnpm type-check` clean across all packages.
+
+**Not fixed here (noticed, out of scope for this ticket):** `cmdk`'s group headings render with
+`aria-hidden="true"` (from the `cmdk` library itself, `Command.Group`), so the "Issues"/
+"Documents"/etc. section labels are invisible to the accessibility tree — an A11Y-shaped gap
+unrelated to caching, pre-existing, and not touched by this change.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/components/CommandPalette.test.tsx
+pnpm --filter @ship/api exec vitest run src/routes/search.test.ts
+```
+
+**Rollback.** Revert the commit(s) on `fix/api-4-cmdk-search-cache` touching
+`CommandPalette.tsx`, `api/src/routes/search.ts`, `api/src/openapi/schemas/search.ts`, and the
+new `describe('Search Documents API (TRO-175 / API-4)', …)` block in
+`api/src/routes/search.test.ts`; remove `web/src/components/CommandPalette.test.tsx`.
+
+---
+
 ## TRO-180 (DB-3) — Named the three hottest unnamed statements so Postgres can cache their plans
 
 **What was broken.** `api/src/db/client.ts`'s `pool` is a plain `pg.Pool`, and every call site in
