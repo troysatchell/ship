@@ -113,6 +113,139 @@ to being static-analysis-illegible in the same way it was before this ticket.
 
 ---
 
+## TRO-291 — Login error offered no recovery guidance for invalid credentials (WCAG 3.3.3)
+
+**What was broken.** `api/src/routes/auth.ts:54,89` deliberately returns the exact same message —
+`"Invalid email or password"` — for both "no such account" and "wrong password," a security choice
+against account enumeration that is correct and **unchanged by this ticket**. `web/src/pages/
+Login.tsx` rendered that string verbatim inside a `role="alert"` div and offered zero recovery
+affordance anywhere on the page. Confirmed by grep rather than assumed: `grep -rni "forgot"
+web/src api/src` matched one unrelated code comment (a CLI test docstring, "caller that forgot
+the..."); `grep -rni "reset.password\|reset_password\|resetpassword" web/src api/src` matched
+nothing; `grep -rni "recovery" web/src api/src` matched only unrelated usages (cache-corruption
+recovery in `queryClient.ts`, error-logging-recovery comments in `BacklinksPanel.*`, a DB-recovery
+test in `ensureDatabase.test.ts`) — none about account/password recovery. Listing every admin/
+invite/password-adjacent endpoint (`grep -n "router\.\(get\|post\|put\|patch\|delete\)"
+api/src/routes/admin.ts api/src/routes/admin-credentials.ts api/src/routes/invites.ts`) shows no
+`/password/reset` or `/forgot-password` route, and `web/src` has no forgot-password page or link.
+That's the WCAG 3.3.3 (Error Suggestions) gap: the error was shown, but nothing told the user what
+to do next.
+
+**What changed.** `web/src/pages/Login.tsx`'s existing error `<div role="alert">` still renders
+`{error}` completely unmodified — the security-sensitive API string is untouched. A new line is
+appended inside the same alert, scoped by an exact string match (`error === 'Invalid email or
+password'`) so it only appears for the credential-failure case and not for client-side validation
+errors ("Email address is required") or network failures ("Failed to sign in..."):
+
+> Don't have an account, or can't remember your password? Contact your workspace admin for help.
+
+This app has no self-service password-reset flow (confirmed by the grep above, and by `grep -n
+"router\.\(get\|post\|put\|patch\|delete\)" api/src/routes/admin.ts api/src/routes/admin-credentials.ts
+api/src/routes/invites.ts`, which lists every admin/invite endpoint and none of them reset an
+existing user's password) — so "contact your workspace admin" is the one real recovery path today,
+not an invented one. `web/src/pages/InviteAccept.tsx:173` already uses the same "contact your
+workspace admin" pattern for its own expired-invite state, so this isn't a new UI idiom for the app.
+
+Also tightened `e2e/accessibility-remediation.spec.ts`'s `'login errors provide recovery
+suggestions'` test (WCAG 3.3.3 describe block), which previously only asserted the error text was
+longer than 10 characters — a proxy weak enough that `"Invalid email or password"` alone (the
+pre-fix, no-guidance state) already satisfied it. It now asserts the alert both still contains
+`'Invalid email or password'` verbatim and matches `/workspace admin/i`.
+
+**Not verified.** Screen-reader announcement of the new text was not checked with an actual screen
+reader (no VoiceOver/NVDA session was run against this change) — this is engineering judgment that
+the added text satisfies WCAG 3.3.3's "suggestion is provided" requirement, not a confirmed
+announcement result. Per the A11Y-1 lesson elsewhere in this file, that gap is real: axe/lint-level
+checks cannot confirm what assistive technology actually speaks.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web test -- src/pages/Login.recoveryHint.test.tsx   # 3/3 pass (new)
+pnpm --filter @ship/web test -- src/pages/Login.test.tsx                # 2/2 pass (unaffected)
+pnpm exec playwright test e2e/accessibility-remediation.spec.ts -g "login errors provide recovery suggestions"
+```
+
+**How to roll it back.** `git revert <this commit>` removes the `Login.tsx` recovery line, the new
+`web/src/pages/Login.recoveryHint.test.tsx` regression test, the tightened e2e assertion, and this
+entry. If reverting by hand: restore `Login.tsx`'s error `<div role="alert">{error}</div>` to have
+no additional child content, `git rm web/src/pages/Login.recoveryHint.test.tsx`, revert the e2e
+assertion in `accessibility-remediation.spec.ts` back to the length-only check (or leave the
+stronger version — reverting it is not required for the app to keep working), and delete this
+entry. No API or database change was made — `api/src/routes/auth.ts` is untouched.
+
+---
+
+## TRO-205 — [BUN-9] First paint blocks on a third-party Google Fonts stylesheet
+
+**What was broken.** `web/index.html` carried two `<link rel="preconnect">`s to
+`fonts.googleapis.com`/`fonts.gstatic.com` plus a render-blocking
+`<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">`
+ahead of the entry script — Vite/Tailwind starter boilerplate that survived into production. Ship is
+deployed at `ship.awsdev.treasury.gov` and is otherwise fully self-hosted (own icons, own CSS, own
+PWA manifest); this was the one remaining third-party runtime dependency on the first-paint critical
+path — a cross-origin round trip to Google from a `.treasury.gov` domain before the browser could
+even start fetching the font.
+
+**What changed.**
+- Added `@fontsource/inter` (^5.3.0, MIT-licensed) as a `web` dependency. It ships the actual woff2/
+  woff files plus pre-written `@font-face` CSS, split one file per weight — the standard way to
+  self-host a Google Font in a Vite app without hand-rolling subsetting.
+- `web/src/index.css` now imports `@fontsource/inter/400.css`, `/500.css`, `/600.css` — the same
+  three weights the removed Google Fonts URL requested (`wght@400;500;600`, no `ital` axis, so
+  normal style only) — ahead of the `@tailwind base/components/utilities` directives, so the
+  `@font-face` rules land ahead of Tailwind's generated layers in the cascade.
+- Removed the two `preconnect` links and the stylesheet `<link>` from `web/index.html`, replacing
+  them with a comment pointing at this ticket and at `src/index.css`.
+- No change needed to `tailwind.config.js` or `body`'s `font-family` in `index.css` — both already
+  named the bare family `'Inter'`, which now resolves to the self-hosted `@font-face` instead of the
+  Google-served one.
+- `@fontsource/inter`'s per-weight CSS files bundle one `@font-face` block per Unicode-range subset
+  (latin, latin-ext, cyrillic, cyrillic-ext, greek, greek-ext, vietnamese) — the same structure
+  Google's own `css2` endpoint returns by default for a `family=Inter` request with no `text=`
+  parameter. Kept that full set rather than switching to the `latin`-only variant: this is a project
+  and issue tracker where user-entered names/content can contain non-Latin-1 characters, and each
+  `@font-face` block is scoped by `unicode-range`, so a browser only downloads the woff2 subset that
+  actually matches the text on the page — derived from standard `unicode-range` browser behavior,
+  not measured with a network trace in this session.
+
+**Evidence.**
+- Regression test: `web/src/selfHostedFonts.test.ts` (6 assertions). Confirmed red first by
+  `git stash push -- web/index.html web/src/index.css` (reverting to the pre-fix state while keeping
+  the new test and the installed `@fontsource/inter` dependency), then
+  `npx vitest run src/selfHostedFonts.test.ts` from `web/`: 4 of 6 failed for the expected reasons
+  (`index.html` still matched `fonts.googleapis.com`/`fonts.gstatic.com`; a `<link>` tag still
+  pointed at `https://fonts.googleapis.com`; `index.css` had no `@fontsource/inter` imports; the
+  cascade-order check had nothing to find). Restored the fix with `git stash pop`; the same command
+  then passed 6/6.
+- Built output: `cd web && pnpm build`, then `grep -rn "fonts.googleapis\|fonts.gstatic" dist/`
+  returned no matches (grep exit code 1). `dist/assets/index-*.css` contains `@font-face` rules
+  referencing content-hashed local files (`inter-latin-400-normal-*.woff2`, etc.), and those files
+  are present under `dist/assets/`.
+- `pnpm --filter @ship/web test`: 66 test files / 492 tests passed (no new failures against the
+  known-empty quarantine in `audit/factory/quarantine.json`).
+- `pnpm --filter @ship/web type-check`: clean.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/web build
+grep -rn "fonts.googleapis\|fonts.gstatic" web/dist/   # expect no matches
+pnpm --filter @ship/web test -- src/selfHostedFonts.test.ts
+```
+
+**Not verified.** Actual visual rendering of Inter in a browser, and an observed (vs. derived)
+browser network trace confirming only the `latin` woff2 subset is fetched for English-only content —
+no browser is available in this environment. The regression test and the `dist/` grep are static/
+build-output checks, not a rendered-page observation.
+
+**Rollback.** Revert `web/index.html` (restore the two `preconnect` links and the
+`fonts.googleapis.com/css2?family=Inter...` stylesheet link), revert `web/src/index.css` (remove the
+three `@fontsource/inter` `@import`s), remove `web/src/selfHostedFonts.test.ts`, and run
+`pnpm --filter @ship/web remove @fontsource/inter` to drop the dependency and its lockfile entry.
+
+---
+
 ## TRO-214 — [TS-9] web build and script files are never type-checked
 
 **What was broken.** `web/tsconfig.json`'s `include` is `["src"]` only, and `web/tsconfig.node.json`
