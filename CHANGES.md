@@ -8,6 +8,64 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-294 — direct-to-ALB health check URL in `.claude/CLAUDE.md` corrected to the CloudFront-fronted path
+
+**Docs-only, priority Low, no vitest path applies (regression-test evidence below instead).**
+
+**What was wrong.** `.claude/CLAUDE.md`'s Deployment section documented the prod API health check
+as `http://ship-api-prod.eba-xsaqsg9h.us-east-1.elasticbeanstalk.com/health` — a direct hit on the
+Elastic Beanstalk ALB's own DNS name, bypassing CloudFront. TF-7/TRO-278 (already merged, see that
+entry above) restricted the ALB security group (`terraform/security-groups.tf`) to CloudFront's
+origin-facing prefix list, `data.aws_ec2_managed_prefix_list.cloudfront_origin_facing`. Once that
+SG is actually applied to a live account, a direct connection to the ALB URL times out for most
+clients — the DNS name itself still resolves; the security group silently drops the TCP connection
+because it isn't sourced from CloudFront's IP ranges. Either way, not an API-health problem: the
+network path is blocked. TRO-278's own
+CHANGES.md entry called this out as DERIVED and explicitly left it for a human/follow-up ticket to
+fix; this ticket is that follow-up.
+
+**What changed.** `.claude/CLAUDE.md`'s Prod API health check now reads
+`https://ship.awsdev.treasury.gov/health`, with a note explaining why the old URL breaks and where
+the replacement comes from.
+
+**How I confirmed the new URL (observed, not invented).** Read `terraform/s3-cloudfront.tf`
+directly: the `dynamic "ordered_cache_behavior"` block with `path_pattern = "/health"` (only
+created `for_each = var.eb_environment_cname != "" ? [1] : []`) targets `target_origin_id =
+"EB-API"` — CloudFront already proxies this exact path to the same Elastic Beanstalk origin the
+old URL hit directly. The domain to use is `var.app_domain_name` (`terraform/variables.tf`) when
+set, else the CloudFront-assigned domain exposed as the `cloudfront_domain_name` output
+(`terraform/outputs.tf`); the `frontend_url` output already picks the right one of the two
+(`var.app_domain_name != "" ? "https://${var.app_domain_name}" : "https://${aws_cloudfront_distribution.frontend.domain_name}"`).
+`ship.awsdev.treasury.gov` is prod's `app_domain_name` value — corroborated by every other prod
+reference in the repo (`.claude/CLAUDE.md`'s own "Prod Web" line just below the edit,
+`audit/AUDIT_REPORT.md`, `memory-bank/techContext.md`, `docs/fpki-auth-client-dcr-analysis.md`'s
+OAuth redirect URI), not by a fresh `terraform output` (no AWS credentials / apply available here,
+same constraint TF-7's own work noted). **Not verified:** whether the ALB SG restriction has
+actually been `apply`'d to the live prod account yet. `memory-bank/progress.md` records two
+*separate* 2026-07-28 checks, not one combined result: `ship.awsdev.treasury.gov` (the domain this
+PR's new health-check URL uses) returned **HTTP 403** — the request reached an HTTP endpoint and
+was refused, which is not evidence of an unreachable network path — but confirms only that the
+viewer-facing hostname returned an HTTP response; it does **not** confirm CloudFront reached the
+`EB-API` origin, since CloudFront or an upstream policy can reject a request before origin access.
+The old direct-ALB
+hostname (`ship-api-prod...elasticbeanstalk.com`) returned **no response at all** — a different,
+stronger signal, closer to what TF-7's SG restriction would actually produce. Neither result
+confirms the SG restriction is live in prod; the new URL could not be curled end-to-end to verify
+from here.
+
+**Regression-test note.** Pure documentation change; neither vitest project (`api/src/**/*.test.ts`,
+`web/src/**/*.test.ts(x)`) has a path to assert against a markdown string, so no test file is added.
+`scripts/factory/gate.sh`'s G6 (regression-test present) is expected to fail on this branch for that
+reason — the evidence for the fix is the terraform cross-reference above, not a test.
+
+**How to roll it back.** `git revert <commit>`, or manually restore the old two-line health-check
+list in `.claude/CLAUDE.md`. This is a docs-only revert — it restores the stale URL text but does
+**not** undo the TF-7/TRO-278 ALB security-group restriction that made the URL stale; that lives in
+a separate, already-merged change (`terraform/security-groups.tf`) with its own Terraform
+apply/revert path. No code, schema, or infra changed by this commit either direction.
+
+---
+
 ## TRO-234 — [TF-1] Prod Aurora cluster and uploads bucket had no deletion protection
 
 **The problem.** Of the flat root's 74 resource blocks, only the Terraform **state** bucket
