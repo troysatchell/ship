@@ -21,6 +21,105 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-228 (TEST-6) — Allocation grid showed `planId: null` right after the plan was created — not a race, a mis-scoped lookup key
+
+**The audit's hypothesis did not hold — traced and overturned, not assumed.** TEST-6 escalated
+`e2e/weekly-accountability.spec.ts:469` as "a real race candidate": `GET
+/api/weekly-plans/project-allocation-grid/:projectId` returned `planId: null` immediately after a
+`POST /api/weekly-plans` that should have created it, reproducibly on the first attempt. The
+hypothesis was that plan creation and its "week assignment" were two separate statements, so a read
+racing the write could observe the plan but not its assignment.
+
+Traced the actual code before touching anything (`api/src/routes/weekly-plans.ts:183-301`):
+`POST /weekly-plans` already inserts the `documents` row and its `document_associations` project
+link inside **one transaction** (`BEGIN` at line 250, `COMMIT` at line 281, both queries in between
+run on the same pooled client), and the `201` response is only written after `COMMIT` resolves.
+Proved this is not a timing issue by reproducing the exact e2e sequence as a single supertest
+request against the real Express app (`api/src/routes/weekly-plans.test.ts`) — it passed cleanly,
+every time, 3/3 runs. There is no window here where the write is half-visible.
+
+**What is actually broken (observed, file:line).** `POST /weekly-plans` deliberately dedupes a
+`weekly_plan` document on `(person_id, week_number)` **only** — `project_id` is documented in the
+route's own `weeklyPlanSchema` comment as "Optional - legacy field, not used for uniqueness"
+(`weekly-plans.ts:143`), and the same person+week-only lookup is reused, unchanged, by the
+`weekly_retro` POST handler when it auto-populates a retro from that week's plan
+(`weekly-plans.ts:642-650`). But the allocation-grid handler's plan/retro lookups
+(`weekly-plans.ts:990-999`, pre-fix) filtered by `(properties->>'project_id') = $2` — treating
+`project_id` as if it reliably scoped a plan to one project, when the create endpoint explicitly
+does not guarantee that.
+
+The failure is deterministic, not probabilistic: a person's first weekly-plan POST for week *N*,
+on *any* project, permanently "claims" that (person, week) pair — its `properties.project_id` is
+whatever project happened to ask first. A **later** POST for the same person+week from a
+**different** project correctly returns that same existing document (`200`, not `201` — idempotent
+by design), but the grid's old `= $2` filter then can never find it for the second project, because
+the document's stored `project_id` still points at the first project. `e2e/weekly-accountability.spec.ts`
+triggers this because every test in the file logs in as the same seeded user (same `person_id`) and
+an earlier test in file order (`weekly-accountability.spec.ts:78`, `week_number: 1`) already claims
+week 1 for a different project before the allocation-grid test (`:469`, also `week_number: 1`) runs
+— but the same shape occurs for a real user assigned to two concurrent projects in the same
+sprint, which is a real (if narrow) production scenario, not just a test-ordering artifact.
+
+**Cross-file note per the ticket's own instruction:** this is query-shaped, not a
+concurrency/transaction bug — flagging plainly rather than forcing a `BEGIN`/`COMMIT` onto a
+mechanism that was already atomic. No `db-query`/`api-perf` action needed beyond what this fix
+already does (see below).
+
+**CodeQL finding, triaged, filed as a new ticket, not fixed here.** PR #94's CodeQL security-scan
+check reported a High-severity "new" `js/missing-rate-limiting` alert at the
+`/project-allocation-grid/:projectId` handler this ticket touches. Verified it is **not new**:
+`git show main:api/src/routes/weekly-plans.ts` shows the same handler already lacked rate-limiting
+middleware before this diff — the `PlanOrRetroRow` interface insertion above it shifted every
+subsequent line number, and CodeQL's PR-vs-base diffing appears to treat the shifted registration as
+newly-introduced code. The repo-wide alert list shows **18 open instances of this same rule in
+`weekly-plans.ts` alone**, plus more in `weeks.ts`, `admin.ts`, and `search.ts` — a systemic gap in
+how `api/src/middleware/rate-limit.ts` (TRO-280) is *applied*, not a defect in this handler
+specifically or something this ticket's narrow query fix should absorb as a drive-by. Filed as
+`TRO-307`, recorded in `audit/factory/review-findings.jsonl` with disposition `new-ticket`.
+
+**The fix — `api/src/routes/weekly-plans.ts`, `project-allocation-grid/:projectId` handler only.**
+Changed the plan/retro lookup queries to filter by `(properties->>'person_id') = ANY($2::text[])`,
+where `$2` is the list of person IDs already allocated to this project (from the preceding
+`allocatedPeopleResult` query), instead of filtering by `project_id`. This matches the actual
+identity model the create endpoints use and enforce elsewhere in this same file, so a person's
+week-*N* plan is found for every project's grid it is relevant to, regardless of which project's
+request happened to create the underlying document first. Also typed the two queries' rows
+(`PlanOrRetroRow`, `weekly-plans.ts:910-916`) instead of leaving `.rows` implicitly `any`.
+
+**Second correction (CodeRabbit, PR #94).** Both queries filtered `deleted_at IS NULL` but not
+`archived_at IS NULL` — pre-existing on `main` before this ticket, not introduced by it, but the
+exact two queries this fix already touches. An archived `weekly_plan`/`weekly_retro` document would
+still populate `planId`/`retroId` in the grid. Added `AND archived_at IS NULL` to both.
+
+**Regression test — `api/src/routes/weekly-plans.test.ts` (new file, 3 cases).** Supertest cases
+against the real Express app:
+1. The straightforward path — POST creates a plan, GET the grid immediately, `planId` matches.
+   This alone does **not** reproduce the bug (confirmed above — it passes against the unfixed code
+   too, because there is no race), which is itself evidence the audit's race hypothesis was wrong.
+2. The actual bug, reproduced deterministically and structurally (no sleep, no timing dependency):
+   POST a week-1 plan for "Other Project", then POST a week-1 plan for the project under test for
+   the **same person** (asserts the idempotent `200` + same `id` first, proving the dedup-by-
+   person+week behavior itself), then GET that project's allocation grid and assert `planId` is the
+   existing plan's id. Confirmed **red before the fix** —
+   `expected null to be '<plan-id>'` — and green after, 3/3 runs.
+3. **Added per CodeRabbit review (PR #94):** the mirror-image case for `weekly_retro`/`retroId`,
+   identical shape to case 2 but through `POST /api/weekly-retros`. The allocation grid applies the
+   same person_id-scoped fix to both lookups, so both need independent coverage — a regression that
+   broke only the retro side would otherwise pass unnoticed.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/routes/weekly-plans.test.ts
+```
+
+**How to roll it back.** Revert this commit. `api/src/routes/weekly-plans.ts`'s
+`project-allocation-grid` handler returns to filtering plan/retro lookups by `project_id`, and
+`api/src/routes/weekly-plans.test.ts` is removed. No schema or migration changes were needed or
+made.
+
+---
+
 ## TRO-306 (TS-10 follow-up, batch 1) — `web/src/pages/*`'s 188 floating/misused-promise sites fixed, both rules promoted to `error` for `web/src/pages/**`
 
 **Scope.** TRO-297's own "what's still open" note recommended splitting web's promise-safety
