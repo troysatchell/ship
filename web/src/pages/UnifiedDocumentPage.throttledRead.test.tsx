@@ -151,9 +151,14 @@ describe('TRO-301 / ERR-17: document-by-id query retry policy', () => {
     await waitFor(() => expect(screen.getByText(/document not found/i)).toBeInTheDocument());
     expect(screen.queryByTestId('editor-mounted')).not.toBeInTheDocument();
 
-    // A permanent 4xx must not retry at all under the shared policy - give it
-    // a beat and confirm the call count never climbs past the first attempt.
-    await new Promise((r) => setTimeout(r, 300));
+    // Not a fixed wall-clock guess: shouldRetryRequest() (queryClient.ts:249-254)
+    // returns false synchronously for any permanent 4xx, so a 404 never gets a
+    // retry timer scheduled at all - there's no backoff window to out-wait here.
+    // Flush the microtask/macrotask queue a bounded number of times instead, to
+    // deterministically catch any stray refetch without depending on a duration.
+    for (let flush = 0; flush < 5; flush++) {
+      await new Promise((r) => setTimeout(r, 0));
+    }
     expect(docCallCount).toBe(1);
   });
 });
