@@ -103,7 +103,7 @@ describe('OrgChartPage (TEST-8 / TRO-230)', () => {
   });
 
   it('shows a loading state before the fetch resolves, then renders the hierarchy', async () => {
-    let resolveFetch!: (res: Response) => void;
+    let resolveFetch: ((res: Response) => void) | undefined;
     apiGet.mockImplementationOnce(
       () => new Promise<Response>((resolve) => { resolveFetch = resolve; }),
     );
@@ -114,6 +114,7 @@ describe('OrgChartPage (TEST-8 / TRO-230)', () => {
     expect(screen.getByText('Loading...')).toBeInTheDocument();
     expect(screen.queryByRole('tree')).not.toBeInTheDocument();
 
+    if (!resolveFetch) throw new Error('Fetch resolver was not initialized');
     resolveFetch(jsonResponse(PEOPLE));
 
     const tree = await screen.findByRole('tree', { name: 'Organization chart' });
@@ -160,17 +161,19 @@ describe('OrgChartPage (TEST-8 / TRO-230)', () => {
 
   it('degrades to the empty state instead of hanging or crashing when the fetch rejects', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    apiGet.mockRejectedValueOnce(new Error('network offline'));
+    try {
+      apiGet.mockRejectedValueOnce(new Error('network offline'));
 
-    renderPage();
+      renderPage();
 
-    // Must not get stuck on the loading branch forever (the `finally` in
-    // fetchPeople is what clears it on the error path, not just the happy path).
-    expect(await screen.findByText('No reporting hierarchy configured')).toBeInTheDocument();
-    expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
-    expect(screen.queryByRole('tree')).not.toBeInTheDocument();
-
-    consoleError.mockRestore();
+      // Must not get stuck on the loading branch forever (the `finally` in
+      // fetchPeople is what clears it on the error path, not just the happy path).
+      expect(await screen.findByText('No reporting hierarchy configured')).toBeInTheDocument();
+      expect(screen.queryByText('Loading...')).not.toBeInTheDocument();
+      expect(screen.queryByRole('tree')).not.toBeInTheDocument();
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it('degrades to the empty state when the API responds but not with ok:true', async () => {

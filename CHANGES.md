@@ -86,11 +86,14 @@ interaction surfaces in this component that remain untested after this ticket �
 deliberately to keep this fix scoped to closing TEST-8's "zero coverage" finding (render/populated/
 empty/error), not to reach full component coverage in one pass.
 
-**How to roll it back.** `git revert <this commit>` (or `git rm web/src/pages/OrgChartPage.test.tsx`)
-removes the new test file only; no production code was changed (the `buildTree` edit used for the
-red/green proof was reverted before committing and never shipped). Reverting returns `OrgChartPage`
-to zero test coverage — TEST-8 reopened for the org-chart half only, since the `/dashboard` half's
-fix (TRO-223) lives on a separate commit untouched by this one.
+**How to roll it back.** `git revert <this commit>` removes both the new test file and this
+`CHANGES.md` entry — the complete rollback. If reverting by hand instead, `git rm
+web/src/pages/OrgChartPage.test.tsx` **and** delete this entry (a manual removal that leaves this
+entry in place would describe a test file that no longer exists). No production code was changed
+either way (the `buildTree` edit used for the red/green proof was reverted before committing and
+never shipped). Reverting returns `OrgChartPage` to zero test coverage — TEST-8 reopened for the
+org-chart half only, since the `/dashboard` half's fix (TRO-223) lives on a separate commit
+untouched by this one.
 
 ---
 
