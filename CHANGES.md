@@ -51,8 +51,9 @@ command runs, and an exported var always wins over `.env.local`/`.env` — but *
 specifically when `.env.test` is present (by design — see the function's own header comment: a
 developer who set one up wants it to be the single source of truth, not silently second-guessed),
 and `client.ts` honors that override, replacing even an already-exported `DATABASE_URL`. No factory
-worktree currently creates or commits an `api/.env.test` (only the gitignored, developer-opt-in
-`.env.test.example` template is added by this ticket), so the factory is unaffected **in practice**
+worktree currently creates or commits an `api/.env.test` (only the tracked, developer-opt-in
+`.env.test.example` template is added by this ticket — `api/.env.test` itself, not the `.example`
+file, is what `.gitignore` excludes), so the factory is unaffected **in practice**
 today — but the correct claim is "safe because no worktree has `.env.test`," not "safe
 unconditionally." A worktree provisioning script that ever copies `.env.test.example` into place
 would need to account for this precedence.
