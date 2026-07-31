@@ -45,6 +45,23 @@ interface TeamGridData {
 const SPRINTS_PER_LOAD = 5;
 const SCROLL_THRESHOLD = 200;
 
+/**
+ * True when `err` is the `AbortError` a `fetch` rejects with when its
+ * `AbortSignal` fires (see the initial-load effect below). Distinguishing
+ * this from a real failure matters because React 18 `StrictMode` (dev only)
+ * mounts every component twice - setup, cleanup, setup again - to surface
+ * exactly this class of bug. Before this guard, TRO-186/DB-9 caught this
+ * page firing `GET /api/team/grid`, `/api/team/projects` and
+ * `/api/team/assignments` twice on first load: the discarded first-mount
+ * effect's requests were never cancelled, so the browser sent them anyway
+ * and the abandoned responses got silently written into state alongside the
+ * real ones (or, worse, raced them). The abort itself is not an error worth
+ * surfacing.
+ */
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === 'AbortError';
+}
+
 // Program group info for grouping users
 interface ProgramGroup {
   programId: string | null;
@@ -201,11 +218,24 @@ export function TeamModePage() {
 
   // Initial load
   useEffect(() => {
+    const controller = new AbortController();
+    let cancelled = false;
+
     Promise.all([
-      fetchTeamGrid(undefined, undefined, showArchived),
-      fetchProjects(),
-      fetchAssignments(),
-    ]).finally(() => setLoading(false));
+      fetchTeamGrid(undefined, undefined, showArchived, controller.signal),
+      fetchProjects(controller.signal),
+      fetchAssignments(controller.signal),
+    ]).finally(() => {
+      // Guards against the StrictMode double-invoke's discarded first pass
+      // calling setLoading(false) before the real (second) pass's fetches
+      // have resolved - see isAbortError's docstring.
+      if (!cancelled) setLoading(false);
+    });
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
   }, []);
 
   // Refetch when showArchived changes
@@ -233,7 +263,7 @@ export function TeamModePage() {
     }
   }, [data, showPastWeeks]);
 
-  async function fetchTeamGrid(fromSprint?: number, toSprint?: number, includeArchived = false) {
+  async function fetchTeamGrid(fromSprint?: number, toSprint?: number, includeArchived = false, signal?: AbortSignal) {
     try {
       const params = new URLSearchParams();
       if (fromSprint !== undefined) params.set('fromSprint', String(fromSprint));
@@ -241,7 +271,7 @@ export function TeamModePage() {
       if (includeArchived) params.set('includeArchived', 'true');
 
       const url = `/api/team/grid${params.toString() ? `?${params}` : ''}`;
-      const res = await apiGet(url);
+      const res = await apiGet(url, { signal });
       if (!res.ok) throw new Error('Failed to fetch team grid');
       const json: TeamGridData = await res.json();
 
@@ -256,30 +286,33 @@ export function TeamModePage() {
 
       setData(json);
     } catch (err) {
+      if (isAbortError(err)) return;
       setError(err instanceof Error ? err.message : 'Unknown error');
     }
   }
 
-  async function fetchProjects() {
+  async function fetchProjects(signal?: AbortSignal) {
     try {
-      const res = await apiGet(`/api/team/projects`);
+      const res = await apiGet(`/api/team/projects`, { signal });
       if (res.ok) {
         const json = await res.json();
         setProjects(json);
       }
     } catch (err) {
+      if (isAbortError(err)) return;
       console.error('Failed to fetch projects:', err);
     }
   }
 
-  async function fetchAssignments() {
+  async function fetchAssignments(signal?: AbortSignal) {
     try {
-      const res = await apiGet(`/api/team/assignments`);
+      const res = await apiGet(`/api/team/assignments`, { signal });
       if (res.ok) {
         const json = await res.json();
         setAssignments(json);
       }
     } catch (err) {
+      if (isAbortError(err)) return;
       console.error('Failed to fetch assignments:', err);
     }
   }
