@@ -257,3 +257,143 @@ describe('SyncStatusIndicator (TRO-190 / ERR-3)', () => {
     expect(statusText()).toContain('Saved');
   });
 });
+
+/**
+ * TRO-194 / ERR-7 - the indicator had no in-flight state at all: probe5
+ * (`audit/error-handling/raw/probe5-slow-network.json`) typed for 6s under
+ * Fast 3G and the indicator held on "Saved" the entire time - "false (false
+ * = no in-flight/unsaved feedback at all)". A synced-but-idle document and a
+ * synced-document-mid-keystroke were indistinguishable to the user.
+ *
+ * These tests were confirmed red against the pre-fix `deriveSyncIndicator`
+ * (which did not accept `isSaving` at all): with `isSynced: true` and
+ * `isSaving: true`, the pre-fix component ignored the unknown prop and
+ * rendered "Saved" - failing `expect(text).not.toMatch(/\bSaved\b/)` with an
+ * actual value of "Saved".
+ */
+describe('SyncStatusIndicator (TRO-194 / ERR-7 — in-flight saving state)', () => {
+  function statusText(): string {
+    return screen.getByTestId('sync-status').textContent ?? '';
+  }
+
+  it('shows a distinct "Saving" state while a synced socket has an unflushed local edit', () => {
+    render(
+      <SyncStatusIndicator
+        syncStatus="synced"
+        isSynced
+        isInitialConnect={false}
+        isBrowserOnline
+        isSaving
+      />
+    );
+
+    const text = statusText();
+    expect(text, 'a save in flight must not still read as the settled "Saved" state').not.toMatch(
+      /\bSaved\b/
+    );
+    expect(text).toMatch(/saving/i);
+  });
+
+  it('is distinct from the error ("Not saved") state', () => {
+    render(
+      <SyncStatusIndicator
+        syncStatus="synced"
+        isSynced
+        isInitialConnect={false}
+        isBrowserOnline
+        isSaving
+      />
+    );
+
+    expect(statusText(), '"Saving" must not be confused with the failure state').not.toMatch(
+      /not saved/i
+    );
+  });
+
+  it('marks the saving state as pending (in-progress), not ok or error', () => {
+    const { container } = render(
+      <SyncStatusIndicator
+        syncStatus="synced"
+        isSynced
+        isInitialConnect={false}
+        isBrowserOnline
+        isSaving
+      />
+    );
+
+    const dot = container.querySelector('[aria-hidden="true"]');
+    expect(dot?.className, 'in-flight must not read as fully settled (green)').not.toMatch(
+      /bg-green-/
+    );
+    expect(dot?.className, 'in-flight is not a failure (red)').not.toMatch(/bg-red-/);
+    expect(dot?.className).toMatch(/bg-yellow-/);
+  });
+
+  it('returns to "Saved" once the local edit has flushed (isSaving clears)', () => {
+    const { rerender } = render(
+      <SyncStatusIndicator
+        syncStatus="synced"
+        isSynced
+        isInitialConnect={false}
+        isBrowserOnline
+        isSaving
+      />
+    );
+    expect(statusText()).toMatch(/saving/i);
+
+    rerender(
+      <SyncStatusIndicator
+        syncStatus="synced"
+        isSynced
+        isInitialConnect={false}
+        isBrowserOnline
+        isSaving={false}
+      />
+    );
+    expect(statusText()).toContain('Saved');
+  });
+
+  it('never claims "Saving" over a connection that is not actually synced', () => {
+    // isSaving reflects an unflushed local edit, not "the user is typing" in
+    // isolation - if the socket itself has no completed sync, the existing
+    // ERR-1 "Not saved" truth must still win.
+    render(
+      <SyncStatusIndicator
+        syncStatus="cached"
+        isSynced={false}
+        isInitialConnect={false}
+        isBrowserOnline
+        isSaving
+      />
+    );
+
+    const text = statusText();
+    expect(text).not.toMatch(/saving/i);
+    expect(text).toMatch(/not saved/i);
+  });
+
+  it('lets a failed direct write override an in-flight body save', () => {
+    render(
+      <SyncStatusIndicator
+        syncStatus="synced"
+        isSynced
+        isInitialConnect={false}
+        isBrowserOnline
+        isSaving
+        hasFailedWrite
+      />
+    );
+
+    const text = statusText();
+    expect(text).not.toMatch(/saving/i);
+    expect(text).toMatch(/not saved/i);
+  });
+
+  it('defaults to the pre-ERR-7 behavior when isSaving is omitted', () => {
+    render(
+      <SyncStatusIndicator syncStatus="synced" isSynced isInitialConnect={false} isBrowserOnline />
+    );
+
+    expect(statusText()).toContain('Saved');
+  });
+});

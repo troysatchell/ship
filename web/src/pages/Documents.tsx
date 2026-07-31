@@ -190,8 +190,16 @@ export function DocumentsPage() {
     setContextMenu({ x: e.clientX, y: e.clientY, selection });
   }, []);
 
+  // TRO-194/ERR-7: the skeleton itself is a purely visual affordance (no
+  // text) - the wrapping status role/live region is what makes "still
+  // loading" perceivable to a screen reader.
   if (loading) {
-    return <DocumentsListSkeleton />;
+    return (
+      <div role="status" aria-live="polite">
+        <span className="sr-only">Loading documents…</span>
+        <DocumentsListSkeleton />
+      </div>
+    );
   }
 
   // Search filter content for toolbar (matches Issues pattern)

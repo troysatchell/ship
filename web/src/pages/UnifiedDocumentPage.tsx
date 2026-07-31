@@ -14,6 +14,7 @@ import { useToast } from '@/components/ui/Toast';
 import { issueKeys } from '@/hooks/useIssuesQuery';
 import { projectKeys, useProjectWeeksQuery } from '@/hooks/useProjectsQuery';
 import { TabBar } from '@/components/ui/TabBar';
+import { RouteFallback } from '@/components/RouteFallback';
 import { useCurrentDocument } from '@/contexts/CurrentDocumentContext';
 import {
   getTabsForDocument,
@@ -519,13 +520,12 @@ export function UnifiedDocumentPage() {
     } as UnifiedDocument;
   }, [document]);
 
-  // Loading state
+  // Loading state. TRO-194/ERR-7: `isLoading` is react-query's initial-fetch
+  // flag (not `isFetching`), so this fires on first paint only. Reuses the
+  // same accessible status affordance as the lazy-route fallback
+  // (BUN-1/TRO-197) instead of inert text.
   if (isLoading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted">Loading...</div>
-      </div>
-    );
+    return <RouteFallback variant="panel" label="Loading document…" />;
   }
 
   // Error state - only when there is no cached document to fall back on.
@@ -580,13 +580,7 @@ export function UnifiedDocumentPage() {
 
         {/* Content area with lazy-loaded tab component */}
         <div className="flex-1 overflow-hidden">
-          <Suspense
-            fallback={
-              <div className="flex h-full items-center justify-center">
-                <div className="text-muted">Loading...</div>
-              </div>
-            }
-          >
+          <Suspense fallback={<RouteFallback variant="panel" />}>
             {TabComponent && (
               <TabComponent documentId={id!} document={document} nestedPath={nestedPath} />
             )}
