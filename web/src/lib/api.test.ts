@@ -57,7 +57,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe('api.auth.me() surfaces the full @ship/shared ApiError shape', () => {
   beforeEach(() => {
-    global.fetch = vi.fn(async (input: RequestInfo | URL) => {
+    global.fetch = async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
       if (String(input).includes('/api/csrf-token')) {
         return jsonResponse({ token: 'test-csrf-token' });
       }
@@ -72,7 +72,7 @@ describe('api.auth.me() surfaces the full @ship/shared ApiError shape', () => {
         },
         400
       );
-    }) as unknown as typeof fetch;
+    };
   });
 
   afterEach(() => {
