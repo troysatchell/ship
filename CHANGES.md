@@ -86,8 +86,13 @@ week-*N* plan is found for every project's grid it is relevant to, regardless of
 request happened to create the underlying document first. Also typed the two queries' rows
 (`PlanOrRetroRow`, `weekly-plans.ts:910-916`) instead of leaving `.rows` implicitly `any`.
 
-**Regression test — `api/src/routes/weekly-plans.test.ts` (new file).** Two supertest cases against
-the real Express app:
+**Second correction (CodeRabbit, PR #94).** Both queries filtered `deleted_at IS NULL` but not
+`archived_at IS NULL` — pre-existing on `main` before this ticket, not introduced by it, but the
+exact two queries this fix already touches. An archived `weekly_plan`/`weekly_retro` document would
+still populate `planId`/`retroId` in the grid. Added `AND archived_at IS NULL` to both.
+
+**Regression test — `api/src/routes/weekly-plans.test.ts` (new file, 3 cases).** Supertest cases
+against the real Express app:
 1. The straightforward path — POST creates a plan, GET the grid immediately, `planId` matches.
    This alone does **not** reproduce the bug (confirmed above — it passes against the unfixed code
    too, because there is no race), which is itself evidence the audit's race hypothesis was wrong.
@@ -97,6 +102,10 @@ the real Express app:
    person+week behavior itself), then GET that project's allocation grid and assert `planId` is the
    existing plan's id. Confirmed **red before the fix** —
    `expected null to be '<plan-id>'` — and green after, 3/3 runs.
+3. **Added per CodeRabbit review (PR #94):** the mirror-image case for `weekly_retro`/`retroId`,
+   identical shape to case 2 but through `POST /api/weekly-retros`. The allocation grid applies the
+   same person_id-scoped fix to both lookups, so both need independent coverage — a regression that
+   broke only the retro side would otherwise pass unnoticed.
 
 **How to run it.**
 ```bash

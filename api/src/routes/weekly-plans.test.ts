@@ -186,5 +186,51 @@ describe('Weekly Plans API', () => {
         'The person’s week-1 plan exists (POST returned it, 200) — the grid must not hide it just because its properties.project_id belongs to the project that first created it'
       ).toBe(firstPlan.id)
     })
+
+    // Mirrors the plan-side test above: the allocation grid applies the
+    // identical person_id-scoped fix to the weekly_retro lookup
+    // (weekly-plans.ts's retrosResult query), so the same cross-project
+    // dedup-visibility bug applies to retroId and needs its own coverage.
+    it('finds a person’s existing week-N retro on a second project’s grid, even though the retro is tagged with the first project', async () => {
+      const firstProjectResult = await pool.query(
+        `INSERT INTO documents (workspace_id, document_type, title, created_by, visibility)
+         VALUES ($1, 'project', 'Other Project (retro)', $2, 'workspace')
+         RETURNING id`,
+        [testWorkspaceId, testUserId]
+      )
+      const firstProjectId = firstProjectResult.rows[0].id
+
+      const firstRetroResponse = await request(app)
+        .post('/api/weekly-retros')
+        .set('Cookie', sessionCookie)
+        .set('x-csrf-token', csrfToken)
+        .send({ person_id: personId, project_id: firstProjectId, week_number: 1 })
+      expect(firstRetroResponse.status).toBe(201)
+      const firstRetro = firstRetroResponse.body
+
+      const secondRetroResponse = await request(app)
+        .post('/api/weekly-retros')
+        .set('Cookie', sessionCookie)
+        .set('x-csrf-token', csrfToken)
+        .send({ person_id: personId, project_id: projectId, week_number: 1 })
+      expect(secondRetroResponse.status).toBe(200)
+      expect(secondRetroResponse.body.id).toBe(firstRetro.id)
+
+      const gridResponse = await request(app)
+        .get(`/api/weekly-plans/project-allocation-grid/${projectId}`)
+        .set('Cookie', sessionCookie)
+      expect(gridResponse.status).toBe(200)
+      const grid = gridResponse.body
+
+      const personInGrid = grid.people.find((p: { id: string }) => p.id === personId)
+      expect(personInGrid, 'Person should appear in allocation grid').toBeTruthy()
+
+      const week1Data = personInGrid.weeks[1]
+      expect(week1Data, 'Week 1 data should exist for the allocated person').toBeTruthy()
+      expect(
+        week1Data.retroId,
+        'The person’s week-1 retro exists (POST returned it, 200) — the grid must not hide it just because its properties.project_id belongs to the project that first created it'
+      ).toBe(firstRetro.id)
+    })
   })
 })

@@ -1017,7 +1017,8 @@ router.get('/project-allocation-grid/:projectId', authMiddleware, authed(async (
        WHERE workspace_id = $1
          AND document_type = 'weekly_plan'
          AND (properties->>'person_id') = ANY($2::text[])
-         AND deleted_at IS NULL`,
+         AND deleted_at IS NULL
+         AND archived_at IS NULL`,
       [workspaceId, personIds]
     );
 
@@ -1029,7 +1030,8 @@ router.get('/project-allocation-grid/:projectId', authMiddleware, authed(async (
        WHERE workspace_id = $1
          AND document_type = 'weekly_retro'
          AND (properties->>'person_id') = ANY($2::text[])
-         AND deleted_at IS NULL`,
+         AND deleted_at IS NULL
+         AND archived_at IS NULL`,
       [workspaceId, personIds]
     );
 
