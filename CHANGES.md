@@ -49,9 +49,9 @@ Post-change, both files show exactly the expected new matches:
 
 ```
 $ grep -n 'deletion_protection\|prevent_destroy' terraform/modules/aurora/main.tf terraform/modules/cloudfront-s3/main.tf
-terraform/modules/cloudfront-s3/main.tf:393:    prevent_destroy = true
 terraform/modules/aurora/main.tf:70:  deletion_protection             = true
 terraform/modules/aurora/main.tf:93:    prevent_destroy = true
+terraform/modules/cloudfront-s3/main.tf:393:    prevent_destroy = true
 ```
 
 **Scope.** Only these two resources in these two module files changed. The flat root
