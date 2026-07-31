@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { cn } from '@/lib/cn';
 import { apiPost, apiGet, apiDelete } from '@/lib/api';
 import { formatDateRange } from '@/lib/date-utils';
+import { RouteFallback } from '@/components/RouteFallback';
 
 interface User {
   personId: string; // Document ID - used for allocations (works for both pending and active)
@@ -520,12 +521,11 @@ export function TeamModePage() {
     return undefined;
   }, [error]);
 
+  // TRO-194/ERR-7: renders as soon as the initial fetch is in flight, using
+  // the same accessible status affordance as the lazy-route fallback
+  // (BUN-1/TRO-197) rather than inert text.
   if (loading) {
-    return (
-      <div className="flex h-full items-center justify-center">
-        <div className="text-muted">Loading team grid...</div>
-      </div>
-    );
+    return <RouteFallback variant="panel" label="Loading team grid…" />;
   }
 
   if (!data) {

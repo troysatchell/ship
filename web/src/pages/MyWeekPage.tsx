@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams, Link } from 'react-router-dom';
 import { useMyWeekQuery, StandupSlot } from '@/hooks/useMyWeekQuery';
 import { apiPost } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { RouteFallback } from '@/components/RouteFallback';
 
 function formatDateRange(startDate: string, endDate: string): string {
   const start = new Date(startDate + 'T00:00:00Z');
@@ -89,12 +90,13 @@ export function MyWeekPage() {
     }
   };
 
+  // TRO-194/ERR-7: `isLoading` is react-query's initial-fetch state (not
+  // `isFetching`), so this renders on first paint and never re-flashes on a
+  // background refetch. `RouteFallback` (already used for lazy route chunks,
+  // BUN-1/TRO-197) gives this the same accessible status role/live region
+  // instead of inert text a screen reader has no reason to notice.
   if (isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <p className="text-sm text-muted">Loading week...</p>
-      </div>
-    );
+    return <RouteFallback variant="panel" label="Loading week…" />;
   }
 
   if (error || !data) {
