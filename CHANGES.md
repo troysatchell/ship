@@ -8,6 +8,76 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-296 (ERR-15) — `yjsToJson` did not read back marks written via `YXmlText.format()`/`applyDelta()` — round-trip asymmetry in the persistence converter
+
+**Reachability — this is a live, currently-occurring bug, not a latent one.** The finding was
+filed as "observed at function level, not via live app" — `api/src/utils/__tests__/yjsConverter.test.ts`
+already pinned that `jsonToYjs` then `yjsToJson` disagreed with each other, but that only proves this
+converter is internally inconsistent, not that a real editing session ever produces the shape that
+trips it. Traced two separate live paths, by reading the actual dependency code shipped in this
+repo's `node_modules`, not by inference from documentation:
+
+1. **The dominant path — any live mark, from any user, in any document.** TipTap's
+   `@tiptap/extension-collaboration` (`web/src/components/Editor.tsx:692`) delegates to
+   `y-prosemirror`. `y-prosemirror/src/plugins/sync-plugin.js`'s `createTypeFromTextNodes` builds
+   each run of a paragraph's inline content as one `Y.XmlText` and calls
+   `.applyDelta([{ insert, attributes: marksToAttributes(node.marks, meta) }])` — Yjs's native
+   text-formatting API, the same one this converter's `jsonToYjs` calls via `.format()`.
+   `YXmlText.toString()` (`yjs/src/types/YXmlText.js:68-100`) serializes both identically as literal
+   pseudo-XML wrapped around the text. `api/src/collaboration/index.ts`'s `persistDocument()` calls
+   `yjsToJson(fragment)` and writes the result into `documents.content` roughly 2 seconds after
+   *every* edit (`schedulePersist`, `doc.on('update')`) for the life of any live-collaborated
+   document — so any user pressing Cmd+B, or adding a link, corrupts that document's `content` JSON
+   backup column into a literal string like `<bold>bold</bold>` within seconds. `documents.yjs_state`
+   itself stays correct (it's the raw CRDT state); the corruption is specifically in the JSON
+   `content` column that `GET /:id/content` (`api/src/routes/documents.ts:491`) reads in preference
+   to converting from `yjs_state`, and that other non-collaborative-socket reads rely on.
+2. **A narrower, also-live path.** `collaboration/index.ts`'s `loadDoc()` calls `jsonToYjs` directly,
+   once, the first time a document with JSON `content` but no `yjs_state` yet is opened in the
+   collaborative editor — e.g. a document written via `PATCH /:id/content` (which explicitly nulls
+   `yjs_state`), or the seeded "Welcome to Ship" document
+   (`api/src/db/welcomeDocument.ts`, dozens of `bold`/`italic` marks) shown to every new workspace.
+
+Reproduced against the real converter (not a mock) in
+`api/src/utils/__tests__/yjsConverter.test.ts`'s new `describe('yjsToJson decodes marks the live
+editor actually writes (TRO-296)')` block — one test builds the Yjs tree exactly the way
+`createTypeFromTextNodes` does (`Y.XmlText.applyDelta`), **never calling this converter's own
+`jsonToYjs` at all**, then runs the real `yjsToJson` against it, proving the bug fires independent of
+this converter's own writer. Confirmed red against the pre-fix code (4 new test cases failed,
+producing literal `<bold>bold</bold>`-style text), green after the fix — see PR for the transcript.
+
+**What changed.** One file: `api/src/utils/yjsConverter.ts`. Kept `jsonToYjs`'s existing write
+representation (`YXmlText.format()`) rather than switching it to wrapper elements, because the live
+editor path (path 1 above) never goes through `jsonToYjs` at all — rewriting only this converter's
+writer would do nothing for the dominant case. Instead, `yjsToJson` (and its two other read sites,
+`yjsElementToJson` and `extractTextWithMarks`) now decode `Y.XmlText.toDelta()` directly instead of
+calling `.toString()`, translating each delta op's `attributes` back into a TipTap `marks` array via
+new helpers `parseTextDelta`, `marksFromDeltaAttributes`, and `xmlTextToNodes`. Delta attribute keys
+are filtered through the existing `MARK_TYPES` allowlist (bold/italic/strike/underline/code/link) and
+defensively stripped of y-prosemirror's `--<hash>` overlapping-mark suffix (mirroring its own
+`yattr2markname`) before matching — a suffix none of this app's marks trigger today, tested anyway
+since it costs nothing and the mapping would otherwise silently drop a mark if that ever changes. A
+mark type outside that allowlist (e.g. TipTap's custom `commentMark`) is dropped rather than
+reconstructed — the same behavior the old wrapper-element path already had for unknown types, and a
+strict improvement over corrupting the surrounding text; extending mark support to comments is a
+separate, out-of-scope concern.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api test -- src/utils/__tests__/yjsConverter.test.ts
+pnpm type-check
+```
+
+8 tests pass, including the updated round-trip test (now a plain `toEqual(original)`, since the
+round trip is symmetric) and the three new TRO-296 tests. Type-check is clean.
+
+**Rollback.** Revert the commit(s) on `fix/err-15-yjs-mark-roundtrip` touching
+`api/src/utils/yjsConverter.ts` and `api/src/utils/__tests__/yjsConverter.test.ts`. No schema,
+migration, or collaboration-server change was made or is required to roll back.
+
+---
+
 ## TRO-244 (RULE-4) — CI pipeline was missing 3 of the 7 required checks (coverage, dependency audit, security scan)
 
 **What was broken.** Assignment rule 4 requires exactly 7 CI checks: build, lint, type-check, test,
