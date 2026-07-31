@@ -253,6 +253,22 @@ export function LoginPage() {
               className="rounded-md border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400"
             >
               {error}
+              {/*
+                TRO-291 / WCAG 3.3.3 (Error Suggestions): the API deliberately
+                returns the same generic message (api/src/routes/auth.ts:54,89)
+                for "no such account" and "wrong password" so a failed login
+                can't be used to enumerate accounts. That's intentional and
+                unchanged above — but it leaves the user with no next step.
+                This line is purely additive recovery guidance, scoped to
+                exactly that message so it doesn't get attached to unrelated
+                errors (e.g. "Email address is required").
+              */}
+              {error === 'Invalid email or password' && (
+                <p className="mt-1">
+                  Don&rsquo;t have an account, or can&rsquo;t remember your password? Contact your
+                  workspace admin for help.
+                </p>
+              )}
             </div>
           )}
 

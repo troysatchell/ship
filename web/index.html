@@ -61,10 +61,12 @@
     <meta name="msapplication-TileImage" content="/icons/blue/mstile-150x150.png" />
     <meta name="msapplication-config" content="/browserconfig.xml" />
 
-    <!-- Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet" />
+    <!--
+      TRO-205 / BUN-9: Inter used to load from a render-blocking Google Fonts
+      stylesheet here (plus two preconnects to Google's font CDN). It is now
+      self-hosted via @fontsource/inter, imported in src/index.css, so first
+      paint no longer depends on a cross-origin request to a third party.
+    -->
 
     <!--
       TRO-194 / ERR-7: under Fast 3G the audit measured a completely blank tab
