@@ -21,6 +21,82 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-210 — [TS-5] The shared/ contract is bypassed — 46 exported types, adopted by 13 of 198 web files
+
+**What was broken.** `web/src/lib/api.ts:5` declared its own `interface ApiResponse<T>` (`success`,
+`data?`, and an `error?: { code; message }` with no `details`) even though `shared/src/types/api.ts:2`
+already exports `ApiResponse<T = unknown>` with a proper `ApiError` (`code`, `message`, and an optional
+`details: Record<string, unknown>` the local copy never had). Two hand-maintained guesses at the same
+wire contract, free to drift silently — exactly what TS-5 is about.
+
+**Sequencing constraint honored (per the ticket's own warning: "do this WITH TS-2, not before it").**
+TS-2 (typing the ~707 untyped `pg` query rows in `api/`) has not landed. `shared/src/types/document.ts`
+models the **raw `documents` table row** (`Document`/`ProjectDocument`/`IssueDocument`/etc. — flat
+`content`, `properties: ProjectProperties`, `workspace_id`, `document_type`). The actual list/detail
+routes do not return that shape. Verified by reading the route handlers, not assumed:
+
+- `api/src/routes/projects.ts:534-548` — the `/api/projects` list query flattens `properties` into
+  top-level fields (`impact`, `confidence`, `ease`, `color`, `emoji`, ...), joins in `owner` (name/email),
+  and computes `sprint_count`, `issue_count`, `inferred_status`, `is_complete`, `missing_fields` — none
+  of which exist on `shared`'s `ProjectDocument`. `web/src/hooks/useProjectsQuery.ts:8`'s local `Project`
+  models this response shape, not the raw document row.
+- The same pattern holds for `Sprint`/`Week` (`web/src/hooks/useWeeksQuery.ts:10` — computed
+  `completed_count`, `started_count`, `has_plan`/`has_retro`, joined `owner`), `Program`
+  (`web/src/hooks/useProgramsQuery.ts:10`), `Issue` (`web/src/hooks/useIssuesQuery.ts:25` — joined
+  `assignee_name`, computed `display_id`), `Person` (`web/src/components/PersonCombobox.tsx:6` — a
+  3-field combobox projection), and `WikiDocument` (`web/src/components/sidebars/WikiSidebar.tsx:5` /
+  `web/src/hooks/useDocumentsQuery.ts:4` — partial views with optional fields).
+
+Forcing any of those seven onto `shared/`'s document types today would either not compile (missing
+required fields the API never sends, e.g. `content`, `workspace_id`) or silently paper over the gap
+with optional-everything — the drift-risk the ticket brief warned against. **None of the 7 were
+consolidated.** They're deferred, explicitly, pending TS-2 producing typed route-response interfaces
+that actually match what the API returns — at which point those response types (not the raw
+`*Document` types) are what `web/src` should import.
+
+**What changed — the one verified-safe case.** `ApiResponse`/`ApiError` is different: it isn't a
+document projection, it's the outer HTTP envelope every route already wraps its response in
+identically, and the local declaration was a byte-for-byte subset (missing only the optional
+`details` field). No route-by-route verification needed — this is the JSON-shape `request<T>()` in
+`web/src/lib/api.ts` always produces, and shared's version is a strict superset.
+
+- `web/src/lib/api.ts:1,5-11` — deleted the local `interface ApiResponse<T>`; added
+  `import type { ApiResponse } from '@ship/shared';`. No call-site changes were needed: every existing
+  read of `data.error?.code` / `data.error?.message` still type-checks against the shared `ApiError`,
+  and the `details` field is now reachable (previously a compile error) without changing any runtime
+  behavior — nothing in this file reads it yet.
+
+**How to run it.**
+```bash
+pnpm build:shared
+pnpm --filter @ship/web exec tsc --noEmit -p web/tsconfig.json
+pnpm --filter @ship/web test -- src/lib/api.test.ts
+```
+
+**Regression test.** `web/src/lib/api.test.ts` (new) — a source-text guard (`apiSource` read via
+`readFileSync`) asserting `web/src/lib/api.ts` no longer matches `/\binterface\s+ApiResponse\b/` and
+does match an `import type { ApiResponse ... } from '@ship/shared'` pattern, plus a runtime companion
+mocking `fetch` through `api.auth.me()` to confirm an `ApiError.details` payload survives end to end.
+Confirmed failing on the pre-fix file (both source assertions failed: the interface was present, the
+import was absent) by temporarily swapping in the pre-fix `web/src/lib/api.ts` via `git show
+HEAD:web/src/lib/api.ts`, running the test, then restoring the fixed file — not via `git stash` (shared
+across worktrees). The runtime companion test passed unchanged in both states, as expected: this repo's
+`vitest run` does not type-check, so a type-only fix can only be caught by a source-text assertion, not
+by executing code whose behavior doesn't change.
+
+**Roll back.** `git revert` the commit, or manually: reinstate
+```ts
+interface ApiResponse<T> {
+  success: boolean;
+  data?: T;
+  error?: { code: string; message: string };
+}
+```
+at the top of `web/src/lib/api.ts` and remove the `@ship/shared` import; delete
+`web/src/lib/api.test.ts`.
+
+---
+
 ## TRO-280 — [API-7] Rate limits are per-process, so the real ceiling is N instances × configured
 
 **What was broken.** `api/src/middleware/rate-limit.ts`'s `perSourceIpLimiter`/`perIdentityLimiter`
