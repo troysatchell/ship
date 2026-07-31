@@ -184,6 +184,18 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     it because it only inspects **added** lines — a pre-existing violation inside a file you touch is
     a structural blind spot. When you claim to have removed casts, `grep` the file afterwards and
     quote the result.
+26. **A mock/spy your test installs must be restored even when an assertion fails, and by a
+    mechanism that actually undoes what you did.** 2 findings across 2 tickets in one wave
+    (TRO-230, TRO-210), both filed by CodeRabbit after `gate.sh` had already passed. Two distinct
+    failure shapes, same root cause:
+    - `vi.spyOn(...)` inside a test body, with `.mockRestore()` called as the **last line** of the
+      test — if an assertion above it throws, restoration never runs and the spy leaks into later
+      tests. Wrap the body in `try { ... } finally { spy.mockRestore(); }`, or move teardown to
+      `afterEach` (which runs even when the test fails).
+    - A **direct property assignment** (`global.fetch = ...`) "restored" via `vi.restoreAllMocks()`
+      in `afterEach` — that call only reverts `vi.spyOn`/`vi.fn` mocks, never a raw assignment, so
+      the replacement value survives into whatever runs next. Use `vi.stubGlobal(name, value)` to
+      install it and `vi.unstubAllGlobals()` to remove it — the pairing that's actually reversible.
 
 ## Log
 

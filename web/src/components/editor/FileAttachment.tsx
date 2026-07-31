@@ -3,7 +3,7 @@
  * Handles file attachments (PDF, DOCX, etc.) as embedded cards with download links
  * Supports drag-and-drop and paste for non-image files
  */
-import { Node, mergeAttributes } from '@tiptap/core';
+import { Node, mergeAttributes, RawCommands } from '@tiptap/core';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { ReactNodeViewRenderer, NodeViewWrapper } from '@tiptap/react';
 import { uploadFile, isAllowedFileType, getMimeTypeFromExtension, isImageFile, MAX_FILE_SIZE, MAX_FILE_SIZE_DISPLAY } from '@/services/upload';
@@ -131,12 +131,12 @@ export const FileAttachmentExtension = Node.create({
     return {
       setFileAttachment:
         (options: { filename: string; url: string; size: number; mimeType: string }) =>
-        ({ commands }: any) =>
+        ({ commands }: { commands: { insertContent: (content: { type: string; attrs: typeof options }) => boolean } }) =>
           commands.insertContent({
             type: this.name,
             attrs: options,
           }),
-    } as any;
+    } as Partial<RawCommands>;
   },
 
   addProseMirrorPlugins() {
