@@ -77,6 +77,163 @@ pnpm --filter @ship/web exec vitest run src/pages/UnifiedDocumentPage.throttledR
 
 ---
 
+## TRO-294 — direct-to-ALB health check URL in `.claude/CLAUDE.md` corrected to the CloudFront-fronted path
+
+**Docs-only, priority Low, no vitest path applies (regression-test evidence below instead).**
+
+**What was wrong.** `.claude/CLAUDE.md`'s Deployment section documented the prod API health check
+as `http://ship-api-prod.eba-xsaqsg9h.us-east-1.elasticbeanstalk.com/health` — a direct hit on the
+Elastic Beanstalk ALB's own DNS name, bypassing CloudFront. TF-7/TRO-278 (already merged, see that
+entry above) restricted the ALB security group (`terraform/security-groups.tf`) to CloudFront's
+origin-facing prefix list, `data.aws_ec2_managed_prefix_list.cloudfront_origin_facing`. Once that
+SG is actually applied to a live account, a direct connection to the ALB URL times out for most
+clients — the DNS name itself still resolves; the security group silently drops the TCP connection
+because it isn't sourced from CloudFront's IP ranges. Either way, not an API-health problem: the
+network path is blocked. TRO-278's own
+CHANGES.md entry called this out as DERIVED and explicitly left it for a human/follow-up ticket to
+fix; this ticket is that follow-up.
+
+**What changed.** `.claude/CLAUDE.md`'s Prod API health check now reads
+`https://ship.awsdev.treasury.gov/health`, with a note explaining why the old URL breaks and where
+the replacement comes from.
+
+**How I confirmed the new URL (observed, not invented).** Read `terraform/s3-cloudfront.tf`
+directly: the `dynamic "ordered_cache_behavior"` block with `path_pattern = "/health"` (only
+created `for_each = var.eb_environment_cname != "" ? [1] : []`) targets `target_origin_id =
+"EB-API"` — CloudFront already proxies this exact path to the same Elastic Beanstalk origin the
+old URL hit directly. The domain to use is `var.app_domain_name` (`terraform/variables.tf`) when
+set, else the CloudFront-assigned domain exposed as the `cloudfront_domain_name` output
+(`terraform/outputs.tf`); the `frontend_url` output already picks the right one of the two
+(`var.app_domain_name != "" ? "https://${var.app_domain_name}" : "https://${aws_cloudfront_distribution.frontend.domain_name}"`).
+`ship.awsdev.treasury.gov` is prod's `app_domain_name` value — corroborated by every other prod
+reference in the repo (`.claude/CLAUDE.md`'s own "Prod Web" line just below the edit,
+`audit/AUDIT_REPORT.md`, `memory-bank/techContext.md`, `docs/fpki-auth-client-dcr-analysis.md`'s
+OAuth redirect URI), not by a fresh `terraform output` (no AWS credentials / apply available here,
+same constraint TF-7's own work noted). **Not verified:** whether the ALB SG restriction has
+actually been `apply`'d to the live prod account yet. `memory-bank/progress.md` records two
+*separate* 2026-07-28 checks, not one combined result: `ship.awsdev.treasury.gov` (the domain this
+PR's new health-check URL uses) returned **HTTP 403** — the request reached an HTTP endpoint and
+was refused, which is not evidence of an unreachable network path — but confirms only that the
+viewer-facing hostname returned an HTTP response; it does **not** confirm CloudFront reached the
+`EB-API` origin, since CloudFront or an upstream policy can reject a request before origin access.
+The old direct-ALB
+hostname (`ship-api-prod...elasticbeanstalk.com`) returned **no response at all** — a different,
+stronger signal, closer to what TF-7's SG restriction would actually produce. Neither result
+confirms the SG restriction is live in prod; the new URL could not be curled end-to-end to verify
+from here.
+
+**Regression-test note.** Pure documentation change; neither vitest project (`api/src/**/*.test.ts`,
+`web/src/**/*.test.ts(x)`) has a path to assert against a markdown string, so no test file is added.
+`scripts/factory/gate.sh`'s G6 (regression-test present) is expected to fail on this branch for that
+reason — the evidence for the fix is the terraform cross-reference above, not a test.
+
+**How to roll it back.** `git revert <commit>`, or manually restore the old two-line health-check
+list in `.claude/CLAUDE.md`. This is a docs-only revert — it restores the stale URL text but does
+**not** undo the TF-7/TRO-278 ALB security-group restriction that made the URL stale; that lives in
+a separate, already-merged change (`terraform/security-groups.tf`) with its own Terraform
+apply/revert path. No code, schema, or infra changed by this commit either direction.
+
+---
+
+## TRO-234 — [TF-1] Prod Aurora cluster and uploads bucket had no deletion protection
+
+**The problem.** Of the flat root's 74 resource blocks, only the Terraform **state** bucket
+(`terraform/bootstrap/main.tf:22-23`) carried `lifecycle { prevent_destroy = true }`. The Aurora
+cluster (`terraform/database.tf`, `aws_rds_cluster.aurora`) had neither `deletion_protection` nor
+`prevent_destroy`, and the uploads bucket (`terraform/s3-cloudfront.tf`, `aws_s3_bucket.uploads`)
+had no `prevent_destroy` either. Both are Tier-1 "data loss on replace or destroy" in
+`audit/terraform/baseline.md`'s blast-radius table: a config change that forces replacement of
+either (e.g. `cluster_identifier`, `master_username`, or the bucket-name interpolation) would let
+Terraform proceed straight to destroying the live production database or every uploaded file,
+with no safety stop. (Line numbers in the Linear ticket — `database.tf:34` /
+`s3-cloudfront.tf:374` — were current at audit time; TF-2's convergence, already merged, shifted
+the Aurora cluster resource to `database.tf:63` by porting in 5 parameter-group settings ahead of
+it. Same resource, same defect.)
+
+**What changed.** Two additions, no resource renamed or restructured:
+
+- `terraform/database.tf` — `aws_rds_cluster.aurora` gets `deletion_protection = true`
+  (a first-class RDS attribute: the AWS API itself refuses a destroy while set) plus
+  `prevent_destroy = true` added to its existing `lifecycle` block (which already carried
+  `ignore_changes = [final_snapshot_identifier]` from `TF-7`/`TF-2` work — merged in, not a
+  second `lifecycle` block, since a resource may declare only one).
+- `terraform/s3-cloudfront.tf` — `aws_s3_bucket.uploads` gets a new
+  `lifecycle { prevent_destroy = true }` block. S3 buckets have no `deletion_protection`
+  attribute in the AWS provider (that concept is RDS-specific), so `prevent_destroy` is the only
+  available guard — same pattern already used on the state bucket.
+
+**Deliberate consequence, not a surprise.** Both resources now require a config change before an
+intentional teardown, but the two guards are independent and **both** must be removed:
+
+- `terraform/s3-cloudfront.tf` (uploads bucket): removing `lifecycle { prevent_destroy = true }`
+  only permits Terraform to *attempt* the deletion — it doesn't make the deletion succeed. The
+  bucket has versioning enabled (`aws_s3_bucket_versioning.uploads`) and does not set
+  `force_destroy`, and no Terraform resource manages object cleanup for it. Before destruction, an
+  operator must also empty the bucket by hand: every object, every object version, and every
+  delete marker, or the destroy call fails on a non-empty bucket regardless of `prevent_destroy`.
+- `terraform/database.tf` (Aurora cluster): **two separate safeguards**, not one.
+  `lifecycle { prevent_destroy = true }` is Terraform-side, same as the bucket — but
+  `deletion_protection = true` is a distinct, first-class RDS attribute enforced by the **AWS API
+  itself**, independent of Terraform. Removing only `prevent_destroy` from the config is not
+  enough: AWS will still refuse the `DeleteDBCluster` call. An operator must apply a config change
+  that sets `deletion_protection = false` *and* removes `prevent_destroy`, then run the destroy —
+  in that order, since the API-level flag has to flip before AWS will honor a destroy at all.
+
+That extra step is the entire point of this ticket (TF-1's finding is literally "one careless
+apply/destroy from prod data loss"); it is called out here — accurately, for both resources — so
+it isn't rediscovered as a mystery blocker during a future teardown.
+
+**What did NOT change.** No other flat-root resource, and no module. `terraform/modules/aurora`
+(used by `terraform/environments/dev` and `terraform/environments/shadow`, kept per TF-2's
+convergence decision) has the same gap — no `deletion_protection`/`prevent_destroy` on its own
+`aws_rds_cluster` — but dev/shadow are non-prod, TF-1's finding and the Linear ticket both scope
+explicitly to the flat root's two named resources, and touching the module is out of scope for
+this ticket. Flagging it as a follow-up candidate, not fixing it here.
+
+**How to run it.**
+
+```bash
+# Terraform binary: temp-downloaded 1.9.8 to a scratch dir (matches audit/terraform/baseline.md
+# and the TF-2/TF-3 precedent; the repo's pinned 1.6.0 cannot `init` at all — TF-3, expired
+# provider-signing key). Not committed to the repo.
+cd terraform
+terraform init -backend=false -input=false
+terraform validate       # Success! same single pre-existing TF-5 warning, before and after
+terraform fmt -check -recursive .   # exit 0, no formatting changes needed
+terraform plan            # Error: Backend initialization required (s3) — expected; no AWS
+                           # credentials or remote-state bucket are available here, matching
+                           # audit/terraform/baseline.md's documented "Live plan not runnable"
+rm -rf .terraform .terraform.lock.hcl   # leaves `git status terraform/` clean, per audit methodology
+cd ..
+grep -n 'deletion_protection\|prevent_destroy' terraform/database.tf terraform/s3-cloudfront.tf
+```
+
+**Verification note.** `terraform validate` was run on the flat root before and after this change
+with the same 1.9.8 binary: both report `Success!` with the identical single pre-existing warning
+(TF-5, the uploads-bucket lifecycle-rule `filter`/`prefix` warning) — this change introduces no
+new warnings or errors. `terraform plan` fails identically before and after with "Backend
+initialization required" (no S3 backend/creds available in this environment) — this is the
+documented, expected failure mode from `audit/terraform/baseline.md`, not a regression caused by
+this change. **No `terraform apply` was run against any account, live or otherwise** — this PR is
+config-only, per the escalation-gate-2 rule against irreversible/outward-facing actions.
+
+**No vitest regression test applies.** This is a Terraform-only, infrastructure-as-code change;
+there is no application code path to exercise and nothing importable into `api/src/**/*.test.ts`
+or `web/src/**/*.test.ts(x)`. The evidence for "before: unprotected, after: protected" is the
+`grep` above — 0 matches across these two files before this change; 3 after, each attributable to
+a specific line: `database.tf:72` (`deletion_protection = true`, the Aurora cluster),
+`database.tf:95` (`prevent_destroy = true`, the same Aurora cluster's `lifecycle` block), and
+`s3-cloudfront.tf:382` (`prevent_destroy = true`, the uploads bucket) — plus the
+`terraform validate`/`plan` output showing the config stays syntactically valid. `gate.sh`'s
+regression-test check is expected to fail honestly here, following the TF-2/TF-3 precedent in
+this factory, rather than have a fake vitest file manufactured to satisfy it.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf-1-deletion-protection`. This removes
+`deletion_protection` and both `prevent_destroy` blocks, returning to the pre-TRO-234 unprotected
+state. No live AWS state is touched either way, since no `apply` was ever run.
+
+---
+
 ## TRO-292 (TF-9) — Removed committed binary `tfplan` from `terraform/environments/shadow/`; closed the `.gitignore` gap for the whole `environments/` family
 
 **Post-baseline, not one of the 68 audit findings — no `AUDIT_REPORT.md` section.** Full spec was
