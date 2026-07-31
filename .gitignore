@@ -8,6 +8,10 @@ build
 .turbo
 *.tsbuildinfo
 
+# TRO-244: vitest --coverage output (api/coverage, web/coverage). Regenerated
+# every run; CI uploads the json-summary as an artifact instead of committing it.
+coverage
+
 # Environment files
 .env
 .env.local
