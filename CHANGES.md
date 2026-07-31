@@ -21,6 +21,183 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-280 — [API-7] Rate limits are per-process, so the real ceiling is N instances × configured
+
+**What was broken.** `api/src/middleware/rate-limit.ts`'s `perSourceIpLimiter`/`perIdentityLimiter`
+and `api/src/app.ts`'s `loginLimiter` all defaulted to `express-rate-limit`'s `MemoryStore`, which
+lives in one Node process's heap. `terraform/elastic-beanstalk.tf`'s ASG runs 1-4 instances
+(`aws:autoscaling:asg` `MinSize`/`MaxSize`) behind a load balancer with no session affinity, so a
+configured "600 req/min per identity" ceiling was actually "600 x N instances", where N moves under
+the SAME autoscaling trigger that fires when traffic is high enough for the limit to matter —
+exactly backwards from what a limit is supposed to guarantee.
+
+**Concurrency argument (rule 6 — this ticket IS a distributed-counter race, not just "add Redis").**
+The naive distributed-counter fix — "GET the count, add one, SET it back" — is a read-then-write
+race: two instances can both read the same value and both write back the same increment, silently
+under-counting under exactly the concurrent load the limiter exists to survive. `rate-limit-redis`'s
+`RedisStore` does not do that: `retryableIncrement` loads a Lua script once (`SCRIPT LOAD`) and runs
+it via `EVALSHA`, so the read-increment-expire sequence executes atomically on the Redis server
+itself (Redis is single-threaded for command execution, so concurrent `EVALSHA` calls for the same
+key are serialized, never interleaved). That atomicity is the entire fix. Nothing added here
+reimplements it — `api/src/middleware/redis-rate-limit-store.ts` only wires an ioredis client to the
+library that provides it.
+
+**What changed — Terraform (`terraform/redis.tf` new; `terraform/ssm.tf`, `terraform/variables.tf`,
+`terraform/terraform.tfvars.example` touched).** Config only — **`terraform apply` was never run**,
+matching this repo's existing AWS-blueprint convention (TF-7/TRO-278: "the AWS blueprints in this
+repo are repo hygiene, not the live deployment" — this repo's actual live deployment is Render,
+`terraform/render/`, see that directory's README).
+
+- `aws_elasticache_cluster.redis` — a single small node (`var.redis_node_type`, default
+  `cache.t4g.micro`), engine `redis` 7.1, `snapshot_retention_limit = 0` (rate-limit counters are
+  disposable — worst case on a restart is counters reset to zero, never a correctness problem, only
+  a brief window of looser-than-configured limits, so a snapshot window buys nothing here).
+- `aws_security_group.redis` — dedicated SG, one ingress rule
+  (`aws_security_group_rule.redis_ingress_from_eb`) on port 6379 sourced from
+  `aws_security_group.eb_instance.id` only, no outbound rules. Matches TF-7's convention (least
+  privilege, source-security-group scoping, never `0.0.0.0/0`) and `aws_security_group.aurora`'s
+  existing shape in `database.tf` for the same kind of resource.
+- `aws_elasticache_subnet_group.redis` — the same private subnets Aurora uses.
+- `aws_ssm_parameter.redis_url` (in `ssm.tf`, next to `database_url`) — `SecureString`,
+  `redis://<endpoint>:<port>`. No IAM change needed: the EB role's existing SSM read policy is
+  already scoped to `arn:aws:ssm:...:parameter/${var.project_name}/${var.environment}/*`, which
+  already covers this new parameter name.
+- **Explicitly NOT done, flagged as follow-up** (per this ticket's brief: "a single small node is
+  fine... note that production hardening is a follow-up if you don't have time to fully spec it"):
+  multi-AZ/automatic failover, `auth_token` (Redis AUTH), and `transit_encryption_enabled` /
+  `at_rest_encryption_enabled` all require `aws_elasticache_replication_group` instead of
+  `aws_elasticache_cluster` — noted directly in `terraform/redis.tf`'s file-level comment.
+- Terraform's own precedent (TF-7) also means this doesn't reach the live site by itself. Extending
+  `REDIS_URL` to the *actually live* Render deployment (`terraform/render/web_service.tf`'s
+  `env_vars`) is a natural follow-up but is out of this ticket's scope — that file's pattern
+  (env vars, no VPC/security-group concept) is materially different from the AWS SG-scoping pattern
+  this ticket's brief pointed at, and Render's `render_key_value` (Redis-compatible) resource support
+  under the pinned `render-oss/render` provider version was not investigated here.
+
+**What changed — application.**
+
+- `api/src/middleware/redis-rate-limit-store.ts` (new) — `createRedisClient`/`createRedisClientFromEnv`
+  (an ioredis client tuned to fail a command FAST rather than queue it indefinitely:
+  `maxRetriesPerRequest: 1`, a bounded `retryStrategy`, `connectTimeout: 2000`, plus an `'error'`
+  listener so a Redis outage logs instead of crashing the process — ioredis's `'error'` event has no
+  listener by default, and Node re-throws unhandled `'error'` events), and
+  `createRedisRateLimitStore(client, prefix)` wrapping `rate-limit-redis`'s `RedisStore`.
+- `api/src/middleware/rate-limit.ts` — `createApiRateLimiters(env, redisClient)` gained a second,
+  optional parameter that defaults to `createRedisClientFromEnv(env)`. When a client is available
+  (from `REDIS_URL` or passed explicitly, the latter used by this ticket's own tests to simulate two
+  independent instances), both limiters get a `RedisStore` with distinct key prefixes
+  (`rl:ip:`/`rl:id:` — Redis has one flat keyspace, so per-limiter prefixes are required, not
+  cosmetic) and `passOnStoreError: true`. No `REDIS_URL` -> unchanged `MemoryStore` behavior, byte
+  for byte what API-1/TRO-172 already shipped.
+- `api/src/app.ts` — one shared Redis client (or `undefined`) built once and passed to both
+  `loginLimiter` (new prefix `rl:login:`) and `createApiRateLimiters`, so all three limiters in this
+  process share one Redis connection when configured.
+- `api/src/config/ssm.ts` — `loadProductionSecrets` now fetches `REDIS_URL` as a separate, **optional**
+  step after the five required secrets. Two reasons it can't join that `Promise.all`: (1) the
+  ElastiCache instance above has never been applied anywhere, so the parameter genuinely doesn't
+  exist yet; (2) even once applied, Redis is an opt-in improvement, not a hard dependency — a missing
+  `REDIS_URL` must never fail boot the way a missing `DATABASE_URL` does.
+
+**Fail-open decision (rule 7 — the failure mode this protects against).** When Redis is configured
+but unreachable at runtime, every limiter fails **OPEN** (allows the request, logs the error) rather
+than **CLOSED** (blocks all traffic). Reasoning:
+
+- A rate limiter's job is anti-abuse, not availability. Failing closed turns a transient Redis blip
+  into a full API outage for every user — worse than briefly un-throttled traffic.
+- The limiters are one layer among several independent ones (helmet, CSRF, session auth, and
+  `loginLimiter`'s own 5-attempts/15-min ceiling do not depend on this store).
+- Implemented two ways: (1) every Redis-backed limiter sets `passOnStoreError: true` — a first-class
+  `express-rate-limit` option (its default is `false`, i.e. fail closed; verified by reading
+  `express-rate-limit@8.2.1`'s `dist/index.cjs` directly, not assumed from its docs) that calls
+  `next()` instead of propagating a rejected `store.increment()` to Express's error handler; (2) the
+  ioredis client itself is tuned to fail a command fast (see above) rather than let `passOnStoreError`
+  wait on a queued command that would never resolve.
+
+**Found while building this ticket's own tests, not assumed from `rate-limit-redis`'s docs.**
+Constructing a `RedisStore` against an unreachable Redis produced real, reproducible **unhandled
+promise rejections** in the first version of this test suite (`vitest` reported "Vitest caught 4
+unhandled errors during the test run" and failed the file even though every individual assertion
+passed). Root cause, found by reading `rate-limit-redis@4.3.1`'s `dist/index.cjs` directly: its
+`RedisStore` constructor eagerly starts **two** `SCRIPT LOAD` calls (`incrementScriptSha`,
+`getScriptSha`) and stores each as a bare promise field. `incrementScriptSha` is later awaited by
+`retryableIncrement`, so its rejection is handled. `getScriptSha` backs `.get()`, which none of this
+app's limiters call — so if Redis is unreachable at construction time, that promise rejects with
+nothing ever awaiting it, which crashes a modern Node process by default. That is the opposite of
+the fail-open design above, and it would fire at boot or at reconnect, not during a request.
+`createRedisRateLimitStore` now attaches a `.catch(() => {})` to both fields immediately — an
+*additional* handler, not a replacement, so `retryableIncrement`'s own await of the same promise
+object still observes the real rejection and still drives `passOnStoreError`. Confirmed fixed:
+re-running the same test suite afterward shows no "Unhandled Errors" section.
+
+**Local proof — exact scenario, exact result.** Local Redis: `redis:7-alpine` (Docker Hub digest
+`sha256:e7723ff7...9219a2`, pulled 2026-07-31), started via `docker run -d --rm -p 127.0.0.1::6379
+redis:7-alpine` inside `api/src/middleware/__tests__/redis-rate-limit-store.test.ts`'s own
+`beforeAll` (ephemeral host port, read back via a bounded poll of `docker port` — `docker run -d`
+can return before the port mapping is queryable, observed directly while building this test, fixed
+with a poll rather than a fixed sleep per rule 5). Scenario: two independent ioredis client
+connections (`clientA`, `clientB`, simulating two separate EB instances) each back their own
+`rateLimit()` middleware/Express app via `createRedisRateLimitStore`, same key prefix, same fixed
+identity key, `limit: 3`. Three requests through instance A alone reach the limit (all `200`).
+**Result actually observed:** the next request through instance B — which has never served a
+request for this identity — is `429`, not `200`. That is only possible if the counter lives in
+Redis, not in either process's memory; two separate TCP connections prove it isn't the SAME
+in-process object being reused. A companion Docker-free "contrast" test runs the identical scenario
+with two plain `MemoryStore` instances and confirms instance B is **not** blocked (`200`) — the
+literal defect API-7 reports, still present and now clearly separated from the fix.
+
+**Regression tests** (`api/src/middleware/__tests__/redis-rate-limit-store.test.ts`, new, 9 cases;
+`api/src/config/ssm.test.ts`, +2 cases):
+
+1. Wiring — `createRedisClientFromEnv` returns `undefined` with no `REDIS_URL`, a client with one;
+   `createRedisRateLimitStore` builds a `RedisStore` with the given prefix; `createApiRateLimiters`
+   still returns exactly 2 handlers unconfigured (API-1 unchanged). No Redis needed.
+2. Fail-open — a store pointed at `127.0.0.1:1` (a privileged port nothing can bind, so the
+   connection fails fast and deterministically, no real Redis needed) with `passOnStoreError: true`
+   still serves `200` and logs via `console.error`; a control test with `passOnStoreError` NOT set
+   confirms the library's own default really is fail-**closed** (`500`), so this ticket's choice is
+   a real override, not a no-op.
+3. Contrast (no Redis) — two `MemoryStore` instances do not share a budget for the same identity —
+   documents the defect.
+4. Shared-state proof (Docker-gated via `describe.skipIf(!dockerAvailable)`, `docker info` checked at
+   file load) — the scenario above, plus a smoke test that `createApiRateLimiters` itself (the real
+   production factory function, not a hand-rolled limiter) serves a request end-to-end against a
+   real Redis. **Checked, not assumed: this repository's own CI (`.github/workflows/ci.yml`) does
+   not declare a `redis:` (or any) `services:` container**, and this test does not require one — it
+   starts its own via `docker run`. GitHub-hosted `ubuntu-latest` runners do generally have a
+   reachable Docker daemon even without a declared service, so this group is expected to run for
+   real in CI too, not just skip — but that is **derived from GitHub's documented runner
+   image, not verified by watching this exact workflow run in Actions**, which this environment
+   cannot do. If a CI environment ever lacks Docker access, `isDockerAvailable()` (a synchronous
+   `docker info` check) makes this group skip cleanly with a `console.warn` explaining why, rather
+   than fail the gate or silently report nothing was tested.
+5. `ssm.test.ts` — `loadProductionSecrets` sets `process.env.REDIS_URL` when SSM has it, and leaves
+   it unset (without failing the required-secrets load) when SSM returns `ParameterNotFound` for it.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api test src/middleware/__tests__/redis-rate-limit-store.test.ts
+pnpm --filter @ship/api test src/middleware/__tests__/rate-limit.test.ts   # unchanged, still 15/15
+pnpm --filter @ship/api test src/config/ssm.test.ts
+cd terraform && /path/to/terraform init -backend=false && terraform validate && terraform fmt -check -recursive .
+```
+
+**NOT verified.** Live AWS multi-instance behavior (no AWS credentials, no `apply` — by design, see
+above). Whether GitHub Actions' `ubuntu-latest` runner actually has a usable Docker daemon for this
+specific workflow (derived from GitHub's general documentation, not observed in this repo's Actions
+history). Redis wired into the live Render deployment (out of scope, noted as a follow-up above).
+
+**Roll back.** Revert this ticket's commits. `api/src/middleware/redis-rate-limit-store.ts` is new
+and self-contained; `rate-limit.ts`/`app.ts`/`config/ssm.ts` changes are additive (an optional
+parameter and an `if (redisClient)` branch) with no `REDIS_URL` behavior change, so simply not
+deploying `terraform/redis.tf` (never applied here) leaves production behavior identical to before
+this ticket — no `REDIS_URL` SSM parameter exists, `createRedisClientFromEnv` returns `undefined`,
+every limiter uses `MemoryStore` exactly as it did under API-1/TRO-172. Remove
+`ioredis`/`rate-limit-redis` from `api/package.json` and re-run `pnpm install` if fully reverting.
+
+---
+
 ## TRO-186 (DB-9) — Sprint board and document view fired byte-identical requests two and three times
 
 **What was broken.** Two unrelated components shared one root cause: a `useEffect` that called

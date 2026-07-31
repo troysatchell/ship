@@ -10,6 +10,11 @@ import session from 'express-session';
 import { csrfSync } from 'csrf-sync';
 import rateLimit from 'express-rate-limit';
 import { createApiRateLimiters } from './middleware/rate-limit.js';
+import {
+  createRedisClientFromEnv,
+  createRedisRateLimitStore,
+  REDIS_KEY_PREFIX_LOGIN,
+} from './middleware/redis-rate-limit-store.js';
 import authRoutes from './routes/auth.js';
 import documentsRoutes from './routes/documents.js';
 import issuesRoutes from './routes/issues.js';
@@ -71,6 +76,12 @@ const conditionalCsrf = (req: Request, res: Response, next: NextFunction) => {
 // for the /api/ budgets and the reasoning behind the numbers (finding API-1).
 const isTestEnv = process.env.NODE_ENV === 'test' || process.env.E2E_TEST === '1';
 
+// TRO-280 / API-7: one Redis client (or none, if REDIS_URL is unset) shared by
+// every limiter built in this file. See middleware/redis-rate-limit-store.ts
+// for the per-process-vs-shared-store problem this solves, the atomicity
+// argument, and the fail-open decision applied via `passOnStoreError` below.
+const rateLimitRedisClient = createRedisClientFromEnv(process.env);
+
 // Strict rate limit for login (5 failed attempts / 15 min) - brute force protection
 // skipSuccessfulRequests: true means only failed attempts count toward the limit
 const loginLimiter = rateLimit({
@@ -80,12 +91,18 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many login attempts. Try again in 15 minutes.' },
   skipSuccessfulRequests: true, // Only count failed login attempts
+  ...(rateLimitRedisClient
+    ? {
+        store: createRedisRateLimitStore(rateLimitRedisClient, REDIS_KEY_PREFIX_LOGIN),
+        passOnStoreError: true,
+      }
+    : {}),
 });
 
 // General API rate limiting: a coarse per-source-IP flood ceiling followed by a
 // per-session/per-token budget. Keyed per identity so a shared agency NAT egress
 // no longer collapses an entire team into one bucket (finding API-1 / TRO-172).
-const apiLimiters = createApiRateLimiters();
+const apiLimiters = createApiRateLimiters(process.env, rateLimitRedisClient);
 
 
 /**
