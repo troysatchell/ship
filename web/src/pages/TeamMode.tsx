@@ -221,7 +221,12 @@ export function TeamModePage() {
     const controller = new AbortController();
     let cancelled = false;
 
-    Promise.all([
+    // Each of these three catches its own errors internally (see their
+    // bodies below - fetchTeamGrid routes into setError, the other two just
+    // console.error), so this Promise.all() itself never rejects; `.finally`
+    // alone doesn't satisfy no-floating-promises since it re-throws on
+    // rejection, hence the explicit `void`.
+    void Promise.all([
       fetchTeamGrid(undefined, undefined, showArchived, controller.signal),
       fetchProjects(controller.signal),
       fetchAssignments(controller.signal),
@@ -242,7 +247,9 @@ export function TeamModePage() {
   useEffect(() => {
     // Skip initial render
     if (loading) return;
-    fetchTeamGrid(sprintRange?.min, sprintRange?.max, showArchived);
+    // fetchTeamGrid catches its own errors (routes into setError below), so
+    // it never rejects.
+    void fetchTeamGrid(sprintRange?.min, sprintRange?.max, showArchived);
   }, [showArchived]);
 
   // Scroll to current sprint on initial load (only when past weeks are shown)
@@ -439,16 +446,19 @@ export function TeamModePage() {
       return;
     }
 
-    // Clear assignment
+    // Clear assignment. handleUnassign catches its own errors (rolls back
+    // the optimistic update and routes into setError below), so it never
+    // rejects.
     if (newProjectId === null && currentAssignment) {
-      handleUnassign(personId, sprintNumber);
+      void handleUnassign(personId, sprintNumber);
       return;
     }
 
     // New assignment or adding to existing - both just call handleAssign
-    // (multiple people can now be assigned to same project/sprint)
+    // (multiple people can now be assigned to same project/sprint).
+    // handleAssign is likewise self-contained (see above).
     if (newProjectId) {
-      handleAssign(personId, newProjectId, sprintNumber);
+      void handleAssign(personId, newProjectId, sprintNumber);
     }
   }, [projects]);
 
@@ -518,12 +528,14 @@ export function TeamModePage() {
 
     const { scrollLeft, scrollWidth, clientWidth } = container;
 
+    // fetchMoreSprints catches its own errors (console.error) and always
+    // resolves via its finally block, so it never rejects.
     if (showPastWeeks && scrollLeft < SCROLL_THRESHOLD && sprintRange && sprintRange.min > 1) {
-      fetchMoreSprints('left');
+      void fetchMoreSprints('left');
     }
 
     if (scrollWidth - scrollLeft - clientWidth < SCROLL_THRESHOLD) {
-      fetchMoreSprints('right');
+      void fetchMoreSprints('right');
     }
   }, [fetchMoreSprints, loadingMore, sprintRange, showPastWeeks]);
 
@@ -845,7 +857,7 @@ export function TeamModePage() {
                                   assignment || null
                                 );
                               }}
-                              onNavigate={(projectId) => navigate(`/documents/${projectId}`)}
+                              onNavigate={(projectId) => void navigate(`/documents/${projectId}`)}
                             />
                           );
                         })}

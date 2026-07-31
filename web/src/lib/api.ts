@@ -1,15 +1,8 @@
+import type { ApiResponse } from '@ship/shared';
+
 // In development, Vite proxy handles /api routes (see vite.config.ts)
 // In production, use VITE_API_URL or relative URLs
 const API_URL = import.meta.env.VITE_API_URL ?? '';
-
-interface ApiResponse<T> {
-  success: boolean;
-  data?: T;
-  error?: {
-    code: string;
-    message: string;
-  };
-}
 
 // CSRF token cache for state-changing requests
 let csrfToken: string | null = null;

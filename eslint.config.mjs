@@ -39,10 +39,18 @@
 //   sites — carefully, per the async-ordering pattern above, not as a
 //   drive-by. `api/src/**` is promoted to `error` below; `shared/src/**` (0
 //   sites, but not yet promoted — no dedicated ticket has verified it stays at
-//   zero under `error` the way TRO-297 did for api) and `web/src/**` (~389
-//   sites) stay at `warn` until their own tickets close them. Recommended
-//   split for web: by directory (e.g. a few `web/src/pages/*` batches), not
-//   one mega-ticket — see CHANGES.md.
+//   zero under `error` the way TRO-297 did for api) stays at `warn` until its
+//   own ticket closes it.
+//
+//   TRO-306 (TS-10 follow-up, batch 1) re-derived the live `web/src/pages/*`
+//   count (188 sites across 21 files — the ticket's cached "~389" figure was
+//   for all of web/src, not just pages) and fixed every one of them. See
+//   CHANGES.md for the exact list and before/after counts. `web/src/pages/**`
+//   is promoted to `error` below; the rest of web/src (components, lib,
+//   hooks, contexts — a separately-uncounted, still-open population) stays at
+//   `warn` until its own ticket closes it. Do not widen the pages override's
+//   `files` glob to the rest of web/src without re-verifying that population
+//   independently, the same caution TRO-297's comment gives for shared/src.
 // - `no-explicit-any` / `no-non-null-assertion`: WARN, not error — these are
 //   the audit's counted, still-open violation classes (TS-4 non-null: 236
 //   sites repo-wide; `any` tracked by TS-1/TS-2/TS-8), already being burned
@@ -72,6 +80,19 @@ const correctnessRules = {
 // independently; shared/src being 0 sites today is not the same as it having
 // been proven to stay that way under 'error'.
 const apiCorrectnessRules = {
+  ...correctnessRules,
+  '@typescript-eslint/no-floating-promises': 'error',
+  '@typescript-eslint/no-misused-promises': 'error',
+};
+
+// web/src/pages/** only (TRO-306 / TS-10 follow-up, batch 1): both
+// promise-safety rules promoted to 'error'. Verified zero violations at this
+// severity across all 21 files in web/src/pages as of TRO-306 — see
+// CHANGES.md for the exact command and count. Do not widen this override's
+// `files` glob to the rest of web/src (components/, lib/, hooks/, contexts/)
+// without re-verifying that population independently — see the header
+// comment above.
+const webPagesCorrectnessRules = {
   ...correctnessRules,
   '@typescript-eslint/no-floating-promises': 'error',
   '@typescript-eslint/no-misused-promises': 'error',
@@ -137,5 +158,23 @@ export default tseslint.config(
       '@typescript-eslint': tseslint.plugin,
     },
     rules: correctnessRules,
+  },
+  {
+    // Placed after the general web/src/** block above so these two rules'
+    // 'error' severity wins for files under web/src/pages/** (flat config
+    // merges same-key rules from later-matching configs over earlier ones).
+    files: ['web/src/pages/**/*.ts', 'web/src/pages/**/*.tsx'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+        ecmaFeatures: { jsx: true },
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+    },
+    rules: webPagesCorrectnessRules,
   },
 );
