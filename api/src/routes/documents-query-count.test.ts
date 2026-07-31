@@ -22,6 +22,7 @@ import request from 'supertest';
 import crypto from 'crypto';
 import { createApp } from '../app.js';
 import { pool } from '../db/client.js';
+import { sqlOf } from '../test/sql-of.js';
 
 /** Statements the document read itself needs: visibility check + belongs_to associations. */
 const ROUTE_QUERIES = 2;
@@ -73,13 +74,17 @@ describe('GET /api/documents/:id query count (TRO-177 / API-6)', () => {
     sessionCookie = `session_id=${sessionId}`;
   });
 
-  /** Run one request with pool.query spied, returning the statements it issued. */
+  /** Run one request with pool.query spied, returning the statements it issued.
+   *
+   * DB-3 / TRO-180 named the session-lookup SELECT in `authMiddleware`, so that call
+   * now passes a single `{ name, text, values }` object rather than `(text, values)`.
+   * `sqlOf` extracts the SQL text regardless of which shape a given call used. */
   async function statementsForOneRead(): Promise<string[]> {
     const spy = vi.spyOn(pool, 'query');
     try {
       const res = await request(app).get(`/api/documents/${docId}`).set('Cookie', sessionCookie);
       expect(res.status, 'the measured request must actually succeed').toBe(200);
-      return spy.mock.calls.map((call) => String(call[0]).replace(/\s+/g, ' ').trim());
+      return spy.mock.calls.map((call) => sqlOf(call[0]).replace(/\s+/g, ' ').trim());
     } finally {
       spy.mockRestore();
     }
