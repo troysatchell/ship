@@ -71,7 +71,7 @@ the same `app.ts` chain), not independently re-verified per file. A candidate fo
 whether the app.ts fix here closes some/all of the 352 once CodeQL re-scans the PR, and only chase
 per-route fixes for whatever, if anything, remains open — do not assume a per-file fix is needed
 before that evidence exists.
-`api/src/app.ts:415-419` (the SPA static-file catch-all, `js/missing-rate-limiting` alert #7) is a
+`api/src/app.ts:424-446` (the SPA static-file catch-all, `js/missing-rate-limiting` alert #7) is a
 **genuinely different, unprotected** route — it is registered outside the `/api/` prefix the limiter
 chain matches, so it gets none of this protection. Different root cause (a real gap, not a
 CodeQL-legibility issue) and only reachable when `web/dist` exists (production/deployed builds, not

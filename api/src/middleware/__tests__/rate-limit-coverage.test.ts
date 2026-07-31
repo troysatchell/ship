@@ -103,15 +103,20 @@ async function hammerUntilThrottled(
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
   const statuses: number[] = []
   let throttledAt: number | null = null
-  for (let i = 0; i < maxRequests; i++) {
-    const res = await request(server).get(path).set('Cookie', `session_id=${sessionId}`)
-    statuses.push(res.status)
-    if (res.status === 429) {
-      throttledAt = statuses.length
-      break
+  try {
+    for (let i = 0; i < maxRequests; i++) {
+      const res = await request(server).get(path).set('Cookie', `session_id=${sessionId}`)
+      statuses.push(res.status)
+      if (res.status === 429) {
+        throttledAt = statuses.length
+        break
+      }
     }
+    return { statuses, throttledAt, server }
+  } catch (error) {
+    await new Promise<void>((resolve) => server.close(() => resolve()))
+    throw error
   }
-  return { statuses, throttledAt, server }
 }
 
 describe('TRO-307: /api rate-limiter application is CodeQL-legible', () => {
@@ -136,8 +141,15 @@ describe('TRO-307: /api rate-limiter application is CodeQL-legible', () => {
       // Two separate statements, not one call with two arguments — so each
       // mount site textually names one rate limiter with no indirection
       // between "the app.use call" and "the identifier it applies".
-      expect(source).toMatch(/app\.use\(\s*['"]\/api\/['"]\s*,\s*perSourceIpLimiter\s*\)/)
-      expect(source).toMatch(/app\.use\(\s*['"]\/api\/['"]\s*,\s*perIdentityLimiter\s*\)/)
+      const perSourceIpMountIndex = source.search(
+        /app\.use\(\s*['"]\/api\/['"]\s*,\s*perSourceIpLimiter\s*\)/
+      )
+      const perIdentityMountIndex = source.search(
+        /app\.use\(\s*['"]\/api\/['"]\s*,\s*perIdentityLimiter\s*\)/
+      )
+
+      expect(perSourceIpMountIndex).toBeGreaterThanOrEqual(0)
+      expect(perIdentityMountIndex).toBeGreaterThan(perSourceIpMountIndex)
     })
   })
 
