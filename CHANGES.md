@@ -8,6 +8,90 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-234 — [TF-1] Prod Aurora cluster and uploads bucket had no deletion protection
+
+**The problem.** Of the flat root's 74 resource blocks, only the Terraform **state** bucket
+(`terraform/bootstrap/main.tf:22-23`) carried `lifecycle { prevent_destroy = true }`. The Aurora
+cluster (`terraform/database.tf`, `aws_rds_cluster.aurora`) had neither `deletion_protection` nor
+`prevent_destroy`, and the uploads bucket (`terraform/s3-cloudfront.tf`, `aws_s3_bucket.uploads`)
+had no `prevent_destroy` either. Both are Tier-1 "data loss on replace or destroy" in
+`audit/terraform/baseline.md`'s blast-radius table: a config change that forces replacement of
+either (e.g. `cluster_identifier`, `master_username`, or the bucket-name interpolation) would let
+Terraform proceed straight to destroying the live production database or every uploaded file,
+with no safety stop. (Line numbers in the Linear ticket — `database.tf:34` /
+`s3-cloudfront.tf:374` — were current at audit time; TF-2's convergence, already merged, shifted
+the Aurora cluster resource to `database.tf:63` by porting in 5 parameter-group settings ahead of
+it. Same resource, same defect.)
+
+**What changed.** Two additions, no resource renamed or restructured:
+
+- `terraform/database.tf` — `aws_rds_cluster.aurora` gets `deletion_protection = true`
+  (a first-class RDS attribute: the AWS API itself refuses a destroy while set) plus
+  `prevent_destroy = true` added to its existing `lifecycle` block (which already carried
+  `ignore_changes = [final_snapshot_identifier]` from `TF-7`/`TF-2` work — merged in, not a
+  second `lifecycle` block, since a resource may declare only one).
+- `terraform/s3-cloudfront.tf` — `aws_s3_bucket.uploads` gets a new
+  `lifecycle { prevent_destroy = true }` block. S3 buckets have no `deletion_protection`
+  attribute in the AWS provider (that concept is RDS-specific), so `prevent_destroy` is the only
+  available guard — same pattern already used on the state bucket.
+
+**Deliberate consequence, not a surprise.** `prevent_destroy = true` means a future *intentional*
+teardown of either resource (account decommission, disaster-recovery rebuild, environment
+retirement) will fail at `terraform plan`/`apply` until an operator first removes or flips the
+`lifecycle` block in a config change — i.e. destroying either resource now requires a second,
+deliberate commit, not just a `terraform destroy` or an `apply` that happens to force replacement.
+That extra step is the entire point of this ticket (TF-1's finding is literally "one careless
+apply/destroy from prod data loss"); it is called out here so it isn't rediscovered as a mystery
+blocker during a future teardown.
+
+**What did NOT change.** No other flat-root resource, and no module. `terraform/modules/aurora`
+(used by `terraform/environments/dev` and `terraform/environments/shadow`, kept per TF-2's
+convergence decision) has the same gap — no `deletion_protection`/`prevent_destroy` on its own
+`aws_rds_cluster` — but dev/shadow are non-prod, TF-1's finding and the Linear ticket both scope
+explicitly to the flat root's two named resources, and touching the module is out of scope for
+this ticket. Flagging it as a follow-up candidate, not fixing it here.
+
+**How to run it.**
+
+```bash
+# Terraform binary: temp-downloaded 1.9.8 to a scratch dir (matches audit/terraform/baseline.md
+# and the TF-2/TF-3 precedent; the repo's pinned 1.6.0 cannot `init` at all — TF-3, expired
+# provider-signing key). Not committed to the repo.
+cd terraform
+terraform init -backend=false -input=false
+terraform validate       # Success! same single pre-existing TF-5 warning, before and after
+terraform fmt -check -recursive .   # exit 0, no formatting changes needed
+terraform plan            # Error: Backend initialization required (s3) — expected; no AWS
+                           # credentials or remote-state bucket are available here, matching
+                           # audit/terraform/baseline.md's documented "Live plan not runnable"
+rm -rf .terraform .terraform.lock.hcl   # leaves `git status terraform/` clean, per audit methodology
+cd ..
+grep -n 'deletion_protection\|prevent_destroy' terraform/database.tf terraform/s3-cloudfront.tf
+```
+
+**Verification note.** `terraform validate` was run on the flat root before and after this change
+with the same 1.9.8 binary: both report `Success!` with the identical single pre-existing warning
+(TF-5, the uploads-bucket lifecycle-rule `filter`/`prefix` warning) — this change introduces no
+new warnings or errors. `terraform plan` fails identically before and after with "Backend
+initialization required" (no S3 backend/creds available in this environment) — this is the
+documented, expected failure mode from `audit/terraform/baseline.md`, not a regression caused by
+this change. **No `terraform apply` was run against any account, live or otherwise** — this PR is
+config-only, per the escalation-gate-2 rule against irreversible/outward-facing actions.
+
+**No vitest regression test applies.** This is a Terraform-only, infrastructure-as-code change;
+there is no application code path to exercise and nothing importable into `api/src/**/*.test.ts`
+or `web/src/**/*.test.ts(x)`. The evidence for "before: unprotected, after: protected" is the
+`grep` above (0 matches on these two resources before this change, 2 after) plus the
+`terraform validate`/`plan` output showing the config stays syntactically valid. `gate.sh`'s
+regression-test check is expected to fail honestly here, following the TF-2/TF-3 precedent in
+this factory, rather than have a fake vitest file manufactured to satisfy it.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf-1-deletion-protection`. This removes
+`deletion_protection` and both `prevent_destroy` blocks, returning to the pre-TRO-234 unprotected
+state. No live AWS state is touched either way, since no `apply` was ever run.
+
+---
+
 ## TRO-299 (TF-10) follow-up — live Render deployment adopted into Terraform state via `import`; post-import plan is a clean no-op
 
 **What was added.** Maintainer decision 2026-07-30 resolved the TF-10 entry's HOLD: adopt the
