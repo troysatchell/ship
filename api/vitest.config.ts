@@ -26,8 +26,16 @@ export default defineConfig({
     hookTimeout: 30_000,
     coverage: {
       provider: 'v8',
-      reporter: ['text', 'html'],
+      reporter: ['text', 'html', 'json-summary'],
       exclude: ['node_modules', 'dist', 'src/test/**'],
+      // TRO-244: measured statement coverage on 2026-07-31 was 45.65%. This
+      // floor is that number minus ~2.5 points — generous on purpose, so the
+      // check's job today is "stop silent regression," not "enforce a target
+      // nobody has agreed to." Raise it deliberately as real coverage grows;
+      // do not lower it to make a failing PR pass.
+      thresholds: {
+        statements: 43,
+      },
     },
   },
 })

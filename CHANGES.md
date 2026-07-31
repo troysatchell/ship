@@ -8,6 +8,199 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-244 (RULE-4) — CI pipeline was missing 3 of the 7 required checks (coverage, dependency audit, security scan)
+
+**What was broken.** Assignment rule 4 requires exactly 7 CI checks: build, lint, type-check, test,
+coverage, dependency audit (`pnpm audit`), security scan. `.github/workflows/ci.yml`'s `verify` job
+ran build, lint, type-check, and test — four of seven. Coverage was never collected, `pnpm audit`
+was never run, and there was no security scan of any kind. Note: `.claude/skills/ship-security-compliance/SKILL.md`
+still says CI "deliberately omits `pnpm lint`" because no ESLint config exists — that was true when
+written but is now stale; TRO-211/TS-6 already added a real `Lint` step running a working flat
+ESLint config. That skill doc's summary needs a follow-up correction; this ticket didn't touch it
+beyond noting the discrepancy here so it doesn't get inherited as fact again.
+
+**What changed — three additions, one per missing check.**
+
+**1. Coverage.** `api/vitest.config.ts` already declared a `coverage` block (provider `v8`); the
+`@vitest/coverage-v8` provider package itself was simply never installed, so `test:coverage` (which
+already existed in `api/package.json`) would have failed on first real use. Added
+`@vitest/coverage-v8` to `api/package.json`'s devDependencies. `web/package.json` had no coverage
+script or config at all — added `test:coverage`, a matching `coverage` block in
+`web/vitest.config.ts`, and the same provider dependency.
+
+Both provider versions are pinned to the **exact** version resolved for `vitest` itself (`4.0.17`),
+not a caret range: `@vitest/coverage-v8`'s own `peerDependencies` pin `vitest` to that exact same
+version (confirmed via `npm view @vitest/coverage-v8@4.0.17 peerDependencies`), so a looser caret
+(`^4.0.16`) resolves to whatever is newest on the `4.x` line at install time — `pnpm install`
+actually picked `4.1.10` on the first attempt here, which doesn't match the installed `vitest@4.0.17`
+and `pnpm install` reported an unmet-peer warning. Exact-pinning avoids that drift; bump both
+together when `vitest` itself is bumped.
+
+Both configs added a **generous, non-enforced-by-default-but-real** floor via vitest's own
+`coverage.thresholds.statements`, so the check does something beyond "runs and prints a number":
+- **api: 43%** (measured 45.65% on 2026-07-31 — floor is ~2.5 points below).
+- **web: 20%** (measured ~22.3% on 2026-07-31 — floor is ~2 points below, and this run showed some
+  natural run-to-run variance, 22.27%–22.38%, wide enough margin either way).
+
+Chosen deliberately low: the goal today is "catch a silent regression," not "enforce a coverage
+target nobody has agreed to." Confirmed the enforcement is real, not decorative, by temporarily
+setting `api`'s threshold to 99% and re-running — it failed with
+`ERROR: Coverage for statements (45.65%) does not meet global threshold (99%)` — then reverted to 43%.
+
+Two new CI steps in the `verify` job run `pnpm --filter @ship/api test:coverage` and
+`pnpm --filter @ship/web test:coverage` against the same CI Postgres database the existing unit-test
+steps use. They are **separate** steps from the existing "API/web unit tests" steps (which already
+run the suite once with `continue-on-error: true` for the quarantine-diff gate) rather than folding
+`--coverage` into those — vitest happily accepts both flags in one invocation, but doing so would let
+a real coverage-threshold failure get silently absorbed by `continue-on-error: true`, which is
+supposed to only tolerate *pre-quarantined test failures*, not a coverage regression. The tradeoff is
+the api/web suites now run twice in CI (once plain, once instrumented) — accepted deliberately for
+that isolation.
+
+A new `scripts/factory/lib/coverage-summary.mjs` reads both packages'
+`coverage/coverage-summary.json` (added `json-summary` to each `coverage.reporter` array) and appends
+a markdown table to `$GITHUB_STEP_SUMMARY`, visible on every run. Kept as its own file instead of an
+inline `node -e '...'` in the YAML `run:` block deliberately — seeing the dependency-audit script hit
+a real shell-quoting bug from embedded backticks (see below) made clear that any JS containing
+template literals belongs in a file, not inlined in a bash heredoc.
+
+**2. `pnpm audit` — baseline-diff, not a hard gate.** Verified fresh on 2026-07-31 at commit
+`2ca800ae47b1fef0368bb86869de19e602297571` (`main`, and this branch's unmodified base):
+`pnpm audit --json` reports **135 pre-existing findings — 10 low / 64 moderate / 58 high / 3
+critical** — matching the number given in this ticket's brief exactly. (Observed both with and
+without `--audit-level=high`; the flag only changes pnpm's own exit-code threshold, not what the
+JSON body reports, so the two invocations produce identical `metadata.vulnerabilities` counts.) None
+of these are introduced by this change — this repo's dependency tree already carried them.
+
+A hard `pnpm audit --audit-level=high` (or any-severity) CI step would fail on all 135 immediately,
+including several other factory tickets' PRs mid-review the same day this landed. **Documented
+deviation** (assignment rule 4 explicitly allows a deviation from a required check's naive form when
+given written justification — this is that justification): instead of gating on raw findings, this
+follows the exact pattern this repo already uses for test regressions
+(`audit/factory/quarantine.json` + `scripts/factory/lib/testdiff.mjs`, which diffs failure
+*identities* against a baseline, not counts).
+
+- `audit/factory/dependency-audit-baseline.json` — new baseline file, captured from the same
+  `pnpm audit --json` run described above. Records `capturedAt`, `capturedAtCommit`,
+  `severityCountsAtCapture` (135: 10/64/58/3), and `knownAdvisories`: 124 unique GHSA ids (fewer than
+  135 because one advisory can affect more than one dependency path — pnpm's summary counts by
+  finding/path, this file's identity list counts by unique advisory).
+- `scripts/factory/lib/dependency-audit-diff.mjs` — new script, modeled directly on
+  `testdiff.mjs`'s structure. Exports `extractAdvisoryIds()` (GHSA id, falling back to a prefixed
+  numeric pnpm advisory id when no GHSA id exists), `severityCounts()`, and `diffAdvisories()` as
+  pure functions, plus a CLI entry point guarded by `import.meta.url === file://${process.argv[1]}`
+  so the test file below can import the functions without running the CLI. Exit 0 = no new advisory
+  vs. the baseline. Exit 1 = a new advisory was introduced — this is what actually fails the build,
+  not `pnpm audit`'s own exit code (which is 1 whenever ANY finding exists, baseline or not — the
+  new CI step explicitly does not gate on it, see the step's own comment in `ci.yml`). Exit 2 = the
+  audit JSON couldn't be read/parsed, e.g. a registry hiccup — reported as a failure, not silently
+  treated as a pass. Also writes the same severity table to `$GITHUB_STEP_SUMMARY` when that env var
+  is set, so the number is visible on every run, not only on failure — the brief's explicit ask.
+- New CI step in the `verify` job: `pnpm audit --json > pnpm-audit-current.json`, then runs the diff
+  script against the baseline. Verified locally against a fresh `pnpm audit --json` run on this
+  branch (unchanged dependencies): **0 new advisories, 0 resolved, 124/124 still present**, exit 0 —
+  and separately verified the fail path by injecting a synthetic fake GHSA id into a copy of the
+  audit JSON, which correctly reported `newAdvisories: ["GHSA-fake-fake-fake"]` and exited 1.
+
+**Caught by the PR's own live CI run, not by local testing — stated plainly because this is exactly
+the kind of gap the claim-provenance rule in `.claude/CLAUDE.md` exists to catch.** The first two
+live runs of this workflow (PR #76, runs `30644101853` and `30644438852`) both failed the audit step
+in ~1.2s with zero output from the diff script. Root cause: GitHub Actions' default shell for `run:`
+is already `bash -e {0}` (confirmed from the job's own `shell: /usr/bin/bash -e {0}` log line) —
+`pnpm audit` exits non-zero on the 135 pre-existing findings *every single run*, and the step's own
+`set -uo pipefail` line does not (and cannot) turn off an `-e` that was already active before the
+script started running. So `pnpm audit`'s expected, harmless non-zero exit aborted the step before
+`dependency-audit-diff.mjs` ever ran. My local verification above never caught this because an
+interactive local shell does not run with `-e` by default — it was "verified," but verified under a
+shell configuration that could not have exercised this failure mode. Fixed by appending `|| true` to
+the `pnpm audit` line, the same idiom the `inventory` job already uses elsewhere in this same file
+for its own known-can-fail commands. Confirmed the fix locally by running the exact step body through
+`bash -e` (not a plain local shell) before pushing again — exit 0, correct JSON output.
+
+Remediating the inherited 135 findings is **explicitly out of scope for this ticket** — that is
+per-advisory dependency upgrade/replacement work, not a CI-pipeline change, and cannot be done safely
+under today's deadline. What changed is that the number is now visible and non-regressing on every
+PR instead of being unenforced and invisible.
+
+**3. Security scan — CodeQL.** Added a `codeql` job to `ci.yml` (`init` → `analyze`, the currently
+recommended two-step form — `autobuild` is legacy and only applies to compiled languages per
+`github/codeql-action`'s own README; JS/TS is interpreted, so `build-mode: none` is correct and
+fastest). `languages: javascript-typescript` is the current combined identifier (confirmed against
+GitHub's docs — `javascript`/`typescript` alone are accepted aliases but `javascript-typescript` is
+the documented explicit spelling and analyzes both together regardless). Pinned to commit
+`a2983b8bed1923f44751c5c43237f479442827b3` — the commit behind the `v3.37.4` release tag, resolved
+via `gh api repos/github/codeql-action/git/refs/tags/v3.37.4` then dereferencing the annotated tag
+object to its commit — rather than the mutable `v3` tag, matching this repo's existing third-party
+action pinning convention (e.g. `pnpm/action-setup@b906aff... # v4`). Job gets its own
+`security-events: write` (least-privilege — the workflow's top-level `permissions:` is `contents:
+read` only, and job-level `permissions:` replaces rather than extends that).
+
+**Coverage floor & baseline-diff logic have real, provable failure modes**, per the two checks above.
+CodeQL and the coverage/lint/typecheck/test/build/inventory jobs cannot be meaningfully unit-tested
+outside GitHub Actions itself — the branch's own PR run is the proof for those (see the PR for the
+live run URL and per-job result).
+
+**Regression test — `scripts/factory/lib/dependency-audit-diff.test.mjs`** (Node's built-in
+`node:test` + `node:assert/strict`, zero new dependencies). 12 cases covering: GHSA-id extraction,
+fallback to a prefixed numeric id when no GHSA id exists, deduping two advisory entries that share
+one GHSA id, an empty/missing `advisories` object, `severityCounts()` reading/defaulting
+`metadata.vulnerabilities`, and — the core property this whole script exists for —
+`diffAdvisories()` correctly classifying a pre-existing advisory as NOT new, a genuinely new one as
+new, a since-fixed one as resolved (not new), and a mixed case with all three at once. A final
+end-to-end case chains `extractAdvisoryIds()` into `diffAdvisories()` against a fake PR audit report
+to prove the whole pipeline, not just the pieces.
+
+No `scripts/factory/lib/*.test.ts` pattern exists yet — nothing under `scripts/` had a test before
+this ticket, and this logic lives in a standalone CLI script outside any package's TypeScript
+project, so a `node script.test.mjs`-style file is the better fit than forcing it into `api/` or
+`web/`'s vitest suite. **Known gap, stated plainly:** `scripts/factory/gate.sh`'s G6 regression-test
+check only greps added lines in `*.test.ts` / `*.test.tsx` / `*.spec.ts` files, so it will NOT count
+this file's 12 `test(...)` cases. That check was written before anything under `scripts/` had tests
+and nobody has updated its glob — filed as a known, documented gap rather than silently relying on
+G6 to "just work" here. The test is not orphaned regardless: it is wired into CI as its own step (see
+below) so it actually executes on every run.
+
+**How to run it.** (each check, locally)
+
+```bash
+# Coverage (requires local Postgres running + the worktree's .env — see
+# .claude/CLAUDE.md's Commands section)
+source .factory-env
+pnpm --filter @ship/api test:coverage
+pnpm --filter @ship/web test:coverage
+
+# Coverage summary (same output CI writes to $GITHUB_STEP_SUMMARY; prints to
+# stdout when that env var is unset)
+node scripts/factory/lib/coverage-summary.mjs \
+  --pkg api:api/coverage/coverage-summary.json:43 \
+  --pkg web:web/coverage/coverage-summary.json:20
+
+# Dependency audit baseline diff
+pnpm audit --json > /tmp/pnpm-audit-current.json
+node scripts/factory/lib/dependency-audit-diff.mjs \
+  --current /tmp/pnpm-audit-current.json \
+  --baseline audit/factory/dependency-audit-baseline.json
+
+# Dependency-audit-diff's own regression test
+node --test scripts/factory/lib/dependency-audit-diff.test.mjs
+
+# CodeQL cannot be run locally in the same form it runs in Actions (it needs
+# the Actions runtime to initialize/upload); the PR's own CI run is the proof.
+```
+
+**Rollback.** Revert the commit(s) on `fix/ci-missing-checks` touching `.github/workflows/ci.yml`,
+`api/package.json`, `api/vitest.config.ts`, `web/package.json`, `web/vitest.config.ts`, `.gitignore`
+(the added `coverage` ignore line), and delete
+`audit/factory/dependency-audit-baseline.json`,
+`scripts/factory/lib/dependency-audit-diff.mjs`,
+`scripts/factory/lib/dependency-audit-diff.test.mjs`, and
+`scripts/factory/lib/coverage-summary.mjs`. `pnpm-lock.yaml` will need `pnpm install` re-run after
+reverting the two `package.json` files to drop the now-unused `@vitest/coverage-v8` entries. Reverting
+does not touch the existing `verify`/`inventory`/`build-image` jobs or any application code — no
+other rollback steps required.
+
+---
+
 ## TRO-305 — Category 6 (error handling) screenshots/recordings, closing the gap `docs/IMPROVEMENTS.md` §6 named
 
 **What was missing.** `docs/IMPROVEMENTS.md` §6 stated plainly that its own evidence was
