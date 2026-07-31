@@ -35,8 +35,107 @@
 | Final polish + presentation | ⬜ Sun Aug 2 |
 | **Post-submission factory wave (Phase 3)** | ✅ **8 tickets done (2026-07-30/31)** — TF-1/TF-3/TF-9, A11Y-9/A11Y-10, ERR-9/ERR-17, TRO-294; PRs #61–#68, all merged. **74 tickets Done total, 84 PRs merged total.** Board empty again; 28 real tickets remain in Backlog, untouched by design (user-directed stop). |
 | CI pipeline gap-closed (`TRO-244`, rule 4 — **a different, later ticket reusing the ID from the row above**) | ✅ done (2026-07-31 PM) — coverage + `pnpm audit` baseline-diff + CodeQL added to `.github/workflows/ci.yml`; PR #76 open, mergeable, live CI green |
+| **Grading-failure remediation** | ✅ **done (2026-07-31 evening)** — all 3 grader-flagged gaps closed and merged: `TRO-244` (CI, 3 missing checks), `TRO-304` (API-3, `/api/documents` pagination, −76% to −85% P95), `TRO-305` (Category 6 screenshots, all 11 fixes). Wave-1 backlog batch (7 tickets) merged alongside. **84 tickets Done total, 94 PRs merged total.** |
 
 ## Log
+
+### 2026-07-31 (evening) — Grading-failure investigation and remediation, plus a wave-1 backlog batch
+
+**Trigger.** User reported this week's implementation checkpoint failed grading and pasted the
+grader's feedback verbatim: (1) "only /api/issues clears the 20% bar at every concurrency, and your
+own compare doc verbatim declines to assert 2/2 endpoints," (2) "a screenshot or recording is
+required per fix and your improvements doc says it plainly," (3) "your CI is missing three of the
+seven required checks." Asked to re-verify against the actual project guidelines and fix.
+
+**Verification, not assumption.** Re-read the source-of-truth PDF (`/Users/troy/Documents/G.Assignments/GFA_Week_4_ShipShape_Updated.pdf`)
+rather than trusting the memory bank's summary. Confirmed each complaint independently against the
+live repo state:
+- `.github/workflows/ci.yml` genuinely had only 4 of the 7 required checks (build, lint, type-check,
+  test) — coverage, `pnpm audit`, and a security scan were absent. `pnpm audit --audit-level=high`
+  showed 135 pre-existing vulnerabilities (10/64/58/3 by severity), meaning a naive hard-fail step
+  would have blocked every PR including ones already in flight.
+- `audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md` (the team's own doc) explicitly said
+  only 1/6 benchmarked endpoints cleared ≥20% P95 at the headline concurrency, and declined to assert
+  2/2. `TRO-302` (already merged) had profiled and *acquitted* a hypothesis for the regression noise
+  but produced no new fix. The audit's own unimplemented recommendation — paginate `/api/documents`
+  — was still open.
+- `docs/IMPROVEMENTS.md:443` already said plainly: "Screenshots and recordings are still owed
+  separately... none of the fix entries include or reference an actual image or video file."
+
+**Root cause behind gap #1, found while investigating:** `TRO-244` had been marked Done on
+2026-07-29, but for a *different* ticket (the original CI-pipeline bootstrap) that happened to reuse
+the same Linear ID 2 days later for unrelated, later work — a ticket-ID collision, not a false
+"Done" status on the same task. Reopened it with the real gap documented and re-dispatched.
+
+**Three new/reopened tickets, dispatched as urgent factory agents alongside a wave-1 batch:**
+- `TRO-244` (reopened) — coverage (api 43%/web 20% enforced floors, `@vitest/coverage-v8` pinned to
+  an exact version since its peer dependency requires an exact vitest match), `pnpm audit`
+  baseline-diff (`audit/factory/dependency-audit-baseline.json` + `scripts/factory/lib/dependency-audit-diff.mjs`,
+  same identity-diff pattern as the test-quarantine baseline — fails only on a genuinely new
+  advisory), CodeQL security scan (`github/codeql-action`, pinned SHA per this repo's supply-chain
+  convention). Verified with **live, green GitHub Actions runs** (not just local `gate.sh`) — this
+  caught two real bugs local testing hadn't: GitHub Actions' default shell is already `bash -e`, so
+  an unguarded `pnpm audit`'s expected non-zero exit aborted the step before the diff script ran; and
+  `session-activity-race` flaked under `vitest --coverage` specifically, plausibly because coverage
+  instrumentation widens the race window. PR #76.
+- `TRO-304` — pagination on `GET /api/documents` (`DEFAULT_DOCUMENTS_LIST_LIMIT = 100`,
+  `MAX_DOCUMENTS_LIST_LIMIT` raised 100→500, `offset` added). Two frontend callers
+  (`useDocumentsQuery.ts`, `CommandPalette.tsx`) needed an explicit `limit=500` to preserve
+  completeness for the wiki tree and command-palette search. Measured before/after with the same
+  `bench-runner-compare.mjs` methodology, same seed volume: P95 **−75.9% (c=10), −66.6% (c=25),
+  −85.5% (c=50)** — clears the ≥20% target at every concurrency, closing the API-3 gap combined with
+  the existing `/api/issues` win. PR #77.
+- `TRO-305` — real browser screenshots for all 11 Category-6 error-handling fixes
+  (`docs/screenshots/error-handling/`), 10 after-only + 1 before+after (ERR-2, session revocation,
+  the only one safely reproducible on current code) + 1 terminal-capture (ERR-11/ERR-12, a
+  sub-millisecond race not practically capturable live). Every fix reproduced exactly as
+  `docs/IMPROVEMENTS.md` claimed — none needed correcting. PR #78.
+
+**Wave-1 backlog batch, run in parallel with the above** (this was the original ask before the
+grading-failure interrupt; continued alongside it): `TRO-180` (DB-3, named prepared statements on 3
+hot auth/visibility queries — deliberately did NOT touch `/api/issues`'s filter-branching queries,
+since naming those would throw a real `pg` client error on a filter-shape change), `TRO-245` (RULE-3,
+verified all 5 named audit fixes ship real regression tests via revert-and-watch, found zero gaps,
+added one precisely-scoped CLI-exit-code test), `TRO-300` (TEST-16, replaced the session-race test's
+dispatch-gating barrier with a completion-gating barrier — proven deterministic by construction, but
+could not reproduce the original CI-only flake even under CPU-pinned CI-matched conditions locally,
+stated honestly), `TRO-237`/`TRO-238` (TF-4/TF-5, terraform lock file + lifecycle filter — both
+correctly judged the regression-test gate inapplicable, matching the TF-1/TF-3/TF-9 precedent),
+`TRO-175` (API-4, routed the command palette through the existing search endpoint with react-query
+caching; a CodeRabbit Major finding — the new search endpoint's browse-all path had no result
+cap — was caught and fixed before merge). `TRO-295` (TF-7 quota follow-up) was deferred per explicit
+user choice: its only two mitigations are a live-AWS-credentials action (out of reach here) or a
+terraform-only security-group split, and the user chose to skip rather than ship a partial fix.
+
+**Operational findings from this session, worth carrying forward:**
+- **The CHANGES.md merge-conflict cascade is worse at this batch size than the 2026-07-30 estimate.**
+  Landing 10 PRs required up to **5 sequential resolution rounds on a single branch** (TRO-304 hit
+  4 rounds, TRO-305 hit 4) because every merge to `main` re-conflicted every still-open branch's
+  CHANGES.md entry. `merge-changes.mjs` never mis-resolved once across ~25 total resolutions.
+- **A real (non-CHANGES.md) code conflict occurred between two PRs targeting the same file for
+  related-but-different reasons**: `TRO-175` rewrote `CommandPalette.tsx`'s document fetch to use
+  search+caching; `TRO-304` (branched earlier, before TRO-175 merged) had patched the same file's
+  *old* fetch call with an explicit `?limit=500`. Resolved by merging TRO-175 first, then taking its
+  version of `CommandPalette.tsx`/`.test.tsx` entirely when resolving TRO-304 (its `?limit=500` patch
+  became moot — the file no longer calls `/api/documents` raw at all), keeping TRO-304's backend and
+  `useDocumentsQuery.ts` changes. Verified by running the affected test suites directly after the
+  manual resolution (437 web + 693 api tests, all green) before trusting CI. Amended TRO-304's own
+  CHANGES.md entry post-hoc to flag which of its documented claims described pre-merge state rather
+  than what actually shipped — CLAUDE.md's provenance rule applied to the orchestrator's own merge
+  resolution, not just agent claims.
+- **CI runs can show `cancelled`, not `failure`, purely from resource contention** — `concurrency:
+  cancel-in-progress: true` plus this session's rapid sequence of pushes to `main` (the merge
+  cascade) produced a `cancelled` conclusion on TRO-244's branch that looked exactly like a real CI
+  failure until a quieter re-run (fewer competing PRs) went fully green with the identical commit's
+  logic. Diagnose `cancelled` by checking for concurrent pushes before assuming a code defect.
+- **`gh workflow run` dispatched twice in quick succession self-cancels** via the same concurrency
+  group — observed once, wasted one CI cycle, not a real problem once understood.
+- Two agents violated lessons.md rule 22 (never background-and-wait) mid-task; both recovered cleanly
+  after a single resume message telling them to check the result synchronously instead.
+
+**All 10 tickets Done, all 6 PRs (#69–#78, 10 tickets across some batched work already counted from
+before) merged, both remotes (`origin`→GitLab, GitHub mirror) confirmed at the same commit `fb3e179`,
+zero open PRs, zero leftover worktrees/databases at session end.**
 
 ### 2026-07-31 (PM) — TRO-244 (RULE-4): CI pipeline closed to all 7 required checks
 

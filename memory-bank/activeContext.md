@@ -2,48 +2,45 @@
 
 *The most-updated file in the bank. Read this first every session; rewrite it whenever focus shifts. Keep it under a screen — move finished work to progress.md.*
 
-**Last updated:** 2026-07-31 (later same day), TRO-244 (RULE-4) closed · CI pipeline now runs all 7 assignment-rule-4 checks. PR #76 open on GitHub (`troysatchell/ship`), mergeable, multiple full-green live CI runs. Factory very active in parallel — dozens of other tickets' PRs merging into `main` concurrently during this session.
+**Last updated:** 2026-07-31 (evening), post-grading-failure remediation session. `main` at `fb3e179`, both remotes synced (GitLab `origin`, GitHub mirror), zero open PRs, zero worktrees, working tree clean except the 3 pre-existing local-only items noted below.
 
 ## Where we are
 
-Worked in dedicated worktree `Ship-wt-tro_244` / branch `fix/ci-missing-checks`. `verify` job had only 4 of 7 required checks (build, lint, type-check, test); added coverage (api+web, `@vitest/coverage-v8`, generous floors 43%/20%), a `pnpm audit` baseline-diff (`audit/factory/dependency-audit-baseline.json` + `scripts/factory/lib/dependency-audit-diff.mjs`, same identity-diff pattern as the test quarantine — 135 pre-existing findings, 0 new), and a new `codeql` job (github/codeql-action init+analyze, pinned SHA). Full detail, the two real bugs the live CI run caught, and the ticket-ID collision finding are in `progress.md`'s 2026-07-31 (PM) entry.
+User reported this week's grading checkpoint **failed**, quoting the grader's feedback verbatim. Investigation (cross-checked against the actual PDF rubric at `/Users/troy/Documents/G.Assignments/GFA_Week_4_ShipShape_Updated.pdf`, not the memory-bank summary) confirmed all three grader complaints were real, not misunderstandings:
 
-Working tree carries 3 pre-existing, deliberately-untouched items: `.gitignore` has an unrelated local `.gstack/` line (not this project's concern), `docs/submission/{DEMO-SCRIPT,SOCIAL-POST}.md` have uncommitted edits kept **local-only per instruction** (internal, not for the public repo), and an unrelated `high-end-visual-design` skill install sits untracked (`skills-lock.json`, `.claude/skills/high-end-visual-design/`, `.agents/`) — also per instruction, not factory work.
+1. **CI missing 3 of 7 required checks** (coverage, `pnpm audit`, security scan) — `TRO-244` had been marked Done on 2026-07-29 for a *different* CI bootstrap ticket that reused the same ID; the actual rule-4 gap was never closed. Reopened, fixed for real: coverage (api 43% / web 20% enforced floors), `pnpm audit` baseline-diff (135 pre-existing findings baselined, fails only on new advisories — same identity-diff pattern as the test quarantine), CodeQL security scan (pinned SHA). Verified with live green GitHub Actions runs, not just local gate.sh. PR #76, merged.
+2. **API-3 category target unmet** — only `/api/issues` robustly cleared the ≥20% P95 bar; the audit's own compare doc explicitly declined to claim 2/2 endpoints. Filed `TRO-304`, implemented pagination on `GET /api/documents` (bounded 100-doc default, 500 ceiling, `offset` support) — the audit's own long-standing "largest unrealized win" recommendation. Measured P95 improvement: **−76% to −85% at every concurrency** (10/25/50), cleanly clearing the target. PR #77, merged.
+3. **Category 6 screenshots/recordings missing** — `docs/IMPROVEMENTS.md` itself already admitted this. Filed `TRO-305`, captured real browser screenshots (10 after-only, 1 before+after where safely reproducible, 1 terminal-capture for a sub-millisecond race) for all 11 error-handling fixes, wired into the doc. PR #78, merged.
+
+All 3 dispatched as parallel factory agents alongside a wave-1 batch of 7 backlog tickets (`TRO-180`/DB-3, `TRO-245`/RULE-3, `TRO-300`/TEST-16, `TRO-237`/TF-4, `TRO-238`/TF-5, `TRO-175`/API-4, `TRO-194`/ERR-7 — `TRO-295` deferred per user choice, since its real fix needs live AWS credentials this environment doesn't have). All 10 tickets merged. Full narrative, the CHANGES.md merge-conflict cascade cost, the CommandPalette.tsx real-code-conflict resolution between TRO-175 and TRO-304, and the CI-run-cancellation-from-contention finding are in `progress.md`'s 2026-07-31 (evening) entry.
+
+Working tree carries 3 pre-existing, deliberately-untouched items (unchanged from prior sessions): `.gitignore`'s local `.gstack/` line, `docs/submission/{DEMO-SCRIPT,SOCIAL-POST}.md` uncommitted edits kept local-only per instruction, and the untracked `high-end-visual-design` skill install.
 
 ## Remaining — Troy only (submission)
 
-Personalize `DISCOVERY.md` + `SOCIAL-POST.md`, record the video from `DEMO-SCRIPT.md`, submit. Optional garnish: the PDF's Render drift demo (one benign dashboard toggle + plan).
+Personalize `DISCOVERY.md` + `SOCIAL-POST.md`, record the video from `DEMO-SCRIPT.md`, submit. Optional garnish: the PDF's Render drift demo. **Final submission deadline: Sun Aug 2, 11:59 AM.**
 
-## Backlog remainder — stale, needs a refresh pass
+## Backlog remainder — re-verify against Linear before resuming, do not trust this list blindly
 
-The 28-ticket list below is what stood after wave 1 (previous entry). **Not re-verified this
-session, and at least two are already done**: `TRO-245` (RULE-3) and `TRO-238` (TF-5) both showed
-up as fully-written, merged `CHANGES.md` entries on `main` while resolving this session's own
-merge conflicts (they were not this ticket's work) — the factory kept running other tickets in
-parallel throughout. Treat this whole list as "needs re-check against Linear," not "confirmed
-remaining":
+Roughly 20 real tickets remain (28 before this session, minus the 7 wave-1 completions, plus `TRO-303` filed by review triage). Not a fresh count — confirm live:
 
-- **TF:** TRO-283 (TF-8), TRO-237 (TF-4, now unblocked — TF-3 landed), ~~TRO-238 (TF-5)~~ **done**, TRO-239 (TF-6)
-- **TEST:** TRO-300 (TEST-16, High — needs the CI-constrained repro, see below), TRO-228..233 (TEST-6/7/8/9/10/11)
+- **TF:** TRO-283 (TF-8), TRO-239 (TF-6), TRO-303 (module `prevent_destroy` gap, CodeRabbit-filed)
+- **TEST:** TRO-228..233 (TEST-6/7/8/9/10/11)
 - **TS:** TRO-210/212/213/214 (TS-5/7/8/9), TRO-297 (TS-10)
-- **DB/API:** TRO-180 (DB-3), TRO-186 (DB-9), TRO-175 (API-4), TRO-280 (API-7)
-- **ERR/BUN:** TRO-194 (ERR-7), TRO-201/205 (BUN-5/9)
-- **RULE:** ~~TRO-245 (RULE-3, High)~~ **done**, TRO-244 (RULE-4) **done this session**, TRO-249 (RULE-8)
-- **CodeRabbit-filed:** TRO-291, TRO-293, TRO-295 (TF-7 follow-up, High — plausible AWS quota blocker)
+- **DB/API:** TRO-186 (DB-9), TRO-280 (API-7)
+- **BUN:** TRO-201/205 (BUN-5/9)
+- **RULE:** TRO-249 (RULE-8)
+- **CodeRabbit-filed:** TRO-291, TRO-293, TRO-295 (TF-7 quota follow-up — needs live AWS credentials to verify/apply the real fix, not just the code-only mitigation; deferred twice now for that reason)
 
 ## Open engineering threads
 
-1. **TRO-300** (TEST-16, High): `session-activity-race` flaked again this session — now also seen
-   **under `vitest run --coverage`** specifically (see `progress.md` for the theory). Still needs the
-   CI-constrained (2-core) repro to root-cause rather than keep rerunning.
-2. Ticket-ID collision confirmed real (`TRO-244` reused across two unrelated pieces of work, 6 weeks
-   apart) and an unattended process auto-merges `main` into open ticket branches — both explained in
-   `progress.md`'s 2026-07-31 (PM) entry; flag the former in Linear so it doesn't recur.
-3. Cat-6 screenshots/recordings for the write-up; VoiceOver passes (TRO-215/281 + prior a11y fixes) still owed to a human.
-4. New load-sensitive-flake identities seen this session, not yet folded into `lessons.md`: `api/src/routes/weeks.test.ts`, `api/src/db/__tests__/migrationLock.test.ts`.
+1. **CI runs get cancelled under contention, not just failed for cause.** `concurrency: cancel-in-progress: true` combined with rapid sequential pushes to `main` (this session's merge cascade) produced at least one falsely-alarming `cancelled` result on `TRO-244`'s branch that looked like a real failure until a quieter re-run went fully green. Don't diagnose a `cancelled` CI conclusion as a code defect without checking whether something else was mid-push at the same time.
+2. **`session-activity-race` flaked at least 4 more times this session** (PRs #71, #76 including once under `vitest --coverage` specifically — theory: coverage instrumentation overhead widens the race window) even with `TRO-300`'s completion-barrier fix merged. Not yet clear whether TRO-300's fix reduces the rate or the fix doesn't cover every path; worth a dedicated look if it keeps recurring.
+3. Cat-6 screenshots done (TRO-305); VoiceOver passes (TRO-215/281 + prior a11y fixes) still owed to a human.
+4. `TRO-244` ticket-ID collision confirmed real (reused across two unrelated pieces of work 2 days apart) — worth a Linear hygiene pass so it doesn't recur.
 
-## Session lessons already in lessons.md
+## Session lessons already in lessons.md / ship-factory SKILL.md
 
-Stash-at-A/B-test moment (2 agents); programWeeksNav new web flake identity; zsh no-word-split in orchestrator Bash loops; profile-first killed a plausible perf hypothesis (TRO-302); session-checkpoint discipline + orchestrator-on-Sonnet (both now in `ship-factory`/`ship-orchestrator` SKILL.md, not lessons.md).
+CHANGES.md merge-conflict cascade (N-1 re-resolutions for N PRs landing together, worse than the 2026-07-30 estimate — this session saw up to 5 resolution rounds on a single branch); stash-at-A/B-test moment; programWeeksNav flake identity; session-checkpoint discipline + orchestrator-on-Sonnet.
 
 > — GIR: "I'm gonna sing the doom song now."
