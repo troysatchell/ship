@@ -109,7 +109,18 @@ describe('TRO-308: SPA static-file/catch-all route is rate-limited', () => {
     try {
       const res = await request(server).get('/some-app-page');
       expect(res.status).toBe(200);
-      expect(res.text).toContain(INDEX_HTML_MARKER);
+      expect(res.headers['content-type']).toMatch(/html/);
+      // Only assert on OUR fixture's exact content when we actually wrote
+      // index.html ourselves (see beforeAll). Under a full `gate.sh` run,
+      // `pnpm build` builds a REAL web/dist before tests run, so this file
+      // finds a real index.html already there and — correctly — leaves it
+      // alone rather than clobbering a real build (see the afterAll
+      // cleanup's ownership check). The status/content-type assertions
+      // above are still a genuine proof the static-SPA branch activated
+      // (Express's default 404 JSON handler would not produce either).
+      if (ownsIndexHtml) {
+        expect(res.text).toContain(INDEX_HTML_MARKER);
+      }
     } finally {
       await closeServer(server);
     }
