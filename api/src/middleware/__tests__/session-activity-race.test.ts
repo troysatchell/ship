@@ -56,6 +56,7 @@ import crypto from 'crypto';
 import { Request, Response, NextFunction } from 'express';
 import { authMiddleware, SESSION_ACTIVITY_UPDATE_THRESHOLD_MS } from '../auth.js';
 import { pool } from '../../db/client.js';
+import { sqlOf } from '../../test/sql-of.js';
 
 const BURST = 10;
 
@@ -81,7 +82,11 @@ function createArrivalBarrier(isBarriered: (sql: string) => boolean, count: numb
 
 /** Matches the session-lookup SELECT in `authMiddleware` (auth.ts), the read whose
  * timing determines whether a request sees the burst's stale `last_activity` or an
- * already-refreshed one. */
+ * already-refreshed one.
+ *
+ * DB-3 / TRO-180 named this statement, so it is now sent as `{ name, text, values }`
+ * rather than a bare string — callers must extract the SQL text with `sqlOf` before
+ * calling this, rather than passing `pool.query`'s first argument straight through. */
 function isSessionLookup(sql: string): boolean {
   return sql.replace(/\s+/g, ' ').trim().startsWith('SELECT s.id, s.user_id, s.workspace_id');
 }
@@ -171,7 +176,7 @@ describe('concurrent session-activity writes (TRO-179 / TRO-177)', () => {
     const trueQuery = pool.query;
     const gateArrival = createArrivalBarrier(isSessionLookup, BURST);
     pool.query = function barrieredQuery(...args: unknown[]): unknown {
-      const sql = String(args[0]);
+      const sql = sqlOf(args[0]);
       // review-pattern-ok: pool.query's overloads collapse to a single signature
       // under Parameters<>/ReturnType<>, so a precise cast is required to forward
       // to the real implementation this codebase's 1-2 arg promise-based calls
@@ -198,7 +203,7 @@ describe('concurrent session-activity writes (TRO-179 / TRO-177)', () => {
         result.type === 'fulfilled' ? result.value : undefined
       );
       const updates = spy.mock.calls
-        .map((call, i) => ({ sql: String(call[0]).replace(/\s+/g, ' ').trim(), i }))
+        .map((call, i) => ({ sql: sqlOf(call[0]).replace(/\s+/g, ' ').trim(), i }))
         .filter(({ sql }) => sql.startsWith('UPDATE sessions SET last_activity'));
       updateStatements = updates.length;
       rowsModified = updates.reduce((total, { i }) => total + rowCountOf(settled[i]), 0);
