@@ -38,8 +38,12 @@ it. Same resource, same defect.)
 **Deliberate consequence, not a surprise.** Both resources now require a config change before an
 intentional teardown, but the two guards are independent and **both** must be removed:
 
-- `terraform/s3-cloudfront.tf` (uploads bucket): only `lifecycle { prevent_destroy = true }` — a
-  Terraform-side guard. Removing it from the config and re-`apply`ing is sufficient.
+- `terraform/s3-cloudfront.tf` (uploads bucket): removing `lifecycle { prevent_destroy = true }`
+  only permits Terraform to *attempt* the deletion — it doesn't make the deletion succeed. The
+  bucket has versioning enabled (`aws_s3_bucket_versioning.uploads`) and does not set
+  `force_destroy`, and no Terraform resource manages object cleanup for it. Before destruction, an
+  operator must also empty the bucket by hand: every object, every object version, and every
+  delete marker, or the destroy call fails on a non-empty bucket regardless of `prevent_destroy`.
 - `terraform/database.tf` (Aurora cluster): **two separate safeguards**, not one.
   `lifecycle { prevent_destroy = true }` is Terraform-side, same as the bucket — but
   `deletion_protection = true` is a distinct, first-class RDS attribute enforced by the **AWS API
