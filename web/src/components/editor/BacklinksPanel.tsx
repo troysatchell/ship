@@ -57,6 +57,16 @@ export function BacklinksPanel({ documentId }: BacklinksPanelProps) {
     if (!documentId) return;
 
     let cancelled = false;
+    // Cancels the in-flight request(s) on cleanup so React 18 StrictMode's
+    // dev-only double-invoke of this effect (mount, cleanup, mount again)
+    // doesn't leave the discarded first mount's request to complete on the
+    // wire alongside the real one - TRO-186/DB-9 caught this endpoint being
+    // hit 3x on a single document view (2x from the double-invoke, plus one
+    // legitimate 5s poll tick landing in the observation window). The
+    // `cancelled` checks below already no-op an aborted fetch's result, this
+    // just stops the request from reaching the server - and its DB queries -
+    // in the first place.
+    const controller = new AbortController();
     // New document, new failure history — the first failure against it should
     // always be logged even if the previous document ended on the same mode.
     lastLoggedFailureModeRef.current = null;
@@ -71,6 +81,7 @@ export function BacklinksPanel({ documentId }: BacklinksPanelProps) {
 
         const response = await fetch(`${API_URL}/api/documents/${documentId}/backlinks`, {
           credentials: 'include',
+          signal: controller.signal,
         });
 
         if (!response.ok) {
@@ -118,6 +129,7 @@ export function BacklinksPanel({ documentId }: BacklinksPanelProps) {
 
     return () => {
       cancelled = true;
+      controller.abort();
       clearInterval(intervalId);
     };
   }, [documentId]);

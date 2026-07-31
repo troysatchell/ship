@@ -198,6 +198,163 @@ every limiter uses `MemoryStore` exactly as it did under API-1/TRO-172. Remove
 
 ---
 
+## TRO-186 (DB-9) — Sprint board and document view fired byte-identical requests two and three times
+
+**What was broken.** Two unrelated components shared one root cause: a `useEffect` that called
+`apiGet`/`fetch` directly, with no cleanup to cancel the request React 18 `StrictMode` discards.
+
+- `web/src/pages/TeamMode.tsx`'s initial-load effect (previously lines 203-209) ran
+  `Promise.all([fetchTeamGrid(...), fetchProjects(), fetchAssignments()])` with no cleanup function
+  at all. `StrictMode` (dev only) mounts every component twice — setup, cleanup, setup again — to
+  surface exactly this class of bug. With nothing to cancel the first mount's three requests, the
+  browser sent them anyway: `GET /api/team/grid`, `GET /api/team/projects`, and
+  `GET /api/team/assignments` each fired twice per page load. `audit/db-query/raw/flow-requests.json`
+  ("Load sprint board") caught this directly.
+- `web/src/components/editor/BacklinksPanel.tsx`'s poll effect (`fetchBacklinks()`, called on mount
+  and every 5s via `setInterval`) already tracked a `cancelled` flag from the TRO-196/ERR-9 fix, but
+  that flag only suppressed the *state update* from a stale response — it never cancelled the
+  underlying `fetch`, so the discarded first mount's request still reached the server. Audit
+  evidence: `GET /api/documents/:id/backlinks` fired 3x on one document view (2x from the
+  `StrictMode` double-mount, plus one legitimate 5-second poll tick landing inside the 5s
+  observation window the audit's harness waits before moving on).
+
+Both are genuinely a frontend duplicate-request bug, not a server issue: the API returns exactly
+one response per request it receives (confirmed by reading `api/src/routes/team.ts` and
+`api/src/routes/backlinks.ts` — each handler runs once per HTTP request, no fan-out).
+
+**What changed — one fix pattern, applied to both.** Neither file was migrated to `@tanstack/react-query`
+(the codebase's usual dedup mechanism for 13 other `use*Query.ts` hooks): `TeamMode.tsx`'s
+grid/projects/assignments fetches carry pagination and optimistic-assignment state that would need a
+real redesign to move onto query-cache semantics, and `BacklinksPanel.tsx`'s poll-plus-failure-mode-
+throttling behavior (TRO-196/ERR-9's `lastLoggedFailureModeRef`) is asserted exactly, line-for-line
+call-count, by `BacklinksPanel.errorLogging.test.tsx` — routing its errors through react-query's
+global `QueryCache.onError` would reintroduce the console-error storm that ticket fixed. Instead,
+both effects now create an `AbortController`, thread its `signal` into the fetch call(s), and call
+`controller.abort()` in the effect's cleanup — the same cancellation idiom React's own docs recommend
+for exactly this failure mode, and a natural extension of `BacklinksPanel.tsx`'s existing (state-only)
+`cancelled` guard rather than a new pattern.
+
+- `web/src/lib/api.ts`: `apiGet(endpoint)` → `apiGet(endpoint, options?: { signal?: AbortSignal })`,
+  backward compatible (all 51 pre-existing call sites pass no second argument).
+- `web/src/pages/TeamMode.tsx`: `fetchTeamGrid`/`fetchProjects`/`fetchAssignments` each take an
+  optional `signal`, forward it to `apiGet`, and treat a resulting `AbortError` as a silent no-op
+  (added `isAbortError`) rather than surfacing `setError`. The initial-load effect creates one
+  `AbortController`, passes its signal into all three calls, and aborts it on cleanup; a `cancelled`
+  guard (same idiom as `BacklinksPanel.tsx`) stops the discarded first mount's `Promise.all(...)
+  .finally()` from calling `setLoading(false)` before the real (second) mount's fetches resolve.
+  Other call sites (`showArchived` toggle, infinite-scroll `fetchMoreSprints`) are unaffected — they
+  are user-triggered, not part of the `StrictMode` double-mount, and were never duplicated.
+- `web/src/components/editor/BacklinksPanel.tsx`: added an `AbortController`, passed its `signal`
+  into the `fetch(...)` call, and call `controller.abort()` in the existing cleanup alongside the
+  pre-existing `cancelled = true` and `clearInterval(intervalId)`. No other line changed — the
+  existing `if (!cancelled)` guards already wrapping every state update and every
+  `console.debug`/`console.error` call in `fetchBacklinks()` (the TRO-196/ERR-9 fix) already no-op
+  correctly for an aborted request; this only stops the wasted request from reaching the server in
+  the first place.
+
+**Regression tests** (vitest, run by the gate):
+- `web/src/pages/TeamMode.duplicateRequests.test.tsx`
+- `web/src/components/editor/BacklinksPanel.duplicateRequests.test.tsx`
+
+Both wrap the component in `<React.StrictMode>` — a single ordinary mount (what
+`BacklinksPanel.test.tsx` and `.errorLogging.test.tsx` already use) never exercises this bug, since
+React only double-invokes effects under `StrictMode`; a test that didn't force it would pass
+unchanged on the pre-fix code and prove nothing. Both mocks are `AbortSignal`-aware: a mock that
+always resolves regardless of `signal` would report "2 calls" whether or not the fix is present,
+because the discarded first mount's `fetchTeamGrid()`/`fetchBacklinks()` call still *happens* either
+way under `StrictMode` — only whether its request reaches a response changes. Each test asserts
+three things: the endpoint really was invoked twice (proves the test forces the double-mount),
+the first mount's request really was aborted, and exactly one request settles with a real response
+(the proxy for "one request reaches the server and runs its DB queries," which is what DB-9 measures).
+
+Confirmed red-before-green on both, without `git stash` (forbidden — the stash stack is shared
+across concurrent factory worktrees on this machine): saved the fix as a patch
+(`git diff > fix.patch`), `git checkout --` the three source files back to `main`'s state, re-ran —
+`TeamMode.duplicateRequests.test.tsx` failed with `expected +0 to be 1` (no aborted request) and
+`BacklinksPanel.duplicateRequests.test.tsx` failed the same way — then `git apply`'d the patch back
+and confirmed both green, alongside the pre-existing `BacklinksPanel.test.tsx` (2 tests, A11Y-6) and
+`BacklinksPanel.errorLogging.test.tsx` (4 tests, ERR-9), unaffected.
+
+**Measured before/after.**
+
+*Conditions.* Factory worktree `ship_wt_tro_186`, dedicated Postgres (`ship-audit-pg` container,
+`localhost:5433`), seeded via `pnpm db:seed` + `npx tsx audit/seed-augment.ts` to the audit's exact
+target volume — verified 500 documents (254 issue / 91 wiki / 35 sprint / 32 weekly_plan / 27
+weekly_retro / 20 person / 15 weekly_review / 15 project / 6 standup / 5 program), 20 users, 813
+`document_associations`, matching `audit/db-query/baseline.md` byte-for-byte. Dev servers on the
+worktree's own ports (API 3352, web 5525). Logged in as `dev@ship.local`.
+
+*HTTP-request level (Playwright, `audit/db-query/raw/flow-capture.mjs` adapted to these ports —
+clean signal, scoped to this worktree's own web server, unaffected by any other worktree's traffic).
+One run pre-fix, three separate runs post-fix, each with 2 iterations (cold/steady) per
+`flow-capture.mjs`'s own convention:*
+
+| Flow | Endpoint | Before | After |
+|---|---|---|---|
+| Load sprint board | `GET /api/team/grid` | 2x (both iterations, both runs) | **1x** (both iterations, all 3 runs — deterministic) |
+| Load sprint board | `GET /api/team/projects` | 2x (both iterations, both runs) | **1x** (both iterations, all 3 runs — deterministic) |
+| Load sprint board | `GET /api/team/assignments` | 2x (both iterations, both runs) | **1x** (both iterations, all 3 runs — deterministic) |
+| View a document | `GET /api/documents/:id/backlinks` | 3x (both iterations) | **2x** in 2 of 3 runs, **1x** in 1 of 3 runs |
+
+The sprint-board reduction is exact and deterministic every time: those three fetches only ever ran
+once per mount, so removing the `StrictMode`-only duplicate takes them cleanly to 1x. Backlinks is
+not fully deterministic because it also polls every 5s — the fix removes the guaranteed
+`StrictMode` duplicate every time (3x → at most 2x, confirmed: never observed above 2x post-fix
+across 3 runs), but whether the count lands at 2x or 1x depends on whether the interval's next
+legitimate tick happens to fall inside the flow's 5-second observation window, which is timing
+noise inherent to the poll, not something this fix controls or should try to control.
+
+*DB query count.* The audit's own methodology (statement logging + marker-bracketed capture) turned
+out to be **unreliable on this shared machine**: `ship-audit-pg` is one Postgres instance shared by
+every concurrent factory worktree, and a repeat of the capture during this measurement caught
+unrelated activity from other worktrees inside the same time-sliced window — a `document_type='wiki'`
+insert titled "Malformed frame async handler doc" (a different ticket's test fixture) landed inside
+my "View a document" slice, and a later attempt caught `Ship-wt-tro_296` running
+`CREATE DATABASE`/`DROP DATABASE`/`TRUNCATE TABLE` mid-capture, inflating one flow's reported count
+from a real ~40 to 588. Both are verifiable in the raw log by their foreign document titles / database
+names, not this worktree's data. Rather than report a contaminated number, per-endpoint query cost
+was instead read directly from source (deterministic, not sensitive to what else is running):
+
+| Endpoint | Source | Non-auth queries | + auth (typical duplicate: session `SELECT` only, `UPDATE` already throttled by DB-2) |
+|---|---|---|---|
+| `GET /api/team/grid` | `api/src/routes/team.ts:14-200` (`getVisibilityContext` + users + workspace + sprints + issues) | 5 | 6 |
+| `GET /api/team/projects` | `api/src/routes/team.ts:200-238` (`getVisibilityContext` + projects) | 2 | 3 |
+| `GET /api/team/assignments` | `api/src/routes/team.ts:265-457` (`getVisibilityContext` + explicit + workspace + issues) | 4 | 5 |
+| `GET /api/documents/:id/backlinks` | `api/src/routes/backlinks.ts:22-73` (`getVisibilityContext` + existence check + backlinks select) | 3 | 4 |
+
+`authMiddleware`'s session-activity `UPDATE` (`api/src/middleware/auth.ts:356-360`) is throttled to
+once per 60s per session since DB-2 (already on `main` before this ticket started) — a duplicate
+call landing seconds after the first never re-pays it, only the session `SELECT`
+(`auth.ts:239-247`) always runs. **Eliminating one duplicate grid + one duplicate projects + one
+duplicate assignments call removes 6+3+5 = 14 DB queries per sprint-board page load** — a fact
+derived from source, not measured live, but exact regardless of concurrent load on the shared
+database, unlike the statement-log approach above. Eliminating backlinks' guaranteed duplicate
+removes a minimum of 4 more per document view (up to 8 when timing also avoids the poll window).
+
+**Correcting the ticket's own estimate.** DB-9's brief cited "Sprint board 51 → ~40 (-22%)" from
+`audit/db-query/baseline.md`. That 51-query baseline predates DB-2 (TRO-179, session-write
+throttling), which already landed on `main` before this ticket started and independently reduced
+the flow's per-request auth cost — the absolute counts do not carry over. Re-running this ticket's
+own (uncontaminated) capture of "Load sprint board" cold-load against the *current* `main` showed
+**42 total queries before this fix**; the 14-query reduction derived above is **-33%** of that
+figure — the same direction as the ticket's estimate and clearing the same ≥20% target, but a
+larger percentage against a smaller (already-improved) baseline, not the same arithmetic.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/web exec vitest run src/pages/TeamMode.duplicateRequests.test.tsx
+pnpm --filter @ship/web exec vitest run src/components/editor/BacklinksPanel.duplicateRequests.test.tsx
+```
+
+**Rollback.** Revert the commit(s) on `fix/db-9-duplicate-requests` touching `TeamMode.tsx`,
+`BacklinksPanel.tsx`, and `api.ts`'s `apiGet` signature (the added second parameter is additive and
+optional, so reverting it is safe independent of the other two), and delete
+`TeamMode.duplicateRequests.test.tsx` and `BacklinksPanel.duplicateRequests.test.tsx`.
+
+---
+
 ## TRO-297 (TS-10) — `api/`'s 10 floating/misused-promise sites fixed, both rules promoted to `error` for `api/` only
 
 **Scope, deliberately narrower than the ticket's own definition of done.** The Linear ticket asks

@@ -115,9 +115,10 @@ async function fetchWithCsrf(
   return res;
 }
 
-export async function apiGet(endpoint: string): Promise<Response> {
+export async function apiGet(endpoint: string, options?: { signal?: AbortSignal }): Promise<Response> {
   const res = await fetch(`${API_URL}${endpoint}`, {
     credentials: 'include',
+    signal: options?.signal,
   });
 
   // Handle session expiration - redirect to login
