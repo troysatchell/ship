@@ -126,6 +126,45 @@ jobs:
             --package web --current web-tests.json \
             --baseline audit/factory/quarantine.json --repo-root "$PWD"
 
+      # TRO-244 (assignment rule 4, "coverage"). Run as separate steps from
+      # "API/web unit tests" above rather than folding `--coverage` into those
+      # (vitest supports both flags in one invocation) so that a coverage
+      # THRESHOLD failure (api/vitest.config.ts, web/vitest.config.ts) is not
+      # silently swallowed by those steps' `continue-on-error: true` — a
+      # regression here must actually fail this job, not just get logged.
+      - name: API test coverage
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+          NODE_ENV: test
+        run: pnpm --filter @ship/api test:coverage
+
+      - name: Web test coverage
+        run: pnpm --filter @ship/web test:coverage
+
+      - name: Coverage summary
+        # Runs even if a threshold failed above, so the actual percentages are
+        # still visible in the job summary rather than only "it failed."
+        if: always()
+        run: |
+          node scripts/factory/lib/coverage-summary.mjs \
+            --pkg api:api/coverage/coverage-summary.json:43 \
+            --pkg web:web/coverage/coverage-summary.json:20
+
+      # TRO-244 (assignment rule 4, "dependency audit (pnpm audit)"). `pnpm
+      # audit` alone exits non-zero on ANY finding, including the 135
+      # pre-existing ones this repo inherited (see
+      # audit/factory/dependency-audit-baseline.json and CHANGES.md) — that
+      # exit code is deliberately NOT the gate here. No `set -e`: the script
+      # below is the real verdict, evaluated against its own exit code, not
+      # `pnpm audit`'s.
+      - name: Dependency audit (pnpm audit) — baseline diff
+        run: |
+          set -uo pipefail
+          pnpm audit --json > pnpm-audit-current.json
+          node scripts/factory/lib/dependency-audit-diff.mjs \
+            --current pnpm-audit-current.json \
+            --baseline audit/factory/dependency-audit-baseline.json
+
       - name: Upload test reports
         if: always()
         uses: actions/upload-artifact@v4
@@ -134,6 +173,18 @@ jobs:
           path: |
             api-tests.json
             web-tests.json
+          retention-days: 14
+
+      - name: Upload coverage + audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-and-audit-${{ github.sha }}
+          path: |
+            api/coverage/coverage-summary.json
+            web/coverage/coverage-summary.json
+            pnpm-audit-current.json
+          if-no-files-found: warn
           retention-days: 14
 
   inventory:
@@ -213,6 +264,52 @@ jobs:
           name: source-inventory-${{ github.sha }}
           path: inventory/
           retention-days: 90
+
+  codeql:
+    name: security scan (CodeQL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Assignment rule 4's "security scan" check. CodeQL is GitHub-native — no
+    # external service, no credential to provision — and is the standard
+    # choice for a TS/JS repo. Independent of `verify`: it's static analysis
+    # of source, not something that needs the built/tested artifact, so it
+    # runs in parallel rather than waiting.
+    #
+    # Job-level `permissions:` REPLACES the workflow default for this job, not
+    # additive — `contents: read` must be restated alongside the
+    # `security-events: write` this job alone needs to upload SARIF results.
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pinned to a full commit SHA, not the mutable `v3` tag: a mutable tag on
+      # a third-party action can be repointed at malicious code without the
+      # ref changing here. a2983b8 is the commit behind the v3.37.4 release
+      # tag (resolved via `gh api repos/github/codeql-action/git/refs/tags/v3.37.4`
+      # on 2026-07-31). actions/* elsewhere in this file are GitHub-owned and
+      # are not subject to this rule; github/codeql-action is third-party by
+      # this convention despite living under the github org.
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@a2983b8bed1923f44751c5c43237f479442827b3 # v3.37.4
+        with:
+          # javascript-typescript is the current combined identifier — it
+          # analyzes both languages together, not "javascript" alone (which
+          # would still cover TS, but the combined name is the documented,
+          # explicit spelling for a repo that is TS-first).
+          languages: javascript-typescript
+          # JS/TS is interpreted: no compilation step is needed to extract a
+          # CodeQL database, so `none` is the correct build mode (`autobuild`
+          # is for compiled languages only, per github/codeql-action's own
+          # README) and is the fastest/simplest option that still fully
+          # analyzes web/, api/, shared/, and e2e/.
+          build-mode: none
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@a2983b8bed1923f44751c5c43237f479442827b3 # v3.37.4
+        with:
+          category: '/language:javascript-typescript'
 
   build-image:
     name: build · push image (GHCR)
