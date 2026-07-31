@@ -75,6 +75,7 @@ output "eb_config_summary" {
     public_subnets          = join(",", aws_subnet.public[*].id)
     instance_security_group = aws_security_group.eb_instance.id
     alb_security_group      = aws_security_group.alb.id
+    alb_http_security_group = aws_security_group.alb_http.id
   }
 }
 
