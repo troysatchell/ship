@@ -119,6 +119,138 @@ migration rollback is needed.
 
 ---
 
+## TRO-300 (TEST-16) — `session-activity-race`'s TRO-288 fix gated the wrong half of the race
+
+**Not one of the audit report's 68 baseline findings** — a post-baseline flake filed by the
+orchestrator after TRO-288 (TEST-15) landed and the same test kept failing in CI anyway.
+
+**What was broken, and how it was confirmed (observed, not inferred).** TRO-288 made
+`api/src/middleware/__tests__/session-activity-race.test.ts`'s "did the burst race" precondition
+structural by adding `createArrivalBarrier`, which held every session-lookup SELECT's *dispatch*
+(the JS-level call into `pool.query`) until all 10 concurrent callers had asked to send one. That
+fix still failed in CI itself three separate times after landing, on three diffs incapable of
+causing an auth-middleware race (PR #62 terraform-only, PR #63 docs-only, PR #66 a CSS token
+swap). Pulled the failed attempts' `api-tests.json` artifacts directly from GitHub (`gh api
+repos/.../actions/artifacts/<id>/zip`) rather than trusting the CI log's summary line, and all
+three show the **identical** assertion failure — `AssertionError: the burst did not race ...
+expected 1 to be greater than 1` — i.e. the exact failure mode TRO-288 was written to eliminate,
+happening again through a different channel.
+
+**The mechanistic gap (derived from reading `pg-pool`'s source, not observed directly — no
+debugger was attached to a failing CI run).** Tracing `Pool.prototype.query` → `connect` →
+`_pulseQueue` in `node_modules/.pnpm/pg-pool@3.10.1/node_modules/pg-pool/index.js` confirms
+TRO-288's barrier really does make all 10 SELECTs leave the Node process in the same
+`process.nextTick` drain, before any response can be processed — that half of TRO-288's claim
+holds. But leaving Node "together" only bounds when bytes are *written to the socket*; it says
+nothing about when Postgres's own per-connection backend *process* is scheduled by the OS to
+actually read and execute that statement, which the client cannot observe or control. Under real
+contention (`.github/workflows/ci.yml`'s 2-vCPU runner, Postgres as a co-located service
+container sharing those same 2 vCPUs) — and specific to this middleware's actual code path, an
+intervening, *unbarriered* `workspace_memberships` lookup between the barriered session SELECT and
+the eventual UPDATE (`auth.ts`'s `if (session.workspace_id && !session.is_super_admin)` block,
+which this fixture's session always satisfies) — one connection's entire
+SELECT-membership-check-decide-UPDATE-commit cycle can plausibly finish before a different,
+already-*dispatched* connection's SELECT is ever scheduled to *execute*. That SELECT, whenever it
+finally runs, correctly reads the just-committed fresh value and correctly declines to write —
+collapsing `updateStatements` back toward 1 through a channel TRO-288's dispatch-only barrier never
+gated.
+
+**Reproduction attempted, not achieved — reported honestly rather than asserted.** Per this
+ticket's own escalating-load instructions, tried to reproduce locally across five increasingly
+CI-faithful runs, all zero-repro:
+1. Baseline, unconstrained (macOS, 14 cores): 15/15 passed.
+2. Postgres container CPU-pinned to a single core (`docker update --cpuset-cpus=0`) plus 12
+   host-side busy-loop processes: 20/20 passed.
+3. Same single-core pin, replacing host busy-loops with 4 `alpine` stress containers pinned to the
+   *same* cpuset (confirmed via `docker stats` to be genuinely consuming ~90% of that one core, so
+   this is real contention inside the Docker VM, not just host noise): 20/20 passed.
+4. The most CI-faithful setup: built a throwaway Linux container (`node:23-slim`, fresh
+   `pnpm install`, own database), pinned it with `--cpuset-cpus=0,1` to the *identical two cores*
+   as the also-pinned Postgres container — Node and Postgres genuinely sharing 2 vCPUs, the same
+   topology as `ubuntu-latest` — run with the default `vitest run` invocation: 25/25 passed.
+5. Same container/pinning as (4), switched to the *exact* CI command
+   (`vitest run --reporter=json --outputFile=...`) with `CI=true` set, in case the reporter or
+   CI-mode vitest behavior itself mattered: 25/25 passed.
+   105 total local runs (15 + 20 + 20 + 25 + 25), zero reproductions. Consistent with TRO-288's own
+   prior exhaustive attempt (14 busy-loop workers on 14 cores + 3 concurrent full suites, also zero
+   repro) — this specific failure mode appears to need something about actual CI infrastructure that
+   CPU-topology-matching alone does not reproduce on this hardware. That gap is itself part of the finding, not swept
+   under a wider quarantine.
+
+**The fix — `api/src/middleware/__tests__/session-activity-race.test.ts` only, no production code
+touched.** Replaced `createArrivalBarrier` (gates *dispatch*) with `createCompletionBarrier` (gates
+*result delivery*). Every barriered query is still sent immediately — nothing about *when* it is
+sent is delayed — but the promise each caller awaits does not settle until **every** one of the
+`BURST` barriered calls' underlying queries has itself settled (resolved or rejected). Concurrency
+argument, and this one does not depend on dispatch order, network timing, or Postgres backend
+scheduling at all: no caller can resume past its `await pool.query(...)` — and therefore none can
+act on its read or reach the write decision — until literally every other barriered caller's read
+has *also* already completed. Since none of the 10 callers can have issued an UPDATE before every
+one of them has resumed, no UPDATE can exist while any of the 10 SELECTs is still executing,
+regardless of the real order or speed Postgres actually ran them in. That makes "all 10 SELECTs
+observe the same stale row" true by construction — a strictly stronger guarantee than TRO-288's,
+independent of every layer of scheduling in the stack, not just the client-side dispatch layer
+TRO-288 addressed. A rejected underlying query still counts toward `count` (via a tagged
+`{ ok, value | error }` outcome, never a rejected promise — see the correction below) so one failed
+query can't hang the other 9 on a barrier that would otherwise never release.
+
+**CodeRabbit review correction, same day, before merge.** The first version of this fix fed the
+raw `resultPromise` straight into `Promise.all([resultPromise, allCompleted])`. `Promise.all`
+rejects as soon as *any* input rejects, without waiting for the others — so a rejecting barriered
+call could still settle (with its rejection) before every other barriered call had completed,
+undermining this fix's own correctness claim specifically on the error path. Fixed by never letting
+the tracked promise itself reject: `resultPromise.then((value) => ({ ok: true, value }), (error) =>
+({ ok: false, error }))` produces an `outcome` that always *fulfills*, tagged with whichever really
+happened, so `Promise.all([outcome, allCompleted])` can only settle once both have — on every path —
+and the caller's real result or error is only unwrapped and delivered (or re-thrown) after that
+join. Confirmed red-before-green for this correction too: a dedicated test forces two barriered
+calls (kept pending via deferreds until both are invoked) and rejects one first — against the
+pre-correction code this failed with `AssertionError: a rejection must not settle before every
+barriered call has completed: expected [ 'bad-rejected' ] to deeply equal []`, then passed once the
+tagged-outcome fix was restored.
+
+**Regression tests — deterministic, confirmed red for the right reason before this fix.** The
+`createCompletionBarrier` describe block's first test uses manually-controlled deferred promises
+(no real timers, no real queries) to force 3 barriered calls to settle in a *scrambled,
+out-of-dispatch order* (the 3rd-dispatched call resolves first) and asserts none of the 3 outer
+promises resolve until the *last* one settles. Verified this test fails against TRO-288's old
+`createArrivalBarrier` logic — temporarily swapped back in, then reverted — with
+`AssertionError: must not release before every call has settled: expected [ 2, +0 ] to deeply
+equal []`, i.e. the old barrier lets an early-resolving call leak through exactly as hypothesized
+above. A second test (added for the CodeRabbit correction, described above) proves the same
+ordering property specifically for a rejecting call, using a shared settlement-order array and
+deferreds kept pending until both calls are invoked — not two independently-resolved promises,
+which would prove nothing about ordering. A third harness test covers the non-matching-SQL
+passthrough (carried over from TRO-288).
+
+**Verified, locally, both without and with the fix in place:**
+- Fixed test file, standalone, unconstrained: 15/15 passed.
+- Fixed test file, inside the CI-topology-matching pinned Linux container (run 5 above), `CI=true`,
+  exact CI invocation: 15/15 passed.
+- Full local `api` suite after the fix: **673/673 passed, 56/56 files** — no regression elsewhere.
+- `pnpm --filter @ship/api exec tsc --noEmit -p .`: clean (no `any`/`as unknown as`/non-null `!`
+  introduced — `createDeferred`'s resolve function is typed optional and invoked via `?.`, matching
+  `createCompletionBarrier`'s own `releaseFn` pattern, not asserted non-null).
+
+**What this fix does NOT claim.** It could not be directly confirmed against the actual CI failure
+— only against the mechanistic hypothesis derived from reading `pg-pool`'s source and the observed
+CI failure signature, and against a constructed unit-level proof that TRO-288's specific gap (gate
+dispatch, not completion) is real and closed. If the true CI mechanism turns out to be something
+else entirely, this fix is still a strict improvement (it removes a documented, real gap in
+TRO-288's reasoning) but may not be the last flake on this file — the honest next check is whether
+this test fails in CI again with the *same* signature after this lands.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/session-activity-race.test.ts
+```
+
+**How to roll it back.** Revert this commit; TRO-288's `createArrivalBarrier` (dispatch-gating)
+returns. No production code, migration, or other file changes to undo.
+
+---
+
 ## TRO-194 (ERR-7) — No loading affordance under slow network; sync indicator never showed an in-flight state
 
 **What was broken.**
