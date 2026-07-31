@@ -164,7 +164,17 @@ Local dev uses `.env.local` for DB connection.
 ```
 
 **After deploy, verify with browser** (curl can't catch JS errors). Health checks:
-- Prod API: `http://ship-api-prod.eba-xsaqsg9h.us-east-1.elasticbeanstalk.com/health`
+- Prod API: `https://ship.awsdev.treasury.gov/health` — go through CloudFront, not a direct ALB
+  hit. `terraform/security-groups.tf` restricts the ALB security group to CloudFront's
+  origin-facing prefix list (TF-7/TRO-278), so a direct connection to the ALB's own DNS name
+  (`ship-api-prod.eba-xsaqsg9h.us-east-1.elasticbeanstalk.com`) will time out once that's live —
+  the name still resolves (security groups act on the connection, not DNS), but traffic from
+  outside CloudFront's IP ranges is silently dropped. Not an API health problem, a blocked network
+  path. `terraform/s3-cloudfront.tf`'s `ordered_cache_behavior` for `path_pattern = "/health"` already
+  proxies this path to the `EB-API` origin; the domain is `var.app_domain_name` when set (prod
+  sets it to `ship.awsdev.treasury.gov`), else the auto-generated CloudFront domain
+  (`terraform/outputs.tf`'s `cloudfront_domain_name` output). The `frontend_url` output already
+  computes the right one of the two.
 - Prod Web: `https://ship.awsdev.treasury.gov`
 
 **Shadow (UAT):** Deploy to shadow from `feat/unified-document-model-v2` before merging to master.
