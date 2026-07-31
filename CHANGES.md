@@ -49,22 +49,29 @@ terraform init -backend=false -input=false
 terraform validate                 # BEFORE: Success! with 1 warning (filter/prefix, TF-5)
                                     # AFTER:  Success! The configuration is valid. (0 warnings)
 terraform fmt -check -recursive .  # exit 0, no formatting changes needed
-rm -rf .terraform                  # no .terraform.lock.hcl is git-tracked at terraform/ (confirmed
-                                    # via `git ls-files`) — only the generated cache needs removing
+git clean -fdx -- .terraform .terraform.lock.hcl   # removes the generated cache + lock file this
+                                                    # init created; git clean only ever touches
+                                                    # untracked/ignored paths, so it is safe here
+                                                    # (leaves `git status` clean) and would refuse
+                                                    # to remove either path if it were ever tracked
 cd environments/shadow             # second root: consumes terraform/modules/cloudfront-s3
 terraform init -backend=false -input=false
 terraform validate                 # BEFORE: Success! with the same warning, module-relative path
                                     # AFTER:  Success! The configuration is valid. (0 warnings)
-rm -rf .terraform                  # same here — no .terraform.lock.hcl is git-tracked in this
-                                    # directory either; do not blanket-delete lock files in other
-                                    # env roots without checking `git ls-files` first, since some
-                                    # (e.g. terraform/modules/*) do commit one
+git clean -fdx -- .terraform .terraform.lock.hcl   # same reasoning: this init generates a fresh
+                                                    # .terraform.lock.hcl here (none was tracked
+                                                    # before), so cleanup must remove it too or
+                                                    # `git status` is left dirty — `git clean`
+                                                    # (never `rm -rf`) is what makes that safe to
+                                                    # do unconditionally, here or in any other
+                                                    # terraform/modules/* root that DOES commit one
 ```
 
 **Verification performed here — before/after `terraform validate`.**
 
 Before (flat root, `terraform/`):
-```
+
+```text
 ╷
 │ Warning: Invalid Attribute Combination
 │
@@ -82,7 +89,8 @@ validation warnings as shown above.
 ```
 
 Before (`terraform/environments/shadow`, via the module):
-```
+
+```text
 ╷
 │ Warning: Invalid Attribute Combination
 │
@@ -101,7 +109,8 @@ validation warnings as shown above.
 
 After, both roots (and `terraform/environments/dev`, checked as a third data point since it also
 consumes the same module):
-```
+
+```text
 Success! The configuration is valid.
 ```
 
