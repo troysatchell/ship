@@ -16,6 +16,10 @@ coverage
 .env
 .env.local
 .env.*.local
+# api/.env.test — a developer's disposable local test-database config
+# (TEST-9 / TRO-231). Only api/.env.test.example is committed; this pattern
+# does not match that filename.
+.env.test
 
 # Logs
 logs
