@@ -26,7 +26,10 @@ the equivalent for `tfplan`. Nothing pattern-scans plan files for secrets before
 class of drift (tfplan → public repo) can recur on any new environment directory.
 
 **What changed.**
-- Deleted `terraform/environments/shadow/tfplan` from the working tree (`git rm --cached`).
+- Removed `terraform/environments/shadow/tfplan` with `git rm` (not `git rm --cached` — that flag
+  only unstages a file from the index and leaves it sitting on disk, untracked; the goal here was
+  removing it from the working tree too, which plain `git rm` does in one step, confirmed by
+  `git show f60ab9b --stat` reporting the file deleted and its absence from `ls` afterward).
 - Added `terraform/environments/*/*.tfplan` and `terraform/environments/*/tfplan` to the root
   `.gitignore`, next to the existing `environments/*/terraform.tfvars` /
   `environments/*/.terraform.lock.hcl` lines — same glob family, so it also covers
@@ -43,9 +46,16 @@ Terraform files were touched, and no `terraform apply`/`plan` was run.
 git ls-files --error-unmatch terraform/environments/shadow/tfplan   # exits 1: not tracked
 # throwaway regression check (no vitest path applies — this is repo hygiene, not app code):
 head -c 2000 /dev/urandom > terraform/environments/shadow/throwaway.tfplan
-git status --short                                   # throwaway file does not appear
+git status --short                                   # throwaway *.tfplan file does not appear
 rm terraform/environments/shadow/throwaway.tfplan
-git check-ignore -v terraform/environments/shadow/newplan.tfplan   # matches the new rule
+git check-ignore -v terraform/environments/shadow/newplan.tfplan   # matches the *.tfplan rule
+# the .gitignore change also added a second, extensionless rule
+# (terraform/environments/*/tfplan) — exercise that one separately, since the
+# *.tfplan checks above never touch it:
+touch terraform/environments/shadow/tfplan
+git status --short                                   # bare-name file does not appear either
+git check-ignore -v terraform/environments/shadow/tfplan   # matches the extensionless rule
+rm terraform/environments/shadow/tfplan
 ```
 
 **How to roll it back.** `git revert <the tfplan-removal commit>` re-creates
