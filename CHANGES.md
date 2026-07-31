@@ -48,7 +48,8 @@ gate). Drives the real `queryClient` singleton and real timers, like the ERR-14 
 1. A 429 on the first fetch, then a 200 on the retry — asserts the editor eventually mounts and the
    document was fetched more than once (real backoff, ~2-3s, `waitFor` given an 8s window).
 2. A 404 on the first fetch — asserts the "not found" screen appears immediately and the document
-   was fetched exactly once, with no growth in call count over a further 300ms.
+   was fetched exactly once, with no growth in call count across 5 flushed microtask/macrotask
+   turns (a 404 disables retry synchronously, so there's no backoff window to wait out).
 
 Confirmed red first, for the right reason: reverting `UnifiedDocumentPage.tsx`'s query options back
 to `retry: false` (`git checkout HEAD -- web/src/pages/UnifiedDocumentPage.tsx`, since the fix was
