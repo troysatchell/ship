@@ -81,7 +81,10 @@ config-only, per the escalation-gate-2 rule against irreversible/outward-facing 
 **No vitest regression test applies.** This is a Terraform-only, infrastructure-as-code change;
 there is no application code path to exercise and nothing importable into `api/src/**/*.test.ts`
 or `web/src/**/*.test.ts(x)`. The evidence for "before: unprotected, after: protected" is the
-`grep` above (0 matches on these two resources before this change, 2 after) plus the
+`grep` above — 0 matches across these two files before this change; 3 after, each attributable to
+a specific line: `database.tf:72` (`deletion_protection = true`, the Aurora cluster),
+`database.tf:95` (`prevent_destroy = true`, the same Aurora cluster's `lifecycle` block), and
+`s3-cloudfront.tf:382` (`prevent_destroy = true`, the uploads bucket) — plus the
 `terraform validate`/`plan` output showing the config stays syntactically valid. `gate.sh`'s
 regression-test check is expected to fail honestly here, following the TF-2/TF-3 precedent in
 this factory, rather than have a fake vitest file manufactured to satisfy it.
