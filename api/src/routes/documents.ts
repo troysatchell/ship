@@ -17,10 +17,35 @@ const router: RouterType = Router();
 // absent id is unaffected and still gets each route's own 404.
 router.param('id', validateUuidParam);
 
-// Maximum rows the list endpoint will return for an explicit `limit` query
-// param (ERR-8). Matches the cap already used by `PaginationParamsSchema`
-// (openapi/schemas/common.ts) for this repo's other list endpoints.
-const MAX_DOCUMENTS_LIST_LIMIT = 100;
+// Bounded default page size (TRO-304 / API-3). Applied when the caller omits
+// `limit` entirely. Before this, an omitted `limit` meant "every matching
+// row" — at this environment's seeded volume, up to 500 documents in one
+// response, the endpoint the audit's own recommended follow-up identified as
+// "the single largest unrealized win in the original recommended plan"
+// (`audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md`). 100 matches
+// the pre-existing `MAX_DOCUMENTS_LIST_LIMIT` ceiling this file already
+// enforced for an explicit `limit` (ERR-8), so a caller that was already
+// passing `?limit=<=100>` sees no change in row count — only a caller that
+// passed no `limit` at all now gets a page instead of everything.
+const DEFAULT_DOCUMENTS_LIST_LIMIT = 100;
+
+// Ceiling for an explicit `limit` query param (ERR-8; raised 100 -> 500 by
+// TRO-304). 100 was fine as a *default* page size but too low for a caller
+// that genuinely needs the full corpus now that omitting `limit` no longer
+// means "everything" — the wiki document tree (`useDocumentsQuery.ts`, which
+// builds a parent/child tree and needs every node to avoid silently dropping
+// whole subtrees) and the command palette's document search
+// (`CommandPalette.tsx`, which searches over the full in-memory list) both
+// now pass an explicit `limit=500` for exactly this reason. 500 matches
+// `IssueListPaginationSchema`'s existing ceiling (openapi/schemas/issues.ts)
+// for consistency, and covers this environment's full 500-document seed
+// corpus exactly. A workspace whose total document count (or whose count
+// within one `?type=` filter) exceeds 500 cannot fetch its entire corpus in
+// a single explicit-`limit` request after this change — a known limitation,
+// not a new one: `/api/issues` has carried the identical 500-row ceiling on
+// its own explicit `limit` since TRO-182/DB-5. True cursor-following
+// unbounded fetch is out of scope for this ticket.
+const MAX_DOCUMENTS_LIST_LIMIT = 500;
 
 // Check if user can access a document (visibility check)
 async function canAccessDocument(
@@ -74,13 +99,21 @@ const LIST_QUERY_DOCUMENT_TYPE_VALUES = [
 ] as const;
 
 // Query params for GET / (list documents). `parent_id` keeps its existing
-// ad-hoc handling (including the 'null'/'' sentinel below) — only `type` and
-// `limit` are validated here, since those are the two params the audit
-// actually reproduced a defect against (ERR-5's `?type=bogus`, ERR-8's
-// `?limit=-1`/`?limit=999999999`).
+// ad-hoc handling (including the 'null'/'' sentinel below). `type` and
+// `limit` are validated against defects the audit actually reproduced
+// (ERR-5's `?type=bogus`, ERR-8's `?limit=-1`/`?limit=999999999`). `offset`
+// (TRO-304) lets a caller page past the bounded default/explicit `limit`.
 const listDocumentsQuerySchema = z.object({
   type: z.enum(LIST_QUERY_DOCUMENT_TYPE_VALUES).optional(),
   limit: limitQuerySchema(MAX_DOCUMENTS_LIST_LIMIT),
+  // Mirrors `IssueListPaginationSchema.offset` (openapi/schemas/issues.ts):
+  // 0-100000, optional, applied after ORDER BY.
+  offset: z.coerce
+    .number({ invalid_type_error: 'offset must be a number' })
+    .int('offset must be an integer')
+    .min(0, 'offset must be zero or greater')
+    .max(100000, 'offset must be at most 100000')
+    .optional(),
 });
 
 const updateDocumentSchema = z.object({
@@ -136,7 +169,7 @@ router.get('/', authMiddleware, authed(async (req, res) => {
       res.status(400).json({ error: 'Invalid input', details: parsedQuery.error.errors });
       return;
     }
-    const { type, limit } = parsedQuery.data;
+    const { type, limit, offset } = parsedQuery.data;
     const { parent_id } = req.query;
     const userId = req.userId;
     const workspaceId = req.workspaceId;
@@ -172,11 +205,17 @@ router.get('/', authMiddleware, authed(async (req, res) => {
 
     query += ` ORDER BY position ASC, created_at DESC`;
 
-    // Only applied when the caller explicitly passes `limit` — absent `limit`
-    // keeps the existing unbounded-list behavior other callers rely on.
-    if (limit !== undefined) {
-      query += ` LIMIT $${params.length + 1}`;
-      params.push(limit);
+    // TRO-304: the default response is now a bounded page, not the full
+    // corpus. An explicit `limit` (already clamped to MAX_DOCUMENTS_LIST_LIMIT
+    // by `limitQuerySchema`) is honored as before; omitting `limit` now
+    // applies DEFAULT_DOCUMENTS_LIST_LIMIT instead of returning every row.
+    const effectiveLimit = limit ?? DEFAULT_DOCUMENTS_LIST_LIMIT;
+    query += ` LIMIT $${params.length + 1}`;
+    params.push(effectiveLimit);
+
+    if (offset !== undefined) {
+      query += ` OFFSET $${params.length + 1}`;
+      params.push(offset);
     }
 
     const result = await pool.query(query, params);

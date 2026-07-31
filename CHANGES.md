@@ -201,6 +201,249 @@ other rollback steps required.
 
 ---
 
+## TRO-304 (API-3) — `GET /api/documents` had no pagination; the audit's own recommended fix for a 2nd endpoint clearing ≥20% P95
+
+**What was broken.** Category 3's target is "≥20% P95 reduction on at least 2 endpoints, identical
+conditions." `audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md` found only `GET /api/issues`
+robustly clears that bar at every concurrency, and explicitly declined to claim a clean 2/2. That
+document's own "Recommended follow-up" #2 said pagination on `GET /api/documents` — never
+implemented — was "the single largest unrealized win in the original recommended plan (predicted
+~65% P95 reduction)." `api/src/routes/documents.ts`'s list route only applied a `LIMIT` clause when
+the caller passed an explicit `limit` query param; an omitted `limit` meant "every matching row" —
+up to 500 documents in one response at this project's audited seed volume, always serialized in
+full regardless of concurrency or caller need.
+
+**What changed — backend.** `api/src/routes/documents.ts`:
+- `DEFAULT_DOCUMENTS_LIST_LIMIT = 100` is now applied whenever `limit` is omitted, so the default
+  response (the exact call the benchmark harness and every unparameterized caller make) is a bounded
+  100-document page, not the full corpus. 100 matches the pre-existing `MAX_DOCUMENTS_LIST_LIMIT`
+  ceiling this route already enforced for an explicit `limit` (ERR-8), so a caller that was already
+  passing `?limit=<=100>` sees no change in row count.
+- `MAX_DOCUMENTS_LIST_LIMIT` is raised 100 → 500 (ERR-8's original ceiling was fine as a default page
+  size but too low for a caller that genuinely needs the full corpus now that omitting `limit` no
+  longer means "everything"). 500 matches `IssueListPaginationSchema`'s existing ceiling
+  (`openapi/schemas/issues.ts`, TRO-182/DB-5) for consistency, and covers this environment's full
+  500-document seed corpus exactly.
+- `offset` (0–100000, optional) is now accepted, mirroring `IssueListPaginationSchema.offset`, so a
+  caller can page past the default/explicit `limit` instead of only ever seeing the first page.
+- OpenAPI (`api/src/openapi/schemas/documents.ts`): the registered `GET /documents` query schema and
+  description now document the bounded default, the raised `limit` ceiling, and the new `offset`
+  param.
+
+**What changed — frontend (two callers of the unparameterized list, found by grepping every
+`/api/documents` list call in `web/src/`; every other reference in `web/src/` was a single-document
+`/api/documents/:id` fetch, unaffected by this change).** `web/src/hooks/useDocumentsQuery.ts` and
+`web/src/components/CommandPalette.tsx` both relied on the old "omitted `limit` means everything"
+contract for correctness — `useDocumentsQuery.ts` feeds `buildDocumentTree` (`lib/documentTree.ts`),
+which needs every document of a type to build correct parent/child relationships (a partial page
+would silently orphan or drop whole subtrees in the wiki sidebar); `CommandPalette.tsx` fetches once
+per open and searches the full list client-side (Cmd+K), so a bounded page would make some documents
+silently unfindable. Both now pass an explicit `limit=500` (the endpoint's new ceiling, matching the
+seeded corpus size) to preserve their pre-existing "every matching document" behavior — this is a
+deliberate choice to keep both features complete rather than redesign them to paginate, since neither
+a hierarchical tree nor an in-memory search UI degrades gracefully to a partial dataset. A workspace
+whose total document count (or whose count within one `?type=` filter) exceeds 500 will not get full
+coverage from either caller after this change — a known limitation shared with `/api/issues`'s own
+500-row ceiling on its own explicit `limit`, not a new one introduced here.
+
+Checked whether a sibling ticket (TRO-175/API-4) had already changed `CommandPalette.tsx` to route
+through the search endpoint instead: `git log --oneline main -- web/src/components/CommandPalette.tsx`
+shows no such commit on `main` as of this branch (the commit exists elsewhere per `git log --all`, not
+yet merged), so `CommandPalette.tsx` needed this ticket's own fix.
+
+**Post-merge correction (orchestrator, resolving this branch against `main` after TRO-175 landed
+first):** TRO-175 (PR #74) merged to `main` before this branch did, and it rewrote
+`CommandPalette.tsx`'s document fetch to route through `/api/search` with react-query caching instead
+of the raw `apiGet('/api/documents')` call this ticket had patched with an explicit `limit=500`. That
+made this ticket's `CommandPalette.tsx`/`CommandPalette.test.tsx` changes moot — the file no longer
+calls `/api/documents` at all, so the `?limit=500` patch has nothing to apply to. The merge conflict
+was resolved by taking TRO-175's version of both files entirely; **the 2 `CommandPalette.test.tsx`
+cases and the "palette requests `/api/documents?limit=500`" claim above describe this branch's
+pre-merge state, not what actually shipped.** The backend (`documents.ts`, `documents-pagination.test.ts`)
+and `useDocumentsQuery.ts`/its test are unaffected by this and shipped exactly as described above and
+measured in the before/after benchmark.
+
+**Measured before/after (`audit/api-perf/documents-pagination-jul31.md`).** Same seed volume (500
+documents, byte-identical distribution to the phase2 compare), same hardware, same
+`bench-runner-compare.mjs` methodology (window-synchronized 900-request bursts, autocannon 8.0.0,
+concurrency 10/25/50), reused unmodified except for scoping to this one endpoint. `GET /api/documents`
+(no params) P95: **40.13ms → 9.66ms (−75.9%)** at c=10, **73.98ms → 24.72ms (−66.6%)** at c=25,
+**292.14ms → 42.44ms (−85.5%)** at c=50 — clears the ≥20% target at every tested concurrency, by a
+wide margin, with no discards/retries needed in any burst. Payload per response fell 295,020 →
+53,927 bytes (−81.7%). Combined with phase2 compare's own `GET /api/issues` result (already
+robustly ≥20% at every concurrency), Category 3's "≥2 endpoints" target is now met under the
+stricter "every tested concurrency" reading, not only the looser "at some concurrency" reading
+phase2 compare left as the only way to call it met.
+
+**Regression tests.**
+- `api/src/routes/documents-pagination.test.ts` (6 cases): bare `GET /api/documents` bounded to 100
+  against a 110-document seed (would be 110 pre-fix); explicit `limit=110` still works (cap raised
+  past the old 100 ceiling); explicit `limit=999999999` clamps to the new 500 ceiling instead of
+  returning everything; `offset` pages correctly past the default limit with no ID overlap between
+  pages; a negative `offset` returns 400; `?type=wiki&limit=500` still returns every matching
+  document for tree-building callers.
+- `web/src/hooks/useDocumentsQuery.test.tsx` (2 cases): `useDocumentsQuery('wiki')` and `('project')`
+  both request `limit=500` explicitly, not the new bounded default.
+- `web/src/components/CommandPalette.test.tsx` (2 cases): the palette requests
+  `/api/documents?limit=500` on open, and still renders documents from the full response.
+
+Confirmed red-before-green for all three files: reverted `api/src/routes/documents.ts` +
+`api/src/openapi/schemas/documents.ts` (backend tests) or `CommandPalette.tsx` +
+`useDocumentsQuery.ts` (frontend tests) to the pre-fix version via `git checkout -- <file>` (files
+copied aside first, per factory rule 9 — no `git stash`), re-ran each suite (6/6 backend cases
+failed for the expected reasons — e.g. `expected 100 to be 110`; 2/2 `useDocumentsQuery` cases failed
+on the missing `limit=500`; 1/2 `CommandPalette` cases failed the same way, the other still passed
+because the old code fetched everything anyway), then restored the fix and re-ran green (6/6, 2/2,
+2/2).
+
+**How to run it.**
+```bash
+pnpm --filter @ship/api test -- documents-pagination
+pnpm --filter @ship/web test -- useDocumentsQuery CommandPalette
+node audit/api-perf/documents-pagination-jul31/raw/bench-runner-documents.mjs before   # against pre-fix code
+node audit/api-perf/documents-pagination-jul31/raw/bench-runner-documents.mjs after    # against post-fix code
+```
+
+**How to roll it back.** Revert this commit (or the four touched files:
+`api/src/routes/documents.ts`, `api/src/openapi/schemas/documents.ts`,
+`web/src/components/CommandPalette.tsx`, `web/src/hooks/useDocumentsQuery.ts`) plus the three new
+test files. No database migration was introduced (query-param-driven, no schema change), so no
+migration rollback is needed.
+
+---
+
+## TRO-300 (TEST-16) — `session-activity-race`'s TRO-288 fix gated the wrong half of the race
+
+**Not one of the audit report's 68 baseline findings** — a post-baseline flake filed by the
+orchestrator after TRO-288 (TEST-15) landed and the same test kept failing in CI anyway.
+
+**What was broken, and how it was confirmed (observed, not inferred).** TRO-288 made
+`api/src/middleware/__tests__/session-activity-race.test.ts`'s "did the burst race" precondition
+structural by adding `createArrivalBarrier`, which held every session-lookup SELECT's *dispatch*
+(the JS-level call into `pool.query`) until all 10 concurrent callers had asked to send one. That
+fix still failed in CI itself three separate times after landing, on three diffs incapable of
+causing an auth-middleware race (PR #62 terraform-only, PR #63 docs-only, PR #66 a CSS token
+swap). Pulled the failed attempts' `api-tests.json` artifacts directly from GitHub (`gh api
+repos/.../actions/artifacts/<id>/zip`) rather than trusting the CI log's summary line, and all
+three show the **identical** assertion failure — `AssertionError: the burst did not race ...
+expected 1 to be greater than 1` — i.e. the exact failure mode TRO-288 was written to eliminate,
+happening again through a different channel.
+
+**The mechanistic gap (derived from reading `pg-pool`'s source, not observed directly — no
+debugger was attached to a failing CI run).** Tracing `Pool.prototype.query` → `connect` →
+`_pulseQueue` in `node_modules/.pnpm/pg-pool@3.10.1/node_modules/pg-pool/index.js` confirms
+TRO-288's barrier really does make all 10 SELECTs leave the Node process in the same
+`process.nextTick` drain, before any response can be processed — that half of TRO-288's claim
+holds. But leaving Node "together" only bounds when bytes are *written to the socket*; it says
+nothing about when Postgres's own per-connection backend *process* is scheduled by the OS to
+actually read and execute that statement, which the client cannot observe or control. Under real
+contention (`.github/workflows/ci.yml`'s 2-vCPU runner, Postgres as a co-located service
+container sharing those same 2 vCPUs) — and specific to this middleware's actual code path, an
+intervening, *unbarriered* `workspace_memberships` lookup between the barriered session SELECT and
+the eventual UPDATE (`auth.ts`'s `if (session.workspace_id && !session.is_super_admin)` block,
+which this fixture's session always satisfies) — one connection's entire
+SELECT-membership-check-decide-UPDATE-commit cycle can plausibly finish before a different,
+already-*dispatched* connection's SELECT is ever scheduled to *execute*. That SELECT, whenever it
+finally runs, correctly reads the just-committed fresh value and correctly declines to write —
+collapsing `updateStatements` back toward 1 through a channel TRO-288's dispatch-only barrier never
+gated.
+
+**Reproduction attempted, not achieved — reported honestly rather than asserted.** Per this
+ticket's own escalating-load instructions, tried to reproduce locally across five increasingly
+CI-faithful runs, all zero-repro:
+1. Baseline, unconstrained (macOS, 14 cores): 15/15 passed.
+2. Postgres container CPU-pinned to a single core (`docker update --cpuset-cpus=0`) plus 12
+   host-side busy-loop processes: 20/20 passed.
+3. Same single-core pin, replacing host busy-loops with 4 `alpine` stress containers pinned to the
+   *same* cpuset (confirmed via `docker stats` to be genuinely consuming ~90% of that one core, so
+   this is real contention inside the Docker VM, not just host noise): 20/20 passed.
+4. The most CI-faithful setup: built a throwaway Linux container (`node:23-slim`, fresh
+   `pnpm install`, own database), pinned it with `--cpuset-cpus=0,1` to the *identical two cores*
+   as the also-pinned Postgres container — Node and Postgres genuinely sharing 2 vCPUs, the same
+   topology as `ubuntu-latest` — run with the default `vitest run` invocation: 25/25 passed.
+5. Same container/pinning as (4), switched to the *exact* CI command
+   (`vitest run --reporter=json --outputFile=...`) with `CI=true` set, in case the reporter or
+   CI-mode vitest behavior itself mattered: 25/25 passed.
+   105 total local runs (15 + 20 + 20 + 25 + 25), zero reproductions. Consistent with TRO-288's own
+   prior exhaustive attempt (14 busy-loop workers on 14 cores + 3 concurrent full suites, also zero
+   repro) — this specific failure mode appears to need something about actual CI infrastructure that
+   CPU-topology-matching alone does not reproduce on this hardware. That gap is itself part of the finding, not swept
+   under a wider quarantine.
+
+**The fix — `api/src/middleware/__tests__/session-activity-race.test.ts` only, no production code
+touched.** Replaced `createArrivalBarrier` (gates *dispatch*) with `createCompletionBarrier` (gates
+*result delivery*). Every barriered query is still sent immediately — nothing about *when* it is
+sent is delayed — but the promise each caller awaits does not settle until **every** one of the
+`BURST` barriered calls' underlying queries has itself settled (resolved or rejected). Concurrency
+argument, and this one does not depend on dispatch order, network timing, or Postgres backend
+scheduling at all: no caller can resume past its `await pool.query(...)` — and therefore none can
+act on its read or reach the write decision — until literally every other barriered caller's read
+has *also* already completed. Since none of the 10 callers can have issued an UPDATE before every
+one of them has resumed, no UPDATE can exist while any of the 10 SELECTs is still executing,
+regardless of the real order or speed Postgres actually ran them in. That makes "all 10 SELECTs
+observe the same stale row" true by construction — a strictly stronger guarantee than TRO-288's,
+independent of every layer of scheduling in the stack, not just the client-side dispatch layer
+TRO-288 addressed. A rejected underlying query still counts toward `count` (via a tagged
+`{ ok, value | error }` outcome, never a rejected promise — see the correction below) so one failed
+query can't hang the other 9 on a barrier that would otherwise never release.
+
+**CodeRabbit review correction, same day, before merge.** The first version of this fix fed the
+raw `resultPromise` straight into `Promise.all([resultPromise, allCompleted])`. `Promise.all`
+rejects as soon as *any* input rejects, without waiting for the others — so a rejecting barriered
+call could still settle (with its rejection) before every other barriered call had completed,
+undermining this fix's own correctness claim specifically on the error path. Fixed by never letting
+the tracked promise itself reject: `resultPromise.then((value) => ({ ok: true, value }), (error) =>
+({ ok: false, error }))` produces an `outcome` that always *fulfills*, tagged with whichever really
+happened, so `Promise.all([outcome, allCompleted])` can only settle once both have — on every path —
+and the caller's real result or error is only unwrapped and delivered (or re-thrown) after that
+join. Confirmed red-before-green for this correction too: a dedicated test forces two barriered
+calls (kept pending via deferreds until both are invoked) and rejects one first — against the
+pre-correction code this failed with `AssertionError: a rejection must not settle before every
+barriered call has completed: expected [ 'bad-rejected' ] to deeply equal []`, then passed once the
+tagged-outcome fix was restored.
+
+**Regression tests — deterministic, confirmed red for the right reason before this fix.** The
+`createCompletionBarrier` describe block's first test uses manually-controlled deferred promises
+(no real timers, no real queries) to force 3 barriered calls to settle in a *scrambled,
+out-of-dispatch order* (the 3rd-dispatched call resolves first) and asserts none of the 3 outer
+promises resolve until the *last* one settles. Verified this test fails against TRO-288's old
+`createArrivalBarrier` logic — temporarily swapped back in, then reverted — with
+`AssertionError: must not release before every call has settled: expected [ 2, +0 ] to deeply
+equal []`, i.e. the old barrier lets an early-resolving call leak through exactly as hypothesized
+above. A second test (added for the CodeRabbit correction, described above) proves the same
+ordering property specifically for a rejecting call, using a shared settlement-order array and
+deferreds kept pending until both calls are invoked — not two independently-resolved promises,
+which would prove nothing about ordering. A third harness test covers the non-matching-SQL
+passthrough (carried over from TRO-288).
+
+**Verified, locally, both without and with the fix in place:**
+- Fixed test file, standalone, unconstrained: 15/15 passed.
+- Fixed test file, inside the CI-topology-matching pinned Linux container (run 5 above), `CI=true`,
+  exact CI invocation: 15/15 passed.
+- Full local `api` suite after the fix: **673/673 passed, 56/56 files** — no regression elsewhere.
+- `pnpm --filter @ship/api exec tsc --noEmit -p .`: clean (no `any`/`as unknown as`/non-null `!`
+  introduced — `createDeferred`'s resolve function is typed optional and invoked via `?.`, matching
+  `createCompletionBarrier`'s own `releaseFn` pattern, not asserted non-null).
+
+**What this fix does NOT claim.** It could not be directly confirmed against the actual CI failure
+— only against the mechanistic hypothesis derived from reading `pg-pool`'s source and the observed
+CI failure signature, and against a constructed unit-level proof that TRO-288's specific gap (gate
+dispatch, not completion) is real and closed. If the true CI mechanism turns out to be something
+else entirely, this fix is still a strict improvement (it removes a documented, real gap in
+TRO-288's reasoning) but may not be the last flake on this file — the honest next check is whether
+this test fails in CI again with the *same* signature after this lands.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/session-activity-race.test.ts
+```
+
+**How to roll it back.** Revert this commit; TRO-288's `createArrivalBarrier` (dispatch-gating)
+returns. No production code, migration, or other file changes to undo.
+
+---
+
 ## TRO-194 (ERR-7) — No loading affordance under slow network; sync indicator never showed an in-flight state
 
 **What was broken.**
