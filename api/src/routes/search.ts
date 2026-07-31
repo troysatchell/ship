@@ -77,6 +77,62 @@ searchRouter.get('/mentions', authMiddleware, authed(async (req, res) => {
   }
 }));
 
+// TRO-175 / API-4: this path was already declared in the OpenAPI registry
+// (openapi/schemas/search.ts) but had no backing Express route - any caller
+// got a plain 404. It's the natural home for the command palette's document
+// list: omitting `q` browses the full corpus (same visibility rules and row
+// set as `GET /api/documents`, trimmed to only the columns the palette
+// renders and to the six document types it groups by - wiki, issue, program,
+// project, sprint, person - dropping weekly_plan/weekly_retro/standup/
+// weekly_review rows the palette never displays), and passing `q` narrows it
+// server-side by title.
+interface DocumentSearchRow {
+  id: string;
+  document_type: string;
+  title: string;
+  ticket_number: number | null;
+}
+
+// Search or browse documents for UI surfaces like the command palette
+// GET /api/search/documents?q=:query
+searchRouter.get('/documents', authMiddleware, authed(async (req, res) => {
+  try {
+    const searchQuery = ((req.query.q as string) || '').trim();
+    const workspaceId = req.workspaceId;
+    const userId = req.userId;
+
+    // Check if user is admin for visibility filtering
+    const isAdmin = await isWorkspaceAdmin(userId, workspaceId);
+
+    const params: (string | boolean)[] = [workspaceId, userId, isAdmin];
+    let query = `
+      SELECT id, document_type, title, ticket_number
+      FROM documents
+      WHERE workspace_id = $1
+        AND archived_at IS NULL
+        AND deleted_at IS NULL
+        AND (visibility = 'workspace' OR created_by = $2 OR $3 = TRUE)
+        AND document_type IN ('wiki', 'issue', 'program', 'project', 'sprint', 'person')
+    `;
+
+    // SECURITY: Escape wildcard characters to prevent SQL wildcard injection
+    if (searchQuery) {
+      const sanitizedQuery = escapeLikePattern(searchQuery);
+      params.push(`%${sanitizedQuery}%`);
+      query += ` AND title ILIKE $${params.length}`;
+    }
+
+    query += ` ORDER BY position ASC, created_at DESC`;
+
+    const result = await pool.query<DocumentSearchRow>(query, params);
+
+    res.json(result.rows);
+  } catch (error) {
+    console.error('Error searching documents:', error);
+    res.status(500).json({ error: 'Failed to search documents' });
+  }
+}));
+
 // Search for learning wiki documents
 // GET /api/search/learnings?q=:query&program_id=:program_id
 searchRouter.get('/learnings', authMiddleware, authed(async (req, res) => {

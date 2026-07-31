@@ -36,6 +36,17 @@ export const LearningSearchResultSchema = z.object({
 
 registry.register('LearningSearchResult', LearningSearchResultSchema);
 
+export const DocumentSearchResultSchema = z.object({
+  id: UuidSchema,
+  document_type: DocumentTypeSchema,
+  title: z.string(),
+  ticket_number: z.number().int().nullable().openapi({
+    description: 'Numeric ticket number, present on issue documents',
+  }),
+}).openapi('DocumentSearchResult');
+
+registry.register('DocumentSearchResult', DocumentSearchResultSchema);
+
 // ============== Register Search Endpoints ==============
 
 registry.registerPath({
@@ -91,33 +102,31 @@ registry.registerPath({
   },
 });
 
+// TRO-175 / API-4: this path was previously registered here with no backing
+// Express route (any caller got a 404) - see api/src/routes/search.ts for the
+// implementation this schema now documents. Powers the command palette (⌘K):
+// omit `q` to browse the full corpus of wiki/issue/program/project/sprint/
+// person documents, or pass it to filter by title server-side.
 registry.registerPath({
   method: 'get',
   path: '/search/documents',
   tags: ['Search'],
-  summary: 'Search documents',
-  description: 'Full-text search across all document types.',
+  summary: 'Search or browse documents',
+  description: 'Returns documents across the six primary types (wiki, issue, program, project, sprint, person). Omit `q` to browse the full list (used by the command palette); pass `q` to filter by title.',
   request: {
     query: z.object({
-      q: z.string(),
-      type: DocumentTypeSchema.optional().openapi({
-        description: 'Filter by document type',
+      q: z.string().optional().openapi({
+        description: 'Optional title search query. Omit to browse all documents.',
+        example: 'onboarding',
       }),
-      limit: z.coerce.number().int().min(1).max(100).optional(),
     }),
   },
   responses: {
     200: {
-      description: 'Document search results',
+      description: 'Matching documents',
       content: {
         'application/json': {
-          schema: z.array(z.object({
-            id: UuidSchema,
-            title: z.string(),
-            document_type: DocumentTypeSchema,
-            content_preview: z.string().nullable(),
-            updated_at: z.string(),
-          })),
+          schema: z.array(DocumentSearchResultSchema),
         },
       },
     },
