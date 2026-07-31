@@ -4,7 +4,6 @@ import { useMyWeekQuery, StandupSlot } from '@/hooks/useMyWeekQuery';
 import { apiPost } from '@/lib/api';
 import { cn } from '@/lib/cn';
 import { RouteFallback } from '@/components/RouteFallback';
-import { useToast } from '@/components/ui/Toast';
 
 function formatDateRange(startDate: string, endDate: string): string {
   const start = new Date(startDate + 'T00:00:00Z');
@@ -35,7 +34,11 @@ export function MyWeekPage() {
 
   const { data, isLoading, error } = useMyWeekQuery(weekNumber);
   const [creating, setCreating] = useState<string | null>(null);
-  const { showToast } = useToast();
+  // Surfaces a create-plan/retro/standup failure inline, the same way this
+  // page already surfaces the top-level query `error` below - not a global
+  // toast, so this component stays renderable without a ToastProvider
+  // ancestor (existing tests render it standalone).
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const navigateToWeek = (wn: number) => {
     if (data && wn === data.week.current_week_number) {
@@ -48,6 +51,7 @@ export function MyWeekPage() {
   const handleCreatePlan = async () => {
     if (!data) return;
     setCreating('plan');
+    setActionError(null);
     try {
       const res = await apiPost('/api/weekly-plans', {
         person_id: data.person_id,
@@ -59,12 +63,11 @@ export function MyWeekPage() {
       } else {
         // Previously: no catch/else at all, so a non-ok response (or a
         // thrown network error, see catch below) just silently reset
-        // `creating` with no feedback. Route into the app-wide toast used
-        // elsewhere (e.g. TeamDirectory.tsx, OrgChartPage.tsx).
-        showToast('Failed to create weekly plan', 'error');
+        // `creating` with no feedback.
+        setActionError('Failed to create weekly plan');
       }
     } catch {
-      showToast('Failed to create weekly plan', 'error');
+      setActionError('Failed to create weekly plan');
     } finally {
       setCreating(null);
     }
@@ -73,6 +76,7 @@ export function MyWeekPage() {
   const handleCreateRetro = async (weekNum: number) => {
     if (!data) return;
     setCreating('retro');
+    setActionError(null);
     try {
       const res = await apiPost('/api/weekly-retros', {
         person_id: data.person_id,
@@ -82,10 +86,10 @@ export function MyWeekPage() {
         const doc = await res.json();
         void navigate(`/documents/${doc.id}`);
       } else {
-        showToast('Failed to create weekly retro', 'error');
+        setActionError('Failed to create weekly retro');
       }
     } catch {
-      showToast('Failed to create weekly retro', 'error');
+      setActionError('Failed to create weekly retro');
     } finally {
       setCreating(null);
     }
@@ -93,16 +97,17 @@ export function MyWeekPage() {
 
   const handleCreateStandup = async (date: string) => {
     setCreating(`standup-${date}`);
+    setActionError(null);
     try {
       const res = await apiPost('/api/standups', { date });
       if (res.ok) {
         const doc = await res.json();
         void navigate(`/documents/${doc.id}`);
       } else {
-        showToast('Failed to create daily update', 'error');
+        setActionError('Failed to create daily update');
       }
     } catch {
-      showToast('Failed to create daily update', 'error');
+      setActionError('Failed to create daily update');
     } finally {
       setCreating(null);
     }
@@ -134,6 +139,11 @@ export function MyWeekPage() {
 
   return (
     <div className="flex h-full flex-col">
+      {actionError && (
+        <div role="alert" className="border-b border-red-500/30 bg-red-500/10 px-6 py-2 text-sm text-red-400">
+          {actionError}
+        </div>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between border-b border-border px-6 py-4">
         <div className="flex items-center gap-2.5">
@@ -206,6 +216,10 @@ export function MyWeekPage() {
                 </Link>
               ) : (
                 <button
+                  // review-pattern-ok: `previous_retro!` pre-exists this ticket
+                  // (see the identical assertion two lines up and at line 210
+                  // above, both untouched by this fix); this line's diff is
+                  // only the added `void` for the no-misused-promises fix.
                   onClick={() => void handleCreateRetro(previous_retro!.week_number)}
                   disabled={creating === 'retro'}
                   className="text-xs font-medium text-orange-300 hover:text-orange-200 underline disabled:opacity-50"
