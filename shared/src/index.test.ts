@@ -4,13 +4,16 @@ import * as typesBarrel from './types/index.js';
 
 // Both barrels are `export * from './x.js'` chains — real, executable
 // statements, not type-only declarations, so they belong in coverage. The
-// meaningful failure mode they guard against is re-export drift: a symbol
-// gets renamed or removed from its source file but the barrel's re-export
-// line is left stale, or a new source file is added under types/ and never
-// wired into types/index.ts. Asserting import-time success plus a couple of
-// known values (rather than just "the module loaded") catches both — an
-// interface-only export can't be checked by value, so HTTP_STATUS from the
-// constants re-export is the concrete, checkable thing available here.
+// meaningful failure mode this guards against is re-export drift on the
+// exports checked below: a symbol gets renamed or removed from its source
+// file but the barrel's re-export line is left stale, so what used to be
+// `typesBarrel.computeICEScore` silently becomes `undefined`. Asserting
+// import-time success plus a known value (rather than just "the module
+// loaded") catches that — an interface-only export can't be checked by
+// value, so HTTP_STATUS/computeICEScore are the concrete, checkable things
+// available here. This does NOT guard against a brand-new source file being
+// added under types/ and never wired into types/index.ts at all — only
+// against drift on the exports this file actually asserts against.
 describe('shared/src/index.ts (root barrel)', () => {
   it('re-exports the runtime values from constants.ts', () => {
     expect(sharedBarrel.HTTP_STATUS.OK).toBe(200);
