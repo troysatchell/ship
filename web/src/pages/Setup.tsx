@@ -38,7 +38,7 @@ export function SetupPage() {
           setNeedsSetup(true);
         } else {
           // Setup already done, redirect to login
-          navigate('/login', { replace: true });
+          void navigate('/login', { replace: true });
         }
       } catch (err) {
         console.error('Failed to check setup status:', err);
@@ -47,7 +47,9 @@ export function SetupPage() {
         setIsChecking(false);
       }
     }
-    checkSetup();
+    // checkSetup() catches its own errors (setError above) and always resolves
+    // via the finally block, so it never rejects.
+    void checkSetup();
   }, [navigate]);
 
   async function handleSubmit(e: FormEvent) {
@@ -81,7 +83,7 @@ export function SetupPage() {
 
       if (data.success) {
         // Setup complete, redirect to login
-        navigate('/login', { replace: true });
+        void navigate('/login', { replace: true });
       } else {
         setError(data.error?.message || 'Setup failed');
       }
@@ -120,7 +122,14 @@ export function SetupPage() {
         </div>
 
         {/* Setup Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form
+          onSubmit={(e) => {
+            // handleSubmit catches its own errors (setError) and always
+            // resolves via its finally block, so it never rejects.
+            void handleSubmit(e);
+          }}
+          className="space-y-4"
+        >
           {error && (
             <div
               role="alert"
