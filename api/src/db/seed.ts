@@ -1256,4 +1256,12 @@ async function seed() {
   }
 }
 
-seed();
+// `.catch` rather than a bare call: `await loadProductionSecrets()` runs
+// before seed()'s own try/catch, so a failure there rejects this promise
+// instead of being caught by seed()'s error handling — previously an
+// unhandled rejection at process exit. Routed through the same "log and exit
+// non-zero" shape the try/catch below already uses.
+seed().catch((error: unknown) => {
+  console.error('❌ Seed failed:', error);
+  process.exit(1);
+});
