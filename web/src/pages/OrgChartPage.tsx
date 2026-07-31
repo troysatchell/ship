@@ -206,7 +206,11 @@ export function OrgChartPage() {
     }
   }, []);
 
-  useEffect(() => { fetchPeople(); }, [fetchPeople]);
+  useEffect(() => {
+    // fetchPeople catches its own errors (console.error) and always resolves
+    // via its finally block, so it never rejects.
+    void fetchPeople();
+  }, [fetchPeople]);
 
   // Build tree
   const tree = useMemo(() => buildTree(people), [people]);
@@ -321,7 +325,7 @@ export function OrgChartPage() {
       case 'Enter': {
         e.preventDefault();
         const row = rows[focusedIndex];
-        if (row) navigate(`/team/${row.node.personId}`);
+        if (row) void navigate(`/team/${row.node.personId}`);
         break;
       }
     }
@@ -394,18 +398,25 @@ export function OrgChartPage() {
       });
       if (!res.ok) throw new Error('Failed to update');
 
-      const undoFn = async () => {
-        setPeople(prev => prev.map(p =>
-          p.id === draggedPersonId ? { ...p, reportsTo: previousReportsTo } : p,
-        ));
-        try {
-          await apiPatch(`/api/documents/${draggedPersonId}`, {
-            properties: { reports_to: previousReportsTo },
-          });
-        } catch {
-          // If undo fails, refetch
-          fetchPeople();
-        }
+      // showToast's undoFn param is typed `(() => void) | null` (it is called
+      // synchronously from a plain onClick, see the toast button below), so
+      // the actual async undo logic is wrapped in a sync function that voids
+      // its own promise rather than widening showToast's param type.
+      const undoFn = () => {
+        void (async () => {
+          setPeople(prev => prev.map(p =>
+            p.id === draggedPersonId ? { ...p, reportsTo: previousReportsTo } : p,
+          ));
+          try {
+            await apiPatch(`/api/documents/${draggedPersonId}`, {
+              properties: { reports_to: previousReportsTo },
+            });
+          } catch {
+            // If undo fails, refetch. fetchPeople catches its own errors and
+            // always resolves, so it never rejects.
+            void fetchPeople();
+          }
+        })();
       };
 
       const message = isNoSupervisor
@@ -490,7 +501,7 @@ export function OrgChartPage() {
                     debouncedQuery={debouncedQuery}
                     onFocus={() => setFocusedIndex(index)}
                     onToggleExpand={toggleExpand}
-                    onNavigate={navigate}
+                    onNavigate={(path) => void navigate(path)}
                   />
                 )}
               </DroppableRow>
@@ -536,7 +547,11 @@ export function OrgChartPage() {
             sensors={sensors}
             collisionDetection={pointerWithin}
             onDragStart={handleDragStart}
-            onDragEnd={handleDragEnd}
+            onDragEnd={(event) => {
+              // handleDragEnd fully catches its own errors (reverts the
+              // optimistic update and shows a toast), so it never rejects.
+              void handleDragEnd(event);
+            }}
             onDragCancel={handleDragCancel}
           >
             {treeContent}

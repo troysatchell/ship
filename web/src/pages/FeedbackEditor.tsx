@@ -13,11 +13,15 @@ export function FeedbackEditorPage() {
   const navigate = useNavigate();
 
   useEffect(() => {
+    // react-router's navigate() returns `void | Promise<void>`; a rejection here
+    // has no established user-facing handling in this codebase and this is a
+    // simple redirect, so `void` is the correct fire-and-forget marker (repeated
+    // throughout this ticket for the same reason).
     if (id) {
       // Redirect to issue editor - feedback is now just an issue with source='external'
-      navigate(`/documents/${id}`, { replace: true });
+      void navigate(`/documents/${id}`, { replace: true });
     } else {
-      navigate('/issues', { replace: true });
+      void navigate('/issues', { replace: true });
     }
   }, [id, navigate]);
 

@@ -83,7 +83,7 @@ export function LoginPage() {
         const data = await res.json();
 
         if (data.success && data.data.needsSetup) {
-          navigate('/setup', { replace: true });
+          void navigate('/setup', { replace: true });
           return;
         }
       } catch (err) {
@@ -108,8 +108,10 @@ export function LoginPage() {
       }
     }
 
-    checkSetup();
-    checkCaiaStatus();
+    // Both functions catch their own errors internally (console.error/debug)
+    // and always resolve, so neither ever rejects.
+    void checkSetup();
+    void checkCaiaStatus();
   }, [navigate]);
 
   async function handleCaiaLogin() {
@@ -158,13 +160,24 @@ export function LoginPage() {
 
     setIsLoading(true);
 
-    const result = await login(email, password);
+    try {
+      const result = await login(email, password);
 
-    if (result.success) {
-      navigate(from, { replace: true });
-    } else {
-      setError(result.error || 'Login failed');
-      setErrorField('email'); // Associate general login errors with email field
+      if (result.success) {
+        void navigate(from, { replace: true });
+      } else {
+        setError(result.error || 'Login failed');
+        setErrorField('email'); // Associate general login errors with email field
+        setIsLoading(false);
+      }
+    } catch (err) {
+      // login()'s underlying request() layer can reject on a network failure
+      // - previously an unhandled rejection that left the button stuck on
+      // "Signing in..." forever with no feedback. Route into the same error
+      // state the failed-login branch above already uses.
+      console.error('Login error:', err);
+      setError('Failed to sign in. Please check your connection and try again.');
+      setErrorField('general');
       setIsLoading(false);
     }
   }
@@ -192,7 +205,15 @@ export function LoginPage() {
         </div>
 
         {/* Login Form */}
-        <form onSubmit={handleSubmit} noValidate className="space-y-4">
+        <form
+          onSubmit={(e) => {
+            // handleSubmit now catches its own errors (see above), so it
+            // never rejects.
+            void handleSubmit(e);
+          }}
+          noValidate
+          className="space-y-4"
+        >
           {/* Offline message */}
           {!isOnline && (
             <div
@@ -310,7 +331,11 @@ export function LoginPage() {
 
             <button
               type="button"
-              onClick={handleCaiaLogin}
+              onClick={() => {
+                // handleCaiaLogin catches its own errors (setError) and
+                // always resets isCaiaLoading, so it never rejects.
+                void handleCaiaLogin();
+              }}
               disabled={isCaiaLoading || !isOnline}
               className={cn(
                 'w-full rounded-md border border-border bg-background px-4 py-2.5',

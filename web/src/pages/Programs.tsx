@@ -93,7 +93,7 @@ export function ProgramsPage() {
     try {
       const program = await createProgram();
       if (program) {
-        navigate(`/documents/${program.id}`);
+        void navigate(`/documents/${program.id}`);
       }
     } catch (err) {
       console.error('Failed to create program:', err);
@@ -157,7 +157,7 @@ export function ProgramsPage() {
     <div className="text-center">
       <p className="text-muted">No programs yet</p>
       <button
-        onClick={handleCreateProgram}
+        onClick={() => void handleCreateProgram()}
         disabled={creating}
         className="mt-2 text-sm text-accent hover:underline disabled:opacity-50"
       >
@@ -173,8 +173,15 @@ export function ProgramsPage() {
         <ProgramBulkActionBar
           selectedCount={selectedIds.size}
           onClearSelection={clearSelection}
-          onArchive={handleBulkArchive}
-          onDelete={handleBulkDelete}
+          onArchive={() => {
+            // handleBulkArchive/handleBulkDelete call updateProgram()/
+            // deleteProgram() (useProgramsQuery.ts), which catch their own
+            // errors and never reject.
+            void handleBulkArchive();
+          }}
+          onDelete={() => {
+            void handleBulkDelete();
+          }}
         />
       )}
 
@@ -192,7 +199,7 @@ export function ProgramsPage() {
           showColumnPicker={true}
           createButton={{
             label: creating ? 'Creating...' : 'New Program',
-            onClick: handleCreateProgram,
+            onClick: () => { void handleCreateProgram(); },
           }}
         />
       </div>
@@ -205,7 +212,7 @@ export function ProgramsPage() {
           renderRow={renderProgramRow}
           columns={columns}
           emptyState={emptyState}
-          onItemClick={(program) => navigate(`/documents/${program.id}`)}
+          onItemClick={(program) => void navigate(`/documents/${program.id}`)}
           selectable={true}
           onSelectionChange={handleSelectionChange}
           onContextMenu={handleContextMenu}
@@ -216,12 +223,12 @@ export function ProgramsPage() {
       {/* Context Menu */}
       {contextMenu && (
         <ContextMenu x={contextMenu.x} y={contextMenu.y} onClose={() => setContextMenu(null)}>
-          <ContextMenuItem onClick={handleBulkArchive}>
+          <ContextMenuItem onClick={() => { void handleBulkArchive(); }}>
             <ArchiveIcon className="h-4 w-4" />
             Archive {selectedIds.size > 1 ? `${selectedIds.size} programs` : 'program'}
           </ContextMenuItem>
           <ContextMenuSeparator />
-          <ContextMenuItem onClick={handleBulkDelete} destructive>
+          <ContextMenuItem onClick={() => { void handleBulkDelete(); }} destructive>
             <TrashIcon className="h-4 w-4" />
             Delete {selectedIds.size > 1 ? `${selectedIds.size} programs` : 'program'}
           </ContextMenuItem>
