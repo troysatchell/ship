@@ -65,7 +65,7 @@ Reserve the **whole batch** in Linear (all tickets → In Progress) before any a
 only works if it covers every ticket the branch will close; otherwise a second worker picks up a
 ticket already being fixed inside someone else's diff.
 
-## 2a. Dispatch ticket agents on Sonnet
+## 2a. Dispatch ticket agents — and the orchestrator itself — on Sonnet
 
 Pass `model: "sonnet"` on every `Agent` call that dispatches ticket work, a triage round, or a
 measurement run. Set by the maintainer 2026-07-29.
@@ -76,9 +76,29 @@ measured evidence, the escalation boundaries, and the gate to check itself again
 well-specified task, not deriving one. Across a ~75-ticket backlog, paying top-tier rates per ticket is
 waste.
 
-The **orchestrator** — the main loop — stays on its own model. It holds the board, runs the gates
-independently of agent self-reports, triages reviews, and makes the merge and escalation calls. Those
-are the judgement-heavy parts.
+**The orchestrator defaults to Sonnet too — revised 2026-07-30, after `docs/submission/AI-COST-ANALYSIS.md`
+showed the same shape of waste one layer up.** The original reasoning ("the orchestrator holds the
+board and makes the judgement-heavy calls, so it stays on its own model") assumed those calls were
+open-ended. They mostly aren't: ticket selection, batching, the merge checklist (gate pass + CI green
++ review triaged + no escalation), and crash recovery are all specified as literal tables and
+checklists in this skill and `ship-factory`'s — the same "well-specified task, not deriving one"
+argument that already justified Sonnet for ticket agents applies to running that loop. Measured cost
+was concentrated exactly where this predicts: orchestration (Opus/Fable-tier) was ~75% of the
+sprint's spend despite ticket agents (Sonnet) carrying more raw cache-read volume — the expense was
+the tier, not the work.
+
+**Raise the model for a specific decision, not the default, when the call is genuinely open-ended:**
+
+- Classifying a CodeRabbit finding whose fix-now / new-ticket / dismissed call is contested or
+  precedent-setting (not the routine cases `references/triage.md` already covers).
+- Judging a review-ledger recurrence — is this the 2nd occurrence (add a `lessons.md` rule) or the 3rd+
+  (add a mechanical `gate.sh` check)? — where the pattern across tickets isn't obvious from the ledger
+  report alone.
+- Recognizing whether a situation actually crosses an `references/escalation.md` gate, when it's not a
+  clean match to the gate's stated trigger.
+- Inventing a measurement methodology rather than applying one — the TRO-197 bundle-metric case below.
+
+Say why when you do. Do not quietly raise the default back up for the whole run.
 
 Two caveats:
 

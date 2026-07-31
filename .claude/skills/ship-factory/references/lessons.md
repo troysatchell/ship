@@ -150,26 +150,18 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     `pnpm install` cleared all of it — the lockfile was already correct, so nothing else was wrong.
     Symptom to recognise: failures in files your diff never touched, all reporting import or
     module-resolution errors rather than assertion failures.
-24. **The load-sensitive api flake has at least NINE identities, and the quarantine is now empty.**
-    Added 2026-07-30: `concurrent-merge.test.ts::merges concurrent inserts from two clients into the
-    SAME text region`, `documents-visibility.test.ts::returns private docs only to creator`,
-    `documents-visibility.test.ts::returns private docs to workspace admins`,
-    `search.test.ts::returns people with correct structure` — joining the five below.
-    **This matters more than it used to.** TEST-1 emptied `quarantine.json` entirely, so there is no
-    longer any list absorbing a red test: one flake now fails a gate and a CI run outright. `gate.sh`
-    therefore re-runs each new failure standalone and reports the result, so you no longer have to do
-    it by hand — but it still records `fail`, deliberately. "Fails in the suite, passes alone" is
-    equally the signature of a real test-isolation bug, which is exactly what TEST-12 turned out to
-    be, so auto-passing it would hide the class this project keeps finding.
-    Read `.factory/<pkg>-standalone.txt` and judge. Concurrency across worktrees is the usual cause —
-    check `ps` for sibling gates before concluding anything.
-    `backlinks.test.ts`, `rate-limit.test.ts`, `weeks.test.ts::should reject review approval without
-    rating`, `session-activity-race.test.ts::modifies the session row exactly once when a concurrent
-    burst crosses the threshold`, and a candidate `workspaces.test.ts::should archive person
-    document`. Every one fails inside a full `gate.sh` run — which carries typecheck + build, so CPU
-    is loaded — and passes standalone. Five identities across files unrelated to each other is the
-    evidence that this is **one shared mechanism** (TRO-277), not five flaky tests. Re-run standalone
-    before believing it, report the identity so the set keeps growing, and never widen the quarantine.
+24. **The load-sensitive api/web flake is one shared mechanism, not isolated flaky tests — never
+    widen the quarantine.** TEST-1 emptied `quarantine.json` entirely, so there is no longer any list
+    absorbing a red test: one flake now fails a gate and a CI run outright. `gate.sh` re-runs each new
+    failure standalone and reports the result automatically — you don't need to track identities by
+    hand. It still records `fail`, deliberately: "fails in the suite, passes alone" is equally the
+    signature of a real test-isolation bug (TEST-12 turned out to be exactly that), so auto-passing it
+    would hide the class this project keeps finding.
+    Read `.factory/<pkg>-standalone.txt` and judge. Concurrency across worktrees under a loaded
+    `gate.sh` run (typecheck + build first) is the usual cause — check `ps` for sibling gates before
+    concluding anything. Multiple identities across files unrelated to each other (TRO-277) is
+    evidence of one shared load-sensitive mechanism, not many flaky tests — re-run standalone before
+    believing any single failure, and never widen the quarantine.
 25. **A commit message that claims a cleanup is not evidence the cleanup happened.**
     A commit on TRO-223 asserted it had removed two `as any` casts; only one was removed, and the
     survivor sat in a file the branch otherwise edited. `review-patterns.mjs` (G7b) could not catch
@@ -197,12 +189,6 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   stashing its fix to take a "before" measurement had its entry popped by a sibling worktree within
   ~2 minutes and gone from `git stash list`. Recovered only via `git fsck --unreachable`. To measure
   before/after, **copy the files aside or `git worktree add` a second checkout** — never stash.
-- 2026-07-29 (TRO-178) — **The api suite has a pre-existing, load-sensitive intermittent failure, and
-  `quarantine.json` records api as `knownFailing: 0`.** A flake therefore fails an otherwise-good
-  branch. Demonstrated not to be any one ticket's fault: with the ticket's new test file removed
-  entirely, 1 of 5 runs still failed. It appears right after `pnpm type-check` + `pnpm build`, i.e.
-  under CPU load. **If a gate fails on an api test you did not touch, re-run it standalone before
-  believing it** — and never "fix" it by widening the quarantine. Report the identities either way.
 - 2026-07-29 (TRO-215) — **Some findings are data-dependent; reproduce before you conclude.**
   A11Y-1's bare-`<li>` violations only render when a sidebar section has **>10** root docs (the
   "N more…" link) or **zero** (empty state). Default seed data has 5, so axe reports **C0/S0** and a

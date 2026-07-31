@@ -261,6 +261,22 @@ factory resumes rather than being interrupted per-ticket.
 Report progress as a running board: tickets done (with PR links), in flight, blocked with reasons,
 and new tickets filed from review triage. Keep it scannable.
 
+**Checkpoint the orchestrator session between waves — don't let "keep working" mean one unbroken
+session for the whole run.** Every turn resends the accumulated transcript; a session that runs
+continuously for a full multi-day sprint pays for that entire growing history on every tool call, not
+just for the work in front of it (`docs/submission/AI-COST-ANALYSIS.md` — orchestration was ~75% of
+the sprint's measured spend, dominated by re-reading context across thousands of requests, not by
+writing code). The board and the gates make this safe: `board.mjs`/`serve.mjs`/`status.mjs` and
+`scorecard.jsonl` read from worktrees, `gh`, and Linear — not from anything held only in the session's
+memory — so a fresh session picks up exactly where the last one left off with a cheap reload (`git
+worktree list`, the scorecard, `activeContext.md`), not a rebuild.
+
+End the current session and start a new one at a natural boundary — after a wave of tickets merges,
+before dispatching the next batch — rather than continuing indefinitely in one session. This is
+scheduling discipline, not a change to the "don't ask, keep going" instruction: the user still doesn't
+need to approve anything, the run just resumes in a session that isn't dragging its entire history
+along.
+
 ## Visibility — keep the board current
 
 Two surfaces, deliberately, because they answer different questions:
