@@ -21,6 +21,78 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-293 — three e2e tests asserted a per-row issue quick-menu that IssuesList does not render — deleted, not built
+
+**Decision: dead/speculative tests (path b), not a missing feature.** TRO-286 (TEST-14) Part 1
+tightened a vacuous conditional guard in `e2e/program-mode-week-ux.spec.ts` into a real assertion
+and, in doing so, surfaced that the assertion targets UI that has never existed. Filed as this
+follow-up to decide feature-vs-dead-test rather than build UI unilaterally.
+
+**What was checked, not just what was read.** The tests' own `test.fixme()` docstring (added in
+`2a97a2ad`) already named the root cause; this ticket verified it against the current tree rather
+than trusting the comment:
+- `grep -rn "⋮" web/src/` returns nothing anywhere in the frontend.
+- `web/src/components/IssuesList.tsx`'s `renderIssueRow` → `IssueRowContent` renders only data
+  columns (id, title, status, source, program, sprint, priority, assignee, updated) — no actions
+  column, no hover-revealed button, no `aria-label` containing "menu" or "actions" on the row.
+- The only per-row interaction on this component is right-click (`onContextMenu` →
+  `handleContextMenu`, `IssuesList.tsx:986`), which opens a `ContextMenu` with a "Move to Week"
+  submenu (`IssuesList.tsx:1281-1283`) — real, but reached by right-click, not a hover ⋮ button.
+- **Equivalent-affordance check (not skipped):** a hover-revealed three-dot "Actions for {title}"
+  button *does* exist elsewhere in the app — `web/src/pages/App.tsx:1141-1153`, a locally-scoped
+  `IssuesList` component rendering the sidebar tree's issue rows. It is a different component in a
+  different part of the 4-panel layout (contextual sidebar, not the Program-mode Issues tab table
+  under test), and its menu (Change Status + Archive, `App.tsx:1160-1184`) has no "Assign to Week"
+  option — the exact capability these tests required. So the closest real analog does not actually
+  satisfy what the tests assert; it's not a case of "the tests just found it in the wrong place."
+- The underlying capability the tests wanted (assign an issue to a sprint/week per row) is already
+  real, already exercised, and does not need a quick-menu: `enableInlineSprintAssignment` renders an
+  `InlineWeekSelector` dropdown directly in the sprint column (used by `WeekPlanningTab.tsx`, though
+  not wired into `ProgramIssuesTab.tsx`, which is the tab these tests target), the right-click
+  context menu's "Move to Week" submenu is available unconditionally, and bulk selection + toolbar
+  "Move to Week" is covered by four passing tests in the same file/describe block (`issues table has
+  checkbox column for bulk selection`, `selecting issues shows bulk action bar`, `bulk action bar has
+  "Move to Week" dropdown`, `bulk "Move to Week" updates issues` — `program-mode-week-ux.spec.ts:679-773`).
+- `git log --all --oneline -- '**/IssuesList*'` and `git log --all --oneline` for "quick menu" /
+  "quick-menu" show no commit that ever added, then removed, a per-row quick-menu — this was never
+  built and then cut, it was asserted without having been built. No mention in `docs/` or elsewhere
+  in `CHANGES.md` of it as a planned feature; the only prior references are TRO-286's own note about
+  this same gap.
+
+**Derived-claim correction.** The ticket brief (based on the fixme docstring's own wording, "these
+three tests") said three tests. Reading the file directly found **four** `test.fixme()` blocks
+sharing that one docstring: `issue row has quick menu (⋮) button`, `quick menu has "Assign to Week"
+option`, `quick menu "Assign to Week" shows available sprints`, and `quick menu can assign issue to
+a sprint (full flow)` — all four define the identical `menuButton` locator and would fail on it
+identically. The docstring undercounted its own scope by one. Deleted all four, per this ticket's
+own "no `test.fixme()` left behind for this either way" done-criterion — stopping at three because
+the brief said three would have been trusting the brief's count over the file itself.
+
+**What changed.** Deleted the four `test.fixme()` blocks and their shared docstring comment from
+`e2e/program-mode-week-ux.spec.ts` (`Phase 4: Issues Tab Filtering` describe block, was lines
+775-885). The describe block is not empty — it retains 12 other real tests, including the four
+"Move to Week" tests listed above that already cover the underlying capability. No other test in the
+file was touched.
+
+**Out of scope, left alone.** `e2e/context-menus.spec.ts:151` (`three-dot menu on team member row
+opens context menu`) is the "same class of gap" the fixme docstring cross-references, but targets a
+different component (`web/src/pages/TeamDirectory.tsx`, not `IssuesList.tsx`) and a different
+feature (team directory, not issues). TRO-293's brief scopes to the per-row *issue* quick-menu only;
+that finding is a separate decision for its own ticket.
+
+**No new regression test.** This removes assertions that never described real behavior — there is
+no defect to lock in a test against. Adding a test here would either re-assert the same nonexistent
+UI (pointless) or test that the button is absent (untestable-as-a-regression: absence-of-a-feature
+isn't a regression surface, and a `not.toBeVisible()` assertion would silently stop meaning anything
+the moment any unrelated button was added to the row). The four real "Move to Week" tests already
+in the file are the regression coverage for the capability these dead tests gestured at.
+
+**Rollback.** `git log --oneline -- e2e/program-mode-week-ux.spec.ts` then check out `2a97a2ad`'s
+version of the file (or `git show 2a97a2ad:e2e/program-mode-week-ux.spec.ts`) to restore the four
+`test.fixme()` tests and their docstring verbatim, if the quick-menu is ever actually built.
+
+---
+
 ## TRO-239 — [TF-6] Secret generators have no `keepers` — regeneration would silently log out every user and rotate the live DB password
 
 **What was broken.** `random_password.db_password` and `random_password.session_secret` had no
