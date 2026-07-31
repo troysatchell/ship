@@ -63,6 +63,66 @@ new test cases fail if either list's accessible name regresses, which is the poi
 
 ---
 
+## TRO-292 (TF-9) — Removed committed binary `tfplan` from `terraform/environments/shadow/`; closed the `.gitignore` gap for the whole `environments/` family
+
+**Post-baseline, not one of the 68 audit findings — no `AUDIT_REPORT.md` section.** Full spec was
+the Linear ticket body.
+
+**What was wrong.** `terraform/environments/shadow/tfplan` was a git-tracked ~28.5KB binary
+Terraform plan artifact in a public repo. A `strings` scan found no password/secret/token/key
+patterns, but that's a pattern scan of a binary, not proof of absence — moot anyway, since scope
+here was drift, not a secret-exposure claim. Root cause: the root `.gitignore`'s
+`terraform/*.tfplan` / `terraform/tfplan` rules (lines 72-73) are anchored one directory deep — no
+`**` — so they never matched anything under `terraform/environments/<env>/`. The TF-10/TRO-299
+Render fix added `terraform/render/*.tfplan` / `terraform/render/tfplan` for that one subdirectory
+for the same reason, but the `environments/` family (which already had its own generalized
+`environments/*/terraform.tfvars` and `environments/*/.terraform.lock.hcl` rules) was never given
+the equivalent for `tfplan`. Nothing pattern-scans plan files for secrets before commit, so this
+class of drift (tfplan → public repo) can recur on any new environment directory.
+
+**What changed.**
+- Removed `terraform/environments/shadow/tfplan` with `git rm` (not `git rm --cached` — that flag
+  only unstages a file from the index and leaves it sitting on disk, untracked; the goal here was
+  removing it from the working tree too, which plain `git rm` does in one step, confirmed by
+  `git show f60ab9b --stat` reporting the file deleted and its absence from `ls` afterward).
+- Added `terraform/environments/*/*.tfplan` and `terraform/environments/*/tfplan` to the root
+  `.gitignore`, next to the existing `environments/*/terraform.tfvars` /
+  `environments/*/.terraform.lock.hcl` lines — same glob family, so it also covers
+  `terraform/environments/dev/` and any future environment, not just `shadow/`.
+
+**Explicitly out of scope (by ticket design):** rewriting git history to purge the blob from prior
+commits. The file remains recoverable from history; only future drift is stopped. No other
+Terraform files were touched, and no `terraform apply`/`plan` was run.
+
+**How to run it / verify.**
+
+```bash
+# proves tfplan is gone from the index, not just from `git status` output:
+git ls-files --error-unmatch terraform/environments/shadow/tfplan   # exits 1: not tracked
+# throwaway regression check (no vitest path applies — this is repo hygiene, not app code):
+head -c 2000 /dev/urandom > terraform/environments/shadow/throwaway.tfplan
+git status --short                                   # throwaway *.tfplan file does not appear
+rm terraform/environments/shadow/throwaway.tfplan
+git check-ignore -v terraform/environments/shadow/newplan.tfplan   # matches the *.tfplan rule
+# the .gitignore change also added a second, extensionless rule
+# (terraform/environments/*/tfplan) — exercise that one separately, since the
+# *.tfplan checks above never touch it:
+touch terraform/environments/shadow/tfplan
+git status --short                                   # bare-name file does not appear either
+git check-ignore -v terraform/environments/shadow/tfplan   # matches the extensionless rule
+rm terraform/environments/shadow/tfplan
+```
+
+**How to roll it back.** `git revert <the tfplan-removal commit>` re-creates
+`terraform/environments/shadow/tfplan` from the parent commit **and re-tracks it** — `revert`
+commits the inverse diff, so the file comes back staged and committed, not just present in the
+working tree. Verified empirically (disposable repo: delete-then-revert leaves the file in
+`git ls-files` with a clean `git status`) before writing this, since the first draft of this
+paragraph asserted the opposite and was wrong — flagged by CodeRabbit review on this same PR.
+The `.gitignore` lines revert normally either way.
+
+---
+
 ## TRO-236 — [TF-3] Pinned Terraform 1.6.0 can no longer `init`; bumped to current 1.15.8
 
 **What was broken.** `terraform/.terraform-version` (`d826517`) pinned Terraform to `1.6.0`.
