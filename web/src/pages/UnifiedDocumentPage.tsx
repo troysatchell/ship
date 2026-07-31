@@ -83,7 +83,19 @@ export function UnifiedDocumentPage() {
       return response.json();
     },
     enabled: !!id,
-    retry: false,
+    // TRO-301/ERR-17: this used to hardcode `retry: false`, which overrode
+    // the shared `shouldRetryRequest`/`retryDelayMs` policy `queryClient`
+    // already applies to every other query (queryClient.ts) - so even though
+    // the thrown error above carries `.status`, a throttled (429) read of
+    // this document failed permanently on the very first attempt instead of
+    // backing off across the server's rate-limit window like every mutation
+    // already does (TRO-190/ERR-3). Leaving `retry`/`retryDelay` unset here
+    // (the same pattern PersonEditor.tsx's `updatePersonMutation` uses) lets
+    // the query inherit that shared policy: 429 still backs off and retries,
+    // while `isNotFoundError`'s 404 case is a permanent 4xx under that same
+    // predicate, so a deleted document still fails on the first attempt with
+    // no retry storm - see the effect above that routes it into ERR-14's
+    // deletion notice.
   });
 
   // TRO-290/ERR-14 - reproduced: this query never overrides
