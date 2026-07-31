@@ -99,9 +99,28 @@ worktree. The claim that the static `index.html` affordance paints within 2 seco
 throttled connection is derived from it being part of the initial HTML response (no JS/CSS
 dependency), not independently measured against a live browser.
 
+**Follow-up (CodeRabbit review, PR #71): cache-reset transaction falsely triggered "Saving".**
+`Editor.tsx:~392` clears the Y.Doc via `ydoc.transact(() => {...})` when the server signals fresh
+content loaded from JSON — and a bare `transact(fn)` defaults its origin to `null`, which the new
+`isSaving` tracker above could not distinguish from a real local edit. That meant a server-driven
+cache reset could flash "Saving" for 600ms over content nobody typed. Fixed by tagging that
+transaction with a dedicated `CACHE_RESET_ORIGIN` symbol (exported from `Editor.tsx`, alongside a
+new exported `isUnflushedLocalUpdateOrigin(origin, provider)` predicate that the `ydoc.on('update',
+...)` handler now calls, excluding both the provider's own origin and this sentinel).
+Regression test: `web/src/components/Editor.cacheResetSaving.test.ts` (new) — uses a real `Y.Doc`
+and its real `transact()`/`update` event (Yjs has no DOM dependency, unlike mounting the full
+`<Editor>`, which `Editor.bubbleMenuAria.test.tsx` already documents as unreliable under
+jsdom+vitest) to confirm the cache-reset origin survives Yjs's event dispatch unchanged and is
+classified as *not* an unflushed local edit, while a real local edit and a provider-originated
+remote update are still classified correctly. Confirmed red first (reverted `Editor.tsx`,
+observed `TypeError: isUnflushedLocalUpdateOrigin is not a function` / the origin not being
+tagged) then green after reapplying the fix; full `web` suite re-run afterward with no other
+regressions (452/452).
+
 **Rollback.** Revert the commit(s) on `fix/err-7-loading-affordance` and remove
-`web/src/appShellLoading.test.tsx`, `web/src/pages/MyWeekPage.loadingAffordance.test.tsx`, and
-`web/src/pages/Dashboard.loadingAffordance.test.tsx`.
+`web/src/appShellLoading.test.tsx`, `web/src/pages/MyWeekPage.loadingAffordance.test.tsx`,
+`web/src/pages/Dashboard.loadingAffordance.test.tsx`, and
+`web/src/components/Editor.cacheResetSaving.test.ts`.
 
 ---
 
