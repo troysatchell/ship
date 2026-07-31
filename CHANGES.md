@@ -8,6 +8,51 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-294 — direct-to-ALB health check URL in `.claude/CLAUDE.md` corrected to the CloudFront-fronted path
+
+**Docs-only, priority Low, no vitest path applies (regression-test evidence below instead).**
+
+**What was wrong.** `.claude/CLAUDE.md`'s Deployment section documented the prod API health check
+as `http://ship-api-prod.eba-xsaqsg9h.us-east-1.elasticbeanstalk.com/health` — a direct hit on the
+Elastic Beanstalk ALB's own DNS name, bypassing CloudFront. TF-7/TRO-278 (already merged, see that
+entry above) restricted the ALB security group (`terraform/security-groups.tf`) to CloudFront's
+origin-facing prefix list, `data.aws_ec2_managed_prefix_list.cloudfront_origin_facing`. Once that
+SG is actually applied to a live account, the direct ALB URL stops resolving from most clients —
+not because the API is unhealthy, but because the network path no longer exists. TRO-278's own
+CHANGES.md entry called this out as DERIVED and explicitly left it for a human/follow-up ticket to
+fix; this ticket is that follow-up.
+
+**What changed.** `.claude/CLAUDE.md`'s Prod API health check now reads
+`https://ship.awsdev.treasury.gov/health`, with a note explaining why the old URL breaks and where
+the replacement comes from.
+
+**How I confirmed the new URL (observed, not invented).** Read `terraform/s3-cloudfront.tf`
+directly: the `dynamic "ordered_cache_behavior"` block with `path_pattern = "/health"` (only
+created `for_each = var.eb_environment_cname != "" ? [1] : []`) targets `target_origin_id =
+"EB-API"` — CloudFront already proxies this exact path to the same Elastic Beanstalk origin the
+old URL hit directly. The domain to use is `var.app_domain_name` (`terraform/variables.tf`) when
+set, else the CloudFront-assigned domain exposed as the `cloudfront_domain_name` output
+(`terraform/outputs.tf`); the `frontend_url` output already picks the right one of the two
+(`var.app_domain_name != "" ? "https://${var.app_domain_name}" : "https://${aws_cloudfront_distribution.frontend.domain_name}"`).
+`ship.awsdev.treasury.gov` is prod's `app_domain_name` value — corroborated by every other prod
+reference in the repo (`.claude/CLAUDE.md`'s own "Prod Web" line just below the edit,
+`audit/AUDIT_REPORT.md`, `memory-bank/techContext.md`, `docs/fpki-auth-client-dcr-analysis.md`'s
+OAuth redirect URI), not by a fresh `terraform output` (no AWS credentials / apply available here,
+same constraint TF-7's own work noted). **Not verified:** whether the ALB SG restriction has
+actually been `apply`'d to the live prod account yet — `memory-bank/progress.md` records prod as
+returning 403/no-response as of 2026-07-28, i.e. not currently reachable either way, so the new URL
+could not be curled end-to-end from here.
+
+**Regression-test note.** Pure documentation change; neither vitest project (`api/src/**/*.test.ts`,
+`web/src/**/*.test.ts(x)`) has a path to assert against a markdown string, so no test file is added.
+`scripts/factory/gate.sh`'s G6 (regression-test present) is expected to fail on this branch for that
+reason — the evidence for the fix is the terraform cross-reference above, not a test.
+
+**How to roll it back.** `git revert <commit>`, or manually restore the old two-line health-check
+list in `.claude/CLAUDE.md`. No code, schema, or infra changed.
+
+---
+
 ## TRO-299 (TF-10) follow-up — live Render deployment adopted into Terraform state via `import`; post-import plan is a clean no-op
 
 **What was added.** Maintainer decision 2026-07-30 resolved the TF-10 entry's HOLD: adopt the
