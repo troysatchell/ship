@@ -18,6 +18,114 @@ function isMarkElement(nodeName: string): boolean {
   return MARK_TYPES.has(nodeName);
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
+ * One entry of `YXmlText.toDelta()`'s output for a materialized (non-snapshot)
+ * text — always an insert op, no `retain`/`delete`, since this converter only
+ * ever inserts plain string runs into a `Y.XmlText` (see `jsonToYjs` below).
+ *
+ * Marks surface here as `attributes` regardless of which write path put them
+ * there (TRO-296):
+ *
+ * - This file's own `jsonToYjs`/`jsonToYjsChildren`, via `Y.XmlText.format()`.
+ * - The LIVE collaborative editor's Yjs binding
+ *   (`y-prosemirror/src/plugins/sync-plugin.js`'s `createTypeFromTextNodes`),
+ *   via `Y.XmlText.applyDelta()` with `attributes: marksToAttributes(node.marks, meta)`.
+ *   Every ProseMirror mark a real user applies in the live editor (bold,
+ *   italic, a link, ...) goes through THIS path, never through `jsonToYjs`.
+ *
+ * Both write into the same underlying Yjs text-formatting representation, and
+ * `YXmlText.toString()` (`yjs/src/types/YXmlText.js:68-100`) serializes that
+ * representation as literal pseudo-XML wrapped around the text either way —
+ * this converter used to call `.toString()` on every `Y.XmlText` it read, so
+ * a mark round-tripped as the literal string `<bold>text</bold>` instead of a
+ * `marks` array. Reading `.toDelta()` directly instead decodes the same
+ * representation correctly.
+ */
+interface TextDeltaOp {
+  insert: string;
+  attributes: Record<string, unknown> | undefined;
+}
+
+/**
+ * `YXmlText.toDelta()`'s declared return type is `any` (ambient
+ * `yjs/dist/src/types/YText.d.ts`) — narrow it structurally at runtime the
+ * same way `typeAttributes()` below narrows `getAttributes()`, rather than
+ * trusting it.
+ */
+function parseTextDelta(rawDelta: unknown): TextDeltaOp[] {
+  if (!Array.isArray(rawDelta)) return [];
+  const ops: TextDeltaOp[] = [];
+  for (const entry of rawDelta) {
+    if (!isRecord(entry) || typeof entry.insert !== 'string') continue;
+    ops.push({
+      insert: entry.insert,
+      attributes: isRecord(entry.attributes) ? entry.attributes : undefined,
+    });
+  }
+  return ops;
+}
+
+function isTipTapAttrValue(value: unknown): value is TipTapAttrValue {
+  return value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean';
+}
+
+/**
+ * A mark applied via `.format()`/`.applyDelta()` carries its attrs (if any)
+ * as the delta attribute's value directly — an empty object for a plain mark
+ * like bold, a real attrs object (`{ href, target }`) for a link.
+ *
+ * y-prosemirror additionally suffixes the attribute key with a
+ * `--<8-char-hash>` for a mark type configured to allow overlapping instances
+ * of itself (`isOverlapping` in `marksToAttributes`,
+ * y-prosemirror/src/plugins/sync-plugin.js). None of `MARK_TYPES` here do
+ * that by default — ProseMirror marks exclude other instances of the same
+ * type unless configured otherwise — but stripping the suffix defensively
+ * costs nothing and keeps a mark type from silently vanishing if that ever
+ * changes upstream. Mirrors y-prosemirror's own `yattr2markname`.
+ */
+const OVERLAPPING_MARK_HASH_SUFFIX = /--[a-zA-Z0-9+/=]{8}$/;
+
+function marksFromDeltaAttributes(attributes: Record<string, unknown> | undefined): TipTapMark[] {
+  if (!attributes) return [];
+  const marks: TipTapMark[] = [];
+  for (const [rawKey, value] of Object.entries(attributes)) {
+    const type = rawKey.replace(OVERLAPPING_MARK_HASH_SUFFIX, '');
+    if (!isMarkElement(type)) continue; // only decode marks this converter knows about
+    if (isRecord(value)) {
+      const attrs: Record<string, TipTapAttrValue> = {};
+      for (const [attrKey, attrValue] of Object.entries(value)) {
+        if (isTipTapAttrValue(attrValue)) attrs[attrKey] = attrValue;
+      }
+      marks.push(Object.keys(attrs).length > 0 ? { type, attrs } : { type });
+    } else {
+      marks.push({ type });
+    }
+  }
+  return marks;
+}
+
+/**
+ * Convert one `Y.XmlText`'s content into TipTap text node(s), decoding
+ * `.format()`/`.applyDelta()` marks back into a `marks` array (TRO-296)
+ * instead of calling `.toString()` and keeping its literal pseudo-XML.
+ * `inheritedMarks` carries marks from an ancestor `<bold>`-style wrapper
+ * element — the representation `extractTextWithMarks` below also still
+ * reads, for whatever may have written that shape.
+ */
+function xmlTextToNodes(text: Y.XmlText, inheritedMarks: TipTapMark[] = []): TipTapNode[] {
+  const nodes: TipTapNode[] = [];
+  for (const op of parseTextDelta(text.toDelta())) {
+    if (!op.insert) continue;
+    const marks = [...inheritedMarks, ...marksFromDeltaAttributes(op.attributes)];
+    nodes.push(marks.length > 0 ? { type: 'text', text: op.insert, marks } : { type: 'text', text: op.insert });
+  }
+  return nodes;
+}
+
 /**
  * Yjs's `getAttributes()` on an unparameterized `XmlElement` returns
  * `string`-valued attributes only (its declared default). This codebase also
@@ -77,10 +185,7 @@ function extractTextWithMarks(element: Y.XmlElement, inheritedMarks: TipTapMark[
   for (let i = 0; i < element.length; i++) {
     const child = element.get(i);
     if (child instanceof Y.XmlText) {
-      const text = child.toString();
-      if (text) {
-        result.push({ type: 'text', text, marks: currentMarks });
-      }
+      result.push(...xmlTextToNodes(child, currentMarks));
     } else if (child instanceof Y.XmlElement) {
       if (isMarkElement(child.nodeName)) {
         // Nested mark (e.g., <bold><italic>text</italic></bold>)
@@ -105,11 +210,10 @@ export function yjsToJson(fragment: Y.XmlFragment): TipTapDoc {
   for (let i = 0; i < fragment.length; i++) {
     const item = fragment.get(i);
     if (item instanceof Y.XmlText) {
-      // Handle text nodes with formatting
-      const text = item.toString();
-      if (text) {
-        content.push({ type: 'text', text });
-      }
+      // Handle text nodes, decoding any `.format()`/`.applyDelta()` marks
+      // back into a TipTap `marks` array (TRO-296) instead of taking the
+      // literal pseudo-XML `.toString()` would produce.
+      content.push(...xmlTextToNodes(item));
     } else if (item instanceof Y.XmlElement) {
       // Check if this is a mark element (bold, italic, etc.)
       if (isMarkElement(item.nodeName)) {
@@ -149,10 +253,7 @@ function yjsElementToJson(element: Y.XmlElement): TipTapNode[] {
   for (let i = 0; i < element.length; i++) {
     const item = element.get(i);
     if (item instanceof Y.XmlText) {
-      const text = item.toString();
-      if (text) {
-        content.push({ type: 'text', text });
-      }
+      content.push(...xmlTextToNodes(item));
     } else if (item instanceof Y.XmlElement) {
       // Check if this is a mark element (bold, italic, etc.)
       if (isMarkElement(item.nodeName)) {

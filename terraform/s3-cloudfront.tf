@@ -22,6 +22,9 @@ resource "aws_cloudfront_origin_request_policy" "api" {
 }
 
 # Cache Policy for API - disable caching
+# enable_accept_encoding_gzip/brotli must be explicitly set for CloudFront to add
+# Accept-Encoding to the cache key and forward it to the origin; without them the
+# ordered_cache_behavior's compress=true setting for /api/* is inert (TRO-283/TF-8).
 resource "aws_cloudfront_cache_policy" "api_no_cache" {
   name        = "${var.project_name}-api-no-cache"
   comment     = "Disable caching for API routes"
@@ -30,6 +33,9 @@ resource "aws_cloudfront_cache_policy" "api_no_cache" {
   min_ttl     = 0
 
   parameters_in_cache_key_and_forwarded_to_origin {
+    enable_accept_encoding_gzip   = true
+    enable_accept_encoding_brotli = true
+
     cookies_config {
       cookie_behavior = "none"
     }
