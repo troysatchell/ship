@@ -83,7 +83,7 @@ the two groups, and the engine retries all of them before giving up.
 regex in `CHANGES.md`'s TRO-307 entry above (which had it right) versus this ticket's brief (which
 did not):** measured directly (`node --eval`, this machine, this run — see the timing table in the
 `isValidInviteEmail` doc comment in `admin.ts`), the pathological input is many dots **after** the
-`@` (inside the ambiguous domain-vs-domain split), not before it. `".repeat(n) + "@" + " "` (dots
+`@` (inside the ambiguous domain-vs-domain split), not before it. `".".repeat(n) + "@" + " "` (dots
 before `@`) stayed O(n) — 0.06ms at n=40,000. `"a@" + ".".repeat(n) + " "` (dots after `@`) scaled
 roughly with n²: 0.6ms at n=1,000, up to 886ms at n=40,000 (each 2x in `n` costing ~4x in time).
 That is CodeQL's literal rule name — "polynomial", not "exponential" — for exactly this reason: two

@@ -91,6 +91,19 @@ export interface ResolvedApiRateLimits {
 }
 
 /**
+ * TRO-308 (CodeRabbit, trivial finding on this ticket's PR): `resolveApiRateLimits`
+ * and `resolveSpaStaticLimit` both need to know "are we in test, dev, or
+ * production" and previously computed it independently. Shared here so the two
+ * `env.NODE_ENV`/`env.E2E_TEST` checks can't drift out of sync with each other.
+ */
+function resolveEnvTier(env: RateLimitEnv): { isTestEnv: boolean; isDevEnv: boolean } {
+  return {
+    isTestEnv: env.NODE_ENV === 'test' || env.E2E_TEST === '1',
+    isDevEnv: env.NODE_ENV !== 'production',
+  };
+}
+
+/**
  * Resolve the limits for an environment.
  *
  * Test and dev keep the permissive numbers they already had — they were never
@@ -111,8 +124,7 @@ export interface ResolvedApiRateLimits {
  *     so a single-source flood is capped well below saturation.
  */
 export function resolveApiRateLimits(env: RateLimitEnv = process.env): ResolvedApiRateLimits {
-  const isTestEnv = env.NODE_ENV === 'test' || env.E2E_TEST === '1';
-  const isDevEnv = env.NODE_ENV !== 'production';
+  const { isTestEnv, isDevEnv } = resolveEnvTier(env);
 
   return {
     windowMs: API_RATE_LIMIT_WINDOW_MS,
@@ -336,8 +348,7 @@ export interface SpaStaticLimits {
  * hundreds of thousands).
  */
 export function resolveSpaStaticLimit(env: RateLimitEnv = process.env): SpaStaticLimits {
-  const isTestEnv = env.NODE_ENV === 'test' || env.E2E_TEST === '1';
-  const isDevEnv = env.NODE_ENV !== 'production';
+  const { isTestEnv, isDevEnv } = resolveEnvTier(env);
 
   return {
     windowMs: API_RATE_LIMIT_WINDOW_MS,
