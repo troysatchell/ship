@@ -8,6 +8,51 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-292 (TF-9) — Removed committed binary `tfplan` from `terraform/environments/shadow/`; closed the `.gitignore` gap for the whole `environments/` family
+
+**Post-baseline, not one of the 68 audit findings — no `AUDIT_REPORT.md` section.** Full spec was
+the Linear ticket body.
+
+**What was wrong.** `terraform/environments/shadow/tfplan` was a git-tracked ~28.5KB binary
+Terraform plan artifact in a public repo. A `strings` scan found no password/secret/token/key
+patterns, but that's a pattern scan of a binary, not proof of absence — moot anyway, since scope
+here was drift, not a secret-exposure claim. Root cause: the root `.gitignore`'s
+`terraform/*.tfplan` / `terraform/tfplan` rules (lines 72-73) are anchored one directory deep — no
+`**` — so they never matched anything under `terraform/environments/<env>/`. The TF-10/TRO-299
+Render fix added `terraform/render/*.tfplan` / `terraform/render/tfplan` for that one subdirectory
+for the same reason, but the `environments/` family (which already had its own generalized
+`environments/*/terraform.tfvars` and `environments/*/.terraform.lock.hcl` rules) was never given
+the equivalent for `tfplan`. Nothing pattern-scans plan files for secrets before commit, so this
+class of drift (tfplan → public repo) can recur on any new environment directory.
+
+**What changed.**
+- Deleted `terraform/environments/shadow/tfplan` from the working tree (`git rm --cached`).
+- Added `terraform/environments/*/*.tfplan` and `terraform/environments/*/tfplan` to the root
+  `.gitignore`, next to the existing `environments/*/terraform.tfvars` /
+  `environments/*/.terraform.lock.hcl` lines — same glob family, so it also covers
+  `terraform/environments/dev/` and any future environment, not just `shadow/`.
+
+**Explicitly out of scope (by ticket design):** rewriting git history to purge the blob from prior
+commits. The file remains recoverable from history; only future drift is stopped. No other
+Terraform files were touched, and no `terraform apply`/`plan` was run.
+
+**How to run it / verify.**
+
+```bash
+git status --short terraform/environments/shadow/   # tfplan no longer tracked
+# throwaway regression check (no vitest path applies — this is repo hygiene, not app code):
+head -c 2000 /dev/urandom > terraform/environments/shadow/throwaway.tfplan
+git status --short                                   # throwaway file does not appear
+rm terraform/environments/shadow/throwaway.tfplan
+git check-ignore -v terraform/environments/shadow/newplan.tfplan   # matches the new rule
+```
+
+**How to roll it back.** `git revert <this commit>` restores the `.gitignore` lines and re-adds
+`terraform/environments/shadow/tfplan` to the working tree from the parent commit (it does **not**
+re-track it — a subsequent `git add -f` would be needed for that, which should not be done).
+
+---
+
 ## TRO-299 (TF-10) follow-up — live Render deployment adopted into Terraform state via `import`; post-import plan is a clean no-op
 
 **What was added.** Maintainer decision 2026-07-30 resolved the TF-10 entry's HOLD: adopt the
