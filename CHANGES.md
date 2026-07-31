@@ -39,7 +39,8 @@ Terraform files were touched, and no `terraform apply`/`plan` was run.
 **How to run it / verify.**
 
 ```bash
-git status --short terraform/environments/shadow/   # tfplan no longer tracked
+# proves tfplan is gone from the index, not just from `git status` output:
+git ls-files --error-unmatch terraform/environments/shadow/tfplan   # exits 1: not tracked
 # throwaway regression check (no vitest path applies — this is repo hygiene, not app code):
 head -c 2000 /dev/urandom > terraform/environments/shadow/throwaway.tfplan
 git status --short                                   # throwaway file does not appear
@@ -47,9 +48,13 @@ rm terraform/environments/shadow/throwaway.tfplan
 git check-ignore -v terraform/environments/shadow/newplan.tfplan   # matches the new rule
 ```
 
-**How to roll it back.** `git revert <this commit>` restores the `.gitignore` lines and re-adds
-`terraform/environments/shadow/tfplan` to the working tree from the parent commit (it does **not**
-re-track it — a subsequent `git add -f` would be needed for that, which should not be done).
+**How to roll it back.** `git revert <the tfplan-removal commit>` re-creates
+`terraform/environments/shadow/tfplan` from the parent commit **and re-tracks it** — `revert`
+commits the inverse diff, so the file comes back staged and committed, not just present in the
+working tree. Verified empirically (disposable repo: delete-then-revert leaves the file in
+`git ls-files` with a clean `git status`) before writing this, since the first draft of this
+paragraph asserted the opposite and was wrong — flagged by CodeRabbit review on this same PR.
+The `.gitignore` lines revert normally either way.
 
 ---
 
