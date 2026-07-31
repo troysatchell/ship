@@ -19,8 +19,15 @@ import type { QueryResult } from 'pg';
 // Declared with the promise-returning signature: `vi.mocked(pool.query)` would resolve to
 // pg's callback overload, whose return type is `void`, forcing a cast on every mocked
 // result and switching off checking of the row shapes these tests assert about.
+//
+// The first parameter is a union, not just `string`: DB-3 / TRO-180 named the
+// session-lookup SELECT and the activity UPDATE, so `authMiddleware` now calls
+// `pool.query` with a single `{ name, text, values }` object for those two
+// statements, and with the plain `(text, values)` form for the rest (e.g. the
+// DELETE on session expiry).
+type NamedQueryConfig = { name?: string; text: string; values?: unknown[] };
 const { queryMock } = vi.hoisted(() => ({
-  queryMock: vi.fn<(text: string, values?: unknown[]) => Promise<QueryResult>>(),
+  queryMock: vi.fn<(textOrConfig: string | NamedQueryConfig, values?: unknown[]) => Promise<QueryResult>>(),
 }));
 
 // Mock pool before importing auth middleware
@@ -38,6 +45,7 @@ import {
 import { Request, Response, NextFunction } from 'express';
 import { SESSION_TIMEOUT_MS, ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
 import { pgResult } from '../../test/pg-result.js';
+import { sqlOf } from '../../test/sql-of.js';
 
 const SESSION_ID = 'throttle-session';
 
@@ -74,9 +82,13 @@ function mockValidSession(opts: { lastActivityMsAgo: number; sessionAgeMs?: numb
     .mockResolvedValue(pgResult([{ id: 'membership-1' }]));
 }
 
-/** Every statement the middleware issued, whitespace-normalized. */
+/** Every statement the middleware issued, whitespace-normalized.
+ *
+ * DB-3 / TRO-180 named the session-lookup SELECT and this activity UPDATE, so their
+ * calls now pass a single `{ name, text, values }` object rather than `(text, values)`.
+ * `sqlOf` extracts the SQL text regardless of which shape a given call used. */
 function statements(): string[] {
-  return queryMock.mock.calls.map((call) => String(call[0]).replace(/\s+/g, ' ').trim());
+  return queryMock.mock.calls.map((call) => sqlOf(call[0]).replace(/\s+/g, ' ').trim());
 }
 
 function activityWrites(): string[] {
@@ -122,17 +134,27 @@ describe('session activity write throttle (TRO-179 / DB-2)', () => {
       expect(activityWrites(), 'a request past the throttle window must refresh the row').toHaveLength(1);
       // The predicate is repeated in SQL so that concurrent requests cannot each land a
       // write: Postgres, not the application's possibly-stale read, decides.
-      expect(queryMock).toHaveBeenCalledWith(
-        'UPDATE sessions SET last_activity = $1 WHERE id = $2 AND last_activity < $3',
-        [expect.any(Date), SESSION_ID, expect.any(Date)]
-      );
+      //
+      // Named (DB-3 / TRO-180): the write is now issued as `{ name, text, values }`
+      // rather than `(text, values)`, so Postgres can cache its plan across repeated
+      // executions on the same pooled connection. `name` is asserted here too — a
+      // stable name is the entire point of the change, not just an incidental detail.
+      expect(queryMock).toHaveBeenCalledWith({
+        name: 'auth_session_touch_activity',
+        text: 'UPDATE sessions SET last_activity = $1 WHERE id = $2 AND last_activity < $3',
+        values: [expect.any(Date), SESSION_ID, expect.any(Date)],
+      });
 
       const writeCall = queryMock.mock.calls.find((call) =>
-        String(call[0]).startsWith('UPDATE sessions SET last_activity')
+        sqlOf(call[0]).startsWith('UPDATE sessions SET last_activity')
       );
       expect(writeCall, 'the throttled write should have been issued').toBeDefined();
 
-      const params: unknown[] = Array.isArray(writeCall?.[1]) ? writeCall[1] : [];
+      const writeArg = writeCall?.[0];
+      const params: unknown[] =
+        writeArg && typeof writeArg === 'object' && 'values' in writeArg && Array.isArray(writeArg.values)
+          ? writeArg.values
+          : [];
       expect(params, 'the write must be parameterized, never interpolated').toHaveLength(3);
       const [writtenAt, , cutoff] = params;
       expect(writtenAt, 'last_activity is written as a Date').toBeInstanceOf(Date);
