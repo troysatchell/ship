@@ -17,8 +17,10 @@ as `http://ship-api-prod.eba-xsaqsg9h.us-east-1.elasticbeanstalk.com/health` —
 Elastic Beanstalk ALB's own DNS name, bypassing CloudFront. TF-7/TRO-278 (already merged, see that
 entry above) restricted the ALB security group (`terraform/security-groups.tf`) to CloudFront's
 origin-facing prefix list, `data.aws_ec2_managed_prefix_list.cloudfront_origin_facing`. Once that
-SG is actually applied to a live account, the direct ALB URL stops resolving from most clients —
-not because the API is unhealthy, but because the network path no longer exists. TRO-278's own
+SG is actually applied to a live account, a direct connection to the ALB URL times out for most
+clients — the DNS name itself still resolves; the security group silently drops the TCP connection
+because it isn't sourced from CloudFront's IP ranges. Either way, not an API-health problem: the
+network path is blocked. TRO-278's own
 CHANGES.md entry called this out as DERIVED and explicitly left it for a human/follow-up ticket to
 fix; this ticket is that follow-up.
 
@@ -49,7 +51,10 @@ could not be curled end-to-end from here.
 reason — the evidence for the fix is the terraform cross-reference above, not a test.
 
 **How to roll it back.** `git revert <commit>`, or manually restore the old two-line health-check
-list in `.claude/CLAUDE.md`. No code, schema, or infra changed.
+list in `.claude/CLAUDE.md`. This is a docs-only revert — it restores the stale URL text but does
+**not** undo the TF-7/TRO-278 ALB security-group restriction that made the URL stale; that lives in
+a separate, already-merged change (`terraform/security-groups.tf`) with its own Terraform
+apply/revert path. No code, schema, or infra changed by this commit either direction.
 
 ---
 
