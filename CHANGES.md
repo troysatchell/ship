@@ -67,6 +67,7 @@ identically, and the local declaration was a byte-for-byte subset (missing only 
   behavior — nothing in this file reads it yet.
 
 **How to run it.**
+
 ```bash
 pnpm build:shared
 pnpm --filter @ship/web exec tsc --noEmit -p web/tsconfig.json
@@ -85,6 +86,7 @@ across worktrees). The runtime companion test passed unchanged in both states, a
 by executing code whose behavior doesn't change.
 
 **Roll back.** `git revert` the commit, or manually: reinstate
+
 ```ts
 interface ApiResponse<T> {
   success: boolean;
@@ -92,6 +94,7 @@ interface ApiResponse<T> {
   error?: { code: string; message: string };
 }
 ```
+
 at the top of `web/src/lib/api.ts` and remove the `@ship/shared` import; delete
 `web/src/lib/api.test.ts`.
 

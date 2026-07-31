@@ -57,7 +57,12 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe('api.auth.me() surfaces the full @ship/shared ApiError shape', () => {
   beforeEach(() => {
-    global.fetch = async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
+    // vi.stubGlobal (not a direct `global.fetch = ...` assignment) so
+    // vi.unstubAllGlobals in afterEach actually restores the original —
+    // a plain assignment survives restoreAllMocks/restoreAllMocks only
+    // undoes vi.spyOn spies, not raw property writes, and would leak this
+    // hard-coded 400 response into any later test file run with --no-isolate.
+    vi.stubGlobal('fetch', async (input: RequestInfo | URL, _init?: RequestInit): Promise<Response> => {
       if (String(input).includes('/api/csrf-token')) {
         return jsonResponse({ token: 'test-csrf-token' });
       }
@@ -72,10 +77,11 @@ describe('api.auth.me() surfaces the full @ship/shared ApiError shape', () => {
         },
         400
       );
-    };
+    });
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
