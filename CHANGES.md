@@ -140,6 +140,201 @@ returns. No production code, migration, or other file changes to undo.
 
 ---
 
+## TRO-245 [RULE-3] — verified every Phase 2 bug fix actually shipped the regression test it claimed
+
+**What this is.** RULE-3 is the assignment-implementation rule that every bug fixed in this
+project's remediation must ship with a regression test that would have caught it. It is not one of
+the audit's 68 numbered findings. The 5 highest-value fixes (DB-1, ERR-1, ERR-2, API-1,
+TEST-5/ERR-6) were already marked Done in Linear, meaning each was supposed to have already merged
+with such a test. This ticket's job was to **verify** that claim per-finding — not re-implement any
+fix — and close any gap found.
+
+**Verification method.** For each finding: located the merged fix and its regression test on
+`main`, read the test to confirm it asserts the real invariant (not just "didn't crash"), confirmed
+it lives in a vitest file the gate actually executes (`api/src/**/*.test.ts` /
+`web/src/**/*.test.ts(x)`, never only `e2e/*.spec.ts`), then — wherever feasible — temporarily
+reintroduced the historical bug in the worktree (never committed), re-ran the test, confirmed a
+genuine `AssertionError` (not an import/type error), and restored the file via `git checkout --`.
+All five were verified this way (revert-and-watch), not by reading alone.
+
+| Finding | Ticket | Regression test | Result |
+|---|---|---|---|
+| DB-1 | TRO-178 | `api/src/db/__tests__/migrationRunner.test.ts`, `verifyMigrations.test.ts` | PASS — reintroduced the historical "swallow any *already exists* error" catch in `runPendingMigrations`; 2 tests went red with `AssertionError: promise resolved ... instead of rejecting` (one in `migrationLock.test.ts` too, an unrelated file exercising the same code path). Restored, green again. |
+| ERR-1 | TRO-188 | `web/src/components/editor/SyncStatusIndicator.test.tsx` | PASS — reverted `deriveSyncIndicator` to trust `syncStatus` alone (the pre-fix behavior); 5 tests went red reproducing the exact "Saved"/"Cached" data-loss lie. Restored, green again. |
+| ERR-2 | TRO-189 | `api/src/collaboration/__tests__/session-revocation.test.ts` | PASS — made `revokeConnection` a no-op (session authenticated once at upgrade, never re-checked, matching the historical defect); 4 of 5 tests went red (the control case, which needs no revocation, correctly stayed green) with real socket/database assertions (`closed` stayed `false`, a post-revocation write reached `documents`). Restored, green again. |
+| API-1 | TRO-172 | `api/src/middleware/__tests__/rate-limit.test.ts`, `web/src/lib/queryClient.test.ts`, `web/src/components/MutationErrorToast.test.tsx` | PASS — reverted `shouldRetryRequest` to treat 429 as permanent like every other 4xx: 1 test red directly, 6 more red in dependent files (`PersonEditor.test.tsx`, `UnifiedDocumentPage.throttledRead.test.tsx`) proving the retry policy is exercised broadly. Separately reverted `apiRateLimitKey`/`identityLimit` to the old per-IP/100-per-minute config: 7 tests went red. Restored both files, green again. |
+| TEST-5 / ERR-6 | TRO-227 | `web/src/components/editor/CommentDisplay.test.ts` | PASS — reverted the plugin's `view()` lifecycle to the pre-fix behavior (blur/click-away had no handler; Escape required the input to already have focus); the 3 dismissal-path tests went red (happy-path and destroy-path tests correctly stayed green). Restored, green again. |
+
+**One gap found and closed, precisely scoped.** No test previously spawned the actual `migrate.ts`
+CLI process — `migrationRunner.test.ts`/`verifyMigrations.test.ts` both call `runMigrations()`
+directly as a function, which cannot observe whether `migrate.ts`'s own try/catch actually converts
+a rejection into `process.exit(1)`. Added
+`api/src/db/__tests__/migrateCli.test.ts`: spawns the real `tsx src/db/migrate.ts` (what
+`db:migrate` runs) against an unreachable `DATABASE_URL` and asserts the process exits non-zero and
+reports the failure on stderr.
+
+**Stated precisely, per the claim-provenance rule:** this new test does **not** reproduce DB-1's
+specific historical defect — verified by swapping in the actual pre-DB-1-fix `migrate.ts` (`git
+show <pre-TRO-178 commit>:api/src/db/migrate.ts`, never committed) and re-running it: the test
+**stayed green**, because the old bug only swallowed errors whose message contains "already
+exists", and a refused database connection does not match that string. DB-1's exact shape is what
+`migrationRunner.test.ts`'s revert-and-watch above already proves red at the `runMigrations()`
+level. This new test instead closes the adjacent, previously-unverified gap: that the CLI wrapper
+forwards *any* `runMigrations()` failure — not only DB-1's specific one — into a non-zero exit
+code, which is what "non-zero exit on failure" requires end-to-end and what no prior test checked
+by spawning the real process.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/db/__tests__/migrateCli.test.ts
+```
+
+**No production code changed.** All 5 findings' fixes were confirmed correct as merged; nothing
+was found incomplete.
+
+**Rollback.** Remove `api/src/db/__tests__/migrateCli.test.ts`.
+
+---
+
+## TRO-238 (TF-5) — uploads S3 lifecycle rule had no `filter`/`prefix`; added an explicit empty `filter {}`
+
+**What was broken.** `aws_s3_bucket_lifecycle_configuration.uploads` — the rule that aborts stray
+incomplete multipart uploads on the uploads bucket — declared a `rule` block with an `id`,
+`status`, and `abort_incomplete_multipart_upload`, but no `filter` and no top-level `prefix`. The
+AWS provider (`hashicorp/aws` `~> 5.0`, resolved to `5.100.0` in this environment) treats that
+combination as invalid: exactly one of `rule[0].filter` / `rule[0].prefix` is required. Today it's
+a validation warning ("This will be an error in a future version of the provider"); a future
+provider major turns it into a hard `terraform validate`/`plan` failure. It also left the rule's
+actual scope ambiguous on paper — "applies to all objects" was only true by implicit default, not
+declared.
+
+Two locations carried the identical resource and warning:
+- `terraform/s3-cloudfront.tf:430` (the flat root — this is what's actually deployed to prod,
+  per TF-2/TRO-235's convergence).
+- `terraform/modules/cloudfront-s3/main.tf:437` (the shared module, consumed by
+  `terraform/environments/dev` and `terraform/environments/shadow` — `environments/prod` used to
+  be a third consumer but TRO-235 deleted it as part of the TF-2 fix, before this ticket started).
+
+**What changed.** Added an empty `filter {}` block to the `rule` in both files, immediately before
+`abort_incomplete_multipart_upload`. An empty filter matches the AWS default (applies to every
+object in the bucket, no prefix/tag narrowing) — this preserves today's actual behavior exactly,
+it just makes it explicit and satisfies the provider's "specify exactly one of filter/prefix"
+requirement. No prefix scoping was intended: the rule's `id` (`abort-incomplete-multipart`) and
+its comment ("clean up incomplete multipart uploads") both describe a bucket-wide housekeeping
+rule, not something scoped to a subset of keys, and there is no other evidence anywhere in the
+repo (docs, other lifecycle rules, upload code) suggesting a narrower scope was ever intended. This
+is a config-only change: no resource is replaced, no attribute that affects data retention/deletion
+changed — only the shape of the declaration.
+
+**How to run it.**
+
+```bash
+# Terraform binary: temp-downloaded 1.9.8 (darwin_arm64) to a scratch dir, matching the
+# TF-1/TF-2/TF-3 precedent in this factory — the repo's pinned 1.15.8 (terraform/.terraform-version)
+# is not installed on this machine and was not modified by this ticket. Not committed to the repo.
+cd terraform
+terraform init -backend=false -input=false
+terraform validate                 # BEFORE: Success! with 1 warning (filter/prefix, TF-5)
+                                    # AFTER:  Success! The configuration is valid. (0 warnings)
+terraform fmt -check -recursive .  # exit 0, no formatting changes needed
+git clean -fdx -- .terraform .terraform.lock.hcl   # removes the generated cache + lock file this
+                                                    # init created; git clean only ever touches
+                                                    # untracked/ignored paths, so it is safe here
+                                                    # (leaves `git status` clean) and would refuse
+                                                    # to remove either path if it were ever tracked
+cd environments/shadow             # second root: consumes terraform/modules/cloudfront-s3
+terraform init -backend=false -input=false
+terraform validate                 # BEFORE: Success! with the same warning, module-relative path
+                                    # AFTER:  Success! The configuration is valid. (0 warnings)
+git clean -fdx -- .terraform .terraform.lock.hcl   # same reasoning: this init generates a fresh
+                                                    # .terraform.lock.hcl here (none was tracked
+                                                    # before), so cleanup must remove it too or
+                                                    # `git status` is left dirty — `git clean`
+                                                    # (never `rm -rf`) is what makes that safe to
+                                                    # do unconditionally, here or in any other
+                                                    # terraform/modules/* root that DOES commit one
+```
+
+**Verification performed here — before/after `terraform validate`.**
+
+Before (flat root, `terraform/`):
+
+```text
+╷
+│ Warning: Invalid Attribute Combination
+│
+│   with aws_s3_bucket_lifecycle_configuration.uploads,
+│   on s3-cloudfront.tf line 430, in resource "aws_s3_bucket_lifecycle_configuration" "uploads":
+│  430: resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
+│
+│ No attribute specified when one (and only one) of
+│ [rule[0].filter,rule[0].prefix] is required
+│
+│ This will be an error in a future version of the provider
+╵
+Success! The configuration is valid, but there were some
+validation warnings as shown above.
+```
+
+Before (`terraform/environments/shadow`, via the module):
+
+```text
+╷
+│ Warning: Invalid Attribute Combination
+│
+│   with module.cloudfront_s3.aws_s3_bucket_lifecycle_configuration.uploads,
+│   on ../../modules/cloudfront-s3/main.tf line 437, in resource "aws_s3_bucket_lifecycle_configuration" "uploads":
+│  437: resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
+│
+│ No attribute specified when one (and only one) of
+│ [rule[0].filter,rule[0].prefix] is required
+│
+│ This will be an error in a future version of the provider
+╵
+Success! The configuration is valid, but there were some
+validation warnings as shown above.
+```
+
+After, both roots (and `terraform/environments/dev`, checked as a third data point since it also
+consumes the same module):
+
+```text
+Success! The configuration is valid.
+```
+
+`terraform fmt -check -recursive .` from `terraform/`: exit 0, no output — no formatting drift
+introduced. `terraform plan` was not run against either root: no S3 backend/AWS credentials are
+available in this environment, matching the documented "Backend initialization required" failure
+mode from `audit/terraform/baseline.md` and the TF-1/TF-2/TF-3 precedent. **No `terraform apply`
+was run against any account, live or otherwise.**
+
+**No vitest regression test applies.** This is a Terraform-only, infrastructure-as-code change —
+there is no application code path to exercise and nothing importable into
+`api/src/**/*.test.ts` or `web/src/**/*.test.ts(x)`. The evidence for "before: 1 warning, after: 0
+warnings" is the `terraform validate` output above, captured on both affected roots before and
+after the same one-line-per-file change. `gate.sh`'s regression-test check is expected to fail
+honestly here, following the TF-1/TF-2/TF-3 precedent in this factory, rather than have a fake
+vitest file manufactured to satisfy it.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf-5-lifecycle-filter`. This removes the `filter
+{}` block from both `terraform/s3-cloudfront.tf` and `terraform/modules/cloudfront-s3/main.tf`,
+returning to the pre-TRO-238 state (1 validation warning, same implicit all-objects behavior).
+
+For *this PR's own validation-only work* (the `terraform init -backend=false` / `validate` / `fmt
+-check` runs above), no live AWS state is touched either way, since no `apply` was ever run against
+any account. That is a statement about what happened here, not a general property of `git revert`
+on this file: `filter {}` on an already-empty-scope rule is a no-op against real AWS lifecycle
+config, so if this change is ever `terraform apply`'d to a live account, a later `git revert` alone
+does **not** undo anything on the AWS side — Terraform only reconciles infrastructure when you run
+it. A rollback *after* a real `apply` would additionally require running `terraform plan` and
+`terraform apply` from the affected root(s) (`terraform/`, and `terraform/environments/{dev,shadow}`
+for the module) once the revert commit lands, so AWS is actually updated to match the reverted
+config.
+
+---
+
 ## TRO-196 (ERR-9) — BacklinksPanel's `console.error` storm on every failed poll buried the real signal
 
 **What was broken.** `web/src/components/editor/BacklinksPanel.tsx`'s `fetchBacklinks()` polls
