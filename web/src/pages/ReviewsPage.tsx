@@ -237,7 +237,9 @@ export function ReviewsPage() {
   }, [filterMode]);
 
   useEffect(() => {
-    fetchReviews();
+    // fetchReviews catches its own errors (routes into setError below) and
+    // always resolves via its finally block, so it never rejects.
+    void fetchReviews();
   }, []);
 
   // Approve a plan optimistically
@@ -265,8 +267,9 @@ export function ReviewsPage() {
       const res = await apiPost(`/api/weeks/${sprintId}/approve-plan`, { comment });
       if (!res.ok) throw new Error('Failed to approve plan');
     } catch {
-      // Revert on error
-      fetchReviews();
+      // Revert on error. fetchReviews catches its own errors (see above), so
+      // it never rejects.
+      void fetchReviews();
     }
   }, [data]);
 
@@ -293,8 +296,9 @@ export function ReviewsPage() {
       const res = await apiPost(`/api/weeks/${sprintId}/${endpoint}`, { feedback });
       if (!res.ok) throw new Error('Failed to request changes');
     } catch {
-      // Revert on error
-      fetchReviews();
+      // Revert on error. fetchReviews catches its own errors (see above), so
+      // it never rejects.
+      void fetchReviews();
     }
   }, [data]);
 
@@ -324,8 +328,9 @@ export function ReviewsPage() {
       const res = await apiPost(`/api/weeks/${sprintId}/approve-review`, { rating, comment });
       if (!res.ok) throw new Error('Failed to rate retro');
     } catch {
-      // Revert on error
-      fetchReviews();
+      // Revert on error. fetchReviews catches its own errors (see above), so
+      // it never rejects.
+      void fetchReviews();
     }
   }, [data]);
 
@@ -925,7 +930,7 @@ export function ReviewsPage() {
                         <button
                           onClick={() => {
                             if (cell.hasPlan && cell.planDocId) {
-                              navigate(`/documents/${cell.planDocId}?review=true&sprintId=${cell.sprintId}`);
+                              void navigate(`/documents/${cell.planDocId}?review=true&sprintId=${cell.sprintId}`);
                             }
                           }}
                           className={cn(
@@ -940,7 +945,7 @@ export function ReviewsPage() {
                         <button
                           onClick={() => {
                             if (cell.hasRetro && cell.retroDocId) {
-                              navigate(`/documents/${cell.retroDocId}?review=true&sprintId=${cell.sprintId}`);
+                              void navigate(`/documents/${cell.retroDocId}?review=true&sprintId=${cell.sprintId}`);
                             }
                           }}
                           className={cn(
@@ -969,7 +974,9 @@ export function ReviewsPage() {
           batchMode={batchMode}
           onClose={() => batchMode ? exitBatchMode() : setSelectedCell(null)}
           onApprovePlan={(personId, weekNumber, sprintId, comment) => {
-            approvePlan(personId, weekNumber, sprintId, comment);
+            // approvePlan catches its own errors (reverts via fetchReviews,
+            // see above), so it never rejects.
+            void approvePlan(personId, weekNumber, sprintId, comment);
             setSelectedCell(prev => prev ? {
               ...prev,
               cell: {
@@ -986,7 +993,9 @@ export function ReviewsPage() {
             if (batchMode) setTimeout(advanceBatch, 300);
           }}
           onRateRetro={(personId, weekNumber, sprintId, rating, comment) => {
-            rateRetro(personId, weekNumber, sprintId, rating, comment);
+            // rateRetro catches its own errors (see above), so it never
+            // rejects.
+            void rateRetro(personId, weekNumber, sprintId, rating, comment);
             setSelectedCell(prev => prev ? {
               ...prev,
               cell: {
@@ -1004,7 +1013,9 @@ export function ReviewsPage() {
             if (batchMode) setTimeout(advanceBatch, 300);
           }}
           onRequestChanges={(personId, weekNumber, sprintId, type, feedback) => {
-            requestChanges(personId, weekNumber, sprintId, type, feedback);
+            // requestChanges catches its own errors (see above), so it never
+            // rejects.
+            void requestChanges(personId, weekNumber, sprintId, type, feedback);
             const approvalField = type === 'plan' ? 'planApproval' : 'reviewApproval';
             setSelectedCell(prev => prev ? {
               ...prev,
@@ -1115,7 +1126,9 @@ function ReviewPanel({
       }
     };
 
-    fetchDocs();
+    // fetchDocs catches its own errors (console.error) and always resolves
+    // via its finally block, so it never rejects.
+    void fetchDocs();
   }, [selectedCell.personId, selectedCell.weekNumber]);
 
   const isRetroMode = selectedCell.type === 'retro';

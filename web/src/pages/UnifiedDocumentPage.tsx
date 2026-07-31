@@ -160,11 +160,11 @@ export function UnifiedDocumentPage() {
           ? `/documents/${id}/${aliasTarget}/${nestedPath}`
           : `/documents/${id}/${aliasTarget}`;
         console.warn(`Tab "${urlTab}" for document type "${document.document_type}" was renamed to "${aliasTarget}", redirecting`);
-        navigate(target, { replace: true });
+        void navigate(target, { replace: true });
         return;
       }
       console.warn(`Invalid tab "${urlTab}" for document type "${document.document_type}", redirecting to base URL`);
-      navigate(`/documents/${id}`, { replace: true });
+      void navigate(`/documents/${id}`, { replace: true });
     }
   }, [document, id, urlTab, nestedPath, tabConfig, navigate]);
 
@@ -217,7 +217,7 @@ export function UnifiedDocumentPage() {
 
   // Handler for when associations change (invalidate document query to refetch)
   const handleAssociationChange = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['document', id] });
+    void queryClient.invalidateQueries({ queryKey: ['document', id] });
   }, [queryClient, id]);
 
   // Document conversion (issue <-> project)
@@ -229,7 +229,9 @@ export function UnifiedDocumentPage() {
   const handleConvert = useCallback(() => {
     if (!document || !id) return;
     const sourceType = document.document_type as 'issue' | 'project';
-    convert(id, sourceType, document.title);
+    // convert() (useDocumentConversion.ts) catches its own errors (shows a
+    // toast) and never rejects.
+    void convert(id, sourceType, document.title);
   }, [convert, document, id]);
 
   const handleUndoConversion = useCallback(async () => {
@@ -285,7 +287,7 @@ export function UnifiedDocumentPage() {
         ]);
 
         // Navigate to the new document
-        navigate(`/documents/${data.id}`, { replace: true });
+        void navigate(`/documents/${data.id}`, { replace: true });
       } else {
         const error = await res.json();
         showToast(error.error || 'Failed to convert document', 'error');
@@ -297,7 +299,7 @@ export function UnifiedDocumentPage() {
 
   // Handle WebSocket notification that document was converted
   const handleDocumentConverted = useCallback((newDocId: string) => {
-    navigate(`/documents/${newDocId}`, { replace: true });
+    void navigate(`/documents/${newDocId}`, { replace: true });
   }, [navigate]);
 
   // Update mutation with optimistic updates
@@ -342,12 +344,12 @@ export function UnifiedDocumentPage() {
       }
     },
     onSuccess: (_, { documentId }) => {
-      queryClient.invalidateQueries({ queryKey: ['document', documentId] });
+      void queryClient.invalidateQueries({ queryKey: ['document', documentId] });
       // Also invalidate type-specific queries for list views
       if (document?.document_type) {
-        queryClient.invalidateQueries({ queryKey: [document.document_type + 's', 'list'] });
+        void queryClient.invalidateQueries({ queryKey: [document.document_type + 's', 'list'] });
         if (document.document_type === 'wiki') {
-          queryClient.invalidateQueries({ queryKey: ['documents', 'wiki'] });
+          void queryClient.invalidateQueries({ queryKey: ['documents', 'wiki'] });
         }
       }
     },
@@ -362,7 +364,7 @@ export function UnifiedDocumentPage() {
       }
     },
     onSuccess: () => {
-      navigate('/docs');
+      void navigate('/docs');
     },
   });
 
@@ -376,7 +378,16 @@ export function UnifiedDocumentPage() {
   const handleDelete = useCallback(async () => {
     if (!id) return;
     if (!window.confirm('Are you sure you want to delete this document?')) return;
-    await deleteMutation.mutateAsync(id);
+    try {
+      await deleteMutation.mutateAsync(id);
+    } catch {
+      // Already surfaced via the shared write-status bus
+      // (queryClient.ts's MutationCache.onError -> notifyMutationError - the
+      // same mechanism updateMutation above relies on for TRO-190/ERR-3), so
+      // this is swallowed here rather than re-surfaced a second time.
+      // `onDelete` (UnifiedEditor.tsx) is declared `() => void`, not
+      // Promise-returning, so this function must not reject.
+    }
   }, [deleteMutation, id]);
 
   const isWeeklyDoc = document?.document_type === 'weekly_plan' || document?.document_type === 'weekly_retro';
@@ -395,15 +406,15 @@ export function UnifiedDocumentPage() {
   const handleBack = useCallback(() => {
     // Navigate to type-specific list or docs
     if (document?.document_type === 'issue') {
-      navigate('/issues');
+      void navigate('/issues');
     } else if (document?.document_type === 'project') {
-      navigate('/projects');
+      void navigate('/projects');
     } else if (document?.document_type === 'sprint') {
-      navigate('/sprints');
+      void navigate('/sprints');
     } else if (document?.document_type === 'program') {
-      navigate('/programs');
+      void navigate('/programs');
     } else {
-      navigate('/docs');
+      void navigate('/docs');
     }
   }, [document, navigate]);
 
@@ -541,7 +552,7 @@ export function UnifiedDocumentPage() {
           {error?.message || 'Document not found'}
         </div>
         <button
-          onClick={() => navigate('/docs')}
+          onClick={() => void navigate('/docs')}
           className="text-sm text-accent hover:underline"
         >
           Go to Documents
@@ -570,9 +581,9 @@ export function UnifiedDocumentPage() {
             onTabChange={(tab) => {
               // Navigate to new URL - first tab gets clean URL, others get tab suffix
               if (tab === tabConfig[0]?.id) {
-                navigate(`/documents/${id}`);
+                void navigate(`/documents/${id}`);
               } else {
-                navigate(`/documents/${id}/${tab}`);
+                void navigate(`/documents/${id}/${tab}`);
               }
             }}
           />
@@ -600,7 +611,11 @@ export function UnifiedDocumentPage() {
       onDocumentConverted={handleDocumentConverted}
       onBack={hideBackButton ? undefined : handleBack}
       backLabel={hideBackButton ? undefined : backLabel}
-      onDelete={handleDelete}
+      onDelete={() => {
+        // handleDelete catches its own errors (see above), so it never
+        // rejects.
+        void handleDelete();
+      }}
       showTypeSelector={true}
       titleSuffix={standupAuthorName}
     />

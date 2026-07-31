@@ -145,8 +145,10 @@ describe('TRO-290 / ERR-14: window-focus refetch on a deleted document', () => {
     expect(writeStatus.current.hasFailedWrite).toBe(false);
 
     // Mark the query stale WITHOUT triggering a refetch yet - isolates the
-    // focus event as the actual trigger under test.
-    queryClient.invalidateQueries({ queryKey: ['document', DOC_ID], refetchType: 'none' });
+    // focus event as the actual trigger under test. `refetchType: 'none'` means
+    // this resolves without any network activity; awaiting it just ensures the
+    // stale-marking itself has completed before we move on.
+    await queryClient.invalidateQueries({ queryKey: ['document', DOC_ID], refetchType: 'none' });
 
     // The real trigger: react-query's focusManager listens for this exact
     // event on `window` (see @tanstack/query-core's focusManager.ts).

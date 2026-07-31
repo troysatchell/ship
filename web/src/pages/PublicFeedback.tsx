@@ -122,7 +122,14 @@ export function PublicFeedbackPage() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form
+          onSubmit={(e) => {
+            // handleSubmit catches all errors internally and routes them into the
+            // existing `error` state (rendered above), so it never rejects.
+            void handleSubmit(e);
+          }}
+          className="space-y-4"
+        >
           <div>
             <label htmlFor="title" className="mb-1 block text-sm font-medium text-foreground">
               Title

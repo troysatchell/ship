@@ -3,6 +3,7 @@ import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/hooks/useAuth';
 import { api, Workspace, AuditLog, UserInfo } from '@/lib/api';
 import { cn } from '@/lib/cn';
+import { useToast } from '@/components/ui/Toast';
 
 type Tab = 'workspaces' | 'users' | 'audit';
 
@@ -20,6 +21,7 @@ export function AdminDashboardPage() {
   const navigate = useNavigate();
   const { user, isSuperAdmin, impersonating, endImpersonation } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
+  const { showToast } = useToast();
 
   // Derive active tab from URL query params
   const tabParam = searchParams.get('tab') as Tab | null;
@@ -32,30 +34,42 @@ export function AdminDashboardPage() {
   const [users, setUsers] = useState<UserWithWorkspaces[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
   const [newWorkspaceName, setNewWorkspaceName] = useState('');
   const [creating, setCreating] = useState(false);
 
   useEffect(() => {
     if (!isSuperAdmin) {
-      navigate('/docs');
+      void navigate('/docs');
       return;
     }
-    loadData();
+    // loadData now catches its own errors (see below) and always resolves
+    // via its finally block, so it never rejects.
+    void loadData();
   }, [isSuperAdmin, navigate, showArchived]);
 
   async function loadData() {
     setLoading(true);
-    const [wsRes, usersRes, logsRes] = await Promise.all([
-      api.admin.listWorkspaces(showArchived),
-      api.admin.listUsers(),
-      api.admin.getAuditLogs({ limit: 50 }),
-    ]);
+    setLoadError(null);
+    try {
+      const [wsRes, usersRes, logsRes] = await Promise.all([
+        api.admin.listWorkspaces(showArchived),
+        api.admin.listUsers(),
+        api.admin.getAuditLogs({ limit: 50 }),
+      ]);
 
-    if (wsRes.success && wsRes.data) setWorkspaces(wsRes.data.workspaces);
-    if (usersRes.success && usersRes.data) setUsers(usersRes.data.users);
-    if (logsRes.success && logsRes.data) setAuditLogs(logsRes.data.logs);
-    setLoading(false);
+      if (wsRes.success && wsRes.data) setWorkspaces(wsRes.data.workspaces);
+      if (usersRes.success && usersRes.data) setUsers(usersRes.data.users);
+      if (logsRes.success && logsRes.data) setAuditLogs(logsRes.data.logs);
+    } catch (err) {
+      // api.admin.*'s underlying request() layer can reject on a network
+      // failure - previously an unhandled rejection that left `loading`
+      // stuck `true` forever (this function's setLoading(false) never ran).
+      setLoadError(err instanceof Error ? err.message : 'Failed to load admin dashboard data.');
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function handleCreateWorkspace(e: React.FormEvent) {
@@ -63,36 +77,65 @@ export function AdminDashboardPage() {
     if (!newWorkspaceName.trim()) return;
 
     setCreating(true);
-    const res = await api.admin.createWorkspace({ name: newWorkspaceName.trim() });
-    if (res.success && res.data) {
-      const { workspace } = res.data;
-      setWorkspaces(prev => [...prev, { ...workspace, memberCount: 0 }]);
-      setNewWorkspaceName('');
+    try {
+      const res = await api.admin.createWorkspace({ name: newWorkspaceName.trim() });
+      if (res.success && res.data) {
+        const { workspace } = res.data;
+        setWorkspaces(prev => [...prev, { ...workspace, memberCount: 0 }]);
+        setNewWorkspaceName('');
+      } else {
+        // Previously: neither a non-success response nor a thrown error
+        // (see catch below) gave any feedback - the form just silently
+        // stopped "Creating..." with the name still typed in. Route into
+        // the app-wide toast used elsewhere in this codebase.
+        showToast(res.error?.message || 'Failed to create workspace', 'error');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to create workspace', 'error');
+    } finally {
+      setCreating(false);
     }
-    setCreating(false);
   }
 
   async function handleArchiveWorkspace(workspaceId: string) {
     if (!confirm('Are you sure you want to archive this workspace? Users will no longer be able to access it.')) return;
 
-    const res = await api.admin.archiveWorkspace(workspaceId);
-    if (res.success) {
-      setWorkspaces(prev => prev.filter(w => w.id !== workspaceId));
+    try {
+      const res = await api.admin.archiveWorkspace(workspaceId);
+      if (res.success) {
+        setWorkspaces(prev => prev.filter(w => w.id !== workspaceId));
+      } else {
+        showToast(res.error?.message || 'Failed to archive workspace', 'error');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to archive workspace', 'error');
     }
   }
 
   async function handleToggleSuperAdmin(userId: string, currentValue: boolean) {
-    const res = await api.admin.toggleSuperAdmin(userId, !currentValue);
-    if (res.success && res.data) {
-      setUsers(prev => prev.map(u => u.id === userId ? { ...u, isSuperAdmin: res.data!.isSuperAdmin } : u));
+    try {
+      const res = await api.admin.toggleSuperAdmin(userId, !currentValue);
+      if (res.success && res.data) {
+        setUsers(prev => prev.map(u => u.id === userId ? { ...u, isSuperAdmin: res.data!.isSuperAdmin } : u));
+      } else {
+        showToast(res.error?.message || 'Failed to update super admin status', 'error');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to update super admin status', 'error');
     }
   }
 
   async function handleImpersonate(userId: string) {
-    const res = await api.admin.startImpersonation(userId);
-    if (res.success) {
-      // Reload page to get new session context
-      window.location.href = '/docs';
+    try {
+      const res = await api.admin.startImpersonation(userId);
+      if (res.success) {
+        // Reload page to get new session context
+        window.location.href = '/docs';
+      } else {
+        showToast(res.error?.message || 'Failed to start impersonation', 'error');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to start impersonation', 'error');
     }
   }
 
@@ -107,7 +150,15 @@ export function AdminDashboardPage() {
         <div className="bg-yellow-500 text-black px-4 py-2 flex items-center justify-between">
           <span>You are impersonating <strong>{impersonating.userName}</strong></span>
           <button
-            onClick={endImpersonation}
+            onClick={() => {
+              // endImpersonation lives in useAuth.tsx (out of this ticket's
+              // scope) and is not known to be self-contained, so its
+              // rejection is caught here rather than voided.
+              endImpersonation().catch((err: unknown) => {
+                console.error('Failed to end impersonation:', err);
+                showToast('Failed to end impersonation', 'error');
+              });
+            }}
             className="px-3 py-1 bg-yellow-700 text-white rounded hover:bg-yellow-800 transition-colors"
           >
             End Session
@@ -119,7 +170,7 @@ export function AdminDashboardPage() {
       <header className="flex h-14 items-center justify-between border-b border-border px-6">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => navigate('/docs')}
+            onClick={() => void navigate('/docs')}
             className="text-muted hover:text-foreground transition-colors"
           >
             <BackIcon />
@@ -152,6 +203,10 @@ export function AdminDashboardPage() {
           <div className="flex items-center justify-center h-32">
             <div className="text-muted">Loading...</div>
           </div>
+        ) : loadError ? (
+          <div className="flex items-center justify-center h-32">
+            <div className="text-sm text-red-400">{loadError}</div>
+          </div>
         ) : (
           <>
             {activeTab === 'workspaces' && (
@@ -162,16 +217,26 @@ export function AdminDashboardPage() {
                 newWorkspaceName={newWorkspaceName}
                 setNewWorkspaceName={setNewWorkspaceName}
                 creating={creating}
-                onCreateWorkspace={handleCreateWorkspace}
-                onArchiveWorkspace={handleArchiveWorkspace}
+                onCreateWorkspace={(e) => {
+                  // handleCreateWorkspace now catches its own errors (see
+                  // above), so it never rejects.
+                  void handleCreateWorkspace(e);
+                }}
+                onArchiveWorkspace={(id) => {
+                  void handleArchiveWorkspace(id);
+                }}
               />
             )}
             {activeTab === 'users' && (
               <UsersTab
                 users={users}
                 currentUserId={user?.id}
-                onToggleSuperAdmin={handleToggleSuperAdmin}
-                onImpersonate={handleImpersonate}
+                onToggleSuperAdmin={(userId, current) => {
+                  void handleToggleSuperAdmin(userId, current);
+                }}
+                onImpersonate={(userId) => {
+                  void handleImpersonate(userId);
+                }}
               />
             )}
             {activeTab === 'audit' && (
