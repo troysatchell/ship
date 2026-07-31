@@ -15,8 +15,9 @@ the source it measured. Every category audit skill's "compare mode" (`/<category
 documented in `.claude/skills/ship-factory/references/evals.md`; this file's own entries lean on it
 directly (see TRO-174's compression note further down, which warns that a compare-mode run against
 `audit-baseline` looks flat or worse over loopback for a fix that is real). Not itself a ticket, so
-it has no rollback entry of its own — `git tag -d audit-baseline` removes it, which leaves compare
-mode with no fixed reference point.
+it has no rollback entry of its own — `git tag -d audit-baseline` removes the **local** tag, which
+leaves compare mode with no fixed reference point; a tag already pushed also needs
+`git push origin :refs/tags/audit-baseline` to remove it from the remote.
 
 ---
 
