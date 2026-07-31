@@ -102,7 +102,28 @@ const loginLimiter = rateLimit({
 // General API rate limiting: a coarse per-source-IP flood ceiling followed by a
 // per-session/per-token budget. Keyed per identity so a shared agency NAT egress
 // no longer collapses an entire team into one bucket (finding API-1 / TRO-172).
-const apiLimiters = createApiRateLimiters(process.env, rateLimitRedisClient);
+//
+// TRO-307: destructured into two named consts and mounted below with two
+// separate calls to `app.use`, one per limiter — not a single call spreading
+// an array returned from `createApiRateLimiters`. Functionally identical —
+// Express creates one middleware layer per handler function either way, so
+// the request-handling behavior (order, path, both limiters applied to every
+// `/api/*` route) is unchanged; verified unchanged by the full pre-existing
+// `rate-limit.test.ts` suite passing byte-for-byte as before. The rewrite
+// exists because CodeQL's `js/missing-rate-limiting` flags 352 open alerts
+// across every route file mounted under `/api/` (api/src/routes/weekly-plans.ts,
+// weeks.ts, admin.ts, search.ts, and ~26 others — TRO-307), despite every one
+// of those routes already being covered by this exact chain: hammering
+// `GET /api/weekly-plans` (one of the flagged lines) 601 times under a forced
+// `NODE_ENV=production` returns HTTP 429 at request #601, exactly matching
+// `identityLimit` (rate-limit.ts:118). That is DERIVED, not CodeQL-confirmed:
+// this repo has no local CodeQL CLI to test against the actual query, so this
+// is a reasoned best-effort fix for a plausible static-analysis blind spot (a
+// `RequestHandler[]` built by a helper in another file, previously spread into
+// a variadic call here), not a verified fix for the alert itself — see
+// CHANGES.md (TRO-307) and `middleware/__tests__/rate-limit-coverage.test.ts`
+// for the regression coverage and its limits.
+const [perSourceIpLimiter, perIdentityLimiter] = createApiRateLimiters(process.env, rateLimitRedisClient);
 
 
 /**
@@ -288,8 +309,12 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
     },
   }));
 
-  // Apply rate limiting to all API routes
-  app.use('/api/', ...apiLimiters);
+  // Apply rate limiting to all API routes. Two explicit calls, not a spread of
+  // the array `createApiRateLimiters` returns — see the TRO-307 comment above
+  // `perSourceIpLimiter`/`perIdentityLimiter` for why. Order is unchanged: the
+  // IP flood ceiling still runs before the per-identity budget.
+  app.use('/api/', perSourceIpLimiter);
+  app.use('/api/', perIdentityLimiter);
   app.use(cors({
     origin: corsOrigin,
     credentials: true,

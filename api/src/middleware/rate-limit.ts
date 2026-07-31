@@ -224,8 +224,18 @@ export function apiRateLimitKey(req: RateLimitKeyRequest): string {
 }
 
 /**
- * Build the `/api/` limiter chain. Mount with
- * `app.use('/api/', ...createApiRateLimiters())`.
+ * Build the `/api/` limiter chain: `[perSourceIpLimiter, perIdentityLimiter]`.
+ *
+ * TRO-307: mount each element with its own `app.use('/api/', <element>)` call
+ * — do NOT spread the return value into one `app.use('/api/', ...)` call. A
+ * spread of this array is the shape that made CodeQL's `js/missing-rate-limiting`
+ * unable to credit this chain for the routes it protects (352 open alerts,
+ * `api/src/app.ts`'s TRO-307 comment above `perSourceIpLimiter` has the
+ * detail). The return type is a 2-tuple, not `RequestHandler[]`, specifically
+ * so destructuring at the call site (`const [a, b] = createApiRateLimiters(...)`)
+ * is exactly 2 non-optional handlers — an untupled array would type each
+ * destructured element as `RequestHandler | undefined`, and neither `!` nor an
+ * `as` cast is allowed in this codebase to paper over that.
  *
  * `redisClient` defaults to one built from `env.REDIS_URL` (production, once
  * `terraform/redis.tf` is applied and its endpoint is plumbed through SSM —
@@ -242,7 +252,7 @@ export function apiRateLimitKey(req: RateLimitKeyRequest): string {
 export function createApiRateLimiters(
   env: RateLimitEnv = process.env,
   redisClient: Redis | undefined = createRedisClientFromEnv(env)
-): RequestHandler[] {
+): [RequestHandler, RequestHandler] {
   const { windowMs, identityLimit, sourceIpLimit } = resolveApiRateLimits(env);
 
   const perSourceIpLimiter = rateLimit({
