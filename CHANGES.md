@@ -8,6 +8,117 @@ Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add 
 
 ---
 
+## TRO-304 (API-3) — `GET /api/documents` had no pagination; the audit's own recommended fix for a 2nd endpoint clearing ≥20% P95
+
+**What was broken.** Category 3's target is "≥20% P95 reduction on at least 2 endpoints, identical
+conditions." `audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md` found only `GET /api/issues`
+robustly clears that bar at every concurrency, and explicitly declined to claim a clean 2/2. That
+document's own "Recommended follow-up" #2 said pagination on `GET /api/documents` — never
+implemented — was "the single largest unrealized win in the original recommended plan (predicted
+~65% P95 reduction)." `api/src/routes/documents.ts`'s list route only applied a `LIMIT` clause when
+the caller passed an explicit `limit` query param; an omitted `limit` meant "every matching row" —
+up to 500 documents in one response at this project's audited seed volume, always serialized in
+full regardless of concurrency or caller need.
+
+**What changed — backend.** `api/src/routes/documents.ts`:
+- `DEFAULT_DOCUMENTS_LIST_LIMIT = 100` is now applied whenever `limit` is omitted, so the default
+  response (the exact call the benchmark harness and every unparameterized caller make) is a bounded
+  100-document page, not the full corpus. 100 matches the pre-existing `MAX_DOCUMENTS_LIST_LIMIT`
+  ceiling this route already enforced for an explicit `limit` (ERR-8), so a caller that was already
+  passing `?limit=<=100>` sees no change in row count.
+- `MAX_DOCUMENTS_LIST_LIMIT` is raised 100 → 500 (ERR-8's original ceiling was fine as a default page
+  size but too low for a caller that genuinely needs the full corpus now that omitting `limit` no
+  longer means "everything"). 500 matches `IssueListPaginationSchema`'s existing ceiling
+  (`openapi/schemas/issues.ts`, TRO-182/DB-5) for consistency, and covers this environment's full
+  500-document seed corpus exactly.
+- `offset` (0–100000, optional) is now accepted, mirroring `IssueListPaginationSchema.offset`, so a
+  caller can page past the default/explicit `limit` instead of only ever seeing the first page.
+- OpenAPI (`api/src/openapi/schemas/documents.ts`): the registered `GET /documents` query schema and
+  description now document the bounded default, the raised `limit` ceiling, and the new `offset`
+  param.
+
+**What changed — frontend (two callers of the unparameterized list, found by grepping every
+`/api/documents` list call in `web/src/`; every other reference in `web/src/` was a single-document
+`/api/documents/:id` fetch, unaffected by this change).** `web/src/hooks/useDocumentsQuery.ts` and
+`web/src/components/CommandPalette.tsx` both relied on the old "omitted `limit` means everything"
+contract for correctness — `useDocumentsQuery.ts` feeds `buildDocumentTree` (`lib/documentTree.ts`),
+which needs every document of a type to build correct parent/child relationships (a partial page
+would silently orphan or drop whole subtrees in the wiki sidebar); `CommandPalette.tsx` fetches once
+per open and searches the full list client-side (Cmd+K), so a bounded page would make some documents
+silently unfindable. Both now pass an explicit `limit=500` (the endpoint's new ceiling, matching the
+seeded corpus size) to preserve their pre-existing "every matching document" behavior — this is a
+deliberate choice to keep both features complete rather than redesign them to paginate, since neither
+a hierarchical tree nor an in-memory search UI degrades gracefully to a partial dataset. A workspace
+whose total document count (or whose count within one `?type=` filter) exceeds 500 will not get full
+coverage from either caller after this change — a known limitation shared with `/api/issues`'s own
+500-row ceiling on its own explicit `limit`, not a new one introduced here.
+
+Checked whether a sibling ticket (TRO-175/API-4) had already changed `CommandPalette.tsx` to route
+through the search endpoint instead: `git log --oneline main -- web/src/components/CommandPalette.tsx`
+shows no such commit on `main` as of this branch (the commit exists elsewhere per `git log --all`, not
+yet merged), so `CommandPalette.tsx` needed this ticket's own fix.
+
+**Post-merge correction (orchestrator, resolving this branch against `main` after TRO-175 landed
+first):** TRO-175 (PR #74) merged to `main` before this branch did, and it rewrote
+`CommandPalette.tsx`'s document fetch to route through `/api/search` with react-query caching instead
+of the raw `apiGet('/api/documents')` call this ticket had patched with an explicit `limit=500`. That
+made this ticket's `CommandPalette.tsx`/`CommandPalette.test.tsx` changes moot — the file no longer
+calls `/api/documents` at all, so the `?limit=500` patch has nothing to apply to. The merge conflict
+was resolved by taking TRO-175's version of both files entirely; **the 2 `CommandPalette.test.tsx`
+cases and the "palette requests `/api/documents?limit=500`" claim above describe this branch's
+pre-merge state, not what actually shipped.** The backend (`documents.ts`, `documents-pagination.test.ts`)
+and `useDocumentsQuery.ts`/its test are unaffected by this and shipped exactly as described above and
+measured in the before/after benchmark.
+
+**Measured before/after (`audit/api-perf/documents-pagination-jul31.md`).** Same seed volume (500
+documents, byte-identical distribution to the phase2 compare), same hardware, same
+`bench-runner-compare.mjs` methodology (window-synchronized 900-request bursts, autocannon 8.0.0,
+concurrency 10/25/50), reused unmodified except for scoping to this one endpoint. `GET /api/documents`
+(no params) P95: **40.13ms → 9.66ms (−75.9%)** at c=10, **73.98ms → 24.72ms (−66.6%)** at c=25,
+**292.14ms → 42.44ms (−85.5%)** at c=50 — clears the ≥20% target at every tested concurrency, by a
+wide margin, with no discards/retries needed in any burst. Payload per response fell 295,020 →
+53,927 bytes (−81.7%). Combined with phase2 compare's own `GET /api/issues` result (already
+robustly ≥20% at every concurrency), Category 3's "≥2 endpoints" target is now met under the
+stricter "every tested concurrency" reading, not only the looser "at some concurrency" reading
+phase2 compare left as the only way to call it met.
+
+**Regression tests.**
+- `api/src/routes/documents-pagination.test.ts` (6 cases): bare `GET /api/documents` bounded to 100
+  against a 110-document seed (would be 110 pre-fix); explicit `limit=110` still works (cap raised
+  past the old 100 ceiling); explicit `limit=999999999` clamps to the new 500 ceiling instead of
+  returning everything; `offset` pages correctly past the default limit with no ID overlap between
+  pages; a negative `offset` returns 400; `?type=wiki&limit=500` still returns every matching
+  document for tree-building callers.
+- `web/src/hooks/useDocumentsQuery.test.tsx` (2 cases): `useDocumentsQuery('wiki')` and `('project')`
+  both request `limit=500` explicitly, not the new bounded default.
+- `web/src/components/CommandPalette.test.tsx` (2 cases): the palette requests
+  `/api/documents?limit=500` on open, and still renders documents from the full response.
+
+Confirmed red-before-green for all three files: reverted `api/src/routes/documents.ts` +
+`api/src/openapi/schemas/documents.ts` (backend tests) or `CommandPalette.tsx` +
+`useDocumentsQuery.ts` (frontend tests) to the pre-fix version via `git checkout -- <file>` (files
+copied aside first, per factory rule 9 — no `git stash`), re-ran each suite (6/6 backend cases
+failed for the expected reasons — e.g. `expected 100 to be 110`; 2/2 `useDocumentsQuery` cases failed
+on the missing `limit=500`; 1/2 `CommandPalette` cases failed the same way, the other still passed
+because the old code fetched everything anyway), then restored the fix and re-ran green (6/6, 2/2,
+2/2).
+
+**How to run it.**
+```bash
+pnpm --filter @ship/api test -- documents-pagination
+pnpm --filter @ship/web test -- useDocumentsQuery CommandPalette
+node audit/api-perf/documents-pagination-jul31/raw/bench-runner-documents.mjs before   # against pre-fix code
+node audit/api-perf/documents-pagination-jul31/raw/bench-runner-documents.mjs after    # against post-fix code
+```
+
+**How to roll it back.** Revert this commit (or the four touched files:
+`api/src/routes/documents.ts`, `api/src/openapi/schemas/documents.ts`,
+`web/src/components/CommandPalette.tsx`, `web/src/hooks/useDocumentsQuery.ts`) plus the three new
+test files. No database migration was introduced (query-param-driven, no schema change), so no
+migration rollback is needed.
+
+---
+
 ## TRO-300 (TEST-16) — `session-activity-race`'s TRO-288 fix gated the wrong half of the race
 
 **Not one of the audit report's 68 baseline findings** — a post-baseline flake filed by the
