@@ -107,6 +107,464 @@ migration rollback is needed.
 
 ---
 
+## TRO-180 (DB-3) — Named the three hottest unnamed statements so Postgres can cache their plans
+
+**What was broken.** `api/src/db/client.ts`'s `pool` is a plain `pg.Pool`, and every call site in
+the app called `pool.query(text, values)` — the *unnamed* statement form. Postgres re-parses and
+re-plans an unnamed statement on every single execution; it never gets a chance to cache a plan.
+The audit's evidence (`audit/AUDIT_REPORT.md` DB-3): across one capture, parse (91.5ms) + bind
+(169.5ms) = 261.0ms of planning tax against only 167.2ms of actual execution — 61% of all database
+time. `documents` alone carries 13 indexes plus JSONB expression predicates, which makes its
+queries expensive to (re-)plan. The hypothesis in the ticket ("name the hot statements") held.
+
+**Which statements, and why these three.** The brief pointed at "the issues-list query, the
+session read/write path, the documents fetch path" as candidates and asked me to pick based on
+the evidence. `audit/db-query/raw/pg-statements.log` and `top-statements.json` show the real
+frequency distribution, not just the slowest single execution:
+
+| Statement | Call site | Executions in one capture |
+|---|---|---|
+| `UPDATE sessions SET last_activity ...` | `api/src/middleware/auth.ts` | 121 (pre-DB-2 throttle) / 134 in the raw parse log |
+| `SELECT ... FROM sessions s JOIN users u ...` | `api/src/middleware/auth.ts` | 107–119 |
+| `SELECT role FROM workspace_memberships ...` | `api/src/middleware/visibility.ts` (`isWorkspaceAdmin`) | 64–70 |
+| `/api/issues` list query | `api/src/routes/issues.ts` | 3 |
+| `/api/documents` list query | `api/src/routes/documents.ts` | 5–15 |
+
+I converted the first three — they dwarf any single list-endpoint query in raw execution count
+because they run on **every** authenticated request, regardless of route, not just on list views.
+
+I deliberately did **not** convert the `/api/issues` or `/api/documents` list queries, even though
+DB-3's own EXPLAIN ANALYZE demonstration used `/api/issues` (Planning 1.5–2.2ms vs Execution
+~0.5ms). Both routes build their SQL text conditionally per applied filter/type param (see
+`issues.ts:347-455`, `documents.ts:143+` — `query +=` appended per optional filter). node-postgres
+itself refuses to reuse a statement name for different text on the same connection
+(`api/node_modules/pg/lib/query.js:157-158`: `"Prepared statements must be unique - '<name>' was
+used for a different statement"`, thrown client-side, not server-side). Naming these as literally
+written would work for the very first filter combination a given pooled connection saw and then
+throw a real runtime error the first time that same connection served a *different* filter
+combination for the same route — a correctness regression, not just a missed optimization. Fixing
+that would require restructuring both routes to a filter-invariant SQL shape (e.g.
+`($n::text IS NULL OR col = $n)` for every optional filter), which is a materially larger, riskier
+change than this ticket's "name a handful of hot statements" scope, and both routes have already
+been touched by API-2/DB-5/DB-7/DB-8/TRO-182 — piling a structural rewrite on top belongs in its
+own ticket, not this one.
+
+**What changed.**
+- `api/src/middleware/auth.ts` — the session-lookup `SELECT` (session validation) and the
+  `last_activity` `UPDATE` (the DB-2 throttled write) now call
+  `pool.query({ name: 'auth_session_lookup', text, values })` and
+  `pool.query({ name: 'auth_session_touch_activity', text, values })` respectively, instead of
+  `pool.query(text, values)`. SQL text and parameter order are byte-identical to before.
+- `api/src/middleware/visibility.ts` — `isWorkspaceAdmin`'s role lookup now calls
+  `pool.query({ name: 'workspace_admin_role_lookup', text, values })`. Same SQL text, same
+  parameter order.
+- Added minimal local row types (`SessionAuthLookupRow`, `WorkspaceMembershipRoleRow`) on the two
+  files touched, matching `schema.sql`'s `sessions`/`users`/`workspace_memberships` columns —
+  these `pool.query` calls were implicitly `any` before (TS-2 territory); typing the exact lines
+  this ticket already touched is in scope, retyping the rest of either file is not.
+- No SQL text changed, no parameter changed, no schema change. This is purely a query-shape
+  (unnamed → named) change; behavior is unchanged by construction and confirmed unchanged by the
+  full api test suite (678/678 passing) and the new regression test below.
+- Three existing tests inspected `pool.query`'s first call argument directly
+  (`String(call[0])`, `call[0] as string`) assuming it was always a raw SQL string —
+  true for every call site except the two in `auth.ts` this ticket converted. Added
+  `api/src/test/sql-of.ts` (`sqlOf(arg)`, extracts `.text` from either call shape) and updated
+  `api/src/middleware/__tests__/session-activity-throttle.test.ts`,
+  `api/src/middleware/__tests__/session-activity-race.test.ts`, and
+  `api/src/routes/documents-query-count.test.ts` to use it. Assertions were updated to check the
+  new call shape (including the `name` field), not weakened or removed.
+
+**Regression test — `api/src/middleware/__tests__/named-prepared-statements.test.ts`** (new file,
+vitest, run by the gate). For each of the three converted statements, asserts (a) the call is
+issued as `{ name, text, values }` with the exact stable name, not `(text, values)`, (b) the same
+name is reused verbatim across independent requests, and (c) behavior is unchanged — a valid
+session still authenticates, the cookie still refreshes, `isWorkspaceAdmin` still resolves
+true/false correctly for admin/member/no-membership rows.
+
+Confirmed **red** for the right reason: copied the pre-fix `auth.ts`/`visibility.ts` into place via
+`git show HEAD:<path>` (this ticket's own base commit, before either file was touched), re-ran the
+suite, and 4 of 6 cases failed on exactly the shape assertion — e.g. `expected 'SELECT s.id,
+s.user_id, s.workspace_i…' to match object { name: 'auth_session_lookup', … }` — not an import
+error or a typo. The 2 behavior-only cases (member/no-membership) passed even against the pre-fix
+code, as expected, since behavior was never the thing this ticket changes. Restored the fix and
+all 6 passed. Full command used for the red run is in the PR description.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run \
+  src/middleware/__tests__/named-prepared-statements.test.ts \
+  src/middleware/__tests__/session-activity-throttle.test.ts \
+  src/middleware/__tests__/session-activity-race.test.ts \
+  src/routes/documents-query-count.test.ts
+# Full suite:
+pnpm --filter @ship/api test
+```
+
+**Measurement (Tier 2 — required for this ticket).** Seed volume: 500 documents (254 issue / 91
+wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project /
+6 standup / 5 program), 20 users, per `audit/shipshape.config.yaml` (`pnpm db:migrate && pnpm
+db:seed && ./api/node_modules/.bin/tsx audit/seed-augment.ts` against this worktree's own
+PostgreSQL 15.13). Script and full output kept in the scratchpad
+(`TRO-180-explain.js`, `TRO-180-explain-output.txt`), not committed — this is a one-off
+measurement, not a maintained tool.
+
+*Single dedicated connection* (PREPARE + `EXPLAIN (ANALYZE, BUFFERS) EXECUTE`, 7 executions —
+node-postgres's own named-query path uses the same server-side plan cache as SQL-level `PREPARE`):
+all three statements show `custom_plans: 5, generic_plans: 2` in `pg_prepared_statements` after 7
+executions — i.e. Postgres genuinely switched from a per-execution custom plan to a cached generic
+plan exactly at the 6th execution, confirmed via the catalog view, not inferred from timing alone.
+Planning time on execution 7 (the second generic-plan execution, once the generic plan itself was
+already built) collapsed to ~0.003–0.005ms across all three statements, down from ~0.02–0.09ms on
+the unnamed runs (after JIT/catalog-cache warmup on the first cold run, which read 2.3–3.2ms
+regardless of naming — that first-request cost is unrelated to this fix and unaffected by it).
+
+**Honest caveat on magnitude.** These three statements are cheap to plan even unnamed — small
+tables (`sessions`, `users`, `workspace_memberships`), no JSONB predicates, few indexes to
+consider. The absolute saving observed here (tens of microseconds per execution) is much smaller
+than DB-3's headline `/api/issues` number (Planning ~1.5–2.2ms against the 13-index `documents`
+table) — because, as explained above, `/api/issues` was deliberately not converted. This fix
+removes real, measured planning cost from the three highest-*volume* statements in the app (the
+ones executed on literally every request), not the highest-*latency* one DB-3 used as its
+demonstration query. Both are legitimate readings of "the hot statements"; this entry is explicit
+about which one was chosen and why.
+
+**Connection-pooling reality check (the nuance CLAUDE.md requires, not assumed).** Postgres's
+custom→generic plan cache is per-backend-connection. `api/src/db/client.ts` pools connections
+(`max: 10` dev / `20` prod, `idleTimeoutMillis: 30000`), and `pool.query()` acquires-and-releases a
+connection per call — a request does not keep "its" connection. Whether the cache benefit actually
+lands depends on whether any given pooled connection sees the *same named statement* 5+ times
+before it is recycled or goes idle:
+
+- An early probing attempt (issuing a plain follow-up query through `pool.query()` after a burst)
+  undercounted: `pool.query()`'s own acquire/release pattern tends to hand back the
+  most-recently-released idle connection under low concurrency, so a naive sequential probe kept
+  landing on one connection and looked like execution counts were fragmented. Corrected by
+  checking out a client explicitly (`pool.connect()` / `client.query()` / `release()`) per
+  simulated request and tagging it with `pg_backend_pid()` on the *same* client — the only way to
+  get a true per-connection count.
+- With that corrected method: 60 simulated requests to the admin-role-check statement, at
+  concurrency 10 (= pool max) in 6 bursts, spread evenly across all 10 pooled connections — **all
+  10 connections reached exactly 6 executions each**, i.e. all 10 crossed the 5-execution
+  threshold and would be serving a cached generic plan for anything past their 6th hit.
+- A connection given 7 uninterrupted executions in a row showed cumulative
+  `custom_plans: 5, generic_plans: 8` (13 total — 6 from the burst phase plus 7 more, since
+  `pool.connect()` handed back an already-warmed connection) — consistent with "first 5 ever on a
+  connection are custom, everything after is generic," accumulating correctly across separate
+  calls to the pool, not just within one tight loop.
+
+**So: observed, not assumed — under sustained/bursty traffic against this hot path (which by
+definition fires on every request), the benefit is real and lands on every connection in the pool,
+not just a lucky few.** The caveat that remains genuinely unverified: at *low* request volume
+(sparse traffic spread out over minutes, well below `idleTimeoutMillis`'s 30s window), a
+connection could idle out and be recycled before ever reaching 5 executions of a given name,
+in which case the new connection starts the count over. This ticket did not — and could not,
+without a production traffic trace — measure Ship's actual request rate against this threshold.
+Given these three statements run on literally every authenticated request, any workspace with more
+than a handful of concurrent users should comfortably clear 5 hits per connection well within the
+30s idle window; a single-user, sparse-usage deployment is the case where the benefit is more
+theoretical than realized.
+
+**Roll back.** Revert the commits on `fix/db-3-query-plan-cache` touching `api/src/middleware/auth.ts`
+and `api/src/middleware/visibility.ts` (reverts to plain `pool.query(text, values)` — no schema or
+data changes to undo), and remove `api/src/middleware/__tests__/named-prepared-statements.test.ts`
+and `api/src/test/sql-of.ts`. The three test-file updates that switched to `sqlOf(...)` can be
+reverted alongside, or left in place — `sqlOf` is a superset-compatible extraction that also
+handles the plain-string case, so it is harmless to keep even if the production naming is rolled
+back.
+
+---
+
+## TRO-237 — [TF-4] Flat root module had no committed provider lock file; providers floated
+
+**What was broken.** `terraform/` (the flat root module, and — since `TRO-235`/TF-2 converged prod
+onto it — the sole AWS root now) declared floating provider constraints
+(`hashicorp/aws ~> 5.0`, `hashicorp/random ~> 3.6`, `terraform/versions.tf:4-13`) with no committed
+`.terraform.lock.hcl`. Two operators, or a laptop vs. CI, running `terraform init` at different
+times could silently resolve different provider builds inside those ranges, with no diff to review
+when it happened. `terraform/modules/*` and `terraform/render/` already commit their own lock
+files; the flat root did not.
+
+**Precondition check (done first, not assumed).** TF-3/TRO-236 claims to have fixed `terraform
+init` at this root by bumping `.terraform-version` from the expired-key `1.6.0` to `1.15.8`. No
+terraform binary was available in this environment (`which terraform` → not found, no `tfenv`/`asdf`
+either), so this was verified rather than taken on faith: downloaded `terraform_1.15.8_darwin_arm64`
+directly from `releases.hashicorp.com`, checked it against the published `SHA256SUMS`
+(`terraform_1.15.8_darwin_arm64.zip: OK`), and ran it fresh. `terraform init -backend=false` from
+`terraform/` succeeded:
+
+```text
+Initializing provider plugins...
+- Finding hashicorp/aws versions matching "~> 5.0"...
+- Finding hashicorp/random versions matching "~> 3.6"...
+- Installing hashicorp/aws v5.100.0...
+- Installed hashicorp/aws v5.100.0 (signed by HashiCorp)
+- Installing hashicorp/random v3.9.0...
+- Installed hashicorp/random v3.9.0 (signed by HashiCorp)
+
+Terraform has created a lock file .terraform.lock.hcl to record the provider
+selections it made above.
+...
+Terraform has been successfully initialized!
+```
+
+TF-3's fix holds at the flat root.
+
+**What changed.**
+- Committed the `.terraform.lock.hcl` the `init` above generated (`hashicorp/aws 5.100.0`,
+  `hashicorp/random 3.9.0`, both with full `h1:`/`zh:` hashes for every platform Terraform
+  recorded).
+- Removed the root `.gitignore`'s `terraform/.terraform.lock.hcl` line — it was anchored to exactly
+  this one file, so removing it does not affect the separate, still-untouched
+  `terraform/environments/*/.terraform.lock.hcl`, `terraform/bootstrap/.terraform.lock.hcl`, or
+  `terraform/test-runner/.terraform.lock.hcl` ignore rules a few lines below it.
+- The nested `terraform/.gitignore` also carries a blanket, unanchored `.terraform.lock.hcl` rule
+  (present since `2c1c633`, predating this ticket) that would otherwise still catch the flat root's
+  file regardless of the root `.gitignore` change. Added `!/.terraform.lock.hcl` — a root-anchored
+  negation, mirroring the existing `!render/.terraform.lock.hcl` exception added for TF-10 — so only
+  `terraform/.terraform.lock.hcl` itself is un-ignored; nested lock files under `environments/*`,
+  `modules/*`, `bootstrap/`, and `test-runner/` stay covered by the blanket rule.
+- `terraform/.terraform/` (the provider binary cache `init` also creates) was **not** committed —
+  confirmed still ignored (`git check-ignore terraform/.terraform/providers` matches
+  `terraform/.gitignore:2:.terraform/`) and absent from `git status --porcelain` after staging.
+
+**Correction to the ticket brief.** The brief asserted "the modular paths (`terraform/
+environments/*`) ARE already properly locked." That is not accurate as of this ticket: neither
+`terraform/environments/dev/` nor `terraform/environments/shadow/` has a committed
+`.terraform.lock.hcl` — `git ls-files terraform/environments/` lists no lock file for either, and
+TF-3's own `CHANGES.md` entry (`TRO-236`) says the same thing explicitly: lock files `init`
+generated for `dev` and `shadow` "none of which are committed." What genuinely *is* already locked
+is `terraform/modules/*/.terraform.lock.hcl` (six modules, all tracked) and
+`terraform/render/.terraform.lock.hcl` (TF-10). Left `environments/*` untouched — closing that gap,
+if wanted, is outside TF-4's declared scope (a flat-root-only fix) and is a separate, currently
+unfiled gap, not this ticket.
+
+**How to run it.**
+
+```bash
+cd terraform
+terraform init -backend=false   # deterministic now: resolves aws 5.100.0 / random 3.9.0 from the lock file
+terraform validate              # Success! 1 pre-existing warning only (TF-5's S3 lifecycle rule, untouched here)
+terraform fmt -check -recursive # exit 0, no output — nothing to reformat
+```
+
+`terraform plan` was not attempted for evidence beyond `-backend=false` `init`: this config's
+backend is S3 with the bucket name in SSM, and there are no AWS credentials in this environment —
+the same documented gap TF-1/TF-3 hit, not new here.
+
+**Not covered by this ticket.** TF-5 (the uploads-bucket lifecycle-rule `validate` warning) and the
+security-groups file (TF-7, already merged) were left untouched, per scope. The
+`terraform/environments/*` lock-file gap identified above is also left untouched — not TF-4's
+declared scope.
+
+**Regression test:** none added — pure Terraform configuration/tooling change, no application code
+path for vitest to exercise. Same "regression-test gate inapplicable" judgment as TF-1/TRO-234,
+TF-3/TRO-236, and TF-9/TRO-292 (`audit/factory/scorecard.jsonl`); the `terraform init`/`validate`/
+`fmt` transcripts above are the evidence in their place.
+
+**How to roll it back.** `git revert <this commit>` deletes `terraform/.terraform.lock.hcl` and
+restores both `.gitignore` rules. That does not reintroduce TF-3's `init` failure (the version pin
+is a separate file, untouched here) — it only re-floats the provider versions within `~> 5.0` /
+`~> 3.6`, i.e. exactly TF-4's original finding, reopened. There is no scenario where reverting is
+desirable; it exists only as a mechanical undo.
+
+---
+
+## TRO-245 [RULE-3] — verified every Phase 2 bug fix actually shipped the regression test it claimed
+
+**What this is.** RULE-3 is the assignment-implementation rule that every bug fixed in this
+project's remediation must ship with a regression test that would have caught it. It is not one of
+the audit's 68 numbered findings. The 5 highest-value fixes (DB-1, ERR-1, ERR-2, API-1,
+TEST-5/ERR-6) were already marked Done in Linear, meaning each was supposed to have already merged
+with such a test. This ticket's job was to **verify** that claim per-finding — not re-implement any
+fix — and close any gap found.
+
+**Verification method.** For each finding: located the merged fix and its regression test on
+`main`, read the test to confirm it asserts the real invariant (not just "didn't crash"), confirmed
+it lives in a vitest file the gate actually executes (`api/src/**/*.test.ts` /
+`web/src/**/*.test.ts(x)`, never only `e2e/*.spec.ts`), then — wherever feasible — temporarily
+reintroduced the historical bug in the worktree (never committed), re-ran the test, confirmed a
+genuine `AssertionError` (not an import/type error), and restored the file via `git checkout --`.
+All five were verified this way (revert-and-watch), not by reading alone.
+
+| Finding | Ticket | Regression test | Result |
+|---|---|---|---|
+| DB-1 | TRO-178 | `api/src/db/__tests__/migrationRunner.test.ts`, `verifyMigrations.test.ts` | PASS — reintroduced the historical "swallow any *already exists* error" catch in `runPendingMigrations`; 2 tests went red with `AssertionError: promise resolved ... instead of rejecting` (one in `migrationLock.test.ts` too, an unrelated file exercising the same code path). Restored, green again. |
+| ERR-1 | TRO-188 | `web/src/components/editor/SyncStatusIndicator.test.tsx` | PASS — reverted `deriveSyncIndicator` to trust `syncStatus` alone (the pre-fix behavior); 5 tests went red reproducing the exact "Saved"/"Cached" data-loss lie. Restored, green again. |
+| ERR-2 | TRO-189 | `api/src/collaboration/__tests__/session-revocation.test.ts` | PASS — made `revokeConnection` a no-op (session authenticated once at upgrade, never re-checked, matching the historical defect); 4 of 5 tests went red (the control case, which needs no revocation, correctly stayed green) with real socket/database assertions (`closed` stayed `false`, a post-revocation write reached `documents`). Restored, green again. |
+| API-1 | TRO-172 | `api/src/middleware/__tests__/rate-limit.test.ts`, `web/src/lib/queryClient.test.ts`, `web/src/components/MutationErrorToast.test.tsx` | PASS — reverted `shouldRetryRequest` to treat 429 as permanent like every other 4xx: 1 test red directly, 6 more red in dependent files (`PersonEditor.test.tsx`, `UnifiedDocumentPage.throttledRead.test.tsx`) proving the retry policy is exercised broadly. Separately reverted `apiRateLimitKey`/`identityLimit` to the old per-IP/100-per-minute config: 7 tests went red. Restored both files, green again. |
+| TEST-5 / ERR-6 | TRO-227 | `web/src/components/editor/CommentDisplay.test.ts` | PASS — reverted the plugin's `view()` lifecycle to the pre-fix behavior (blur/click-away had no handler; Escape required the input to already have focus); the 3 dismissal-path tests went red (happy-path and destroy-path tests correctly stayed green). Restored, green again. |
+
+**One gap found and closed, precisely scoped.** No test previously spawned the actual `migrate.ts`
+CLI process — `migrationRunner.test.ts`/`verifyMigrations.test.ts` both call `runMigrations()`
+directly as a function, which cannot observe whether `migrate.ts`'s own try/catch actually converts
+a rejection into `process.exit(1)`. Added
+`api/src/db/__tests__/migrateCli.test.ts`: spawns the real `tsx src/db/migrate.ts` (what
+`db:migrate` runs) against an unreachable `DATABASE_URL` and asserts the process exits non-zero and
+reports the failure on stderr.
+
+**Stated precisely, per the claim-provenance rule:** this new test does **not** reproduce DB-1's
+specific historical defect — verified by swapping in the actual pre-DB-1-fix `migrate.ts` (`git
+show <pre-TRO-178 commit>:api/src/db/migrate.ts`, never committed) and re-running it: the test
+**stayed green**, because the old bug only swallowed errors whose message contains "already
+exists", and a refused database connection does not match that string. DB-1's exact shape is what
+`migrationRunner.test.ts`'s revert-and-watch above already proves red at the `runMigrations()`
+level. This new test instead closes the adjacent, previously-unverified gap: that the CLI wrapper
+forwards *any* `runMigrations()` failure — not only DB-1's specific one — into a non-zero exit
+code, which is what "non-zero exit on failure" requires end-to-end and what no prior test checked
+by spawning the real process.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/db/__tests__/migrateCli.test.ts
+```
+
+**No production code changed.** All 5 findings' fixes were confirmed correct as merged; nothing
+was found incomplete.
+
+**Rollback.** Remove `api/src/db/__tests__/migrateCli.test.ts`.
+
+---
+
+## TRO-238 (TF-5) — uploads S3 lifecycle rule had no `filter`/`prefix`; added an explicit empty `filter {}`
+
+**What was broken.** `aws_s3_bucket_lifecycle_configuration.uploads` — the rule that aborts stray
+incomplete multipart uploads on the uploads bucket — declared a `rule` block with an `id`,
+`status`, and `abort_incomplete_multipart_upload`, but no `filter` and no top-level `prefix`. The
+AWS provider (`hashicorp/aws` `~> 5.0`, resolved to `5.100.0` in this environment) treats that
+combination as invalid: exactly one of `rule[0].filter` / `rule[0].prefix` is required. Today it's
+a validation warning ("This will be an error in a future version of the provider"); a future
+provider major turns it into a hard `terraform validate`/`plan` failure. It also left the rule's
+actual scope ambiguous on paper — "applies to all objects" was only true by implicit default, not
+declared.
+
+Two locations carried the identical resource and warning:
+- `terraform/s3-cloudfront.tf:430` (the flat root — this is what's actually deployed to prod,
+  per TF-2/TRO-235's convergence).
+- `terraform/modules/cloudfront-s3/main.tf:437` (the shared module, consumed by
+  `terraform/environments/dev` and `terraform/environments/shadow` — `environments/prod` used to
+  be a third consumer but TRO-235 deleted it as part of the TF-2 fix, before this ticket started).
+
+**What changed.** Added an empty `filter {}` block to the `rule` in both files, immediately before
+`abort_incomplete_multipart_upload`. An empty filter matches the AWS default (applies to every
+object in the bucket, no prefix/tag narrowing) — this preserves today's actual behavior exactly,
+it just makes it explicit and satisfies the provider's "specify exactly one of filter/prefix"
+requirement. No prefix scoping was intended: the rule's `id` (`abort-incomplete-multipart`) and
+its comment ("clean up incomplete multipart uploads") both describe a bucket-wide housekeeping
+rule, not something scoped to a subset of keys, and there is no other evidence anywhere in the
+repo (docs, other lifecycle rules, upload code) suggesting a narrower scope was ever intended. This
+is a config-only change: no resource is replaced, no attribute that affects data retention/deletion
+changed — only the shape of the declaration.
+
+**How to run it.**
+
+```bash
+# Terraform binary: temp-downloaded 1.9.8 (darwin_arm64) to a scratch dir, matching the
+# TF-1/TF-2/TF-3 precedent in this factory — the repo's pinned 1.15.8 (terraform/.terraform-version)
+# is not installed on this machine and was not modified by this ticket. Not committed to the repo.
+cd terraform
+terraform init -backend=false -input=false
+terraform validate                 # BEFORE: Success! with 1 warning (filter/prefix, TF-5)
+                                    # AFTER:  Success! The configuration is valid. (0 warnings)
+terraform fmt -check -recursive .  # exit 0, no formatting changes needed
+git clean -fdx -- .terraform .terraform.lock.hcl   # removes the generated cache + lock file this
+                                                    # init created; git clean only ever touches
+                                                    # untracked/ignored paths, so it is safe here
+                                                    # (leaves `git status` clean) and would refuse
+                                                    # to remove either path if it were ever tracked
+cd environments/shadow             # second root: consumes terraform/modules/cloudfront-s3
+terraform init -backend=false -input=false
+terraform validate                 # BEFORE: Success! with the same warning, module-relative path
+                                    # AFTER:  Success! The configuration is valid. (0 warnings)
+git clean -fdx -- .terraform .terraform.lock.hcl   # same reasoning: this init generates a fresh
+                                                    # .terraform.lock.hcl here (none was tracked
+                                                    # before), so cleanup must remove it too or
+                                                    # `git status` is left dirty — `git clean`
+                                                    # (never `rm -rf`) is what makes that safe to
+                                                    # do unconditionally, here or in any other
+                                                    # terraform/modules/* root that DOES commit one
+```
+
+**Verification performed here — before/after `terraform validate`.**
+
+Before (flat root, `terraform/`):
+
+```text
+╷
+│ Warning: Invalid Attribute Combination
+│
+│   with aws_s3_bucket_lifecycle_configuration.uploads,
+│   on s3-cloudfront.tf line 430, in resource "aws_s3_bucket_lifecycle_configuration" "uploads":
+│  430: resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
+│
+│ No attribute specified when one (and only one) of
+│ [rule[0].filter,rule[0].prefix] is required
+│
+│ This will be an error in a future version of the provider
+╵
+Success! The configuration is valid, but there were some
+validation warnings as shown above.
+```
+
+Before (`terraform/environments/shadow`, via the module):
+
+```text
+╷
+│ Warning: Invalid Attribute Combination
+│
+│   with module.cloudfront_s3.aws_s3_bucket_lifecycle_configuration.uploads,
+│   on ../../modules/cloudfront-s3/main.tf line 437, in resource "aws_s3_bucket_lifecycle_configuration" "uploads":
+│  437: resource "aws_s3_bucket_lifecycle_configuration" "uploads" {
+│
+│ No attribute specified when one (and only one) of
+│ [rule[0].filter,rule[0].prefix] is required
+│
+│ This will be an error in a future version of the provider
+╵
+Success! The configuration is valid, but there were some
+validation warnings as shown above.
+```
+
+After, both roots (and `terraform/environments/dev`, checked as a third data point since it also
+consumes the same module):
+
+```text
+Success! The configuration is valid.
+```
+
+`terraform fmt -check -recursive .` from `terraform/`: exit 0, no output — no formatting drift
+introduced. `terraform plan` was not run against either root: no S3 backend/AWS credentials are
+available in this environment, matching the documented "Backend initialization required" failure
+mode from `audit/terraform/baseline.md` and the TF-1/TF-2/TF-3 precedent. **No `terraform apply`
+was run against any account, live or otherwise.**
+
+**No vitest regression test applies.** This is a Terraform-only, infrastructure-as-code change —
+there is no application code path to exercise and nothing importable into
+`api/src/**/*.test.ts` or `web/src/**/*.test.ts(x)`. The evidence for "before: 1 warning, after: 0
+warnings" is the `terraform validate` output above, captured on both affected roots before and
+after the same one-line-per-file change. `gate.sh`'s regression-test check is expected to fail
+honestly here, following the TF-1/TF-2/TF-3 precedent in this factory, rather than have a fake
+vitest file manufactured to satisfy it.
+
+**Rollback.** `git revert` the commit(s) on `fix/tf-5-lifecycle-filter`. This removes the `filter
+{}` block from both `terraform/s3-cloudfront.tf` and `terraform/modules/cloudfront-s3/main.tf`,
+returning to the pre-TRO-238 state (1 validation warning, same implicit all-objects behavior).
+
+For *this PR's own validation-only work* (the `terraform init -backend=false` / `validate` / `fmt
+-check` runs above), no live AWS state is touched either way, since no `apply` was ever run against
+any account. That is a statement about what happened here, not a general property of `git revert`
+on this file: `filter {}` on an already-empty-scope rule is a no-op against real AWS lifecycle
+config, so if this change is ever `terraform apply`'d to a live account, a later `git revert` alone
+does **not** undo anything on the AWS side — Terraform only reconciles infrastructure when you run
+it. A rollback *after* a real `apply` would additionally require running `terraform plan` and
+`terraform apply` from the affected root(s) (`terraform/`, and `terraform/environments/{dev,shadow}`
+for the module) once the revert commit lands, so AWS is actually updated to match the reverted
+config.
+
+---
+
 ## TRO-196 (ERR-9) — BacklinksPanel's `console.error` storm on every failed poll buried the real signal
 
 **What was broken.** `web/src/components/editor/BacklinksPanel.tsx`'s `fetchBacklinks()` polls
