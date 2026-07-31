@@ -1,13 +1,28 @@
 import { pool } from '../db/client.js';
 
+/** Row shape for the role lookup below (DB-3 / TRO-180) — touched while naming that
+ * statement, so it gets a real type instead of the implicit `any` `pool.query` would
+ * otherwise return (RULE-21). `workspace_memberships.role` (schema.sql) is a free-text
+ * column, not an enum, so this stays `string` rather than a literal union. */
+interface WorkspaceMembershipRoleRow {
+  role: string | null;
+}
+
 /**
  * Check if user is a workspace admin
  */
 export async function isWorkspaceAdmin(userId: string, workspaceId: string): Promise<boolean> {
-  const result = await pool.query(
-    'SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2',
-    [workspaceId, userId]
-  );
+  // Named (DB-3 / TRO-180): `getVisibilityContext` calls this from nearly every
+  // list/get route (documents, issues, weeks, programs, workspaces, ...), so this
+  // single call site accounts for a large share of the "3 auth queries per
+  // request" DB-2 measured — and, being one statement of fixed shape reused
+  // everywhere, it never got a cached plan. See CHANGES.md for the measured
+  // effect and the connection-pooling caveat.
+  const result = await pool.query<WorkspaceMembershipRoleRow>({
+    name: 'workspace_admin_role_lookup',
+    text: 'SELECT role FROM workspace_memberships WHERE workspace_id = $1 AND user_id = $2',
+    values: [workspaceId, userId],
+  });
   return result.rows[0]?.role === 'admin';
 }
 
