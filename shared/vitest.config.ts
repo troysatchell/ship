@@ -15,9 +15,11 @@ export default defineConfig({
       // stay at 100% while genuinely untested code exists. Naming the glob
       // makes every source file count, tested or not.
       include: ['src/**/*.ts'],
-      // TRO-229 correction (see below): api.ts/auth.ts/user.ts/workspace.ts are
-      // verified, individually, to contain only `interface` declarations — zero
-      // runtime statements, nothing for v8 to instrument. Excluded explicitly
+      // TRO-229 correction (see below): api.ts/user.ts/workspace.ts are verified,
+      // individually, to contain only `interface` declarations; auth.ts is
+      // comment-only (its exports were removed by an earlier ticket). All four
+      // compile to zero runtime statements, nothing for v8 to instrument.
+      // Excluded explicitly
       // rather than left to auto-discovery, so their genuine absence of logic
       // doesn't drag the denominator down for files that DO have something to
       // cover. The two barrel files (index.ts, types/index.ts) are NOT excluded

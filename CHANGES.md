@@ -52,12 +52,14 @@ prior ticket's own claim:
 `test:coverage` script, and zero test files existed anywhere under `shared/src/` (0 of 8 source
 files). **This — `shared/` only — was the ticket's actual remaining scope.**
 
-**What `shared/src` actually contains.** Read all 8 files before writing anything. Four are pure
-`interface` declarations with zero runtime logic — `types/api.ts`, `types/auth.ts` (now just a
-comment — its exports were removed by an earlier ticket), `types/user.ts`, `types/workspace.ts` —
-verified individually, not assumed from a file-count heuristic. These compile to no executable
-statements, so there is nothing in them to unit-test and nothing for v8 to instrument. Two more
-files have real, testable logic: `constants.ts` (`SESSION_TIMEOUT_MS`/`ABSOLUTE_SESSION_TIMEOUT_MS`,
+**What `shared/src` actually contains.** Read all 8 files before writing anything. Four have zero
+runtime logic — `types/api.ts`, `types/user.ts`, `types/workspace.ts` are pure `interface`
+declarations; `types/auth.ts` is comment-only (its exports were removed by an earlier ticket, so it
+isn't even an interface file anymore, just two lines of comment) — three interface-only files and
+one comment-only file, verified individually, not assumed from a file-count heuristic. These compile
+to no executable statements, so there is nothing in them to unit-test and nothing for v8 to
+instrument. Two more files have real, testable logic: `constants.ts`
+(`SESSION_TIMEOUT_MS`/`ABSOLUTE_SESSION_TIMEOUT_MS`,
 computed millisecond values backing the session semantics `.claude/CLAUDE.md` documents — 15min
 idle / 12hr absolute, NIST SP 800-63B-4 AAL2 — plus the `HTTP_STATUS`/`ERROR_CODES` literal maps)
 and `types/document.ts` (`computeICEScore()`, a real branching function, plus the
