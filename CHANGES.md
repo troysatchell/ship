@@ -56,13 +56,15 @@ on Linux and wrong on Darwin," so only the wrong half changes.
   `floor((freeMemGB − 2) / 0.5)`. On the audit's measured machine this now computes 14 (capped at
   `cpuCores`), not 1.
 - Every other platform: identical freemem-based formula as before.
-- Result is always clamped to `Math.max(1, Math.min(memoryBasedLimit, cpuCores))` — never 0/negative,
-  never more than `cpuCores` — preserving the file's documented memory-safety intent (the header
-  comment's 8-workers-vs-vite-dev crash history is about `vite dev` vs `vite preview`, unrelated to
-  and unchanged by this fix; the config already uses `vite preview`).
+- For the automatic (non-override, non-CI) path, the result is clamped to
+  `Math.max(1, Math.min(memoryBasedLimit, cpuCores))` — never 0/negative, never more than
+  `cpuCores` — preserving the file's documented memory-safety intent (the header comment's
+  8-workers-vs-vite-dev crash history is about `vite dev` vs `vite preview`, unrelated to and
+  unchanged by this fix; the config already uses `vite preview`). A valid `PLAYWRIGHT_WORKERS`
+  override is checked first and bypasses both this clamp and the CI short-circuit.
 - `playwright.config.ts`'s `getWorkerCount()` is now a 9-line wrapper that gathers real `os`/
   `process.env` values and calls the extracted function; behavior for the `PLAYWRIGHT_WORKERS`
-  override and the CI short-circuit is unchanged.
+  override and the CI short-circuit is unchanged, including override precedence over CI.
 
 **Why the extraction, not just a fix in place.** `scripts/factory/gate.sh`'s unit-test gate only
 executes `api/src/**/*.test.ts` and `web/src/**/*.test.ts(x)` — `playwright.config.ts` itself (repo

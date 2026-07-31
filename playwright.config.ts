@@ -33,7 +33,8 @@ import { computeE2eWorkerCount } from './web/src/lib/computeE2eWorkerCount';
 // every local run to a single worker (~4x slower) with no warning. See
 // `computeE2eWorkerCount.ts`'s header comment and its test file for the fix and the
 // regression coverage; this bug never affected CI (the `isCI` branch below is
-// unchanged from before, and still returns 4 immediately).
+// unchanged from before, and still returns 4 immediately when no valid
+// `PLAYWRIGHT_WORKERS` override is set — override handling runs first and wins).
 function getWorkerCount(): number {
   return computeE2eWorkerCount({
     platform: os.platform(),

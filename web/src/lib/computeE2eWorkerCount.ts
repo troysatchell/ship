@@ -32,7 +32,8 @@ export interface ComputeE2eWorkerCountOptions {
   freeMemGB: number;
   /** `os.cpus().length`. Workers never exceed this. */
   cpuCores: number;
-  /** `!!process.env.CI`. CI always returns a fixed 4 (unaffected by this fix). */
+  /** `!!process.env.CI`. Returns a fixed 4 when no valid `explicitOverride` is set
+   *  (unaffected by this fix) — `explicitOverride` is checked first and wins. */
   isCI: boolean;
   /** Raw `process.env.PLAYWRIGHT_WORKERS`, if set. Wins over every other input. */
   explicitOverride?: string;
@@ -51,7 +52,9 @@ const DARWIN_USABLE_MEM_FRACTION = 0.5;
 
 /**
  * Compute a safe Playwright worker count from machine/environment facts.
- * Never returns 0 or a negative number; never exceeds `cpuCores`.
+ * For the automatic (non-override, non-CI) calculation: never returns 0 or a
+ * negative number, never exceeds `cpuCores`. A valid `explicitOverride` bypasses
+ * both this floor and the CI short-circuit and is returned as-is.
  */
 export function computeE2eWorkerCount(options: ComputeE2eWorkerCountOptions): number {
   const { platform, totalMemGB, freeMemGB, cpuCores, isCI, explicitOverride } = options;
