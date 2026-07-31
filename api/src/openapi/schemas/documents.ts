@@ -101,7 +101,9 @@ registry.registerPath({
   path: '/documents',
   tags: ['Documents'],
   summary: 'List documents',
-  description: 'List documents with optional filtering by type and parent.',
+  description: 'List documents with optional filtering by type and parent. Paginated (TRO-304): ' +
+    'omitting `limit` returns a 100-document page, not the full corpus — pass an explicit ' +
+    '`limit` (up to 500) and `offset` to page through or fetch more.',
   request: {
     query: z.object({
       type: DocumentTypeSchema.optional().openapi({
@@ -110,9 +112,15 @@ registry.registerPath({
       parent_id: UuidSchema.optional().openapi({
         description: 'Filter by parent document ID',
       }),
-      limit: z.coerce.number().int().positive().optional().openapi({
-        description: 'Maximum number of documents to return (capped at 100). Omit for the full unfiltered list.',
-        example: 20,
+      limit: z.coerce.number().int().min(1).max(500).optional().openapi({
+        description: 'Maximum documents to return (1-500). Omit for a 100-document default page ' +
+          '(TRO-304) — pass an explicit value up to 500 to fetch more in one request.',
+        example: 100,
+      }),
+      offset: z.coerce.number().int().min(0).max(100000).optional().openapi({
+        description: 'Number of documents to skip, applied after ordering (0-100000). Use with ' +
+          '`limit` to page through results.',
+        example: 100,
       }),
     }),
   },
@@ -126,7 +134,7 @@ registry.registerPath({
       },
     },
     400: {
-      description: 'Invalid type, parent_id, or limit',
+      description: 'Invalid type, parent_id, limit, or offset',
       content: {
         'application/json': {
           schema: z.object({

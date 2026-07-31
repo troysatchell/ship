@@ -5628,7 +5628,7 @@
           "Documents"
         ],
         "summary": "List documents",
-        "description": "List documents with optional filtering by type and parent.",
+        "description": "List documents with optional filtering by type and parent. Paginated (TRO-304): omitting `limit` returns a 100-document page, not the full corpus — pass an explicit `limit` (up to 500) and `offset` to page through or fetch more.",
         "parameters": [
           {
             "schema": {
@@ -5665,13 +5665,26 @@
           {
             "schema": {
               "type": "integer",
-              "minimum": 0,
-              "exclusiveMinimum": true,
-              "description": "Maximum number of documents to return (capped at 100). Omit for the full unfiltered list.",
-              "example": 20
+              "minimum": 1,
+              "maximum": 500,
+              "description": "Maximum documents to return (1-500). Omit for a 100-document default page (TRO-304) — pass an explicit value up to 500 to fetch more in one request.",
+              "example": 100
             },
             "required": false,
             "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "nullable": true,
+              "minimum": 0,
+              "maximum": 100000,
+              "description": "Number of documents to skip, applied after ordering (0-100000). Use with `limit` to page through results.",
+              "example": 100
+            },
+            "required": false,
+            "name": "offset",
             "in": "query"
           }
         ],
@@ -5690,7 +5703,7 @@
             }
           },
           "400": {
-            "description": "Invalid type, parent_id, or limit",
+            "description": "Invalid type, parent_id, limit, or offset",
             "content": {
               "application/json": {
                 "schema": {
