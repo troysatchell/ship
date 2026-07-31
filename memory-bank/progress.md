@@ -36,8 +36,68 @@
 | **Post-submission factory wave (Phase 3)** | ✅ **8 tickets done (2026-07-30/31)** — TF-1/TF-3/TF-9, A11Y-9/A11Y-10, ERR-9/ERR-17, TRO-294; PRs #61–#68, all merged. **74 tickets Done total, 84 PRs merged total.** Board empty again; 28 real tickets remain in Backlog, untouched by design (user-directed stop). |
 | CI pipeline gap-closed (`TRO-244`, rule 4 — **a different, later ticket reusing the ID from the row above**) | ✅ done (2026-07-31 PM) — coverage + `pnpm audit` baseline-diff + CodeQL added to `.github/workflows/ci.yml`; PR #76 open, mergeable, live CI green |
 | **Grading-failure remediation** | ✅ **done (2026-07-31 evening)** — all 3 grader-flagged gaps closed and merged: `TRO-244` (CI, 3 missing checks), `TRO-304` (API-3, `/api/documents` pagination, −76% to −85% P95), `TRO-305` (Category 6 screenshots, all 11 fixes). Wave-1 backlog batch (7 tickets) merged alongside. **84 tickets Done total, 94 PRs merged total.** |
+| **Factory wave 2 (resumed backlog)** | ✅ **done (2026-07-31 night)** — 8 more tickets: `TRO-303`/`TRO-283` (terraform, code-only), `TRO-296` (Yjs mark corruption — escalated latent→live), `TRO-297` (TS-10 api burn-down — found+fixed a real ERR-10-class crash as a byproduct), `TRO-280` (Redis rate limiting, terraform+code, never applied), `TRO-186` (duplicate requests), `TRO-201` (icon glob — eliminated all 245 chunks, not the estimated 36), `TRO-249` (CHANGES.md audit). PRs #79–#86, all merged. 1 follow-up filed (`TRO-306`). **92 tickets Done total, 102 PRs merged total.** |
 
 ## Log
+
+### 2026-07-31 (night) — Factory wave 2: 8 more backlog tickets, two severity corrections
+
+Resumed on explicit user request ("resume the factory on the remaining backlog") right after the
+grading-failure remediation session. Pulled the live Linear backlog fresh rather than trusting the
+memory bank's cached list (which was already one ticket stale — `TRO-296`/ERR-15 wasn't on it).
+Selected 8 of the ~23 remaining tickets by priority (1 High, 7 Medium), explicitly deferring
+`TRO-295` again (still needs live AWS credentials) and reading each ticket's full body before
+dispatch rather than just its title — this caught two escalation-relevant details the title alone
+would have missed: TRO-283 carries its own "do not `terraform apply`" gate, and TRO-280's definition
+of done assumes AWS access this environment doesn't have.
+
+**Two severity corrections, both found by having the agent actually trace the code path rather than
+trust the finding's own framing:**
+
+1. **TRO-296 (ERR-15), Medium→High.** Filed as "observed at function level, reachability unknown."
+   The agent read `y-prosemirror`'s actual source (not docs) and found the live TipTap editor's
+   Yjs binding writes marks through the *exact same* mechanism the converter's read side was broken
+   for — meaning every bold/italic/link a real user applies corrupts the persisted JSON backup within
+   the ~2s debounce window. This is now live in production behavior, not a latent risk. Same
+   diagnostic shape as A11Y-1 (derived reachability claim, corrected once traced) — worth watching
+   for as a recurring pattern: **when a finding's own text says "reachability unknown," that's a flag
+   to verify before treating the fix as routine.**
+2. **TRO-297 (TS-10)'s api-package burn-down surfaced a real crash, not just lint noise.** Extracting
+   `server.on('upgrade', ...)` and `wss.on('connection', ...)` into named async functions (required to
+   satisfy `no-misused-promises` without changing execution order) exposed that a malformed `Host`
+   header threw synchronously inside `handleUpgrade`, an unhandled rejection that would take down the
+   *entire* collaboration server for every connected user — same failure class as ERR-10, one layer
+   up, never caught before because nothing tested a malformed upgrade request. Verified the refactor
+   preserves the exact synchronous-before-first-await timing this hazard file depends on (read the
+   diff line by line against the `.claude/CLAUDE.md`-documented pattern before trusting it) rather
+   than assuming a lint-driven refactor of this specific file was safe by default.
+
+**TS-10 scoped deliberately narrow.** The ticket's own definition of done wanted all ~398 sites
+(api+web+shared) at zero; dispatched only the `api/` package (9-10 sites) and had the agent
+explicitly recommend splitting web's ~389 sites into follow-up tickets by directory rather than
+attempting one mega-PR. Filed `TRO-306` for `web/src/pages/*` (where most sites live) as the first
+batch; a second batch for `components/**`+`lib/**` is named but not yet filed.
+
+**Operational notes:**
+- **`git worktree.sh`'s CHANGES.md merge-conflict cascade continued at the same cost as the
+  grading-remediation wave** — up to 4-5 resolution rounds per branch landing 8 PRs together. No
+  new pattern here, just confirms it's a function of batch size, not something specific to either
+  session.
+- **CI contention (from wave 1) did not recur this wave** — likely because merges were spaced out
+  more (waiting for full CI rather than firing multiple `gh pr merge`/`workflow run` calls in quick
+  succession). Circumstantial, not conclusively tested, but consistent with the contention theory.
+- **`session-activity-race` flaked again** on `TRO-244`'s pre-merge branch (a stale run from the
+  grading-remediation wave, re-surfaced when re-gating) even with `TRO-300`'s completion-barrier fix
+  already merged. Either the fix doesn't cover every path, or this is genuinely two distinct
+  load-sensitive mechanisms sharing one test file. Not investigated further this wave — flagged as
+  an open thread rather than re-opening TRO-300.
+- Two agents self-caught mid-violation of standing rules this wave (a `git stash` slip on TRO-186,
+  recovered without touching the shared stash stack's other entries) and reported it plainly rather
+  than hiding it — the provenance/honesty culture is holding under pressure, not just when convenient.
+
+**All 8 tickets Done in Linear, all 8 PRs (#79-#86) merged `--no-ff` equivalent (`--merge`), both
+remotes confirmed at identical HEAD (`d41e3a1`), zero open PRs, zero leftover worktrees/databases at
+session end.**
 
 ### 2026-07-31 (evening) — Grading-failure investigation and remediation, plus a wave-1 backlog batch
 
