@@ -1,5 +1,6 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server, IncomingMessage } from 'http';
+import type { Duplex } from 'stream';
 import * as Y from 'yjs';
 import * as syncProtocol from 'y-protocols/sync';
 import * as awarenessProtocol from 'y-protocols/awareness';
@@ -216,7 +217,16 @@ function schedulePersist(docName: string, doc: Y.Doc) {
   if (existing) clearTimeout(existing);
 
   pendingSaves.set(docName, setTimeout(() => {
-    persistDocument(docName, doc);
+    // persistDocument() already catches everything inside its own try/catch
+    // (see its `catch (err)` block above) and never rethrows; this `.catch`
+    // only guards the narrow case where something throws synchronously
+    // before that try block (e.g. Y.encodeStateAsUpdate on a corrupted doc).
+    // Without it, that throw would escape this setTimeout callback as an
+    // unhandled rejection and — same failure class as ERR-10 — take down
+    // the process for every connected user over one bad document.
+    persistDocument(docName, doc).catch((err) => {
+      console.error(`[Collaboration] Unexpected error scheduling persist for ${docName}:`, err);
+    });
     pendingSaves.delete(docName);
   }, 2000));
 }
@@ -1109,7 +1119,16 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_MESSAGE_SIZE });
   const eventsWss = new WebSocketServer({ noServer: true, maxPayload: MAX_WS_MESSAGE_SIZE });
 
-  server.on('upgrade', async (request, socket, head) => {
+  // Named + extracted (rather than passed to `.on()` directly) purely so the
+  // listener registered below can be a plain sync function that attaches a
+  // `.catch` to this one's returned promise — `server.on('upgrade', async ...)`
+  // itself is a no-misused-promises violation (an EventEmitter listener isn't
+  // awaited, so a rejection here would otherwise be unhandled) and TS-10 asks
+  // for that to be an error, not a warning, in this package. The body and its
+  // execution order are unchanged: calling `handleUpgrade(...)` below runs
+  // this function's synchronous prologue in the exact same tick as before,
+  // same as if it were still the listener itself.
+  async function handleUpgrade(request: IncomingMessage, socket: Duplex, head: Buffer): Promise<void> {
     const url = new URL(request.url || '', `http://${request.headers.host}`);
 
     // Handle /events WebSocket for real-time notifications
@@ -1180,9 +1199,29 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request, docName, sessionData);
     });
+  }
+
+  server.on('upgrade', (request, socket, head) => {
+    handleUpgrade(request, socket, head).catch((err) => {
+      // Nothing above this point is expected to throw asynchronously in the
+      // normal error paths (those all `socket.write(...)` + `socket.destroy()`
+      // and `return`) — this only catches a genuinely unexpected failure (e.g.
+      // a DB error from canAccessDocumentForCollab/validateWebSocketSession).
+      // Best-effort HTTP response before destroying: the socket may already
+      // be half-closed by the time we get here.
+      console.error('[Collaboration] Unexpected error handling upgrade request:', err);
+      if (!socket.destroyed) {
+        try {
+          socket.write('HTTP/1.1 500 Internal Server Error\r\n\r\n');
+        } catch {
+          // Socket already unwritable; destroy() below is what actually matters.
+        }
+        socket.destroy();
+      }
+    });
   });
 
-  wss.on('connection', async (ws: WebSocket, _request: IncomingMessage, docName: string, sessionData: WebSocketSession) => {
+  async function handleConnection(ws: WebSocket, _request: IncomingMessage, docName: string, sessionData: WebSocketSession): Promise<void> {
     // ERR-10: FIRST statement, before any await. This handler is async and the
     // document load below is a database round trip, so anything registered after
     // it leaves the socket unguarded for the whole of that window — and a peer
@@ -1385,7 +1424,12 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
         const pending = pendingSaves.get(docName);
         if (pending) {
           clearTimeout(pending);
-          persistDocument(docName, doc);
+          // Same guard as schedulePersist()'s `.catch` above: persistDocument()
+          // does not reject in the normal error path (it catches internally),
+          // this only covers a synchronous throw before its own try block.
+          persistDocument(docName, doc).catch((err) => {
+            console.error(`[Collaboration] Unexpected error persisting ${docName} on close:`, err);
+          });
           pendingSaves.delete(docName);
         }
 
@@ -1400,6 +1444,22 @@ export function setupCollaboration(server: Server, options: CollaborationOptions
             awareness.delete(docName);
           }
         }, 30000);
+      }
+    });
+  }
+
+  wss.on('connection', (ws: WebSocket, request: IncomingMessage, docName: string, sessionData: WebSocketSession) => {
+    handleConnection(ws, request, docName, sessionData).catch((err) => {
+      // Same reasoning as handleUpgrade()'s wrapper above: everything this
+      // function is expected to fail on already has its own try/catch (the
+      // doc-load block) or cannot throw. This only catches a genuinely
+      // unexpected failure reaching here asynchronously — e.g. from
+      // getAwareness()/ws.send() — and closes just this one socket rather
+      // than letting the rejection escape unhandled and take down every
+      // other live connection (the ERR-10 failure mode, one level up).
+      console.error(`[Collaboration] Unexpected error in connection handler for ${docName}:`, err);
+      if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+        ws.close(WS_CLOSE_LOAD_FAILED, 'Internal error');
       }
     });
   });

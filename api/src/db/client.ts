@@ -37,18 +37,40 @@ const pool = new Pool({
 });
 
 // Graceful shutdown - close pool connections on process termination
-process.on('SIGTERM', async () => {
+//
+// These listeners must be plain (non-async) functions: `process.on()` does not
+// await its listener's return value, so an `async` listener whose promise
+// rejects becomes an unhandled rejection during shutdown — previously true
+// here if `pool.end()` ever failed (e.g. already-dead connections), which
+// would have surfaced as a raw unhandled-rejection stack trace instead of the
+// clean, logged exit this is supposed to be. `.then`/`.catch` route both
+// outcomes through an explicit exit code instead.
+process.on('SIGTERM', () => {
   console.log('SIGTERM received, closing database pool...');
-  await pool.end();
-  console.log('Database pool closed');
-  process.exit(0);
+  pool
+    .end()
+    .then(() => {
+      console.log('Database pool closed');
+      process.exit(0);
+    })
+    .catch((error: unknown) => {
+      console.error('Error closing database pool on SIGTERM:', error);
+      process.exit(1);
+    });
 });
 
-process.on('SIGINT', async () => {
+process.on('SIGINT', () => {
   console.log('SIGINT received, closing database pool...');
-  await pool.end();
-  console.log('Database pool closed');
-  process.exit(0);
+  pool
+    .end()
+    .then(() => {
+      console.log('Database pool closed');
+      process.exit(0);
+    })
+    .catch((error: unknown) => {
+      console.error('Error closing database pool on SIGINT:', error);
+      process.exit(1);
+    });
 });
 
 export { pool };
