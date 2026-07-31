@@ -31,7 +31,9 @@ text on faith: `npx vitest run src/pages/Dashboard.test.tsx` from `web/` → **7
 vitest.config.ts` has no `include` restriction, so `pnpm --filter @ship/web test` already picks this
 file up today, with no change needed. This ticket's entire scope is therefore
 `web/src/pages/OrgChartPage.tsx`, which genuinely had none: `find web/src -iname '*orgchart*'`
-returned only the page component itself, and `grep -rl 'org-chart|orgchart' e2e/` returned nothing.
+returned only the page component itself, and `grep -rEl 'org-chart|orgchart' e2e/` returned nothing
+(basic `grep` treats `|` literally rather than as alternation; `-E` is required for this command to
+actually search for either term rather than the single literal string `org-chart|orgchart`).
 `/my-week` (the actual `/` redirect target, flagged separately in TEST-8 for flaky e2e coverage) is
 explicitly out of scope here — that's TEST-3, a separate open ticket.
 
@@ -86,14 +88,17 @@ interaction surfaces in this component that remain untested after this ticket �
 deliberately to keep this fix scoped to closing TEST-8's "zero coverage" finding (render/populated/
 empty/error), not to reach full component coverage in one pass.
 
-**How to roll it back.** `git revert <this commit>` removes both the new test file and this
-`CHANGES.md` entry — the complete rollback. If reverting by hand instead, `git rm
-web/src/pages/OrgChartPage.test.tsx` **and** delete this entry (a manual removal that leaves this
-entry in place would describe a test file that no longer exists). No production code was changed
-either way (the `buildTree` edit used for the red/green proof was reverted before committing and
-never shipped). Reverting returns `OrgChartPage` to zero test coverage — TEST-8 reopened for the
-org-chart half only, since the `/dashboard` half's fix (TRO-223) lives on a separate commit
-untouched by this one.
+**How to roll it back.** `git revert <this commit>` removes the new test file, this `CHANGES.md`
+entry, and this ticket's `audit/factory/review-findings.jsonl` records — the complete rollback. If
+reverting by hand instead, `git rm web/src/pages/OrgChartPage.test.tsx`, delete this entry (a manual
+removal that leaves this entry in place would describe a test file that no longer exists), and
+remove or explicitly retain the TRO-230 lines in `review-findings.jsonl` (that file is an append-only
+audit log by design — retaining it and just noting the ticket rolled back is also a legitimate
+choice; `git revert` is the version that keeps this decision consistent automatically). No
+production code was changed either way (the `buildTree` edit used for the red/green proof was
+reverted before committing and never shipped). Reverting returns `OrgChartPage` to zero test
+coverage — TEST-8 reopened for the org-chart half only, since the `/dashboard` half's fix (TRO-223)
+lives on a separate commit untouched by this one.
 
 ---
 

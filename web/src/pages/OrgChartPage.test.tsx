@@ -141,6 +141,23 @@ describe('OrgChartPage (TEST-8 / TRO-230)', () => {
     // under test, not just "the name string appears in the document".
     expect(grace).toHaveAttribute('aria-level', '2');
 
+    // aria-level alone proves depth, not which root Grace nests under — a
+    // regression that attached her to Bob instead of Ada would still pass
+    // the two checks above. OrgChartPage renders a FLAT <li> list (no DOM
+    // nesting between parent/child rows), and flattenTree() is depth-first
+    // pre-order: a node's children are spliced in immediately after it,
+    // before the next sibling. So the real parent-child relation is provable
+    // from row ORDER — Grace must appear directly after Ada, before Bob —
+    // which a wrong-parent regression (Grace under Bob) would break.
+    const names = within(tree)
+      .getAllByRole('treeitem')
+      .map((el) => el.textContent);
+    const adaIndex = names.findIndex((t) => t?.includes('Ada Lovelace'));
+    const bobIndex = names.findIndex((t) => t?.includes('Bob Chen'));
+    const graceIndex = names.findIndex((t) => t?.includes('Grace Hopper'));
+    expect(graceIndex).toBe(adaIndex + 1);
+    expect(graceIndex).toBeLessThan(bobIndex);
+
     // Role and email are rendered content, not just present in the DOM tree.
     expect(within(ada).getByText('Engineering Lead')).toBeInTheDocument();
     expect(within(ada).getByText('ada@ship.dev')).toBeInTheDocument();
