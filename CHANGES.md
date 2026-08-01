@@ -173,9 +173,11 @@ pnpm exec playwright test e2e/performance.spec.ts e2e/bulk-selection.spec.ts \
   e2e/programs.spec.ts e2e/my-week-stale-data.spec.ts
 ```
 
-**How to roll it back.** Revert this commit. All changes are confined to the 7 spec files above
-plus the one-line `playwright.config.ts` comment; nothing outside `e2e/` was touched, and no
-migration, schema, or `api`/`web` source file is affected.
+**How to roll it back.** Revert this commit. The actual diff is confined to 6 of the 7 spec files
+in the command above (`my-week-stale-data.spec.ts` has zero real changes — its one `grep` hit was
+a comment, not a call site, so it's unmodified; listed in the command only so the verification run
+covers the full flake-list cohort) plus the one-line `playwright.config.ts` comment; nothing outside
+`e2e/` was touched, and no migration, schema, or `api`/`web` source file is affected.
 
 ---
 
