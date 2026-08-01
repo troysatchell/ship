@@ -24,8 +24,18 @@ test.describe('Inline Comments', () => {
     const editor = page.locator('.ProseMirror')
     await editor.click()
     await page.keyboard.type(text, { delay: 5 })
-    // Wait for content to sync
-    await page.waitForTimeout(500)
+    // Wait for the collaboration socket to confirm the typed text actually
+    // reached and was persisted by the server. "Saved" requires a live,
+    // completed Yjs sync handshake with no in-flight write
+    // (SyncStatusIndicator.tsx `deriveSyncIndicator`) - the strongest
+    // client-observable proxy available, in place of guessing 500ms is long
+    // enough. This helper backs every test in this file, including
+    // "canceling a comment removes the highlight" on the TEST-3 (TRO-225)
+    // flake list - an under-synced create here is a plausible source of that
+    // flake, since every downstream selection/comment action builds on it.
+    await expect(page.getByTestId('sync-status').getByText('Saved', { exact: true })).toBeVisible({
+      timeout: 10000,
+    })
   }
 
   /**
@@ -54,7 +64,17 @@ test.describe('Inline Comments', () => {
         offset += len
       }
     }, target)
-    await page.waitForTimeout(400)
+    // The evaluate() above only sets the native DOM Selection. ProseMirror
+    // mirrors that into its own editor.state.selection asynchronously via
+    // the browser's `selectionchange` event, and there is no earlier signal
+    // available than an effect of that mirroring completing. The BubbleMenu
+    // Comment button renders only once ProseMirror's internal selection is
+    // non-empty, so waiting for it here is real evidence the selection
+    // landed inside the editor (not just the raw DOM) - for every caller,
+    // including the Cmd+Shift+M keyboard-shortcut test, which reads that
+    // same internal selection (CommentMark.ts `addKeyboardShortcuts` ->
+    // `addComment()`) but has no UI of its own to wait on before this.
+    await expect(page.getByRole('button', { name: 'Comment' })).toBeVisible({ timeout: 5000 })
   }
 
   test('bubble menu shows Comment button on text selection', async ({ page }) => {
@@ -83,8 +103,8 @@ test.describe('Inline Comments', () => {
     await commentInput.fill('This is a test comment')
     await commentInput.press('Enter')
 
-    // Wait for API response and decoration re-render
-    await page.waitForTimeout(1500)
+    // The assertions below already poll for the API response and decoration
+    // re-render - no fixed guess needed first.
 
     // The inline comment card should appear with the comment text
     await expect(page.getByText('This is a test comment')).toBeVisible({ timeout: 5000 })
@@ -109,8 +129,6 @@ test.describe('Inline Comments', () => {
     // Submit comment
     await commentInput.fill('Created via keyboard shortcut')
     await commentInput.press('Enter')
-
-    await page.waitForTimeout(1500)
 
     await expect(page.getByText('Created via keyboard shortcut')).toBeVisible({ timeout: 5000 })
   })
@@ -178,8 +196,6 @@ test.describe('Inline Comments', () => {
     await commentInput.fill('Checking the card layout')
     await commentInput.press('Enter')
 
-    await page.waitForTimeout(1500)
-
     // Verify card shows quoted text
     await expect(page.getByText('"quoted text"')).toBeVisible({ timeout: 5000 })
 
@@ -204,18 +220,26 @@ test.describe('Inline Comments', () => {
     const commentInput = page.getByRole('textbox', { name: 'Write a comment...' })
     await commentInput.fill('Original comment')
     await commentInput.press('Enter')
-    await page.waitForTimeout(1500)
 
-    // Click the reply input and type a reply
+    // Click the reply input and type a reply. The reply input only exists
+    // once the original comment's thread card has rendered (CommentDisplay.tsx
+    // template), so `.click()`'s own actionability wait already covers the
+    // original comment's round trip - no separate wait needed here.
     const replyInput = page.getByRole('textbox', { name: 'Reply...' })
     await replyInput.click()
     await page.keyboard.type('This is a reply to the original', { delay: 5 })
     await page.keyboard.press('Enter')
-    await page.waitForTimeout(1500)
+
+    // The reply write goes through useCreateComment (useCommentsQuery.ts),
+    // which has no optimistic update - the reply text only renders after its
+    // POST succeeds and the subsequent GET refetch completes. Confirming it
+    // is visible here (rather than guessing 1500ms is long enough) is what
+    // proves the reply is actually persisted before we reload - reloading
+    // any earlier could cancel an in-flight request and lose the write.
+    await expect(page.getByText('This is a reply to the original')).toBeVisible({ timeout: 5000 })
 
     // Reload to verify persistence
     await page.reload()
-    await page.waitForTimeout(3000)
 
     // Both comments should be visible after reload
     await expect(page.getByText('Original comment')).toBeVisible({ timeout: 5000 })
@@ -232,14 +256,13 @@ test.describe('Inline Comments', () => {
     const commentInput = page.getByRole('textbox', { name: 'Write a comment...' })
     await commentInput.fill('This will be resolved')
     await commentInput.press('Enter')
-    await page.waitForTimeout(1500)
 
     // Verify comment card is visible
     await expect(page.getByText('This will be resolved')).toBeVisible({ timeout: 5000 })
 
-    // Click resolve button
+    // Click resolve button - the assertions below already poll for the
+    // PATCH (useUpdateComment) and its cache-invalidation refetch.
     await page.getByRole('button', { name: '✓' }).click()
-    await page.waitForTimeout(1500)
 
     // Thread should collapse to indicator
     await expect(page.getByText('Resolved by Dev User')).toBeVisible({ timeout: 5000 })
@@ -248,13 +271,14 @@ test.describe('Inline Comments', () => {
     // Original comment text should NOT be visible (collapsed)
     await expect(page.getByText('This will be resolved')).not.toBeVisible()
 
-    // Highlight should be removed (transparent via CSS :has())
+    // Highlight should be removed (transparent via CSS :has()). The mark's
+    // background-color transitions over 150ms (index.css
+    // `.comment-highlight`), so use the auto-retrying CSS matcher instead of
+    // reading the computed style once - a single read could sample
+    // mid-transition.
     const highlight = page.locator('.comment-highlight')
     if (await highlight.count() > 0) {
-      const bgColor = await highlight.evaluate((el: HTMLElement) =>
-        window.getComputedStyle(el).backgroundColor
-      )
-      expect(bgColor).toBe('rgba(0, 0, 0, 0)')
+      await expect(highlight).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)', { timeout: 3000 })
     }
   })
 
@@ -268,28 +292,30 @@ test.describe('Inline Comments', () => {
     const commentInput = page.getByRole('textbox', { name: 'Write a comment...' })
     await commentInput.fill('Will be resolved then un-resolved')
     await commentInput.press('Enter')
-    await page.waitForTimeout(1500)
 
+    // The assertion below already polls for the resolve PATCH and its
+    // refetch - no fixed guess needed first.
     await page.getByRole('button', { name: '✓' }).click()
-    await page.waitForTimeout(1500)
 
     // Verify collapsed
     await expect(page.getByText('Show thread')).toBeVisible({ timeout: 5000 })
 
-    // Click "Show thread" to un-resolve
+    // Click "Show thread" to un-resolve - the assertion below already polls
+    // for the un-resolve PATCH and its refetch.
     await page.getByText('Show thread').click()
-    await page.waitForTimeout(1500)
 
     // Thread should be expanded again
     await expect(page.getByText('Will be resolved then un-resolved')).toBeVisible({ timeout: 5000 })
 
-    // Highlight should be restored (visible amber color)
+    // Highlight should be restored (visible amber color). The `:has()`
+    // selector swap triggers a 150ms CSS transition (index.css
+    // `.comment-highlight`), so use the auto-retrying CSS matcher rather
+    // than reading the computed style once after a guessed delay - avoids
+    // sampling mid-transition.
     const highlight = page.locator('.comment-highlight')
     await expect(highlight).toBeVisible()
-    const bgColor = await highlight.evaluate((el: HTMLElement) =>
-      window.getComputedStyle(el).backgroundColor
-    )
-    expect(bgColor).toContain('245')  // rgba(245, 158, 11, 0.2)
+    // rgba(245, 158, 11, 0.2)
+    await expect(highlight).toHaveCSS('background-color', /245/, { timeout: 3000 })
   })
 
   test('comments persist across page reload', async ({ page }) => {
@@ -302,13 +328,14 @@ test.describe('Inline Comments', () => {
     const commentInput = page.getByRole('textbox', { name: 'Write a comment...' })
     await commentInput.fill('Persistence check')
     await commentInput.press('Enter')
-    await page.waitForTimeout(1500)
 
+    // Confirms the create POST (useCreateComment, no optimistic update) has
+    // actually completed before reload - reloading any earlier could cancel
+    // an in-flight request and lose the write.
     await expect(page.getByText('Persistence check')).toBeVisible({ timeout: 5000 })
 
     // Reload
     await page.reload()
-    await page.waitForTimeout(3000)
 
     // Comment should still be visible after reload
     await expect(page.getByText('Persistence check')).toBeVisible({ timeout: 10000 })

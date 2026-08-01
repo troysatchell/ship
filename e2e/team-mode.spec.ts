@@ -76,11 +76,11 @@ test.describe('Team Mode (Phase 7)', () => {
     // Get initial scroll position
     const initialScrollLeft = await scrollContainer.evaluate(el => el.scrollLeft)
 
-    // Scroll right
+    // Scroll right. Setting `scrollLeft` directly is a synchronous DOM write
+    // (this container has no `scroll-behavior: smooth`), so the value is
+    // already applied by the time the assignment's `evaluate()` call
+    // resolves - no wait needed before reading it back.
     await scrollContainer.evaluate(el => { el.scrollLeft += 200 })
-
-    // Wait a bit for scroll
-    await page.waitForTimeout(100)
 
     // Get new scroll position - it should have changed or be at max
     const newScrollLeft = await scrollContainer.evaluate(el => el.scrollLeft)
@@ -157,11 +157,14 @@ test.describe('Team Mode (Phase 7)', () => {
     // Wait for sprint columns to load
     await expect(page.getByText(/Week \d+/).first()).toBeVisible({ timeout: 10000 })
 
-    // Wait a moment for grid to stabilize
-    await page.waitForTimeout(500)
-
-    // Look for an empty cell (shows "+" placeholder) - clicking this opens the popover
+    // Look for an empty cell (shows "+" placeholder) - clicking this opens the
+    // popover. Wait for whichever trigger the grid actually renders (empty
+    // "+" cell or the "change assignment" caret on an already-assigned cell)
+    // instead of guessing how long the grid takes to finish rendering cells,
+    // then snapshotting `.count()` at a fixed instant.
     const emptyCellButton = page.getByRole('button', { name: '+' }).first()
+    const caretButton = page.getByLabel('Change project assignment').first()
+    await expect(emptyCellButton.or(caretButton).first()).toBeVisible({ timeout: 10000 })
     const hasEmptyCell = await emptyCellButton.count() > 0
 
     if (hasEmptyCell) {
@@ -170,8 +173,6 @@ test.describe('Team Mode (Phase 7)', () => {
     } else {
       // All cells have programs assigned - need to click the caret button
       // Find a cell with program and hover to reveal caret
-      const caretButton = page.getByLabel('Change project assignment').first()
-      await expect(caretButton).toBeVisible({ timeout: 5000 })
       await caretButton.click({ force: true }) // force for opacity transition
     }
 
@@ -194,19 +195,19 @@ test.describe('Team Mode (Phase 7)', () => {
     // Wait for sprint columns to load
     await expect(page.getByText(/Week \d+/).first()).toBeVisible({ timeout: 10000 })
 
-    // Wait a moment for grid to stabilize
-    await page.waitForTimeout(500)
-
-    // Look for an empty cell (shows "+" placeholder) - clicking this opens the popover
+    // Look for an empty cell (shows "+" placeholder) - clicking this opens the
+    // popover. Wait for whichever trigger the grid actually renders instead
+    // of guessing how long rendering takes, then snapshotting `.count()` at
+    // a fixed instant.
     const emptyCellButton = page.getByRole('button', { name: '+' }).first()
+    const caretButton = page.getByLabel('Change project assignment').first()
+    await expect(emptyCellButton.or(caretButton).first()).toBeVisible({ timeout: 10000 })
     const hasEmptyCell = await emptyCellButton.count() > 0
 
     if (hasEmptyCell) {
       await emptyCellButton.click()
     } else {
       // All cells have programs - click the caret button
-      const caretButton = page.getByLabel('Change project assignment').first()
-      await expect(caretButton).toBeVisible({ timeout: 5000 })
       await caretButton.click({ force: true })
     }
 
@@ -214,9 +215,10 @@ test.describe('Team Mode (Phase 7)', () => {
     const searchInput = page.getByPlaceholder('Search projects...')
     await expect(searchInput).toBeVisible({ timeout: 10000 })
 
-    // Focus the search input and wait for it to be ready
+    // Focus the search input and confirm it actually took focus before
+    // pressing Escape, rather than guessing 200ms is enough.
     await searchInput.focus()
-    await page.waitForTimeout(200)
+    await expect(searchInput).toBeFocused({ timeout: 3000 })
 
     // Press Escape to close
     await page.keyboard.press('Escape')
@@ -355,8 +357,9 @@ test.describe('Team Mode (Phase 7)', () => {
       // Select a project
       await projectOptions.first().click()
 
-      // Wait for dropdown to close and cell to update
-      await page.waitForTimeout(500)
+      // Dropdown must actually close before we look for the caret it leaves
+      // behind - a fixed guess here raced the close animation under load.
+      await expect(page.getByPlaceholder('Search projects...')).not.toBeVisible({ timeout: 5000 })
 
       // Now open the dropdown again (click the caret or the cell)
       const changeButton = page.getByLabel('Change project assignment').first()
@@ -371,8 +374,8 @@ test.describe('Team Mode (Phase 7)', () => {
       await expect(page.getByPlaceholder('Search projects...')).toBeVisible({ timeout: 10000 })
       await page.getByRole('option', { name: 'None' }).click()
 
-      // Cell should now show '+' placeholder again
-      await page.waitForTimeout(500)
+      // Cell should now show '+' placeholder again - toBeVisible already
+      // polls for the update, no fixed guess needed first.
       await expect(page.getByRole('button', { name: '+' }).first()).toBeVisible({ timeout: 5000 })
     })
   })
@@ -399,8 +402,8 @@ test.describe('Team Mode (Phase 7)', () => {
       // Click to collapse
       await groupHeader.click()
 
-      // Header should now show "(N)" format in collapsed state
-      await page.waitForTimeout(300)
+      // Header should now show "(N)" format in collapsed state - toBeVisible
+      // already polls for the re-render, no fixed guess needed first.
       const collapsedHeader = page.getByRole('button', { name: /Unassigned \(\d+\)/ })
       await expect(collapsedHeader).toBeVisible({ timeout: 5000 })
     })
@@ -417,8 +420,10 @@ test.describe('Team Mode (Phase 7)', () => {
       await expect(groupHeader).toBeVisible({ timeout: 5000 })
       await groupHeader.click()
 
-      // Wait for collapse
-      await page.waitForTimeout(300)
+      // Wait for collapse - toBeVisible already polls for the re-render,
+      // no fixed guess needed first. This test is on the TEST-3 (TRO-225)
+      // flake list; the fixed sleeps here were exactly the substrate that
+      // finding traced flakes to (TRO-233).
       const collapsedHeader = page.getByRole('button', { name: /Unassigned \(\d+\)/ })
       await expect(collapsedHeader).toBeVisible({ timeout: 5000 })
 
@@ -426,7 +431,6 @@ test.describe('Team Mode (Phase 7)', () => {
       await collapsedHeader.click()
 
       // Header should revert to expanded format (without parentheses around count)
-      await page.waitForTimeout(300)
       const expandedHeader = page.getByRole('button', { name: /Unassigned \d+/ }).filter({ hasNotText: /\(\d+\)/ })
       await expect(expandedHeader).toBeVisible({ timeout: 5000 })
     })
@@ -446,9 +450,9 @@ test.describe('Team Mode (Phase 7)', () => {
       const countMatch = headerText?.match(/(\d+)/)
       const memberCount = countMatch ? countMatch[1] : '0'
 
-      // Collapse the group
+      // Collapse the group - toBeVisible below already polls for the
+      // re-render, no fixed guess needed first.
       await groupHeader.click()
-      await page.waitForTimeout(300)
 
       // Verify collapsed header shows count in parentheses
       const collapsedHeader = page.getByRole('button', { name: `Unassigned (${memberCount})` })

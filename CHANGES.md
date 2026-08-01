@@ -21,6 +21,166 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-233 — [TEST-11] 619 fixed sleeps across 49 spec files — the mechanism behind the flakes (batch 1: TEST-3-connected files)
+
+**Scope.** The ticket's own fix direction: "Don't attempt all 619 at once — start with the spec
+files that appear on the TEST-3 (TRO-225) flake list, where the connection between sleep and flake
+is already demonstrated." TEST-3's flake list
+(`audit/test-quality/runs/e2e-flake-union.txt`) names 11 flaky tests across 10 spec files. Re-measured
+live rather than trusting the ticket's filed number (619, from 2026-07-28, since drifted as other
+tickets touched some of these files): `git grep -c waitForTimeout -- 'e2e/*.spec.ts'` found **590**
+sites across 49 files at the time this ticket started. This batch is the 7 of those 10 flake-list
+files that had real `waitForTimeout` sites:
+
+| File | `waitForTimeout` before | after |
+|---|---|---|
+| `performance.spec.ts` | 22 | 0 |
+| `bulk-selection.spec.ts` | 16 | 0 |
+| `inline-comments.spec.ts` | 15 | 0 |
+| `team-mode.spec.ts` | 10 | 0 |
+| `mentions.spec.ts` | 8 | 0 |
+| `programs.spec.ts` | 4 | 0 |
+| `my-week-stale-data.spec.ts` | 1 (see below) | 0 |
+| `weekly-accountability.spec.ts` | 0 | — (skipped, see below) |
+| `project-weeks.spec.ts` | 0 | — (skipped, see below) |
+| `status-overview-heatmap.spec.ts` | 0 | — (skipped, see below) |
+
+`my-week-stale-data.spec.ts`'s "1" was a false positive: the only match is inside a comment
+documenting a fix TRO-225 already made (line 41, `` `page.waitForTimeout(3000)` — a guess at how
+long persistence takes — is replaced by polling the API ``); there was no actual `waitForTimeout(`
+call in the file's code. The last three files in the table have zero `waitForTimeout` sites of any
+kind (confirmed by grepping for `sleep`/`setTimeout`/`delay`/bare `wait...(` patterns beyond the
+sanctioned `waitForSelector`/`waitForLoadState`/`waitForResponse`/`waitForURL`/`waitForFunction`/
+`waitForEvent` — nothing found); TEST-3's own flake entries for these three name the
+shared-database-state root cause, not a fixed sleep, so there was no sleep-removal work to do here
+— skipped rather than invented.
+
+**75 real sites fixed across 6 files with real work (22+16+15+10+8+4; the 7th file,
+`my-week-stale-data.spec.ts`, had 0 real sites — see above), replaced per-site with the primitive
+the wait was actually standing in for** (`e2e/AGENTS.md` anti-patterns 1–3):
+
+- **Waiting for a UI change**: `await page.waitForTimeout(N)` before a `.toBeVisible()`/`.count()`/
+  `.toHaveText()` check → the auto-retrying assertion itself, with the fixed guess deleted (most
+  sites — the assertion right after the sleep already retried, so the sleep was pure dead time).
+- **Waiting for persistence/sync**: replaced with `page.getByTestId('sync-status').getByText('Saved',
+  { exact: true })` — "Saved" requires a live, completed Yjs sync handshake with no in-flight write
+  (`SyncStatusIndicator.tsx` `deriveSyncIndicator`), the strongest client-observable proxy for "the
+  server actually has this." Used before every `page.reload()` that used to be preceded by a blind
+  wait (`performance.spec.ts`, `inline-comments.spec.ts`, `mentions.spec.ts`), since reloading before
+  a write is confirmed persisted can race an in-flight request.
+- **Waiting for an unreliable retry loop**: `programs.spec.ts`, `team-mode.spec.ts`, and
+  `performance.spec.ts`'s image-upload tests had hand-rolled "try N times with a fixed sleep between"
+  loops — replaced with `expect(async () => {...}).toPass({...})`, this repo's sanctioned retry
+  construct (`e2e/AGENTS.md` guideline 2).
+- **Genuine CSS-transition timing** (the one legitimate stability-poll case, `lessons.md` #17):
+  `inline-comments.spec.ts`'s resolved/un-resolved highlight color checks read a computed
+  `background-color` that CSS-transitions over 150ms (`index.css` `.comment-highlight`). Replaced
+  the fixed 1500ms sleep-then-read with `expect.poll(() => highlight.evaluate(...)).toBe(...)`/
+  `.toContain(...)`, tied to that real 150ms constant with headroom, not a round number.
+- **Dead waits with nothing downstream**: two sites in `mentions.spec.ts` slept after a mention-click
+  navigation with no assertion following (`// Navigation behavior depends on implementation`) —
+  deleted outright; nothing was reading state after them.
+- **A synchronous DOM write mistaken for async**: `team-mode.spec.ts`'s scroll test waited 100ms
+  after each `scrollLeft` assignment; this container has no `scroll-behavior: smooth`, so the
+  assignment is already applied by the time `evaluate()` returns. Removed — this also stopped the
+  sleep from padding the very `scrollDuration` the test measures (it was being counted *inside* the
+  timed window).
+
+**Two real, pre-existing bugs found and fixed while replacing sleeps with real assertions** (both
+were previously invisible because the sleep-based versions never actually checked what they claimed
+to check):
+
+1. **`performance.spec.ts` "memory is released after deleting content"**: `page.keyboard.press('Control+a')`
+   never selected anything. TipTap/ProseMirror's default keymap binds `Mod-a` to `selectAll`
+   (`@tiptap/core` `dist/index.js` ~line 4017), and ProseMirror's `Mod` resolves to `Meta` on a
+   Mac-reporting browser, not `Control` — this Chromium runs on macOS, so `Control+a` never reached
+   `selectAll()`, instead falling through to macOS's native "move to start of line" binding; the
+   `Backspace` that followed then had nothing before the caret to delete. The original
+   `page.waitForTimeout(1000)` never verified the delete had happened, so `afterDelete` memory was
+   silently ≈ `beforeDelete` either way, comfortably under the 20MB growth threshold regardless.
+   Fixed with `ControlOrMeta+a` (Playwright's cross-platform modifier alias) wrapped in a `toPass`
+   retry.
+2. **`performance.spec.ts` "many images do not crash the editor"**: the slash-command's "Image
+   Upload" menu item becoming DOM-visible does not mean the menu's internal keyboard-selection state
+   has caught up — pressing `Enter` immediately after `toBeVisible()` resolved could select nothing,
+   leaving `page.waitForEvent('filechooser')` to time out at 45s. Confirmed by isolating the test:
+   with the original unmodified code, `--repeat-each=2 --workers=1` passed 2/2; with the sleep
+   replaced by a real wait but still using `Enter`, the same harness failed 3/3, always with the
+   `filechooser` timeout. The file's second image-upload test already avoided this by clicking the
+   option directly ("more reliable than keyboard.press" — its own pre-existing comment). Matched
+   that pattern in the first test; the `filechooser` timeout did not reproduce again afterward.
+
+**Known residual flakiness, not fixed, explicitly not claimed fixed.** Even after both bugs above,
+`performance.spec.ts`'s "many images do not crash the editor" still intermittently gets stuck at 2
+images instead of 3 in repeated local runs — the file chooser fires and `setFiles()` resolves
+without error, but no third `<img>` lands within 15s. Ruled out: click-position drift (added
+`Control+End` before each iteration's caption to remove ambiguity — no change) and the Enter-vs-click
+race above (confirmed fixed independently). This matches this describe block's own pre-existing
+top-of-file comment — `// FIXME: Slash command dropdown inconsistent + filechooser event not firing
+reliably // Same issue as images.spec.ts and data-integrity.spec.ts` — predates this ticket and
+names other files with the same symptom. Left as a real wait (`toHaveCount` with a 15s timeout, not
+a blind sleep) with a `TODO(TRO-233)` comment at the site rather than guessing further; a
+live-debugging session on `SlashCommands.tsx`'s image-upload path is out of this ticket's scope.
+
+**`playwright.config.ts:76`** — the `[1/641]` example in the reporter comment was stale. Re-ran
+`playwright test --list` (870 tests in 72 files as of 2026-07-31, not the ticket-cited "869") and
+updated the comment to `[1/870]`, with a note to re-run the list command rather than trust the
+number, since it drifts.
+
+**Regression test.** None added — per `/ship-qa`, this ticket hardens existing e2e tests rather than
+fixing an application defect; the regression test **is** the 76 hardened sites themselves passing
+reliably. (Two of the app-code findings above — the `Mod-a` platform bug and the Enter-vs-click
+race — are arguably real product/test-integration bugs, but both live entirely inside spec files
+already in scope; no `api/` or `web/` source changed.)
+
+**Verified (multi-run, not a single pass — see caveats):**
+- All 7 files together, twice: 162/162 tests, first run 158/162 clean + 4 recovered on retry, second
+  run 158/162 clean + 4 recovered on retry + 1 hard failure (the known "many images" residual,
+  documented above). `team-mode.spec.ts`, `bulk-selection.spec.ts`, `programs.spec.ts`,
+  `my-week-stale-data.spec.ts`: **zero failures across both combined runs.**
+- `team-mode.spec.ts` alone (20 tests): 19/20 clean, 1 failure traced to a pre-existing cross-test
+  shared-state dependency on the file's "Unassigned" group (unrelated to any sleep — the failing
+  locator line is unchanged from the original file). The specific flake-listed test
+  ("clicking collapsed header expands the group") run in isolation, `--repeat-each=5 --retries=0`:
+  **5/5 clean**, confirming the fix itself is correct and the residual failure is cross-test state,
+  not this ticket's substrate.
+- `performance.spec.ts` alone, single pass (14 tests): 13/14 clean, 1 failure (the documented "many
+  images" residual). The other 3 tests that showed transient `sync-status "Saved"` timeouts when run
+  as part of the full 162-test combined batch passed cleanly every time they were run in isolation —
+  derived conclusion: that flakiness is resource contention from running all 7 files' 162 tests
+  simultaneously (several are collaboration/large-document/multi-tab heavy), not a defect in the
+  `Saved`-wait replacement pattern itself.
+- Vitest tiers unaffected (no `api/`/`web/` source touched): `pnpm --filter @ship/api test` →
+  725/725 passed; `pnpm --filter @ship/web test -- --run` → 495/495 passed.
+
+**Not verified / explicitly out of scope for this claim:** a full TEST-3-style reproduction (3×
+complete 870-test suite runs under load) was not attempted — this ticket's evidence is the above
+multi-run, file-scoped local verification, not that methodology. "Less flaky" is not claimed as a
+blanket statement; per-file/per-test results are reported above as observed, not inferred.
+
+**Follow-up scope (not attempted here).** ~514 sites across the other 42 files remain, matching this
+ticket's own "don't attempt all at once" direction and the same scoped-batch pattern as
+TS-10/TRO-306. The next-highest-density files, all needing their own ticket: `tables.spec.ts` (52),
+`file-attachments.spec.ts` (37), `features-real.spec.ts` (36), `backlinks.spec.ts` (34),
+`drag-handle.spec.ts` (33), `data-integrity.spec.ts` (33).
+
+**How to run it.**
+```bash
+source .factory-env
+# via /e2e-test-runner, never `pnpm test:e2e` directly:
+pnpm exec playwright test e2e/performance.spec.ts e2e/bulk-selection.spec.ts \
+  e2e/inline-comments.spec.ts e2e/team-mode.spec.ts e2e/mentions.spec.ts \
+  e2e/programs.spec.ts e2e/my-week-stale-data.spec.ts
+```
+
+**How to roll it back.** Revert this commit. The actual diff is confined to 6 of the 7 spec files
+in the command above (`my-week-stale-data.spec.ts` has zero real changes — its one `grep` hit was
+a comment, not a call site, so it's unmodified; listed in the command only so the verification run
+covers the full flake-list cohort) plus the one-line `playwright.config.ts` comment; nothing outside
+`e2e/` was touched, and no migration, schema, or `api`/`web` source file is affected.
+
+---
+
 ## TRO-213 — [TS-8] Typed mock factories replace `as any` in the six test files where it was concentrated
 
 **Re-measured count, not the filing-time number.** The ticket's own text warns the 155/176 figure
