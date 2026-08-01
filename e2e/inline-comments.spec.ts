@@ -273,16 +273,12 @@ test.describe('Inline Comments', () => {
 
     // Highlight should be removed (transparent via CSS :has()). The mark's
     // background-color transitions over 150ms (index.css
-    // `.comment-highlight`), so poll for the final value instead of reading
-    // it once - a single read could sample mid-transition.
+    // `.comment-highlight`), so use the auto-retrying CSS matcher instead of
+    // reading the computed style once - a single read could sample
+    // mid-transition.
     const highlight = page.locator('.comment-highlight')
     if (await highlight.count() > 0) {
-      await expect
-        .poll(
-          () => highlight.evaluate((el: HTMLElement) => window.getComputedStyle(el).backgroundColor),
-          { timeout: 3000 }
-        )
-        .toBe('rgba(0, 0, 0, 0)')
+      await expect(highlight).toHaveCSS('background-color', 'rgba(0, 0, 0, 0)', { timeout: 3000 })
     }
   })
 
@@ -313,17 +309,13 @@ test.describe('Inline Comments', () => {
 
     // Highlight should be restored (visible amber color). The `:has()`
     // selector swap triggers a 150ms CSS transition (index.css
-    // `.comment-highlight`), so poll for the final computed color rather
-    // than read it once after a guessed delay - avoids sampling
-    // mid-transition.
+    // `.comment-highlight`), so use the auto-retrying CSS matcher rather
+    // than reading the computed style once after a guessed delay - avoids
+    // sampling mid-transition.
     const highlight = page.locator('.comment-highlight')
     await expect(highlight).toBeVisible()
-    await expect
-      .poll(
-        () => highlight.evaluate((el: HTMLElement) => window.getComputedStyle(el).backgroundColor),
-        { timeout: 3000 }
-      )
-      .toContain('245') // rgba(245, 158, 11, 0.2)
+    // rgba(245, 158, 11, 0.2)
+    await expect(highlight).toHaveCSS('background-color', /245/, { timeout: 3000 })
   })
 
   test('comments persist across page reload', async ({ page }) => {
