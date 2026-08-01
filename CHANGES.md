@@ -21,6 +21,69 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-311 — RULE-7 follow-up: a real circuit breaker for the Redis rate-limit store
+
+**What was broken.** `TRO-248` (RULE-7) assessed the codebase for missing retry logic, hardcoded
+timeouts, and missing circuit-breaker patterns, and fixed real gaps in the first two categories
+(`api/src/db/poolConfig.ts`, `api/src/config/ssm.ts`). Its circuit-breaker investigation concluded,
+correctly, that the strongest candidate — the collaboration WebSocket — already had equivalent
+protection (`y-websocket`'s exponential-backoff reconnect + `Editor.tsx`'s permanent-failure
+`shouldConnect = false` gating, ERR-1/ERR-2) and that building a second breaker there would
+duplicate existing work. That was the right call, but it left no code anywhere in the repo
+literally named or structured as a circuit breaker — `grep -ri circuitbreaker api/src` returned
+zero hits despite the retry/timeout half of the rule being genuinely well covered.
+
+**What changed.** `api/src/utils/circuitBreaker.ts` (new) — a generic, reusable `CircuitBreaker`
+class: CLOSED (calls go through) → OPEN after `failureThreshold` consecutive failures (calls fail
+immediately with `CircuitOpenError`, the wrapped function is never invoked) → HALF_OPEN after
+`cooldownMs` (exactly one trial call) → CLOSED on trial success / OPEN again (cooldown restarted)
+on trial failure. Wired into `api/src/middleware/redis-rate-limit-store.ts`'s `sendRedisCommand` —
+the single choke point every limiter's Redis traffic already funnels through — one breaker per
+underlying `Redis` client instance (a `WeakMap`, since `app.ts` shares one client across every
+limiter it builds). Threshold 3 consecutive failures, 10s cooldown
+(`REDIS_CIRCUIT_FAILURE_THRESHOLD`/`REDIS_CIRCUIT_COOLDOWN_MS`, exported for tests).
+
+**Why this doesn't duplicate TRO-248's existing protection.** TRO-280's retry/timeout tuning
+(`maxRetriesPerRequest: 1`, `connectTimeout: 2000`, `passOnStoreError: true`) bounds the cost of
+any ONE failed Redis call. It does nothing to stop every subsequent request from paying that same
+bounded cost again during a sustained outage — 1,000 requests against a Redis that has been down
+for five minutes previously meant 1,000 doomed connection attempts, each adding latency. The
+breaker adds memory: once an outage is established, stop trying entirely (near-zero cost per
+request) until a cooldown-gated trial confirms recovery. A `CircuitOpenError` is just another
+rejection from the store's perspective, so it flows into the exact same `passOnStoreError`
+fail-open path as any other Redis error — every user-facing behavior (requests still served,
+errors still logged) is unchanged; only the number of real Redis calls during a sustained outage
+drops.
+
+**Regression tests.**
+- `api/src/utils/__tests__/circuitBreaker.test.ts` (new, 9 cases) — the state machine itself, all
+  timing driven by an injectable `now` (a plain counter advanced manually in tests, never a real
+  sleep): closed→open on threshold, open skips the wrapped function entirely, half-open allows
+  exactly one trial, trial success closes and resets the failure count, trial failure reopens and
+  restarts the cooldown from the trial's own time (not the original open time), and a success
+  before threshold resets the consecutive-failure count.
+- `api/src/middleware/__tests__/redis-rate-limit-store.test.ts` — one new case proving the actual
+  integration, not just the unit in isolation: spies on `client.call` against a real (but
+  unreachable) ioredis client, sends `REDIS_CIRCUIT_FAILURE_THRESHOLD` requests (each calls Redis,
+  fails, fails open — 3 calls observed), then sends one more and asserts the call count does NOT
+  increase — Redis is genuinely not contacted once the breaker is open — while confirming every
+  request throughout, including the one after the breaker trips, still gets a 200.
+
+**Observed, not assumed:** confirmed this test fails for the right reason on the pre-fix code
+(copied `redis-rate-limit-store.ts` aside — `lessons.md` documents `refs/stash` as shared across
+every worktree in this repo, so never `git stash` here — reverted `sendRedisCommand` to call
+`client.call` directly, reran: `expected "Mock" to be called undefined times, but got 2 times`
+against the same assertion, i.e. 5 real Redis calls across 4 requests instead of the fixed
+version's 3 across 4 — restored the fix afterward).
+
+**How to run it.** `pnpm --filter @ship/api exec vitest run src/utils/__tests__/circuitBreaker.test.ts src/middleware/__tests__/redis-rate-limit-store.test.ts`
+
+**How to roll it back.** Revert this commit. `sendRedisCommand` returns to calling `client.call`
+directly; `passOnStoreError`'s existing fail-open behavior is unaffected either way, so a rollback
+changes only latency/load during a sustained Redis outage, not correctness.
+
+---
+
 ## TRO-233 — [TEST-11] 619 fixed sleeps across 49 spec files — the mechanism behind the flakes (batch 1: TEST-3-connected files)
 
 **Scope.** The ticket's own fix direction: "Don't attempt all 619 at once — start with the spec

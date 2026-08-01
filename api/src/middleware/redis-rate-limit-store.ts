@@ -41,7 +41,7 @@
  *     the blast radius of "the whole API 500s because the rate limiter's
  *     backing store hiccuped" is not.
  *
- * Implemented two ways, deliberately redundant:
+ * Implemented three ways, deliberately redundant:
  *   1. Every limiter built with a Redis store also sets
  *      `passOnStoreError: true` (a first-class `express-rate-limit` option —
  *      see its `dist/index.cjs`: on a rejected `store.increment()` it logs
@@ -52,9 +52,24 @@
  *      `connectTimeout`) rather than queuing it indefinitely — a fail-open
  *      policy is worthless if the "open" path still blocks the request for
  *      seconds waiting on a queued command that will never succeed.
+ *   3. CIRCUIT BREAKER (TRO-311, RULE-7 follow-up): (1) and (2) bound the
+ *      cost of any ONE failed command, but do nothing to stop every
+ *      subsequent request from paying that same bounded cost again during a
+ *      sustained outage. `sendRedisCommand` below routes every call through a
+ *      `CircuitBreaker` (`utils/circuitBreaker.ts`), one per underlying
+ *      `Redis` client instance: after `REDIS_CIRCUIT_FAILURE_THRESHOLD`
+ *      consecutive failures it trips OPEN and every subsequent call fails
+ *      immediately with `CircuitOpenError` — Redis is not contacted at all —
+ *      until `REDIS_CIRCUIT_COOLDOWN_MS` has elapsed, at which point exactly
+ *      one trial call is allowed through to check for recovery. A
+ *      `CircuitOpenError` is just another rejection from the store's
+ *      perspective, so it flows into the exact same `passOnStoreError`
+ *      fail-open path as any other Redis error — this is additive latency/
+ *      load protection on top of (1) and (2), not a replacement for either.
  */
 import { Redis } from 'ioredis';
 import { RedisStore, type RedisReply } from 'rate-limit-redis';
+import { CircuitBreaker } from '../utils/circuitBreaker.js';
 
 /** Any environment-like object; deliberately loose so callers can pass `process.env` directly. */
 export interface RedisEnv {
@@ -107,6 +122,33 @@ export function createRedisClientFromEnv(env: RedisEnv): Redis | undefined {
 }
 
 /**
+ * One breaker per underlying `Redis` client instance, not per limiter/prefix
+ * — `app.ts` shares a single `rateLimitRedisClient` across every limiter it
+ * builds, and an outage of that connection is a property of the connection,
+ * not of any one limiter's key namespace. A `WeakMap` means a client that
+ * goes out of scope (e.g. in tests, which construct many short-lived clients)
+ * doesn't leak breaker instances.
+ */
+const redisCircuitBreakers = new WeakMap<Redis, CircuitBreaker>();
+
+/** Trip after this many consecutive failures. */
+export const REDIS_CIRCUIT_FAILURE_THRESHOLD = 3;
+/** Stay OPEN this long before allowing a HALF_OPEN trial call. */
+export const REDIS_CIRCUIT_COOLDOWN_MS = 10_000;
+
+function getCircuitBreaker(client: Redis): CircuitBreaker {
+  let breaker = redisCircuitBreakers.get(client);
+  if (!breaker) {
+    breaker = new CircuitBreaker({
+      failureThreshold: REDIS_CIRCUIT_FAILURE_THRESHOLD,
+      cooldownMs: REDIS_CIRCUIT_COOLDOWN_MS,
+    });
+    redisCircuitBreakers.set(client, breaker);
+  }
+  return breaker;
+}
+
+/**
  * ioredis' `call()` returns `Promise<unknown>` (rule 8: it hands us
  * `unknown`, not a lie dressed as `any`) — it can't know ahead of time which
  * of Redis's many reply shapes a given command produces. `rate-limit-redis`
@@ -118,7 +160,8 @@ export function createRedisClientFromEnv(env: RedisEnv): Redis | undefined {
  * casts the same way).
  */
 async function sendRedisCommand(client: Redis, command: string, args: string[]): Promise<RedisReply> {
-  const reply = await client.call(command, ...args);
+  const breaker = getCircuitBreaker(client);
+  const reply = await breaker.execute(() => client.call(command, ...args));
   return reply as RedisReply;
 }
 
