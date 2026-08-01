@@ -1,20 +1,37 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { QueryResult } from 'pg';
 
 // Mock pool before importing routes
 // Implementations are passed to vi.fn() rather than chained on as
 // .mockResolvedValue(...): vi.resetAllMocks() (used below) restores the
 // implementation given to vi.fn(impl) but wipes one that was chained on, which
 // would silently turn these into undefined-returning stubs.
-const { mockClient } = vi.hoisted(() => {
+//
+// Both `queryMock` and `mockClient.query` are declared with the promise-returning
+// signature directly, rather than typed via `vi.mocked(pool.query)` /
+// `vi.mocked(mockClient.query)`: `vi.mocked(pool.query)` resolves to pg's
+// callback overload (return type `void`), forcing a cast on every mocked result
+// (confirmed directly against this repo's `tsc` — see iterations.test.ts / TRO-213).
+// `mockClient` has no such overload problem since it isn't the real `pg.PoolClient`
+// type, but leaving its initial impl un-annotated infers `rows: never[]` from the
+// `{ rows: [] }` literal, which is just as unable to hold a real row shape.
+const { queryMock, mockClient } = vi.hoisted(() => {
+  const queryMock = vi.fn<(text: string, values?: unknown[]) => Promise<QueryResult>>();
   const mockClient = {
-    query: vi.fn(async () => ({ rows: [] })),
+    query: vi.fn<(text: string, values?: unknown[]) => Promise<QueryResult>>(async () => ({
+      rows: [],
+      rowCount: 0,
+      command: 'SELECT',
+      oid: 0,
+      fields: [],
+    })),
     release: vi.fn(),
   };
-  return { mockClient };
+  return { queryMock, mockClient };
 });
 vi.mock('../db/client.js', () => ({
   pool: {
-    query: vi.fn(),
+    query: queryMock,
     connect: vi.fn(async () => mockClient),
   },
 }));
@@ -38,10 +55,10 @@ vi.mock('../middleware/auth.js', () => ({
   authed: (handler: unknown) => handler,
 }));
 
-import { pool } from '../db/client.js';
 import express from 'express';
 import request from 'supertest';
 import issuesRouter from './issues.js';
+import { pgResult } from '../test/pg-result.js';
 
 describe('Issues History API', () => {
   let app: express.Express;
@@ -65,11 +82,11 @@ describe('Issues History API', () => {
     it('creates history entry with valid data', async () => {
       const issueId = 'issue-123';
 
-      vi.mocked(pool.query)
+      queryMock
         // Issue access check
-        .mockResolvedValueOnce({ rows: [{ id: issueId }] } as any)
+        .mockResolvedValueOnce(pgResult([{ id: issueId }]))
         // Insert history
-        .mockResolvedValueOnce({ rows: [] } as any);
+        .mockResolvedValueOnce(pgResult([]));
 
       const res = await request(app)
         .post(`/api/issues/${issueId}/history`)
@@ -87,9 +104,9 @@ describe('Issues History API', () => {
     it('creates history entry without automated_by', async () => {
       const issueId = 'issue-123';
 
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({ rows: [{ id: issueId }] } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+      queryMock
+        .mockResolvedValueOnce(pgResult([{ id: issueId }]))
+        .mockResolvedValueOnce(pgResult([]));
 
       const res = await request(app)
         .post(`/api/issues/${issueId}/history`)
@@ -142,8 +159,8 @@ describe('Issues History API', () => {
     });
 
     it('returns 404 for non-existent issue', async () => {
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({ rows: [] } as any);
+      queryMock
+        .mockResolvedValueOnce(pgResult([]));
 
       const res = await request(app)
         .post('/api/issues/nonexistent/history')
@@ -160,9 +177,9 @@ describe('Issues History API', () => {
     it('accepts null values', async () => {
       const issueId = 'issue-123';
 
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({ rows: [{ id: issueId }] } as any)
-        .mockResolvedValueOnce({ rows: [] } as any);
+      queryMock
+        .mockResolvedValueOnce(pgResult([{ id: issueId }]))
+        .mockResolvedValueOnce(pgResult([]));
 
       const res = await request(app)
         .post(`/api/issues/${issueId}/history`)
@@ -203,11 +220,11 @@ describe('Issues History API', () => {
         },
       ];
 
-      vi.mocked(pool.query)
+      queryMock
         // Issue access check
-        .mockResolvedValueOnce({ rows: [{ id: issueId }] } as any)
+        .mockResolvedValueOnce(pgResult([{ id: issueId }]))
         // Get history
-        .mockResolvedValueOnce({ rows: historyEntries } as any);
+        .mockResolvedValueOnce(pgResult(historyEntries));
 
       const res = await request(app)
         .get(`/api/issues/${issueId}/history`);
@@ -220,8 +237,8 @@ describe('Issues History API', () => {
     });
 
     it('returns 404 for non-existent issue', async () => {
-      vi.mocked(pool.query)
-        .mockResolvedValueOnce({ rows: [] } as any);
+      queryMock
+        .mockResolvedValueOnce(pgResult([]));
 
       const res = await request(app)
         .get('/api/issues/nonexistent/history');
@@ -256,26 +273,26 @@ describe('Issues History API', () => {
       };
 
       // Client queries (within transaction)
-      vi.mocked(mockClient.query)
+      mockClient.query
         // Get existing issue
-        .mockResolvedValueOnce({ rows: [existingIssue] } as any)
+        .mockResolvedValueOnce(pgResult([existingIssue]))
         // Check for children (cascade warning check)
-        .mockResolvedValueOnce({ rows: [] } as any)
+        .mockResolvedValueOnce(pgResult([]))
         // BEGIN
-        .mockResolvedValueOnce({ rows: [] } as any)
+        .mockResolvedValueOnce(pgResult([]))
         // Log state change (document_history insert)
-        .mockResolvedValueOnce({ rows: [] } as any)
+        .mockResolvedValueOnce(pgResult([]))
         // Update issue
-        .mockResolvedValueOnce({ rows: [updatedRow] } as any)
+        .mockResolvedValueOnce(pgResult([updatedRow]))
         // Fetch updated issue after UPDATE
-        .mockResolvedValueOnce({ rows: [updatedRow] } as any)
+        .mockResolvedValueOnce(pgResult([updatedRow]))
         // COMMIT
-        .mockResolvedValueOnce({ rows: [] } as any);
+        .mockResolvedValueOnce(pgResult([]));
 
       // Pool queries (post-commit, non-transactional)
-      vi.mocked(pool.query)
+      queryMock
         // Get belongs_to associations
-        .mockResolvedValueOnce({ rows: [] } as any);
+        .mockResolvedValueOnce(pgResult([]));
 
       const res = await request(app)
         .patch(`/api/issues/${issueId}`)

@@ -21,6 +21,130 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-213 — [TS-8] Typed mock factories replace `as any` in the six test files where it was concentrated
+
+**Re-measured count, not the filing-time number.** The ticket's own text warns the 155/176 figure
+is stale (dated 2026-07-28) because TS-1/TS-2/TS-3/TS-4/TS-7/TS-10 touched adjacent code since. A
+plain `grep -rn 'as any' api/src --include='*.test.ts'` still returns 128 raw hits across 9 files,
+but several of those are prose, not casts — e.g. `db/__tests__/ssl.test.ts`'s two hits are a comment
+explaining the ban (`// type assertion ("as any" / "as unknown as" are both banned here...`), and
+`__tests__/auth.test.ts`'s one hit is a comment noting the file *used to* be `as any` (it was already
+converted to a typed mock, apparently by TS-4/TRO-209 — the `pgResult` helper this ticket reuses
+already carries a TS-4/TS-8 dual-attribution comment). Filtering to lines that survive stripping
+`//`-comments (`awk '{ sub(/\/\/.*/, ""); if ($0 ~ /as any/) print }'` per file) gives the real,
+actionable count: **124 sites in exactly 6 files** — the same 6 the ticket named, all still
+concentrated there, `iterations.test.ts` newly appearing (not in the filing-time list) and
+`auth.test.ts` dropping out (fixed by a prior ticket):
+
+| File | Sites (re-measured 2026-07-31) |
+|---|---|
+| `api/src/services/accountability.test.ts` | 32 |
+| `api/src/__tests__/transformIssueLinks.test.ts` | 28 |
+| `api/src/__tests__/activity.test.ts` | 20 |
+| `api/src/routes/issues-history.test.ts` | 18 |
+| `api/src/routes/projects.test.ts` | 17 |
+| `api/src/routes/iterations.test.ts` | 9 |
+
+All 124 converted. Post-fix `grep -rn 'as any' api/src --include='*.test.ts'` returns 5 hits, all
+prose (the two `ssl.test.ts` ban-comment lines, the one pre-existing `auth.test.ts` comment, and two
+new doc-comment lines in `transformIssueLinks.test.ts` that discuss `as any`/`as unknown as` by
+name while explaining why neither is used) — zero real casts remain, verified by re-running the
+same comment-stripped `awk` filter, which reports 0 across every `*.test.ts` file.
+
+**Why a naive fix would have been cosmetic.** The ticket's own risk warning: swapping `as any` for
+`as unknown as X` "retires the count without restoring any protection." Two separate traps made a
+naive per-site retype insufficient here, both found by actually trying it and reading the compiler
+output rather than assuming:
+
+1. **`vi.mocked(pool.query).mockResolvedValueOnce(...)` doesn't typecheck at all**, `as any` or not.
+   `pg`'s `Pool.query` is overloaded, including a callback-style signature returning `void`; `vi.mocked()`
+   resolves the mock's type against that overload, so `.mockResolvedValueOnce(anyRealQueryResult)`
+   fails with `TS2345: ... not assignable to parameter of type 'void'` — reproduced directly against
+   this repo's `tsc` on `iterations.test.ts` before any other change, not inferred from the pattern.
+   This is exactly why `pgResult`'s own doc comment and two already-existing test files
+   (`middleware/__tests__/session-activity-throttle.test.ts`,
+   `middleware/__tests__/named-prepared-statements.test.ts`, both pre-existing, not touched by this
+   ticket) already used a `vi.hoisted(() => ({ queryMock: vi.fn<(text, values?) => Promise<QueryResult>>() }))`
+   pattern instead of `vi.mocked(pool.query)`. All 6 files converted to this same pattern.
+2. **`transformIssueLinks` genuinely returns `Promise<unknown>`** (`api/src/utils/transformIssueLinks.ts:206`,
+   application code, not touched) because it accepts arbitrary TipTap JSON — so the test's `as any`
+   on the result wasn't masking a real declared type, it was standing in for a type the source
+   deliberately doesn't export. A local `TransformedNode`/`TransformedDoc` interface (test-file-only,
+   mirrors the shapes the file's own assertions already relied on) plus a single `as TransformedDoc`
+   off of `unknown` restores real checking without inventing `as unknown as` — asserting directly off
+   `unknown` needs no intermediate hop, so the ticket's own banned pattern was never necessary here.
+
+**What changed — infrastructure (reused, not duplicated).** `api/src/test/pg-result.ts`'s `pgResult<T
+extends QueryResultRow>(rows: T[]): QueryResult<T>` and `api/src/test/sql-of.ts`'s `sqlOf` already
+existed (built by an earlier ticket per their doc comments' TS-4/TRO-180 attribution) — reused as-is,
+not duplicated with a differently-named helper, per the ticket's own instruction to check for and
+extend existing mock helpers first. `pgResult` had no test of its own; added one
+(`api/src/__tests__/pg-result.test.ts`, new — deliberately NOT under `api/src/test/`, which
+`api/tsconfig.json` excludes from compile roots, so a `@ts-expect-error` placed there would never
+actually be evaluated by `type-check`).
+
+**What changed — the 6 files.** Same two-part pattern applied everywhere:
+
+- `vi.mock('../db/client.js', ...)`'s `query: vi.fn()` replaced with a `vi.hoisted` typed `queryMock:
+  vi.fn<(text: string, values?: unknown[]) => Promise<QueryResult>>()`; all `vi.mocked(pool.query)`
+  call sites (including bare `pool.query` assertion targets like `expect(pool.query).toHaveBeenCalledWith`)
+  replaced with the typed `queryMock` directly.
+- Every `{ rows: [...] } as any` / `{ rows: [...], rowCount: N } as any` mock result replaced with
+  `pgResult([...])` (verified case-by-case that `rowCount` always equaled `rows.length` in every
+  site that specified it, e.g. `activity.test.ts` — `pgResult` derives `rowCount` from the array it's
+  given, so this is a like-for-like replacement, not a behavior change).
+- `issues-history.test.ts`'s `mockClient` (a hand-rolled `pool.connect()` stand-in, not the real
+  `pg.PoolClient` type) had its `query` field's untyped `vi.fn(async () => ({ rows: [] }))` — which
+  infers `rows: never[]` from the bare literal — retyped the same way as `queryMock`.
+- `transformIssueLinks.test.ts`'s `vi.mocked(pool.query).mock.calls[0]![1] as any[]` became
+  `queryMock.mock.calls[0]![1]` (typed `unknown[] | undefined` from the mock's declared signature)
+  read via `?.[1]`, no cast needed. The `(n: any) =>` callback-parameter annotations on `.find`/`.some`
+  over the now-typed `TransformedNode[]` were also removed (inferred instead) since they became
+  redundant once the array they iterate stopped being `any[]`.
+- `noUncheckedIndexedAccess` (root `tsconfig.json:14`) means every array index into the new typed
+  `TransformedDoc`/`TransformedNode` shape in `transformIssueLinks.test.ts` is `T | undefined` — this
+  surfaced ~26 real possibly-undefined accesses that `as any` had been silently hiding all along (not
+  new problems this ticket introduced; pre-existing gaps `as any` made invisible). Fixed with optional
+  chaining (`result.content[0]?.content?.[0]`) and `?? []` fallbacks on arrays consumed by
+  `.find`/`.some` — no `!` added anywhere, per rule 16.
+
+**Regression test proving this restores real protection, verified by actually breaking it (not just
+asserted).** `api/src/__tests__/pg-result.test.ts` has two tests: a normal runtime test that `pgResult`
+builds a correct `QueryResult` (rows/rowCount/command/oid/fields), and a `@ts-expect-error` test
+asserting `pgResult({ id: 'not-an-array' })` — the exact "forgot to wrap the row in an array" mistake
+`{ rows: mockIteration } as any` used to accept silently — fails to compile. Verified three separate
+ways during development, each confirmed by actually running `tsc`, not inferred:
+1. Broke `iterations.test.ts` directly: changed `pgResult([mockIteration])` to `pgResult(mockIteration)`
+   and ran `npx tsc --noEmit -p api` — got `TS2345: ... not assignable to parameter of type 'any[]'`.
+   Reverted before committing.
+2. Removed the `@ts-expect-error` directive from `pg-result.test.ts` itself and re-ran `tsc` — got a
+   real error (`TS2353: Object literal may only specify known properties... does not exist in type
+   'QueryResultRow[]'`), confirming the directive is matching a genuine failure, not sitting there
+   unused. Restored the directive before committing.
+3. With the directive restored, `tsc --noEmit -p api` reports zero errors for this file, and
+   `vitest run src/__tests__/pg-result.test.ts` passes both tests (2/2).
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/api type-check   # confirms all 6 files + the new test compile clean
+pnpm --filter @ship/api test         # or: source .factory-env && pnpm test (root runs api, then web)
+```
+
+Full api suite after this change: 65 files, 725 tests, all passing (no new failures vs. baseline).
+
+**Files covered vs. left.** All 6 dominant files fully converted, 0 real `as any` remaining in any
+`api/src/**/*.test.ts`. Not touched: `db/__tests__/ssl.test.ts` and `__tests__/auth.test.ts` (their
+`as any` hits are comments only, not casts — confirmed above) and `collaboration/__tests__/concurrent-doc-load.test.ts`
+(one raw grep hit, also a comment, not a cast). No production source file was touched — every change
+is inside `*.test.ts` files plus the one new test-helper test file.
+
+**Rollback.** Revert this commit. Restores the `as any` casts in all 6 files and removes
+`api/src/__tests__/pg-result.test.ts`. No schema, API, or runtime behavior change — test-only and one
+new test-helper test.
+
+---
+
 ## TRO-308 — CodeQL js/missing-rate-limiting follow-up: SPA catch-all gap + admin.ts polynomial-redos
 
 **Three sub-items; only two needed code.** TRO-307 fixed a CodeQL legibility problem in
