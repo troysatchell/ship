@@ -148,6 +148,42 @@ describe('CircuitBreaker', () => {
     expect(breaker.getState()).toBe('closed');
   });
 
+  it('allows only ONE trial call through when several requests arrive concurrently right as the cooldown elapses (CodeRabbit finding on this PR)', async () => {
+    const clock = makeClock();
+    const breaker = new CircuitBreaker({ failureThreshold: 1, cooldownMs: 1000, now: clock.now });
+    await expect(breaker.execute(vi.fn().mockRejectedValue(new Error('a')))).rejects.toThrow('a');
+    expect(breaker.getState()).toBe('open');
+    clock.advance(1001); // cooldown elapsed — the next call(s) are eligible to trial
+
+    // A trial function that does not resolve until released, so its
+    // `execute()` call is still in flight (state pinned at 'half-open')
+    // when the second, third, and fourth calls are made — this is what
+    // actually exercises the race, unlike sequentially-awaited calls.
+    let releaseTrial: (() => void) | undefined;
+    const trialGate = new Promise<void>((resolve) => {
+      releaseTrial = resolve;
+    });
+    const trialFn = vi.fn(async () => {
+      await trialGate;
+      return 'trial result';
+    });
+    const otherFn = vi.fn().mockResolvedValue('should not run');
+
+    const trialPromise = breaker.execute(trialFn); // starts the trial, does not resolve yet
+    // These three arrive while the trial above is still pending.
+    const rejectedPromises = [breaker.execute(otherFn), breaker.execute(otherFn), breaker.execute(otherFn)];
+
+    for (const p of rejectedPromises) {
+      await expect(p).rejects.toBeInstanceOf(CircuitOpenError);
+    }
+    expect(otherFn, 'no concurrent caller may reach the wrapped function during an in-flight trial').not.toHaveBeenCalled();
+    expect(trialFn).toHaveBeenCalledTimes(1);
+
+    releaseTrial?.();
+    await expect(trialPromise).resolves.toBe('trial result');
+    expect(breaker.getState()).toBe('closed');
+  });
+
   it('rejects an invalid failureThreshold or negative cooldownMs at construction', () => {
     expect(() => new CircuitBreaker({ failureThreshold: 0, cooldownMs: 1000 })).toThrow();
     expect(() => new CircuitBreaker({ failureThreshold: 1, cooldownMs: -1 })).toThrow();

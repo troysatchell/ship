@@ -93,6 +93,19 @@ export class CircuitBreaker {
         throw new CircuitOpenError();
       }
       this.state = 'half-open';
+    } else if (this.state === 'half-open') {
+      // A trial call is already in flight (its own `await fn()` below hasn't
+      // settled yet, so the state is still 'half-open'). Without this branch,
+      // any concurrent call arriving during that window falls through this
+      // whole `if`/`else if` untouched and calls `fn()` directly — exactly
+      // one trial call at a time is the documented invariant this exists to
+      // hold. The check-then-mutate above is safe from the same race because
+      // it is synchronous (no `await` between reading `this.state` and
+      // writing it), so two calls invoked back-to-back (e.g. via
+      // `Promise.all`) cannot both observe 'open' before either mutates —
+      // JS evaluates and starts each call in order, and a function body runs
+      // synchronously up to its first `await`.
+      throw new CircuitOpenError();
     }
 
     try {

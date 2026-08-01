@@ -82,6 +82,29 @@ version's 3 across 4 — restored the fix afterward).
 directly; `passOnStoreError`'s existing fail-open behavior is unaffected either way, so a rollback
 changes only latency/load during a sustained Redis outage, not correctness.
 
+**CodeRabbit review triage (post-gate, before merge):**
+- **Critical, fixed.** `execute()` only intercepted calls when `state === 'open'`; once a trial call
+  set `state = 'half-open'` and started `await fn()`, a second concurrent call reads
+  `state === 'half-open'`, doesn't match `if (state === 'open')`, and falls straight through to
+  calling `fn()` itself — breaking the documented "exactly one trial call" invariant under real
+  concurrent request load, exactly when it matters (many requests arrive at once right as a
+  cooldown elapses). Fixed with an `else if (state === 'half-open') throw new CircuitOpenError()`
+  guard. Confirmed red-before-green: reverted to the pre-fix code, the new concurrent-call test
+  failed with "promise resolved 'should not run' instead of rejecting" (the second caller's function
+  really did run); restored the fix, 20/20 tests pass. New regression test uses a manually-releasable
+  promise so the trial call is provably still in flight when the concurrent calls arrive, rather than
+  relying on timing.
+- **Trivial, dismissed with a reason.** CodeRabbit asked whether the new integration test (using a
+  real unreachable `redis://127.0.0.1:1` connection rather than mocking `client.call`) was the source
+  of this gate run's reported `tests:api` flake. Checked directly: `.factory/api-standalone.txt`
+  names `weekly-plans.test.ts` as the flaked-then-passed-standalone file — the pre-existing
+  TRO-277/`session-activity-race` load-sensitive mechanism, unrelated to this PR's diff. The new test
+  also follows the exact same real-unreachable-connection pattern this file's own pre-existing
+  fail-open tests already use deliberately (see the file's top-of-file docstring: "fails fast and
+  deterministically with ECONNREFUSED"), so switching to a mock here would be inconsistent with an
+  established, intentional convention in this file for a benefit (avoiding a flake that provably
+  didn't happen) that doesn't apply.
+
 ---
 
 ## TRO-233 — [TEST-11] 619 fixed sleeps across 49 spec files — the mechanism behind the flakes (batch 1: TEST-3-connected files)
