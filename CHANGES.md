@@ -145,6 +145,129 @@ new test-helper test.
 
 ---
 
+## TRO-308 — CodeQL js/missing-rate-limiting follow-up: SPA catch-all gap + admin.ts polynomial-redos
+
+**Three sub-items; only two needed code.** TRO-307 fixed a CodeQL legibility problem in
+`app.ts`'s `/api/` rate-limiter mounting (two explicit `app.use()` calls instead of a spread) and
+left three things for follow-up: (1) 254 of 352 open `js/missing-rate-limiting` alerts, unverified
+whether the app.ts fix actually cleared them once CodeQL re-scanned; (2) the SPA static-file
+catch-all, flagged separately and named at the time as a genuinely different, unprotected route;
+(3) `admin.ts:929`'s separate `js/polynomial-redos` alert.
+
+**Item 1 — confirmed resolved, no code change.** Re-queried live CodeQL alerts immediately before
+starting work:
+```
+gh api repos/troysatchell/ship/code-scanning/alerts --paginate \
+  -q '.[] | select(.state=="open") | select(.rule.id=="js/missing-rate-limiting" or .rule.id=="js/polynomial-redos") | "\(.rule.id) \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)"'
+```
+Result: **`js/missing-rate-limiting` has exactly one open alert**, at `api/src/app.ts:440` (the SPA
+catch-all — item 2, below). The 254 alerts across other route files are gone. This is OBSERVED
+from the live query above at the time this ticket started, not inferred from TRO-307's own
+(explicitly labeled DERIVED) prediction that its fix would clear them — TRO-307's app-level mount
+fix did clear them once CI's CodeQL job re-scanned the merged change. No route file needed a
+per-file fix; nothing in this ticket touches `api/src/routes/` route-mounting.
+
+**Item 2 — the SPA static-file catch-all had zero rate-limit coverage. Fixed.**
+`api/src/app.ts`'s "Static SPA (single-origin deployments)" section
+(`express.static(webDist, ...)` + `app.get('*', ...)`, only active when `web/dist` exists on disk —
+single-origin/single-service deployments, never local dev/test) is registered after every
+`/api/*` route, outside the `/api/` prefix `perSourceIpLimiter`/`perIdentityLimiter` match. It had
+no rate-limit coverage of its own — a real gap, not a CodeQL-legibility issue like item 1.
+
+Fix: a new, separate per-source-IP-only limiter, `createSpaStaticLimiter`
+(`api/src/middleware/rate-limit.ts`), mounted via `app.use(spaStaticLimiter)` immediately before
+`express.static`/the catch-all in `app.ts`. Design choices, reasoned from
+`rate-limit.ts`'s existing NAT-egress/audit-measurement doc:
+- **Per-source-IP only, not per-identity.** This route serves anonymous page loads (`index.html`,
+  JS/CSS bundles) — most requests carry no session cookie or bearer token — so
+  `perIdentityLimiter`'s session/token-keyed shape doesn't apply; `perSourceIpLimiter`'s per-IP
+  flood-ceiling shape does.
+- **A separate bucket, not a reuse of `perSourceIpLimiter` itself** (own Redis key prefix,
+  `rl:spa:`, added in `redis-rate-limit-store.ts`): a static-asset flood (e.g. a stuck client retry
+  loop re-fetching `index.html`) and an `/api/*` flood from the same source IP would otherwise be
+  able to exhaust each other's budget. Verified independent in the new test suite (see below).
+  Same Redis-shared-store treatment as `perSourceIpLimiter` (`REDIS_URL`-conditional,
+  `passOnStoreError: true`) for the same reason TRO-280/API-7 required it: a per-process
+  `MemoryStore` ceiling silently multiplies by instance count under Elastic Beanstalk autoscaling.
+- **Limits:** production/dev tiers reuse `perSourceIpLimiter`'s own numbers (6,000/min prod,
+  10,000/min dev) — same traffic-order-of-magnitude reasoning documented in `rate-limit.ts`'s
+  top-of-file doc. The test tier is a separate, deliberately small number (25) so a real
+  "hit the limit, get a 429" regression test needs tens of requests, not 100,000 — safe because no
+  other test file in this suite exercises a non-`/api/`, non-`/collaboration` path through a real
+  built `web/dist` (grepped for `.get('/')`-shaped requests across `api/src/**/*.test.ts`: none).
+
+**Item 3 — `admin.ts:929`'s invite-email regex had real, measured quadratic backtracking. Fixed.**
+The flagged pattern, `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` (used by `POST
+/api/admin/workspaces/:id/invites` to validate an admin-supplied invite email), has two adjacent
+`[^\s@]+` groups in the domain portion, separated only by a required literal `.` that neither class
+excludes — so a rejected input with a long run of dots in that region has many ways to split across
+the two groups, and the engine retries all of them before giving up.
+
+**Correction to this ticket's own description, and to an earlier draft comment on this same
+regex in `CHANGES.md`'s TRO-307 entry above (which had it right) versus this ticket's brief (which
+did not):** measured directly (`node --eval`, this machine, this run — see the timing table in the
+`isValidInviteEmail` doc comment in `admin.ts`), the pathological input is many dots **after** the
+`@` (inside the ambiguous domain-vs-domain split), not before it. `".".repeat(n) + "@" + " "` (dots
+before `@`) stayed O(n) — 0.06ms at n=40,000. `"a@" + ".".repeat(n) + " "` (dots after `@`) scaled
+roughly with n²: 0.6ms at n=1,000, up to 886ms at n=40,000 (each 2x in `n` costing ~4x in time).
+That is CodeQL's literal rule name — "polynomial", not "exponential" — for exactly this reason: two
+adjacent unbounded groups over the same overlapping character set produce quadratic blowup, not the
+classic `(a+)+` exponential shape.
+
+Fix: split the string on `@` in code first (reject anything but exactly one `@`, both sides
+non-empty), then validate each side with a regex that has only one unbounded quantifier live over
+any given substring — `EMAIL_LOCAL_PART_REGEX = /^[^\s@]+$/` and `EMAIL_DOMAIN_REGEX =
+/^[^\s@.]+(?:\.[^\s@.]+)+$/` (domain labels exclude `.`, so the boundary between them is the literal
+dot itself, not two groups negotiating where it falls) — exported as `isValidInviteEmail` from
+`admin.ts`. Compared systematically against the old regex across 17 representative cases while
+designing the fix: identical accept/reject behavior except one case, `user@example..com` (a domain
+with an empty label between two dots), which the old regex accepted and the new one correctly
+rejects — a tightening, not a regression, of what a legitimate email/hostname looks like. Dotted
+local parts (`first.last@...`) and multi-label domains (`sub.example.co.uk`) are still accepted;
+verified in the new test suite.
+
+**Regression coverage.**
+- `api/src/app.spa-static-rate-limit.test.ts` (item 2, new file): builds a minimal fake `web/dist`
+  (directory + `index.html`) in `beforeAll` so `createApp()`'s static-file branch actually
+  activates (cleans up only what it created, in `afterAll`), then: confirms the fixture works,
+  drives requests until the configured test-tier limit (25) is exceeded and asserts 429 on request
+  #26 with a `statuses.slice(0, 25)` check that nothing before it was already wrong, and confirms
+  exhausting the static-file budget does not throttle `/api/csrf-token` from the same source IP
+  (proves the separate-bucket design). RED BEFORE / GREEN AFTER, verified directly: with
+  `app.use(spaStaticLimiter)` temporarily commented out, the 429 assertion failed with "never saw a
+  429 in 30 requests" and the bucket-isolation test's own setup assertion failed too (429
+  expected, got 200) — both for the expected reason, both pass again with the line restored.
+- `api/src/routes/admin.test.ts` (item 3, new file — no test file previously existed for
+  `admin.ts`): 6 valid-email cases, 9 malformed-email cases (including the deliberate
+  `example..com` tightening), and two timing-bounded ReDoS assertions. The primary one drives
+  `isValidInviteEmail` with `"a@" + ".".repeat(200_000) + " "` and asserts completion under 500ms;
+  RED BEFORE (verified separately): the OLD regex on the same 200,000-dot input took **20,798ms** on
+  this machine, ~42x the ceiling — confirming this is a real fix, not a redundant test. A second
+  assertion covers the "before the `@`" shape the ticket's brief originally named, which was already
+  fast on the old code (a pin, included because the brief called it out, not because it was ever
+  broken). EMPIRICAL CAVEAT: both timing ceilings are measured on this machine, in this run — a
+  heavily loaded CI box could push the absolute numbers up, though the margin (500ms ceiling vs. an
+  old-code baseline of ~20.8s at the same input size) is generous enough to absorb realistic
+  machine-load variance.
+
+**How to run it.**
+```bash
+cd api && source ../.factory-env
+npx vitest run src/app.spa-static-rate-limit.test.ts src/routes/admin.test.ts
+npx vitest run src/middleware/__tests__/rate-limit.test.ts src/middleware/__tests__/rate-limit-coverage.test.ts src/app.test.ts  # unchanged-behavior proof
+```
+
+**Rollback.** Revert the commit(s) on `fix/tro-308-codeql-followup` touching `api/src/app.ts`,
+`api/src/middleware/rate-limit.ts`, `api/src/middleware/redis-rate-limit-store.ts`, and
+`api/src/routes/admin.ts`. Restores the unprotected SPA catch-all (real gap — CodeQL will re-flag
+`js/missing-rate-limiting` at `app.ts:440`) and the single-regex, quadratic-backtracking email
+validator (real gap — CodeQL will re-flag `js/polynomial-redos` at `admin.ts:929`, and the crafted
+pathological input can again cost ~20s of single-threaded event-loop time on this size of input, a
+real DoS surface on an authenticated but not privileged-in-any-stronger-sense admin endpoint).
+Neither rollback affects item 1 (no code changed for it).
+
+---
+
 ## TRO-295 (TF-7 follow-up) — ALB security group split in two to keep the CloudFront-prefix-list rule expansion under AWS's rules-per-group quota
 
 **The finding.** `terraform/security-groups.tf`'s single `aws_security_group.alb` carried both of

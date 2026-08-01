@@ -164,3 +164,10 @@ export function createRedisRateLimitStore(client: Redis, prefix: string): RedisS
 export const REDIS_KEY_PREFIX_SOURCE_IP = 'rl:ip:';
 export const REDIS_KEY_PREFIX_IDENTITY = 'rl:id:';
 export const REDIS_KEY_PREFIX_LOGIN = 'rl:login:';
+/**
+ * TRO-308: the static-SPA/catch-all limiter (`createSpaStaticLimiter` in
+ * `rate-limit.ts`) gets its own prefix — a separate bucket from
+ * `REDIS_KEY_PREFIX_SOURCE_IP` — so an anonymous page-load flood and an
+ * `/api/*` flood from the same source IP can't exhaust each other's budget.
+ */
+export const REDIS_KEY_PREFIX_SPA_STATIC = 'rl:spa:';
