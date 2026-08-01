@@ -17,6 +17,20 @@ async function login(page: import('@playwright/test').Page) {
   await expect(page).not.toHaveURL('/login', { timeout: 10000 });
 }
 
+/**
+ * Switch to an Issues filter tab (Active/Backlog/Done/All) and wait for the
+ * switch to actually apply. Filtering happens client-side over
+ * already-loaded issues (IssuesList.tsx `DEFAULT_FILTER_TABS`), not a fresh
+ * fetch, so `aria-selected` flipping true is the real signal the filtered
+ * list has re-rendered (FilterTabs.tsx: both come from the same state and
+ * the same render) - not a fixed guess at how long the click takes.
+ */
+async function selectIssuesTab(page: import('@playwright/test').Page, name: string) {
+  const tab = page.getByRole('tab', { name });
+  await tab.click();
+  await expect(tab).toHaveAttribute('aria-selected', 'true');
+}
+
 test.describe('Bulk Selection - List View', () => {
   test.describe('Checkbox Visibility', () => {
     test('checkbox is hidden by default on each row', async ({ page }) => {
@@ -34,9 +48,9 @@ test.describe('Bulk Selection - List View', () => {
       // Check that the checkbox button is not visible (opacity: 0)
       const checkboxContainer = firstRow.locator('td').first().locator('div');
 
-      // Move mouse away to ensure no hover state
+      // Move mouse away to ensure no hover state. toHaveCSS below already
+      // polls for the style recalc, no fixed guess needed first.
       await page.mouse.move(0, 0);
-      await page.waitForTimeout(100);
 
       // The container should exist but have opacity 0 (hidden)
       await expect(checkboxContainer).toHaveCSS('opacity', '0');
@@ -74,9 +88,9 @@ test.describe('Bulk Selection - List View', () => {
       const checkbox = firstRow.getByRole('checkbox');
       await checkbox.click();
 
-      // Move mouse away from the row
+      // Move mouse away from the row. toHaveCSS below already polls for the
+      // style recalc, no fixed guess needed first.
       await page.mouse.move(0, 0);
-      await page.waitForTimeout(100);
 
       // Checkbox should remain visible because item is selected
       const checkboxContainer = firstRow.locator('td').first().locator('div');
@@ -119,8 +133,12 @@ test.describe('Bulk Selection - List View', () => {
       const checkbox = firstRow.getByRole('checkbox');
       await checkbox.click();
 
-      // Wait a bit and verify URL hasn't changed
-      await page.waitForTimeout(200);
+      // No time-based wait needed: the checkbox's onClick calls
+      // e.stopPropagation() before the row's own onClick runs
+      // (SelectableList.tsx:265-266), so the row's navigate() can never
+      // fire for this click - not a race that resolves later, a
+      // synchronous guarantee already in effect by the time click()
+      // resolves.
       expect(page.url()).toBe(initialUrl);
     });
 
@@ -756,10 +774,13 @@ test.describe('Global j/k Vim-Style Navigation', () => {
       const rows = page.locator('tbody tr');
       await expect(rows.first()).toBeVisible();
 
-      // Move mouse outside the list to prevent hover-to-focus interference
-      // This ensures we start with a clean focus state
+      // Move mouse outside the list to prevent hover-to-focus interference.
+      // Confirm no row is still carrying the hover-driven focus ring before
+      // pressing 'j' - hover sets focus via a JS listener (see the
+      // "Hover-to-Focus" tests below), not pure CSS, so it can lag the
+      // mouse move by a render cycle. A fixed guess here could race that.
       await page.mouse.move(0, 0);
-      await page.waitForTimeout(100);
+      await expect(page.locator('tbody tr.ring-2')).toHaveCount(0);
 
       // Press 'j' to focus first row
       await page.keyboard.press('j');
@@ -792,9 +813,11 @@ test.describe('Global j/k Vim-Style Navigation', () => {
       const rowCount = await rows.count();
       expect(rowCount, 'Seed data should provide at least 2 issues. Run: pnpm db:seed').toBeGreaterThanOrEqual(2);
 
-      // Move mouse outside the list to prevent hover-to-focus interference
+      // Move mouse outside the list to prevent hover-to-focus interference.
+      // Confirm no row still carries the hover-driven focus ring before
+      // navigating - see the identical note above in the 'j' test.
       await page.mouse.move(0, 0);
-      await page.waitForTimeout(100);
+      await expect(page.locator('tbody tr.ring-2')).toHaveCount(0);
 
       // Navigate down first with j
       await page.keyboard.press('j'); // First row
@@ -817,9 +840,11 @@ test.describe('Global j/k Vim-Style Navigation', () => {
       const rows = page.locator('tbody tr');
       await expect(rows.first()).toBeVisible();
 
-      // Move mouse outside the list to prevent hover-to-focus interference
+      // Move mouse outside the list to prevent hover-to-focus interference.
+      // Confirm no row still carries the hover-driven focus ring before
+      // navigating - see the identical note above in the 'j' test.
       await page.mouse.move(0, 0);
-      await page.waitForTimeout(100);
+      await expect(page.locator('tbody tr.ring-2')).toHaveCount(0);
 
       // Press j - should still work and focus first row (without clicking anything)
       await page.keyboard.press('j');
@@ -836,9 +861,11 @@ test.describe('Global j/k Vim-Style Navigation', () => {
       const rows = page.locator('tbody tr');
       await expect(rows.first()).toBeVisible();
 
-      // Move mouse outside the list to prevent hover-to-focus interference
+      // Move mouse outside the list to prevent hover-to-focus interference.
+      // Confirm no row still carries the hover-driven focus ring before
+      // navigating - see the identical note above in the 'j' test.
       await page.mouse.move(0, 0);
-      await page.waitForTimeout(100);
+      await expect(page.locator('tbody tr.ring-2')).toHaveCount(0);
 
       // Focus the row with j
       const firstRow = rows.first();
@@ -863,9 +890,11 @@ test.describe('Global j/k Vim-Style Navigation', () => {
       const rows = page.locator('tbody tr');
       await expect(rows.first()).toBeVisible();
 
-      // Move mouse outside the list to prevent hover-to-focus interference
+      // Move mouse outside the list to prevent hover-to-focus interference.
+      // Confirm no row still carries the hover-driven focus ring before
+      // navigating - see the identical note above in the 'j' test.
       await page.mouse.move(0, 0);
-      await page.waitForTimeout(100);
+      await expect(page.locator('tbody tr.ring-2')).toHaveCount(0);
 
       // Press j to focus first row
       await page.keyboard.press('j');
@@ -952,8 +981,9 @@ test.describe('Global j/k Vim-Style Navigation', () => {
       await expect(issuesTab).toBeVisible({ timeout: 5000 });
       await issuesTab.click();
 
-      // Wait for issues to load
-      await page.waitForTimeout(500);
+      // Wait for issues to load - the shared helper polls for the first row
+      // to render rather than guessing 500ms is long enough.
+      await waitForTableData(page);
 
       // Check if there are issues in this program
       const issueRows = page.locator('tbody tr');
@@ -1309,16 +1339,24 @@ test.describe('Bulk Actions - Archive', () => {
       await expect(page.locator('tbody').getByText(issueTitle)).toHaveCount(0);
     }
 
-    // Check Active tab
-    await page.getByRole('tab', { name: 'Active' }).click();
-    await page.waitForTimeout(200);
+    // Check Active tab. Filtering is client-side over already-loaded issues
+    // (IssuesList.tsx `DEFAULT_FILTER_TABS`), so the click itself is
+    // synchronous - but `aria-selected` and the filtered list come from the
+    // same render, so waiting for it confirms the filter has actually
+    // applied instead of guessing 200ms is long enough. This also avoids a
+    // vacuous pass: `toHaveCount(0)` alone could succeed on a render that
+    // hasn't switched tabs yet.
+    const activeTab = page.getByRole('tab', { name: 'Active' });
+    await activeTab.click();
+    await expect(activeTab).toHaveAttribute('aria-selected', 'true');
     if (issueTitle) {
       await expect(page.locator('tbody').getByText(issueTitle)).toHaveCount(0);
     }
 
     // Check Backlog tab
-    await page.getByRole('tab', { name: 'Backlog' }).click();
-    await page.waitForTimeout(200);
+    const backlogTab = page.getByRole('tab', { name: 'Backlog' });
+    await backlogTab.click();
+    await expect(backlogTab).toHaveAttribute('aria-selected', 'true');
     if (issueTitle) {
       await expect(page.locator('tbody').getByText(issueTitle)).toHaveCount(0);
     }
@@ -1638,8 +1676,7 @@ test.describe('Bulk Actions - Change Status', () => {
     await expect(page.getByRole('heading', { name: 'Issues', level: 1 })).toBeVisible({ timeout: 10000 });
 
     // Go to Backlog tab to find issues we can change
-    await page.getByRole('tab', { name: 'Backlog' }).click();
-    await page.waitForTimeout(300);
+    await selectIssuesTab(page, 'Backlog');
 
     const rows = page.locator('tbody tr');
     const rowCount = await rows.count();
@@ -1661,8 +1698,7 @@ test.describe('Bulk Actions - Change Status', () => {
     await expect(page.getByRole('alert')).toContainText(/changed/i, { timeout: 5000 });
 
     // Verify issues are now in Active tab
-    await page.getByRole('tab', { name: 'Active' }).click();
-    await page.waitForTimeout(300);
+    await selectIssuesTab(page, 'Active');
 
     // The previously backlog issues should now appear in Active
     const statusIndicators = page.locator('[data-status="in_progress"]');
@@ -1696,8 +1732,7 @@ test.describe('Bulk Actions - Change Status', () => {
     await expect(page.getByRole('heading', { name: 'Issues', level: 1 })).toBeVisible({ timeout: 10000 });
 
     // Go to Backlog tab
-    await page.getByRole('tab', { name: 'Backlog' }).click();
-    await page.waitForTimeout(300);
+    await selectIssuesTab(page, 'Backlog');
 
     const rows = page.locator('tbody tr');
     const initialCount = await rows.count();
@@ -1723,8 +1758,7 @@ test.describe('Bulk Actions - Change Status', () => {
     }
 
     // Verify issue appears in Done tab
-    await page.getByRole('tab', { name: 'Done' }).click();
-    await page.waitForTimeout(300);
+    await selectIssuesTab(page, 'Done');
     if (issueTitle) {
       await expect(page.locator('tbody').getByText(issueTitle)).toBeVisible({ timeout: 5000 });
     }
@@ -1779,9 +1813,9 @@ test.describe('Bulk Selection - Kanban View', () => {
       // The opacity is on the checkbox container div, not the input itself
       const checkboxContainer = checkbox.locator('..');
 
-      // Move mouse away to ensure no hover state
+      // Move mouse away to ensure no hover state. toHaveCSS below already
+      // polls for the style recalc, no fixed guess needed first.
       await page.mouse.move(0, 0);
-      await page.waitForTimeout(100);
 
       // Before hover, checkbox container should exist but be invisible (opacity-0)
       await expect(checkboxContainer).toHaveCSS('opacity', '0');

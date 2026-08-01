@@ -96,7 +96,14 @@ test.describe('Performance - Page Load', () => {
     await page.keyboard.press('Enter')
     await page.keyboard.type('This is test content.')
 
-    await page.waitForTimeout(2000)
+    // Confirm the content actually reached and was persisted by the server
+    // before measuring a reload against it - "Saved" requires a live,
+    // completed Yjs sync handshake with no in-flight write
+    // (SyncStatusIndicator.tsx `deriveSyncIndicator`), in place of guessing
+    // 2s is long enough.
+    await expect(page.getByTestId('sync-status').getByText('Saved', { exact: true })).toBeVisible({
+      timeout: 10000,
+    })
     const docUrl = page.url()
 
     // Navigate away
@@ -205,7 +212,13 @@ test.describe('Performance - Typing Latency', () => {
     await page2.goto(docUrl)
 
     await expect(page2.locator('.ProseMirror')).toBeVisible({ timeout: 5000 })
-    await page2.waitForTimeout(1500)
+    // Confirm the second tab's collaboration socket has actually completed
+    // its initial sync handshake before typing on the first tab - "Saved"
+    // requires a live, completed handshake with no in-flight write
+    // (SyncStatusIndicator.tsx), in place of guessing 1.5s is long enough.
+    await expect(page2.getByTestId('sync-status').getByText('Saved', { exact: true })).toBeVisible({
+      timeout: 10000,
+    })
 
     // Type on first tab while second tab is connected
     await editor1.click()
@@ -272,8 +285,13 @@ test.describe('Performance - Large Documents', () => {
       }
     }
 
-    // Wait for content to settle
-    await page.waitForTimeout(2000)
+    // Wait for content to settle - confirm the last paragraph actually
+    // rendered and the burst of edits was persisted, rather than guessing
+    // 2s is long enough.
+    await expect(editor).toContainText(`Paragraph ${paragraphs}`)
+    await expect(page.getByTestId('sync-status').getByText('Saved', { exact: true })).toBeVisible({
+      timeout: 10000,
+    })
 
     // Verify editor is still responsive
     await editor.click()
@@ -295,18 +313,22 @@ test.describe('Performance - Large Documents', () => {
       await page.keyboard.press('Enter')
     }
 
-    await page.waitForTimeout(1000)
+    // Confirm the last line actually rendered before timing scroll -
+    // otherwise the "duration" below could just be measuring pending typing
+    // work rather than scroll speed.
+    await expect(editor).toContainText('Line 100')
 
-    // Measure scroll performance
+    // Measure scroll performance. No wait between the two key presses: this
+    // editor has no `scroll-behavior: smooth` (confirmed in web/src), so
+    // Control+Home/End scroll synchronously - a fixed wait here would only
+    // pad the very duration this test is trying to measure.
     const startTime = Date.now()
 
     // Scroll to top
     await page.keyboard.press('Control+Home')
-    await page.waitForTimeout(100)
 
     // Scroll to bottom
     await page.keyboard.press('Control+End')
-    await page.waitForTimeout(100)
 
     const scrollDuration = Date.now() - startTime
 
@@ -335,7 +357,8 @@ test.describe('Performance - Large Documents', () => {
       await page.keyboard.press('Enter')
     }
 
-    await page.waitForTimeout(1000)
+    // Confirm the searchable content actually rendered before timing search.
+    await expect(editor).toContainText('FINDME')
 
     // Measure search time
     const startTime = Date.now()
@@ -344,9 +367,10 @@ test.describe('Performance - Large Documents', () => {
     await page.keyboard.press('Control+f')
     await page.keyboard.type('FINDME')
 
-    // Wait a bit for search
-    await page.waitForTimeout(500)
-
+    // No wait here: the browser's native find UI isn't reachable through the
+    // page DOM in headless mode, so there is no observable completion event
+    // to poll for - and a fixed sleep would only pad the very duration this
+    // test is trying to measure (the same problem as the scroll test above).
     const searchDuration = Date.now() - startTime
 
     console.log(`Search duration: ${searchDuration}ms`)
@@ -374,46 +398,78 @@ test.describe('Performance - Many Images', () => {
 
     // Upload 5 images
     for (let i = 0; i < 5; i++) {
-      // Re-focus editor each iteration (focus can be lost after file chooser)
+      // Re-focus editor each iteration (focus can be lost after file chooser).
+      // click() targets the bounding box's centre, which drifts as the
+      // document grows with each inserted image - Control+End puts the
+      // caret at the actual end of content deterministically, regardless of
+      // where the centre-click landed.
       await editor.click()
-      await page.waitForTimeout(300)
+      await expect(editor).toBeFocused({ timeout: 3000 })
+      await page.keyboard.press('Control+End')
 
       await page.keyboard.type(`Image ${i + 1}:`)
       await page.keyboard.press('Enter')
-      await page.keyboard.type('/image')
-      // Wait for slash command dropdown to appear - give extra time under load
-      await page.waitForTimeout(1000)
 
-      // Retry if dropdown didn't appear (slash menu items are buttons, not options)
+      // Retry the slash-command trigger until the dropdown appears. toPass
+      // is this repo's sanctioned retry construct (e2e/AGENTS.md guideline
+      // 2), replacing a hand-rolled loop of fixed sleeps capped at 3 tries -
+      // each retry clears the previous "/image" text before retyping it
+      // (slash menu items are buttons, not options).
       const optionLocator = page.getByRole('button', { name: /Image.*Upload/i })
-      let dropdownVisible = false
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (await optionLocator.isVisible()) {
-          dropdownVisible = true
-          break
+      let typedSlashCommand = false
+      await expect(async () => {
+        if (typedSlashCommand) {
+          for (let bs = 0; bs < 6; bs++) await page.keyboard.press('Backspace')
         }
-        // Try triggering the dropdown again
-        await page.keyboard.press('Backspace')
-        await page.keyboard.press('Backspace')
-        await page.keyboard.press('Backspace')
-        await page.keyboard.press('Backspace')
-        await page.keyboard.press('Backspace')
-        await page.keyboard.press('Backspace')
         await page.keyboard.type('/image')
-        await page.waitForTimeout(1000)
-      }
-      expect(dropdownVisible, `Slash command dropdown not visible for image ${i + 1}`).toBe(true)
+        typedSlashCommand = true
+        await expect(optionLocator).toBeVisible({ timeout: 2000 })
+      }).toPass({ timeout: 15000, intervals: [500, 1000, 2000] })
 
       const tmpPath = createTestImageFile()
       imagePaths.push(tmpPath)
 
+      // Click the option directly rather than pressing Enter. Observed
+      // while testing this change: `optionLocator` becoming DOM-visible
+      // does not mean the slash menu's internal keyboard-selection state
+      // has caught up to it yet, so an Enter press immediately after
+      // toBeVisible() resolves can race that and never open the file
+      // picker at all (page.waitForEvent('filechooser') then times out).
+      // This exact ambiguity is why the second test below already clicks
+      // instead of pressing Enter ("more reliable than keyboard.press") -
+      // matching that here removes the race instead of adding back a fixed
+      // delay to paper over it.
       const fileChooserPromise = page.waitForEvent('filechooser', { timeout: 45000 })
-      await page.keyboard.press('Enter')
+      await optionLocator.click()
 
       const fileChooser = await fileChooserPromise
       await fileChooser.setFiles(tmpPath)
 
-      await page.waitForTimeout(2000) // Give more time for upload under load
+      // Wait for the image to actually be inserted - the slash command's
+      // Image item (SlashCommands.tsx ~line 388) calls setImage() with a
+      // data-URL preview as soon as FileReader resolves, well before the
+      // CDN upload finishes, so this is real evidence of insertion rather
+      // than a guess that 2s covers it under load. Also strengthens the
+      // check per iteration (confirms the count grows on each image)
+      // instead of only at the very end.
+      //
+      // TODO(TRO-233): even with this real wait (and after fixing a
+      // separate, confirmed bug on this same path - see the "Click the
+      // option directly" comment above), this test still intermittently
+      // gets stuck at 2 images instead of reaching 3 in repeated local
+      // runs, both isolated and in the full suite. The file chooser fires
+      // and setFiles() resolves without error, but no third <img> lands
+      // within 15s. Ruled out: click-position drift (added Control+End
+      // above, no change), and the Enter-vs-click selection race (fixed,
+      // confirmed separately - see above). Matches this describe block's
+      // own pre-existing FIXME at the top of this file ("Slash command
+      // dropdown inconsistent + filechooser event not firing reliably") -
+      // this looks like the same documented, pre-existing class, not
+      // something sleep-removal caused or can fix. Needs a live-debugging
+      // session on the SlashCommands.tsx image-upload path to pin down
+      // (e.g. instrumenting whether input.onchange even fires for the
+      // third detached <input>), which is out of this ticket's scope.
+      await expect(editor.locator('img')).toHaveCount(i + 1, { timeout: 15000 })
 
       // Add newline after image for next iteration
       await page.keyboard.press('Enter')
@@ -422,8 +478,10 @@ test.describe('Performance - Many Images', () => {
       await expect(editor).toBeVisible()
     }
 
-    // Wait for all uploads to complete
-    await page.waitForTimeout(3000)
+    // Each iteration above already confirmed its own image appeared, so
+    // this just gives any final async work a moment to settle before
+    // reading the count below.
+    await expect(editor.locator('img').first()).toBeVisible({ timeout: 15000 })
 
     // Verify at least some images are present (timing may vary)
     const imgCount = await editor.locator('img').count()
@@ -458,31 +516,23 @@ test.describe('Performance - Many Images', () => {
     for (let i = 0; i < 3; i++) {
       // Re-focus editor each iteration (focus can be lost after file chooser)
       await editor.click()
-      await page.waitForTimeout(300)
+      await expect(editor).toBeFocused({ timeout: 3000 })
 
-      await page.keyboard.type('/image')
-      // Wait for slash command dropdown to appear - give extra time under load
-      await page.waitForTimeout(1000)
-
-      // Retry if dropdown didn't appear (slash menu items are buttons, not options)
+      // Retry the slash-command trigger until the dropdown appears. toPass
+      // is this repo's sanctioned retry construct (e2e/AGENTS.md guideline
+      // 2), replacing a hand-rolled loop of fixed sleeps capped at 3 tries -
+      // each retry clears the previous "/image" text before retyping it
+      // (slash menu items are buttons, not options).
       const optionLocator = page.getByRole('button', { name: /Image.*Upload/i })
-      let dropdownVisible = false
-      for (let attempt = 0; attempt < 3; attempt++) {
-        if (await optionLocator.isVisible()) {
-          dropdownVisible = true
-          break
+      let typedSlashCommand = false
+      await expect(async () => {
+        if (typedSlashCommand) {
+          for (let bs = 0; bs < 6; bs++) await page.keyboard.press('Backspace')
         }
-        // Try triggering the dropdown again
-        await page.keyboard.press('Backspace')
-        await page.keyboard.press('Backspace')
-        await page.keyboard.press('Backspace')
-        await page.keyboard.press('Backspace')
-        await page.keyboard.press('Backspace')
-        await page.keyboard.press('Backspace')
         await page.keyboard.type('/image')
-        await page.waitForTimeout(1000)
-      }
-      expect(dropdownVisible, `Slash command dropdown not visible for image ${i + 1}`).toBe(true)
+        typedSlashCommand = true
+        await expect(optionLocator).toBeVisible({ timeout: 2000 })
+      }).toPass({ timeout: 15000, intervals: [500, 1000, 2000] })
 
       const tmpPath = createTestImageFile()
       imagePaths.push(tmpPath)
@@ -494,13 +544,22 @@ test.describe('Performance - Many Images', () => {
       const fileChooser = await fileChooserPromise
       await fileChooser.setFiles(tmpPath)
 
-      await page.waitForTimeout(2000)
+      // Wait for the image to actually be inserted - see the identical note
+      // in the "many images do not crash the editor" test above.
+      await expect(editor.locator('img')).toHaveCount(i + 1, { timeout: 15000 })
 
       // Add newline after image for next iteration
       await page.keyboard.press('Enter')
     }
 
-    await page.waitForTimeout(3000)
+    // Confirm uploads and the Yjs sync actually completed before reloading -
+    // reloading earlier could measure a load against a half-persisted
+    // document. "Saved" requires a live, completed sync handshake with no
+    // in-flight write (SyncStatusIndicator.tsx), in place of guessing 3s is
+    // long enough.
+    await expect(page.getByTestId('sync-status').getByText('Saved', { exact: true })).toBeVisible({
+      timeout: 15000,
+    })
 
     const docUrl = page.url()
 
@@ -559,8 +618,9 @@ test.describe('Performance - Memory Usage', () => {
       await page.keyboard.press('Enter')
     }
 
-    // Wait for operations to complete
-    await page.waitForTimeout(2000)
+    // Wait for operations to complete - confirm the last line actually
+    // rendered rather than guessing 2s is long enough.
+    await expect(editor).toContainText('Line 20')
 
     // Check memory again
     const finalMemory = await page.evaluate(() => {
@@ -597,7 +657,9 @@ test.describe('Performance - Memory Usage', () => {
       await page.keyboard.type(`Content line ${i + 1}. `)
     }
 
-    await page.waitForTimeout(1000)
+    // Confirm the last line actually rendered rather than guessing 1s is
+    // long enough.
+    await expect(editor).toContainText('Content line 50.')
 
     // Get memory after adding content
     const beforeDelete = await page.evaluate(() => {
@@ -607,20 +669,36 @@ test.describe('Performance - Memory Usage', () => {
       return 0
     })
 
-    // Delete all content
-    await page.keyboard.press('Control+a')
-    await page.keyboard.press('Backspace')
+    // Delete all content. This is a real fix, not just a sleep removal:
+    // TipTap/ProseMirror's default keymap binds `Mod-a` to selectAll
+    // (@tiptap/core dist/index.js ~line 4017), and ProseMirror's "Mod"
+    // resolves to Meta on a Mac-reporting browser, not Control - Chromium
+    // here runs on macOS, so a literal `Control+a` never reached
+    // selectAll(). Instead it fell through to macOS's native Emacs-style
+    // "move to start of line" binding, and the Backspace that followed had
+    // nothing before the caret to delete. `ControlOrMeta` is Playwright's
+    // cross-platform modifier alias for exactly this. The stale
+    // `page.waitForTimeout(1000)` this replaced never verified the delete
+    // had happened at all, so this went unnoticed - `afterDelete` was
+    // silently ~= `beforeDelete` either way, comfortably under the 20MB
+    // growth threshold regardless of whether anything was actually deleted.
+    await expect(async () => {
+      await editor.click()
+      await page.keyboard.press('ControlOrMeta+a')
+      await page.keyboard.press('Backspace')
+      await expect(editor).not.toContainText('Content line 1.', { timeout: 2000 })
+    }).toPass({ timeout: 15000, intervals: [500, 1000, 2000] })
 
-    await page.waitForTimeout(1000)
-
-    // Force garbage collection hint
+    // Force garbage collection hint. window.gc(), when exposed, runs
+    // synchronously - it has already completed by the time this evaluate()
+    // call resolves, and this browser isn't launched with --expose-gc
+    // (playwright.config.ts has no such flag) so the branch is a no-op here
+    // regardless. Either way there is nothing async left to wait for.
     await page.evaluate(() => {
       if (window.gc) {
         window.gc()
       }
     })
-
-    await page.waitForTimeout(1000)
 
     // Check memory after deletion
     const afterDelete = await page.evaluate(() => {

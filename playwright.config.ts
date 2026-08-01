@@ -73,7 +73,10 @@ export default defineConfig({
   retries: process.env.CI ? 2 : 1,
   workers: calculatedWorkers,
   // Reporters:
-  // - 'line' shows real-time progress: [1/641] ✓ auth.spec.ts:15 (2.3s)
+  // - 'line' shows real-time progress: [1/870] ✓ auth.spec.ts:15 (2.3s)
+  //   (870 tests in 72 files as of TRO-233, 2026-07-31 - re-run
+  //   `playwright test --list` for the current count rather than trusting
+  //   this comment, since it drifts as specs are added/removed)
   // - 'html' generates detailed report at end
   // - './e2e/progress-reporter.ts' writes JSONL for live monitoring
   reporter: process.env.CI

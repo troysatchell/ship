@@ -57,28 +57,27 @@ test.describe('Mentions', () => {
 
     const editor = page.locator('.ProseMirror');
     await editor.click();
-
-    // Wait a bit for editor to be fully interactive
-    await page.waitForTimeout(500);
+    // Editor must actually have focus before '@' can trigger the mention
+    // extension - a bare click doesn't guarantee it lands before the next
+    // keystroke under load.
+    await expect(editor).toBeFocused({ timeout: 3000 });
 
     await page.keyboard.type('@');
 
-    // Wait a bit for API call and popup
-    await page.waitForTimeout(1000);
-
-    // Log console messages for debugging
-    console.log('Console messages:', consoleMessages);
-
-    // Check for any tippy elements
-    const tippyElements = await page.locator('[data-tippy-root]').count();
-    console.log('Tippy elements found:', tippyElements);
-
-    // Check for any popup-like elements
-    const popups = await page.locator('.tippy-box, .tippy-content, [role="listbox"]').count();
-    console.log('Popup elements found:', popups);
-
-    // Mention popup should appear
-    await expect(page.locator('[role="listbox"]')).toBeVisible({ timeout: 5000 });
+    // Mention popup should appear once the mentions API call resolves.
+    // Debug logging runs in `finally` so it still fires (and still helps
+    // diagnose a real failure) even if the popup assertion below times out -
+    // previously this only ran after a fixed 1s guess, unconditionally.
+    try {
+      await expect(page.locator('[role="listbox"]')).toBeVisible({ timeout: 5000 });
+    } finally {
+      console.log('Console messages:', consoleMessages);
+      console.log('Tippy elements found:', await page.locator('[data-tippy-root]').count());
+      console.log(
+        'Popup elements found:',
+        await page.locator('.tippy-box, .tippy-content, [role="listbox"]').count()
+      );
+    }
   });
 
   test('mention popup shows search results', async ({ page }) => {
@@ -181,10 +180,9 @@ test.describe('Mentions', () => {
     // Type @test to filter
     await page.keyboard.type('@test');
 
-    // Wait a moment for filtering
-    await page.waitForTimeout(500);
-
-    // Popup should be visible (even if showing "No results")
+    // Popup should be visible (even if showing "No results"). toBeVisible
+    // already polls until the filter request resolves - no need to guess
+    // how long filtering takes first.
     const popup = page.locator('[role="listbox"]');
     await expect(popup).toBeVisible({ timeout: 5000 });
   });
@@ -236,10 +234,8 @@ test.describe('Mentions', () => {
     // Type @ followed by gibberish
     await page.keyboard.type('@zzzznonexistent12345');
 
-    // Wait a moment for API response
-    await page.waitForTimeout(500);
-
-    // Either show "No results" or have no options
+    // Either show "No results" or have no options. toBeVisible below already
+    // polls for the search API response - no fixed guess needed first.
     const popup = page.locator('[role="listbox"]');
     await expect(popup).toBeVisible({ timeout: 5000 });
 
@@ -273,10 +269,13 @@ test.describe('Mentions', () => {
       // Click on the mention
       await mention.click();
 
-      // Should navigate to person's profile (URL contains /people/)
-      await page.waitForTimeout(1000);
-      // Note: Navigation behavior depends on implementation
-      // The mention click should trigger onNavigate callback
+      // Should navigate to person's profile (URL contains /people/).
+      // Note: Navigation behavior depends on implementation - no assertion
+      // follows this click today (nothing here to synchronize on), so the
+      // fixed 1s wait that used to sit here was pure dead time, not a
+      // guard for a check below it. Left unasserted rather than inventing
+      // a new navigation assertion, which is out of this ticket's scope.
+      // The mention click should trigger onNavigate callback.
     }
   });
 
@@ -302,9 +301,11 @@ test.describe('Mentions', () => {
       // Click on the mention
       await mention.click();
 
-      // Should navigate to document
-      await page.waitForTimeout(1000);
-      // Navigation behavior depends on implementation
+      // Should navigate to document. Navigation behavior depends on
+      // implementation - no assertion follows this click today, so the
+      // fixed 1s wait that used to sit here was dead time rather than a
+      // guard for a check below it. Left unasserted rather than inventing
+      // a new navigation assertion, which is out of this ticket's scope.
     }
   });
 
@@ -393,8 +394,17 @@ test.describe('Mentions', () => {
       // Get current document URL
       const docUrl = page.url();
 
-      // Wait for Yjs sync
-      await page.waitForTimeout(2000);
+      // Wait for the collaboration socket to report the mention edit has
+      // actually reached and been persisted by the server, rather than
+      // guessing 2s is long enough - this is the fixed sleep the TEST-3
+      // audit (TRO-225) traced this test's flakiness to. "Saved" requires a
+      // live, completed Yjs sync handshake with no in-flight write
+      // (SyncStatusIndicator.tsx `deriveSyncIndicator`), which is the
+      // strongest client-observable proxy for "page2 will see this if it
+      // connects now."
+      await expect(page.getByTestId('sync-status').getByText('Saved', { exact: true })).toBeVisible(
+        { timeout: 10000 }
+      );
 
       // Open second tab with same document
       const page2 = await browser.newPage();
@@ -409,9 +419,10 @@ test.describe('Mentions', () => {
       // Navigate to same document
       await page2.goto(docUrl);
 
-      // Wait for editor to load and Yjs sync to complete
+      // Wait for editor to load - the mention assertion below already
+      // polls for up to 15s, which covers Yjs sync completing, so no fixed
+      // guess is needed between the two.
       await expect(page2.locator('.ProseMirror')).toBeVisible({ timeout: 5000 });
-      await page2.waitForTimeout(3000);
 
       // Verify mention synced to second tab (Yjs sync can be slow)
       await expect(page2.locator('.ProseMirror .mention')).toBeVisible({ timeout: 15000 });

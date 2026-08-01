@@ -1,4 +1,21 @@
-import { test, expect } from './fixtures/isolated-env'
+import { test, expect, Page } from './fixtures/isolated-env'
+
+/**
+ * Wait for the Programs sidebar list to resolve past its loading state —
+ * either the `programs-list` <ul> or the "No programs yet" empty state
+ * (ProgramsList in web/src/pages/App.tsx, `programs.length === 0` branch).
+ *
+ * `.count()` on `aside ul li` is a point-in-time read (e2e/AGENTS.md
+ * anti-pattern #3: point-in-time checks on async state), so it must not run
+ * until `GET /api/programs` (useProgramsQuery.ts) has resolved and the
+ * sidebar has rendered one of its two terminal states.
+ */
+async function waitForProgramsSidebarLoaded(page: Page): Promise<void> {
+  const aside = page.locator('aside[aria-label="Document list"]')
+  await expect(
+    aside.getByTestId('programs-list').or(aside.getByText('No programs yet'))
+  ).toBeVisible({ timeout: 10000 })
+}
 
 test.describe('Programs', () => {
   test.beforeEach(async ({ page }) => {
@@ -44,7 +61,7 @@ test.describe('Programs', () => {
     await page.goto('/programs')
 
     // Count existing programs in sidebar
-    await page.waitForTimeout(500)
+    await waitForProgramsSidebarLoaded(page)
     const initialCount = await page.locator('aside ul li').count()
 
     // Create new program
@@ -53,10 +70,17 @@ test.describe('Programs', () => {
     // Wait for navigation
     await expect(page).toHaveURL(/\/documents\/[a-f0-9-]+/, { timeout: 5000 })
 
-    // Program should appear in sidebar
-    await page.waitForTimeout(500)
-    const newCount = await page.locator('aside ul li').count()
-    expect(newCount).toBeGreaterThanOrEqual(initialCount)
+    // Program should appear in sidebar. expect.poll re-reads the count until
+    // it grows or the timeout elapses, rather than snapshotting once after a
+    // guessed delay. Strengthened from the prior `toBeGreaterThanOrEqual` (which
+    // passed even with zero new items) to `toBeGreaterThan`, since that is what
+    // this test's name actually asserts.
+    await expect
+      .poll(() => page.locator('aside ul li').count(), {
+        message: 'the new program should appear in the sidebar list',
+        timeout: 10000,
+      })
+      .toBeGreaterThan(initialCount)
   })
 
   test('program editor has tabbed navigation (Overview, Issues, Weeks)', async ({ page }) => {
@@ -162,9 +186,6 @@ test.describe('Programs', () => {
   test('program list shows issue and sprint counts', async ({ page }) => {
     await page.goto('/programs')
 
-    // Wait for programs to load
-    await page.waitForTimeout(1000)
-
     // Programs render as a table (web/src/pages/Programs.tsx, SelectableList),
     // not cards -- issue/sprint counts are plain numeric gridcells ("3"), not
     // "N issues" badge text. Only the Issues/Weeks columns render bare
@@ -216,9 +237,6 @@ test.describe('Programs', () => {
 
   test('program cards show emoji or initial badges', async ({ page }) => {
     await page.goto('/programs')
-
-    // Wait for programs to load
-    await page.waitForTimeout(500)
 
     // Programs render as a table (web/src/pages/Programs.tsx
     // ProgramRowContent), not cards -- the Name gridcell holds a colored
