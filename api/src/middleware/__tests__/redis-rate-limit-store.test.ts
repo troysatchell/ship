@@ -38,6 +38,7 @@ import {
   createRedisClient,
   createRedisClientFromEnv,
   createRedisRateLimitStore,
+  REDIS_CIRCUIT_FAILURE_THRESHOLD,
 } from '../redis-rate-limit-store.js'
 import { createApiRateLimiters } from '../rate-limit.js'
 
@@ -159,6 +160,57 @@ describe('TRO-280: fail-open when Redis is configured but unreachable', () => {
     const res = await request(app).get('/ping')
 
     expect(res.status).toBe(500)
+  })
+})
+
+describe('TRO-311: circuit breaker stops calling a Redis that has been down for a while', () => {
+  const clients: Redis[] = []
+  afterEach(() => {
+    while (clients.length > 0) clients.pop()?.disconnect()
+    vi.restoreAllMocks()
+  })
+
+  const unreachableUrl = 'redis://127.0.0.1:1'
+
+  it('stops invoking client.call once REDIS_CIRCUIT_FAILURE_THRESHOLD consecutive requests have failed, while still serving 200s throughout', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    const client = createRedisClient(unreachableUrl)
+    clients.push(client)
+    // Real proof the breaker stops calling Redis, not an inference from
+    // response codes alone — `passOnStoreError` would still return 200 even
+    // if every single request kept calling Redis and failing individually,
+    // so the response code by itself cannot distinguish "breaker working" from
+    // "breaker absent." The call spy is the actual assertion under test.
+    const callSpy = vi.spyOn(client, 'call')
+
+    const limiter = rateLimit({
+      windowMs: 60_000,
+      limit: 1000, // high enough that this test's own request count never trips express-rate-limit itself
+      standardHeaders: true,
+      legacyHeaders: false,
+      store: createRedisRateLimitStore(client, `rl:test-breaker:${randomUUID()}:`),
+      passOnStoreError: true,
+    })
+    const app = buildPingApp(limiter)
+
+    // Send exactly REDIS_CIRCUIT_FAILURE_THRESHOLD requests — each one calls
+    // Redis (fails, fails open), tripping the breaker on the last of these.
+    for (let i = 0; i < REDIS_CIRCUIT_FAILURE_THRESHOLD; i++) {
+      const res = await request(app).get('/ping')
+      expect(res.status, `request ${i + 1} should still be served (fail-open)`).toBe(200)
+    }
+    expect(callSpy).toHaveBeenCalledTimes(REDIS_CIRCUIT_FAILURE_THRESHOLD)
+
+    // One more request, now that the breaker should be OPEN: still served
+    // (fail-open is unconditional — CircuitOpenError is just another
+    // rejection to passOnStoreError), but Redis itself must NOT be contacted
+    // again — the call count must not increase.
+    const resAfterOpen = await request(app).get('/ping')
+    expect(resAfterOpen.status, 'still served while the breaker is open').toBe(200)
+    expect(
+      callSpy,
+      'client.call must not be invoked again once the breaker has tripped open'
+    ).toHaveBeenCalledTimes(REDIS_CIRCUIT_FAILURE_THRESHOLD)
   })
 })
 
