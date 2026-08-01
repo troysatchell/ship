@@ -9,7 +9,7 @@ import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import { csrfSync } from 'csrf-sync';
 import rateLimit from 'express-rate-limit';
-import { createApiRateLimiters } from './middleware/rate-limit.js';
+import { createApiRateLimiters, createSpaStaticLimiter } from './middleware/rate-limit.js';
 import {
   createRedisClientFromEnv,
   createRedisRateLimitStore,
@@ -124,6 +124,14 @@ const loginLimiter = rateLimit({
 // CHANGES.md (TRO-307) and `middleware/__tests__/rate-limit-coverage.test.ts`
 // for the regression coverage and its limits.
 const [perSourceIpLimiter, perIdentityLimiter] = createApiRateLimiters(process.env, rateLimitRedisClient);
+
+// TRO-308 (js/missing-rate-limiting, app.ts:440 on main): a separate
+// per-source-IP-only flood ceiling for the static SPA section below (the
+// `if (existsSync(webDist))` block) — see `createSpaStaticLimiter`'s doc in
+// middleware/rate-limit.ts for why that section had zero rate-limit coverage
+// and why this is its own limiter rather than a reuse of
+// perSourceIpLimiter/perIdentityLimiter.
+const spaStaticLimiter = createSpaStaticLimiter(process.env, rateLimitRedisClient);
 
 
 /**
@@ -435,6 +443,12 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   // and the collaboration WebSocket URL is built from window.location.host.
   const webDist = join(dirname(fileURLToPath(import.meta.url)), '../../web/dist');
   if (existsSync(webDist)) {
+    // TRO-308: this whole section sits outside the `/api/` prefix the
+    // limiter chain above matches, so it had no rate-limit coverage at all
+    // (CodeQL js/missing-rate-limiting, app.ts:440 on main — the app.get('*',
+    // ...) line below). Mounted unconditionally (no path prefix) so it also
+    // covers express.static's own file-serving, not just the catch-all.
+    app.use(spaStaticLimiter);
     app.use(express.static(webDist, { index: false }));
 
     app.get('*', (req, res, next) => {

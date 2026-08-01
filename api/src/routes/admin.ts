@@ -7,6 +7,54 @@ import { logAuditEvent } from '../services/audit.js';
 
 const router: RouterType = Router();
 
+/**
+ * TRO-308 (js/polynomial-redos, admin.ts:929 on main) — the invite-email
+ * validator used to be one regex: `/^[^\s@]+@[^\s@]+\.[^\s@]+$/`. Its domain
+ * portion has two ADJACENT `[^\s@]+` groups separated only by a required
+ * literal `.`, and neither class excludes `.` — so a run of repeated dots
+ * between them has many ways to split across the two groups, and on a
+ * rejected input the engine retries every split before giving up.
+ *
+ * MEASURED (`node --eval`, this machine, this run — see the timing assertion
+ * in `admin.test.ts` for the reproducible form): `"a@" + ".".repeat(n) + " "`
+ * (many dots after the `@`, followed by a space so the match ultimately
+ * fails) scales roughly with n^2 — 0.6ms at n=1,000, 15ms at n=5,000, 59ms at
+ * n=10,000, 224ms at n=20,000, 886ms at n=40,000 (each ~4x for a 2x input,
+ * i.e. quadratic — CodeQL's rule name says "polynomial", not "exponential",
+ * for exactly this reason). CORRECTION TO THIS TICKET'S OWN DESCRIPTION: the
+ * slow input has the repeated dots AFTER the `@` (inside the ambiguous
+ * domain-vs-domain split), not before it — dots before `@` are consumed by a
+ * single `+` group with nothing adjacent to negotiate a split with, and
+ * stayed O(n) (0.06ms at n=40,000) in the same measurement.
+ *
+ * Fix: split on `@` in code first (exactly one `@`, both sides non-empty),
+ * then validate each side with a regex that has only ONE unbounded
+ * quantifier live over any given substring — no two adjacent groups are ever
+ * competing over the same run of characters, so there's nothing left to
+ * backtrack across. The domain regex requires at least one `.`-delimited
+ * label after the first (so a bare "localhost"-style domain is still
+ * rejected, matching the old behavior) and excludes `.` from each label,
+ * which makes the boundary between labels the literal dot itself instead of
+ * two `+` groups negotiating where it falls — the same technique, applied
+ * one level down.
+ *
+ * Exported as a unit-test seam (TS-8 convention: a real function to call, not
+ * a private regex to poke at via `as any`).
+ */
+const EMAIL_LOCAL_PART_REGEX = /^[^\s@]+$/;
+const EMAIL_DOMAIN_REGEX = /^[^\s@.]+(?:\.[^\s@.]+)+$/;
+
+export function isValidInviteEmail(email: string): boolean {
+  const atIndex = email.indexOf('@');
+  // Reject empty local part, and reject more than one '@' outright rather
+  // than let a class further down try to make sense of it.
+  if (atIndex <= 0 || atIndex !== email.lastIndexOf('@')) return false;
+
+  const localPart = email.slice(0, atIndex);
+  const domainPart = email.slice(atIndex + 1);
+  return EMAIL_LOCAL_PART_REGEX.test(localPart) && EMAIL_DOMAIN_REGEX.test(domainPart);
+}
+
 // All admin routes require super-admin
 router.use(authMiddleware, superAdminMiddleware);
 
@@ -925,8 +973,7 @@ router.post('/workspaces/:id/invites', authed(async (req, res): Promise<void> =>
     return;
   }
   const emailLower = email.toLowerCase().trim();
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-  if (!emailRegex.test(emailLower)) {
+  if (!isValidInviteEmail(emailLower)) {
     res.status(HTTP_STATUS.BAD_REQUEST).json({
       success: false,
       error: {

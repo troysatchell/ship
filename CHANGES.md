@@ -179,6 +179,355 @@ migration, schema, or `api`/`web` source file is affected.
 
 ---
 
+## TRO-213 — [TS-8] Typed mock factories replace `as any` in the six test files where it was concentrated
+
+**Re-measured count, not the filing-time number.** The ticket's own text warns the 155/176 figure
+is stale (dated 2026-07-28) because TS-1/TS-2/TS-3/TS-4/TS-7/TS-10 touched adjacent code since. A
+plain `grep -rn 'as any' api/src --include='*.test.ts'` still returns 128 raw hits across 9 files,
+but several of those are prose, not casts — e.g. `db/__tests__/ssl.test.ts`'s two hits are a comment
+explaining the ban (`// type assertion ("as any" / "as unknown as" are both banned here...`), and
+`__tests__/auth.test.ts`'s one hit is a comment noting the file *used to* be `as any` (it was already
+converted to a typed mock, apparently by TS-4/TRO-209 — the `pgResult` helper this ticket reuses
+already carries a TS-4/TS-8 dual-attribution comment). Filtering to lines that survive stripping
+`//`-comments (`awk '{ sub(/\/\/.*/, ""); if ($0 ~ /as any/) print }'` per file) gives the real,
+actionable count: **124 sites in exactly 6 files** — the same 6 the ticket named, all still
+concentrated there, `iterations.test.ts` newly appearing (not in the filing-time list) and
+`auth.test.ts` dropping out (fixed by a prior ticket):
+
+| File | Sites (re-measured 2026-07-31) |
+|---|---|
+| `api/src/services/accountability.test.ts` | 32 |
+| `api/src/__tests__/transformIssueLinks.test.ts` | 28 |
+| `api/src/__tests__/activity.test.ts` | 20 |
+| `api/src/routes/issues-history.test.ts` | 18 |
+| `api/src/routes/projects.test.ts` | 17 |
+| `api/src/routes/iterations.test.ts` | 9 |
+
+All 124 converted. Post-fix `grep -rn 'as any' api/src --include='*.test.ts'` returns 5 hits, all
+prose (the two `ssl.test.ts` ban-comment lines, the one pre-existing `auth.test.ts` comment, and two
+new doc-comment lines in `transformIssueLinks.test.ts` that discuss `as any`/`as unknown as` by
+name while explaining why neither is used) — zero real casts remain, verified by re-running the
+same comment-stripped `awk` filter, which reports 0 across every `*.test.ts` file.
+
+**Why a naive fix would have been cosmetic.** The ticket's own risk warning: swapping `as any` for
+`as unknown as X` "retires the count without restoring any protection." Two separate traps made a
+naive per-site retype insufficient here, both found by actually trying it and reading the compiler
+output rather than assuming:
+
+1. **`vi.mocked(pool.query).mockResolvedValueOnce(...)` doesn't typecheck at all**, `as any` or not.
+   `pg`'s `Pool.query` is overloaded, including a callback-style signature returning `void`; `vi.mocked()`
+   resolves the mock's type against that overload, so `.mockResolvedValueOnce(anyRealQueryResult)`
+   fails with `TS2345: ... not assignable to parameter of type 'void'` — reproduced directly against
+   this repo's `tsc` on `iterations.test.ts` before any other change, not inferred from the pattern.
+   This is exactly why `pgResult`'s own doc comment and two already-existing test files
+   (`middleware/__tests__/session-activity-throttle.test.ts`,
+   `middleware/__tests__/named-prepared-statements.test.ts`, both pre-existing, not touched by this
+   ticket) already used a `vi.hoisted(() => ({ queryMock: vi.fn<(text, values?) => Promise<QueryResult>>() }))`
+   pattern instead of `vi.mocked(pool.query)`. All 6 files converted to this same pattern.
+2. **`transformIssueLinks` genuinely returns `Promise<unknown>`** (`api/src/utils/transformIssueLinks.ts:206`,
+   application code, not touched) because it accepts arbitrary TipTap JSON — so the test's `as any`
+   on the result wasn't masking a real declared type, it was standing in for a type the source
+   deliberately doesn't export. A local `TransformedNode`/`TransformedDoc` interface (test-file-only,
+   mirrors the shapes the file's own assertions already relied on) plus a single `as TransformedDoc`
+   off of `unknown` restores real checking without inventing `as unknown as` — asserting directly off
+   `unknown` needs no intermediate hop, so the ticket's own banned pattern was never necessary here.
+
+**What changed — infrastructure (reused, not duplicated).** `api/src/test/pg-result.ts`'s `pgResult<T
+extends QueryResultRow>(rows: T[]): QueryResult<T>` and `api/src/test/sql-of.ts`'s `sqlOf` already
+existed (built by an earlier ticket per their doc comments' TS-4/TRO-180 attribution) — reused as-is,
+not duplicated with a differently-named helper, per the ticket's own instruction to check for and
+extend existing mock helpers first. `pgResult` had no test of its own; added one
+(`api/src/__tests__/pg-result.test.ts`, new — deliberately NOT under `api/src/test/`, which
+`api/tsconfig.json` excludes from compile roots, so a `@ts-expect-error` placed there would never
+actually be evaluated by `type-check`).
+
+**What changed — the 6 files.** Same two-part pattern applied everywhere:
+
+- `vi.mock('../db/client.js', ...)`'s `query: vi.fn()` replaced with a `vi.hoisted` typed `queryMock:
+  vi.fn<(text: string, values?: unknown[]) => Promise<QueryResult>>()`; all `vi.mocked(pool.query)`
+  call sites (including bare `pool.query` assertion targets like `expect(pool.query).toHaveBeenCalledWith`)
+  replaced with the typed `queryMock` directly.
+- Every `{ rows: [...] } as any` / `{ rows: [...], rowCount: N } as any` mock result replaced with
+  `pgResult([...])` (verified case-by-case that `rowCount` always equaled `rows.length` in every
+  site that specified it, e.g. `activity.test.ts` — `pgResult` derives `rowCount` from the array it's
+  given, so this is a like-for-like replacement, not a behavior change).
+- `issues-history.test.ts`'s `mockClient` (a hand-rolled `pool.connect()` stand-in, not the real
+  `pg.PoolClient` type) had its `query` field's untyped `vi.fn(async () => ({ rows: [] }))` — which
+  infers `rows: never[]` from the bare literal — retyped the same way as `queryMock`.
+- `transformIssueLinks.test.ts`'s `vi.mocked(pool.query).mock.calls[0]![1] as any[]` became
+  `queryMock.mock.calls[0]![1]` (typed `unknown[] | undefined` from the mock's declared signature)
+  read via `?.[1]`, no cast needed. The `(n: any) =>` callback-parameter annotations on `.find`/`.some`
+  over the now-typed `TransformedNode[]` were also removed (inferred instead) since they became
+  redundant once the array they iterate stopped being `any[]`.
+- `noUncheckedIndexedAccess` (root `tsconfig.json:14`) means every array index into the new typed
+  `TransformedDoc`/`TransformedNode` shape in `transformIssueLinks.test.ts` is `T | undefined` — this
+  surfaced ~26 real possibly-undefined accesses that `as any` had been silently hiding all along (not
+  new problems this ticket introduced; pre-existing gaps `as any` made invisible). Fixed with optional
+  chaining (`result.content[0]?.content?.[0]`) and `?? []` fallbacks on arrays consumed by
+  `.find`/`.some` — no `!` added anywhere, per rule 16.
+
+**Regression test proving this restores real protection, verified by actually breaking it (not just
+asserted).** `api/src/__tests__/pg-result.test.ts` has two tests: a normal runtime test that `pgResult`
+builds a correct `QueryResult` (rows/rowCount/command/oid/fields), and a `@ts-expect-error` test
+asserting `pgResult({ id: 'not-an-array' })` — the exact "forgot to wrap the row in an array" mistake
+`{ rows: mockIteration } as any` used to accept silently — fails to compile. Verified three separate
+ways during development, each confirmed by actually running `tsc`, not inferred:
+1. Broke `iterations.test.ts` directly: changed `pgResult([mockIteration])` to `pgResult(mockIteration)`
+   and ran `npx tsc --noEmit -p api` — got `TS2345: ... not assignable to parameter of type 'any[]'`.
+   Reverted before committing.
+2. Removed the `@ts-expect-error` directive from `pg-result.test.ts` itself and re-ran `tsc` — got a
+   real error (`TS2353: Object literal may only specify known properties... does not exist in type
+   'QueryResultRow[]'`), confirming the directive is matching a genuine failure, not sitting there
+   unused. Restored the directive before committing.
+3. With the directive restored, `tsc --noEmit -p api` reports zero errors for this file, and
+   `vitest run src/__tests__/pg-result.test.ts` passes both tests (2/2).
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/api type-check   # confirms all 6 files + the new test compile clean
+pnpm --filter @ship/api test         # or: source .factory-env && pnpm test (root runs api, then web)
+```
+
+Full api suite after this change: 65 files, 725 tests, all passing (no new failures vs. baseline).
+
+**Files covered vs. left.** All 6 dominant files fully converted, 0 real `as any` remaining in any
+`api/src/**/*.test.ts`. Not touched: `db/__tests__/ssl.test.ts` and `__tests__/auth.test.ts` (their
+`as any` hits are comments only, not casts — confirmed above) and `collaboration/__tests__/concurrent-doc-load.test.ts`
+(one raw grep hit, also a comment, not a cast). No production source file was touched — every change
+is inside `*.test.ts` files plus the one new test-helper test file.
+
+**Rollback.** Revert this commit. Restores the `as any` casts in all 6 files and removes
+`api/src/__tests__/pg-result.test.ts`. No schema, API, or runtime behavior change — test-only and one
+new test-helper test.
+
+---
+
+## TRO-308 — CodeQL js/missing-rate-limiting follow-up: SPA catch-all gap + admin.ts polynomial-redos
+
+**Three sub-items; only two needed code.** TRO-307 fixed a CodeQL legibility problem in
+`app.ts`'s `/api/` rate-limiter mounting (two explicit `app.use()` calls instead of a spread) and
+left three things for follow-up: (1) 254 of 352 open `js/missing-rate-limiting` alerts, unverified
+whether the app.ts fix actually cleared them once CodeQL re-scanned; (2) the SPA static-file
+catch-all, flagged separately and named at the time as a genuinely different, unprotected route;
+(3) `admin.ts:929`'s separate `js/polynomial-redos` alert.
+
+**Item 1 — confirmed resolved, no code change.** Re-queried live CodeQL alerts immediately before
+starting work:
+```
+gh api repos/troysatchell/ship/code-scanning/alerts --paginate \
+  -q '.[] | select(.state=="open") | select(.rule.id=="js/missing-rate-limiting" or .rule.id=="js/polynomial-redos") | "\(.rule.id) \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)"'
+```
+Result: **`js/missing-rate-limiting` has exactly one open alert**, at `api/src/app.ts:440` (the SPA
+catch-all — item 2, below). The 254 alerts across other route files are gone. This is OBSERVED
+from the live query above at the time this ticket started, not inferred from TRO-307's own
+(explicitly labeled DERIVED) prediction that its fix would clear them — TRO-307's app-level mount
+fix did clear them once CI's CodeQL job re-scanned the merged change. No route file needed a
+per-file fix; nothing in this ticket touches `api/src/routes/` route-mounting.
+
+**Item 2 — the SPA static-file catch-all had zero rate-limit coverage. Fixed.**
+`api/src/app.ts`'s "Static SPA (single-origin deployments)" section
+(`express.static(webDist, ...)` + `app.get('*', ...)`, only active when `web/dist` exists on disk —
+single-origin/single-service deployments, never local dev/test) is registered after every
+`/api/*` route, outside the `/api/` prefix `perSourceIpLimiter`/`perIdentityLimiter` match. It had
+no rate-limit coverage of its own — a real gap, not a CodeQL-legibility issue like item 1.
+
+Fix: a new, separate per-source-IP-only limiter, `createSpaStaticLimiter`
+(`api/src/middleware/rate-limit.ts`), mounted via `app.use(spaStaticLimiter)` immediately before
+`express.static`/the catch-all in `app.ts`. Design choices, reasoned from
+`rate-limit.ts`'s existing NAT-egress/audit-measurement doc:
+- **Per-source-IP only, not per-identity.** This route serves anonymous page loads (`index.html`,
+  JS/CSS bundles) — most requests carry no session cookie or bearer token — so
+  `perIdentityLimiter`'s session/token-keyed shape doesn't apply; `perSourceIpLimiter`'s per-IP
+  flood-ceiling shape does.
+- **A separate bucket, not a reuse of `perSourceIpLimiter` itself** (own Redis key prefix,
+  `rl:spa:`, added in `redis-rate-limit-store.ts`): a static-asset flood (e.g. a stuck client retry
+  loop re-fetching `index.html`) and an `/api/*` flood from the same source IP would otherwise be
+  able to exhaust each other's budget. Verified independent in the new test suite (see below).
+  Same Redis-shared-store treatment as `perSourceIpLimiter` (`REDIS_URL`-conditional,
+  `passOnStoreError: true`) for the same reason TRO-280/API-7 required it: a per-process
+  `MemoryStore` ceiling silently multiplies by instance count under Elastic Beanstalk autoscaling.
+- **Limits:** production/dev tiers reuse `perSourceIpLimiter`'s own numbers (6,000/min prod,
+  10,000/min dev) — same traffic-order-of-magnitude reasoning documented in `rate-limit.ts`'s
+  top-of-file doc. The test tier is a separate, deliberately small number (25) so a real
+  "hit the limit, get a 429" regression test needs tens of requests, not 100,000 — safe because no
+  other test file in this suite exercises a non-`/api/`, non-`/collaboration` path through a real
+  built `web/dist` (grepped for `.get('/')`-shaped requests across `api/src/**/*.test.ts`: none).
+
+**Item 3 — `admin.ts:929`'s invite-email regex had real, measured quadratic backtracking. Fixed.**
+The flagged pattern, `/^[^\s@]+@[^\s@]+\.[^\s@]+$/` (used by `POST
+/api/admin/workspaces/:id/invites` to validate an admin-supplied invite email), has two adjacent
+`[^\s@]+` groups in the domain portion, separated only by a required literal `.` that neither class
+excludes — so a rejected input with a long run of dots in that region has many ways to split across
+the two groups, and the engine retries all of them before giving up.
+
+**Correction to this ticket's own description, and to an earlier draft comment on this same
+regex in `CHANGES.md`'s TRO-307 entry above (which had it right) versus this ticket's brief (which
+did not):** measured directly (`node --eval`, this machine, this run — see the timing table in the
+`isValidInviteEmail` doc comment in `admin.ts`), the pathological input is many dots **after** the
+`@` (inside the ambiguous domain-vs-domain split), not before it. `".".repeat(n) + "@" + " "` (dots
+before `@`) stayed O(n) — 0.06ms at n=40,000. `"a@" + ".".repeat(n) + " "` (dots after `@`) scaled
+roughly with n²: 0.6ms at n=1,000, up to 886ms at n=40,000 (each 2x in `n` costing ~4x in time).
+That is CodeQL's literal rule name — "polynomial", not "exponential" — for exactly this reason: two
+adjacent unbounded groups over the same overlapping character set produce quadratic blowup, not the
+classic `(a+)+` exponential shape.
+
+Fix: split the string on `@` in code first (reject anything but exactly one `@`, both sides
+non-empty), then validate each side with a regex that has only one unbounded quantifier live over
+any given substring — `EMAIL_LOCAL_PART_REGEX = /^[^\s@]+$/` and `EMAIL_DOMAIN_REGEX =
+/^[^\s@.]+(?:\.[^\s@.]+)+$/` (domain labels exclude `.`, so the boundary between them is the literal
+dot itself, not two groups negotiating where it falls) — exported as `isValidInviteEmail` from
+`admin.ts`. Compared systematically against the old regex across 17 representative cases while
+designing the fix: identical accept/reject behavior except one case, `user@example..com` (a domain
+with an empty label between two dots), which the old regex accepted and the new one correctly
+rejects — a tightening, not a regression, of what a legitimate email/hostname looks like. Dotted
+local parts (`first.last@...`) and multi-label domains (`sub.example.co.uk`) are still accepted;
+verified in the new test suite.
+
+**Regression coverage.**
+- `api/src/app.spa-static-rate-limit.test.ts` (item 2, new file): builds a minimal fake `web/dist`
+  (directory + `index.html`) in `beforeAll` so `createApp()`'s static-file branch actually
+  activates (cleans up only what it created, in `afterAll`), then: confirms the fixture works,
+  drives requests until the configured test-tier limit (25) is exceeded and asserts 429 on request
+  #26 with a `statuses.slice(0, 25)` check that nothing before it was already wrong, and confirms
+  exhausting the static-file budget does not throttle `/api/csrf-token` from the same source IP
+  (proves the separate-bucket design). RED BEFORE / GREEN AFTER, verified directly: with
+  `app.use(spaStaticLimiter)` temporarily commented out, the 429 assertion failed with "never saw a
+  429 in 30 requests" and the bucket-isolation test's own setup assertion failed too (429
+  expected, got 200) — both for the expected reason, both pass again with the line restored.
+- `api/src/routes/admin.test.ts` (item 3, new file — no test file previously existed for
+  `admin.ts`): 6 valid-email cases, 9 malformed-email cases (including the deliberate
+  `example..com` tightening), and two timing-bounded ReDoS assertions. The primary one drives
+  `isValidInviteEmail` with `"a@" + ".".repeat(200_000) + " "` and asserts completion under 500ms;
+  RED BEFORE (verified separately): the OLD regex on the same 200,000-dot input took **20,798ms** on
+  this machine, ~42x the ceiling — confirming this is a real fix, not a redundant test. A second
+  assertion covers the "before the `@`" shape the ticket's brief originally named, which was already
+  fast on the old code (a pin, included because the brief called it out, not because it was ever
+  broken). EMPIRICAL CAVEAT: both timing ceilings are measured on this machine, in this run — a
+  heavily loaded CI box could push the absolute numbers up, though the margin (500ms ceiling vs. an
+  old-code baseline of ~20.8s at the same input size) is generous enough to absorb realistic
+  machine-load variance.
+
+**How to run it.**
+```bash
+cd api && source ../.factory-env
+npx vitest run src/app.spa-static-rate-limit.test.ts src/routes/admin.test.ts
+npx vitest run src/middleware/__tests__/rate-limit.test.ts src/middleware/__tests__/rate-limit-coverage.test.ts src/app.test.ts  # unchanged-behavior proof
+```
+
+**Rollback.** Revert the commit(s) on `fix/tro-308-codeql-followup` touching `api/src/app.ts`,
+`api/src/middleware/rate-limit.ts`, `api/src/middleware/redis-rate-limit-store.ts`, and
+`api/src/routes/admin.ts`. Restores the unprotected SPA catch-all (real gap — CodeQL will re-flag
+`js/missing-rate-limiting` at `app.ts:440`) and the single-regex, quadratic-backtracking email
+validator (real gap — CodeQL will re-flag `js/polynomial-redos` at `admin.ts:929`, and the crafted
+pathological input can again cost ~20s of single-threaded event-loop time on this size of input, a
+real DoS surface on an authenticated but not privileged-in-any-stronger-sense admin endpoint).
+Neither rollback affects item 1 (no code changed for it).
+
+---
+
+## TRO-295 (TF-7 follow-up) — ALB security group split in two to keep the CloudFront-prefix-list rule expansion under AWS's rules-per-group quota
+
+**The finding.** `terraform/security-groups.tf`'s single `aws_security_group.alb` carried both of
+TF-7/TRO-278's CloudFront-only ingress rules (port 80 and port 443), each referencing
+`data.aws_ec2_managed_prefix_list.cloudfront_origin_facing`. AWS counts a security-group rule that
+references a prefix list against the "Rules per security group" quota as though expanded to one
+rule per prefix-list entry, not as a single rule — TF-7's own CAUTION comment (already in the file,
+above the two rules) already documented this and named two possible mitigations: (1) check the
+account's live quota before `apply`, or (2) split the rules across separate security groups. This
+ticket implements mitigation 2; mitigation 1 needs live AWS credentials this environment doesn't
+have and is still a human's job (unchanged from TF-7).
+
+**Premise check: the "two rules on one group" framing held.** Read the file before changing
+anything, per standing rule — confirmed exactly two ingress rules on `aws_security_group.alb`
+(ports 80 and 443), both referencing the one prefix list, nothing else referencing it anywhere else
+in `terraform/`. `terraform/modules/security-groups/main.tf` (the separate module used by
+`environments/dev` and `environments/shadow`) has its own `alb` security group but still uses
+`cidr_blocks = ["0.0.0.0/0"]`, not the prefix list — TF-7's restriction was never ported there, so
+it carries no quota-expansion risk and is out of this ticket's scope (a pre-existing inconsistency,
+not touched here).
+
+**What changed — `terraform/security-groups.tf`.**
+
+- `aws_security_group.alb` now holds only the port-443 (HTTPS) ingress rule, plus its own egress
+  rule (`Allow all outbound`) and a doc comment explaining the split.
+- A new `aws_security_group.alb_http` holds the port-80 (HTTP) ingress rule, moved verbatim from
+  the old `alb` resource, plus its own copy of the egress rule (duplicated rather than relied on
+  via the ALB's shared-ENI rule union, so this group is self-contained). Both groups reference the
+  same `data.aws_ec2_managed_prefix_list.cloudfront_origin_facing` — the split changes which quota
+  bucket each rule's expansion counts against, not which traffic is allowed.
+- **Note on naming vs. traffic reality:** despite the `_http` suffix suggesting a secondary
+  redirect listener, port 80 is the port that actually carries CloudFront's origin traffic today
+  (the `EB-API` custom origin's `origin_protocol_policy` is `http-only`, per `s3-cloudfront.tf`);
+  443 is reserved for a possible future switch. Documented in both resources' comments so a future
+  reader doesn't assume `alb_http` is the low-priority one.
+- `aws_security_group.eb_instance`'s existing ingress-from-ALB rule still references only
+  `aws_security_group.alb.id` (not both). Left as-is with a new comment explaining why: AWS's
+  security-group-reference matching keys off the *source ENI's* group membership, not which group
+  a rule names, so once the ALB's ENI carries both `alb` and `alb_http`, a rule naming either one
+  still matches ALB-originated traffic. Verified against AWS's documented security-group-reference
+  semantics, not run against live infrastructure (no credentials here).
+- The CAUTION comment above the two (now split) resources is narrowed, not removed: it now states
+  the split is done (mitigation 2) and still flags mitigation 1 (the live quota + prefix-list
+  `max_entries` check) as unverified and still a human's job before any real `apply`.
+
+**What changed — `terraform/elastic-beanstalk.tf`.** The `aws:elbv2:loadbalancer` / `SecurityGroups`
+EB option setting (previously `value = aws_security_group.alb.id`) now lists both groups:
+`value = join(",", [aws_security_group.alb.id, aws_security_group.alb_http.id])`. **Syntax
+confirmed against this repo's own precedent, not invented:** this file already uses
+`join(",", ...)` for other multi-value EB option settings on the same resource —
+`aws:ec2:vpc`/`Subnets` (line ~112) and `aws:ec2:vpc`/`ELBSubnets` (line ~118) both build
+comma-separated values the same way, and AWS's own docs for `aws:elbv2:loadbalancer`/`SecurityGroups`
+describe it as accepting a comma-separated list of security group IDs. Also added
+`output "eb_alb_http_security_group"` alongside the existing `eb_alb_security_group` output, and
+added `alb_http_security_group` to the `eb_config_summary` map in `terraform/outputs.tf`, for parity
+with the existing single-group outputs.
+
+**How to run it.** Nothing to `terraform apply` — per this project's Terraform-ticket precedent
+(TF-1/TF-3/TF-4/TF-5/TF-6/TF-8/TF-9/TF-10, TRO-303) and the explicit instruction for this ticket,
+this is a code-only change; the AWS blueprint in this repo is not planned to be applied (see
+TF-7/TRO-278's CHANGES.md entry). **Verification performed here:** downloaded Terraform v1.9.8
+(darwin_arm64, matching TF-7's own precedent of a temp binary since none is installed in this
+environment) and ran, from `terraform/`, with no backend/credentials involved:
+- `terraform fmt -check -diff -recursive .` — clean, no diff.
+- `terraform init -backend=false -input=false` then `terraform validate` — `Success! The
+  configuration is valid.`
+No `plan`/`apply`/`import` run against any real state, per the hard rule for this ticket.
+
+**Regression test: inapplicable, same precedent as every other terraform-only ticket in this
+project** (TF-1/TF-3/TF-4/TF-5/TF-6/TF-8/TF-9/TF-10, TRO-303) — this is an unapplied infrastructure
+blueprint with no runtime code path to exercise.
+
+**NOT verified (unchanged from TF-7, still a human's job before any real `apply`):**
+- The account's actual "Rules per security group" quota (VPC section of Service Quotas console, or
+  `aws service-quotas list-service-quotas --service-code vpc`).
+- The prefix list's live `data.aws_ec2_managed_prefix_list.cloudfront_origin_facing.max_entries`
+  value, and therefore whether even the *split* per-group rule count (not just the pre-split
+  combined count) stays under quota. The split narrows the risk; it does not by itself prove either
+  group is now under the limit.
+- Whether AWS's EB `SecurityGroups` option setting is additive (adds these groups alongside one EB
+  creates) or replaces the group list outright — inferred from this repo's own multi-value-setting
+  convention (`Subnets`/`ELBSubnets` above) and AWS's documented comma-separated-list format for
+  this option, not confirmed against a live `apply`/`describe-environments`.
+
+**Rollback.** Revert this commit (or the branch's merge commit) — the split is additive/mechanical
+(new resource + a widened setting value), with no schema or state-destructive change, so a plain
+`git revert` restores the single-`alb`-group shape TF-7 shipped. No state exists to reconcile today:
+this blueprint has never been `apply`'d (per TF-7/TRO-278).
+
+**If this has since been `apply`'d to a live account, a plain `git revert` is not safe by itself.**
+`git revert` alone reverts `security-groups.tf` (removing `aws_security_group.alb_http` and its
+port-80 rule) and `elastic-beanstalk.tf` (narrowing `SecurityGroups` back to one group) in the same
+commit, so a subsequent `apply` of the reverted code removes both halves together and restores the
+pre-split shape correctly. The danger is a **partial** revert — reverting only one of the two files
+(e.g. removing `alb_http` from `security-groups.tf` while leaving the widened `SecurityGroups`
+setting in `elastic-beanstalk.tf`, or the reverse) would either dangle a security-group reference to
+a resource Terraform is about to destroy, or silently drop port-80 ingress while
+`aws_security_group.alb_http` still exists unattached. Revert both files together in one `apply`,
+never one at a time against live state.
+
+---
+
 ## TRO-293 — three e2e tests asserted a per-row issue quick-menu that IssuesList does not render — deleted, not built
 
 **Decision: dead/speculative tests (path b), not a missing feature.** TRO-286 (TEST-14) Part 1
