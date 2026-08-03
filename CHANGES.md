@@ -21,6 +21,84 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-316 — [FG-11] Terraform for the agent service — Render docker web service, `/health` health-check-gated deploy, plan captured and annotated
+
+**Part of bundle `TRO-326` ([PR-B] EPIC: Agent service foundation) — third and final sub-issue** on
+this branch, after `TRO-313` (FG-2) and `TRO-315` (FG-4). See those entries below for the rest of
+the bundle.
+
+**What was missing.** No deployment existed for the agent service FG-2/FG-4 built. The MVP
+requires it "deployed and publicly accessible via Terraform" with `/health`/`/ready`, a captured
+and annotated `terraform plan`, and (separately, not in this PR — see below) a destroy-and-redeploy
+proof.
+
+**Target platform decision: Render, not AWS — decided out loud, not silently.** This ticket's own
+text says "Choose the target platform accordingly; do not assume an AWS apply will work." Verified
+again while doing this work: no `aws` CLI installed, no `AWS_*` env vars, matching
+`memory-bank/activeContext.md`'s standing note that no AWS credentials have existed all sprint.
+`memory-bank/activeContext.md`'s PM review (2026-08-03, TRO-341) independently names the same
+target ("Render Ship + agent + seeded Render Postgres"). Extended the existing, already-provably-
+plannable `terraform/render/` root (TF-10 / TRO-299) with a new `agent_service.tf`, rather than the
+large AWS root in `terraform/` (which has never had a successful `plan` in this environment either)
+or a second Terraform root.
+
+**Deviation from the literal dispatch brief, disclosed:** told to model secrets on "the existing
+`terraform/ssm.tf` / `.tfvars.example` pattern" — `ssm.tf` is AWS SSM Parameter Store, unusable by
+non-AWS compute. Followed the same **discipline** (sensitive variables, no defaults, gitignored
+`terraform.tfvars`, nothing committed) via Render's `env_vars` mechanism instead, which
+`web_service.tf` already uses for `SESSION_SECRET` in this same root.
+
+**What changed.**
+- `terraform/render/agent_service.tf` (new) — `render_web_service.agent`: Render docker runtime
+  pointed at `agent/Dockerfile` (also new — see below), `health_check_path = /health`,
+  `SHIP_API_BASE_URL` derived from `render_web_service.ship.url` (never hardcoded), five more env
+  vars for the model provider and LangSmith tracing, all sourced from sensitive input variables.
+- `terraform/render/variables.tf` — 11 new variables for the agent service, all documented; the
+  three secrets (`anthropic_api_key`, `langsmith_api_key`, `ship_api_token`) have no default.
+- `terraform/render/outputs.tf` — `agent_service_url`/`agent_service_id`, non-sensitive only.
+- `terraform/render/terraform.tfvars.example` — placeholders for the three new secrets plus
+  commented overrides for the non-secret agent variables.
+- `agent/Dockerfile` (new) — mirrors the root Dockerfile's build/runtime split (build stage
+  compiles from source since `dist/`/`node_modules/` are gitignored; runtime stage carries only
+  `agent/dist` + prod deps). **Built and run in this session, not just written**: `docker build -f
+  agent/Dockerfile .` from the repo root succeeded; the resulting container served `GET /health` →
+  `200 {"status":"ok"}` and `GET /ready` → `503 {"status":"not_ready","reason":"config_incomplete"}`
+  with no config supplied — the exact FG-2/FG-4 contract, running inside the real image Render
+  would build.
+- `FLEETGRAPH.MD` "Deployment model" — the rollback trigger/procedure the brief requires documented:
+  (1) CI gates *merge*, so a failing CI run never reaches the branch Render watches in the first
+  place (`.github/workflows/ci.yml`'s own header: "the merge gate the ticket factory depends on");
+  (2) Render's own health-check-gated deploy promotion is the safety net for runtime failures CI
+  can't catch — a new deploy that never passes `/health` never receives traffic, and the previous
+  good deploy keeps serving. `/ready` is deliberately NOT what Render's platform check points at,
+  since it can legitimately be false on a freshly-promoted, healthy instance if Ship is briefly down.
+
+**`terraform plan` — captured and annotated in full: `terraform/render/plan/tro-316-agent-plan-annotated.md`.**
+Two captures: (1) with `RENDER_API_KEY` unset (this environment's real, unmodified state) — fails
+immediately with "Missing Render API Key," proving the provider requires a credential this agent
+was not given (deliberately, matching the bundle's "no `terraform apply`" hard stop); (2) with a
+non-empty placeholder key (still not a real credential) — the plan completes in full, "3 to add, 0
+to change, 0 to destroy," because every resource here is a `create` against genuinely empty state
+and nothing requires a live API round-trip merely to plan. Every secret-shaped value renders as
+`(sensitive value)`. `terraform fmt -check -recursive .` clean; `terraform validate`: Success (2
+pre-existing deprecation warnings, identical pattern already in `web_service.tf`, not new).
+
+**Deliberately NOT done, per this bundle's hard stop (escalation gate #2 — irreversible/outward-
+facing infrastructure, human confirmation required every time):** `terraform apply` was never run;
+the destroy-and-redeploy proof was never attempted. See the annotated plan file's "What a human
+needs to finish this" section for the exact remaining steps (a real `RENDER_API_KEY`, a decision on
+the pre-existing `ship`/`ship-db` import-vs-create gap this root already carried before this
+ticket, real secret values, and explicit sign-off to `apply`).
+
+**How to run it.** `cd terraform/render && terraform init && terraform plan -var-file=terraform.tfvars`
+(after copying `terraform.tfvars.example` and filling in real values, and exporting `RENDER_API_KEY`).
+`docker build -f agent/Dockerfile -t ship-agent .` from the repo root to build the image standalone.
+
+**How to roll it back.** Revert this commit. No resource here has ever been applied (plan-only), so
+there is nothing live to tear down — reverting only removes the config and the Dockerfile.
+
+---
+
 ## TRO-315 — [FG-4] Resilient client for every outbound call — timeouts, backoff, circuit breaker, self-throttle, graceful degradation
 
 **What was missing.** FG-2 (TRO-313)'s `/ready` check used a bare `fetch` with a timeout — correct

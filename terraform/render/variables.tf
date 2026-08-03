@@ -113,6 +113,110 @@ variable "cors_origin" {
   default     = "https://ship-rr6m.onrender.com"
 }
 
+# --- Agent service (TRO-316 / FG-11) ----------------------------------------
+#
+# Target platform: Render, not AWS. This ticket's own brief says "Choose the
+# target platform accordingly; do not assume an AWS apply will work" — this
+# environment has never had AWS credentials this sprint
+# (memory-bank/activeContext.md; re-confirmed working this ticket: `aws` CLI
+# absent, no AWS_* env vars). The same memory bank's PM review (2026-08-03,
+# TRO-341) independently recommends the identical target: "Render Ship
+# (ship-rr6m.onrender.com) + agent + seeded Render Postgres." Reusing this
+# existing, provably-plannable Render root — rather than extending the large
+# AWS root in `terraform/` — is a deliberate, disclosed deviation from a
+# literal reading of "the terraform/ssm.tf / .tfvars.example pattern"; the
+# secrets DISCIPLINE (sensitive vars, no defaults, gitignored tfvars, no
+# secrets committed) is the same either way, only the storage mechanism
+# differs (Render env_vars here vs. AWS SSM Parameter Store there), because
+# SSM parameters would only be usable by AWS-hosted compute this service
+# doesn't run on.
+
+variable "agent_service_name" {
+  description = "Name of the Render web service for the FleetGraph agent."
+  type        = string
+  default     = "ship-agent"
+}
+
+variable "agent_service_plan" {
+  description = "Render plan for the agent web service (e.g. free, starter, standard)."
+  type        = string
+  default     = "free"
+}
+
+variable "agent_port" {
+  description = "Port the agent's Express server listens on (agent/src/config.ts's PORT, default 3100)."
+  type        = number
+  default     = 3100
+}
+
+variable "agent_dockerfile_path" {
+  description = "Path to the agent's Dockerfile, relative to the repo root (docker_context)."
+  type        = string
+  default     = "./agent/Dockerfile"
+}
+
+variable "agent_docker_context" {
+  description = "Docker build context for the agent image — the REPO ROOT, not agent/, because pnpm workspace resolution needs pnpm-workspace.yaml and the lockfile (see agent/Dockerfile's header comment)."
+  type        = string
+  default     = "."
+}
+
+variable "agent_health_check_path" {
+  description = <<-EOT
+    HTTP path Render polls to gate deploy promotion and ongoing liveness for
+    the agent service. Render exposes exactly one such path; FG-2's /health
+    (process alive) and /ready (Ship reachable + config loaded) are
+    deliberately different endpoints Render's single-path model can't fully
+    express — this points at /health, consistent with the existing `ship`
+    web service above (health_check_path in web_service.tf). /ready stays
+    available on the service itself for any caller that wants the
+    finer-grained readiness signal (CI, a human, a future orchestrator).
+  EOT
+  type        = string
+  default     = "/health"
+}
+
+variable "anthropic_api_key" {
+  description = <<-EOT
+    Anthropic API key for the agent's model provider (TRO-313's settled
+    decision: Anthropic API directly, not Bedrock — no AWS credentials have
+    existed in this environment all sprint). Sensitive, no default — supply
+    via a gitignored terraform.tfvars or -var, never a literal here.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
+variable "langsmith_api_key" {
+  description = "LangSmith API key for trace ingestion (TRO-313 / FG-2 — tracing on from the first invocation). Sensitive, no default."
+  type        = string
+  sensitive   = true
+}
+
+variable "langchain_project" {
+  description = "LangSmith project name traces are grouped under."
+  type        = string
+  default     = "fleetgraph-agent"
+}
+
+variable "langchain_endpoint" {
+  description = "LangSmith API endpoint."
+  type        = string
+  default     = "https://api.smith.langchain.com"
+}
+
+variable "ship_api_token" {
+  description = <<-EOT
+    Per-user Ship API token the agent runs under. FLEETGRAPH.MD "Deployment
+    model": there is no service account — every API token belongs to a real
+    user, and the agent runs as them, which is what makes following the
+    graph outward from a document to others the person didn't open safe by
+    construction. Sensitive, no default.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
 # --- Postgres ----------------------------------------------------------------
 
 variable "database_service_name" {
