@@ -21,6 +21,71 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-313 — [FG-2] There is no agent service — new `agent/` package, LangGraph + LangSmith, `/health` + `/ready`
+
+**What was missing.** No agent service existed at all: `pnpm-workspace.yaml` listed only `api`,
+`web`, `shared`; no `langgraph`/`langsmith`/`@langchain/*`/`@anthropic-ai/sdk` dependency existed
+anywhere; the only model access in the repo was AWS Bedrock (`api/src/services/ai-analysis.ts`),
+and this environment has never had AWS credentials this sprint. Six MVP requirements (graph
+running, LangSmith traces, HITL gate, real Ship data, UI surfaces, Terraform deploy) all assume a
+service that did not exist.
+
+**Model provider decision (the "one decision still open" in this ticket): Anthropic API directly**,
+via `@langchain/anthropic` — not Bedrock. Confirmed by the maintainer 2026-08-03. Reasons: no AWS
+credentials have existed in this environment all sprint (so Bedrock cannot be assumed to work
+locally or in whatever deploy target FG-11 lands on), and the brief's "Claude API costs" accounting
+matches billing through the Anthropic API directly, not Bedrock's per-inference-profile pricing.
+
+**What changed.** New `agent/` workspace package (added to `pnpm-workspace.yaml`, matching
+build/type-check/lint/test scripts to the sibling packages):
+- `agent/src/graph.ts` — a compiled LangGraph `StateGraph` (`ingest` → `respond`, `START`/`END`).
+  Phase 2 (the six-use-case node design — FLEETGRAPH.MD "Node design rationale", marked Pending) is
+  explicitly out of scope for this ticket; this proves a real, compiled, traced graph exists. The
+  model is injected (`AnthropicModel` interface — just `.invoke(input)`), so every automated test
+  uses a stable fake and the production wiring (`index.ts`) is the only place a real `ChatAnthropic`
+  is constructed.
+- `agent/src/server.ts` + `index.ts` — Express app: `GET /health` (200 always, process alive, no
+  dependency check — this is what Terraform/FG-11 points its platform health check at) and
+  `GET /ready` (503 if config is incomplete OR Ship is unreachable via a single timed fetch; 200
+  otherwise). `/ready`'s Ship check is deliberately a bare `fetch` with a timeout here, not the full
+  resilient client — FG-4 (TRO-315) is the ticket that gives every outbound call retry/backoff/
+  circuit-breaker treatment; doing that here would be doing FG-4's work under FG-2's ticket.
+- `agent/src/config.ts` — env-only config, no secrets hardcoded, no defaults on secrets.
+- `agent/.env.example` — documents every var, including the FG-4 client knobs that don't exist yet
+  (so the file doesn't need a second pass when FG-4 lands).
+- `agent/src/scripts/trace-invoke.ts` — a one-off manual utility (NOT a test, not run by `pnpm
+  test`) that makes the one real, live call this ticket's proof requires.
+
+**LangSmith trace — real invocation, captured via the LangSmith API, not the console:**
+- Trace: `https://smith.langchain.com/o/827be0c8-ee40-4854-9d37-e82820ec9263/projects/p/c1e38b67-b458-4e8b-a680-be74ece5e1a6/r/a43f52ee-ea08-459d-bfa2-ece414797759`
+- Project `fleetgraph-agent`, run type `chain`, status `success`, 9 child runs (the graph's own
+  node/model spans), 71 total tokens (33 prompt / 38 completion), $0.000223 total cost — all read
+  directly from `GET /runs/{id}` on the LangSmith API (`total_tokens`/`total_cost`/`child_run_ids`
+  fields), not estimated.
+- Model used for the trace: `claude-haiku-4-5-20251001` — the cheapest model available to this API
+  key (confirmed via `GET /v1/models`; `claude-3-5-haiku-latest` 404s against this key's model
+  list, so the first attempt is also on record as an **error** trace in the same LangSmith project).
+
+**Regression tests (stable fake — no live call in any of these; `pnpm test` never spends money or
+depends on network availability).** All confirmed red for the right reason before the corresponding
+implementation line, green after — see PR body for the exact before/after transcripts:
+- `agent/src/__tests__/graph.test.ts` (4 cases) — the compiled graph's node set contains every name
+  in `NODE_NAMES`; `ingest` trims input before `respond` ever sees it; array-shaped model content is
+  joined into a string; a model rejection propagates rather than being swallowed.
+- `agent/src/__tests__/health.test.ts` (4 cases) + `agent/src/__tests__/server.test.ts` (4 cases) —
+  `/health` always 200; `/ready` 503 on incomplete config (no network call made) and on Ship
+  unreachable, 200 once both are satisfied — exactly FG-2's "how it will be proven" clause.
+- `agent/src/__tests__/config.test.ts` (5 cases) — defaults, full env read, non-numeric fallback.
+
+**How to run it.** `pnpm --filter @ship/agent test` · `pnpm --filter @ship/agent dev` (serves on
+`:3100` by default) · `set -a; source .env.local; set +a && pnpm --filter @ship/agent trace:invoke`
+for a fresh live trace.
+
+**How to roll it back.** Revert this commit and remove `'agent'` from `pnpm-workspace.yaml`; no
+other package depends on `agent/`, so nothing else is affected.
+
+---
+
 ## GitLab CI — shared runners were never enabled; every pipeline on `main` had been stuck or failing since `.gitlab-ci.yml` was added
 
 **What was broken.** `.gitlab-ci.yml` (added 2026-07-30, `3563fa3`) mirrors `.github/workflows/ci.yml`

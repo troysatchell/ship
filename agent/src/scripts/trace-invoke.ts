@@ -1,0 +1,59 @@
+/**
+ * One-off manual utility (TRO-313 / FG-2): invoke the real compiled graph
+ * against the real Anthropic API, with LangSmith tracing on, to produce the
+ * trace-link proof artifact the ticket requires.
+ *
+ * Deliberately NOT a test — this is the one place in the package permitted to
+ * make a live call. Every automated test in `src/__tests__/` uses a stable
+ * fake `AnthropicModel` instead (see graph.test.ts) so `pnpm test` never
+ * spends money or depends on network/API availability.
+ *
+ * Usage (from repo root, with the worktree's staged .env.local):
+ *   set -a; source .env.local; set +a
+ *   pnpm --filter @ship/agent trace:invoke
+ */
+import 'dotenv/config';
+import { ChatAnthropic } from '@langchain/anthropic';
+import { buildGraph } from '../graph.js';
+
+async function main() {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    console.error('ANTHROPIC_API_KEY is not set — cannot make a real invocation.');
+    process.exitCode = 1;
+    return;
+  }
+  if (process.env.LANGCHAIN_TRACING_V2 !== 'true') {
+    console.warn(
+      'LANGCHAIN_TRACING_V2 is not "true" — this invocation will NOT produce a LangSmith trace.'
+    );
+  }
+
+  const model = new ChatAnthropic({
+    apiKey,
+    // Cheapest/fastest model available to this API key (verified via
+    // GET /v1/models) — this is a smoke-test invocation, not a quality one.
+    model: 'claude-haiku-4-5-20251001',
+    maxTokens: 128,
+  });
+
+  const graph = buildGraph(model);
+  const result = await graph.invoke({
+    input:
+      'In one sentence, confirm you are the FleetGraph agent foundation graph (TRO-313) running end to end.',
+  });
+
+  console.log('--- graph output ---');
+  console.log(result.output);
+  console.log('--------------------');
+  console.log(
+    `Check https://smith.langchain.com for a new trace in project "${
+      process.env.LANGCHAIN_PROJECT ?? '(default)'
+    }".`
+  );
+}
+
+main().catch((err) => {
+  console.error('trace-invoke failed:', err);
+  process.exitCode = 1;
+});
