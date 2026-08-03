@@ -1,0 +1,179 @@
+meta:
+  title: Software Factory — reference model
+  subtitle: Agent-assisted delivery pipeline, intake to operate
+  source: example/software-factory @ reference
+
+zones:
+  - id: intake
+    label: Intake
+    accent: intake
+    note: Demand enters and is shaped
+  - id: build
+    label: Build
+    accent: transform
+    note: Where the work is actually done
+  - id: verify
+    label: Verify
+    accent: gate
+    note: Every quality gate lives here
+  - id: ship
+    label: Release & operate
+    accent: release
+    note: Work leaves, and reality answers back
+
+nodes:
+  # ---------------------------------------------------------------- intake
+  - id: demand
+    label: Demand
+    kind: external
+    zone: intake
+    subtitle: Customers, support, roadmap
+    detail: Everything that wants engineering time. Not modelled in detail — it
+      is the boundary of the factory, drawn so the entry point is not implicit.
+
+  - id: backlog
+    label: Backlog
+    kind: intake
+    zone: intake
+    subtitle: Issue tracker
+    emits: [ticket]
+    detail: The single queue. If work enters the factory anywhere else, that path
+      is invisible to this diagram and should be added.
+
+  - id: triage
+    label: Triage & shaping
+    kind: gate
+    zone: intake
+    subtitle: Human + agent pass
+    consumes: [ticket]
+    emits: [shaped-spec]
+    detail: Decides whether a ticket is well-formed enough to enter Build.
+      The first place ambiguity can be caught cheaply.
+
+  # ----------------------------------------------------------------- build
+  - id: planner
+    label: Plan synthesis
+    kind: transform
+    zone: build
+    subtitle: Agent writes the plan
+    consumes: [shaped-spec]
+    emits: [plan]
+
+  - id: planreview
+    label: Plan review
+    kind: gate
+    zone: build
+    subtitle: Human approves scope
+    consumes: [plan]
+    emits: [approved-plan]
+
+  - id: impl
+    label: Implementation
+    kind: transform
+    zone: build
+    subtitle: Agent fleet, one ticket each
+    consumes: [approved-plan]
+    emits: [changeset]
+    detail: Recursive by design — an agent that cannot make a test pass re-enters
+      implementation with the failure as new context.
+
+  - id: repo
+    label: Repository
+    kind: store
+    zone: build
+    subtitle: git, branch per ticket
+    consumes: [changeset]
+
+  # ---------------------------------------------------------------- verify
+  - id: ci
+    label: CI suite
+    kind: gate
+    zone: verify
+    subtitle: unit + integration
+    emits: [test-report]
+
+  - id: review
+    label: Code review
+    kind: gate
+    zone: verify
+    subtitle: Human, blocking
+
+  - id: staging
+    label: Staging soak
+    kind: transform
+    zone: verify
+    subtitle: 30 min bake
+
+  # ------------------------------------------------------------------ ship
+  - id: deploy
+    label: Deploy
+    kind: control
+    zone: ship
+    subtitle: Progressive rollout
+
+  - id: prod
+    label: Production
+    kind: release
+    zone: ship
+    subtitle: Serving traffic
+
+  - id: telemetry
+    label: Telemetry
+    kind: store
+    zone: ship
+    subtitle: Metrics, traces, logs
+    emits: [signal]
+
+  - id: incident
+    label: Incident response
+    kind: transform
+    zone: ship
+    subtitle: On-call rotation
+    consumes: [signal]
+    detail: The failure path for the whole factory. Everything that goes wrong
+      downstream of deploy arrives here.
+
+edges:
+  - {id: e01, from: demand,     to: backlog,   kind: flow, label: requests}
+  - {id: e02, from: backlog,    to: triage,    kind: flow, label: ticket}
+  - {id: e03, from: triage,     to: planner,   kind: flow, label: shaped spec}
+  - {id: e04, from: planner,    to: planreview, kind: flow, label: plan}
+  - {id: e05, from: planreview, to: impl,      kind: flow, label: approved}
+  - {id: e06, from: impl,       to: repo,      kind: flow, label: branch push}
+  - {id: e07, from: repo,       to: ci,        kind: flow}
+  - {id: e08, from: ci,         to: review,    kind: flow, label: green}
+  - {id: e09, from: review,     to: staging,   kind: flow, label: approved}
+  - {id: e10, from: staging,    to: deploy,    kind: flow}
+  - {id: e11, from: deploy,     to: prod,      kind: flow}
+  - {id: e12, from: prod,       to: telemetry, kind: data,  label: emits signal}
+  - {id: e13, from: telemetry,  to: incident,  kind: control, label: alert fires}
+
+  # ---- feedback: the loops that make this a factory rather than a chute ---
+  - {id: f01, from: ci,        to: impl,   kind: feedback, label: tests failed,
+     polarity: '-', loop: B1}
+  - {id: f02, from: review,    to: impl,   kind: feedback, label: changes requested,
+     polarity: '-', loop: B2}
+  - {id: f03, from: incident,  to: backlog, kind: feedback, label: remediation work,
+     polarity: '+', loop: R1}
+  - {id: f04, from: planreview, to: planner, kind: feedback, label: rescope,
+     polarity: '-', loop: B3}
+
+  # ---- a link the team believes exists but nothing implements -------------
+  - id: g01
+    from: telemetry
+    to: triage
+    kind: gap
+    label: no signal reaches shaping
+    note: >-
+      Nobody feeds production behaviour back into how work is shaped. Every
+      ticket is written as if the last release never happened.
+
+findings:
+  - id: manual-1
+    severity: high
+    kind: single-point-of-serialisation
+    title: Code review is the only unbatched human gate
+    nodes: [review]
+    detail: Every change waits on one blocking human step with no parallel lane
+      and no timeout. Throughput of the whole factory equals throughput of this
+      one node.

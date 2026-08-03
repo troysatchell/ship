@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ship Factory v2</title>
+<!--
+  AGENT / LLM NOTE — read this before parsing anything else in this file.
+
+  This document is a rendered view of a complete, machine-readable system
+  model. Do NOT reconstruct the system from the SVG, the CSS, or a
+  screenshot. The full model — every node (with kind, description, metrics),
+  every edge (with kind, label, polarity, confidence), every derived loop,
+  and every analyzer finding — is embedded verbatim in:
+
+      <script type="application/json" id="system-graph-model">
+
+  Read that one element and you have everything the diagram knows, including
+  detail text that is only visible to humans via hover/click. Everything
+  after that element is presentation code and can be ignored.
+
+  Vocabulary: nodes have kind ∈ {intake, transform, gate, store, release,
+  control, external} (an original alias like "module" or "guard" is kept in
+  kindLabel). Edge kinds: flow (forward work/dependency), control (triggers),
+  data (state read/write), feedback (result returns upstream), recursion,
+  violation (breaks a stated rule), gap (a link that SHOULD exist and does
+  not — modelled absence, not an error). loops[] are cycles closed by
+  feedback edges: type "balancing" converges, "reinforcing" compounds.
+  findings[] are the analyzer's structural claims, sorted by severity.
+  Nodes may carry sources[] — file paths (with optional symbol/lines) that
+  anchor the node to real code; combine with meta.repoUrl to cite exact files.
+-->
+
+<style>
+/* ===========================================================================
+   system-graph artifact stylesheet
+   Every value below comes from the design system in references/design-system.md.
+   Do not hand-tune: change the model or the tokens, rebuild.
+   =========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+:root {
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px;
+  --r-sm: 6px; --r-md: 10px; --r-lg: 14px;
+  --font: ui-sans-serif, -apple-system, "Segoe UI", Inter, Roboto, system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --rail: 268px; --panel: 330px;
+  --ease: cubic-bezier(.2,.7,.3,1);
+}
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--font);
+  background: var(--canvas); color: var(--ink);
+  font-size: 13px; line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+/* ------------------------------------------------------------------ chrome */
+.app { display: grid; grid-template-rows: auto 1fr;
+       grid-template-columns: var(--rail) 1fr var(--panel);
+       grid-template-areas: "head head head" "rail canvas panel";
+       height: 100%; }
+header { grid-area: head; display: flex; align-items: center; gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-5); border-bottom: 1px solid var(--hairline);
+  background: var(--surface); }
+header h1 { font-size: 14.5px; font-weight: 640; margin: 0; letter-spacing: -.005em; }
+header .sub { color: var(--ink-muted); font-size: 12px; }
+header .src { font-family: var(--mono); font-size: 10.5px; color: var(--ink-muted);
+  border: 1px solid var(--hairline); padding: 3px var(--sp-2); border-radius: var(--r-sm); }
+header .spacer { flex: 1; }
+
+.rail  { grid-area: rail;  border-right: 1px solid var(--hairline);
+         background: var(--surface); overflow-y: auto; padding: var(--sp-4); }
+.panel { grid-area: panel; border-left: 1px solid var(--hairline);
+         background: var(--surface); overflow-y: auto; padding: var(--sp-4); }
+.canvas { grid-area: canvas; position: relative; overflow: hidden; background: var(--canvas); }
+
+.sec { margin-bottom: var(--sp-6); }
+.sec > h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--ink-muted); font-weight: 620; margin: 0 0 var(--sp-3); }
+
+/* ------------------------------------------------------------- view switch */
+.views { display: flex; flex-direction: column; gap: var(--sp-1); }
+.views button { display: flex; align-items: baseline; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); text-align: left;
+  border: 1px solid transparent; transition: background .12s var(--ease); }
+.views button:hover { background: var(--hover); }
+.views button[aria-pressed="true"] { background: var(--hover); border-color: var(--hairline); }
+.views button[aria-pressed="true"] .vk { color: var(--ink); }
+.views .vk { font-weight: 600; font-size: 13px; color: var(--ink-muted); }
+.views .vb { font-size: 11px; color: var(--ink-muted); line-height: 1.35; }
+.views kbd { margin-left: auto; font-family: var(--mono); font-size: 9.5px;
+  color: var(--ink-muted); border: 1px solid var(--hairline); border-radius: 4px;
+  padding: 0 4px; }
+
+/* ---------------------------------------------------------------- toggles */
+.toggle { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) 0;
+  cursor: pointer; user-select: none; }
+.toggle input { appearance: none; width: 30px; height: 17px; border-radius: 9px;
+  background: var(--hairline); position: relative; transition: background .15s var(--ease);
+  flex: none; cursor: pointer; }
+.toggle input::after { content: ""; position: absolute; top: 2px; left: 2px;
+  width: 13px; height: 13px; border-radius: 50%; background: var(--ink);
+  transition: transform .15s var(--ease); }
+.toggle input:checked { background: var(--acc-transform); }
+.toggle input:checked::after { transform: translateX(13px); background: var(--canvas); }
+.toggle span { font-size: 12px; }
+.toggle .ct { margin-left: auto; font-family: var(--mono); font-size: 10px;
+  color: var(--ink-muted); }
+
+/* ----------------------------------------------------------------- legend */
+.legend { display: flex; flex-direction: column; gap: 7px; }
+.lg { display: flex; align-items: center; gap: var(--sp-2); font-size: 11.5px;
+  cursor: pointer; border-radius: var(--r-sm); padding: 2px 3px; }
+.lg:hover { background: var(--hover); }
+.lg[data-off="1"] { opacity: .38; }
+.lg svg { flex: none; }
+.lg .nm { font-weight: 560; }
+.lg .ds { color: var(--ink-muted); font-size: 10.5px; }
+
+/* ------------------------------------------------------------------ lists */
+.item { width: 100%; text-align: left; border: 1px solid var(--hairline);
+  border-radius: var(--r-md); padding: var(--sp-3); margin-bottom: var(--sp-2);
+  background: var(--canvas); transition: border-color .12s var(--ease); }
+.item:hover { border-color: var(--ink-muted); }
+.item.on { border-color: var(--acc-transform); }
+.item .hd { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 3px; }
+.item .ti { font-weight: 590; font-size: 12.5px; }
+.item .bd { color: var(--ink-muted); font-size: 11.5px; line-height: 1.45; }
+.chip { font-family: var(--mono); font-size: 9.5px; font-weight: 650;
+  padding: 1.5px 6px; border-radius: 999px; border: 1px solid currentColor;
+  letter-spacing: .02em; flex: none; }
+.chip.hi { color: var(--acc-alert); }
+.chip.md { color: var(--acc-gate); }
+.chip.lo { color: var(--ink-muted); }
+.chip.R  { color: var(--acc-gate); }
+.chip.B  { color: var(--acc-release); }
+.chip.U  { color: var(--ink-muted); }
+
+.empty { color: var(--ink-muted); font-size: 11.5px; border: 1px dashed var(--hairline);
+  border-radius: var(--r-md); padding: var(--sp-3); }
+
+/* -------------------------------------------------------------- inspector */
+.insp .kind { font-size: 9.5px; text-transform: uppercase; letter-spacing: .1em;
+  font-weight: 650; }
+.insp h3 { margin: var(--sp-1) 0 var(--sp-1); font-size: 16px; letter-spacing: -.01em; }
+.insp .st { color: var(--ink-muted); font-size: 12px; margin-bottom: var(--sp-4); }
+.insp p { font-size: 12px; line-height: 1.55; color: var(--ink-muted); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px var(--sp-3);
+  font-size: 11.5px; margin: var(--sp-3) 0; }
+.kv dt { color: var(--ink-muted); }
+.kv dd { margin: 0; font-family: var(--mono); font-size: 11px; }
+.rel { display: flex; flex-direction: column; gap: 3px; margin-top: var(--sp-2); }
+.rel button { display: flex; gap: var(--sp-2); align-items: baseline; font-size: 11.5px;
+  padding: 3px var(--sp-2); border-radius: var(--r-sm); text-align: left; }
+.rel button:hover { background: var(--hover); }
+.rel .ar { font-family: var(--mono); color: var(--ink-muted); flex: none; }
+.srclink { display: block; font-size: 11px; padding: 3px var(--sp-2);
+  border-radius: var(--r-sm); color: var(--ink); text-decoration: none; }
+.srclink code { font-family: var(--mono); font-size: 10.5px; }
+a.srclink:hover { background: var(--hover); }
+a.srclink code { text-decoration: underline; text-underline-offset: 2px;
+  text-decoration-color: var(--ink-muted); }
+
+/* ----------------------------------------------------------------- canvas */
+svg#stage { position: absolute; inset: 0; width: 100%; height: 100%;
+  cursor: grab; touch-action: none; }
+svg#stage.drag { cursor: grabbing; }
+#stage text { pointer-events: none; user-select: none; }
+.node, .edge, .zone { transition: opacity .18s var(--ease); }
+.dim { opacity: .13; }
+/* Many simultaneous return paths would otherwise dominate the canvas (their
+   hue is the loudest by design). Past a handful, they rest at reduced opacity
+   and come forward on hover or when their loop is isolated. */
+.edge.soft { opacity: .38; }
+.edge.soft:hover, .edge.soft.lit { opacity: 1; }
+.node { cursor: pointer; }
+.node .card { transition: filter .15s var(--ease); }
+.node:hover .card { filter: brightness(1.14); }
+.node.sel .card { filter: brightness(1.14); }
+.hidden { display: none; }
+.zlabel { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  font-weight: 640; }
+.elabel { font-size: 10px; font-weight: 560; }
+.nkind { font-size: 8.5px; letter-spacing: .09em; text-transform: uppercase; font-weight: 660; }
+.ntitle { font-size: 13px; font-weight: 620; letter-spacing: -.005em; }
+.nsub { font-size: 10.5px; }
+.badge { font-size: 10px; font-weight: 700; }
+.loopchip { font-family: var(--mono); font-size: 10px; font-weight: 700; }
+
+.hud { position: absolute; left: var(--sp-4); bottom: var(--sp-4); display: flex;
+  gap: var(--sp-1); background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: var(--r-md); padding: var(--sp-1); }
+.hud button { padding: var(--sp-1) var(--sp-3); border-radius: var(--r-sm);
+  font-size: 11.5px; color: var(--ink-muted); }
+.hud button:hover { background: var(--hover); color: var(--ink); }
+.tip { position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3); font-size: 11.5px; max-width: 280px;
+  box-shadow: 0 6px 22px rgba(0,0,0,.32); z-index: 5; }
+.tip.on { opacity: 1; }
+.tip b { display: block; font-size: 12px; margin-bottom: 2px; }
+.tip span { color: var(--ink-muted); }
+
+/* ------------------------------------------------- collapsible side panels */
+/* "Only the graph" is a legitimate reading mode — presenting, screenshotting,
+   or just thinking. The chrome collapses; the model does not change.         */
+.app.no-rail  { grid-template-columns: 1fr var(--panel);
+                grid-template-areas: "head head" "canvas panel"; }
+.app.no-panel { grid-template-columns: var(--rail) 1fr;
+                grid-template-areas: "head head" "rail canvas"; }
+.app.no-rail.no-panel { grid-template-columns: 1fr;
+                        grid-template-areas: "head" "canvas"; }
+.app.no-rail .rail, .app.no-panel .panel { display: none; }
+.hbtn { padding: 5px 10px; border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  font-size: 11.5px; color: var(--ink-muted); }
+.hbtn:hover { color: var(--ink); background: var(--hover); }
+.hbtn[aria-pressed="false"] { opacity: .5; }
+
+@media (max-width: 1180px) {
+  .app { grid-template-columns: var(--rail) 1fr; grid-template-areas: "head head" "rail canvas"; }
+  .panel { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1 id="ttl"></h1>
+    <span class="sub" id="sub"></span>
+    <span class="spacer"></span>
+    <span class="src" id="src"></span>
+    <button class="hbtn" id="brief" title="Copy the whole model as markdown — paste it to a human or an LLM">Copy brief</button>
+    <button class="hbtn" id="tglRail"  aria-pressed="true"  title="Toggle left panel ([)">Controls</button>
+    <button class="hbtn" id="tglPanel" aria-pressed="true"  title="Toggle right panel (])">Details</button>
+    <button class="hbtn" id="theme">Light</button>
+  </header>
+
+  <aside class="rail">
+    <div class="sec"><h2>Lens</h2><div class="views" id="views"></div></div>
+    <div class="sec"><h2>Show</h2><div id="toggles"></div></div>
+    <div class="sec"><h2>Stages</h2><div class="legend" id="legNodes"></div></div>
+    <div class="sec"><h2>Connections</h2><div class="legend" id="legEdges"></div></div>
+  </aside>
+
+  <main class="canvas">
+    <svg id="stage"><defs id="defs"></defs><g id="world"></g></svg>
+    <div class="hud">
+      <button id="fit">Fit</button><button id="zin">+</button>
+      <button id="zout">−</button><button id="clr">Clear focus</button>
+    </div>
+    <div class="tip" id="tip"></div>
+  </main>
+
+  <aside class="panel" id="panel"></aside>
+</div>
+
+<script type="application/json" id="system-graph-model">{"meta":{"title":"Ship Factory v2","subtitle":"Plan \u2192 Build \u2192 Review, with a self-closing loop and a blind verifier","source":"GAUNTLET/Ship \u2014 scripts/factory/*, .claude/skills/ship-{factory,pm,architect,spec,qa-review}","profile":"process","repoUrl":"https://github.com/troysatchell/ship","branch":"main"},"tokens":{"meta":{"space":"oklch","generated_by":"assets/palette.py"},"kinds":{"intake":{"hue":264,"shape":"round-tag","meaning":"Where work enters the factory"},"transform":{"hue":152,"shape":"round-rect","meaning":"Work is done / value is added"},"gate":{"hue":82,"shape":"diamond","meaning":"A decision, check, or quality gate"},"store":{"hue":310,"shape":"cylinder","meaning":"Durable state or an artifact at rest"},"release":{"hue":196,"shape":"cut-rect","meaning":"Work leaves the factory"}},"themes":{"dark":{"canvas":"#0e1115","surface":"#171a20","hairline":"#25282e","ink":"#f1f3f9","ink_muted":"#8e929b","alert":{"accent":"#fe8b7f","fill":"#431d1a","text":"#f8edec"},"control":{"accent":"#9fa5b0","fill":"#33353b","text":"#edf0f6"},"external":{"accent":"#71757c","fill":"#1a1c1f","text":"#95989f"},"kinds":{"intake":{"accent":"#8ab0fe","fill":"#1f2a41","text":"#ecf0f9"},"transform":{"accent":"#5fcb82","fill":"#18301f","text":"#ebf3ec"},"gate":{"accent":"#dfa72a","fill":"#35280d","text":"#f4f0e7"},"store":{"accent":"#cd95f5","fill":"#31243b","text":"#f3eef6"},"release":{"accent":"#0bcacc","fill":"#053131","text":"#e7f3f3"}}},"light":{"canvas":"#f8faff","surface":"#ffffff","hairline":"#d8dce5","ink":"#2e3034","ink_muted":"#656971","alert":{"accent":"#c23631","fill":"#ffe6e3","text":"#472522"},"control":{"accent":"#585e68","fill":"#dfe3ea","text":"#2e3034"},"external":{"accent":"#888c94","fill":"#f2f4f9","text":"#585b61"},"kinds":{"intake":{"accent":"#406ac9","fill":"#e4edff","text":"#23304b"},"transform":{"accent":"#018743","fill":"#daf5e0","text":"#1a3823"},"gate":{"accent":"#906800","fill":"#faebcf","text":"#3d2d0d"},"store":{"accent":"#8c51b2","fill":"#f4e7ff","text":"#382944"},"release":{"accent":"#068082","fill":"#cff6f6","text":"#013839"}}}}},"nodes":{"intent":{"id":"intent","label":"Intent","kind":"intake","zone":"plan","subtitle":"new capability, no audit finding behind it","emits":["intent"],"detail":"Work that arrives as a wish rather than as evidence. The Week 4 factory could\nnot start on this at all \u2014 every ticket it consumed came pre-written from\nAUDIT_REPORT.md, which had already done the analysis. Running Build directly\non an intent produces tickets that contradict each other, because nobody\ndecided the shape first.\n","kindLabel":"intake","sources":[],"metrics":{"fanIn":0,"fanOut":1,"instability":1.0}},"audit":{"id":"audit","label":"Audit findings","kind":"intake","zone":"plan","subtitle":"68 findings, each with measured evidence","sources":[{"path":"audit/AUDIT_REPORT.md","note":"the 68 findings, Evidence separated from Hypothesis"}],"emits":["finding"],"detail":"The other way work enters. A finding already carries its own spec \u2014 the\nmeasurement, the file, the estimated impact \u2014 so it skips Plan entirely and\ngoes straight to the backlog. Writing a spec for \"DB-7, the index is missing\"\nis ceremony.\n","kindLabel":"intake","metrics":{"fanIn":0,"fanOut":1,"instability":1.0}},"spec":{"id":"spec","label":"PM writes the spec","kind":"transform","zone":"plan","subtitle":"/ship-pm + /ship-spec","sources":[{"path":".claude/skills/ship-spec/SKILL.md","note":"problem as a cost, observable success, non-goals, verified repo facts"}],"consumes":["intent","spec-defect"],"emits":["draft-spec"],"detail":"Six sections. The problem stated as what it costs someone, not as a feature \u2014\n\"add a change-feed endpoint\" is a solution and survives no contact with an\narchitect who knows a cheaper one. Non-goals do the most work: every spec\nwithout them grows a ticket at a time until the phase misses its deadline.\n","kindLabel":"transform","metrics":{"fanIn":3,"fanOut":1,"instability":0.25},"scc":1},"specgate":{"id":"specgate","label":"Scope gate","kind":"gate","zone":"plan","subtitle":"five rows, any one fails the spec","consumes":["draft-spec"],"emits":["approved-spec"],"detail":"Problem-as-cost \u00b7 observable success \u00b7 explicit non-goals \u00b7 every repo claim\nverified and marked observed-vs-derived \u00b7 fits the phase. A failed gate names\nthe row. The PM does not soften a spec to pass its own gate.\n","kindLabel":"gate","sources":[],"metrics":{"fanIn":1,"fanOut":2,"instability":0.67},"scc":1},"architect":{"id":"architect","label":"Architect designs","kind":"transform","zone":"plan","subtitle":"/ship-architect","sources":[{"path":".claude/skills/ship-architect/SKILL.md","note":"shape, data, seams, failure modes, rejected alternatives"}],"consumes":["survey"],"emits":["design","question"],"detail":"Owns the how, which the spec deliberately withholds. Component boundaries,\nmigrations with their numbers, where this plugs into what exists, how it\ndegrades, and what was rejected \u2014 the last being the most-read section in six\nmonths and the cheapest to write now.\n","kindLabel":"transform","metrics":{"fanIn":1,"fanOut":2,"instability":0.67},"scc":1},"tiering":{"id":"tiering","label":"Tier every ticket","kind":"control","zone":"plan","subtitle":"apply or investigate","sources":[{"path":".claude/skills/ship-factory/references/model-tiering.md","note":"the discriminator, and the applier contract"}],"consumes":["design","acceptance-tests"],"emits":["ticket"],"detail":"One question decides the cost of everything downstream: can you name the file,\nthe change, and the check that proves it? Yes \u2192 an applier on haiku with one\nself-contained instruction. No \u2192 an investigator on sonnet with the full brief.\nPush work down a tier wherever honest \u2014 an investigator rediscovering what the\narchitect already decided is this factory's most common waste.\n","kindLabel":"control","metrics":{"fanIn":1,"fanOut":1,"instability":0.5}},"backlog":{"id":"backlog","label":"Linear backlog","kind":"store","zone":"plan","subtitle":"authoritative for ticket status","consumes":["ticket","finding","new-ticket","merged","rewritten"],"emits":["eligible"],"detail":"Linear owns status; the board owns execution state. When they disagree, Linear\nwins and something has gone wrong \u2014 say so rather than reconciling silently.\nEvery ticket in a batch moves to In Progress before dispatch: that is the lock,\nand it only works if it covers everything the branch will close.\n","kindLabel":"store","sources":[],"metrics":{"fanIn":5,"fanOut":1,"instability":0.17},"scc":1},"survey":{"id":"survey","label":"Surveyor","kind":"transform","zone":"plan","subtitle":"sonnet \u00b7 answers, not source","sources":[{"path":".claude/skills/ship-surveyor/SKILL.md","note":"observed / derived / not-determined, with file:line"}],"consumes":["approved-spec","question"],"emits":["survey"],"detail":"Finds out what is actually there so the architect does not have to read\nfifteen files to find out. Returns two pages of answered questions with\nfile:line evidence, and an explicit list of what could not be determined \u2014\na question dropped by omission is how an architect ends up assuming.\n\nSame tiering argument as the applier, one level up: the architect is the most\nexpensive context in the factory to fill, and filling it with raw source it\nwill use once is the waste this removes.\n","kindLabel":"transform","metrics":{"fanIn":2,"fanOut":1,"instability":0.33},"scc":1},"testdesign":{"id":"testdesign","label":"Test designer","kind":"gate","zone":"plan","subtitle":"writes the tests before the code exists","sources":[{"path":".claude/skills/ship-test-designer/SKILL.md","note":"one test per acceptance criterion; where red is valid"}],"consumes":["design"],"emits":["acceptance-tests","spec-defect"],"detail":"Designs each acceptance test from the spec and the design, having never seen\nan implementation \u2014 because there isn't one yet. A test written by the agent\nthat just decided how the code works proves that implementation behaves as\nintended; it does not prove the requirement is met, and it survives refactors\nthat break what someone actually asked for.\n\nIts output becomes each ticket's definition of done \u2014 which test, and what it\nmust assert. An acceptance criterion it cannot design a test for goes back to\nthe PM as a spec defect rather than being quietly dropped.\n","kindLabel":"gate","metrics":{"fanIn":1,"fanOut":3,"instability":0.75},"scc":1},"orch":{"id":"orch","label":"Orchestrator","kind":"control","zone":"dispatch","subtitle":"selects, batches, serializes only on real dependencies","sources":[{"path":".claude/skills/ship-orchestrator/SKILL.md","note":"routing, parallelism, concurrency sizing, crash recovery"}],"consumes":["eligible"],"emits":["dispatch"],"detail":"Dispatches everything eligible concurrently. Serializes only for a true\nblocking dependency, a same-file collision, or expensive-tier measurement\nordering. Re-evaluates after every completion \u2014 a ticket whose blockers just\nwent Done becomes eligible immediately.\n","kindLabel":"control","metrics":{"fanIn":2,"fanOut":1,"instability":0.33},"scc":1},"worktree":{"id":"worktree","label":"Isolated worktree","kind":"transform","zone":"build","subtitle":"worktree.sh \u2014 own branch, own database, own ports","sources":[{"path":"scripts/factory/worktree.sh","note":"provisions worktree, dedicated DB, probed ports, .factory-env"}],"consumes":["dispatch"],"emits":["workspace"],"detail":"Every ticket gets its own database because the test setup TRUNCATEs 16 tables\nin the beforeAll of every test file \u2014 agents sharing one would corrupt each\nother and produce failures that look like code defects. Ports are probed and\nclaimed, not derived from a hash: md5 % 900 collides about half the time by 36\nconcurrent tickets.\n","kindLabel":"transform","metrics":{"fanIn":1,"fanOut":3,"instability":0.75},"scc":1},"applier":{"id":"applier","label":"Applier","kind":"transform","zone":"build","subtitle":"haiku \u00b7 one instruction, no role brief","consumes":["workspace"],"emits":["diff","discrepancy"],"detail":"Gets the file, the change, the reason, and the command that proves it \u2014\nnothing else. No lessons.md, no role skill. If the instruction does not match\nwhat it finds, it STOPS and reports the discrepancy rather than improvising:\na wrong instruction is information, and surfacing it costs one cheap round\ntrip. That stop rule is what makes a small model safe here.\n","kindLabel":"transform","sources":[],"metrics":{"fanIn":2,"fanOut":2,"instability":0.5},"scc":1},"investigator":{"id":"investigator","label":"Investigator","kind":"transform","zone":"build","subtitle":"sonnet \u00b7 contract + lessons + role skill","sources":[{"path":".claude/skills/ship-factory/references/agent-contract.md","note":"scope, locked quarantine, provenance, keep-working"}],"consumes":["workspace","rule"],"emits":["diff"],"detail":"For work where the cause is unknown. Carries the full ~40KB brief because\ndiagnosis needs the context. Must produce a regression test seen red first \u2014\nand red for the right reason, since an import error is not a red test.\n","kindLabel":"transform","metrics":{"fanIn":6,"fanOut":1,"instability":0.14},"scc":1},"gate":{"id":"gate","label":"gate.sh","kind":"gate","zone":"verify","subtitle":"typecheck \u00b7 build \u00b7 tests vs quarantine \u00b7 not-weakened \u00b7 regression \u00b7 CHANGES \u00b7 patterns","sources":[{"path":"scripts/factory/gate.sh","note":"eight mechanical checks; an agent's green is a claim, this is the result"}],"consumes":["diff","check"],"emits":["gate-result","stuck"],"detail":"Deliberately mechanical \u2014 every check passes or fails on evidence. The\nquarantine baseline is materialized from BASE_REF, never read from the ticket\nbranch, so an agent cannot append its own new failures and pass. Retry cap is\nthree; raising it to force a pass is what turns \"surfaces a hard problem\" into\n\"burns tokens forever\".\n","kindLabel":"gate","metrics":{"fanIn":3,"fanOut":5,"instability":0.62},"scc":1},"verifier":{"id":"verifier","label":"Blind verifier","kind":"gate","zone":"verify","subtitle":"gets the finding, the diff, the gate JSON \u2014 and nothing else","sources":[{"path":".claude/skills/ship-factory/references/self-closing-loop.md","note":"why the investigator's report is withheld"}],"consumes":["gate-result"],"emits":["verdict","stuck"],"detail":"Checks that the right thing was built, which the gate cannot. It never sees\nthe investigator's report, commits, or PR body \u2014 that narrative is a framing\nwritten by whoever decided what to build, and a verifier that reads it first\ncan only check internal consistency. Reading the finding fresh and the diff\ncold is the only thing that makes the check independent, and independence is\nwhat makes closing without a human safe.\n","kindLabel":"gate","metrics":{"fanIn":1,"fanOut":3,"instability":0.75},"scc":1},"pr":{"id":"pr","label":"Pull request","kind":"release","zone":"review","subtitle":"body is the evidence, not a summary","consumes":["verdict","proof-verdict"],"emits":["pr-open"],"detail":"One Closes line per ticket \u2014 GitHub only auto-closes what it sees named\nindividually, and a batched branch that closes one of three leaves two tickets\nopen with their work already merged.\n","kindLabel":"release","sources":[],"metrics":{"fanIn":2,"fanOut":2,"instability":0.5},"scc":1},"coderabbit":{"id":"coderabbit","label":"CodeRabbit","kind":"external","zone":"review","subtitle":"reviews the code \u2014 is it correct?","consumes":["pr-open"],"emits":["code-finding"],"detail":"Finds real things and irrelevant things with equal confidence, which is why\nits output goes to a decider rather than straight to a fix queue.\n","kindLabel":"external","sources":[],"metrics":{"fanIn":1,"fanOut":1,"instability":0.5},"scc":1},"qareview":{"id":"qareview","label":"QA reviewer","kind":"gate","zone":"verify","subtitle":"reviews the proof \u2014 would anything have failed?","sources":[{"path":".claude/skills/ship-qa-review/SKILL.md","note":"the five ways proof goes fake in this repo"}],"consumes":["gate-result"],"emits":["proof-verdict"],"detail":"A different job from reviewing code, and this repo has the scars: its own\naudit found 68 e2e tests that passed without executing a single assertion.\nChecks the regression test lives where the gate actually runs it, that red was\nseen, that the quarantine did not widen, and that every \"verified\" names what\nwas run.\n","kindLabel":"gate","metrics":{"fanIn":1,"fanOut":2,"instability":0.67},"scc":1},"pmtriage":{"id":"pmtriage","label":"PM triage","kind":"control","zone":"review","subtitle":"in scope? needed? efficient?","sources":[{"path":".claude/skills/ship-pm/SKILL.md","note":"the three questions, and how to say no defensibly"}],"consumes":["code-finding"],"emits":["fix-now","new-ticket","dismissal"],"detail":"The second question is the one the old mechanical triage never asked. A finding\ncan be entirely correct and still not worth acting on \u2014 a missing index on a\ntable holding 20 rows read once a day is a true observation about an irrelevant\npath. \"Not important\" is not a triage decision; the PM must name a row count, a\ncall frequency, or a convention.\n","kindLabel":"control","metrics":{"fanIn":1,"fanOut":4,"instability":0.8},"scc":1},"ledger":{"id":"ledger","label":"Review ledger","kind":"store","zone":"observe","subtitle":"every finding, every disposition","sources":[{"path":"scripts/factory/review-ledger.mjs","note":"record + report; recurrence thresholds"}],"consumes":["fix-now","new-ticket","dismissal"],"emits":["recurrence"],"detail":"Fixing findings one at a time and discarding them means a defect class can\nrecur on four branches without anyone noticing it is the same defect four\ntimes \u2014 which is exactly what happened on day one. Also tracks dismissals: a\ngrowing pile in one category means the factory is talking itself out of real\nfeedback.\n","kindLabel":"store","metrics":{"fanIn":1,"fanOut":2,"instability":0.67},"scc":1},"merge":{"id":"merge","label":"Merge --no-ff","kind":"release","zone":"review","subtitle":"self-closes when all five hold","emits":["merged"],"detail":"Gate pass \u00b7 CI green \u00b7 verifier confirmed \u00b7 every finding triaged with fix-now\nones fixed \u00b7 no open escalation. A close with no verifier verdict attached is\nan unreviewed merge wearing the same label. Merged --no-ff so the branch\nstructure survives \u2014 the git log is read directly.\n","kindLabel":"release","sources":[],"metrics":{"fanIn":1,"fanOut":1,"instability":0.5},"scc":1},"escalation":{"id":"escalation","label":"Escalation","kind":"control","zone":"escalate","subtitle":"parks the ticket, never the wave","sources":[{"path":".claude/skills/ship-factory/references/escalation.md","note":"the human gates"}],"consumes":["stuck","discrepancy"],"emits":["ping","stuck"],"detail":"One test: is this work stream stopped until the person answers? A gate holds\nits own ticket \u2014 that worktree parks, its Linear ticket goes to blocked with\nthe reason, and the orchestrator dispatches the next eligible ticket\nimmediately. Never drain in-flight work to wait for an answer.\n","kindLabel":"control","metrics":{"fanIn":3,"fanOut":3,"instability":0.5},"scc":1},"slack":{"id":"slack","label":"Slack","kind":"external","zone":"escalate","subtitle":"three triggers, batched","sources":[{"path":"scripts/factory/notify.mjs","note":"severity is blocked | gate | summary; a clean run sends nothing"}],"consumes":["ping"],"detail":"Spent retry budget \u00b7 two rejected verifications \u00b7 any escalation.md gate. Plus\none batched summary only if an unattended run ends with unresolved items \u2014\n--count 0 refuses to send, enforced in the script rather than left to a\ncaller's discipline. There is deliberately no informational severity: adding\none is how a channel stops being read, and an unread channel is worse than\nnone because it looks like coverage.\n","kindLabel":"external","metrics":{"fanIn":1,"fanOut":0,"instability":0.0}},"rewrite":{"id":"rewrite","label":"Rewrite the ticket","kind":"transform","zone":"escalate","subtitle":"PM \u00b7 max 2 attempts","sources":[{"path":".claude/skills/ship-factory/references/self-closing-loop.md","symbol":"Rewrite before you escalate","note":"the failure-to-rewrite mapping, and why the cap exists"}],"consumes":["stuck"],"emits":["rewritten"],"detail":"A ticket that failed is usually not a ticket that needs a human \u2014 it is more\noften a ticket that was written badly: under-specified, tiered wrong, or three\nchanges wearing one title. The PM asks whether a differently-written ticket\nwould succeed, and if so rewrites it.\n\nRe-queued fresh, not retried: new ticket, new worktree, no inherited context \u2014\nbecause the inherited context is what produced the failure. Cap of two. A third\nfailure means the wording is not the problem, and that is exactly the signal\nworth a person's attention.\n\nThis is the mechanism that makes the escalation channel rare. Anything an agent\ncould fix given a better instruction gets one, automatically, without reaching\nSlack.\n","kindLabel":"transform","metrics":{"fanIn":1,"fanOut":1,"instability":0.5},"scc":1},"state":{"id":"state","label":"Derived state","kind":"store","zone":"observe","subtitle":"phase \u00b7 lastActivityAt \u00b7 idleMinutes \u00b7 stalled","sources":[{"path":"scripts/factory/lib/state.mjs","symbol":"collect","note":"phase inferred from what the work produced"}],"consumes":["workspace","gate-result","pr-open"],"emits":["live-state"],"detail":"There is deliberately no status file. One that drifts reads as authoritative\nwhile being wrong, which is worse than none. Phase is derived from signals the\nwork itself left: commits, dirty files, gate results, PR state. Stall is idle\ntime in a phase that should be moving \u2014 without that qualifier every merged\nticket reads as stuck.\n","kindLabel":"store","metrics":{"fanIn":3,"fanOut":1,"instability":0.25}},"dashboard":{"id":"dashboard","label":"Live dashboard","kind":"release","zone":"observe","subtitle":"SSE \u00b7 localhost:7373","sources":[{"path":"scripts/factory/serve.mjs","note":"streams state; timers tick locally so the page never freezes"}],"consumes":["live-state"],"detail":"Answers \"what is going on\" without investigation \u2014 five tiles, a phase track\nper ticket, and an activity feed built by diffing frames. Elapsed timers count\nevery second client-side while the server polls every three, which is what\nmakes it feel connected rather than static. Adaptive backoff when collect()\nslows.\n","kindLabel":"release","metrics":{"fanIn":1,"fanOut":0,"instability":0.0}},"lessons":{"id":"lessons","label":"lessons.md","kind":"store","zone":"observe","subtitle":"injected verbatim into every investigator brief","sources":[{"path":".claude/skills/ship-factory/references/lessons.md","note":"rules that earned their place"}],"consumes":["recurrence"],"emits":["rule"],"detail":"Two recurrences across separate tickets means a rule is missing from the brief.\nOnly works if it stays short and specific \u2014 rules that earned their place, not\na diary.\n","kindLabel":"store","metrics":{"fanIn":1,"fanOut":1,"instability":0.5},"scc":1},"newcheck":{"id":"newcheck","label":"New gate check","kind":"transform","zone":"observe","subtitle":"review-patterns.mjs \u2014 G7b","sources":[{"path":"scripts/factory/review-patterns.mjs","note":"mechanical checks for classes that crossed the threshold"}],"consumes":["recurrence"],"emits":["check"],"detail":"Three or more recurrences means the prompt is not holding. A rule stated in the\nbrief and ignored three times does not need restating louder \u2014 it needs a\nmechanical check. G7b exists because two classes crossed that line.\n","kindLabel":"transform","metrics":{"fanIn":1,"fanOut":1,"instability":0.5},"scc":1}},"zones":{"plan":{"id":"plan","label":"Plan","accent":"intake","note":"New capability arrives as intent, not as a finding. Two gates before a ticket exists."},"dispatch":{"id":"dispatch","label":"Dispatch","accent":"control","note":"Tier every unit of work before composing a brief \u2014 context sits with whoever reasons"},"build":{"id":"build","label":"Isolated build","accent":"transform","note":"One worktree, one database, one branch per ticket"},"verify":{"id":"verify","label":"Verify","accent":"gate","note":"Mechanical gate, then an independent check that the right thing was built"},"review":{"id":"review","label":"Review","accent":"release","note":"Two reviewers with different questions; one decider"},"escalate":{"id":"escalate","label":"Escalate","accent":"external","note":"A gate holds its own ticket, never the wave"},"observe":{"id":"observe","label":"Observe","accent":"store","note":"State is derived from what the work produced \u2014 there is no status file"}},"loops":[{"id":"close","type":"balancing","label":"Linear backlog \u2192 Orchestrator \u2192 Isolated worktree\u2026","members":["backlog","orch","worktree","applier","gate","verifier","pr","coderabbit","pmtriage","merge"],"edges":["f08","e07","e08","e09","e12","e15","e16","e17","e19","e22"],"note":null,"derived":true},{"id":"fix-now","type":"balancing","label":"Applier \u2192 gate.sh \u2192 Blind verifier\u2026","members":["applier","gate","verifier","pr","coderabbit","pmtriage"],"edges":["f04","e12","e15","e16","e17","e19"],"note":null,"derived":true},{"id":"gate-retry","type":"balancing","label":"Investigator \u2192 gate.sh","members":["investigator","gate"],"edges":["f02","e13"],"note":null,"derived":true},{"id":"mechanize","type":"balancing","label":"New gate check \u2192 gate.sh \u2192 Blind verifier\u2026","members":["newcheck","gate","verifier","pr","coderabbit","pmtriage","ledger"],"edges":["f07","e14","e15","e16","e17","e19","e21"],"note":null,"derived":true},{"id":"park","type":"balancing","label":"Orchestrator \u2192 Isolated worktree \u2192 Applier\u2026","members":["orch","worktree","applier","escalation"],"edges":["x04","e08","e09","x05"],"note":null,"derived":true},{"id":"prompt-repair","type":"balancing","label":"lessons.md \u2192 Investigator \u2192 gate.sh\u2026","members":["lessons","investigator","gate","verifier","pr","coderabbit","pmtriage","ledger"],"edges":["f06","e11","e13","e15","e16","e17","e19","e21"],"note":null,"derived":true},{"id":"proof-repair","type":"balancing","label":"Investigator \u2192 gate.sh \u2192 QA reviewer","members":["investigator","gate","qareview"],"edges":["f09","e13","e18"],"note":null,"derived":true},{"id":"rewrite","type":"balancing","label":"Linear backlog \u2192 Orchestrator \u2192 Isolated worktree\u2026","members":["backlog","orch","worktree","applier","escalation","rewrite"],"edges":["f10","e07","e08","e09","x05","x06"],"note":null,"derived":true},{"id":"spec-defect","type":"balancing","label":"PM writes the spec \u2192 Scope gate \u2192 Surveyor\u2026","members":["spec","specgate","survey","architect","testdesign"],"edges":["f13","e02","e03","e03b","e04"],"note":null,"derived":true},{"id":"spec-gate","type":"balancing","label":"PM writes the spec \u2192 Scope gate","members":["spec","specgate"],"edges":["f01","e02"],"note":null,"derived":true},{"id":"survey-followup","type":"balancing","label":"Surveyor \u2192 Architect designs","members":["survey","architect"],"edges":["f12","e03b"],"note":null,"derived":true},{"id":"verify-retry","type":"balancing","label":"Investigator \u2192 gate.sh \u2192 Blind verifier","members":["investigator","gate","verifier"],"edges":["f03","e13","e15"],"note":null,"derived":true},{"id":"backlog-growth","type":"reinforcing","label":"Linear backlog \u2192 Orchestrator \u2192 Isolated worktree\u2026","members":["backlog","orch","worktree","applier","gate","verifier","pr","coderabbit","pmtriage"],"edges":["f05","e07","e08","e09","e12","e15","e16","e17","e19"],"note":null,"derived":true}],"findings":[{"id":"auto-2","kind":"ungated-path","severity":"high","title":"There is a path to \u201cLive dashboard\u201d that passes no gate","nodes":["dashboard"],"detail":"Work can reach release without crossing any verification stage. Trace the ungated path and decide whether it is intentional (a hotfix lane) or an escape hatch nobody meant to leave open.","derived":true},{"id":"auto-1","kind":"no-failure-path","severity":"medium","title":"1 stage(s) model only the happy path","nodes":["survey"],"detail":"Every outgoing edge from these stages is a success edge: Surveyor. What happens when each of them fails? Unmodelled failure paths are where real factories silently drop work.","derived":true}],"views":{"flow":{"id":"flow","label":"Flow","blurb":"How work moves, and where it comes back around.","direction":"RIGHT","bounds":{"minX":128,"minY":-88,"maxX":1968,"maxY":1475.3333333333335},"nodes":[{"id":"applier","x":472,"y":846.0,"w":216,"h":76},{"id":"architect","x":1408,"y":156,"w":216,"h":76},{"id":"audit","x":472,"y":501.0,"w":216,"h":76},{"id":"backlog","x":784,"y":604.3,"w":216,"h":76},{"id":"coderabbit","x":1720,"y":1028.7,"w":216,"h":76},{"id":"escalation","x":1408,"y":850.3,"w":216,"h":76},{"id":"gate","x":784,"y":1022.3,"w":216,"h":76},{"id":"intent","x":160,"y":156,"w":216,"h":76},{"id":"investigator","x":472,"y":1022.3,"w":216,"h":76},{"id":"ledger","x":160,"y":272,"w":216,"h":76},{"id":"lessons","x":160,"y":40,"w":216,"h":76},{"id":"merge","x":472,"y":1367.3,"w":216,"h":76},{"id":"newcheck","x":472,"y":1138.3,"w":216,"h":76},{"id":"orch","x":1096,"y":604.3,"w":216,"h":76},{"id":"pmtriage","x":160,"y":1367.3,"w":216,"h":76},{"id":"pr","x":1408,"y":1028.7,"w":216,"h":76},{"id":"qareview","x":1096,"y":1041.3,"w":216,"h":76},{"id":"rewrite","x":1720,"y":747.0,"w":216,"h":76},{"id":"slack","x":1720,"y":863.0,"w":216,"h":76},{"id":"spec","x":472,"y":156,"w":216,"h":76},{"id":"specgate","x":784,"y":156,"w":216,"h":76},{"id":"survey","x":1096,"y":156,"w":216,"h":76},{"id":"testdesign","x":160,"y":617.0,"w":216,"h":76},{"id":"tiering","x":472,"y":617.0,"w":216,"h":76},{"id":"verifier","x":1096,"y":925.3,"w":216,"h":76},{"id":"worktree","x":160,"y":1009.7,"w":216,"h":76}],"zones":{},"edges":[{"id":"e01","from":"intent","to":"spec","kind":"flow","label":"intent","route":"layer","points":[[376,194],[472,194]]},{"id":"e02","from":"spec","to":"specgate","kind":"flow","label":"draft spec","route":"layer","points":[[688,194],[784,194]]},{"id":"e03","from":"specgate","to":"survey","kind":"flow","label":"approved \u2014 go look","route":"layer","points":[[1000,194],[1096,194]]},{"id":"e03b","from":"survey","to":"architect","kind":"flow","label":"what is actually there","route":"layer","points":[[1312,194],[1408,194]]},{"id":"e04","from":"architect","to":"testdesign","kind":"flow","label":"design","route":"layer","points":[[1624,194],[1968,194],[1968,424.0],[32,424.0],[32,655.0],[160,655.0]]},{"id":"e04b","from":"testdesign","to":"tiering","kind":"flow","label":"acceptance tests per ticket","route":"layer","points":[[376,655.0],[472,655.0]]},{"id":"e05","from":"tiering","to":"backlog","kind":"flow","label":"tiered tickets","route":"layer","points":[[688,655.0],[784,655.0]]},{"id":"e06","from":"audit","to":"backlog","kind":"flow","label":"finding carries its own spec","route":"layer","points":[[688,539.0],[720,539.0],[720,629.7],[784,629.7]]},{"id":"e07","from":"backlog","to":"orch","kind":"flow","label":"next eligible batch","route":"layer","points":[[1000,642.3],[1096,642.3]]},{"id":"e08","from":"orch","to":"worktree","kind":"control","label":"provision per ticket","route":"layer","points":[[1312,642.3],[1656,642.3],[1656,769.0],[32,769.0],[32,1047.7],[160,1047.7]]},{"id":"e09","from":"worktree","to":"applier","kind":"flow","label":"specified work","route":"layer","points":[[376,1035],[408,1035],[408,884.0],[472,884.0]]},{"id":"e10","from":"worktree","to":"investigator","kind":"flow","label":"cause unknown","route":"layer","points":[[376,1060.3],[472,1060.3]]},{"id":"e12","from":"applier","to":"gate","kind":"flow","label":"diff","route":"layer","points":[[688,896.7],[720,896.7],[720,1041.3],[784,1041.3]]},{"id":"e13","from":"investigator","to":"gate","kind":"flow","label":"diff + regression test","route":"layer","points":[[688,1060.3],[784,1060.3]]},{"id":"e14","from":"newcheck","to":"gate","kind":"control","label":"G7b","route":"layer","points":[[688,1176.3],[720,1176.3],[720,1079.3],[784,1079.3]]},{"id":"e15","from":"gate","to":"verifier","kind":"flow","label":"pass","route":"layer","points":[[1000,1060.3],[1048,1060.3],[1048,963.3],[1096,963.3]]},{"id":"e16","from":"verifier","to":"pr","kind":"flow","label":"confirmed","route":"layer","points":[[1312,976.0],[1344,976.0],[1344,1054],[1408,1054]]},{"id":"e17","from":"pr","to":"coderabbit","kind":"flow","label":"reviews the code","route":"layer","points":[[1624,1066.7],[1720,1066.7]]},{"id":"e18","from":"gate","to":"qareview","kind":"flow","label":"pass \u2014 is the proof real?","route":"layer","points":[[1000,1079.3],[1096,1079.3]]},{"id":"e19","from":"coderabbit","to":"pmtriage","kind":"flow","label":"code findings","route":"layer","points":[[1936,1066.7],[2064,1066.7],[2064,1290.3],[32,1290.3],[32,1405.3],[160,1405.3]]},{"id":"e20","from":"qareview","to":"pr","kind":"flow","label":"proof holds","route":"layer","points":[[1312,1079.3],[1408,1079.3]]},{"id":"e22","from":"pmtriage","to":"merge","kind":"flow","label":"all triaged","fix-nows fixed":null,"route":"layer","points":[[376,1405.3],[472,1405.3]]},{"id":"x01","from":"gate","to":"escalation","kind":"control","label":"3 failed gates","route":"layer","points":[[1000,1041.3],[1032,1041.3],[1032,888.3],[1408,888.3]]},{"id":"x02","from":"verifier","to":"escalation","kind":"control","label":"2 rejected verifications","route":"layer","points":[[1312,950.7],[1344,950.7],[1344,907.3],[1408,907.3]]},{"id":"x03","from":"escalation","to":"slack","kind":"flow","label":"blocked \u00b7 gate \u00b7 summary","route":"layer","points":[[1624,901.0],[1720,901.0]]},{"id":"x05","from":"applier","to":"escalation","kind":"control","label":"instruction does not match the file","route":"layer","points":[[688,871.3],[1344,871.3],[1344,869.3],[1408,869.3]]},{"id":"x06","from":"escalation","to":"rewrite","kind":"control","label":"would a rewrite succeed?","route":"layer","points":[[1624,875.7],[1656,875.7],[1656,785.0],[1720,785.0]]},{"id":"f01","from":"specgate","to":"spec","kind":"feedback","polarity":"-","loop":"spec-gate","label":"failed row named","route":"arc","labelAt":[736.0,158.0],"points":[[778.0,194.0],[754.5,146.0],[717.5,146.0],[694.0,194.0]]},{"id":"f02","from":"gate","to":"investigator","kind":"feedback","polarity":"-","loop":"gate-retry","label":"exact gate output","retry \u00d73":null,"route":"arc","labelAt":[736.0,1024.3],"points":[[778.0,1060.3],[754.5,1012.3],[717.5,1012.3],[694.0,1060.3]]},{"id":"f03","from":"verifier","to":"investigator","kind":"feedback","polarity":"-","loop":"verify-retry","label":"not-addressed \u2014 same agent","keeps context":null,"route":"arc","labelAt":[880.0,934.6],"points":[[1090.0,981.1],[963.1,895.3],[788.9,922.4],[694.0,1042.6]]},{"id":"f04","from":"pmtriage","to":"applier","kind":"feedback","polarity":"-","loop":"fix-now","label":"fix now \u2014 file already named","route":"arc","labelAt":[339.5,1094.1],"points":[[294.3,1361.3],[254.3,1172.6],[368.4,981.9],[553.7,928.0]]},{"id":"f05","from":"pmtriage","to":"backlog","kind":"feedback","polarity":"+","loop":"backlog-growth","label":"real","not this branch":null,"route":"arc","labelAt":[690.3,1114.0],"points":[[304.0,1361.3],[605.6,1292.6],[848.5,995.6],[856.0,686.3]]},{"id":"f06","from":"ledger","to":"lessons","kind":"feedback","polarity":"-","loop":"prompt-repair","label":"2 recurrences \u2014 a rule is missing","route":"channel","labelAt":[268.0,-6],"points":[[268.0,272],[268.0,-6],[268.0,-6],[268.0,40]]},{"id":"f07","from":"ledger","to":"newcheck","kind":"feedback","polarity":"-","loop":"mechanize","label":"3+ \u2014 the prompt is not holding","route":"arc","labelAt":[289.9,791.5],"points":[[283.8,354.0],[183.6,636.3],[306.9,978.8],[564.2,1132.3]]},{"id":"f08","from":"merge","to":"backlog","kind":"feedback","polarity":"-","loop":"close","label":"self-close with evidence attached","route":"arc","labelAt":[867.6,1077.7],"points":[[598.0,1361.3],[850.8,1244.1],[972.2,947.1],[874.0,686.3]]},{"id":"x04","from":"escalation","to":"orch","kind":"feedback","polarity":"-","loop":"park","label":"park this ticket","dispatch the next":null,"route":"arc","labelAt":[1390.8,726.3],"points":[[1460.2,844.3],[1445.2,748.0],[1357.0,678.5],[1259.8,686.3]]},{"id":"g01","from":"slack","to":"orch","kind":"gap","label":"no defined return path for the human's answer","route":"arc","labelAt":[1549.3,691.4],"points":[[1721.9,857.0],[1650.9,702.2],[1469.8,627.1],[1310.1,686.3]]},{"id":"g02","from":"verifier","to":"ledger","kind":"gap","label":"rejections bypass the recurrence thresholds","route":"arc","labelAt":[817.6,519.8],"points":[[1141.0,919.3],[1022.9,605.2],[666.6,356.5],[331.0,354.0]]},{"id":"f09","from":"qareview","to":"investigator","kind":"feedback","polarity":"-","loop":"proof-repair","label":"blocks-merge \u2014 test cannot run","or asserts nothing":null,"route":"arc","labelAt":[889.6,1147.1],"points":[[1090.0,1075.9],[976.0,1175.4],[801.7,1170.1],[694.0,1063.8]]},{"id":"g03","from":"architect","to":"specgate","kind":"gap","label":"no gate on the design \u2014 only the spec is reviewed","route":"arc","labelAt":[1204.0,116.8],"points":[[1402.0,194.0],[1291.1,91.0],[1116.9,91.0],[1006.0,194.0]]},{"id":"f10","from":"rewrite","to":"backlog","kind":"feedback","polarity":"-","loop":"rewrite","label":"re-queued fresh \u2014 max 2","route":"arc","labelAt":[1381.0,575.6],"points":[[1714.0,767.6],[1543.8,553.3],[1232.3,505.8],[1006.0,659.7]]},{"id":"f12","from":"architect","to":"survey","kind":"feedback","polarity":"-","loop":"survey-followup","label":"follow-up question","route":"arc","labelAt":[1360.0,158.0],"points":[[1402.0,194.0],[1378.5,146.0],[1341.5,146.0],[1318.0,194.0]]},{"id":"f13","from":"testdesign","to":"spec","kind":"feedback","polarity":"-","loop":"spec-defect","label":"criterion cannot be tested \u2014 spec defect","route":"arc","labelAt":[496.7,473.7],"points":[[297.8,611.0],[465.4,572.2],[576.5,408.1],[550.2,238.0]]}]},"structure":{"id":"structure","label":"Structure","blurb":"What the parts are, what contains what, what depends on what.","direction":"RIGHT","bounds":{"minX":128,"minY":8,"maxX":1968,"maxY":1243.3333333333335},"nodes":[{"id":"applier","x":472,"y":614.0,"w":216,"h":76},{"id":"architect","x":1408,"y":40,"w":216,"h":76},{"id":"audit","x":472,"y":269.0,"w":216,"h":76},{"id":"backlog","x":784,"y":372.3,"w":216,"h":76},{"id":"coderabbit","x":1720,"y":796.7,"w":216,"h":76},{"id":"escalation","x":1408,"y":618.3,"w":216,"h":76},{"id":"gate","x":784,"y":790.3,"w":216,"h":76},{"id":"intent","x":160,"y":40,"w":216,"h":76},{"id":"investigator","x":472,"y":906.3,"w":216,"h":76},{"id":"merge","x":472,"y":1135.3,"w":216,"h":76},{"id":"newcheck","x":472,"y":790.3,"w":216,"h":76},{"id":"orch","x":1096,"y":372.3,"w":216,"h":76},{"id":"pmtriage","x":160,"y":1135.3,"w":216,"h":76},{"id":"pr","x":1408,"y":796.7,"w":216,"h":76},{"id":"qareview","x":1096,"y":809.3,"w":216,"h":76},{"id":"rewrite","x":1720,"y":515.0,"w":216,"h":76},{"id":"slack","x":1720,"y":631.0,"w":216,"h":76},{"id":"spec","x":472,"y":40,"w":216,"h":76},{"id":"specgate","x":784,"y":40,"w":216,"h":76},{"id":"survey","x":1096,"y":40,"w":216,"h":76},{"id":"testdesign","x":160,"y":385.0,"w":216,"h":76},{"id":"tiering","x":472,"y":385.0,"w":216,"h":76},{"id":"verifier","x":1096,"y":693.3,"w":216,"h":76},{"id":"worktree","x":160,"y":893.7,"w":216,"h":76}],"zones":{},"edges":[{"id":"e01","from":"intent","to":"spec","kind":"flow","label":"intent","route":"layer","points":[[376,78],[472,78]]},{"id":"e02","from":"spec","to":"specgate","kind":"flow","label":"draft spec","route":"layer","points":[[688,78],[784,78]]},{"id":"e03","from":"specgate","to":"survey","kind":"flow","label":"approved \u2014 go look","route":"layer","points":[[1000,78],[1096,78]]},{"id":"e03b","from":"survey","to":"architect","kind":"flow","label":"what is actually there","route":"layer","points":[[1312,78],[1408,78]]},{"id":"e04","from":"architect","to":"testdesign","kind":"flow","label":"design","route":"layer","points":[[1624,78],[1968,78],[1968,192.0],[32,192.0],[32,423.0],[160,423.0]]},{"id":"e04b","from":"testdesign","to":"tiering","kind":"flow","label":"acceptance tests per ticket","route":"layer","points":[[376,423.0],[472,423.0]]},{"id":"e05","from":"tiering","to":"backlog","kind":"flow","label":"tiered tickets","route":"layer","points":[[688,423.0],[784,423.0]]},{"id":"e06","from":"audit","to":"backlog","kind":"flow","label":"finding carries its own spec","route":"layer","points":[[688,307.0],[720,307.0],[720,397.7],[784,397.7]]},{"id":"e07","from":"backlog","to":"orch","kind":"flow","label":"next eligible batch","route":"layer","points":[[1000,410.3],[1096,410.3]]},{"id":"e08","from":"orch","to":"worktree","kind":"control","label":"provision per ticket","route":"layer","points":[[1312,410.3],[1656,410.3],[1656,537.0],[32,537.0],[32,931.7],[160,931.7]]},{"id":"e09","from":"worktree","to":"applier","kind":"flow","label":"specified work","route":"layer","points":[[376,919.0],[408,919.0],[408,652.0],[472,652.0]]},{"id":"e10","from":"worktree","to":"investigator","kind":"flow","label":"cause unknown","route":"layer","points":[[376,944.3],[472,944.3]]},{"id":"e12","from":"applier","to":"gate","kind":"flow","label":"diff","route":"layer","points":[[688,664.7],[720,664.7],[720,809.3],[784,809.3]]},{"id":"e13","from":"investigator","to":"gate","kind":"flow","label":"diff + regression test","route":"layer","points":[[688,944.3],[720,944.3],[720,847.3],[784,847.3]]},{"id":"e14","from":"newcheck","to":"gate","kind":"control","label":"G7b","route":"layer","points":[[688,828.3],[784,828.3]]},{"id":"e15","from":"gate","to":"verifier","kind":"flow","label":"pass","route":"layer","points":[[1000,828.3],[1048,828.3],[1048,731.3],[1096,731.3]]},{"id":"e16","from":"verifier","to":"pr","kind":"flow","label":"confirmed","route":"layer","points":[[1312,744.0],[1344,744.0],[1344,822.0],[1408,822.0]]},{"id":"e17","from":"pr","to":"coderabbit","kind":"flow","label":"reviews the code","route":"layer","points":[[1624,834.7],[1720,834.7]]},{"id":"e18","from":"gate","to":"qareview","kind":"flow","label":"pass \u2014 is the proof real?","route":"layer","points":[[1000,847.3],[1096,847.3]]},{"id":"e19","from":"coderabbit","to":"pmtriage","kind":"flow","label":"code findings","route":"layer","points":[[1936,834.7],[2064,834.7],[2064,1058.3],[32,1058.3],[32,1173.3],[160,1173.3]]},{"id":"e20","from":"qareview","to":"pr","kind":"flow","label":"proof holds","route":"layer","points":[[1312,847.3],[1408,847.3]]},{"id":"e22","from":"pmtriage","to":"merge","kind":"flow","label":"all triaged","fix-nows fixed":null,"route":"layer","points":[[376,1173.3],[472,1173.3]]},{"id":"x01","from":"gate","to":"escalation","kind":"control","label":"3 failed gates","route":"layer","points":[[1000,809.3],[1032,809.3],[1032,656.3],[1408,656.3]]},{"id":"x02","from":"verifier","to":"escalation","kind":"control","label":"2 rejected verifications","route":"layer","points":[[1312,718.7],[1344,718.7],[1344,675.3],[1408,675.3]]},{"id":"x03","from":"escalation","to":"slack","kind":"flow","label":"blocked \u00b7 gate \u00b7 summary","route":"layer","points":[[1624,669.0],[1720,669.0]]},{"id":"x05","from":"applier","to":"escalation","kind":"control","label":"instruction does not match the file","route":"layer","points":[[688,639.3],[1344,639.3],[1344,637.3],[1408,637.3]]},{"id":"x06","from":"escalation","to":"rewrite","kind":"control","label":"would a rewrite succeed?","route":"layer","points":[[1624,643.7],[1656,643.7],[1656,553.0],[1720,553.0]]}]},"data":{"id":"data","label":"Data","blurb":"What each stage consumes and emits, and where state settles.","direction":"RIGHT","bounds":{"minX":149,"minY":61,"maxX":4187,"maxY":1477},"nodes":[{"id":"applier","x":511,"y":917,"w":216,"h":76},{"id":"architect","x":2697,"y":279.4,"w":216,"h":76},{"id":"audit","x":3305,"y":448,"w":216,"h":76},{"id":"backlog","x":3609,"y":496,"w":216,"h":76},{"id":"coderabbit","x":2003,"y":700.5,"w":216,"h":76},{"id":"dashboard","x":3001,"y":922,"w":216,"h":76},{"id":"escalation","x":1749.7,"y":287.2,"w":216,"h":76},{"id":"gate","x":937,"y":793.4,"w":216,"h":76},{"id":"intent","x":3001,"y":175,"w":216,"h":76},{"id":"investigator","x":511,"y":805.0,"w":216,"h":76},{"id":"ledger","x":2697,"y":710.7,"w":216,"h":76},{"id":"lessons","x":3001,"y":698,"w":216,"h":76},{"id":"merge","x":2307,"y":588.5,"w":216,"h":76},{"id":"newcheck","x":3001,"y":810,"w":216,"h":76},{"id":"orch","x":207,"y":1343,"w":216,"h":76},{"id":"pmtriage","x":2307,"y":700.5,"w":216,"h":76},{"id":"pr","x":1699,"y":719.5,"w":216,"h":76},{"id":"qareview","x":1241,"y":837,"w":216,"h":76},{"id":"rewrite","x":2053.7,"y":386.5,"w":216,"h":76},{"id":"slack","x":2053.7,"y":274.5,"w":216,"h":76},{"id":"spec","x":3305,"y":187.7,"w":216,"h":76},{"id":"specgate","x":3609,"y":187.7,"w":216,"h":76},{"id":"state","x":2697,"y":922,"w":216,"h":76},{"id":"survey","x":3913,"y":168.7,"w":216,"h":76},{"id":"testdesign","x":3001,"y":287,"w":216,"h":76},{"id":"tiering","x":3305,"y":336,"w":216,"h":76},{"id":"verifier","x":1241,"y":740,"w":216,"h":76},{"id":"worktree","x":207,"y":924.6,"w":216,"h":76}],"zones":{"build":{"x":181,"y":745,"w":592,"h":296},"dispatch":{"x":181,"y":1283,"w":268,"h":162},"escalate":{"x":1723.7,"y":214.5,"w":572,"h":274},"observe":{"x":2671,"y":638,"w":572,"h":386},"plan":{"x":2671,"y":93,"w":1484,"h":505},"review":{"x":1673,"y":528.5,"w":876,"h":296},"verify":{"x":911,"y":669,"w":592,"h":292}},"edges":[{"id":"e11","from":"lessons","to":"investigator","kind":"data","label":"verbatim","every brief":null,"route":"layer","points":[[3217,748.7],[4208,748.7],[4208,1077],[112,1077],[112,850.6],[511,850.6]]},{"id":"e21","from":"pmtriage","to":"ledger","kind":"data","label":"every finding","any disposition":null,"route":"layer","points":[[2523,738.5],[2586,738.5],[2586,741.1],[2697,741.1]]},{"id":"e23","from":"worktree","to":"state","kind":"data","label":"git + .factory-env","route":"layer","points":[[423,985.4],[433,985.4],[433,1014],[2602,1014.0],[2602,987.1],[2697,987.1]]},{"id":"e24","from":"gate","to":"state","kind":"data","label":"gate-result.json","route":"layer","points":[[1153,847.7],[1173,847.7],[1173,923],[1540,923],[1540,917],[2602,917],[2602,954.6],[2697,954.6]]},{"id":"e25","from":"pr","to":"state","kind":"data","label":"gh pr list","route":"layer","points":[[1915,757.5],[1935,757.5],[1935,786.5],[2634,786.5],[2634,932.9],[2697,932.9]]},{"id":"e26","from":"state","to":"dashboard","kind":"data","label":"SSE","every 3s":null,"route":"layer","points":[[2913,972.7],[3001,972.7]]},{"id":"e04c","from":"testdesign","to":"investigator","kind":"data","label":"the test each ticket must pass","route":"layer","points":[[3217,325],[4192,325],[4192,57],[128,57],[128,820.2],[511,820.2]]},{"id":"d-acceptance-tests-testdesign-tiering","from":"testdesign","to":"tiering","kind":"data","label":"acceptance-tests","derived":true,"confidence":"resolved","note":"\u201cacceptance-tests\u201d is emitted by Test designer and consumed by Tier every ticket.","route":"layer","points":[[3217,344],[3227,344],[3227,361.3],[3305,361.3]]},{"id":"d-approved-spec-specgate-survey","from":"specgate","to":"survey","kind":"data","label":"approved-spec","derived":true,"confidence":"resolved","note":"\u201capproved-spec\u201d is emitted by Scope gate and consumed by Surveyor.","route":"layer","points":[[3825,225.7],[3913,225.7]]},{"id":"d-check-newcheck-gate","from":"newcheck","to":"gate","kind":"data","label":"check","derived":true,"confidence":"resolved","note":"\u201ccheck\u201d is emitted by New gate check and consumed by gate.sh.","route":"layer","points":[[3217,848],[4192,848],[4192,1060],[858,1060],[858,850.4],[937,850.4]]},{"id":"d-code-finding-coderabbit-pmtriage","from":"coderabbit","to":"pmtriage","kind":"data","label":"code-finding","derived":true,"confidence":"resolved","note":"\u201ccode-finding\u201d is emitted by CodeRabbit and consumed by PM triage.","route":"layer","points":[[2219,738.5],[2307,738.5]]},{"id":"d-design-architect-tiering","from":"architect","to":"tiering","kind":"data","label":"design","derived":true,"confidence":"heuristic","note":"\u201cdesign\u201d is emitted by Architect designs and consumed by Tier every ticket.","route":"layer","points":[[2913,340.2],[2923,340.2],[2923,386.7],[3305,386.7]]},{"id":"d-design-architect-testdesign","from":"architect","to":"testdesign","kind":"data","label":"design","derived":true,"confidence":"resolved","note":"\u201cdesign\u201d is emitted by Architect designs and consumed by Test designer.","route":"layer","points":[[2913,325],[3001,325]]},{"id":"d-diff-applier-gate","from":"applier","to":"gate","kind":"data","label":"diff","derived":true,"confidence":"resolved","note":"\u201cdiff\u201d is emitted by Applier and consumed by gate.sh.","route":"layer","points":[[727,967.7],[842,967.7],[842,831.4],[937,831.4]]},{"id":"d-diff-investigator-gate","from":"investigator","to":"gate","kind":"data","label":"diff","derived":true,"confidence":"resolved","note":"\u201cdiff\u201d is emitted by Investigator and consumed by gate.sh.","route":"layer","points":[[727,843],[737,843],[737,952.3],[826,952.3],[826,812.4],[937,812.4]]},{"id":"d-discrepancy-applier-escalation","from":"applier","to":"escalation","kind":"data","label":"discrepancy","derived":true,"confidence":"resolved","note":"\u201cdiscrepancy\u201d is emitted by Applier and consumed by Escalation.","route":"layer","points":[[727,942.3],[810,942.3],[810,632.0],[1540,632.0],[1540,306.2],[1749.7,306.2]]},{"id":"d-dismissal-pmtriage-ledger","from":"pmtriage","to":"ledger","kind":"data","label":"dismissal","derived":true,"confidence":"resolved","note":"\u201cdismissal\u201d is emitted by PM triage and consumed by Review ledger.","route":"layer","points":[[2523,751.2],[2602,751.2],[2602,756.3],[2697,756.3]]},{"id":"d-dispatch-orch-worktree","from":"orch","to":"worktree","kind":"data","label":"dispatch","derived":true,"confidence":"resolved","note":"\u201cdispatch\u201d is emitted by Orchestrator and consumed by Isolated worktree.","route":"layer","points":[[423,1381],[810,1381],[810,1481],[32,1481],[32,1189],[810,1189],[810,1113],[128,1113],[128,962.6],[207,962.6]]},{"id":"d-draft-spec-spec-specgate","from":"spec","to":"specgate","kind":"data","label":"draft-spec","derived":true,"confidence":"resolved","note":"\u201cdraft-spec\u201d is emitted by PM writes the spec and consumed by Scope gate.","route":"layer","points":[[3521,225.7],[3609,225.7]]},{"id":"d-eligible-backlog-orch","from":"backlog","to":"orch","kind":"data","label":"eligible","derived":true,"confidence":"resolved","note":"\u201celigible\u201d is emitted by Linear backlog and consumed by Orchestrator.","route":"layer","points":[[3825,534],[4288,534],[4288,1206],[48,1206],[48,1381],[207,1381]]},{"id":"d-finding-audit-backlog","from":"audit","to":"backlog","kind":"data","label":"finding","derived":true,"confidence":"resolved","note":"\u201cfinding\u201d is emitted by Audit findings and consumed by Linear backlog.","route":"layer","points":[[3521,486],[3531,486],[3531,521.3],[3609,521.3]]},{"id":"d-fix-now-pmtriage-ledger","from":"pmtriage","to":"ledger","kind":"data","label":"fix-now","derived":true,"confidence":"resolved","note":"\u201cfix-now\u201d is emitted by PM triage and consumed by Review ledger.","route":"layer","points":[[2523,763.9],[2586,763.9],[2586,771.5],[2697,771.5]]},{"id":"d-gate-result-gate-verifier","from":"gate","to":"verifier","kind":"data","label":"gate-result","derived":true,"confidence":"resolved","note":"\u201cgate-result\u201d is emitted by gate.sh and consumed by Blind verifier.","route":"layer","points":[[1153,815.1],[1173,815.1],[1173,778],[1241,778]]},{"id":"d-gate-result-gate-qareview","from":"gate","to":"qareview","kind":"data","label":"gate-result","derived":true,"confidence":"resolved","note":"\u201cgate-result\u201d is emitted by gate.sh and consumed by QA reviewer.","route":"layer","points":[[1153,836.9],[1183,836.9],[1183,875],[1241,875]]},{"id":"d-gate-result-gate-state","from":"gate","to":"state","kind":"data","label":"gate-result","derived":true,"confidence":"resolved","note":"\u201cgate-result\u201d is emitted by gate.sh and consumed by Derived state.","route":"layer","points":[[1153,858.6],[1163,858.6],[1163,934],[2586,934],[2586,965.4],[2697,965.4]]},{"id":"d-intent-intent-spec","from":"intent","to":"spec","kind":"data","label":"intent","derived":true,"confidence":"resolved","note":"\u201cintent\u201d is emitted by Intent and consumed by PM writes the spec.","route":"layer","points":[[3217,213],[3305,213]]},{"id":"d-live-state-state-dashboard","from":"state","to":"dashboard","kind":"data","label":"live-state","derived":true,"confidence":"resolved","note":"\u201clive-state\u201d is emitted by Derived state and consumed by Live dashboard.","route":"layer","points":[[2913,947.3],[3001,947.3]]},{"id":"d-merged-merge-backlog","from":"merge","to":"backlog","kind":"data","label":"merged","derived":true,"confidence":"resolved","note":"\u201cmerged\u201d is emitted by Merge --no-ff and consumed by Linear backlog.","route":"layer","points":[[2523,626.5],[2586,626.5],[2586,546.7],[3609,546.7]]},{"id":"d-new-ticket-pmtriage-backlog","from":"pmtriage","to":"backlog","kind":"data","label":"new-ticket","derived":true,"confidence":"resolved","note":"\u201cnew-ticket\u201d is emitted by PM triage and consumed by Linear backlog.","route":"layer","points":[[2523,713.2],[2602,713.2],[2602,559.3],[3609,559.3]]},{"id":"d-new-ticket-pmtriage-ledger","from":"pmtriage","to":"ledger","kind":"data","label":"new-ticket","derived":true,"confidence":"resolved","note":"\u201cnew-ticket\u201d is emitted by PM triage and consumed by Review ledger.","route":"layer","points":[[2523,725.9],[2697,725.9]]},{"id":"d-ping-escalation-slack","from":"escalation","to":"slack","kind":"data","label":"ping","derived":true,"confidence":"resolved","note":"\u201cping\u201d is emitted by Escalation and consumed by Slack.","route":"layer","points":[[1965.7,312.5],[2053.7,312.5]]},{"id":"d-pr-open-pr-coderabbit","from":"pr","to":"coderabbit","kind":"data","label":"pr-open","derived":true,"confidence":"resolved","note":"\u201cpr-open\u201d is emitted by Pull request and consumed by CodeRabbit.","route":"layer","points":[[1915,738.5],[2003,738.5]]},{"id":"d-pr-open-pr-state","from":"pr","to":"state","kind":"data","label":"pr-open","derived":true,"confidence":"resolved","note":"\u201cpr-open\u201d is emitted by Pull request and consumed by Derived state.","route":"layer","points":[[1915,776.5],[1925,776.5],[1925,797.5],[2618,797.5],[2618,943.7],[2697,943.7]]},{"id":"d-proof-verdict-qareview-pr","from":"qareview","to":"pr","kind":"data","label":"proof-verdict","derived":true,"confidence":"resolved","note":"\u201cproof-verdict\u201d is emitted by QA reviewer and consumed by Pull request.","route":"layer","points":[[1457,875],[1636,875],[1636,770.2],[1699,770.2]]},{"id":"d-question-architect-survey","from":"architect","to":"survey","kind":"data","label":"question","derived":true,"confidence":"resolved","note":"\u201cquestion\u201d is emitted by Architect designs and consumed by Surveyor.","route":"layer","points":[[2913,309.8],[2933,309.8],[2933,164],[3835,164],[3835,206.7],[3913,206.7]]},{"id":"d-recurrence-ledger-lessons","from":"ledger","to":"lessons","kind":"data","label":"recurrence","derived":true,"confidence":"resolved","note":"\u201crecurrence\u201d is emitted by Review ledger and consumed by lessons.md.","route":"layer","points":[[2913,736],[3001,736]]},{"id":"d-recurrence-ledger-newcheck","from":"ledger","to":"newcheck","kind":"data","label":"recurrence","derived":true,"confidence":"resolved","note":"\u201crecurrence\u201d is emitted by Review ledger and consumed by New gate check.","route":"layer","points":[[2913,761.3],[2923,761.3],[2923,848],[3001,848]]},{"id":"d-rewritten-rewrite-backlog","from":"rewrite","to":"backlog","kind":"data","label":"rewritten","derived":true,"confidence":"resolved","note":"\u201crewritten\u201d is emitted by Rewrite the ticket and consumed by Linear backlog.","route":"layer","points":[[2269.7,424.5],[2586,424.5],[2586,534.0],[3609,534.0]]},{"id":"d-rule-lessons-investigator","from":"lessons","to":"investigator","kind":"data","label":"rule","derived":true,"confidence":"resolved","note":"\u201crule\u201d is emitted by lessons.md and consumed by Investigator.","route":"layer","points":[[3217,723.3],[4208,723.3],[4208,40],[112,40],[112,835.4],[511,835.4]]},{"id":"d-spec-defect-testdesign-spec","from":"testdesign","to":"spec","kind":"data","label":"spec-defect","derived":true,"confidence":"resolved","note":"\u201cspec-defect\u201d is emitted by Test designer and consumed by PM writes the spec.","route":"layer","points":[[3217,306],[3227,306],[3227,238.3],[3305,238.3]]},{"id":"d-stuck-gate-escalation","from":"gate","to":"escalation","kind":"data","label":"stuck","derived":true,"confidence":"resolved","note":"\u201cstuck\u201d is emitted by gate.sh and consumed by Escalation.","route":"layer","points":[[1153,804.3],[1163,804.3],[1163,729],[1556,729],[1556,325.2],[1749.7,325.2]]},{"id":"d-stuck-gate-rewrite","from":"gate","to":"rewrite","kind":"data","label":"stuck","derived":true,"confidence":"heuristic","note":"\u201cstuck\u201d is emitted by gate.sh and consumed by Rewrite the ticket.","route":"layer","points":[[1153,826],[1604,826],[1604,443.5],[2053.7,443.5]]},{"id":"d-stuck-verifier-escalation","from":"verifier","to":"escalation","kind":"data","label":"stuck","derived":true,"confidence":"resolved","note":"\u201cstuck\u201d is emitted by Blind verifier and consumed by Escalation.","route":"layer","points":[[1457,759],[1572,759],[1572,344.2],[1749.7,344.2]]},{"id":"d-stuck-verifier-rewrite","from":"verifier","to":"rewrite","kind":"data","label":"stuck","derived":true,"confidence":"heuristic","note":"\u201cstuck\u201d is emitted by Blind verifier and consumed by Rewrite the ticket.","route":"layer","points":[[1457,778],[1588,778],[1588,424.5],[2053.7,424.5]]},{"id":"d-stuck-escalation-rewrite","from":"escalation","to":"rewrite","kind":"data","label":"stuck","derived":true,"confidence":"resolved","note":"\u201cstuck\u201d is emitted by Escalation and consumed by Rewrite the ticket.","route":"layer","points":[[1965.7,337.9],[1975.7,337.9],[1975.7,405.5],[2053.7,405.5]]},{"id":"d-survey-survey-architect","from":"survey","to":"architect","kind":"data","label":"survey","derived":true,"confidence":"resolved","note":"\u201csurvey\u201d is emitted by Surveyor and consumed by Architect designs.","route":"layer","points":[[3913,187.7],[3845,187.7],[3845,153],[2923,153],[2923,294.6],[2913,294.6]]},{"id":"d-ticket-tiering-backlog","from":"tiering","to":"backlog","kind":"data","label":"ticket","derived":true,"confidence":"resolved","note":"\u201cticket\u201d is emitted by Tier every ticket and consumed by Linear backlog.","route":"layer","points":[[3521,374],[3541,374],[3541,508.7],[3609,508.7]]},{"id":"d-verdict-verifier-pr","from":"verifier","to":"pr","kind":"data","label":"verdict","derived":true,"confidence":"resolved","note":"\u201cverdict\u201d is emitted by Blind verifier and consumed by Pull request.","route":"layer","points":[[1457,797],[1467,797],[1467,836],[1620,836],[1620,744.9],[1699,744.9]]},{"id":"d-workspace-worktree-applier","from":"worktree","to":"applier","kind":"data","label":"workspace","derived":true,"confidence":"resolved","note":"\u201cworkspace\u201d is emitted by Isolated worktree and consumed by Applier.","route":"layer","points":[[423,955],[511,955]]},{"id":"d-workspace-worktree-investigator","from":"worktree","to":"investigator","kind":"data","label":"workspace","derived":true,"confidence":"resolved","note":"\u201cworkspace\u201d is emitted by Isolated worktree and consumed by Investigator.","route":"layer","points":[[423,939.8],[433,939.8],[433,865.8],[511,865.8]]},{"id":"d-workspace-worktree-state","from":"worktree","to":"state","kind":"data","label":"workspace","derived":true,"confidence":"resolved","note":"\u201cworkspace\u201d is emitted by Isolated worktree and consumed by Derived state.","route":"layer","points":[[423,970.2],[443,970.2],[443,1003],[874,1003.0],[874,997.0],[2586,997.0],[2586,976.3],[2697,976.3]]}]}},"viewOrder":["flow","structure","data"],"analysis":{"nodeCount":28,"edgeCount":94,"loopCount":13,"findingCount":2,"unreachable":[]}}</script>
+<script>
+"use strict";
+const S = JSON.parse(document.getElementById('system-graph-model').textContent);
+
+/* ======================================================================== */
+/* 1. design tokens -> CSS custom properties                                */
+/* ======================================================================== */
+function applyTheme(name) {
+  const t = S.tokens.themes[name], r = document.documentElement.style;
+  r.setProperty('--canvas', t.canvas);
+  r.setProperty('--surface', t.surface);
+  r.setProperty('--hairline', t.hairline);
+  r.setProperty('--ink', t.ink);
+  r.setProperty('--ink-muted', t.ink_muted);
+  r.setProperty('--hover', name === 'dark' ? 'rgba(255,255,255,.045)' : 'rgba(0,0,0,.035)');
+  for (const k of Object.keys(t.kinds)) {
+    r.setProperty('--acc-' + k, t.kinds[k].accent);
+    r.setProperty('--fill-' + k, t.kinds[k].fill);
+  }
+  for (const k of ['control', 'external', 'alert']) {
+    r.setProperty('--acc-' + k, t[k].accent);
+    r.setProperty('--fill-' + k, t[k].fill);
+  }
+  document.documentElement.dataset.theme = name;
+  document.getElementById('theme').textContent = name === 'dark' ? 'Light' : 'Dark';
+  ST.theme = name;
+}
+function pal(kind) {
+  const t = S.tokens.themes[ST.theme];
+  return t.kinds[kind] || t[kind] || t.control;
+}
+
+/* ======================================================================== */
+/* 2. state                                                                 */
+/* ======================================================================== */
+const ST = {
+  theme: 'dark',
+  ui: { rail: true, panel: true },
+  view: S.viewOrder[0],
+  focus: null,            // node id
+  loop: null,             // loop id
+  finding: null,
+  offKinds: new Set(),
+  show: { feedback: true, gaps: true, labels: true, metrics: false },
+  tx: 0, ty: 0, k: 1,
+};
+
+/* ======================================================================== */
+/* 3. shape language — one silhouette per stage kind                        */
+/*    Colour alone never carries category (CVD safety): the outline does too.*/
+/* ======================================================================== */
+const R = 10;
+function cardPath(kind, w, h) {
+  const r = R, hr = h / 2;
+  switch (kind) {
+    case 'intake':   // stadium cap on the LEFT  = work enters here
+      return `M ${hr},0 H ${w - r} a${r},${r} 0 0 1 ${r},${r} V ${h - r}
+              a${r},${r} 0 0 1 -${r},${r} H ${hr} A ${hr},${hr} 0 0 1 ${hr},0 Z`;
+    case 'release':  // stadium cap on the RIGHT = work leaves here
+      return `M ${r},0 H ${w - hr} A ${hr},${hr} 0 0 1 ${w - hr},${h} H ${r}
+              a${r},${r} 0 0 1 -${r},-${r} V ${r} a${r},${r} 0 0 1 ${r},-${r} Z`;
+    case 'gate':     // chevron in, chevron out = flow must pass a check
+      return `M 0,0 L 14,${hr} L 0,${h} H ${w - 14} L ${w},${hr} L ${w - 14},0 Z`;
+    case 'store':    // cylinder = state at rest
+      return `M 16,0 H ${w - r} a${r},${r} 0 0 1 ${r},${r} V ${h - r}
+              a${r},${r} 0 0 1 -${r},${r} H 16 A 16,${hr} 0 0 1 16,0 Z`;
+    case 'control':  // hexagon = orchestration / routing
+      return `M 15,0 H ${w - 15} L ${w},${hr} L ${w - 15},${h} H 15 L 0,${hr} Z`;
+    default:         // transform + external = plain process box
+      return `M ${r},0 H ${w - r} a${r},${r} 0 0 1 ${r},${r} V ${h - r}
+              a${r},${r} 0 0 1 -${r},${r} H ${r} a${r},${r} 0 0 1 -${r},-${r} V ${r}
+              a${r},${r} 0 0 1 ${r},-${r} Z`;
+  }
+}
+const PADX = { intake: 34, release: 20, gate: 20, store: 30, control: 20 };
+const PADR = { intake: 16, release: 36, gate: 22, store: 16, control: 22 };
+function padx(kind) { return PADX[kind] || 16; }
+function padr(kind) { return PADR[kind] || 16; }
+
+/* edge visual grammar — one style per relation, applied without exception  */
+const EDGE = {
+  flow:      { w: 2.4,  dash: '',      head: 'solid', tone: 'ink',      lab: false },
+  control:   { w: 1.75, dash: '1 5',   head: 'solid', tone: 'control',  lab: true  },
+  data:      { w: 1.75, dash: '',      head: 'open',  tone: 'release',  lab: true  },
+  feedback:  { w: 2.25, dash: '7 5',   head: 'solid', tone: 'gate',     lab: true  },
+  recursion: { w: 2.25, dash: '2 4',   head: 'solid', tone: 'store',    lab: true  },
+  violation: { w: 2.5,  dash: '',      head: 'solid', tone: 'alert',    lab: true  },
+  gap:       { w: 2,    dash: '3 6',   head: 'open',  tone: 'alert',    lab: true, ghost: .55 },
+};
+function edgeColor(kind) {
+  const t = S.tokens.themes[ST.theme], s = EDGE[kind] || EDGE.flow;
+  if (s.tone === 'ink') return t.ink_muted;
+  return (t.kinds[s.tone] || t[s.tone]).accent;
+}
+
+/* ======================================================================== */
+/* 4. svg helpers                                                           */
+/* ======================================================================== */
+const NS = 'http://www.w3.org/2000/svg';
+function el(n, a = {}, kids = []) {
+  const e = document.createElementNS(NS, n);
+  for (const k in a) if (a[k] != null) e.setAttribute(k, a[k]);
+  for (const c of [].concat(kids)) e.appendChild(c);
+  return e;
+}
+function txt(s, a = {}) { const e = el('text', a); e.textContent = s; return e; }
+function clip(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+/* the point half-way ALONG the path, not the middle array index — a label
+   pinned to an arbitrary bend point is a label in the wrong place          */
+function midpoint(pts) {
+  let total = 0; const segs = [];
+  for (let i = 1; i < pts.length; i++) {
+    const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    segs.push(d); total += d;
+  }
+  let want = total / 2;
+  for (let i = 0; i < segs.length; i++) {
+    if (want <= segs[i] || i === segs.length - 1) {
+      const t = segs[i] ? want / segs[i] : 0;
+      return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t,
+              pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t];
+    }
+    want -= segs[i];
+  }
+  return pts[0];
+}
+
+/* An edge that travels a long way backwards is not a semantic return — it is
+   the layout wrapping onto the next row. Demote it visually (Tufte: smallest
+   effective difference) so the eye does not read it as a feedback path.     */
+function isWrap(e, bounds) {
+  if (e.route !== 'layer') return false;
+  const w = bounds.maxX - bounds.minX;
+  return (e.points[0][0] - e.points[e.points.length - 1][0]) > w * 0.28;
+}
+
+/* rounded-corner polyline: keeps orthogonal routing readable without the
+   hard-corner "circuit board" look that makes bends hard to trace          */
+function roundPoly(pts, r = 9) {
+  if (pts.length < 3) return pts.map((p, i) => (i ? 'L' : 'M') + p[0] + ',' + p[1]).join(' ');
+  let d = `M ${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
+    const d1 = Math.hypot(cx - px, cy - py), d2 = Math.hypot(nx - cx, ny - cy);
+    const rr = Math.min(r, d1 / 2, d2 / 2);
+    if (rr < 1.5) { d += ` L ${cx},${cy}`; continue; }
+    d += ` L ${cx + (px - cx) / d1 * rr},${cy + (py - cy) / d1 * rr}`;
+    d += ` Q ${cx},${cy} ${cx + (nx - cx) / d2 * rr},${cy + (ny - cy) / d2 * rr}`;
+  }
+  const L = pts[pts.length - 1];
+  return d + ` L ${L[0]},${L[1]}`;
+}
+
+/* ======================================================================== */
+/* 5. render                                                                */
+/* ======================================================================== */
+const world = document.getElementById('world');
+const defs = document.getElementById('defs');
+
+function markers() {
+  defs.textContent = '';
+  const kinds = Object.keys(EDGE);
+  for (const k of kinds) {
+    const c = edgeColor(k), st = EDGE[k];
+    const head = st.head === 'open'
+      ? el('path', { d: 'M1,1 L9,5 L1,9', fill: 'none', stroke: c, 'stroke-width': 1.6,
+                     'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
+      : el('path', { d: 'M1,1.5 L9.5,5 L1,8.5 Z', fill: c });
+    defs.appendChild(el('marker', {
+      id: 'a-' + k, viewBox: '0 0 11 10', refX: st.head === 'open' ? 9.5 : 9.8,
+      refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse',
+      markerUnits: 'userSpaceOnUse',
+    }, [head]));
+  }
+  // soft shadow for the loop / finding chips
+  const f = el('filter', { id: 'chipShadow', x: '-40%', y: '-40%', width: '180%', height: '180%' });
+  f.appendChild(el('feDropShadow', { dx: 0, dy: 1, stdDeviation: 1.6, 'flood-opacity': .35 }));
+  defs.appendChild(f);
+}
+
+/* off-page connector: a short stub plus a chip naming the far end.
+   dir = +1 leaving the node, -1 arriving at it.                              */
+function stub(g, at, toward, farLabel, colour, dir) {
+  const t = S.tokens.themes[ST.theme];
+  let dx = toward[0] - at[0], dy = toward[1] - at[1];
+  const len = Math.hypot(dx, dy) || 1;
+  dx /= len; dy /= len;
+  const end = [at[0] + dx * 26, at[1] + dy * 26];
+  g.appendChild(el('path', {
+    d: `M ${at[0]},${at[1]} L ${end[0]},${end[1]}`, stroke: colour,
+    'stroke-width': 1.6, 'stroke-linecap': 'round', fill: 'none', opacity: .8,
+    'marker-end': dir < 0 ? null : 'url(#a-flow)',
+  }));
+  const s = (dir > 0 ? '↦ ' : '') + clip(farLabel, 16) + (dir < 0 ? ' ↦' : '');
+  const w = 12 + s.length * 5.5;
+  const cx = end[0] + dx * (w / 2 + 4), cy = end[1] + dy * 11;
+  g.appendChild(el('rect', { x: cx - w / 2, y: cy - 9, width: w, height: 18, rx: 9,
+    fill: t.surface, stroke: t.hairline, 'stroke-width': 1 }));
+  g.appendChild(txt(s, { x: cx, y: cy + 3.5, class: 'elabel', fill: t.ink_muted,
+    'text-anchor': 'middle' }));
+}
+
+function view() { return S.views[ST.view]; }
+
+function visibleNode(id) {
+  const n = S.nodes[id];
+  if (ST.offKinds.has(n.kind || 'transform')) return false;
+  return true;
+}
+function visibleEdge(e) {
+  if (!ST.show.feedback && (e.kind === 'feedback' || e.kind === 'recursion')) return false;
+  if (!ST.show.gaps && e.kind === 'gap') return false;
+  return visibleNode(e.from) && visibleNode(e.to);
+}
+
+function render() {
+  const v = view();
+  world.textContent = '';
+  markers();
+
+  const gZone = el('g'), gLane = el('g'), gEdge = el('g'), gNode = el('g'), gTop = el('g');
+  world.append(gZone, gEdge, gLane, gNode, gTop);
+  const t = S.tokens.themes[ST.theme];
+
+  /* --- zones: common region is the strongest grouping cue there is ------ */
+  for (const [zid, r] of Object.entries(v.zones)) {
+    const z = S.zones[zid] || { label: zid };
+    const g = el('g', { class: 'zone', 'data-zone': zid });
+    g.appendChild(el('rect', {
+      x: r.x, y: r.y, width: r.w, height: r.h, rx: 16,
+      fill: t.surface, stroke: t.hairline, 'stroke-width': 1,
+    }));
+    g.appendChild(el('rect', { x: r.x, y: r.y, width: r.w, height: 3, rx: 1.5,
+      fill: z.accent ? pal(z.accent).accent : t.hairline, opacity: .9 }));
+    g.appendChild(txt(z.label || zid, {
+      x: r.x + 18, y: r.y + 24, class: 'zlabel', fill: t.ink_muted,
+    }));
+    if (z.note) g.appendChild(txt(clip(z.note, 64), {
+      x: r.x + 18, y: r.y + 39, class: 'nsub', fill: t.ink_muted, opacity: .75 }));
+    gZone.appendChild(g);
+  }
+
+  /* --- edges ----------------------------------------------------------- */
+  const RETURN_KINDS = new Set(['feedback', 'recursion', 'gap']);
+  const returnCount = v.edges.filter(
+    e => RETURN_KINDS.has(e.kind) && visibleEdge(e)).length;
+  const softenReturns = returnCount > 5;
+
+  for (const e of v.edges) {
+    if (!visibleEdge(e)) continue;
+    const st = EDGE[e.kind] || EDGE.flow, c = edgeColor(e.kind || 'flow');
+    const wrap = isWrap(e, v.bounds);
+    const soft = softenReturns && RETURN_KINDS.has(e.kind);
+    const g = el('g', {
+      class: 'edge' + (soft ? ' soft' : ''), 'data-edge': e.id,
+      'data-from': e.from, 'data-to': e.to,
+      'data-loop': e.loop || '', opacity: st.ghost || 1,
+    });
+    const P = e.points;
+
+    /* A wrapped row's continuation edge is a layout artefact, not a semantic
+       long-distance link. Drawn in full it becomes a giant bracket that reads
+       as a container. Draw it as an off-page connector instead: a short stub at
+       each end, labelled with where it goes. */
+    if (wrap) {
+      gEdge.appendChild(g);
+      stub(g, P[0], P[1] || P[0], S.nodes[e.to].label, c, 1);
+      stub(g, P[P.length - 1], P[P.length - 2] || P[0], S.nodes[e.from].label, c, -1);
+      continue;
+    }
+    const d = e.route === 'arc'
+      ? `M ${P[0][0]},${P[0][1]} C ${P[1][0]},${P[1][1]} ${P[2][0]},${P[2][1]} ${P[3][0]},${P[3][1]}`
+      : roundPoly(P, e.route === 'layer' ? 9 : 14);
+    g.appendChild(el('path', { d, fill: 'none', stroke: 'transparent',
+      'stroke-width': 14, class: 'hit' }));
+    g.appendChild(el('path', {
+      d, fill: 'none', stroke: c, 'stroke-width': wrap ? 1.25 : st.w,
+      'stroke-dasharray': st.dash || null, 'stroke-linecap': 'round',
+      'stroke-linejoin': 'round', 'marker-end': `url(#a-${e.kind || 'flow'})`,
+      'vector-effect': 'non-scaling-stroke',
+    }));
+    (e.route === 'layer' ? gEdge : gLane).appendChild(g);
+
+    /* label / loop chip half-way along the path */
+    const showLab = ST.show.labels && st.lab && !wrap;
+    const [mx, my] = e.labelAt || midpoint(e.points);
+    if (e.loop) {
+      const lp = S.loops.find(l => l.id === e.loop);
+      const lc = lp && lp.type === 'balancing' ? t.kinds.release.accent
+               : lp && lp.type === 'reinforcing' ? t.kinds.gate.accent : t.ink_muted;
+      const label = e.loop + (e.polarity ? ' ' + e.polarity : '');
+      const w = 16 + label.length * 6.4;
+      const cg = el('g', { class: 'edge' + (soft ? ' soft' : ''),
+                           'data-loop': e.loop, 'data-edge': e.id,
+                           filter: 'url(#chipShadow)' });
+      cg.appendChild(el('rect', { x: mx - w / 2, y: my - 10, width: w, height: 20,
+        rx: 10, fill: t.surface, stroke: lc, 'stroke-width': 1.4 }));
+      cg.appendChild(txt(label, { x: mx, y: my + 4, class: 'loopchip', fill: lc,
+        'text-anchor': 'middle' }));
+      gTop.appendChild(cg);
+    } else if (showLab && e.label) {
+      const s = clip(e.label, 30), w = 12 + s.length * 5.7;
+      const cg = el('g', { class: 'edge', 'data-edge': e.id });
+      cg.appendChild(el('rect', { x: mx - w / 2, y: my - 9, width: w, height: 18,
+        rx: 5, fill: t.surface, stroke: t.hairline, 'stroke-width': 1, opacity: .96 }));
+      cg.appendChild(txt(s, { x: mx, y: my + 3.5, class: 'elabel',
+        fill: st.tone === 'ink' ? t.ink_muted : c, 'text-anchor': 'middle' }));
+      gTop.appendChild(cg);
+    }
+  }
+
+  /* --- nodes ----------------------------------------------------------- */
+  const findingNodes = new Set();
+  for (const f of S.findings) for (const n of (f.nodes || [])) findingNodes.add(n);
+  /* badge the stages work actually RETURNS to — not every node that happens to
+     sit inside some large cycle, which in a real factory is nearly all of them */
+  const revisited = new Set(v.edges
+    .filter(e => e.kind === 'feedback' || e.kind === 'recursion')
+    .map(e => e.to));
+
+  for (const nr of v.nodes) {
+    const n = S.nodes[nr.id];
+    if (!n || !visibleNode(nr.id)) continue;
+    const kind = n.kind || 'transform';
+    const c = pal(kind);
+    const g = el('g', { class: 'node', 'data-node': nr.id, 'data-kind': kind,
+                        transform: `translate(${nr.x},${nr.y})` });
+    g.appendChild(el('path', {
+      class: 'card', d: cardPath(kind, nr.w, nr.h), fill: c.fill,
+      stroke: c.accent, 'stroke-width': 1.5,
+      'stroke-dasharray': kind === 'external' ? '4 3' : null,
+    }));
+    const px = padx(kind), pr = padr(kind);
+    const inner = nr.w - px - pr;
+    g.appendChild(txt(n.kindLabel || kind, { x: px, y: 17, class: 'nkind', fill: c.accent }));
+    g.appendChild(txt(clip(n.label, Math.floor(inner / 7.1)),
+      { x: px, y: 36, class: 'ntitle', fill: c.text }));
+    if (n.subtitle) g.appendChild(txt(clip(n.subtitle, Math.floor(inner / 5.6)),
+      { x: px, y: 54, class: 'nsub', fill: c.text, opacity: .68 }));
+
+    /* badges: work returns here / an open question touches this stage.
+       Redundant with the side panels on purpose — the diagram should be
+       readable without them. */
+    let bx = nr.w - pr;
+    if (findingNodes.has(nr.id)) {
+      bx -= 15;
+      g.appendChild(el('circle', { cx: bx, cy: 13, r: 7.5,
+        fill: S.tokens.themes[ST.theme].alert.fill,
+        stroke: S.tokens.themes[ST.theme].alert.accent, 'stroke-width': 1.2 }));
+      g.appendChild(txt('!', { x: bx, y: 17, class: 'badge',
+        fill: S.tokens.themes[ST.theme].alert.accent, 'text-anchor': 'middle' }));
+    }
+    if (revisited.has(nr.id)) {
+      bx -= 17;
+      g.appendChild(txt('↻', { x: bx, y: 18, class: 'badge',
+        fill: c.accent, 'text-anchor': 'middle' }));
+    }
+    if (ST.show.metrics && n.metrics) {
+      const m = n.metrics;
+      g.appendChild(txt(`in ${m.fanIn ?? 0} · out ${m.fanOut ?? 0}` +
+        (m.instability != null ? ` · I ${m.instability}` : ''),
+        { x: px, y: nr.h + 13, class: 'nsub', fill: S.tokens.themes[ST.theme].ink_muted }));
+    }
+    gNode.appendChild(g);
+  }
+
+  applyFocus();
+  fit();
+}
+
+/* ======================================================================== */
+/* 6. focus — figure/ground, not deletion                                   */
+/* ======================================================================== */
+function applyFocus() {
+  const v = view();
+  const keep = new Set();
+  if (ST.focus) {
+    keep.add(ST.focus);
+    for (const e of v.edges) {
+      if (e.from === ST.focus) keep.add(e.to);
+      if (e.to === ST.focus) keep.add(e.from);
+    }
+  } else if (ST.loop) {
+    const l = S.loops.find(x => x.id === ST.loop);
+    if (l) l.members.forEach(m => keep.add(m));
+  } else if (ST.finding) {
+    const f = S.findings.find(x => x.id === ST.finding);
+    if (f) (f.nodes || []).forEach(m => keep.add(m));
+  }
+  const active = keep.size > 0;
+  for (const g of world.querySelectorAll('.node')) {
+    const id = g.dataset.node;
+    g.classList.toggle('dim', active && !keep.has(id));
+    g.classList.toggle('sel', id === ST.focus);
+  }
+  for (const g of world.querySelectorAll('.edge')) {
+    const inLoop = ST.loop && g.dataset.loop === ST.loop;
+    const touches = keep.has(g.dataset.from) && keep.has(g.dataset.to) &&
+      (!ST.focus || g.dataset.from === ST.focus || g.dataset.to === ST.focus);
+    g.classList.toggle('dim', active && !(inLoop || touches));
+    g.classList.toggle('lit', active && (inLoop || touches));
+  }
+  for (const g of world.querySelectorAll('.zone')) g.classList.toggle('dim', active);
+}
+
+/* ======================================================================== */
+/* 7. pan + zoom                                                            */
+/* ======================================================================== */
+const stage = document.getElementById('stage');
+function xform() { world.setAttribute('transform', `translate(${ST.tx},${ST.ty}) scale(${ST.k})`); }
+function fit(pad = 40) {
+  const b = view().bounds, r = stage.getBoundingClientRect();
+  const w = b.maxX - b.minX, h = b.maxY - b.minY;
+  ST.k = Math.min((r.width - pad * 2) / w, (r.height - pad * 2) / h, 1.35);
+  ST.tx = (r.width - w * ST.k) / 2 - b.minX * ST.k;
+  ST.ty = (r.height - h * ST.k) / 2 - b.minY * ST.k;
+  xform();
+}
+function zoomAt(f, cx, cy) {
+  const k2 = Math.max(.12, Math.min(4, ST.k * f));
+  ST.tx = cx - (cx - ST.tx) * (k2 / ST.k);
+  ST.ty = cy - (cy - ST.ty) * (k2 / ST.k);
+  ST.k = k2; xform();
+}
+stage.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const r = stage.getBoundingClientRect();
+  zoomAt(Math.exp(-ev.deltaY * 0.0016), ev.clientX - r.left, ev.clientY - r.top);
+}, { passive: false });
+let drag = null;
+stage.addEventListener('pointerdown', ev => {
+  if (ev.target.closest('.node')) return;
+  drag = { x: ev.clientX - ST.tx, y: ev.clientY - ST.ty };
+  stage.classList.add('drag'); stage.setPointerCapture(ev.pointerId);
+});
+stage.addEventListener('pointermove', ev => {
+  if (drag) { ST.tx = ev.clientX - drag.x; ST.ty = ev.clientY - drag.y; xform(); }
+  const g = ev.target.closest('.node, .edge');
+  if (g) showTip(g, ev); else hideTip();
+});
+addEventListener('pointerup', () => { drag = null; stage.classList.remove('drag'); });
+addEventListener('resize', () => fit());
+
+const tip = document.getElementById('tip');
+function showTip(g, ev) {
+  let b = '', s = '';
+  if (g.dataset.node) {
+    const n = S.nodes[g.dataset.node];
+    b = n.label; s = [n.kind, n.subtitle].filter(Boolean).join(' · ');
+  } else {
+    const e = view().edges.find(x => x.id === g.dataset.edge);
+    if (!e) return hideTip();
+    b = `${S.nodes[e.from].label} → ${S.nodes[e.to].label}`;
+    s = [e.kind, e.label, e.loop && `loop ${e.loop}`,
+         e.confidence === 'heuristic' && 'inferred'].filter(Boolean).join(' · ');
+  }
+  tip.innerHTML = '';
+  const bb = document.createElement('b'); bb.textContent = b;
+  const ss = document.createElement('span'); ss.textContent = s;
+  tip.append(bb, ss);
+  const r = stage.getBoundingClientRect();
+  tip.style.left = Math.min(ev.clientX - r.left + 14, r.width - 300) + 'px';
+  tip.style.top = (ev.clientY - r.top + 14) + 'px';
+  tip.classList.add('on');
+}
+function hideTip() { tip.classList.remove('on'); }
+
+stage.addEventListener('click', ev => {
+  const n = ev.target.closest('.node');
+  if (n) { select(n.dataset.node); return; }
+  const e = ev.target.closest('.edge');
+  if (e && e.dataset.loop) { ST.focus = null; ST.finding = null; ST.loop = e.dataset.loop; }
+  else if (!e) { ST.focus = ST.loop = ST.finding = null; }
+  applyFocus(); paintPanel();
+});
+
+function select(id) { ST.focus = id; ST.loop = null; ST.finding = null; applyFocus(); paintPanel(); }
+
+/* ======================================================================== */
+/* 8. panels                                                                */
+/* ======================================================================== */
+function h(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function sec(title) { const d = h('div', 'sec'); d.appendChild(h('h2', null, title)); return d; }
+
+function paintPanel() {
+  const p = document.getElementById('panel');
+  p.textContent = '';
+  if (ST.focus) p.appendChild(inspector(ST.focus));
+  else p.appendChild(overview());
+  p.appendChild(loopsPanel());
+  p.appendChild(findingsPanel());
+}
+
+function isCode() { return S.meta.profile === 'code'; }
+
+/* Build a click-through URL for a source ref. GitHub/GitLab-style repo URL +
+   branch when the model provides them; otherwise no link, just the path. */
+function srcUrl(src) {
+  const repo = (S.meta.repoUrl || '').replace(/\/+$/, '');
+  if (!repo) return null;
+  const branch = S.meta.branch || 'main';
+  const frag = src.lines ? `#L${src.lines[0]}` +
+    (src.lines[1] ? `-L${src.lines[1]}` : '') : '';
+  const sep = repo.includes('gitlab') ? '/-/blob/' : '/blob/';
+  return `${repo}${sep}${branch}/${src.path}${frag}`;
+}
+
+function overview() {
+  const d = sec('This diagram');
+  const a = S.analysis || {};
+  const dl = h('dl', 'kv');
+  const rows = [[isCode() ? 'Modules' : 'Stages', a.nodeCount],
+                [isCode() ? 'Dependencies' : 'Connections', a.edgeCount],
+                [isCode() ? 'Cycles' : 'Loops', a.loopCount],
+                ['Open questions', a.findingCount]];
+  for (const [k, val] of rows) { dl.appendChild(h('dt', null, k)); dl.appendChild(h('dd', null, val ?? '—')); }
+  d.appendChild(dl);
+  d.appendChild(h('p', null, view().blurb || ''));
+  d.appendChild(h('p', null, isCode()
+    ? 'Click any module to trace what it depends on and what depends on it.'
+    : 'Click any stage to trace its immediate neighbourhood. Click a loop badge to isolate a cycle.'));
+  return d;
+}
+
+function inspector(id) {
+  const n = S.nodes[id], v = view(), c = pal(n.kind || 'transform');
+  const d = h('div', 'sec insp');
+  const k = h('div', 'kind', n.kindLabel || n.kind || 'transform'); k.style.color = c.accent;
+  d.append(k, h('h3', null, n.label));
+  if (n.subtitle) d.appendChild(h('div', 'st', n.subtitle));
+  if (n.detail) d.appendChild(h('p', null, n.detail));
+
+  const m = n.metrics || {};
+  const dl = h('dl', 'kv');
+  const rows = [['Zone', (S.zones[n.zone] || {}).label || n.zone || '—'],
+                ['Fan-in', m.fanIn ?? '—'], ['Fan-out', m.fanOut ?? '—'],
+                ['Instability', m.instability ?? '—']];
+  if (n.emits && n.emits.length) rows.push(['Emits', n.emits.join(', ')]);
+  if (n.consumes && n.consumes.length) rows.push(['Consumes', n.consumes.join(', ')]);
+  if (n.owner) rows.push(['Owner', n.owner]);
+  for (const [a, b] of rows) { dl.appendChild(h('dt', null, a)); dl.appendChild(h('dd', null, b)); }
+  d.appendChild(dl);
+
+  /* Source anchors — the graph is a surface to answer from, and this is the
+     click-through that lets any claim on this card be checked against code. */
+  if (n.sources && n.sources.length) {
+    const s = sec('Source');
+    const wrap = h('div', 'rel');
+    for (const src of n.sources) {
+      const label = src.path + (src.symbol ? ` · ${src.symbol}` : '')
+        + (src.lines ? `:${src.lines[0]}${src.lines[1] ? '–' + src.lines[1] : ''}` : '');
+      const url = srcUrl(src);
+      let row;
+      if (url) {
+        row = document.createElement('a');
+        row.href = url; row.target = '_blank'; row.rel = 'noopener';
+        row.className = 'srclink';
+      } else {
+        row = h('div', 'srclink');
+      }
+      const code = document.createElement('code'); code.textContent = label;
+      row.appendChild(code);
+      if (src.note) row.appendChild(h('span', 'ds', ' — ' + src.note));
+      wrap.appendChild(row);
+    }
+    s.appendChild(wrap); d.appendChild(s);
+  }
+
+  const ins = v.edges.filter(e => e.to === id), outs = v.edges.filter(e => e.from === id);
+  for (const [title, list, arrow, other] of
+       [[isCode() ? 'Depended on by' : 'Upstream', ins, '←', 'from'],
+        [isCode() ? 'Depends on' : 'Downstream', outs, '→', 'to']]) {
+    if (!list.length) continue;
+    const s = sec(title), wrap = h('div', 'rel');
+    for (const e of list) {
+      const b = h('button');
+      b.append(h('span', 'ar', arrow));
+      const lab = h('span', null, S.nodes[e[other]].label +
+        (e.label ? ' · ' + e.label : ''));
+      lab.style.color = e.kind === 'flow' ? '' : edgeColor(e.kind);
+      b.appendChild(lab);
+      b.onclick = () => select(e[other]);
+      wrap.appendChild(b);
+    }
+    s.appendChild(wrap); d.appendChild(s);
+  }
+  return d;
+}
+
+function loopsPanel() {
+  const d = sec(`${isCode() ? 'Cycles' : 'Loops'} (${S.loops.length})`);
+  if (!S.loops.length) {
+    d.appendChild(h('div', 'empty', isCode()
+      ? 'No circular dependency anywhere in this graph. Every module can be built, tested and reasoned about on its own.'
+      : 'No cycle in this model. For a process that is meant to learn, that is itself a finding — see below.'));
+    return d;
+  }
+  for (const l of S.loops) {
+    const b = h('button', 'item' + (ST.loop === l.id ? ' on' : ''));
+    const hd = h('div', 'hd');
+    const cls = l.type === 'balancing' ? 'B' : l.type === 'reinforcing' ? 'R' : 'U';
+    hd.append(h('span', 'chip ' + cls, l.id), h('span', 'ti', l.label));
+    b.appendChild(hd);
+    b.appendChild(h('div', 'bd',
+      (isCode() ? 'Circular dependency. ' :
+       l.type === 'reinforcing' ? 'Reinforcing — compounds. ' :
+       l.type === 'balancing' ? 'Balancing — seeks a goal. ' :
+       'Polarity unlabelled — cannot tell if it converges. ') +
+      l.members.map(m => (S.nodes[m] || {}).label || m).join(' → ')));
+    b.onclick = () => { ST.loop = ST.loop === l.id ? null : l.id; ST.focus = null; ST.finding = null; applyFocus(); paintPanel(); };
+    d.appendChild(b);
+  }
+  return d;
+}
+
+function findingsPanel() {
+  const d = sec(`Open questions (${S.findings.length})`);
+  if (!S.findings.length) {
+    d.appendChild(h('div', 'empty', 'No structural gaps detected.'));
+    return d;
+  }
+  for (const f of S.findings) {
+    const b = h('button', 'item' + (ST.finding === f.id ? ' on' : ''));
+    const hd = h('div', 'hd');
+    const sev = f.severity === 'high' ? 'hi' : f.severity === 'medium' ? 'md' : 'lo';
+    hd.append(h('span', 'chip ' + sev, f.severity), h('span', 'ti', f.title));
+    b.append(hd, h('div', 'bd', f.detail || ''));
+    b.onclick = () => { ST.finding = ST.finding === f.id ? null : f.id; ST.focus = null; ST.loop = null; applyFocus(); paintPanel(); };
+    d.appendChild(b);
+  }
+  return d;
+}
+
+/* ======================================================================== */
+/* 9. rail                                                                  */
+/* ======================================================================== */
+function buildRail() {
+  const vs = document.getElementById('views');
+  S.viewOrder.forEach((id, i) => {
+    const v = S.views[id];
+    const b = h('button');
+    b.setAttribute('aria-pressed', String(id === ST.view));
+    const top = h('div'); top.style.display = 'flex'; top.style.width = '100%'; top.style.alignItems = 'baseline';
+    top.append(h('span', 'vk', v.label));
+    const kb = document.createElement('kbd'); kb.textContent = String(i + 1); top.appendChild(kb);
+    b.append(top, h('div', 'vb', v.blurb || ''));
+    b.onclick = () => setView(id);
+    vs.appendChild(b);
+  });
+
+  const tg = document.getElementById('toggles');
+  const opts = [['feedback', 'Feedback & recursion'], ['gaps', 'Gaps & missing links'],
+                ['labels', 'Edge labels'], ['metrics', 'Coupling metrics']];
+  for (const [key, label] of opts) {
+    const l = h('label', 'toggle');
+    const i = document.createElement('input'); i.type = 'checkbox'; i.checked = ST.show[key];
+    i.onchange = () => { ST.show[key] = i.checked; render(); paintPanel(); };
+    l.append(i, h('span', null, label));
+    tg.appendChild(l);
+  }
+
+  buildLegend();
+}
+
+/* The legend is generated from what is actually on the canvas, in the vocabulary
+   the author used. A legend listing kinds the diagram does not contain is noise;
+   a legend saying "transform" when every card says "module" is worse.          */
+const KIND_ORDER = ['intake', 'transform', 'gate', 'store', 'release', 'control', 'external'];
+const MEANING = {
+  process: {
+    intake: 'Where work enters', transform: 'Work is done, value is added',
+    gate: 'A decision, check, or quality gate', store: 'Durable state or an artifact at rest',
+    release: 'Where work leaves', control: 'Routes, schedules, or orchestrates',
+    external: 'Outside the boundary — context only',
+  },
+  code: {
+    intake: 'Entry point — requests and events arrive', transform: 'Does the work',
+    gate: 'Validates, authorises, or filters', store: 'Persistence, cache, or queue',
+    release: 'Public surface — what others consume', control: 'Routes, wires, or schedules',
+    external: 'Third-party — outside this codebase',
+  },
+};
+const EDGE_MEANING = {
+  process: {
+    flow: 'Work moves forward', control: 'Triggers or schedules',
+    data: 'Data is read or written', feedback: 'Result returns upstream',
+    recursion: 'The stage re-enters itself', violation: 'Breaks a stated rule',
+    gap: 'A link that should exist and does not',
+  },
+  code: {
+    flow: 'Depends on / calls', control: 'Registers, wires, or dispatches',
+    data: 'Reads or writes shared state', feedback: 'Callback or inversion of control',
+    recursion: 'Mutually or self-recursive', violation: 'Breaks the layering contract',
+    gap: 'A dependency that should exist and does not',
+  },
+};
+
+function buildLegend() {
+  const prof = MEANING[S.meta.profile] ? S.meta.profile : 'process';
+  const ln = document.getElementById('legNodes');
+  const le = document.getElementById('legEdges');
+  ln.textContent = ''; le.textContent = '';
+
+  const present = new Map();          // canonical kind -> label the author used
+  for (const id of Object.keys(S.nodes)) {
+    const n = S.nodes[id];
+    if (!present.has(n.kind)) present.set(n.kind, n.kindLabel || n.kind);
+  }
+  for (const k of KIND_ORDER)
+    if (present.has(k)) addLegendNode(ln, k, MEANING[prof][k], present.get(k));
+
+  const usedEdges = new Set();
+  for (const v of Object.values(S.views))
+    for (const e of v.edges) usedEdges.add(e.kind || 'flow');
+  for (const k of Object.keys(EDGE))
+    if (usedEdges.has(k)) addLegendEdge(le, k, EDGE_MEANING[prof][k]);
+}
+
+function addLegendNode(host, kind, desc, label) {
+  const row = h('div', 'lg'); row.dataset.kind = kind;
+  const c = pal(kind);
+  const s = el('svg', { width: 40, height: 20, viewBox: '0 0 40 20' });
+  s.appendChild(el('path', { d: cardPath(kind, 40, 20), fill: c.fill, stroke: c.accent,
+    'stroke-width': 1.4, 'stroke-dasharray': kind === 'external' ? '3 2' : null }));
+  row.appendChild(s);
+  const w = h('div');
+  const nm = h('div', 'nm', label || kind); nm.style.color = c.accent;
+  w.append(nm, h('div', 'ds', desc || ''));
+  row.appendChild(w);
+  row.onclick = () => {
+    ST.offKinds.has(kind) ? ST.offKinds.delete(kind) : ST.offKinds.add(kind);
+    row.dataset.off = ST.offKinds.has(kind) ? '1' : '';
+    render();
+  };
+  host.appendChild(row);
+}
+function addLegendEdge(host, kind, desc) {
+  const row = h('div', 'lg');
+  const st = EDGE[kind], c = edgeColor(kind);
+  const s = el('svg', { width: 40, height: 20, viewBox: '0 0 40 20' });
+  s.appendChild(el('path', { d: 'M2,10 H 34', stroke: c, 'stroke-width': st.w,
+    'stroke-dasharray': st.dash || null, 'stroke-linecap': 'round',
+    'marker-end': `url(#a-${kind})`, opacity: st.ghost || 1, fill: 'none' }));
+  row.appendChild(s);
+  const w = h('div');
+  const nm = h('div', 'nm', kind); nm.style.color = c;
+  w.append(nm, h('div', 'ds', desc || ''));
+  row.appendChild(w);
+  host.appendChild(row);
+}
+
+function setView(id) {
+  ST.view = id; ST.focus = ST.loop = ST.finding = null;
+  for (const b of document.querySelectorAll('#views button'))
+    b.setAttribute('aria-pressed', String(b.querySelector('.vk').textContent === S.views[id].label));
+  render(); paintPanel();
+}
+
+/* ======================================================================== */
+/* 10. boot                                                                 */
+/* ======================================================================== */
+document.getElementById('ttl').textContent = S.meta.title || 'Factory Graph';
+document.getElementById('sub').textContent = S.meta.subtitle || '';
+document.getElementById('src').textContent = S.meta.source || '';
+document.getElementById('theme').onclick = () => {
+  applyTheme(ST.theme === 'dark' ? 'light' : 'dark');
+  render(); paintPanel(); buildLegend();
+};
+/* The same model the diagram renders, as prose. This is the handoff format:
+   paste it to a colleague or an LLM and they know what the diagram knows —
+   including detail text and findings that are only hover-visible on screen. */
+function briefText() {
+  const code = isCode();
+  const L = [];
+  const push = (...a) => L.push(...a);
+  push(`# ${S.meta.title || 'System graph'}`);
+  const sub = [S.meta.subtitle, S.meta.source,
+               `profile: ${S.meta.profile || 'process'}`].filter(Boolean);
+  if (sub.length) push(sub.join(' · '));
+  const A = S.analysis || {};
+  push('', `${A.nodeCount ?? Object.keys(S.nodes).length} ${code ? 'modules' : 'stages'} · ` +
+       `${A.edgeCount ?? '?'} connections · ${(S.loops || []).length} ${code ? 'cycles' : 'loops'} · ` +
+       `${(S.findings || []).length} open questions`, '');
+
+  push(`## ${code ? 'Modules' : 'Stages'}`);
+  const byZone = {};
+  for (const n of Object.values(S.nodes))
+    (byZone[n.zone || ''] = byZone[n.zone || ''] || []).push(n);
+  for (const [z, ns] of Object.entries(byZone)) {
+    const zl = (S.zones[z] || {}).label;
+    if (zl) push('', `### ${zl}`);
+    for (const n of ns) {
+      const m = n.metrics || {};
+      const bits = [n.subtitle,
+        m.fanIn != null && `fan-in ${m.fanIn}, fan-out ${m.fanOut}` +
+          (m.instability != null ? `, instability ${m.instability}` : ''),
+        m.loc && `${m.loc} loc`,
+        n.emits && n.emits.length && `emits: ${n.emits.join(', ')}`,
+        n.consumes && n.consumes.length && `consumes: ${n.consumes.join(', ')}`,
+      ].filter(Boolean).join(' · ');
+      push(`- **${n.label}** [${n.kindLabel || n.kind}]${bits ? ' — ' + bits : ''}`);
+      if (n.detail) push(`  ${String(n.detail).trim().replace(/\s+/g, ' ')}`);
+      if (n.sources && n.sources.length)
+        push(`  source: ${n.sources.map(x => x.path + (x.symbol ? '·' + x.symbol : '')).join(', ')}`);
+    }
+  }
+
+  push('', '## Connections');
+  const seen = new Set();
+  for (const v of Object.values(S.views)) for (const e of v.edges) {
+    if (seen.has(e.id)) continue;
+    seen.add(e.id);
+    const a = (S.nodes[e.from] || {}).label || e.from;
+    const b = (S.nodes[e.to] || {}).label || e.to;
+    const tags = [e.kind !== 'flow' && e.kind, e.label, e.polarity && `polarity ${e.polarity}`,
+      e.loop && `loop ${e.loop}`, e.confidence === 'heuristic' && 'inferred'].filter(Boolean);
+    const pre = e.kind === 'gap' ? 'MISSING LINK (modelled absence): ' : '';
+    push(`- ${pre}${a} → ${b}${tags.length ? ` (${tags.join(', ')})` : ''}`);
+    if (e.kind === 'gap' && e.note) push(`  ${String(e.note).trim().replace(/\s+/g, ' ')}`);
+  }
+
+  if ((S.loops || []).length) {
+    push('', `## ${code ? 'Cycles' : 'Loops'}`);
+    for (const l of S.loops) {
+      push(`- **${l.id}** (${l.type}): ` +
+           l.members.map(m => (S.nodes[m] || {}).label || m).join(' → '));
+      if (l.note) push(`  ${l.note}`);
+    }
+  }
+
+  if ((S.findings || []).length) {
+    push('', '## Open questions (analyzer findings)');
+    for (const f of S.findings) {
+      push(`- [${f.severity}] **${f.title}**`);
+      if (f.detail) push(`  ${String(f.detail).trim().replace(/\s+/g, ' ')}`);
+    }
+  }
+  return L.join('\n');
+}
+window.briefText = briefText;
+document.getElementById('brief').onclick = async () => {
+  const text = briefText(), btn = document.getElementById('brief');
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); ta.remove();
+  }
+  btn.textContent = 'Copied';
+  setTimeout(() => { btn.textContent = 'Copy brief'; }, 1400);
+};
+
+function setChrome() {
+  const app = document.querySelector('.app');
+  app.classList.toggle('no-rail', !ST.ui.rail);
+  app.classList.toggle('no-panel', !ST.ui.panel);
+  document.getElementById('tglRail').setAttribute('aria-pressed', String(ST.ui.rail));
+  document.getElementById('tglPanel').setAttribute('aria-pressed', String(ST.ui.panel));
+  fit();      // the canvas just changed size — refit, don't leave dead space
+}
+document.getElementById('tglRail').onclick = () => { ST.ui.rail = !ST.ui.rail; setChrome(); };
+document.getElementById('tglPanel').onclick = () => { ST.ui.panel = !ST.ui.panel; setChrome(); };
+document.getElementById('fit').onclick = () => fit();
+document.getElementById('zin').onclick = () => { const r = stage.getBoundingClientRect(); zoomAt(1.25, r.width / 2, r.height / 2); };
+document.getElementById('zout').onclick = () => { const r = stage.getBoundingClientRect(); zoomAt(.8, r.width / 2, r.height / 2); };
+document.getElementById('clr').onclick = () => { ST.focus = ST.loop = ST.finding = null; applyFocus(); paintPanel(); };
+addEventListener('keydown', ev => {
+  if (ev.target.tagName === 'INPUT') return;
+  const i = parseInt(ev.key, 10);
+  if (i >= 1 && i <= S.viewOrder.length) setView(S.viewOrder[i - 1]);
+  else if (ev.key === 'f') { ST.show.feedback = !ST.show.feedback; document.querySelectorAll('#toggles input')[0].checked = ST.show.feedback; render(); }
+  else if (ev.key === 'g') { ST.show.gaps = !ST.show.gaps; document.querySelectorAll('#toggles input')[1].checked = ST.show.gaps; render(); }
+  else if (ev.key === '0') fit();
+  else if (ev.key === '[') { ST.ui.rail = !ST.ui.rail; setChrome(); }
+  else if (ev.key === ']') { ST.ui.panel = !ST.ui.panel; setChrome(); }
+  else if (ev.key === '\\') {         // presentation: only the graph
+    const any = ST.ui.rail || ST.ui.panel;
+    ST.ui.rail = ST.ui.panel = !any; setChrome();
+  }
+  else if (ev.key === 'Escape') { ST.focus = ST.loop = ST.finding = null; applyFocus(); paintPanel(); }
+});
+
+applyTheme('dark');
+buildRail();
+render();
+paintPanel();
+</script>
+</body>
+</html>

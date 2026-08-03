@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShipShape Ticket Factory</title>
+<!--
+  AGENT / LLM NOTE — read this before parsing anything else in this file.
+
+  This document is a rendered view of a complete, machine-readable system
+  model. Do NOT reconstruct the system from the SVG, the CSS, or a
+  screenshot. The full model — every node (with kind, description, metrics),
+  every edge (with kind, label, polarity, confidence), every derived loop,
+  and every analyzer finding — is embedded verbatim in:
+
+      <script type="application/json" id="system-graph-model">
+
+  Read that one element and you have everything the diagram knows, including
+  detail text that is only visible to humans via hover/click. Everything
+  after that element is presentation code and can be ignored.
+
+  Vocabulary: nodes have kind ∈ {intake, transform, gate, store, release,
+  control, external} (an original alias like "module" or "guard" is kept in
+  kindLabel). Edge kinds: flow (forward work/dependency), control (triggers),
+  data (state read/write), feedback (result returns upstream), recursion,
+  violation (breaks a stated rule), gap (a link that SHOULD exist and does
+  not — modelled absence, not an error). loops[] are cycles closed by
+  feedback edges: type "balancing" converges, "reinforcing" compounds.
+  findings[] are the analyzer's structural claims, sorted by severity.
+  Nodes may carry sources[] — file paths (with optional symbol/lines) that
+  anchor the node to real code; combine with meta.repoUrl to cite exact files.
+-->
+
+<style>
+/* ===========================================================================
+   system-graph artifact stylesheet
+   Every value below comes from the design system in references/design-system.md.
+   Do not hand-tune: change the model or the tokens, rebuild.
+   =========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+:root {
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px;
+  --r-sm: 6px; --r-md: 10px; --r-lg: 14px;
+  --font: ui-sans-serif, -apple-system, "Segoe UI", Inter, Roboto, system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --rail: 268px; --panel: 330px;
+  --ease: cubic-bezier(.2,.7,.3,1);
+}
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--font);
+  background: var(--canvas); color: var(--ink);
+  font-size: 13px; line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+/* ------------------------------------------------------------------ chrome */
+.app { display: grid; grid-template-rows: auto 1fr;
+       grid-template-columns: var(--rail) 1fr var(--panel);
+       grid-template-areas: "head head head" "rail canvas panel";
+       height: 100%; }
+header { grid-area: head; display: flex; align-items: center; gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-5); border-bottom: 1px solid var(--hairline);
+  background: var(--surface); }
+header h1 { font-size: 14.5px; font-weight: 640; margin: 0; letter-spacing: -.005em; }
+header .sub { color: var(--ink-muted); font-size: 12px; }
+header .src { font-family: var(--mono); font-size: 10.5px; color: var(--ink-muted);
+  border: 1px solid var(--hairline); padding: 3px var(--sp-2); border-radius: var(--r-sm); }
+header .spacer { flex: 1; }
+
+.rail  { grid-area: rail;  border-right: 1px solid var(--hairline);
+         background: var(--surface); overflow-y: auto; padding: var(--sp-4); }
+.panel { grid-area: panel; border-left: 1px solid var(--hairline);
+         background: var(--surface); overflow-y: auto; padding: var(--sp-4); }
+.canvas { grid-area: canvas; position: relative; overflow: hidden; background: var(--canvas); }
+
+.sec { margin-bottom: var(--sp-6); }
+.sec > h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--ink-muted); font-weight: 620; margin: 0 0 var(--sp-3); }
+
+/* ------------------------------------------------------------- view switch */
+.views { display: flex; flex-direction: column; gap: var(--sp-1); }
+.views button { display: flex; align-items: baseline; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); text-align: left;
+  border: 1px solid transparent; transition: background .12s var(--ease); }
+.views button:hover { background: var(--hover); }
+.views button[aria-pressed="true"] { background: var(--hover); border-color: var(--hairline); }
+.views button[aria-pressed="true"] .vk { color: var(--ink); }
+.views .vk { font-weight: 600; font-size: 13px; color: var(--ink-muted); }
+.views .vb { font-size: 11px; color: var(--ink-muted); line-height: 1.35; }
+.views kbd { margin-left: auto; font-family: var(--mono); font-size: 9.5px;
+  color: var(--ink-muted); border: 1px solid var(--hairline); border-radius: 4px;
+  padding: 0 4px; }
+
+/* ---------------------------------------------------------------- toggles */
+.toggle { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) 0;
+  cursor: pointer; user-select: none; }
+.toggle input { appearance: none; width: 30px; height: 17px; border-radius: 9px;
+  background: var(--hairline); position: relative; transition: background .15s var(--ease);
+  flex: none; cursor: pointer; }
+.toggle input::after { content: ""; position: absolute; top: 2px; left: 2px;
+  width: 13px; height: 13px; border-radius: 50%; background: var(--ink);
+  transition: transform .15s var(--ease); }
+.toggle input:checked { background: var(--acc-transform); }
+.toggle input:checked::after { transform: translateX(13px); background: var(--canvas); }
+.toggle span { font-size: 12px; }
+.toggle .ct { margin-left: auto; font-family: var(--mono); font-size: 10px;
+  color: var(--ink-muted); }
+
+/* ----------------------------------------------------------------- legend */
+.legend { display: flex; flex-direction: column; gap: 7px; }
+.lg { display: flex; align-items: center; gap: var(--sp-2); font-size: 11.5px;
+  cursor: pointer; border-radius: var(--r-sm); padding: 2px 3px; }
+.lg:hover { background: var(--hover); }
+.lg[data-off="1"] { opacity: .38; }
+.lg svg { flex: none; }
+.lg .nm { font-weight: 560; }
+.lg .ds { color: var(--ink-muted); font-size: 10.5px; }
+
+/* ------------------------------------------------------------------ lists */
+.item { width: 100%; text-align: left; border: 1px solid var(--hairline);
+  border-radius: var(--r-md); padding: var(--sp-3); margin-bottom: var(--sp-2);
+  background: var(--canvas); transition: border-color .12s var(--ease); }
+.item:hover { border-color: var(--ink-muted); }
+.item.on { border-color: var(--acc-transform); }
+.item .hd { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 3px; }
+.item .ti { font-weight: 590; font-size: 12.5px; }
+.item .bd { color: var(--ink-muted); font-size: 11.5px; line-height: 1.45; }
+.chip { font-family: var(--mono); font-size: 9.5px; font-weight: 650;
+  padding: 1.5px 6px; border-radius: 999px; border: 1px solid currentColor;
+  letter-spacing: .02em; flex: none; }
+.chip.hi { color: var(--acc-alert); }
+.chip.md { color: var(--acc-gate); }
+.chip.lo { color: var(--ink-muted); }
+.chip.R  { color: var(--acc-gate); }
+.chip.B  { color: var(--acc-release); }
+.chip.U  { color: var(--ink-muted); }
+
+.empty { color: var(--ink-muted); font-size: 11.5px; border: 1px dashed var(--hairline);
+  border-radius: var(--r-md); padding: var(--sp-3); }
+
+/* -------------------------------------------------------------- inspector */
+.insp .kind { font-size: 9.5px; text-transform: uppercase; letter-spacing: .1em;
+  font-weight: 650; }
+.insp h3 { margin: var(--sp-1) 0 var(--sp-1); font-size: 16px; letter-spacing: -.01em; }
+.insp .st { color: var(--ink-muted); font-size: 12px; margin-bottom: var(--sp-4); }
+.insp p { font-size: 12px; line-height: 1.55; color: var(--ink-muted); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px var(--sp-3);
+  font-size: 11.5px; margin: var(--sp-3) 0; }
+.kv dt { color: var(--ink-muted); }
+.kv dd { margin: 0; font-family: var(--mono); font-size: 11px; }
+.rel { display: flex; flex-direction: column; gap: 3px; margin-top: var(--sp-2); }
+.rel button { display: flex; gap: var(--sp-2); align-items: baseline; font-size: 11.5px;
+  padding: 3px var(--sp-2); border-radius: var(--r-sm); text-align: left; }
+.rel button:hover { background: var(--hover); }
+.rel .ar { font-family: var(--mono); color: var(--ink-muted); flex: none; }
+.srclink { display: block; font-size: 11px; padding: 3px var(--sp-2);
+  border-radius: var(--r-sm); color: var(--ink); text-decoration: none; }
+.srclink code { font-family: var(--mono); font-size: 10.5px; }
+a.srclink:hover { background: var(--hover); }
+a.srclink code { text-decoration: underline; text-underline-offset: 2px;
+  text-decoration-color: var(--ink-muted); }
+
+/* ----------------------------------------------------------------- canvas */
+svg#stage { position: absolute; inset: 0; width: 100%; height: 100%;
+  cursor: grab; touch-action: none; }
+svg#stage.drag { cursor: grabbing; }
+#stage text { pointer-events: none; user-select: none; }
+.node, .edge, .zone { transition: opacity .18s var(--ease); }
+.dim { opacity: .13; }
+/* Many simultaneous return paths would otherwise dominate the canvas (their
+   hue is the loudest by design). Past a handful, they rest at reduced opacity
+   and come forward on hover or when their loop is isolated. */
+.edge.soft { opacity: .38; }
+.edge.soft:hover, .edge.soft.lit { opacity: 1; }
+.node { cursor: pointer; }
+.node .card { transition: filter .15s var(--ease); }
+.node:hover .card { filter: brightness(1.14); }
+.node.sel .card { filter: brightness(1.14); }
+.hidden { display: none; }
+.zlabel { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  font-weight: 640; }
+.elabel { font-size: 10px; font-weight: 560; }
+.nkind { font-size: 8.5px; letter-spacing: .09em; text-transform: uppercase; font-weight: 660; }
+.ntitle { font-size: 13px; font-weight: 620; letter-spacing: -.005em; }
+.nsub { font-size: 10.5px; }
+.badge { font-size: 10px; font-weight: 700; }
+.loopchip { font-family: var(--mono); font-size: 10px; font-weight: 700; }
+
+.hud { position: absolute; left: var(--sp-4); bottom: var(--sp-4); display: flex;
+  gap: var(--sp-1); background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: var(--r-md); padding: var(--sp-1); }
+.hud button { padding: var(--sp-1) var(--sp-3); border-radius: var(--r-sm);
+  font-size: 11.5px; color: var(--ink-muted); }
+.hud button:hover { background: var(--hover); color: var(--ink); }
+.tip { position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3); font-size: 11.5px; max-width: 280px;
+  box-shadow: 0 6px 22px rgba(0,0,0,.32); z-index: 5; }
+.tip.on { opacity: 1; }
+.tip b { display: block; font-size: 12px; margin-bottom: 2px; }
+.tip span { color: var(--ink-muted); }
+
+/* ------------------------------------------------- collapsible side panels */
+/* "Only the graph" is a legitimate reading mode — presenting, screenshotting,
+   or just thinking. The chrome collapses; the model does not change.         */
+.app.no-rail  { grid-template-columns: 1fr var(--panel);
+                grid-template-areas: "head head" "canvas panel"; }
+.app.no-panel { grid-template-columns: var(--rail) 1fr;
+                grid-template-areas: "head head" "rail canvas"; }
+.app.no-rail.no-panel { grid-template-columns: 1fr;
+                        grid-template-areas: "head" "canvas"; }
+.app.no-rail .rail, .app.no-panel .panel { display: none; }
+.hbtn { padding: 5px 10px; border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  font-size: 11.5px; color: var(--ink-muted); }
+.hbtn:hover { color: var(--ink); background: var(--hover); }
+.hbtn[aria-pressed="false"] { opacity: .5; }
+
+@media (max-width: 1180px) {
+  .app { grid-template-columns: var(--rail) 1fr; grid-template-areas: "head head" "rail canvas"; }
+  .panel { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1 id="ttl"></h1>
+    <span class="sub" id="sub"></span>
+    <span class="spacer"></span>
+    <span class="src" id="src"></span>
+    <button class="hbtn" id="brief" title="Copy the whole model as markdown — paste it to a human or an LLM">Copy brief</button>
+    <button class="hbtn" id="tglRail"  aria-pressed="true"  title="Toggle left panel ([)">Controls</button>
+    <button class="hbtn" id="tglPanel" aria-pressed="true"  title="Toggle right panel (])">Details</button>
+    <button class="hbtn" id="theme">Light</button>
+  </header>
+
+  <aside class="rail">
+    <div class="sec"><h2>Lens</h2><div class="views" id="views"></div></div>
+    <div class="sec"><h2>Show</h2><div id="toggles"></div></div>
+    <div class="sec"><h2>Stages</h2><div class="legend" id="legNodes"></div></div>
+    <div class="sec"><h2>Connections</h2><div class="legend" id="legEdges"></div></div>
+  </aside>
+
+  <main class="canvas">
+    <svg id="stage"><defs id="defs"></defs><g id="world"></g></svg>
+    <div class="hud">
+      <button id="fit">Fit</button><button id="zin">+</button>
+      <button id="zout">−</button><button id="clr">Clear focus</button>
+    </div>
+    <div class="tip" id="tip"></div>
+  </main>
+
+  <aside class="panel" id="panel"></aside>
+</div>
+
+<script type="application/json" id="system-graph-model">{"meta":{"title":"ShipShape Ticket Factory","subtitle":"Autonomous audit-remediation pipeline \u2014 Linear backlog to merged main, with its self-improvement loops","source":"GAUNTLET/Ship @ 791380a \u2014 scripts/factory/*, .claude/skills/ship-factory + ship-orchestrator","profile":"process","repoUrl":"https://github.com/troysatchell/ship","branch":"main"},"tokens":{"meta":{"space":"oklch","generated_by":"assets/palette.py"},"kinds":{"intake":{"hue":264,"shape":"round-tag","meaning":"Where work enters the factory"},"transform":{"hue":152,"shape":"round-rect","meaning":"Work is done / value is added"},"gate":{"hue":82,"shape":"diamond","meaning":"A decision, check, or quality gate"},"store":{"hue":310,"shape":"cylinder","meaning":"Durable state or an artifact at rest"},"release":{"hue":196,"shape":"cut-rect","meaning":"Work leaves the factory"}},"themes":{"dark":{"canvas":"#0e1115","surface":"#171a20","hairline":"#25282e","ink":"#f1f3f9","ink_muted":"#8e929b","alert":{"accent":"#fe8b7f","fill":"#431d1a","text":"#f8edec"},"control":{"accent":"#9fa5b0","fill":"#33353b","text":"#edf0f6"},"external":{"accent":"#71757c","fill":"#1a1c1f","text":"#95989f"},"kinds":{"intake":{"accent":"#8ab0fe","fill":"#1f2a41","text":"#ecf0f9"},"transform":{"accent":"#5fcb82","fill":"#18301f","text":"#ebf3ec"},"gate":{"accent":"#dfa72a","fill":"#35280d","text":"#f4f0e7"},"store":{"accent":"#cd95f5","fill":"#31243b","text":"#f3eef6"},"release":{"accent":"#0bcacc","fill":"#053131","text":"#e7f3f3"}}},"light":{"canvas":"#f8faff","surface":"#ffffff","hairline":"#d8dce5","ink":"#2e3034","ink_muted":"#656971","alert":{"accent":"#c23631","fill":"#ffe6e3","text":"#472522"},"control":{"accent":"#585e68","fill":"#dfe3ea","text":"#2e3034"},"external":{"accent":"#888c94","fill":"#f2f4f9","text":"#585b61"},"kinds":{"intake":{"accent":"#406ac9","fill":"#e4edff","text":"#23304b"},"transform":{"accent":"#018743","fill":"#daf5e0","text":"#1a3823"},"gate":{"accent":"#906800","fill":"#faebcf","text":"#3d2d0d"},"store":{"accent":"#8c51b2","fill":"#f4e7ff","text":"#382944"},"release":{"accent":"#068082","fill":"#cff6f6","text":"#013839"}}}}},"nodes":{"audit":{"id":"audit","label":"Audit findings","kind":"intake","zone":"intake","subtitle":"shipshape-audit \u00b7 68 findings","sources":[{"path":"audit/AUDIT_REPORT.md","note":"the 68 findings, each with its measured evidence"},{"path":"audit/shipshape.config.yaml","note":"audit scope and per-category configuration"}],"emits":["finding"],"detail":"The 7-category baseline audit (type safety, bundle, API perf, DB queries,\ntests, error handling, a11y) produced AUDIT_REPORT.md with 68 findings.\nEvery finding became a Linear ticket (TRO-164..239). The 68 number is\nsubmitted and fixed \u2014 CodeRabbit-derived tickets are never counted into it.\n","kindLabel":"intake","metrics":{"fanIn":0,"fanOut":1,"instability":1.0}},"linear":{"id":"linear","label":"Linear backlog","kind":"store","zone":"intake","subtitle":"project ShipShape Audit Remediation","sources":[{"path":".claude/skills/ship-factory/SKILL.md","symbol":"1. Select the next ticket","lines":[58,75],"note":"selection order, and the In-Progress dispatch lock"}],"consumes":["finding","new-ticket"],"emits":["ticket"],"detail":"Authoritative for ticket STATUS (the board only shows execution state \u2014\nwhen they disagree, Linear wins and something is wrong). \"In Progress\" is\nthe dispatch lock: the whole batch is reserved before any agent starts,\nor a second worker can pick up a ticket already being fixed in someone\nelse's branch. Scope guardrail: the same workspace holds three unrelated\nprojects; the factory never dispatches outside this one.\n","kindLabel":"store","metrics":{"fanIn":4,"fanOut":1,"instability":0.2},"scc":1},"orch":{"id":"orch","label":"Orchestrator","kind":"control","zone":"dispatch","subtitle":"ship-factory run loop \u00b7 Sonnet","sources":[{"path":".claude/skills/ship-factory/SKILL.md","symbol":"The loop","lines":[56,252],"note":"the nine numbered steps this node executes"},{"path":".claude/skills/ship-orchestrator/SKILL.md","symbol":"2. Decide what runs in parallel","lines":[46,129],"note":"parallelism rules and concurrency sizing"}],"consumes":["ticket"],"detail":"Select \u2192 provision \u2192 dispatch \u2192 gate \u2192 measure \u2192 PR \u2192 triage \u2192 merge.\nOrders by unblock-first, then priority; batches shared root causes\n(DB-4 \u21c4 API-4/5/ERR-7, BUN-1 \u21c4 2/3/4/6) onto one branch. Runs everything\nin parallel except real blockers, same-file collisions, and measurement\nordering (db-query-audit after api-perf-audit). Runs the gate ITSELF \u2014\nan agent reporting green is a claim, not a result. Checkpoints the\nsession between waves: orchestration was ~75% of sprint spend, dominated\nby re-reading context, so no unbroken multi-day sessions.\n","kindLabel":"orchestrator","metrics":{"fanIn":2,"fanOut":4,"instability":0.67},"scc":1},"brief":{"id":"brief","label":"Brief assembly","kind":"transform","zone":"dispatch","subtitle":"contract + lessons + role skill","sources":[{"path":".claude/skills/ship-factory/references/agent-contract.md","note":"the domain-blind contract every brief opens with"},{"path":".claude/skills/ship-orchestrator/SKILL.md","symbol":"1. Route the ticket to a role brief","lines":[18,45],"note":"prefix \u2192 role-skill routing table"}],"emits":["brief"],"detail":"The agent contract (domain-blind, non-negotiables: scope, locked\nquarantine, provenance, keep-working) + lessons.md verbatim + the role\nskill(s) routed by finding prefix. Every brief also carries ship-qa's\nregression-test placement rule regardless of category, because the\ngate's regression check can be satisfied by a test the gate never runs.\n","kindLabel":"transform","metrics":{"fanIn":3,"fanOut":1,"instability":0.25},"scc":1},"lessons":{"id":"lessons","label":"lessons.md","kind":"store","zone":"dispatch","subtitle":"standing rules, earned per incident","sources":[{"path":".claude/skills/ship-factory/references/lessons.md","note":"the standing rules themselves, injected verbatim"},{"path":".claude/skills/ship-factory/SKILL.md","lines":[51,51],"note":"preflight step 5 \u2014 read lessons, carry into every prompt"}],"detail":"The prompt-level self-improvement mechanism. A rule lands here when a\nreview finding recurs on a 2nd ticket \u2014 a defect class recurring means\nthe brief is missing a rule, not that agents need louder restating.\nInjected verbatim into every subsequent brief. Kept short and specific:\nrules that earned their place, not a diary.\n","kindLabel":"store","metrics":{"fanIn":1,"fanOut":1,"instability":0.5},"scc":1},"roles":{"id":"roles","label":"Role skills","kind":"store","zone":"dispatch","subtitle":"ship-frontend \u00b7 ship-backend \u00b7 ship-qa","sources":[{"path":".claude/skills/ship-frontend/SKILL.md","note":"TS-* / BUN-* / A11Y-* tickets"},{"path":".claude/skills/ship-backend/SKILL.md","note":"API-* / DB-* / ERR-* tickets"},{"path":".claude/skills/ship-qa/SKILL.md","note":"TEST-* tickets, plus the placement rule carried by every brief"}],"detail":"Routing table (ship-orchestrator \u00a71): TS-*/BUN-*/A11Y-* \u2192 frontend,\nAPI-*/DB-*/ERR-* \u2192 backend, TEST-* \u2192 qa (plus the package's role skill),\nTF-* \u2192 none yet (escalation gate 2, irreversible infra). Multi-role\ntickets get both briefs \u2014 two briefs is fine, a vague brief is not.\n","kindLabel":"store","metrics":{"fanIn":0,"fanOut":1,"instability":1.0}},"provision":{"id":"provision","label":"worktree.sh","kind":"transform","zone":"build","subtitle":"worktree + DB + ports + .factory-env","sources":[{"path":"scripts/factory/worktree.sh","lines":[88,89],"note":"DROP/CREATE ... WITH FORCE \u2014 a retry starts clean"},{"path":"scripts/factory/worktree.sh","symbol":"find_free_port","lines":[97,125],"note":"md5 offset then probe upward; the hash alone collides"},{"path":"scripts/factory/worktree.sh","lines":[148,151],"note":"every line exported, so DATABASE_URL reaches pnpm"}],"detail":"Provisions ../Ship-wt-<ticket>: a git worktree on its own branch, an\nEXCLUSIVE database (DROP/CREATE ship_wt_<ticket> WITH FORCE \u2014 retries\nstart clean, not half-migrated), and ports probed upward from an md5\nstarting point (the hash alone collides ~50% by 36 concurrent tickets).\nWrites .factory-env (exported so DATABASE_URL actually reaches pnpm) and\nnever touches .git/info/exclude \u2014 in a linked worktree .git is a FILE,\nand that write once aborted provisioning before migration under set -e.\n","kindLabel":"transform","metrics":{"fanIn":1,"fanOut":2,"instability":0.67}},"pg":{"id":"pg","label":"ship-audit-pg","kind":"store","zone":"build","subtitle":"one Postgres container \u00b7 :5433","sources":[{"path":"scripts/factory/worktree.sh","lines":[30,32],"note":"FACTORY_PG_CONTAINER=ship-audit-pg on :5433"},{"path":"api/src/test/setup.ts","lines":[10,16],"note":"the TRUNCATE-16-tables beforeAll that forces per-ticket databases"}],"detail":"Docker Postgres holding every worktree's database. Isolation exists\nbecause api/src/test/setup.ts TRUNCATEs 16 tables in beforeAll of every\ntest file \u2014 two agents sharing a database silently destroy each other's\nfixtures and produce failures that look like code defects. The container\nis also the factory's real concurrency ceiling: gates share its\nconnection limit and CPU, so gate runs are staggered even when agent\ndispatch is broad.\n","kindLabel":"store","metrics":{"fanIn":1,"fanOut":1,"instability":0.5}},"agent":{"id":"agent","label":"Coding sub-agent","kind":"transform","zone":"build","subtitle":"Sonnet \u00b7 one ticket, one branch","sources":[{"path":".claude/skills/ship-factory/SKILL.md","symbol":"3. Dispatch the coding sub-agent","lines":[102,122]},{"path":".claude/skills/ship-orchestrator/SKILL.md","symbol":"2a. Dispatch ticket agents \u2014 and the orchestrator itself \u2014 on Sonnet","lines":[68,111],"note":"the brief carries the knowledge, not the model"}],"consumes":["brief"],"emits":["diff"],"detail":"Dispatched on Sonnet (maintainer policy 2026-07-29): the brief carries\nthe knowledge, not the model. By dispatch time it holds the role skill,\nstanding rules, the finding's measured evidence, escalation boundaries,\nand the gate to check itself against \u2014 a well-specified task, not a\nderived one. Model is raised per-ticket only for genuinely open-ended\ncalls (e.g. TRO-197, where the right bundle metric had to be invented).\n","kindLabel":"transform","metrics":{"fanIn":7,"fanOut":1,"instability":0.12},"scc":1},"gate":{"id":"gate","label":"gate.sh","kind":"gate","zone":"verify","subtitle":"G1\u2013G9 \u00b7 mechanical, evidence out","sources":[{"path":"scripts/factory/gate.sh","symbol":"G1 type check / G2 build","lines":[108,123]},{"path":"scripts/factory/gate.sh","symbol":"G3/G4 unit tests vs quarantine baseline","lines":[124,204],"note":"failure IDENTITIES, not counts"},{"path":"scripts/factory/gate.sh","symbol":"G5 tests were not weakened","lines":[205,244]},{"path":"scripts/factory/gate.sh","symbol":"G6 regression test present","lines":[245,255],"note":"the soft spot \u2014 added, not necessarily executed (see manual-1)"},{"path":"scripts/factory/gate.sh","symbol":"G7 CHANGES.md / G7b recurring review patterns","lines":[256,294]},{"path":"scripts/factory/gate.sh","symbol":"G8 scope discipline / G9 CodeRabbit","lines":[295,388]},{"path":"scripts/factory/gate.sh","lines":[389,412],"note":"verdict \u2192 .factory/gate-result.json, the PR body's evidence block"}],"consumes":["diff"],"emits":["gate-verdict","scorecard-row"],"detail":"The cheap-tier eval. G1 typecheck \u00b7 G2 build \u00b7 G3/G4 unit tests vs the\nquarantine baseline (failure IDENTITIES, not counts \u2014 fixing one test\nwhile breaking another keeps totals equal) \u00b7 G5 tests not weakened (net\nadds vs dels; .skip/.todo is an unconditional fail) \u00b7 G6 regression test\nADDED (not just touched) \u00b7 G7 CHANGES.md entry + structural check \u00b7\nG7b recurring review patterns (review-patterns.mjs) \u00b7 G8 diff bounded \u00b7\nG9 CodeRabbit CLI under a hard timeout, never overwriting a real review\nwith a rate-limit stub. New test failures are auto-re-run standalone to\nseparate load noise (TRO-277) from real regressions \u2014 verdict stays\nfail, operator gets the diagnosis free. Writes .factory/gate-result.json,\nwhich becomes the PR body's evidence block.\n","kindLabel":"gate","metrics":{"fanIn":4,"fanOut":5,"instability":0.56},"scc":1},"quarantine":{"id":"quarantine","label":"quarantine.json","kind":"store","zone":"verify","subtitle":"known-failing baseline","sources":[{"path":"audit/factory/quarantine.json","note":"the 13 known-failing web tests (TEST-1 / TRO-223)"},{"path":"scripts/factory/gate.sh","lines":[75,87],"note":"materialized from BASE_REF, never from the ticket branch"}],"detail":"The 13 known-failing web tests (TEST-1/TRO-223). The gate materializes\nit FROM BASE_REF, never from the ticket branch \u2014 reading the branch copy\nwould let an agent append its own failures and pass. The file may only\nshrink: removing genuinely fixed tests is legitimate (reported as\n\"fixed\", informational); widening it to get green is gaming the gate.\n","kindLabel":"store","metrics":{"fanIn":1,"fanOut":1,"instability":0.5},"scc":1},"scorecard":{"id":"scorecard","label":"scorecard.jsonl","kind":"store","zone":"verify","subtitle":"one row per gate run","sources":[{"path":"audit/factory/scorecard.jsonl","note":"append-only, one row per gate run including retries"},{"path":"scripts/factory/lib/state.mjs","symbol":"scorecard","lines":[178,200],"note":"how the board reads attempt history back out"}],"consumes":["scorecard-row"],"detail":"Appended after EVERY gate run \u2014 pass or fail, including each retry.\nSuccess-only rows would erase failed attempts and the first-attempt-pass\ntrend (the whole point) would read as 100%. cr* fields are filled in at\ntriage.\n","kindLabel":"store","metrics":{"fanIn":1,"fanOut":1,"instability":0.5}},"evals":{"id":"evals","label":"Compare-mode evals","kind":"gate","zone":"verify","subtitle":"vs audit-baseline tag","sources":[{"path":".claude/skills/ship-factory/references/evals.md","note":"which findings need a compare-mode run, and in what order"},{"path":".claude/skills/ship-factory/SKILL.md","symbol":"5. Measure (findings with a target)","lines":[147,152]}],"consumes":["gate-verdict"],"emits":["evidence"],"detail":"The expensive tier: for findings with a measurable target, a compare-mode\nrun of the category audit skill against the audit-baseline git tag\nproves the delta. Cheap categories run per ticket; expensive ones batch\nper category (db-query-audit strictly after api-perf-audit \u2014 statement\nlogging skews timings). A perf or bundle ticket without a measured delta\nis not done; measurable improvement is 40% of the grade.\n","kindLabel":"gate","metrics":{"fanIn":1,"fanOut":2,"instability":0.67},"scc":1},"pr":{"id":"pr","label":"PR + CI","kind":"gate","zone":"ship","subtitle":"GitHub \u00b7 required checks","sources":[{"path":".claude/skills/ship-factory/SKILL.md","symbol":"6. Open the PR","lines":[153,162],"note":"the PR body IS the evidence; GH_REPO=troysatchell/ship"},{"path":".claude/skills/ship-factory/SKILL.md","lines":[49,50],"note":"preflight \u2014 origin's fetch URL is GitLab, so gh cannot infer the repo"}],"consumes":["evidence"],"emits":["review-request","green-pr"],"detail":"Push + PR-open is pre-authorized for gate-passed factory branches. The\nPR body IS the evidence (gate JSON, measurement), not a summary; a\nbatched branch lists every ticket it closes. Branch protection on main:\ntypecheck/build/unit, source inventory, CodeQL \u2014 strict, admins bound.\ngh needs GH_REPO=troysatchell/ship because origin's fetch URL is GitLab.\n","kindLabel":"gate","metrics":{"fanIn":1,"fanOut":4,"instability":0.8},"scc":1},"coderabbit":{"id":"coderabbit","label":"CodeRabbit","kind":"external","zone":"ship","subtitle":"reviewer \u00b7 input, never a verdict","sources":[{"path":"scripts/factory/gate.sh","symbol":"G9 CodeRabbit review","lines":[305,388],"note":"hard timeout; a rate-limit stub never overwrites a real review"}],"consumes":["review-request"],"emits":["review-finding"],"detail":"Reviews every PR (and pre-PR via the CLI in G9). Findings never fail the\ngate on their own \u2014 a reviewer's opinion is input to triage, not a\nverdict. It has caught real bugs: the half-open concurrency race in\nTRO-311's circuit breaker was a genuine critical find.\n","kindLabel":"external","metrics":{"fanIn":1,"fanOut":1,"instability":0.5},"scc":1},"triage":{"id":"triage","label":"Triage","kind":"gate","zone":"ship","subtitle":"fix-now \u00b7 new-ticket \u00b7 dismissed","sources":[{"path":".claude/skills/ship-factory/references/triage.md","note":"the classification rules and what a dismissal must state"},{"path":".claude/skills/ship-factory/SKILL.md","symbol":"7. Triage the review \u2014 and record every finding","lines":[163,203]}],"consumes":["review-finding"],"emits":["disposition","new-ticket"],"detail":"Every finding is classified, none merely received. Fix-now findings get\nfixed and re-reviewed on the branch; ticket-worthy ones are filed to\nLinear automatically (labelled coderabbit, never counted in the 68);\ndismissals need a written reason. A growing dismissed pile in one\ncategory means the factory is talking itself out of real feedback.\n","kindLabel":"gate","metrics":{"fanIn":1,"fanOut":4,"instability":0.8},"scc":1},"ledger":{"id":"ledger","label":"Review ledger","kind":"store","zone":"ship","subtitle":"review-findings.jsonl","sources":[{"path":"scripts/factory/review-ledger.mjs","lines":[30,38],"note":"append-only JSONL; every finding, whatever its disposition"},{"path":"audit/factory/review-findings.jsonl","note":"the ledger itself"},{"path":"scripts/factory/review-patterns.mjs","note":"recurrence report \u2014 2 tickets \u2192 a rule, 3+ \u2192 a gate check"}],"consumes":["disposition"],"detail":"Every finding recorded whatever its disposition (review-ledger.mjs).\nExists because fixing findings one at a time and discarding them let a\ndefect class recur on four branches unnoticed on day one. The report's\nrecurrence thresholds drive the two self-improvement loops: 2 tickets \u2192\na lessons.md rule; 3+ tickets \u2192 a mechanical gate.sh check.\n","kindLabel":"store","metrics":{"fanIn":1,"fanOut":2,"instability":0.67},"scc":1},"merge":{"id":"merge","label":"Merge --no-ff","kind":"release","zone":"ship","subtitle":"auto once green \u00b7 policy 2026-07-29","sources":[{"path":".claude/skills/ship-factory/SKILL.md","symbol":"8. Merge \u2014 auto-merge once the review is green","lines":[204,245],"note":"the four conditions, and --no-ff"},{"path":"scripts/factory/merge-changes.mjs","note":"CHANGES.md consolidation across merged branches"}],"consumes":["green-pr","disposition"],"emits":["merged-main"],"detail":"Standing policy: merges without per-PR confirmation once all four hold \u2014\ngate pass, CI green, every review finding triaged (fix-now ones fixed\nand re-reviewed), no open escalation. --no-ff so branch structure\nsurvives (10% of the grade reads off the git log). Non-ticket content\n(tooling, skills, docs, CI) may merge on gate + CI alone \u2014 but the\nreview still gets read and triaged after the fact. Never merge to clear\na queue.\n","kindLabel":"release","metrics":{"fanIn":2,"fanOut":3,"instability":0.6},"scc":1},"remotes":{"id":"remotes","label":"GitLab + GitHub main","kind":"external","zone":"ship","subtitle":"GitLab is the graded remote","sources":[{"path":".claude/skills/ship-factory/SKILL.md","lines":[42,55],"note":"preflight \u2014 clean tree synced with BOTH remotes"},{"path":".claude/skills/ship-factory/SKILL.md","symbol":"9. Close the loop back into the factory","lines":[246,252]}],"consumes":["merged-main"],"detail":"One push updates both, but origin FETCHES from GitLab while CI, PRs and\nmerges happen on GitHub \u2014 a GitHub merge must be pulled down before the\nnext push or the remotes diverge (verified on PR #1: GitLab was one\ncommit behind). Verify with git ls-remote against both, never assume.\n","kindLabel":"external","metrics":{"fanIn":1,"fanOut":0,"instability":0.0}},"state":{"id":"state","label":"state.mjs","kind":"transform","zone":"observe","subtitle":"derive, never duplicate","sources":[{"path":"scripts/factory/lib/state.mjs","symbol":"collect","lines":[240,266],"note":"the single read that assembles a snapshot from live sources"},{"path":"scripts/factory/lib/state.mjs","symbol":"worktrees","lines":[104,153],"note":"worktrees + .factory-env + gate-result.json, plus title/liveAction"},{"path":"scripts/factory/lib/state.mjs","symbol":"cost","lines":[201,239],"note":"list-rate token estimate from session transcripts \u2014 NOT billed spend"}],"emits":["snapshot"],"detail":"Reconstructs live state from sources of truth on every read: worktrees\n+ .factory-env, .factory/gate-result.json, gh pr list, scorecard.jsonl,\nand Claude session transcripts for token cost (list-rate estimate,\nexplicitly NOT billed spend). There is deliberately no status file to\nupdate \u2014 a status file that drifts reads as authoritative while wrong.\n","kindLabel":"transform","metrics":{"fanIn":3,"fanOut":1,"instability":0.25}},"surfaces":{"id":"surfaces","label":"Board surfaces","kind":"release","zone":"observe","subtitle":"serve.mjs :7373 \u00b7 status.mjs \u00b7 board.html","sources":[{"path":"scripts/factory/serve.mjs","lines":[27,52],"note":"OPERATE \u2014 rebuilds from live state per request on :7373"},{"path":"scripts/factory/status.mjs","note":"OPERATE \u2014 the terminal view"},{"path":"scripts/factory/board.mjs","note":"SHARE \u2014 renders audit/factory/board.html for publishing"},{"path":"audit/factory/board.html","note":"the published snapshot itself"}],"consumes":["snapshot"],"detail":"Two kinds on purpose: OPERATE (serve.mjs rebuilds from live state per\nrequest, free to refresh; status.mjs is the terminal view) and SHARE\n(board.mjs \u2192 board.html, republished as a Claude Artifact at stable URL\nonly at milestones \u2014 a shell script cannot republish an Artifact, so\nevery refresh costs an agent tool call).\n","kindLabel":"release","metrics":{"fanIn":1,"fanOut":1,"instability":0.5}},"maintainer":{"id":"maintainer","label":"Maintainer","kind":"external","zone":"observe","subtitle":"human \u00b7 escalation gates \u00b7 policy","sources":[{"path":".claude/skills/ship-factory/references/escalation.md","note":"what stops a ticket, what stops the run, and what is batched"},{"path":".claude/skills/ship-factory/SKILL.md","symbol":"Running unattended","lines":[253,279]}],"detail":"The factory runs unattended between defined human gates. Escalation\nblocks the TICKET, not the run: questions are held and batched so one\nanswer resumes the factory. Standing policies set here (auto-merge on\ngreen, Sonnet dispatch, pre-authorized PR pushes) are what let the loop\nrun without per-action approval.\n","kindLabel":"external","metrics":{"fanIn":2,"fanOut":1,"instability":0.33},"scc":1}},"zones":{"intake":{"id":"intake","label":"Intake","accent":"intake","note":"68 audit findings became the ticket backlog"},"dispatch":{"id":"dispatch","label":"Dispatch","accent":"control","note":"ship-factory runs the loop; ship-orchestrator composes the brief"},"build":{"id":"build","label":"Isolated build","accent":"transform","note":"One worktree, one database, one branch per ticket"},"verify":{"id":"verify","label":"Verify","accent":"gate","note":"Evidence, not self-reports"},"ship":{"id":"ship","label":"Review & ship","accent":"release","note":"PR, CodeRabbit triage, auto-merge once green"},"observe":{"id":"observe","label":"Operate & observe","accent":"store","note":"State is derived, never duplicated"}},"loops":[{"id":"B1","type":"balancing","label":"Gate-retry loop","members":["agent","gate"],"edges":["f01","e11"],"note":null,"derived":false},{"id":"B10","type":"balancing","label":"Ticket lifecycle closes","members":["linear","orch","agent","gate","evals","pr","merge"],"edges":["e23","e02","e08","e11","e15","e16","e21"],"note":null,"derived":false},{"id":"B2","type":"balancing","label":"Hard problems surface","members":["linear","orch","agent","gate"],"edges":["f02","e02","e08","e11"],"note":null,"derived":false},{"id":"B3","type":"balancing","label":"Fix-now re-review","members":["agent","gate","evals","pr","coderabbit","triage"],"edges":["f03","e11","e15","e16","e17","e18"],"note":null,"derived":false},{"id":"B4","type":"balancing","label":"Lessons loop (prompt-level)","members":["lessons","brief","agent","gate","evals","pr","coderabbit","triage","ledger"],"edges":["f05","e05","e07","e11","e15","e16","e17","e18","e19"],"note":null,"derived":false},{"id":"B5","type":"balancing","label":"Gate-hardening loop (mechanical)","members":["gate","evals","pr","coderabbit","triage","ledger"],"edges":["f06","e15","e16","e17","e18","e19"],"note":null,"derived":false},{"id":"B6","type":"balancing","label":"Escalation round-trip","members":["orch","maintainer"],"edges":["f07","e30"],"note":null,"derived":false},{"id":"B7","type":"balancing","label":"Baseline maintenance","members":["quarantine","gate","evals","pr","merge"],"edges":["f08","e13","e15","e16","e21"],"note":null,"derived":false},{"id":"B8","type":"balancing","label":"Measured-delta loop","members":["agent","gate","evals"],"edges":["f09","e11","e15"],"note":null,"derived":false},{"id":"B9","type":"balancing","label":"CI-red loop","members":["agent","gate","evals","pr"],"edges":["f10","e11","e15","e16"],"note":null,"derived":false},{"id":"R1","type":"reinforcing","label":"Review grows the backlog","members":["linear","orch","agent","gate","evals","pr","coderabbit","triage"],"edges":["f04","e02","e08","e11","e15","e16","e17","e18"],"note":null,"derived":false}],"findings":[{"id":"manual-1","severity":"high","kind":"prompt-side-invariant","title":"The regression-test gate is satisfiable by a test that never runs","nodes":["gate"],"detail":"G6 requires an added test case anywhere in the diff; whether the gate's own suites execute that file is enforced only by the ship-qa placement rule carried in every brief. Both skills state this openly \u2014 it is the known soft spot of the evidence gate, and the reason the rule is injected into every brief regardless of ticket category."},{"id":"manual-3","severity":"medium","kind":"manual-refresh","title":"The shared board artifact only refreshes via an agent tool call","nodes":["surfaces"],"detail":"serve.mjs/status.mjs are free and always current; the published Artifact is a milestone snapshot because a shell script cannot republish it. The mitigation is labelling, not automation \u2014 the board says it is a snapshot."},{"id":"manual-2","severity":"medium","kind":"single-point-of-serialisation","title":"One Postgres container bounds the whole factory's concurrency","nodes":["pg"],"detail":"Databases isolate correctness, but every gate's test run shares ship-audit-pg's connection limit and CPU \u2014 beyond a handful of simultaneous gates, test timings stop being comparable. Playwright sizing from free memory alongside gate runs once produced a 90GB over-subscription and a system crash. Dispatch is broad; gates stagger."},{"id":"manual-4","severity":"low","kind":"shared-external-dependency","title":"CodeRabbit CLI is unbounded and its allowance is shared","nodes":["coderabbit"],"detail":"The CLI has no internal deadline (observed 11+ min wall against 2.6s CPU under concurrent worktrees) and its free allowance exhausts, returning a JSON error stub. G9 mitigates both \u2014 hard timeout, and never promoting a stub over a completed review \u2014 but the PR-level review remains the authoritative fallback."}],"views":{"flow":{"id":"flow","label":"Flow","blurb":"How work moves, and where it comes back around.","direction":"RIGHT","bounds":{"minX":32,"minY":8,"maxX":1872,"maxY":1129.4666666666667},"nodes":[{"id":"agent","x":1312,"y":335.8,"w":216,"h":76},{"id":"audit","x":64,"y":388,"w":216,"h":76},{"id":"brief","x":1000,"y":410.8,"w":216,"h":76},{"id":"coderabbit","x":1000,"y":644.5,"w":216,"h":76},{"id":"evals","x":376,"y":631.8,"w":216,"h":76},{"id":"gate","x":64,"y":631.8,"w":216,"h":76},{"id":"ledger","x":64,"y":40,"w":216,"h":76},{"id":"lessons","x":64,"y":156,"w":216,"h":76},{"id":"linear","x":376,"y":388,"w":216,"h":76},{"id":"maintainer","x":1000,"y":145.8,"w":216,"h":76},{"id":"merge","x":1624,"y":631.8,"w":216,"h":76},{"id":"orch","x":688,"y":388,"w":216,"h":76},{"id":"pr","x":688,"y":631.8,"w":216,"h":76},{"id":"provision","x":1000,"y":261.8,"w":216,"h":76},{"id":"quarantine","x":64,"y":272,"w":216,"h":76},{"id":"remotes","x":64,"y":865.5,"w":216,"h":76},{"id":"state","x":376,"y":133.1,"w":216,"h":76},{"id":"surfaces","x":688,"y":133.1,"w":216,"h":76},{"id":"triage","x":1312,"y":644.5,"w":216,"h":76}],"zones":{},"edges":[{"id":"e01","from":"audit","to":"linear","kind":"flow","label":"68 findings \u2192 tickets","route":"layer","points":[[280,426],[376,426]]},{"id":"e02","from":"linear","to":"orch","kind":"flow","label":"next eligible batch","route":"layer","points":[[592,426],[688,426]]},{"id":"e03","from":"orch","to":"provision","kind":"control","label":"provision per ticket","route":"layer","points":[[904,418.4],[952,418.4],[952,299.8],[1000,299.8]]},{"id":"e04","from":"orch","to":"brief","kind":"control","label":"compose per ticket","route":"layer","points":[[904,448.8],[1000,448.8]]},{"id":"e07","from":"brief","to":"agent","kind":"flow","label":"the brief","route":"layer","points":[[1216,448.8],[1248,448.8],[1248,392.8],[1312,392.8]]},{"id":"e08","from":"orch","to":"agent","kind":"control","label":"dispatch (Sonnet)","route":"layer","points":[[904,433.6],[968,433.6],[968,373.8],[1312,373.8]]},{"id":"e10","from":"provision","to":"agent","kind":"flow","label":"worktree + .factory-env","route":"layer","points":[[1216,299.8],[1248,299.8],[1248,354.8],[1312,354.8]]},{"id":"e11","from":"agent","to":"gate","kind":"flow","label":"diff (self-report \u2260 done)","route":"layer","points":[[1528,373.8],[1560,373.8],[1560,558.8],[32,558.8],[32,669.8],[64,669.8]]},{"id":"e15","from":"gate","to":"evals","kind":"flow","label":"pass","route":"layer","points":[[280,669.8],[376,669.8]]},{"id":"e16","from":"evals","to":"pr","kind":"flow","label":"evidence-backed PR","route":"layer","points":[[592,669.8],[688,669.8]]},{"id":"e17","from":"pr","to":"coderabbit","kind":"flow","label":"review","route":"layer","points":[[904,682.5],[1000,682.5]]},{"id":"e18","from":"coderabbit","to":"triage","kind":"flow","label":"findings","route":"layer","points":[[1216,682.5],[1312,682.5]]},{"id":"e20","from":"triage","to":"merge","kind":"flow","label":"review green","route":"layer","points":[[1528,682.5],[1624,682.5]]},{"id":"e21","from":"pr","to":"merge","kind":"flow","label":"CI green","route":"layer","points":[[904,657.1],[936,657.1],[936,607.5],[1560,607.5],[1560,657.1],[1624,657.1]]},{"id":"e22","from":"merge","to":"remotes","kind":"flow","label":"push","verify both":null,"route":"layer","points":[[1840,669.8],[1872,669.8],[1872,792.5],[32,792.5],[32,903.5],[64,903.5]]},{"id":"e28","from":"state","to":"surfaces","kind":"flow","label":"snapshot + failure warnings","note":"The snapshot carries its own degradation signals \u2014 gate FAILED warnings","worktrees with no commits (stale locks)":null,"and \"gh returned no PRs\" when the repo cannot be resolved. state.mjs swallows shell errors (sh() returns '')":null,"so these warnings are the only failure surface.":null,"route":"layer","points":[[592,171.1],[688,171.1]]},{"id":"e29","from":"surfaces","to":"maintainer","kind":"flow","label":"board \u00b7 artifact","route":"layer","points":[[904,171.1],[1000,171.1]]},{"id":"e30","from":"orch","to":"maintainer","kind":"control","label":"escalation","batched":null,"route":"layer","points":[[904,403.2],[936,403.2],[936,196.5],[1000,196.5]]},{"id":"e23","from":"merge","to":"linear","kind":"feedback","polarity":"-","loop":"B10","label":"Done + evidence","note":"Tickets move to Done carrying the gate result","PR link":null,"and measured before/after \u2014 the loop that actually drains the backlog.":null,"route":"channel","labelAt":[1108.0,1047.5],"points":[[1732.0,707.8],[1732.0,1047.5],[484.0,1047.5],[484.0,464]]},{"id":"f01","from":"gate","to":"agent","kind":"feedback","polarity":"-","loop":"B1","label":"gate output back","\u22643 attempts":null,"note":"Same agent keeps its context. The cap converts \"burns tokens forever\" into \"surfaces a hard problem\" \u2014 never raised to force a pass.","route":"arc","labelAt":[763.1,383.1],"points":[[286.0,642.8],[527.8,390.2],[976.6,283.7],[1306.0,400.8]]},{"id":"f02","from":"gate","to":"linear","kind":"feedback","polarity":"-","loop":"B2","label":"3 fails \u2192 blocked","note":"After three failed gates the ticket is marked blocked in Linear with the gate output and a best-read diagnosis; the factory moves on.","route":"arc","labelAt":[358.4,586.8],"points":[[228.3,625.8],[324.6,634.0],[412.4,565.5],[427.7,470.0]]},{"id":"f03","from":"triage","to":"agent","kind":"feedback","polarity":"-","loop":"B3","label":"fix-now \u2192 re-review","route":"arc","labelAt":[1463.0,528.1],"points":[[1420.0,638.5],[1477.4,576.7],[1477.4,479.6],[1420.0,417.8]]},{"id":"f04","from":"triage","to":"linear","kind":"feedback","polarity":"+","loop":"R1","label":"new tickets (coderabbit label)","note":"The factory grows its own backlog instead of losing findings in PR threads. Labelled tickets never count toward the fixed 68.","route":"channel","labelAt":[952.0,987.5],"points":[[1420.0,720.5],[1420.0,987.5],[484.0,987.5],[484.0,464]]},{"id":"f05","from":"ledger","to":"lessons","kind":"feedback","polarity":"-","loop":"B4","label":"2nd recurrence \u2192 standing rule","route":"arc","labelAt":[136.0,136.0],"points":[[172.0,122.0],[124.0,129.8],[124.0,142.2],[172.0,150.0]]},{"id":"f06","from":"ledger","to":"gate","kind":"feedback","polarity":"-","loop":"B5","label":"3rd+ \u2192 mechanical check (G7b)","note":"A rule stated in the brief and ignored three times needs a check","not louder restating. review-patterns.mjs exists because two classes crossed this line.":null,"route":"arc","labelAt":[29.5,373.9],"points":[[172.0,122.0],[-18.0,263.1],[-18.0,484.7],[172.0,625.8]]},{"id":"f07","from":"maintainer","to":"orch","kind":"feedback","polarity":"-","loop":"B6","label":"batched answers \u00b7 policy","route":"arc","labelAt":[921.9,266.2],"points":[[1051.3,227.8],[955.6,219.3],[868.2,287.2],[852.7,382.0]]},{"id":"f08","from":"merge","to":"quarantine","kind":"feedback","polarity":"-","loop":"B7","label":"fixed tests shrink baseline","note":"The gate reads quarantine.json from BASE_REF","never from the ticket branch \u2014 so updates only take effect once merged":null,"and the file may only shrink. Widening it to get green is gaming the gate.":null,"route":"arc","labelAt":[984.0,351.0],"points":[[1618.0,643.5],[1287.7,372.3],[701.7,237.2],[286.0,336.3]]},{"id":"f09","from":"evals","to":"agent","kind":"feedback","polarity":"-","loop":"B8","label":"no measured delta \u2192 not done","note":"A perf/bundle ticket without a proven delta against audit-baseline is not done \u2014 it goes back to work","not to a PR.":null,"route":"channel","labelAt":[952.0,1017.5],"points":[[484.0,707.8],[484.0,1017.5],[1420.0,1017.5],[1420.0,411.8]]},{"id":"f10","from":"pr","to":"agent","kind":"feedback","polarity":"-","loop":"B9","label":"CI red \u2192 fix on branch","route":"arc","labelAt":[1046.9,393.1],"points":[[888.8,625.8],[930.1,395.9],[1123.0,304.4],[1327.2,417.8]]},{"id":"g01","from":"linear","to":"state","kind":"gap","label":"board cannot read ticket status","note":"state.mjs deliberately does not read Linear (it needs auth a shell script does not have), so the board shows execution state only. Linear stays authoritative; disagreement is surfaced as a warning, not reconciled silently. Deliberate \u2014 but it means no single surface shows both halves.","route":"arc","labelAt":[520.0,298.6],"points":[[484.0,382.0],[532.0,335.3],[532.0,261.9],[484.0,215.1]]}]},"structure":{"id":"structure","label":"Structure","blurb":"What the parts are, what contains what, what depends on what.","direction":"RIGHT","bounds":{"minX":32,"minY":8,"maxX":1872,"maxY":880.3333333333333},"nodes":[{"id":"agent","x":1312,"y":298.7,"w":216,"h":76},{"id":"audit","x":64,"y":235.1,"w":216,"h":76},{"id":"brief","x":1000,"y":317.7,"w":216,"h":76},{"id":"coderabbit","x":1000,"y":551.3,"w":216,"h":76},{"id":"evals","x":376,"y":538.7,"w":216,"h":76},{"id":"gate","x":64,"y":538.7,"w":216,"h":76},{"id":"linear","x":376,"y":235.1,"w":216,"h":76},{"id":"maintainer","x":1000,"y":52.7,"w":216,"h":76},{"id":"merge","x":1624,"y":538.7,"w":216,"h":76},{"id":"orch","x":688,"y":235.1,"w":216,"h":76},{"id":"pr","x":688,"y":538.7,"w":216,"h":76},{"id":"provision","x":1000,"y":168.7,"w":216,"h":76},{"id":"remotes","x":64,"y":772.3,"w":216,"h":76},{"id":"state","x":376,"y":40,"w":216,"h":76},{"id":"surfaces","x":688,"y":40,"w":216,"h":76},{"id":"triage","x":1312,"y":551.3,"w":216,"h":76}],"zones":{},"edges":[{"id":"e01","from":"audit","to":"linear","kind":"flow","label":"68 findings \u2192 tickets","route":"layer","points":[[280,273.1],[376,273.1]]},{"id":"e02","from":"linear","to":"orch","kind":"flow","label":"next eligible batch","route":"layer","points":[[592,273.1],[688,273.1]]},{"id":"e03","from":"orch","to":"provision","kind":"control","label":"provision per ticket","route":"layer","points":[[904,265.5],[952,265.5],[952,206.7],[1000,206.7]]},{"id":"e04","from":"orch","to":"brief","kind":"control","label":"compose per ticket","route":"layer","points":[[904,295.9],[936,295.9],[936,355.7],[1000,355.7]]},{"id":"e07","from":"brief","to":"agent","kind":"flow","label":"the brief","route":"layer","points":[[1216,355.7],[1312,355.7]]},{"id":"e08","from":"orch","to":"agent","kind":"control","label":"dispatch (Sonnet)","route":"layer","points":[[904,280.7],[1248,280.7],[1248,336.7],[1312,336.7]]},{"id":"e10","from":"provision","to":"agent","kind":"flow","label":"worktree + .factory-env","route":"layer","points":[[1216,206.7],[1264,206.7],[1264,317.7],[1312,317.7]]},{"id":"e11","from":"agent","to":"gate","kind":"flow","label":"diff (self-report \u2260 done)","route":"layer","points":[[1528,336.7],[1560,336.7],[1560,465.7],[32,465.7],[32,576.7],[64,576.7]]},{"id":"e15","from":"gate","to":"evals","kind":"flow","label":"pass","route":"layer","points":[[280,576.7],[376,576.7]]},{"id":"e16","from":"evals","to":"pr","kind":"flow","label":"evidence-backed PR","route":"layer","points":[[592,576.7],[688,576.7]]},{"id":"e17","from":"pr","to":"coderabbit","kind":"flow","label":"review","route":"layer","points":[[904,589.3],[1000,589.3]]},{"id":"e18","from":"coderabbit","to":"triage","kind":"flow","label":"findings","route":"layer","points":[[1216,589.3],[1312,589.3]]},{"id":"e20","from":"triage","to":"merge","kind":"flow","label":"review green","route":"layer","points":[[1528,589.3],[1624,589.3]]},{"id":"e21","from":"pr","to":"merge","kind":"flow","label":"CI green","route":"layer","points":[[904,564.0],[936,564.0],[936,514.3],[1560,514.3],[1560,564.0],[1624,564.0]]},{"id":"e22","from":"merge","to":"remotes","kind":"flow","label":"push","verify both":null,"route":"layer","points":[[1840,576.7],[1872,576.7],[1872,699.3],[32,699.3],[32,810.3],[64,810.3]]},{"id":"e28","from":"state","to":"surfaces","kind":"flow","label":"snapshot + failure warnings","note":"The snapshot carries its own degradation signals \u2014 gate FAILED warnings","worktrees with no commits (stale locks)":null,"and \"gh returned no PRs\" when the repo cannot be resolved. state.mjs swallows shell errors (sh() returns '')":null,"so these warnings are the only failure surface.":null,"route":"layer","points":[[592,78],[688,78]]},{"id":"e29","from":"surfaces","to":"maintainer","kind":"flow","label":"board \u00b7 artifact","route":"layer","points":[[904,78],[1000,78]]},{"id":"e30","from":"orch","to":"maintainer","kind":"control","label":"escalation","batched":null,"route":"layer","points":[[904,250.3],[936,250.3],[936,103.3],[1000,103.3]]}]},"data":{"id":"data","label":"Data","blurb":"What each stage consumes and emits, and where state settles.","direction":"RIGHT","bounds":{"minX":128,"minY":8,"maxX":1656,"maxY":986.9999999999999},"nodes":[{"id":"agent","x":784,"y":52.7,"w":216,"h":76},{"id":"audit","x":784,"y":879.0,"w":216,"h":76},{"id":"brief","x":472,"y":52.7,"w":216,"h":76},{"id":"coderabbit","x":472,"y":755.4,"w":216,"h":76},{"id":"evals","x":1408,"y":200.4,"w":216,"h":76},{"id":"gate","x":1096,"y":71.7,"w":216,"h":76},{"id":"ledger","x":1096,"y":750.3,"w":216,"h":76},{"id":"lessons","x":160,"y":156,"w":216,"h":76},{"id":"linear","x":1096,"y":866.3,"w":216,"h":76},{"id":"merge","x":1096,"y":634.3,"w":216,"h":76},{"id":"orch","x":1408,"y":866.3,"w":216,"h":76},{"id":"pg","x":784,"y":284.7,"w":216,"h":76},{"id":"pr","x":160,"y":621.7,"w":216,"h":76},{"id":"provision","x":472,"y":284.7,"w":216,"h":76},{"id":"quarantine","x":784,"y":168.7,"w":216,"h":76},{"id":"remotes","x":1408,"y":634.3,"w":216,"h":76},{"id":"roles","x":160,"y":40,"w":216,"h":76},{"id":"scorecard","x":1408,"y":51.4,"w":216,"h":76},{"id":"state","x":472,"y":547.7,"w":216,"h":76},{"id":"surfaces","x":784,"y":547.7,"w":216,"h":76},{"id":"triage","x":784,"y":755.4,"w":216,"h":76}],"zones":{},"edges":[{"id":"e05","from":"lessons","to":"brief","kind":"data","label":"verbatim","every brief":null,"route":"layer","points":[[376,194],[408,194],[408,103.3],[472,103.3]]},{"id":"e06","from":"roles","to":"brief","kind":"data","label":"routed by prefix","route":"layer","points":[[376,78],[472,78]]},{"id":"e09","from":"provision","to":"pg","kind":"data","label":"DROP/CREATE ship_wt_*","route":"layer","points":[[688,322.7],[784,322.7]]},{"id":"e12","from":"pg","to":"gate","kind":"data","label":"exclusive test DB (TRUNCATEd)","route":"layer","points":[[1000,322.7],[1048,322.7],[1048,128.7],[1096,128.7]]},{"id":"e13","from":"quarantine","to":"gate","kind":"data","label":"baseline from BASE_REF","route":"layer","points":[[1000,206.7],[1032,206.7],[1032,109.7],[1096,109.7]]},{"id":"e14","from":"gate","to":"scorecard","kind":"data","label":"row per run","pass or fail":null,"route":"layer","points":[[1312,102.1],[1408,102.1]]},{"id":"e19","from":"triage","to":"ledger","kind":"data","label":"every finding","any disposition":null,"route":"layer","points":[[1000,801],[1096,801.0]]},{"id":"e25","from":"gate","to":"state","kind":"data","label":"gate-result.json","route":"layer","points":[[1312,117.3],[1360,117.3],[1360,163.4],[1768,163.4],[1768,453.7],[96,453.7],[96,585.7],[472,585.7]]},{"id":"e26","from":"scorecard","to":"state","kind":"data","label":"attempt history","route":"layer","points":[[1624,89.4],[1784,89.4],[1784,470.7],[112,470.7],[112,566.7],[472,566.7]]},{"id":"e27","from":"pr","to":"state","kind":"data","label":"gh pr list","route":"layer","points":[[376,640.7],[408,640.7],[408,604.7],[472,604.7]]},{"id":"d-brief-brief-agent","from":"brief","to":"agent","kind":"data","label":"brief","derived":true,"confidence":"resolved","note":"\u201cbrief\u201d is emitted by Brief assembly and consumed by Coding sub-agent.","route":"layer","points":[[688,90.7],[784,90.7]]},{"id":"d-diff-agent-gate","from":"agent","to":"gate","kind":"data","label":"diff","derived":true,"confidence":"resolved","note":"\u201cdiff\u201d is emitted by Coding sub-agent and consumed by gate.sh.","route":"layer","points":[[1000,90.7],[1096,90.7]]},{"id":"d-disposition-triage-ledger","from":"triage","to":"ledger","kind":"data","label":"disposition","derived":true,"confidence":"resolved","note":"\u201cdisposition\u201d is emitted by Triage and consumed by Review ledger.","route":"layer","points":[[1000,785.8],[1048,785.8],[1048,775.7],[1096,775.7]]},{"id":"d-disposition-triage-merge","from":"triage","to":"merge","kind":"data","label":"disposition","derived":true,"confidence":"resolved","note":"\u201cdisposition\u201d is emitted by Triage and consumed by Merge --no-ff.","route":"layer","points":[[1000,770.6],[1032,770.6],[1032,685.0],[1096,685.0]]},{"id":"d-evidence-evals-pr","from":"evals","to":"pr","kind":"data","label":"evidence","derived":true,"confidence":"resolved","note":"\u201cevidence\u201d is emitted by Compare-mode evals and consumed by PR + CI.","route":"layer","points":[[1624,238.4],[1752,238.4],[1752,436.7],[32,436.7],[32,659.7],[160,659.7]]},{"id":"d-finding-audit-linear","from":"audit","to":"linear","kind":"data","label":"finding","derived":true,"confidence":"resolved","note":"\u201cfinding\u201d is emitted by Audit findings and consumed by Linear backlog.","route":"layer","points":[[1000,917.0],[1096,917.0]]},{"id":"d-gate-verdict-gate-evals","from":"gate","to":"evals","kind":"data","label":"gate-verdict","derived":true,"confidence":"resolved","note":"\u201cgate-verdict\u201d is emitted by gate.sh and consumed by Compare-mode evals.","route":"layer","points":[[1312,132.5],[1344,132.5],[1344,238.4],[1408,238.4]]},{"id":"d-green-pr-pr-merge","from":"pr","to":"merge","kind":"data","label":"green-pr","derived":true,"confidence":"resolved","note":"\u201cgreen-pr\u201d is emitted by PR + CI and consumed by Merge --no-ff.","route":"layer","points":[[376,659.7],[1096,659.7]]},{"id":"d-merged-main-merge-remotes","from":"merge","to":"remotes","kind":"data","label":"merged-main","derived":true,"confidence":"resolved","note":"\u201cmerged-main\u201d is emitted by Merge --no-ff and consumed by GitLab + GitHub main.","route":"layer","points":[[1312,672.3],[1408,672.3]]},{"id":"d-new-ticket-triage-linear","from":"triage","to":"linear","kind":"data","label":"new-ticket","derived":true,"confidence":"resolved","note":"\u201cnew-ticket\u201d is emitted by Triage and consumed by Linear backlog.","route":"layer","points":[[1000,816.2],[1032,816.2],[1032,891.7],[1096,891.7]]},{"id":"d-review-finding-coderabbit-triage","from":"coderabbit","to":"triage","kind":"data","label":"review-finding","derived":true,"confidence":"resolved","note":"\u201creview-finding\u201d is emitted by CodeRabbit and consumed by Triage.","route":"layer","points":[[688,793.4],[784,793.4]]},{"id":"d-review-request-pr-coderabbit","from":"pr","to":"coderabbit","kind":"data","label":"review-request","derived":true,"confidence":"resolved","note":"\u201creview-request\u201d is emitted by PR + CI and consumed by CodeRabbit.","route":"layer","points":[[376,678.7],[408,678.7],[408,793.4],[472,793.4]]},{"id":"d-scorecard-row-gate-scorecard","from":"gate","to":"scorecard","kind":"data","label":"scorecard-row","derived":true,"confidence":"resolved","note":"\u201cscorecard-row\u201d is emitted by gate.sh and consumed by scorecard.jsonl.","route":"layer","points":[[1312,86.9],[1344,86.9],[1344,76.7],[1408,76.7]]},{"id":"d-snapshot-state-surfaces","from":"state","to":"surfaces","kind":"data","label":"snapshot","derived":true,"confidence":"resolved","note":"\u201csnapshot\u201d is emitted by state.mjs and consumed by Board surfaces.","route":"layer","points":[[688,585.7],[784,585.7]]},{"id":"d-ticket-linear-orch","from":"linear","to":"orch","kind":"data","label":"ticket","derived":true,"confidence":"resolved","note":"\u201cticket\u201d is emitted by Linear backlog and consumed by Orchestrator.","route":"layer","points":[[1312,904.3],[1408,904.3]]}]}},"viewOrder":["flow","structure","data"],"analysis":{"nodeCount":22,"edgeCount":55,"loopCount":11,"findingCount":4,"unreachable":[]}}</script>
+<script>
+"use strict";
+const S = JSON.parse(document.getElementById('system-graph-model').textContent);
+
+/* ======================================================================== */
+/* 1. design tokens -> CSS custom properties                                */
+/* ======================================================================== */
+function applyTheme(name) {
+  const t = S.tokens.themes[name], r = document.documentElement.style;
+  r.setProperty('--canvas', t.canvas);
+  r.setProperty('--surface', t.surface);
+  r.setProperty('--hairline', t.hairline);
+  r.setProperty('--ink', t.ink);
+  r.setProperty('--ink-muted', t.ink_muted);
+  r.setProperty('--hover', name === 'dark' ? 'rgba(255,255,255,.045)' : 'rgba(0,0,0,.035)');
+  for (const k of Object.keys(t.kinds)) {
+    r.setProperty('--acc-' + k, t.kinds[k].accent);
+    r.setProperty('--fill-' + k, t.kinds[k].fill);
+  }
+  for (const k of ['control', 'external', 'alert']) {
+    r.setProperty('--acc-' + k, t[k].accent);
+    r.setProperty('--fill-' + k, t[k].fill);
+  }
+  document.documentElement.dataset.theme = name;
+  document.getElementById('theme').textContent = name === 'dark' ? 'Light' : 'Dark';
+  ST.theme = name;
+}
+function pal(kind) {
+  const t = S.tokens.themes[ST.theme];
+  return t.kinds[kind] || t[kind] || t.control;
+}
+
+/* ======================================================================== */
+/* 2. state                                                                 */
+/* ======================================================================== */
+const ST = {
+  theme: 'dark',
+  ui: { rail: true, panel: true },
+  view: S.viewOrder[0],
+  focus: null,            // node id
+  loop: null,             // loop id
+  finding: null,
+  offKinds: new Set(),
+  show: { feedback: true, gaps: true, labels: true, metrics: false },
+  tx: 0, ty: 0, k: 1,
+};
+
+/* ======================================================================== */
+/* 3. shape language — one silhouette per stage kind                        */
+/*    Colour alone never carries category (CVD safety): the outline does too.*/
+/* ======================================================================== */
+const R = 10;
+function cardPath(kind, w, h) {
+  const r = R, hr = h / 2;
+  switch (kind) {
+    case 'intake':   // stadium cap on the LEFT  = work enters here
+      return `M ${hr},0 H ${w - r} a${r},${r} 0 0 1 ${r},${r} V ${h - r}
+              a${r},${r} 0 0 1 -${r},${r} H ${hr} A ${hr},${hr} 0 0 1 ${hr},0 Z`;
+    case 'release':  // stadium cap on the RIGHT = work leaves here
+      return `M ${r},0 H ${w - hr} A ${hr},${hr} 0 0 1 ${w - hr},${h} H ${r}
+              a${r},${r} 0 0 1 -${r},-${r} V ${r} a${r},${r} 0 0 1 ${r},-${r} Z`;
+    case 'gate':     // chevron in, chevron out = flow must pass a check
+      return `M 0,0 L 14,${hr} L 0,${h} H ${w - 14} L ${w},${hr} L ${w - 14},0 Z`;
+    case 'store':    // cylinder = state at rest
+      return `M 16,0 H ${w - r} a${r},${r} 0 0 1 ${r},${r} V ${h - r}
+              a${r},${r} 0 0 1 -${r},${r} H 16 A 16,${hr} 0 0 1 16,0 Z`;
+    case 'control':  // hexagon = orchestration / routing
+      return `M 15,0 H ${w - 15} L ${w},${hr} L ${w - 15},${h} H 15 L 0,${hr} Z`;
+    default:         // transform + external = plain process box
+      return `M ${r},0 H ${w - r} a${r},${r} 0 0 1 ${r},${r} V ${h - r}
+              a${r},${r} 0 0 1 -${r},${r} H ${r} a${r},${r} 0 0 1 -${r},-${r} V ${r}
+              a${r},${r} 0 0 1 ${r},-${r} Z`;
+  }
+}
+const PADX = { intake: 34, release: 20, gate: 20, store: 30, control: 20 };
+const PADR = { intake: 16, release: 36, gate: 22, store: 16, control: 22 };
+function padx(kind) { return PADX[kind] || 16; }
+function padr(kind) { return PADR[kind] || 16; }
+
+/* edge visual grammar — one style per relation, applied without exception  */
+const EDGE = {
+  flow:      { w: 2.4,  dash: '',      head: 'solid', tone: 'ink',      lab: false },
+  control:   { w: 1.75, dash: '1 5',   head: 'solid', tone: 'control',  lab: true  },
+  data:      { w: 1.75, dash: '',      head: 'open',  tone: 'release',  lab: true  },
+  feedback:  { w: 2.25, dash: '7 5',   head: 'solid', tone: 'gate',     lab: true  },
+  recursion: { w: 2.25, dash: '2 4',   head: 'solid', tone: 'store',    lab: true  },
+  violation: { w: 2.5,  dash: '',      head: 'solid', tone: 'alert',    lab: true  },
+  gap:       { w: 2,    dash: '3 6',   head: 'open',  tone: 'alert',    lab: true, ghost: .55 },
+};
+function edgeColor(kind) {
+  const t = S.tokens.themes[ST.theme], s = EDGE[kind] || EDGE.flow;
+  if (s.tone === 'ink') return t.ink_muted;
+  return (t.kinds[s.tone] || t[s.tone]).accent;
+}
+
+/* ======================================================================== */
+/* 4. svg helpers                                                           */
+/* ======================================================================== */
+const NS = 'http://www.w3.org/2000/svg';
+function el(n, a = {}, kids = []) {
+  const e = document.createElementNS(NS, n);
+  for (const k in a) if (a[k] != null) e.setAttribute(k, a[k]);
+  for (const c of [].concat(kids)) e.appendChild(c);
+  return e;
+}
+function txt(s, a = {}) { const e = el('text', a); e.textContent = s; return e; }
+function clip(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+/* the point half-way ALONG the path, not the middle array index — a label
+   pinned to an arbitrary bend point is a label in the wrong place          */
+function midpoint(pts) {
+  let total = 0; const segs = [];
+  for (let i = 1; i < pts.length; i++) {
+    const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    segs.push(d); total += d;
+  }
+  let want = total / 2;
+  for (let i = 0; i < segs.length; i++) {
+    if (want <= segs[i] || i === segs.length - 1) {
+      const t = segs[i] ? want / segs[i] : 0;
+      return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t,
+              pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t];
+    }
+    want -= segs[i];
+  }
+  return pts[0];
+}
+
+/* An edge that travels a long way backwards is not a semantic return — it is
+   the layout wrapping onto the next row. Demote it visually (Tufte: smallest
+   effective difference) so the eye does not read it as a feedback path.     */
+function isWrap(e, bounds) {
+  if (e.route !== 'layer') return false;
+  const w = bounds.maxX - bounds.minX;
+  return (e.points[0][0] - e.points[e.points.length - 1][0]) > w * 0.28;
+}
+
+/* rounded-corner polyline: keeps orthogonal routing readable without the
+   hard-corner "circuit board" look that makes bends hard to trace          */
+function roundPoly(pts, r = 9) {
+  if (pts.length < 3) return pts.map((p, i) => (i ? 'L' : 'M') + p[0] + ',' + p[1]).join(' ');
+  let d = `M ${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
+    const d1 = Math.hypot(cx - px, cy - py), d2 = Math.hypot(nx - cx, ny - cy);
+    const rr = Math.min(r, d1 / 2, d2 / 2);
+    if (rr < 1.5) { d += ` L ${cx},${cy}`; continue; }
+    d += ` L ${cx + (px - cx) / d1 * rr},${cy + (py - cy) / d1 * rr}`;
+    d += ` Q ${cx},${cy} ${cx + (nx - cx) / d2 * rr},${cy + (ny - cy) / d2 * rr}`;
+  }
+  const L = pts[pts.length - 1];
+  return d + ` L ${L[0]},${L[1]}`;
+}
+
+/* ======================================================================== */
+/* 5. render                                                                */
+/* ======================================================================== */
+const world = document.getElementById('world');
+const defs = document.getElementById('defs');
+
+function markers() {
+  defs.textContent = '';
+  const kinds = Object.keys(EDGE);
+  for (const k of kinds) {
+    const c = edgeColor(k), st = EDGE[k];
+    const head = st.head === 'open'
+      ? el('path', { d: 'M1,1 L9,5 L1,9', fill: 'none', stroke: c, 'stroke-width': 1.6,
+                     'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
+      : el('path', { d: 'M1,1.5 L9.5,5 L1,8.5 Z', fill: c });
+    defs.appendChild(el('marker', {
+      id: 'a-' + k, viewBox: '0 0 11 10', refX: st.head === 'open' ? 9.5 : 9.8,
+      refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse',
+      markerUnits: 'userSpaceOnUse',
+    }, [head]));
+  }
+  // soft shadow for the loop / finding chips
+  const f = el('filter', { id: 'chipShadow', x: '-40%', y: '-40%', width: '180%', height: '180%' });
+  f.appendChild(el('feDropShadow', { dx: 0, dy: 1, stdDeviation: 1.6, 'flood-opacity': .35 }));
+  defs.appendChild(f);
+}
+
+/* off-page connector: a short stub plus a chip naming the far end.
+   dir = +1 leaving the node, -1 arriving at it.                              */
+function stub(g, at, toward, farLabel, colour, dir) {
+  const t = S.tokens.themes[ST.theme];
+  let dx = toward[0] - at[0], dy = toward[1] - at[1];
+  const len = Math.hypot(dx, dy) || 1;
+  dx /= len; dy /= len;
+  const end = [at[0] + dx * 26, at[1] + dy * 26];
+  g.appendChild(el('path', {
+    d: `M ${at[0]},${at[1]} L ${end[0]},${end[1]}`, stroke: colour,
+    'stroke-width': 1.6, 'stroke-linecap': 'round', fill: 'none', opacity: .8,
+    'marker-end': dir < 0 ? null : 'url(#a-flow)',
+  }));
+  const s = (dir > 0 ? '↦ ' : '') + clip(farLabel, 16) + (dir < 0 ? ' ↦' : '');
+  const w = 12 + s.length * 5.5;
+  const cx = end[0] + dx * (w / 2 + 4), cy = end[1] + dy * 11;
+  g.appendChild(el('rect', { x: cx - w / 2, y: cy - 9, width: w, height: 18, rx: 9,
+    fill: t.surface, stroke: t.hairline, 'stroke-width': 1 }));
+  g.appendChild(txt(s, { x: cx, y: cy + 3.5, class: 'elabel', fill: t.ink_muted,
+    'text-anchor': 'middle' }));
+}
+
+function view() { return S.views[ST.view]; }
+
+function visibleNode(id) {
+  const n = S.nodes[id];
+  if (ST.offKinds.has(n.kind || 'transform')) return false;
+  return true;
+}
+function visibleEdge(e) {
+  if (!ST.show.feedback && (e.kind === 'feedback' || e.kind === 'recursion')) return false;
+  if (!ST.show.gaps && e.kind === 'gap') return false;
+  return visibleNode(e.from) && visibleNode(e.to);
+}
+
+function render() {
+  const v = view();
+  world.textContent = '';
+  markers();
+
+  const gZone = el('g'), gLane = el('g'), gEdge = el('g'), gNode = el('g'), gTop = el('g');
+  world.append(gZone, gEdge, gLane, gNode, gTop);
+  const t = S.tokens.themes[ST.theme];
+
+  /* --- zones: common region is the strongest grouping cue there is ------ */
+  for (const [zid, r] of Object.entries(v.zones)) {
+    const z = S.zones[zid] || { label: zid };
+    const g = el('g', { class: 'zone', 'data-zone': zid });
+    g.appendChild(el('rect', {
+      x: r.x, y: r.y, width: r.w, height: r.h, rx: 16,
+      fill: t.surface, stroke: t.hairline, 'stroke-width': 1,
+    }));
+    g.appendChild(el('rect', { x: r.x, y: r.y, width: r.w, height: 3, rx: 1.5,
+      fill: z.accent ? pal(z.accent).accent : t.hairline, opacity: .9 }));
+    g.appendChild(txt(z.label || zid, {
+      x: r.x + 18, y: r.y + 24, class: 'zlabel', fill: t.ink_muted,
+    }));
+    if (z.note) g.appendChild(txt(clip(z.note, 64), {
+      x: r.x + 18, y: r.y + 39, class: 'nsub', fill: t.ink_muted, opacity: .75 }));
+    gZone.appendChild(g);
+  }
+
+  /* --- edges ----------------------------------------------------------- */
+  const RETURN_KINDS = new Set(['feedback', 'recursion', 'gap']);
+  const returnCount = v.edges.filter(
+    e => RETURN_KINDS.has(e.kind) && visibleEdge(e)).length;
+  const softenReturns = returnCount > 5;
+
+  for (const e of v.edges) {
+    if (!visibleEdge(e)) continue;
+    const st = EDGE[e.kind] || EDGE.flow, c = edgeColor(e.kind || 'flow');
+    const wrap = isWrap(e, v.bounds);
+    const soft = softenReturns && RETURN_KINDS.has(e.kind);
+    const g = el('g', {
+      class: 'edge' + (soft ? ' soft' : ''), 'data-edge': e.id,
+      'data-from': e.from, 'data-to': e.to,
+      'data-loop': e.loop || '', opacity: st.ghost || 1,
+    });
+    const P = e.points;
+
+    /* A wrapped row's continuation edge is a layout artefact, not a semantic
+       long-distance link. Drawn in full it becomes a giant bracket that reads
+       as a container. Draw it as an off-page connector instead: a short stub at
+       each end, labelled with where it goes. */
+    if (wrap) {
+      gEdge.appendChild(g);
+      stub(g, P[0], P[1] || P[0], S.nodes[e.to].label, c, 1);
+      stub(g, P[P.length - 1], P[P.length - 2] || P[0], S.nodes[e.from].label, c, -1);
+      continue;
+    }
+    const d = e.route === 'arc'
+      ? `M ${P[0][0]},${P[0][1]} C ${P[1][0]},${P[1][1]} ${P[2][0]},${P[2][1]} ${P[3][0]},${P[3][1]}`
+      : roundPoly(P, e.route === 'layer' ? 9 : 14);
+    g.appendChild(el('path', { d, fill: 'none', stroke: 'transparent',
+      'stroke-width': 14, class: 'hit' }));
+    g.appendChild(el('path', {
+      d, fill: 'none', stroke: c, 'stroke-width': wrap ? 1.25 : st.w,
+      'stroke-dasharray': st.dash || null, 'stroke-linecap': 'round',
+      'stroke-linejoin': 'round', 'marker-end': `url(#a-${e.kind || 'flow'})`,
+      'vector-effect': 'non-scaling-stroke',
+    }));
+    (e.route === 'layer' ? gEdge : gLane).appendChild(g);
+
+    /* label / loop chip half-way along the path */
+    const showLab = ST.show.labels && st.lab && !wrap;
+    const [mx, my] = e.labelAt || midpoint(e.points);
+    if (e.loop) {
+      const lp = S.loops.find(l => l.id === e.loop);
+      const lc = lp && lp.type === 'balancing' ? t.kinds.release.accent
+               : lp && lp.type === 'reinforcing' ? t.kinds.gate.accent : t.ink_muted;
+      const label = e.loop + (e.polarity ? ' ' + e.polarity : '');
+      const w = 16 + label.length * 6.4;
+      const cg = el('g', { class: 'edge' + (soft ? ' soft' : ''),
+                           'data-loop': e.loop, 'data-edge': e.id,
+                           filter: 'url(#chipShadow)' });
+      cg.appendChild(el('rect', { x: mx - w / 2, y: my - 10, width: w, height: 20,
+        rx: 10, fill: t.surface, stroke: lc, 'stroke-width': 1.4 }));
+      cg.appendChild(txt(label, { x: mx, y: my + 4, class: 'loopchip', fill: lc,
+        'text-anchor': 'middle' }));
+      gTop.appendChild(cg);
+    } else if (showLab && e.label) {
+      const s = clip(e.label, 30), w = 12 + s.length * 5.7;
+      const cg = el('g', { class: 'edge', 'data-edge': e.id });
+      cg.appendChild(el('rect', { x: mx - w / 2, y: my - 9, width: w, height: 18,
+        rx: 5, fill: t.surface, stroke: t.hairline, 'stroke-width': 1, opacity: .96 }));
+      cg.appendChild(txt(s, { x: mx, y: my + 3.5, class: 'elabel',
+        fill: st.tone === 'ink' ? t.ink_muted : c, 'text-anchor': 'middle' }));
+      gTop.appendChild(cg);
+    }
+  }
+
+  /* --- nodes ----------------------------------------------------------- */
+  const findingNodes = new Set();
+  for (const f of S.findings) for (const n of (f.nodes || [])) findingNodes.add(n);
+  /* badge the stages work actually RETURNS to — not every node that happens to
+     sit inside some large cycle, which in a real factory is nearly all of them */
+  const revisited = new Set(v.edges
+    .filter(e => e.kind === 'feedback' || e.kind === 'recursion')
+    .map(e => e.to));
+
+  for (const nr of v.nodes) {
+    const n = S.nodes[nr.id];
+    if (!n || !visibleNode(nr.id)) continue;
+    const kind = n.kind || 'transform';
+    const c = pal(kind);
+    const g = el('g', { class: 'node', 'data-node': nr.id, 'data-kind': kind,
+                        transform: `translate(${nr.x},${nr.y})` });
+    g.appendChild(el('path', {
+      class: 'card', d: cardPath(kind, nr.w, nr.h), fill: c.fill,
+      stroke: c.accent, 'stroke-width': 1.5,
+      'stroke-dasharray': kind === 'external' ? '4 3' : null,
+    }));
+    const px = padx(kind), pr = padr(kind);
+    const inner = nr.w - px - pr;
+    g.appendChild(txt(n.kindLabel || kind, { x: px, y: 17, class: 'nkind', fill: c.accent }));
+    g.appendChild(txt(clip(n.label, Math.floor(inner / 7.1)),
+      { x: px, y: 36, class: 'ntitle', fill: c.text }));
+    if (n.subtitle) g.appendChild(txt(clip(n.subtitle, Math.floor(inner / 5.6)),
+      { x: px, y: 54, class: 'nsub', fill: c.text, opacity: .68 }));
+
+    /* badges: work returns here / an open question touches this stage.
+       Redundant with the side panels on purpose — the diagram should be
+       readable without them. */
+    let bx = nr.w - pr;
+    if (findingNodes.has(nr.id)) {
+      bx -= 15;
+      g.appendChild(el('circle', { cx: bx, cy: 13, r: 7.5,
+        fill: S.tokens.themes[ST.theme].alert.fill,
+        stroke: S.tokens.themes[ST.theme].alert.accent, 'stroke-width': 1.2 }));
+      g.appendChild(txt('!', { x: bx, y: 17, class: 'badge',
+        fill: S.tokens.themes[ST.theme].alert.accent, 'text-anchor': 'middle' }));
+    }
+    if (revisited.has(nr.id)) {
+      bx -= 17;
+      g.appendChild(txt('↻', { x: bx, y: 18, class: 'badge',
+        fill: c.accent, 'text-anchor': 'middle' }));
+    }
+    if (ST.show.metrics && n.metrics) {
+      const m = n.metrics;
+      g.appendChild(txt(`in ${m.fanIn ?? 0} · out ${m.fanOut ?? 0}` +
+        (m.instability != null ? ` · I ${m.instability}` : ''),
+        { x: px, y: nr.h + 13, class: 'nsub', fill: S.tokens.themes[ST.theme].ink_muted }));
+    }
+    gNode.appendChild(g);
+  }
+
+  applyFocus();
+  fit();
+}
+
+/* ======================================================================== */
+/* 6. focus — figure/ground, not deletion                                   */
+/* ======================================================================== */
+function applyFocus() {
+  const v = view();
+  const keep = new Set();
+  if (ST.focus) {
+    keep.add(ST.focus);
+    for (const e of v.edges) {
+      if (e.from === ST.focus) keep.add(e.to);
+      if (e.to === ST.focus) keep.add(e.from);
+    }
+  } else if (ST.loop) {
+    const l = S.loops.find(x => x.id === ST.loop);
+    if (l) l.members.forEach(m => keep.add(m));
+  } else if (ST.finding) {
+    const f = S.findings.find(x => x.id === ST.finding);
+    if (f) (f.nodes || []).forEach(m => keep.add(m));
+  }
+  const active = keep.size > 0;
+  for (const g of world.querySelectorAll('.node')) {
+    const id = g.dataset.node;
+    g.classList.toggle('dim', active && !keep.has(id));
+    g.classList.toggle('sel', id === ST.focus);
+  }
+  for (const g of world.querySelectorAll('.edge')) {
+    const inLoop = ST.loop && g.dataset.loop === ST.loop;
+    const touches = keep.has(g.dataset.from) && keep.has(g.dataset.to) &&
+      (!ST.focus || g.dataset.from === ST.focus || g.dataset.to === ST.focus);
+    g.classList.toggle('dim', active && !(inLoop || touches));
+    g.classList.toggle('lit', active && (inLoop || touches));
+  }
+  for (const g of world.querySelectorAll('.zone')) g.classList.toggle('dim', active);
+}
+
+/* ======================================================================== */
+/* 7. pan + zoom                                                            */
+/* ======================================================================== */
+const stage = document.getElementById('stage');
+function xform() { world.setAttribute('transform', `translate(${ST.tx},${ST.ty}) scale(${ST.k})`); }
+function fit(pad = 40) {
+  const b = view().bounds, r = stage.getBoundingClientRect();
+  const w = b.maxX - b.minX, h = b.maxY - b.minY;
+  ST.k = Math.min((r.width - pad * 2) / w, (r.height - pad * 2) / h, 1.35);
+  ST.tx = (r.width - w * ST.k) / 2 - b.minX * ST.k;
+  ST.ty = (r.height - h * ST.k) / 2 - b.minY * ST.k;
+  xform();
+}
+function zoomAt(f, cx, cy) {
+  const k2 = Math.max(.12, Math.min(4, ST.k * f));
+  ST.tx = cx - (cx - ST.tx) * (k2 / ST.k);
+  ST.ty = cy - (cy - ST.ty) * (k2 / ST.k);
+  ST.k = k2; xform();
+}
+stage.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const r = stage.getBoundingClientRect();
+  zoomAt(Math.exp(-ev.deltaY * 0.0016), ev.clientX - r.left, ev.clientY - r.top);
+}, { passive: false });
+let drag = null;
+stage.addEventListener('pointerdown', ev => {
+  if (ev.target.closest('.node')) return;
+  drag = { x: ev.clientX - ST.tx, y: ev.clientY - ST.ty };
+  stage.classList.add('drag'); stage.setPointerCapture(ev.pointerId);
+});
+stage.addEventListener('pointermove', ev => {
+  if (drag) { ST.tx = ev.clientX - drag.x; ST.ty = ev.clientY - drag.y; xform(); }
+  const g = ev.target.closest('.node, .edge');
+  if (g) showTip(g, ev); else hideTip();
+});
+addEventListener('pointerup', () => { drag = null; stage.classList.remove('drag'); });
+addEventListener('resize', () => fit());
+
+const tip = document.getElementById('tip');
+function showTip(g, ev) {
+  let b = '', s = '';
+  if (g.dataset.node) {
+    const n = S.nodes[g.dataset.node];
+    b = n.label; s = [n.kind, n.subtitle].filter(Boolean).join(' · ');
+  } else {
+    const e = view().edges.find(x => x.id === g.dataset.edge);
+    if (!e) return hideTip();
+    b = `${S.nodes[e.from].label} → ${S.nodes[e.to].label}`;
+    s = [e.kind, e.label, e.loop && `loop ${e.loop}`,
+         e.confidence === 'heuristic' && 'inferred'].filter(Boolean).join(' · ');
+  }
+  tip.innerHTML = '';
+  const bb = document.createElement('b'); bb.textContent = b;
+  const ss = document.createElement('span'); ss.textContent = s;
+  tip.append(bb, ss);
+  const r = stage.getBoundingClientRect();
+  tip.style.left = Math.min(ev.clientX - r.left + 14, r.width - 300) + 'px';
+  tip.style.top = (ev.clientY - r.top + 14) + 'px';
+  tip.classList.add('on');
+}
+function hideTip() { tip.classList.remove('on'); }
+
+stage.addEventListener('click', ev => {
+  const n = ev.target.closest('.node');
+  if (n) { select(n.dataset.node); return; }
+  const e = ev.target.closest('.edge');
+  if (e && e.dataset.loop) { ST.focus = null; ST.finding = null; ST.loop = e.dataset.loop; }
+  else if (!e) { ST.focus = ST.loop = ST.finding = null; }
+  applyFocus(); paintPanel();
+});
+
+function select(id) { ST.focus = id; ST.loop = null; ST.finding = null; applyFocus(); paintPanel(); }
+
+/* ======================================================================== */
+/* 8. panels                                                                */
+/* ======================================================================== */
+function h(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function sec(title) { const d = h('div', 'sec'); d.appendChild(h('h2', null, title)); return d; }
+
+function paintPanel() {
+  const p = document.getElementById('panel');
+  p.textContent = '';
+  if (ST.focus) p.appendChild(inspector(ST.focus));
+  else p.appendChild(overview());
+  p.appendChild(loopsPanel());
+  p.appendChild(findingsPanel());
+}
+
+function isCode() { return S.meta.profile === 'code'; }
+
+/* Build a click-through URL for a source ref. GitHub/GitLab-style repo URL +
+   branch when the model provides them; otherwise no link, just the path. */
+function srcUrl(src) {
+  const repo = (S.meta.repoUrl || '').replace(/\/+$/, '');
+  if (!repo) return null;
+  const branch = S.meta.branch || 'main';
+  const frag = src.lines ? `#L${src.lines[0]}` +
+    (src.lines[1] ? `-L${src.lines[1]}` : '') : '';
+  const sep = repo.includes('gitlab') ? '/-/blob/' : '/blob/';
+  return `${repo}${sep}${branch}/${src.path}${frag}`;
+}
+
+function overview() {
+  const d = sec('This diagram');
+  const a = S.analysis || {};
+  const dl = h('dl', 'kv');
+  const rows = [[isCode() ? 'Modules' : 'Stages', a.nodeCount],
+                [isCode() ? 'Dependencies' : 'Connections', a.edgeCount],
+                [isCode() ? 'Cycles' : 'Loops', a.loopCount],
+                ['Open questions', a.findingCount]];
+  for (const [k, val] of rows) { dl.appendChild(h('dt', null, k)); dl.appendChild(h('dd', null, val ?? '—')); }
+  d.appendChild(dl);
+  d.appendChild(h('p', null, view().blurb || ''));
+  d.appendChild(h('p', null, isCode()
+    ? 'Click any module to trace what it depends on and what depends on it.'
+    : 'Click any stage to trace its immediate neighbourhood. Click a loop badge to isolate a cycle.'));
+  return d;
+}
+
+function inspector(id) {
+  const n = S.nodes[id], v = view(), c = pal(n.kind || 'transform');
+  const d = h('div', 'sec insp');
+  const k = h('div', 'kind', n.kindLabel || n.kind || 'transform'); k.style.color = c.accent;
+  d.append(k, h('h3', null, n.label));
+  if (n.subtitle) d.appendChild(h('div', 'st', n.subtitle));
+  if (n.detail) d.appendChild(h('p', null, n.detail));
+
+  const m = n.metrics || {};
+  const dl = h('dl', 'kv');
+  const rows = [['Zone', (S.zones[n.zone] || {}).label || n.zone || '—'],
+                ['Fan-in', m.fanIn ?? '—'], ['Fan-out', m.fanOut ?? '—'],
+                ['Instability', m.instability ?? '—']];
+  if (n.emits && n.emits.length) rows.push(['Emits', n.emits.join(', ')]);
+  if (n.consumes && n.consumes.length) rows.push(['Consumes', n.consumes.join(', ')]);
+  if (n.owner) rows.push(['Owner', n.owner]);
+  for (const [a, b] of rows) { dl.appendChild(h('dt', null, a)); dl.appendChild(h('dd', null, b)); }
+  d.appendChild(dl);
+
+  /* Source anchors — the graph is a surface to answer from, and this is the
+     click-through that lets any claim on this card be checked against code. */
+  if (n.sources && n.sources.length) {
+    const s = sec('Source');
+    const wrap = h('div', 'rel');
+    for (const src of n.sources) {
+      const label = src.path + (src.symbol ? ` · ${src.symbol}` : '')
+        + (src.lines ? `:${src.lines[0]}${src.lines[1] ? '–' + src.lines[1] : ''}` : '');
+      const url = srcUrl(src);
+      let row;
+      if (url) {
+        row = document.createElement('a');
+        row.href = url; row.target = '_blank'; row.rel = 'noopener';
+        row.className = 'srclink';
+      } else {
+        row = h('div', 'srclink');
+      }
+      const code = document.createElement('code'); code.textContent = label;
+      row.appendChild(code);
+      if (src.note) row.appendChild(h('span', 'ds', ' — ' + src.note));
+      wrap.appendChild(row);
+    }
+    s.appendChild(wrap); d.appendChild(s);
+  }
+
+  const ins = v.edges.filter(e => e.to === id), outs = v.edges.filter(e => e.from === id);
+  for (const [title, list, arrow, other] of
+       [[isCode() ? 'Depended on by' : 'Upstream', ins, '←', 'from'],
+        [isCode() ? 'Depends on' : 'Downstream', outs, '→', 'to']]) {
+    if (!list.length) continue;
+    const s = sec(title), wrap = h('div', 'rel');
+    for (const e of list) {
+      const b = h('button');
+      b.append(h('span', 'ar', arrow));
+      const lab = h('span', null, S.nodes[e[other]].label +
+        (e.label ? ' · ' + e.label : ''));
+      lab.style.color = e.kind === 'flow' ? '' : edgeColor(e.kind);
+      b.appendChild(lab);
+      b.onclick = () => select(e[other]);
+      wrap.appendChild(b);
+    }
+    s.appendChild(wrap); d.appendChild(s);
+  }
+  return d;
+}
+
+function loopsPanel() {
+  const d = sec(`${isCode() ? 'Cycles' : 'Loops'} (${S.loops.length})`);
+  if (!S.loops.length) {
+    d.appendChild(h('div', 'empty', isCode()
+      ? 'No circular dependency anywhere in this graph. Every module can be built, tested and reasoned about on its own.'
+      : 'No cycle in this model. For a process that is meant to learn, that is itself a finding — see below.'));
+    return d;
+  }
+  for (const l of S.loops) {
+    const b = h('button', 'item' + (ST.loop === l.id ? ' on' : ''));
+    const hd = h('div', 'hd');
+    const cls = l.type === 'balancing' ? 'B' : l.type === 'reinforcing' ? 'R' : 'U';
+    hd.append(h('span', 'chip ' + cls, l.id), h('span', 'ti', l.label));
+    b.appendChild(hd);
+    b.appendChild(h('div', 'bd',
+      (isCode() ? 'Circular dependency. ' :
+       l.type === 'reinforcing' ? 'Reinforcing — compounds. ' :
+       l.type === 'balancing' ? 'Balancing — seeks a goal. ' :
+       'Polarity unlabelled — cannot tell if it converges. ') +
+      l.members.map(m => (S.nodes[m] || {}).label || m).join(' → ')));
+    b.onclick = () => { ST.loop = ST.loop === l.id ? null : l.id; ST.focus = null; ST.finding = null; applyFocus(); paintPanel(); };
+    d.appendChild(b);
+  }
+  return d;
+}
+
+function findingsPanel() {
+  const d = sec(`Open questions (${S.findings.length})`);
+  if (!S.findings.length) {
+    d.appendChild(h('div', 'empty', 'No structural gaps detected.'));
+    return d;
+  }
+  for (const f of S.findings) {
+    const b = h('button', 'item' + (ST.finding === f.id ? ' on' : ''));
+    const hd = h('div', 'hd');
+    const sev = f.severity === 'high' ? 'hi' : f.severity === 'medium' ? 'md' : 'lo';
+    hd.append(h('span', 'chip ' + sev, f.severity), h('span', 'ti', f.title));
+    b.append(hd, h('div', 'bd', f.detail || ''));
+    b.onclick = () => { ST.finding = ST.finding === f.id ? null : f.id; ST.focus = null; ST.loop = null; applyFocus(); paintPanel(); };
+    d.appendChild(b);
+  }
+  return d;
+}
+
+/* ======================================================================== */
+/* 9. rail                                                                  */
+/* ======================================================================== */
+function buildRail() {
+  const vs = document.getElementById('views');
+  S.viewOrder.forEach((id, i) => {
+    const v = S.views[id];
+    const b = h('button');
+    b.setAttribute('aria-pressed', String(id === ST.view));
+    const top = h('div'); top.style.display = 'flex'; top.style.width = '100%'; top.style.alignItems = 'baseline';
+    top.append(h('span', 'vk', v.label));
+    const kb = document.createElement('kbd'); kb.textContent = String(i + 1); top.appendChild(kb);
+    b.append(top, h('div', 'vb', v.blurb || ''));
+    b.onclick = () => setView(id);
+    vs.appendChild(b);
+  });
+
+  const tg = document.getElementById('toggles');
+  const opts = [['feedback', 'Feedback & recursion'], ['gaps', 'Gaps & missing links'],
+                ['labels', 'Edge labels'], ['metrics', 'Coupling metrics']];
+  for (const [key, label] of opts) {
+    const l = h('label', 'toggle');
+    const i = document.createElement('input'); i.type = 'checkbox'; i.checked = ST.show[key];
+    i.onchange = () => { ST.show[key] = i.checked; render(); paintPanel(); };
+    l.append(i, h('span', null, label));
+    tg.appendChild(l);
+  }
+
+  buildLegend();
+}
+
+/* The legend is generated from what is actually on the canvas, in the vocabulary
+   the author used. A legend listing kinds the diagram does not contain is noise;
+   a legend saying "transform" when every card says "module" is worse.          */
+const KIND_ORDER = ['intake', 'transform', 'gate', 'store', 'release', 'control', 'external'];
+const MEANING = {
+  process: {
+    intake: 'Where work enters', transform: 'Work is done, value is added',
+    gate: 'A decision, check, or quality gate', store: 'Durable state or an artifact at rest',
+    release: 'Where work leaves', control: 'Routes, schedules, or orchestrates',
+    external: 'Outside the boundary — context only',
+  },
+  code: {
+    intake: 'Entry point — requests and events arrive', transform: 'Does the work',
+    gate: 'Validates, authorises, or filters', store: 'Persistence, cache, or queue',
+    release: 'Public surface — what others consume', control: 'Routes, wires, or schedules',
+    external: 'Third-party — outside this codebase',
+  },
+};
+const EDGE_MEANING = {
+  process: {
+    flow: 'Work moves forward', control: 'Triggers or schedules',
+    data: 'Data is read or written', feedback: 'Result returns upstream',
+    recursion: 'The stage re-enters itself', violation: 'Breaks a stated rule',
+    gap: 'A link that should exist and does not',
+  },
+  code: {
+    flow: 'Depends on / calls', control: 'Registers, wires, or dispatches',
+    data: 'Reads or writes shared state', feedback: 'Callback or inversion of control',
+    recursion: 'Mutually or self-recursive', violation: 'Breaks the layering contract',
+    gap: 'A dependency that should exist and does not',
+  },
+};
+
+function buildLegend() {
+  const prof = MEANING[S.meta.profile] ? S.meta.profile : 'process';
+  const ln = document.getElementById('legNodes');
+  const le = document.getElementById('legEdges');
+  ln.textContent = ''; le.textContent = '';
+
+  const present = new Map();          // canonical kind -> label the author used
+  for (const id of Object.keys(S.nodes)) {
+    const n = S.nodes[id];
+    if (!present.has(n.kind)) present.set(n.kind, n.kindLabel || n.kind);
+  }
+  for (const k of KIND_ORDER)
+    if (present.has(k)) addLegendNode(ln, k, MEANING[prof][k], present.get(k));
+
+  const usedEdges = new Set();
+  for (const v of Object.values(S.views))
+    for (const e of v.edges) usedEdges.add(e.kind || 'flow');
+  for (const k of Object.keys(EDGE))
+    if (usedEdges.has(k)) addLegendEdge(le, k, EDGE_MEANING[prof][k]);
+}
+
+function addLegendNode(host, kind, desc, label) {
+  const row = h('div', 'lg'); row.dataset.kind = kind;
+  const c = pal(kind);
+  const s = el('svg', { width: 40, height: 20, viewBox: '0 0 40 20' });
+  s.appendChild(el('path', { d: cardPath(kind, 40, 20), fill: c.fill, stroke: c.accent,
+    'stroke-width': 1.4, 'stroke-dasharray': kind === 'external' ? '3 2' : null }));
+  row.appendChild(s);
+  const w = h('div');
+  const nm = h('div', 'nm', label || kind); nm.style.color = c.accent;
+  w.append(nm, h('div', 'ds', desc || ''));
+  row.appendChild(w);
+  row.onclick = () => {
+    ST.offKinds.has(kind) ? ST.offKinds.delete(kind) : ST.offKinds.add(kind);
+    row.dataset.off = ST.offKinds.has(kind) ? '1' : '';
+    render();
+  };
+  host.appendChild(row);
+}
+function addLegendEdge(host, kind, desc) {
+  const row = h('div', 'lg');
+  const st = EDGE[kind], c = edgeColor(kind);
+  const s = el('svg', { width: 40, height: 20, viewBox: '0 0 40 20' });
+  s.appendChild(el('path', { d: 'M2,10 H 34', stroke: c, 'stroke-width': st.w,
+    'stroke-dasharray': st.dash || null, 'stroke-linecap': 'round',
+    'marker-end': `url(#a-${kind})`, opacity: st.ghost || 1, fill: 'none' }));
+  row.appendChild(s);
+  const w = h('div');
+  const nm = h('div', 'nm', kind); nm.style.color = c;
+  w.append(nm, h('div', 'ds', desc || ''));
+  row.appendChild(w);
+  host.appendChild(row);
+}
+
+function setView(id) {
+  ST.view = id; ST.focus = ST.loop = ST.finding = null;
+  for (const b of document.querySelectorAll('#views button'))
+    b.setAttribute('aria-pressed', String(b.querySelector('.vk').textContent === S.views[id].label));
+  render(); paintPanel();
+}
+
+/* ======================================================================== */
+/* 10. boot                                                                 */
+/* ======================================================================== */
+document.getElementById('ttl').textContent = S.meta.title || 'Factory Graph';
+document.getElementById('sub').textContent = S.meta.subtitle || '';
+document.getElementById('src').textContent = S.meta.source || '';
+document.getElementById('theme').onclick = () => {
+  applyTheme(ST.theme === 'dark' ? 'light' : 'dark');
+  render(); paintPanel(); buildLegend();
+};
+/* The same model the diagram renders, as prose. This is the handoff format:
+   paste it to a colleague or an LLM and they know what the diagram knows —
+   including detail text and findings that are only hover-visible on screen. */
+function briefText() {
+  const code = isCode();
+  const L = [];
+  const push = (...a) => L.push(...a);
+  push(`# ${S.meta.title || 'System graph'}`);
+  const sub = [S.meta.subtitle, S.meta.source,
+               `profile: ${S.meta.profile || 'process'}`].filter(Boolean);
+  if (sub.length) push(sub.join(' · '));
+  const A = S.analysis || {};
+  push('', `${A.nodeCount ?? Object.keys(S.nodes).length} ${code ? 'modules' : 'stages'} · ` +
+       `${A.edgeCount ?? '?'} connections · ${(S.loops || []).length} ${code ? 'cycles' : 'loops'} · ` +
+       `${(S.findings || []).length} open questions`, '');
+
+  push(`## ${code ? 'Modules' : 'Stages'}`);
+  const byZone = {};
+  for (const n of Object.values(S.nodes))
+    (byZone[n.zone || ''] = byZone[n.zone || ''] || []).push(n);
+  for (const [z, ns] of Object.entries(byZone)) {
+    const zl = (S.zones[z] || {}).label;
+    if (zl) push('', `### ${zl}`);
+    for (const n of ns) {
+      const m = n.metrics || {};
+      const bits = [n.subtitle,
+        m.fanIn != null && `fan-in ${m.fanIn}, fan-out ${m.fanOut}` +
+          (m.instability != null ? `, instability ${m.instability}` : ''),
+        m.loc && `${m.loc} loc`,
+        n.emits && n.emits.length && `emits: ${n.emits.join(', ')}`,
+        n.consumes && n.consumes.length && `consumes: ${n.consumes.join(', ')}`,
+      ].filter(Boolean).join(' · ');
+      push(`- **${n.label}** [${n.kindLabel || n.kind}]${bits ? ' — ' + bits : ''}`);
+      if (n.detail) push(`  ${String(n.detail).trim().replace(/\s+/g, ' ')}`);
+      if (n.sources && n.sources.length)
+        push(`  source: ${n.sources.map(x => x.path + (x.symbol ? '·' + x.symbol : '')).join(', ')}`);
+    }
+  }
+
+  push('', '## Connections');
+  const seen = new Set();
+  for (const v of Object.values(S.views)) for (const e of v.edges) {
+    if (seen.has(e.id)) continue;
+    seen.add(e.id);
+    const a = (S.nodes[e.from] || {}).label || e.from;
+    const b = (S.nodes[e.to] || {}).label || e.to;
+    const tags = [e.kind !== 'flow' && e.kind, e.label, e.polarity && `polarity ${e.polarity}`,
+      e.loop && `loop ${e.loop}`, e.confidence === 'heuristic' && 'inferred'].filter(Boolean);
+    const pre = e.kind === 'gap' ? 'MISSING LINK (modelled absence): ' : '';
+    push(`- ${pre}${a} → ${b}${tags.length ? ` (${tags.join(', ')})` : ''}`);
+    if (e.kind === 'gap' && e.note) push(`  ${String(e.note).trim().replace(/\s+/g, ' ')}`);
+  }
+
+  if ((S.loops || []).length) {
+    push('', `## ${code ? 'Cycles' : 'Loops'}`);
+    for (const l of S.loops) {
+      push(`- **${l.id}** (${l.type}): ` +
+           l.members.map(m => (S.nodes[m] || {}).label || m).join(' → '));
+      if (l.note) push(`  ${l.note}`);
+    }
+  }
+
+  if ((S.findings || []).length) {
+    push('', '## Open questions (analyzer findings)');
+    for (const f of S.findings) {
+      push(`- [${f.severity}] **${f.title}**`);
+      if (f.detail) push(`  ${String(f.detail).trim().replace(/\s+/g, ' ')}`);
+    }
+  }
+  return L.join('\n');
+}
+window.briefText = briefText;
+document.getElementById('brief').onclick = async () => {
+  const text = briefText(), btn = document.getElementById('brief');
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); ta.remove();
+  }
+  btn.textContent = 'Copied';
+  setTimeout(() => { btn.textContent = 'Copy brief'; }, 1400);
+};
+
+function setChrome() {
+  const app = document.querySelector('.app');
+  app.classList.toggle('no-rail', !ST.ui.rail);
+  app.classList.toggle('no-panel', !ST.ui.panel);
+  document.getElementById('tglRail').setAttribute('aria-pressed', String(ST.ui.rail));
+  document.getElementById('tglPanel').setAttribute('aria-pressed', String(ST.ui.panel));
+  fit();      // the canvas just changed size — refit, don't leave dead space
+}
+document.getElementById('tglRail').onclick = () => { ST.ui.rail = !ST.ui.rail; setChrome(); };
+document.getElementById('tglPanel').onclick = () => { ST.ui.panel = !ST.ui.panel; setChrome(); };
+document.getElementById('fit').onclick = () => fit();
+document.getElementById('zin').onclick = () => { const r = stage.getBoundingClientRect(); zoomAt(1.25, r.width / 2, r.height / 2); };
+document.getElementById('zout').onclick = () => { const r = stage.getBoundingClientRect(); zoomAt(.8, r.width / 2, r.height / 2); };
+document.getElementById('clr').onclick = () => { ST.focus = ST.loop = ST.finding = null; applyFocus(); paintPanel(); };
+addEventListener('keydown', ev => {
+  if (ev.target.tagName === 'INPUT') return;
+  const i = parseInt(ev.key, 10);
+  if (i >= 1 && i <= S.viewOrder.length) setView(S.viewOrder[i - 1]);
+  else if (ev.key === 'f') { ST.show.feedback = !ST.show.feedback; document.querySelectorAll('#toggles input')[0].checked = ST.show.feedback; render(); }
+  else if (ev.key === 'g') { ST.show.gaps = !ST.show.gaps; document.querySelectorAll('#toggles input')[1].checked = ST.show.gaps; render(); }
+  else if (ev.key === '0') fit();
+  else if (ev.key === '[') { ST.ui.rail = !ST.ui.rail; setChrome(); }
+  else if (ev.key === ']') { ST.ui.panel = !ST.ui.panel; setChrome(); }
+  else if (ev.key === '\\') {         // presentation: only the graph
+    const any = ST.ui.rail || ST.ui.panel;
+    ST.ui.rail = ST.ui.panel = !any; setChrome();
+  }
+  else if (ev.key === 'Escape') { ST.focus = ST.loop = ST.finding = null; applyFocus(); paintPanel(); }
+});
+
+applyTheme('dark');
+buildRail();
+render();
+paintPanel();
+</script>
+</body>
+</html>

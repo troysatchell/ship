@@ -173,3 +173,5 @@ web/dev-dist/
 # worktree .git is a FILE, not a directory, so that path does not exist.
 .factory-env
 .factory/
+.gstack/
+__pycache__/

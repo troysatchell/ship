@@ -7,11 +7,14 @@
 
 # Social Post Drafts
 
-## X / Twitter (267 characters)
+## X / Twitter (267 characters — non-premium limit is 280)
 
 > Audited a real government codebase this week (US Treasury's open-source Ship project): 68
-> findings across type safety, perf, a11y, infra. Fixed the worst ones — /login bundle -80.5%, a
+> findings across type safety, perf, a11y, infra. Fixed the worst ones — /login bundle -81.6%, a
 > silent editor data-loss bug, 700+ untyped DB queries now type-checked. @GauntletAI
+
+Attach up to 4 images from `docs/submission/social-assets/` (generated 2026-08-02, no internal
+hostnames or real user data — dashboard renders + a Playwright capture of the seeded dev app).
 
 ## LinkedIn (~156 words)
 
@@ -33,4 +36,30 @@
 >
 > @GauntletAI
 
-> — GIR: "Doom doom doom doom doom."
+## X thread version (recommended) — 4 tweets, all under the 280-char non-premium limit
+
+Attach one image per tweet from `docs/submission/social-assets/`.
+
+**1/4** (263 chars) — image: `1-hero-scorecard.png`
+
+> Audited a real government codebase this week — the US Treasury's open-source Ship project. 68
+> findings across type safety, perf, accessibility, error handling, infra. Then a remediation
+> sprint with a measured before/after for every fix. Some numbers 🧵 @GauntletAI
+
+**2/4** (269 chars) — image: `2-biggest-improvement.png`
+
+> /login bundle: 601 → 110 kB gzip (−81.6%). One import graph was the whole story: the entry chunk
+> statically pulled all 25 pages + the full editor stack into a login page that never renders an
+> editor. React.lazy on 23 routes + a lazy editor wrapper. No features removed.
+
+**3/4** (258 chars) — image: `4-datafix-live-capture.png`
+
+> Scariest find: the editor said 'Saved' while a dead collaboration socket silently dropped every
+> keystroke — permanent data loss. Fixed and screenshot-proven. Also: 700+ untyped DB queries now
+> compiler-checked, and 236 non-null assertions on auth context → 0.
+
+**4/4** (254 chars) — image: `3-category-metrics.png`
+
+> Biggest lesson: never trust a claim that does not name its evidence. An XSS test had passed
+> forever because the app rendered nothing to test. The audit's own race hypothesis was wrong.
+> Measure before, measure after, and mark what is observed vs. derived.

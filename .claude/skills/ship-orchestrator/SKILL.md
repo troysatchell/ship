@@ -45,8 +45,13 @@ Multi-role tickets get both briefs. Two briefs is fine; a vague brief is not.
 
 ## 2. Decide what runs in parallel
 
-Default is **everything at once** — each ticket has its own worktree, database, and ports. Serialize
-only for these four reasons:
+**The unit is the bundle where one exists** (a `[PR-x] EPIC` parent declaring "one branch, one PR,
+one CodeRabbit review" — see `/ship-factory` § *The unit of work is the bundle*). Parallelism runs
+**between** bundles; sub-issues inside one run in the epic's stated order on a single branch, except
+where they touch disjoint files and the epic does not order them.
+
+Default is otherwise **everything at once** — each bundle or unbundled ticket has its own worktree,
+database, and ports. Serialize only for these four reasons:
 
 1. **A real blocking dependency.** Linear `blocks` relations: API-1 → API-2/API-3, TF-3 → TF-4,
    TF-2 → TF-1.
@@ -61,9 +66,9 @@ only for these four reasons:
 4. **Measurement ordering.** `/db-query-audit` runs **after** `/api-perf-audit`, never
    concurrently — the statement logging it enables skews the other's timings.
 
-Reserve the **whole batch** in Linear (all tickets → In Progress) before any agent starts. The lock
-only works if it covers every ticket the branch will close; otherwise a second worker picks up a
-ticket already being fixed inside someone else's diff.
+Reserve the **whole batch — or the whole bundle** — in Linear (all tickets → In Progress) before any
+agent starts. The lock only works if it covers every ticket the branch will close; otherwise a
+second worker picks up a ticket already being fixed inside someone else's diff.
 
 ## 2a. Dispatch ticket agents — and the orchestrator itself — on Sonnet
 

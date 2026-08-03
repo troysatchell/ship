@@ -1,0 +1,582 @@
+meta:
+  title: Ship Factory v2
+  subtitle: Plan → Build → Review, with a self-closing loop and a blind verifier
+  source: GAUNTLET/Ship — scripts/factory/*, .claude/skills/ship-{factory,pm,architect,spec,qa-review}
+  profile: process
+  # GitHub, not the GitLab origin: origin's host does not contain "gitlab", so the
+  # artifact would build GitHub-style /blob/ paths for it and every link would 404.
+  repoUrl: https://github.com/troysatchell/ship
+  branch: main
+
+zones:
+  - id: plan
+    label: Plan
+    accent: intake
+    note: New capability arrives as intent, not as a finding. Two gates before a ticket exists.
+  - id: dispatch
+    label: Dispatch
+    accent: control
+    note: Tier every unit of work before composing a brief — context sits with whoever reasons
+  - id: build
+    label: Isolated build
+    accent: transform
+    note: One worktree, one database, one branch per ticket
+  - id: verify
+    label: Verify
+    accent: gate
+    note: Mechanical gate, then an independent check that the right thing was built
+  - id: review
+    label: Review
+    accent: release
+    note: Two reviewers with different questions; one decider
+  - id: escalate
+    label: Escalate
+    accent: external
+    note: A gate holds its own ticket, never the wave
+  - id: observe
+    label: Observe
+    accent: store
+    note: State is derived from what the work produced — there is no status file
+
+nodes:
+  # ------------------------------------------------------------------- plan
+  - id: intent
+    label: Intent
+    kind: intake
+    zone: plan
+    subtitle: new capability, no audit finding behind it
+    emits: [intent]
+    detail: |
+      Work that arrives as a wish rather than as evidence. The Week 4 factory could
+      not start on this at all — every ticket it consumed came pre-written from
+      AUDIT_REPORT.md, which had already done the analysis. Running Build directly
+      on an intent produces tickets that contradict each other, because nobody
+      decided the shape first.
+
+  - id: audit
+    label: Audit findings
+    kind: intake
+    zone: plan
+    subtitle: 68 findings, each with measured evidence
+    sources:
+      - path: audit/AUDIT_REPORT.md
+        note: the 68 findings, Evidence separated from Hypothesis
+    emits: [finding]
+    detail: |
+      The other way work enters. A finding already carries its own spec — the
+      measurement, the file, the estimated impact — so it skips Plan entirely and
+      goes straight to the backlog. Writing a spec for "DB-7, the index is missing"
+      is ceremony.
+
+  - id: spec
+    label: PM writes the spec
+    kind: transform
+    zone: plan
+    subtitle: /ship-pm + /ship-spec
+    sources:
+      - path: .claude/skills/ship-spec/SKILL.md
+        note: problem as a cost, observable success, non-goals, verified repo facts
+    consumes: [intent, spec-defect]
+    emits: [draft-spec]
+    detail: |
+      Six sections. The problem stated as what it costs someone, not as a feature —
+      "add a change-feed endpoint" is a solution and survives no contact with an
+      architect who knows a cheaper one. Non-goals do the most work: every spec
+      without them grows a ticket at a time until the phase misses its deadline.
+
+  - id: specgate
+    label: Scope gate
+    kind: gate
+    zone: plan
+    subtitle: five rows, any one fails the spec
+    consumes: [draft-spec]
+    emits: [approved-spec]
+    detail: |
+      Problem-as-cost · observable success · explicit non-goals · every repo claim
+      verified and marked observed-vs-derived · fits the phase. A failed gate names
+      the row. The PM does not soften a spec to pass its own gate.
+
+  - id: architect
+    label: Architect designs
+    kind: transform
+    zone: plan
+    subtitle: /ship-architect
+    sources:
+      - path: .claude/skills/ship-architect/SKILL.md
+        note: shape, data, seams, failure modes, rejected alternatives
+    consumes: [survey]
+    emits: [design, question]
+    detail: |
+      Owns the how, which the spec deliberately withholds. Component boundaries,
+      migrations with their numbers, where this plugs into what exists, how it
+      degrades, and what was rejected — the last being the most-read section in six
+      months and the cheapest to write now.
+
+  - id: tiering
+    label: Tier every ticket
+    kind: control
+    zone: plan
+    subtitle: apply or investigate
+    sources:
+      - path: .claude/skills/ship-factory/references/model-tiering.md
+        note: the discriminator, and the applier contract
+    consumes: [design, acceptance-tests]
+    emits: [ticket]
+    detail: |
+      One question decides the cost of everything downstream: can you name the file,
+      the change, and the check that proves it? Yes → an applier on haiku with one
+      self-contained instruction. No → an investigator on sonnet with the full brief.
+      Push work down a tier wherever honest — an investigator rediscovering what the
+      architect already decided is this factory's most common waste.
+
+  - id: backlog
+    label: Linear backlog
+    kind: store
+    zone: plan
+    subtitle: authoritative for ticket status
+    consumes: [ticket, finding, new-ticket, merged, rewritten]
+    emits: [eligible]
+    detail: |
+      Linear owns status; the board owns execution state. When they disagree, Linear
+      wins and something has gone wrong — say so rather than reconciling silently.
+      Every ticket in a batch moves to In Progress before dispatch: that is the lock,
+      and it only works if it covers everything the branch will close.
+
+  - id: survey
+    label: Surveyor
+    kind: transform
+    zone: plan
+    subtitle: sonnet · answers, not source
+    sources:
+      - path: .claude/skills/ship-surveyor/SKILL.md
+        note: observed / derived / not-determined, with file:line
+    consumes: [approved-spec, question]
+    emits: [survey]
+    detail: |
+      Finds out what is actually there so the architect does not have to read
+      fifteen files to find out. Returns two pages of answered questions with
+      file:line evidence, and an explicit list of what could not be determined —
+      a question dropped by omission is how an architect ends up assuming.
+
+      Same tiering argument as the applier, one level up: the architect is the most
+      expensive context in the factory to fill, and filling it with raw source it
+      will use once is the waste this removes.
+
+  - id: testdesign
+    label: Test designer
+    kind: gate
+    zone: plan
+    subtitle: writes the tests before the code exists
+    sources:
+      - path: .claude/skills/ship-test-designer/SKILL.md
+        note: one test per acceptance criterion; where red is valid
+    consumes: [design]
+    emits: [acceptance-tests, spec-defect]
+    detail: |
+      Designs each acceptance test from the spec and the design, having never seen
+      an implementation — because there isn't one yet. A test written by the agent
+      that just decided how the code works proves that implementation behaves as
+      intended; it does not prove the requirement is met, and it survives refactors
+      that break what someone actually asked for.
+
+      Its output becomes each ticket's definition of done — which test, and what it
+      must assert. An acceptance criterion it cannot design a test for goes back to
+      the PM as a spec defect rather than being quietly dropped.
+
+  # --------------------------------------------------------------- dispatch
+  - id: orch
+    label: Orchestrator
+    kind: control
+    zone: dispatch
+    subtitle: selects, batches, serializes only on real dependencies
+    sources:
+      - path: .claude/skills/ship-orchestrator/SKILL.md
+        note: routing, parallelism, concurrency sizing, crash recovery
+    consumes: [eligible]
+    emits: [dispatch]
+    detail: |
+      Dispatches everything eligible concurrently. Serializes only for a true
+      blocking dependency, a same-file collision, or expensive-tier measurement
+      ordering. Re-evaluates after every completion — a ticket whose blockers just
+      went Done becomes eligible immediately.
+
+  - id: worktree
+    label: Isolated worktree
+    kind: transform
+    zone: build
+    subtitle: worktree.sh — own branch, own database, own ports
+    sources:
+      - path: scripts/factory/worktree.sh
+        note: provisions worktree, dedicated DB, probed ports, .factory-env
+    consumes: [dispatch]
+    emits: [workspace]
+    detail: |
+      Every ticket gets its own database because the test setup TRUNCATEs 16 tables
+      in the beforeAll of every test file — agents sharing one would corrupt each
+      other and produce failures that look like code defects. Ports are probed and
+      claimed, not derived from a hash: md5 % 900 collides about half the time by 36
+      concurrent tickets.
+
+  - id: applier
+    label: Applier
+    kind: transform
+    zone: build
+    subtitle: haiku · one instruction, no role brief
+    consumes: [workspace]
+    emits: [diff, discrepancy]
+    detail: |
+      Gets the file, the change, the reason, and the command that proves it —
+      nothing else. No lessons.md, no role skill. If the instruction does not match
+      what it finds, it STOPS and reports the discrepancy rather than improvising:
+      a wrong instruction is information, and surfacing it costs one cheap round
+      trip. That stop rule is what makes a small model safe here.
+
+  - id: investigator
+    label: Investigator
+    kind: transform
+    zone: build
+    subtitle: sonnet · contract + lessons + role skill
+    sources:
+      - path: .claude/skills/ship-factory/references/agent-contract.md
+        note: scope, locked quarantine, provenance, keep-working
+    consumes: [workspace, rule]
+    emits: [diff]
+    detail: |
+      For work where the cause is unknown. Carries the full ~40KB brief because
+      diagnosis needs the context. Must produce a regression test seen red first —
+      and red for the right reason, since an import error is not a red test.
+
+  # ----------------------------------------------------------------- verify
+  - id: gate
+    label: gate.sh
+    kind: gate
+    zone: verify
+    subtitle: typecheck · build · tests vs quarantine · not-weakened · regression · CHANGES · patterns
+    sources:
+      - path: scripts/factory/gate.sh
+        note: eight mechanical checks; an agent's green is a claim, this is the result
+    consumes: [diff, check]
+    emits: [gate-result, stuck]
+    detail: |
+      Deliberately mechanical — every check passes or fails on evidence. The
+      quarantine baseline is materialized from BASE_REF, never read from the ticket
+      branch, so an agent cannot append its own new failures and pass. Retry cap is
+      three; raising it to force a pass is what turns "surfaces a hard problem" into
+      "burns tokens forever".
+
+  - id: verifier
+    label: Blind verifier
+    kind: gate
+    zone: verify
+    subtitle: gets the finding, the diff, the gate JSON — and nothing else
+    sources:
+      - path: .claude/skills/ship-factory/references/self-closing-loop.md
+        note: why the investigator's report is withheld
+    consumes: [gate-result]
+    emits: [verdict, stuck]
+    detail: |
+      Checks that the right thing was built, which the gate cannot. It never sees
+      the investigator's report, commits, or PR body — that narrative is a framing
+      written by whoever decided what to build, and a verifier that reads it first
+      can only check internal consistency. Reading the finding fresh and the diff
+      cold is the only thing that makes the check independent, and independence is
+      what makes closing without a human safe.
+
+  # ----------------------------------------------------------------- review
+  - id: pr
+    label: Pull request
+    kind: release
+    zone: review
+    subtitle: body is the evidence, not a summary
+    consumes: [verdict, proof-verdict]
+    emits: [pr-open]
+    detail: |
+      One Closes line per ticket — GitHub only auto-closes what it sees named
+      individually, and a batched branch that closes one of three leaves two tickets
+      open with their work already merged.
+
+  - id: coderabbit
+    label: CodeRabbit
+    kind: external
+    zone: review
+    subtitle: reviews the code — is it correct?
+    consumes: [pr-open]
+    emits: [code-finding]
+    detail: |
+      Finds real things and irrelevant things with equal confidence, which is why
+      its output goes to a decider rather than straight to a fix queue.
+
+  - id: qareview
+    label: QA reviewer
+    kind: gate
+    zone: verify
+    subtitle: reviews the proof — would anything have failed?
+    sources:
+      - path: .claude/skills/ship-qa-review/SKILL.md
+        note: the five ways proof goes fake in this repo
+    consumes: [gate-result]
+    emits: [proof-verdict]
+    detail: |
+      A different job from reviewing code, and this repo has the scars: its own
+      audit found 68 e2e tests that passed without executing a single assertion.
+      Checks the regression test lives where the gate actually runs it, that red was
+      seen, that the quarantine did not widen, and that every "verified" names what
+      was run.
+
+  - id: pmtriage
+    label: PM triage
+    kind: control
+    zone: review
+    subtitle: in scope? needed? efficient?
+    sources:
+      - path: .claude/skills/ship-pm/SKILL.md
+        note: the three questions, and how to say no defensibly
+    consumes: [code-finding]
+    emits: [fix-now, new-ticket, dismissal]
+    detail: |
+      The second question is the one the old mechanical triage never asked. A finding
+      can be entirely correct and still not worth acting on — a missing index on a
+      table holding 20 rows read once a day is a true observation about an irrelevant
+      path. "Not important" is not a triage decision; the PM must name a row count, a
+      call frequency, or a convention.
+
+  - id: ledger
+    label: Review ledger
+    kind: store
+    zone: observe
+    subtitle: every finding, every disposition
+    sources:
+      - path: scripts/factory/review-ledger.mjs
+        note: record + report; recurrence thresholds
+    consumes: [fix-now, new-ticket, dismissal]
+    emits: [recurrence]
+    detail: |
+      Fixing findings one at a time and discarding them means a defect class can
+      recur on four branches without anyone noticing it is the same defect four
+      times — which is exactly what happened on day one. Also tracks dismissals: a
+      growing pile in one category means the factory is talking itself out of real
+      feedback.
+
+  - id: merge
+    label: Merge --no-ff
+    kind: release
+    zone: review
+    subtitle: self-closes when all five hold
+    emits: [merged]
+    detail: |
+      Gate pass · CI green · verifier confirmed · every finding triaged with fix-now
+      ones fixed · no open escalation. A close with no verifier verdict attached is
+      an unreviewed merge wearing the same label. Merged --no-ff so the branch
+      structure survives — the git log is read directly.
+
+  # --------------------------------------------------------------- escalate
+  - id: escalation
+    label: Escalation
+    kind: control
+    zone: escalate
+    subtitle: parks the ticket, never the wave
+    sources:
+      - path: .claude/skills/ship-factory/references/escalation.md
+        note: the human gates
+    consumes: [stuck, discrepancy]
+    emits: [ping, stuck]
+    detail: |
+      One test: is this work stream stopped until the person answers? A gate holds
+      its own ticket — that worktree parks, its Linear ticket goes to blocked with
+      the reason, and the orchestrator dispatches the next eligible ticket
+      immediately. Never drain in-flight work to wait for an answer.
+
+  - id: slack
+    label: Slack
+    kind: external
+    zone: escalate
+    subtitle: three triggers, batched
+    sources:
+      - path: scripts/factory/notify.mjs
+        note: severity is blocked | gate | summary; a clean run sends nothing
+    consumes: [ping]
+    detail: |
+      Spent retry budget · two rejected verifications · any escalation.md gate. Plus
+      one batched summary only if an unattended run ends with unresolved items —
+      --count 0 refuses to send, enforced in the script rather than left to a
+      caller's discipline. There is deliberately no informational severity: adding
+      one is how a channel stops being read, and an unread channel is worse than
+      none because it looks like coverage.
+
+  - id: rewrite
+    label: Rewrite the ticket
+    kind: transform
+    zone: escalate
+    subtitle: PM · max 2 attempts
+    sources:
+      - path: .claude/skills/ship-factory/references/self-closing-loop.md
+        symbol: Rewrite before you escalate
+        note: the failure-to-rewrite mapping, and why the cap exists
+    consumes: [stuck]
+    emits: [rewritten]
+    detail: |
+      A ticket that failed is usually not a ticket that needs a human — it is more
+      often a ticket that was written badly: under-specified, tiered wrong, or three
+      changes wearing one title. The PM asks whether a differently-written ticket
+      would succeed, and if so rewrites it.
+
+      Re-queued fresh, not retried: new ticket, new worktree, no inherited context —
+      because the inherited context is what produced the failure. Cap of two. A third
+      failure means the wording is not the problem, and that is exactly the signal
+      worth a person's attention.
+
+      This is the mechanism that makes the escalation channel rare. Anything an agent
+      could fix given a better instruction gets one, automatically, without reaching
+      Slack.
+
+  # ---------------------------------------------------------------- observe
+  - id: state
+    label: Derived state
+    kind: store
+    zone: observe
+    subtitle: phase · lastActivityAt · idleMinutes · stalled
+    sources:
+      - path: scripts/factory/lib/state.mjs
+        symbol: collect
+        note: phase inferred from what the work produced
+    consumes: [workspace, gate-result, pr-open]
+    emits: [live-state]
+    detail: |
+      There is deliberately no status file. One that drifts reads as authoritative
+      while being wrong, which is worse than none. Phase is derived from signals the
+      work itself left: commits, dirty files, gate results, PR state. Stall is idle
+      time in a phase that should be moving — without that qualifier every merged
+      ticket reads as stuck.
+
+  - id: dashboard
+    label: Live dashboard
+    kind: release
+    zone: observe
+    subtitle: SSE · localhost:7373
+    sources:
+      - path: scripts/factory/serve.mjs
+        note: streams state; timers tick locally so the page never freezes
+    consumes: [live-state]
+    detail: |
+      Answers "what is going on" without investigation — five tiles, a phase track
+      per ticket, and an activity feed built by diffing frames. Elapsed timers count
+      every second client-side while the server polls every three, which is what
+      makes it feel connected rather than static. Adaptive backoff when collect()
+      slows.
+
+  - id: lessons
+    label: lessons.md
+    kind: store
+    zone: observe
+    subtitle: injected verbatim into every investigator brief
+    sources:
+      - path: .claude/skills/ship-factory/references/lessons.md
+        note: rules that earned their place
+    consumes: [recurrence]
+    emits: [rule]
+    detail: |
+      Two recurrences across separate tickets means a rule is missing from the brief.
+      Only works if it stays short and specific — rules that earned their place, not
+      a diary.
+
+  - id: newcheck
+    label: New gate check
+    kind: transform
+    zone: observe
+    subtitle: review-patterns.mjs — G7b
+    sources:
+      - path: scripts/factory/review-patterns.mjs
+        note: mechanical checks for classes that crossed the threshold
+    consumes: [recurrence]
+    emits: [check]
+    detail: |
+      Three or more recurrences means the prompt is not holding. A rule stated in the
+      brief and ignored three times does not need restating louder — it needs a
+      mechanical check. G7b exists because two classes crossed that line.
+
+edges:
+  # ---- plan
+  - {id: e01, from: intent,      to: spec,         kind: flow, label: intent}
+  - {id: e02, from: spec,        to: specgate,     kind: flow, label: draft spec}
+  - {id: e03, from: specgate,    to: survey,       kind: flow, label: approved — go look}
+  - {id: e03b, from: survey,     to: architect,    kind: flow, label: what is actually there}
+  - {id: e04, from: architect,   to: testdesign,   kind: flow, label: design}
+  - {id: e04b, from: testdesign, to: tiering,      kind: flow, label: acceptance tests per ticket}
+  - {id: e05, from: tiering,     to: backlog,      kind: flow, label: tiered tickets}
+  - {id: e06, from: audit,       to: backlog,      kind: flow, label: finding carries its own spec}
+
+  # ---- dispatch and build
+  - {id: e07, from: backlog,     to: orch,         kind: flow, label: next eligible batch}
+  - {id: e08, from: orch,        to: worktree,     kind: control, label: provision per ticket}
+  - {id: e09, from: worktree,    to: applier,      kind: flow, label: specified work}
+  - {id: e10, from: worktree,    to: investigator, kind: flow, label: cause unknown}
+  - {id: e11, from: lessons,     to: investigator, kind: data, label: verbatim, every brief}
+  - {id: e12, from: applier,     to: gate,         kind: flow, label: diff}
+  - {id: e13, from: investigator, to: gate,        kind: flow, label: diff + regression test}
+  - {id: e14, from: newcheck,    to: gate,         kind: control, label: G7b}
+
+  # ---- verify
+  - {id: e15, from: gate,        to: verifier,     kind: flow, label: pass}
+  - {id: e16, from: verifier,    to: pr,           kind: flow, label: confirmed}
+
+  # ---- review
+  - {id: e17, from: pr,          to: coderabbit,   kind: flow, label: reviews the code}
+  - {id: e18, from: gate,        to: qareview,     kind: flow, label: 'pass — is the proof real?'}
+  - {id: e19, from: coderabbit,  to: pmtriage,     kind: flow, label: code findings}
+  - {id: e20, from: qareview,    to: pr,           kind: flow, label: proof holds}
+  - {id: e21, from: pmtriage,    to: ledger,       kind: data, label: every finding, any disposition}
+  - {id: e22, from: pmtriage,    to: merge,        kind: flow, label: all triaged, fix-nows fixed}
+
+  # ---- observe
+  - {id: e23, from: worktree,    to: state,        kind: data, label: git + .factory-env}
+  - {id: e24, from: gate,        to: state,        kind: data, label: gate-result.json}
+  - {id: e25, from: pr,          to: state,        kind: data, label: gh pr list}
+  - {id: e26, from: state,       to: dashboard,    kind: data, label: SSE, every 3s}
+
+  # ---- feedback: the loops that make this self-closing
+  - {id: f01, from: specgate,    to: spec,         kind: feedback, polarity: '-', loop: spec-gate,
+      label: failed row named}
+  - {id: f02, from: gate,        to: investigator, kind: feedback, polarity: '-', loop: gate-retry,
+      label: exact gate output, retry ×3}
+  - {id: f03, from: verifier,    to: investigator, kind: feedback, polarity: '-', loop: verify-retry,
+      label: not-addressed — same agent, keeps context}
+  - {id: f04, from: pmtriage,    to: applier,      kind: feedback, polarity: '-', loop: fix-now,
+      label: fix now — file already named}
+  - {id: f05, from: pmtriage,    to: backlog,      kind: feedback, polarity: '+', loop: backlog-growth,
+      label: real, not this branch}
+  - {id: f06, from: ledger,      to: lessons,      kind: feedback, polarity: '-', loop: prompt-repair,
+      label: 2 recurrences — a rule is missing}
+  - {id: f07, from: ledger,      to: newcheck,     kind: feedback, polarity: '-', loop: mechanize,
+      label: 3+ — the prompt is not holding}
+  - {id: f08, from: merge,       to: backlog,      kind: feedback, polarity: '-', loop: close,
+      label: self-close with evidence attached}
+
+  # ---- escalation: parks one ticket, wave continues
+  - {id: x01, from: gate,        to: escalation,   kind: control, label: 3 failed gates}
+  - {id: x02, from: verifier,    to: escalation,   kind: control, label: 2 rejected verifications}
+  - {id: x03, from: escalation,  to: slack,        kind: flow, label: blocked · gate · summary}
+  - {id: x04, from: escalation,  to: orch,         kind: feedback, polarity: '-', loop: park,
+      label: park this ticket, dispatch the next}
+
+  # ---- gaps: should exist, does not
+  - {id: g01, from: slack,       to: orch,         kind: gap,
+      label: no defined return path for the human's answer}
+  - {id: g02, from: verifier,    to: ledger,       kind: gap,
+      label: rejections bypass the recurrence thresholds}
+
+  # QA review can block a merge outright — that reject path was missing.
+  - {id: f09, from: qareview, to: investigator, kind: feedback, polarity: '-', loop: proof-repair,
+      label: blocks-merge — test cannot run, or asserts nothing}
+  - {id: x05, from: applier, to: escalation, kind: control, label: instruction does not match the file}
+  # The spec is gated; the design is not. A wrong decomposition is only discovered
+  # at build time, by an agent with far less context than the architect had.
+  - {id: g03, from: architect, to: specgate, kind: gap,
+      label: no gate on the design — only the spec is reviewed}
+  - {id: x06, from: escalation, to: rewrite, kind: control, label: 'would a rewrite succeed?'}
+  - {id: f10, from: rewrite, to: backlog, kind: feedback, polarity: '-', loop: rewrite,
+      label: re-queued fresh — max 2}
+  - {id: f12, from: architect, to: survey, kind: feedback, polarity: '-', loop: survey-followup,
+      label: follow-up question}
+  - {id: f13, from: testdesign, to: spec, kind: feedback, polarity: '-', loop: spec-defect,
+      label: criterion cannot be tested — spec defect}
+  - {id: e04c, from: testdesign, to: investigator, kind: data, label: the test each ticket must pass}

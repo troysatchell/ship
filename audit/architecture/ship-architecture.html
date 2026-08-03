@@ -1,0 +1,1155 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ship — application architecture</title>
+<!--
+  AGENT / LLM NOTE — read this before parsing anything else in this file.
+
+  This document is a rendered view of a complete, machine-readable system
+  model. Do NOT reconstruct the system from the SVG, the CSS, or a
+  screenshot. The full model — every node (with kind, description, metrics),
+  every edge (with kind, label, polarity, confidence), every derived loop,
+  and every analyzer finding — is embedded verbatim in:
+
+      <script type="application/json" id="system-graph-model">
+
+  Read that one element and you have everything the diagram knows, including
+  detail text that is only visible to humans via hover/click. Everything
+  after that element is presentation code and can be ignored.
+
+  Vocabulary: nodes have kind ∈ {intake, transform, gate, store, release,
+  control, external} (an original alias like "module" or "guard" is kept in
+  kindLabel). Edge kinds: flow (forward work/dependency), control (triggers),
+  data (state read/write), feedback (result returns upstream), recursion,
+  violation (breaks a stated rule), gap (a link that SHOULD exist and does
+  not — modelled absence, not an error). loops[] are cycles closed by
+  feedback edges: type "balancing" converges, "reinforcing" compounds.
+  findings[] are the analyzer's structural claims, sorted by severity.
+  Nodes may carry sources[] — file paths (with optional symbol/lines) that
+  anchor the node to real code; combine with meta.repoUrl to cite exact files.
+-->
+
+<style>
+/* ===========================================================================
+   system-graph artifact stylesheet
+   Every value below comes from the design system in references/design-system.md.
+   Do not hand-tune: change the model or the tokens, rebuild.
+   =========================================================================== */
+*, *::before, *::after { box-sizing: border-box; }
+:root {
+  --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
+  --sp-5: 24px; --sp-6: 32px; --sp-7: 48px; --sp-8: 64px;
+  --r-sm: 6px; --r-md: 10px; --r-lg: 14px;
+  --font: ui-sans-serif, -apple-system, "Segoe UI", Inter, Roboto, system-ui, sans-serif;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --rail: 268px; --panel: 330px;
+  --ease: cubic-bezier(.2,.7,.3,1);
+}
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--font);
+  background: var(--canvas); color: var(--ink);
+  font-size: 13px; line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+
+/* ------------------------------------------------------------------ chrome */
+.app { display: grid; grid-template-rows: auto 1fr;
+       grid-template-columns: var(--rail) 1fr var(--panel);
+       grid-template-areas: "head head head" "rail canvas panel";
+       height: 100%; }
+header { grid-area: head; display: flex; align-items: center; gap: var(--sp-4);
+  padding: var(--sp-3) var(--sp-5); border-bottom: 1px solid var(--hairline);
+  background: var(--surface); }
+header h1 { font-size: 14.5px; font-weight: 640; margin: 0; letter-spacing: -.005em; }
+header .sub { color: var(--ink-muted); font-size: 12px; }
+header .src { font-family: var(--mono); font-size: 10.5px; color: var(--ink-muted);
+  border: 1px solid var(--hairline); padding: 3px var(--sp-2); border-radius: var(--r-sm); }
+header .spacer { flex: 1; }
+
+.rail  { grid-area: rail;  border-right: 1px solid var(--hairline);
+         background: var(--surface); overflow-y: auto; padding: var(--sp-4); }
+.panel { grid-area: panel; border-left: 1px solid var(--hairline);
+         background: var(--surface); overflow-y: auto; padding: var(--sp-4); }
+.canvas { grid-area: canvas; position: relative; overflow: hidden; background: var(--canvas); }
+
+.sec { margin-bottom: var(--sp-6); }
+.sec > h2 { font-size: 10px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--ink-muted); font-weight: 620; margin: 0 0 var(--sp-3); }
+
+/* ------------------------------------------------------------- view switch */
+.views { display: flex; flex-direction: column; gap: var(--sp-1); }
+.views button { display: flex; align-items: baseline; gap: var(--sp-2);
+  padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); text-align: left;
+  border: 1px solid transparent; transition: background .12s var(--ease); }
+.views button:hover { background: var(--hover); }
+.views button[aria-pressed="true"] { background: var(--hover); border-color: var(--hairline); }
+.views button[aria-pressed="true"] .vk { color: var(--ink); }
+.views .vk { font-weight: 600; font-size: 13px; color: var(--ink-muted); }
+.views .vb { font-size: 11px; color: var(--ink-muted); line-height: 1.35; }
+.views kbd { margin-left: auto; font-family: var(--mono); font-size: 9.5px;
+  color: var(--ink-muted); border: 1px solid var(--hairline); border-radius: 4px;
+  padding: 0 4px; }
+
+/* ---------------------------------------------------------------- toggles */
+.toggle { display: flex; align-items: center; gap: var(--sp-2); padding: var(--sp-1) 0;
+  cursor: pointer; user-select: none; }
+.toggle input { appearance: none; width: 30px; height: 17px; border-radius: 9px;
+  background: var(--hairline); position: relative; transition: background .15s var(--ease);
+  flex: none; cursor: pointer; }
+.toggle input::after { content: ""; position: absolute; top: 2px; left: 2px;
+  width: 13px; height: 13px; border-radius: 50%; background: var(--ink);
+  transition: transform .15s var(--ease); }
+.toggle input:checked { background: var(--acc-transform); }
+.toggle input:checked::after { transform: translateX(13px); background: var(--canvas); }
+.toggle span { font-size: 12px; }
+.toggle .ct { margin-left: auto; font-family: var(--mono); font-size: 10px;
+  color: var(--ink-muted); }
+
+/* ----------------------------------------------------------------- legend */
+.legend { display: flex; flex-direction: column; gap: 7px; }
+.lg { display: flex; align-items: center; gap: var(--sp-2); font-size: 11.5px;
+  cursor: pointer; border-radius: var(--r-sm); padding: 2px 3px; }
+.lg:hover { background: var(--hover); }
+.lg[data-off="1"] { opacity: .38; }
+.lg svg { flex: none; }
+.lg .nm { font-weight: 560; }
+.lg .ds { color: var(--ink-muted); font-size: 10.5px; }
+
+/* ------------------------------------------------------------------ lists */
+.item { width: 100%; text-align: left; border: 1px solid var(--hairline);
+  border-radius: var(--r-md); padding: var(--sp-3); margin-bottom: var(--sp-2);
+  background: var(--canvas); transition: border-color .12s var(--ease); }
+.item:hover { border-color: var(--ink-muted); }
+.item.on { border-color: var(--acc-transform); }
+.item .hd { display: flex; align-items: center; gap: var(--sp-2); margin-bottom: 3px; }
+.item .ti { font-weight: 590; font-size: 12.5px; }
+.item .bd { color: var(--ink-muted); font-size: 11.5px; line-height: 1.45; }
+.chip { font-family: var(--mono); font-size: 9.5px; font-weight: 650;
+  padding: 1.5px 6px; border-radius: 999px; border: 1px solid currentColor;
+  letter-spacing: .02em; flex: none; }
+.chip.hi { color: var(--acc-alert); }
+.chip.md { color: var(--acc-gate); }
+.chip.lo { color: var(--ink-muted); }
+.chip.R  { color: var(--acc-gate); }
+.chip.B  { color: var(--acc-release); }
+.chip.U  { color: var(--ink-muted); }
+
+.empty { color: var(--ink-muted); font-size: 11.5px; border: 1px dashed var(--hairline);
+  border-radius: var(--r-md); padding: var(--sp-3); }
+
+/* -------------------------------------------------------------- inspector */
+.insp .kind { font-size: 9.5px; text-transform: uppercase; letter-spacing: .1em;
+  font-weight: 650; }
+.insp h3 { margin: var(--sp-1) 0 var(--sp-1); font-size: 16px; letter-spacing: -.01em; }
+.insp .st { color: var(--ink-muted); font-size: 12px; margin-bottom: var(--sp-4); }
+.insp p { font-size: 12px; line-height: 1.55; color: var(--ink-muted); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 3px var(--sp-3);
+  font-size: 11.5px; margin: var(--sp-3) 0; }
+.kv dt { color: var(--ink-muted); }
+.kv dd { margin: 0; font-family: var(--mono); font-size: 11px; }
+.rel { display: flex; flex-direction: column; gap: 3px; margin-top: var(--sp-2); }
+.rel button { display: flex; gap: var(--sp-2); align-items: baseline; font-size: 11.5px;
+  padding: 3px var(--sp-2); border-radius: var(--r-sm); text-align: left; }
+.rel button:hover { background: var(--hover); }
+.rel .ar { font-family: var(--mono); color: var(--ink-muted); flex: none; }
+.srclink { display: block; font-size: 11px; padding: 3px var(--sp-2);
+  border-radius: var(--r-sm); color: var(--ink); text-decoration: none; }
+.srclink code { font-family: var(--mono); font-size: 10.5px; }
+a.srclink:hover { background: var(--hover); }
+a.srclink code { text-decoration: underline; text-underline-offset: 2px;
+  text-decoration-color: var(--ink-muted); }
+
+/* ----------------------------------------------------------------- canvas */
+svg#stage { position: absolute; inset: 0; width: 100%; height: 100%;
+  cursor: grab; touch-action: none; }
+svg#stage.drag { cursor: grabbing; }
+#stage text { pointer-events: none; user-select: none; }
+.node, .edge, .zone { transition: opacity .18s var(--ease); }
+.dim { opacity: .13; }
+/* Many simultaneous return paths would otherwise dominate the canvas (their
+   hue is the loudest by design). Past a handful, they rest at reduced opacity
+   and come forward on hover or when their loop is isolated. */
+.edge.soft { opacity: .38; }
+.edge.soft:hover, .edge.soft.lit { opacity: 1; }
+.node { cursor: pointer; }
+.node .card { transition: filter .15s var(--ease); }
+.node:hover .card { filter: brightness(1.14); }
+.node.sel .card { filter: brightness(1.14); }
+.hidden { display: none; }
+.zlabel { font-size: 10px; letter-spacing: .12em; text-transform: uppercase;
+  font-weight: 640; }
+.elabel { font-size: 10px; font-weight: 560; }
+.nkind { font-size: 8.5px; letter-spacing: .09em; text-transform: uppercase; font-weight: 660; }
+.ntitle { font-size: 13px; font-weight: 620; letter-spacing: -.005em; }
+.nsub { font-size: 10.5px; }
+.badge { font-size: 10px; font-weight: 700; }
+.loopchip { font-family: var(--mono); font-size: 10px; font-weight: 700; }
+
+.hud { position: absolute; left: var(--sp-4); bottom: var(--sp-4); display: flex;
+  gap: var(--sp-1); background: var(--surface); border: 1px solid var(--hairline);
+  border-radius: var(--r-md); padding: var(--sp-1); }
+.hud button { padding: var(--sp-1) var(--sp-3); border-radius: var(--r-sm);
+  font-size: 11.5px; color: var(--ink-muted); }
+.hud button:hover { background: var(--hover); color: var(--ink); }
+.tip { position: absolute; pointer-events: none; opacity: 0; transition: opacity .1s;
+  background: var(--surface); border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  padding: var(--sp-2) var(--sp-3); font-size: 11.5px; max-width: 280px;
+  box-shadow: 0 6px 22px rgba(0,0,0,.32); z-index: 5; }
+.tip.on { opacity: 1; }
+.tip b { display: block; font-size: 12px; margin-bottom: 2px; }
+.tip span { color: var(--ink-muted); }
+
+/* ------------------------------------------------- collapsible side panels */
+/* "Only the graph" is a legitimate reading mode — presenting, screenshotting,
+   or just thinking. The chrome collapses; the model does not change.         */
+.app.no-rail  { grid-template-columns: 1fr var(--panel);
+                grid-template-areas: "head head" "canvas panel"; }
+.app.no-panel { grid-template-columns: var(--rail) 1fr;
+                grid-template-areas: "head head" "rail canvas"; }
+.app.no-rail.no-panel { grid-template-columns: 1fr;
+                        grid-template-areas: "head" "canvas"; }
+.app.no-rail .rail, .app.no-panel .panel { display: none; }
+.hbtn { padding: 5px 10px; border: 1px solid var(--hairline); border-radius: var(--r-sm);
+  font-size: 11.5px; color: var(--ink-muted); }
+.hbtn:hover { color: var(--ink); background: var(--hover); }
+.hbtn[aria-pressed="false"] { opacity: .5; }
+
+@media (max-width: 1180px) {
+  .app { grid-template-columns: var(--rail) 1fr; grid-template-areas: "head head" "rail canvas"; }
+  .panel { display: none; }
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1 id="ttl"></h1>
+    <span class="sub" id="sub"></span>
+    <span class="spacer"></span>
+    <span class="src" id="src"></span>
+    <button class="hbtn" id="brief" title="Copy the whole model as markdown — paste it to a human or an LLM">Copy brief</button>
+    <button class="hbtn" id="tglRail"  aria-pressed="true"  title="Toggle left panel ([)">Controls</button>
+    <button class="hbtn" id="tglPanel" aria-pressed="true"  title="Toggle right panel (])">Details</button>
+    <button class="hbtn" id="theme">Light</button>
+  </header>
+
+  <aside class="rail">
+    <div class="sec"><h2>Lens</h2><div class="views" id="views"></div></div>
+    <div class="sec"><h2>Show</h2><div id="toggles"></div></div>
+    <div class="sec"><h2>Stages</h2><div class="legend" id="legNodes"></div></div>
+    <div class="sec"><h2>Connections</h2><div class="legend" id="legEdges"></div></div>
+  </aside>
+
+  <main class="canvas">
+    <svg id="stage"><defs id="defs"></defs><g id="world"></g></svg>
+    <div class="hud">
+      <button id="fit">Fit</button><button id="zin">+</button>
+      <button id="zout">−</button><button id="clr">Clear focus</button>
+    </div>
+    <div class="tip" id="tip"></div>
+  </main>
+
+  <aside class="panel" id="panel"></aside>
+</div>
+
+<script type="application/json" id="system-graph-model">{"meta":{"title":"Ship \u2014 application architecture","subtitle":"292 source files across api/web/shared, plus the AWS runtime path","source":"troysatchell/Ship @ 791380a (2026-08-01)","profile":"code","repoUrl":"https://github.com/troysatchell/ship","branch":"main"},"tokens":{"meta":{"space":"oklch","generated_by":"assets/palette.py"},"kinds":{"intake":{"hue":264,"shape":"round-tag","meaning":"Where work enters the factory"},"transform":{"hue":152,"shape":"round-rect","meaning":"Work is done / value is added"},"gate":{"hue":82,"shape":"diamond","meaning":"A decision, check, or quality gate"},"store":{"hue":310,"shape":"cylinder","meaning":"Durable state or an artifact at rest"},"release":{"hue":196,"shape":"cut-rect","meaning":"Work leaves the factory"}},"themes":{"dark":{"canvas":"#0e1115","surface":"#171a20","hairline":"#25282e","ink":"#f1f3f9","ink_muted":"#8e929b","alert":{"accent":"#fe8b7f","fill":"#431d1a","text":"#f8edec"},"control":{"accent":"#9fa5b0","fill":"#33353b","text":"#edf0f6"},"external":{"accent":"#71757c","fill":"#1a1c1f","text":"#95989f"},"kinds":{"intake":{"accent":"#8ab0fe","fill":"#1f2a41","text":"#ecf0f9"},"transform":{"accent":"#5fcb82","fill":"#18301f","text":"#ebf3ec"},"gate":{"accent":"#dfa72a","fill":"#35280d","text":"#f4f0e7"},"store":{"accent":"#cd95f5","fill":"#31243b","text":"#f3eef6"},"release":{"accent":"#0bcacc","fill":"#053131","text":"#e7f3f3"}}},"light":{"canvas":"#f8faff","surface":"#ffffff","hairline":"#d8dce5","ink":"#2e3034","ink_muted":"#656971","alert":{"accent":"#c23631","fill":"#ffe6e3","text":"#472522"},"control":{"accent":"#585e68","fill":"#dfe3ea","text":"#2e3034"},"external":{"accent":"#888c94","fill":"#f2f4f9","text":"#585b61"},"kinds":{"intake":{"accent":"#406ac9","fill":"#e4edff","text":"#23304b"},"transform":{"accent":"#018743","fill":"#daf5e0","text":"#1a3823"},"gate":{"accent":"#906800","fill":"#faebcf","text":"#3d2d0d"},"store":{"accent":"#8c51b2","fill":"#f4e7ff","text":"#382944"},"release":{"accent":"#068082","fill":"#cff6f6","text":"#013839"}}}}},"nodes":{"web_main":{"id":"web_main","label":"main.tsx","kind":"intake","zone":"browser","subtitle":"SPA bootstrap + route table","consumes":["spa-bundle"],"detail":"Mounts the provider stack (QueryClientProvider, WorkspaceContext, auth) and\ndeclares every route. Route components are lazy \u2014 `main.routes.test.ts`\nexists to keep the split honest, because a static import here silently\nundoes code splitting for the whole app.\n","metrics":{"loc":295,"fanIn":0,"fanOut":4,"instability":1.0},"sources":[{"path":"web/src/main.tsx","note":"provider stack + route table"}],"kindLabel":"entrypoint"},"web_pages":{"id":"web_pages","label":"pages/","kind":"transform","zone":"browser","subtitle":"24 route components","detail":"One component per route. `UnifiedDocumentPage` is the important one: every\ndocument type (wiki, issue, program, project, sprint, person) renders\nthrough it rather than through a type-specific page, which is the load-\nbearing consequence of the unified document model.\n","metrics":{"loc":12489,"fanIn":1,"fanOut":6,"instability":0.86},"sources":[{"path":"web/src/pages/UnifiedDocumentPage.tsx"},{"path":"web/src/pages/Dashboard.tsx"},{"path":"web/src/pages/App.tsx"}],"kindLabel":"component"},"web_components":{"id":"web_components","label":"components/","kind":"transform","zone":"browser","subtitle":"89 files \u2014 the 4-panel shell","detail":"The icon rail, contextual sidebar, properties panel and every shared\nwidget. 19,010 lines across 89 files, and it both depends on and is\ndepended on by lib/, hooks/ and the editor \u2014 see the circular-dependency\nfinding. This is the single largest module in the repo by line count after\nroutes/.\n","metrics":{"loc":19010,"fanIn":4,"fanOut":7,"instability":0.64},"sources":[{"path":"web/src/components/sidebars/PropertiesPanel.tsx"},{"path":"web/src/components/DocumentTreeItem.tsx"},{"path":"web/src/components/ui/"}],"kindLabel":"component"},"web_editor":{"id":"web_editor","label":"Editor + TipTap","kind":"transform","zone":"browser","subtitle":"one editor for every doc type","emits":["yjs-update"],"consumes":["yjs-broadcast"],"detail":"`Editor.tsx` is the single shared editor \u2014 there is deliberately no\ntype-specific editor. It owns the Yjs document, the `y-indexeddb`\npersistence provider and the `y-websocket` provider pointed at\n`/collaboration/{docType}:{docId}`. `LazyEditor` defers the whole TipTap\n+ Yjs bundle so it never lands in the initial payload.\n","metrics":{"loc":6814,"fanIn":3,"fanOut":8,"instability":0.73},"sources":[{"path":"web/src/components/Editor.tsx","lines":[364,460],"note":"Y.Doc + IndexeddbPersistence + WebsocketProvider wiring"},{"path":"web/src/components/LazyEditor.tsx"},{"path":"web/src/components/editor/"}],"kindLabel":"component","scc":1},"web_contexts":{"id":"web_contexts","label":"contexts/","kind":"store","zone":"browser","subtitle":"10 React contexts","detail":"Workspace, documents, issues, projects, programs, current document,\nselection persistence, uploads. Ambient client state \u2014 distinct from the\nserver cache in queryClient, and the boundary between the two is not\nenforced anywhere.\n","metrics":{"loc":622,"fanIn":6,"fanOut":3,"instability":0.33},"sources":[{"path":"web/src/contexts/WorkspaceContext.tsx"},{"path":"web/src/contexts/DocumentsContext.tsx"}],"kindLabel":"datastore"},"web_hooks":{"id":"web_hooks","label":"hooks/","kind":"transform","zone":"browser","subtitle":"27 TanStack Query hooks","detail":"Every server read goes through a query hook, so the query key namespace is\nthe de-facto client data model. `useRealtimeEvents` is the odd one out: it\nopens a raw WebSocket to `/events` and turns server pushes into cache\ninvalidations.\n","metrics":{"loc":4540,"fanIn":5,"fanOut":6,"instability":0.55},"sources":[{"path":"web/src/hooks/useRealtimeEvents.tsx","lines":[36,80],"note":"/events WebSocket -> query invalidation"},{"path":"web/src/hooks/useDocumentsQuery.ts"}],"kindLabel":"module","scc":1},"web_query":{"id":"web_query","label":"queryClient","kind":"store","zone":"browser","subtitle":"TanStack cache, persisted","detail":"The query cache is persisted to IndexedDB via idb-keyval, with an explicit\nschema version and a corruption detector. Corruption is not silent: it\nsurfaces as `CacheCorruptionAlert`, which clears every store and reloads.\n","metrics":{"loc":329,"fanIn":4,"fanOut":1,"instability":0.2},"sources":[{"path":"web/src/lib/queryClient.ts","lines":[1,200],"note":"IndexedDB persister + corruption detection"}],"kindLabel":"cache","scc":1},"web_lib":{"id":"web_lib","label":"lib/ + services/","kind":"transform","zone":"browser","subtitle":"utils, tree building, uploads","emits":["file-object"],"consumes":["presigned-upload-url"],"detail":"Document-tree construction, status colours, contrast, date maths, context-\nmenu actions, and the upload tracker. `lib/` imports back into\n`components/` (13 resolved imports), which is what closes the largest\ncircular dependency in the frontend.\n","metrics":{"loc":1764,"fanIn":4,"fanOut":4,"instability":0.5},"sources":[{"path":"web/src/lib/documentTree.ts"},{"path":"web/src/lib/contextMenuActions.ts"},{"path":"web/src/services/upload.ts"}],"kindLabel":"module"},"web_apiclient":{"id":"web_apiclient","label":"lib/api.ts","kind":"release","zone":"browser","subtitle":"fetch + CSRF + session handling","consumes":["csrf-token"],"detail":"The only place the browser talks REST. Caches a CSRF token from\n`/api/csrf-token`, attaches it to state-changing requests, and translates a\n`SESSION_EXPIRED` response into a redirect to `/login`. It deliberately\ndoes *not* redirect on a plain `UNAUTHORIZED` \u2014 a fresh visitor with no\nsession should get a clean login, not a \"session expired\" modal.\n","metrics":{"loc":530,"fanIn":7,"fanOut":2,"instability":0.22},"sources":[{"path":"web/src/lib/api.ts","symbol":"handleSessionExpired","lines":[28,70]}],"kindLabel":"api","scc":1},"web_idb":{"id":"web_idb","label":"IndexedDB","kind":"store","zone":"browser","subtitle":"two independent stores","detail":"Two unrelated stores share the name. `ship-{roomPrefix}-{documentId}` holds\nthe Yjs document state written by y-indexeddb, which is what makes the\neditor work offline. The idb-keyval store holds the persisted TanStack\nQuery cache. Only the second one has a corruption check.\n","metrics":{"loc":0,"fanIn":2,"fanOut":1,"instability":0.33},"sources":[{"path":"web/src/components/Editor.tsx","lines":[372,372],"note":"new IndexeddbPersistence(`ship-${roomPrefix}-${documentId}`)"},{"path":"web/src/lib/queryClient.ts","lines":[13,20],"note":"idb-keyval stores for cache + metadata"}],"kindLabel":"datastore","scc":1},"shared":{"id":"shared","label":"@ship/shared","kind":"transform","zone":"contract","subtitle":"types + constants, 8 files","detail":"469 lines. Document, auth, workspace and API response types, plus the\nsession-timeout constants that both the auth middleware and the\ncollaboration server import so the two cannot drift. Must be built before\napi or web will compile.\n","metrics":{"loc":469,"fanIn":9,"fanOut":0,"instability":0.0},"sources":[{"path":"shared/src/types/document.ts"},{"path":"shared/src/constants.ts"}],"kindLabel":"package"},"cloudfront":{"id":"cloudfront","label":"CloudFront","kind":"control","zone":"edge","subtitle":"one domain, two origins","detail":"Everything enters here. The default behaviour serves the SPA from S3 with a\nviewer-request function for SPA routing; five ordered behaviours\n(`/api/*`, `/health`, `/collaboration/*`, `/events`, `/.well-known/*`) go\nto the `EB-API` custom origin instead. The WebSocket behaviours use an\norigin request policy rather than legacy `forwarded_values` so the upgrade\nsurvives. This is also why the API must be health-checked through\nCloudFront: the ALB security group only admits CloudFront's prefix list.\n","sources":[{"path":"terraform/s3-cloudfront.tf","lines":[128,250],"note":"origins + ordered_cache_behavior blocks"},{"path":"terraform/security-groups.tf"},{"path":"terraform/waf.tf"}],"kindLabel":"router","metrics":{"fanIn":5,"fanOut":2,"instability":0.29},"scc":1},"s3_frontend":{"id":"s3_frontend","label":"S3 \u2014 SPA bundle","kind":"store","zone":"edge","subtitle":"origin access control only","emits":["spa-bundle"],"detail":"Built by `pnpm build:web` and pushed by `scripts/deploy-frontend.sh`.\nPrivate bucket; reachable only through the CloudFront origin access\ncontrol. Versioned and encrypted at rest.\n","sources":[{"path":"terraform/s3-cloudfront.tf","symbol":"aws_s3_bucket.frontend"}],"kindLabel":"bucket","metrics":{"fanIn":1,"fanOut":0,"instability":0.0}},"eb":{"id":"eb","label":"Elastic Beanstalk","kind":"control","zone":"edge","subtitle":"ALB + ASG, 1\u20134 Docker instances","detail":"Amazon Linux 2023 running Docker, behind an application load balancer.\nMinSize 1, MaxSize 4, scaling on 70% average CPU. The container entrypoint\nis `node dist/db/migrate.js && node dist/index.js` \u2014 migrations run on\nevery boot, before the server listens.\n\nTwo deploy paths disagree about session stickiness, and the repo does not\nsettle which one built the live environment. `terraform/elastic-beanstalk.tf`\nenumerates its settings explicitly and does not include `StickinessEnabled`;\n`scripts/deploy-api.sh:187` sets it to `true`, but only on the\n`create-environment` branch \u2014 its update branch passes no option settings at\nall. `scripts/deploy.sh`, the documented deploy, drives terraform. Confirm\nagainst the running environment before relying on either.\n","sources":[{"path":"terraform/elastic-beanstalk.tf","lines":[155,240],"note":"MinSize 1 / MaxSize 4 / LoadBalanced ALB"},{"path":"Dockerfile","note":"CMD: migrate then serve"}],"kindLabel":"container","metrics":{"fanIn":1,"fanOut":1,"instability":0.5},"scc":1},"api_entry":{"id":"api_entry","label":"index.ts","kind":"intake","zone":"api","subtitle":"boot order is the point","detail":"Loads SSM secrets *before* dynamically importing `app.ts`, so nothing\nmodule-scoped reads an unset env var. Then installs the process safety net,\nsets Slowloris timeouts (60s/65s/66s), attaches the collaboration\nWebSocket server to the same HTTP server, and listens.\n\nThe safety net lives here rather than in a library module on purpose:\nimporting the app from a test or the MCP server must not hijack the host\nprocess's error handling.\n","metrics":{"loc":228,"fanIn":1,"fanOut":3,"instability":0.75},"sources":[{"path":"api/src/index.ts","lines":[13,50]},{"path":"api/src/process-safety.ts"}],"kindLabel":"entrypoint","scc":1},"api_config":{"id":"api_config","label":"config/ssm.ts","kind":"transform","zone":"api","subtitle":"production secret loading","consumes":["ssm-parameters"],"detail":"Reads `/ship/{env}/DATABASE_URL`, `SESSION_SECRET`, `CORS_ORIGIN` and\nfriends from SSM Parameter Store with a 5s per-request timeout and 3\nbounded attempts. Only runs when `NODE_ENV=production` \u2014 the early return\nis a known test-masking hazard: a smoke test run under\n`NODE_ENV=development` never exercises this file at all.\n","metrics":{"loc":212,"fanIn":2,"fanOut":1,"instability":0.33},"sources":[{"path":"api/src/config/ssm.ts","lines":[35,60],"note":"timeout + retry policy"}],"kindLabel":"module"},"api_app":{"id":"api_app","label":"app.ts","kind":"control","zone":"api","subtitle":"middleware chain + 28 mounts","emits":["csrf-token"],"detail":"One function, `createApp`, builds the whole chain in order: trust-proxy hop\ncount, compression, helmet/CSP, two `/api/` rate limiters, CORS, body\nparsers, cookie parser, express-session, CSRF, Swagger, then 28 route\nmounts. Order here is behaviour \u2014 the public feedback router must precede\nthe CSRF-protected mounts, and the login limiter must precede the auth\nroutes.\n","metrics":{"loc":464,"fanIn":1,"fanOut":4,"instability":0.8},"sources":[{"path":"api/src/app.ts","symbol":"createApp","lines":[222,420]}],"kindLabel":"router","scc":1},"api_mw":{"id":"api_mw","label":"middleware/","kind":"gate","zone":"api","subtitle":"auth, rate limit, visibility","consumes":["session-row"],"detail":"`authMiddleware` accepts either a `Bearer` API token or a session cookie,\nenforces a 15-minute inactivity window and a 12-hour absolute cap, and\nwrites `req.userId`/`req.workspaceId`. `visibility` scopes document reads.\n`redis-rate-limit-store` fronts Redis with a circuit breaker and fails\nopen (`passOnStoreError: true`) so a Redis outage degrades to per-process\nlimiting rather than locking everyone out.\n","metrics":{"loc":1278,"fanIn":3,"fanOut":5,"instability":0.62},"sources":[{"path":"api/src/middleware/auth.ts","symbol":"authMiddleware","lines":[169,300]},{"path":"api/src/middleware/rate-limit.ts"},{"path":"api/src/middleware/redis-rate-limit-store.ts"}],"kindLabel":"guard","scc":1},"api_routes":{"id":"api_routes","label":"routes/","kind":"release","zone":"api","subtitle":"29 files, 23k lines","emits":["session-row","presigned-upload-url","document-content-json"],"detail":"The REST surface, and by a wide margin the heaviest module in the repo:\n23,031 lines across 29 files, reaching into middleware, db, services, utils,\nthe collaboration server, the OpenAPI registry and S3. Most of that mass is\nraw SQL \u2014 there is no ORM, so query construction lives in the handlers.\n","metrics":{"loc":23031,"fanIn":1,"fanOut":8,"instability":0.89},"sources":[{"path":"api/src/routes/documents.ts"},{"path":"api/src/routes/issues.ts"},{"path":"api/src/routes/files.ts"}],"kindLabel":"endpoint"},"api_collab":{"id":"api_collab","label":"collaboration/","kind":"transform","zone":"api","subtitle":"Yjs rooms + /events, 1,570 lines","emits":["yjs-state","yjs-broadcast"],"consumes":["yjs-update","document-content-json"],"detail":"One file doing two jobs. It runs the Yjs sync protocol over\n`/collaboration/{docType}:{docId}`, holding each room's `Y.Doc` and\nawareness state in a process-local `Map` and debouncing persistence to\n`documents.yjs_state` every 2s. It also serves `/events`, a plain\nWebSocket that route handlers push to via `broadcastToUser`.\n\nBoth maps are per-process. Nothing replicates them.\n","metrics":{"loc":1570,"fanIn":2,"fanOut":7,"instability":0.78},"sources":[{"path":"api/src/collaboration/index.ts","lines":[95,130],"note":"docs / awareness Maps \u2014 process-local room state"},{"path":"api/src/collaboration/index.ts","symbol":"broadcastToUser","lines":[1056,1080]},{"path":"api/src/collaboration/index.ts","lines":[326,380],"note":"loadDoc \u2014 yjs_state, falling back to converting content JSON"}],"kindLabel":"service","scc":1},"api_services":{"id":"api_services","label":"services/","kind":"transform","zone":"api","subtitle":"the only outbound integrations","consumes":["caia-credentials"],"detail":"CAIA OAuth (PIV smartcard auth via Treasury's OIDC server), AWS Secrets\nManager, Bedrock-backed plan/retro analysis, audit logging, accountability\ninference, OAuth state. Every third-party call the API makes originates\nhere \u2014 routes never reach out directly.\n","metrics":{"loc":1885,"fanIn":2,"fanOut":6,"instability":0.75},"sources":[{"path":"api/src/services/caia.ts"},{"path":"api/src/services/ai-analysis.ts"},{"path":"api/src/services/secrets-manager.ts"}],"kindLabel":"service"},"api_utils":{"id":"api_utils","label":"utils/","kind":"transform","zone":"api","subtitle":"Yjs<->JSON, document CRUD","detail":"`yjsConverter` is the interesting one: it is what lets a document created\nthrough the REST API (plain TipTap JSON in `content`) be opened by the\ncollaborative editor, by converting JSON into Yjs the first time a room\nloads. Also holds the circuit breaker used by the Redis store.\n","metrics":{"loc":2065,"fanIn":4,"fanOut":1,"instability":0.2},"sources":[{"path":"api/src/utils/yjsConverter.ts"},{"path":"api/src/utils/document-crud.ts"},{"path":"api/src/utils/circuitBreaker.ts"}],"kindLabel":"module"},"api_openapi":{"id":"api_openapi","label":"openapi/ + swagger","kind":"release","zone":"api","subtitle":"zod -> spec -> Swagger -> MCP","emits":["openapi-spec"],"detail":"23 schema modules register zod definitions and paths into one registry at\nimport time; `swagger.ts` generates the document once at module load and\nserves it at `/api/docs`, `/api/openapi.json` and `/api/openapi.yaml`.\nRegistration is not optional \u2014 an endpoint that skips it is invisible to\nSwagger and produces no MCP tool.\n","metrics":{"loc":5583,"fanIn":2,"fanOut":0,"instability":0.0},"sources":[{"path":"api/src/openapi/registry.ts"},{"path":"api/src/openapi/schemas/index.ts"},{"path":"api/src/swagger.ts"}],"kindLabel":"api"},"api_db":{"id":"api_db","label":"db/","kind":"transform","zone":"api","subtitle":"pool, migrations, seed","detail":"A single `pg.Pool` \u2014 no ORM, no query builder. Pool timing, TLS resolution\nand which `.env` files load are each split into their own module because\neach was a defect: the app pool once connected in plaintext while the\nmigrate and seed scripts either side of it negotiated TLS.\n\n`migrate.ts` applies `schema.sql` first, then numbered migrations tracked\nin `schema_migrations`, each in its own transaction.\n","metrics":{"loc":3381,"fanIn":5,"fanOut":2,"instability":0.29},"sources":[{"path":"api/src/db/client.ts","lines":[34,60],"note":"pool config \u2014 TLS, statement_timeout 30s, maxUses 7500"},{"path":"api/src/db/migrate.ts","lines":[25,60]},{"path":"api/src/db/schema.sql"}],"kindLabel":"module"},"api_mcp":{"id":"api_mcp","label":"mcp/server.ts","kind":"intake","zone":"agent","subtitle":"separate stdio process","consumes":["openapi-spec"],"detail":"Not part of the served application. A standalone MCP server that reads\n`~/.claude/.env`, fetches `/api/openapi.json` from a *running* Ship\ninstance, and generates one MCP tool per operation at startup. Its tool\nsurface therefore tracks whichever deployment `SHIP_URL` points at \u2014 not\nthis checkout.\n","metrics":{"loc":524,"fanIn":0,"fanOut":1,"instability":1.0},"sources":[{"path":"api/src/mcp/server.ts","lines":[1,60]}],"kindLabel":"cli"},"pg":{"id":"pg","label":"PostgreSQL / Aurora","kind":"store","zone":"state","subtitle":"18 tables, one for content","consumes":["yjs-state"],"detail":"Aurora PostgreSQL in private subnets, reachable only from the EB security\ngroup. Every content type \u2014 wiki, issue, program, project, sprint, person \u2014\nis a row in `documents`, distinguished by `document_type`. Relationships\nlive in `document_associations`; all three legacy association columns have\nbeen dropped. `documents.yjs_state` (bytea) holds the CRDT state and\n`documents.content` (jsonb) is kept in sync as a readable fallback.\n","sources":[{"path":"api/src/db/schema.sql","lines":[106,210],"note":"documents + document_associations"},{"path":"terraform/database.tf"}],"kindLabel":"database","metrics":{"fanIn":2,"fanOut":0,"instability":0.0}},"redis":{"id":"redis","label":"ElastiCache Redis","kind":"store","zone":"state","subtitle":"single node, rate limits only","detail":"One `cache.*` node, engine 7.1. Its only consumer is the rate-limit store \u2014\ngrep for `REDIS_URL` returns app.ts, rate-limit.ts, redis-rate-limit-store.ts\nand ssm.ts, and nothing else. If `REDIS_URL` is unset the limiters fall back\nto per-process memory stores.\n","sources":[{"path":"terraform/redis.tf","lines":[80,90]},{"path":"api/src/middleware/redis-rate-limit-store.ts"}],"kindLabel":"cache","metrics":{"fanIn":1,"fanOut":0,"instability":0.0}},"s3_uploads":{"id":"s3_uploads","label":"S3 \u2014 uploads","kind":"store","zone":"state","subtitle":"presigned PUT, CORS, lifecycle","consumes":["file-object"],"detail":"File attachments. The browser uploads directly with a presigned URL rather\nthan streaming through the API, then calls `POST /api/files/:id/confirm`.\nMetadata rows live in the `files` table; only bytes live here.\n","sources":[{"path":"api/src/routes/files.ts","lines":[100,250],"note":"presigned PUT + confirm"},{"path":"terraform/s3-cloudfront.tf"}],"kindLabel":"bucket","metrics":{"fanIn":1,"fanOut":0,"instability":0.0}},"aws_params":{"id":"aws_params","label":"SSM + Secrets Manager","kind":"external","zone":"vendor","subtitle":"/ship/{env}/*","emits":["ssm-parameters","caia-credentials"],"detail":"Parameter Store holds runtime config (DATABASE_URL, SESSION_SECRET,\nCORS_ORIGIN, CDN_DOMAIN, APP_BASE_URL) read once at boot. Secrets Manager\nholds `/ship/{env}/caia-credentials`, re-fetched on every auth flow so a\ncredential rotation takes effect without a restart.\n","sources":[{"path":"api/src/config/ssm.ts"},{"path":"api/src/services/secrets-manager.ts"},{"path":"terraform/ssm.tf"}],"kindLabel":"vendor","metrics":{"fanIn":2,"fanOut":0,"instability":0.0}},"caia":{"id":"caia","label":"Treasury CAIA","kind":"external","zone":"vendor","subtitle":"OIDC / PIV smartcard","detail":"Treasury's Customer Authentication & Identity Architecture, spoken via\nopenid-client v6. Supplies the PIV/X509Cert, Login.gov and ID.me credential\npaths. Email is the identifier that persists; `sub` explicitly is not.\n","sources":[{"path":"api/src/services/caia.ts"},{"path":"api/src/routes/caia-auth.ts"}],"kindLabel":"vendor","metrics":{"fanIn":1,"fanOut":0,"instability":0.0}},"bedrock":{"id":"bedrock","label":"AWS Bedrock","kind":"external","zone":"vendor","subtitle":"claude-opus-4-5, us-east-1","detail":"Scores weekly plans for falsifiability and workload, and compares retros\nagainst their plan for coverage. Degrades gracefully \u2014 a failed client\ninit or invocation returns no score rather than failing the request.\n","sources":[{"path":"api/src/services/ai-analysis.ts","lines":[1,40]},{"path":"terraform/elastic-beanstalk.tf"}],"kindLabel":"vendor","metrics":{"fanIn":1,"fanOut":0,"instability":0.0}}},"zones":{"browser":{"id":"browser","label":"Browser","accent":"intake","note":"React 18 + Vite SPA, TipTap/Yjs editor, TanStack Query"},"contract":{"id":"contract","label":"Shared contract","accent":"transform","note":"the only code both halves compile against"},"agent":{"id":"agent","label":"Agent surface","accent":"intake","note":"a developer-machine process, not part of the deployment"},"edge":{"id":"edge","label":"AWS edge","accent":"control","note":"CloudFront in front of S3 (SPA) and Elastic Beanstalk (API)"},"api":{"id":"api","label":"API process","accent":"transform","note":"Express + ws on Node 20, one Docker image"},"state":{"id":"state","label":"Durable state","accent":"store","note":"inside the VPC, reachable only from the EB security group"},"vendor":{"id":"vendor","label":"External services","accent":"external"}},"loops":[{"id":"B1","type":"balancing","label":"Yjs edit convergence","members":["web_editor","cloudfront","eb","api_entry","api_collab"],"edges":["f01","r04","r06","r07","a03"],"note":null,"derived":false},{"id":"B2","type":"balancing","label":"Realtime cache invalidation","members":["web_hooks","cloudfront","eb","api_entry","api_collab"],"edges":["f02","r05","r06","r07","a03"],"note":null,"derived":false},{"id":"B3","type":"balancing","label":"Session expiry -> re-auth","members":["web_apiclient","cloudfront","eb","api_entry","api_app","api_mw"],"edges":["f03","r03","r06","r07","a02","a05"],"note":null,"derived":false},{"id":"B4","type":"balancing","label":"Query-cache corruption recovery","members":["web_query","web_idb"],"edges":["f04","w37"],"note":null,"derived":false}],"findings":[{"id":"auto-7","kind":"god-module","severity":"high","title":"\u201ccomponents/\u201d is coupled in both directions","nodes":["web_components"],"detail":"4 modules depend on it and it depends on 7 others. It is simultaneously hard to change (many dependents) and hard to keep stable (many dependencies). This is the classic shape of a module that has absorbed responsibilities that belong elsewhere \u2014 split it along the two directions of coupling.","derived":true},{"id":"auto-10","kind":"god-module","severity":"high","title":"\u201chooks/\u201d is coupled in both directions","nodes":["web_hooks"],"detail":"5 modules depend on it and it depends on 6 others. It is simultaneously hard to change (many dependents) and hard to keep stable (many dependencies). This is the classic shape of a module that has absorbed responsibilities that belong elsewhere \u2014 split it along the two directions of coupling.","derived":true},{"id":"auto-6","kind":"oversized-module","severity":"high","title":"\u201ccomponents/\u201d is 12\u00d7 the median module size","nodes":["web_components"],"detail":"19010 lines against a median of 1570. Size on its own is not a defect, but a module this far off the distribution is almost always several modules that were never separated \u2014 and it is the hardest place in the codebase to change safely, review, or test in isolation.","derived":true},{"id":"auto-11","kind":"oversized-module","severity":"high","title":"\u201croutes/\u201d is 14\u00d7 the median module size","nodes":["api_routes"],"detail":"23031 lines against a median of 1570. Size on its own is not a defect, but a module this far off the distribution is almost always several modules that were never separated \u2014 and it is the hardest place in the codebase to change safely, review, or test in isolation.","derived":true},{"id":"auto-4","kind":"undeclared-cycle","severity":"high","title":"Circular dependency: Editor + TipTap \u2192 lib/ + services/ \u2192 components/ \u2192 hooks/","nodes":["web_editor","web_lib","web_components","web_hooks","web_contexts"],"detail":"These modules import each other in a cycle. Nothing here is marked as intentional feedback, so this is a circular dependency: it makes build order, initialisation order, and test isolation all ambiguous, and it means none of these modules can be understood \u2014 or extracted \u2014 on its own.","derived":true},{"id":"manual-1","severity":"medium","kind":"boundary-not-modelled","title":"Nodes are directories, so intra-directory coupling is invisible","nodes":["api_routes","web_components"],"detail":"Every node here is a folder, not a file. routes/ (23k lines) and\ncomponents/ (19k lines) are drawn as single boxes, so the coupling *inside*\nthem \u2014 the part most likely to hurt \u2014 does not appear. The measured import\ncounts on each edge are cross-directory only; imports within a directory\nwere dropped during aggregation. For file-level detail, re-extract with\ndependency-cruiser scoped to one directory.\n"},{"id":"auto-9","kind":"hub-module","severity":"medium","title":"\u201cEditor + TipTap\u201d reaches into 8 other modules","nodes":["web_editor"],"detail":"Fan-out of 8, instability 0.73. This module knows about most of the codebase, so almost any change elsewhere can break it, and reading it requires holding the whole system in your head. Look for a seam: usually a hub like this is one coordinator plus several collaborators that could be injected instead of imported.","derived":true},{"id":"auto-12","kind":"hub-module","severity":"medium","title":"\u201croutes/\u201d reaches into 8 other modules","nodes":["api_routes"],"detail":"Fan-out of 8, instability 0.89. This module knows about most of the codebase, so almost any change elsewhere can break it, and reading it requires holding the whole system in your head. Look for a seam: usually a hub like this is one coordinator plus several collaborators that could be injected instead of imported.","derived":true},{"id":"auto-5","kind":"oversized-module","severity":"medium","title":"\u201cpages/\u201d is 7\u00d7 the median module size","nodes":["web_pages"],"detail":"12489 lines against a median of 1570. Size on its own is not a defect, but a module this far off the distribution is almost always several modules that were never separated \u2014 and it is the hardest place in the codebase to change safely, review, or test in isolation.","derived":true},{"id":"auto-8","kind":"oversized-module","severity":"medium","title":"\u201cEditor + TipTap\u201d is 4\u00d7 the median module size","nodes":["web_editor"],"detail":"6814 lines against a median of 1570. Size on its own is not a defect, but a module this far off the distribution is almost always several modules that were never separated \u2014 and it is the hardest place in the codebase to change safely, review, or test in isolation.","derived":true},{"id":"manual-2","severity":"medium","kind":"runtime-dependency-not-static","title":"The MCP tool surface is not derivable from this repository","nodes":["api_mcp"],"detail":"mcp/server.ts has no import edge into the rest of the codebase \u2014 it builds\nits tools by fetching /api/openapi.json from whatever SHIP_URL points at,\nat startup. So its behaviour is a property of a deployment, not of a\ncommit, and it silently tracks whichever environment the operator\nconfigured. The edge into CloudFront is marked heuristic for that reason.\n"},{"id":"manual-3","severity":"low","kind":"test-config-masking","title":"A smoke test can pass by skipping the code that breaks","nodes":["api_config"],"detail":"config/ssm.ts returns early unless NODE_ENV=production (ssm.ts:39). A\ncontainer smoke test run under development therefore never exercises secret\nloading, and has previously been reported as end-to-end verification when\nit was the opposite. Any claim about boot correctness has to state the\nNODE_ENV it ran under.\n"}],"views":{"flow":{"id":"flow","label":"Flow","blurb":"How a request, an edit and a secret actually travel \u2014 and what comes back.","direction":"RIGHT","bounds":{"minX":0,"minY":-88,"maxX":4222,"maxY":974.6666666666667},"nodes":[{"id":"api_app","x":2646,"y":273.7,"w":216,"h":76},{"id":"api_collab","x":3254,"y":278.3,"w":216,"h":76},{"id":"api_config","x":2646,"y":562.0,"w":216,"h":76},{"id":"api_db","x":3558,"y":333.9,"w":216,"h":76},{"id":"api_entry","x":2342,"y":224.7,"w":216,"h":76},{"id":"api_mcp","x":1274,"y":100,"w":216,"h":76},{"id":"api_mw","x":3254,"y":402.0,"w":216,"h":76},{"id":"api_openapi","x":2950,"y":366.7,"w":216,"h":76},{"id":"api_routes","x":2950,"y":254.7,"w":216,"h":76},{"id":"api_services","x":3254,"y":514.0,"w":216,"h":76},{"id":"aws_params","x":3948,"y":840.7,"w":216,"h":76},{"id":"bedrock","x":3948,"y":616.7,"w":216,"h":76},{"id":"caia","x":3948,"y":728.7,"w":216,"h":76},{"id":"cloudfront","x":1664,"y":125.3,"w":216,"h":76},{"id":"eb","x":1968,"y":224.7,"w":216,"h":76},{"id":"pg","x":3948,"y":302.7,"w":216,"h":76},{"id":"redis","x":3948,"y":414.7,"w":216,"h":76},{"id":"s3_frontend","x":1968,"y":112.7,"w":216,"h":76},{"id":"s3_uploads","x":3948,"y":190.7,"w":216,"h":76},{"id":"web_apiclient","x":970,"y":313,"w":216,"h":76},{"id":"web_editor","x":666,"y":485.7,"w":216,"h":76},{"id":"web_hooks","x":666,"y":313,"w":216,"h":76},{"id":"web_idb","x":1274,"y":437.7,"w":216,"h":76},{"id":"web_main","x":58,"y":338.3,"w":216,"h":76},{"id":"web_pages","x":362,"y":325.7,"w":216,"h":76},{"id":"web_query","x":970,"y":425,"w":216,"h":76}],"zones":{"agent":{"x":1248,"y":40,"w":268,"h":162},"api":{"x":2316,"y":164.7,"w":1484,"h":499.3},"browser":{"x":32,"y":242,"w":1484,"h":356.7},"edge":{"x":1638,"y":52.7,"w":572,"h":274},"state":{"x":3922,"y":130.7,"w":268,"h":386},"vendor":{"x":3922,"y":556.7,"w":268,"h":386}},"edges":[{"id":"r01","from":"web_main","to":"cloudfront","kind":"flow","label":"GET / (SPA)","route":"layer","points":[[274,389],[284,389],[284,571.7],[1601,571.7],[1601,188.7],[1664,188.7]]},{"id":"r02","from":"cloudfront","to":"s3_frontend","kind":"flow","label":"default behavior","note":"viewer-request CloudFront function rewrites SPA routes to /index.html","route":"layer","points":[[1880,150.7],[1968,150.7]]},{"id":"r03","from":"web_apiclient","to":"cloudfront","kind":"flow","label":"/api/* + CSRF","note":"session cookie is sameSite=strict, so the SPA must be same-origin","route":"layer","points":[[1186,351],[1569,351],[1569,163.3],[1664,163.3]]},{"id":"r04","from":"web_editor","to":"cloudfront","kind":"flow","label":"wss /collaboration/*","route":"layer","points":[[882,536.3],[1585,536.3],[1585,176],[1664,176.0]]},{"id":"r05","from":"web_hooks","to":"cloudfront","kind":"flow","label":"wss /events","note":"useRealtimeEvents.tsx:36-80","route":"layer","points":[[882,332],[892,332],[892,302],[1553,302],[1553,150.7],[1664,150.7]]},{"id":"r06","from":"cloudfront","to":"eb","kind":"flow","label":"EB-API origin","note":"5 ordered cache behaviors; ALB SG admits only CloudFront's prefix list","route":"layer","points":[[1880,176.0],[1890,176.0],[1890,262.7],[1968,262.7]]},{"id":"r07","from":"eb","to":"api_entry","kind":"flow","label":"migrate, then serve","route":"layer","points":[[2184,262.7],[2342,262.7]]},{"id":"r08","from":"api_mcp","to":"cloudfront","kind":"flow","label":"GET /api/openapi.json","confidence":"heuristic","note":"resolved by SHIP_URL at runtime, not by an import","route":"layer","points":[[1490,138],[1664,138]]},{"id":"a01","from":"api_entry","to":"api_config","kind":"flow","label":"secrets first","note":"1 resolved import \u2014 dynamic, before app.ts is imported","route":"layer","points":[[2558,281.7],[2568,281.7],[2568,600.0],[2646,600.0]]},{"id":"a02","from":"api_entry","to":"api_app","kind":"flow","note":"1 resolved import (dynamic)","route":"layer","points":[[2558,262.7],[2578,262.7],[2578,311.7],[2646,311.7]]},{"id":"a03","from":"api_entry","to":"api_collab","kind":"flow","label":"attach ws","note":"1 resolved import (dynamic)","route":"layer","points":[[2558,243.7],[3216,243.7],[3216,303.7],[3254,303.7]]},{"id":"a04","from":"api_app","to":"api_routes","kind":"flow","label":"28 mounts","note":"28 resolved imports","route":"layer","points":[[2862,292.7],[2950,292.7]]},{"id":"a05","from":"api_app","to":"api_mw","kind":"flow","label":"rate limiters","note":"2 resolved imports","route":"layer","points":[[2862,330.7],[2872,330.7],[2872,452.7],[3254,452.7]]},{"id":"a06","from":"api_app","to":"api_openapi","kind":"flow","label":"setupSwagger","note":"1 resolved import","route":"layer","points":[[2862,311.7],[2882,311.7],[2882,404.7],[2950,404.7]]},{"id":"a08","from":"api_routes","to":"api_mw","kind":"flow","label":"authed()","note":"39 resolved imports \u2014 the densest edge in the backend","route":"layer","points":[[3166,305.3],[3186,305.3],[3186,427.3],[3254,427.3]]},{"id":"a09","from":"api_routes","to":"api_db","kind":"flow","label":"pool.query","note":"26 resolved imports","route":"layer","points":[[3166,292.7],[3196,292.7],[3196,364.3],[3558,364.3]]},{"id":"a10","from":"api_routes","to":"api_services","kind":"flow","note":"16 resolved imports","route":"layer","points":[[3166,318.0],[3176,318.0],[3176,552.0],[3254,552.0]]},{"id":"a13","from":"api_routes","to":"api_collab","kind":"control","label":"broadcastToUser","note":"5 resolved imports \u2014 documents.ts, projects.ts, issues.ts, weekly-plans.ts","route":"layer","points":[[3166,280.0],[3206,280.0],[3206,329.0],[3254,329.0]]},{"id":"a15","from":"api_services","to":"api_db","kind":"flow","note":"4 resolved imports","route":"layer","points":[[3470,529.2],[3490,529.2],[3490,394.7],[3558,394.7]]},{"id":"a18","from":"api_mw","to":"api_db","kind":"flow","note":"2 resolved imports","route":"layer","points":[[3470,427.3],[3480,427.3],[3480,379.5],[3558,379.5]]},{"id":"a21","from":"api_collab","to":"api_db","kind":"flow","note":"1 resolved import","route":"layer","points":[[3470,329.0],[3480,329.0],[3480,349.1],[3558,349.1]]},{"id":"s01","from":"api_db","to":"pg","kind":"flow","label":"pg.Pool (TLS)","route":"layer","points":[[3774,371.9],[3837,371.9],[3837,353.3],[3948,353.3]]},{"id":"s02","from":"api_mw","to":"redis","kind":"flow","label":"rate-limit store","note":"circuit-breakered, passOnStoreError - fails open","route":"layer","points":[[3470,452.7],[3948,452.7]]},{"id":"s03","from":"api_routes","to":"s3_uploads","kind":"flow","label":"presigned PUT","route":"layer","points":[[3166,267.3],[3837,267.3],[3837,228.7],[3948,228.7]]},{"id":"s04","from":"api_config","to":"aws_params","kind":"flow","label":"GetParameter","route":"layer","points":[[2862,600],[3837,600],[3837,891.3],[3948,891.3]]},{"id":"s05","from":"api_services","to":"aws_params","kind":"flow","label":"caia-credentials","route":"layer","points":[[3470,574.8],[3853,574.8],[3853,866.0],[3948,866]]},{"id":"s06","from":"api_services","to":"caia","kind":"flow","label":"OIDC","route":"layer","points":[[3470,559.6],[3869,559.6],[3869,766.7],[3948,766.7]]},{"id":"s07","from":"api_services","to":"bedrock","kind":"flow","label":"InvokeModel","route":"layer","points":[[3470,544.4],[3885,544.4],[3885,654.7],[3948,654.7]]},{"id":"s08","from":"api_collab","to":"pg","kind":"data","label":"yjs_state (2s debounce)","note":"the data lens draws this from emits/consumes instead","route":"layer","points":[[3470,303.7],[3837,303.7],[3837,328],[3948,328.0]]},{"id":"w01","from":"web_main","to":"web_pages","kind":"flow","label":"lazy routes","note":"24 resolved imports","route":"layer","points":[[274,363.7],[362,363.7]]},{"id":"w05","from":"web_pages","to":"web_hooks","kind":"flow","note":"39 resolved imports","route":"layer","points":[[578,351],[666,351]]},{"id":"w09","from":"web_pages","to":"web_editor","kind":"flow","note":"2 resolved imports","route":"layer","points":[[578,376.3],[588,376.3],[588,523.7],[666,523.7]]},{"id":"w23","from":"web_hooks","to":"web_apiclient","kind":"flow","note":"18 resolved imports","route":"layer","points":[[882,351],[970,351]]},{"id":"w26","from":"web_hooks","to":"web_query","kind":"flow","note":"1 resolved import","route":"layer","points":[[882,370],[892,370],[892,463],[970,463]]},{"id":"w36","from":"web_editor","to":"web_idb","kind":"data","label":"Yjs state","note":"y-indexeddb \u2014 what makes the editor work offline","route":"layer","points":[[882,511],[1196,511],[1196,488.3],[1274,488.3]]},{"id":"w37","from":"web_query","to":"web_idb","kind":"data","label":"persisted cache","note":"idb-keyval, schema-versioned","route":"layer","points":[[1186,463],[1274,463]]},{"id":"f01","from":"api_collab","to":"web_editor","kind":"feedback","label":"Yjs sync + awareness","polarity":"-","loop":"B1","note":"The convergence loop. Every local edit is applied optimistically, sent as a\nYjs update, merged server-side and rebroadcast to the other clients in the\nroom. Corrective, and it settles \u2014 CRDT merge is commutative, so the\nreplicas agree regardless of arrival order.\n","route":"arc","labelAt":[2079.4,562.0],"points":[[3248.0,325.5],[2602.4,567.8],[1564.0,651.0],[888.0,514.5]]},{"id":"f02","from":"api_collab","to":"web_hooks","kind":"feedback","label":"/events push","polarity":"-","loop":"B2","note":"broadcastToUser -> the /events socket -> query invalidation -> refetch.\nCorrective: it pulls the client cache back toward server truth after a\nmutation someone else made.\n","route":"channel","labelAt":[2068.0,-6],"points":[[3362.0,278.3],[3362.0,-6],[774.0,-6],[774.0,313]]},{"id":"f03","from":"api_mw","to":"web_apiclient","kind":"feedback","label":"401 SESSION_EXPIRED","polarity":"-","loop":"B3","note":"15-minute inactivity window, 12-hour absolute cap. lib/api.ts turns\nSESSION_EXPIRED into a redirect to /login with returnTo, but deliberately\nnot a plain UNAUTHORIZED.\n","route":"arc","labelAt":[2214.5,537.9],"points":[[3248.0,435.6],[2664.9,603.0],[1760.3,567.7],[1192.0,355.4]]},{"id":"f04","from":"web_idb","to":"web_query","kind":"feedback","label":"corruption -> clear + reload","polarity":"-","loop":"B4","note":"The persister validates the schema version and the restored shape on read.\nOn failure CacheCorruptionAlert offers clearAllCacheData() followed by\nwindow.location.reload(). One of the few loops in this system that a human\nhas to close by clicking.\n","route":"arc","labelAt":[1231.5,433.4],"points":[[1268.0,470.9],[1248.7,422.1],[1215.3,420.7],[1192.0,467.8]]},{"id":"g01","from":"api_collab","to":"redis","kind":"gap","label":"no cross-instance room sync","note":"DERIVED, not observed. Three observed facts: the Yjs `docs` and `awareness`\nMaps are process-local (collaboration/index.ts:95-130); Redis has no\nconsumer other than the rate limiters (grep REDIS_URL -> app.ts,\nrate-limit.ts, redis-rate-limit-store.ts, ssm.ts); the ASG scales to 4\ninstances.\n\nThe consequence I have NOT run: above one instance, two people editing the\nsame document can be routed to different processes, each holding its own\nY.Doc for that room and persisting over the other every 2s. Session\nstickiness does not address this either way \u2014 it pins a browser to an\ninstance, not a document to an instance, so two different users on the same\ndocument can still land on two different rooms. To confirm or kill this,\nrun two instances behind the ALB and open one document as two users.\n","route":"arc","labelAt":[3726.9,293.6],"points":[[3476.0,338.7],[3630.3,243.2],[3835.3,283.5],[3942.0,430.3]]},{"id":"g02","from":"api_app","to":"redis","kind":"gap","label":"CSRF store is in-process","note":"DERIVED from an observed fact: `app.use(session({...}))` at app.ts:335-345\npasses no `store`, so express-session uses the default MemoryStore, and\ncsrf-sync keeps the CSRF secret in that session. A token minted by\n`/api/csrf-token` on one instance therefore has no matching secret on\nanother.\n\nHow much this bites depends on the stickiness question in the Elastic\nBeanstalk note. With stickiness on, a browser keeps hitting the same\ninstance and this mostly does not surface \u2014 until that instance is replaced\nby a deploy or a scale-in, at which point every in-flight CSRF secret is\ngone. With it off, it surfaces as intermittent 403s under load. Neither\ncase is reproduced here. Application auth is unaffected either way: that is\na real `sessions` table in Postgres, not express-session.\n","route":"arc","labelAt":[3420.3,240.5],"points":[[2868.0,324.0],[3189.2,167.7],[3661.7,218.9],[3942.0,440.3]]}]},"structure":{"id":"structure","label":"Structure","blurb":"What the parts are and what depends on what, with measured import counts.","direction":"RIGHT","bounds":{"minX":0,"minY":8,"maxX":1395,"maxY":1628},"nodes":[{"id":"api_app","x":424,"y":632,"w":216,"h":76},{"id":"api_collab","x":714,"y":928,"w":216,"h":76},{"id":"api_config","x":858,"y":1520,"w":216,"h":76},{"id":"api_db","x":32,"y":1372,"w":216,"h":76},{"id":"api_entry","x":714,"y":484,"w":216,"h":76},{"id":"api_mw","x":425,"y":1076,"w":216,"h":76},{"id":"api_openapi","x":425,"y":928,"w":216,"h":76},{"id":"api_routes","x":569,"y":780,"w":216,"h":76},{"id":"api_services","x":177,"y":1076,"w":216,"h":76},{"id":"api_utils","x":425,"y":1224,"w":216,"h":76},{"id":"pg","x":32,"y":1520,"w":216,"h":76},{"id":"redis","x":177,"y":1224,"w":216,"h":76},{"id":"shared","x":714,"y":1224,"w":216,"h":76},{"id":"web_apiclient","x":1003,"y":1076,"w":216,"h":76},{"id":"web_components","x":1003,"y":336,"w":216,"h":76},{"id":"web_contexts","x":1003,"y":780,"w":216,"h":76},{"id":"web_editor","x":1003,"y":484,"w":216,"h":76},{"id":"web_hooks","x":1003,"y":928,"w":216,"h":76},{"id":"web_lib","x":1003,"y":632,"w":216,"h":76},{"id":"web_main","x":858,"y":40,"w":216,"h":76},{"id":"web_pages","x":1147,"y":188,"w":216,"h":76},{"id":"web_query","x":714,"y":1076,"w":216,"h":76}],"zones":{},"edges":[{"id":"a01","from":"api_entry","to":"api_config","kind":"flow","label":"secrets first","note":"1 resolved import \u2014 dynamic, before app.ts is imported","route":"layer","points":[[822,560],[822,592],[966,592],[966,1036],[677,1036],[677,1184],[966,1184],[966,1520]]},{"id":"a02","from":"api_entry","to":"api_app","kind":"flow","note":"1 resolved import (dynamic)","route":"layer","points":[[822,560],[822,592],[532,592],[532,632]]},{"id":"a03","from":"api_entry","to":"api_collab","kind":"flow","label":"attach ws","note":"1 resolved import (dynamic)","route":"layer","points":[[822,560],[822,592],[966,592],[966,888],[822,888],[822,928]]},{"id":"a04","from":"api_app","to":"api_routes","kind":"flow","label":"28 mounts","note":"28 resolved imports","route":"layer","points":[[532,708],[532,740],[677,740],[677,780]]},{"id":"a05","from":"api_app","to":"api_mw","kind":"flow","label":"rate limiters","note":"2 resolved imports","route":"layer","points":[[532,708],[532,888],[388,888],[388,1036],[533,1036],[533,1076]]},{"id":"a06","from":"api_app","to":"api_openapi","kind":"flow","label":"setupSwagger","note":"1 resolved import","route":"layer","points":[[532,708],[532,888],[533,888],[533,928]]},{"id":"a07","from":"api_app","to":"api_services","kind":"flow","label":"initializeCAIA","note":"1 resolved import","route":"layer","points":[[532,708],[532,888],[677,888],[677,1036],[285,1036],[285,1076]]},{"id":"a08","from":"api_routes","to":"api_mw","kind":"flow","label":"authed()","note":"39 resolved imports \u2014 the densest edge in the backend","route":"layer","points":[[677,856],[677,1036],[533,1036],[533,1076]]},{"id":"a09","from":"api_routes","to":"api_db","kind":"flow","label":"pool.query","note":"26 resolved imports","route":"layer","points":[[677,856],[677,1036],[140,1036],[140,1372]]},{"id":"a10","from":"api_routes","to":"api_services","kind":"flow","note":"16 resolved imports","route":"layer","points":[[677,856],[677,1036],[285,1036],[285,1076]]},{"id":"a11","from":"api_routes","to":"api_utils","kind":"flow","note":"11 resolved imports","route":"layer","points":[[677,856],[677,1184],[533,1184],[533,1224]]},{"id":"a12","from":"api_routes","to":"shared","kind":"flow","note":"11 resolved imports","route":"layer","points":[[677,856],[677,1184],[822,1184],[822,1224]]},{"id":"a13","from":"api_routes","to":"api_collab","kind":"control","label":"broadcastToUser","note":"5 resolved imports \u2014 documents.ts, projects.ts, issues.ts, weekly-plans.ts","route":"layer","points":[[677,856],[677,888],[822,888],[822,928]]},{"id":"a14","from":"api_routes","to":"api_openapi","kind":"flow","label":"registerPath","note":"1 resolved import; 19 schema modules call registry.registerPath","route":"layer","points":[[677,856],[677,888],[533,888],[533,928]]},{"id":"a15","from":"api_services","to":"api_db","kind":"flow","note":"4 resolved imports","route":"layer","points":[[285,1152],[285,1184],[140,1184],[140,1372]]},{"id":"a16","from":"api_services","to":"api_utils","kind":"flow","note":"4 resolved imports","route":"layer","points":[[285,1152],[285,1184],[533,1184],[533,1224]]},{"id":"a17","from":"api_services","to":"shared","kind":"flow","note":"1 resolved import","route":"layer","points":[[285,1152],[285,1184],[822,1184],[822,1224]]},{"id":"a18","from":"api_mw","to":"api_db","kind":"flow","note":"2 resolved imports","route":"layer","points":[[533,1152],[533,1184],[140,1184],[140,1372]]},{"id":"a19","from":"api_mw","to":"api_utils","kind":"flow","label":"circuitBreaker","note":"1 resolved import","route":"layer","points":[[533,1152],[533,1224]]},{"id":"a20","from":"api_mw","to":"shared","kind":"flow","note":"1 resolved import","route":"layer","points":[[533,1152],[533,1184],[822,1184],[822,1224]]},{"id":"a21","from":"api_collab","to":"api_db","kind":"flow","note":"1 resolved import","route":"layer","points":[[822,1004],[822,1036],[677,1036],[677,1332],[140,1332],[140,1372]]},{"id":"a22","from":"api_collab","to":"api_utils","kind":"flow","label":"yjsConverter","note":"2 resolved imports","route":"layer","points":[[822,1004],[822,1036],[677,1036],[677,1184],[533,1184],[533,1224]]},{"id":"a23","from":"api_collab","to":"api_mw","kind":"flow","label":"session TTL","note":"1 resolved import \u2014 SESSION_INACTIVITY_LIMIT_MS","route":"layer","points":[[822,1004],[822,1036],[533,1036],[533,1076]]},{"id":"a24","from":"api_collab","to":"shared","kind":"flow","note":"1 resolved import","route":"layer","points":[[822,1004],[822,1036],[677,1036],[677,1184],[822,1184],[822,1224]]},{"id":"a25","from":"api_utils","to":"api_db","kind":"flow","note":"3 resolved imports","route":"layer","points":[[533,1300],[533,1332],[140,1332],[140,1372]]},{"id":"a26","from":"api_db","to":"api_config","kind":"flow","note":"2 resolved imports \u2014 migrate/seed load secrets too","route":"layer","points":[[140,1448],[140,1480],[966,1480],[966,1520]]},{"id":"s01","from":"api_db","to":"pg","kind":"flow","label":"pg.Pool (TLS)","route":"layer","points":[[140,1448],[140,1520]]},{"id":"s02","from":"api_mw","to":"redis","kind":"flow","label":"rate-limit store","note":"circuit-breakered, passOnStoreError - fails open","route":"layer","points":[[533,1152],[533,1184],[285,1184],[285,1224]]},{"id":"w01","from":"web_main","to":"web_pages","kind":"flow","label":"lazy routes","note":"24 resolved imports","route":"layer","points":[[966,116],[966,148],[1255,148],[1255,188]]},{"id":"w02","from":"web_main","to":"web_contexts","kind":"flow","label":"provider stack","note":"9 resolved imports","route":"layer","points":[[966,116],[966,740],[1111,740],[1111,780]]},{"id":"w03","from":"web_main","to":"web_query","kind":"flow","note":"1 resolved import","route":"layer","points":[[966,116],[966,1036],[822,1036],[822,1076]]},{"id":"w04","from":"web_pages","to":"web_components","kind":"flow","note":"53 resolved imports","route":"layer","points":[[1255,264],[1255,296],[1111,296],[1111,336]]},{"id":"w05","from":"web_pages","to":"web_hooks","kind":"flow","note":"39 resolved imports","route":"layer","points":[[1255,264],[1255,888],[1111,888],[1111,928]]},{"id":"w06","from":"web_pages","to":"web_lib","kind":"flow","note":"26 resolved imports","route":"layer","points":[[1255,264],[1255,592],[1111,592],[1111,632]]},{"id":"w07","from":"web_pages","to":"web_contexts","kind":"flow","note":"22 resolved imports","route":"layer","points":[[1255,264],[1255,296],[966,296],[966,740],[1111,740],[1111,780]]},{"id":"w08","from":"web_pages","to":"web_apiclient","kind":"flow","note":"13 resolved imports","route":"layer","points":[[1255,264],[1255,1036],[1111,1036],[1111,1076]]},{"id":"w09","from":"web_pages","to":"web_editor","kind":"flow","note":"2 resolved imports","route":"layer","points":[[1255,264],[1255,444],[1111,444],[1111,484]]},{"id":"w10","from":"web_components","to":"web_lib","kind":"flow","note":"71 resolved imports \u2014 the densest edge in the repo","route":"layer","points":[[1111,412],[1111,444],[966,444],[966,592],[1111,592],[1111,632]]},{"id":"w11","from":"web_components","to":"web_hooks","kind":"flow","note":"40 resolved imports","route":"layer","points":[[1111,412],[1111,444],[966,444],[966,888],[1111,888],[1111,928]]},{"id":"w12","from":"web_components","to":"web_apiclient","kind":"flow","note":"18 resolved imports","route":"layer","points":[[1111,412],[1111,444],[966,444],[966,1036],[1111,1036],[1111,1076]]},{"id":"w13","from":"web_components","to":"shared","kind":"flow","note":"8 resolved imports","route":"layer","points":[[1111,412],[1111,444],[966,444],[966,740],[1255,740],[1255,888],[966,888],[966,1184],[822,1184],[822,1224]]},{"id":"w14","from":"web_components","to":"web_contexts","kind":"flow","note":"6 resolved imports","route":"layer","points":[[1111,412],[1111,444],[966,444],[966,592],[1255,592],[1255,740],[1111,740],[1111,780]]},{"id":"w15","from":"web_components","to":"web_editor","kind":"flow","note":"5 resolved imports","route":"layer","points":[[1111,412],[1111,484]]},{"id":"w16","from":"web_components","to":"web_query","kind":"flow","note":"2 resolved imports","route":"layer","points":[[1111,412],[1111,444],[966,444],[966,1036],[822,1036],[822,1076]]},{"id":"w17","from":"web_editor","to":"web_components","kind":"flow","note":"11 resolved imports \u2014 closes a cycle with w15","route":"layer","points":[[1111,484],[1111,412]]},{"id":"w18","from":"web_editor","to":"web_lib","kind":"flow","note":"12 resolved imports (lib/ + services/)","route":"layer","points":[[1111,560],[1111,632]]},{"id":"w19","from":"web_editor","to":"web_hooks","kind":"flow","note":"6 resolved imports","route":"layer","points":[[1111,560],[1111,592],[1255,592],[1255,888],[1111,888],[1111,928]]},{"id":"w20","from":"web_editor","to":"web_apiclient","kind":"flow","note":"1 resolved import","route":"layer","points":[[1111,560],[1111,592],[1255,592],[1255,1036],[1111,1036],[1111,1076]]},{"id":"w21","from":"web_editor","to":"shared","kind":"flow","note":"1 resolved import","route":"layer","points":[[1111,560],[1111,592],[1255,592],[1255,1184],[822,1184],[822,1224]]},{"id":"w22","from":"web_editor","to":"web_contexts","kind":"flow","note":"1 resolved import","route":"layer","points":[[1111,560],[1111,592],[1255,592],[1255,740],[1111,740],[1111,780]]},{"id":"w23","from":"web_hooks","to":"web_apiclient","kind":"flow","note":"18 resolved imports","route":"layer","points":[[1111,1004],[1111,1076]]},{"id":"w24","from":"web_hooks","to":"shared","kind":"flow","note":"3 resolved imports","route":"layer","points":[[1111,1004],[1111,1036],[966,1036],[966,1184],[822,1184],[822,1224]]},{"id":"w25","from":"web_hooks","to":"web_contexts","kind":"flow","note":"2 resolved imports","route":"layer","points":[[1111,928],[1111,856]]},{"id":"w26","from":"web_hooks","to":"web_query","kind":"flow","note":"1 resolved import","route":"layer","points":[[1111,1004],[1111,1036],[822,1036],[822,1076]]},{"id":"w27","from":"web_hooks","to":"web_components","kind":"flow","note":"1 resolved import \u2014 closes a cycle with w11","route":"layer","points":[[1111,928],[1111,888],[966,888],[966,444],[1111,444],[1111,412]]},{"id":"w28","from":"web_contexts","to":"web_hooks","kind":"flow","note":"4 resolved imports \u2014 closes a cycle with w25","route":"layer","points":[[1111,856],[1111,928]]},{"id":"w29","from":"web_contexts","to":"web_apiclient","kind":"flow","note":"2 resolved imports","route":"layer","points":[[1111,856],[1111,888],[966,888],[966,1036],[1111,1036],[1111,1076]]},{"id":"w30","from":"web_contexts","to":"web_lib","kind":"flow","note":"1 resolved import (services/upload)","route":"layer","points":[[1111,780],[1111,708]]},{"id":"w31","from":"web_lib","to":"web_components","kind":"flow","note":"13 resolved imports \u2014 closes a cycle with w10","route":"layer","points":[[1111,632],[1111,592],[966,592],[966,444],[1111,444],[1111,412]]},{"id":"w32","from":"web_lib","to":"web_contexts","kind":"flow","note":"1 resolved import \u2014 closes a cycle with w30","route":"layer","points":[[1111,708],[1111,780]]},{"id":"w33","from":"web_lib","to":"web_apiclient","kind":"flow","note":"1 resolved import","route":"layer","points":[[1111,708],[1111,740],[1255,740],[1255,1036],[1111,1036],[1111,1076]]},{"id":"w34","from":"web_lib","to":"shared","kind":"flow","note":"1 resolved import","route":"layer","points":[[1111,708],[1111,740],[1255,740],[1255,1184],[822,1184],[822,1224]]},{"id":"w35","from":"web_apiclient","to":"shared","kind":"flow","note":"1 resolved import","route":"layer","points":[[1111,1152],[1111,1184],[822,1184],[822,1224]]}]},"data":{"id":"data","label":"Data","blurb":"Where state settles \u2014 Postgres, Redis, S3 and two IndexedDB stores.","direction":"RIGHT","bounds":{"minX":0,"minY":8,"maxX":1216,"maxY":979},"nodes":[{"id":"api_app","x":32,"y":156,"w":216,"h":76},{"id":"api_collab","x":344,"y":639,"w":216,"h":76},{"id":"api_config","x":344,"y":871,"w":216,"h":76},{"id":"api_mcp","x":344,"y":272,"w":216,"h":76},{"id":"api_mw","x":344,"y":504,"w":216,"h":76},{"id":"api_openapi","x":32,"y":272,"w":216,"h":76},{"id":"api_routes","x":32,"y":407,"w":216,"h":76},{"id":"api_services","x":344,"y":755,"w":216,"h":76},{"id":"aws_params","x":32,"y":767.7,"w":216,"h":76},{"id":"pg","x":656,"y":620,"w":216,"h":76},{"id":"s3_frontend","x":32,"y":40,"w":216,"h":76},{"id":"s3_uploads","x":656,"y":388,"w":216,"h":76},{"id":"web_apiclient","x":344,"y":156,"w":216,"h":76},{"id":"web_editor","x":656,"y":736,"w":216,"h":76},{"id":"web_idb","x":968,"y":516.7,"w":216,"h":76},{"id":"web_lib","x":344,"y":388,"w":216,"h":76},{"id":"web_main","x":344,"y":40,"w":216,"h":76},{"id":"web_query","x":656,"y":504,"w":216,"h":76}],"zones":{},"edges":[{"id":"w36","from":"web_editor","to":"web_idb","kind":"data","label":"Yjs state","note":"y-indexeddb \u2014 what makes the editor work offline","route":"layer","points":[[872,774],[904,774],[904,567.3],[968,567.3]]},{"id":"w37","from":"web_query","to":"web_idb","kind":"data","label":"persisted cache","note":"idb-keyval, schema-versioned","route":"layer","points":[[872,542],[968,542]]},{"id":"d-caia-credentials-aws_params-api_services","from":"aws_params","to":"api_services","kind":"data","label":"caia-credentials","derived":true,"confidence":"heuristic","note":"\u201ccaia-credentials\u201d is emitted by SSM + Secrets Manager and consumed by services/.","route":"layer","points":[[248,793],[344,793]]},{"id":"d-csrf-token-api_app-web_apiclient","from":"api_app","to":"web_apiclient","kind":"data","label":"csrf-token","derived":true,"confidence":"heuristic","note":"\u201ccsrf-token\u201d is emitted by app.ts and consumed by lib/api.ts.","route":"layer","points":[[248,194],[344,194]]},{"id":"d-document-content-json-api_routes-api_collab","from":"api_routes","to":"api_collab","kind":"data","label":"document-content-json","derived":true,"confidence":"resolved","note":"\u201cdocument-content-json\u201d is emitted by routes/ and consumed by collaboration/.","route":"layer","points":[[248,464],[280,464],[280,677],[344,677]]},{"id":"d-file-object-web_lib-s3_uploads","from":"web_lib","to":"s3_uploads","kind":"data","label":"file-object","derived":true,"confidence":"heuristic","note":"\u201cfile-object\u201d is emitted by lib/ + services/ and consumed by S3 \u2014 uploads.","route":"layer","points":[[560,426],[656,426]]},{"id":"d-openapi-spec-api_openapi-api_mcp","from":"api_openapi","to":"api_mcp","kind":"data","label":"openapi-spec","derived":true,"confidence":"heuristic","note":"\u201copenapi-spec\u201d is emitted by openapi/ + swagger and consumed by mcp/server.ts.","route":"layer","points":[[248,310],[344,310]]},{"id":"d-presigned-upload-url-api_routes-web_lib","from":"api_routes","to":"web_lib","kind":"data","label":"presigned-upload-url","derived":true,"confidence":"heuristic","note":"\u201cpresigned-upload-url\u201d is emitted by routes/ and consumed by lib/ + services/.","route":"layer","points":[[248,426],[344,426]]},{"id":"d-session-row-api_routes-api_mw","from":"api_routes","to":"api_mw","kind":"data","label":"session-row","derived":true,"confidence":"resolved","note":"\u201csession-row\u201d is emitted by routes/ and consumed by middleware/.","route":"layer","points":[[248,445],[296,445],[296,542],[344,542]]},{"id":"d-spa-bundle-s3_frontend-web_main","from":"s3_frontend","to":"web_main","kind":"data","label":"spa-bundle","derived":true,"confidence":"heuristic","note":"\u201cspa-bundle\u201d is emitted by S3 \u2014 SPA bundle and consumed by main.tsx.","route":"layer","points":[[248,78],[344,78]]},{"id":"d-ssm-parameters-aws_params-api_config","from":"aws_params","to":"api_config","kind":"data","label":"ssm-parameters","derived":true,"confidence":"heuristic","note":"\u201cssm-parameters\u201d is emitted by SSM + Secrets Manager and consumed by config/ssm.ts.","route":"layer","points":[[248,818.3],[280,818.3],[280,909],[344,909]]},{"id":"d-yjs-broadcast-api_collab-web_editor","from":"api_collab","to":"web_editor","kind":"data","label":"yjs-broadcast","derived":true,"confidence":"resolved","note":"\u201cyjs-broadcast\u201d is emitted by collaboration/ and consumed by Editor + TipTap.","route":"layer","points":[[560,696],[592,696],[592,786.7],[656,786.7]]},{"id":"d-yjs-state-api_collab-pg","from":"api_collab","to":"pg","kind":"data","label":"yjs-state","derived":true,"confidence":"resolved","note":"\u201cyjs-state\u201d is emitted by collaboration/ and consumed by PostgreSQL / Aurora.","route":"layer","points":[[560,658],[656,658]]},{"id":"d-yjs-update-web_editor-api_collab","from":"web_editor","to":"api_collab","kind":"data","label":"yjs-update","derived":true,"confidence":"heuristic","note":"\u201cyjs-update\u201d is emitted by Editor + TipTap and consumed by collaboration/.","route":"layer","points":[[656,761.3],[608,761.3],[608,677],[560,677]]}]}},"viewOrder":["flow","structure","data"],"analysis":{"nodeCount":31,"edgeCount":97,"loopCount":4,"findingCount":12,"unreachable":[]}}</script>
+<script>
+"use strict";
+const S = JSON.parse(document.getElementById('system-graph-model').textContent);
+
+/* ======================================================================== */
+/* 1. design tokens -> CSS custom properties                                */
+/* ======================================================================== */
+function applyTheme(name) {
+  const t = S.tokens.themes[name], r = document.documentElement.style;
+  r.setProperty('--canvas', t.canvas);
+  r.setProperty('--surface', t.surface);
+  r.setProperty('--hairline', t.hairline);
+  r.setProperty('--ink', t.ink);
+  r.setProperty('--ink-muted', t.ink_muted);
+  r.setProperty('--hover', name === 'dark' ? 'rgba(255,255,255,.045)' : 'rgba(0,0,0,.035)');
+  for (const k of Object.keys(t.kinds)) {
+    r.setProperty('--acc-' + k, t.kinds[k].accent);
+    r.setProperty('--fill-' + k, t.kinds[k].fill);
+  }
+  for (const k of ['control', 'external', 'alert']) {
+    r.setProperty('--acc-' + k, t[k].accent);
+    r.setProperty('--fill-' + k, t[k].fill);
+  }
+  document.documentElement.dataset.theme = name;
+  document.getElementById('theme').textContent = name === 'dark' ? 'Light' : 'Dark';
+  ST.theme = name;
+}
+function pal(kind) {
+  const t = S.tokens.themes[ST.theme];
+  return t.kinds[kind] || t[kind] || t.control;
+}
+
+/* ======================================================================== */
+/* 2. state                                                                 */
+/* ======================================================================== */
+const ST = {
+  theme: 'dark',
+  ui: { rail: true, panel: true },
+  view: S.viewOrder[0],
+  focus: null,            // node id
+  loop: null,             // loop id
+  finding: null,
+  offKinds: new Set(),
+  show: { feedback: true, gaps: true, labels: true, metrics: false },
+  tx: 0, ty: 0, k: 1,
+};
+
+/* ======================================================================== */
+/* 3. shape language — one silhouette per stage kind                        */
+/*    Colour alone never carries category (CVD safety): the outline does too.*/
+/* ======================================================================== */
+const R = 10;
+function cardPath(kind, w, h) {
+  const r = R, hr = h / 2;
+  switch (kind) {
+    case 'intake':   // stadium cap on the LEFT  = work enters here
+      return `M ${hr},0 H ${w - r} a${r},${r} 0 0 1 ${r},${r} V ${h - r}
+              a${r},${r} 0 0 1 -${r},${r} H ${hr} A ${hr},${hr} 0 0 1 ${hr},0 Z`;
+    case 'release':  // stadium cap on the RIGHT = work leaves here
+      return `M ${r},0 H ${w - hr} A ${hr},${hr} 0 0 1 ${w - hr},${h} H ${r}
+              a${r},${r} 0 0 1 -${r},-${r} V ${r} a${r},${r} 0 0 1 ${r},-${r} Z`;
+    case 'gate':     // chevron in, chevron out = flow must pass a check
+      return `M 0,0 L 14,${hr} L 0,${h} H ${w - 14} L ${w},${hr} L ${w - 14},0 Z`;
+    case 'store':    // cylinder = state at rest
+      return `M 16,0 H ${w - r} a${r},${r} 0 0 1 ${r},${r} V ${h - r}
+              a${r},${r} 0 0 1 -${r},${r} H 16 A 16,${hr} 0 0 1 16,0 Z`;
+    case 'control':  // hexagon = orchestration / routing
+      return `M 15,0 H ${w - 15} L ${w},${hr} L ${w - 15},${h} H 15 L 0,${hr} Z`;
+    default:         // transform + external = plain process box
+      return `M ${r},0 H ${w - r} a${r},${r} 0 0 1 ${r},${r} V ${h - r}
+              a${r},${r} 0 0 1 -${r},${r} H ${r} a${r},${r} 0 0 1 -${r},-${r} V ${r}
+              a${r},${r} 0 0 1 ${r},-${r} Z`;
+  }
+}
+const PADX = { intake: 34, release: 20, gate: 20, store: 30, control: 20 };
+const PADR = { intake: 16, release: 36, gate: 22, store: 16, control: 22 };
+function padx(kind) { return PADX[kind] || 16; }
+function padr(kind) { return PADR[kind] || 16; }
+
+/* edge visual grammar — one style per relation, applied without exception  */
+const EDGE = {
+  flow:      { w: 2.4,  dash: '',      head: 'solid', tone: 'ink',      lab: false },
+  control:   { w: 1.75, dash: '1 5',   head: 'solid', tone: 'control',  lab: true  },
+  data:      { w: 1.75, dash: '',      head: 'open',  tone: 'release',  lab: true  },
+  feedback:  { w: 2.25, dash: '7 5',   head: 'solid', tone: 'gate',     lab: true  },
+  recursion: { w: 2.25, dash: '2 4',   head: 'solid', tone: 'store',    lab: true  },
+  violation: { w: 2.5,  dash: '',      head: 'solid', tone: 'alert',    lab: true  },
+  gap:       { w: 2,    dash: '3 6',   head: 'open',  tone: 'alert',    lab: true, ghost: .55 },
+};
+function edgeColor(kind) {
+  const t = S.tokens.themes[ST.theme], s = EDGE[kind] || EDGE.flow;
+  if (s.tone === 'ink') return t.ink_muted;
+  return (t.kinds[s.tone] || t[s.tone]).accent;
+}
+
+/* ======================================================================== */
+/* 4. svg helpers                                                           */
+/* ======================================================================== */
+const NS = 'http://www.w3.org/2000/svg';
+function el(n, a = {}, kids = []) {
+  const e = document.createElementNS(NS, n);
+  for (const k in a) if (a[k] != null) e.setAttribute(k, a[k]);
+  for (const c of [].concat(kids)) e.appendChild(c);
+  return e;
+}
+function txt(s, a = {}) { const e = el('text', a); e.textContent = s; return e; }
+function clip(s, n) { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+
+/* the point half-way ALONG the path, not the middle array index — a label
+   pinned to an arbitrary bend point is a label in the wrong place          */
+function midpoint(pts) {
+  let total = 0; const segs = [];
+  for (let i = 1; i < pts.length; i++) {
+    const d = Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+    segs.push(d); total += d;
+  }
+  let want = total / 2;
+  for (let i = 0; i < segs.length; i++) {
+    if (want <= segs[i] || i === segs.length - 1) {
+      const t = segs[i] ? want / segs[i] : 0;
+      return [pts[i][0] + (pts[i + 1][0] - pts[i][0]) * t,
+              pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t];
+    }
+    want -= segs[i];
+  }
+  return pts[0];
+}
+
+/* An edge that travels a long way backwards is not a semantic return — it is
+   the layout wrapping onto the next row. Demote it visually (Tufte: smallest
+   effective difference) so the eye does not read it as a feedback path.     */
+function isWrap(e, bounds) {
+  if (e.route !== 'layer') return false;
+  const w = bounds.maxX - bounds.minX;
+  return (e.points[0][0] - e.points[e.points.length - 1][0]) > w * 0.28;
+}
+
+/* rounded-corner polyline: keeps orthogonal routing readable without the
+   hard-corner "circuit board" look that makes bends hard to trace          */
+function roundPoly(pts, r = 9) {
+  if (pts.length < 3) return pts.map((p, i) => (i ? 'L' : 'M') + p[0] + ',' + p[1]).join(' ');
+  let d = `M ${pts[0][0]},${pts[0][1]}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, py] = pts[i - 1], [cx, cy] = pts[i], [nx, ny] = pts[i + 1];
+    const d1 = Math.hypot(cx - px, cy - py), d2 = Math.hypot(nx - cx, ny - cy);
+    const rr = Math.min(r, d1 / 2, d2 / 2);
+    if (rr < 1.5) { d += ` L ${cx},${cy}`; continue; }
+    d += ` L ${cx + (px - cx) / d1 * rr},${cy + (py - cy) / d1 * rr}`;
+    d += ` Q ${cx},${cy} ${cx + (nx - cx) / d2 * rr},${cy + (ny - cy) / d2 * rr}`;
+  }
+  const L = pts[pts.length - 1];
+  return d + ` L ${L[0]},${L[1]}`;
+}
+
+/* ======================================================================== */
+/* 5. render                                                                */
+/* ======================================================================== */
+const world = document.getElementById('world');
+const defs = document.getElementById('defs');
+
+function markers() {
+  defs.textContent = '';
+  const kinds = Object.keys(EDGE);
+  for (const k of kinds) {
+    const c = edgeColor(k), st = EDGE[k];
+    const head = st.head === 'open'
+      ? el('path', { d: 'M1,1 L9,5 L1,9', fill: 'none', stroke: c, 'stroke-width': 1.6,
+                     'stroke-linecap': 'round', 'stroke-linejoin': 'round' })
+      : el('path', { d: 'M1,1.5 L9.5,5 L1,8.5 Z', fill: c });
+    defs.appendChild(el('marker', {
+      id: 'a-' + k, viewBox: '0 0 11 10', refX: st.head === 'open' ? 9.5 : 9.8,
+      refY: 5, markerWidth: 7, markerHeight: 7, orient: 'auto-start-reverse',
+      markerUnits: 'userSpaceOnUse',
+    }, [head]));
+  }
+  // soft shadow for the loop / finding chips
+  const f = el('filter', { id: 'chipShadow', x: '-40%', y: '-40%', width: '180%', height: '180%' });
+  f.appendChild(el('feDropShadow', { dx: 0, dy: 1, stdDeviation: 1.6, 'flood-opacity': .35 }));
+  defs.appendChild(f);
+}
+
+/* off-page connector: a short stub plus a chip naming the far end.
+   dir = +1 leaving the node, -1 arriving at it.                              */
+function stub(g, at, toward, farLabel, colour, dir) {
+  const t = S.tokens.themes[ST.theme];
+  let dx = toward[0] - at[0], dy = toward[1] - at[1];
+  const len = Math.hypot(dx, dy) || 1;
+  dx /= len; dy /= len;
+  const end = [at[0] + dx * 26, at[1] + dy * 26];
+  g.appendChild(el('path', {
+    d: `M ${at[0]},${at[1]} L ${end[0]},${end[1]}`, stroke: colour,
+    'stroke-width': 1.6, 'stroke-linecap': 'round', fill: 'none', opacity: .8,
+    'marker-end': dir < 0 ? null : 'url(#a-flow)',
+  }));
+  const s = (dir > 0 ? '↦ ' : '') + clip(farLabel, 16) + (dir < 0 ? ' ↦' : '');
+  const w = 12 + s.length * 5.5;
+  const cx = end[0] + dx * (w / 2 + 4), cy = end[1] + dy * 11;
+  g.appendChild(el('rect', { x: cx - w / 2, y: cy - 9, width: w, height: 18, rx: 9,
+    fill: t.surface, stroke: t.hairline, 'stroke-width': 1 }));
+  g.appendChild(txt(s, { x: cx, y: cy + 3.5, class: 'elabel', fill: t.ink_muted,
+    'text-anchor': 'middle' }));
+}
+
+function view() { return S.views[ST.view]; }
+
+function visibleNode(id) {
+  const n = S.nodes[id];
+  if (ST.offKinds.has(n.kind || 'transform')) return false;
+  return true;
+}
+function visibleEdge(e) {
+  if (!ST.show.feedback && (e.kind === 'feedback' || e.kind === 'recursion')) return false;
+  if (!ST.show.gaps && e.kind === 'gap') return false;
+  return visibleNode(e.from) && visibleNode(e.to);
+}
+
+function render() {
+  const v = view();
+  world.textContent = '';
+  markers();
+
+  const gZone = el('g'), gLane = el('g'), gEdge = el('g'), gNode = el('g'), gTop = el('g');
+  world.append(gZone, gEdge, gLane, gNode, gTop);
+  const t = S.tokens.themes[ST.theme];
+
+  /* --- zones: common region is the strongest grouping cue there is ------ */
+  for (const [zid, r] of Object.entries(v.zones)) {
+    const z = S.zones[zid] || { label: zid };
+    const g = el('g', { class: 'zone', 'data-zone': zid });
+    g.appendChild(el('rect', {
+      x: r.x, y: r.y, width: r.w, height: r.h, rx: 16,
+      fill: t.surface, stroke: t.hairline, 'stroke-width': 1,
+    }));
+    g.appendChild(el('rect', { x: r.x, y: r.y, width: r.w, height: 3, rx: 1.5,
+      fill: z.accent ? pal(z.accent).accent : t.hairline, opacity: .9 }));
+    g.appendChild(txt(z.label || zid, {
+      x: r.x + 18, y: r.y + 24, class: 'zlabel', fill: t.ink_muted,
+    }));
+    if (z.note) g.appendChild(txt(clip(z.note, 64), {
+      x: r.x + 18, y: r.y + 39, class: 'nsub', fill: t.ink_muted, opacity: .75 }));
+    gZone.appendChild(g);
+  }
+
+  /* --- edges ----------------------------------------------------------- */
+  const RETURN_KINDS = new Set(['feedback', 'recursion', 'gap']);
+  const returnCount = v.edges.filter(
+    e => RETURN_KINDS.has(e.kind) && visibleEdge(e)).length;
+  const softenReturns = returnCount > 5;
+
+  for (const e of v.edges) {
+    if (!visibleEdge(e)) continue;
+    const st = EDGE[e.kind] || EDGE.flow, c = edgeColor(e.kind || 'flow');
+    const wrap = isWrap(e, v.bounds);
+    const soft = softenReturns && RETURN_KINDS.has(e.kind);
+    const g = el('g', {
+      class: 'edge' + (soft ? ' soft' : ''), 'data-edge': e.id,
+      'data-from': e.from, 'data-to': e.to,
+      'data-loop': e.loop || '', opacity: st.ghost || 1,
+    });
+    const P = e.points;
+
+    /* A wrapped row's continuation edge is a layout artefact, not a semantic
+       long-distance link. Drawn in full it becomes a giant bracket that reads
+       as a container. Draw it as an off-page connector instead: a short stub at
+       each end, labelled with where it goes. */
+    if (wrap) {
+      gEdge.appendChild(g);
+      stub(g, P[0], P[1] || P[0], S.nodes[e.to].label, c, 1);
+      stub(g, P[P.length - 1], P[P.length - 2] || P[0], S.nodes[e.from].label, c, -1);
+      continue;
+    }
+    const d = e.route === 'arc'
+      ? `M ${P[0][0]},${P[0][1]} C ${P[1][0]},${P[1][1]} ${P[2][0]},${P[2][1]} ${P[3][0]},${P[3][1]}`
+      : roundPoly(P, e.route === 'layer' ? 9 : 14);
+    g.appendChild(el('path', { d, fill: 'none', stroke: 'transparent',
+      'stroke-width': 14, class: 'hit' }));
+    g.appendChild(el('path', {
+      d, fill: 'none', stroke: c, 'stroke-width': wrap ? 1.25 : st.w,
+      'stroke-dasharray': st.dash || null, 'stroke-linecap': 'round',
+      'stroke-linejoin': 'round', 'marker-end': `url(#a-${e.kind || 'flow'})`,
+      'vector-effect': 'non-scaling-stroke',
+    }));
+    (e.route === 'layer' ? gEdge : gLane).appendChild(g);
+
+    /* label / loop chip half-way along the path */
+    const showLab = ST.show.labels && st.lab && !wrap;
+    const [mx, my] = e.labelAt || midpoint(e.points);
+    if (e.loop) {
+      const lp = S.loops.find(l => l.id === e.loop);
+      const lc = lp && lp.type === 'balancing' ? t.kinds.release.accent
+               : lp && lp.type === 'reinforcing' ? t.kinds.gate.accent : t.ink_muted;
+      const label = e.loop + (e.polarity ? ' ' + e.polarity : '');
+      const w = 16 + label.length * 6.4;
+      const cg = el('g', { class: 'edge' + (soft ? ' soft' : ''),
+                           'data-loop': e.loop, 'data-edge': e.id,
+                           filter: 'url(#chipShadow)' });
+      cg.appendChild(el('rect', { x: mx - w / 2, y: my - 10, width: w, height: 20,
+        rx: 10, fill: t.surface, stroke: lc, 'stroke-width': 1.4 }));
+      cg.appendChild(txt(label, { x: mx, y: my + 4, class: 'loopchip', fill: lc,
+        'text-anchor': 'middle' }));
+      gTop.appendChild(cg);
+    } else if (showLab && e.label) {
+      const s = clip(e.label, 30), w = 12 + s.length * 5.7;
+      const cg = el('g', { class: 'edge', 'data-edge': e.id });
+      cg.appendChild(el('rect', { x: mx - w / 2, y: my - 9, width: w, height: 18,
+        rx: 5, fill: t.surface, stroke: t.hairline, 'stroke-width': 1, opacity: .96 }));
+      cg.appendChild(txt(s, { x: mx, y: my + 3.5, class: 'elabel',
+        fill: st.tone === 'ink' ? t.ink_muted : c, 'text-anchor': 'middle' }));
+      gTop.appendChild(cg);
+    }
+  }
+
+  /* --- nodes ----------------------------------------------------------- */
+  const findingNodes = new Set();
+  for (const f of S.findings) for (const n of (f.nodes || [])) findingNodes.add(n);
+  /* badge the stages work actually RETURNS to — not every node that happens to
+     sit inside some large cycle, which in a real factory is nearly all of them */
+  const revisited = new Set(v.edges
+    .filter(e => e.kind === 'feedback' || e.kind === 'recursion')
+    .map(e => e.to));
+
+  for (const nr of v.nodes) {
+    const n = S.nodes[nr.id];
+    if (!n || !visibleNode(nr.id)) continue;
+    const kind = n.kind || 'transform';
+    const c = pal(kind);
+    const g = el('g', { class: 'node', 'data-node': nr.id, 'data-kind': kind,
+                        transform: `translate(${nr.x},${nr.y})` });
+    g.appendChild(el('path', {
+      class: 'card', d: cardPath(kind, nr.w, nr.h), fill: c.fill,
+      stroke: c.accent, 'stroke-width': 1.5,
+      'stroke-dasharray': kind === 'external' ? '4 3' : null,
+    }));
+    const px = padx(kind), pr = padr(kind);
+    const inner = nr.w - px - pr;
+    g.appendChild(txt(n.kindLabel || kind, { x: px, y: 17, class: 'nkind', fill: c.accent }));
+    g.appendChild(txt(clip(n.label, Math.floor(inner / 7.1)),
+      { x: px, y: 36, class: 'ntitle', fill: c.text }));
+    if (n.subtitle) g.appendChild(txt(clip(n.subtitle, Math.floor(inner / 5.6)),
+      { x: px, y: 54, class: 'nsub', fill: c.text, opacity: .68 }));
+
+    /* badges: work returns here / an open question touches this stage.
+       Redundant with the side panels on purpose — the diagram should be
+       readable without them. */
+    let bx = nr.w - pr;
+    if (findingNodes.has(nr.id)) {
+      bx -= 15;
+      g.appendChild(el('circle', { cx: bx, cy: 13, r: 7.5,
+        fill: S.tokens.themes[ST.theme].alert.fill,
+        stroke: S.tokens.themes[ST.theme].alert.accent, 'stroke-width': 1.2 }));
+      g.appendChild(txt('!', { x: bx, y: 17, class: 'badge',
+        fill: S.tokens.themes[ST.theme].alert.accent, 'text-anchor': 'middle' }));
+    }
+    if (revisited.has(nr.id)) {
+      bx -= 17;
+      g.appendChild(txt('↻', { x: bx, y: 18, class: 'badge',
+        fill: c.accent, 'text-anchor': 'middle' }));
+    }
+    if (ST.show.metrics && n.metrics) {
+      const m = n.metrics;
+      g.appendChild(txt(`in ${m.fanIn ?? 0} · out ${m.fanOut ?? 0}` +
+        (m.instability != null ? ` · I ${m.instability}` : ''),
+        { x: px, y: nr.h + 13, class: 'nsub', fill: S.tokens.themes[ST.theme].ink_muted }));
+    }
+    gNode.appendChild(g);
+  }
+
+  applyFocus();
+  fit();
+}
+
+/* ======================================================================== */
+/* 6. focus — figure/ground, not deletion                                   */
+/* ======================================================================== */
+function applyFocus() {
+  const v = view();
+  const keep = new Set();
+  if (ST.focus) {
+    keep.add(ST.focus);
+    for (const e of v.edges) {
+      if (e.from === ST.focus) keep.add(e.to);
+      if (e.to === ST.focus) keep.add(e.from);
+    }
+  } else if (ST.loop) {
+    const l = S.loops.find(x => x.id === ST.loop);
+    if (l) l.members.forEach(m => keep.add(m));
+  } else if (ST.finding) {
+    const f = S.findings.find(x => x.id === ST.finding);
+    if (f) (f.nodes || []).forEach(m => keep.add(m));
+  }
+  const active = keep.size > 0;
+  for (const g of world.querySelectorAll('.node')) {
+    const id = g.dataset.node;
+    g.classList.toggle('dim', active && !keep.has(id));
+    g.classList.toggle('sel', id === ST.focus);
+  }
+  for (const g of world.querySelectorAll('.edge')) {
+    const inLoop = ST.loop && g.dataset.loop === ST.loop;
+    const touches = keep.has(g.dataset.from) && keep.has(g.dataset.to) &&
+      (!ST.focus || g.dataset.from === ST.focus || g.dataset.to === ST.focus);
+    g.classList.toggle('dim', active && !(inLoop || touches));
+    g.classList.toggle('lit', active && (inLoop || touches));
+  }
+  for (const g of world.querySelectorAll('.zone')) g.classList.toggle('dim', active);
+}
+
+/* ======================================================================== */
+/* 7. pan + zoom                                                            */
+/* ======================================================================== */
+const stage = document.getElementById('stage');
+function xform() { world.setAttribute('transform', `translate(${ST.tx},${ST.ty}) scale(${ST.k})`); }
+function fit(pad = 40) {
+  const b = view().bounds, r = stage.getBoundingClientRect();
+  const w = b.maxX - b.minX, h = b.maxY - b.minY;
+  ST.k = Math.min((r.width - pad * 2) / w, (r.height - pad * 2) / h, 1.35);
+  ST.tx = (r.width - w * ST.k) / 2 - b.minX * ST.k;
+  ST.ty = (r.height - h * ST.k) / 2 - b.minY * ST.k;
+  xform();
+}
+function zoomAt(f, cx, cy) {
+  const k2 = Math.max(.12, Math.min(4, ST.k * f));
+  ST.tx = cx - (cx - ST.tx) * (k2 / ST.k);
+  ST.ty = cy - (cy - ST.ty) * (k2 / ST.k);
+  ST.k = k2; xform();
+}
+stage.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const r = stage.getBoundingClientRect();
+  zoomAt(Math.exp(-ev.deltaY * 0.0016), ev.clientX - r.left, ev.clientY - r.top);
+}, { passive: false });
+let drag = null;
+stage.addEventListener('pointerdown', ev => {
+  if (ev.target.closest('.node')) return;
+  drag = { x: ev.clientX - ST.tx, y: ev.clientY - ST.ty };
+  stage.classList.add('drag'); stage.setPointerCapture(ev.pointerId);
+});
+stage.addEventListener('pointermove', ev => {
+  if (drag) { ST.tx = ev.clientX - drag.x; ST.ty = ev.clientY - drag.y; xform(); }
+  const g = ev.target.closest('.node, .edge');
+  if (g) showTip(g, ev); else hideTip();
+});
+addEventListener('pointerup', () => { drag = null; stage.classList.remove('drag'); });
+addEventListener('resize', () => fit());
+
+const tip = document.getElementById('tip');
+function showTip(g, ev) {
+  let b = '', s = '';
+  if (g.dataset.node) {
+    const n = S.nodes[g.dataset.node];
+    b = n.label; s = [n.kind, n.subtitle].filter(Boolean).join(' · ');
+  } else {
+    const e = view().edges.find(x => x.id === g.dataset.edge);
+    if (!e) return hideTip();
+    b = `${S.nodes[e.from].label} → ${S.nodes[e.to].label}`;
+    s = [e.kind, e.label, e.loop && `loop ${e.loop}`,
+         e.confidence === 'heuristic' && 'inferred'].filter(Boolean).join(' · ');
+  }
+  tip.innerHTML = '';
+  const bb = document.createElement('b'); bb.textContent = b;
+  const ss = document.createElement('span'); ss.textContent = s;
+  tip.append(bb, ss);
+  const r = stage.getBoundingClientRect();
+  tip.style.left = Math.min(ev.clientX - r.left + 14, r.width - 300) + 'px';
+  tip.style.top = (ev.clientY - r.top + 14) + 'px';
+  tip.classList.add('on');
+}
+function hideTip() { tip.classList.remove('on'); }
+
+stage.addEventListener('click', ev => {
+  const n = ev.target.closest('.node');
+  if (n) { select(n.dataset.node); return; }
+  const e = ev.target.closest('.edge');
+  if (e && e.dataset.loop) { ST.focus = null; ST.finding = null; ST.loop = e.dataset.loop; }
+  else if (!e) { ST.focus = ST.loop = ST.finding = null; }
+  applyFocus(); paintPanel();
+});
+
+function select(id) { ST.focus = id; ST.loop = null; ST.finding = null; applyFocus(); paintPanel(); }
+
+/* ======================================================================== */
+/* 8. panels                                                                */
+/* ======================================================================== */
+function h(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+function sec(title) { const d = h('div', 'sec'); d.appendChild(h('h2', null, title)); return d; }
+
+function paintPanel() {
+  const p = document.getElementById('panel');
+  p.textContent = '';
+  if (ST.focus) p.appendChild(inspector(ST.focus));
+  else p.appendChild(overview());
+  p.appendChild(loopsPanel());
+  p.appendChild(findingsPanel());
+}
+
+function isCode() { return S.meta.profile === 'code'; }
+
+/* Build a click-through URL for a source ref. GitHub/GitLab-style repo URL +
+   branch when the model provides them; otherwise no link, just the path. */
+function srcUrl(src) {
+  const repo = (S.meta.repoUrl || '').replace(/\/+$/, '');
+  if (!repo) return null;
+  const branch = S.meta.branch || 'main';
+  const frag = src.lines ? `#L${src.lines[0]}` +
+    (src.lines[1] ? `-L${src.lines[1]}` : '') : '';
+  const sep = repo.includes('gitlab') ? '/-/blob/' : '/blob/';
+  return `${repo}${sep}${branch}/${src.path}${frag}`;
+}
+
+function overview() {
+  const d = sec('This diagram');
+  const a = S.analysis || {};
+  const dl = h('dl', 'kv');
+  const rows = [[isCode() ? 'Modules' : 'Stages', a.nodeCount],
+                [isCode() ? 'Dependencies' : 'Connections', a.edgeCount],
+                [isCode() ? 'Cycles' : 'Loops', a.loopCount],
+                ['Open questions', a.findingCount]];
+  for (const [k, val] of rows) { dl.appendChild(h('dt', null, k)); dl.appendChild(h('dd', null, val ?? '—')); }
+  d.appendChild(dl);
+  d.appendChild(h('p', null, view().blurb || ''));
+  d.appendChild(h('p', null, isCode()
+    ? 'Click any module to trace what it depends on and what depends on it.'
+    : 'Click any stage to trace its immediate neighbourhood. Click a loop badge to isolate a cycle.'));
+  return d;
+}
+
+function inspector(id) {
+  const n = S.nodes[id], v = view(), c = pal(n.kind || 'transform');
+  const d = h('div', 'sec insp');
+  const k = h('div', 'kind', n.kindLabel || n.kind || 'transform'); k.style.color = c.accent;
+  d.append(k, h('h3', null, n.label));
+  if (n.subtitle) d.appendChild(h('div', 'st', n.subtitle));
+  if (n.detail) d.appendChild(h('p', null, n.detail));
+
+  const m = n.metrics || {};
+  const dl = h('dl', 'kv');
+  const rows = [['Zone', (S.zones[n.zone] || {}).label || n.zone || '—'],
+                ['Fan-in', m.fanIn ?? '—'], ['Fan-out', m.fanOut ?? '—'],
+                ['Instability', m.instability ?? '—']];
+  if (n.emits && n.emits.length) rows.push(['Emits', n.emits.join(', ')]);
+  if (n.consumes && n.consumes.length) rows.push(['Consumes', n.consumes.join(', ')]);
+  if (n.owner) rows.push(['Owner', n.owner]);
+  for (const [a, b] of rows) { dl.appendChild(h('dt', null, a)); dl.appendChild(h('dd', null, b)); }
+  d.appendChild(dl);
+
+  /* Source anchors — the graph is a surface to answer from, and this is the
+     click-through that lets any claim on this card be checked against code. */
+  if (n.sources && n.sources.length) {
+    const s = sec('Source');
+    const wrap = h('div', 'rel');
+    for (const src of n.sources) {
+      const label = src.path + (src.symbol ? ` · ${src.symbol}` : '')
+        + (src.lines ? `:${src.lines[0]}${src.lines[1] ? '–' + src.lines[1] : ''}` : '');
+      const url = srcUrl(src);
+      let row;
+      if (url) {
+        row = document.createElement('a');
+        row.href = url; row.target = '_blank'; row.rel = 'noopener';
+        row.className = 'srclink';
+      } else {
+        row = h('div', 'srclink');
+      }
+      const code = document.createElement('code'); code.textContent = label;
+      row.appendChild(code);
+      if (src.note) row.appendChild(h('span', 'ds', ' — ' + src.note));
+      wrap.appendChild(row);
+    }
+    s.appendChild(wrap); d.appendChild(s);
+  }
+
+  const ins = v.edges.filter(e => e.to === id), outs = v.edges.filter(e => e.from === id);
+  for (const [title, list, arrow, other] of
+       [[isCode() ? 'Depended on by' : 'Upstream', ins, '←', 'from'],
+        [isCode() ? 'Depends on' : 'Downstream', outs, '→', 'to']]) {
+    if (!list.length) continue;
+    const s = sec(title), wrap = h('div', 'rel');
+    for (const e of list) {
+      const b = h('button');
+      b.append(h('span', 'ar', arrow));
+      const lab = h('span', null, S.nodes[e[other]].label +
+        (e.label ? ' · ' + e.label : ''));
+      lab.style.color = e.kind === 'flow' ? '' : edgeColor(e.kind);
+      b.appendChild(lab);
+      b.onclick = () => select(e[other]);
+      wrap.appendChild(b);
+    }
+    s.appendChild(wrap); d.appendChild(s);
+  }
+  return d;
+}
+
+function loopsPanel() {
+  const d = sec(`${isCode() ? 'Cycles' : 'Loops'} (${S.loops.length})`);
+  if (!S.loops.length) {
+    d.appendChild(h('div', 'empty', isCode()
+      ? 'No circular dependency anywhere in this graph. Every module can be built, tested and reasoned about on its own.'
+      : 'No cycle in this model. For a process that is meant to learn, that is itself a finding — see below.'));
+    return d;
+  }
+  for (const l of S.loops) {
+    const b = h('button', 'item' + (ST.loop === l.id ? ' on' : ''));
+    const hd = h('div', 'hd');
+    const cls = l.type === 'balancing' ? 'B' : l.type === 'reinforcing' ? 'R' : 'U';
+    hd.append(h('span', 'chip ' + cls, l.id), h('span', 'ti', l.label));
+    b.appendChild(hd);
+    b.appendChild(h('div', 'bd',
+      (isCode() ? 'Circular dependency. ' :
+       l.type === 'reinforcing' ? 'Reinforcing — compounds. ' :
+       l.type === 'balancing' ? 'Balancing — seeks a goal. ' :
+       'Polarity unlabelled — cannot tell if it converges. ') +
+      l.members.map(m => (S.nodes[m] || {}).label || m).join(' → ')));
+    b.onclick = () => { ST.loop = ST.loop === l.id ? null : l.id; ST.focus = null; ST.finding = null; applyFocus(); paintPanel(); };
+    d.appendChild(b);
+  }
+  return d;
+}
+
+function findingsPanel() {
+  const d = sec(`Open questions (${S.findings.length})`);
+  if (!S.findings.length) {
+    d.appendChild(h('div', 'empty', 'No structural gaps detected.'));
+    return d;
+  }
+  for (const f of S.findings) {
+    const b = h('button', 'item' + (ST.finding === f.id ? ' on' : ''));
+    const hd = h('div', 'hd');
+    const sev = f.severity === 'high' ? 'hi' : f.severity === 'medium' ? 'md' : 'lo';
+    hd.append(h('span', 'chip ' + sev, f.severity), h('span', 'ti', f.title));
+    b.append(hd, h('div', 'bd', f.detail || ''));
+    b.onclick = () => { ST.finding = ST.finding === f.id ? null : f.id; ST.focus = null; ST.loop = null; applyFocus(); paintPanel(); };
+    d.appendChild(b);
+  }
+  return d;
+}
+
+/* ======================================================================== */
+/* 9. rail                                                                  */
+/* ======================================================================== */
+function buildRail() {
+  const vs = document.getElementById('views');
+  S.viewOrder.forEach((id, i) => {
+    const v = S.views[id];
+    const b = h('button');
+    b.setAttribute('aria-pressed', String(id === ST.view));
+    const top = h('div'); top.style.display = 'flex'; top.style.width = '100%'; top.style.alignItems = 'baseline';
+    top.append(h('span', 'vk', v.label));
+    const kb = document.createElement('kbd'); kb.textContent = String(i + 1); top.appendChild(kb);
+    b.append(top, h('div', 'vb', v.blurb || ''));
+    b.onclick = () => setView(id);
+    vs.appendChild(b);
+  });
+
+  const tg = document.getElementById('toggles');
+  const opts = [['feedback', 'Feedback & recursion'], ['gaps', 'Gaps & missing links'],
+                ['labels', 'Edge labels'], ['metrics', 'Coupling metrics']];
+  for (const [key, label] of opts) {
+    const l = h('label', 'toggle');
+    const i = document.createElement('input'); i.type = 'checkbox'; i.checked = ST.show[key];
+    i.onchange = () => { ST.show[key] = i.checked; render(); paintPanel(); };
+    l.append(i, h('span', null, label));
+    tg.appendChild(l);
+  }
+
+  buildLegend();
+}
+
+/* The legend is generated from what is actually on the canvas, in the vocabulary
+   the author used. A legend listing kinds the diagram does not contain is noise;
+   a legend saying "transform" when every card says "module" is worse.          */
+const KIND_ORDER = ['intake', 'transform', 'gate', 'store', 'release', 'control', 'external'];
+const MEANING = {
+  process: {
+    intake: 'Where work enters', transform: 'Work is done, value is added',
+    gate: 'A decision, check, or quality gate', store: 'Durable state or an artifact at rest',
+    release: 'Where work leaves', control: 'Routes, schedules, or orchestrates',
+    external: 'Outside the boundary — context only',
+  },
+  code: {
+    intake: 'Entry point — requests and events arrive', transform: 'Does the work',
+    gate: 'Validates, authorises, or filters', store: 'Persistence, cache, or queue',
+    release: 'Public surface — what others consume', control: 'Routes, wires, or schedules',
+    external: 'Third-party — outside this codebase',
+  },
+};
+const EDGE_MEANING = {
+  process: {
+    flow: 'Work moves forward', control: 'Triggers or schedules',
+    data: 'Data is read or written', feedback: 'Result returns upstream',
+    recursion: 'The stage re-enters itself', violation: 'Breaks a stated rule',
+    gap: 'A link that should exist and does not',
+  },
+  code: {
+    flow: 'Depends on / calls', control: 'Registers, wires, or dispatches',
+    data: 'Reads or writes shared state', feedback: 'Callback or inversion of control',
+    recursion: 'Mutually or self-recursive', violation: 'Breaks the layering contract',
+    gap: 'A dependency that should exist and does not',
+  },
+};
+
+function buildLegend() {
+  const prof = MEANING[S.meta.profile] ? S.meta.profile : 'process';
+  const ln = document.getElementById('legNodes');
+  const le = document.getElementById('legEdges');
+  ln.textContent = ''; le.textContent = '';
+
+  const present = new Map();          // canonical kind -> label the author used
+  for (const id of Object.keys(S.nodes)) {
+    const n = S.nodes[id];
+    if (!present.has(n.kind)) present.set(n.kind, n.kindLabel || n.kind);
+  }
+  for (const k of KIND_ORDER)
+    if (present.has(k)) addLegendNode(ln, k, MEANING[prof][k], present.get(k));
+
+  const usedEdges = new Set();
+  for (const v of Object.values(S.views))
+    for (const e of v.edges) usedEdges.add(e.kind || 'flow');
+  for (const k of Object.keys(EDGE))
+    if (usedEdges.has(k)) addLegendEdge(le, k, EDGE_MEANING[prof][k]);
+}
+
+function addLegendNode(host, kind, desc, label) {
+  const row = h('div', 'lg'); row.dataset.kind = kind;
+  const c = pal(kind);
+  const s = el('svg', { width: 40, height: 20, viewBox: '0 0 40 20' });
+  s.appendChild(el('path', { d: cardPath(kind, 40, 20), fill: c.fill, stroke: c.accent,
+    'stroke-width': 1.4, 'stroke-dasharray': kind === 'external' ? '3 2' : null }));
+  row.appendChild(s);
+  const w = h('div');
+  const nm = h('div', 'nm', label || kind); nm.style.color = c.accent;
+  w.append(nm, h('div', 'ds', desc || ''));
+  row.appendChild(w);
+  row.onclick = () => {
+    ST.offKinds.has(kind) ? ST.offKinds.delete(kind) : ST.offKinds.add(kind);
+    row.dataset.off = ST.offKinds.has(kind) ? '1' : '';
+    render();
+  };
+  host.appendChild(row);
+}
+function addLegendEdge(host, kind, desc) {
+  const row = h('div', 'lg');
+  const st = EDGE[kind], c = edgeColor(kind);
+  const s = el('svg', { width: 40, height: 20, viewBox: '0 0 40 20' });
+  s.appendChild(el('path', { d: 'M2,10 H 34', stroke: c, 'stroke-width': st.w,
+    'stroke-dasharray': st.dash || null, 'stroke-linecap': 'round',
+    'marker-end': `url(#a-${kind})`, opacity: st.ghost || 1, fill: 'none' }));
+  row.appendChild(s);
+  const w = h('div');
+  const nm = h('div', 'nm', kind); nm.style.color = c;
+  w.append(nm, h('div', 'ds', desc || ''));
+  row.appendChild(w);
+  host.appendChild(row);
+}
+
+function setView(id) {
+  ST.view = id; ST.focus = ST.loop = ST.finding = null;
+  for (const b of document.querySelectorAll('#views button'))
+    b.setAttribute('aria-pressed', String(b.querySelector('.vk').textContent === S.views[id].label));
+  render(); paintPanel();
+}
+
+/* ======================================================================== */
+/* 10. boot                                                                 */
+/* ======================================================================== */
+document.getElementById('ttl').textContent = S.meta.title || 'Factory Graph';
+document.getElementById('sub').textContent = S.meta.subtitle || '';
+document.getElementById('src').textContent = S.meta.source || '';
+document.getElementById('theme').onclick = () => {
+  applyTheme(ST.theme === 'dark' ? 'light' : 'dark');
+  render(); paintPanel(); buildLegend();
+};
+/* The same model the diagram renders, as prose. This is the handoff format:
+   paste it to a colleague or an LLM and they know what the diagram knows —
+   including detail text and findings that are only hover-visible on screen. */
+function briefText() {
+  const code = isCode();
+  const L = [];
+  const push = (...a) => L.push(...a);
+  push(`# ${S.meta.title || 'System graph'}`);
+  const sub = [S.meta.subtitle, S.meta.source,
+               `profile: ${S.meta.profile || 'process'}`].filter(Boolean);
+  if (sub.length) push(sub.join(' · '));
+  const A = S.analysis || {};
+  push('', `${A.nodeCount ?? Object.keys(S.nodes).length} ${code ? 'modules' : 'stages'} · ` +
+       `${A.edgeCount ?? '?'} connections · ${(S.loops || []).length} ${code ? 'cycles' : 'loops'} · ` +
+       `${(S.findings || []).length} open questions`, '');
+
+  push(`## ${code ? 'Modules' : 'Stages'}`);
+  const byZone = {};
+  for (const n of Object.values(S.nodes))
+    (byZone[n.zone || ''] = byZone[n.zone || ''] || []).push(n);
+  for (const [z, ns] of Object.entries(byZone)) {
+    const zl = (S.zones[z] || {}).label;
+    if (zl) push('', `### ${zl}`);
+    for (const n of ns) {
+      const m = n.metrics || {};
+      const bits = [n.subtitle,
+        m.fanIn != null && `fan-in ${m.fanIn}, fan-out ${m.fanOut}` +
+          (m.instability != null ? `, instability ${m.instability}` : ''),
+        m.loc && `${m.loc} loc`,
+        n.emits && n.emits.length && `emits: ${n.emits.join(', ')}`,
+        n.consumes && n.consumes.length && `consumes: ${n.consumes.join(', ')}`,
+      ].filter(Boolean).join(' · ');
+      push(`- **${n.label}** [${n.kindLabel || n.kind}]${bits ? ' — ' + bits : ''}`);
+      if (n.detail) push(`  ${String(n.detail).trim().replace(/\s+/g, ' ')}`);
+      if (n.sources && n.sources.length)
+        push(`  source: ${n.sources.map(x => x.path + (x.symbol ? '·' + x.symbol : '')).join(', ')}`);
+    }
+  }
+
+  push('', '## Connections');
+  const seen = new Set();
+  for (const v of Object.values(S.views)) for (const e of v.edges) {
+    if (seen.has(e.id)) continue;
+    seen.add(e.id);
+    const a = (S.nodes[e.from] || {}).label || e.from;
+    const b = (S.nodes[e.to] || {}).label || e.to;
+    const tags = [e.kind !== 'flow' && e.kind, e.label, e.polarity && `polarity ${e.polarity}`,
+      e.loop && `loop ${e.loop}`, e.confidence === 'heuristic' && 'inferred'].filter(Boolean);
+    const pre = e.kind === 'gap' ? 'MISSING LINK (modelled absence): ' : '';
+    push(`- ${pre}${a} → ${b}${tags.length ? ` (${tags.join(', ')})` : ''}`);
+    if (e.kind === 'gap' && e.note) push(`  ${String(e.note).trim().replace(/\s+/g, ' ')}`);
+  }
+
+  if ((S.loops || []).length) {
+    push('', `## ${code ? 'Cycles' : 'Loops'}`);
+    for (const l of S.loops) {
+      push(`- **${l.id}** (${l.type}): ` +
+           l.members.map(m => (S.nodes[m] || {}).label || m).join(' → '));
+      if (l.note) push(`  ${l.note}`);
+    }
+  }
+
+  if ((S.findings || []).length) {
+    push('', '## Open questions (analyzer findings)');
+    for (const f of S.findings) {
+      push(`- [${f.severity}] **${f.title}**`);
+      if (f.detail) push(`  ${String(f.detail).trim().replace(/\s+/g, ' ')}`);
+    }
+  }
+  return L.join('\n');
+}
+window.briefText = briefText;
+document.getElementById('brief').onclick = async () => {
+  const text = briefText(), btn = document.getElementById('brief');
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta);
+    ta.select(); document.execCommand('copy'); ta.remove();
+  }
+  btn.textContent = 'Copied';
+  setTimeout(() => { btn.textContent = 'Copy brief'; }, 1400);
+};
+
+function setChrome() {
+  const app = document.querySelector('.app');
+  app.classList.toggle('no-rail', !ST.ui.rail);
+  app.classList.toggle('no-panel', !ST.ui.panel);
+  document.getElementById('tglRail').setAttribute('aria-pressed', String(ST.ui.rail));
+  document.getElementById('tglPanel').setAttribute('aria-pressed', String(ST.ui.panel));
+  fit();      // the canvas just changed size — refit, don't leave dead space
+}
+document.getElementById('tglRail').onclick = () => { ST.ui.rail = !ST.ui.rail; setChrome(); };
+document.getElementById('tglPanel').onclick = () => { ST.ui.panel = !ST.ui.panel; setChrome(); };
+document.getElementById('fit').onclick = () => fit();
+document.getElementById('zin').onclick = () => { const r = stage.getBoundingClientRect(); zoomAt(1.25, r.width / 2, r.height / 2); };
+document.getElementById('zout').onclick = () => { const r = stage.getBoundingClientRect(); zoomAt(.8, r.width / 2, r.height / 2); };
+document.getElementById('clr').onclick = () => { ST.focus = ST.loop = ST.finding = null; applyFocus(); paintPanel(); };
+addEventListener('keydown', ev => {
+  if (ev.target.tagName === 'INPUT') return;
+  const i = parseInt(ev.key, 10);
+  if (i >= 1 && i <= S.viewOrder.length) setView(S.viewOrder[i - 1]);
+  else if (ev.key === 'f') { ST.show.feedback = !ST.show.feedback; document.querySelectorAll('#toggles input')[0].checked = ST.show.feedback; render(); }
+  else if (ev.key === 'g') { ST.show.gaps = !ST.show.gaps; document.querySelectorAll('#toggles input')[1].checked = ST.show.gaps; render(); }
+  else if (ev.key === '0') fit();
+  else if (ev.key === '[') { ST.ui.rail = !ST.ui.rail; setChrome(); }
+  else if (ev.key === ']') { ST.ui.panel = !ST.ui.panel; setChrome(); }
+  else if (ev.key === '\\') {         // presentation: only the graph
+    const any = ST.ui.rail || ST.ui.panel;
+    ST.ui.rail = ST.ui.panel = !any; setChrome();
+  }
+  else if (ev.key === 'Escape') { ST.focus = ST.loop = ST.finding = null; applyFocus(); paintPanel(); }
+});
+
+applyTheme('dark');
+buildRail();
+render();
+paintPanel();
+</script>
+</body>
+</html>
