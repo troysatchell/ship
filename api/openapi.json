@@ -3832,6 +3832,240 @@
           "created_at"
         ]
       },
+      "ChangedDocument": {
+        "type": "object",
+        "properties": {
+          "dedupe_key": {
+            "type": "string",
+            "description": "Stable key for de-duplicating this change across polls with overlapping windows"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "document_type": {
+            "type": "string",
+            "enum": [
+              "wiki",
+              "issue",
+              "program",
+              "project",
+              "sprint",
+              "person",
+              "weekly_plan",
+              "weekly_retro",
+              "standup",
+              "weekly_review"
+            ],
+            "description": "Type of document"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          }
+        },
+        "required": [
+          "dedupe_key",
+          "id",
+          "document_type",
+          "title",
+          "updated_at",
+          "created_by"
+        ]
+      },
+      "ChangedHistoryEntry": {
+        "type": "object",
+        "properties": {
+          "dedupe_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "field": {
+            "type": "string"
+          },
+          "old_value": {
+            "type": "string",
+            "nullable": true
+          },
+          "new_value": {
+            "type": "string",
+            "nullable": true
+          },
+          "changed_by": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "automated_by": {
+            "type": "string",
+            "nullable": true,
+            "description": "Automation source (e.g. \"claude\"), or null for a human change"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          }
+        },
+        "required": [
+          "dedupe_key",
+          "id",
+          "document_id",
+          "field",
+          "old_value",
+          "new_value",
+          "changed_by",
+          "automated_by",
+          "created_at"
+        ]
+      },
+      "ChangedComment": {
+        "type": "object",
+        "properties": {
+          "dedupe_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "comment_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Thread identifier (matches the TipTap commentId mark)",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "parent_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "author_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "content": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          }
+        },
+        "required": [
+          "dedupe_key",
+          "id",
+          "document_id",
+          "comment_id",
+          "parent_id",
+          "author_id",
+          "content",
+          "resolved_at",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "ChangeFeedResponse": {
+        "type": "object",
+        "properties": {
+          "next_cursor": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Pass as `since` on the next poll. Lagged behind \"now\" by a fixed safety window so a slow transaction cannot be permanently missed — see the endpoint description.",
+            "example": "2025-01-30T14:30:00.000Z"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedDocument"
+            }
+          },
+          "documents_truncated": {
+            "type": "boolean",
+            "description": "True if `documents` hit `limit` and more may be pending in this window"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedHistoryEntry"
+            }
+          },
+          "history_truncated": {
+            "type": "boolean"
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedComment"
+            }
+          },
+          "comments_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "next_cursor",
+          "documents",
+          "documents_truncated",
+          "history",
+          "history_truncated",
+          "comments",
+          "comments_truncated"
+        ]
+      },
       "IssueStats": {
         "type": "object",
         "properties": {
@@ -10722,6 +10956,54 @@
           },
           "404": {
             "description": "Document not found"
+          }
+        }
+      }
+    },
+    "/change-feed": {
+      "get": {
+        "tags": [
+          "Change Feed"
+        ],
+        "summary": "List changes since a cursor",
+        "description": "Workspace-scoped, permission-filtered feed of documents, document_history entries, and comments changed since `since`. The returned `next_cursor` is deliberately lagged behind \"now\" by a fixed safety window (not advanced to the request time) so that a transaction committing late is never permanently missed — pass it back as `since` on the next poll rather than using your own clock. Each item carries a `dedupe_key` stable across polls with overlapping windows.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "ISO 8601 datetime cursor — only changes strictly after this instant are returned",
+              "example": "2026-08-01T00:00:00.000Z"
+            },
+            "required": true,
+            "name": "since",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "exclusiveMinimum": true,
+              "description": "Max rows per source (documents/history/comments each capped independently). Default 100, max 500."
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Changes since the given cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeFeedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid since or limit"
           }
         }
       }

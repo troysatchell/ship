@@ -22,6 +22,7 @@ export * from './files.js';
 export * from './activity.js';
 export * from './auth.js';
 export * from './backlinks.js';
+export * from './change-feed.js';
 export * from './claude.js';
 export * from './dashboard.js';
 export * from './accountability.js';

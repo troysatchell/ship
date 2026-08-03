@@ -148,6 +148,68 @@ containment associations are completely unaffected either way.
 
 ---
 
+## TRO-312 — [FG-1] `GET /api/change-feed` — "what changed since a cursor"
+
+**What was broken.** FleetGraph's proactive mode is defined as "observe state changes since a
+cursor." Ship's API had no way to ask that question: zero occurrences of `since`/`updated_since`
+as a query parameter anywhere in `api/src/routes/`, `GET /api/documents` sorts by
+`position, created_at` (recently-updated documents never surface at the head), and the endpoints
+that do sort `updated_at DESC` (two dashboard widgets, search, one week lookup) take no time
+filter. The proactive half of the agent's MVP had no input.
+
+**What changed.** `GET /api/change-feed?since=<iso>&limit=<n>` (new route,
+`api/src/routes/change-feed.ts`, mounted read-only/no-CSRF in `app.ts` next to `dashboard`/
+`activity`). Workspace-scoped and permission-filtered as the calling user (reuses
+`getVisibilityContext`/`VISIBILITY_FILTER_SQL` from `middleware/visibility.ts` — the same pattern
+`documents.ts`'s list route uses — joined onto `document_history`/`comments` since neither has its
+own visibility column). Returns three arrays — `documents`, `history` (from `document_history`),
+`comments` — each item carrying a `dedupe_key`.
+
+**Did not ship the naive version, per the ticket's explicit warning.** A high-water mark on
+`updated_at` (or on `document_history.id`, a `SERIAL` — same flaw, handed out pre-commit)
+*permanently* misses a row whose transaction commits after the cursor has already advanced past its
+timestamp: a slower transaction with an earlier timestamp can commit after a faster, later-stamped
+one a poll already saw and advanced past. The fix: the returned `next_cursor` is never advanced to
+"now" — it lags `Date.now()` by a fixed `CHANGE_FEED_LAG_MS` (5s, exported for tests). A change more
+recent than that safe cutoff is deliberately withheld and left for a later poll, once enough
+wall-clock time has passed that its transaction (and any earlier-timestamped sibling still in
+flight) is guaranteed to have committed. Stated plainly: this is a tunable safety margin, not a
+proof — it holds as long as `CHANGE_FEED_LAG_MS` exceeds the longest write transaction's duration.
+The cursor is also clamped to never regress behind a caller's own `since` (a caller polling faster
+than the lag window elapses would otherwise move its own cursor backwards).
+
+**OpenAPI** (`/ship-openapi-endpoints`, verified in Swagger, not assumed):
+`api/src/openapi/schemas/change-feed.ts` (new) registers `GET /change-feed` with
+`ChangeFeedResponseSchema` (`ChangedDocument`/`ChangedHistoryEntry`/`ChangedComment`, each with
+`dedupe_key`) and is wired into `schemas/index.ts`. Confirmed by running `pnpm openapi:generate` and
+inspecting `openapi.json`: `paths['/change-feed'].get` is present with `since` (required) and
+`limit` (optional) query params and a `$ref` to `ChangeFeedResponse`.
+
+**Regression test.** `api/src/routes/change-feed.test.ts` (new, 5 cases): (1) a change committing
+inside the lag window is deferred from the first poll, then returned once the window elapses —
+proven with `vi.useFakeTimers({ toFake: ['Date'] })` advancing only the `Date` global (not
+`setTimeout`, so the real HTTP/DB round trips inside the test still run on real timers) rather than
+an actual sleep; (2) never returns a private document owned by another user, or any document in a
+different workspace; (3) the same change carries an identical `dedupe_key` across two polls with
+the same (overlapping) `since`; plus coverage that `document_history` and `comments` both appear
+with their own `dedupe_key` shapes, and that a missing/malformed `since` 400s. Confirmed red first:
+temporarily reverted `app.ts`'s mount (`git checkout HEAD -- api/src/app.ts`, restored after) so
+`/api/change-feed` 404s — all 5 cases failed with `expected 200 to be 404` / `expected 400 to be
+404`, i.e. the route did not exist yet, which is the correct "before" state for a brand-new
+endpoint. Restored the mount, all 5 pass.
+
+**How to run it.** `source .factory-env && pnpm --filter @ship/api exec vitest run src/routes/change-feed.test.ts`
+
+**How to roll it back.** Revert this commit. No migration, no schema change — the endpoint is
+purely additive (a new read-only route), so rollback removes the endpoint and nothing else.
+
+**Not verified:** whether `CHANGE_FEED_LAG_MS = 5000` is the right value for this deployment's
+actual longest write-transaction duration — chosen as a reasonable default, not measured against
+production transaction timing. If a transaction can genuinely run longer than 5s, the row it writes
+can still be permanently missed; this is the tunable margin the design accepts, not a guarantee.
+
+---
+
 ## GitLab CI — shared runners were never enabled; every pipeline on `main` had been stuck or failing since `.gitlab-ci.yml` was added
 
 **What was broken.** `.gitlab-ci.yml` (added 2026-07-30, `3563fa3`) mirrors `.github/workflows/ci.yml`
