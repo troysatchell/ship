@@ -26,6 +26,17 @@ describe('checkReady', () => {
     expect(client.get).toHaveBeenCalledWith('https://ship.example.gov/health');
   });
 
+  it('is not ready when the client resolves with a non-ok response (e.g. Ship returning 503)', async () => {
+    const client: ShipReadClient = { get: vi.fn().mockResolvedValue(new Response(null, { status: 503 })) };
+    const result = await checkReady({
+      shipApiBaseUrl: 'https://ship.example.gov',
+      configComplete: true,
+      client,
+    });
+
+    expect(result.ready).toBe(false);
+  });
+
   it('is not ready when the client rejects (Ship unreachable, breaker open, timeout, etc.)', async () => {
     const client: ShipReadClient = { get: vi.fn().mockRejectedValue(new Error("I can't reach Ship right now.")) };
     const result = await checkReady({

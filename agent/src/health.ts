@@ -39,7 +39,15 @@ export async function checkReady(deps: ReadinessCheckDeps): Promise<ReadinessRes
   const base = deps.shipApiBaseUrl.replace(/\/+$/, '');
 
   try {
-    await deps.client.get(`${base}/health`);
+    const response = await deps.client.get(`${base}/health`);
+    if (!response.ok) {
+      // The `ShipReadClient` interface only promises a resolved `Response` —
+      // it does not promise the resolved value is a success. A real
+      // `ResilientClient` already throws for >=500 (`checkedFetch`), but a
+      // fake or a future client implementation could resolve with any
+      // status, so this check does not rely on that internal contract.
+      return { ready: false, reason: `ship_unhealthy: ${response.status}` };
+    }
     return { ready: true, reason: 'ok' };
   } catch (err) {
     // The client always normalizes failures to a plain, safe message
