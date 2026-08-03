@@ -95,6 +95,59 @@ cases) both still pass unmodified — proof item 3 (existing association behavio
 
 ---
 
+## TRO-333 — [FG-15] `blocks` relationship: Ship can now express "issue A blocks issue B"
+
+**What was broken.** Ship's `relationship_type` enum was only containment
+(`parent | project | sprint | program`) — there was no way to express a dependency between two
+documents, and `document_links` (backlinks) had 0 rows. FG-19 (tracing a blocker whose impact
+crosses reporting lines) had no Ship view that could show it.
+
+**What changed.** Four edits, per the ticket's own PM-review scope amendment (2026-08-03), which
+supersedes the original edit #2:
+1. `api/src/db/migrations/041_add_blocks_relationship.sql` (new) — `ALTER TYPE relationship_type
+   ADD VALUE IF NOT EXISTS 'blocks'`, pattern copied from migration 017. Numbered 041, not 040 as
+   the ticket names — TRO-332 (FG-14, cycle protection) claimed 040 to land first per the bundle's
+   internal order; see TRO-332's CHANGES.md entry.
+2. `shared/src/types/document.ts` — **did not** add `'blocks'` to `BelongsToType` (the amendment).
+   Added `export type RelationshipType = BelongsToType | 'blocks'` alongside it for the API layer.
+3. `api/src/routes/associations.ts` — `'blocks'` added to `createAssociationSchema`'s zod enum and
+   to the `validTypes` runtime array (both call sites the ticket names).
+4. `api/src/utils/document-crud.ts` — the amendment's actual teeth. `getBelongsToAssociations`,
+   `getBelongsToAssociationsBatch`, and `syncBelongsToAssociations`'s DELETE are now all scoped to
+   `relationship_type IN ('parent','project','sprint','program')`. Without this, a `blocks` edge
+   would have appeared in every document's `belongs_to` array — consumed unfiltered by 10+ web
+   components (`ContextTreeNav`, `PropertiesPanel`, `IssuesList`, `UnifiedEditor`, the week tabs) —
+   rendering a blocking issue as if it were a parent/project, and `syncBelongsToAssociations` would
+   have silently deleted any `blocks` edges on a future caller that uses it for a "save" flow
+   (verified uncalled from any route today, but the DELETE was previously unscoped).
+5. **OpenAPI** (`/ship-openapi-endpoints`, verified in Swagger, not assumed): `common.ts` gets a new
+   `RelationshipTypeSchema` (the full 5-value enum) kept separate from `BelongsToTypeSchema` (still
+   4 values, containment only) for the same reason as edit #2. `backlinks.ts`'s `AssociationSchema`
+   and the `POST /documents/{id}/associations` body now use `RelationshipTypeSchema`. Confirmed by
+   running `pnpm openapi:generate` and inspecting `openapi.json`: both the `Association` component
+   schema and the POST body's inline enum list `"blocks"` alongside the four containment types.
+
+**Regression test.** `api/src/routes/blocks-relationship.test.ts` (new, 5 cases), covering the
+ticket's stated proof items: POST + GET round-trip; the reverse ("blocked by") query; FG-14's cycle
+trigger rejecting a `blocks`-specific cycle (not just the containment types it was built and tested
+against); the scope-amendment proof that a `blocks` edge does not leak into `belongs_to` while the
+generic associations GET still returns it; and a live call to `generateOpenAPIDocument()` asserting
+`'blocks'` appears in the generated spec (protects the Swagger registration itself, not just the
+route behavior). Confirmed red first: reverted `associations.ts`, `document-crud.ts`,
+`shared/src/types/document.ts`, and the two openapi schema files to their pre-fix HEAD versions
+(migrations 040/041 stayed applied), reran — all 5 cases failed, proof 1 with `expected 400 to be
+201` (the zod layer rejecting `'blocks'`, exactly as the ticket describes). Restored the fix, all 5
+pass, plus `associations-regression.test.ts` (12), `circular-reference.test.ts` (5),
+`association-cycle-protection.test.ts` (5), and `issues.test.ts` (27) all still pass unmodified.
+
+**How to run it.** `source .factory-env && pnpm db:migrate && pnpm build:shared && pnpm --filter @ship/api exec vitest run src/routes/blocks-relationship.test.ts`
+
+**How to roll it back.** Revert this commit. The enum value migration is additive (no data migration,
+nothing else references `'blocks'` yet outside this branch), so a rollback is safe — existing
+containment associations are completely unaffected either way.
+
+---
+
 ## GitLab CI — shared runners were never enabled; every pipeline on `main` had been stuck or failing since `.gitlab-ci.yml` was added
 
 **What was broken.** `.gitlab-ci.yml` (added 2026-07-30, `3563fa3`) mirrors `.github/workflows/ci.yml`

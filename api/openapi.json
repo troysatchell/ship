@@ -98,7 +98,7 @@
               "sprint",
               "parent"
             ],
-            "description": "Type of document association"
+            "description": "Type of document association (containment only — see RelationshipTypeSchema for the full set including \"blocks\")"
           }
         },
         "required": [
@@ -123,7 +123,7 @@
               "sprint",
               "parent"
             ],
-            "description": "Type of document association"
+            "description": "Type of document association (containment only — see RelationshipTypeSchema for the full set including \"blocks\")"
           },
           "title": {
             "type": "string",
@@ -3309,6 +3309,47 @@
           "updated_at"
         ]
       },
+      "DocumentSearchResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "document_type": {
+            "type": "string",
+            "enum": [
+              "wiki",
+              "issue",
+              "program",
+              "project",
+              "sprint",
+              "person",
+              "weekly_plan",
+              "weekly_retro",
+              "standup",
+              "weekly_review"
+            ],
+            "description": "Type of document"
+          },
+          "title": {
+            "type": "string"
+          },
+          "ticket_number": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Numeric ticket number, present on issue documents"
+          }
+        },
+        "required": [
+          "id",
+          "document_type",
+          "title",
+          "ticket_number"
+        ]
+      },
       "UploadRequest": {
         "type": "object",
         "properties": {
@@ -3749,9 +3790,10 @@
               "program",
               "project",
               "sprint",
-              "parent"
+              "parent",
+              "blocks"
             ],
-            "description": "Type of document association"
+            "description": "Type of document association, including the \"blocks\" dependency edge"
           },
           "created_at": {
             "type": "string",
@@ -9924,99 +9966,29 @@
         "tags": [
           "Search"
         ],
-        "summary": "Search documents",
-        "description": "Full-text search across all document types.",
+        "summary": "Search or browse documents",
+        "description": "Returns documents across the six primary types (wiki, issue, program, project, sprint, person). Omit `q` to browse the full list (used by the command palette); pass `q` to filter by title.",
         "parameters": [
           {
             "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "q",
-            "in": "query"
-          },
-          {
-            "schema": {
               "type": "string",
-              "enum": [
-                "wiki",
-                "issue",
-                "program",
-                "project",
-                "sprint",
-                "person",
-                "weekly_plan",
-                "weekly_retro",
-                "standup",
-                "weekly_review"
-              ],
-              "description": "Filter by document type"
+              "description": "Optional title search query. Omit to browse all documents.",
+              "example": "onboarding"
             },
             "required": false,
-            "name": "type",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100
-            },
-            "required": false,
-            "name": "limit",
+            "name": "q",
             "in": "query"
           }
         ],
         "responses": {
           "200": {
-            "description": "Document search results",
+            "description": "Matching documents",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string",
-                        "format": "uuid",
-                        "description": "UUID identifier",
-                        "example": "550e8400-e29b-41d4-a716-446655440000"
-                      },
-                      "title": {
-                        "type": "string"
-                      },
-                      "document_type": {
-                        "type": "string",
-                        "enum": [
-                          "wiki",
-                          "issue",
-                          "program",
-                          "project",
-                          "sprint",
-                          "person",
-                          "weekly_plan",
-                          "weekly_retro",
-                          "standup",
-                          "weekly_review"
-                        ],
-                        "description": "Type of document"
-                      },
-                      "content_preview": {
-                        "type": "string",
-                        "nullable": true
-                      },
-                      "updated_at": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "title",
-                      "document_type",
-                      "content_preview",
-                      "updated_at"
-                    ]
+                    "$ref": "#/components/schemas/DocumentSearchResult"
                   }
                 }
               }
@@ -10605,7 +10577,7 @@
           "Documents"
         ],
         "summary": "Add document association",
-        "description": "Add an association to a program, project, sprint, or parent document.",
+        "description": "Add an association to a program, project, sprint, or parent document, or a \"blocks\" dependency edge to another document.",
         "parameters": [
           {
             "schema": {
@@ -10637,9 +10609,10 @@
                       "program",
                       "project",
                       "sprint",
-                      "parent"
+                      "parent",
+                      "blocks"
                     ],
-                    "description": "Type of document association"
+                    "description": "Type of document association, including the \"blocks\" dependency edge"
                   }
                 },
                 "required": [

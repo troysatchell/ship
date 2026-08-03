@@ -57,7 +57,18 @@ export const PaginatedResponseSchema = <T extends z.ZodTypeAny>(itemSchema: T) =
 // ============== Belongs To (Document Associations) ==============
 
 export const BelongsToTypeSchema = z.enum(['program', 'project', 'sprint', 'parent']).openapi({
-  description: 'Type of document association',
+  description: 'Type of document association (containment only — see RelationshipTypeSchema for the full set including "blocks")',
+});
+
+// FG-15 / TRO-333: the full set of document_associations relationship types,
+// including 'blocks' (a dependency edge, not containment). Deliberately kept
+// separate from BelongsToTypeSchema — the belongs_to array on documents/issues
+// means containment specifically, and 'blocks' must never appear there (see
+// api/src/utils/document-crud.ts). Use this schema for the generic
+// association CRUD surface (GET/POST/DELETE .../associations), where 'blocks'
+// is a valid relationship_type.
+export const RelationshipTypeSchema = z.enum(['program', 'project', 'sprint', 'parent', 'blocks']).openapi({
+  description: 'Type of document association, including the "blocks" dependency edge',
 });
 
 export const BelongsToEntrySchema = z.object({

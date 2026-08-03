@@ -7,9 +7,15 @@ type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
 
 // Validation schemas
+//
+// 'blocks' (FG-15 / TRO-333) is a dependency edge, not containment — it is
+// valid here (the generic association CRUD surface) but deliberately absent
+// from BelongsToType / the belongs_to array. See document-crud.ts's
+// getBelongsToAssociations*/syncBelongsToAssociations for the containment
+// filter that keeps it out of belongs_to.
 const createAssociationSchema = z.object({
   related_id: z.string().uuid(),
-  relationship_type: z.enum(['parent', 'project', 'sprint', 'program']),
+  relationship_type: z.enum(['parent', 'project', 'sprint', 'program', 'blocks']),
   metadata: z.record(z.unknown()).optional(),
 });
 
@@ -29,8 +35,8 @@ async function canAccessDocument(
   return result.rows.length > 0;
 }
 
-// Valid relationship types
-const validTypes = ['parent', 'project', 'sprint', 'program'] as const;
+// Valid relationship types ('blocks' added by FG-15 / TRO-333)
+const validTypes = ['parent', 'project', 'sprint', 'program', 'blocks'] as const;
 type RelationshipType = typeof validTypes[number];
 
 function isValidRelationshipType(value: unknown): value is RelationshipType {
