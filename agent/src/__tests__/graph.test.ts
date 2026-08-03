@@ -38,6 +38,30 @@ describe('buildGraph', () => {
     expect(result.output).toBe('part one part two');
   });
 
+  it('extracts `.text` from a native Anthropic `{ type: "text", text }` block inside an array, rather than JSON.stringify-ing it', async () => {
+    const model: AnthropicModel = {
+      invoke: vi.fn().mockResolvedValue({
+        content: [{ type: 'text', text: 'hello from a real content block' }],
+      }),
+    };
+    const compiled = buildGraph(model);
+
+    const result = await compiled.invoke({ input: 'hello' });
+
+    expect(result.output).toBe('hello from a real content block');
+  });
+
+  it('extracts `.text` from a bare (non-array) native text block too', async () => {
+    const model: AnthropicModel = {
+      invoke: vi.fn().mockResolvedValue({ content: { type: 'text', text: 'top-level text block' } }),
+    };
+    const compiled = buildGraph(model);
+
+    const result = await compiled.invoke({ input: 'hello' });
+
+    expect(result.output).toBe('top-level text block');
+  });
+
   it('propagates a model failure rather than swallowing it', async () => {
     const model: AnthropicModel = { invoke: vi.fn().mockRejectedValue(new Error('model unavailable')) };
     const compiled = buildGraph(model);

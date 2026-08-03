@@ -42,11 +42,29 @@ export type GraphStateType = typeof GraphState.State;
 export const NODE_NAMES = ['ingest', 'respond'] as const;
 export type NodeName = (typeof NODE_NAMES)[number];
 
+/** Narrows to Anthropic's native `{ type: 'text', text: string, ... }` content block shape. */
+function hasStringText(value: unknown): value is { text: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'text' in value &&
+    typeof (value as Record<string, unknown>).text === 'string'
+  );
+}
+
 function contentToString(content: unknown): string {
   if (typeof content === 'string') return content;
+  // A native text block (`{ type: 'text', text: '...' }`) carries its own
+  // string payload — return that directly rather than stringifying the
+  // whole object around it.
+  if (hasStringText(content)) return content.text;
   if (Array.isArray(content)) {
     return content
-      .map((part) => (typeof part === 'string' ? part : JSON.stringify(part)))
+      .map((part) => {
+        if (typeof part === 'string') return part;
+        if (hasStringText(part)) return part.text;
+        return JSON.stringify(part);
+      })
       .join('');
   }
   return String(content);
