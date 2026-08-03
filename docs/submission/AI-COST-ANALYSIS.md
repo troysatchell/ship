@@ -147,4 +147,3 @@ edit freely]
   context, not agent intelligence. The next optimization target is cache-read volume — tighter
   briefs and smaller shared-context footprints per agent — not a cheaper model.
 
-> — Zim: "I must go, my planet needs me."

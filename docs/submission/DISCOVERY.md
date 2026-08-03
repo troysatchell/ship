@@ -76,4 +76,3 @@ fixed key) acquired before the very first query — not assume idempotent DDL im
 And I'd verify that assumption once, directly: spin up N processes against a throwaway database and
 watch what actually happens, rather than reasoning from the SQL text alone.
 
-> — GIR: "I made it myself! ...with my mind."

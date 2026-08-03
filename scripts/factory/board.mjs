@@ -39,10 +39,12 @@ const worktreeRows = s.worktrees.length ? s.worktrees.map((w) => {
   return `
   <li class="row ${state}">
     <div class="row-head">
+      <span class="title">${esc(w.title)}</span>
       <span class="tkt">${esc(w.ticket)}</span>
       <span class="verdict">${verdict}</span>
       <span class="commits">${w.commits} commit${w.commits === 1 ? '' : 's'}</span>
     </div>
+    <div class="live">${esc(w.liveAction)}</div>
     <div class="row-meta">
       <span>${esc(w.branch)}</span>
       <span>db ${esc(w.db ?? '—')}</span>
@@ -180,11 +182,18 @@ ${live ? '<meta http-equiv="refresh" content="15">' : ''}
   .row.bad { border-left-color:var(--bad); background:var(--bad-wash); }
   .row.wait { border-left-color:var(--wait); background:var(--wait-wash); }
   .row-head { display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
-  .tkt { font-weight:700; letter-spacing:.04em; }
+  /* Title is the primary label — what to go read is more useful at a glance than
+     which numbered bucket it's filed under. The ticket ID survives as a small
+     tag so it's still there to cross-reference against Linear/PRs. */
+  .title { font-family:var(--sans); font-weight:700; font-size:14.5px; flex:1 1 220px; }
+  .tkt { font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.04em;
+         color:var(--muted); border:1px solid var(--line); border-radius:2px; padding:1px 7px; }
   .verdict { color:var(--muted); }
   .row.bad .verdict { color:var(--bad); }
   .row.ok .verdict { color:var(--ok); }
   .commits { margin-left:auto; color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  /* What the worktree is doing right now, not just which ticket it's on. */
+  .live { font-family:var(--mono); font-size:12px; color:var(--accent); margin-top:4px; }
   .row-meta { display:flex; flex-wrap:wrap; gap:14px; color:var(--muted); font-size:12px; margin-top:3px; }
   .empty { color:var(--muted); padding:9px 0 9px 15px; }
 

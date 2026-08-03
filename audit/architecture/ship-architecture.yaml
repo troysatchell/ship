@@ -1,0 +1,1297 @@
+# Ship — application architecture, subsystem level.
+#
+# Provenance:
+#   Nodes are directories of api/src, web/src, shared/src, plus the AWS runtime
+#   topology from terraform/*.tf. File counts and LOC are measured.
+#   Code edges are MEASURED: every relative / `@/` / `@ship/shared` import in
+#   292 non-test source files was resolved and aggregated to the directory
+#   level; the `note:` on each code edge is the resolved import count.
+#   Runtime edges (HTTP, WebSocket, SDK calls, AWS wiring) are read from source
+#   and terraform and cited in `sources:`.
+#
+# The `detail:` prose, the two `gap` edges and the manual findings are human.
+
+meta:
+  title: Ship — application architecture
+  subtitle: 292 source files across api/web/shared, plus the AWS runtime path
+  source: troysatchell/Ship @ 791380a (2026-08-01)
+  profile: code
+  repoUrl: https://github.com/troysatchell/ship
+  branch: main
+
+zones:
+  - id: browser
+    label: Browser
+    accent: intake
+    note: React 18 + Vite SPA, TipTap/Yjs editor, TanStack Query
+  - id: contract
+    label: Shared contract
+    accent: transform
+    note: the only code both halves compile against
+  - id: agent
+    label: Agent surface
+    accent: intake
+    note: a developer-machine process, not part of the deployment
+  - id: edge
+    label: AWS edge
+    accent: control
+    note: CloudFront in front of S3 (SPA) and Elastic Beanstalk (API)
+  - id: api
+    label: API process
+    accent: transform
+    note: Express + ws on Node 20, one Docker image
+  - id: state
+    label: Durable state
+    accent: store
+    note: inside the VPC, reachable only from the EB security group
+  - id: vendor
+    label: External services
+    accent: external
+
+nodes:
+  # ───────────────────────────── browser ─────────────────────────────
+  - id: web_main
+    label: main.tsx
+    kind: entrypoint
+    zone: browser
+    subtitle: SPA bootstrap + route table
+    consumes: [spa-bundle]
+    detail: |
+      Mounts the provider stack (QueryClientProvider, WorkspaceContext, auth) and
+      declares every route. Route components are lazy — `main.routes.test.ts`
+      exists to keep the split honest, because a static import here silently
+      undoes code splitting for the whole app.
+    metrics:
+      loc: 295
+    sources:
+      - path: web/src/main.tsx
+        note: provider stack + route table
+
+  - id: web_pages
+    label: pages/
+    kind: component
+    zone: browser
+    subtitle: 24 route components
+    detail: |
+      One component per route. `UnifiedDocumentPage` is the important one: every
+      document type (wiki, issue, program, project, sprint, person) renders
+      through it rather than through a type-specific page, which is the load-
+      bearing consequence of the unified document model.
+    metrics:
+      loc: 12489
+    sources:
+      - web/src/pages/UnifiedDocumentPage.tsx
+      - web/src/pages/Dashboard.tsx
+      - web/src/pages/App.tsx
+
+  - id: web_components
+    label: components/
+    kind: component
+    zone: browser
+    subtitle: 89 files — the 4-panel shell
+    detail: |
+      The icon rail, contextual sidebar, properties panel and every shared
+      widget. 19,010 lines across 89 files, and it both depends on and is
+      depended on by lib/, hooks/ and the editor — see the circular-dependency
+      finding. This is the single largest module in the repo by line count after
+      routes/.
+    metrics:
+      loc: 19010
+    sources:
+      - web/src/components/sidebars/PropertiesPanel.tsx
+      - web/src/components/DocumentTreeItem.tsx
+      - web/src/components/ui/
+
+  - id: web_editor
+    label: Editor + TipTap
+    kind: component
+    zone: browser
+    subtitle: one editor for every doc type
+    emits: [yjs-update]
+    consumes: [yjs-broadcast]
+    detail: |
+      `Editor.tsx` is the single shared editor — there is deliberately no
+      type-specific editor. It owns the Yjs document, the `y-indexeddb`
+      persistence provider and the `y-websocket` provider pointed at
+      `/collaboration/{docType}:{docId}`. `LazyEditor` defers the whole TipTap
+      + Yjs bundle so it never lands in the initial payload.
+    metrics:
+      loc: 6814
+    sources:
+      - path: web/src/components/Editor.tsx
+        lines: [364, 460]
+        note: Y.Doc + IndexeddbPersistence + WebsocketProvider wiring
+      - web/src/components/LazyEditor.tsx
+      - web/src/components/editor/
+
+  - id: web_contexts
+    label: contexts/
+    kind: datastore
+    zone: browser
+    subtitle: 10 React contexts
+    detail: |
+      Workspace, documents, issues, projects, programs, current document,
+      selection persistence, uploads. Ambient client state — distinct from the
+      server cache in queryClient, and the boundary between the two is not
+      enforced anywhere.
+    metrics:
+      loc: 622
+    sources:
+      - web/src/contexts/WorkspaceContext.tsx
+      - web/src/contexts/DocumentsContext.tsx
+
+  - id: web_hooks
+    label: hooks/
+    kind: module
+    zone: browser
+    subtitle: 27 TanStack Query hooks
+    detail: |
+      Every server read goes through a query hook, so the query key namespace is
+      the de-facto client data model. `useRealtimeEvents` is the odd one out: it
+      opens a raw WebSocket to `/events` and turns server pushes into cache
+      invalidations.
+    metrics:
+      loc: 4540
+    sources:
+      - path: web/src/hooks/useRealtimeEvents.tsx
+        lines: [36, 80]
+        note: /events WebSocket -> query invalidation
+      - web/src/hooks/useDocumentsQuery.ts
+
+  - id: web_query
+    label: queryClient
+    kind: cache
+    zone: browser
+    subtitle: TanStack cache, persisted
+    detail: |
+      The query cache is persisted to IndexedDB via idb-keyval, with an explicit
+      schema version and a corruption detector. Corruption is not silent: it
+      surfaces as `CacheCorruptionAlert`, which clears every store and reloads.
+    metrics:
+      loc: 329
+    sources:
+      - path: web/src/lib/queryClient.ts
+        lines: [1, 200]
+        note: IndexedDB persister + corruption detection
+
+  - id: web_lib
+    label: lib/ + services/
+    kind: module
+    zone: browser
+    subtitle: utils, tree building, uploads
+    emits: [file-object]
+    consumes: [presigned-upload-url]
+    detail: |
+      Document-tree construction, status colours, contrast, date maths, context-
+      menu actions, and the upload tracker. `lib/` imports back into
+      `components/` (13 resolved imports), which is what closes the largest
+      circular dependency in the frontend.
+    metrics:
+      loc: 1764
+    sources:
+      - web/src/lib/documentTree.ts
+      - web/src/lib/contextMenuActions.ts
+      - web/src/services/upload.ts
+
+  - id: web_apiclient
+    label: lib/api.ts
+    kind: api
+    zone: browser
+    subtitle: fetch + CSRF + session handling
+    consumes: [csrf-token]
+    detail: |
+      The only place the browser talks REST. Caches a CSRF token from
+      `/api/csrf-token`, attaches it to state-changing requests, and translates a
+      `SESSION_EXPIRED` response into a redirect to `/login`. It deliberately
+      does *not* redirect on a plain `UNAUTHORIZED` — a fresh visitor with no
+      session should get a clean login, not a "session expired" modal.
+    metrics:
+      loc: 530
+    sources:
+      - path: web/src/lib/api.ts
+        symbol: handleSessionExpired
+        lines: [28, 70]
+
+  - id: web_idb
+    label: IndexedDB
+    kind: datastore
+    zone: browser
+    subtitle: two independent stores
+    detail: |
+      Two unrelated stores share the name. `ship-{roomPrefix}-{documentId}` holds
+      the Yjs document state written by y-indexeddb, which is what makes the
+      editor work offline. The idb-keyval store holds the persisted TanStack
+      Query cache. Only the second one has a corruption check.
+    metrics:
+      loc: 0
+    sources:
+      - path: web/src/components/Editor.tsx
+        lines: [372, 372]
+        note: new IndexeddbPersistence(`ship-${roomPrefix}-${documentId}`)
+      - path: web/src/lib/queryClient.ts
+        lines: [13, 20]
+        note: idb-keyval stores for cache + metadata
+
+  # ──────────────────────────── contract ─────────────────────────────
+  - id: shared
+    label: '@ship/shared'
+    kind: package
+    zone: contract
+    subtitle: types + constants, 8 files
+    detail: |
+      469 lines. Document, auth, workspace and API response types, plus the
+      session-timeout constants that both the auth middleware and the
+      collaboration server import so the two cannot drift. Must be built before
+      api or web will compile.
+    metrics:
+      loc: 469
+    sources:
+      - shared/src/types/document.ts
+      - shared/src/constants.ts
+
+  # ────────────────────────────── edge ───────────────────────────────
+  - id: cloudfront
+    label: CloudFront
+    kind: router
+    zone: edge
+    subtitle: one domain, two origins
+    detail: |
+      Everything enters here. The default behaviour serves the SPA from S3 with a
+      viewer-request function for SPA routing; five ordered behaviours
+      (`/api/*`, `/health`, `/collaboration/*`, `/events`, `/.well-known/*`) go
+      to the `EB-API` custom origin instead. The WebSocket behaviours use an
+      origin request policy rather than legacy `forwarded_values` so the upgrade
+      survives. This is also why the API must be health-checked through
+      CloudFront: the ALB security group only admits CloudFront's prefix list.
+    sources:
+      - path: terraform/s3-cloudfront.tf
+        lines: [128, 250]
+        note: origins + ordered_cache_behavior blocks
+      - terraform/security-groups.tf
+      - terraform/waf.tf
+
+  - id: s3_frontend
+    label: S3 — SPA bundle
+    kind: bucket
+    zone: edge
+    subtitle: origin access control only
+    emits: [spa-bundle]
+    detail: |
+      Built by `pnpm build:web` and pushed by `scripts/deploy-frontend.sh`.
+      Private bucket; reachable only through the CloudFront origin access
+      control. Versioned and encrypted at rest.
+    sources:
+      - path: terraform/s3-cloudfront.tf
+        symbol: aws_s3_bucket.frontend
+
+  - id: eb
+    label: Elastic Beanstalk
+    kind: container
+    zone: edge
+    subtitle: ALB + ASG, 1–4 Docker instances
+    detail: |
+      Amazon Linux 2023 running Docker, behind an application load balancer.
+      MinSize 1, MaxSize 4, scaling on 70% average CPU. The container entrypoint
+      is `node dist/db/migrate.js && node dist/index.js` — migrations run on
+      every boot, before the server listens.
+
+      Two deploy paths disagree about session stickiness, and the repo does not
+      settle which one built the live environment. `terraform/elastic-beanstalk.tf`
+      enumerates its settings explicitly and does not include `StickinessEnabled`;
+      `scripts/deploy-api.sh:187` sets it to `true`, but only on the
+      `create-environment` branch — its update branch passes no option settings at
+      all. `scripts/deploy.sh`, the documented deploy, drives terraform. Confirm
+      against the running environment before relying on either.
+    sources:
+      - path: terraform/elastic-beanstalk.tf
+        lines: [155, 240]
+        note: MinSize 1 / MaxSize 4 / LoadBalanced ALB
+      - path: Dockerfile
+        note: 'CMD: migrate then serve'
+
+  # ─────────────────────────────── api ───────────────────────────────
+  - id: api_entry
+    label: index.ts
+    kind: entrypoint
+    zone: api
+    subtitle: boot order is the point
+    detail: |
+      Loads SSM secrets *before* dynamically importing `app.ts`, so nothing
+      module-scoped reads an unset env var. Then installs the process safety net,
+      sets Slowloris timeouts (60s/65s/66s), attaches the collaboration
+      WebSocket server to the same HTTP server, and listens.
+
+      The safety net lives here rather than in a library module on purpose:
+      importing the app from a test or the MCP server must not hijack the host
+      process's error handling.
+    metrics:
+      loc: 228
+    sources:
+      - path: api/src/index.ts
+        lines: [13, 50]
+      - api/src/process-safety.ts
+
+  - id: api_config
+    label: config/ssm.ts
+    kind: module
+    zone: api
+    subtitle: production secret loading
+    consumes: [ssm-parameters]
+    detail: |
+      Reads `/ship/{env}/DATABASE_URL`, `SESSION_SECRET`, `CORS_ORIGIN` and
+      friends from SSM Parameter Store with a 5s per-request timeout and 3
+      bounded attempts. Only runs when `NODE_ENV=production` — the early return
+      is a known test-masking hazard: a smoke test run under
+      `NODE_ENV=development` never exercises this file at all.
+    metrics:
+      loc: 212
+    sources:
+      - path: api/src/config/ssm.ts
+        lines: [35, 60]
+        note: timeout + retry policy
+
+  - id: api_app
+    label: app.ts
+    kind: router
+    zone: api
+    subtitle: middleware chain + 28 mounts
+    emits: [csrf-token]
+    detail: |
+      One function, `createApp`, builds the whole chain in order: trust-proxy hop
+      count, compression, helmet/CSP, two `/api/` rate limiters, CORS, body
+      parsers, cookie parser, express-session, CSRF, Swagger, then 28 route
+      mounts. Order here is behaviour — the public feedback router must precede
+      the CSRF-protected mounts, and the login limiter must precede the auth
+      routes.
+    metrics:
+      loc: 464
+    sources:
+      - path: api/src/app.ts
+        symbol: createApp
+        lines: [222, 420]
+
+  - id: api_mw
+    label: middleware/
+    kind: guard
+    zone: api
+    subtitle: auth, rate limit, visibility
+    consumes: [session-row]
+    detail: |
+      `authMiddleware` accepts either a `Bearer` API token or a session cookie,
+      enforces a 15-minute inactivity window and a 12-hour absolute cap, and
+      writes `req.userId`/`req.workspaceId`. `visibility` scopes document reads.
+      `redis-rate-limit-store` fronts Redis with a circuit breaker and fails
+      open (`passOnStoreError: true`) so a Redis outage degrades to per-process
+      limiting rather than locking everyone out.
+    metrics:
+      loc: 1278
+    sources:
+      - path: api/src/middleware/auth.ts
+        symbol: authMiddleware
+        lines: [169, 300]
+      - api/src/middleware/rate-limit.ts
+      - api/src/middleware/redis-rate-limit-store.ts
+
+  - id: api_routes
+    label: routes/
+    kind: endpoint
+    zone: api
+    subtitle: 29 files, 23k lines
+    emits: [session-row, presigned-upload-url, document-content-json]
+    detail: |
+      The REST surface, and by a wide margin the heaviest module in the repo:
+      23,031 lines across 29 files, reaching into middleware, db, services, utils,
+      the collaboration server, the OpenAPI registry and S3. Most of that mass is
+      raw SQL — there is no ORM, so query construction lives in the handlers.
+    metrics:
+      loc: 23031
+    sources:
+      - api/src/routes/documents.ts
+      - api/src/routes/issues.ts
+      - api/src/routes/files.ts
+
+  - id: api_collab
+    label: collaboration/
+    kind: service
+    zone: api
+    subtitle: Yjs rooms + /events, 1,570 lines
+    emits: [yjs-state, yjs-broadcast]
+    consumes: [yjs-update, document-content-json]
+    detail: |
+      One file doing two jobs. It runs the Yjs sync protocol over
+      `/collaboration/{docType}:{docId}`, holding each room's `Y.Doc` and
+      awareness state in a process-local `Map` and debouncing persistence to
+      `documents.yjs_state` every 2s. It also serves `/events`, a plain
+      WebSocket that route handlers push to via `broadcastToUser`.
+
+      Both maps are per-process. Nothing replicates them.
+    metrics:
+      loc: 1570
+    sources:
+      - path: api/src/collaboration/index.ts
+        lines: [95, 130]
+        note: 'docs / awareness Maps — process-local room state'
+      - path: api/src/collaboration/index.ts
+        symbol: broadcastToUser
+        lines: [1056, 1080]
+      - path: api/src/collaboration/index.ts
+        lines: [326, 380]
+        note: loadDoc — yjs_state, falling back to converting content JSON
+
+  - id: api_services
+    label: services/
+    kind: service
+    zone: api
+    subtitle: the only outbound integrations
+    consumes: [caia-credentials]
+    detail: |
+      CAIA OAuth (PIV smartcard auth via Treasury's OIDC server), AWS Secrets
+      Manager, Bedrock-backed plan/retro analysis, audit logging, accountability
+      inference, OAuth state. Every third-party call the API makes originates
+      here — routes never reach out directly.
+    metrics:
+      loc: 1885
+    sources:
+      - api/src/services/caia.ts
+      - api/src/services/ai-analysis.ts
+      - api/src/services/secrets-manager.ts
+
+  - id: api_utils
+    label: utils/
+    kind: module
+    zone: api
+    subtitle: Yjs<->JSON, document CRUD
+    detail: |
+      `yjsConverter` is the interesting one: it is what lets a document created
+      through the REST API (plain TipTap JSON in `content`) be opened by the
+      collaborative editor, by converting JSON into Yjs the first time a room
+      loads. Also holds the circuit breaker used by the Redis store.
+    metrics:
+      loc: 2065
+    sources:
+      - api/src/utils/yjsConverter.ts
+      - api/src/utils/document-crud.ts
+      - api/src/utils/circuitBreaker.ts
+
+  - id: api_openapi
+    label: openapi/ + swagger
+    kind: api
+    zone: api
+    subtitle: zod -> spec -> Swagger -> MCP
+    emits: [openapi-spec]
+    detail: |
+      23 schema modules register zod definitions and paths into one registry at
+      import time; `swagger.ts` generates the document once at module load and
+      serves it at `/api/docs`, `/api/openapi.json` and `/api/openapi.yaml`.
+      Registration is not optional — an endpoint that skips it is invisible to
+      Swagger and produces no MCP tool.
+    metrics:
+      loc: 5583
+    sources:
+      - api/src/openapi/registry.ts
+      - api/src/openapi/schemas/index.ts
+      - api/src/swagger.ts
+
+  - id: api_db
+    label: db/
+    kind: module
+    zone: api
+    subtitle: pool, migrations, seed
+    detail: |
+      A single `pg.Pool` — no ORM, no query builder. Pool timing, TLS resolution
+      and which `.env` files load are each split into their own module because
+      each was a defect: the app pool once connected in plaintext while the
+      migrate and seed scripts either side of it negotiated TLS.
+
+      `migrate.ts` applies `schema.sql` first, then numbered migrations tracked
+      in `schema_migrations`, each in its own transaction.
+    metrics:
+      loc: 3381
+    sources:
+      - path: api/src/db/client.ts
+        lines: [34, 60]
+        note: pool config — TLS, statement_timeout 30s, maxUses 7500
+      - path: api/src/db/migrate.ts
+        lines: [25, 60]
+      - api/src/db/schema.sql
+
+  - id: api_mcp
+    label: mcp/server.ts
+    kind: cli
+    zone: agent
+    subtitle: separate stdio process
+    consumes: [openapi-spec]
+    detail: |
+      Not part of the served application. A standalone MCP server that reads
+      `~/.claude/.env`, fetches `/api/openapi.json` from a *running* Ship
+      instance, and generates one MCP tool per operation at startup. Its tool
+      surface therefore tracks whichever deployment `SHIP_URL` points at — not
+      this checkout.
+    metrics:
+      loc: 524
+    sources:
+      - path: api/src/mcp/server.ts
+        lines: [1, 60]
+
+  # ────────────────────────────── state ──────────────────────────────
+  - id: pg
+    label: PostgreSQL / Aurora
+    kind: database
+    zone: state
+    subtitle: 18 tables, one for content
+    consumes: [yjs-state]
+    detail: |
+      Aurora PostgreSQL in private subnets, reachable only from the EB security
+      group. Every content type — wiki, issue, program, project, sprint, person —
+      is a row in `documents`, distinguished by `document_type`. Relationships
+      live in `document_associations`; all three legacy association columns have
+      been dropped. `documents.yjs_state` (bytea) holds the CRDT state and
+      `documents.content` (jsonb) is kept in sync as a readable fallback.
+    sources:
+      - path: api/src/db/schema.sql
+        lines: [106, 210]
+        note: documents + document_associations
+      - terraform/database.tf
+
+  - id: redis
+    label: ElastiCache Redis
+    kind: cache
+    zone: state
+    subtitle: single node, rate limits only
+    detail: |
+      One `cache.*` node, engine 7.1. Its only consumer is the rate-limit store —
+      grep for `REDIS_URL` returns app.ts, rate-limit.ts, redis-rate-limit-store.ts
+      and ssm.ts, and nothing else. If `REDIS_URL` is unset the limiters fall back
+      to per-process memory stores.
+    sources:
+      - path: terraform/redis.tf
+        lines: [80, 90]
+      - api/src/middleware/redis-rate-limit-store.ts
+
+  - id: s3_uploads
+    label: S3 — uploads
+    kind: bucket
+    zone: state
+    subtitle: presigned PUT, CORS, lifecycle
+    consumes: [file-object]
+    detail: |
+      File attachments. The browser uploads directly with a presigned URL rather
+      than streaming through the API, then calls `POST /api/files/:id/confirm`.
+      Metadata rows live in the `files` table; only bytes live here.
+    sources:
+      - path: api/src/routes/files.ts
+        lines: [100, 250]
+        note: presigned PUT + confirm
+      - terraform/s3-cloudfront.tf
+
+  # ────────────────────────────── vendor ─────────────────────────────
+  - id: aws_params
+    label: SSM + Secrets Manager
+    kind: vendor
+    zone: vendor
+    subtitle: /ship/{env}/*
+    emits: [ssm-parameters, caia-credentials]
+    detail: |
+      Parameter Store holds runtime config (DATABASE_URL, SESSION_SECRET,
+      CORS_ORIGIN, CDN_DOMAIN, APP_BASE_URL) read once at boot. Secrets Manager
+      holds `/ship/{env}/caia-credentials`, re-fetched on every auth flow so a
+      credential rotation takes effect without a restart.
+    sources:
+      - api/src/config/ssm.ts
+      - api/src/services/secrets-manager.ts
+      - terraform/ssm.tf
+
+  - id: caia
+    label: Treasury CAIA
+    kind: vendor
+    zone: vendor
+    subtitle: OIDC / PIV smartcard
+    detail: |
+      Treasury's Customer Authentication & Identity Architecture, spoken via
+      openid-client v6. Supplies the PIV/X509Cert, Login.gov and ID.me credential
+      paths. Email is the identifier that persists; `sub` explicitly is not.
+    sources:
+      - api/src/services/caia.ts
+      - api/src/routes/caia-auth.ts
+
+  - id: bedrock
+    label: AWS Bedrock
+    kind: vendor
+    zone: vendor
+    subtitle: claude-opus-4-5, us-east-1
+    detail: |
+      Scores weekly plans for falsifiability and workload, and compares retros
+      against their plan for coverage. Degrades gracefully — a failed client
+      init or invocation returns no score rather than failing the request.
+    sources:
+      - path: api/src/services/ai-analysis.ts
+        lines: [1, 40]
+      - terraform/elastic-beanstalk.tf
+
+edges:
+  # ─────────────────── runtime path: browser -> edge -> api ───────────
+  - id: r01
+    from: web_main
+    to: cloudfront
+    kind: flow
+    label: GET / (SPA)
+    views: [flow]
+  - id: r02
+    from: cloudfront
+    to: s3_frontend
+    kind: flow
+    label: default behavior
+    views: [flow]
+    note: viewer-request CloudFront function rewrites SPA routes to /index.html
+  - id: r03
+    from: web_apiclient
+    to: cloudfront
+    kind: flow
+    label: /api/* + CSRF
+    views: [flow]
+    note: session cookie is sameSite=strict, so the SPA must be same-origin
+  - id: r04
+    from: web_editor
+    to: cloudfront
+    kind: flow
+    label: wss /collaboration/*
+    views: [flow]
+  - id: r05
+    from: web_hooks
+    to: cloudfront
+    kind: flow
+    label: wss /events
+    views: [flow]
+    note: useRealtimeEvents.tsx:36-80
+  - id: r06
+    from: cloudfront
+    to: eb
+    kind: flow
+    label: EB-API origin
+    views: [flow]
+    note: 5 ordered cache behaviors; ALB SG admits only CloudFront's prefix list
+  - id: r07
+    from: eb
+    to: api_entry
+    kind: flow
+    label: migrate, then serve
+    views: [flow]
+  - id: r08
+    from: api_mcp
+    to: cloudfront
+    kind: flow
+    label: GET /api/openapi.json
+    confidence: heuristic
+    views: [flow]
+    note: resolved by SHIP_URL at runtime, not by an import
+
+  # ─────────────────────── api internals (measured) ───────────────────
+  - id: a01
+    from: api_entry
+    to: api_config
+    kind: flow
+    views: [structure, flow]
+    label: secrets first
+    note: 1 resolved import — dynamic, before app.ts is imported
+  - id: a02
+    from: api_entry
+    to: api_app
+    kind: flow
+    views: [structure, flow]
+    note: 1 resolved import (dynamic)
+  - id: a03
+    from: api_entry
+    to: api_collab
+    kind: flow
+    views: [structure, flow]
+    label: attach ws
+    note: 1 resolved import (dynamic)
+  - id: a04
+    from: api_app
+    to: api_routes
+    kind: flow
+    views: [structure, flow]
+    label: 28 mounts
+    note: 28 resolved imports
+  - id: a05
+    from: api_app
+    to: api_mw
+    kind: flow
+    views: [structure, flow]
+    label: rate limiters
+    note: 2 resolved imports
+  - id: a06
+    from: api_app
+    to: api_openapi
+    kind: flow
+    views: [structure, flow]
+    label: setupSwagger
+    note: 1 resolved import
+  - id: a07
+    from: api_app
+    to: api_services
+    kind: flow
+    views: [structure]
+    label: initializeCAIA
+    note: 1 resolved import
+  - id: a08
+    from: api_routes
+    to: api_mw
+    kind: flow
+    views: [structure, flow]
+    label: authed()
+    note: 39 resolved imports — the densest edge in the backend
+  - id: a09
+    from: api_routes
+    to: api_db
+    kind: flow
+    views: [structure, flow]
+    label: pool.query
+    note: 26 resolved imports
+  - id: a10
+    from: api_routes
+    to: api_services
+    kind: flow
+    views: [structure, flow]
+    note: 16 resolved imports
+  - id: a11
+    from: api_routes
+    to: api_utils
+    kind: flow
+    views: [structure]
+    note: 11 resolved imports
+  - id: a12
+    from: api_routes
+    to: shared
+    kind: flow
+    views: [structure]
+    note: 11 resolved imports
+  - id: a13
+    from: api_routes
+    to: api_collab
+    kind: control
+    views: [structure, flow]
+    label: broadcastToUser
+    note: 5 resolved imports — documents.ts, projects.ts, issues.ts, weekly-plans.ts
+  - id: a14
+    from: api_routes
+    to: api_openapi
+    kind: flow
+    views: [structure]
+    label: registerPath
+    note: 1 resolved import; 19 schema modules call registry.registerPath
+  - id: a15
+    from: api_services
+    to: api_db
+    kind: flow
+    views: [structure, flow]
+    note: 4 resolved imports
+  - id: a16
+    from: api_services
+    to: api_utils
+    kind: flow
+    views: [structure]
+    note: 4 resolved imports
+  - id: a17
+    from: api_services
+    to: shared
+    kind: flow
+    views: [structure]
+    note: 1 resolved import
+  - id: a18
+    from: api_mw
+    to: api_db
+    kind: flow
+    views: [structure, flow]
+    note: 2 resolved imports
+  - id: a19
+    from: api_mw
+    to: api_utils
+    kind: flow
+    views: [structure]
+    label: circuitBreaker
+    note: 1 resolved import
+  - id: a20
+    from: api_mw
+    to: shared
+    kind: flow
+    views: [structure]
+    note: 1 resolved import
+  - id: a21
+    from: api_collab
+    to: api_db
+    kind: flow
+    views: [structure, flow]
+    note: 1 resolved import
+  - id: a22
+    from: api_collab
+    to: api_utils
+    kind: flow
+    views: [structure]
+    label: yjsConverter
+    note: 2 resolved imports
+  - id: a23
+    from: api_collab
+    to: api_mw
+    kind: flow
+    views: [structure]
+    label: session TTL
+    note: 1 resolved import — SESSION_INACTIVITY_LIMIT_MS
+  - id: a24
+    from: api_collab
+    to: shared
+    kind: flow
+    views: [structure]
+    note: 1 resolved import
+  - id: a25
+    from: api_utils
+    to: api_db
+    kind: flow
+    views: [structure]
+    note: 3 resolved imports
+  - id: a26
+    from: api_db
+    to: api_config
+    kind: flow
+    views: [structure]
+    note: 2 resolved imports — migrate/seed load secrets too
+
+  # ──────────────────── api -> state and vendors ──────────────────────
+  - id: s01
+    from: api_db
+    to: pg
+    kind: flow
+    label: pg.Pool (TLS)
+    views: [flow, structure]
+  - id: s02
+    from: api_mw
+    to: redis
+    kind: flow
+    label: rate-limit store
+    views: [flow, structure]
+    note: circuit-breakered, passOnStoreError - fails open
+  - id: s03
+    from: api_routes
+    to: s3_uploads
+    kind: flow
+    label: presigned PUT
+    views: [flow]
+  - id: s04
+    from: api_config
+    to: aws_params
+    kind: flow
+    label: GetParameter
+    views: [flow]
+  - id: s05
+    from: api_services
+    to: aws_params
+    kind: flow
+    label: caia-credentials
+    views: [flow]
+  - id: s06
+    from: api_services
+    to: caia
+    kind: flow
+    label: OIDC
+    views: [flow]
+  - id: s07
+    from: api_services
+    to: bedrock
+    kind: flow
+    label: InvokeModel
+    views: [flow]
+  - id: s08
+    from: api_collab
+    to: pg
+    kind: data
+    label: yjs_state (2s debounce)
+    views: [flow]
+    note: the data lens draws this from emits/consumes instead
+
+  # ───────────────────── web internals (measured) ─────────────────────
+  - id: w01
+    from: web_main
+    to: web_pages
+    kind: flow
+    views: [structure, flow]
+    label: lazy routes
+    note: 24 resolved imports
+  - id: w02
+    from: web_main
+    to: web_contexts
+    kind: flow
+    views: [structure]
+    label: provider stack
+    note: 9 resolved imports
+  - id: w03
+    from: web_main
+    to: web_query
+    kind: flow
+    views: [structure]
+    note: 1 resolved import
+  - id: w04
+    from: web_pages
+    to: web_components
+    kind: flow
+    views: [structure]
+    note: 53 resolved imports
+  - id: w05
+    from: web_pages
+    to: web_hooks
+    kind: flow
+    views: [structure, flow]
+    note: 39 resolved imports
+  - id: w06
+    from: web_pages
+    to: web_lib
+    kind: flow
+    views: [structure]
+    note: 26 resolved imports
+  - id: w07
+    from: web_pages
+    to: web_contexts
+    kind: flow
+    views: [structure]
+    note: 22 resolved imports
+  - id: w08
+    from: web_pages
+    to: web_apiclient
+    kind: flow
+    views: [structure]
+    note: 13 resolved imports
+  - id: w09
+    from: web_pages
+    to: web_editor
+    kind: flow
+    views: [structure, flow]
+    note: 2 resolved imports
+  - id: w10
+    from: web_components
+    to: web_lib
+    kind: flow
+    views: [structure]
+    note: 71 resolved imports — the densest edge in the repo
+  - id: w11
+    from: web_components
+    to: web_hooks
+    kind: flow
+    views: [structure]
+    note: 40 resolved imports
+  - id: w12
+    from: web_components
+    to: web_apiclient
+    kind: flow
+    views: [structure]
+    note: 18 resolved imports
+  - id: w13
+    from: web_components
+    to: shared
+    kind: flow
+    views: [structure]
+    note: 8 resolved imports
+  - id: w14
+    from: web_components
+    to: web_contexts
+    kind: flow
+    views: [structure]
+    note: 6 resolved imports
+  - id: w15
+    from: web_components
+    to: web_editor
+    kind: flow
+    views: [structure]
+    note: 5 resolved imports
+  - id: w16
+    from: web_components
+    to: web_query
+    kind: flow
+    views: [structure]
+    note: 2 resolved imports
+  - id: w17
+    from: web_editor
+    to: web_components
+    kind: flow
+    views: [structure]
+    note: 11 resolved imports — closes a cycle with w15
+  - id: w18
+    from: web_editor
+    to: web_lib
+    kind: flow
+    views: [structure]
+    note: 12 resolved imports (lib/ + services/)
+  - id: w19
+    from: web_editor
+    to: web_hooks
+    kind: flow
+    views: [structure]
+    note: 6 resolved imports
+  - id: w20
+    from: web_editor
+    to: web_apiclient
+    kind: flow
+    views: [structure]
+    note: 1 resolved import
+  - id: w21
+    from: web_editor
+    to: shared
+    kind: flow
+    views: [structure]
+    note: 1 resolved import
+  - id: w22
+    from: web_editor
+    to: web_contexts
+    kind: flow
+    views: [structure]
+    note: 1 resolved import
+  - id: w23
+    from: web_hooks
+    to: web_apiclient
+    kind: flow
+    views: [structure, flow]
+    note: 18 resolved imports
+  - id: w24
+    from: web_hooks
+    to: shared
+    kind: flow
+    views: [structure]
+    note: 3 resolved imports
+  - id: w25
+    from: web_hooks
+    to: web_contexts
+    kind: flow
+    views: [structure]
+    note: 2 resolved imports
+  - id: w26
+    from: web_hooks
+    to: web_query
+    kind: flow
+    views: [structure, flow]
+    note: 1 resolved import
+  - id: w27
+    from: web_hooks
+    to: web_components
+    kind: flow
+    views: [structure]
+    note: 1 resolved import — closes a cycle with w11
+  - id: w28
+    from: web_contexts
+    to: web_hooks
+    kind: flow
+    views: [structure]
+    note: 4 resolved imports — closes a cycle with w25
+  - id: w29
+    from: web_contexts
+    to: web_apiclient
+    kind: flow
+    views: [structure]
+    note: 2 resolved imports
+  - id: w30
+    from: web_contexts
+    to: web_lib
+    kind: flow
+    views: [structure]
+    note: 1 resolved import (services/upload)
+  - id: w31
+    from: web_lib
+    to: web_components
+    kind: flow
+    views: [structure]
+    note: 13 resolved imports — closes a cycle with w10
+  - id: w32
+    from: web_lib
+    to: web_contexts
+    kind: flow
+    views: [structure]
+    note: 1 resolved import — closes a cycle with w30
+  - id: w33
+    from: web_lib
+    to: web_apiclient
+    kind: flow
+    views: [structure]
+    note: 1 resolved import
+  - id: w34
+    from: web_lib
+    to: shared
+    kind: flow
+    views: [structure]
+    note: 1 resolved import
+  - id: w35
+    from: web_apiclient
+    to: shared
+    kind: flow
+    views: [structure]
+    note: 1 resolved import
+  - id: w36
+    from: web_editor
+    to: web_idb
+    kind: data
+    label: Yjs state
+    views: [flow, data]
+    note: y-indexeddb — what makes the editor work offline
+  - id: w37
+    from: web_query
+    to: web_idb
+    kind: data
+    label: persisted cache
+    views: [flow, data]
+    note: idb-keyval, schema-versioned
+
+  # ───────────────────────── return paths ─────────────────────────────
+  - id: f01
+    from: api_collab
+    to: web_editor
+    kind: feedback
+    label: Yjs sync + awareness
+    polarity: '-'
+    loop: B1
+    views: [flow]
+    note: |
+      The convergence loop. Every local edit is applied optimistically, sent as a
+      Yjs update, merged server-side and rebroadcast to the other clients in the
+      room. Corrective, and it settles — CRDT merge is commutative, so the
+      replicas agree regardless of arrival order.
+  - id: f02
+    from: api_collab
+    to: web_hooks
+    kind: feedback
+    label: /events push
+    polarity: '-'
+    loop: B2
+    views: [flow]
+    note: |
+      broadcastToUser -> the /events socket -> query invalidation -> refetch.
+      Corrective: it pulls the client cache back toward server truth after a
+      mutation someone else made.
+  - id: f03
+    from: api_mw
+    to: web_apiclient
+    kind: feedback
+    label: 401 SESSION_EXPIRED
+    polarity: '-'
+    loop: B3
+    views: [flow]
+    note: |
+      15-minute inactivity window, 12-hour absolute cap. lib/api.ts turns
+      SESSION_EXPIRED into a redirect to /login with returnTo, but deliberately
+      not a plain UNAUTHORIZED.
+  - id: f04
+    from: web_idb
+    to: web_query
+    kind: feedback
+    label: corruption -> clear + reload
+    polarity: '-'
+    loop: B4
+    views: [flow]
+    note: |
+      The persister validates the schema version and the restored shape on read.
+      On failure CacheCorruptionAlert offers clearAllCacheData() followed by
+      window.location.reload(). One of the few loops in this system that a human
+      has to close by clicking.
+
+  # ────────────────────────────── gaps ────────────────────────────────
+  - id: g01
+    from: api_collab
+    to: redis
+    kind: gap
+    label: no cross-instance room sync
+    views: [flow]
+    note: |
+      DERIVED, not observed. Three observed facts: the Yjs `docs` and `awareness`
+      Maps are process-local (collaboration/index.ts:95-130); Redis has no
+      consumer other than the rate limiters (grep REDIS_URL -> app.ts,
+      rate-limit.ts, redis-rate-limit-store.ts, ssm.ts); the ASG scales to 4
+      instances.
+
+      The consequence I have NOT run: above one instance, two people editing the
+      same document can be routed to different processes, each holding its own
+      Y.Doc for that room and persisting over the other every 2s. Session
+      stickiness does not address this either way — it pins a browser to an
+      instance, not a document to an instance, so two different users on the same
+      document can still land on two different rooms. To confirm or kill this,
+      run two instances behind the ALB and open one document as two users.
+  - id: g02
+    from: api_app
+    to: redis
+    kind: gap
+    label: CSRF store is in-process
+    views: [flow]
+    note: |
+      DERIVED from an observed fact: `app.use(session({...}))` at app.ts:335-345
+      passes no `store`, so express-session uses the default MemoryStore, and
+      csrf-sync keeps the CSRF secret in that session. A token minted by
+      `/api/csrf-token` on one instance therefore has no matching secret on
+      another.
+
+      How much this bites depends on the stickiness question in the Elastic
+      Beanstalk note. With stickiness on, a browser keeps hitting the same
+      instance and this mostly does not surface — until that instance is replaced
+      by a deploy or a scale-in, at which point every in-flight CSRF secret is
+      gone. With it off, it surfaces as intermittent 403s under load. Neither
+      case is reproduced here. Application auth is unaffected either way: that is
+      a real `sessions` table in Postgres, not express-session.
+
+loops:
+  - id: B1
+    type: balancing
+    label: Yjs edit convergence
+  - id: B2
+    type: balancing
+    label: Realtime cache invalidation
+  - id: B3
+    type: balancing
+    label: Session expiry -> re-auth
+  - id: B4
+    type: balancing
+    label: Query-cache corruption recovery
+
+views:
+  - id: flow
+    label: Flow
+    direction: RIGHT
+    blurb: How a request, an edit and a secret actually travel — and what comes back.
+    layoutOptions:
+      elk.aspectRatio: '1.5'
+  - id: structure
+    label: Structure
+    direction: RIGHT
+    blurb: What the parts are and what depends on what, with measured import counts.
+  - id: data
+    label: Data
+    direction: RIGHT
+    blurb: Where state settles — Postgres, Redis, S3 and two IndexedDB stores.
+
+findings:
+  - id: manual-1
+    severity: medium
+    kind: boundary-not-modelled
+    title: Nodes are directories, so intra-directory coupling is invisible
+    nodes: [api_routes, web_components]
+    detail: |
+      Every node here is a folder, not a file. routes/ (23k lines) and
+      components/ (19k lines) are drawn as single boxes, so the coupling *inside*
+      them — the part most likely to hurt — does not appear. The measured import
+      counts on each edge are cross-directory only; imports within a directory
+      were dropped during aggregation. For file-level detail, re-extract with
+      dependency-cruiser scoped to one directory.
+  - id: manual-2
+    severity: medium
+    kind: runtime-dependency-not-static
+    title: The MCP tool surface is not derivable from this repository
+    nodes: [api_mcp]
+    detail: |
+      mcp/server.ts has no import edge into the rest of the codebase — it builds
+      its tools by fetching /api/openapi.json from whatever SHIP_URL points at,
+      at startup. So its behaviour is a property of a deployment, not of a
+      commit, and it silently tracks whichever environment the operator
+      configured. The edge into CloudFront is marked heuristic for that reason.
+  - id: manual-3
+    severity: low
+    kind: test-config-masking
+    title: A smoke test can pass by skipping the code that breaks
+    nodes: [api_config]
+    detail: |
+      config/ssm.ts returns early unless NODE_ENV=production (ssm.ts:39). A
+      container smoke test run under development therefore never exercises secret
+      loading, and has previously been reported as end-to-end verification when
+      it was the opposite. Any claim about boot correctness has to state the
+      NODE_ENV it ran under.

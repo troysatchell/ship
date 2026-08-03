@@ -3,6 +3,11 @@
 *Every number below is sourced from `docs/IMPROVEMENTS.md` / compare artifacts. "SHOW:" lines are
 screen-share cues. Target 4:30; trim the deep-dive section to hit 3:30 if needed.*
 
+*Improvement-documentation SHOW cues point at the demo artifact — https://claude.ai/code/artifact/ed2b48e2-8fcd-46be-a790-debd8c2ea9a9
+— instead of `docs/IMPROVEMENTS.md`, so nothing needs an editor/markdown tab open on screen. The
+`#category-id` suffix jumps straight to that category; the artifact has Prev/Next buttons for the
+live walkthrough. `AUDIT_REPORT.md` and repo/terminal cues are unchanged.*
+
 ## 0:00–0:30 — Framing
 
 - "I audited ShipShape — a real government project-management codebase fork — across 8 categories:
@@ -16,16 +21,16 @@ screen-share cues. Target 4:30; trim the deep-dive section to hit 3:30 if needed
 
 1. **Bundle:** "/login went from **601 KB to 117 KB gzip — an 80% cut** — by adding route-level
    code splitting where there was none."
-   SHOW: `docs/IMPROVEMENTS.md` §2 table.
+   SHOW: demo artifact → Bundle Size (https://claude.ai/code/artifact/ed2b48e2-8fcd-46be-a790-debd8c2ea9a9#bundle-size).
 2. **Data loss fixed:** "The worst finding: if the collaboration socket was unreachable, edits were
    **silently lost while the UI said 'Saved'**. That's fixed, plus ten more error-handling gaps —
    including a whole class where async setup windows dropped frames or leaked sockets."
-   SHOW: IMPROVEMENTS.md §6; optionally the live app editing a doc.
+   SHOW: demo artifact → Error Handling (…/artifact/ed2b48e2-8fcd-46be-a790-debd8c2ea9a9#error-handling); optionally the live app editing a doc.
 3. **The API contract stopped being a guess:** "**707 untyped database queries** — every `.rows`
    access was `any`. Now the hot paths are typed, **236 auth-context non-null assertions are zero**,
    and an authenticated route is a compile-time distinction. Over **400 violations retired**, each
    PR carrying its own before/after count."
-   SHOW: IMPROVEMENTS.md §1.
+   SHOW: demo artifact → Type Safety (…/artifact/ed2b48e2-8fcd-46be-a790-debd8c2ea9a9#type-safety).
 
 ## 1:45–3:00 — One deep dive (pick ONE, both scripted)
 
@@ -43,7 +48,7 @@ screen-share cues. Target 4:30; trim the deep-dive section to hit 3:30 if needed
   stored-XSS check, which 'passed' because the app rendered nothing at all. All 68 are now real
   assertions or explicit `test.fixme()`, and a pre-commit hook plus the factory gate keep new
   vacuous tests out."
-- SHOW: IMPROVEMENTS.md §5; `e2e/` diff in PR #40.
+- SHOW: demo artifact → Test Quality (…/artifact/ed2b48e2-8fcd-46be-a790-debd8c2ea9a9#test-quality); `e2e/` diff in PR #40.
 
 ## 3:00–3:45 — Measurement honesty (differentiator — say it plainly)
 
@@ -57,7 +62,7 @@ screen-share cues. Target 4:30; trim the deep-dive section to hit 3:30 if needed
     deterministic numbers — payload bytes and query counts — that noise can't fake."
   - "An accessibility fix made two broken routes render for the first time — which *exposed* a
     pre-existing contrast failure. It's in the report as a new finding."
-- SHOW: IMPROVEMENTS.md §3's two-reading P95 table.
+- SHOW: demo artifact → API Performance (…/artifact/ed2b48e2-8fcd-46be-a790-debd8c2ea9a9#api-performance), the two-reading P95 table.
 
 ## 3:45–4:30 — Live deployment + infrastructure as code
 

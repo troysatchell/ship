@@ -1,11 +1,12 @@
 ---
 name: ship-factory
 description: >-
-  Run the ShipShape ticket factory — pull open findings from Linear, dispatch each to a coding
-  sub-agent in an isolated worktree, gate it on evidence, open a PR, triage the CodeRabbit review
-  into new tickets, and keep going until every ticket is terminal. Use when the user says "run the
-  factory", "work the tickets", "keep grinding the backlog", or wants autonomous remediation of the
-  68 audit findings. Stops only at defined human gates.
+  Run the ShipShape ticket factory — pull open work from Linear, dispatch each PR bundle (or
+  unbundled ticket) to coding sub-agents in an isolated worktree, gate it on evidence, open one PR
+  per bundle, triage the CodeRabbit review into new tickets, and keep going until every ticket is
+  terminal. Use when the user says "run the factory", "work the tickets", "keep grinding the
+  backlog", or wants autonomous remediation of the 68 audit findings. Stops only at defined human
+  gates.
 ---
 
 # Ship Factory
@@ -16,19 +17,124 @@ the grading rubric rewards things a naive "fix it" loop destroys: one branch per
 before/after measurement, a regression test per bug, and an honest git history.
 
 Read `references/evals.md` before your first dispatch — the two-tier eval is what makes "done"
-mean something here. Read `references/escalation.md` before running unattended. The other
-references are consulted at the step that needs them.
+mean something here. Read `references/model-tiering.md` before dispatching anything — it decides
+which model does which work, and dispatching every task at investigator tier is the largest
+avoidable cost in this factory. Read `references/escalation.md` before running unattended. The
+other references are consulted at the step that needs them.
+
+## Three phases
+
+The factory below (§ *The loop*) is the **Build** phase. It assumes a ticket already exists and
+already says what to do. That assumption holds for audit remediation, where
+`audit/AUDIT_REPORT.md` did the analysis. It does **not** hold for new capability, which arrives
+as an intent rather than a finding — and running Build directly on an intent produces tickets that
+contradict each other, because nobody decided the shape first.
+
+```
+PLAN                              BUILD                    REVIEW
+────                              ─────                    ──────
+/ship-pm writes spec (/ship-spec) orchestrator selects     gate passes
+    │ scope gate                  worktree.sh isolates       ├─▶ blind verifier  (right thing?)
+    ▼                             applier or investigator    └─▶ /ship-qa-review (real proof?)
+/ship-surveyor  — what is         gate.sh verifies                   │ both pass
+    │             actually there      │                              ▼
+    ▼                                 │                          PR opens
+/ship-architect designs               │                              ▼
+    │                                 │                       CodeRabbit (correct code?)
+    ▼                                 │                              ▼
+/ship-test-designer                   │                       /ship-pm triages
+    │  the tests, before any code     │                              ▼
+    ▼                                 │                     appliers fix / tickets filed
+  tiered tickets ────────────────────▶│                              │
+       ▲                              └──────────────────────────────┘
+       └──── rewrite (max 2) ◀──── failure
+```
+
+**Plan** runs once per body of work, not per ticket. It ends when the architect hands over a tiered
+ticket set with dependencies marked. Skip it only when the tickets already exist and were written
+from evidence — an audit finding qualifies, a wish does not.
+
+**Review** now has two reviewers with different jobs. CodeRabbit asks whether the code is correct.
+`/ship-qa-review` asks whether the proof is real — whether the regression test actually runs, whether
+red was ever seen, whether the bar moved instead of the code. Both feed `/ship-pm`, which makes the
+call on every finding rather than applying a rule table.
+
+## The loop closes itself — read `references/self-closing-loop.md`
+
+Findings feed back in without a human. The short version:
+
+- **Error-class findings get no ticket.** A missing `await`, a new `as any`, a missing index the
+  reviewer already located — dispatch an applier, let `gate.sh` prove it, close it, record it in
+  the ledger. A ticket for a one-line mechanical fix costs more than the fix.
+- **Issue-class findings get a ticket, an investigator, and a verifier.** Anything needing
+  diagnosis, a design decision, or a change to product behaviour.
+- **The verifier is blind on purpose.** After the gate passes, a separate agent checks the work
+  against the *original* finding — and it receives only the finding verbatim, the diff, and the
+  gate JSON. **Not the investigator's report.** That narrative is a framing written by whoever
+  decided what to build; a verifier that reads it first can only check internal consistency.
+- **A close requires a `confirmed` verdict.** A merge without one is an unreviewed merge wearing
+  the same label.
+- **Two rejected verifications escalates** — separate from and independent of the gate's
+  three-failure cap. Three failed gates is a mechanical problem; two rejected verifications means
+  the ticket is wrong or the investigator cannot see it. Both need a person.
+
+**One test decides what reaches the human:** *is this work stream stopped until they answer?*
+**A gate holds its own ticket, not the factory** — park that worktree, mark the ticket `blocked`
+with the reason, and dispatch the next eligible ticket immediately. Never drain in-flight work to
+wait for an answer. If the wave can keep going, it does not get sent. Progress, successes, wave counts, a dismissed finding, a first or
+second failed gate inside the retry budget — all pull, not push. `localhost:7373` answers "how is
+it going" for free.
+
+Three things pass: a spent retry budget, two rejected verifications, and any `escalation.md` gate.
+Plus one batched summary **only if an unattended run ends with unresolved items** — a clean run
+sends nothing, and the script enforces that rather than trusting the caller. Send via
+`scripts/factory/notify.mjs`; set `SLACK_WEBHOOK_URL` once and it degrades to stdout without it.
+**Batch** — three tickets blocking within a minute is one message.
+
+## The unit of work is the bundle, not the ticket
+
+**Set by the maintainer 2026-08-03, after CodeRabbit rate-limited the factory.** One PR per ticket
+produced a review queue that stalled — and a stalled reviewer blocks merges harder than a large
+diff does. Related tickets now ship together: **one bundle, one worktree, one branch, one PR, one
+review.**
+
+**A bundle is a Linear parent issue titled `[PR-x] EPIC: …` whose body says "one branch, one PR,
+one CodeRabbit review."** That declaration is the discriminator, and it is deliberately explicit —
+a plain `EPIC:` parent (the audit's category epics, `TRO-167`/`TRO-169`/`TRO-241`) is a *grouping*,
+not a bundle, and its children still ship one PR each. Do not infer a bundle from a parent link
+alone.
+
+Working a bundle:
+
+- Reserve **every** sub-issue in Linear before dispatching anything. The bundle is the lock.
+- One worktree, named for the **bundle**. Every sub-issue is a commit on that branch, sequenced by
+  the epic's internal order.
+- Sub-issues still tier individually (`references/model-tiering.md`) — an apply-tier ticket inside a
+  bundle still gets a cheap applier. **Bundling changes where the work lands, not who does it.**
+- `gate.sh` runs on the bundle branch after each sub-issue's commit, and again before the PR. A
+  sub-issue that cannot pass the gate is reverted out of the branch and marked `blocked`; **the rest
+  of the bundle still ships.** One stuck ticket must not hold four finished ones hostage.
+- The bundle's own definition of done (in the epic body) is checked in addition to each sub-issue's.
+
+**A ticket earns its own PR only when it is genuinely separable *and* the bundle would otherwise be
+unreviewable — and that is a call to make out loud in the report, not silently.**
+
+Unbundled tickets keep the original per-ticket behaviour throughout the loop below. Where a step
+says "ticket", read "bundle" when working one.
 
 ## What "done" means in this factory
 
 A ticket is **not** done when the agent says it is, and **not** done when tests pass. It is done
 when all of this holds:
 
-1. Work is on its own branch named for the ticket, based on `main`.
+1. Work is on its own branch named for the **bundle** (or the ticket, when unbundled), based on
+   `main`.
 2. `scripts/factory/gate.sh` returns `verdict: pass` — typecheck, build, no new test failures vs
    `audit/factory/quarantine.json`, no weakened tests, a regression test present, a `CHANGES.md`
-   entry, and a bounded diff.
-3. A PR is open and CI is green.
+   entry, and a bounded diff. **In a bundle, every sub-issue carries its own regression test and its
+   own `CHANGES.md` entry** — the gate checks the branch, so one sub-issue's test can mask another's
+   absence. Check per sub-issue, not per branch.
+3. A PR is open and CI is green — **one PR for the whole bundle**, listing every ticket it closes.
 4. The CodeRabbit review has been **triaged**, not merely received (`references/triage.md`).
 5. For findings with a measurable target: a compare-mode measurement exists proving the delta
    against the `audit-baseline` tag (`references/evals.md`). Cheap categories run per ticket;
@@ -55,27 +161,44 @@ stop and report exactly what blocks you.
 
 ## The loop
 
-### 1. Select the next ticket
+### 1. Select the next bundle (or ticket)
 
-Pull open issues from Linear, **team `Troysatchell`, project `ShipShape Audit Remediation`**.
-Scope matters: that workspace also holds three unrelated projects (an iOS app, a healthcare
-copilot, and a separate security audit at `TRO-250`–`TRO-275`). Never dispatch outside the project.
+Pull open issues from Linear, **team `Troysatchell`**, scoped to the project the run is for —
+`ShipShape Audit Remediation` for audit remediation, `FleetGraph — Week 5 Project Intelligence
+Agent` for Week 5. Scope matters: that workspace also holds several unrelated projects (an iOS app,
+a healthcare copilot, and a separate security audit at `TRO-250`–`TRO-275`). **Confirm which project
+the run is for before selecting anything, and never dispatch outside it.**
 
-Order by, in priority sequence:
+**Select bundles first.** If open work has `[PR-x] EPIC` parents, the selectable unit is the bundle
+and its sub-issues are never selected independently. Order bundles by their epic's declared position
+in the dispatch order (`A ∥ B → C → D ∥ E → F → G` for FleetGraph), then by priority.
+
+Within a bundle, order sub-issues by the epic's stated internal order. For unbundled tickets, order
+by, in priority sequence:
 - **Unblocks other work first** — Linear `blocks` relations are real dependencies (API-1 → API-2/3;
   TF-3 → TF-4; TF-2 → TF-1).
 - **Urgent before High before Medium.**
 - **Shared root cause batched together** — DB-2⇄API-6, DB-4⇄API-4/API-5/ERR-7, BUN-1⇄BUN-2/3/4/6
   are one fix each, not six. Batching them is cheaper *and* produces a better measurement story.
 
-Move **every** ticket in the batch to **In Progress** in Linear before dispatching — not just the
-primary one. That is the lock, and it only works if it covers everything the branch will close.
-Reserve the whole batch before any agent starts, or a second worker can select a ticket that is
-already being fixed inside someone else's branch.
+Move **every** ticket in the batch — or **every sub-issue in the bundle** — to **In Progress** in
+Linear before dispatching. Not just the primary one. That is the lock, and it only works if it
+covers everything the branch will close. Reserve the whole set before any agent starts, or a second
+worker can select a ticket that is already being fixed inside someone else's branch.
 
 ### 1a. Run in parallel — serialize only on real dependencies
 
-Dispatch every eligible ticket concurrently. The **only** reasons to serialize:
+**Parallelism now lives between bundles, not inside them.** Dispatch every eligible bundle
+concurrently; within a bundle, sub-issues run in the epic's stated order on one branch. That is the
+trade the bundling policy buys — fewer PRs at the cost of some intra-bundle serialization — and it
+is why bundles are grouped by shared surface, so the sequenced work is the work that would have
+conflicted anyway.
+
+Two sub-issues in one bundle may still run concurrently when they touch disjoint files and the epic
+does not order them. Same worktree, same branch — so this is ordinary concurrent editing, and the
+moment two agents want the same file it stops being worth it.
+
+The **only** reasons to serialize whole units:
 
 - **A true blocking dependency.** Linear `blocks` relations: API-1 → API-2/API-3, TF-3 → TF-4,
   TF-2 → TF-1. The blocked ticket waits.
@@ -84,26 +207,49 @@ Dispatch every eligible ticket concurrently. The **only** reasons to serialize:
 - **Expensive-tier measurement ordering.** `db-query-audit` must run after `api-perf-audit`, never
   concurrently — its statement logging skews the other's timings.
 
-Everything else runs at once. Each ticket has its own worktree, its own database, and ports that
-`worktree.sh` **probes for and claims** rather than deriving from a hash alone — the hash only sets
-a stable starting point, and `md5 % 900` collides in practice (~50% odds by 36 concurrent tickets).
-Re-evaluate the graph after every completion: a ticket whose blockers are now `Done` becomes
-eligible immediately.
+Everything else runs at once. Each **bundle** (or unbundled ticket) has its own worktree, its own
+database, and ports that `worktree.sh` **probes for and claims** rather than deriving from a hash
+alone — the hash only sets a stable starting point, and `md5 % 900` collides in practice (~50% odds
+by 36 concurrent units). Re-evaluate the graph after every completion: a unit whose blockers are now
+`Done` becomes eligible immediately.
+
+Bundling also *reduces* database pressure — one bundle holds one database for four tickets instead
+of four — so concurrency sizing (`/ship-orchestrator` §3) gets easier, not harder.
 
 ### 2. Provision an isolated worktree
 
 ```bash
+# per bundle — the epic id names the worktree and the branch
+scripts/factory/worktree.sh TRO-325 feat/pr-a-ship-api-foundations
+
+# per ticket, when unbundled
 scripts/factory/worktree.sh TRO-178 fix/db-1-migration-runner
 ```
 
-Creates the worktree, a dedicated database, per-ticket ports, and `.factory-env`. Re-running it
+Creates the worktree, a dedicated database, per-unit ports, and `.factory-env`. Re-running it
 resets the database — a retry starts clean rather than inheriting a half-migrated state.
 
-### 3. Dispatch the coding sub-agent
+**One worktree per bundle, not per sub-issue.** Provisioning a worktree per sub-issue and merging
+them back is exactly the fan-out the bundling policy exists to remove.
 
-Use the contract in `references/agent-contract.md` verbatim as the agent's brief, filled in with
-the ticket. The contract carries the non-negotiables: scope, the locked-quarantine rule, the
-provenance requirements, and the instruction to keep working rather than check in.
+### 3. Dispatch — tier it first
+
+**Before composing any brief, decide the tier** (`references/model-tiering.md`):
+
+> Can you name the file, the change, and the check that proves it?
+> **Yes** → dispatch an `haiku` applier with the applier contract. Nothing else — no lessons, no
+> role skill. **No** → dispatch a `sonnet` investigator with the full brief below.
+
+Apply-tier covers every ticket the architect decomposed to file-and-change precision, and nearly
+every fix-now CodeRabbit finding — the reviewer already did the diagnosis. Sending a
+40 KB-briefed investigator to add a missing `await` is the single largest source of waste in this
+factory. An applier that finds its instruction does not match the file **stops and reports**; that
+is a correct outcome and costs one cheap round trip.
+
+For investigate-tier only, use the contract in `references/agent-contract.md` verbatim as the
+agent's brief, filled in with the ticket. The contract carries the non-negotiables: scope, the
+locked-quarantine rule, the provenance requirements, and the instruction to keep working rather
+than check in.
 
 The contract is deliberately domain-blind, so **compose the brief in three parts**:
 
@@ -133,12 +279,20 @@ the exact gate output back to the same agent (context is worth keeping) and retr
 gate output and your best read on why, and move to the next ticket. Do not raise the cap to force
 a pass — the cap is what converts "burns tokens forever" into "surfaces a hard problem".
 
+**The cap is per sub-issue, not per bundle.** A sub-issue that spends its retry budget is reverted
+out of the bundle branch and marked `blocked`; the bundle continues with the rest and its PR lists
+the ticket that was dropped and why. **Never let one stuck sub-issue block a finished bundle** — and
+never quietly ship the bundle without saying a ticket fell out of it.
+
 **Append a scorecard row after EVERY gate run — pass or fail, including each retry.** One line to
 `audit/factory/scorecard.jsonl`, right here in the loop, before you retry or move on:
 
 ```json
-{"ticket":"TRO-178","attempt":2,"verdict":"fail","failedGates":["regression-test"],"ts":"..."}
+{"ticket":"TRO-312","bundle":"TRO-325","attempt":2,"verdict":"fail","failedGates":["regression-test"],"ts":"..."}
 ```
+
+Rows stay **per sub-issue** — that is the level the gate-pass-on-first-attempt trend is meaningful
+at. `bundle` is omitted for unbundled tickets.
 
 If rows are only written on success, failed and retried tickets vanish from the record and the
 gate-pass-on-first-attempt trend — the whole point of the scorecard — reads as 100%. Fill the
@@ -157,14 +311,42 @@ an explicit standing delegation for factory runs; it does not extend to any othe
 pushes, or to a branch that failed its gate.
 
 Push to GitHub (`GH_REPO=troysatchell/ship`) and open a PR whose body is the evidence, not a
-summary. Template in `references/agent-contract.md`. A batched branch **must list every ticket it
-closes**. Move all of them to **In Review** and attach the PR link.
+summary. Template in `references/agent-contract.md`. A batched or bundled branch **must list every
+ticket it closes**. Move all of them to **In Review** and attach the PR link.
 
-### 7. Triage the review — and record every finding
+**One PR per bundle.** Its body is structured *per sub-issue* — each ticket's problem, its change,
+and its proof — because a bundle PR is the one place a reviewer can lose track of what is being
+claimed. A bundle PR that reads as one undifferentiated change has defeated the purpose: the point
+was to spend one review well, not to hide four changes inside one diff. Also name any sub-issue that
+was dropped from the bundle and why.
 
-CodeRabbit reviews the PR. Classify every finding into fix-now / new-ticket / dismissed-with-reason
-per `references/triage.md`. **New tickets get filed in Linear automatically** — that is how the
-factory grows its own backlog instead of losing findings in PR threads.
+### 7. Review — two reviewers, one decider
+
+**Run both reviewers.** They answer different questions and neither substitutes for the other:
+
+- **CodeRabbit** reviews the *code*. Is it correct?
+- **`/ship-qa-review`** reviews the *proof*. Does the regression test actually run in a suite the
+  gate executes? Was red ever seen? Did the bar move instead of the code? Does every "verified"
+  claim name what was run? None of that is visible to a code reviewer, and this repo's own audit
+  found 68 e2e tests that passed without executing a single assertion.
+
+**Both feed `/ship-pm`, which decides.** Do not apply a rule table yourself. The PM asks three
+questions of every finding — *is it in scope, is it needed, is it efficient to fix now* — and the
+second one is the one the old mechanical triage never asked. A finding can be entirely correct and
+still not worth acting on; the PM must be able to say why, naming something real.
+
+The PM's disposition routes the work:
+
+| Disposition | Goes to |
+|---|---|
+| Fix now, and the file and change are named | An `haiku` applier — the common case |
+| Fix now, but the cause is unknown | A `sonnet` investigator |
+| Real, not this branch | A new Linear ticket |
+| Dismissed | The thread, with the reason and its evidence |
+
+`references/triage.md` holds the mechanics — ticket format, labels, priorities. `/ship-pm` holds
+the judgment. **New tickets get filed in Linear automatically** — that is how the factory grows its
+own backlog instead of losing findings in PR threads.
 
 **Record every finding in the ledger, whatever its disposition:**
 
@@ -315,8 +497,12 @@ disagree, Linear wins and something has gone wrong — say so rather than reconc
 - **Never let an agent widen the quarantine.** Adding entries to `quarantine.json` to get green is
   gaming the gate. Only *removing* entries (tests genuinely fixed) is legitimate.
 - **Never dispatch outside the ShipShape project** in Linear.
-- **One finding per branch.** Batched root causes are one branch covering several tickets — that is
-  fine, and the PR must list every ticket it closes. Unrelated drive-by fixes are not.
+- **Nothing on a branch that the branch does not close.** A bundle branch covers exactly its epic's
+  sub-issues; a batched-root-cause branch covers exactly its batch. Either way the PR lists every
+  ticket it closes. **Unrelated drive-by fixes are still not allowed** — bundling widened what may
+  share a branch, it did not remove the requirement that everything on it be accounted for.
+- **Never split a bundle to dodge a slow review.** If CodeRabbit is slow, wait — opening four PRs to
+  route around one queue is the exact behaviour that caused the rate limit.
 - **Claims carry provenance.** `.claude/CLAUDE.md` requires observed-vs-derived to be marked. Three
   documented failures in this project came from unmarked inference. The PR template enforces it;
   do not let agents write "verified" about something they reasoned about.

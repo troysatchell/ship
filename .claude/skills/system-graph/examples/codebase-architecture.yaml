@@ -1,0 +1,446 @@
+# got — codebase architecture, extracted then hand-corrected.
+#
+# Provenance:
+#   git clone --depth 1 https://github.com/sindresorhus/got
+#   npx depcruise source --no-config --output-type json > deps.json
+#   python3 assets/from_depcruise.py deps.json --root source --zone-depth 2 \
+#       --repo-url https://github.com/sindresorhus/got > model.yaml
+#
+# The nodes, edges, zones and sources below are mechanical. The `kind:`
+# values were guessed from filename patterns and then corrected by hand —
+# the intended workflow, not a shortcut. `detail:` and the gap edge are human.
+
+meta:
+  title: got — HTTP client architecture
+  subtitle: 25 modules, extracted with dependency-cruiser
+  source: sindresorhus/got @ main
+  profile: code
+  repoUrl: https://github.com/sindresorhus/got
+  branch: main
+zones:
+- id: as_promise
+  label: as-promise
+- id: core
+  label: core
+- id: core_utils
+  label: core/utils
+- id: root
+  label: root
+nodes:
+- id: as_promise_index
+  label: as-promise
+  kind: module
+  zone: as_promise
+  subtitle: source/as-promise/index.ts
+  metrics:
+    loc: 328
+  sources:
+  - source/as-promise/index.ts
+- id: core_errors
+  label: errors
+  kind: module
+  zone: core
+  subtitle: source/core/errors.ts
+  metrics:
+    loc: 192
+  detail: The error taxonomy. Every failure mode the library can produce is a class in this
+    file, which is why so much of the codebase points at it.
+  sources:
+  - source/core/errors.ts
+- id: core_utils_strip_url_auth
+  label: strip-url-auth
+  kind: guard
+  zone: core_utils
+  subtitle: source/core/utils/strip-url-auth.ts
+  metrics:
+    loc: 9
+  sources:
+  - source/core/utils/strip-url-auth.ts
+- id: core_index
+  label: core
+  kind: module
+  zone: core
+  subtitle: source/core/index.ts — the Request engine
+  metrics:
+    loc: 2658
+  detail: 'The Request class: the engine every other path funnels through. 2,658 lines and
+    13 outbound dependencies — it is the single place where streams, retries, timeouts, redirects
+    and events are coordinated.'
+  sources:
+  - source/core/index.ts
+- id: core_calculate_retry_delay
+  label: calculate-retry-delay
+  kind: module
+  zone: core
+  subtitle: source/core/calculate-retry-delay.ts
+  metrics:
+    loc: 42
+  sources:
+  - source/core/calculate-retry-delay.ts
+- id: core_diagnostics_channel
+  label: diagnostics-channel
+  kind: module
+  zone: core
+  subtitle: source/core/diagnostics-channel.ts
+  metrics:
+    loc: 139
+  sources:
+  - source/core/diagnostics-channel.ts
+- id: core_options
+  label: options
+  kind: datastore
+  zone: core
+  subtitle: source/core/options.ts — configuration state
+  metrics:
+    loc: 3732
+  detail: 'One object holding the entire configuration surface, merged and normalised. Depended
+    on by four modules and depending on five: it is both the shared vocabulary of the library
+    and its widest coupling point.'
+  sources:
+  - source/core/options.ts
+- id: core_parse_link_header
+  label: parse-link-header
+  kind: module
+  zone: core
+  subtitle: source/core/parse-link-header.ts
+  metrics:
+    loc: 105
+  sources:
+  - source/core/parse-link-header.ts
+- id: core_timed_out
+  label: timed-out
+  kind: module
+  zone: core
+  subtitle: source/core/timed-out.ts
+  metrics:
+    loc: 201
+  sources:
+  - source/core/timed-out.ts
+- id: core_utils_unhandle
+  label: unhandle
+  kind: module
+  zone: core_utils
+  subtitle: source/core/utils/unhandle.ts
+  metrics:
+    loc: 39
+  sources:
+  - source/core/utils/unhandle.ts
+- id: core_utils_dns_cache
+  label: dns-cache
+  kind: datastore
+  zone: core_utils
+  subtitle: source/core/utils/dns-cache.ts
+  metrics:
+    loc: 727
+  sources:
+  - source/core/utils/dns-cache.ts
+- id: core_utils_http2_client
+  label: http2-client
+  kind: module
+  zone: core_utils
+  subtitle: source/core/utils/http2-client.ts
+  metrics:
+    loc: 1580
+  sources:
+  - source/core/utils/http2-client.ts
+- id: core_utils_is_unix_socket_url
+  label: is-unix-socket-url
+  kind: guard
+  zone: core_utils
+  subtitle: source/core/utils/is-unix-socket-url.ts
+  metrics:
+    loc: 27
+  sources:
+  - source/core/utils/is-unix-socket-url.ts
+- id: core_response
+  label: response
+  kind: module
+  zone: core
+  subtitle: source/core/response.ts
+  metrics:
+    loc: 191
+  sources:
+  - source/core/response.ts
+- id: core_utils_get_body_size
+  label: get-body-size
+  kind: module
+  zone: core_utils
+  subtitle: source/core/utils/get-body-size.ts
+  metrics:
+    loc: 27
+  sources:
+  - source/core/utils/get-body-size.ts
+- id: core_utils_is_client_request
+  label: is-client-request
+  kind: guard
+  zone: core_utils
+  subtitle: source/core/utils/is-client-request.ts
+  metrics:
+    loc: 8
+  sources:
+  - source/core/utils/is-client-request.ts
+- id: core_utils_proxy_events
+  label: proxy-events
+  kind: module
+  zone: core_utils
+  subtitle: source/core/utils/proxy-events.ts
+  metrics:
+    loc: 20
+  sources:
+  - source/core/utils/proxy-events.ts
+- id: core_utils_timer
+  label: timer
+  kind: module
+  zone: core_utils
+  subtitle: source/core/utils/timer.ts
+  metrics:
+    loc: 241
+  sources:
+  - source/core/utils/timer.ts
+- id: core_utils_defer_to_connect
+  label: defer-to-connect
+  kind: module
+  zone: core_utils
+  subtitle: source/core/utils/defer-to-connect.ts
+  metrics:
+    loc: 44
+  sources:
+  - source/core/utils/defer-to-connect.ts
+- id: core_utils_weakable_map
+  label: weakable-map
+  kind: module
+  zone: core_utils
+  subtitle: source/core/utils/weakable-map.ts
+  metrics:
+    loc: 28
+  sources:
+  - source/core/utils/weakable-map.ts
+- id: as_promise_types
+  label: types
+  kind: module
+  zone: as_promise
+  subtitle: source/as-promise/types.ts
+  metrics:
+    loc: 30
+  sources:
+  - source/as-promise/types.ts
+- id: core_utils_options_to_url
+  label: options-to-url
+  kind: module
+  zone: core_utils
+  subtitle: source/core/utils/options-to-url.ts
+  metrics:
+    loc: 71
+  sources:
+  - source/core/utils/options-to-url.ts
+- id: create
+  label: create
+  kind: orchestrator
+  zone: root
+  subtitle: source/create.ts
+  metrics:
+    loc: 412
+  detail: The factory that wires defaults, handlers and instances together. This is where
+    extension happens — got.extend() lands here.
+  sources:
+  - source/create.ts
+- id: index
+  label: source
+  kind: api
+  zone: root
+  subtitle: source/index.ts — public exports
+  metrics:
+    loc: 27
+  detail: The public export surface. Everything a consumer of got can reach is named here;
+    anything not re-exported is private by construction.
+  sources:
+  - source/index.ts
+- id: types
+  label: types
+  kind: module
+  zone: root
+  subtitle: source/types.ts
+  metrics:
+    loc: 342
+  sources:
+  - source/types.ts
+edges:
+- id: as_promise_index__core_errors
+  from: as_promise_index
+  to: core_errors
+  kind: flow
+- id: as_promise_index__core_index
+  from: as_promise_index
+  to: core_index
+  kind: flow
+- id: as_promise_index__core_options
+  from: as_promise_index
+  to: core_options
+  kind: flow
+- id: as_promise_index__core_response
+  from: as_promise_index
+  to: core_response
+  kind: flow
+- id: as_promise_index__core_utils_proxy_events
+  from: as_promise_index
+  to: core_utils_proxy_events
+  kind: flow
+- id: core_errors__core_utils_strip_url_auth
+  from: core_errors
+  to: core_utils_strip_url_auth
+  kind: flow
+- id: core_index__core_calculate_retry_delay
+  from: core_index
+  to: core_calculate_retry_delay
+  kind: flow
+- id: core_index__core_diagnostics_channel
+  from: core_index
+  to: core_diagnostics_channel
+  kind: flow
+- id: core_index__core_errors
+  from: core_index
+  to: core_errors
+  kind: flow
+- id: core_index__core_options
+  from: core_index
+  to: core_options
+  kind: flow
+- id: core_index__core_response
+  from: core_index
+  to: core_response
+  kind: flow
+- id: core_index__core_timed_out
+  from: core_index
+  to: core_timed_out
+  kind: flow
+- id: core_index__core_utils_get_body_size
+  from: core_index
+  to: core_utils_get_body_size
+  kind: flow
+- id: core_index__core_utils_is_client_request
+  from: core_index
+  to: core_utils_is_client_request
+  kind: flow
+- id: core_index__core_utils_is_unix_socket_url
+  from: core_index
+  to: core_utils_is_unix_socket_url
+  kind: flow
+- id: core_index__core_utils_proxy_events
+  from: core_index
+  to: core_utils_proxy_events
+  kind: flow
+- id: core_index__core_utils_strip_url_auth
+  from: core_index
+  to: core_utils_strip_url_auth
+  kind: flow
+- id: core_index__core_utils_timer
+  from: core_index
+  to: core_utils_timer
+  kind: flow
+- id: core_index__core_utils_weakable_map
+  from: core_index
+  to: core_utils_weakable_map
+  kind: flow
+- id: core_options__core_parse_link_header
+  from: core_options
+  to: core_parse_link_header
+  kind: flow
+- id: core_options__core_timed_out
+  from: core_options
+  to: core_timed_out
+  kind: flow
+- id: core_options__core_utils_dns_cache
+  from: core_options
+  to: core_utils_dns_cache
+  kind: flow
+- id: core_options__core_utils_http2_client
+  from: core_options
+  to: core_utils_http2_client
+  kind: flow
+- id: core_options__core_utils_is_unix_socket_url
+  from: core_options
+  to: core_utils_is_unix_socket_url
+  kind: flow
+- id: core_timed_out__core_utils_unhandle
+  from: core_timed_out
+  to: core_utils_unhandle
+  kind: flow
+- id: core_utils_http2_client__core_timed_out
+  from: core_utils_http2_client
+  to: core_timed_out
+  kind: flow
+- id: core_response__core_errors
+  from: core_response
+  to: core_errors
+  kind: flow
+- id: core_response__core_utils_strip_url_auth
+  from: core_response
+  to: core_utils_strip_url_auth
+  kind: flow
+- id: core_utils_timer__core_utils_defer_to_connect
+  from: core_utils_timer
+  to: core_utils_defer_to_connect
+  kind: flow
+- id: create__as_promise_index
+  from: create
+  to: as_promise_index
+  kind: flow
+- id: create__core_index
+  from: create
+  to: core_index
+  kind: flow
+- id: create__core_options
+  from: create
+  to: core_options
+  kind: flow
+- id: index__core_calculate_retry_delay
+  from: index
+  to: core_calculate_retry_delay
+  kind: flow
+- id: index__core_diagnostics_channel
+  from: index
+  to: core_diagnostics_channel
+  kind: flow
+- id: index__core_errors
+  from: index
+  to: core_errors
+  kind: flow
+- id: index__core_index
+  from: index
+  to: core_index
+  kind: flow
+- id: index__core_options
+  from: index
+  to: core_options
+  kind: flow
+- id: index__core_parse_link_header
+  from: index
+  to: core_parse_link_header
+  kind: flow
+- id: index__core_response
+  from: index
+  to: core_response
+  kind: flow
+- id: index__create
+  from: index
+  to: create
+  kind: flow
+- id: g01
+  from: core_errors
+  to: index
+  kind: gap
+  label: errors not re-exported here?
+  note: Confirm the error classes consumers need to catch are all reachable from the public
+    surface. If a thrown type is not exported, callers cannot instanceof it.
+findings:
+- id: manual-1
+  severity: medium
+  kind: boundary-not-modelled
+  title: Node core and third-party dependencies are not drawn
+  nodes:
+  - core_index
+  - core_utils_http2_client
+  detail: 'dependency-cruiser was run on source/ only, so node:http, node:stream, cacheable-lookup
+    and form-data-encoder are invisible here. The diagram therefore shows internal coupling
+    honestly and external coupling not at all. Add them as kind: vendor nodes before using
+    this to reason about upgrade risk.'

@@ -19,7 +19,7 @@
  */
 
 import { execSync } from 'node:child_process'
-import { readFileSync, existsSync, readdirSync } from 'node:fs'
+import { readFileSync, existsSync, readdirSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -47,9 +47,113 @@ export function repoRoot() {
   return sh('git rev-parse --show-toplevel') || process.cwd()
 }
 
+/**
+ * Finding titles, parsed once from the audit report's own `#### ID · Severity —
+ * Title` headers. Not a second copy of the title: the report is already the
+ * source of truth for what a finding ID means, this just indexes it by ID.
+ */
+export function findingTitles(root) {
+  const map = new Map()
+  const p = join(root, 'audit', 'AUDIT_REPORT.md')
+  if (!existsSync(p)) return map
+  const headerRe = /^####\s+(\S+-\d+)\s*[·—-]\s*(?:Critical|High|Medium|Low)[^·—-]*[·—-]\s*(.+)$/i
+  for (const line of readFileSync(p, 'utf8').split('\n')) {
+    const m = line.match(headerRe)
+    if (m) map.set(m[1].toUpperCase(), m[2].trim())
+  }
+  return map
+}
+
+/**
+ * A ticket's own branch names its finding (`fix/api-3-documents-pagination` ->
+ * `API-3` + a slug). Prefer the audit report's fuller title when the finding ID
+ * resolves there; otherwise humanize the branch's own slug. Either way this is a
+ * derived read of something the agent already wrote, not a title someone has to
+ * remember to keep in sync.
+ */
+export function titleFor(branch, titles) {
+  const tail = (branch || '').split('/').slice(1).join('/') || branch || ''
+  const m = tail.match(/^([a-z0-9]+-\d+)-(.+)$/i)
+  if (m) {
+    const id = m[1].toUpperCase()
+    if (titles.has(id)) return titles.get(id)
+    return m[2].replace(/-/g, ' ')
+  }
+  return tail.replace(/-/g, ' ') || branch
+}
+
+/**
+ * What a worktree is doing right now: files with uncommitted changes, or the
+ * last commit's subject if the tree is clean. No new signal to keep — this is
+ * the same git state the rest of this file already reads.
+ */
+export function liveAction(path) {
+  const dirty = sh(`git -C "${path}" status --porcelain`)
+    .split('\n').filter(Boolean)
+    .map((l) => l.slice(3).trim().split('/').pop())
+  if (dirty.length) {
+    const shown = dirty.slice(0, 3)
+    const rest = dirty.length - shown.length
+    return `editing ${shown.join(', ')}${rest > 0 ? ` +${rest} more` : ''}`
+  }
+  const lastCommit = sh(`git -C "${path}" log -1 --format=%s`)
+  return lastCommit ? `last commit: ${lastCommit}` : 'no changes yet'
+}
+
+/**
+ * The last moment anything actually happened in a worktree, as epoch ms.
+ *
+ * Three signals, newest wins: the last commit, the newest mtime among tracked
+ * files, and when the gate last ran. A worktree whose newest signal is 40
+ * minutes old is not "in progress" no matter what its phase says — that gap is
+ * the difference between a board that shows state and one that shows motion.
+ */
+function lastActivityAt(path, gate) {
+  const times = []
+
+  const commitTs = sh(`git -C "${path}" log -1 --format=%ct`)
+  if (commitTs) times.push(Number(commitTs) * 1000)
+
+  if (gate?.ranAt) {
+    const t = Date.parse(gate.ranAt)
+    if (Number.isFinite(t)) times.push(t)
+  }
+
+  // Newest mtime among files git considers changed. Bounded with `head` because
+  // a large dirty tree would otherwise stat hundreds of files on every poll.
+  const dirty = sh(`git -C "${path}" status --porcelain`).split('\n').filter(Boolean).slice(0, 40)
+  for (const line of dirty) {
+    const rel = line.slice(3).trim()
+    try { times.push(statSync(join(path, rel)).mtimeMs) } catch { /* deleted or unreadable */ }
+  }
+
+  return times.length ? Math.max(...times) : null
+}
+
+/**
+ * What this ticket is actually doing, derived from signals rather than reported.
+ *
+ * Nothing writes a status file — deliberately. A status file that drifts reads
+ * as authoritative while being wrong, which is worse than none. Every phase
+ * below is inferred from something the work itself produced.
+ */
+function phaseOf({ commits, gate, dirtyCount }, pr) {
+  if (pr?.merged) return 'merged'
+  if (pr) return pr.reviewDecision === 'CHANGES_REQUESTED' ? 'changes-requested' : 'in-review'
+  if (gate?.verdict === 'pass') return 'ready-for-pr'
+  if (gate?.verdict === 'fail') return 'gate-failed'
+  if (dirtyCount > 0) return 'coding'
+  if (commits > 0) return 'committed'
+  return 'provisioned'
+}
+
+/** Ordered for the timeline UI. Terminal phases are not on the happy path. */
+export const PHASES = ['provisioned', 'coding', 'committed', 'gate-failed', 'ready-for-pr', 'in-review', 'changes-requested', 'merged']
+
 /** Worktrees currently provisioned, with the gate verdict each last produced. */
 export function worktrees(root) {
   const out = []
+  const titles = findingTitles(root)
   const porcelain = sh('git worktree list --porcelain', { cwd: root })
   for (const block of porcelain.split('\n\n')) {
     const m = block.match(/^worktree (.+)$/m)
@@ -76,8 +180,14 @@ export function worktrees(root) {
     const branch = env.FACTORY_BRANCH || sh(`git -C "${path}" branch --show-current`)
     const ahead = sh(`git -C "${path}" rev-list --count ${env.FACTORY_BASE_REF || 'main'}..HEAD`)
 
+    const dirtyCount = sh(`git -C "${path}" status --porcelain`).split('\n').filter(Boolean).length
+
     out.push({
       ticket: env.FACTORY_TICKET || basename(path),
+      title: titleFor(branch, titles),
+      liveAction: liveAction(path),
+      dirtyCount,
+      lastActivityAt: lastActivityAt(path, gate),
       path, branch,
       db: env.FACTORY_DB_NAME || null,
       apiPort: env.API_PORT || null,
@@ -188,6 +298,21 @@ export function collect() {
   const sc = scorecard(root)
   const branch = sh(`git -C "${root}" branch --show-current`)
   const mainSha = sh(`git -C "${root}" rev-parse main`).slice(0, 7)
+
+  // Join each worktree to its PR so phase can be derived once, here, rather than
+  // re-derived by every consumer with a slightly different idea of the rules.
+  const STALL_MINUTES = 12
+  const now = Date.now()
+  for (const w of wts) {
+    const pr = prs.find((p) => p.ticket === w.ticket) || null
+    w.pr = pr ? { number: pr.number, url: pr.url, ci: pr.ci, reviewDecision: pr.reviewDecision } : null
+    w.phase = phaseOf(w, pr)
+    w.idleMinutes = w.lastActivityAt ? Math.floor((now - w.lastActivityAt) / 60000) : null
+    // Terminal phases are supposed to sit still; only flag stillness where motion
+    // is expected, or every merged ticket reads as stuck.
+    const shouldBeMoving = ['coding', 'committed', 'gate-failed', 'provisioned'].includes(w.phase)
+    w.stalled = shouldBeMoving && w.idleMinutes !== null && w.idleMinutes >= STALL_MINUTES
+  }
 
   const warnings = []
   if (!prs.length && !sh('gh auth status') && wts.length) {

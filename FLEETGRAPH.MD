@@ -1,0 +1,456 @@
+# FleetGraph
+
+A project intelligence agent for Ship, the project management tool built by the U.S. Department
+of the Treasury.
+
+**Status:** Phase 1 (agent definition) complete. Phase 2 (graph architecture) not started.
+Sections marked *Pending* are honestly empty rather than filled with placeholders.
+
+Last updated: August 3, 2026
+
+---
+
+## Agent Responsibility
+
+### What the agent is for
+
+Ship asks people to write down what happened — standups, weekly plans, weekly retros, weekly
+reviews, project retros. Its accountability engine computes ten kinds of missing paperwork,
+deterministically, and chases people for it.
+
+That engine works. It also cannot tell whether any of the paperwork is true. The content check
+strips three known template headings and passes if a single non-whitespace character remains, so a
+weekly plan whose entire body is the word "stuff" is fully compliant.
+
+The obvious response is to grade the writing. We tried that framing and rejected it. An agent that
+tells a federal employee their standup looks thin — on a document that feeds a performance rating
+— is a surveillance tool aimed at the least powerful person in the room. It also solves the wrong
+problem. **People write "stuff" because writing it properly is tedious and they are busy.**
+Enforcement does not change that. Removing the tedium does.
+
+> **Ship asks people to write down what happened. FleetGraph already knows — so it writes the
+> first draft, and it tells you what needs you.**
+
+The agent saves time and surfaces obligations. It does not audit compliance.
+
+### What it monitors proactively
+
+Ship has no event bus. "Events" means observed state changes, found by comparing each document's
+last-updated timestamp against a saved cursor and reading the document history table where entries
+exist.
+
+| Event | How it is observed | What the agent does with it |
+|---|---|---|
+| An issue changes state | A history row on the state field | Material for a standup draft |
+| An issue changes assignee | A history row on the assignee field | Someone's list changes |
+| A comment is posted | A new comment row | Draft material; possibly a mention |
+| A document body is edited | The last-updated timestamp moves | Draft material |
+| Someone is mentioned | Walking the changed body for mention markers | Goes into that person's list |
+| A plan or review approval flips | The approval status field changes | Unblocks someone, or starts a clock |
+| A week crosses a boundary | Date arithmetic on the week number | Opens the retro drafting window |
+
+**Nothing in Ship writes a row when a week ends.** There is no change to detect, which is why a
+purely change-driven design is insufficient and the agent needs a scheduled pass as well.
+
+### What it reasons about on demand
+
+The document you have open **seeds** the question. It does not fence it.
+
+This corrects an earlier draft that treated the current view as a boundary and had the agent
+refuse to look further. The brief says the chat "uses that as the **starting point** for its
+reasoning." A starting point and a boundary are different things.
+
+**The boundary is what you are allowed to see. The view only decides where to start.**
+
+From the open document the agent walks outward as far as the question requires — the project, the
+week, the program, the issues and their history, the people and their other work, documents that
+mention it and documents it mentions, and what changed recently in any of those.
+
+**It names every document it pulled in and why.** That is the trust mechanism: the reach of an
+answer is always visible, so following the graph never feels like the agent went wandering.
+
+### What it does without approval, and what always needs a human
+
+The gate is **where the fact came from**, not how large the write is. The important part is what
+the agent produces when it is not certain.
+
+**It acts, when a query proves it** — each of these is a structured lookup with no interpretation:
+
+- Resolving mentions to people to user accounts, and assembling those into someone's list
+- Linking a document to the issue or week it refers to, when the reference is unambiguous
+- Writing its own drafts and items, attributed to the agent
+- Clearing its own item when the condition ends
+
+**It drafts, when a model inferred it.** The second output mode is a draft the human edits and
+posts. It never posts as the human, and never leaves an opinion the human is expected to act on.
+
+**It never does these at all:**
+
+- Writing a performance rating. These are federal performance ratings on the standard five-level
+  scale. Not at any confidence, not for any reason.
+- Setting an approval state, week status, or ownership.
+- Applying an issue state transition. It may *propose* one with its evidence attached; a person
+  accepts it.
+- Creating, archiving, or deleting any document.
+- Writing anything that would read as though a person wrote it.
+
+> **Every output is either an action a query proved, or a draft a human confirms. The agent never
+> has an opinion it expects you to act on.**
+
+That rule is what structurally prevents the agent becoming a complaint generator.
+
+### Who it notifies, and when
+
+Ship has no notification infrastructure at all — no notifications table, no email service, no push
+mechanism. So the agent reaches people by writing into Ship itself.
+
+The surface is **one list per person: what needs you.** Not a stream of individual pings.
+Everything a person is on the hook for, assembled and ranked, presented when they arrive:
+
+1. Mentions of them they have not seen
+2. Approvals they are blocking — someone else's week cannot start
+3. Work assigned to them that is waiting on something they control
+4. Drafts the agent has prepared for them
+
+Ranked by who else is blocked and for how long. Every item carries a direct action, not just a
+description. Escalation to a manager exists but is last, and only after several periods with no
+resolution — and because only half the people in the system have a manager recorded, that path
+degrades gracefully when the link is absent. The agent never broadcasts to the workspace.
+
+### Precision, and why the bar moved
+
+A wrong draft costs a few seconds of editing, and the person was going to write the document
+anyway. A wrong accusation, on a document feeding a performance review, costs trust permanently.
+
+The earlier detection design optimised hard against the second and ended up doing almost nothing.
+Changing the output format from criticism to draft removes most of that risk, which lets the
+confidence bar come down, which lets the agent do considerably more. **The precision obsession was
+downstream of a bad output format, not a fundamental constraint.**
+
+The quality signal is also better than detection ever had: **how much of a draft survives to the
+posted version.** A draft posted unedited was a good draft; one rewritten from scratch was not.
+That is measurable in production with no labelling effort.
+
+### How it knows who is on a project and what their role is
+
+Ship keeps this in three places, and confusing them is the trap.
+
+The workspace membership table has a role column, but it holds only "admin" or "member", and the
+schema comment says in capitals that it is for authorization only. Using it to work out someone's
+job is wrong.
+
+Person documents hold the real data: a link to a user account, a link to a manager, and a free-text
+job role. That job role is unreliable — free text with no fixed values, and in the current database
+not one of the twenty people has it filled in.
+
+Project membership lives in a separate associations table, alongside owner and assignee fields.
+
+Roles are derived from structure, never read from a field:
+
+| Role | How it is derived |
+|---|---|
+| Director | People reporting to them two or more levels deep; owns programs |
+| Project manager | Owns projects or weeks; appears as approver on plans |
+| Engineer | Has issues assigned; nobody reports to them |
+
+---
+
+## Graph Diagram
+
+**Pending — Phase 2 not started.** Node design, parallel fetch structure and conditional edges are
+the Phase 2 deliverable. Filling this in now would be guesswork.
+
+Four things are already settled and will constrain it:
+
+- Both modes run through the same graph; only the entry trigger differs.
+- The proactive path accumulates material continuously but composes drafts **once per person per
+  window**, not once per change. The graph therefore branches on "is a window open for this
+  person" as well as on what changed.
+- The on-demand path expands outward from a seed document along associations, mentions and
+  history, with a hard cap on documents pulled in. That expansion loop is the main source of
+  genuinely different execution paths between runs.
+- One human-in-the-loop gate is required and already identified: every draft terminates at a
+  human, and the retro path must never set the approval state itself.
+
+---
+
+## Use Cases
+
+Every one either saves time or removes a lookup. None grade anybody.
+
+| # | Role | Trigger | Agent detects / produces | Human decides |
+|---|---|---|---|---|
+| 1 | Engineer | The standup window opens on a working day for someone with assigned issues in an active week | A draft standup assembled from what actually happened — issues that changed state, comments written, documents edited, blockers hit. Where nothing moved, it says so and names what has been sitting | Edit and post, or discard. Accept or reject any proposed issue state changes individually |
+| 2 | Anyone | The person opens Ship, or opens the panel | One ranked list: mentions they have not seen, approvals they are blocking, work waiting on them, drafts prepared for them — each with why it matters and a direct action | What to act on, and in what order |
+| 3 | Engineer or PM | The retro window opens for a week whose plan carries at least one success criterion | The delivered section pre-filled from issues that actually closed, mapped against each criterion, with unmatched criteria called out so they can be explained rather than quietly dropped | Edit, add unplanned work the agent cannot see, submit |
+| 4 | Director | A weekly plan is edited after it was approved | What materially changed, before and after side by side, plus a drafted re-approval request or a drafted question to the author | Re-approve, or send the question |
+| 5 | Director or PM | An issue blocks work in two or more projects whose blocked people sit in different reporting lines | The full impact, the lowest manager with authority over everyone blocked, and a drafted message to them | Send it, or step in directly |
+| 6 | Anyone | The person opens the chat panel anywhere in Ship | An answer seeded by the open document and expanded along whatever the question requires, naming every document pulled in and why | What to do about it |
+
+**Notes**
+
+**Use case 1 absorbs what used to be a separate "your standup is thin" detection.** The drift
+signal still gets delivered — it is just delivered as help. Removing that detection as a
+standalone use case was a deliberate decision: it was the only case where the agent criticised a
+person directly, on a document feeding a performance rating, and it is the notification users mute
+first.
+
+**Use case 2 replaces per-mention notifications.** An earlier design pinged on each mention event.
+That is dribble. What a person wants on arrival is everything that needs them, in one place,
+ranked — an inbox, not a stream.
+
+**Use cases 1 and 2 need no language model for their hardest parts.** Mention resolution and
+approval-blocking are structured lookups. The model composes prose and ranks; the floor underneath
+it is deterministic.
+
+**Use case 5 depends on work not yet done.** Ship cannot express "issue A blocks issue B" — the
+relationship types are only parent, project, sprint and program, and the backlinks table is empty.
+Ship has a containment tree and an org chart but no dependency graph. The decision is to add the
+missing relationship to Ship rather than design around it; scoped in
+`memory-bank/fleetgraph-backlog.md`.
+
+---
+
+## Trigger Model
+
+### The decision: hybrid, with polling as the backbone
+
+| Tier | How often | What it does | Latency |
+|---|---|---|---|
+| **Fast** | The moment a document is saved | Mentions and assignment changes land in the affected person's list. No model. | ~3 seconds |
+| **Steady** | Every 60 seconds | Collect what changed; hold the material each person's next draft will be built from | ~80 seconds |
+| **Deep** | Per person, before their window opens | Compose the drafts — standups in the morning, retros at week end | Scheduled |
+
+The steady tier used to be where the model ran, once per suspicious change. Under drafting it
+mostly **accumulates material**, and the model runs once per person per window instead. That is
+cheaper per unit of value and produces better output — a standup written from a whole day of
+activity beats six separate observations.
+
+The five-minute detection requirement binds only on the fast tier, which is deterministic and runs
+in about three seconds.
+
+Polling works as the backbone because Ship's collaborative editor saves on a two-second delay and
+always stamps the last-updated time when it does, making that timestamp a complete signal for
+every content change. The document history table is only partial by comparison — it records field
+changes broadly but body text only for weekly plans and retros.
+
+### The tradeoffs
+
+| | Polling only | Webhooks only | Hybrid (chosen) |
+|---|---|---|---|
+| Changes needed in Ship | One read endpoint | Emission code in 2+ places | One read endpoint plus one in-process hook |
+| Coverage | Complete | Only where emission was added | Complete |
+| Missed events | Self-correcting — next tick re-reads | Permanent. A dropped delivery is gone | Polling backstops the fast path |
+| Week boundaries | Detected — the schedule is the trigger | Never fires. Nothing changes when a week ends | Detected |
+| Mention reaching a list | Up to 60 seconds | ~1 second | ~3 seconds |
+| Cost when idle | One indexed query returning nothing | Nothing | One indexed query returning nothing |
+| Coupling to Ship's uptime | None | Ship's save path waits on your endpoint | None — the hook is fire-and-forget |
+| Testability | Replay a time range | Must simulate emission | Both |
+
+**Webhooks alone fail for two verified reasons.** Ship has no outbound webhook mechanism and no
+database notification channel, so emission would need adding both to the REST write path and to the
+collaborative editor's save path — and missing the second blinds the agent to the document edits
+its drafts are built from. And a week ending produces no change at all, so there is nothing to
+hook.
+
+**Polling alone is genuinely viable** and was the runner-up, costing up to 60 seconds before a
+mention reaches someone's list. The hybrid buys that back for the price of one hook, and if the
+hook fails the poll still catches it within a minute. **The fast path is an optimisation on top of
+a correct baseline, not something the design depends on.**
+
+### Reliability
+
+**The cursor must lag.** Asking for everything updated since a saved timestamp permanently misses
+rows whose transaction commits after the cursor moved past their timestamp. An auto-incrementing
+history ID has the same flaw — those numbers are handed out before commit. The fix is to lag the
+cursor behind real time and de-duplicate.
+
+**Both of Ship's rate limiters fail open.** On a cache outage the server-side ceiling disappears
+entirely, so the agent cannot treat it as a safety net and must throttle itself.
+
+### The blocking dependency
+
+**Ship's API has no way to ask what changed.** No "since this time" parameter exists anywhere. The
+main document listing endpoint sorts by position and creation date, so recently-updated documents
+never surface at the top. Paging is offset-only, and a source comment states proper cursor paging
+is a known gap. The endpoints that do sort by last-updated are fixed-purpose and take no time
+filter.
+
+An agent deployed separately cannot go around this — the production database sits in private
+subnets reachable only from the application's own servers.
+
+The decision is to **add a change-feed endpoint to Ship** rather than move the agent inside the
+network, because keeping permission enforcement inside Ship's own API matters in a system carrying
+federal performance ratings. The supporting index already exists — created by a migration that came
+directly out of the Week 4 audit, which found seven route modules sorting by last-updated with no
+index behind them.
+
+---
+
+## Test Cases
+
+**Trace links pending — nothing is built yet.** Ship state and expected output are defined; traces
+follow as each is implemented.
+
+| # | Ship State | Expected Output | Trace Link |
+|---|---|---|---|
+| 1 | An engineer with 3 assigned issues; since their last standup, one moved to in review, they commented on another, and the third has not moved in 6 days | A draft standup naming the two that moved and what changed, flagging the third as sitting for 6 days, with a proposed state change on the one in review | Pending |
+| 2 | A person mentioned in two documents they do not own, blocking one approval on someone else's week, with a standup draft waiting | A four-item ranked list, approval first because another person's week cannot start, each item carrying a direct action | Pending |
+| 3 | A week whose plan lists 4 success criteria; 3 issues closed during the week, mapping to 2 of them | A delivered section pre-filled from the 3 closed issues, mapped to their criteria, with the 2 unmatched criteria called out | Pending |
+| 4 | A weekly plan approved at version N, then edited to remove one success criterion | A before-and-after on the removed criterion plus a drafted question to the author, routed to the approver | Pending |
+| 5 | An issue in Project A blocking two issues in Project B whose assignees report to different managers | The impact fan-out, the lowest common manager, and a drafted message | Pending — requires the `blocks` relationship |
+| 6 | A user opens the chat on an issue and asks why it is stalled; the answer requires its week, its blocking issue, and a comment on a different document | An answer drawing on all four documents, each named with the reason it was pulled in | Pending |
+
+**Most of these have no reachable trigger state today.** The development database is a load-testing
+fixture built to a Week 4 specification, and it records none of the activity these drafts are built
+from: the document history table is empty, comments are empty, issue start and completion
+timestamps are unset on all 254 issues including all 71 marked done, and plan approval state is
+unset on all 35 weeks. The code that writes all of this exists and runs in normal use, so this is
+fixture work rather than a research problem — and the brief explicitly asks for "the Ship state
+that should trigger the agent," which makes constructing them part of the assignment.
+
+---
+
+## Architecture Decisions
+
+### Framework
+
+**Pending.** LangGraph is recommended by the brief and is the presumptive choice; anything else
+requires manual instrumentation to produce equivalent traces. Not yet committed.
+
+### Node design rationale
+
+**Pending — Phase 2.** Two principles are fixed. Proactively, material accumulation and draft
+composition are separate stages running on different clocks — the graph collects continuously and
+composes per person per window. On demand, expansion from the seed document is an iterative loop
+with a hard cap, and that loop is the main source of different execution paths between runs.
+
+### State management
+
+**Pending — Phase 2.** Three requirements are known. Between proactive runs the graph carries a
+lagged cursor. Between the steady and deep tiers it carries per-person accumulated material, keyed
+by person and window. Within a run, anything derived from a document is cached on the combination
+of document and content version — so ten people asking about the same week do not each re-read it.
+That cache key is load-bearing: keying it by viewer instead would change how the whole system
+scales.
+
+### Deployment model
+
+Partially settled.
+
+**Authentication does not expire.** Ship's session timeouts — fifteen minutes idle, twelve hours
+absolute — apply only to browser sessions. API tokens are handled first and bypass that logic;
+they are bounded only by their own expiry, which can be unset, and by explicit revocation. A
+headless agent needs no re-authentication schedule.
+
+**There is no service account.** Every API token belongs to a real user, so the agent runs under
+each person's own token. This matters more under the current design than it did before — following
+the graph outward from the open document means reaching documents the person did not open, and
+running as them is what makes that safe by construction. **It can reach anything you could reach,
+and nothing you could not.**
+
+**Private documents are currently hypothetical.** All 523 documents are workspace-visible and none
+are private. The risk is real in the schema and absent from the data.
+
+**Network path.** Production traffic must go through the content delivery network; the load
+balancer accepts nothing else.
+
+Terraform configuration, health and readiness endpoints, and the destroy-and-redeploy test remain
+to be done.
+
+---
+
+## Cost Analysis
+
+### Development and Testing Costs
+
+**Pending — not yet instrumented.** Development has so far been design and codebase verification,
+with no agent invocations. Token accounting is added once the graph runs.
+
+| Item | Amount |
+|---|---|
+| Claude API — input tokens | Pending |
+| Claude API — output tokens | Pending |
+| Total invocations during development | Pending |
+| Total development spend | Pending |
+
+### Production Cost Projections
+
+| 100 Users | 1,000 Users | 10,000 Users |
+|---|---|---|
+| **~$450/month** | **~$4,470/month** | **~$44,700/month** |
+
+**Assumptions**
+
+Unit ratios come from the live database — 15 projects, 523 documents, 254 issues, 20 people —
+giving roughly 35 documents, 17 issues and 1.33 people per project. So 100 users is about 75
+projects.
+
+- **Proactive runs per project per day:** 1,440 polls (one per minute, mostly returning nothing),
+  plus one draft composition per person per window — about 1.3 standup drafts and 1.3 inbox
+  assemblies per project per working day, and roughly 1.3 retro drafts per project per week.
+- **On-demand invocations per user per day:** 2
+- **Average tokens per invocation:** 4,000 in / 600 out for a standup draft; 3,000 / 400 for an
+  inbox assembly; 6,000 / 900 for a retro draft; 9,000 / 800 for an on-demand answer, which is
+  larger than the old design because the agent now follows the graph outward.
+- **Cost per run:** $0.021 standup draft, $0.015 inbox, $0.052 retro draft, $0.065 on-demand
+  answer.
+- **Estimated runs per day, per 1,000 users:** ~1,000 standup drafts, ~1,000 inbox assemblies,
+  ~200 retro drafts, 2,000 on-demand answers.
+
+Model tiering: high-volume drafting runs on the cheaper model; the reasoning tiers run on the more
+capable one.
+
+| Tier | Scales with | $/user/month |
+|---|---|---|
+| Standup drafts | People | $0.46 |
+| Inbox assembly | People | $0.32 |
+| Retro drafts | People | $0.23 |
+| Nightly cross-project pass | Projects | $0.60 |
+| On-demand answers | People | $2.86 |
+| **Total** | | **$4.47** |
+
+### Three things that matter more than the totals
+
+**This is about a third more expensive than the detection design it replaces.** That is the correct
+trade — the earlier design was cheaper mainly because it declined to do anything.
+
+**On-demand dominates at 64% of spend, and it grew.** Following the graph outward costs more input
+tokens than answering from a single document. That is the price of treating the current view as a
+starting point rather than a fence, and it is worth paying.
+
+**The rate limit runs out long before the budget does.** Ship's per-source-IP limiter allows 6,000
+requests a minute across every user the agent serves. At roughly 2,000 users the agent begins
+throttling itself, while the bill is still under $9,000 a month. **The 10,000-user column is a cost
+projection, not a capacity claim** — reaching it requires multiple egress addresses or a raised
+limit, which is an infrastructure conversation rather than a budget one.
+
+### Cost cliffs, worst first
+
+1. **Which model answers on-demand questions.** Moving that tier to the cheaper model takes the
+   per-user cost from $4.47 to $3.32 — a 26% cut from one configuration change.
+2. **How far on-demand expands the graph.** Following every edge from every document is unbounded.
+   Relevance ranking with a hard cap on documents pulled in is what keeps this line finite, and it
+   is the single most important implementation constraint in the design.
+3. **Drafting for people who never read the drafts.** If someone ignores their drafts for two
+   weeks, stop generating them and let them ask. Trivial to implement, and it removes the largest
+   single source of waste.
+4. **How the derived-content cache is keyed.** Keyed by document and content version, ten people
+   asking about the same week read it once. Keyed by viewer, that work multiplies by readers.
+
+---
+
+## A note on the data behind these numbers
+
+Everything measured comes from Ship's development database: 523 documents, 254 issues, 20 users,
+20 people, 35 weeks spanning weeks 11 to 17.
+
+It was built to a Week 4 specification — "seed the database with realistic data: 500+ documents,
+100+ issues, 20+ users, 10+ sprints." It is a load-testing fixture, made to give benchmarking tools
+enough rows to produce meaningful latency numbers, not to model how people behave. Weekly plans and
+retros are drawn from eleven fixed content pools; confidence values are computed from how far in
+the past a week is plus random noise.
+
+**So counts from it measure the fixture, not Ship's users.** The unit ratios in the cost model are
+safe, because documents and issues per project are exactly what the fixture was built to be
+realistic about. Behavioural claims are not, and none are made here.

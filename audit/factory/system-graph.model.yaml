@@ -1,0 +1,664 @@
+meta:
+  title: ShipShape Ticket Factory
+  subtitle: Autonomous audit-remediation pipeline — Linear backlog to merged main, with its self-improvement loops
+  source: GAUNTLET/Ship @ 791380a — scripts/factory/*, .claude/skills/ship-factory + ship-orchestrator
+  profile: process
+  # GitHub, not the GitLab origin: origin's host (labs.gauntletai.com) does not
+  # contain "gitlab", so the artifact would build GitHub-style /blob/ paths for
+  # it and every deep link would 404. The GitHub mirror takes exactly that form.
+  repoUrl: https://github.com/troysatchell/ship
+  branch: main
+
+zones:
+  - id: intake
+    label: Intake
+    accent: intake
+    note: 68 audit findings became the ticket backlog
+  - id: dispatch
+    label: Dispatch
+    accent: control
+    note: ship-factory runs the loop; ship-orchestrator composes the brief
+  - id: build
+    label: Isolated build
+    accent: transform
+    note: One worktree, one database, one branch per ticket
+  - id: verify
+    label: Verify
+    accent: gate
+    note: Evidence, not self-reports
+  - id: ship
+    label: Review & ship
+    accent: release
+    note: PR, CodeRabbit triage, auto-merge once green
+  - id: observe
+    label: Operate & observe
+    accent: store
+    note: State is derived, never duplicated
+
+nodes:
+  # ------------------------------------------------------------------ intake
+  - id: audit
+    label: Audit findings
+    kind: intake
+    zone: intake
+    subtitle: shipshape-audit · 68 findings
+    sources:
+      - path: audit/AUDIT_REPORT.md
+        note: the 68 findings, each with its measured evidence
+      - path: audit/shipshape.config.yaml
+        note: audit scope and per-category configuration
+    emits: [finding]
+    detail: |
+      The 7-category baseline audit (type safety, bundle, API perf, DB queries,
+      tests, error handling, a11y) produced AUDIT_REPORT.md with 68 findings.
+      Every finding became a Linear ticket (TRO-164..239). The 68 number is
+      submitted and fixed — CodeRabbit-derived tickets are never counted into it.
+
+  - id: linear
+    label: Linear backlog
+    kind: store
+    zone: intake
+    subtitle: project ShipShape Audit Remediation
+    sources:
+      - path: .claude/skills/ship-factory/SKILL.md
+        symbol: 1. Select the next ticket
+        lines: [58, 75]
+        note: selection order, and the In-Progress dispatch lock
+    consumes: [finding, new-ticket]
+    emits: [ticket]
+    detail: |
+      Authoritative for ticket STATUS (the board only shows execution state —
+      when they disagree, Linear wins and something is wrong). "In Progress" is
+      the dispatch lock: the whole batch is reserved before any agent starts,
+      or a second worker can pick up a ticket already being fixed in someone
+      else's branch. Scope guardrail: the same workspace holds three unrelated
+      projects; the factory never dispatches outside this one.
+
+  # ---------------------------------------------------------------- dispatch
+  - id: orch
+    label: Orchestrator
+    kind: orchestrator
+    zone: dispatch
+    subtitle: ship-factory run loop · Sonnet
+    sources:
+      - path: .claude/skills/ship-factory/SKILL.md
+        symbol: The loop
+        lines: [56, 252]
+        note: the nine numbered steps this node executes
+      - path: .claude/skills/ship-orchestrator/SKILL.md
+        symbol: 2. Decide what runs in parallel
+        lines: [46, 129]
+        note: parallelism rules and concurrency sizing
+    consumes: [ticket]
+    detail: |
+      Select → provision → dispatch → gate → measure → PR → triage → merge.
+      Orders by unblock-first, then priority; batches shared root causes
+      (DB-4 ⇄ API-4/5/ERR-7, BUN-1 ⇄ 2/3/4/6) onto one branch. Runs everything
+      in parallel except real blockers, same-file collisions, and measurement
+      ordering (db-query-audit after api-perf-audit). Runs the gate ITSELF —
+      an agent reporting green is a claim, not a result. Checkpoints the
+      session between waves: orchestration was ~75% of sprint spend, dominated
+      by re-reading context, so no unbroken multi-day sessions.
+
+  - id: brief
+    label: Brief assembly
+    kind: transform
+    zone: dispatch
+    subtitle: contract + lessons + role skill
+    sources:
+      - path: .claude/skills/ship-factory/references/agent-contract.md
+        note: the domain-blind contract every brief opens with
+      - path: .claude/skills/ship-orchestrator/SKILL.md
+        symbol: 1. Route the ticket to a role brief
+        lines: [18, 45]
+        note: prefix → role-skill routing table
+    emits: [brief]
+    detail: |
+      The agent contract (domain-blind, non-negotiables: scope, locked
+      quarantine, provenance, keep-working) + lessons.md verbatim + the role
+      skill(s) routed by finding prefix. Every brief also carries ship-qa's
+      regression-test placement rule regardless of category, because the
+      gate's regression check can be satisfied by a test the gate never runs.
+
+  - id: lessons
+    label: lessons.md
+    kind: store
+    zone: dispatch
+    subtitle: standing rules, earned per incident
+    sources:
+      - path: .claude/skills/ship-factory/references/lessons.md
+        note: the standing rules themselves, injected verbatim
+      - path: .claude/skills/ship-factory/SKILL.md
+        lines: [51, 51]
+        note: preflight step 5 — read lessons, carry into every prompt
+    detail: |
+      The prompt-level self-improvement mechanism. A rule lands here when a
+      review finding recurs on a 2nd ticket — a defect class recurring means
+      the brief is missing a rule, not that agents need louder restating.
+      Injected verbatim into every subsequent brief. Kept short and specific:
+      rules that earned their place, not a diary.
+
+  - id: roles
+    label: Role skills
+    kind: store
+    zone: dispatch
+    subtitle: ship-frontend · ship-backend · ship-qa
+    sources:
+      - path: .claude/skills/ship-frontend/SKILL.md
+        note: TS-* / BUN-* / A11Y-* tickets
+      - path: .claude/skills/ship-backend/SKILL.md
+        note: API-* / DB-* / ERR-* tickets
+      - path: .claude/skills/ship-qa/SKILL.md
+        note: TEST-* tickets, plus the placement rule carried by every brief
+    detail: |
+      Routing table (ship-orchestrator §1): TS-*/BUN-*/A11Y-* → frontend,
+      API-*/DB-*/ERR-* → backend, TEST-* → qa (plus the package's role skill),
+      TF-* → none yet (escalation gate 2, irreversible infra). Multi-role
+      tickets get both briefs — two briefs is fine, a vague brief is not.
+
+  # ------------------------------------------------------------------- build
+  - id: provision
+    label: worktree.sh
+    kind: transform
+    zone: build
+    subtitle: worktree + DB + ports + .factory-env
+    sources:
+      - path: scripts/factory/worktree.sh
+        lines: [88, 89]
+        note: DROP/CREATE ... WITH FORCE — a retry starts clean
+      - path: scripts/factory/worktree.sh
+        symbol: find_free_port
+        lines: [97, 125]
+        note: md5 offset then probe upward; the hash alone collides
+      - path: scripts/factory/worktree.sh
+        lines: [148, 151]
+        note: every line exported, so DATABASE_URL reaches pnpm
+    detail: |
+      Provisions ../Ship-wt-<ticket>: a git worktree on its own branch, an
+      EXCLUSIVE database (DROP/CREATE ship_wt_<ticket> WITH FORCE — retries
+      start clean, not half-migrated), and ports probed upward from an md5
+      starting point (the hash alone collides ~50% by 36 concurrent tickets).
+      Writes .factory-env (exported so DATABASE_URL actually reaches pnpm) and
+      never touches .git/info/exclude — in a linked worktree .git is a FILE,
+      and that write once aborted provisioning before migration under set -e.
+
+  - id: pg
+    label: ship-audit-pg
+    kind: store
+    zone: build
+    subtitle: one Postgres container · :5433
+    sources:
+      - path: scripts/factory/worktree.sh
+        lines: [30, 32]
+        note: FACTORY_PG_CONTAINER=ship-audit-pg on :5433
+      - path: api/src/test/setup.ts
+        lines: [10, 16]
+        note: the TRUNCATE-16-tables beforeAll that forces per-ticket databases
+    detail: |
+      Docker Postgres holding every worktree's database. Isolation exists
+      because api/src/test/setup.ts TRUNCATEs 16 tables in beforeAll of every
+      test file — two agents sharing a database silently destroy each other's
+      fixtures and produce failures that look like code defects. The container
+      is also the factory's real concurrency ceiling: gates share its
+      connection limit and CPU, so gate runs are staggered even when agent
+      dispatch is broad.
+
+  - id: agent
+    label: Coding sub-agent
+    kind: transform
+    zone: build
+    subtitle: Sonnet · one ticket, one branch
+    sources:
+      - path: .claude/skills/ship-factory/SKILL.md
+        symbol: 3. Dispatch the coding sub-agent
+        lines: [102, 122]
+      - path: .claude/skills/ship-orchestrator/SKILL.md
+        symbol: 2a. Dispatch ticket agents — and the orchestrator itself — on Sonnet
+        lines: [68, 111]
+        note: the brief carries the knowledge, not the model
+    consumes: [brief]
+    emits: [diff]
+    detail: |
+      Dispatched on Sonnet (maintainer policy 2026-07-29): the brief carries
+      the knowledge, not the model. By dispatch time it holds the role skill,
+      standing rules, the finding's measured evidence, escalation boundaries,
+      and the gate to check itself against — a well-specified task, not a
+      derived one. Model is raised per-ticket only for genuinely open-ended
+      calls (e.g. TRO-197, where the right bundle metric had to be invented).
+
+  # ------------------------------------------------------------------ verify
+  - id: gate
+    label: gate.sh
+    kind: gate
+    zone: verify
+    subtitle: G1–G9 · mechanical, evidence out
+    sources:
+      - path: scripts/factory/gate.sh
+        symbol: G1 type check / G2 build
+        lines: [108, 123]
+      - path: scripts/factory/gate.sh
+        symbol: G3/G4 unit tests vs quarantine baseline
+        lines: [124, 204]
+        note: failure IDENTITIES, not counts
+      - path: scripts/factory/gate.sh
+        symbol: G5 tests were not weakened
+        lines: [205, 244]
+      - path: scripts/factory/gate.sh
+        symbol: G6 regression test present
+        lines: [245, 255]
+        note: the soft spot — added, not necessarily executed (see manual-1)
+      - path: scripts/factory/gate.sh
+        symbol: G7 CHANGES.md / G7b recurring review patterns
+        lines: [256, 294]
+      - path: scripts/factory/gate.sh
+        symbol: G8 scope discipline / G9 CodeRabbit
+        lines: [295, 388]
+      - path: scripts/factory/gate.sh
+        lines: [389, 412]
+        note: verdict → .factory/gate-result.json, the PR body's evidence block
+    consumes: [diff]
+    emits: [gate-verdict, scorecard-row]
+    detail: |
+      The cheap-tier eval. G1 typecheck · G2 build · G3/G4 unit tests vs the
+      quarantine baseline (failure IDENTITIES, not counts — fixing one test
+      while breaking another keeps totals equal) · G5 tests not weakened (net
+      adds vs dels; .skip/.todo is an unconditional fail) · G6 regression test
+      ADDED (not just touched) · G7 CHANGES.md entry + structural check ·
+      G7b recurring review patterns (review-patterns.mjs) · G8 diff bounded ·
+      G9 CodeRabbit CLI under a hard timeout, never overwriting a real review
+      with a rate-limit stub. New test failures are auto-re-run standalone to
+      separate load noise (TRO-277) from real regressions — verdict stays
+      fail, operator gets the diagnosis free. Writes .factory/gate-result.json,
+      which becomes the PR body's evidence block.
+
+  - id: quarantine
+    label: quarantine.json
+    kind: store
+    zone: verify
+    subtitle: known-failing baseline
+    sources:
+      - path: audit/factory/quarantine.json
+        note: the 13 known-failing web tests (TEST-1 / TRO-223)
+      - path: scripts/factory/gate.sh
+        lines: [75, 87]
+        note: materialized from BASE_REF, never from the ticket branch
+    detail: |
+      The 13 known-failing web tests (TEST-1/TRO-223). The gate materializes
+      it FROM BASE_REF, never from the ticket branch — reading the branch copy
+      would let an agent append its own failures and pass. The file may only
+      shrink: removing genuinely fixed tests is legitimate (reported as
+      "fixed", informational); widening it to get green is gaming the gate.
+
+  - id: scorecard
+    label: scorecard.jsonl
+    kind: store
+    zone: verify
+    subtitle: one row per gate run
+    sources:
+      - path: audit/factory/scorecard.jsonl
+        note: append-only, one row per gate run including retries
+      - path: scripts/factory/lib/state.mjs
+        symbol: scorecard
+        lines: [178, 200]
+        note: how the board reads attempt history back out
+    consumes: [scorecard-row]
+    detail: |
+      Appended after EVERY gate run — pass or fail, including each retry.
+      Success-only rows would erase failed attempts and the first-attempt-pass
+      trend (the whole point) would read as 100%. cr* fields are filled in at
+      triage.
+
+  - id: evals
+    label: Compare-mode evals
+    kind: gate
+    zone: verify
+    subtitle: vs audit-baseline tag
+    sources:
+      - path: .claude/skills/ship-factory/references/evals.md
+        note: which findings need a compare-mode run, and in what order
+      - path: .claude/skills/ship-factory/SKILL.md
+        symbol: 5. Measure (findings with a target)
+        lines: [147, 152]
+    consumes: [gate-verdict]
+    emits: [evidence]
+    detail: |
+      The expensive tier: for findings with a measurable target, a compare-mode
+      run of the category audit skill against the audit-baseline git tag
+      proves the delta. Cheap categories run per ticket; expensive ones batch
+      per category (db-query-audit strictly after api-perf-audit — statement
+      logging skews timings). A perf or bundle ticket without a measured delta
+      is not done; measurable improvement is 40% of the grade.
+
+  # -------------------------------------------------------------------- ship
+  - id: pr
+    label: PR + CI
+    kind: gate
+    zone: ship
+    subtitle: GitHub · required checks
+    sources:
+      - path: .claude/skills/ship-factory/SKILL.md
+        symbol: 6. Open the PR
+        lines: [153, 162]
+        note: the PR body IS the evidence; GH_REPO=troysatchell/ship
+      - path: .claude/skills/ship-factory/SKILL.md
+        lines: [49, 50]
+        note: preflight — origin's fetch URL is GitLab, so gh cannot infer the repo
+    consumes: [evidence]
+    emits: [review-request, green-pr]
+    detail: |
+      Push + PR-open is pre-authorized for gate-passed factory branches. The
+      PR body IS the evidence (gate JSON, measurement), not a summary; a
+      batched branch lists every ticket it closes. Branch protection on main:
+      typecheck/build/unit, source inventory, CodeQL — strict, admins bound.
+      gh needs GH_REPO=troysatchell/ship because origin's fetch URL is GitLab.
+
+  - id: coderabbit
+    label: CodeRabbit
+    kind: external
+    zone: ship
+    subtitle: reviewer · input, never a verdict
+    sources:
+      - path: scripts/factory/gate.sh
+        symbol: G9 CodeRabbit review
+        lines: [305, 388]
+        note: hard timeout; a rate-limit stub never overwrites a real review
+    consumes: [review-request]
+    emits: [review-finding]
+    detail: |
+      Reviews every PR (and pre-PR via the CLI in G9). Findings never fail the
+      gate on their own — a reviewer's opinion is input to triage, not a
+      verdict. It has caught real bugs: the half-open concurrency race in
+      TRO-311's circuit breaker was a genuine critical find.
+
+  - id: triage
+    label: Triage
+    kind: gate
+    zone: ship
+    subtitle: fix-now · new-ticket · dismissed
+    sources:
+      - path: .claude/skills/ship-factory/references/triage.md
+        note: the classification rules and what a dismissal must state
+      - path: .claude/skills/ship-factory/SKILL.md
+        symbol: 7. Triage the review — and record every finding
+        lines: [163, 203]
+    consumes: [review-finding]
+    emits: [disposition, new-ticket]
+    detail: |
+      Every finding is classified, none merely received. Fix-now findings get
+      fixed and re-reviewed on the branch; ticket-worthy ones are filed to
+      Linear automatically (labelled coderabbit, never counted in the 68);
+      dismissals need a written reason. A growing dismissed pile in one
+      category means the factory is talking itself out of real feedback.
+
+  - id: ledger
+    label: Review ledger
+    kind: store
+    zone: ship
+    subtitle: review-findings.jsonl
+    sources:
+      - path: scripts/factory/review-ledger.mjs
+        lines: [30, 38]
+        note: append-only JSONL; every finding, whatever its disposition
+      - path: audit/factory/review-findings.jsonl
+        note: the ledger itself
+      - path: scripts/factory/review-patterns.mjs
+        note: recurrence report — 2 tickets → a rule, 3+ → a gate check
+    consumes: [disposition]
+    detail: |
+      Every finding recorded whatever its disposition (review-ledger.mjs).
+      Exists because fixing findings one at a time and discarding them let a
+      defect class recur on four branches unnoticed on day one. The report's
+      recurrence thresholds drive the two self-improvement loops: 2 tickets →
+      a lessons.md rule; 3+ tickets → a mechanical gate.sh check.
+
+  - id: merge
+    label: Merge --no-ff
+    kind: release
+    zone: ship
+    subtitle: auto once green · policy 2026-07-29
+    sources:
+      - path: .claude/skills/ship-factory/SKILL.md
+        symbol: 8. Merge — auto-merge once the review is green
+        lines: [204, 245]
+        note: the four conditions, and --no-ff
+      - path: scripts/factory/merge-changes.mjs
+        note: CHANGES.md consolidation across merged branches
+    consumes: [green-pr, disposition]
+    emits: [merged-main]
+    detail: |
+      Standing policy: merges without per-PR confirmation once all four hold —
+      gate pass, CI green, every review finding triaged (fix-now ones fixed
+      and re-reviewed), no open escalation. --no-ff so branch structure
+      survives (10% of the grade reads off the git log). Non-ticket content
+      (tooling, skills, docs, CI) may merge on gate + CI alone — but the
+      review still gets read and triaged after the fact. Never merge to clear
+      a queue.
+
+  - id: remotes
+    label: GitLab + GitHub main
+    kind: external
+    zone: ship
+    subtitle: GitLab is the graded remote
+    sources:
+      - path: .claude/skills/ship-factory/SKILL.md
+        lines: [42, 55]
+        note: preflight — clean tree synced with BOTH remotes
+      - path: .claude/skills/ship-factory/SKILL.md
+        symbol: 9. Close the loop back into the factory
+        lines: [246, 252]
+    consumes: [merged-main]
+    detail: |
+      One push updates both, but origin FETCHES from GitLab while CI, PRs and
+      merges happen on GitHub — a GitHub merge must be pulled down before the
+      next push or the remotes diverge (verified on PR #1: GitLab was one
+      commit behind). Verify with git ls-remote against both, never assume.
+
+  # ----------------------------------------------------------------- observe
+  - id: state
+    label: state.mjs
+    kind: transform
+    zone: observe
+    subtitle: derive, never duplicate
+    sources:
+      - path: scripts/factory/lib/state.mjs
+        symbol: collect
+        lines: [240, 266]
+        note: the single read that assembles a snapshot from live sources
+      - path: scripts/factory/lib/state.mjs
+        symbol: worktrees
+        lines: [104, 153]
+        note: worktrees + .factory-env + gate-result.json, plus title/liveAction
+      - path: scripts/factory/lib/state.mjs
+        symbol: cost
+        lines: [201, 239]
+        note: list-rate token estimate from session transcripts — NOT billed spend
+    emits: [snapshot]
+    detail: |
+      Reconstructs live state from sources of truth on every read: worktrees
+      + .factory-env, .factory/gate-result.json, gh pr list, scorecard.jsonl,
+      and Claude session transcripts for token cost (list-rate estimate,
+      explicitly NOT billed spend). There is deliberately no status file to
+      update — a status file that drifts reads as authoritative while wrong.
+
+  - id: surfaces
+    label: Board surfaces
+    kind: release
+    zone: observe
+    subtitle: serve.mjs :7373 · status.mjs · board.html
+    sources:
+      - path: scripts/factory/serve.mjs
+        lines: [27, 52]
+        note: OPERATE — rebuilds from live state per request on :7373
+      - path: scripts/factory/status.mjs
+        note: OPERATE — the terminal view
+      - path: scripts/factory/board.mjs
+        note: SHARE — renders audit/factory/board.html for publishing
+      - path: audit/factory/board.html
+        note: the published snapshot itself
+    consumes: [snapshot]
+    detail: |
+      Two kinds on purpose: OPERATE (serve.mjs rebuilds from live state per
+      request, free to refresh; status.mjs is the terminal view) and SHARE
+      (board.mjs → board.html, republished as a Claude Artifact at stable URL
+      only at milestones — a shell script cannot republish an Artifact, so
+      every refresh costs an agent tool call).
+
+  - id: maintainer
+    label: Maintainer
+    kind: external
+    zone: observe
+    subtitle: human · escalation gates · policy
+    sources:
+      - path: .claude/skills/ship-factory/references/escalation.md
+        note: what stops a ticket, what stops the run, and what is batched
+      - path: .claude/skills/ship-factory/SKILL.md
+        symbol: Running unattended
+        lines: [253, 279]
+    detail: |
+      The factory runs unattended between defined human gates. Escalation
+      blocks the TICKET, not the run: questions are held and batched so one
+      answer resumes the factory. Standing policies set here (auto-merge on
+      green, Sonnet dispatch, pre-authorized PR pushes) are what let the loop
+      run without per-action approval.
+
+edges:
+  # forward flow
+  - {id: e01, from: audit,     to: linear,    kind: flow, label: 68 findings → tickets}
+  - {id: e02, from: linear,    to: orch,      kind: flow, label: next eligible batch}
+  - {id: e03, from: orch,      to: provision, kind: control, label: provision per ticket}
+  - {id: e04, from: orch,      to: brief,     kind: control, label: compose per ticket}
+  - {id: e05, from: lessons,   to: brief,     kind: data, label: verbatim, every brief}
+  - {id: e06, from: roles,     to: brief,     kind: data, label: routed by prefix}
+  - {id: e07, from: brief,     to: agent,     kind: flow, label: the brief}
+  - {id: e08, from: orch,      to: agent,     kind: control, label: dispatch (Sonnet)}
+  - {id: e09, from: provision, to: pg,        kind: data, label: DROP/CREATE ship_wt_*}
+  - {id: e10, from: provision, to: agent,     kind: flow, label: worktree + .factory-env}
+  - {id: e11, from: agent,     to: gate,      kind: flow, label: diff (self-report ≠ done)}
+  - {id: e12, from: pg,        to: gate,      kind: data, label: exclusive test DB (TRUNCATEd)}
+  - {id: e13, from: quarantine, to: gate,     kind: data, label: baseline from BASE_REF}
+  - {id: e14, from: gate,      to: scorecard, kind: data, label: row per run, pass or fail}
+  - {id: e15, from: gate,      to: evals,     kind: flow, label: pass}
+  - {id: e16, from: evals,     to: pr,        kind: flow, label: evidence-backed PR}
+  - {id: e17, from: pr,        to: coderabbit, kind: flow, label: review}
+  - {id: e18, from: coderabbit, to: triage,   kind: flow, label: findings}
+  - {id: e19, from: triage,    to: ledger,    kind: data, label: every finding, any disposition}
+  - {id: e20, from: triage,    to: merge,     kind: flow, label: review green}
+  - {id: e21, from: pr,        to: merge,     kind: flow, label: CI green}
+  - {id: e22, from: merge,     to: remotes,   kind: flow, label: push, verify both}
+  - {id: e23, from: merge,     to: linear,    kind: feedback, polarity: '-', loop: B10,
+     label: Done + evidence,
+     note: Tickets move to Done carrying the gate result, PR link, and measured
+       before/after — the loop that actually drains the backlog.}
+
+  # observation
+  - {id: e25, from: gate,      to: state,     kind: data, label: gate-result.json}
+  - {id: e26, from: scorecard, to: state,     kind: data, label: attempt history}
+  - {id: e27, from: pr,        to: state,     kind: data, label: gh pr list}
+  - {id: e28, from: state,     to: surfaces,  kind: flow, label: snapshot + failure warnings,
+     note: The snapshot carries its own degradation signals — gate FAILED
+       warnings, worktrees with no commits (stale locks), and "gh returned no
+       PRs" when the repo cannot be resolved. state.mjs swallows shell errors
+       (sh() returns ''), so these warnings are the only failure surface.}
+  - {id: e29, from: surfaces,  to: maintainer, kind: flow, label: board · artifact}
+  - {id: e30, from: orch,      to: maintainer, kind: control, label: escalation, batched}
+
+  # feedback — the loops that make it a factory
+  - {id: f01, from: gate, to: agent, kind: feedback, polarity: '-', loop: B1,
+     label: gate output back, ≤3 attempts,
+     note: Same agent keeps its context. The cap converts "burns tokens forever"
+       into "surfaces a hard problem" — never raised to force a pass.}
+  - {id: f02, from: gate, to: linear, kind: feedback, polarity: '-', loop: B2,
+     label: 3 fails → blocked,
+     note: After three failed gates the ticket is marked blocked in Linear with
+       the gate output and a best-read diagnosis; the factory moves on.}
+  - {id: f03, from: triage, to: agent, kind: feedback, polarity: '-', loop: B3,
+     label: fix-now → re-review}
+  - {id: f04, from: triage, to: linear, kind: feedback, polarity: '+', loop: R1,
+     label: new tickets (coderabbit label),
+     note: The factory grows its own backlog instead of losing findings in PR
+       threads. Labelled tickets never count toward the fixed 68.}
+  - {id: f05, from: ledger, to: lessons, kind: feedback, polarity: '-', loop: B4,
+     label: 2nd recurrence → standing rule}
+  - {id: f06, from: ledger, to: gate, kind: feedback, polarity: '-', loop: B5,
+     label: 3rd+ → mechanical check (G7b),
+     note: A rule stated in the brief and ignored three times needs a check, not
+       louder restating. review-patterns.mjs exists because two classes crossed
+       this line.}
+  - {id: f07, from: maintainer, to: orch, kind: feedback, polarity: '-', loop: B6,
+     label: batched answers · policy}
+  - {id: f08, from: merge, to: quarantine, kind: feedback, polarity: '-', loop: B7,
+     label: fixed tests shrink baseline,
+     note: The gate reads quarantine.json from BASE_REF, never from the ticket
+       branch — so updates only take effect once merged, and the file may only
+       shrink. Widening it to get green is gaming the gate.}
+  - {id: f09, from: evals, to: agent, kind: feedback, polarity: '-', loop: B8,
+     label: no measured delta → not done,
+     note: A perf/bundle ticket without a proven delta against audit-baseline is
+       not done — it goes back to work, not to a PR.}
+  - {id: f10, from: pr, to: agent, kind: feedback, polarity: '-', loop: B9,
+     label: CI red → fix on branch}
+
+  # links that should exist and don't
+  - id: g01
+    from: linear
+    to: state
+    kind: gap
+    label: board cannot read ticket status
+    note: >-
+      state.mjs deliberately does not read Linear (it needs auth a shell script
+      does not have), so the board shows execution state only. Linear stays
+      authoritative; disagreement is surfaced as a warning, not reconciled
+      silently. Deliberate — but it means no single surface shows both halves.
+loops:
+  - {id: B1, type: balancing, label: Gate-retry loop}
+  - {id: B2, type: balancing, label: Hard problems surface}
+  - {id: B3, type: balancing, label: Fix-now re-review}
+  - {id: R1, type: reinforcing, label: Review grows the backlog}
+  - {id: B4, type: balancing, label: Lessons loop (prompt-level)}
+  - {id: B5, type: balancing, label: Gate-hardening loop (mechanical)}
+  - {id: B6, type: balancing, label: Escalation round-trip}
+  - {id: B7, type: balancing, label: Baseline maintenance}
+  - {id: B10, type: balancing, label: Ticket lifecycle closes}
+  - {id: B8, type: balancing, label: Measured-delta loop}
+  - {id: B9, type: balancing, label: CI-red loop}
+
+findings:
+  - id: manual-1
+    severity: high
+    kind: prompt-side-invariant
+    title: The regression-test gate is satisfiable by a test that never runs
+    nodes: [gate]
+    detail: G6 requires an added test case anywhere in the diff; whether the
+      gate's own suites execute that file is enforced only by the ship-qa
+      placement rule carried in every brief. Both skills state this openly —
+      it is the known soft spot of the evidence gate, and the reason the rule
+      is injected into every brief regardless of ticket category.
+  - id: manual-2
+    severity: medium
+    kind: single-point-of-serialisation
+    title: One Postgres container bounds the whole factory's concurrency
+    nodes: [pg]
+    detail: Databases isolate correctness, but every gate's test run shares
+      ship-audit-pg's connection limit and CPU — beyond a handful of
+      simultaneous gates, test timings stop being comparable. Playwright
+      sizing from free memory alongside gate runs once produced a 90GB
+      over-subscription and a system crash. Dispatch is broad; gates stagger.
+  - id: manual-3
+    severity: medium
+    kind: manual-refresh
+    title: The shared board artifact only refreshes via an agent tool call
+    nodes: [surfaces]
+    detail: serve.mjs/status.mjs are free and always current; the published
+      Artifact is a milestone snapshot because a shell script cannot republish
+      it. The mitigation is labelling, not automation — the board says it is a
+      snapshot.
+  - id: manual-4
+    severity: low
+    kind: shared-external-dependency
+    title: CodeRabbit CLI is unbounded and its allowance is shared
+    nodes: [coderabbit]
+    detail: The CLI has no internal deadline (observed 11+ min wall against
+      2.6s CPU under concurrent worktrees) and its free allowance exhausts,
+      returning a JSON error stub. G9 mitigates both — hard timeout, and never
+      promoting a stub over a completed review — but the PR-level review
+      remains the authoritative fallback.

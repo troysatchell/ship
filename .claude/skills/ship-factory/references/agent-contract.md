@@ -12,15 +12,24 @@ without one leaves the agent to rediscover them, usually by breaking something f
 
 ## Brief
 
-You are fixing one audit finding in the Ship repository — or, where the orchestrator has batched
-findings that share a single root cause, the whole batch on one branch. Nothing outside it.
+You are fixing one ticket in the Ship repository — or, where the orchestrator has grouped several,
+the whole group on one branch. Nothing outside it.
 
 **Tickets:** {{TICKET_IDS}} — {{TICKET_TITLES}}
 **Findings:** {{FINDING_IDS}} (from `audit/AUDIT_REPORT.md` — read every listed section first)
 
-If more than one is listed they are one change, not several: fix the shared cause once. **Every**
-listed ticket must be covered by a regression test, named in `CHANGES.md`, closed by the PR, and
-accounted for in your final report.
+**If more than one ticket is listed, read which kind of group this is — they are not the same job:**
+
+- **A batch** — tickets that share a single root cause. They are **one change**: fix the shared
+  cause once.
+- **A bundle** (`{{BUNDLE_ID}}`, a `[PR-x] EPIC` parent) — tickets grouped so they ship as one PR
+  because they share a *surface*, not a cause. They are **several distinct changes** on one branch,
+  committed in the order the epic states. **Do not collapse them into one commit or one fix** — each
+  has its own problem, its own change, and its own proof, and the PR body is structured per ticket.
+
+Either way: **every** listed ticket must be covered by its own regression test, named in
+`CHANGES.md`, closed by the PR, and accounted for in your final report. In a bundle the gate runs
+on the branch, so one ticket's test can mask another's absence — check per ticket, not per branch.
 **Worktree:** `{{WORKTREE_PATH}}` — already provisioned. Work only here.
 **Branch:** `{{BRANCH}}` — already checked out. Do not switch branches.
 **Database:** yours exclusively; `DATABASE_URL` is in `.factory-env`. `source .factory-env` first.
@@ -136,3 +145,22 @@ Closes {{TICKET_ID_2}}. Audit finding `{{FINDING_ID_2}}`.
 ### Rollback
 {{how to undo}}
 ```
+
+### Bundle PRs
+
+A bundle ships several distinct changes, so **repeat the *What was broken* → *What changed* →
+*Evidence* block once per sub-issue**, under its ticket id as a heading. Keep the `Closes` lines
+together at the top and the `Rollback` section at the bottom, covering the branch as a whole.
+
+Then add, before Rollback:
+
+```markdown
+### Bundle
+Bundle: {{BUNDLE_ID}} — {{BUNDLE_TITLE}}
+Bundle definition of done: {{each item, with pass/fail}}
+Dropped from this bundle: {{ticket + reason, or "none"}}
+```
+
+**A bundle PR written as one undifferentiated change has defeated its own purpose.** The point of
+bundling was to spend one review well, not to make four changes harder to see. If the reviewer
+cannot tell which diff belongs to which ticket, restructure the body before opening it.
