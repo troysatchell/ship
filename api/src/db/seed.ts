@@ -1288,8 +1288,7 @@ async function seed() {
         [workspaceId]
       );
       let closedInCurrentWeek = 0;
-      for (let i = 0; i < doneIssues.rows.length; i++) {
-        const issue = doneIssues.rows[i]!;
+      for (const [i, issue] of doneIssues.rows.entries()) {
         let completedAt: Date;
         if (i % 4 === 0) {
           // Every 4th done issue closes inside the current week, capped at
@@ -1353,9 +1352,10 @@ async function seed() {
              LIMIT 3`,
             [currentShipCoreSprint.id, workspaceId, engineerRow.assignee_id]
           );
-          if (engineer && engineerIssues.rows.length === 3) {
-            const [issueA, issueB, issueC] = engineerIssues.rows as Array<{ id: string; title: string; state: string }>;
-
+          const [issueA, issueB, issueC] = engineerIssues.rows as Array<
+            { id: string; title: string; state: string } | undefined
+          >;
+          if (engineer && issueA && issueB && issueC) {
             // A standup from 3 days ago — the "since their last standup" anchor
             // this test case's activity is measured against.
             const standupResult = await pool.query(
@@ -1368,7 +1368,7 @@ async function seed() {
                 JSON.stringify({
                   type: 'doc',
                   content: [
-                    { type: 'paragraph', content: [{ type: 'text', text: `Yesterday: Working through ${issueA!.title}.` }] },
+                    { type: 'paragraph', content: [{ type: 'text', text: `Yesterday: Working through ${issueA.title}.` }] },
                     { type: 'paragraph', content: [{ type: 'text', text: 'Today: Continuing current sprint work.' }] },
                     { type: 'paragraph', content: [{ type: 'text', text: 'Blockers: None' }] },
                   ],
@@ -1383,28 +1383,28 @@ async function seed() {
             // issueA: moved to in_review 1 day ago (state-change history).
             await pool.query(
               `UPDATE documents SET properties = properties || '{"state":"in_review"}'::jsonb, updated_at = NOW() - INTERVAL '1 day' WHERE id = $1`,
-              [issueA!.id]
+              [issueA.id]
             );
             await pool.query(
               `INSERT INTO document_history (document_id, field, old_value, new_value, changed_by, created_at)
                VALUES ($1, 'state', $2, 'in_review', $3, NOW() - INTERVAL '1 day')`,
-              [issueA!.id, issueA!.state, engineer.id]
+              [issueA.id, issueA.state, engineer.id]
             );
-            fg3TestCaseIds.testCase1_movedToReview = issueA!.id;
+            fg3TestCaseIds.testCase1_movedToReview = issueA.id;
 
             // issueB: commented on 1 day ago (standup draft material).
             await pool.query(
               `INSERT INTO comments (document_id, comment_id, author_id, workspace_id, content, created_at, updated_at)
                VALUES ($1, gen_random_uuid(), $2, $3, $4, NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day')`,
-              [issueB!.id, engineer.id, workspaceId, `Making progress on ${issueB!.title} — should land by end of week.`]
+              [issueB.id, engineer.id, workspaceId, `Making progress on ${issueB.title} — should land by end of week.`]
             );
-            fg3TestCaseIds.testCase1_commented = issueB!.id;
+            fg3TestCaseIds.testCase1_commented = issueB.id;
 
             // issueC: has not moved in 6+ days.
-            await pool.query(`UPDATE documents SET updated_at = NOW() - INTERVAL '7 days' WHERE id = $1`, [issueC!.id]);
-            fg3TestCaseIds.testCase1_stale = issueC!.id;
+            await pool.query(`UPDATE documents SET updated_at = NOW() - INTERVAL '7 days' WHERE id = $1`, [issueC.id]);
+            fg3TestCaseIds.testCase1_stale = issueC.id;
 
-            console.log(`✅ Test Case 1 fixture: engineer ${engineer.name} — moved ${issueA!.id}, commented ${issueB!.id}, stale ${issueC!.id}`);
+            console.log(`✅ Test Case 1 fixture: engineer ${engineer.name} — moved ${issueA.id}, commented ${issueB.id}, stale ${issueC.id}`);
           }
         }
       }

@@ -161,14 +161,18 @@ describe('seed.ts FG-3 fixture trigger states (TRO-314)', () => {
     expect(doneIssues.rows.length, 'the seed should produce at least one done issue to backfill').toBeGreaterThan(0);
 
     for (const issue of doneIssues.rows) {
-      expect(issue.started_at, `issue ${issue.id} (done) must have started_at set`).not.toBeNull();
-      expect(issue.completed_at, `issue ${issue.id} (done) must have completed_at set`).not.toBeNull();
+      const { started_at: startedAt, completed_at: completedAt } = issue;
+      expect(startedAt, `issue ${issue.id} (done) must have started_at set`).not.toBeNull();
+      expect(completedAt, `issue ${issue.id} (done) must have completed_at set`).not.toBeNull();
+      if (!startedAt || !completedAt) {
+        throw new Error(`issue ${issue.id} is missing started_at/completed_at — the assertions above should already have failed`);
+      }
       // Coherent ordering: started <= completed. Deliberately NOT checked
       // against created_at — this seed (like the rest of seed.ts) never
       // backdates documents.created_at to match an issue's conceptual
       // sprint, so created_at is always ~"whenever this seed ran" regardless
       // of which past sprint the issue's properties place it in.
-      expect(new Date(issue.completed_at!).getTime()).toBeGreaterThanOrEqual(new Date(issue.started_at!).getTime());
+      expect(new Date(completedAt).getTime()).toBeGreaterThanOrEqual(new Date(startedAt).getTime());
     }
 
     const closedRecently = await pool.query(
