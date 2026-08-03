@@ -21,6 +21,80 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-325 — [PR-A] EPIC: Ship-side API foundations (change feed, blocks relationship, fixtures)
+
+Bundle epic, one branch (`feat/pr-a-ship-api-foundations`) / one PR covering four sub-issues that
+ship together because they share a surface (`api/`, `shared/`, `db/`), not a root cause. Each
+sub-issue has its own entry below (this file lists newest-first, so look for the ticket ID): TRO-312
+[FG-1] change-feed endpoint, TRO-314 [FG-3] seed/fixture trigger-state work, TRO-332 [FG-14] cycle
+protection on `document_associations` (landed first per the epic's stated internal order — cycle
+protection must guard the new relationship before it exists), TRO-333 [FG-15] the `blocks`
+relationship. See each sub-issue's own entry for what was broken, what changed, how to run/test it,
+and how to roll it back individually.
+
+**Rollback (whole bundle).** Revert the branch's merge commit, or cherry-pick-revert each
+sub-issue's own commit individually — every sub-issue below is its own commit and its own change,
+not one undifferentiated diff.
+
+---
+
+## TRO-332 — [FG-14] Cycle protection on `document_associations` (A-blocks-B-blocks-A was insertable)
+
+**What was broken.** `document_associations` (`api/src/db/schema.sql:209-222`) had zero cycle
+protection. `prevent_circular_parent()` (`schema.sql:165`) only guards the single-valued
+`documents.parent_id` column; the junction table has no trigger, no depth cap, nothing. A caller
+could `POST /api/documents/:id/associations` A→B and then B→A (or the equivalent for any
+relationship_type) and both would succeed. That is latent in Ship today, independent of any agent
+code — the moment anything walks the association graph outward (the existing `/:id/context`
+ancestors CTE in `associations.ts`, and FleetGraph's planned traversal) it loops until something
+times out or the heap runs out.
+
+**What changed.** `api/src/db/migrations/040_prevent_circular_associations.sql` (new) adds
+`prevent_circular_association()` + `prevent_circular_association_trigger`
+(`BEFORE INSERT OR UPDATE ON document_associations`). Adapted from `prevent_circular_parent()` but
+generalized to a visited-set BFS (not a linear walk) because this table is not single-valued — a
+document can hold multiple outgoing edges of the same `relationship_type` (see
+"Multi-parent associations" in `associations-regression.test.ts`), so the association graph can
+fan out. Capped at 100 visited nodes so a pathological graph fails fast rather than hanging the
+insert.
+
+**Scope decision, recorded in the migration's own comment:** the cycle check is scoped **per
+`relationship_type`**, not across all types combined. A `parent` cycle and a `blocks` cycle (landing
+in TRO-333, migration 041) are different problems, and containment types are expected to legitimately
+co-exist with a `blocks` edge in the reverse direction — checking across types would reject that
+coexistence as a false-positive cycle.
+
+**Concurrency caveat, also recorded in the migration comment (PM review 2026-08-03):** a `BEFORE`
+trigger cannot guarantee acyclicity under concurrency — two edges that each close no cycle alone but
+together form one can both commit, since neither transaction's walk sees the other's uncommitted
+row. Not worth a `SERIALIZABLE` transaction or an advisory lock at this write volume (association
+writes are low-frequency, interactive edits, not a hot path); this trigger guards the common case and
+is explicitly not a proof of acyclicity. FG-7's future traversal must carry its own hard document cap
+and its own visited-set regardless of what the database promises here.
+
+**Migration numbering note:** TRO-333's own ticket body names `040_add_blocks_relationship.sql` as
+"the next free number." This ticket (TRO-332) landed first per the bundle epic's stated internal
+order ("FG-14 before FG-15 — cycle protection guards the new relationship"), so it claims migration
+040 and TRO-333's blocks migration is renumbered to 041. Recorded here explicitly since it deviates
+from TRO-333's literal filename instruction — the deviation preserves the epic's own ordering
+requirement rather than violating it silently.
+
+**Regression test.** `api/src/routes/association-cycle-protection.test.ts` (new, 5 cases): confirms
+the trigger actually exists on a migrated database (not assumed from the file — DB-1 means
+`pnpm db:migrate` can silently under-apply); rejects a 2-node cycle; rejects a 3-node cycle; allows a
+legitimate chain within the depth cap; confirms a same-pair edge of a *different* relationship_type
+does not cross-contaminate the check. Confirmed red first: ran against the unmigrated database (no
+040 applied) — 4 of 5 cases failed, the cycle-forming inserts succeeding silently and the
+"trigger exists" check finding zero rows in `pg_trigger`. After `pnpm db:migrate`, all 5 pass.
+Existing `circular-reference.test.ts` (parent_id trigger) and `associations-regression.test.ts` (12
+cases) both still pass unmodified — proof item 3 (existing association behavior unchanged).
+
+**How to run it.** `source .factory-env && pnpm db:migrate && pnpm --filter @ship/api exec vitest run src/routes/association-cycle-protection.test.ts src/routes/circular-reference.test.ts src/routes/associations-regression.test.ts`
+
+**How to roll it back.** Revert this commit (or `DROP TRIGGER prevent_circular_association_trigger ON document_associations; DROP FUNCTION prevent_circular_association();` directly). No data migration involved — the trigger only affects future INSERT/UPDATE, so rollback is safe on a database that already has non-cyclic data (the only kind this trigger ever allowed to be written).
+
+---
+
 ## GitLab CI — shared runners were never enabled; every pipeline on `main` had been stuck or failing since `.gitlab-ci.yml` was added
 
 **What was broken.** `.gitlab-ci.yml` (added 2026-07-30, `3563fa3`) mirrors `.github/workflows/ci.yml`
