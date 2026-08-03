@@ -173,7 +173,10 @@ describe('blocks relationship (FG-15 / TRO-333)', () => {
       .set('Cookie', sessionCookie)
 
     expect(issueRes.status).toBe(200)
-    const leaked = (issueRes.body.belongs_to || []).some((b: { type: string }) => b.type === 'blocks')
+    // No `|| []` fallback: a missing belongs_to field entirely (a real
+    // regression) must fail this assertion, not silently read as "no leak".
+    expect(issueRes.body.belongs_to, 'GET /api/issues/:id must include a belongs_to array').toEqual(expect.any(Array))
+    const leaked = issueRes.body.belongs_to.some((b: { type: string }) => b.type === 'blocks')
     expect(leaked, 'belongs_to must never contain a "blocks" entry').toBe(false)
 
     // But the generic associations GET must still show it — the edge exists,

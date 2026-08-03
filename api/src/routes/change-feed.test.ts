@@ -15,6 +15,15 @@ import { CHANGE_FEED_LAG_MS } from './change-feed.js'
  * commits after the cursor has already advanced past its timestamp. Instead
  * the returned `next_cursor` lags "now" by `CHANGE_FEED_LAG_MS`.
  */
+
+// Backdating window for fixtures that must land safely outside the lag
+// window (2x CHANGE_FEED_LAG_MS, not a bare literal) — self-documenting and
+// stays correct if the constant ever changes. Built from a validated numeric
+// constant, not request input, so interpolating it into `interval '...'` is
+// safe.
+const SAFE_BACKDATE_SECONDS = Math.ceil((CHANGE_FEED_LAG_MS / 1000) * 2)
+const SAFE_BACKDATE_INTERVAL_SQL = `interval '${SAFE_BACKDATE_SECONDS} seconds'`
+
 describe('change feed (FG-1 / TRO-312)', () => {
   const app = createApp()
   const testRunId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
@@ -109,7 +118,12 @@ describe('change feed (FG-1 / TRO-312)', () => {
     ).toBe(false)
     // Red before the fix: a naive implementation advances next_cursor to
     // "now" here, which is exactly what permanently loses the row below.
-    expect(new Date(poll1.body.next_cursor).getTime()).toBeLessThanOrEqual(baseTime - CHANGE_FEED_LAG_MS + 1)
+    // Checked as a tight window (not just an upper bound) so a cursor that
+    // regressed too far — which would also "pass" a bare <= check — is
+    // caught too.
+    const nextCursorTime = new Date(poll1.body.next_cursor).getTime()
+    expect(nextCursorTime).toBeLessThanOrEqual(baseTime - CHANGE_FEED_LAG_MS + 1)
+    expect(nextCursorTime).toBeGreaterThanOrEqual(baseTime - CHANGE_FEED_LAG_MS - 1)
 
     // Advance real wall-clock time (simulated) past the lag window without an
     // actual sleep — only the Date global is faked, so the HTTP/DB round trip
@@ -135,14 +149,14 @@ describe('change feed (FG-1 / TRO-312)', () => {
       [testWorkspaceId, otherUserId]
     )
     const privateDocId = privateDoc.rows[0].id
-    await pool.query(`UPDATE documents SET updated_at = now() - interval '10 seconds' WHERE id = $1`, [privateDocId])
+    await pool.query(`UPDATE documents SET updated_at = now() - ${SAFE_BACKDATE_INTERVAL_SQL} WHERE id = $1`, [privateDocId])
 
     const otherWorkspaceDoc = await pool.query(
       `INSERT INTO documents (workspace_id, document_type, title, created_by) VALUES ($1, 'wiki', 'Other Workspace Doc', $2) RETURNING id`,
       [otherWorkspaceId, otherUserId]
     )
     const otherWorkspaceDocId = otherWorkspaceDoc.rows[0].id
-    await pool.query(`UPDATE documents SET updated_at = now() - interval '10 seconds' WHERE id = $1`, [otherWorkspaceDocId])
+    await pool.query(`UPDATE documents SET updated_at = now() - ${SAFE_BACKDATE_INTERVAL_SQL} WHERE id = $1`, [otherWorkspaceDocId])
 
     // Sanity check the fixtures are visible to a DB-level query at all (rules
     // out "the test asserts an absence that was never actually going to be
@@ -171,7 +185,7 @@ describe('change feed (FG-1 / TRO-312)', () => {
       [testWorkspaceId, testUserId]
     )
     const dedupeDocId = docRes.rows[0].id
-    await pool.query(`UPDATE documents SET updated_at = now() - interval '10 seconds' WHERE id = $1`, [dedupeDocId])
+    await pool.query(`UPDATE documents SET updated_at = now() - ${SAFE_BACKDATE_INTERVAL_SQL} WHERE id = $1`, [dedupeDocId])
 
     // Two overlapping polls: both use the SAME `since`, so both windows cover
     // this change.
@@ -190,6 +204,13 @@ describe('change feed (FG-1 / TRO-312)', () => {
 
     expect(itemA, 'change must appear in the first overlapping poll').toBeDefined()
     expect(itemB, 'change must appear in the second overlapping poll').toBeDefined()
+    // Non-empty-string checks first: two items that both carry `undefined` or
+    // `''` would otherwise satisfy a bare equality assertion below without
+    // actually proving the key is a real, stable identifier.
+    expect(itemA.dedupe_key).toEqual(expect.any(String))
+    expect(itemA.dedupe_key.length).toBeGreaterThan(0)
+    expect(itemB.dedupe_key).toEqual(expect.any(String))
+    expect(itemB.dedupe_key.length).toBeGreaterThan(0)
     expect(
       itemB.dedupe_key,
       'the same underlying change must carry the identical dedupe_key across overlapping polls, so a consumer can de-duplicate rather than double-act on it'
@@ -210,14 +231,14 @@ describe('change feed (FG-1 / TRO-312)', () => {
       [docId, testUserId]
     )
     const historyId = historyRes.rows[0].id
-    await pool.query(`UPDATE document_history SET created_at = now() - interval '10 seconds' WHERE id = $1`, [historyId])
+    await pool.query(`UPDATE document_history SET created_at = now() - ${SAFE_BACKDATE_INTERVAL_SQL} WHERE id = $1`, [historyId])
 
     const commentRes = await pool.query(
       `INSERT INTO comments (document_id, comment_id, author_id, workspace_id, content) VALUES ($1, gen_random_uuid(), $2, $3, 'a test comment') RETURNING id`,
       [docId, testUserId, testWorkspaceId]
     )
     const commentId = commentRes.rows[0].id
-    await pool.query(`UPDATE comments SET updated_at = now() - interval '10 seconds' WHERE id = $1`, [commentId])
+    await pool.query(`UPDATE comments SET updated_at = now() - ${SAFE_BACKDATE_INTERVAL_SQL} WHERE id = $1`, [commentId])
 
     const res = await request(app)
       .get(`/api/change-feed?since=${encodeURIComponent(since)}`)

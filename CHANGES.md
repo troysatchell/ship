@@ -72,6 +72,12 @@ writes are low-frequency, interactive edits, not a hot path); this trigger guard
 is explicitly not a proof of acyclicity. FG-7's future traversal must carry its own hard document cap
 and its own visited-set regardless of what the database promises here.
 
+**CodeRabbit triage: advisory-lock suggestion dismissed, not overlooked.** CodeRabbit flagged the
+trigger's BFS as needing a transaction-scoped advisory lock to close the concurrent-insert race.
+This is exactly the tradeoff the PM review already evaluated and declined two paragraphs above,
+in the migration's own comment, before CodeRabbit ever saw the diff — applying the suggestion here
+would silently reverse a recorded product decision, not fix an overlooked bug. Left as-is.
+
 **Migration numbering note:** TRO-333's own ticket body names `040_add_blocks_relationship.sql` as
 "the next free number." This ticket (TRO-332) landed first per the bundle epic's stated internal
 order ("FG-14 before FG-15 — cycle protection guards the new relationship"), so it claims migration
@@ -102,7 +108,7 @@ cases) both still pass unmodified — proof item 3 (existing association behavio
 documents, and `document_links` (backlinks) had 0 rows. FG-19 (tracing a blocker whose impact
 crosses reporting lines) had no Ship view that could show it.
 
-**What changed.** Four edits, per the ticket's own PM-review scope amendment (2026-08-03), which
+**What changed.** Five edits, per the ticket's own PM-review scope amendment (2026-08-03), which
 supersedes the original edit #2:
 1. `api/src/db/migrations/041_add_blocks_relationship.sql` (new) — `ALTER TYPE relationship_type
    ADD VALUE IF NOT EXISTS 'blocks'`, pattern copied from migration 017. Numbered 041, not 040 as
@@ -177,6 +183,17 @@ flight) is guaranteed to have committed. Stated plainly: this is a tunable safet
 proof — it holds as long as `CHANGE_FEED_LAG_MS` exceeds the longest write transaction's duration.
 The cursor is also clamped to never regress behind a caller's own `since` (a caller polling faster
 than the lag window elapses would otherwise move its own cursor backwards).
+
+**A second permanent-miss path, found in CodeRabbit triage and fixed before merge: pagination could
+skip rows the same way the naive timestamp cursor could.** If any of the three categories hit
+`limit` (truncated), the original code still advanced the shared `next_cursor` all the way to
+`safeCutoff` — silently skipping every row of that category between the last one actually returned
+and `safeCutoff`, forever, the exact failure class this endpoint exists to prevent, just moved from
+the timestamp layer to the pagination layer. Fixed: when a category is truncated, `next_cursor` is
+capped at that category's last-returned row's timestamp instead, so the next poll re-covers the gap.
+A non-truncated category may then re-deliver a few already-seen rows in that re-covered window —
+expected and handled by `dedupe_key`, not a new bug. Also added: `since` in the future now 400s
+(previously silently accepted, producing an inverted or empty window with no error).
 
 **OpenAPI** (`/ship-openapi-endpoints`, verified in Swagger, not assumed):
 `api/src/openapi/schemas/change-feed.ts` (new) registers `GET /change-feed` with

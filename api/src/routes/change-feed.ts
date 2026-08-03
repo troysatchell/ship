@@ -89,11 +89,17 @@ router.get('/', authMiddleware, authed(async (req, res) => {
     const sinceDate = new Date(since);
     const effectiveLimit = limit ?? DEFAULT_CHANGE_FEED_LIMIT;
 
+    const now = new Date();
+    if (sinceDate.getTime() > now.getTime()) {
+      res.status(400).json({ error: 'Invalid input', details: [{ path: ['since'], message: 'since must not be in the future' }] });
+      return;
+    }
+
     const { isAdmin } = await getVisibilityContext(userId, workspaceId);
 
     // The safe cutoff this poll is willing to trust. Never advanced past
     // `now - CHANGE_FEED_LAG_MS`; see the module docstring for why.
-    const rawSafeCutoff = new Date(Date.now() - CHANGE_FEED_LAG_MS);
+    const rawSafeCutoff = new Date(now.getTime() - CHANGE_FEED_LAG_MS);
     // Never move the returned cursor backwards relative to what the caller
     // already sent — a caller polling faster than the lag window elapses
     // would otherwise regress its own cursor.
@@ -142,8 +148,31 @@ router.get('/', authMiddleware, authed(async (req, res) => {
       [workspaceId, userId, isAdmin, sinceDate, safeCutoff, effectiveLimit]
     );
 
+    // If a category hit `limit`, rows between the last one actually returned
+    // and `safeCutoff` were never delivered for it. Advancing the shared
+    // cursor past them would silently skip those rows forever — the exact
+    // permanent-miss failure mode this endpoint exists to avoid, just moved
+    // from the timestamp layer to the pagination layer. Capping the cursor at
+    // the earliest "last delivered" timestamp across any truncated category
+    // means the next poll re-covers that gap; a category that was NOT
+    // truncated may re-deliver a few already-seen rows in that re-covered
+    // window, which is exactly what `dedupe_key` exists for.
+    let nextCursor = safeCutoff;
+    const lastDocumentRow = documentsResult.rows[documentsResult.rows.length - 1];
+    if (documentsResult.rows.length === effectiveLimit && lastDocumentRow && lastDocumentRow.updated_at.getTime() < nextCursor.getTime()) {
+      nextCursor = lastDocumentRow.updated_at;
+    }
+    const lastHistoryRow = historyResult.rows[historyResult.rows.length - 1];
+    if (historyResult.rows.length === effectiveLimit && lastHistoryRow && lastHistoryRow.created_at.getTime() < nextCursor.getTime()) {
+      nextCursor = lastHistoryRow.created_at;
+    }
+    const lastCommentRow = commentsResult.rows[commentsResult.rows.length - 1];
+    if (commentsResult.rows.length === effectiveLimit && lastCommentRow && lastCommentRow.updated_at.getTime() < nextCursor.getTime()) {
+      nextCursor = lastCommentRow.updated_at;
+    }
+
     res.json({
-      next_cursor: safeCutoff.toISOString(),
+      next_cursor: nextCursor.toISOString(),
       documents: documentsResult.rows.map((row) => ({
         dedupe_key: `document:${row.id}:${row.updated_at.toISOString()}`,
         id: row.id,

@@ -20,7 +20,7 @@
  * schema.sql re-application.
  */
 import { randomBytes } from 'crypto';
-import { spawnSync } from 'child_process';
+import { spawnSync, SpawnSyncReturns } from 'child_process';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import pg from 'pg';
@@ -91,6 +91,28 @@ async function dropDatabase(name: string): Promise<void> {
   }
 }
 
+/**
+ * `result.status` alone conflates three different failures: the process
+ * never started (`result.error`, e.g. ENOENT), it was killed before exiting
+ * (`result.signal`, e.g. SIGTERM from the `timeout` option — `status` is then
+ * `null`, which already fails a `!== 0` check but with no explanation why),
+ * or it ran and exited non-zero. Surfacing which one actually happened is the
+ * difference between a useful failure message and a guessing game.
+ */
+function assertSeedSucceeded(result: SpawnSyncReturns<string>): void {
+  if (result.error) {
+    throw new Error(`seed.ts failed to spawn: ${result.error.message}`);
+  }
+  if (result.signal) {
+    throw new Error(
+      `seed.ts was killed by signal ${result.signal} (likely the ${100_000}ms timeout). stdout:\n${result.stdout}\n\nstderr:\n${result.stderr}`
+    );
+  }
+  if (result.status !== 0) {
+    throw new Error(`seed.ts exited ${result.status}. stdout:\n${result.stdout}\n\nstderr:\n${result.stderr}`);
+  }
+}
+
 describe('seed.ts FG-3 fixture trigger states (TRO-314)', () => {
   const dbName = throwawayDatabaseName();
   const scratchUrl = urlFor(dbName);
@@ -115,11 +137,7 @@ describe('seed.ts FG-3 fixture trigger states (TRO-314)', () => {
       timeout: 100_000,
     });
 
-    if (result.status !== 0) {
-      throw new Error(
-        `seed.ts exited ${result.status}. stdout:\n${result.stdout}\n\nstderr:\n${result.stderr}`
-      );
-    }
+    assertSeedSucceeded(result);
   }, HOOK_TIMEOUT);
 
   afterAll(async () => {
@@ -182,12 +200,18 @@ describe('seed.ts FG-3 fixture trigger states (TRO-314)', () => {
   });
 
   it('sets plan_approval on several weeks, including one approved-then-edited (changed_since_approved)', async () => {
-    const withApproval = await pool.query(
+    const withApproval = await pool.query<{ id: string; plan_approval: unknown }>(
       `SELECT id, properties->'plan_approval' as plan_approval FROM documents WHERE document_type = 'sprint' AND properties ? 'plan_approval'`
     );
     expect(withApproval.rows.length, '"several" weeks should carry plan_approval').toBeGreaterThanOrEqual(3);
 
-    const states = withApproval.rows.map(r => r.plan_approval.state);
+    const states = withApproval.rows.map((r) => {
+      const approval = r.plan_approval;
+      const isRecord = typeof approval === 'object' && approval !== null;
+      const state = isRecord ? (approval as Record<string, unknown>).state : undefined;
+      expect(typeof state, `week ${r.id}'s plan_approval must be an object with a string state, got: ${JSON.stringify(approval)}`).toBe('string');
+      return state;
+    });
     expect(states, 'one week must show the changed_since_approved transition (approved, then edited)').toContain('changed_since_approved');
   });
 
@@ -216,7 +240,7 @@ describe('seed.ts FG-3 fixture trigger states (TRO-314)', () => {
       timeout: 100_000,
     });
 
-    expect(result.status, `second seed run must exit 0. stderr:\n${result.stderr}`).toBe(0);
+    assertSeedSucceeded(result);
     expect(result.stdout).toMatch(/already seeded/);
 
     const after = await pool.query('SELECT COUNT(*) FROM document_history');

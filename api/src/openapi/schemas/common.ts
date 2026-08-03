@@ -57,7 +57,7 @@ export const PaginatedResponseSchema = <T extends z.ZodTypeAny>(itemSchema: T) =
 // ============== Belongs To (Document Associations) ==============
 
 export const BelongsToTypeSchema = z.enum(['program', 'project', 'sprint', 'parent']).openapi({
-  description: 'Type of document association (containment only — see RelationshipTypeSchema for the full set including "blocks")',
+  description: 'Type of document association (containment only — see the Association schema\'s relationship_type field for the full set, which also includes "blocks")',
 });
 
 // FG-15 / TRO-333: the full set of document_associations relationship types,

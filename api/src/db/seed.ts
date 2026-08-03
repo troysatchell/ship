@@ -1246,18 +1246,27 @@ async function seed() {
     // FG-3 / TRO-314: fixture work — the trigger states the seed never created.
     //
     // The agent drafts from observed activity; the load-testing fixture above
-    // records none of it. Gated on document_history being empty rather than a
-    // per-row existence check, because none of document_history, comments, or
-    // a plan_approval transition has a natural key to ON CONFLICT against —
-    // this is the same "verified" baseline the ticket measured (document_history
-    // and comments both 0 rows), so an empty document_history is exactly the
-    // "not seeded yet" signal. A re-run of `pnpm db:seed` against an
-    // already-fixtured database is a no-op for this block, same as every
-    // check-before-insert block above it.
+    // records none of it. Gated on document_history being empty for THIS
+    // workspace, rather than a per-row existence check, because none of
+    // document_history, comments, or a plan_approval transition has a natural
+    // key to ON CONFLICT against — this is the same "verified" baseline the
+    // ticket measured (document_history and comments both 0 rows), so an
+    // empty document_history is exactly the "not seeded yet" signal. Scoped
+    // to workspaceId (via a join, since document_history has no workspace_id
+    // column of its own) rather than a bare global count, so a database that
+    // happens to hold history for some other workspace cannot make this
+    // Ship-Workspace-specific block silently skip itself. A re-run of
+    // `pnpm db:seed` against an already-fixtured database is a no-op for this
+    // block, same as every check-before-insert block above it.
     // ==========================================================================
-    const fg3Baseline = await pool.query('SELECT COUNT(*) FROM document_history');
+    const fg3Baseline = await pool.query(
+      `SELECT COUNT(*) FROM document_history dh
+       JOIN documents d ON d.id = dh.document_id
+       WHERE d.workspace_id = $1`,
+      [workspaceId]
+    );
     if (parseInt(fg3Baseline.rows[0].count, 10) > 0) {
-      console.log('ℹ️  FG-3 fixture trigger states already seeded (document_history is non-empty)');
+      console.log('ℹ️  FG-3 fixture trigger states already seeded (document_history is non-empty for this workspace)');
     } else {
       console.log('🌱 Seeding FG-3 fixture trigger states (history, comments, timestamps, approvals)...');
 
@@ -1281,9 +1290,14 @@ async function seed() {
       // place it in. started_at/completed_at are the fields that carry the
       // narrative history here, so they are only checked against each other
       // (started <= completed), not against created_at.
+      // `started_at IS NULL` defends this against ever overwriting a
+      // lifecycle timestamp some other path (real usage against this
+      // database, or a future seed change) already set — this block only
+      // needs to backfill issues that genuinely have nothing yet.
       const doneIssues = await pool.query(
         `SELECT id FROM documents
          WHERE workspace_id = $1 AND document_type = 'issue' AND properties->>'state' = 'done'
+           AND started_at IS NULL
          ORDER BY ticket_number`,
         [workspaceId]
       );
