@@ -210,6 +210,99 @@ can still be permanently missed; this is the tunable margin the design accepts, 
 
 ---
 
+## TRO-314 — [FG-3] Seed fixture work: the trigger states four FleetGraph use cases had no reachable input for
+
+**What was broken.** The agent drafts from observed Ship activity. The dev-database seed was a Week
+4 load-testing fixture built to a volume spec ("500+ documents, 100+ issues, 20+ users, 10+
+sprints") that never recorded any of that activity: `document_history` and `comments` were both
+always 0 rows, no issue ever had `started_at`/`completed_at` set (including ones marked `done`), and
+no week ever had `plan_approval` set. Verified directly against this worktree's own database before
+any change: `document_history=0`, `comments=0`, `issues_done_with_started_at=0`,
+`weeks_with_plan_approval=0` on a fresh `pnpm db:seed` run — matching the ticket's own baseline
+exactly. The code that writes all of these exists and runs in normal use (state-transition timestamps
+in `document-crud.ts`'s `getTimestampUpdates`, the `changed_since_approved` transition in
+`documents.ts:1074`/`projects.ts:864`); the seed simply never exercised any of it, so four of six
+FleetGraph use cases (`FLEETGRAPH.MD` Test Cases 1-4) had no reachable trigger state.
+
+**What changed.** `api/src/db/seed.ts` gets one new block (gated on `document_history` being empty,
+so a re-run against an already-fixtured database is a no-op — there is no natural unique key for a
+`document_history` row, a comment, or a `plan_approval` transition to `ON CONFLICT` against):
+
+- **`started_at`/`completed_at`** backfilled on every `done` issue: most spread across the last ~5
+  weeks (so "sitting for N days" has a realistic distribution), every 4th one closing inside the
+  current week (computed from the same `sprint_start_date` + `currentSprintNumber` the rest of the
+  file already uses for "current sprint" — not a separate day-count guess).
+- **`document_history`**: a state-change entry (an issue moved `in_progress` → `in_review`) and a
+  content-edit entry on a current-week `weekly_plan` — the ticket's Scope item 1 names "issues AND
+  weekly plans" explicitly, not issues alone.
+- **`comments`**: at least two carrying a literal `@Full Name` mention. Confirmed the actual
+  convention first rather than assuming a structured TipTap mark: `comments.content` is plain
+  `TEXT` (`schema.sql:325`) and `CommentDisplay.tsx` renders comment input as a bare
+  `<input type="text">` — there is no mention *node* on this column, so `@Name` literal text is the
+  real convention, not a gap in this fix.
+- **`plan_approval`** set on several weeks (4 total): one `changes_requested`, one
+  `changed_since_approved` (the "approved, then edited" transition), two plain `approved`.
+- **`reports_to`**: verified still 10 of 11 people (root `dev@ship.local` deliberately has none) —
+  not re-seeded, so the escalation-degrades path stays exercised.
+
+**Also constructs concrete document ids for `FLEETGRAPH.MD` Test Cases 1-4**, per the ticket's own
+proof requirement ("those ids go into the ticket" — posted as a comment on TRO-314):
+- **Case 1** (engineer, 3 assigned issues, activity since last standup): picks the current-sprint
+  engineer with the most non-`done` assigned issues, moves one to `in_review` with history, comments
+  on a second, backdates the third's `updated_at` 7 days, and creates a standup from 3 days ago as
+  the "since" anchor.
+- **Case 2** (person mentioned in 2 docs they don't own, blocking someone else's week): 2 mentions of
+  Alice Chen on issues she neither created nor is assigned to, plus Emma Johnson's week (Emma reports
+  to Alice per the existing `reportingHierarchy`) set to `changes_requested` with Alice as
+  `approved_by`.
+- **Case 3** (week with 4 success criteria, 3 issues closed mapping to 2): current Ship Core week's
+  `success_criteria` overwritten to a real 4-item array (the pre-existing per-sprint value was a
+  single string, not an array, at every other week — left alone everywhere else, only overwritten
+  for this one week), its 3 already-`done` current-sprint issues closing within the week's actual
+  Mon-Sun boundary.
+- **Case 4** (plan approved at version N, then edited to remove one criterion): the prior completed
+  week's `plan_history` captures an original 4-criterion version, `success_criteria` shrunk to 3, and
+  `plan_approval.state = 'changed_since_approved'`.
+
+**A bug found and fixed while building this** (not shipped, caught before commit): Test Case 3's
+block re-sets `completed_at` on the same 3 issues the backfill loop already touched, without
+re-deriving `started_at` — an earlier draft left the stale `started_at` in place, which could land
+*after* the newly-assigned `completed_at`, violating "coherently populated". Fixed by having Test
+Case 3 derive its own `started_at` from its own `completed_at` rather than trusting the earlier
+loop's value. Caught by the regression test itself (see below), not by inspection.
+
+**Regression test.** `api/src/db/__tests__/seedFixtures.test.ts` (new, 6 cases). Per this ticket's
+own hazard note ("do not point the test suite at the development database — running Ship's tests
+wipes whatever database they are aimed at"), this test creates a throwaway scratch database
+(`randomBytes`-named, same pattern as `migrationRunner.test.ts`), runs the full migration set against
+it via `runMigrations()` (so it matches what `pnpm dev`'s migrate-then-seed actually produces, not
+just `seed.ts`'s own internal `schema.sql` re-application), then spawns the real
+`tsx src/db/seed.ts` CLI against it — never `DATABASE_URL` itself. Asserts: `document_history`
+non-empty and covers both `issue` and `weekly_plan`; `comments` non-empty with ≥2 mentions;
+`started_at`/`completed_at` set and coherent (`started_at <= completed_at`) on every `done` issue,
+with at least one closing in the last 7 days; `plan_approval` set on ≥3 weeks including one
+`changed_since_approved`; at least one person with no `reports_to` and at least one with; and a
+second seed run against the same database is a clean no-op. Confirmed red first: ran the pre-fix
+`seed.ts` against a fresh scratch database and queried directly —
+`document_history=0, comments=0, issues_done_with_started_at=0, weeks_with_plan_approval=0`,
+matching the ticket's own baseline exactly. After the fix, all 6 cases pass, confirmed stable across
+4 consecutive runs (the block uses `Math.random()` for date offsets, so repeat runs were checked
+deliberately for boundary-condition flakiness — none observed).
+
+**How to run it.** `source .factory-env && pnpm --filter @ship/api exec vitest run src/db/__tests__/seedFixtures.test.ts`
+
+**How to roll it back.** Revert this commit. `seed.ts`'s new block is additive and gated on
+`document_history` being empty, so reverting it only stops *future* `pnpm db:seed` runs on a fresh
+database from populating these fields — it does not delete rows from a database that already ran
+the fixed version (the seed script itself is never destructive).
+
+**Not verified:** whether the exact narrative match to each `FLEETGRAPH.MD` test case row (e.g.
+"mapping to 2 of them" in Case 3) will read correctly once FleetGraph's own drafting logic exists —
+this ticket constructs the Ship-side *state*, not the agent's interpretation of it, which is Phase 2
+and out of scope here.
+
+---
+
 ## GitLab CI — shared runners were never enabled; every pipeline on `main` had been stuck or failing since `.gitlab-ci.yml` was added
 
 **What was broken.** `.gitlab-ci.yml` (added 2026-07-30, `3563fa3`) mirrors `.github/workflows/ci.yml`
