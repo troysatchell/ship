@@ -21,6 +21,69 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-315 — [FG-4] Resilient client for every outbound call — timeouts, backoff, circuit breaker, self-throttle, graceful degradation
+
+**What was missing.** FG-2 (TRO-313)'s `/ready` check used a bare `fetch` with a timeout — correct
+for that ticket's narrower scope, but it retried nothing, remembered nothing across polls, and had
+no notion of Ship's own rate limits. The brief's Engineering Requirements are graded alongside the
+agent: outbound calls need explicit timeouts and retry with exponential backoff, and the agent must
+degrade gracefully (no crash, no indefinite hang) if Ship is unreachable. FLEETGRAPH.MD also
+verifies both of Ship's own rate limiters fail OPEN on a cache outage — the agent cannot lean on
+Ship's ceiling as a safety net and must throttle itself below it.
+
+**What changed.** A single client layer, `agent/src/resilientClient.ts`, used by every outbound
+call this package makes:
+- `agent/src/circuitBreaker.ts` — copied, not reinvented, from `api/src/utils/circuitBreaker.ts`
+  (TRO-311 / RULE-7) **starting from its fixed version** (`273f058`): the first version had a real
+  half-open concurrency race (a second concurrent call arriving while a trial call's `await fn()`
+  was in flight fell through the `state === 'open'` check and called `fn()` itself). `agent/` does
+  not depend on `api/`, so this is a deliberate duplication of a verified-correct ~100-line class,
+  with the corresponding regression test carried over unchanged (TRO-315's own proof #3 names this
+  exact race).
+- `agent/src/rateLimiter.ts` — a sliding-window self-throttle (`RateLimiter`), default 500 req/min,
+  configurable via `SHIP_SELF_THROTTLE_RPM` — well under Ship's shared ~6,000 req/min per-IP ceiling.
+- `agent/src/resilientClient.ts` — `ResilientClient.get()` (idempotent reads: timeout, retry with
+  exponential backoff + full jitter, circuit breaker, self-throttle) and `.request()` (non-idempotent:
+  timeout + breaker, no retry). Design point: the breaker wraps each individual HTTP attempt, not
+  the whole retry sequence — so a call that retries into an already-tripped breaker fails fast
+  instead of backing off pointlessly. Every failure mode normalizes to `ShipUnreachableError`
+  ("I can't reach Ship right now.") — the plain, user-safe message the degradation contract requires;
+  no raw stack trace or error type leaks past this layer.
+- `agent/src/health.ts` / `server.ts` — `/ready` now goes through a `ResilientClient` built once per
+  server (`buildShipClient`) and reused across every poll, so the breaker's state — the whole point
+  of a breaker — actually persists between requests instead of being rebuilt fresh each time.
+- `agent/src/config.ts` — four new env-driven knobs: `SHIP_BREAKER_FAILURE_THRESHOLD` (default 5),
+  `SHIP_BREAKER_COOLDOWN_MS` (30000), `SHIP_RETRY_MAX_ATTEMPTS` (3), `SHIP_SELF_THROTTLE_RPM` (500).
+
+**Regression tests — stable fakes only, timers/sleep/clock all injected, zero real wait (40 total
+cases across the package now; 23 new/changed for this ticket).** Confirmed red for the right reason
+before the corresponding implementation line (see PR body for transcripts):
+- `agent/src/__tests__/resilientClient.test.ts` (9 cases) — the four proofs named in the ticket:
+  (1) Ship returning 503 → 3 attempts with growing delays (100ms, 200ms, no jitter), breaker opens
+  on the 3rd consecutive failure, caller gets `ShipUnreachableError` with the plain message — process
+  never throws uncaught; (2) a fetch that never resolves → the call rejects at exactly the configured
+  timeout bound (a fake `setTimeoutImpl` proves the exact ms scheduled and fires it deterministically
+  — no real elapsed time); (3) half-open admits exactly one concurrent trial (a gated fetch proves it
+  is still in flight when concurrent callers arrive; they get `CircuitOpenError`→`ShipUnreachableError`
+  without ever reaching `fetch`); (4) a successful call after the cooldown closes the breaker and the
+  next call needs no retry. Plus: self-throttle rejects over-ceiling calls without ever reaching
+  fetch; `.request()` never retries.
+- `agent/src/__tests__/circuitBreaker.test.ts` (10 cases) — carried over from TRO-311's file
+  verbatim in substance, including the half-open concurrency regression.
+- `agent/src/__tests__/rateLimiter.test.ts` (4 cases) — ceiling enforcement, rejected calls not
+  counted, sliding-window expiry.
+- `agent/src/__tests__/health.test.ts` / `server.test.ts` — rewritten against the new
+  `ShipReadClient` interface; added a case proving the same client (and breaker) instance is reused
+  across three `/ready` polls, not rebuilt per request.
+
+**How to run it.** `pnpm --filter @ship/agent test`
+
+**How to roll it back.** Revert this commit. `health.ts`/`server.ts` fall back to FG-2's bare-fetch
+`/ready` check (still correct, just without retry/breaker/throttle); nothing outside `agent/` is
+affected.
+
+---
+
 ## TRO-313 — [FG-2] There is no agent service — new `agent/` package, LangGraph + LangSmith, `/health` + `/ready`
 
 **What was missing.** No agent service existed at all: `pnpm-workspace.yaml` listed only `api`,

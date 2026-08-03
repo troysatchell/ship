@@ -9,6 +9,10 @@ describe('loadConfig', () => {
     expect(config.shipRequestTimeoutMs).toBe(5000);
     expect(config.anthropicApiKey).toBeUndefined();
     expect(config.langchainTracingV2).toBe(false);
+    expect(config.shipBreakerFailureThreshold).toBe(5);
+    expect(config.shipBreakerCooldownMs).toBe(30000);
+    expect(config.shipRetryMaxAttempts).toBe(3);
+    expect(config.shipSelfThrottleRpm).toBe(500);
   });
 
   it('reads every value from the provided env map, not process.env', () => {
@@ -20,6 +24,10 @@ describe('loadConfig', () => {
       LANGCHAIN_TRACING_V2: 'true',
       LANGCHAIN_PROJECT: 'fleetgraph-agent',
       SHIP_REQUEST_TIMEOUT_MS: '2500',
+      SHIP_BREAKER_FAILURE_THRESHOLD: '7',
+      SHIP_BREAKER_COOLDOWN_MS: '15000',
+      SHIP_RETRY_MAX_ATTEMPTS: '4',
+      SHIP_SELF_THROTTLE_RPM: '250',
     });
 
     expect(config).toEqual({
@@ -30,6 +38,10 @@ describe('loadConfig', () => {
       langchainTracingV2: true,
       langchainProject: 'fleetgraph-agent',
       shipRequestTimeoutMs: 2500,
+      shipBreakerFailureThreshold: 7,
+      shipBreakerCooldownMs: 15000,
+      shipRetryMaxAttempts: 4,
+      shipSelfThrottleRpm: 250,
     });
   });
 
