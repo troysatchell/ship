@@ -8,7 +8,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { CircuitBreaker, CircuitOpenError } from '../circuitBreaker.js';
 import { RateLimiter } from '../rateLimiter.js';
-import { ResilientClient, ShipUnreachableError } from '../resilientClient.js';
+import {
+  ResilientClient,
+  ShipUnreachableError,
+  type ClearTimeoutImpl,
+  type SetTimeoutImpl,
+} from '../resilientClient.js';
 
 function makeClock(start = 0) {
   let current = start;
@@ -107,6 +112,48 @@ describe('ResilientClient.get — proof #1: Ship returning 503 repeatedly', () =
   });
 });
 
+describe('ResilientClient.get — 429 (rate limited) responses', () => {
+  it('classifies a 429 as a failure, same as 5xx — retries then opens the breaker', async () => {
+    const clock = makeClock();
+    const breaker = new CircuitBreaker({ failureThreshold: 2, cooldownMs: 10_000, now: clock.now });
+    const fetchImpl = vi.fn().mockResolvedValue(new Response(null, { status: 429 }));
+    const { sleep } = instantSleep();
+
+    const client = new ResilientClient({
+      breaker,
+      timeoutMs: 1000,
+      retry: { maxAttempts: 2, baseDelayMs: 10, jitter: false },
+      fetchImpl,
+      sleep,
+    });
+
+    await expect(client.get('https://ship.example.gov/x')).rejects.toBeInstanceOf(ShipUnreachableError);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(breaker.getState()).toBe('open');
+  });
+
+  it('honors a `Retry-After` header (seconds) in place of the computed exponential backoff', async () => {
+    const breaker = new CircuitBreaker({ failureThreshold: 5, cooldownMs: 10_000 });
+    const fetchImpl = vi.fn().mockResolvedValue(
+      new Response(null, { status: 429, headers: { 'Retry-After': '7' } })
+    );
+    const { sleep, delays } = instantSleep();
+
+    const client = new ResilientClient({
+      breaker,
+      timeoutMs: 1000,
+      // baseDelayMs is deliberately far from 7000ms so the assertion proves
+      // Retry-After won the delay computation, not that they coincided.
+      retry: { maxAttempts: 2, baseDelayMs: 10, jitter: false },
+      fetchImpl,
+      sleep,
+    });
+
+    await expect(client.get('https://ship.example.gov/x')).rejects.toBeInstanceOf(ShipUnreachableError);
+    expect(delays).toEqual([7000]);
+  });
+});
+
 describe('ResilientClient.get — proof #2: Ship hanging', () => {
   it('times out at the configured bound rather than waiting indefinitely', async () => {
     const breaker = new CircuitBreaker({ failureThreshold: 5, cooldownMs: 10_000 });
@@ -114,11 +161,14 @@ describe('ResilientClient.get — proof #2: Ship hanging', () => {
     const fetchImpl = vi.fn(() => new Promise<Response>(() => {}));
 
     const scheduled: Array<{ ms: number; cb: () => void }> = [];
-    const setTimeoutImpl = vi.fn((cb: () => void, ms?: number) => {
-      scheduled.push({ ms: ms ?? 0, cb });
-      return scheduled.length as unknown as ReturnType<typeof setTimeout>;
-    }) as unknown as typeof setTimeout;
-    const clearTimeoutImpl = vi.fn() as unknown as typeof clearTimeout;
+    // A plain counter satisfies `TimerHandle` (`NodeJS.Timeout | number`)
+    // directly — no cast needed, since the client only ever round-trips this
+    // value back to `clearTimeoutImpl`, never inspects it.
+    const setTimeoutImpl: SetTimeoutImpl = vi.fn((cb, ms) => {
+      scheduled.push({ ms, cb });
+      return scheduled.length;
+    });
+    const clearTimeoutImpl: ClearTimeoutImpl = vi.fn();
 
     const client = new ResilientClient({
       breaker,
@@ -262,6 +312,110 @@ describe('ResilientClient.request — non-idempotent calls', () => {
       ShipUnreachableError
     );
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('is throttled by the self-rate-limiter same as get(), and never reaches fetch once denied', async () => {
+    const clock = makeClock();
+    const breaker = new CircuitBreaker({ failureThreshold: 5, cooldownMs: 1000 });
+    const rateLimiter = new RateLimiter({ maxPerWindow: 1, windowMs: 60_000, now: clock.now });
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse());
+    const client = new ResilientClient({
+      breaker,
+      rateLimiter,
+      timeoutMs: 1000,
+      retry: { maxAttempts: 1, baseDelayMs: 10 },
+      fetchImpl,
+    });
+
+    await expect(client.request('https://ship.example.gov/a', { method: 'POST' })).resolves.toBeInstanceOf(
+      Response
+    );
+    await expect(client.request('https://ship.example.gov/b', { method: 'POST' })).rejects.toBeInstanceOf(
+      ShipUnreachableError
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1); // the throttled second call never reached fetch
+  });
+});
+
+describe('ResilientClient — abort signal forwarding (timedFetch)', () => {
+  it('aborts its internal controller before starting fetch when the caller-supplied signal is already aborted', async () => {
+    const breaker = new CircuitBreaker({ failureThreshold: 5, cooldownMs: 1000 });
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse());
+    const client = new ResilientClient({
+      breaker,
+      timeoutMs: 1000,
+      retry: { maxAttempts: 1, baseDelayMs: 10 },
+      fetchImpl,
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+
+    await client.request('https://ship.example.gov/x', { signal: controller.signal }).catch(() => {});
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    // The signal actually passed to fetch is our OWN internal controller's
+    // (never the caller's directly) — proving it, not just the caller's, was
+    // already aborted before fetch was ever invoked.
+    expect(init.signal?.aborted).toBe(true);
+  });
+
+  it('removes the forwarding listener it adds to the caller-supplied signal once the call settles, so it never leaks', async () => {
+    const breaker = new CircuitBreaker({ failureThreshold: 5, cooldownMs: 1000 });
+    const fetchImpl = vi.fn().mockResolvedValue(okResponse());
+    const client = new ResilientClient({
+      breaker,
+      timeoutMs: 1000,
+      retry: { maxAttempts: 1, baseDelayMs: 10 },
+      fetchImpl,
+    });
+
+    const controller = new AbortController();
+    const addSpy = vi.spyOn(controller.signal, 'addEventListener');
+    const removeSpy = vi.spyOn(controller.signal, 'removeEventListener');
+
+    await client.request('https://ship.example.gov/x', { signal: controller.signal });
+
+    expect(addSpy).toHaveBeenCalledTimes(1);
+    expect(removeSpy).toHaveBeenCalledTimes(1);
+    // The exact same listener reference that was added is the one removed —
+    // otherwise `removeEventListener` silently no-ops and the leak remains.
+    expect(removeSpy.mock.calls[0]?.[1]).toBe(addSpy.mock.calls[0]?.[1]);
+  });
+});
+
+describe('ResilientClient — constructor validation', () => {
+  it('rejects a zero or negative retry.maxAttempts, consistent with CircuitBreaker/RateLimiter', () => {
+    const breaker = new CircuitBreaker({ failureThreshold: 1, cooldownMs: 1000 });
+    expect(
+      () =>
+        new ResilientClient({
+          breaker,
+          timeoutMs: 1000,
+          retry: { maxAttempts: 0, baseDelayMs: 10 },
+        })
+    ).toThrow();
+    expect(
+      () =>
+        new ResilientClient({
+          breaker,
+          timeoutMs: 1000,
+          retry: { maxAttempts: -1, baseDelayMs: 10 },
+        })
+    ).toThrow();
+  });
+
+  it('still allows the valid minimum of exactly one attempt', () => {
+    const breaker = new CircuitBreaker({ failureThreshold: 5, cooldownMs: 1000 });
+    expect(
+      () =>
+        new ResilientClient({
+          breaker,
+          timeoutMs: 1000,
+          retry: { maxAttempts: 1, baseDelayMs: 10 },
+        })
+    ).not.toThrow();
   });
 });
 

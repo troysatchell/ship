@@ -29,12 +29,37 @@ import { SelfThrottleExceededError } from './rateLimiter.js';
 
 export { CircuitOpenError, SelfThrottleExceededError };
 
-/** Thrown when a response's HTTP status makes it a failure for retry/breaker purposes (5xx). */
+/**
+ * Thrown when a response's HTTP status makes it a failure for retry/breaker
+ * purposes (5xx, or 429 rate-limited). `retryAfterMs`, when the response
+ * carried a `Retry-After` header, is the server-directed wait — honored in
+ * place of computed exponential backoff when present (see `get()`).
+ */
 export class ShipHttpError extends Error {
-  constructor(public readonly status: number) {
+  constructor(
+    public readonly status: number,
+    public readonly retryAfterMs?: number
+  ) {
     super(`Ship responded ${status}`);
     this.name = 'ShipHttpError';
   }
+}
+
+/** Parses a `Retry-After` header value (delta-seconds or an HTTP-date) into milliseconds. */
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) {
+    return Math.max(0, seconds * 1000);
+  }
+
+  const dateMs = Date.parse(value);
+  if (!Number.isNaN(dateMs)) {
+    return Math.max(0, dateMs - Date.now());
+  }
+
+  return undefined;
 }
 
 /** A bounded wait exceeded — connect/read never resolved in time. */
@@ -50,8 +75,11 @@ export class TimeoutError extends Error {
  * in-flight on-demand request should surface this, never a stack trace.
  */
 export class ShipUnreachableError extends Error {
-  constructor(public readonly cause: unknown) {
-    super("I can't reach Ship right now.");
+  constructor(cause: unknown) {
+    // Native `Error.cause` (via the options bag), not a parameter-property —
+    // a parameter-property would additionally make `cause` an enumerable own
+    // property of every instance, which the native mechanism does not.
+    super("I can't reach Ship right now.", { cause });
     this.name = 'ShipUnreachableError';
   }
 }
@@ -65,6 +93,19 @@ export interface RetryOptions {
   jitter?: boolean;
 }
 
+/**
+ * Handle returned by `setTimeoutImpl`, as accepted by `clearTimeoutImpl`. This
+ * client only ever stores the handle and passes it back to `clearTimeoutImpl`
+ * — it never inspects it — so the type only needs to cover what a real timer
+ * returns (`NodeJS.Timeout`) and what a deterministic test fake naturally
+ * returns instead (a plain counter/index), not the full ambient
+ * `typeof setTimeout` overload set.
+ */
+export type TimerHandle = ReturnType<typeof setTimeout> | number;
+/** The narrow shape this client actually calls: a zero-arg callback and a delay in ms. */
+export type SetTimeoutImpl = (callback: () => void, ms: number) => TimerHandle;
+export type ClearTimeoutImpl = (handle: TimerHandle) => void;
+
 export interface ResilientClientOptions {
   breaker: CircuitBreaker;
   rateLimiter?: RateLimiter;
@@ -72,8 +113,8 @@ export interface ResilientClientOptions {
   retry: RetryOptions;
   fetchImpl?: typeof fetch;
   /** Injectable timer, for deterministic tests — never a real wait (lessons.md #17). */
-  setTimeoutImpl?: typeof setTimeout;
-  clearTimeoutImpl?: typeof clearTimeout;
+  setTimeoutImpl?: SetTimeoutImpl;
+  clearTimeoutImpl?: ClearTimeoutImpl;
   /** Injectable backoff sleep, for deterministic tests. Defaults to a real setTimeout-based sleep. */
   sleep?: (ms: number) => Promise<void>;
   /** Injectable jitter source (0..1). Defaults to Math.random. */
@@ -86,12 +127,15 @@ export class ResilientClient {
   private readonly timeoutMs: number;
   private readonly retry: Required<RetryOptions>;
   private readonly fetchImpl: typeof fetch;
-  private readonly setTimeoutImpl: typeof setTimeout;
-  private readonly clearTimeoutImpl: typeof clearTimeout;
+  private readonly setTimeoutImpl: SetTimeoutImpl;
+  private readonly clearTimeoutImpl: ClearTimeoutImpl;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly random: () => number;
 
   constructor(options: ResilientClientOptions) {
+    if (options.retry.maxAttempts < 1) {
+      throw new Error('retry.maxAttempts must be at least 1');
+    }
     this.breaker = options.breaker;
     this.rateLimiter = options.rateLimiter;
     this.timeoutMs = options.timeoutMs;
@@ -142,7 +186,13 @@ export class ResilientClient {
         if (attempt >= this.retry.maxAttempts) {
           break;
         }
-        await this.backoffDelay(attempt);
+        if (err instanceof ShipHttpError && err.retryAfterMs !== undefined) {
+          // Server-directed wait (429/5xx with Retry-After) takes precedence
+          // over our own computed exponential backoff.
+          await this.sleep(err.retryAfterMs);
+        } else {
+          await this.backoffDelay(attempt);
+        }
       }
     }
 
@@ -151,6 +201,10 @@ export class ResilientClient {
 
   /** Non-idempotent request: timeout + breaker, no retry. */
   async request(url: string, init: RequestInit = {}): Promise<Response> {
+    if (this.rateLimiter && !this.rateLimiter.tryAcquire()) {
+      throw new ShipUnreachableError(new SelfThrottleExceededError());
+    }
+
     try {
       return await this.breaker.execute(() => this.checkedFetch(url, init));
     } catch (err) {
@@ -160,21 +214,30 @@ export class ResilientClient {
 
   private async checkedFetch(url: string, init: RequestInit): Promise<Response> {
     const response = await this.timedFetch(url, init);
-    if (!response.ok && response.status >= 500) {
-      throw new ShipHttpError(response.status);
+    // >=500 is a server failure; 429 is Ship telling us to back off — both
+    // are failures for retry/breaker purposes. `response.status >= 500`
+    // already implies `!response.ok`, so no separate `.ok` check is needed.
+    if (response.status >= 500 || response.status === 429) {
+      throw new ShipHttpError(response.status, parseRetryAfterMs(response.headers.get('Retry-After')));
     }
     return response;
   }
 
   private async timedFetch(url: string, init: RequestInit): Promise<Response> {
     const controller = new AbortController();
+    const onAbort = () => controller.abort();
     // Forward an externally-supplied signal too — the caller can still
-    // cancel independently of our own bound.
+    // cancel independently of our own bound. If it's already aborted before
+    // we even start, don't bother starting the fetch at all.
     if (init.signal) {
-      init.signal.addEventListener('abort', () => controller.abort());
+      if (init.signal.aborted) {
+        controller.abort();
+      } else {
+        init.signal.addEventListener('abort', onAbort);
+      }
     }
 
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let timer: TimerHandle | undefined;
     const timeout = new Promise<never>((_, reject) => {
       timer = this.setTimeoutImpl(() => {
         controller.abort();
@@ -189,6 +252,11 @@ export class ResilientClient {
       ]);
     } finally {
       if (timer !== undefined) this.clearTimeoutImpl(timer);
+      // Always remove the listener we may have added above — otherwise it
+      // leaks onto the caller's signal for the lifetime of that signal,
+      // which can outlive this single call by a lot (e.g. a request-scoped
+      // AbortSignal reused across several outbound calls).
+      if (init.signal) init.signal.removeEventListener('abort', onAbort);
     }
   }
 
