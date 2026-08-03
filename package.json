@@ -54,9 +54,16 @@
   },
   "pnpm": {
     "// overrides (BUN-8 / TRO-204)": "cmdk pins @radix-ui/react-primitive via a caret range (^2.0.2) and resolves it to 2.1.4/react-slot 1.2.4, while @radix-ui/react-dialog|popover|tooltip each pin the exact older 2.1.3/1.2.3 internally - so both trees shipped. Force the newer pair everywhere: diffing the built dist confirmed 2.1.4/1.2.4 is a strict superset (react-slot 1.2.4 only adds React.lazy-child support over 1.2.3; react-primitive's logic is byte-identical between 2.1.3 and 2.1.4), so converging up is behavior-safe. Remove this override once react-dialog/popover/tooltip publish a release that pins 2.1.4+/1.2.4+ themselves.",
+    "// overrides (dependency-audit-diff baseline drift, 2026-08-03)": "10 new advisories surfaced against transitive deps since the committed audit baseline was captured, unrelated to any in-flight ticket work: undici (via testcontainers, dev-only), fast-uri/hono/ip-address (via @modelcontextprotocol/sdk and express-rate-limit, production), postcss (via vitest, dev-only), brace-expansion (via testcontainers/archiver, dev-only). Pinned each to its minimum patched version per the GHSA advisory; no direct dependency changed. brace-expansion is range-scoped (@>=2.0.0 <2.1.2, matching only the vulnerable v2.x range) rather than a blanket override - a blanket override broke ESLint, whose minimatch@3.1.5 depends on brace-expansion's incompatible v1.x line; a range selector only rewrites requests that actually asked for the vulnerable v2.x range, leaving v1.x consumers alone. The other five have exactly one resolved version each pre-fix (verified against the pre-fix lockfile), so a blanket override is safe for them.",
     "overrides": {
       "@radix-ui/react-primitive": "2.1.4",
-      "@radix-ui/react-slot": "1.2.4"
+      "@radix-ui/react-slot": "1.2.4",
+      "undici": ">=7.28.0",
+      "fast-uri": ">=3.1.4",
+      "hono": ">=4.12.14",
+      "postcss": ">=8.5.12",
+      "ip-address": ">=10.3.1",
+      "brace-expansion@>=2.0.0 <2.1.2": ">=2.1.2"
     }
   }
 }
