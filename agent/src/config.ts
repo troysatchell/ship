@@ -69,5 +69,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
  * Ship reachability — is a live check, not a static one; see `health.ts`.
  */
 export function isConfigComplete(config: AgentConfig): boolean {
-  return Boolean(config.anthropicApiKey) && config.shipApiBaseUrl.length > 0;
+  return (
+    Boolean(config.anthropicApiKey) &&
+    config.shipApiBaseUrl.length > 0 &&
+    Boolean(config.shipApiToken)
+  );
 }

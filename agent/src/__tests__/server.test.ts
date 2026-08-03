@@ -7,6 +7,7 @@ import type { ShipReadClient } from '../health.js';
 const READY_CONFIG = {
   ANTHROPIC_API_KEY: 'sk-test',
   SHIP_API_BASE_URL: 'https://ship.example.gov',
+  SHIP_API_TOKEN: 'token-abc',
 };
 
 describe('GET /health', () => {

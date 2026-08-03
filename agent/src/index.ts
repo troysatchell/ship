@@ -24,9 +24,9 @@ if (!config.langchainTracingV2) {
 
 if (!isConfigComplete(config)) {
   console.warn(
-    '[agent] Startup config is incomplete (ANTHROPIC_API_KEY and/or SHIP_API_BASE_URL missing). ' +
-      'The process will stay up — /health still returns 200 — but /ready will return 503 ' +
-      'until the missing values are set (graceful degradation, FG-4).'
+    '[agent] Startup config is incomplete (ANTHROPIC_API_KEY, SHIP_API_BASE_URL, and/or ' +
+      'SHIP_API_TOKEN missing). The process will stay up — /health still returns 200 — but ' +
+      '/ready will return 503 until the missing values are set (graceful degradation, FG-4).'
   );
 }
 

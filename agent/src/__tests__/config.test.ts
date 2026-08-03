@@ -54,14 +54,26 @@ describe('loadConfig', () => {
 
 describe('isConfigComplete', () => {
   it('is false without an Anthropic API key', () => {
-    const config = loadConfig({ SHIP_API_BASE_URL: 'https://ship.example.gov' });
+    const config = loadConfig({
+      SHIP_API_BASE_URL: 'https://ship.example.gov',
+      SHIP_API_TOKEN: 'token-abc',
+    });
     expect(isConfigComplete(config)).toBe(false);
   });
 
-  it('is true once the API key and Ship base URL are both set', () => {
+  it('is false without a Ship API token', () => {
     const config = loadConfig({
       ANTHROPIC_API_KEY: 'sk-test',
       SHIP_API_BASE_URL: 'https://ship.example.gov',
+    });
+    expect(isConfigComplete(config)).toBe(false);
+  });
+
+  it('is true once the API key, Ship base URL, and Ship token are all set', () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: 'sk-test',
+      SHIP_API_BASE_URL: 'https://ship.example.gov',
+      SHIP_API_TOKEN: 'token-abc',
     });
     expect(isConfigComplete(config)).toBe(true);
   });
