@@ -29,6 +29,12 @@ export interface AgentConfig {
   shipRetryMaxAttempts: number;
   /** Self-throttle ceiling, requests/minute, well under Ship's shared per-IP limit (FG-4). */
   shipSelfThrottleRpm: number;
+  /** Steady-tier proactive poll cadence, in ms (TRO-317 / FG-5) — the
+   * ticket's own trigger table names 60s; see FLEETGRAPH.MD's Trigger Model. */
+  proactivePollIntervalMs: number;
+  /** How far back the FIRST proactive poll (no cursor carried forward yet —
+   * a fresh start/redeploy) looks, in ms (FG-5). */
+  proactiveInitialLookbackMs: number;
 }
 
 const DEFAULT_PORT = 3100;
@@ -38,6 +44,8 @@ const DEFAULT_BREAKER_FAILURE_THRESHOLD = 5;
 const DEFAULT_BREAKER_COOLDOWN_MS = 30_000;
 const DEFAULT_RETRY_MAX_ATTEMPTS = 3;
 const DEFAULT_SELF_THROTTLE_RPM = 500;
+const DEFAULT_PROACTIVE_POLL_INTERVAL_MS = 60_000;
+const DEFAULT_PROACTIVE_INITIAL_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 function positiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
@@ -61,6 +69,14 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     shipBreakerCooldownMs: positiveInt(env.SHIP_BREAKER_COOLDOWN_MS, DEFAULT_BREAKER_COOLDOWN_MS),
     shipRetryMaxAttempts: positiveInt(env.SHIP_RETRY_MAX_ATTEMPTS, DEFAULT_RETRY_MAX_ATTEMPTS),
     shipSelfThrottleRpm: positiveInt(env.SHIP_SELF_THROTTLE_RPM, DEFAULT_SELF_THROTTLE_RPM),
+    proactivePollIntervalMs: positiveInt(
+      env.PROACTIVE_POLL_INTERVAL_MS,
+      DEFAULT_PROACTIVE_POLL_INTERVAL_MS
+    ),
+    proactiveInitialLookbackMs: positiveInt(
+      env.PROACTIVE_INITIAL_LOOKBACK_MS,
+      DEFAULT_PROACTIVE_INITIAL_LOOKBACK_MS
+    ),
   };
 }
 

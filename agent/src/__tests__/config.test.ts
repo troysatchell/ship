@@ -13,6 +13,8 @@ describe('loadConfig', () => {
     expect(config.shipBreakerCooldownMs).toBe(30000);
     expect(config.shipRetryMaxAttempts).toBe(3);
     expect(config.shipSelfThrottleRpm).toBe(500);
+    expect(config.proactivePollIntervalMs).toBe(60_000);
+    expect(config.proactiveInitialLookbackMs).toBe(24 * 60 * 60 * 1000);
   });
 
   it('reads every value from the provided env map, not process.env', () => {
@@ -28,6 +30,8 @@ describe('loadConfig', () => {
       SHIP_BREAKER_COOLDOWN_MS: '15000',
       SHIP_RETRY_MAX_ATTEMPTS: '4',
       SHIP_SELF_THROTTLE_RPM: '250',
+      PROACTIVE_POLL_INTERVAL_MS: '30000',
+      PROACTIVE_INITIAL_LOOKBACK_MS: '3600000',
     });
 
     expect(config).toEqual({
@@ -42,6 +46,8 @@ describe('loadConfig', () => {
       shipBreakerCooldownMs: 15000,
       shipRetryMaxAttempts: 4,
       shipSelfThrottleRpm: 250,
+      proactivePollIntervalMs: 30000,
+      proactiveInitialLookbackMs: 3600000,
     });
   });
 

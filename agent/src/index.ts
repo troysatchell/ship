@@ -1,5 +1,5 @@
 /**
- * Agent service entrypoint (TRO-313 / FG-2).
+ * Agent service entrypoint (TRO-313 / FG-2; extended by TRO-317 / FG-5).
  *
  * LangSmith tracing is controlled entirely by env vars
  * (`LANGCHAIN_TRACING_V2`, `LANGCHAIN_PROJECT`, `LANGCHAIN_API_KEY` /
@@ -7,11 +7,24 @@
  * itself — there is nothing to wire up here beyond loading `.env` before
  * anything else runs, and warning loudly if tracing looks off, since the
  * brief requires traces from the first invocation, not bolted on later.
+ *
+ * FG-5 additionally starts the proactive steady-tier poller (mention
+ * resolution + approval-blocking detection, no model call) once config is
+ * complete. It is intentionally NOT gated on `ANTHROPIC_API_KEY` alone —
+ * `buildGraph`'s `model` argument is only ever invoked by the on-demand
+ * `respond` node, never by anything on the proactive path this poller
+ * drives — but `isConfigComplete` already requires the key today, so this
+ * only matters once that changes.
  */
 
 import 'dotenv/config';
+import { ChatAnthropic } from '@langchain/anthropic';
 import { loadConfig, isConfigComplete } from './config.js';
-import { createServer } from './server.js';
+import { createServer, buildShipClient } from './server.js';
+import { buildGraph } from './graph.js';
+import { ShipClient } from './shipClient.js';
+import { InMemoryItemStore } from './itemStore.js';
+import { createProactivePoller } from './proactivePoll.js';
 
 const config = loadConfig();
 
@@ -26,7 +39,42 @@ if (!isConfigComplete(config)) {
   console.warn(
     '[agent] Startup config is incomplete (ANTHROPIC_API_KEY, SHIP_API_BASE_URL, and/or ' +
       'SHIP_API_TOKEN missing). The process will stay up — /health still returns 200 — but ' +
-      '/ready will return 503 until the missing values are set (graceful degradation, FG-4).'
+      '/ready will return 503 until the missing values are set (graceful degradation, FG-4). ' +
+      'The proactive poller (FG-5) will not start either.'
+  );
+} else {
+  // Config complete: wire the real graph (real model, real Ship client, the
+  // in-memory item store — see itemStore.ts for why in-memory is the right
+  // call for this ticket) and start the steady-tier poller.
+  const model = new ChatAnthropic({
+    apiKey: config.anthropicApiKey,
+    model: 'claude-haiku-4-5-20251001',
+    maxTokens: 1024,
+  });
+  const shipClient = new ShipClient({
+    baseUrl: config.shipApiBaseUrl,
+    // isConfigComplete() already guarantees this is set.
+    token: config.shipApiToken as string,
+    client: buildShipClient(config),
+  });
+  const itemStore = new InMemoryItemStore();
+  const graph = buildGraph(model, { shipClient, itemStore });
+
+  const poller = createProactivePoller({
+    graph,
+    intervalMs: config.proactivePollIntervalMs,
+    initialLookbackMs: config.proactiveInitialLookbackMs,
+    onError: (err) => {
+      console.error('[agent] proactive poll tick failed (will retry next cycle):', err);
+    },
+  });
+  poller.start();
+  // Also run one tick immediately at startup rather than waiting a full
+  // interval for the first observation.
+  void poller.tick();
+  console.log(
+    `[agent] proactive poller started (every ${config.proactivePollIntervalMs}ms, ` +
+      `initial lookback ${config.proactiveInitialLookbackMs}ms)`
   );
 }
 

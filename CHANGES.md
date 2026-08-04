@@ -21,6 +21,154 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-317 — [FG-5] Proactive fast tier: mentions and blocking approvals now surface into a person's own inbox — the MVP's "at least one proactive detection wired end-to-end"
+
+**First of four sub-issues on branch `feat/pr-c-graph-both-modes` (bundle `TRO-327` / [PR-C] EPIC:
+"The graph — both modes through one graph, plus the human gate"), landing in this exact order:
+FG-5 (this commit) -> FG-7 -> FG-6 -> FG-8. This commit lays the foundation the other three build
+on: the graph's shared state shape and the proactive-path detection logic.**
+
+**What was missing.** Obligations were scattered across mention marks inside document bodies,
+literal `@Name` mentions inside comments, and approvals sitting in someone else's week — and Ship
+aggregated none of it. `api/src/services/accountability.ts` computes only *missing paperwork*, and
+only for the person who asks. Nothing told an approver that plans were queued in front of them,
+blocking other people's weeks; the only existing signal (`checkChangesRequested`) tells the WEEK
+OWNER when changes are requested, and only when they happen to check — never the approver, and
+never proactively.
+
+**Two mention representations exist in Ship, verified against two different sources, both
+resolved here (skipping either would leave a real gap):**
+- Document bodies: a structured TipTap `mention` node (`web/src/components/editor/MentionExtension.ts`)
+  — `attrs.id` is a person DOCUMENT id.
+- Comments: literal `@Full Name` text in a plain `TEXT` column — verified against
+  `api/src/db/seed.ts`'s own FG-3 fixture comment ("there is no structured TipTap mention mark on
+  the comments.content TEXT column") and `CommentDisplay.tsx` (a plain `<input type="text">`, no
+  mention plugin). This is the ONLY shape FG-3's seeded proof fixture
+  (`testCase2_mention1`/`testCase2_mention2`) actually produces.
+
+**Approval-blocking routing decision (left open by the ticket, made here against verified code, not
+guessed):** `plan_approval`/`review_approval` state `'changes_requested'` routes the item to the
+OWNER (mirrors `accountability.ts`'s existing `checkChangesRequested`, delivered proactively instead
+of only on-demand). A pending/never-reviewed approval (`state` null) or `'changed_since_approved'`
+routes to the structurally-derived APPROVER — the owner's manager via `person.properties.reports_to`
+(verified as the manager's USER id, not a person-doc id: `api/src/routes/reports-to.test.ts`,
+`weeks.ts`'s own `getSprintOwnerReportsTo`) — this is the actual proactive gap the ticket's cost
+section describes. Deliberately read `properties.owner_id` off the RAW document row
+(`GET /api/documents/:id`), not `GET /api/weeks/:id`'s top-level `owner_id` alias — that alias is
+computed from `assignee_ids[0]` (`LEFT JOIN users u ON (d.properties->'assignee_ids'->>0)::uuid =
+u.id`), a DIFFERENT value than `properties.owner_id`, which is what `accountability.ts`, `seed.ts`,
+and `getSprintOwnerReportsTo` all actually treat as the sprint owner.
+
+**Never-surface enforcement:** every candidate item is checked against the RECIPIENT's own
+visibility (`visibility.ts`, mirroring `api/src/middleware/visibility.ts`'s exact rule), never the
+polling token's — FleetGraph's "no service account" deployment model means the poller's token does
+not necessarily belong to an item's recipient. No admin bypass: "possibly admin" is deliberately
+treated as "not visible," since a false negative here is a quieter failure than exposing a private
+document's mention to someone who turns out not to have access.
+
+**What changed** — all new files in `agent/src/`, plus a state/node extension to the existing graph
+(FG-2/FG-4's `ingest -> respond` on-demand path is untouched):
+- `graph.ts` — `GraphState` gains `trigger` (`'on_demand' | 'proactive_fast' | 'proactive_steady' |
+  'proactive_deep'`, defaults to `'on_demand'` so every existing FG-2 test/call site is unaffected),
+  `cursor`, `changeFeedPage`, `people`, and two concatenating-reducer fields — `inboxItems` and
+  `clearedItemIds` — designed so FG-6/FG-7's own producer nodes can append to the SAME list rather
+  than inventing a parallel one. Four new nodes (`pollChangeFeed` -> `resolveMentions` ->
+  `detectBlockingApprovals` -> `commitInboxItems`) wired as their own entry via a conditional edge
+  off `START` (routes on `trigger`) — never touching `respond`'s model dependency, since the ticket
+  is explicit this path carries no model call. `buildGraph`'s new second parameter
+  (`proactiveDeps?: ProactiveDeps`) is optional so it never breaks an existing on-demand call site;
+  a proactive node throws a clear, named error if it ever runs without deps, rather than silently
+  no-op-ing.
+- `shipClient.ts` — `ShipClient`, the only place this path calls Ship's API, entirely through FG-4's
+  `ResilientClient` (never a bare `fetch`). Three endpoints: `GET /api/change-feed` (FG-1),
+  `GET /api/documents/:id` (raw row — see the owner_id note above), `GET /api/team/people` (covers
+  mention-doc-id -> user-id resolution AND the manager lookup in one call). `ShipClientLike` (a
+  `Pick`-derived public interface, same pattern as `health.ts`'s `ShipReadClient`) is what every
+  consumer actually depends on, since the class's private fields make it un-mockable structurally.
+- `mentions.ts` — `extractPersonMentionDocIds` (walks TipTap JSON for `mention` nodes) and
+  `extractLiteralNameMentions` (matches `@Full Name` against the people directory).
+- `visibility.ts` — `isDocumentVisibleTo`, the never-surface check described above.
+- `roles.ts` — `findManagerUserId`, the one structural-authority fact this ticket needs (not the
+  full Director/PM/Engineer taxonomy FLEETGRAPH.MD describes — left for whichever later ticket
+  needs it).
+- `itemStore.ts` — `ItemStore` interface + `InMemoryItemStore`. **Design decision: in-memory, not
+  persistent.** `agent/package.json` had no DB/storage dependency before this change; every item is
+  re-derivable from Ship's own state on the next poll (mentions/approvals are computed fresh each
+  cycle, never from agent-local history), so a restart costs at most one poll cycle's delay, not a
+  permanently lost item; and FLEETGRAPH.MD's own "Deployment model" describes exactly one agent
+  process, so there's no cross-instance state to share yet. A persistent store is the natural next
+  step once multi-instance or across-restart durability actually matters — deliberately deferred
+  rather than adding a production dependency this ticket doesn't need. Agent items never touch
+  Ship's `documents` table (the ticket's own "already made" design decision) — `ItemStore` is a
+  completely separate object graph the agent's process owns.
+- `proactive.ts` — `pollChangeFeed`, `buildMentionItems`, `buildBlockingApprovalItems`: the
+  deterministic detection logic, composed as small functions independent of the graph so each is
+  unit-testable on its own.
+- `proactivePoll.ts` — `createProactivePoller`, the production `setInterval` wrapper around one
+  graph `invoke()` per tick, carrying the cursor forward and never crashing the process on a failed
+  tick (the next tick retries from the same `since`, no gap).
+- `config.ts` — two new env-driven knobs: `PROACTIVE_POLL_INTERVAL_MS` (default 60000, the ticket's
+  own steady-tier cadence) and `PROACTIVE_INITIAL_LOOKBACK_MS` (default 24h, the first-ever-poll
+  bootstrap window).
+- `index.ts` — wires the real graph (real `ChatAnthropic`, real `ShipClient`, `InMemoryItemStore`)
+  and starts the poller once config is complete; stays up with the poller simply not started
+  otherwise (same graceful-degradation shape as FG-4's `/ready`).
+
+**Scope note:** this ticket implements the POLL-BASED steady tier only (~60s cadence, per the
+ticket's own Scope section: "Poll the change feed ... on the steady 60s tick"). The save-hook fast
+tier (~3s, FLEETGRAPH.MD's trigger table) requires a hook inside Ship's own save path that does not
+exist yet and is not in this ticket's scope — the ticket's own "Performance requirement" section
+frames the save hook as a future optimization on top of this poll-based baseline, not something
+this ticket depends on. The 60s cadence leaves the required "<5 minutes" margin large.
+
+**Regression tests — stable fakes only (`ShipClientLike`), no live Ship API call anywhere in the
+suite (112 total cases in the package now, up from 52 before this ticket — 60 new/changed, verified
+by diffing `it(` counts per file, not estimated). Confirmed red for the right reason before the fix** (verified live during this work — not just asserted — by temporarily
+reverting the visibility check and the approval-clearing logic and re-running; both failed exactly
+where expected, transcripts below are the assertions that caught it, not the manual repro steps):
+- `agent/src/__tests__/mentions.test.ts` (13 cases) — both mention shapes, malformed content, no
+  false match without the leading `@`.
+- `agent/src/__tests__/visibility.test.ts` (4 cases) — the exact rule from
+  `api/src/middleware/visibility.ts`, no admin branch.
+- `agent/src/__tests__/roles.test.ts` (3 cases) — manager lookup, graceful `null` when absent.
+- `agent/src/__tests__/itemStore.test.ts` (6 cases) — upsert-not-duplicate, `createdAt` preserved
+  across updates, ranking (`blocking_approval` before `mention`, then by `blockedCount`/age).
+- `agent/src/__tests__/shipClient.test.ts` (5 cases) — URL/auth-header construction, non-ok ->
+  `ShipApiError`.
+- `agent/src/__tests__/proactive.test.ts` (16 cases) — **the ticket's own four proofs directly**:
+  (1) a comment mention produces exactly one item, re-building from the same feed does not duplicate
+  it in the store; (2) a blocking-approval item is cleared once its `plan_approval` transitions to
+  `'approved'`; (3) an end-to-end `buildGraph(...).invoke()` run against fakes completes and writes
+  the item — timed, asserted under 5 minutes (see the test's own comment on what this does and does
+  not prove: the mechanism has no unbounded delay under fakes, not the live 60s-cadence timing the
+  ticket says is graded by a separate timed live run); (4) a mention evidenced only by a private
+  document the recipient didn't create is never created — plus the same document DOES surface to
+  its own creator, proving the check is real and not just "always false." Also: both approval
+  routing branches, the no-manager degrade case, latest-transition-wins within one window.
+- `agent/src/__tests__/proactivePoll.test.ts` (5 cases) — lookback bootstrap, cursor carried
+  forward, a failed tick calls `onError` without throwing and without advancing the cursor, the next
+  tick retries from the same `since`, `start()` schedules on the configured interval.
+- `agent/src/__tests__/graph.test.ts` (+10 cases, existing 6 untouched) — proactive node names on
+  the compiled graph, an omitted `trigger` still runs the unchanged on-demand path, `proactive_fast`
+  never calls the model, `proactive_steady` routes to the same chain, cursor advances to
+  `next_cursor`, lookback bootstrap when no cursor exists, missing `ProactiveDeps` fails loudly, and
+  a full mention resolved into the injected `ItemStore`.
+- `agent/src/__tests__/config.test.ts` — extended for the two new fields (defaults + full env read).
+
+**How to run it.** `pnpm --filter @ship/agent test` · `pnpm --filter @ship/agent type-check` ·
+`pnpm --filter @ship/agent build`.
+
+**How to roll it back.** Revert this commit. `agent/src/graph.ts`'s on-demand path is untouched by
+construction (the proactive nodes are additive, reached only via a conditional edge that a reverted
+`trigger` default never selects), so reverting drops FG-5's five new files
+(`shipClient.ts`/`mentions.ts`/`visibility.ts`/`roles.ts`/`itemStore.ts`/`proactive.ts`/
+`proactivePoll.ts`) and the state/node/config/index.ts additions cleanly, with no effect on FG-2/FG-4's
+existing `/health`/`/ready`/on-demand behavior. FG-7/FG-6/FG-8 (later commits on this same branch)
+extend the `GraphState` shape this commit adds — reverting this commit while those remain will break
+the build the same way TRO-313's own rollback note describes for its bundle; revert newest-first.
+
+---
+
 ## TRO-316 — [FG-11] Terraform for the agent service — Render docker web service, `/health` health-check-gated deploy, plan captured and annotated
 
 **Part of bundle `TRO-326` ([PR-B] EPIC: Agent service foundation) — third and final sub-issue** on
