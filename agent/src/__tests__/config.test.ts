@@ -13,6 +13,11 @@ describe('loadConfig', () => {
     expect(config.shipBreakerCooldownMs).toBe(30000);
     expect(config.shipRetryMaxAttempts).toBe(3);
     expect(config.shipSelfThrottleRpm).toBe(500);
+    expect(config.proactivePollIntervalMs).toBe(60_000);
+    expect(config.proactiveInitialLookbackMs).toBe(24 * 60 * 60 * 1000);
+    // TRO-318 / FG-7: the on-demand expansion cap, grounded in
+    // FLEETGRAPH.MD's cost model — see config.ts's own docstring.
+    expect(config.onDemandDocumentCap).toBe(12);
   });
 
   it('reads every value from the provided env map, not process.env', () => {
@@ -28,6 +33,9 @@ describe('loadConfig', () => {
       SHIP_BREAKER_COOLDOWN_MS: '15000',
       SHIP_RETRY_MAX_ATTEMPTS: '4',
       SHIP_SELF_THROTTLE_RPM: '250',
+      PROACTIVE_POLL_INTERVAL_MS: '30000',
+      PROACTIVE_INITIAL_LOOKBACK_MS: '3600000',
+      ON_DEMAND_DOCUMENT_CAP: '20',
     });
 
     expect(config).toEqual({
@@ -42,6 +50,9 @@ describe('loadConfig', () => {
       shipBreakerCooldownMs: 15000,
       shipRetryMaxAttempts: 4,
       shipSelfThrottleRpm: 250,
+      proactivePollIntervalMs: 30000,
+      proactiveInitialLookbackMs: 3600000,
+      onDemandDocumentCap: 20,
     });
   });
 
@@ -49,6 +60,12 @@ describe('loadConfig', () => {
     const config = loadConfig({ PORT: 'not-a-number', SHIP_REQUEST_TIMEOUT_MS: 'also-not' });
     expect(config.port).toBe(3100);
     expect(config.shipRequestTimeoutMs).toBe(5000);
+  });
+
+  it('never lets ON_DEMAND_DOCUMENT_CAP resolve to 0 or a negative number — the cap must stay a real limit', () => {
+    expect(loadConfig({ ON_DEMAND_DOCUMENT_CAP: '0' }).onDemandDocumentCap).toBe(12);
+    expect(loadConfig({ ON_DEMAND_DOCUMENT_CAP: '-5' }).onDemandDocumentCap).toBe(12);
+    expect(loadConfig({ ON_DEMAND_DOCUMENT_CAP: 'not-a-number' }).onDemandDocumentCap).toBe(12);
   });
 });
 
