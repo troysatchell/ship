@@ -143,6 +143,88 @@ export class ShipApiError extends Error {
  */
 export type ShipClientLike = Pick<ShipClient, 'getChangeFeed' | 'getDocument' | 'getPeople'>;
 
+/**
+ * An association edge as returned by `GET /api/documents/:id/associations`
+ * (forward — `document_id` is the id you asked about, `related_id` is what
+ * it points at). Deliberately does NOT declare `related_title`/
+ * `related_document_type`, even though the route returns them: that route
+ * checks access on the ANCHOR document only (`associations.ts`'s
+ * `canAccessDocument(id, ...)`), never on each joined `related_id` — so a
+ * private document's title can leak through this response. `expansion.ts`
+ * never reads those fields for exactly that reason; every candidate is
+ * re-fetched through `getDocument` (which DOES check per-document access)
+ * before anything about it is trusted. `relationship_type` is kept as a
+ * bare `string`, not narrowed to a literal union — this enum has already
+ * grown once this sprint ('blocks', FG-15/TRO-333) and an agent-side literal
+ * type would need editing every time it grows again.
+ */
+export interface AssociationForwardEdge {
+  related_id: string;
+  relationship_type: string;
+}
+
+/** Same shape, from `GET /api/documents/:id/reverse-associations` — rows
+ * where `related_id` is the id you asked about and `document_id` is what
+ * points AT it. Same title-leak caveat as `AssociationForwardEdge`. */
+export interface AssociationReverseEdge {
+  document_id: string;
+  relationship_type: string;
+}
+
+/** `GET /api/documents/:id/backlinks` (`document_links`, FG-7/TRO-318) —
+ * already visibility-filtered server-side (`backlinks.ts` joins
+ * `VISIBILITY_FILTER_SQL` on the source document), unlike the associations
+ * endpoints above. */
+export interface BacklinkEntry {
+  id: string;
+  document_type: string;
+  title: string;
+  display_id?: string;
+}
+
+/** `GET /api/documents/:id/comments`. Only the fields the expansion walk
+ * actually reads from a comment (content + who + when) — see
+ * `comments.ts`'s route for the full response shape. */
+export interface CommentEntry {
+  id: string;
+  content: string;
+  author: { id: string; name: string; email: string | null };
+  created_at: string;
+  resolved_at: string | null;
+}
+
+/** One row of `GET /api/issues?assignee_id=...` — "the people and their
+ * other work" (TRO-318's Scope section). Narrower than the route's full
+ * `IssueListItem` response; only what `expansion.ts` reads. */
+export interface AssigneeIssueSummary {
+  id: string;
+  title: string;
+  state: string;
+  updated_at: string;
+}
+
+/**
+ * The on-demand expansion walk's own dependency surface (TRO-318 / FG-7) —
+ * a STRICT ADDITION on top of `ShipClientLike`, not a widening of it.
+ * `ShipClientLike` stays exactly as FG-5 left it (`getChangeFeed` /
+ * `getDocument` / `getPeople`) deliberately: every existing proactive test
+ * across this package builds its own local `ShipClientLike`-typed fake
+ * object literal (`proactive.test.ts`, `proactivePoll.test.ts`,
+ * `graph.test.ts`'s own proactive describe block), and widening that type
+ * with new REQUIRED methods would break every one of them at compile time
+ * for a capability the proactive path never uses. `OnDemandDeps.shipClient`
+ * (`graph.ts`) depends on THIS type instead — `getDocument` plus the five
+ * graph-walk reads FG-7 adds. Deliberately excludes `getChangeFeed`/
+ * `getPeople`: the expansion walk never polls the change feed and never
+ * needs the whole people directory (role-derivation via `roles.ts` was
+ * considered and left out of this ticket's ranking — see graph.ts's
+ * `buildCandidatesFromDocument` docstring).
+ */
+export type OnDemandShipClientLike = Pick<
+  ShipClient,
+  'getDocument' | 'getAssociations' | 'getReverseAssociations' | 'getBacklinks' | 'getComments' | 'getIssuesByAssignee'
+>;
+
 export interface ShipClientOptions {
   baseUrl: string;
   token: string;
@@ -190,5 +272,56 @@ export class ShipClient {
 
   async getPeople(): Promise<ShipPerson[]> {
     return this.getJson<ShipPerson[]>(`${this.base}/api/team/people`);
+  }
+
+  /** Forward associations FROM `documentId` (`associations.ts`'s
+   * `GET /:id/associations`) — containment (parent/project/sprint/program)
+   * plus `blocks` (FG-15/TRO-333), all in one generic surface since
+   * `associations.ts` never filtered by type on this route unless asked. */
+  async getAssociations(documentId: string, type?: string): Promise<AssociationForwardEdge[]> {
+    const url = new URL(`${this.base}/api/documents/${documentId}/associations`);
+    if (type !== undefined) {
+      url.searchParams.set('type', type);
+    }
+    return this.getJson<AssociationForwardEdge[]>(url.toString());
+  }
+
+  /** Associations pointing AT `documentId` (`associations.ts`'s
+   * `GET /:id/reverse-associations`) — e.g. every issue in a week, or every
+   * issue that `blocks` this one. */
+  async getReverseAssociations(documentId: string, type?: string): Promise<AssociationReverseEdge[]> {
+    const url = new URL(`${this.base}/api/documents/${documentId}/reverse-associations`);
+    if (type !== undefined) {
+      url.searchParams.set('type', type);
+    }
+    return this.getJson<AssociationReverseEdge[]>(url.toString());
+  }
+
+  /** Documents that link to `documentId` (`backlinks.ts`'s `document_links`
+   * table) — "documents that mention it" (TRO-318's Scope section). Already
+   * visibility-filtered server-side. */
+  async getBacklinks(documentId: string): Promise<BacklinkEntry[]> {
+    return this.getJson<BacklinkEntry[]>(`${this.base}/api/documents/${documentId}/backlinks`);
+  }
+
+  /** Comments on `documentId` (`comments.ts`) — evidence text attached to a
+   * document already pulled into context, never itself a walk edge to a
+   * different document (a comment lives ON a document, it does not point at
+   * one). */
+  async getComments(documentId: string): Promise<CommentEntry[]> {
+    return this.getJson<CommentEntry[]>(`${this.base}/api/documents/${documentId}/comments`);
+  }
+
+  /** Other issues assigned to `assigneeUserId` (`issues.ts`'s
+   * `GET /api/issues?assignee_id=...`) — "the people and their other work."
+   * `limit` keeps one prolific assignee from flooding a single hop's
+   * candidate set; omitted = every matching issue (the route's own default). */
+  async getIssuesByAssignee(assigneeUserId: string, limit?: number): Promise<AssigneeIssueSummary[]> {
+    const url = new URL(`${this.base}/api/issues`);
+    url.searchParams.set('assignee_id', assigneeUserId);
+    if (limit !== undefined) {
+      url.searchParams.set('limit', String(limit));
+    }
+    return this.getJson<AssigneeIssueSummary[]>(url.toString());
   }
 }

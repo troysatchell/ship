@@ -21,6 +21,176 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-318 — [FG-7] The on-demand graph: answering "what's going on with this?" now walks outward from the open document instead of stopping at it
+
+**Second of four sub-issues on branch `feat/pr-c-graph-both-modes` (bundle `TRO-327` / [PR-C] EPIC),
+landing in this order: FG-5 (done, prior commit) -> FG-7 (this commit) -> FG-6 -> FG-8. Builds on
+FG-5's shared `GraphState`/`trigger` shape without touching its proactive nodes — this is the
+SECOND execution path the bundle's LangSmith-trace requirement needs (a real loop with a variable
+number of node visits, genuinely different from FG-5's fixed four-node chain every run).**
+
+**The scoping correction this ticket exists to enforce:** the open document SEEDS the question, it
+does not FENCE it — "the boundary is what you are allowed to see, the view only decides where to
+start." From the seed the graph walks outward through associations (`parent`/`project`/`sprint`/
+`program`/`blocks` — `blocks` real since FG-15/TRO-333, not hypothetical as an earlier draft of
+this ticket assumed), reverse associations, backlinks (`document_links`), and a bounded slice of
+the same person's other assigned work — with a hard, required cap on how many documents get pulled
+in, and every one named with why.
+
+**What was verified before designing anything (not re-derived from an earlier draft):**
+- `document_associations.relationship_type` is `parent | project | sprint | program | blocks` —
+  `blocks` was added by migration `041_add_blocks_relationship.sql` (FG-15/TRO-333), landed on this
+  same branch's blocking dependency PR-A. `document_links` (backlinks) has **0 rows** in this
+  worktree's seeded database (checked directly, not assumed) — real but currently inert; the walk
+  still handles it generically.
+- `api/src/utils/document-crud.ts`'s `getBelongsToAssociations*` explicitly filters `relationship_type
+  IN ('parent','project','sprint','program')` — FG-15 already found and fixed the bug where `blocks`
+  leaked into `belongs_to`. This ticket's own candidate-discovery code (`expansion.ts`) never touches
+  that function; it calls `associations.ts`'s generic `/associations`/`/reverse-associations` routes
+  directly and classifies every `relationship_type` itself, so the same bug has nowhere to
+  reintroduce itself.
+- `associations.ts`'s forward/reverse routes check access on the ANCHOR document only
+  (`canAccessDocument(id, ...)`) — the joined `related_title`/`document_title` fields can leak a
+  private document's title even though `GET /api/documents/:id` itself correctly 404s for it. This
+  is why `expansion.ts` never trusts those inline fields for anything citable — every candidate is
+  re-resolved through `getDocument` (the real per-document visibility gate) before it becomes
+  evidence.
+- `memory-bank/fleetgraph-backlog.md`'s FG-14 cycle-protection writeup states this explicitly, ahead
+  of this ticket even starting: *"FG-7's traversal must carry its own hard document cap and its own
+  visited-set regardless of what the database promises"* — migration 040's BEFORE trigger is
+  per-relationship-type and not race-proof under concurrent writers, so the walk cannot rely on it.
+
+**What changed:**
+- `agent/src/expansion.ts` (new) — the deterministic (no model call) half of the walk, mirroring
+  `proactive.ts`'s own "small testable functions, thin graph nodes" shape:
+  - `buildCandidatesFromDocument` — one visited document's next-hop candidates: forward/reverse
+    associations (typed reason text per relationship, e.g. a reverse `blocks` edge reads "blocks
+    ...", not a generic label), backlinks ("mentions ..."), and — issues only — a capped slice of
+    the assignee's other work via the new `GET /api/issues?assignee_id=` call.
+  - `scoreCandidate`/`sortFrontierByRelevance` — the relevance ranking the ticket calls "the single
+    most important implementation constraint in the whole design": edge-type weight (a `blocks`
+    edge outranks plain containment) minus a per-hop penalty, tie-broken by `documentId` so the sort
+    is a pure function of its input, never insertion order or any other mutable counter.
+  - `visitDocument` — resolves one candidate through TWO independent visibility gates: `getDocument`
+    itself (Ship's real 404), then `passesAskerVisibility` (reusing FG-5's own `isDocumentVisibleTo`
+    verbatim, per the ticket's explicit instruction not to invent a second mechanism) as
+    belt-and-braces against exactly the associations-endpoint title leak above.
+  - `buildExpansionPrompt`/`buildCitedSources`/`capNoticeText` — prompt assembly and the citation
+    list, built directly from the same `expandedDocuments` state the walk already carries (never
+    reconstructed from the model's own prose afterward — "citations are structural, not a suffix").
+- `agent/src/graph.ts` — `GraphState` gains `seedDocumentId`, `askingUserId`, `frontier`,
+  `visitedDocumentIds`, `expandedDocuments`, `citedSources`, `expansionCapped` (additive; FG-5's own
+  fields untouched). Four new nodes: `resolveSeed` -> `expandFrontier` (a REAL loop — a conditional
+  self-edge, `routeExpansionLoop`, that keeps visiting while the frontier is non-empty) ->
+  `finalizeExpansion` -> `composeAnswer` (the one node that calls the model). `on_demand` now
+  branches on whether `state.seedDocumentId` is set: unset routes to the original, byte-for-byte
+  unchanged `ingest -> respond` chain (every existing FG-2 test/call site keeps compiling and
+  passing with zero edits); set routes into the expansion path. No new `TriggerKind` value — the
+  ticket is explicit that `on_demand` stays the trigger name for this.
+  `OnDemandDeps.documentCap` is a REQUIRED field (not `documentCap?: number`) — TypeScript itself
+  refuses to compile a call site that constructs the deps without choosing a cap, matching "the cap
+  is a required parameter, not a nice-to-have" directly rather than as a runtime-only check.
+- `agent/src/shipClient.ts` — five new `ShipClient` methods (`getAssociations`,
+  `getReverseAssociations`, `getBacklinks`, `getComments`, `getIssuesByAssignee`) and a NEW,
+  ADDITIVE `OnDemandShipClientLike` type. Deliberately NOT a widening of FG-5's own `ShipClientLike`
+  — every existing proactive test file builds its own local `ShipClientLike`-typed fake object
+  literal, and adding required methods to that shared type would have broken all of them at compile
+  time for a capability the proactive path never uses. `OnDemandDeps.shipClient` depends on the new,
+  separate type instead; FG-5's `ShipClientLike` and every file that constructs one is untouched.
+- `agent/src/config.ts` / `.env.example` — `ON_DEMAND_DOCUMENT_CAP` (default 12, `positiveInt`-
+  guarded so a misconfigured "0" can't silently disable the cap). DERIVED, not measured, from
+  FLEETGRAPH.MD's ~9,000-input-token on-demand cost estimate — there is no production traffic yet to
+  measure a better number against; said so in the code, not presented as observed.
+- `agent/src/index.ts` — wires `onDemandDeps` (the same `ShipClient` instance, which already
+  structurally satisfies `OnDemandShipClientLike`) alongside the existing `proactiveDeps`. No route
+  yet supplies `seedDocumentId`/`askingUserId` in production (FG-9/TRO-320 owns the chat panel that
+  will) — until then, every real `on_demand` invocation still takes the bare chat path.
+- `agent/src/scripts/trace-invoke-on-demand.ts` (new) — the on-demand sibling of FG-2's
+  `trace-invoke.ts`, for FG-13/TRO-324 (blocked by this ticket) to actually capture the second
+  LangSmith trace this bundle's proof item #4 needs once a real Ship deployment + seed document id
+  is available. Same live-call refusal guards as `trace-invoke.ts` (tracing must be exactly `"true"`,
+  a LangSmith key must be set) plus a Ship-token check this path additionally needs. `pnpm --filter
+  @ship/agent trace:invoke-on-demand -- <seedDocumentId> ["question"]`.
+
+**Known gap, left open rather than built speculatively:** "documents it mentions" (the SEED's own
+outbound `document_links`) has no Ship API endpoint — `backlinks.ts` only exposes the reverse
+direction. `document_links` has 0 rows in the current dev database, so this is real but currently
+inert; adding the forward endpoint is a Ship API change, judged out of scope for an agent-only
+ticket. Similarly, "what changed recently" is only exposed generically through comments/backlinks in
+this ticket — per-document `document_history` is exposed per-type today (`GET /api/issues/:id/history`,
+`weekly-plans.ts`'s own route), not through one generic endpoint; FG-6 needs exactly this and may be
+the ticket that adds it. `roles.ts` (director/PM/engineer) was read but deliberately not used for
+ranking — FG-5's "who can unblock an approval" need does not translate into "whose documents are
+more relevant to this question," and a role-weighted relevance score with no usage evidence behind
+it would be exactly the derived-not-observed claim the provenance rules warn against.
+
+**Handoff to FG-6 (standup drafts):** `expansion.ts`'s `ExpandedDocument` shape (title + reason +
+content snippet + comment snippets, gathered via the same `buildCandidatesFromDocument`/
+`fetchCommentSnippets`/`extractPlainText` functions) is already "a document, why it matters, and its
+recent comment activity" — the same raw material a standup draft's "what actually moved" needs.
+Reusing it directly (rather than re-gathering the same facts a second way) is worth considering
+before FG-6 designs its own gathering step from scratch.
+
+**Handoff to FG-8 (human gate):** this ticket's nodes never write anything — `composeAnswer`'s
+`output`/`citedSources` are returned to the caller, not persisted anywhere in Ship or the agent's
+own `ItemStore`. There is nothing for FG-8 to gate on THIS path; the human-in-the-loop concern here
+is answered structurally by the citation list itself (every source named, so "the agent went
+wandering" is always checkable), not by a write that needs approval.
+
+**Regression tests — stable fakes only (`OnDemandShipClientLike`/`AnthropicModel`), no live Ship API
+or Anthropic call anywhere in the suite. `ANTHROPIC_API_KEY` verified absent from this environment
+(checked `.env`, `.env.local`, `agent/.env.example` across the repo root and `agent/` — no real key
+anywhere), so this uses a stable fake model, same posture as FG-2/FG-5, not a recorded live
+response. 144 tests total in the package now (up from 112 after FG-5 — 32 new: 26 in `expansion.ts`,
+5 in `graph.ts`, 1 in `config.ts`), all against stable fakes. Confirmed red for the right reason
+before the fix** (verified live, not just asserted: `git checkout --` on `graph.ts`/`shipClient.ts`
+plus moving the new `expansion.ts` aside — never `git stash`, which is banned in this repo's
+worktrees for corrupting sibling worktrees' stash entries — then re-running; `expansion.test.ts`
+failed to even load, `TS2305`-shaped: `Cannot find module '../expansion.js'`; all 5 new `graph.test.ts`
+cases failed for real behavioral reasons — `citedSources`/`expandedDocuments` undefined because the
+old `GraphState` has no such fields, and the "missing `OnDemandDeps` should throw" case instead found
+the promise *resolving*, proving the old code silently ignored `seedDocumentId` rather than expanding
+it — while all 14 pre-existing `graph.test.ts` cases kept passing against the reverted source,
+confirming nothing else broke):
+- `agent/src/__tests__/expansion.test.ts` (26 cases, new) — ranking (hop decay, edge-type weight,
+  deterministic tie-break), candidate classification for every relationship type in both directions
+  plus an unrecognized-type fallback, backlinks, assignee-other-work (bounded, self-excluded),
+  citation projection, comment-snippet ordering/truncation/failure-swallowing, TipTap plain-text
+  extraction, prompt assembly (including the "nothing resolved" empty case), the cap notice text,
+  and `visitDocument`'s three outcomes (success, fetch failure, visibility-check failure).
+- `agent/src/__tests__/graph.test.ts` (+5 cases, existing 14 untouched) — **the ticket's own four
+  proofs, against real FG-3 seed-fixture ids/titles pulled from this worktree's actual database
+  (`testCase1_stale`/`testCase3_week`/`testCase1_commented`/`testCase3_closedIssues[0]`), not
+  synthetic placeholders**: (1) a question about the stalled issue produces exactly four cited
+  sources — the seed, its week, a related issue (reached via a reverse `sprint` sibling edge), and
+  the assignee's other work item carrying a real seeded comment verbatim — each with a reason, and
+  the model's prompt contains every one of their titles; (2) a seed with 10 real forward-association
+  candidates and `documentCap: 3` pulls in exactly 3 documents, sets `expansionCapped: true`, and the
+  output names the limit rather than truncating silently; (3) a related document simulating the
+  associations-endpoint title-leak (private, not owned by the asker) is attempted (present in
+  `visitedDocumentIds`, so never retried) but absent from both `citedSources` and the model's prompt,
+  while a genuinely visible sibling candidate IS cited — proving `passesAskerVisibility` does real
+  work, not that the mock happened to 404; plus a routing test that `on_demand` with a
+  `seedDocumentId` but no `OnDemandDeps` throws (rather than the old silent no-op it was compared
+  against), and a backward-compatibility test that `on_demand` with no seed still runs the bare
+  `ingest -> respond` chain even when `OnDemandDeps` IS supplied.
+- `agent/src/__tests__/config.test.ts` (+1 case, existing 6 extended in place for the new field) —
+  `ON_DEMAND_DOCUMENT_CAP` default, full-env read, and never resolving to 0/negative.
+
+**How to run it.** `pnpm --filter @ship/agent test` · `pnpm --filter @ship/agent type-check` ·
+`pnpm --filter @ship/agent build`.
+
+**How to roll it back.** Revert this commit. `agent/src/graph.ts`'s bare on-demand path
+(`ingest -> respond`) and FG-5's entire proactive chain are untouched by construction — the
+expansion nodes are additive, reached only when a caller explicitly sets `seedDocumentId`, which
+nothing in production does yet (FG-9 is the ticket that will). Reverting drops `expansion.ts`,
+`trace-invoke-on-demand.ts`, and the state/node/config/index.ts additions cleanly. FG-6/FG-8 (later
+commits on this same branch) may extend this ticket's `GraphState` shape — reverting this commit
+while those remain will break the build the same way FG-5's own rollback note describes; revert
+newest-first.
+
+---
+
 ## TRO-317 — [FG-5] Proactive fast tier: mentions and blocking approvals now surface into a person's own inbox — the MVP's "at least one proactive detection wired end-to-end"
 
 **First of four sub-issues on branch `feat/pr-c-graph-both-modes` (bundle `TRO-327` / [PR-C] EPIC:

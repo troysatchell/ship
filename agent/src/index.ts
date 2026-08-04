@@ -1,5 +1,6 @@
 /**
- * Agent service entrypoint (TRO-313 / FG-2; extended by TRO-317 / FG-5).
+ * Agent service entrypoint (TRO-313 / FG-2; extended by TRO-317 / FG-5 and
+ * TRO-318 / FG-7).
  *
  * LangSmith tracing is controlled entirely by env vars
  * (`LANGCHAIN_TRACING_V2`, `LANGCHAIN_PROJECT`, `LANGCHAIN_API_KEY` /
@@ -15,6 +16,16 @@
  * `respond` node, never by anything on the proactive path this poller
  * drives — but `isConfigComplete` already requires the key today, so this
  * only matters once that changes.
+ *
+ * FG-7 wires the same `ShipClient` instance as `onDemandDeps.shipClient` —
+ * it already satisfies `OnDemandShipClientLike` structurally (a strict
+ * superset of `ShipClientLike`'s methods), so no second client is
+ * constructed. `documentCap` comes from `config.onDemandDocumentCap` — see
+ * that field's own docstring in `config.ts` for where the default number
+ * comes from. There is no route into the graph that supplies
+ * `seedDocumentId`/`askingUserId` yet (FG-9 owns the chat panel that will);
+ * until then, `on_demand` invocations with no seed still take the
+ * unchanged `ingest -> respond` path.
  */
 
 import 'dotenv/config';
@@ -58,7 +69,7 @@ if (!isConfigComplete(config)) {
     client: buildShipClient(config),
   });
   const itemStore = new InMemoryItemStore();
-  const graph = buildGraph(model, { shipClient, itemStore });
+  const graph = buildGraph(model, { shipClient, itemStore }, { shipClient, documentCap: config.onDemandDocumentCap });
 
   const poller = createProactivePoller({
     graph,

@@ -35,6 +35,19 @@ export interface AgentConfig {
   /** How far back the FIRST proactive poll (no cursor carried forward yet —
    * a fresh start/redeploy) looks, in ms (FG-5). */
   proactiveInitialLookbackMs: number;
+  /** Hard cap on documents pulled into context per on-demand answer,
+   * counting the seed itself (TRO-318 / FG-7) — "the single most important
+   * implementation constraint in the whole design" (FLEETGRAPH.MD's Cost
+   * Analysis: on-demand is already 64% of projected spend). `graph.ts`'s
+   * `OnDemandDeps.documentCap` has no default of its own on purpose (see
+   * that interface's docstring) — this is the one place a concrete number
+   * is chosen, so it can be reasoned about and changed in one spot. DERIVED,
+   * not measured: FLEETGRAPH.MD's cost model estimates ~9,000 input tokens
+   * per on-demand answer with no cap stated; 12 documents at a few hundred
+   * tokens of title/snippet/comment context each is consistent with that
+   * figure without re-deriving it from scratch. There is no production
+   * traffic yet to measure a better number against. */
+  onDemandDocumentCap: number;
 }
 
 const DEFAULT_PORT = 3100;
@@ -46,6 +59,7 @@ const DEFAULT_RETRY_MAX_ATTEMPTS = 3;
 const DEFAULT_SELF_THROTTLE_RPM = 500;
 const DEFAULT_PROACTIVE_POLL_INTERVAL_MS = 60_000;
 const DEFAULT_PROACTIVE_INITIAL_LOOKBACK_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_ON_DEMAND_DOCUMENT_CAP = 12;
 
 function positiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
@@ -77,6 +91,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
       env.PROACTIVE_INITIAL_LOOKBACK_MS,
       DEFAULT_PROACTIVE_INITIAL_LOOKBACK_MS
     ),
+    // `positiveInt` also guarantees >= 1 here — a misconfigured "0" cannot
+    // silently disable expansion (`OnDemandDeps.documentCap`'s own docstring:
+    // "required, not a nice-to-have").
+    onDemandDocumentCap: positiveInt(env.ON_DEMAND_DOCUMENT_CAP, DEFAULT_ON_DEMAND_DOCUMENT_CAP),
   };
 }
 
