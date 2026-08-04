@@ -1,0 +1,39 @@
+# reference-transaction hook — records every write to refs/stash, so the
+# factory gate can detect a `git stash` (even a clean push+pop/drop) that
+# happened during a ticket's work, despite the working tree showing no
+# trace afterward.
+#
+# WHY THIS EXISTS: the `git stash` ban (lessons.md, TRO-215 — refs/stash is
+# shared across every worktree off one common .git, so a sibling worktree
+# can pop/drop an agent's stash within minutes) has now been violated 3
+# times (TRO-215, TRO-208/TRO-206, TRO-319) despite being stated in every
+# agent brief. This factory's own recurrence policy — "once a rule has been
+# stated and ignored three times, restating it louder is not the fix, a
+# check is" (review-patterns.mjs's own header) — says that crossed the bar.
+# A source-diff checker can't see this: push+pop leaves the working tree,
+# `git stash list`, and even `.git/logs/refs/stash` exactly as before if the
+# stash list started empty. Only a hook firing on the write itself, before
+# it can be undone, catches it reliably.
+#
+# Husky owns core.hooksPath in this repo (see `.husky/_/h`), so this is
+# where a real git hook has to live to ever run — `.git/hooks/*` is
+# silently bypassed. `.husky/_/reference-transaction` is the auto-generated
+# shim that dispatches here; this file is the one that's actually tracked.
+#
+# Contract: git calls this with one arg (prepared|committed|aborted) and
+# feeds "<old-value> SP <new-value> SP <ref-name> LF" lines on stdin, one
+# per ref touched in the transaction.
+
+[ "$1" = "committed" ] || exit 0
+
+GIT_COMMON_DIR=$(git rev-parse --git-common-dir)
+LOG_FILE="${GIT_COMMON_DIR}/factory-stash-activity.log"
+
+while read -r old_value new_value ref_name; do
+  if [ "$ref_name" = "refs/stash" ]; then
+    printf '%s ref=%s old=%s new=%s cwd=%s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$ref_name" "$old_value" "$new_value" "$(pwd)" >> "$LOG_FILE"
+  fi
+done
+
+exit 0
