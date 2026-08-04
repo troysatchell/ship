@@ -32,7 +32,6 @@ resource "render_web_service" "agent" {
     ignore_changes = [
       notification_override,
       previews,
-      pull_request_previews_enabled,
       root_directory,
       runtime_source.docker.auto_deploy_trigger,
     ]

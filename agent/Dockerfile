@@ -18,8 +18,7 @@ FROM public.ecr.aws/docker/library/node:20-slim AS build
 
 WORKDIR /app
 
-RUN npm config set strict-ssl false
-RUN npm install -g pnpm@10.27.0 && pnpm config set strict-ssl false
+RUN npm install -g pnpm@10.27.0
 
 # Manifests first, so dependency layers cache independently of source
 # changes. pnpm-workspace.yaml lists api/web/shared/agent — every listed
@@ -43,8 +42,7 @@ FROM public.ecr.aws/docker/library/node:20-slim AS runtime
 
 WORKDIR /app
 
-RUN npm config set strict-ssl false
-RUN npm install -g pnpm@10.27.0 && pnpm config set strict-ssl false
+RUN npm install -g pnpm@10.27.0
 
 # Runtime needs agent/ only — same trimming the root Dockerfile's runtime
 # stage does for its own dependents (api + shared, not web).
