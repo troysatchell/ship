@@ -48,6 +48,15 @@ export interface AgentConfig {
    * figure without re-deriving it from scratch. There is no production
    * traffic yet to measure a better number against. */
   onDemandDocumentCap: number;
+  /** Shared secret `POST /chat` requires on the `X-Internal-Secret` header
+   * (TRO-320 / FG-9). This agent's HTTP surface is reachable from the public
+   * internet (a Render service, no private networking configured) — without
+   * this check, anyone could spend the configured Anthropic API budget and
+   * query the graph as an arbitrary `askingUserId`. No default: `undefined`
+   * means `/chat` fails closed (every request rejected), never open. Must
+   * match the value `api/`'s `AGENT_API_BASE_URL`-calling route sends —
+   * see `api/.env.example`. */
+  agentInternalSecret: string | undefined;
 }
 
 const DEFAULT_PORT = 3100;
@@ -95,12 +104,20 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     // silently disable expansion (`OnDemandDeps.documentCap`'s own docstring:
     // "required, not a nice-to-have").
     onDemandDocumentCap: positiveInt(env.ON_DEMAND_DOCUMENT_CAP, DEFAULT_ON_DEMAND_DOCUMENT_CAP),
+    agentInternalSecret: env.AGENT_INTERNAL_SECRET,
   };
 }
 
 /**
  * "Config loaded" half of /ready (TRO-313's proof section). The other half —
  * Ship reachability — is a live check, not a static one; see `health.ts`.
+ *
+ * Deliberately does NOT include `agentInternalSecret`: that field gates one
+ * route (`POST /chat`, TRO-320 / FG-9) and is checked there directly — folding
+ * it in here would make `/ready` (and the proactive poller's start condition,
+ * `index.ts`) depend on a value that has nothing to do with either. A missing
+ * secret makes `/chat` fail closed on its own; it does not make the process
+ * "not ready."
  */
 export function isConfigComplete(config: AgentConfig): boolean {
   return (

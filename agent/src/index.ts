@@ -38,13 +38,23 @@
  * them — same "not this ticket" posture FG-7 left the on-demand route in;
  * `deepDeps` is wired so the path is real and testable end-to-end, but
  * nothing calls it yet.
+ *
+ * FG-9 (TRO-320) closes the gap this file's own comment used to leave open —
+ * "there is no route into the graph that supplies seedDocumentId/
+ * askingUserId yet." `createServer` now takes the compiled `graph` as an
+ * optional dep (`server.ts`'s `CreateServerDeps.graph`) so `POST /chat` can
+ * invoke it; `graph` is only ever assigned inside the `isConfigComplete`
+ * branch below, same as `itemStore`/`draftStore` — when config is
+ * incomplete, `createServer` still gets called (still 200 on `/health`) but
+ * with no `graph`, and `/chat` degrades to a clear 503 (FG-4's contract,
+ * applied inbound this time instead of outbound).
  */
 
 import 'dotenv/config';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { loadConfig, isConfigComplete } from './config.js';
 import { createServer, buildShipClient } from './server.js';
-import { buildGraph } from './graph.js';
+import { buildGraph, type CompiledGraph } from './graph.js';
 import { ShipClient } from './shipClient.js';
 import { InMemoryItemStore } from './itemStore.js';
 import { InMemoryDraftStore } from './draftStore.js';
@@ -59,12 +69,27 @@ if (!config.langchainTracingV2) {
   );
 }
 
+if (!config.agentInternalSecret) {
+  // Independent of isConfigComplete() (config.ts's own docstring explains
+  // why) — this only means POST /chat will reject every request rather than
+  // the whole process being "not ready."
+  console.warn(
+    '[agent] AGENT_INTERNAL_SECRET is not set — POST /chat will reject every request ' +
+      '(fails closed, TRO-320 / FG-9), including legitimate ones from api/.'
+  );
+}
+
+// Assigned only inside the isConfigComplete branch below, same as
+// itemStore/draftStore — undefined here means createServer's /chat degrades
+// to a clear 503 rather than calling .invoke on nothing (server.ts).
+let graph: CompiledGraph | undefined;
+
 if (!isConfigComplete(config)) {
   console.warn(
     '[agent] Startup config is incomplete (ANTHROPIC_API_KEY, SHIP_API_BASE_URL, and/or ' +
       'SHIP_API_TOKEN missing). The process will stay up — /health still returns 200 — but ' +
       '/ready will return 503 until the missing values are set (graceful degradation, FG-4). ' +
-      'The proactive poller (FG-5) will not start either.'
+      'The proactive poller (FG-5) will not start either, and POST /chat will return 503.'
   );
 } else {
   // Config complete: wire the real graph (real model, real Ship client, the
@@ -83,7 +108,7 @@ if (!isConfigComplete(config)) {
   });
   const itemStore = new InMemoryItemStore();
   const draftStore = new InMemoryDraftStore();
-  const graph = buildGraph(
+  graph = buildGraph(
     model,
     { shipClient, itemStore },
     { shipClient, documentCap: config.onDemandDocumentCap },
@@ -108,7 +133,7 @@ if (!isConfigComplete(config)) {
   );
 }
 
-const app = createServer(config);
+const app = createServer(config, { graph });
 
 app.listen(config.port, () => {
   console.log(`[agent] listening on :${config.port}`);

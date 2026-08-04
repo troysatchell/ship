@@ -57,3 +57,82 @@ describe('GET /ready', () => {
     expect(client.get).toHaveBeenCalledTimes(3);
   });
 });
+
+// TRO-320 / FG-9: the route the Ship-side chat panel proxies through
+// (api/src/routes/agent.ts). This service is reachable from the public
+// internet (a Render service, no private networking) — the internal-secret
+// check must run BEFORE the graph is ever touched.
+describe('POST /chat', () => {
+  const SECRET = 'test-internal-secret';
+  const CHAT_CONFIG = { ...READY_CONFIG, AGENT_INTERNAL_SECRET: SECRET };
+  const VALID_BODY = { seedDocumentId: 'doc-123', question: 'why is this stalled?', askingUserId: 'user-456' };
+
+  function fakeGraph(resolved: { output: string; citedSources: unknown[]; expansionCapped: boolean }) {
+    return { invoke: vi.fn().mockResolvedValue(resolved) };
+  }
+
+  it('returns 500 when the server itself has no AGENT_INTERNAL_SECRET configured — fails closed, not open', async () => {
+    const app = createServer(loadConfig(READY_CONFIG), { graph: fakeGraph({ output: 'x', citedSources: [], expansionCapped: false }) });
+    const res = await request(app).post('/chat').send(VALID_BODY);
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('internal_secret_not_configured');
+  });
+
+  it('returns 401 when the X-Internal-Secret header is missing', async () => {
+    const app = createServer(loadConfig(CHAT_CONFIG), { graph: fakeGraph({ output: 'x', citedSources: [], expansionCapped: false }) });
+    const res = await request(app).post('/chat').send(VALID_BODY);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('unauthorized');
+  });
+
+  it('returns 401 when the X-Internal-Secret header does not match', async () => {
+    const app = createServer(loadConfig(CHAT_CONFIG), { graph: fakeGraph({ output: 'x', citedSources: [], expansionCapped: false }) });
+    const res = await request(app).post('/chat').set('X-Internal-Secret', 'wrong-secret').send(VALID_BODY);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('unauthorized');
+  });
+
+  it('returns 503 (agent not configured) when the secret matches but no graph was wired — config incomplete', async () => {
+    const app = createServer(loadConfig(CHAT_CONFIG)); // no graph dep at all
+    const res = await request(app).post('/chat').set('X-Internal-Secret', SECRET).send(VALID_BODY);
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('agent_not_configured');
+  });
+
+  it('returns 400 when the body is missing required fields, even with a valid secret and a real graph', async () => {
+    const graph = fakeGraph({ output: 'x', citedSources: [], expansionCapped: false });
+    const app = createServer(loadConfig(CHAT_CONFIG), { graph });
+    const res = await request(app).post('/chat').set('X-Internal-Secret', SECRET).send({ question: 'no seed here' });
+    expect(res.status).toBe(400);
+    expect(graph.invoke).not.toHaveBeenCalled();
+  });
+
+  it('invokes the graph with trigger "on_demand" and the seed/question/askingUserId from the request, and relays output/citedSources/expansionCapped', async () => {
+    const citedSources = [{ documentId: 'week-1', documentType: 'sprint', title: 'Week 12', reason: "the issue's week" }];
+    const graph = fakeGraph({ output: 'This issue is stalled because...', citedSources, expansionCapped: false });
+    const app = createServer(loadConfig(CHAT_CONFIG), { graph });
+
+    const res = await request(app).post('/chat').set('X-Internal-Secret', SECRET).send(VALID_BODY);
+
+    expect(graph.invoke).toHaveBeenCalledWith({
+      trigger: 'on_demand',
+      input: VALID_BODY.question,
+      seedDocumentId: VALID_BODY.seedDocumentId,
+      askingUserId: VALID_BODY.askingUserId,
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      output: 'This issue is stalled because...',
+      citedSources,
+      expansionCapped: false,
+    });
+  });
+
+  it('returns 502 (never a hang or a raw stack trace) when the graph invocation itself throws', async () => {
+    const graph = { invoke: vi.fn().mockRejectedValue(new Error('Ship unreachable mid-expansion')) };
+    const app = createServer(loadConfig(CHAT_CONFIG), { graph });
+    const res = await request(app).post('/chat').set('X-Internal-Secret', SECRET).send(VALID_BODY);
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe('graph_invoke_failed');
+  });
+});
