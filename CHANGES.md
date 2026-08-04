@@ -10307,3 +10307,29 @@ needs a local `pnpm build` before `docker build`** — it can no longer build fr
 only from a working tree that already has `shared/dist/` and `api/dist/` populated (the
 build-locally-then-ship AWS flow this ticket's own "What changed" section describes).
 
+
+---
+
+## TRO-316 — FG-11: agent service deployed, destroy-and-redeploy proof captured
+
+**What changed.** `terraform apply` (previously only `plan`-verified, no credentials available)
+created `render_web_service.agent` ("ship-agent") for real: 1 add, 0 changes to the existing
+`ship`/`ship-db` resources. Verified live `/health` and `/ready` both `200`. Then ran the ticket's
+required destroy-and-redeploy proof scoped to the agent resource only
+(`-target=render_web_service.agent`): destroyed (confirmed 404, `ship` unaffected), re-applied from
+config alone with no `import` and no manual step, verified `/health`/`/ready` `200` again on the
+newly-created instance (a different service id/URL, confirming genuine recreation, not a cached
+response). Full command sequence and captured output in
+`terraform/render/plan/tro-316-destroy-redeploy-proof.md`.
+
+**Known caveat, not hidden.** `SHIP_API_TOKEN` is a placeholder — `agent/src/config.ts`'s
+`isConfigComplete()` only requires the three secrets non-empty, doesn't validate them, so `/ready`
+genuinely passes without a working token. Minting the real per-user token and deciding which Ship
+instance the agent points at belongs to TRO-341 (FG-23), per FLEETGRAPH.MD's "no service account"
+design.
+
+**How to run it.** `cd terraform/render && terraform init && terraform plan -var-file=terraform.tfvars`
+(tfvars is gitignored — see `terraform.tfvars.example`).
+
+**Rollback.** `terraform destroy -target=render_web_service.agent -var-file=terraform.tfvars` — the
+proof above already confirms this only ever removes the agent service, never `ship`/`ship-db`.
