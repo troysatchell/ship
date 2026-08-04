@@ -83,7 +83,7 @@ components:
             - project
             - sprint
             - parent
-          description: Type of document association (containment only — see RelationshipTypeSchema for the full set including "blocks")
+          description: Type of document association (containment only — see the Association schema's relationship_type field for the full set, which also includes "blocks")
       required:
         - id
         - type
@@ -102,7 +102,7 @@ components:
             - project
             - sprint
             - parent
-          description: Type of document association (containment only — see RelationshipTypeSchema for the full set including "blocks")
+          description: Type of document association (containment only — see the Association schema's relationship_type field for the full set, which also includes "blocks")
         title:
           type: string
           description: Title of the related document
@@ -4521,6 +4521,44 @@ components:
           type: boolean
       required:
         - available
+    AgentCitedSource:
+      type: object
+      properties:
+        documentId:
+          type: string
+          format: uuid
+          description: UUID identifier
+          example: 550e8400-e29b-41d4-a716-446655440000
+        documentType:
+          type: string
+          description: Ship document_type of the cited source (e.g. "issue", "sprint", "wiki")
+        title:
+          type: string
+        reason:
+          type: string
+          description: "Why this document was pulled into the answer — FLEETGRAPH.MD: \"It names every document it pulled in and why,\" the trust mechanism the chat panel renders alongside each source."
+      required:
+        - documentId
+        - documentType
+        - title
+        - reason
+    AgentChatResponse:
+      type: object
+      properties:
+        output:
+          type: string
+          description: The agent's answer
+        citedSources:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentCitedSource"
+        expansionCapped:
+          type: boolean
+          description: True if the on-demand expansion hit its document cap before the walk ran out of candidates on its own
+      required:
+        - output
+        - citedSources
+        - expansionCapped
   parameters:
 {}
 paths:
@@ -8459,3 +8497,39 @@ paths:
                 $ref: "#/components/schemas/RetroAnalysisResult"
         429:
           description: Rate limit exceeded (max 10 per hour)
+  /agent/chat:
+    post:
+      tags:
+        - Agent
+      summary: Ask the FleetGraph agent a question seeded by an open document
+      description: Proxies to the agent service (AGENT_API_BASE_URL) over a shared-secret-authenticated internal call — the browser never calls the agent service directly, since it has no concept of a Ship session. askingUserId is taken from the authenticated session (never from the request body) and forwarded so the agent runs the on-demand expansion walk under that user's own visibility, not an elevated one. Returns a clean degraded shape — never a hang — when the agent is unreachable or not configured on either side.
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                seedDocumentId:
+                  type: string
+                  format: uuid
+                  description: The document open when the question was asked. Seeds, but does not fence, the expansion walk.
+                  example: 550e8400-e29b-41d4-a716-446655440000
+                question:
+                  type: string
+                  minLength: 1
+              required:
+                - seedDocumentId
+                - question
+      responses:
+        200:
+          description: The agent's answer, with every document it pulled in and why
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentChatResponse"
+        400:
+          description: Missing seedDocumentId or question
+        502:
+          description: The agent service is unreachable, timed out, or returned an error
+        503:
+          description: The agent is not configured — AGENT_INTERNAL_SECRET is unset on this side, so no request was sent
