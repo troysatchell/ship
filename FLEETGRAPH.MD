@@ -371,17 +371,23 @@ infrastructure actions require confirmation every time, no standing approval).
    Render only ever builds from a branch that already passed CI to get there — a failing CI run
    never reaches `main` in the first place, so it never reaches Render's `auto_deploy` trigger
    either. This is the primary rollback: prevention before promotion, not correction after.
-2. **Render's own health-check-gated promotion is the safety net for whatever CI cannot catch**
-   (a runtime failure that only manifests after deploy — a missing env var, a crash on boot). Per
-   Render's documented zero-downtime deploy behavior, a new deploy is only promoted to receive live
-   traffic once its configured `health_check_path` (`/health` — process alive, from FG-2) returns
-   healthy within the deploy's startup window; if it never does, Render keeps the **previous**
-   successful deploy serving traffic and marks the new one failed. This is genuinely automatic and
-   requires no Terraform beyond setting `health_check_path` correctly, which `agent_service.tf`
-   does. `/ready` is deliberately NOT what Render's platform check points at — `/health` needs to
-   be true for Render to promote a build at all; `/ready` (Ship reachable, FG-4's resilient client)
-   can legitimately be false on a healthy, freshly-promoted instance if Ship itself is briefly down,
-   and that must not be read as "the deploy failed."
+2. **Render's own health-check-gated promotion is a liveness safety net, not a readiness one.**
+   `/health` (`health_check_path`, from FG-2) returns 200 whenever the process is up — it makes no
+   config check and no Ship-dependency check (`agent/src/server.ts`). Per Render's documented
+   zero-downtime deploy behavior, a new deploy is only promoted to receive live traffic once
+   `/health` returns healthy within the deploy's startup window; if it never does — the process
+   crashes on boot, or hangs — Render keeps the **previous** successful deploy serving traffic and
+   marks the new one failed. That much is genuinely automatic and requires no Terraform beyond
+   setting `health_check_path` correctly, which `agent_service.tf` does.
+   **What this does NOT catch:** a deploy that boots cleanly but is missing
+   `ANTHROPIC_API_KEY`/`SHIP_API_TOKEN`, or cannot reach Ship, still passes `/health` and is still
+   promoted to live traffic — none of this is a readiness gate. `/ready` (config complete AND Ship
+   reachable, FG-4's resilient client) reports that case as `503`, but `/ready` is deliberately NOT
+   what Render's platform check points at, and no separate readiness check is currently configured
+   or validated for that purpose — a deploy with a missing secret or an unreachable Ship still
+   receives traffic today. `/ready` can also legitimately be false on a healthy, freshly-promoted
+   instance if Ship itself is briefly down, and that specific case must not be read as "the deploy
+   failed."
 
 ---
 

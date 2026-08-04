@@ -68,10 +68,16 @@ non-AWS compute. Followed the same **discipline** (sensitive variables, no defau
 - `FLEETGRAPH.MD` "Deployment model" — the rollback trigger/procedure the brief requires documented:
   (1) CI gates *merge*, so a failing CI run never reaches the branch Render watches in the first
   place (`.github/workflows/ci.yml`'s own header: "the merge gate the ticket factory depends on");
-  (2) Render's own health-check-gated deploy promotion is the safety net for runtime failures CI
-  can't catch — a new deploy that never passes `/health` never receives traffic, and the previous
-  good deploy keeps serving. `/ready` is deliberately NOT what Render's platform check points at,
-  since it can legitimately be false on a freshly-promoted, healthy instance if Ship is briefly down.
+  (2) Render's own health-check-gated deploy promotion is a **liveness** safety net, not a readiness
+  one: `/health` (what `health_check_path` points at) returns 200 whenever the process is up, with
+  no config or Ship-dependency check (`agent/src/server.ts`) — so it only catches a process that
+  fails to boot or hangs, never a missing secret or an unreachable Ship. A new deploy that never
+  passes `/health` never receives traffic, and the previous good deploy keeps serving; a deploy that
+  boots fine but is missing `ANTHROPIC_API_KEY`/`SHIP_API_TOKEN`, or can't reach Ship, is still
+  promoted and still receives traffic — `/ready` reports that as `503`, but `/ready` is deliberately
+  NOT what Render's platform check points at (no separate readiness check is configured for that
+  purpose), and it can also legitimately be false on a freshly-promoted, healthy instance if Ship is
+  briefly down.
 
 **`terraform plan` — captured and annotated in full: `terraform/render/plan/tro-316-agent-plan-annotated.md`.**
 Two captures: (1) with `RENDER_API_KEY` unset (this environment's real, unmodified state) — fails
@@ -94,8 +100,21 @@ ticket, real secret values, and explicit sign-off to `apply`).
 (after copying `terraform.tfvars.example` and filling in real values, and exporting `RENDER_API_KEY`).
 `docker build -f agent/Dockerfile -t ship-agent .` from the repo root to build the image standalone.
 
-**How to roll it back.** Revert this commit. No resource here has ever been applied (plan-only), so
-there is nothing live to tear down — reverting only removes the config and the Dockerfile.
+**How to roll it back.** Two different procedures, depending on whether `apply` has run.
+- **Now (pre-apply, plan-only — this PR's actual state):** revert this commit. No resource here has
+  ever been applied, so there is nothing live to tear down — reverting only removes the Terraform
+  config and the Dockerfile.
+- **After a human runs `terraform apply` (not done in this PR):** reverting the commit alone does
+  NOT remove the live Render service — git history and live infrastructure are independent once
+  `apply` has run. Removing `render_web_service.agent` for real requires a subsequent `terraform
+  plan`/`apply` (either after reverting `agent_service.tf` in a new commit, or via `terraform destroy
+  -target=render_web_service.agent`) so Terraform actually issues the delete against Render's API.
+  Until that apply runs, the service — and its billing — stays live regardless of what git shows.
+  This is exactly the kind of irreversible, outward-facing infrastructure action this bundle's
+  escalation gate #2 requires explicit human confirmation for, the same as the original `apply`.
+  If the intent is to restore a prior good deploy rather than delete the resource entirely, that is
+  a Render-side deploy rollback, not a Terraform one — Terraform manages the resource's existence
+  and config, not its deploy history.
 
 ---
 
@@ -222,8 +241,21 @@ implementation line, green after — see PR body for the exact before/after tran
 `:3100` by default) · `set -a; source .env.local; set +a && pnpm --filter @ship/agent trace:invoke`
 for a fresh live trace.
 
-**How to roll it back.** Revert this commit and remove `'agent'` from `pnpm-workspace.yaml`; no
-other package depends on `agent/`, so nothing else is affected.
+**How to roll it back.** Not independent of the other two tickets in this bundle. `TRO-315`
+(`c1f8b09`) and `TRO-316` (`cbee4ae`) are later commits on this same branch that both consume the
+`agent/` package this commit creates: TRO-315 adds `resilientClient.ts`/`circuitBreaker.ts`/
+`rateLimiter.ts` into `agent/src/` and rewires `health.ts`/`server.ts`/`config.ts` to use them, and
+TRO-316 adds `agent/Dockerfile` plus a Terraform plan (`terraform/render/agent_service.tf`,
+un-applied) that builds and deploys the package this commit creates. Reverting *this* commit alone
+while those two remain breaks the build — files they add or edit import things this commit created.
+- **To fully undo the agent service:** revert newest-first — `cbee4ae` (TRO-316), then `c1f8b09`
+  (TRO-315), then this commit — and only as the last step, once all three are gone, remove `'agent'`
+  from `pnpm-workspace.yaml`. Doing that removal any earlier is the under-scoped version of this
+  rollback and will break whichever of TRO-315/TRO-316 is still present.
+- **To roll back only this ticket while TRO-315/TRO-316 stay:** not possible as a plain revert —
+  both later commits depend on files this one adds. Re-implementing FG-2's narrower scope (a bare
+  `fetch`-based `/ready`, no resilient client, no deploy) on top of what TRO-315/TRO-316 built would
+  be a forward fix, not a revert.
 
 ---
 
