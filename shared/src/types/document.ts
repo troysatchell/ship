@@ -6,6 +6,15 @@ export type DocumentVisibility = 'private' | 'workspace';
 // Association relationship types for belongs_to array
 export type BelongsToType = 'program' | 'project' | 'sprint' | 'parent';
 
+// Full set of document_associations relationship types, including 'blocks'
+// (FG-15 / TRO-333). Deliberately NOT folded into BelongsToType: 'blocks' is
+// a dependency edge, not containment, and belongs_to (the array returned on
+// documents/issues) means containment specifically. Use RelationshipType for
+// the association CRUD surface (api/src/routes/associations.ts), where the
+// full set is valid; use BelongsToType for anything reading/writing the
+// belongs_to array itself.
+export type RelationshipType = BelongsToType | 'blocks';
+
 // BelongsTo association entry - unified format for all document relationships
 export interface BelongsTo {
   id: string;

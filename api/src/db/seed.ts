@@ -1242,6 +1242,416 @@ async function seed() {
       console.log(`✅ Created ${weeklyRetrosCreated} weekly retros`);
     }
 
+    // ==========================================================================
+    // FG-3 / TRO-314: fixture work — the trigger states the seed never created.
+    //
+    // The agent drafts from observed activity; the load-testing fixture above
+    // records none of it. Gated on document_history being empty for THIS
+    // workspace, rather than a per-row existence check, because none of
+    // document_history, comments, or a plan_approval transition has a natural
+    // key to ON CONFLICT against — this is the same "verified" baseline the
+    // ticket measured (document_history and comments both 0 rows), so an
+    // empty document_history is exactly the "not seeded yet" signal. Scoped
+    // to workspaceId (via a join, since document_history has no workspace_id
+    // column of its own) rather than a bare global count, so a database that
+    // happens to hold history for some other workspace cannot make this
+    // Ship-Workspace-specific block silently skip itself. A re-run of
+    // `pnpm db:seed` against an already-fixtured database is a no-op for this
+    // block, same as every check-before-insert block above it.
+    // ==========================================================================
+    const fg3Baseline = await pool.query(
+      `SELECT COUNT(*) FROM document_history dh
+       JOIN documents d ON d.id = dh.document_id
+       WHERE d.workspace_id = $1`,
+      [workspaceId]
+    );
+    if (parseInt(fg3Baseline.rows[0].count, 10) > 0) {
+      console.log('ℹ️  FG-3 fixture trigger states already seeded (document_history is non-empty for this workspace)');
+    } else {
+      console.log('🌱 Seeding FG-3 fixture trigger states (history, comments, timestamps, approvals)...');
+
+      // A Linear comment on TRO-314 records these ids as "concrete document ids"
+      // per the ticket's own proof requirement.
+      const fg3TestCaseIds: Record<string, string> = {};
+
+      // ---- started_at / completed_at on closed issues (Scope item 3) --------
+      // "at least some closing inside the current week", computed from the
+      // same sprint_start_date + currentSprintNumber this file already uses
+      // for "current sprint" everywhere else — not a separate day-count guess.
+      const currentWeekStart = new Date(sprintStartDate);
+      currentWeekStart.setUTCDate(currentWeekStart.getUTCDate() + (currentSprintNumber - 1) * 7);
+      const currentWeekEnd = new Date(currentWeekStart);
+      currentWeekEnd.setUTCDate(currentWeekEnd.getUTCDate() + 7);
+
+      // Not anchored to documents.created_at: this seed (like the rest of the
+      // file) never backdates created_at to match an issue's conceptual
+      // sprint — every row's created_at is essentially "whenever this seed
+      // script ran", regardless of which past/future sprint its properties
+      // place it in. started_at/completed_at are the fields that carry the
+      // narrative history here, so they are only checked against each other
+      // (started <= completed), not against created_at.
+      // `started_at IS NULL` defends this against ever overwriting a
+      // lifecycle timestamp some other path (real usage against this
+      // database, or a future seed change) already set — this block only
+      // needs to backfill issues that genuinely have nothing yet.
+      const doneIssues = await pool.query(
+        `SELECT id FROM documents
+         WHERE workspace_id = $1 AND document_type = 'issue' AND properties->>'state' = 'done'
+           AND started_at IS NULL
+         ORDER BY ticket_number`,
+        [workspaceId]
+      );
+      let closedInCurrentWeek = 0;
+      for (const [i, issue] of doneIssues.rows.entries()) {
+        let completedAt: Date;
+        if (i % 4 === 0) {
+          // Every 4th done issue closes inside the current week, capped at
+          // "now" so a week that has not fully elapsed yet never produces a
+          // future completed_at.
+          const windowMs = currentWeekEnd.getTime() - currentWeekStart.getTime();
+          const elapsedMs = Math.max(60_000, Math.min(windowMs, Date.now() - currentWeekStart.getTime()));
+          completedAt = new Date(currentWeekStart.getTime() + Math.floor(Math.random() * elapsedMs));
+          closedInCurrentWeek++;
+        } else {
+          // The rest spread across the last ~5 weeks so "sitting for N days"
+          // has a realistic distribution rather than everything on one day.
+          const daysAgo = 8 + Math.floor(Math.random() * 30);
+          completedAt = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+        }
+        const startDelayDays = 1 + Math.floor(Math.random() * 4);
+        const startedAt = new Date(completedAt.getTime() - startDelayDays * 24 * 60 * 60 * 1000);
+
+        await pool.query(
+          `UPDATE documents SET started_at = $1, completed_at = $2 WHERE id = $3`,
+          [startedAt, completedAt, issue.id]
+        );
+      }
+      console.log(`✅ Backfilled started_at/completed_at on ${doneIssues.rows.length} done issues (${closedInCurrentWeek} closed inside the current week)`);
+
+      // ---- Test Case 1 (FLEETGRAPH.MD): engineer with 3 assigned issues, ----
+      // ---- activity since their last standup ---------------------------------
+      const currentShipCoreSprint = sprints.find(
+        s => s.programId === shipCoreProgram.id && s.number === currentSprintNumber
+      );
+      if (currentShipCoreSprint) {
+        // Excludes 'done' issues deliberately: Test Case 3 below needs the
+        // current sprint's done issues left untouched to close 3 of them
+        // within the week, and promoting an already-done issue to
+        // 'in_review' would also be a state regression, not the "moved
+        // forward" narrative this test case is for.
+        const engineerCandidate = await pool.query(
+          `SELECT d.properties->>'assignee_id' as assignee_id, count(*) as cnt
+           FROM documents d
+           JOIN document_associations da ON da.document_id = d.id
+             AND da.related_id = $1 AND da.relationship_type = 'sprint'
+           WHERE d.workspace_id = $2 AND d.document_type = 'issue'
+             AND d.properties->>'assignee_id' IS NOT NULL
+             AND d.properties->>'state' != 'done'
+           GROUP BY d.properties->>'assignee_id'
+           ORDER BY count(*) DESC
+           LIMIT 1`,
+          [currentShipCoreSprint.id, workspaceId]
+        );
+        const engineerRow = engineerCandidate.rows[0] as { assignee_id: string; cnt: string } | undefined;
+        if (engineerRow && parseInt(engineerRow.cnt, 10) >= 3) {
+          const engineer = allUsers.find((u: { id: string }) => u.id === engineerRow.assignee_id);
+          const engineerIssues = await pool.query(
+            `SELECT d.id, d.title, d.properties->>'state' as state
+             FROM documents d
+             JOIN document_associations da ON da.document_id = d.id
+               AND da.related_id = $1 AND da.relationship_type = 'sprint'
+             WHERE d.workspace_id = $2 AND d.document_type = 'issue' AND d.properties->>'assignee_id' = $3
+               AND d.properties->>'state' != 'done'
+             ORDER BY d.ticket_number
+             LIMIT 3`,
+            [currentShipCoreSprint.id, workspaceId, engineerRow.assignee_id]
+          );
+          const [issueA, issueB, issueC] = engineerIssues.rows as Array<
+            { id: string; title: string; state: string } | undefined
+          >;
+          if (engineer && issueA && issueB && issueC) {
+            // A standup from 3 days ago — the "since their last standup" anchor
+            // this test case's activity is measured against.
+            const standupResult = await pool.query(
+              `INSERT INTO documents (workspace_id, document_type, title, content, created_by, properties, created_at)
+               VALUES ($1, 'standup', $2, $3, $4, $5, NOW() - INTERVAL '3 days')
+               RETURNING id`,
+              [
+                workspaceId,
+                `Standup - ${engineer.name} (FG-3 fixture)`,
+                JSON.stringify({
+                  type: 'doc',
+                  content: [
+                    { type: 'paragraph', content: [{ type: 'text', text: `Yesterday: Working through ${issueA.title}.` }] },
+                    { type: 'paragraph', content: [{ type: 'text', text: 'Today: Continuing current sprint work.' }] },
+                    { type: 'paragraph', content: [{ type: 'text', text: 'Blockers: None' }] },
+                  ],
+                }),
+                engineer.id,
+                JSON.stringify({ author_id: engineer.id }),
+              ]
+            );
+            await createAssociation(pool, standupResult.rows[0].id, currentShipCoreSprint.id, 'sprint');
+            fg3TestCaseIds.testCase1_standup = standupResult.rows[0].id;
+
+            // issueA: moved to in_review 1 day ago (state-change history).
+            await pool.query(
+              `UPDATE documents SET properties = properties || '{"state":"in_review"}'::jsonb, updated_at = NOW() - INTERVAL '1 day' WHERE id = $1`,
+              [issueA.id]
+            );
+            await pool.query(
+              `INSERT INTO document_history (document_id, field, old_value, new_value, changed_by, created_at)
+               VALUES ($1, 'state', $2, 'in_review', $3, NOW() - INTERVAL '1 day')`,
+              [issueA.id, issueA.state, engineer.id]
+            );
+            fg3TestCaseIds.testCase1_movedToReview = issueA.id;
+
+            // issueB: commented on 1 day ago (standup draft material).
+            await pool.query(
+              `INSERT INTO comments (document_id, comment_id, author_id, workspace_id, content, created_at, updated_at)
+               VALUES ($1, gen_random_uuid(), $2, $3, $4, NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day')`,
+              [issueB.id, engineer.id, workspaceId, `Making progress on ${issueB.title} — should land by end of week.`]
+            );
+            fg3TestCaseIds.testCase1_commented = issueB.id;
+
+            // issueC: has not moved in 6+ days.
+            await pool.query(`UPDATE documents SET updated_at = NOW() - INTERVAL '7 days' WHERE id = $1`, [issueC.id]);
+            fg3TestCaseIds.testCase1_stale = issueC.id;
+
+            console.log(`✅ Test Case 1 fixture: engineer ${engineer.name} — moved ${issueA.id}, commented ${issueB.id}, stale ${issueC.id}`);
+          }
+        }
+      }
+
+      // ---- Test Case 2 (FLEETGRAPH.MD): person mentioned in two documents ----
+      // ---- they do not own, blocking one approval on someone else's week -----
+      // Also satisfies this ticket's own Scope item 2 ("comments, including at
+      // least two carrying @ mention marks") — the mention convention here is
+      // literal `@Full Name` text, matching the actual comment input
+      // (CommentDisplay.tsx renders a plain `<input type="text">`; there is no
+      // structured TipTap mention mark on the comments.content TEXT column).
+      const alice = allUsers.find((u: { name: string }) => u.name === 'Alice Chen');
+      const emma = allUsers.find((u: { name: string }) => u.name === 'Emma Johnson');
+      if (alice && emma) {
+        const notAlicesIssues = await pool.query(
+          `SELECT id, title, properties->>'assignee_id' as assignee_id FROM documents
+           WHERE workspace_id = $1 AND document_type = 'issue'
+             AND (created_by IS DISTINCT FROM $2::uuid) AND (properties->>'assignee_id' IS DISTINCT FROM $2::text)
+           ORDER BY ticket_number LIMIT 2`,
+          [workspaceId, alice.id]
+        );
+        if (notAlicesIssues.rows.length === 2) {
+          const mentionTexts = [
+            `Hey @Alice Chen, can you weigh in on this before we ship? Wasn't sure who owns the final call.`,
+            `@Alice Chen flagging this in case it affects your team's timeline — no action needed yet, just visibility.`,
+          ];
+          for (let i = 0; i < notAlicesIssues.rows.length; i++) {
+            const doc = notAlicesIssues.rows[i] as { id: string; assignee_id: string | null };
+            const authorId = doc.assignee_id || emma.id;
+            await pool.query(
+              `INSERT INTO comments (document_id, comment_id, author_id, workspace_id, content, created_at, updated_at)
+               VALUES ($1, gen_random_uuid(), $2, $3, $4, NOW() - INTERVAL '${i + 1} days', NOW() - INTERVAL '${i + 1} days')`,
+              [doc.id, authorId, workspaceId, mentionTexts[i]]
+            );
+            fg3TestCaseIds[`testCase2_mention${i + 1}`] = doc.id;
+          }
+        }
+
+        // A week owned by Emma (reports to Alice per reportingHierarchy above)
+        // blocked pending Alice's approval — "blocking one approval on someone
+        // else's week".
+        const emmaWeek = await pool.query(
+          `SELECT id FROM documents
+           WHERE workspace_id = $1 AND document_type = 'sprint' AND properties->>'owner_id' = $2
+           ORDER BY (properties->>'sprint_number')::int DESC LIMIT 1`,
+          [workspaceId, emma.id]
+        );
+        if (emmaWeek.rows[0]) {
+          const blockedApproval = {
+            state: 'changes_requested',
+            approved_by: alice.id,
+            approved_at: null,
+            approved_version_id: null,
+            feedback: 'Please add rollout specifics before I can approve.',
+          };
+          await pool.query(
+            `UPDATE documents SET properties = properties || $1::jsonb WHERE id = $2`,
+            [JSON.stringify({ plan_approval: blockedApproval }), emmaWeek.rows[0].id]
+          );
+          fg3TestCaseIds.testCase2_blockedWeek = emmaWeek.rows[0].id;
+        }
+        console.log(`✅ Test Case 2 fixture: 2 mentions of ${alice.name}, blocked week ${fg3TestCaseIds.testCase2_blockedWeek || 'n/a'}`);
+      }
+
+      // ---- Test Case 3 (FLEETGRAPH.MD): week with 4 success criteria, 3 ------
+      // ---- issues closed during the week, mapping to 2 of them ---------------
+      if (currentShipCoreSprint) {
+        const criteria = [
+          'Sprint management flows end-to-end with no manual DB edits',
+          'Sprint timeline UI renders for every active week',
+          'Progress chart reflects real issue counts within 1 minute',
+          'Issue assignment flow ships behind a feature flag',
+        ];
+        await pool.query(
+          `UPDATE documents SET properties = properties || $1::jsonb WHERE id = $2`,
+          [JSON.stringify({ success_criteria: criteria }), currentShipCoreSprint.id]
+        );
+
+        const doneInCurrentSprint = await pool.query(
+          `SELECT d.id FROM documents d
+           JOIN document_associations da ON da.document_id = d.id
+             AND da.related_id = $1 AND da.relationship_type = 'sprint'
+           WHERE d.workspace_id = $2 AND d.document_type = 'issue' AND d.properties->>'state' = 'done'
+           ORDER BY d.ticket_number LIMIT 3`,
+          [currentShipCoreSprint.id, workspaceId]
+        );
+        const closedIds: string[] = [];
+        const windowMs = currentWeekEnd.getTime() - currentWeekStart.getTime();
+        for (let i = 0; i < doneInCurrentSprint.rows.length; i++) {
+          const issue = doneInCurrentSprint.rows[i] as { id: string };
+          const targetMs = Math.floor(((i + 1) * windowMs) / (doneInCurrentSprint.rows.length + 1));
+          const cappedMs = Math.max(60_000, Math.min(targetMs, Date.now() - currentWeekStart.getTime() - 1000));
+          const completedAt = new Date(currentWeekStart.getTime() + cappedMs);
+          // Re-derive started_at from this new completedAt rather than leaving
+          // the earlier backfill loop's value in place — that value was set
+          // relative to a DIFFERENT completedAt and can end up after this one,
+          // breaking the started_at <= completed_at invariant this fixture is
+          // supposed to hold.
+          const startDelayMs = Math.min(cappedMs, (1 + Math.floor(Math.random() * 2)) * 24 * 60 * 60 * 1000);
+          const startedAt = new Date(completedAt.getTime() - startDelayMs);
+          await pool.query(`UPDATE documents SET started_at = $1, completed_at = $2 WHERE id = $3`, [startedAt, completedAt, issue.id]);
+          closedIds.push(issue.id);
+        }
+        fg3TestCaseIds.testCase3_week = currentShipCoreSprint.id;
+        fg3TestCaseIds.testCase3_closedIssues = closedIds.join(',');
+        console.log(`✅ Test Case 3 fixture: week ${currentShipCoreSprint.id}, ${closedIds.length} issues closed within it (4 success criteria)`);
+      }
+
+      // ---- Test Case 4 (FLEETGRAPH.MD): plan approved at version N, then ----
+      // ---- edited to remove one success criterion -----------------------------
+      const priorShipCoreSprint = sprints.find(
+        s => s.programId === shipCoreProgram.id && s.number === currentSprintNumber - 1
+      );
+      const devUser = allUsers.find((u: { name: string }) => u.name === 'Dev User');
+      if (priorShipCoreSprint && devUser) {
+        const originalCriteria = [
+          'All auth endpoints covered by integration tests',
+          'Password reset flow ships behind a feature flag',
+          'Session timeout matches the 15-minute policy',
+          'CSRF protection verified on every mutating route',
+        ];
+        const editedCriteria = originalCriteria.slice(0, 3); // one removed after approval
+
+        const priorOwner = await pool.query(
+          `SELECT properties->>'owner_id' as owner_id FROM documents WHERE id = $1`,
+          [priorShipCoreSprint.id]
+        );
+        const ownerId = (priorOwner.rows[0]?.owner_id as string | undefined) ?? null;
+        const ownerName = ownerId ? allUsers.find((u: { id: string }) => u.id === ownerId)?.name ?? 'Unknown' : 'Unknown';
+
+        const approvedAt = new Date(Date.now() - 6 * 24 * 60 * 60 * 1000).toISOString();
+        const planApproval = {
+          state: 'changed_since_approved',
+          approved_by: devUser.id,
+          approved_at: approvedAt,
+          approved_version_id: null,
+          comment: 'Approved — clear goals for the week.',
+        };
+        const planHistory = [
+          {
+            plan: JSON.stringify(originalCriteria),
+            timestamp: approvedAt,
+            author_id: ownerId,
+            author_name: ownerName,
+          },
+        ];
+        await pool.query(
+          `UPDATE documents SET properties = properties || $1::jsonb WHERE id = $2`,
+          [
+            JSON.stringify({ success_criteria: editedCriteria, plan_approval: planApproval, plan_history: planHistory }),
+            priorShipCoreSprint.id,
+          ]
+        );
+        fg3TestCaseIds.testCase4_week = priorShipCoreSprint.id;
+        console.log(`✅ Test Case 4 fixture: week ${priorShipCoreSprint.id} approved then edited (4 → 3 criteria)`);
+      }
+
+      // ---- document_history on a weekly plan (Scope item 1 explicitly names ----
+      // ---- "issues and weekly plans", not issues alone) ------------------------
+      const currentWeeklyPlan = await pool.query(
+        `SELECT id, properties->>'person_id' as person_id FROM documents
+         WHERE workspace_id = $1 AND document_type = 'weekly_plan'
+           AND (properties->>'week_number')::int = $2
+         ORDER BY created_at LIMIT 1`,
+        [workspaceId, currentSprintNumber]
+      );
+      if (currentWeeklyPlan.rows[0]) {
+        const plan = currentWeeklyPlan.rows[0] as { id: string; person_id: string | null };
+        const planAuthorUserId = plan.person_id
+          ? allUsers.find((u: { person_doc_id: string | null }) => u.person_doc_id === plan.person_id)?.id ?? null
+          : null;
+        await pool.query(
+          `INSERT INTO document_history (document_id, field, old_value, new_value, changed_by, created_at)
+           VALUES ($1, 'content', 'draft', 'submitted', $2, NOW() - INTERVAL '2 days')`,
+          [plan.id, planAuthorUserId]
+        );
+        fg3TestCaseIds.weeklyPlanHistory = plan.id;
+        console.log(`✅ document_history trail added to weekly plan ${plan.id}`);
+      }
+
+      // ---- plan_approval on a few more, uneventful weeks ----------------------
+      // Test Cases 2 and 4 above already set plan_approval on two weeks as part
+      // of their own narratives ('changes_requested' and 'changed_since_approved'
+      // respectively). This adds a plain 'approved' state to two further
+      // completed Ship Core weeks so "set on several weeks" (Scope item 4) means
+      // more than just the two dramatic cases, and so a plain "approved, nothing
+      // pending" state is represented too.
+      const otherPastShipCoreSprints = sprints
+        .filter(
+          s =>
+            s.programId === shipCoreProgram.id &&
+            s.number < currentSprintNumber &&
+            s.number !== priorShipCoreSprint?.number
+        )
+        .slice(0, 2);
+      let extraApprovalsSet = 0;
+      for (const sprint of otherPastShipCoreSprints) {
+        const ownerResult = await pool.query(
+          `SELECT properties->>'owner_id' as owner_id FROM documents WHERE id = $1`,
+          [sprint.id]
+        );
+        const ownerId = (ownerResult.rows[0]?.owner_id as string | undefined) ?? null;
+        if (!ownerId || !devUser) continue;
+        const approval = {
+          state: 'approved',
+          approved_by: devUser.id,
+          approved_at: new Date(Date.now() - (10 + sprint.number) * 24 * 60 * 60 * 1000).toISOString(),
+          approved_version_id: null,
+          comment: 'Approved as planned.',
+        };
+        await pool.query(
+          `UPDATE documents SET properties = properties || $1::jsonb WHERE id = $2`,
+          [JSON.stringify({ plan_approval: approval }), sprint.id]
+        );
+        fg3TestCaseIds[`approvedWeek_${sprint.number}`] = sprint.id;
+        extraApprovalsSet++;
+      }
+      if (extraApprovalsSet > 0) {
+        console.log(`✅ Set plain 'approved' plan_approval on ${extraApprovalsSet} additional past weeks`);
+      }
+
+      // reports_to (Scope item 5): already only set on 10 of 11 people by the
+      // reportingHierarchy above (dev@ship.local is root, deliberately no
+      // manager) — verified, not re-seeded, so the escalation-degrades path
+      // stays exercised without this block touching it.
+
+      console.log('');
+      console.log('📋 FG-3 test case document ids (FLEETGRAPH.MD Test Cases 1-4):');
+      for (const [key, id] of Object.entries(fg3TestCaseIds)) {
+        console.log(`   ${key}: ${id}`);
+      }
+    }
+
     console.log('');
     console.log('🎉 Seed complete!');
     console.log('');

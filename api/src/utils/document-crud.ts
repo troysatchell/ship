@@ -128,12 +128,18 @@ export function getTimestampUpdates(
 export async function getBelongsToAssociations(
   documentId: string
 ): Promise<BelongsToEntry[]> {
+  // FG-15 / TRO-333: belongs_to means containment. 'blocks' is a dependency
+  // edge, not containment, and must not appear in this array — 10+ web
+  // components (ContextTreeNav, PropertiesPanel, IssuesList, UnifiedEditor,
+  // the week tabs) consume belongs_to unfiltered and would render a blocking
+  // issue as if it were a parent/project.
   const result = await pool.query(
     `SELECT da.related_id as id, da.relationship_type as type,
             d.title, d.properties->>'color' as color
      FROM document_associations da
      LEFT JOIN documents d ON da.related_id = d.id
      WHERE da.document_id = $1
+       AND da.relationship_type IN ('parent', 'project', 'sprint', 'program')
      ORDER BY da.relationship_type, da.created_at`,
     [documentId]
   );
@@ -185,11 +191,16 @@ export async function getBelongsToAssociationsBatch(
   // length, so it does not fix the misestimate at all.
   const valuesClause = uniqueIds.map((_, i) => `($${i + 1}::uuid)`).join(', ');
 
+  // FG-15 / TRO-333: belongs_to means containment; 'blocks' is deliberately
+  // excluded (dependency, not containment) — same reasoning as
+  // getBelongsToAssociations above, applied to the batch path so both stay
+  // in sync.
   const result = await pool.query<BelongsToAssociationBatchRow>(
     `SELECT da.document_id, da.related_id as id, da.relationship_type as type,
             d.title, d.properties->>'color' as color
      FROM (VALUES ${valuesClause}) AS ids(document_id)
      JOIN document_associations da ON da.document_id = ids.document_id
+       AND da.relationship_type IN ('parent', 'project', 'sprint', 'program')
      LEFT JOIN documents d ON da.related_id = d.id
      ORDER BY da.document_id, da.relationship_type, da.created_at`,
     uniqueIds
@@ -231,9 +242,18 @@ export async function syncBelongsToAssociations(
   documentId: string,
   associations: Array<{ id: string; type: string }>
 ): Promise<void> {
-  // Delete existing associations
+  // FG-15 / TRO-333: this replaces the document's *containment* (belongs_to)
+  // associations from a caller-supplied array. Scoped to containment types so
+  // a caller passing a partial belongs_to array (no 'blocks' entries — the
+  // type isn't even representable in BelongsToEntry) cannot silently wipe any
+  // 'blocks' edges the document has. Currently uncalled from any route
+  // (verified: every route-level association delete is type- or
+  // pair-scoped), but any future caller relying on this for a "save" flow
+  // would otherwise delete dependency edges nobody told it about.
   await pool.query(
-    'DELETE FROM document_associations WHERE document_id = $1',
+    `DELETE FROM document_associations
+     WHERE document_id = $1
+       AND relationship_type IN ('parent', 'project', 'sprint', 'program')`,
     [documentId]
   );
 
