@@ -34,17 +34,17 @@ vi.mock('@/lib/api', () => ({
 
 const mockApiGet = vi.mocked(apiGet);
 
-// Intentionally a PARTIAL Response — only the fields useInboxQuery actually
-// reads (`ok`/`status`/`json()`) — not a full Response instance. `as
-// Response` (a direct assertion, never `as unknown as Response`) is safe
-// here because every field the hook touches is present with the right
-// shape.
+// A real Response instance — same helper shape as agent.test.ts /
+// UnifiedDocumentPage.programWeeksNav.test.tsx's own `jsonResponse`/inline
+// mocks, rather than a partial object cast `as Response` (a mock/spy fidelity
+// gap: a partial object can silently drift from the real Response contract
+// useInboxQuery actually depends on — e.g. `.ok`/`.status` staying in sync,
+// or any other Response member a future change starts reading).
 function jsonResponse(status: number, body: unknown): Response {
-  return {
-    ok: status >= 200 && status < 300,
+  return new Response(JSON.stringify(body), {
     status,
-    json: async () => body,
-  } as Response;
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 function renderInbox(onNavigate?: () => void) {

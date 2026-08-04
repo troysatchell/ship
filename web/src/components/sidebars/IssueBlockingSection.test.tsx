@@ -62,16 +62,16 @@ afterAll(() => {
   Element.prototype.scrollIntoView = originalScrollIntoView;
 });
 
-// Intentionally PARTIAL Response objects — only the fields the hooks
-// actually read (`ok`/`status`/`json()`) — matching AgentChatPanel.test.tsx
-// / InboxSidebar.test.tsx's own `jsonResponse` helper. `as Response` (never
-// `as unknown as Response`) is safe because every field touched is present.
+// A real Response instance — same helper shape as agent.test.ts /
+// UnifiedDocumentPage.programWeeksNav.test.tsx's own `jsonResponse`/inline
+// mocks, rather than a partial object cast `as Response` (a mock/spy fidelity
+// gap: a partial object can silently drift from the real Response contract
+// the hooks in this file actually depend on).
 function jsonResponse(status: number, body: unknown): Response {
-  return {
-    ok: status >= 200 && status < 300,
+  return new Response(JSON.stringify(body), {
     status,
-    json: async () => body,
-  } as Response;
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 const ISSUE_A = 'issue-A'; // the document open in the sidebar under test
