@@ -72,6 +72,17 @@ const neverCalledModel: AnthropicModel = {
   },
 };
 
+/** `RETURNING id` always returns exactly one row for a single-row INSERT —
+ * but under `noUncheckedIndexedAccess` (lessons.md #16/#21, the same
+ * "explicit runtime guard, not a `!` assertion" convention `graph.ts`'s
+ * `expandFrontier` already uses) `rows[0]` is still typed possibly
+ * `undefined`. Fails loudly with a clear label rather than asserting past it. */
+function insertedId(rows: readonly { id: string }[], label: string): string {
+  const row = rows[0];
+  if (!row) throw new Error(`INSERT ... RETURNING id for ${label} returned no row`);
+  return row.id;
+}
+
 async function snapshotDbState() {
   const dh = await pool.query<{ count: string; max_id: string }>(
     `SELECT COUNT(*)::text AS count, COALESCE(MAX(id), 0)::text AS max_id FROM document_history`
@@ -105,13 +116,13 @@ describe('the human-in-the-loop write boundary, against a real running Ship API 
     const ws = await pool.query<{ id: string }>(`INSERT INTO workspaces (name) VALUES ($1) RETURNING id`, [
       `FG-8 gate test ${RUN_ID}`,
     ]);
-    workspaceId = ws.rows[0]!.id;
+    workspaceId = insertedId(ws.rows, 'workspace');
 
     const user = await pool.query<{ id: string }>(
       `INSERT INTO users (email, password_hash, name) VALUES ($1, 'not-a-real-hash', 'FG-8 Gate Test User') RETURNING id`,
       [`fg8-gate-test-${RUN_ID}@ship.local`]
     );
-    userId = user.rows[0]!.id;
+    userId = insertedId(user.rows, 'test user');
 
     await pool.query(`INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'member')`, [
       workspaceId,
@@ -130,7 +141,7 @@ describe('the human-in-the-loop write boundary, against a real running Ship API 
        VALUES ($1, 'issue', 'FG-8 gate test issue', $2, 1, $3) RETURNING id`,
       [workspaceId, JSON.stringify({ state: 'todo', assignee_id: userId }), userId]
     );
-    issueId = issue.rows[0]!.id;
+    issueId = insertedId(issue.rows, 'test issue');
 
     // A live blocking approval — makes the proactive_fast run below do real
     // work (a real document_history READ that produces a real in-memory
@@ -145,7 +156,7 @@ describe('the human-in-the-loop write boundary, against a real running Ship API 
         userId,
       ]
     );
-    sprintId = sprint.rows[0]!.id;
+    sprintId = insertedId(sprint.rows, 'test sprint');
 
     await pool.query(
       `INSERT INTO document_history (document_id, field, old_value, new_value, changed_by, automated_by, created_at)
