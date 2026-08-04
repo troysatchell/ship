@@ -1,4 +1,4 @@
-import { useState, useCallback, type FormEvent } from 'react';
+import { useState, useCallback, useEffect, type FormEvent } from 'react';
 import { apiPost } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
@@ -80,6 +80,17 @@ export function AgentChatPanel({ documentId }: AgentChatPanelProps) {
   const [question, setQuestion] = useState('');
   const [state, setState] = useState<ChatState>({ status: 'idle' });
 
+  // An answer/citation list belongs to exactly one document. PropertiesPanel
+  // re-renders this component with a new `documentId` (rather than
+  // remounting it) when the user navigates to a different document, so
+  // without this reset a previous document's answer would keep showing
+  // beside the newly-open one — exactly the kind of mismatch the citation
+  // list exists to prevent trusting.
+  useEffect(() => {
+    setQuestion('');
+    setState({ status: 'idle' });
+  }, [documentId]);
+
   const handleSubmit = useCallback(
     async (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
@@ -137,66 +148,77 @@ export function AgentChatPanel({ documentId }: AgentChatPanelProps) {
         <span>Ask FleetGraph</span>
       </button>
 
-      {isExpanded && (
-        <div id="agent-chat-panel-content" className="mt-3 space-y-3">
-          <form onSubmit={handleSubmit}>
-            <label htmlFor="agent-chat-question" className="sr-only">
-              Ask a question about this document
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="agent-chat-question"
-                type="text"
-                value={question}
-                onChange={(e) => setQuestion(e.target.value)}
-                placeholder="Ask about this document…"
-                disabled={isLoading}
-                className="flex-1 rounded border border-border bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted disabled:opacity-50"
-              />
-              <button
-                type="submit"
-                disabled={isLoading || question.trim().length === 0}
-                className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-text disabled:opacity-50"
-              >
-                Ask
-              </button>
-            </div>
-          </form>
-
-          <div role={state.status === 'degraded' ? 'alert' : 'status'}>
-            {state.status === 'loading' && (
-              <p className="text-sm text-muted italic">Thinking…</p>
-            )}
-
-            {state.status === 'degraded' && (
-              <p className="text-sm text-red-400">{state.message}</p>
-            )}
-
-            {state.status === 'answered' && (
-              <div className="space-y-2">
-                <p className="text-sm text-foreground whitespace-pre-wrap">{state.output}</p>
-                <div>
-                  <span className="text-xs font-medium text-muted">Sources</span>
-                  <ul className="mt-1 space-y-1">
-                    {state.citedSources.map((source) => (
-                      <li key={source.documentId} className="text-xs text-muted">
-                        <span className="font-medium text-foreground">{source.title}</span>
-                        {' — '}
-                        {source.reason}
-                      </li>
-                    ))}
-                  </ul>
-                  {state.expansionCapped && (
-                    <p className={cn('mt-1 text-[11px] italic text-muted')}>
-                      There was more to explore than this answer could include.
-                    </p>
-                  )}
-                </div>
-              </div>
-            )}
+      {/* Rendered unconditionally (hidden via the `hidden` attribute, not
+        * unmounted) so `aria-controls="agent-chat-panel-content"` above
+        * never references an id that doesn't exist in the DOM — a dangling
+        * aria-controls target is itself an accessibility defect. */}
+      <div id="agent-chat-panel-content" hidden={!isExpanded} className="mt-3 space-y-3">
+        <form onSubmit={handleSubmit}>
+          <label htmlFor="agent-chat-question" className="sr-only">
+            Ask a question about this document
+          </label>
+          <div className="flex gap-2">
+            <input
+              id="agent-chat-question"
+              type="text"
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              placeholder="Ask about this document…"
+              disabled={isLoading}
+              className="flex-1 rounded border border-border bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted disabled:opacity-50"
+            />
+            <button
+              type="submit"
+              disabled={isLoading || question.trim().length === 0}
+              className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-text disabled:opacity-50"
+            >
+              Ask
+            </button>
           </div>
+        </form>
+
+        {/* Two sibling live regions, each with a role FIXED for the lifetime
+          * of the element, rather than one region whose role is switched
+          * between "status" and "alert" depending on state — a region whose
+          * politeness changes with its own content is unreliably announced
+          * by assistive technology, since a live region's announcement
+          * behavior is generally established when it is inserted, not
+          * re-evaluated cleanly on every attribute change. */}
+        <div role="alert">
+          {state.status === 'degraded' && (
+            <p className="text-sm text-red-400">{state.message}</p>
+          )}
         </div>
-      )}
+
+        <div role="status">
+          {state.status === 'loading' && (
+            <p className="text-sm text-muted italic">Thinking…</p>
+          )}
+
+          {state.status === 'answered' && (
+            <div className="space-y-2">
+              <p className="text-sm text-foreground whitespace-pre-wrap">{state.output}</p>
+              <div>
+                <span className="text-xs font-medium text-muted">Sources</span>
+                <ul className="mt-1 space-y-1">
+                  {state.citedSources.map((source) => (
+                    <li key={source.documentId} className="text-xs text-muted">
+                      <span className="font-medium text-foreground">{source.title}</span>
+                      {' — '}
+                      {source.reason}
+                    </li>
+                  ))}
+                </ul>
+                {state.expansionCapped && (
+                  <p className={cn('mt-1 text-[11px] italic text-muted')}>
+                    There was more to explore than this answer could include.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }

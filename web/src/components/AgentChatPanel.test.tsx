@@ -25,6 +25,12 @@ vi.mock('@/lib/api', () => ({
 
 const mockApiPost = vi.mocked(apiPost);
 
+// Intentionally a PARTIAL Response — only the three fields AgentChatPanel
+// actually reads (`ok`/`status`/`json()`) — not a full Response instance.
+// `as Response` (a direct assertion, never `as unknown as Response`, which
+// this repo's gate.sh forbids even in tests) is safe here because every
+// field the component touches is present with the right shape; anything
+// this fake omits (headers, body stream, etc.) is simply never called.
 function jsonResponse(status: number, body: unknown): Response {
   return {
     ok: status >= 200 && status < 300,
@@ -75,6 +81,29 @@ describe('AgentChatPanel — seeding (TRO-320 / FG-9, proof 1)', () => {
     render(<AgentChatPanel documentId="issue-42" />);
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
     expect(screen.queryByRole('textbox', { name: /document/i })).not.toBeInTheDocument();
+  });
+
+  it('drops the previous answer/citations when the open document changes — PropertiesPanel re-renders this component with a new documentId rather than remounting it', async () => {
+    mockApiPost.mockResolvedValue(
+      jsonResponse(200, {
+        output: 'Issue A is stalled because of AUTH-1.',
+        citedSources: [{ documentId: 'a1', documentType: 'issue', title: 'AUTH-1', reason: 'blocks it' }],
+        expansionCapped: false,
+      })
+    );
+
+    const { rerender } = render(<AgentChatPanel documentId="issue-A" />);
+    await openPanel();
+    await askQuestion('why is this stalled?');
+    expect(await screen.findByText('Issue A is stalled because of AUTH-1.')).toBeInTheDocument();
+
+    // The user navigates to a different document — same component instance,
+    // new documentId prop (this is what PropertiesPanel actually does; it
+    // does not key AgentChatPanel to force a remount).
+    rerender(<AgentChatPanel documentId="issue-B" />);
+
+    expect(screen.queryByText('Issue A is stalled because of AUTH-1.')).not.toBeInTheDocument();
+    expect(screen.queryByText('AUTH-1')).not.toBeInTheDocument();
   });
 });
 
