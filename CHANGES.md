@@ -21,6 +21,154 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-323 — [FG-10] Ship has no notification surface at all — one ranked "what needs you" list, not a stream of pings
+
+**Second of three sub-issues on branch `feat/pr-d-ship-ui-surfaces` (bundle `TRO-328` / [PR-D] EPIC:
+"Ship UI surfaces — in-context chat, the ranked inbox, blocks/blocked-by"), landing in this order:
+FG-9 (done, TRO-320) -> the inbox (this commit) -> blocks/blocked-by (TRO-334), each by a separate
+agent on the same branch. This commit touches only `agent/`'s new `GET /inbox` route, `api/`'s new
+proxy route, and two new `web/` files plus a scoped `pages/App.tsx` addition — it does not touch
+the chat panel or the blocks/blocked-by surface.**
+
+**The cost this closes.** MVP checkbox: "notifications accessible in the UI." FG-5/FG-6 (both done)
+already detect mentions, blocking approvals, and prepared standup drafts and rank them into a
+per-person inbox (`agent/src/itemStore.ts`) — but nothing in Ship's own product surfaced that list.
+It existed only as data a poller wrote into an in-memory store nobody read.
+
+**What was verified before designing anything (the scope gap, same shape as TRO-320's):** the
+ticket text reads UI-only, but there was no HTTP route exposing `itemStore.list()` at all —
+`agent/src/server.ts` had `/health`, `/ready`, and (as of TRO-320) `/chat`, nothing else; `api/`
+had no `/agent/inbox` proxy; `web/` had nothing that called it. `InMemoryItemStore.list()`
+(`agent/src/itemStore.ts:142-151`, `ItemStore.list`'s own docstring) is already fully ranked — `blocking_approval` first, highest
+`blockedCount` first within that, ties broken by longest-waiting; then `mention` oldest-first; then
+`standup_draft` oldest-first — and every `InboxItem` already carries `action: { label, href }`, a
+concrete Ship route. None of that ranking, blocking-detection, or draft logic is touched here; this
+ticket is read-only plumbing plus a rendering surface, matching FG-9's own precedent exactly.
+
+**What changed:**
+- `agent/src/server.ts:198-233` — new `GET /inbox`: same `X-Internal-Secret` check as `/chat`
+  (secret-not-configured -> 500, header missing/wrong -> 401, checked BEFORE anything else touches
+  the store), then `!deps.itemStore` -> `503 agent_not_configured` (same degrade-when-unconfigured
+  posture as `/chat`'s `!deps.graph` branch), then `recipientUserId` query-param validation ->
+  `400`, then `deps.itemStore.list(recipientUserId)` relayed verbatim as `{ items }`. Does no
+  sorting/filtering of its own. `CreateServerDeps` widened with `itemStore?: Pick<ItemStore,
+  'list'>` (same narrowing style as the existing `graph?: Pick<CompiledGraph, 'invoke'>`).
+- `agent/src/index.ts` — `itemStore` is now ALSO hoisted above the `isConfigComplete` branch
+  (previously a `const` scoped inside it, invisible to `createServer`) and passed through as
+  `createServer(config, { graph, itemStore })`. Same store the FG-5/FG-6 producers already write
+  into — never a second, separately-constructed one that could drift.
+- `api/src/routes/agent.ts` — new `GET /inbox`: `authMiddleware`/`authed()` (same pattern as
+  `POST /chat`), forwards `recipientUserId: req.userId` (the session's own user, never a
+  client-supplied query param — nobody can read another person's inbox by editing a request) to the
+  agent's `GET /inbox?recipientUserId=...` with the same `X-Internal-Secret` header, and validates
+  the response shape field-by-field (`isAgentInboxItem`/`isAgentInboxSuccessBody`) the same
+  disciplined way `/chat` validates `citedSources` — a malformed `action.href` from the agent does
+  not reach the browser unvalidated. Renamed `AGENT_CHAT_TIMEOUT_MS` -> `AGENT_REQUEST_TIMEOUT_MS`
+  (now shared by both routes; no behavior change, same 30s bound).
+- `api/src/openapi/schemas/agent.ts` — OpenAPI registration for `GET /agent/inbox`
+  (`AgentInboxItemSchema`/`AgentInboxResponseSchema`), verified present in `api/openapi.json`/
+  `api/openapi.yaml` after `pnpm --filter @ship/api openapi:generate`. No `api/src/app.ts` change
+  needed — `/api/agent` was already mounted to this same router file by TRO-320.
+- `web/src/hooks/useInboxQuery.ts` (new) — fetches `GET /api/agent/inbox` and never throws:
+  resolves to a discriminated union (`{ status: 'ok', items }` or `{ status: 'degraded', message
+  }`), the same shape `AgentChatPanel.tsx`'s local `ChatState` uses. `staleTime`/`refetchInterval`
+  match `useActionItemsQuery`'s cadence.
+- `web/src/components/InboxSidebar.tsx` (new) — renders `useInboxQuery`'s items in the exact order
+  returned (no client-side re-sorting — FLEETGRAPH.MD Test Case 2's "approval first" proof is that
+  this component does NOT reorder what the server already ranked). Every item's action is a real
+  react-router `<Link to={action.href}>` (renders a native `<a href>`), carrying `action.label` as
+  visible text — not a `<div>`/`<li>` with an `onClick` bolted on, the exact shape this repo's own
+  `DocumentTreeItem.tsx` A11Y-1 defect was. `blockedCount`/`blockedSince` are rendered defensively
+  (optional on `InboxItem`; absent for every type except `blocking_approval`, and not guaranteed
+  even there) — a person with no manager recorded (`reports_to` unset, 10 of 20 people in the DB)
+  still gets a usable list, since there is no escalation UI here at all.
+- `web/src/pages/App.tsx` — the ticket's own placement constraint: "the Icon Rail plus contextual
+  sidebar is the natural home. No fifth panel." Added a new Icon Rail button (`inboxOpen` state,
+  NOT one of the routed `Mode`s) that toggles `InboxSidebar` in as an overlay of the Contextual
+  Sidebar's normal mode-based content, without navigating — whatever page was open stays open
+  underneath it, and `onNavigate` closes the overlay when an item's link is followed. The sidebar's
+  collapse/hide width formula was widened (`... && !inboxOpen`) so the Inbox button is never a
+  silent no-op on a page that normally hides or collapses the sidebar (a weekly doc, a standup, or
+  a manually-collapsed sidebar). The mode-specific "New X" buttons and the collapse button are
+  hidden while `inboxOpen` (they act on the mode the overlay is temporarily covering). Badge dot on
+  the rail icon reuses the same `showBadge` mechanic already built for `standupDue`.
+
+**What this ticket did NOT do (deliberately, per the ticket's own scope):** no accept/dismiss UI —
+`dismiss()`/accept-a-draft semantics belong to FG-8's already-built human-in-the-loop gate
+(`agent/src/gate.ts`), a separate surface. This is view-and-navigate only. No escalation UI/logic —
+`blockedSince`/`blockedCount` are rendered when present and simply omitted when not; there is no
+escalation feature to build here. `agent/src/graph.ts`, `mentions.ts`, `proactive.ts` are untouched.
+
+**Accessibility — claim provenance marked explicitly (`.claude/CLAUDE.md`).** Every inbox item's
+action is a real native `<a href>` (react-router's `Link`) — `InboxSidebar.test.tsx`'s keyboard
+tests OBSERVE (via jsdom's real `HTMLElement.focus()`/`document.activeElement`) that every link is
+genuinely focusable with no `tabIndex="-1"`, and OBSERVE the correct role/accessible name via
+`getByRole`. They do NOT claim a raw synthetic key event activates navigation in the test run —
+same posture as `AgentChatPanel.test.tsx`/the actual `DocumentTreeItem.test.tsx` A11Y-1 regression
+test: native anchor activation is guaranteed by the browser once shipped, not something a
+jsdom-only test fabricates evidence for. The `role="status"`/`role="alert"` live-region claims are
+ARIA-structural (derived from the spec's documented implicit behavior for those roles), not
+observed through an actual assistive technology — no VoiceOver pass was run.
+
+**Contrast — measured, not assumed (`InboxSidebar.contrast.test.tsx`, same precedent as
+`DashboardSidebar.contrast.test.tsx` / TRO-298 / A11Y-10).** The degraded-message text was
+initially written as `text-red-600` on the (incorrect) assumption that this codebase's `dark:`
+variants meant a light-mode default worth matching (`ActionItems.tsx`'s `text-red-600 ...
+dark:text-red-400` overdue styling). Running the actual resolver against `web/tailwind.config.js`'s
+real palette (`background: '#0d0d0d'` — Ship is a single dark theme, not light-with-a-dark-variant;
+most `dark:*` classes elsewhere in this codebase are inert against it) measured `text-red-600` at
+**4.02:1 — below the 4.5:1 AA minimum** on that background. Reverted to `text-red-400` (matching
+`AgentChatPanel.tsx`'s existing, correct choice for the same reason), which measures well clear of
+4.5:1. Left as an unverified follow-up: whether `ActionItems.tsx`'s own `text-red-600` (used
+directly, not just as a `dark:` fallback) has the same defect — outside this ticket's scope to fix,
+noted here because the same resolver would answer it in one run.
+
+**Regression tests (counts verified by grepping the actual files):**
+- `agent/src/__tests__/server.test.ts` — 7 new cases for `GET /inbox` (secret-not-configured,
+  missing header, a same-length wrong secret exercising `timingSafeEqual` itself, itemStore not
+  wired, missing `recipientUserId`, a successful relay asserting `list()` was called with exactly
+  the query param and the response passed through verbatim in order, and an empty-list 200).
+  Confirmed failing (404, route didn't exist) before the fix by stashing `agent/src/{server,
+  index}.ts` and re-running with the tests already in place.
+- `api/src/routes/agent.test.ts` — 7 new cases against a real Express app + real seeded
+  session/CSRF (no CSRF token needed for a GET — `csrf-sync`'s default ignored methods, confirmed
+  against `change-feed.test.ts`'s own GET cases), `global.fetch` mocked: auth required, agent not
+  configured, the exact forwarded URL/query-param/header (proving `recipientUserId` comes from the
+  session, never a client-supplied value), a malformed-item 502 (missing `action.href`), an empty
+  200, a non-OK 502, and an unreachable 502. Confirmed failing (404) before the fix via the same
+  stash-and-rerun method.
+- `web/src/components/InboxSidebar.test.tsx` (new) — 13 cases covering all four of the ticket's
+  "how it will be proven" points: FLEETGRAPH.MD Test Case 2's four-item shape rendered in the exact
+  server-given order (blocking_approval first); each item's `action.href`/`action.label` as a real
+  `<a href>`, and that following it calls `onNavigate`; defensive rendering of an item with no
+  `blockedCount`/`blockedSince` at all (mention) and a `blocking_approval` item missing those same
+  optional fields; degraded states (network failure, 503, 502) and a loading state; keyboard
+  reachability (every link focusable, no `tabIndex="-1"`) and the `aria-label`d list / live-region
+  structure. Confirmed failing (module import error — the component didn't exist) before the fix by
+  temporarily moving `InboxSidebar.tsx`/`useInboxQuery.ts` out of the tree and re-running — this
+  also failed `web/src/pages/App.test.tsx` for the same reason, confirming the App.tsx wiring is
+  load-bearing, not dead code.
+- `web/src/components/InboxSidebar.contrast.test.tsx` (new) — 5 cases, the precedent
+  `DashboardSidebar.contrast.test.tsx` establishes: every colour pair the component can render
+  (badges, summary text, the blocked-count note, the empty-inbox message, the degraded message)
+  resolved from the DOM and asserted >= 4.5:1. This is what caught the `text-red-600` defect noted
+  above before it shipped.
+
+**How to run it.** `pnpm --filter @ship/agent test` · `pnpm --filter @ship/agent type-check` ·
+`source .factory-env && pnpm --filter @ship/api exec vitest run src/routes/agent.test.ts` ·
+`pnpm --filter @ship/web test -- src/components/InboxSidebar.test.tsx
+src/components/InboxSidebar.contrast.test.tsx src/pages/App.test.tsx`.
+
+**Rollback.** Revert this commit (or the range of commits carrying TRO-323's changes). No schema
+change and no migration to roll back. Unsetting `AGENT_INTERNAL_SECRET` disables `GET /inbox` the
+same way it already disables `POST /chat` (both fail closed — 503 from `api/`, 500 from `agent/`),
+so the inbox overlay degrades to its visible "not set up" message. If `web/src/pages/App.tsx`'s
+Icon Rail change is reverted independently of the rest, the underlying routes remain live but
+unreachable from the UI — a partial rollback that removes the surface without removing the plumbing
+(harmless, just dead code, matching the same shape TRO-320 originally described the gap in).
+
+---
+
 ## TRO-320 — [FG-9] The agent is unreachable from Ship — an in-context chat panel, not a standalone chatbot page
 
 **First of three sub-issues on branch `feat/pr-d-ship-ui-surfaces` (bundle `TRO-328` / [PR-D] EPIC:
