@@ -3,6 +3,7 @@ import request from 'supertest';
 import { loadConfig } from '../config.js';
 import { createServer } from '../server.js';
 import type { ShipReadClient } from '../health.js';
+import type { InboxItem } from '../itemStore.js';
 
 const READY_CONFIG = {
   ANTHROPIC_API_KEY: 'sk-test',
@@ -144,5 +145,97 @@ describe('POST /chat', () => {
     const res = await request(app).post('/chat').set('X-Internal-Secret', SECRET).send(VALID_BODY);
     expect(res.status).toBe(502);
     expect(res.body.error).toBe('graph_invoke_failed');
+  });
+});
+
+// TRO-323 / FG-10: the route Ship's ranked-inbox surface proxies through
+// (api/src/routes/agent.ts's own GET /inbox). Same public-internet exposure
+// as /chat, so the same secret check must run first. itemStore.list() is
+// already fully ranked (itemStore.ts's own docstring, FG-5/FG-6) — this
+// route is read-only plumbing, so these tests assert it calls list() with
+// the right recipient and relays the result verbatim, never that it
+// re-derives or re-sorts anything.
+describe('GET /inbox', () => {
+  const SECRET = 'test-internal-secret';
+  const CHAT_CONFIG = { ...READY_CONFIG, AGENT_INTERNAL_SECRET: SECRET };
+  const RECIPIENT = 'user-456';
+
+  function fakeItemStore(items: InboxItem[]) {
+    return { list: vi.fn().mockReturnValue(items) };
+  }
+
+  const SAMPLE_ITEM: InboxItem = {
+    id: 'blocking-approval:sprint-1:state',
+    recipientUserId: RECIPIENT,
+    type: 'blocking_approval',
+    summary: 'AUTH-12 is waiting on your approval',
+    evidence: { documentId: 'issue-2', documentType: 'issue' },
+    action: { label: 'Review AUTH-12', href: '/documents/issue-2' },
+    blockedCount: 3,
+    blockedSince: '2026-07-30T12:00:00.000Z',
+    createdAt: '2026-07-30T12:00:00.000Z',
+    updatedAt: '2026-07-30T12:00:00.000Z',
+  };
+
+  it('returns 500 when the server itself has no AGENT_INTERNAL_SECRET configured — fails closed, not open', async () => {
+    const app = createServer(loadConfig(READY_CONFIG), { itemStore: fakeItemStore([SAMPLE_ITEM]) });
+    const res = await request(app).get('/inbox').query({ recipientUserId: RECIPIENT });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('internal_secret_not_configured');
+  });
+
+  it('returns 401 when the X-Internal-Secret header is missing', async () => {
+    const app = createServer(loadConfig(CHAT_CONFIG), { itemStore: fakeItemStore([SAMPLE_ITEM]) });
+    const res = await request(app).get('/inbox').query({ recipientUserId: RECIPIENT });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('unauthorized');
+  });
+
+  it('returns 401 for a wrong secret of the SAME length as the real one — exercises the timingSafeEqual comparison itself, not just the length-mismatch guard in front of it', async () => {
+    const sameLengthWrongSecret = 'x'.repeat(SECRET.length);
+    const itemStore = fakeItemStore([SAMPLE_ITEM]);
+    const app = createServer(loadConfig(CHAT_CONFIG), { itemStore });
+    const res = await request(app)
+      .get('/inbox')
+      .query({ recipientUserId: RECIPIENT })
+      .set('X-Internal-Secret', sameLengthWrongSecret);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('unauthorized');
+    expect(itemStore.list).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 (agent not configured) when the secret matches but no itemStore was wired — config incomplete', async () => {
+    const app = createServer(loadConfig(CHAT_CONFIG)); // no itemStore dep at all
+    const res = await request(app).get('/inbox').query({ recipientUserId: RECIPIENT }).set('X-Internal-Secret', SECRET);
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('agent_not_configured');
+  });
+
+  it('returns 400 when recipientUserId is missing, even with a valid secret and a real itemStore', async () => {
+    const itemStore = fakeItemStore([SAMPLE_ITEM]);
+    const app = createServer(loadConfig(CHAT_CONFIG), { itemStore });
+    const res = await request(app).get('/inbox').set('X-Internal-Secret', SECRET);
+    expect(res.status).toBe(400);
+    expect(itemStore.list).not.toHaveBeenCalled();
+  });
+
+  it('calls itemStore.list with the recipientUserId query param and relays its items verbatim, in the order list() returned them', async () => {
+    const items = [SAMPLE_ITEM, { ...SAMPLE_ITEM, id: 'mention:doc-9:user-456', type: 'mention' as const, summary: 'You were mentioned in Week 12', blockedCount: undefined, blockedSince: undefined }];
+    const itemStore = fakeItemStore(items);
+    const app = createServer(loadConfig(CHAT_CONFIG), { itemStore });
+
+    const res = await request(app).get('/inbox').query({ recipientUserId: RECIPIENT }).set('X-Internal-Secret', SECRET);
+
+    expect(itemStore.list).toHaveBeenCalledWith(RECIPIENT);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ items });
+  });
+
+  it('returns an empty list (not an error) when the recipient has nothing waiting on them', async () => {
+    const itemStore = fakeItemStore([]);
+    const app = createServer(loadConfig(CHAT_CONFIG), { itemStore });
+    const res = await request(app).get('/inbox').query({ recipientUserId: RECIPIENT }).set('X-Internal-Secret', SECRET);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ items: [] });
   });
 });

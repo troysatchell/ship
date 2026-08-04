@@ -18,6 +18,13 @@
  * here would let anyone spend the configured Anthropic API budget and query
  * as an arbitrary `askingUserId`. Degrades the same way `/ready` does when
  * `deps.graph` is absent (config incomplete): a clear 503, never a hang.
+ * `/inbox`  — GET only (TRO-323 / FG-10). The route Ship's ranked-inbox
+ * surface proxies through (`api/src/routes/agent.ts`'s own `GET /inbox`).
+ * Same `X-Internal-Secret` check as `/chat`, same public-internet exposure
+ * reasoning, same 503-when-unconfigured degradation. Does no ranking or
+ * filtering of its own — `itemStore.list()` (`itemStore.ts`) is already
+ * fully ranked (FG-5/FG-6), so this route is read-only plumbing, not a
+ * second place that could disagree with the store about order.
  *
  * The `client` is built once per server (not per request) and reused across
  * every `/ready` poll — the circuit breaker's whole point is to remember
@@ -34,6 +41,7 @@ import { CircuitBreaker } from './circuitBreaker.js';
 import { RateLimiter } from './rateLimiter.js';
 import { ResilientClient } from './resilientClient.js';
 import type { CompiledGraph } from './graph.js';
+import type { ItemStore } from './itemStore.js';
 
 const INTERNAL_SECRET_HEADER = 'x-internal-secret';
 
@@ -79,6 +87,14 @@ export interface CreateServerDeps {
    * `ProactivePollerOptions.graph` (`proactivePoll.ts`) — so tests can pass a
    * plain stable fake instead of a real compiled graph. */
   graph?: Pick<CompiledGraph, 'invoke'>;
+  /** The item store, when config is complete (TRO-323 / FG-10) — same
+   * hoisting pattern as `graph`: `index.ts` only constructs one inside its
+   * `isConfigComplete` branch. `undefined` here means `/inbox` degrades to a
+   * clear 503 rather than calling `.list` on nothing. Narrowed to
+   * `Pick<ItemStore, 'list'>` — same reasoning as `graph`'s narrowing to
+   * `Pick<CompiledGraph, 'invoke'>` — so tests can pass a plain stable fake
+   * instead of a real `InMemoryItemStore`. */
+  itemStore?: Pick<ItemStore, 'list'>;
 }
 
 /** Request body `POST /chat` expects — mirrors the on-demand expansion
@@ -177,6 +193,43 @@ export function createServer(config: AgentConfig, deps: CreateServerDeps = {}): 
       console.error('[agent] /chat graph invocation failed:', err);
       res.status(502).json({ error: 'graph_invoke_failed' });
     }
+  });
+
+  app.get('/inbox', (req, res) => {
+    // Same order as /chat: the secret check runs before anything else,
+    // including whether itemStore exists — an unconfigured deployment
+    // should not leak "not configured" to a caller that never proved it's
+    // allowed to ask (this route is reachable from the public internet too).
+    if (!config.agentInternalSecret) {
+      res.status(500).json({ error: 'internal_secret_not_configured' });
+      return;
+    }
+    const provided = req.header(INTERNAL_SECRET_HEADER);
+    if (!provided || !secretsMatch(provided, config.agentInternalSecret)) {
+      res.status(401).json({ error: 'unauthorized' });
+      return;
+    }
+
+    if (!deps.itemStore) {
+      // Config incomplete — same degradation contract as /chat's `!deps.graph`
+      // branch and /ready: a clear 503, never a hang and never an empty list
+      // that would read as "no items" instead of "not configured."
+      res.status(503).json({ error: 'agent_not_configured' });
+      return;
+    }
+
+    const recipientUserId = req.query.recipientUserId;
+    if (typeof recipientUserId !== 'string' || recipientUserId.length === 0) {
+      res.status(400).json({ error: 'invalid_request', message: 'recipientUserId is required' });
+      return;
+    }
+
+    // itemStore.list() is already fully ranked (itemStore.ts's own
+    // docstring: blocking_approval first, highest blockedCount first within
+    // that, ties broken by longest-waiting; then mention oldest-first; then
+    // standup_draft oldest-first) — this route does no sorting of its own.
+    const items = deps.itemStore.list(recipientUserId);
+    res.status(200).json({ items });
   });
 
   return app;
