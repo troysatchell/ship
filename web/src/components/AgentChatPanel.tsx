@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, type FormEvent } from 'react';
+import { useState, useCallback, useEffect, useRef, type FormEvent } from 'react';
 import { apiPost } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
@@ -80,6 +80,18 @@ export function AgentChatPanel({ documentId }: AgentChatPanelProps) {
   const [question, setQuestion] = useState('');
   const [state, setState] = useState<ChatState>({ status: 'idle' });
 
+  // The reset effect below handles the case where a request already
+  // resolved before the user navigated. It does NOT protect a request still
+  // IN FLIGHT: if the user submits a question on issue A, then navigates to
+  // issue B before the response lands, the reset effect fires synchronously
+  // (state -> idle), but issue A's response arriving afterward would still
+  // call setState with issue A's answer — silently overwriting the freshly
+  // reset idle state with a stale answer now shown under issue B's context.
+  // This ref is the guard against exactly that: captured at submit time,
+  // compared after every await point, and any resolution for a document
+  // that is no longer open is discarded rather than rendered.
+  const currentDocumentIdRef = useRef(documentId);
+
   // An answer/citation list belongs to exactly one document. PropertiesPanel
   // re-renders this component with a new `documentId` (rather than
   // remounting it) when the user navigates to a different document, so
@@ -87,6 +99,7 @@ export function AgentChatPanel({ documentId }: AgentChatPanelProps) {
   // beside the newly-open one — exactly the kind of mismatch the citation
   // list exists to prevent trusting.
   useEffect(() => {
+    currentDocumentIdRef.current = documentId;
     setQuestion('');
     setState({ status: 'idle' });
   }, [documentId]);
@@ -97,12 +110,16 @@ export function AgentChatPanel({ documentId }: AgentChatPanelProps) {
       const trimmed = question.trim();
       if (!trimmed || state.status === 'loading') return;
 
+      const submittedForDocumentId = documentId;
+      const isStale = () => currentDocumentIdRef.current !== submittedForDocumentId;
+
       setState({ status: 'loading' });
       try {
         const res = await apiPost('/api/agent/chat', {
           seedDocumentId: documentId,
           question: trimmed,
         });
+        if (isStale()) return;
 
         if (res.status === 503) {
           setState({ status: 'degraded', message: NOT_CONFIGURED_MESSAGE });
@@ -114,6 +131,8 @@ export function AgentChatPanel({ documentId }: AgentChatPanelProps) {
         }
 
         const data = (await res.json()) as AgentChatSuccessResponse;
+        if (isStale()) return;
+
         if (!data.citedSources || data.citedSources.length === 0) {
           setState({ status: 'degraded', message: NO_CITATIONS_MESSAGE });
           return;
@@ -126,6 +145,7 @@ export function AgentChatPanel({ documentId }: AgentChatPanelProps) {
           expansionCapped: data.expansionCapped,
         });
       } catch {
+        if (isStale()) return;
         setState({ status: 'degraded', message: UNREACHABLE_MESSAGE });
       }
     },

@@ -105,6 +105,35 @@ describe('AgentChatPanel — seeding (TRO-320 / FG-9, proof 1)', () => {
     expect(screen.queryByText('Issue A is stalled because of AUTH-1.')).not.toBeInTheDocument();
     expect(screen.queryByText('AUTH-1')).not.toBeInTheDocument();
   });
+
+  it('discards a response that resolves AFTER the user has already navigated away — an in-flight request for issue A must never populate issue B\'s answer', async () => {
+    let resolveFn: (value: Response) => void = () => {};
+    mockApiPost.mockReturnValue(new Promise((resolve) => { resolveFn = resolve; }));
+
+    const { rerender } = render(<AgentChatPanel documentId="issue-A" />);
+    await openPanel();
+    await askQuestion('why is this stalled?');
+    // Request is now in flight for issue-A, unresolved.
+
+    // Navigate to issue-B WHILE the issue-A request is still pending. The
+    // reset effect clears the question/answer state back to idle (proven by
+    // the prior test) but does not collapse the panel itself.
+    rerender(<AgentChatPanel documentId="issue-B" />);
+
+    // The stale issue-A response now lands.
+    await act(async () => {
+      resolveFn(jsonResponse(200, {
+        output: 'Issue A is stalled because of AUTH-1.',
+        citedSources: [{ documentId: 'a1', documentType: 'issue', title: 'AUTH-1', reason: 'blocks it' }],
+        expansionCapped: false,
+      }));
+    });
+
+    // Never rendered anywhere — including inside the now-collapsed panel,
+    // which the reset effect already closed when documentId changed.
+    expect(screen.queryByText('Issue A is stalled because of AUTH-1.')).not.toBeInTheDocument();
+    expect(screen.queryByText(/thinking/i)).not.toBeInTheDocument();
+  });
 });
 
 describe('AgentChatPanel — citations (TRO-320 / FG-9, proof 2)', () => {
