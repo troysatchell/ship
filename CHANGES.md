@@ -144,21 +144,36 @@ earlier draft of this entry):**
   exist) before the fix, by temporarily stashing `agent/src/{server,config,index}.ts` and re-running
   with the tests already in place.
 - `agent/src/__tests__/config.test.ts` — extended for the new `agentInternalSecret` field.
-- `api/src/routes/agent.test.ts` (new) — 8 cases against a real Express app + real seeded
+- `api/src/routes/agent.test.ts` (new) — 9 cases against a real Express app + real seeded
   session/CSRF (same pattern as `change-feed.test.ts`/`blocks-relationship.test.ts`), with
   `global.fetch` mocked so no real agent process is ever contacted: auth required, validation
   (including the question max-length rejection), agent-not-configured, the exact forwarded body
-  (proving `askingUserId` comes from the session, not the request body), and both degraded-relay
-  cases (agent 5xx, agent unreachable). Confirmed failing (404) before the fix via the same
+  (proving `askingUserId` comes from the session, not the request body), both degraded-relay cases
+  (agent 5xx, agent unreachable), and a malformed-`citedSources`-element case added for a second
+  CodeRabbit-caught bug (below). Confirmed failing (404) before the fix via the same
   stash-and-rerun method.
-- `web/src/components/AgentChatPanel.test.tsx` (new) — 12 cases covering all four of the ticket's
+- `web/src/components/AgentChatPanel.test.tsx` (new) — 13 cases covering all four of the ticket's
   "how it will be proven" points — seeding without user input, cited-sources rendering, the
   no-citations failure state, the agent-unreachable/not-configured/5xx degraded states, and keyboard
-  reachability — plus one covering a CodeRabbit-caught bug fixed in this same commit: the panel
+  reachability — plus two covering CodeRabbit-caught bugs fixed in this same PR: (1) the panel
   previously kept showing a PREVIOUS document's answer/citations after the user navigated to a
   different document, since `PropertiesPanel` re-renders this component with a new `documentId`
-  prop rather than remounting it. Confirmed failing (module import error — the component didn't
-  exist) before the fix by temporarily moving `AgentChatPanel.tsx` out of the tree and re-running.
+  prop rather than remounting it; (2) a request still IN FLIGHT when the user navigates away could
+  still land afterward and populate the WRONG document's answer — the first fix alone only covered
+  an already-resolved response, not a race with one still pending. Confirmed failing (module import
+  error — the component didn't exist) before the first fix by temporarily moving `AgentChatPanel.tsx`
+  out of the tree and re-running.
+
+**Two more CodeRabbit-caught bugs, fixed in follow-up commits on this same branch (not
+re-summarized here in full — see each commit's own message):** the citation validation gap above
+(`isAgentChatSuccessBody` checked `Array.isArray(citedSources)` but never validated what was inside
+it — a malformed element from the agent would have reached the browser unvalidated), and the
+in-flight-request race in `AgentChatPanel.tsx` above. A CodeRabbit re-run after all the first-pass
+fixes dropped the finding count from 16 to 5; the remaining 5 are trivial/minor (an
+`agent/src/server.ts` invoke-timeout hardening suggestion, out of scope — the `api/` proxy's own 30s
+`AbortController` already bounds what the BROWSER waits on, which is what "never a hang" means at
+the surface this ticket actually changes; and a couple of test-hygiene suggestions) and are left for
+the orchestrator's PR-level triage rather than re-litigated here.
 
 **How to run it.** `pnpm --filter @ship/agent test` · `pnpm --filter @ship/agent type-check` ·
 `source .factory-env && pnpm --filter @ship/api exec vitest run src/routes/agent.test.ts` ·
