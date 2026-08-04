@@ -175,6 +175,14 @@ router.post('/chat', authMiddleware, authed(async (req, res) => {
       },
       body: JSON.stringify({ seedDocumentId, question: trimmedQuestion, askingUserId: req.userId }),
       signal: controller.signal,
+      // CWE-522 (insufficiently protected credentials): `fetch` defaults to
+      // `redirect: 'follow'`, and a cross-origin redirect strips
+      // `Authorization` but NOT arbitrary headers like `X-Internal-Secret` —
+      // an unexpected redirect from a misconfigured/compromised
+      // AGENT_API_BASE_URL would silently forward the secret to whatever
+      // host it points at. Fail loudly instead: a redirect here is always a
+      // configuration error, never a legitimate response.
+      redirect: 'error',
     });
 
     if (!agentRes.ok) {
@@ -190,6 +198,12 @@ router.post('/chat', authMiddleware, authed(async (req, res) => {
       return;
     }
 
+    // CWE-524 (sensitive data exposure via caching): this is a per-user,
+    // per-question answer. Even though CloudFront's own edge policy already
+    // treats /api/* as no-cache, that says nothing about a browser's own
+    // HTTP cache — an explicit no-store is the only thing that actually
+    // controls that.
+    res.set('Cache-Control', 'no-store');
     res.status(200).json(data);
   } catch (err) {
     // Covers both a network failure and the abort timeout above — either
@@ -310,6 +324,10 @@ router.get('/inbox', authMiddleware, authed(async (req, res) => {
         'X-Internal-Secret': internalSecret,
       },
       signal: controller.signal,
+      // CWE-522: same posture as POST /chat above — an unexpected redirect
+      // from AGENT_API_BASE_URL must never silently forward
+      // X-Internal-Secret to a different host.
+      redirect: 'error',
     });
 
     if (!agentRes.ok) {
@@ -325,6 +343,10 @@ router.get('/inbox', authMiddleware, authed(async (req, res) => {
       return;
     }
 
+    // CWE-524: this is one person's ranked inbox — a browser-cached copy
+    // served back after a logout/login (or account switch on a shared
+    // machine) would leak it to whoever is using the browser next.
+    res.set('Cache-Control', 'no-store');
     res.status(200).json(data);
   } catch (err) {
     // Covers both a network failure and the abort timeout above — same

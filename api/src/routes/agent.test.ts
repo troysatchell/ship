@@ -218,6 +218,10 @@ describe('POST /api/agent/chat (TRO-320 / FG-9)', () => {
     expect(calledUrl).toContain('/chat')
     expect(calledInit.method).toBe('POST')
     expect((calledInit.headers as Record<string, string>)['X-Internal-Secret']).toBe('test-internal-secret')
+    // CWE-522 (CodeRabbit PR #120): a redirect here is always a
+    // configuration error, never legitimate — `fetch` must not silently
+    // follow one and forward X-Internal-Secret to a different host.
+    expect(calledInit.redirect).toBe('error')
     const sentBody = JSON.parse(calledInit.body as string)
     expect(sentBody).toEqual({
       seedDocumentId: VALID_BODY.seedDocumentId,
@@ -230,6 +234,9 @@ describe('POST /api/agent/chat (TRO-320 / FG-9)', () => {
 
     expect(res.status).toBe(200)
     expect(res.body).toEqual(agentBody)
+    // CWE-524 (CodeRabbit PR #120): a per-user, per-question answer must
+    // never be servable from a browser's own HTTP cache.
+    expect(res.headers['cache-control']).toBe('no-store')
   })
 
   it('degrades to a clean 502 when the agent returns 200 with a malformed citedSources element (crosses the trust boundary, so every element is validated)', async () => {
@@ -389,9 +396,14 @@ describe('GET /api/agent/inbox (TRO-323 / FG-10)', () => {
     expect(urlString).toContain(`recipientUserId=${testUserId}`)
     expect(calledInit.method).toBe('GET')
     expect((calledInit.headers as Record<string, string>)['X-Internal-Secret']).toBe('test-internal-secret')
+    // CWE-522 (CodeRabbit PR #120): same posture as POST /chat.
+    expect(calledInit.redirect).toBe('error')
 
     expect(res.status).toBe(200)
     expect(res.body).toEqual(agentBody)
+    // CWE-524 (CodeRabbit PR #120): one person's ranked inbox must never be
+    // servable from a browser cache to whoever uses the machine next.
+    expect(res.headers['cache-control']).toBe('no-store')
   })
 
   it('preserves a path component in AGENT_API_BASE_URL, the same way POST /chat already does (CodeRabbit PR #120) — `new URL(\'/inbox\', base)` would silently discard it', async () => {
