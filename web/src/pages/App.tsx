@@ -223,6 +223,14 @@ export function AppLayout() {
   const activeDocumentId = getActiveDocumentId();
 
   const handleModeClick = (mode: Mode) => {
+    // TRO-323/FG-10 follow-up (CodeRabbit review, PR #120): a normal
+    // rail-mode click must always close the Inbox overlay first — otherwise
+    // the Contextual Sidebar can show the Inbox overlay AND the
+    // newly-selected mode as simultaneously "active" (header text and
+    // `InboxSidebar` stay mounted while `activeMode` also changes underneath
+    // it). Every rail-mode `RailIcon` shares this one function, so this
+    // single reset covers all of them.
+    setInboxOpen(false);
     switch (mode) {
       case 'dashboard': void navigate('/my-week'); break;
       case 'docs': void navigate('/docs'); break;
