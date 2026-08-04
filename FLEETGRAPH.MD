@@ -412,10 +412,11 @@ explicit human sign-off, scoped only to the new agent service
 (`terraform/render/plan/tro-316-destroy-redeploy-proof.md`): create → verified `/health`/`/ready`
 200 → targeted `destroy` of the agent alone (verified `ship`/`ship-db` untouched) → re-`apply` from
 config alone, no import → verified `/health`/`/ready` 200 again on the newly generated URL. **One
-piece that proof deliberately left open, now closed by this ticket:** `SHIP_API_TOKEN` was applied
-as a placeholder string; a real per-user token has since been minted (see "Login and the 403" below)
-and is staged in a gitignored `terraform/render/terraform.tfvars` for a human to fold into the
-next `apply` — not applied by this ticket, per its own stop conditions.
+piece that proof deliberately left open, now closed:** `SHIP_API_TOKEN` was applied as a placeholder
+string; a real per-user token has since been minted (see "Login and the 403" below) and wired into
+the live agent — see the "Done, 2026-08-04" paragraph under "Login and the 403" for exactly how
+(not via a second `terraform apply`, which hit a provider bug — worked around via the Render REST
+API directly).
 
 **Confirmed (not assumed): which branch Render deploys, and whether merged code actually reaches
 it.** `git_branch` defaults to `"main"` in `variables.tf` for both services, and the live
@@ -448,6 +449,19 @@ the prior bare `404`, and `GET /`'s `last-modified` header moved from `2026-07-3
 `auto_deploy` itself never fired is still not diagnosed — this was a manual workaround, not a fix to
 the underlying trigger, so the same gap will recur on the next push unless someone with Render
 dashboard access checks the GitHub App installation.
+
+**Standing operational procedure until that root cause is fixed:** after merging anything to `main`
+that the graded demo depends on (PR-D, PR-E, PR-F, PR-G), do not assume `auto_deploy` fired.
+Manually verify — `GET https://ship-rr6m.onrender.com/` and check its `last-modified` header against
+the merge time, or probe a route the merge actually added (the same pattern used above,
+`/api/change-feed`). If it's stale, trigger the same remediation call this ticket used:
+```bash
+curl -X POST https://api.render.com/v1/services/srv-d9kf2t942hec73aofrt0/deploys \
+  -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
+```
+The identical procedure applies to the agent service (`srv-d9otunmgekts73eqs0h0` as of this ticket
+— re-check the current id via `terraform output agent_service_url`/state, since it changes on every
+clean-machine `apply`) whenever `agent/` code changes land on `main`.
 ```bash
 curl -X POST https://api.render.com/v1/services/srv-d9kf2t942hec73aofrt0/deploys \
   -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
@@ -501,10 +515,20 @@ per-user API token was then minted through that session (`POST /api/api-tokens`,
 `api/src/routes/api-tokens.ts`), name `fleetgraph-agent-tro-341`, no expiry, and verified working via
 `Authorization: Bearer` against both a plain route (`/api/auth/me`) and a `conditionalCsrf`-guarded
 one (`/api/documents` — Bearer correctly bypasses CSRF, `app.ts:66-68`). The raw value is not in this
-file or in git: it's in a gitignored `terraform/render/terraform.tfvars` in the FG-23 worktree,
-already the target location for `agent_service.tf`'s `var.ship_api_token` (`variables.tf:208-218`),
-waiting to be folded into the checked-out root's real `terraform.tfvars` and applied per the
-Terraform paragraph above.
+file or in git: it was folded into the main checkout's gitignored `terraform/render/terraform.tfvars`
+and wired into the live agent — see the "Done, 2026-08-04" paragraph immediately below.
+
+**On the choice of identity, deliberately not changed here.** `dev@ship.local` is this repo's
+established seed-fixture super-admin, already the login this entire sprint's manual verification
+work has used and the identity "20+ e2e specs" (per this codebase's own prior convention) build on
+— using it to mint the agent's token is consistent with that, not a new pattern. This is **not** the
+"no service account" design being violated: FLEETGRAPH.MD's own stance is that every token belongs
+to a real person, and `dev@ship.local` is a real (seeded) person's account, not a synthetic service
+identity. A narrower, least-privilege, non-admin person's token would still be a legitimate future
+tightening — deliberately not done under today's deadline pressure, and the token has no expiry,
+which is worth a follow-up ticket for graded/demo-lifetime credential hygiene (rotation, an
+expiration, and secret-manager storage instead of a gitignored `.tfvars` file) rather than blocking
+this one.
 
 **Done, 2026-08-04, with explicit human sign-off — but not via `terraform apply` as planned.** The
 real token was folded into the main checkout's `terraform.tfvars` and `terraform plan` confirmed
@@ -522,10 +546,21 @@ then a manual redeploy (`POST .../deploys`, since an env-var PUT alone doesn't r
 process — confirmed by checking `GET .../deploys?limit=1` still showed the prior deploy after the
 PUT). New deploy `dep-d9ouuar7uimc73a8vrkg` reached `live`; `GET /health` → `200`, `GET /ready` →
 `200`, both against the live agent with a real, working per-user token. **Terraform's own state
-now agrees with reality** (the `.tfvars` value matches what's live), but a future `terraform apply`
-touching this resource will hit the identical provider bug again until either the provider fixes
-it or someone finds a cleaner workaround than a manual `ignore_changes` addition that empirically
-didn't stop the bad payload.
+now agrees with reality** (the `.tfvars` value matches what's live), but this is a standing landmine,
+not a one-off: **`terraform apply` cannot currently update `render_web_service.agent` at all, for
+any field, on the free tier.** `ignore_changes` only suppresses what shows in the plan *diff* — it
+does not stop the provider's `Update` call from unconditionally including `maintenance_mode` in its
+request body, so the failure reproduces identically for any change (a new env var, a plan tier
+change, anything). The `pull_request_previews_enabled`/`maintenance_mode` `ignore_changes` entries
+added here are harmless and worth keeping (they do suppress real diff noise from *other* drift), but
+they are not the fix. Until the provider is patched or the service moves off the free tier, **any
+future change to this resource's config must go through the Render REST API directly** — a
+`PUT`/`PATCH` to `/v1/services/{id}` or its `/env-vars` sub-resource, following the pattern used
+above — not `terraform apply`. Filed as a follow-up rather than solved here: adding automated
+integration coverage for this specific provider failure mode isn't practical (it requires a live
+Render API call against a free-tier resource, not something a unit/vitest suite can exercise), but
+someone should re-check `terraform apply` against this resource each time the provider version pins
+forward, since that's the actual fix path.
 
 **Seeding the graded database with FG-3's fixture states (TRO-341 / FG-23) — plan, not executed.**
 `api/src/db/seed.ts`'s FG-3 block (`TRO-314`, merged to `main` 2026-08-03) is additive and
@@ -556,8 +591,8 @@ shapes `seed.ts` checks for). Two things stand between "safe in principle" and "
    (`memory-bank/techContext.md:148`). The SSM fallback (`TRO-243`) is what lets that path work off
    AWS.
 
-Full sequence, ready to run, **not run by this ticket** (writes to the live graded database — this
-ticket's own stop condition):
+Full sequence, run 2026-08-04 (writes to the live graded database, so it required explicit human
+sign-off — see the "Done" paragraph below):
 ```bash
 # 1. Get the external connection string (dashboard, or GET /v1/postgres/{id}/connection-info)
 #    after the temporary ipAllowList PATCH above has taken effect.
