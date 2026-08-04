@@ -30,6 +30,14 @@ interface IssueBlockingSectionProps {
   issueId: string;
 }
 
+// Distinct messages per query (CodeRabbit review, PR #120) — a failed
+// useBlocksQuery/useBlockedByQuery/useIssuesQuery must render its own
+// visible error, never silently fall through to the same empty-list text a
+// genuinely empty result renders.
+const BLOCKS_LOAD_ERROR = "Couldn't load the issues this blocks. Please try again.";
+const BLOCKED_BY_LOAD_ERROR = "Couldn't load the issues blocking this one. Please try again.";
+const ISSUES_LOAD_ERROR = "Couldn't load issues to pick from. Please try again.";
+
 function toIssueOption(issue: { id: string; title: string; display_id: string }): IssueOption {
   return { id: issue.id, title: issue.title || 'Untitled', displayId: issue.display_id };
 }
@@ -77,7 +85,7 @@ function BlockingList({
 }
 
 export function IssueBlockingSection({ issueId }: IssueBlockingSectionProps) {
-  const { data: allIssues = [] } = useIssuesQuery();
+  const issuesQuery = useIssuesQuery();
   const blocksQuery = useBlocksQuery(issueId);
   const blockedByQuery = useBlockedByQuery(issueId);
   const invalidate = useInvalidateBlockingAssociations(issueId);
@@ -89,6 +97,7 @@ export function IssueBlockingSection({ issueId }: IssueBlockingSectionProps) {
   const [removingBlocksId, setRemovingBlocksId] = useState<string | null>(null);
   const [removingBlockedById, setRemovingBlockedById] = useState<string | null>(null);
 
+  const allIssues = useMemo(() => issuesQuery.data ?? [], [issuesQuery.data]);
   const blocks = useMemo(() => blocksQuery.data ?? [], [blocksQuery.data]);
   const blockedBy = useMemo(() => blockedByQuery.data ?? [], [blockedByQuery.data]);
 
@@ -161,23 +170,47 @@ export function IssueBlockingSection({ issueId }: IssueBlockingSectionProps) {
     <>
       <PropertyRow label="Blocks">
         <div className="space-y-1.5">
-          <BlockingList
-            ariaLabel="Blocks"
-            items={blocks}
-            emptyText="Not blocking any issues"
-            removingId={removingBlocksId}
-            onRemove={handleRemoveBlocks}
-          />
+          {/* Fixed role="status"/"alert" containers for the lifetime of the
+            * element — same reasoning as AgentChatPanel.tsx/InboxSidebar.tsx:
+            * a live region's role should not switch with its content. A
+            * still-LOADING or FAILED query must never fall through to the
+            * same "Not blocking any issues" text a genuinely empty list
+            * renders (CodeRabbit review, PR #120) — a real network failure
+            * would otherwise look identical to "you have no blockers." */}
+          <div role="status">
+            {blocksQuery.isLoading && <p className="text-xs text-muted italic">Loading…</p>}
+          </div>
+          <div role="alert">
+            {blocksQuery.isError && (
+              <p className="text-xs text-red-400">{BLOCKS_LOAD_ERROR}</p>
+            )}
+          </div>
+          {!blocksQuery.isLoading && !blocksQuery.isError && (
+            <BlockingList
+              ariaLabel="Blocks"
+              items={blocks}
+              emptyText="Not blocking any issues"
+              removingId={removingBlocksId}
+              onRemove={handleRemoveBlocks}
+            />
+          )}
           <IssueCombobox
             options={blocksOptions}
             onSelect={handleAddBlocks}
-            disabled={addingBlocks}
+            // Also disabled while the issues list itself is loading/failed —
+            // otherwise opening the picker while `allIssues` is still `[]`
+            // would show cmdk's own "No matching issues" empty state, which
+            // reads as "there really are no other issues" rather than "this
+            // hasn't loaded yet" (the same class of defect this fix is for).
+            disabled={addingBlocks || issuesQuery.isLoading || issuesQuery.isError}
             placeholder="Add issue this blocks…"
             aria-label="Add issue this blocks"
           />
-          {/* Fixed role="alert" for the lifetime of the element — same
-            * reasoning as AgentChatPanel.tsx/InboxSidebar.tsx: a live
-            * region's politeness should not switch role with its content. */}
+          <div role="alert">
+            {issuesQuery.isError && (
+              <p className="text-xs text-red-400">{ISSUES_LOAD_ERROR}</p>
+            )}
+          </div>
           <div role="alert">
             {blocksError && <p className="text-xs text-red-400">{blocksError}</p>}
           </div>
@@ -186,20 +219,35 @@ export function IssueBlockingSection({ issueId }: IssueBlockingSectionProps) {
 
       <PropertyRow label="Blocked by">
         <div className="space-y-1.5">
-          <BlockingList
-            ariaLabel="Blocked by"
-            items={blockedBy}
-            emptyText="Not blocked by any issues"
-            removingId={removingBlockedById}
-            onRemove={handleRemoveBlockedBy}
-          />
+          <div role="status">
+            {blockedByQuery.isLoading && <p className="text-xs text-muted italic">Loading…</p>}
+          </div>
+          <div role="alert">
+            {blockedByQuery.isError && (
+              <p className="text-xs text-red-400">{BLOCKED_BY_LOAD_ERROR}</p>
+            )}
+          </div>
+          {!blockedByQuery.isLoading && !blockedByQuery.isError && (
+            <BlockingList
+              ariaLabel="Blocked by"
+              items={blockedBy}
+              emptyText="Not blocked by any issues"
+              removingId={removingBlockedById}
+              onRemove={handleRemoveBlockedBy}
+            />
+          )}
           <IssueCombobox
             options={blockedByOptions}
             onSelect={handleAddBlockedBy}
-            disabled={addingBlockedBy}
+            disabled={addingBlockedBy || issuesQuery.isLoading || issuesQuery.isError}
             placeholder="Add issue blocking this…"
             aria-label="Add issue blocking this"
           />
+          <div role="alert">
+            {issuesQuery.isError && (
+              <p className="text-xs text-red-400">{ISSUES_LOAD_ERROR}</p>
+            )}
+          </div>
           <div role="alert">
             {blockedByError && <p className="text-xs text-red-400">{blockedByError}</p>}
           </div>

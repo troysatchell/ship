@@ -24,7 +24,7 @@
  */
 import { useState } from 'react';
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { queryClient } from '@/lib/queryClient';
@@ -170,11 +170,18 @@ function renderSection(issueId = ISSUE_A) {
 }
 
 async function openBlocksPicker() {
-  fireEvent.click(await screen.findByRole('button', { name: /add issue this blocks/i }));
+  const trigger = await screen.findByRole('button', { name: /add issue this blocks/i });
+  // The trigger is disabled while useIssuesQuery is still loading (TRO-334
+  // follow-up, CodeRabbit review PR #120) — wait for it to become usable,
+  // same as a real user would, rather than firing a click Radix ignores.
+  await waitFor(() => expect(trigger).not.toBeDisabled());
+  fireEvent.click(trigger);
 }
 
 async function openBlockedByPicker() {
-  fireEvent.click(await screen.findByRole('button', { name: /add issue blocking this/i }));
+  const trigger = await screen.findByRole('button', { name: /add issue blocking this/i });
+  await waitFor(() => expect(trigger).not.toBeDisabled());
+  fireEvent.click(trigger);
 }
 
 /**
@@ -387,6 +394,9 @@ describe('IssueBlockingSection — keyboard reachability and screen-reader struc
     expect(trigger.tagName).toBe('BUTTON');
     expect(trigger).toHaveAttribute('type', 'button');
     expect(trigger).not.toHaveAttribute('tabindex', '-1');
+    // Disabled while useIssuesQuery is still loading (TRO-334 follow-up,
+    // CodeRabbit review PR #120) — a disabled element cannot take focus.
+    await waitFor(() => expect(trigger).not.toBeDisabled());
     trigger.focus();
     expect(document.activeElement).toBe(trigger);
 
@@ -485,5 +495,105 @@ describe('IssueBlockingSection — key resets state across issue switches (CodeR
     // Issue 2's fresh instance must show no trace of issue 1's error state.
     // Before the fix, the reused instance would still be rendering it.
     expect(screen.queryByText(CIRCULAR_BLOCKS_MESSAGE)).not.toBeInTheDocument();
+  });
+});
+
+describe('IssueBlockingSection — loading/error states never read as "empty" (CodeRabbit review, PR #120)', () => {
+  /**
+   * Before this fix, `blocksQuery.data ?? []` / `blockedByQuery.data ?? []`
+   * / `allIssues = []` meant a still-LOADING query and a FAILED query both
+   * rendered identically to a genuinely empty list — a real network failure
+   * looked exactly like "you have no blockers." These tests force each of
+   * the three queries (`useBlocksQuery`, `useBlockedByQuery`, the issues
+   * query) to reject and assert a visible error renders instead of the
+   * empty-list text.
+   *
+   * The shared `queryClient` (web/src/lib/queryClient.ts) retries a 5xx or a
+   * plain thrown `Error` up to 3 times with real exponential backoff
+   * (1s/2s/4s) by design (TRO-179's throttle-aware retry policy) — correct
+   * for production, but it would make every case below take several seconds
+   * to settle into `isError`, past this suite's timeouts. That retry
+   * behavior is exercised elsewhere; this block is only about the render
+   * logic once a query IS in the error state, so retries are disabled here
+   * for the duration of each test and restored immediately after.
+   */
+  let originalQueryDefaults: ReturnType<typeof queryClient.getDefaultOptions>['queries'];
+
+  beforeEach(() => {
+    originalQueryDefaults = queryClient.getDefaultOptions().queries;
+    queryClient.setDefaultOptions({ queries: { ...originalQueryDefaults, retry: false } });
+  });
+
+  afterEach(() => {
+    queryClient.setDefaultOptions({ queries: originalQueryDefaults });
+  });
+
+  it('renders a visible error, not "Not blocking any issues", when useBlocksQuery rejects', async () => {
+    mockApiGet.mockImplementation(async (endpoint: string) => {
+      if (endpoint === '/api/issues') return jsonResponse(200, []);
+      if (endpoint === `/api/documents/${ISSUE_A}/associations?type=blocks`) {
+        return jsonResponse(500, { error: 'Internal Server Error' });
+      }
+      if (endpoint.endsWith('/reverse-associations?type=blocks')) return jsonResponse(200, []);
+      throw new Error(`Unexpected apiGet call in test: ${endpoint}`);
+    });
+
+    renderSection();
+
+    const message = await screen.findByText(/couldn't load the issues this blocks/i);
+    expect(message.closest('[role="alert"]')).not.toBeNull();
+    expect(screen.queryByText('Not blocking any issues')).not.toBeInTheDocument();
+    // The reverse query succeeded independently — its own empty state is
+    // unaffected by the forward query's failure.
+    expect(await screen.findByText('Not blocked by any issues')).toBeInTheDocument();
+  });
+
+  it('renders a visible error, not "Not blocked by any issues", when useBlockedByQuery rejects', async () => {
+    mockApiGet.mockImplementation(async (endpoint: string) => {
+      if (endpoint === '/api/issues') return jsonResponse(200, []);
+      if (endpoint === `/api/documents/${ISSUE_A}/associations?type=blocks`) return jsonResponse(200, []);
+      if (endpoint.endsWith('/reverse-associations?type=blocks')) {
+        return jsonResponse(500, { error: 'Internal Server Error' });
+      }
+      throw new Error(`Unexpected apiGet call in test: ${endpoint}`);
+    });
+
+    renderSection();
+
+    const message = await screen.findByText(/couldn't load the issues blocking this one/i);
+    expect(message.closest('[role="alert"]')).not.toBeNull();
+    expect(screen.queryByText('Not blocked by any issues')).not.toBeInTheDocument();
+    expect(await screen.findByText('Not blocking any issues')).toBeInTheDocument();
+  });
+
+  it('renders a visible error and keeps both pickers disabled, not silently empty option lists, when the issues query rejects', async () => {
+    mockApiGet.mockImplementation(async (endpoint: string) => {
+      if (endpoint === '/api/issues') return jsonResponse(500, { error: 'Internal Server Error' });
+      if (endpoint === `/api/documents/${ISSUE_A}/associations?type=blocks`) return jsonResponse(200, []);
+      if (endpoint.endsWith('/reverse-associations?type=blocks')) return jsonResponse(200, []);
+      throw new Error(`Unexpected apiGet call in test: ${endpoint}`);
+    });
+
+    renderSection();
+
+    const messages = await screen.findAllByText(/couldn't load issues to pick from/i);
+    expect(messages.length).toBeGreaterThanOrEqual(1);
+    for (const message of messages) {
+      expect(message.closest('[role="alert"]')).not.toBeNull();
+    }
+
+    // Both "Add issue…" triggers stay disabled — opening either while
+    // `allIssues` is unrecoverably empty would show cmdk's own "No matching
+    // issues" empty state, which reads as "there really are no other
+    // issues" rather than "this failed to load."
+    const blocksTrigger = await screen.findByRole('button', { name: /add issue this blocks/i });
+    const blockedByTrigger = await screen.findByRole('button', { name: /add issue blocking this/i });
+    expect(blocksTrigger).toBeDisabled();
+    expect(blockedByTrigger).toBeDisabled();
+
+    // The two association lists themselves are still empty and successful,
+    // so their own "not blocking/blocked by" text is correct and expected.
+    expect(await screen.findByText('Not blocking any issues')).toBeInTheDocument();
+    expect(await screen.findByText('Not blocked by any issues')).toBeInTheDocument();
   });
 });
