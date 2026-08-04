@@ -145,6 +145,24 @@ export default tseslint.config(
     rules: correctnessRules,
   },
   {
+    // TRO-313/315/316 (PR-B): new agent/ workspace package. Scoped the same
+    // way as shared/src — same default correctness rules, not yet promoted to
+    // the api/src-only 'error' overrides above (no ticket has verified this
+    // population stays at zero under 'error' the way TRO-297 did for api).
+    files: ['agent/src/**/*.ts'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+    },
+    rules: correctnessRules,
+  },
+  {
     files: ['web/src/**/*.ts', 'web/src/**/*.tsx'],
     languageOptions: {
       parser: tseslint.parser,

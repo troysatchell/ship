@@ -21,6 +21,244 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-316 — [FG-11] Terraform for the agent service — Render docker web service, `/health` health-check-gated deploy, plan captured and annotated
+
+**Part of bundle `TRO-326` ([PR-B] EPIC: Agent service foundation) — third and final sub-issue** on
+this branch, after `TRO-313` (FG-2) and `TRO-315` (FG-4). See those entries below for the rest of
+the bundle.
+
+**What was missing.** No deployment existed for the agent service FG-2/FG-4 built. The MVP
+requires it "deployed and publicly accessible via Terraform" with `/health`/`/ready`, a captured
+and annotated `terraform plan`, and (separately, not in this PR — see below) a destroy-and-redeploy
+proof.
+
+**Target platform decision: Render, not AWS — decided out loud, not silently.** This ticket's own
+text says "Choose the target platform accordingly; do not assume an AWS apply will work." Verified
+again while doing this work: no `aws` CLI installed, no `AWS_*` env vars, matching
+`memory-bank/activeContext.md`'s standing note that no AWS credentials have existed all sprint.
+`memory-bank/activeContext.md`'s PM review (2026-08-03, TRO-341) independently names the same
+target ("Render Ship + agent + seeded Render Postgres"). Extended the existing, already-provably-
+plannable `terraform/render/` root (TF-10 / TRO-299) with a new `agent_service.tf`, rather than the
+large AWS root in `terraform/` (which has never had a successful `plan` in this environment either)
+or a second Terraform root.
+
+**Deviation from the literal dispatch brief, disclosed:** told to model secrets on "the existing
+`terraform/ssm.tf` / `.tfvars.example` pattern" — `ssm.tf` is AWS SSM Parameter Store, unusable by
+non-AWS compute. Followed the same **discipline** (sensitive variables, no defaults, gitignored
+`terraform.tfvars`, nothing committed) via Render's `env_vars` mechanism instead, which
+`web_service.tf` already uses for `SESSION_SECRET` in this same root.
+
+**What changed.**
+- `terraform/render/agent_service.tf` (new) — `render_web_service.agent`: Render docker runtime
+  pointed at `agent/Dockerfile` (also new — see below), `health_check_path = /health`,
+  `SHIP_API_BASE_URL` derived from `render_web_service.ship.url` (never hardcoded), five more env
+  vars for the model provider and LangSmith tracing, all sourced from sensitive input variables.
+- `terraform/render/variables.tf` — 11 new variables for the agent service, all documented; the
+  three secrets (`anthropic_api_key`, `langsmith_api_key`, `ship_api_token`) have no default.
+- `terraform/render/outputs.tf` — `agent_service_url`/`agent_service_id`, non-sensitive only.
+- `terraform/render/terraform.tfvars.example` — placeholders for the three new secrets plus
+  commented overrides for the non-secret agent variables.
+- `agent/Dockerfile` (new) — mirrors the root Dockerfile's build/runtime split (build stage
+  compiles from source since `dist/`/`node_modules/` are gitignored; runtime stage carries only
+  `agent/dist` + prod deps). **Built and run in this session, not just written**: `docker build -f
+  agent/Dockerfile .` from the repo root succeeded; the resulting container served `GET /health` →
+  `200 {"status":"ok"}` and `GET /ready` → `503 {"status":"not_ready","reason":"config_incomplete"}`
+  with no config supplied — the exact FG-2/FG-4 contract, running inside the real image Render
+  would build.
+- `FLEETGRAPH.MD` "Deployment model" — the rollback trigger/procedure the brief requires documented:
+  (1) CI gates *merge*, so a failing CI run never reaches the branch Render watches in the first
+  place (`.github/workflows/ci.yml`'s own header: "the merge gate the ticket factory depends on");
+  (2) Render's own health-check-gated deploy promotion is a **liveness** safety net, not a readiness
+  one: `/health` (what `health_check_path` points at) returns 200 whenever the process is up, with
+  no config or Ship-dependency check (`agent/src/server.ts`) — so it only catches a process that
+  fails to boot or hangs, never a missing secret or an unreachable Ship. A new deploy that never
+  passes `/health` never receives traffic, and the previous good deploy keeps serving; a deploy that
+  boots fine but is missing `ANTHROPIC_API_KEY`/`SHIP_API_TOKEN`, or can't reach Ship, is still
+  promoted and still receives traffic — `/ready` reports that as `503`, but `/ready` is deliberately
+  NOT what Render's platform check points at (no separate readiness check is configured for that
+  purpose), and it can also legitimately be false on a freshly-promoted, healthy instance if Ship is
+  briefly down.
+
+**`terraform plan` — captured and annotated in full: `terraform/render/plan/tro-316-agent-plan-annotated.md`.**
+Two captures: (1) with `RENDER_API_KEY` unset (this environment's real, unmodified state) — fails
+immediately with "Missing Render API Key," proving the provider requires a credential this agent
+was not given (deliberately, matching the bundle's "no `terraform apply`" hard stop); (2) with a
+non-empty placeholder key (still not a real credential) — the plan completes in full, "3 to add, 0
+to change, 0 to destroy," because every resource here is a `create` against genuinely empty state
+and nothing requires a live API round-trip merely to plan. Every secret-shaped value renders as
+`(sensitive value)`. `terraform fmt -check -recursive .` clean; `terraform validate`: Success (2
+pre-existing deprecation warnings, identical pattern already in `web_service.tf`, not new).
+
+**Deliberately NOT done, per this bundle's hard stop (escalation gate #2 — irreversible/outward-
+facing infrastructure, human confirmation required every time):** `terraform apply` was never run;
+the destroy-and-redeploy proof was never attempted. See the annotated plan file's "What a human
+needs to finish this" section for the exact remaining steps (a real `RENDER_API_KEY`, a decision on
+the pre-existing `ship`/`ship-db` import-vs-create gap this root already carried before this
+ticket, real secret values, and explicit sign-off to `apply`).
+
+**How to run it.** `cd terraform/render && terraform init && terraform plan -var-file=terraform.tfvars`
+(after copying `terraform.tfvars.example` and filling in real values, and exporting `RENDER_API_KEY`).
+`docker build -f agent/Dockerfile -t ship-agent .` from the repo root to build the image standalone.
+
+**How to roll it back.** Two different procedures, depending on whether `apply` has run.
+- **Now (pre-apply, plan-only — this PR's actual state):** revert this commit. No resource here has
+  ever been applied, so there is nothing live to tear down — reverting only removes the Terraform
+  config and the Dockerfile.
+- **After a human runs `terraform apply` (not done in this PR):** reverting the commit alone does
+  NOT remove the live Render service — git history and live infrastructure are independent once
+  `apply` has run. Removing `render_web_service.agent` for real requires a subsequent `terraform
+  plan`/`apply` (either after reverting `agent_service.tf` in a new commit, or via `terraform destroy
+  -target=render_web_service.agent`) so Terraform actually issues the delete against Render's API.
+  Until that apply runs, the service — and its billing — stays live regardless of what git shows.
+  This is exactly the kind of irreversible, outward-facing infrastructure action this bundle's
+  escalation gate #2 requires explicit human confirmation for, the same as the original `apply`.
+  If the intent is to restore a prior good deploy rather than delete the resource entirely, that is
+  a Render-side deploy rollback, not a Terraform one — Terraform manages the resource's existence
+  and config, not its deploy history.
+
+---
+
+## TRO-315 — [FG-4] Resilient client for every outbound call — timeouts, backoff, circuit breaker, self-throttle, graceful degradation
+
+**What was missing.** FG-2 (TRO-313)'s `/ready` check used a bare `fetch` with a timeout — correct
+for that ticket's narrower scope, but it retried nothing, remembered nothing across polls, and had
+no notion of Ship's own rate limits. The brief's Engineering Requirements are graded alongside the
+agent: outbound calls need explicit timeouts and retry with exponential backoff, and the agent must
+degrade gracefully (no crash, no indefinite hang) if Ship is unreachable. FLEETGRAPH.MD also
+verifies both of Ship's own rate limiters fail OPEN on a cache outage — the agent cannot lean on
+Ship's ceiling as a safety net and must throttle itself below it.
+
+**What changed.** A single client layer, `agent/src/resilientClient.ts`, used by every outbound
+call this package makes:
+- `agent/src/circuitBreaker.ts` — copied, not reinvented, from `api/src/utils/circuitBreaker.ts`
+  (TRO-311 / RULE-7) **starting from its fixed version** (`273f058`): the first version had a real
+  half-open concurrency race (a second concurrent call arriving while a trial call's `await fn()`
+  was in flight fell through the `state === 'open'` check and called `fn()` itself). `agent/` does
+  not depend on `api/`, so this is a deliberate duplication of a verified-correct ~100-line class,
+  with the corresponding regression test carried over unchanged (TRO-315's own proof #3 names this
+  exact race).
+- `agent/src/rateLimiter.ts` — a sliding-window self-throttle (`RateLimiter`), default 500 req/min,
+  configurable via `SHIP_SELF_THROTTLE_RPM` — well under Ship's shared ~6,000 req/min per-IP ceiling.
+- `agent/src/resilientClient.ts` — `ResilientClient.get()` (idempotent reads: timeout, retry with
+  exponential backoff + full jitter, circuit breaker, self-throttle) and `.request()` (non-idempotent:
+  timeout + breaker, no retry). Design point: the breaker wraps each individual HTTP attempt, not
+  the whole retry sequence — so a call that retries into an already-tripped breaker fails fast
+  instead of backing off pointlessly. Every failure mode normalizes to `ShipUnreachableError`
+  ("I can't reach Ship right now.") — the plain, user-safe message the degradation contract requires;
+  no raw stack trace or error type leaks past this layer.
+- `agent/src/health.ts` / `server.ts` — `/ready` now goes through a `ResilientClient` built once per
+  server (`buildShipClient`) and reused across every poll, so the breaker's state — the whole point
+  of a breaker — actually persists between requests instead of being rebuilt fresh each time.
+- `agent/src/config.ts` — four new env-driven knobs: `SHIP_BREAKER_FAILURE_THRESHOLD` (default 5),
+  `SHIP_BREAKER_COOLDOWN_MS` (30000), `SHIP_RETRY_MAX_ATTEMPTS` (3), `SHIP_SELF_THROTTLE_RPM` (500).
+
+**Regression tests — stable fakes only, timers/sleep/clock all injected, zero real wait (40 total
+cases across the package now; 23 new/changed for this ticket).** Confirmed red for the right reason
+before the corresponding implementation line (see PR body for transcripts):
+- `agent/src/__tests__/resilientClient.test.ts` (9 cases) — the four proofs named in the ticket:
+  (1) Ship returning 503 → 3 attempts with growing delays (100ms, 200ms, no jitter), breaker opens
+  on the 3rd consecutive failure, caller gets `ShipUnreachableError` with the plain message — process
+  never throws uncaught; (2) a fetch that never resolves → the call rejects at exactly the configured
+  timeout bound (a fake `setTimeoutImpl` proves the exact ms scheduled and fires it deterministically
+  — no real elapsed time); (3) half-open admits exactly one concurrent trial (a gated fetch proves it
+  is still in flight when concurrent callers arrive; they get `CircuitOpenError`→`ShipUnreachableError`
+  without ever reaching `fetch`); (4) a successful call after the cooldown closes the breaker and the
+  next call needs no retry. Plus: self-throttle rejects over-ceiling calls without ever reaching
+  fetch; `.request()` never retries.
+- `agent/src/__tests__/circuitBreaker.test.ts` (10 cases) — carried over from TRO-311's file
+  verbatim in substance, including the half-open concurrency regression.
+- `agent/src/__tests__/rateLimiter.test.ts` (4 cases) — ceiling enforcement, rejected calls not
+  counted, sliding-window expiry.
+- `agent/src/__tests__/health.test.ts` / `server.test.ts` — rewritten against the new
+  `ShipReadClient` interface; added a case proving the same client (and breaker) instance is reused
+  across three `/ready` polls, not rebuilt per request.
+
+**How to run it.** `pnpm --filter @ship/agent test`
+
+**How to roll it back.** Revert this commit. `health.ts`/`server.ts` fall back to FG-2's bare-fetch
+`/ready` check (still correct, just without retry/breaker/throttle); nothing outside `agent/` is
+affected.
+
+---
+
+## TRO-313 — [FG-2] There is no agent service — new `agent/` package, LangGraph + LangSmith, `/health` + `/ready`
+
+**What was missing.** No agent service existed at all: `pnpm-workspace.yaml` listed only `api`,
+`web`, `shared`; no `langgraph`/`langsmith`/`@langchain/*`/`@anthropic-ai/sdk` dependency existed
+anywhere; the only model access in the repo was AWS Bedrock (`api/src/services/ai-analysis.ts`),
+and this environment has never had AWS credentials this sprint. Six MVP requirements (graph
+running, LangSmith traces, HITL gate, real Ship data, UI surfaces, Terraform deploy) all assume a
+service that did not exist.
+
+**Model provider decision (the "one decision still open" in this ticket): Anthropic API directly**,
+via `@langchain/anthropic` — not Bedrock. Confirmed by the maintainer 2026-08-03. Reasons: no AWS
+credentials have existed in this environment all sprint (so Bedrock cannot be assumed to work
+locally or in whatever deploy target FG-11 lands on), and the brief's "Claude API costs" accounting
+matches billing through the Anthropic API directly, not Bedrock's per-inference-profile pricing.
+
+**What changed.** New `agent/` workspace package (added to `pnpm-workspace.yaml`, matching
+build/type-check/lint/test scripts to the sibling packages):
+- `agent/src/graph.ts` — a compiled LangGraph `StateGraph` (`ingest` → `respond`, `START`/`END`).
+  Phase 2 (the six-use-case node design — FLEETGRAPH.MD "Node design rationale", marked Pending) is
+  explicitly out of scope for this ticket; this proves a real, compiled, traced graph exists. The
+  model is injected (`AnthropicModel` interface — just `.invoke(input)`), so every automated test
+  uses a stable fake and the production wiring (`index.ts`) is the only place a real `ChatAnthropic`
+  is constructed.
+- `agent/src/server.ts` + `index.ts` — Express app: `GET /health` (200 always, process alive, no
+  dependency check — this is what Terraform/FG-11 points its platform health check at) and
+  `GET /ready` (503 if config is incomplete OR Ship is unreachable via a single timed fetch; 200
+  otherwise). `/ready`'s Ship check is deliberately a bare `fetch` with a timeout here, not the full
+  resilient client — FG-4 (TRO-315) is the ticket that gives every outbound call retry/backoff/
+  circuit-breaker treatment; doing that here would be doing FG-4's work under FG-2's ticket.
+- `agent/src/config.ts` — env-only config, no secrets hardcoded, no defaults on secrets.
+- `agent/.env.example` — documents every var, including the FG-4 client knobs that don't exist yet
+  (so the file doesn't need a second pass when FG-4 lands).
+- `agent/src/scripts/trace-invoke.ts` — a one-off manual utility (NOT a test, not run by `pnpm
+  test`) that makes the one real, live call this ticket's proof requires.
+
+**LangSmith trace — real invocation, captured via the LangSmith API, not the console:**
+- Trace: `https://smith.langchain.com/o/827be0c8-ee40-4854-9d37-e82820ec9263/projects/p/c1e38b67-b458-4e8b-a680-be74ece5e1a6/r/a43f52ee-ea08-459d-bfa2-ece414797759`
+- Project `fleetgraph-agent`, run type `chain`, status `success`, 9 child runs (the graph's own
+  node/model spans), 71 total tokens (33 prompt / 38 completion), $0.000223 total cost — all read
+  directly from `GET /runs/{id}` on the LangSmith API (`total_tokens`/`total_cost`/`child_run_ids`
+  fields), not estimated.
+- Model used for the trace: `claude-haiku-4-5-20251001` — the cheapest model available to this API
+  key (confirmed via `GET /v1/models`; `claude-3-5-haiku-latest` 404s against this key's model
+  list, so the first attempt is also on record as an **error** trace in the same LangSmith project).
+
+**Regression tests (stable fake — no live call in any of these; `pnpm test` never spends money or
+depends on network availability).** All confirmed red for the right reason before the corresponding
+implementation line, green after — see PR body for the exact before/after transcripts:
+- `agent/src/__tests__/graph.test.ts` (4 cases) — the compiled graph's node set contains every name
+  in `NODE_NAMES`; `ingest` trims input before `respond` ever sees it; array-shaped model content is
+  joined into a string; a model rejection propagates rather than being swallowed.
+- `agent/src/__tests__/health.test.ts` (4 cases) + `agent/src/__tests__/server.test.ts` (4 cases) —
+  `/health` always 200; `/ready` 503 on incomplete config (no network call made) and on Ship
+  unreachable, 200 once both are satisfied — exactly FG-2's "how it will be proven" clause.
+- `agent/src/__tests__/config.test.ts` (5 cases) — defaults, full env read, non-numeric fallback.
+
+**How to run it.** `pnpm --filter @ship/agent test` · `pnpm --filter @ship/agent dev` (serves on
+`:3100` by default) · `set -a; source .env.local; set +a && pnpm --filter @ship/agent trace:invoke`
+for a fresh live trace.
+
+**How to roll it back.** Not independent of the other two tickets in this bundle. `TRO-315`
+(`c1f8b09`) and `TRO-316` (`cbee4ae`) are later commits on this same branch that both consume the
+`agent/` package this commit creates: TRO-315 adds `resilientClient.ts`/`circuitBreaker.ts`/
+`rateLimiter.ts` into `agent/src/` and rewires `health.ts`/`server.ts`/`config.ts` to use them, and
+TRO-316 adds `agent/Dockerfile` plus a Terraform plan (`terraform/render/agent_service.tf`,
+un-applied) that builds and deploys the package this commit creates. Reverting *this* commit alone
+while those two remain breaks the build — files they add or edit import things this commit created.
+- **To fully undo the agent service:** revert newest-first — `cbee4ae` (TRO-316), then `c1f8b09`
+  (TRO-315), then this commit — and only as the last step, once all three are gone, remove `'agent'`
+  from `pnpm-workspace.yaml`. Doing that removal any earlier is the under-scoped version of this
+  rollback and will break whichever of TRO-315/TRO-316 is still present.
+- **To roll back only this ticket while TRO-315/TRO-316 stay:** not possible as a plain revert —
+  both later commits depend on files this one adds. Re-implementing FG-2's narrower scope (a bare
+  `fetch`-based `/ready`, no resilient client, no deploy) on top of what TRO-315/TRO-316 built would
+  be a forward fix, not a revert.
+
+---
+
 ## TRO-325 — [PR-A] EPIC: Ship-side API foundations (change feed, blocks relationship, fixtures)
 
 Bundle epic, one branch (`feat/pr-a-ship-api-foundations`) / one PR covering four sub-issues that

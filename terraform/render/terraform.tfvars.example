@@ -10,6 +10,11 @@
 
 session_secret = "REPLACE_WITH_A_REAL_SECRET"   # e.g. output of: openssl rand -hex 32
 
+# --- Agent service secrets (TRO-316 / FG-11) — no defaults, must be set ----
+anthropic_api_key = "REPLACE_WITH_A_REAL_ANTHROPIC_API_KEY"
+langsmith_api_key = "REPLACE_WITH_A_REAL_LANGSMITH_API_KEY"
+ship_api_token    = "REPLACE_WITH_A_REAL_SHIP_API_TOKEN"   # a real user's Ship API token — see FLEETGRAPH.MD "Deployment model"
+
 # Everything else below has a working default in variables.tf that
 # reproduces the existing live service; override only what you need to
 # change.
@@ -31,3 +36,12 @@ session_secret = "REPLACE_WITH_A_REAL_SECRET"   # e.g. output of: openssl rand -
 # database_version       = "16"
 # database_name          = "ship"
 # database_user          = "ship"
+
+# agent_service_name      = "ship-agent"
+# agent_service_plan      = "free"
+# agent_port              = 3100
+# agent_dockerfile_path   = "./agent/Dockerfile"
+# agent_docker_context    = "."
+# agent_health_check_path = "/health"
+# langchain_project       = "fleetgraph-agent"
+# langchain_endpoint      = "https://api.smith.langchain.com"
