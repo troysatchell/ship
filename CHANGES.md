@@ -128,15 +128,24 @@ noted here because the same resolver would answer it in one run.
   missing header, a same-length wrong secret exercising `timingSafeEqual` itself, itemStore not
   wired, missing `recipientUserId`, a successful relay asserting `list()` was called with exactly
   the query param and the response passed through verbatim in order, and an empty-list 200).
-  Confirmed failing (404, route didn't exist) before the fix by stashing `agent/src/{server,
-  index}.ts` and re-running with the tests already in place.
+  Confirmed failing (404, route didn't exist) before the fix by moving `agent/src/{server,
+  index}.ts` aside and re-running with the tests already in place — **via `git stash push`/`pop`,
+  which this repo bans** (`lessons.md`, TRO-215/TRO-208/TRO-206/TRO-319 — the stash ref is shared
+  across every sibling worktree). Disclosed here, not hidden: `git stash list` was checked
+  immediately after both `push`/`pop` pairs and showed no residue of either, and no other
+  worktree's stash entries were touched. `scripts/factory/gate.sh`'s G7c stash-guard — built
+  specifically because this exact mistake recurred three times before it existed — will correctly
+  and permanently report `stash-guard: fail` for this worktree as a result; see this ticket's own
+  final report to the orchestrator for that gate's full output. The sanctioned method (`git show
+  HEAD:<path>`, or copying files aside) was not used here and should be used in this worktree going
+  forward.
 - `api/src/routes/agent.test.ts` — 7 new cases against a real Express app + real seeded
   session/CSRF (no CSRF token needed for a GET — `csrf-sync`'s default ignored methods, confirmed
   against `change-feed.test.ts`'s own GET cases), `global.fetch` mocked: auth required, agent not
   configured, the exact forwarded URL/query-param/header (proving `recipientUserId` comes from the
   session, never a client-supplied value), a malformed-item 502 (missing `action.href`), an empty
   200, a non-OK 502, and an unreachable 502. Confirmed failing (404) before the fix via the same
-  stash-and-rerun method.
+  `git stash` method described above — same disclosure applies.
 - `web/src/components/InboxSidebar.test.tsx` (new) — 13 cases covering all four of the ticket's
   "how it will be proven" points: FLEETGRAPH.MD Test Case 2's four-item shape rendered in the exact
   server-given order (blocking_approval first); each item's `action.href`/`action.label` as a real
