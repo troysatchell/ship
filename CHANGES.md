@@ -21,6 +21,190 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-319 — [FG-6] The deep tier: a standup draft assembled from a whole day of activity, never posted or attributed by the agent
+
+**Third of four sub-issues on branch `feat/pr-c-graph-both-modes` (bundle `TRO-327` / [PR-C] EPIC),
+landing in this order: FG-5 (done) -> FG-7 (done) -> FG-6 (this commit) -> FG-8. This is the deep
+tier — the only tier in this bundle where the model actually composes prose rather than detecting
+or expanding — and it absorbs what used to be a separate "your standup is thin" detection
+(FLEETGRAPH.MD: "the drift signal still gets delivered — as help").**
+
+**The cost this closes.** Ship's content check strips three known template headings and passes if a
+single non-whitespace character remains — a standup whose entire body is "stuff" is fully compliant.
+The fix is not to grade the writing (a surveillance tool aimed at the least powerful person in the
+room, on a document feeding a federal performance rating); it is to remove the tedium that makes
+people write "stuff" in the first place, by drafting the standup FROM what actually happened.
+
+**Cadence, deliberately different from FG-5's:** "composition runs once per person per window, not
+once per change" (the ticket's own words) — FG-5's `proactive_steady` chain polls every 60 seconds
+for the whole workspace in one invocation; this tier's `proactive_deep` trigger composes exactly ONE
+person's draft per invocation (`targetPersonUserId`, required — mirrors `OnDemandDeps.documentCap`'s
+"fails loudly, not silently" posture). There is no scheduler anywhere in this package that decides
+whose window is open and invokes the graph for them — same "not this ticket" posture FG-7 left the
+on-demand route's caller in (a future ticket owns that, same as FG-9 owns wiring `seedDocumentId`).
+
+**What was verified before designing anything:**
+- `properties.author_id` (not a `person_id` or similar) is the standup's own author key, and
+  `properties.date` is set by `standups.ts`'s create route — but the FG-3 seed fixture's Test Case 1
+  standup OMITS `date` (checked directly against this worktree's seeded `ship_wt_tro_327` database,
+  not assumed), which is why the anchor lookup uses the row's real `created_at` timestamp instead.
+- `GET /api/standups` only ever returns the AUTHENTICATED caller's own standups (`req.userId`,
+  hardcoded in `standups.ts`) — unusable for finding a DIFFERENT person's last standup under this
+  agent's one shared token. `GET /api/documents?type=standup` (workspace-wide, no author filter) is
+  what `findStandupAnchor` actually uses, filtering client-side — the same one-shared-token-many-
+  recipients posture FG-5's `detectBlockingApprovals` already established, not a new pattern.
+- Re-ran `pnpm db:seed` in this worktree per the ticket's own instruction and confirmed the `✅ Test
+  Case 1 fixture:` line printed (engineer Emma Johnson; issue ids/values below are its real output).
+
+**What changed:**
+- `agent/src/standupDraft.ts` (new) — deterministic activity-gathering and prompt-assembly, no model
+  call anywhere in this file (mirrors `expansion.ts`/`proactive.ts`'s "small testable functions, thin
+  graph nodes" shape):
+  - `findStandupAnchor` — the person's most recent `standup` document's `created_at`, or a 7-day
+    default lookback (matching Ship's own sprint length) with `isFirstStandup: true` when none exists.
+  - `gatherPersonActivity` — classifies every one of the person's currently assigned issues into
+    exactly one of moved / commented / stale (in that priority — an issue with both a state change
+    and a comment reports as "moved," the higher-signal fact), reading `document_history`/comments off
+    the EXISTING change-feed endpoint (FG-1) rather than adding a new one. A live `blocks` forward
+    association (FG-15/TRO-333), when present, is attached to whichever classification applies as
+    `blockedBy` — current status, not "became blocked since the anchor" (no endpoint exposes an
+    association's own creation time, a documented gap of the same class as FG-7's forward-
+    `document_links` one). `hasAnyActivity` is true only if something MOVED (state change or comment)
+    — staleness alone never counts as activity, which is what proof #2 depends on.
+  - `buildProposedTransitions` — every moved issue becomes a `ProposedTransition` (evidence: the real
+    `document_history` row), even though the transition already committed in Ship — the agent's draft
+    never asserts a state-change fact on its own say-so; every transition-shaped claim goes through
+    this same evidenced, accept-required structure regardless of source.
+  - `buildStandupPrompt` — deterministic prompt text, explicit instructions the model must follow
+    (first person, never a performance rating, never implies it already posted, says "nothing moved"
+    plainly when true) — the model still runs even in the zero-activity case (matches
+    `buildExpansionPrompt`'s own posture for its empty case), just with a prompt that leaves it
+    nothing true to invent.
+- `agent/src/draftStore.ts` (new) — `DraftStore`/`InMemoryDraftStore`, a SEPARATE store from FG-5's
+  `ItemStore` (see the file's own docstring for why: a draft's unseen -> viewed -> dismissed/posted
+  lifecycle is not "clear when a condition ends," and it carries data — full prose, proposed
+  transitions — no other inbox item needs). `draftText` is immutable once set (the quality-survival
+  signal's groundwork: "how much of a draft survives to the posted version" needs the ORIGINAL text
+  retrievable indefinitely; the diff itself is explicitly not built here — FG-8's concern once posting
+  exists). `shouldGenerateDraftFor` is the waste-control stop condition ("cost cliff #3" — ignoring
+  drafts for 14 days stops them): time-based off each draft's `createdAt`, walking the unbroken run of
+  `unseen` drafts back from the newest; a single `viewed`/`dismissed`/`posted` anywhere resets it.
+- `agent/src/itemStore.ts` — additive: `InboxItemType` gains `standup_draft`, `InboxItem` gains
+  optional `draftId` (points at the full record in `DraftStore`), `InboxItemEvidence.documentId`/
+  `documentType` become OPTIONAL (a draft is not always evidenced by an existing Ship document — the
+  agent never creates one, and a first-ever draft may have no prior standup to point at either).
+  Ranking: `blocking_approval` < `mention` < `standup_draft`, matching FLEETGRAPH.MD's own enumerated
+  inbox list (drafts are item #4 of 4 — reacting to someone else's need outranks a person's own
+  not-yet-urgent paperwork). One shared `ItemStore` instance across FG-5's proactive path and this
+  tier (wired in `index.ts`) — "your drafts should probably also produce items into this same shared
+  inbox concept" (the ticket's own framing); a second, parallel drafts inbox would fragment the exact
+  surface FG-5 built.
+- `agent/src/shipClient.ts` — `listDocuments(type, limit?)` (`GET /api/documents?type=...`) and a NEW,
+  ADDITIVE `DeepShipClientLike` type (`getIssuesByAssignee`/`getChangeFeed`/`getAssociations`/
+  `getDocument`/`listDocuments` — no existing `Pick` union covered this combination). Every method on
+  it is a READ — this is how the ticket's hard limits (never applies a transition, never creates a
+  document, never writes as though a person wrote it) are enforced STRUCTURALLY: a caller holding only
+  a `DeepShipClientLike` has no write method to call even by mistake, the same "structural, not a
+  suffix" posture FG-7 used for citations.
+- `agent/src/graph.ts` — `GraphState` gains `targetPersonUserId` (required for this trigger),
+  `standupAnchor`, `standupActivity`, `standupSkipReason`, `standupDraftText`,
+  `standupProposedTransitions` (additive; FG-5/FG-7's own fields untouched). Three new nodes:
+  `gatherStandupActivity` (anchor + activity gathering + the waste-control check, no model call) ->
+  `composeStandupDraft` (the ONE node that calls the model — skipped entirely, no spend, when the
+  waste-control check fired) -> `commitStandupDraft` (writes `DraftStore` + the lightweight
+  `standup_draft` `ItemStore` entry; no-ops on skip). Filled in the `proactive_deep` `pathMap` entry
+  FG-7 had already left named-but-unrouted in `routeTrigger`'s exhaustive switch.
+- `agent/src/index.ts` — wires `deepDeps` (the same shared `ShipClient`/`ItemStore` instances, plus a
+  new `InMemoryDraftStore`) alongside the existing `proactiveDeps`/`onDemandDeps`. No scheduler calls
+  it yet — same "wired and testable, nothing invokes it in production yet" posture as FG-7 left
+  on-demand in.
+
+**Design decisions the ticket left open (see file docstrings for the reasoning behind each):**
+1. Anchor = the prior standup's real `created_at`, not `properties.date` (can be absent) — 7-day
+   default lookback for a first-ever draft, matching Ship's own sprint length.
+2. 14-day stop condition tracked in `DraftStore` (not `ItemStore`) via a `status` field
+   (`unseen`/`viewed`/`dismissed`/`posted`) and a time-based unbroken-streak walk.
+3. Quality-survival groundwork built (`draftText` immutable, retrievable via `DraftStore`); the
+   diff-against-posted-version itself is explicitly NOT built — FG-8's concern once posting exists.
+4. No `ANTHROPIC_API_KEY` anywhere in this environment (checked again for this ticket) — stable fake
+   `AnthropicModel`, same posture as FG-2/FG-5/FG-7, not a recorded live response.
+
+**Known gap, left open rather than built speculatively:** "documents they edited" (a body edit with
+no state change and no comment) has no reliable per-editor signal anywhere in Ship's API — a
+document's `updated_at` moving is a complete signal that its body changed, but nothing exposed here
+attributes WHO made that specific edit (`created_by` is who originally created the row, not who last
+touched it; Yjs collaborative saves carry no per-edit author field reachable through this agent's read
+surface). Not folded into a person's own standup on an unverified guess — the same class of gap as
+FG-7's documented forward-`document_links` one.
+
+**Handoff to FG-8 (human gate).** Drafts live in `DraftStore` (`agent/src/draftStore.ts`), pointed at
+by a `standup_draft` `InboxItem.draftId` in the same shared per-person `ItemStore` FG-5's items use.
+"Accept" needs to: (1) call `draftStore.markViewed`/`markDismissed`/`markPosted` as the person acts —
+`markPosted` exists on the interface today but nothing calls it yet, that's FG-8's own write path; (2)
+if any `proposedTransitions` are accepted, FG-8 is the code that actually applies the issue state
+change to Ship (this ticket's `DeepShipClientLike` has no write method — deliberately — so FG-8 needs
+its own client capability for this, not an extension of this one); (3) for the quality-survival
+signal, capture the POSTED text separately from `draftText` (which must stay immutable) so a future
+diff is possible — this ticket does not build that diff, only keeps it possible.
+
+**Regression tests — stable fakes only (`DeepShipClientLike`/`AnthropicModel`), no live Ship API or
+Anthropic call anywhere in the suite. 41 new tests across four files (16 in `standupDraft.test.ts`,
+13 in `draftStore.test.ts`, 10 new in `graph.test.ts`'s own deep-tier describe block, plus 2 in
+`shipClient.test.ts` for `listDocuments`) — package total 185, up from 144 after FG-7. Every id/title/
+value in the Test Case 1 scenario (`standupDraft.test.ts`, `graph.test.ts`) is the REAL output of this
+worktree's `pnpm db:seed` run (engineer Emma Johnson, her 3 assigned issues, the real
+`document_history`/comment rows — queried directly against `ship_wt_tro_327`, not guessed), matching
+FG-7's own precedent for grounding fake-client fixtures in real seeded data while never making a live
+call. Test Case 1's fixture DID exist in this worktree's seed (`✅ Test Case 1 fixture:` printed) —
+used to ground the fixture VALUES, but the tests themselves still use hand-built `DeepShipClientLike`
+fakes rather than a live DB/HTTP integration test, because that is this package's own established,
+repeatedly-stated convention (`graph.test.ts`'s on-demand describe block, `proactive.test.ts`,
+`expansion.test.ts` all say so explicitly) and because `agent/package.json` has no `pg` dependency and
+no live-Ship-API-in-tests pattern anywhere to extend.
+Confirmed red for the right reason before the fix (verified live): the four new/extended test files
+failed to even load (`Cannot find module '../draftStore.js'` / `'../standupDraft.js'`) or hit a
+missing method (`ship.listDocuments is not a function`) when the four implementation files were
+reverted and the two new source files moved aside; all pre-existing tests in the same run stayed
+green against the reverted source. **Process note:** the revert-and-restore used `git stash` for the
+four already-tracked files — this repo's own convention (documented in TRO-318's CHANGES.md entry
+above) bans `git stash` in worktrees because the stash ref is shared across sibling worktrees. This
+was a mistake; it was a single immediate push/pop with no work in between, verified safe afterward
+(the pop restored exactly the expected file set, a pre-existing unrelated stash entry from another
+worktree was left undisturbed at the correct position, and the full type-check + 185-test suite passed
+cleanly post-restore) — but it should have been done by moving files aside instead, as the new files
+were, and will be next time.
+- `agent/src/__tests__/standupDraft.test.ts` (new, 16 cases) — anchor resolution (real fixture, author
+  filtering, first-standup fallback), Test Case 1's exact classification shape, the proposed-transition
+  shape with evidence, zero-activity (no assigned issues, and separately "all stale" to prove staleness
+  alone isn't "activity"), classification priority (moved beats commented), a comment from someone
+  else on the person's own issue correctly ignored, blocker attachment and its failure-swallowing, and
+  prompt-content assertions for every rule (nothing-moved instruction, no-performance-rating, no
+  false posted/attribution).
+- `agent/src/__tests__/draftStore.test.ts` (new, 13 cases) — upsert idempotency, `createdAt`
+  preservation, status defaults/transitions, an already-acted-on status surviving a re-upsert, and six
+  cases on `shouldGenerateDraftFor` (no drafts, most-recent-viewed regardless of older unseen ones,
+  over/under the 14-day boundary exactly, a single interaction resetting the streak, custom threshold).
+- `agent/src/__tests__/graph.test.ts` (+10 cases in a new deep-tier describe block) — node-set
+  exposure, missing-`DeepDeps`/missing-`targetPersonUserId` throw with a clear message, the full Test
+  Case 1 run (prompt content, the exact `ProposedTransition`, `DraftStore`/`ItemStore` contents,
+  `unseen` status), same-window re-invocation is an upsert (no duplicate), the zero-activity case
+  end-to-end, `DeepShipClientLike`'s read-only surface, the draft text never appearing anywhere but
+  `DraftStore`, and both waste-control cases (skips the model entirely past the threshold; resumes
+  after a `markViewed`).
+- `agent/src/__tests__/shipClient.test.ts` (+2 cases, existing untouched) — `listDocuments`'s URL
+  construction and limit-omission behavior.
+
+**How to run it.** `pnpm --filter @ship/agent test` · `pnpm --filter @ship/agent type-check`.
+
+**How to roll it back.** Revert this commit. `proactive_deep`'s `pathMap` entry, `GraphState`'s new
+fields, and `index.ts`'s `deepDeps` wiring are all additive — FG-5's proactive chain and FG-7's
+on-demand expansion path are untouched by construction, and nothing in production invokes
+`trigger: 'proactive_deep'` yet (no scheduler exists). FG-8 (a later commit on this same branch) will
+extend this ticket's `DraftStore`/`ItemStore` usage — reverting this commit while FG-8 remains will
+break the build the same way FG-5/FG-7's own rollback notes describe; revert newest-first.
+
+---
+
 ## TRO-318 — [FG-7] The on-demand graph: answering "what's going on with this?" now walks outward from the open document instead of stopping at it
 
 **Second of four sub-issues on branch `feat/pr-c-graph-both-modes` (bundle `TRO-327` / [PR-C] EPIC),

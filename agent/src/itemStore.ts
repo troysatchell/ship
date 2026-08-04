@@ -32,14 +32,31 @@
  * interface, so swapping the implementation later touches one file.
  */
 
-export type InboxItemType = 'mention' | 'blocking_approval';
+/** `standup_draft` (TRO-319 / FG-6): the deep tier's own producer, alongside
+ * FG-5's `mention`/`blocking_approval` — "your drafts should probably also
+ * produce items into this same shared inbox concept" (the ticket's own
+ * framing). One shared list per person is the whole point of this store
+ * (FLEETGRAPH.MD: "one list per person: what needs you," item #4 of which is
+ * literally "drafts the agent has prepared for them") — a second,
+ * parallel "drafts inbox" would fragment exactly the surface FG-5 built.
+ * The full draft text and any proposed transitions do NOT live here,
+ * though (see `draftId` below) — this record is a lightweight pointer into
+ * `draftStore.ts`'s `DraftStore`, not a duplicate of it. */
+export type InboxItemType = 'mention' | 'blocking_approval' | 'standup_draft';
 
 export interface InboxItemEvidence {
   /** The Ship document this item is evidenced by. The never-surface check
    * (`visibility.ts`) is run against THIS document before an item carrying
-   * it is ever built — see `proactive.ts` — never after. */
-  documentId: string;
-  documentType: string;
+   * it is ever built — see `proactive.ts` — never after.
+   *
+   * Optional as of TRO-319 / FG-6: a `standup_draft` item is not always
+   * evidenced by an EXISTING Ship document — the agent never creates one
+   * (hard limit), and a person's very first-ever draft has no prior standup
+   * to point at either. Every existing producer (`proactive.ts`) still
+   * always sets both fields; this widening is additive and changes no
+   * existing behavior. */
+  documentId?: string;
+  documentType?: string;
   /** Present for comment-sourced mentions. */
   commentId?: string;
 }
@@ -73,6 +90,12 @@ export interface InboxItem {
    * `document_history` row's own timestamp), not when this item was last
    * (re-)observed. */
   blockedSince?: string;
+  /** Present for `standup_draft` items — the id of the full record in
+   * `draftStore.ts`'s `DraftStore` (draft text, proposed transitions,
+   * accept/dismiss status). Kept out of `InboxItem` itself so this store's
+   * shape stays the same for every other item type; FG-8's accept-flow
+   * reads the full draft via this pointer, never off `InboxItem` directly. */
+  draftId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -92,15 +115,27 @@ export interface ItemStore {
    * (ticket / FLEETGRAPH.MD Test Case 2: "approval first because another
    * person's week cannot start"), highest `blockedCount` first within
    * that, ties broken by longest-waiting (`blockedSince` ascending); then
-   * `mention` items, oldest first. */
+   * `mention` items, oldest first; then `standup_draft` items, oldest
+   * first (TRO-319 / FG-6 — FLEETGRAPH.MD's own enumerated inbox list puts
+   * "drafts prepared for them" last, item #4 of 4, behind mentions and
+   * blocking approvals — reacting to someone ELSE's need outranks a
+   * person's own not-yet-urgent paperwork). */
   list(recipientUserId: string): InboxItem[];
   /** Every item currently stored, for tests/inspection. */
   all(): InboxItem[];
 }
 
+/** Type rank, lowest sorts first. `blocking_approval` before `mention`
+ * before `standup_draft` — see `list()`'s own docstring for why. */
+const TYPE_RANK: Record<InboxItemType, number> = {
+  blocking_approval: 0,
+  mention: 1,
+  standup_draft: 2,
+};
+
 function compareInboxItems(a: InboxItem, b: InboxItem): number {
   if (a.type !== b.type) {
-    return a.type === 'blocking_approval' ? -1 : 1;
+    return TYPE_RANK[a.type] - TYPE_RANK[b.type];
   }
   if (a.type === 'blocking_approval') {
     const countDiff = (b.blockedCount ?? 0) - (a.blockedCount ?? 0);

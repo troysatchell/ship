@@ -26,6 +26,18 @@
  * `seedDocumentId`/`askingUserId` yet (FG-9 owns the chat panel that will);
  * until then, `on_demand` invocations with no seed still take the
  * unchanged `ingest -> respond` path.
+ *
+ * FG-6 (TRO-319) wires `deepDeps` the same way: the same shared `ShipClient`
+ * instance again (it also structurally satisfies `DeepShipClientLike`) and
+ * the SAME `itemStore` FG-5's proactive path already uses — a standup-draft
+ * item lands in the same per-person inbox as mentions/blocking-approvals
+ * (see `graph.ts`'s module docstring). A new `InMemoryDraftStore` holds the
+ * full draft text/proposed transitions. There is no scheduler here (or
+ * anywhere in this package) that decides WHOSE standup window is open and
+ * invokes `trigger: 'proactive_deep'` with a `targetPersonUserId` for
+ * them — same "not this ticket" posture FG-7 left the on-demand route in;
+ * `deepDeps` is wired so the path is real and testable end-to-end, but
+ * nothing calls it yet.
  */
 
 import 'dotenv/config';
@@ -35,6 +47,7 @@ import { createServer, buildShipClient } from './server.js';
 import { buildGraph } from './graph.js';
 import { ShipClient } from './shipClient.js';
 import { InMemoryItemStore } from './itemStore.js';
+import { InMemoryDraftStore } from './draftStore.js';
 import { createProactivePoller } from './proactivePoll.js';
 
 const config = loadConfig();
@@ -69,7 +82,13 @@ if (!isConfigComplete(config)) {
     client: buildShipClient(config),
   });
   const itemStore = new InMemoryItemStore();
-  const graph = buildGraph(model, { shipClient, itemStore }, { shipClient, documentCap: config.onDemandDocumentCap });
+  const draftStore = new InMemoryDraftStore();
+  const graph = buildGraph(
+    model,
+    { shipClient, itemStore },
+    { shipClient, documentCap: config.onDemandDocumentCap },
+    { shipClient, itemStore, draftStore }
+  );
 
   const poller = createProactivePoller({
     graph,

@@ -58,6 +58,29 @@ describe('ShipClient', () => {
     expect(result).toEqual(people);
   });
 
+  it('listDocuments builds the URL with type/limit and sends a Bearer token (TRO-319 / FG-6)', async () => {
+    const client = fakeClient(new Response(JSON.stringify([]), { status: 200 }));
+    const ship = new ShipClient({ baseUrl: 'https://ship.example.gov', token: 'tok-abc', client });
+
+    await ship.listDocuments('standup', 500);
+
+    expect(client.get).toHaveBeenCalledWith('https://ship.example.gov/api/documents?type=standup&limit=500', {
+      headers: { Authorization: 'Bearer tok-abc' },
+    });
+  });
+
+  it('listDocuments omits limit when not provided and returns the parsed body', async () => {
+    const rows = [{ id: 'standup-1', document_type: 'standup', properties: { author_id: 'user-a' }, created_at: '2026-01-01T00:00:00.000Z', updated_at: '2026-01-01T00:00:00.000Z' }];
+    const client = fakeClient(new Response(JSON.stringify(rows), { status: 200 }));
+    const ship = new ShipClient({ baseUrl: 'https://ship.example.gov', token: 'tok', client });
+
+    const result = await ship.listDocuments('standup');
+
+    const url = (client.get as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+    expect(url).not.toContain('limit');
+    expect(result).toEqual(rows);
+  });
+
   it('throws ShipApiError on a non-ok response rather than returning an error body as data', async () => {
     const client = fakeClient(new Response(JSON.stringify({ error: 'Document not found' }), { status: 404 }));
     const ship = new ShipClient({ baseUrl: 'https://ship.example.gov', token: 'tok', client });

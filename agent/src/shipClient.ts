@@ -203,6 +203,22 @@ export interface AssigneeIssueSummary {
   updated_at: string;
 }
 
+/** One row of `GET /api/documents?type=...` (`documents.ts`'s list route) —
+ * TRO-319 / FG-6's anchor lookup ("the most recent standup document by this
+ * author"). Deliberately narrow: that route's SELECT never returns `content`
+ * (see `documents.ts`'s own query — only `id, workspace_id, document_type,
+ * title, parent_id, position, ticket_number, properties, created_at,
+ * updated_at, created_by, visibility`), and this file only reads
+ * `properties`/`created_at` off it (author id + recency), so nothing wider
+ * is declared. */
+export interface DocumentListItem {
+  id: string;
+  document_type: string;
+  properties: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
 /**
  * The on-demand expansion walk's own dependency surface (TRO-318 / FG-7) —
  * a STRICT ADDITION on top of `ShipClientLike`, not a widening of it.
@@ -223,6 +239,30 @@ export interface AssigneeIssueSummary {
 export type OnDemandShipClientLike = Pick<
   ShipClient,
   'getDocument' | 'getAssociations' | 'getReverseAssociations' | 'getBacklinks' | 'getComments' | 'getIssuesByAssignee'
+>;
+
+/**
+ * The deep-tier draft composition's own dependency surface (TRO-319 / FG-6)
+ * — a STRICT ADDITION, same pattern as `OnDemandShipClientLike`. Neither
+ * `ShipClientLike` nor `OnDemandShipClientLike` alone covers what this path
+ * needs: `getChangeFeed` (FG-5's, for state-change/comment activity since an
+ * anchor) plus `getIssuesByAssignee`/`getAssociations`/`getDocument` (FG-7's,
+ * for the person's current issue list, blocker edges, and a blocking issue's
+ * title) plus `listDocuments` (new in this file, for the standup anchor
+ * lookup) — no existing `Pick` union covers that combination, so this is its
+ * own type rather than a widening of either existing one.
+ *
+ * Every method here is a READ. This is deliberate, not incidental: FG-6's
+ * hard limits ("never applies an issue transition," "never creates ... any
+ * document," "never writes anything that would read as though a person
+ * wrote it") are enforced STRUCTURALLY by this type never exposing a write
+ * method at all — the same posture FG-7 used for citations ("structural,
+ * not a suffix"). A caller holding only a `DeepShipClientLike` cannot
+ * accidentally call a Ship write endpoint; TypeScript has nothing to call.
+ */
+export type DeepShipClientLike = Pick<
+  ShipClient,
+  'getIssuesByAssignee' | 'getChangeFeed' | 'getAssociations' | 'getDocument' | 'listDocuments'
 >;
 
 export interface ShipClientOptions {
@@ -323,5 +363,24 @@ export class ShipClient {
       url.searchParams.set('limit', String(limit));
     }
     return this.getJson<AssigneeIssueSummary[]>(url.toString());
+  }
+
+  /** `GET /api/documents?type=...` (`documents.ts`) — workspace-wide, NOT
+   * filtered by author. TRO-319 / FG-6 uses this for the standup anchor
+   * lookup (`standupDraft.ts`'s `findStandupAnchor`), filtering the result
+   * client-side to one author's `properties.author_id` — there is no
+   * server-side "standups by author X" route usable here: `GET /api/standups`
+   * (`standups.ts`) only ever returns the AUTHENTICATED caller's own
+   * standups (`req.userId`, hardcoded), and this agent runs under one shared
+   * token for the whole deep-tier pass (same posture FG-5's
+   * `detectBlockingApprovals` already relies on — one token, many
+   * recipients), not a distinct token per person. */
+  async listDocuments(type: string, limit?: number): Promise<DocumentListItem[]> {
+    const url = new URL(`${this.base}/api/documents`);
+    url.searchParams.set('type', type);
+    if (limit !== undefined) {
+      url.searchParams.set('limit', String(limit));
+    }
+    return this.getJson<DocumentListItem[]>(url.toString());
   }
 }

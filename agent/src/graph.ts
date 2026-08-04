@@ -1,10 +1,10 @@
 /**
- * The compiled LangGraph graph (TRO-313 / FG-2; extended by TRO-317 / FG-5
- * and TRO-318 / FG-7).
+ * The compiled LangGraph graph (TRO-313 / FG-2; extended by TRO-317 / FG-5,
+ * TRO-318 / FG-7, and TRO-319 / FG-6).
  *
  * Phase 2 (node design for the six FleetGraph use cases — see FLEETGRAPH.MD
  * "Graph Diagram" / "Node design rationale", both marked Pending) is still
- * not fully done. Three entry points exist so far, all sharing ONE compiled
+ * not fully done. Four entry points exist so far, all sharing ONE compiled
  * graph, selected by `trigger`:
  *
  *   on_demand (no seed document) -> ingest -> respond
@@ -21,20 +21,31 @@
  *     FG-5's proactive fast tier (mention resolution + approval-blocking
  *     detection). No model call anywhere in this chain.
  *
+ *   proactive_deep -> gatherStandupActivity -> composeStandupDraft ->
+ *     commitStandupDraft
+ *     FG-6's own addition — see the "Deep tier draft composition" section
+ *     below. Requires `targetPersonUserId` (one graph invocation composes
+ *     ONE person's draft — "once per person per window," not once per
+ *     change, is the ticket's own cadence requirement). The only node in
+ *     this chain that calls the model is `composeStandupDraft`, and it is
+ *     skipped entirely (no model call, no spend) when the waste-control
+ *     stop condition fires — see that section.
+ *
  * Model provider: Anthropic API directly (`@langchain/anthropic`), confirmed
  * by the maintainer 2026-08-03 — see TRO-313's own "one decision still open"
  * section. Not Bedrock: this environment has never had AWS credentials this
  * sprint (memory-bank/activeContext.md), and the brief's "Claude API costs"
  * accounting matches billing through the Anthropic API, not Bedrock.
  *
- * `GraphState` gains fields shared with FG-6 (the next ticket on this
- * branch): `trigger` lets any future node branch on why the graph is
- * running without hardcoding "this graph only ever handles the proactive
- * trigger" (`proactive_deep`, the drafting tier, is named in the type but
- * has no node yet — deliberately; composing drafts is out of this ticket's
- * scope). `inboxItems`/`clearedItemIds` (FG-5) use concatenating reducers
- * specifically so more than one producer node can append to the same list
- * in one run.
+ * `GraphState` gains fields shared across tiers: `trigger` lets any node
+ * branch on why the graph is running without hardcoding "this graph only
+ * ever handles the proactive trigger" — originally written (FG-7) when
+ * `proactive_deep` (the drafting tier) was named in the type with no node
+ * behind it yet ("composing drafts is out of this ticket's scope"); FG-6 is
+ * that node, below. `inboxItems`/`clearedItemIds` (FG-5) use concatenating
+ * reducers specifically so more than one producer node can append to the
+ * same list in one run — `commitStandupDraft` (FG-6) is a third producer
+ * onto `inboxItems` for the same reason.
  *
  * ---- On-demand expansion (TRO-318 / FG-7) --------------------------------
  *
@@ -70,10 +81,58 @@
  * path that calls the model — it builds a prompt from `expandedDocuments`
  * (`buildExpansionPrompt`) and never lets the model's own text decide which
  * sources get cited.
+ *
+ * ---- Deep tier draft composition (TRO-319 / FG-6) -------------------------
+ *
+ * "Composition runs once per person per window, not once per change" (the
+ * ticket's Scope section) — a materially different cadence from FG-5's
+ * every-60-seconds `proactive_steady` chain, which is why this is its own
+ * trigger and its own node chain rather than a fifth node bolted onto FG-5's.
+ * One invocation with `trigger: 'proactive_deep'` composes exactly ONE
+ * person's draft (`targetPersonUserId`, required — `requireDeepDeps`/the
+ * gather node throw a clear error otherwise, same "fails loudly rather than
+ * silently" posture as `OnDemandDeps.documentCap`). There is deliberately no
+ * scheduler in this file (or anywhere in this package) that decides WHOSE
+ * window is open and invokes the graph for them — same posture FG-7 left
+ * `seedDocumentId`/`askingUserId` in: a real trigger route is a future
+ * ticket's job (this bundle's ordering makes FG-8 the next one, and even
+ * FG-8 is the accept-flow, not necessarily the scheduler).
+ *
+ * `gatherStandupActivity` finds the anchor ("since their last standup" —
+ * `standupDraft.ts`'s `findStandupAnchor`) and classifies every one of the
+ * person's currently assigned issues into moved / commented / stale
+ * (`gatherPersonActivity`) — no model call anywhere in this node. It ALSO
+ * evaluates the waste-control stop condition here, before any model spend:
+ * `DraftStore.shouldGenerateDraftFor` (ticket's "cost cliff #3" — "if a
+ * person ignores their drafts for two weeks, stop generating them and let
+ * them ask"). When it returns false, `standupSkipReason` is set and
+ * `composeStandupDraft` skips its model call entirely — the skip is the
+ * whole point of checking this early rather than after composing.
+ *
+ * `composeStandupDraft` is the ONLY node in this chain that calls the
+ * model — same shape as `composeAnswer`: a deterministic prompt
+ * (`buildStandupPrompt`) built entirely from `standupActivity`, never from
+ * anything the model chooses on its own. `commitStandupDraft` writes the
+ * result into TWO stores: `DraftStore` (the full draft text — immutable
+ * once set, the quality-survival signal's groundwork — plus any
+ * `ProposedTransition`s with their evidence) and `ItemStore` (a lightweight
+ * `standup_draft` `InboxItem` pointing at the draft via `draftId`, joining
+ * FG-5's mention/blocking-approval items in the SAME shared per-person
+ * list — FLEETGRAPH.MD's "one list per person: what needs you").
+ *
+ * Hard limits (TRO-319, verbatim: "never writes a performance rating, never
+ * sets an approval state / week status / ownership, never applies an issue
+ * transition, never creates or deletes a document, and never writes
+ * anything that would read as though a person wrote it") are enforced
+ * STRUCTURALLY, not by convention: `DeepShipClientLike` (`shipClient.ts`)
+ * exposes only READ methods — there is no write method for any node in this
+ * chain to call even by mistake. Nothing this chain produces is ever
+ * written to Ship; `DraftStore`/`ItemStore` are both entirely inside this
+ * agent process.
  */
 
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
-import type { ChangeFeedResponse, OnDemandShipClientLike, ShipClientLike, ShipPerson } from './shipClient.js';
+import type { ChangeFeedResponse, DeepShipClientLike, OnDemandShipClientLike, ShipClientLike, ShipPerson } from './shipClient.js';
 import type { ItemStore, NewInboxItem } from './itemStore.js';
 import { buildBlockingApprovalItems, buildMentionItems, pollChangeFeed } from './proactive.js';
 import {
@@ -87,6 +146,15 @@ import {
   type ExpandedDocument,
   type ExpansionCandidate,
 } from './expansion.js';
+import type { DraftStore, ProposedTransition } from './draftStore.js';
+import {
+  buildProposedTransitions,
+  buildStandupPrompt,
+  findStandupAnchor,
+  gatherPersonActivity,
+  type PersonActivitySummary,
+  type StandupAnchor,
+} from './standupDraft.js';
 
 /** The subset of ChatAnthropic's interface this graph actually needs — narrow
  * on purpose so tests can pass a plain object instead of a real client. */
@@ -99,9 +167,8 @@ export interface AnthropicModel {
  * poll-based node chain FG-5 builds — the ticket's trigger table
  * (FLEETGRAPH.MD) treats them as two cadences of the same deterministic
  * work, not different logic. `proactive_deep` (drafting, once-per-window
- * composition) is named for forward-compatibility only — no node handles
- * it yet, and routing to it deliberately has no `pathMap` entry below, so
- * using it before it exists fails loudly instead of silently no-op-ing. */
+ * composition, TRO-319 / FG-6) routes to `gatherStandupActivity` — see the
+ * module docstring's "Deep tier draft composition" section. */
 export type TriggerKind = 'on_demand' | 'proactive_fast' | 'proactive_steady' | 'proactive_deep';
 
 export const GraphState = Annotation.Root({
@@ -229,6 +296,61 @@ export const GraphState = Annotation.Root({
     reducer: (current, update) => update ?? current,
     default: () => false,
   }),
+
+  // ---- Deep tier draft composition (TRO-319 / FG-6) -----------------------
+
+  /** Which person's draft this invocation composes — REQUIRED for
+   * `trigger: 'proactive_deep'` (one invocation, one person's draft; see the
+   * module docstring). No default beyond `undefined`: `gatherStandupActivity`
+   * throws a clear error if this trigger runs without one, rather than
+   * silently composing nothing or guessing a recipient. */
+  targetPersonUserId: Annotation<string | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** The "since their last standup" anchor `gatherStandupActivity` resolved
+   * (`standupDraft.ts`'s `findStandupAnchor`). */
+  standupAnchor: Annotation<StandupAnchor | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** The classified activity `gatherStandupActivity` gathered — moved /
+   * commented / stale issues plus whether anything moved at all
+   * (`hasAnyActivity`, proof #2's "nothing moved" signal). `undefined` only
+   * if the run never reached that node (should not happen on this trigger's
+   * own path, but left optional rather than asserted, matching this file's
+   * existing style for every other per-run-computed field). */
+  standupActivity: Annotation<PersonActivitySummary | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** Set by `gatherStandupActivity` when the waste-control stop condition
+   * fires (`DraftStore.shouldGenerateDraftFor` returned false — "cost cliff
+   * #3"). `composeStandupDraft` reads this to skip its model call entirely,
+   * and `commitStandupDraft` reads it to skip writing anything. */
+  standupSkipReason: Annotation<'ignored_by_recipient' | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** The model's composed draft text, once `composeStandupDraft` has run.
+   * `undefined` when the run was skipped (`standupSkipReason` set). */
+  standupDraftText: Annotation<string | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** Observed state changes, packaged with their evidence — "attaches a
+   * proposed transition on the one in review" (proof #1). Never applied by
+   * this or any node; see `standupDraft.ts`'s `buildProposedTransitions`
+   * docstring. */
+  standupProposedTransitions: Annotation<ProposedTransition[]>({
+    reducer: (current, update) => update ?? current,
+    default: () => [],
+  }),
 });
 
 export type GraphStateType = typeof GraphState.State;
@@ -246,6 +368,9 @@ export const NODE_NAMES = [
   'expandFrontier',
   'finalizeExpansion',
   'composeAnswer',
+  'gatherStandupActivity',
+  'composeStandupDraft',
+  'commitStandupDraft',
 ] as const;
 export type NodeName = (typeof NODE_NAMES)[number];
 
@@ -304,6 +429,41 @@ export interface OnDemandDeps {
   commentSnippetLimit?: number;
 }
 
+/**
+ * Dependencies the deep-tier draft composition path needs (TRO-319 / FG-6) —
+ * same injection pattern as `ProactiveDeps`/`OnDemandDeps`. Optional on
+ * `buildGraph` itself so no existing call site is affected; a missing dep
+ * only surfaces once a caller actually invokes `trigger: 'proactive_deep'`
+ * (`requireDeepDeps`, mirroring the other two `require*Deps` helpers).
+ *
+ * `itemStore` is typed identically to `ProactiveDeps.itemStore` — production
+ * wiring (`index.ts`) passes the SAME instance to both, so a standup-draft
+ * item lands in the exact shared per-person inbox FG-5's mention/
+ * blocking-approval items already use (see the module docstring's "Deep
+ * tier draft composition" section for why this is one shared inbox rather
+ * than a second, parallel one). Kept as its own field — not folded into
+ * `ProactiveDeps` — so a caller can wire the deep tier without also needing
+ * a `shipClient` shaped for the (different) proactive-fast contract.
+ */
+export interface DeepDeps {
+  shipClient: DeepShipClientLike;
+  itemStore: ItemStore;
+  draftStore: DraftStore;
+  /** Injected clock — tests never depend on real wall-clock time
+   * (lessons.md #17), matching `ProactiveDeps.now`. */
+  now?: () => Date;
+  /** First-ever-standup lookback — omitted = `standupDraft.ts`'s own
+   * default (7 days, matching Ship's own sprint length). */
+  initialLookbackMs?: number;
+  /** How many rows `GET /api/change-feed` returns for the activity window —
+   * omitted = `standupDraft.ts`'s own default (500). */
+  changeFeedLimit?: number;
+  /** The waste-control stop condition's window, in days — omitted =
+   * `draftStore.ts`'s own default (14, the ticket's own number: "if a
+   * person ignores their drafts for two weeks, stop generating them"). */
+  ignoreThresholdDays?: number;
+}
+
 /** Narrows to Anthropic's native `{ type: 'text', text: string, ... }` content block shape. */
 function hasStringText(value: unknown): value is { text: string } {
   return (
@@ -354,6 +514,28 @@ function requireOnDemandDeps(deps: OnDemandDeps | undefined, nodeName: NodeName)
   return deps;
 }
 
+function requireDeepDeps(deps: DeepDeps | undefined, nodeName: NodeName): DeepDeps {
+  if (!deps) {
+    throw new Error(
+      `graph node "${nodeName}" requires DeepDeps (shipClient/itemStore/draftStore) — buildGraph ` +
+        'was called with none. This node only runs for trigger: "proactive_deep"; pass deps if the ' +
+        'caller ever invokes the graph with that trigger.'
+    );
+  }
+  return deps;
+}
+
+function requireTargetPersonUserId(state: GraphStateType, nodeName: NodeName): string {
+  if (!state.targetPersonUserId) {
+    throw new Error(
+      `graph node "${nodeName}" requires state.targetPersonUserId — one "proactive_deep" ` +
+        'invocation composes exactly one person\'s draft (the ticket\'s own cadence: "once per ' +
+        'person per window"); pass targetPersonUserId when invoking the graph with that trigger.'
+    );
+  }
+  return state.targetPersonUserId;
+}
+
 /** `START`'s routing keys — a superset of `TriggerKind` because `on_demand`
  * itself splits into two different node chains depending on whether a seed
  * document is present (see the module docstring). `proactive_deep` and bare
@@ -370,8 +552,10 @@ type RouteKey =
 
 /** Routes `START` by `state.trigger` (and, for `on_demand`, by whether a
  * seed document was given) — the seam that lets every mode share one graph
- * without any path knowing the others exist. No `pathMap` entry for
- * `proactive_deep` is deliberate: see `TriggerKind`'s docstring. */
+ * without any path knowing the others exist. `proactive_deep` now has a
+ * `pathMap` entry too (TRO-319 / FG-6, below) — FG-7 already wired this
+ * switch's `proactive_deep` case in anticipation, ahead of the node it
+ * routes to existing. */
 function routeTrigger(state: GraphStateType): RouteKey {
   switch (state.trigger) {
     case 'on_demand':
@@ -402,9 +586,15 @@ function routeExpansionLoop(state: GraphStateType): 'expandFrontier' | 'finalize
  * live call. `proactiveDeps` is the same pattern applied to FG-5's path —
  * optional so every existing on-demand call site/test is unaffected; see
  * `ProactiveDeps`'s own docstring for why a missing dep fails loudly rather
- * than silently.
+ * than silently. `deepDeps` (TRO-319 / FG-6) is the same pattern again —
+ * see `DeepDeps`'s own docstring.
  */
-export function buildGraph(model: AnthropicModel, proactiveDeps?: ProactiveDeps, onDemandDeps?: OnDemandDeps) {
+export function buildGraph(
+  model: AnthropicModel,
+  proactiveDeps?: ProactiveDeps,
+  onDemandDeps?: OnDemandDeps,
+  deepDeps?: DeepDeps
+) {
   const graph = new StateGraph(GraphState)
     .addNode('ingest', (state: GraphStateType) => ({ input: state.input.trim() }))
     .addNode('respond', async (state: GraphStateType) => {
@@ -553,11 +743,98 @@ export function buildGraph(model: AnthropicModel, proactiveDeps?: ProactiveDeps,
       const output = state.expansionCapped ? `${modelOutput}${capNoticeText(deps.documentCap)}` : modelOutput;
       return { output };
     })
+    // ---- Deep tier draft composition (TRO-319 / FG-6) -------------------
+    .addNode('gatherStandupActivity', async (state: GraphStateType) => {
+      const deps = requireDeepDeps(deepDeps, 'gatherStandupActivity');
+      const personUserId = requireTargetPersonUserId(state, 'gatherStandupActivity');
+      const now = deps.now ?? (() => new Date());
+
+      // Waste control (ticket's "cost cliff #3") — checked BEFORE any
+      // gathering or model spend, not after: if this person has ignored
+      // their last several drafts for the threshold window, skip entirely.
+      if (!deps.draftStore.shouldGenerateDraftFor(personUserId, deps.ignoreThresholdDays)) {
+        return { standupSkipReason: 'ignored_by_recipient' as const };
+      }
+
+      const anchor = await findStandupAnchor(deps.shipClient, personUserId, now, deps.initialLookbackMs);
+      const activity = await gatherPersonActivity(deps.shipClient, personUserId, anchor, {
+        now,
+        changeFeedLimit: deps.changeFeedLimit,
+      });
+
+      return { standupAnchor: anchor, standupActivity: activity };
+    })
+    .addNode('composeStandupDraft', async (state: GraphStateType) => {
+      requireDeepDeps(deepDeps, 'composeStandupDraft');
+      if (state.standupSkipReason) {
+        // Waste control's whole point: no model call, no spend, when the
+        // recipient has been ignoring their drafts.
+        return {};
+      }
+      if (!state.standupActivity) return {};
+
+      const prompt = buildStandupPrompt(state.standupActivity);
+      const result = await model.invoke(prompt);
+      const draftText = contentToString(result.content);
+      const proposedTransitions = buildProposedTransitions(state.standupActivity.moved);
+
+      return { standupDraftText: draftText, standupProposedTransitions: proposedTransitions };
+    })
+    .addNode('commitStandupDraft', (state: GraphStateType) => {
+      const deps = requireDeepDeps(deepDeps, 'commitStandupDraft');
+      if (state.standupSkipReason || !state.standupDraftText) {
+        // Either skipped (waste control) or nothing to commit (e.g. the
+        // gather step never ran) — never write a partial/empty draft.
+        return {};
+      }
+      const personUserId = requireTargetPersonUserId(state, 'commitStandupDraft');
+      const now = deps.now ?? (() => new Date());
+      const windowDate = now().toISOString().slice(0, 10);
+      const draftId = `standup-draft:${personUserId}:${windowDate}`;
+
+      const draft = deps.draftStore.upsert({
+        id: draftId,
+        personUserId,
+        windowDate,
+        draftText: state.standupDraftText,
+        proposedTransitions: state.standupProposedTransitions,
+      });
+
+      // Evidence a real Ship document whenever one is available — the most
+      // significant gathered activity item, falling back to the anchor
+      // standup, matching `InboxItemEvidence`'s original (pre-FG-6)
+      // contract wherever a candidate exists. Both can legitimately be
+      // absent (a first-ever draft for someone with no assigned issues);
+      // `documentId`/`documentType` are optional precisely for that case
+      // (see `itemStore.ts`'s own docstring).
+      const activity = state.standupActivity;
+      const evidenceIssue = activity ? (activity.moved[0] ?? activity.commented[0] ?? activity.stale[0]) : undefined;
+      const summary = !activity || activity.hasAnyActivity
+        ? 'Your standup draft is ready'
+        : 'Your standup draft is ready — nothing moved since your last one';
+
+      deps.itemStore.upsert({
+        id: draft.id,
+        recipientUserId: personUserId,
+        type: 'standup_draft',
+        summary,
+        evidence: evidenceIssue
+          ? { documentId: evidenceIssue.issueId, documentType: 'issue' }
+          : activity?.anchor.lastStandupId
+            ? { documentId: activity.anchor.lastStandupId, documentType: 'standup' }
+            : {},
+        action: { label: 'Review draft', href: `/standup-draft/${draft.id}` },
+        draftId: draft.id,
+      });
+
+      return {};
+    })
     .addConditionalEdges(START, routeTrigger, {
       on_demand_chat: 'ingest',
       on_demand_expand: 'resolveSeed',
       proactive_fast: 'pollChangeFeed',
       proactive_steady: 'pollChangeFeed',
+      proactive_deep: 'gatherStandupActivity',
     })
     .addEdge('ingest', 'respond')
     .addEdge('respond', END)
@@ -571,7 +848,10 @@ export function buildGraph(model: AnthropicModel, proactiveDeps?: ProactiveDeps,
       finalizeExpansion: 'finalizeExpansion',
     })
     .addEdge('finalizeExpansion', 'composeAnswer')
-    .addEdge('composeAnswer', END);
+    .addEdge('composeAnswer', END)
+    .addEdge('gatherStandupActivity', 'composeStandupDraft')
+    .addEdge('composeStandupDraft', 'commitStandupDraft')
+    .addEdge('commitStandupDraft', END);
 
   return graph.compile();
 }

@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
-import { buildGraph, NODE_NAMES, type AnthropicModel, type OnDemandDeps } from '../graph.js';
-import type { ShipClientLike, ChangeFeedResponse, OnDemandShipClientLike, ShipDocument } from '../shipClient.js';
+import { buildGraph, NODE_NAMES, type AnthropicModel, type DeepDeps, type OnDemandDeps } from '../graph.js';
+import type { ChangeFeedResponse, DeepShipClientLike, OnDemandShipClientLike, ShipClientLike, ShipDocument } from '../shipClient.js';
 import { InMemoryItemStore } from '../itemStore.js';
+import { InMemoryDraftStore } from '../draftStore.js';
 
 function fakeModel(response: string): AnthropicModel {
   return { invoke: vi.fn().mockResolvedValue({ content: response }) };
@@ -493,5 +494,271 @@ describe('buildGraph — on-demand expansion (TRO-318 / FG-7)', () => {
     expect(result.output).toBe('plain reply');
     expect(shipClient.getDocument).not.toHaveBeenCalled();
     expect(result.citedSources).toEqual([]);
+  });
+});
+
+describe('buildGraph — deep tier draft composition (TRO-319 / FG-6)', () => {
+  /**
+   * Fixture ids/titles/values below are REAL rows in this worktree's seeded
+   * dev database (`pnpm db:seed`'s FG-3 "Test Case 1" fixture block — see
+   * `standupDraft.test.ts`'s own header comment for how these were
+   * verified). `DeepShipClientLike` is a FAKE here — same "never a live
+   * call" posture as every other describe block in this file; `model` is a
+   * stable fake for the same reason (no `ANTHROPIC_API_KEY` anywhere in
+   * this worktree — checked again for this ticket).
+   */
+  const EMMA_USER_ID = '6e6d2906-6e53-4a8c-a166-ca3661029363';
+  const STANDUP_ID = 'bf55a6c9-83ba-498f-9778-ae7697ea1bdb';
+  const ANCHOR_ISO = '2026-08-01T14:34:49.637Z';
+  const MOVED_ISSUE_ID = '9c862982-c6a0-4795-b710-05da50a94623'; // "Build issue assignment flow"
+  const COMMENTED_ISSUE_ID = '09f9b549-e60f-434b-b741-6ca78a507d65'; // "Create sprint retrospective view"
+  const STALE_ISSUE_ID = '2bea5768-22fa-4c33-bdfa-fc500819f0ea'; // "Implement burndown chart"
+
+  function fakeDeepShipClient(overrides: Partial<DeepShipClientLike> = {}): DeepShipClientLike {
+    return {
+      getIssuesByAssignee: vi.fn().mockResolvedValue([]),
+      getChangeFeed: vi.fn().mockResolvedValue(emptyFeed()),
+      getAssociations: vi.fn().mockResolvedValue([]),
+      getDocument: vi.fn(),
+      listDocuments: vi.fn().mockResolvedValue([
+        { id: STANDUP_ID, document_type: 'standup', properties: { author_id: EMMA_USER_ID }, created_at: ANCHOR_ISO, updated_at: ANCHOR_ISO },
+      ]),
+      ...overrides,
+    };
+  }
+
+  function testCase1Client(): DeepShipClientLike {
+    return fakeDeepShipClient({
+      getIssuesByAssignee: vi.fn().mockResolvedValue([
+        { id: MOVED_ISSUE_ID, title: 'Build issue assignment flow', state: 'in_review', updated_at: '2026-08-03T14:34:49.638Z' },
+        { id: COMMENTED_ISSUE_ID, title: 'Create sprint retrospective view', state: 'in_progress', updated_at: '2026-08-03T14:34:49.639Z' },
+        { id: STALE_ISSUE_ID, title: 'Implement burndown chart', state: 'todo', updated_at: '2026-07-28T14:34:49.640Z' },
+      ]),
+      getChangeFeed: vi.fn().mockResolvedValue({
+        ...emptyFeed(),
+        history: [
+          {
+            id: 212,
+            document_id: MOVED_ISSUE_ID,
+            field: 'state',
+            old_value: 'in_progress',
+            new_value: 'in_review',
+            changed_by: EMMA_USER_ID,
+            automated_by: null,
+            created_at: '2026-08-03T14:34:49.638Z',
+            dedupe_key: 'history:212',
+          },
+        ],
+        comments: [
+          {
+            id: 'efa909fd-3ec8-421b-967d-9665ef3031be',
+            document_id: COMMENTED_ISSUE_ID,
+            comment_id: '06b7f1da-478d-4c6b-9414-40cac3dfbda6',
+            parent_id: null,
+            author_id: EMMA_USER_ID,
+            content: 'Making progress on Create sprint retrospective view — should land by end of week.',
+            resolved_at: null,
+            created_at: '2026-08-03T14:34:49.639Z',
+            updated_at: '2026-08-03T14:34:49.639Z',
+            dedupe_key: 'comment:efa909fd',
+          },
+        ],
+      }),
+    });
+  }
+
+  function deps(overrides: Partial<DeepDeps> = {}): DeepDeps {
+    return {
+      shipClient: testCase1Client(),
+      itemStore: new InMemoryItemStore(),
+      draftStore: new InMemoryDraftStore(),
+      now: () => new Date('2026-08-04T14:34:49.641Z'),
+      ...overrides,
+    };
+  }
+
+  it('exposes every deep-tier node in NODE_NAMES on the compiled graph', () => {
+    expect(NODE_NAMES).toEqual(
+      expect.arrayContaining(['gatherStandupActivity', 'composeStandupDraft', 'commitStandupDraft'])
+    );
+  });
+
+  it('throws a clear error if a proactive_deep trigger runs without DeepDeps, rather than silently no-op-ing', async () => {
+    const compiled = buildGraph(fakeModel('unused'));
+
+    await expect(
+      compiled.invoke({ trigger: 'proactive_deep', targetPersonUserId: EMMA_USER_ID })
+    ).rejects.toThrow(/DeepDeps/);
+  });
+
+  it('throws a clear error if proactive_deep runs without targetPersonUserId, rather than guessing a recipient', async () => {
+    const compiled = buildGraph(fakeModel('unused'), undefined, undefined, deps());
+
+    await expect(compiled.invoke({ trigger: 'proactive_deep' })).rejects.toThrow(/targetPersonUserId/);
+  });
+
+  describe('Test Case 1 — 3 assigned issues: one moved, one commented, one stale (proof #1)', () => {
+    it('composes a draft, attaches a proposed transition with evidence on the moved issue, and never calls the model with a live key', async () => {
+      const model = fakeModel('DRAFT: I moved "Build issue assignment flow" to In Review...');
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const compiled = buildGraph(model, undefined, undefined, deps({ itemStore, draftStore }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_deep', targetPersonUserId: EMMA_USER_ID });
+
+      // The prompt handed to the model names both issues that had activity
+      // and flags the third with its age — TRO-319 proof #1, verified at
+      // the prompt-content level (the model itself is a stable fake).
+      const prompt = (model.invoke as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+      expect(prompt).toContain('Build issue assignment flow');
+      expect(prompt).toContain('Create sprint retrospective view');
+      expect(prompt).toContain('Implement burndown chart');
+      expect(prompt).toContain('7 days');
+
+      expect(result.standupProposedTransitions).toEqual([
+        {
+          issueId: MOVED_ISSUE_ID,
+          issueTitle: 'Build issue assignment flow',
+          field: 'state',
+          fromState: 'in_progress',
+          toState: 'in_review',
+          evidence: { kind: 'history', changedAt: '2026-08-03T14:34:49.638Z', changedBy: EMMA_USER_ID },
+        },
+      ]);
+
+      // The draft is stored, never posted — retrievable via DraftStore only.
+      const items = itemStore.list(EMMA_USER_ID);
+      expect(items).toHaveLength(1);
+      const item = items[0];
+      if (!item) throw new Error('expected exactly one item');
+      expect(item.type).toBe('standup_draft');
+      expect(item.draftId).toBeDefined();
+
+      const stored = item.draftId ? draftStore.get(item.draftId) : undefined;
+      expect(stored?.draftText).toBe('DRAFT: I moved "Build issue assignment flow" to In Review...');
+      expect(stored?.proposedTransitions).toHaveLength(1);
+      expect(stored?.status).toBe('unseen');
+    });
+
+    it('re-invoking the same window is an upsert — no duplicate draft or item', async () => {
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const sharedDeps = deps({ itemStore, draftStore });
+      const compiled = buildGraph(fakeModel('draft text'), undefined, undefined, sharedDeps);
+
+      await compiled.invoke({ trigger: 'proactive_deep', targetPersonUserId: EMMA_USER_ID });
+      await compiled.invoke({ trigger: 'proactive_deep', targetPersonUserId: EMMA_USER_ID });
+
+      expect(itemStore.list(EMMA_USER_ID)).toHaveLength(1);
+      expect(draftStore.listForPerson(EMMA_USER_ID)).toHaveLength(1);
+    });
+  });
+
+  describe('Zero-activity case (proof #2)', () => {
+    it('states nothing moved rather than inventing content, for a person with no assigned issues', async () => {
+      const model = fakeModel('Nothing moved since your last standup.');
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const client = fakeDeepShipClient({ getIssuesByAssignee: vi.fn().mockResolvedValue([]) });
+      const compiled = buildGraph(model, undefined, undefined, deps({ shipClient: client, itemStore, draftStore }));
+
+      await compiled.invoke({ trigger: 'proactive_deep', targetPersonUserId: EMMA_USER_ID });
+
+      const prompt = (model.invoke as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+      expect(prompt).toContain('Nothing moved in this window');
+      expect(prompt).not.toContain('Build issue assignment flow'); // no invented activity
+
+      const items = itemStore.list(EMMA_USER_ID);
+      const item = items[0];
+      if (!item) throw new Error('expected exactly one item');
+      expect(item.summary).toContain('nothing moved');
+
+      const stored = item.draftId ? draftStore.get(item.draftId) : undefined;
+      expect(stored?.proposedTransitions).toEqual([]);
+    });
+  });
+
+  describe('Proof #3 — the draft is never posted by the agent and never attributed to the person', () => {
+    it('DeepShipClientLike exposes only read methods — there is no write method for this path to call', async () => {
+      const client = testCase1Client();
+      // Every method on the fake is one of the five reads DeepShipClientLike
+      // declares; nothing resembling create/update/post/apply exists on it
+      // to call even by mistake (enforced structurally by the TYPE, not by
+      // this assertion — this just documents the surface actually used).
+      expect(Object.keys(client).sort()).toEqual(
+        ['getAssociations', 'getChangeFeed', 'getDocument', 'getIssuesByAssignee', 'listDocuments'].sort()
+      );
+    });
+
+    it('the drafted text is retrievable ONLY from DraftStore — commitStandupDraft never calls a document-writing endpoint', async () => {
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const compiled = buildGraph(fakeModel('a private draft'), undefined, undefined, deps({ itemStore, draftStore }));
+
+      await compiled.invoke({ trigger: 'proactive_deep', targetPersonUserId: EMMA_USER_ID });
+
+      // The InboxItem is a lightweight pointer — the actual prose lives only
+      // in DraftStore, never duplicated onto anything Ship-visible.
+      const item = itemStore.list(EMMA_USER_ID)[0];
+      if (!item) throw new Error('expected exactly one item');
+      expect(item).not.toHaveProperty('draftText');
+      const stored = item.draftId ? draftStore.get(item.draftId) : undefined;
+      expect(stored?.draftText).toBe('a private draft');
+    });
+  });
+
+  describe('Waste control — 14 days of ignored drafts stops generation (proof #4)', () => {
+    it('skips the model call entirely and writes nothing when the person has ignored their last 14+ days of drafts', async () => {
+      // A single SHARED clock — both DraftStore's internal age-math and the
+      // graph's own `deps.now` must agree on "now," or `shouldGenerateDraftFor`
+      // measures the streak's age against the wrong instant.
+      let now = new Date('2026-08-01T00:00:00.000Z');
+      const draftStore = new InMemoryDraftStore(() => now);
+      draftStore.upsert({
+        id: 'standup-draft:pre-existing:2026-08-01',
+        personUserId: EMMA_USER_ID,
+        windowDate: '2026-08-01',
+        draftText: 'an old ignored draft',
+        proposedTransitions: [],
+      });
+      // Never viewed/dismissed — 15 days later this is an unbroken ignored run.
+      now = new Date('2026-08-16T00:00:00.000Z');
+
+      const model = fakeModel('should never be called');
+      const itemStore = new InMemoryItemStore();
+      const compiled = buildGraph(model, undefined, undefined, deps({ itemStore, draftStore, now: () => now }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_deep', targetPersonUserId: EMMA_USER_ID });
+
+      expect(model.invoke).not.toHaveBeenCalled();
+      expect(result.standupDraftText).toBeUndefined();
+      expect(itemStore.list(EMMA_USER_ID)).toHaveLength(0);
+      // The old draft is untouched, not deleted — "let them ask" (the
+      // ticket's own words), not "erase the record."
+      expect(draftStore.get('standup-draft:pre-existing:2026-08-01')).toBeDefined();
+    });
+
+    it('resumes generating once the person interacts with a draft (the streak resets)', async () => {
+      let now = new Date('2026-08-01T00:00:00.000Z');
+      const draftStore = new InMemoryDraftStore(() => now);
+      const old = draftStore.upsert({
+        id: 'standup-draft:pre-existing:2026-08-01',
+        personUserId: EMMA_USER_ID,
+        windowDate: '2026-08-01',
+        draftText: 'an old draft the person actually looked at',
+        proposedTransitions: [],
+      });
+      draftStore.markViewed(old.id);
+      now = new Date('2026-08-16T00:00:00.000Z');
+
+      const model = fakeModel('a fresh draft');
+      const itemStore = new InMemoryItemStore();
+      const compiled = buildGraph(model, undefined, undefined, deps({ itemStore, draftStore, now: () => now }));
+
+      await compiled.invoke({ trigger: 'proactive_deep', targetPersonUserId: EMMA_USER_ID });
+
+      expect(model.invoke).toHaveBeenCalledTimes(1);
+      expect(itemStore.list(EMMA_USER_ID)).toHaveLength(1);
+    });
   });
 });
