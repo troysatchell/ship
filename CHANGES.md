@@ -21,6 +21,168 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-334 — [FG-16] A blocking relationship nobody can see or set is not a feature — blocks/blocked-by in the issue sidebar
+
+**Last of three sub-issues on branch `feat/pr-d-ship-ui-surfaces` (bundle `TRO-328` / [PR-D] EPIC:
+"Ship UI surfaces — in-context chat, the ranked inbox, blocks/blocked-by"), landing in this order:
+FG-9 (done, TRO-320) -> the inbox (done, TRO-323) -> blocks/blocked-by (this commit), each by a
+separate agent on the same branch. This commit touches only `web/`'s issue sidebar (three new
+files plus one mount point in `IssueSidebar.tsx`) — it does not touch the chat panel or the inbox
+surface.**
+
+**The cost this closes.** FG-15 (done, TRO-333) made `blocks` expressible through
+`api/src/routes/associations.ts` and added cycle protection (FG-14 / TRO-332, migration
+`040_prevent_circular_associations.sql`). Until now nothing in the UI could view, set, or clear
+that relationship, so `document_associations` stayed at 0 `blocks` rows regardless — FG-19's
+blocker routing (a later ticket) has nothing to route yet.
+
+**Unlike TRO-320/TRO-323, this ticket had no backend gap.** Verified before writing any `web/`
+code: `api/src/routes/associations.ts` is already generic over relationship type end to end —
+`GET/POST/DELETE /api/documents/:id/associations` and `GET /api/documents/:id/reverse-associations`
+all already accept/return `type=blocks` (the `validTypes`/`isValidRelationshipType` guard already
+includes it, added by TRO-333). No migration, no new route, no `api/` change at all.
+
+**Endpoints called, and the reverse-query direction confirmed by reading the route (not
+assumed):**
+- **"Blocks"** (issues this one blocks): `GET /api/documents/:id/associations?type=blocks`
+  (`associations.ts:47-94`) — rows where `:id` is `document_id`.
+- **"Blocked by"** (issues blocking this one): `GET /api/documents/:id/reverse-associations?type=blocks`
+  (`associations.ts:192-240`) — rows where `:id` is `related_id` (`da.related_id = $1`, the mirror
+  image of the forward query's `da.document_id = $1`). This is the exact endpoint FG-14/FG-15 left
+  in place for this purpose; there is no second, separately-stored `blocked_by` relationship
+  anywhere, matching the ticket's own scope constraint.
+- **Add**: `POST /api/documents/:id/associations` with `{ related_id, relationship_type: 'blocks' }`
+  — `:id` is always the edge's SOURCE (the blocker), `related_id` its target. Adding from the
+  "Blocked by" section therefore POSTs to `/api/documents/{selected-issue-id}/associations` (not
+  this issue's own id) with `related_id` = this issue — the selected issue is the source, this
+  issue the target, matching the direction the "Blocked by" label describes.
+- **Remove**: `DELETE /api/documents/:id/associations/:relatedId?type=blocks` — same source/target
+  addressing as add. Removing from either section's list issues one DELETE call against the row's
+  actual `(document_id, related_id)` pair, never a bulk operation, so a removal from either side
+  deletes exactly one row.
+
+**The circular-association error — observed, not assumed.** `migration
+040_prevent_circular_associations.sql`'s trigger raises `Circular % reference detected: document %
+is already reachable from % via this relationship type` on a cycle. Read alone, that looks like a
+"translate the raw Postgres string" task. It isn't: `associations.ts`'s `POST` handler (`:97-146`)
+wraps the insert in a blanket `catch` (`:142-145`) that already discards that message server-side
+(`console.error` only) and always returns the generic `{"error":"Failed to create association"}`
+with status 500 — the raw trigger text never reaches the client at all, on a cycle or any other
+INSERT-time failure. Confirmed by running the actual sequence (create issue A, POST "A blocks B",
+then POST "B blocks A") against a real Express app + a real Postgres trigger with a throwaway
+diagnostic test (written, run once, then deleted — never committed, and no `git stash` involved):
+the second call came back exactly `500 {"error":"Failed to create association"}`; the trigger's own
+text (`Circular blocks reference detected: document <id> is already reachable from <id> via this
+relationship type`) appeared only in the server's stderr capture. Given every OTHER rejection this
+route can raise is already a 4xx before the INSERT runs (self-reference at `:126-128`, missing
+related document at `:121-123`; duplicates upsert via `ON CONFLICT` at `:134` rather than erroring),
+a 500 from this specific call is, in practice, always the cycle guard — a derived inference from
+reading the route's complete control flow, not a match against Postgres output the client never
+receives. `web/src/hooks/useBlockingAssociations.ts`'s `addBlocksEdge` translates any 500 from this
+call into one fixed, readable sentence (`CIRCULAR_BLOCKS_MESSAGE`) rather than the generic body
+text, and a non-500 4xx into a second, still-readable fallback message — never the raw response.
+
+**What changed:**
+- `web/src/hooks/useBlockingAssociations.ts` (new) — `useBlocksQuery`/`useBlockedByQuery` (plain
+  `useQuery` wrappers around the two GETs above), `addBlocksEdge`/`removeBlocksEdge` (plain async
+  functions, not `useMutation` — deliberately: `queryClient`'s default mutation `retry` policy
+  (`web/src/lib/queryClient.ts`) only skips retrying 4xx, so a `useMutation` around a thrown 500
+  would silently retry the "cycle" response up to 3 times before the UI ever saw it; these functions
+  never throw on a non-2xx response, so no retry logic ever engages), and
+  `useInvalidateBlockingAssociations` to refetch both lists after any add/remove settles.
+- `web/src/components/IssueCombobox.tsx` (new) — the "add a blocker" picker. Explicitly modeled on
+  `PersonCombobox.tsx`'s structure (Radix `Popover` + `cmdk` `Command`) per the ticket's own
+  instruction to reuse the existing document-picker pattern rather than build a third one — adapted
+  to a "pick-and-fire" single action (`onSelect(issueId)`, no persisted `value`) since the picker
+  never represents "the current blocker," only the add control; the current set is its own list
+  with per-row remove buttons in `IssueBlockingSection.tsx`. One deliberate deviation from the
+  reused pattern: `Popover.Content` here carries an `aria-label`. Read directly, neither
+  `PersonCombobox.tsx` nor `MultiPersonCombobox.tsx` sets one on its own `Popover.Content` — that is
+  TRO-218/A11Y-4's exact defect (Radix's `Popover.Content` defaults to `role="dialog"` with no
+  accessible name), already fixed on the shared `ui/Combobox.tsx` but not on these two. Reusing
+  their structure without also reusing that still-open gap is deliberate, not scope creep — proof
+  point 4 below depends on it.
+- `web/src/components/sidebars/IssueBlockingSection.tsx` (new) — the "Blocks"/"Blocked by"
+  `PropertyRow`s. Self-contained: takes only `issueId`, matching the precedent `AgentChatPanel
+  documentId={document.id}` (TRO-320) set for a sidebar section that owns its own data fetching
+  rather than threading new props through `PropertiesPanel`/`UnifiedEditor`'s `IssuePanelProps` —
+  `IssueSidebar.tsx`, `PropertiesPanel.tsx`, and `UnifiedEditor.tsx`'s existing prop plumbing are
+  otherwise untouched. Each row is a real `<a>` (react-router `Link`) plus a real `<button
+  aria-label="Remove {title} from {Blocks|Blocked by}">` — never a `<div>`/`<li>` with an `onClick`
+  bolted on, the same A11Y-1 shape (`DocumentTreeItem.tsx`) every ticket on this bundle has been
+  built against. Options offered by each picker exclude this issue and whatever is already listed
+  in that specific direction (the API upserts a re-add rather than erroring, but hiding it from its
+  own picker is clearer UX).
+- `web/src/components/sidebars/IssueSidebar.tsx` — one new import plus `<IssueBlockingSection
+  issueId={issue.id} />`, mounted between the existing "Rejection Reason" row and the "Document
+  Conversion" divider. Issue-sidebar scoped, per the ticket — not mounted from `PropertiesPanel.tsx`
+  the way `AgentChatPanel` is (that one is universal across all five document types; this one only
+  makes sense for issues). `PropertyRow`'s `tooltip` prop was deliberately NOT used here even though
+  `ProgramSidebar.tsx`/`ProjectSidebar.tsx` use it elsewhere — it requires a `TooltipProvider`
+  ancestor (`Tooltip must be used within TooltipProvider`, confirmed by trying it and watching every
+  new test fail), and `PropertiesPanel.test.tsx` does not currently exercise the `issue` document
+  type at all, so adding that dependency here would have been the first thing to require it with no
+  existing coverage to catch a regression.
+
+**Accessibility — claim provenance marked explicitly (`.claude/CLAUDE.md`).** Every remove control
+and every "Add issue…" trigger is a real native `<button>`; every list item's link is a real
+`<a href>`. `IssueBlockingSection.test.tsx`'s keyboard tests OBSERVE (via jsdom's real
+`HTMLElement.focus()`/`document.activeElement`) that these controls are genuinely focusable with no
+`tabIndex="-1"`, and OBSERVE the correct role/accessible name via `getByRole` — including that the
+picker's popover has a non-empty accessible name once opened (`toHaveAccessibleName()`, the same
+assertion `Combobox.test.tsx` uses for its own TRO-218/A11Y-4 regression). Nothing here was
+verified against a real screen reader (no VoiceOver pass was run) — the `role="alert"` claims on
+the error regions are ARIA-structural (derived from the spec's documented implicit live-region
+behavior for that role), not observed through actual assistive technology.
+
+**Regression tests (`web/src/components/sidebars/IssueBlockingSection.test.tsx`, new, 10 cases —
+count verified by grepping the file, not carried over from an earlier draft):**
+1. *Add direction (proof 1, 2 cases):* selecting an issue in the "Blocks" picker POSTs
+   `document_id` = this issue, `related_id` = the selected issue (A blocks B); selecting one in the
+   "Blocked by" picker POSTs `document_id` = the selected issue, `related_id` = this issue (the
+   selected issue blocks THIS one) — the two cases the ticket's proof point exists to distinguish.
+2. *Reverse query + symmetric removal (proof 2, 3 cases):* the "Blocked by" list is populated from
+   `GET .../reverse-associations?type=blocks` (asserted directly against the mocked call, with the
+   forward "Blocks" list simultaneously empty in the same fixture, so the two lists cannot be
+   confused for each other); removing from "Blocks" issues exactly one `DELETE
+   /api/documents/{this-issue}/associations/{other}?type=blocks`; removing from "Blocked by" issues
+   exactly one `DELETE /api/documents/{other}/associations/{this-issue}?type=blocks` — same edge,
+   opposite addressing, one call each.
+3. *Circular error (proof 3, 1 case):* mocks the POST response to the EXACT body observed in the
+   throwaway diagnostic run above (`500 {"error":"Failed to create association"}`) and asserts the
+   UI renders `CIRCULAR_BLOCKS_MESSAGE` inside a `role="alert"` region while the raw body text
+   ("Failed to create association") never appears anywhere in the DOM.
+4. *Keyboard/screen-reader structure (proof 4, 4 cases):* every remove `<button>` is real, focusable,
+   and has no `tabIndex="-1"`; the "Blocks"/"Blocked by" lists each have a distinct `aria-label` (so
+   a screen reader announces them as separate regions rather than one ambiguous list); the "Add
+   issue…" trigger is a real, focusable `<button type="button">` whose popover has a non-empty
+   accessible name once opened; and the empty state renders as plain, findable text rather than an
+   empty, unlabeled list (`queryByRole('list', ...)` returns nothing when there is nothing to list).
+
+Confirmed failing for the right reason before the fix: since all three new files are brand new
+(nothing in `HEAD` to diff against), they were copied aside to a ticket-prefixed scratch path
+(`/tmp/TRO-334-before/`, **never `git stash`** — this worktree's gate already shows `stash-guard:
+fail` from the two agents before this one; a third violation was not added), then deleted from the
+tree. Re-running the test file against that state failed with "Failed to resolve import
+`@/components/sidebars/IssueBlockingSection`" (module not found) — the right reason, a genuine
+absence of the feature, not a mis-set assertion. The three files were then copied back from the
+scratch path to restore the fix, and the suite was re-run green.
+
+**How to run it.** `pnpm --filter @ship/web test -- src/components/sidebars/IssueBlockingSection.test.tsx`
+(root `pnpm test` is API-only; `source .factory-env` first per this repo's DB-truncation warning,
+though this ticket's own test file makes no real network or database call — every `apiGet`/`apiPost`/
+`apiDelete` call is mocked).
+
+**Rollback.** Revert this commit (or the range of commits carrying TRO-334's changes). No schema
+change and no migration to roll back — `041_add_blocks_relationship.sql`/
+`040_prevent_circular_associations.sql` were both already applied by TRO-333/TRO-332 before this
+ticket started, and neither is touched here. Reverting removes the "Blocks"/"Blocked by" sidebar
+sections and their three new `web/` files entirely; `document_associations` rows of type `blocks`
+already written through this UI remain in the database (harmless — the generic associations API and
+FG-14's cycle trigger continue to enforce them regardless of whether the UI to create more exists).
+
+---
+
 ## TRO-323 — [FG-10] Ship has no notification surface at all — one ranked "what needs you" list, not a stream of pings
 
 **Second of three sub-issues on branch `feat/pr-d-ship-ui-surfaces` (bundle `TRO-328` / [PR-D] EPIC:

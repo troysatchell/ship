@@ -3,6 +3,7 @@ import { Combobox } from '@/components/ui/Combobox';
 import { MultiAssociationChips } from '@/components/ui/MultiAssociationChips';
 import { PropertyRow } from '@/components/ui/PropertyRow';
 import { ConfirmDialog } from '@/components/ConfirmDialog';
+import { IssueBlockingSection } from '@/components/sidebars/IssueBlockingSection';
 import { isCascadeWarningError, type IncompleteChild } from '@/hooks/useIssuesQuery';
 import { apiPost, apiDelete } from '@/lib/api';
 import { formatDateRange } from '@/lib/date-utils';
@@ -479,6 +480,13 @@ export function IssueSidebar({
           <span className="text-sm text-red-300">{issue.rejection_reason}</span>
         </PropertyRow>
       )}
+
+      {/* Blocks / Blocked by - TRO-334 / FG-16. Self-contained: fetches and
+        * mutates its own data via api/src/routes/associations.ts, keyed off
+        * issue.id alone. Not part of belongs_to (that array is containment
+        * only - see associations.ts's own comment on why 'blocks' is
+        * excluded from it). */}
+      <IssueBlockingSection issueId={issue.id} />
 
       {/* Document Conversion */}
       {onConvert && (
