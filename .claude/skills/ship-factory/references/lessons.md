@@ -307,3 +307,72 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   from `fail` to `pass` with no code change. **Whenever a merge from `main` brings in files under
   `api/src/db/migrations/`, re-run migrate before re-trusting the gate** — `pnpm install` only
   refreshes `node_modules`, never touches a database.
+- 2026-08-04 (TRO-319/FG-6) — **The `git stash` ban crossed this factory's own 3-recurrence bar
+  (TRO-215, TRO-208/TRO-206, now TRO-319) without the mechanical check its own policy calls for ever
+  getting built.** `review-patterns.mjs`'s header states the rule plainly — "once a rule has been
+  stated and ignored three times, restating it louder is not the fix, a check is" — and it was
+  followed for type-safety/sleep patterns (G7b) but not for this one, because a source-diff checker
+  genuinely can't see a clean `stash push`+`pop`: the working tree, `git stash list`, and sometimes
+  even `.git/logs/refs/stash` end up byte-identical to before. **Fixed with G7c**
+  (`scripts/factory/gate.sh`): a `reference-transaction` git hook (`.husky/reference-transaction` —
+  hooks in `.git/hooks/` are silently ignored in this repo, Husky owns `core.hooksPath`) logs every
+  write to `refs/stash` to a file in the *common* git directory, which every worktree shares by
+  construction — the same sharing that makes the underlying stash risk real in the first place.
+  `gate.sh` compares that log's line count against a per-worktree baseline captured on its own first
+  run and fails loudly if it grew. **Building the detector surfaced a live near-miss of the exact bug
+  it exists to catch**: an early, careless test of it ran `git stash pop` unconditionally after a
+  `push` that had silently failed (wrong pathspec for an untracked file), and it popped a real,
+  unrelated stash entry sitting on the shared stack instead — producing a genuine merge conflict
+  against unrelated files. Recovered cleanly (`git reset --hard`, verified the stray stash entry was
+  undisturbed) before it touched anything committed. **Any future stash-adjacent tooling test must
+  check `git stash list` count before AND immediately after `push`, and only pop by the exact ref it
+  just created — never pop unconditionally.**
+- 2026-08-04 (TRO-341/FG-23) — **`terraform apply` cannot update `render_web_service.agent` at all,
+  for any field, on the free tier — a provider bug, not a config mistake.** Adding `maintenance_mode`
+  to `agent_service.tf`'s `lifecycle.ignore_changes` (the fix that worked for the identical-looking
+  `pull_request_previews_enabled` drift in `web_service.tf`) did not fix it: `ignore_changes` only
+  suppresses what shows in the `terraform plan` *diff* — it does not stop the render-oss/render
+  provider's `Update` call from unconditionally including `maintenance_mode` in its actual API
+  request body, and Render's API rejects that field's mere presence for a free-tier service. Worked
+  around by calling the Render REST API directly (`PUT /v1/services/{id}/env-vars/{key}`) instead of
+  `terraform apply` for this resource. **Before attempting `terraform apply` against
+  `render_web_service.agent` (or any other free-tier Render service), expect this failure and go
+  straight to the REST API for a single-field change** — retrying `terraform apply` after tweaking
+  `ignore_changes` just burns time re-discovering the same dead end.
+- 2026-08-04 (TRO-341/FG-23) — **A merged PR is not a live deploy — the graded `ship` instance had
+  not actually redeployed in 6 days despite `auto_deploy` being configured correctly, and no wave
+  this sprint had ever checked.** PR-A (merged 2026-08-03 20:07) and PR-B (merged 2026-08-03 21:54)
+  were both on `main`, CI green, `gh pr list --state open` clean — every signal this factory normally
+  trusts said "shipped." The graded public instance was still serving a 2026-07-30 build the whole
+  time; confirmed three independent ways (Render's own `/deploys` API, a stale `last-modified`
+  header, `GET /api/change-feed` 404ing on a route that had been merged 3 days earlier). Root cause of
+  why `auto_deploy` stopped firing is still not found — a manual `POST /v1/services/{id}/deploys` is
+  the only remediation known to work. **Whenever a live graded/demo deployment exists and depends on
+  a merge, verify the deploy actually happened (a route probe or a `last-modified` check) as a
+  standard step after merging — "CI green and PR merged" proves the code is on `main`, not that
+  anyone's environment is running it.** Same class of failure as the GitLab-CI-never-ran incident
+  (2026-08-01): a trusted signal (CI, or a merged PR) covered less scope than it was read as
+  covering.
+- 2026-08-04 (TRO-341/FG-23) — **A seed fixture that depends on "the current sprint" decays as real
+  time passes, even though the seed script itself is unchanged and re-running it is a no-op by
+  design.** FG-3's Test Case 1 fixture (`seed.ts`) requires an engineer with ≥3 non-done issues in
+  whatever sprint resolves as current *at the moment `pnpm db:seed` runs* — true against a freshly
+  seeded database, and no longer true 6 days later against the same database re-seeded today, because
+  "current sprint" moved but the underlying issue-to-sprint assignments (frozen since the original
+  seed, since seeding is idempotent and skips existing rows) did not. Failed silently: no error, no
+  log line, just an absent `✅ Test Case 1 fixture:` line a human has to notice is missing. **When
+  re-running an idempotent seed against a database seeded on an earlier date, check the console output
+  for every expected per-fixture success line by name — "seed complete" alone does not mean every
+  fixture actually fired**, and a fixture whose precondition is date-relative needs that precondition
+  re-verified, not assumed, on every re-seed.
+- 2026-08-04 (orchestrator, this session) — **Opening a separate small PR per scorecard/bookkeeping
+  entry taxes every real ticket PR landing at the same time.** This session opened 5 tiny
+  bookkeeping-only PRs (#111, #114, #115, #116, #118) interleaved with 3 ticket PRs (#112, #113,
+  #117); every one of those 3 hit `mergeStateStatus: BEHIND` and needed a `merge main` (twice, for
+  two of them) purely because a bookkeeping PR had landed on `main` between pushes — the same
+  `CHANGES.md`-cascade tax already documented for concurrent ticket branches, self-inflicted here by
+  the orchestrator's own dispatch pattern rather than by parallel agents. **Batch scorecard/ledger
+  rows and land them once per wave (or fold into the next real ticket PR already in flight) instead
+  of opening a bookkeeping PR after every single ticket** — the entries are non-urgent, gitignored
+  from CodeRabbit's attention either way, and batching removes rebase churn from the tickets that
+  actually matter.

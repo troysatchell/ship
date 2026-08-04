@@ -119,75 +119,53 @@
 <div class="wrap">
   <header>
     <h1>Ship Factory</h1>
-    <span class="stamp">main@0db1fd0 · Tue, 04 Aug 2026 01:54:59 GMT</span>
+    <span class="stamp">main@5264182 · Tue, 04 Aug 2026 16:32:36 GMT</span>
   </header>
 
   <div class="strip">
-    <div class="cell"><span class="k">In flight</span><span class="v">2</span></div>
-    <div class="cell"><span class="k">Open PRs</span><span class="v">0</span></div>
+    <div class="cell"><span class="k">In flight</span><span class="v">0</span></div>
+    <div class="cell"><span class="k">Open PRs</span><span class="v">1</span></div>
     <div class="cell"><span class="k">First-attempt pass</span>
-      <span class="v ">14/24</span></div>
+      <span class="v ">18/29</span></div>
     <div class="cell"><span class="k">Spend (est.)</span>
-      <span class="v">$2128</span></div>
+      <span class="v">$2230</span></div>
   </div>
 
   <section class="panel">
     <h2>In flight</h2>
-    <ul>
-  <li class="row ok">
-    <div class="row-head">
-      <span class="title">pr a ship api foundations</span>
-      <span class="tkt">TRO-325</span>
-      <span class="verdict">gate pass</span>
-      <span class="commits">0 commits</span>
-    </div>
-    <div class="live">last commit: Merge branch &#39;main&#39; into feat/pr-a-ship-api-foundations</div>
-    <div class="row-meta">
-      <span>feat/pr-a-ship-api-foundations</span>
-      <span>db ship_wt_tro_325</span>
-      <span>api :3633</span>
-      <span>web :5806</span>
-    </div>
-  </li>
-  <li class="row ok">
-    <div class="row-head">
-      <span class="title">pr b agent service foundation</span>
-      <span class="tkt">TRO-326</span>
-      <span class="verdict">gate pass</span>
-      <span class="commits">0 commits</span>
-    </div>
-    <div class="live">last commit: fix(deps): close 4 new advisories from agent/&#39;s langsmith transitive dep</div>
-    <div class="row-meta">
-      <span>feat/pr-b-agent-service-foundation</span>
-      <span>db ship_wt_tro_326</span>
-      <span>api :3698</span>
-      <span>web :5871</span>
-    </div>
-  </li></ul>
+    <ul><li class="empty">No ticket worktrees provisioned. The factory is idle.</li></ul>
   </section>
 
   <section class="panel">
     <h2>Open pull requests</h2>
-    <ul><li class="empty">No open pull requests.</li></ul>
+    <ul>
+  <li class="row ok">
+    <div class="row-head">
+      <span class="tkt">#118</span>
+      <span class="pill ok">CI green</span>
+      
+    </div>
+    <div class="row-meta"><span>docs(memory-bank): PR-A/B/C, FG-11, FG-23 closed; PR-D next</span></div>
+  </li></ul>
   </section>
 
   
 <section class="panel">
   <h2>Gate trend</h2>
-  <p class="lede"><strong>14/24</strong> tickets passed the gate on their first attempt (58%).</p>
+  <p class="lede"><strong>18/29</strong> tickets passed the gate on their first attempt (62%).</p>
   
   <table>
     <caption>Which gate fails, and how often</caption>
     <thead><tr><th scope="col">Gate</th><th scope="col">Failures</th><th scope="col"></th></tr></thead>
     <tbody>
-      <tr><th scope="row">regression-test</th><td class="num">10</td>
+      <tr><th scope="row">regression-test</th><td class="num">11</td>
       <td class="barcell"><div class="bar" style="width:100%"></div></td></tr>
       <tr><th scope="row">tests:api</th><td class="num">3</td>
-      <td class="barcell"><div class="bar" style="width:30%"></div></td></tr>
+      <td class="barcell"><div class="bar" style="width:27.27272727272727%"></div></td></tr>
       <tr><th scope="row">tests:web</th><td class="num">3</td>
-      <td class="barcell"><div class="bar" style="width:30%"></div></td></tr>
+      <td class="barcell"><div class="bar" style="width:27.27272727272727%"></div></td></tr>
       <tr><th scope="row">tests:not-weakened</th><td class="num">2</td>
-      <td class="barcell"><div class="bar" style="width:20%"></div></td></tr>
+      <td class="barcell"><div class="bar" style="width:18.181818181818183%"></div></td></tr>
     </tbody>
   </table>
   <p class="note">The same gate failing repeatedly is a defect in the agent brief, not three careless
@@ -199,23 +177,19 @@
   <p class="basis">List-rate estimate over observed token counts — <strong>not billed spend</strong>.
      On a subscription plan the marginal cost is zero and this is API-equivalent value.</p>
   <div class="tokens">
-    <div><span class="k">output</span><span class="v">14,430,573</span></div>
-    <div><span class="k">cache write</span><span class="v">72,290,030</span></div>
-    <div><span class="k">cache read</span><span class="v">3,647,833,956</span></div>
-    <div><span class="k">raw input</span><span class="v">67,444</span></div>
+    <div><span class="k">output</span><span class="v">14,938,547</span></div>
+    <div><span class="k">cache write</span><span class="v">73,675,870</span></div>
+    <div><span class="k">cache read</span><span class="v">3,945,333,111</span></div>
+    <div><span class="k">raw input</span><span class="v">69,034</span></div>
   </div>
   <div class="cachebar" role="img"
        aria-label="98 percent of token volume is cache reads">
-    <div class="fill" style="width:97.7%"></div>
+    <div class="fill" style="width:97.8%"></div>
   </div>
   <p class="note">98% of all token volume is cache reads, billed at one tenth
      the input rate. The economics of this workflow are prompt-cache economics.</p>
 </section>
   
-<section class="panel annunciator">
-  <h2>Attention</h2>
-  <ul class="warn"><li>TRO-325: worktree provisioned but no commits yet</li><li>TRO-326: worktree provisioned but no commits yet</li></ul>
-</section>
 
   <footer>
     Snapshot, not a live feed — regenerate with <code>node scripts/factory/board.mjs</code> and
