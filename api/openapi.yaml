@@ -4559,6 +4559,69 @@ components:
         - output
         - citedSources
         - expansionCapped
+    AgentInboxItemEvidence:
+      type: object
+      properties:
+        documentId:
+          type: string
+        documentType:
+          type: string
+        commentId:
+          type: string
+    AgentInboxItemAction:
+      type: object
+      properties:
+        label:
+          type: string
+          description: Button/link text for the direct action
+        href:
+          type: string
+          description: Where acting on this item takes the person — a concrete Ship document/route
+      required:
+        - label
+        - href
+    AgentInboxItem:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Stable across polls for the same underlying fact — safe to use as a React key
+        type:
+          type: string
+          enum:
+            - mention
+            - blocking_approval
+            - standup_draft
+        summary:
+          type: string
+        evidence:
+          $ref: "#/components/schemas/AgentInboxItemEvidence"
+        action:
+          $ref: "#/components/schemas/AgentInboxItemAction"
+        blockedCount:
+          type: number
+          description: "blocking_approval only: how many OTHER people are currently blocked on this recipient's action"
+        blockedSince:
+          type: string
+          format: date-time
+          description: "blocking_approval only: when the blocking condition first appeared"
+          example: "2025-01-30T14:30:00.000Z"
+      required:
+        - id
+        - type
+        - summary
+        - evidence
+        - action
+    AgentInboxResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AgentInboxItem"
+          description: Already fully ranked by the agent (blocking_approval first, highest blockedCount first within that, ties broken by longest-waiting; then mention oldest-first; then standup_draft oldest-first) — this endpoint does no re-sorting.
+      required:
+        - items
   parameters:
 {}
 paths:
@@ -8534,6 +8597,25 @@ paths:
           description: No valid session — the browser must be signed in (authMiddleware)
         403:
           description: CSRF token missing or invalid for a session-cookie request (conditionalCsrf)
+        502:
+          description: The agent service is unreachable, timed out, or returned an error
+        503:
+          description: The agent is not configured — AGENT_INTERNAL_SECRET is unset on this side, so no request was sent
+  /agent/inbox:
+    get:
+      tags:
+        - Agent
+      summary: Get the signed-in user's ranked FleetGraph inbox — mentions, blocking approvals, and standup drafts that need them
+      description: Proxies to the agent service (AGENT_API_BASE_URL) over the same shared-secret-authenticated internal call POST /agent/chat uses. recipientUserId is taken from the authenticated session (never from a query param) and forwarded so nobody can read another person's inbox by editing the request. Returns a clean degraded shape — never a hang — when the agent is unreachable or not configured on either side.
+      responses:
+        200:
+          description: The recipient's ranked inbox items, already sorted by the agent
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentInboxResponse"
+        401:
+          description: No valid session — the browser must be signed in (authMiddleware)
         502:
           description: The agent service is unreachable, timed out, or returned an error
         503:
