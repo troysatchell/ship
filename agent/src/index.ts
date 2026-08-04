@@ -86,11 +86,20 @@ if (!config.agentInternalSecret) {
 let graph: CompiledGraph | undefined;
 
 if (!isConfigComplete(config)) {
+  // server.ts checks agentInternalSecret BEFORE deps.graph — so when BOTH
+  // are missing, POST /chat actually returns 500 (the secret warning above
+  // already said so), never 503. Naming 503 here unconditionally would make
+  // the two warnings claim conflicting outcomes for the same endpoint in
+  // that combined case.
+  const chatStatusNote = config.agentInternalSecret
+    ? ' POST /chat will also return 503 agent_not_configured.'
+    : ' POST /chat is unavailable (see the AGENT_INTERNAL_SECRET warning above for the exact status).';
   console.warn(
     '[agent] Startup config is incomplete (ANTHROPIC_API_KEY, SHIP_API_BASE_URL, and/or ' +
       'SHIP_API_TOKEN missing). The process will stay up — /health still returns 200 — but ' +
       '/ready will return 503 until the missing values are set (graceful degradation, FG-4). ' +
-      'The proactive poller (FG-5) will not start either, and POST /chat will return 503.'
+      'The proactive poller (FG-5) will not start either.' +
+      chatStatusNote
   );
 } else {
   // Config complete: wire the real graph (real model, real Ship client, the
