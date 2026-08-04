@@ -202,9 +202,10 @@ describe('fetchCommentSnippets', () => {
     const snippets = await fetchCommentSnippets(client, 'doc-1', 2);
 
     expect(snippets).toHaveLength(2);
-    expect(snippets[0]).toMatch(/^Emma Johnson: x+…$/);
-    expect(snippets[0]!.length).toBeLessThan(300);
-    expect(snippets[1]).toBe('Emma Johnson: middle');
+    const [first, second] = snippets;
+    expect(first).toMatch(/^Emma Johnson: x+…$/);
+    expect(first?.length).toBeLessThan(300);
+    expect(second).toBe('Emma Johnson: middle');
   });
 
   it('never throws — a failed comments fetch is treated as no evidence', async () => {
