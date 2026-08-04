@@ -92,6 +92,16 @@ describe('POST /chat', () => {
     expect(res.body.error).toBe('unauthorized');
   });
 
+  it('returns 401 for a wrong secret of the SAME length as the real one — exercises the timingSafeEqual comparison itself, not just the length-mismatch guard in front of it', async () => {
+    const sameLengthWrongSecret = 'x'.repeat(SECRET.length);
+    const graph = fakeGraph({ output: 'x', citedSources: [], expansionCapped: false });
+    const app = createServer(loadConfig(CHAT_CONFIG), { graph });
+    const res = await request(app).post('/chat').set('X-Internal-Secret', sameLengthWrongSecret).send(VALID_BODY);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('unauthorized');
+    expect(graph.invoke).not.toHaveBeenCalled();
+  });
+
   it('returns 503 (agent not configured) when the secret matches but no graph was wired — config incomplete', async () => {
     const app = createServer(loadConfig(CHAT_CONFIG)); // no graph dep at all
     const res = await request(app).post('/chat').set('X-Internal-Secret', SECRET).send(VALID_BODY);

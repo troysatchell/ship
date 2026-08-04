@@ -74,8 +74,9 @@ if (!config.agentInternalSecret) {
   // why) — this only means POST /chat will reject every request rather than
   // the whole process being "not ready."
   console.warn(
-    '[agent] AGENT_INTERNAL_SECRET is not set — POST /chat will reject every request ' +
-      '(fails closed, TRO-320 / FG-9), including legitimate ones from api/.'
+    '[agent] AGENT_INTERNAL_SECRET is not set — POST /chat will return 500 ' +
+      'internal_secret_not_configured for EVERY request, including legitimate ones from api/ ' +
+      '(fails closed, TRO-320 / FG-9).'
   );
 }
 
