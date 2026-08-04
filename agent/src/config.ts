@@ -57,6 +57,17 @@ export interface AgentConfig {
    * match the value `api/`'s `AGENT_API_BASE_URL`-calling route sends —
    * see `api/.env.example`. */
   agentInternalSecret: string | undefined;
+  /** How long `POST /chat` (server.ts) waits on `graph.invoke(...)` before
+   * giving up on ITS OWN response, in ms (CodeRabbit review, PR #120). The
+   * `api/` proxy that calls this route aborts its own outbound fetch after
+   * `AGENT_REQUEST_TIMEOUT_MS` (30s, `api/src/routes/agent.ts`) — but that
+   * only stops api/'s wait; it does nothing to this Express handler, which
+   * would otherwise keep awaiting a hung graph/model/Ship call indefinitely,
+   * consuming a request slot for a caller that already received a 502.
+   * Deliberately shorter than api/'s 30s bound so this process gives up
+   * first, while the caller is still there to receive something other than
+   * a connection reset. */
+  chatHandlerTimeoutMs: number;
 }
 
 const DEFAULT_PORT = 3100;
@@ -69,6 +80,9 @@ const DEFAULT_SELF_THROTTLE_RPM = 500;
 const DEFAULT_PROACTIVE_POLL_INTERVAL_MS = 60_000;
 const DEFAULT_PROACTIVE_INITIAL_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_ON_DEMAND_DOCUMENT_CAP = 12;
+// Shorter than api/'s own AGENT_REQUEST_TIMEOUT_MS (30_000ms,
+// api/src/routes/agent.ts) — see chatHandlerTimeoutMs's own docstring.
+const DEFAULT_CHAT_HANDLER_TIMEOUT_MS = 25_000;
 
 function positiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
@@ -105,6 +119,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     // "required, not a nice-to-have").
     onDemandDocumentCap: positiveInt(env.ON_DEMAND_DOCUMENT_CAP, DEFAULT_ON_DEMAND_DOCUMENT_CAP),
     agentInternalSecret: env.AGENT_INTERNAL_SECRET,
+    chatHandlerTimeoutMs: positiveInt(env.CHAT_HANDLER_TIMEOUT_MS, DEFAULT_CHAT_HANDLER_TIMEOUT_MS),
   };
 }
 

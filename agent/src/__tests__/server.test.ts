@@ -125,12 +125,18 @@ describe('POST /chat', () => {
 
     const res = await request(app).post('/chat').set('X-Internal-Secret', SECRET).send(VALID_BODY);
 
-    expect(graph.invoke).toHaveBeenCalledWith({
-      trigger: 'on_demand',
-      input: VALID_BODY.question,
-      seedDocumentId: VALID_BODY.seedDocumentId,
-      askingUserId: VALID_BODY.askingUserId,
-    });
+    // Second argument (CodeRabbit review, PR #120): a real AbortSignal,
+    // passed so LangGraph can actually cancel the run if the handler's own
+    // timeout fires — see server.ts's own comment on `POST /chat`.
+    expect(graph.invoke).toHaveBeenCalledWith(
+      {
+        trigger: 'on_demand',
+        input: VALID_BODY.question,
+        seedDocumentId: VALID_BODY.seedDocumentId,
+        askingUserId: VALID_BODY.askingUserId,
+      },
+      { signal: expect.any(AbortSignal) }
+    );
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       output: 'This issue is stalled because...',
@@ -145,6 +151,73 @@ describe('POST /chat', () => {
     const res = await request(app).post('/chat').set('X-Internal-Secret', SECRET).send(VALID_BODY);
     expect(res.status).toBe(502);
     expect(res.body.error).toBe('graph_invoke_failed');
+  });
+
+  /**
+   * CodeRabbit review, PR #120: `graph.invoke(...)` had no deadline of its
+   * own — a hung graph/model/Ship call kept this handler (and its request
+   * slot) alive indefinitely, even after api/'s own proxy gave up and
+   * returned a 502 to the browser (api/'s AGENT_REQUEST_TIMEOUT_MS, 30s).
+   *
+   * `abortAwareGraph` below is not a bare stub: it actually honors the
+   * `signal` passed as `invoke`'s second argument (rejecting when it fires),
+   * modeling the REAL `@langchain/langgraph` behavior confirmed with a
+   * throwaway probe against the real package before writing this test —
+   * `graph.invoke(input, { signal })` rejects within ~10ms of an abort,
+   * regardless of whether the node in flight ever finishes on its own. A
+   * mock that ignored the signal and just resolved/rejected on its own timer
+   * would prove nothing about whether the signal is actually wired through.
+   */
+  function abortAwareGraph(resolveAfterMs: number) {
+    const invoke = vi.fn((_input: unknown, options?: { signal?: AbortSignal }) => {
+      return new Promise((resolve, reject) => {
+        const timer = setTimeout(
+          () => resolve({ output: 'too late', citedSources: [], expansionCapped: false }),
+          resolveAfterMs
+        );
+        options?.signal?.addEventListener('abort', () => {
+          clearTimeout(timer);
+          reject(new Error('Aborted'));
+        });
+      });
+    });
+    return { invoke };
+  }
+
+  it('returns 504 (never an unbounded hang) when graph.invoke does not settle within chatHandlerTimeoutMs, and actually aborts the SAME signal it passed to the graph', async () => {
+    const graph = abortAwareGraph(5000); // would resolve in 5s if never aborted
+    const config = loadConfig({ ...CHAT_CONFIG, CHAT_HANDLER_TIMEOUT_MS: '20' });
+    const app = createServer(config, { graph });
+
+    const start = Date.now();
+    const res = await request(app).post('/chat').set('X-Internal-Secret', SECRET).send(VALID_BODY);
+    const elapsed = Date.now() - start;
+
+    expect(res.status).toBe(504);
+    expect(res.body.error).toBe('graph_invoke_timeout');
+    // Settled near the configured 20ms timeout, nowhere near the 5s the
+    // fake graph would otherwise have taken — the handler's response is
+    // genuinely bounded by chatHandlerTimeoutMs, not by graph.invoke ever
+    // settling on its own.
+    expect(elapsed).toBeLessThan(2000);
+
+    // The exact AbortSignal object graph.invoke received is the one that
+    // ended up aborted — real propagation, not a signal built and then
+    // never wired anywhere (the bare-`Promise.race` shape this replaces).
+    expect(graph.invoke).toHaveBeenCalledTimes(1);
+    const [, options] = graph.invoke.mock.calls[0] as [unknown, { signal: AbortSignal }];
+    expect(options.signal.aborted).toBe(true);
+  });
+
+  it('preserves the existing 200 success shape when graph.invoke settles well within chatHandlerTimeoutMs', async () => {
+    const graph = abortAwareGraph(1);
+    const config = loadConfig({ ...CHAT_CONFIG, CHAT_HANDLER_TIMEOUT_MS: '5000' });
+    const app = createServer(config, { graph });
+
+    const res = await request(app).post('/chat').set('X-Internal-Secret', SECRET).send(VALID_BODY);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ output: 'too late', citedSources: [], expansionCapped: false });
   });
 });
 

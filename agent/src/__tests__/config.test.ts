@@ -20,6 +20,9 @@ describe('loadConfig', () => {
     expect(config.onDemandDocumentCap).toBe(12);
     // TRO-320 / FG-9: no default — a missing secret must fail /chat closed.
     expect(config.agentInternalSecret).toBeUndefined();
+    // CodeRabbit review, PR #120 — shorter than api/'s own
+    // AGENT_REQUEST_TIMEOUT_MS (30s, api/src/routes/agent.ts).
+    expect(config.chatHandlerTimeoutMs).toBe(25_000);
   });
 
   it('reads every value from the provided env map, not process.env', () => {
@@ -39,6 +42,7 @@ describe('loadConfig', () => {
       PROACTIVE_INITIAL_LOOKBACK_MS: '3600000',
       ON_DEMAND_DOCUMENT_CAP: '20',
       AGENT_INTERNAL_SECRET: 'shared-secret-abc',
+      CHAT_HANDLER_TIMEOUT_MS: '12000',
     });
 
     expect(config).toEqual({
@@ -57,6 +61,7 @@ describe('loadConfig', () => {
       proactiveInitialLookbackMs: 3600000,
       onDemandDocumentCap: 20,
       agentInternalSecret: 'shared-secret-abc',
+      chatHandlerTimeoutMs: 12000,
     });
   });
 

@@ -18,6 +18,11 @@
  * here would let anyone spend the configured Anthropic API budget and query
  * as an arbitrary `askingUserId`. Degrades the same way `/ready` does when
  * `deps.graph` is absent (config incomplete): a clear 503, never a hang.
+ * Also bounded once the graph IS present (CodeRabbit review, PR #120):
+ * `graph.invoke` races against `config.chatHandlerTimeoutMs`, aborted via a
+ * real `AbortSignal` LangGraph itself honors — a 504 after that window,
+ * never an unbounded wait on a hung model/Ship call. See the route's own
+ * comment for exactly what that cancellation does and does not reach.
  * `/inbox`  — GET only (TRO-323 / FG-10). The route Ship's ranked-inbox
  * surface proxies through (`api/src/routes/agent.ts`'s own `GET /inbox`).
  * Same `X-Internal-Secret` check as `/chat`, same public-internet exposure
@@ -174,24 +179,77 @@ export function createServer(config: AgentConfig, deps: CreateServerDeps = {}): 
       return;
     }
 
+    // CodeRabbit review, PR #120: api/'s proxy aborts its own outbound fetch
+    // after AGENT_REQUEST_TIMEOUT_MS (30s, api/src/routes/agent.ts) — but
+    // that only stops api/'s wait; a hung graph/model/Ship call would
+    // otherwise keep this handler (and the request slot it holds) alive
+    // indefinitely for a caller that already received a 502. Race the
+    // invoke against a timer, AND propagate real cancellation, not just an
+    // abandoned promise: `CompiledGraph#invoke` accepts a `RunnableConfig`
+    // whose `signal` LangGraph itself honors — verified directly against
+    // `@langchain/langgraph` (not assumed from its types): aborting mid-run
+    // makes `invoke()` reject within ~10ms of the signal firing, rather than
+    // waiting for whatever node was in flight to finish on its own. Passing
+    // the signal is a genuine improvement over a bare `Promise.race`, which
+    // would leave this exact graph run orphaned in the background forever
+    // with nothing left to observe its eventual settlement.
+    //
+    // Full honesty about what this does NOT do (read before trusting a
+    // "cancelled" claim you didn't verify — CLAUDE.md's own provenance
+    // rule): neither `AnthropicModel.invoke(input: string)` (this file's own
+    // narrow model interface, `graph.ts`) nor any `ShipClientLike` method
+    // (`shipClient.ts`) accepts or forwards a signal, even though the
+    // underlying `ResilientClient.get`/`request` (`resilientClient.ts`) DOES
+    // support one — nothing in `graph.ts`'s node bodies threads `config`
+    // through to either call today. So when the abort fires while a node's
+    // own `model.invoke()`/Ship HTTP call is already in flight, THAT single
+    // call keeps running to completion server-side (confirmed with a
+    // throwaway probe against the real package: the node's own awaited
+    // promise settled ~3s after `invoke()` had already rejected) — this
+    // timeout bounds THIS HANDLER'S response, not every byte of work the
+    // graph kicked off. Threading the signal into `AnthropicModel`/
+    // `ShipClientLike` themselves would close that gap; it is a real,
+    // separately-scoped change to graph.ts's node bodies and every caller
+    // of those interfaces, not a one-line addition here.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), config.chatHandlerTimeoutMs);
     try {
-      const result = await deps.graph.invoke({
-        trigger: 'on_demand',
-        input: req.body.question,
-        seedDocumentId: req.body.seedDocumentId,
-        askingUserId: req.body.askingUserId,
-      });
+      const result = await deps.graph.invoke(
+        {
+          trigger: 'on_demand',
+          input: req.body.question,
+          seedDocumentId: req.body.seedDocumentId,
+          askingUserId: req.body.askingUserId,
+        },
+        { signal: controller.signal }
+      );
       res.status(200).json({
         output: result.output,
         citedSources: result.citedSources,
         expansionCapped: result.expansionCapped,
       });
     } catch (err) {
+      if (controller.signal.aborted) {
+        // The timer fired, not a graph-internal failure. Distinct from the
+        // 502 branch below: the caller (api/'s proxy) has almost certainly
+        // already given up by the time this fires (its own 30s bound is
+        // longer than chatHandlerTimeoutMs's default, but not guaranteed
+        // under load), so this just frees the handler rather than claiming
+        // any particular downstream effect.
+        console.error(
+          `[agent] /chat timed out after ${config.chatHandlerTimeoutMs}ms waiting on graph.invoke — ` +
+            'the underlying node call may still be running server-side; see this handler\'s own comment.'
+        );
+        res.status(504).json({ error: 'graph_invoke_timeout' });
+        return;
+      }
       // Never let a graph-internal failure (a bad Ship response, a model
       // error) reach the caller as a raw stack trace or an unresolving
       // request — same posture as ResilientClient's own normalized errors.
       console.error('[agent] /chat graph invocation failed:', err);
       res.status(502).json({ error: 'graph_invoke_failed' });
+    } finally {
+      clearTimeout(timer);
     }
   });
 
