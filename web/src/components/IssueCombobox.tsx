@@ -85,7 +85,16 @@ export function IssueCombobox({
           sideOffset={4}
           align="start"
         >
+          {/* `label` (not `aria-label` on Command.Input below) is cmdk's own
+            * mechanism for naming the search box: CommandInput always sets
+            * `aria-labelledby` pointing at a hidden `<label>` whose content
+            * is this prop, and `aria-labelledby` wins over any `aria-label`
+            * placed directly on the input — verified by reading cmdk's
+            * source (node_modules/cmdk/dist/index.mjs) and confirming
+            * empirically that `aria-label` on Command.Input alone leaves the
+            * input with no accessible name at all. */}
           <Command
+            label="Search issues"
             className="flex flex-col"
             filter={(value, search) => {
               const option = options.find((o) => o.id === value);
