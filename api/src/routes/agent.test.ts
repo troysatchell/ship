@@ -348,6 +348,43 @@ describe('GET /api/agent/inbox (TRO-323 / FG-10)', () => {
     expect(res.body).toEqual(agentBody)
   })
 
+  it('preserves a path component in AGENT_API_BASE_URL, the same way POST /chat already does (CodeRabbit PR #120) — `new URL(\'/inbox\', base)` would silently discard it', async () => {
+    // AGENT_API_BASE_URL is read into a module-scope const at import time, so
+    // getting a fresh value requires a fresh module graph (same pattern as
+    // api/src/middleware/__tests__/rate-limit.test.ts's loadAppWithNodeEnv).
+    // Reusing the OUTER sessionCookie/testUserId is safe: authMiddleware
+    // resolves a session by looking it up in the (real, shared) database,
+    // not by anything baked into a particular app instance.
+    const prevBaseUrl = process.env.AGENT_API_BASE_URL
+    process.env.AGENT_API_BASE_URL = 'https://agent.example.com/api'
+    vi.resetModules()
+    let freshApp: import('express').Express
+    try {
+      const { createApp: createFreshApp } = await import('../app.js')
+      freshApp = createFreshApp()
+    } finally {
+      if (prevBaseUrl === undefined) delete process.env.AGENT_API_BASE_URL
+      else process.env.AGENT_API_BASE_URL = prevBaseUrl
+    }
+
+    try {
+      const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+        new Response(JSON.stringify({ items: [] }), { status: 200, headers: { 'content-type': 'application/json' } })
+      )
+
+      const res = await request(freshApp).get('/api/agent/inbox').set('Cookie', sessionCookie)
+
+      expect(fetchSpy).toHaveBeenCalledTimes(1)
+      const [calledUrl] = fetchSpy.mock.calls[0] as [string | URL, RequestInit]
+      // The /api base path must survive into the outbound call — a bare
+      // `/inbox` (origin-only, base path dropped) would fail this.
+      expect(calledUrl.toString()).toContain('agent.example.com/api/inbox')
+      expect(res.status).toBe(200)
+    } finally {
+      vi.resetModules()
+    }
+  })
+
   it('degrades to a clean 502 when the agent returns 200 with a malformed item (missing action.href) — crosses the trust boundary, so every item is validated', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({

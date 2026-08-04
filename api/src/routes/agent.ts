@@ -248,7 +248,15 @@ router.get('/inbox', authMiddleware, authed(async (req, res) => {
   const timer = setTimeout(() => controller.abort(), AGENT_REQUEST_TIMEOUT_MS);
 
   try {
-    const url = new URL('/inbox', AGENT_API_BASE_URL);
+    // `new URL('/inbox', AGENT_API_BASE_URL)` (the two-argument form) would
+    // resolve the leading-slash path against the base's ORIGIN only,
+    // silently discarding any path component AGENT_API_BASE_URL might carry
+    // (e.g. `https://agent.example.com/api` -> `/inbox` targets
+    // `https://agent.example.com/inbox`, dropping `/api`). Build the full
+    // URL string first, matching POST /chat's own
+    // `${AGENT_API_BASE_URL}/chat` construction, so both routes behave
+    // identically if AGENT_API_BASE_URL ever gains a path prefix.
+    const url = new URL(`${AGENT_API_BASE_URL}/inbox`);
     url.searchParams.set('recipientUserId', req.userId);
 
     const agentRes = await fetch(url, {
