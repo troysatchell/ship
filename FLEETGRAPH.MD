@@ -292,6 +292,45 @@ index behind them.
 **Trace links pending — nothing is built yet.** Ship state and expected output are defined; traces
 follow as each is implemented.
 
+**Graded-database fixture status (TRO-341/FG-23, 2026-08-04) — seeded, with one real gap found, not
+hidden.** `pnpm db:seed` ran against the graded `ship-db` (external connection, temporary IP
+allowlist, reset immediately after). Pre-seed sanity check: 257 documents / 11 users / 0
+`document_history` rows, matching the documented 2026-07-28 snapshot exactly — confirming this
+database's existing rows really were produced by this same seed script, the precondition the
+seeding plan itself named. Post-seed:
+
+- **Test Cases 2 and 4 fixtures created successfully** — document ids below, real and resolvable
+  in the graded database today.
+- **Test Case 3's fixture ran but produced 0 closed issues, not the 3 its own row requires.** The
+  fixture logic picks issues to close from the *current* sprint as Postgres's `NOW()` resolves it
+  today (2026-08-04) — six days after this database's issues were originally created
+  (2026-07-28) — and this database's specific existing issue set apparently has none eligible in
+  whatever sprint that now is. Recorded, not fixed here: this ticket's scope was seeding and
+  environment, not redesigning the fixture's sprint-selection logic.
+- **Test Case 1's fixture did not fire at all** — same root cause, sharper effect. Its precondition
+  (`SELECT ... WHERE state != 'done' GROUP BY assignee ... HAVING count >= 3` against the current
+  sprint) found no engineer meeting the threshold *in the current sprint specifically*, so the
+  `if (engineerRow && cnt >= 3)` guard silently skipped the entire block — no error, no console
+  output, confirmed by reading `api/src/db/seed.ts` directly rather than guessing from the absent
+  log line. Verified (observed) that engineers with 3+ non-done issues DO exist in this database in
+  *some* sprint (a direct query found two), just not the one the fixture insists on. **Test Case 1's
+  row stays `Pending` below — a real gap for whoever runs the graded demo to know about, not
+  something this seeding pass could silently paper over.**
+
+Document ids that DID resolve, against the graded `ship-db` (not this worktree's local scratch
+database):
+
+| Fixture | Document id |
+|---|---|
+| Test Case 2 — mention 1 | `65f499b2-8e8c-417c-8372-f60ff4ba8c75` |
+| Test Case 2 — mention 2 | `a8a08536-d4ef-44a9-a9c1-12d1efe39dc4` |
+| Test Case 2 — blocked week | `e5adadd7-e574-4f6b-9893-3da2261cf463` |
+| Test Case 3 — week (0 issues closed within it — see gap above) | `c8dfb32e-5b08-47d4-8150-af7728543ac4` |
+| Test Case 4 — week (approved then edited) | `0e44bc95-6ee9-4aa7-a6c0-41205bf87e85` |
+
+These are document ids the fixture states live at, not LangSmith trace links — the `Trace Link`
+column below stays `Pending` until PR-C's graph actually runs against them.
+
 | # | Ship State | Expected Output | Trace Link |
 |---|---|---|---|
 | 1 | An engineer with 3 assigned issues; since their last standup, one moved to in review, they commented on another, and the third has not moved in 6 days | A draft standup naming the two that moved and what changed, flagging the third as sitting for 6 days, with a proposed state change on the one in review | Pending |
@@ -398,8 +437,17 @@ being on `main` and despite `auto_deploy` being correctly configured — auto-de
 Root cause not fully diagnosed: `gh api repos/troysatchell/ship/hooks` returns `[]` (no classic
 webhooks), which is suggestive but not conclusive, since Render's GitHub integration commonly runs
 through a GitHub App installation rather than a classic repo webhook, and this session's `gh` token
-cannot list App installations to check that directly. **Remediation is a single Render API call —
-not run by this ticket, live-infra action, flagged for the orchestrator:**
+cannot list App installations to check that directly.
+
+**Done, 2026-08-04, with explicit human sign-off.** The remediation call below was run by the
+orchestrator against `srv-d9kf2t942hec73aofrt0`. Result: deploy `dep-d9ouj9jl550s73feh900` reached
+`live`, commit `ef9d9c7` (current `main` at the time). Verified after, not just trusted: `GET
+/api/change-feed` unauthenticated now returns `401` (auth required — the route exists) instead of
+the prior bare `404`, and `GET /`'s `last-modified` header moved from `2026-07-30` to
+`2026-08-04T13:31:47Z`. **PR-A's routes are now live on the graded Ship.** Root cause of why
+`auto_deploy` itself never fired is still not diagnosed — this was a manual workaround, not a fix to
+the underlying trigger, so the same gap will recur on the next push unless someone with Render
+dashboard access checks the GitHub App installation.
 ```bash
 curl -X POST https://api.render.com/v1/services/srv-d9kf2t942hec73aofrt0/deploys \
   -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
@@ -458,6 +506,27 @@ already the target location for `agent_service.tf`'s `var.ship_api_token` (`vari
 waiting to be folded into the checked-out root's real `terraform.tfvars` and applied per the
 Terraform paragraph above.
 
+**Done, 2026-08-04, with explicit human sign-off — but not via `terraform apply` as planned.** The
+real token was folded into the main checkout's `terraform.tfvars` and `terraform plan` confirmed
+exactly one change (`SHIP_API_TOKEN` on `render_web_service.agent`, 0 changes elsewhere). `terraform
+apply` itself failed both before and after adding `maintenance_mode` to `agent_service.tf`'s
+`lifecycle.ignore_changes` (matching `web_service.tf`'s existing `pull_request_previews_enabled`
+precedent for the identical reason): `Could not update service, unexpected error: could not update
+service: maintenance mode can only be configured for non-free tier services`. This is a
+render-oss/render provider bug — `ignore_changes` only changes what Terraform's *plan diff* shows,
+not what the provider's `Update` call sends in its API request body, and this provider appears to
+unconditionally include `maintenance_mode` on every update to this resource type regardless of
+whether it changed. **Worked around by calling Render's REST API directly for this one field**
+(`PUT /v1/services/{id}/env-vars/SHIP_API_TOKEN`, confirmed `200` with the new value's real length),
+then a manual redeploy (`POST .../deploys`, since an env-var PUT alone doesn't restart the running
+process — confirmed by checking `GET .../deploys?limit=1` still showed the prior deploy after the
+PUT). New deploy `dep-d9ouuar7uimc73a8vrkg` reached `live`; `GET /health` → `200`, `GET /ready` →
+`200`, both against the live agent with a real, working per-user token. **Terraform's own state
+now agrees with reality** (the `.tfvars` value matches what's live), but a future `terraform apply`
+touching this resource will hit the identical provider bug again until either the provider fixes
+it or someone finds a cleaner workaround than a manual `ignore_changes` addition that empirically
+didn't stop the bad payload.
+
 **Seeding the graded database with FG-3's fixture states (TRO-341 / FG-23) — plan, not executed.**
 `api/src/db/seed.ts`'s FG-3 block (`TRO-314`, merged to `main` 2026-08-03) is additive and
 self-gating: it checks `COUNT(*) FROM document_history` for the workspace first and no-ops if
@@ -503,11 +572,14 @@ pnpm db:migrate   # idempotent, schema_migrations-tracked — confirms PR-A's sc
 pnpm db:seed       # additive; prints "📋 FG-3 test case document ids (FLEETGRAPH.MD Test Cases 1-4)"
                    # with the real ids for THIS database on success.
 ```
-Then copy that printed block into the Test Cases table's `Trace Link` column below, replacing
-`Pending` — against `ship-db`'s ids, not this worktree's local scratch database's. Not done here: no
-`DATABASE_URL` for the live `ship-db` was obtained (the temporary-allowlist step above was not
-run), consistent with treating this as a live-write action requiring sign-off rather than a
-read.
+**Done, 2026-08-04, with explicit human sign-off.** Pre-seed sanity check (257 documents / 11 users
+/ 0 `document_history` rows) confirmed this database's rows really were produced by this same seed
+script before running anything against it. `pnpm db:migrate` reported "All migrations already
+applied" (the `ship` redeploy above had already run it on boot). `pnpm db:seed` ran additively — see
+the Test Cases section above for exactly which fixtures resolved, which didn't, and why. The
+temporary `ipAllowList` PATCH was applied, the seed ran over the external connection string, and the
+allowlist was reset to `[]` immediately after — confirmed via a second `GET` on the postgres
+resource showing `ipAllowList: null` again.
 
 ---
 

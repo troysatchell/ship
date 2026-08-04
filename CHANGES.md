@@ -98,6 +98,51 @@ forward.
 
 ---
 
+## TRO-341 follow-up — all three deferred infra actions executed, with explicit human sign-off
+
+**What changed.** The three actions the ticket above deliberately stopped short of, all run this
+session with the user's explicit go-ahead on each:
+
+1. **`ship` redeployed.** `POST /v1/services/srv-d9kf2t942hec73aofrt0/deploys` → `dep-d9ouj9jl550s73feh900`
+   → `live`, commit `ef9d9c7`. Verified: `GET /api/change-feed` unauthenticated now `401` (route
+   present) not `404` (route absent); `last-modified` moved from `2026-07-30` to `2026-08-04`.
+   PR-A/PR-D are now live on the graded Ship. `auto_deploy`'s own root cause is still undiagnosed —
+   this was a manual trigger, not a fix to why it stopped firing.
+2. **The real `ship_api_token` wired into the live agent — via the Render REST API directly, not
+   `terraform apply`.** `terraform apply` failed both before and after adding `maintenance_mode` to
+   `agent_service.tf`'s `ignore_changes` (same fix pattern as `web_service.tf`'s existing
+   `pull_request_previews_enabled` entry): `could not update service: maintenance mode can only be
+   configured for non-free tier services` — a render-oss/render provider bug where `ignore_changes`
+   suppresses the plan *diff* but not what the provider sends in its actual API update payload.
+   Worked around with `PUT /v1/services/{id}/env-vars/SHIP_API_TOKEN` directly, then a manual
+   redeploy (`dep-d9ouuar7uimc73a8vrkg` → `live`) since an env-var PUT alone doesn't restart the
+   running process. Verified: `GET /health` → `200`, `GET /ready` → `200` against the live agent
+   with the real token. `agent_service.tf` still gained the `ignore_changes` addition since it's
+   correct regardless (matches `web_service.tf`'s precedent) — it just didn't fully solve this one
+   provider call.
+3. **`ship-db` seeded.** Pre-seed check confirmed 257 documents / 11 users / 0 `document_history`
+   rows, matching the documented snapshot exactly. Temporary `ipAllowList` PATCH → `pnpm db:migrate`
+   (no-op, already current) → `pnpm db:seed` → `ipAllowList` reset to `[]`, confirmed empty again
+   after. **One real gap found, not papered over:** Test Case 1's fixture never fired — its
+   precondition (an engineer with ≥3 non-done issues in whatever sprint resolves as "current" today)
+   wasn't met against this database's actual, six-days-drifted data, confirmed by reading
+   `seed.ts`'s guard directly rather than guessing from the missing log line. Test Case 3's fixture
+   ran but closed 0 issues instead of the 3 its own row requires, same root cause. Test Cases 2 and 4
+   resolved cleanly; their real document ids are now in FLEETGRAPH.MD's Test Cases section. Test
+   Case 1 stays `Pending` — genuinely unresolved, needs the fixture's sprint-selection logic
+   revisited, out of scope for a seeding pass.
+
+**How to run it.** N/A — these were one-time live-infrastructure actions, not a repeatable local
+command. FLEETGRAPH.MD's "Deployment model" section has the full command sequence for each, updated
+in place with results.
+
+**How to roll it back.** Redeploys aren't revertible as such (redeploying an older commit would
+require another `POST .../deploys` with `git checkout` first). The token PUT can be reverted by
+minting a fresh token and repeating the PUT. The seed is additive and self-gating — nothing to roll
+back short of manually deleting the specific rows it created (ids listed above / in FLEETGRAPH.MD).
+
+---
+
 ## TRO-316 — [FG-11] Terraform for the agent service — Render docker web service, `/health` health-check-gated deploy, plan captured and annotated
 
 **Part of bundle `TRO-326` ([PR-B] EPIC: Agent service foundation) — third and final sub-issue** on
