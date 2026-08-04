@@ -42,6 +42,15 @@ const AGENT_API_BASE_URL = process.env.AGENT_API_BASE_URL || 'http://localhost:3
 // ticket prohibits, so it is bounded, not open-ended.
 const AGENT_CHAT_TIMEOUT_MS = 30_000;
 
+// Upper bound on a single question. `express.json()` (app.ts) already caps
+// the whole request body, but that limit is generous enough to admit a
+// question far larger than any real user would type — and every character
+// here becomes input tokens on a paid model call (FLEETGRAPH.MD's own cost
+// analysis: on-demand answers are already 64% of projected spend). Matches
+// the corresponding OpenAPI schema's `question.max()`
+// (api/src/openapi/schemas/agent.ts) — keep both in sync.
+const MAX_QUESTION_LENGTH = 4000;
+
 interface AgentChatSuccessBody {
   output: string;
   citedSources: Array<{ documentId: string; documentType: string; title: string; reason: string }>;
@@ -70,6 +79,11 @@ router.post('/chat', authMiddleware, authed(async (req, res) => {
     res.status(400).json({ error: 'question is required' });
     return;
   }
+  const trimmedQuestion = question.trim();
+  if (trimmedQuestion.length > MAX_QUESTION_LENGTH) {
+    res.status(400).json({ error: `question must be ${MAX_QUESTION_LENGTH} characters or fewer` });
+    return;
+  }
 
   const internalSecret = process.env.AGENT_INTERNAL_SECRET;
   if (!internalSecret) {
@@ -88,7 +102,7 @@ router.post('/chat', authMiddleware, authed(async (req, res) => {
         'Content-Type': 'application/json',
         'X-Internal-Secret': internalSecret,
       },
-      body: JSON.stringify({ seedDocumentId, question, askingUserId: req.userId }),
+      body: JSON.stringify({ seedDocumentId, question: trimmedQuestion, askingUserId: req.userId }),
       signal: controller.signal,
     });
 

@@ -11930,7 +11930,8 @@
                   },
                   "question": {
                     "type": "string",
-                    "minLength": 1
+                    "minLength": 1,
+                    "maxLength": 4000
                   }
                 },
                 "required": [
@@ -11953,7 +11954,13 @@
             }
           },
           "400": {
-            "description": "Missing seedDocumentId or question"
+            "description": "Missing seedDocumentId or question, or question exceeds the max length"
+          },
+          "401": {
+            "description": "No valid session — the browser must be signed in (authMiddleware)"
+          },
+          "403": {
+            "description": "CSRF token missing or invalid for a session-cookie request (conditionalCsrf)"
           },
           "502": {
             "description": "The agent service is unreachable, timed out, or returned an error"

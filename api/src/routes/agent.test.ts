@@ -124,6 +124,17 @@ describe('POST /api/agent/chat (TRO-320 / FG-9)', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
+  it('returns 400 when question exceeds the max length, and never calls the agent', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch')
+    const res = await request(app)
+      .post('/api/agent/chat')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ seedDocumentId: VALID_BODY.seedDocumentId, question: 'x'.repeat(4001) })
+    expect(res.status).toBe(400)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('returns 503 and never calls the agent when AGENT_INTERNAL_SECRET is not configured on this side', async () => {
     delete process.env.AGENT_INTERNAL_SECRET
     const fetchSpy = vi.spyOn(global, 'fetch')

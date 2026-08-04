@@ -42,8 +42,17 @@ registry.registerPath({
       content: {
         'application/json': {
           schema: z.object({
+            // Ship document ids are genuinely UUIDs (schema.sql: `documents.id
+            // UUID`), so this documents the real contract. The route's own
+            // runtime check (api/src/routes/agent.ts) is deliberately looser
+            // — a non-empty string, not a UUID-format regex — because a
+            // malformed id fails downstream (the agent's own document fetch
+            // 404s) rather than being a security or correctness gap; adding
+            // duplicate UUID-format validation here would only catch what
+            // that 404 already catches.
             seedDocumentId: UuidSchema.openapi({ description: 'The document open when the question was asked. Seeds, but does not fence, the expansion walk.' }),
-            question: z.string().min(1),
+            // Matches MAX_QUESTION_LENGTH in api/src/routes/agent.ts — keep both in sync.
+            question: z.string().min(1).max(4000),
           }),
         },
       },
@@ -55,7 +64,13 @@ registry.registerPath({
       content: { 'application/json': { schema: AgentChatResponseSchema } },
     },
     400: {
-      description: 'Missing seedDocumentId or question',
+      description: 'Missing seedDocumentId or question, or question exceeds the max length',
+    },
+    401: {
+      description: 'No valid session — the browser must be signed in (authMiddleware)',
+    },
+    403: {
+      description: 'CSRF token missing or invalid for a session-cookie request (conditionalCsrf)',
     },
     503: {
       description: 'The agent is not configured — AGENT_INTERNAL_SECRET is unset on this side, so no request was sent',
