@@ -64,6 +64,52 @@ export const inboxKeys = {
   all: ['agent-inbox'] as const,
 };
 
+// Defense-in-depth shape validation on an already-validated boundary:
+// api/src/routes/agent.ts's GET /inbox handler already runs
+// isAgentInboxSuccessBody (and its own per-field isAgentInboxItem /
+// isAgentInboxEvidence / isAgentInboxAction checks) over the agent service's
+// response before ever relaying it to the browser, so a malformed item
+// cannot actually reach this hook today. Still worth doing cheaply on this
+// side too, mirroring that same field-by-field discipline rather than
+// trusting `res.json()`'s inferred shape blindly — this file has no
+// build-time dependency on api/'s types (same posture agent.ts itself takes
+// on agent/'s InboxItemType), so the check is duplicated, not imported.
+function isInboxItemEvidence(value: unknown): value is InboxItemEvidence {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    (v.documentId === undefined || typeof v.documentId === 'string') &&
+    (v.documentType === undefined || typeof v.documentType === 'string') &&
+    (v.commentId === undefined || typeof v.commentId === 'string')
+  );
+}
+
+function isInboxItemAction(value: unknown): value is InboxItemAction {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.label === 'string' && typeof v.href === 'string';
+}
+
+function isInboxItem(value: unknown): value is InboxItem {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.id === 'string' &&
+    (v.type === 'mention' || v.type === 'blocking_approval' || v.type === 'standup_draft') &&
+    typeof v.summary === 'string' &&
+    isInboxItemEvidence(v.evidence) &&
+    isInboxItemAction(v.action) &&
+    (v.blockedCount === undefined || typeof v.blockedCount === 'number') &&
+    (v.blockedSince === undefined || typeof v.blockedSince === 'string')
+  );
+}
+
+function isInboxSuccessBody(value: unknown): value is { items: InboxItem[] } {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return Array.isArray(v.items) && v.items.every(isInboxItem);
+}
+
 export function useInboxQuery() {
   return useQuery<InboxQueryResult>({
     queryKey: inboxKeys.all,
@@ -76,7 +122,10 @@ export function useInboxQuery() {
         if (!res.ok) {
           return { status: 'degraded', message: UNREACHABLE_MESSAGE };
         }
-        const data = (await res.json()) as { items: InboxItem[] };
+        const data: unknown = await res.json();
+        if (!isInboxSuccessBody(data)) {
+          return { status: 'degraded', message: UNREACHABLE_MESSAGE };
+        }
         return { status: 'ok', items: data.items };
       } catch {
         return { status: 'degraded', message: UNREACHABLE_MESSAGE };
