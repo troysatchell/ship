@@ -57,12 +57,29 @@ interface AgentChatSuccessBody {
   expansionCapped: boolean;
 }
 
+function isCitedSource(value: unknown): value is AgentChatSuccessBody['citedSources'][number] {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    typeof v.documentId === 'string' &&
+    typeof v.documentType === 'string' &&
+    typeof v.title === 'string' &&
+    typeof v.reason === 'string'
+  );
+}
+
+// The response this validates crosses a trust boundary (the agent service,
+// even though it's ours) — a shallow `Array.isArray` check on citedSources
+// alone would let a malformed element (missing `reason`, wrong type) through
+// to the browser, where the chat panel renders `source.reason` directly.
+// Every element is validated, not just the array's own shape.
 function isAgentChatSuccessBody(value: unknown): value is AgentChatSuccessBody {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   return (
     typeof v.output === 'string' &&
     Array.isArray(v.citedSources) &&
+    v.citedSources.every(isCitedSource) &&
     typeof v.expansionCapped === 'boolean'
   );
 }

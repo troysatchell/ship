@@ -186,6 +186,26 @@ describe('POST /api/agent/chat (TRO-320 / FG-9)', () => {
     expect(res.body).toEqual(agentBody)
   })
 
+  it('degrades to a clean 502 when the agent returns 200 with a malformed citedSources element (crosses the trust boundary, so every element is validated)', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({
+        output: 'some answer',
+        // Missing `reason` — the chat panel renders this field directly.
+        citedSources: [{ documentId: 'd1', documentType: 'issue', title: 'X' }],
+        expansionCapped: false,
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    )
+
+    const res = await request(app)
+      .post('/api/agent/chat')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send(VALID_BODY)
+
+    expect(res.status).toBe(502)
+    expect(res.body.error).toBe('agent_unavailable')
+  })
+
   it('degrades to a clean 502 (never the agent\'s raw body) when the agent responds with a non-OK status', async () => {
     vi.spyOn(global, 'fetch').mockResolvedValue(
       new Response('Internal Server Error', { status: 500 })
