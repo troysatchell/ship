@@ -281,3 +281,29 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   branch gating against `main` kept running the weaker checker. Found because an agent reconciled a
   contradiction — the orchestrator reported 2 violations, the agent's own run said `clean` — instead
   of assuming one side was wrong. **When two runs of the same check disagree, diff the checkers.**
+- 2026-08-03 (TRO-325/PR-A merge) — **`gh pr checks <n>` right after a push can report the PREVIOUS
+  head commit's results, not the new one's.** Pushed an update, polled `gh pr checks 110` in a loop
+  until every check showed non-pending, then ran `gh pr merge` — GitHub rejected it: "the base branch
+  policy prohibits the merge." `gh pr view --json mergeStateStatus` said `BLOCKED`; direct check on
+  the actual head SHA (`gh api .../commits/<headSha>/check-runs`) showed `typecheck · build · unit
+  tests` still `in_progress` — a fresh run had started for the new push, but `gh pr checks` was still
+  serving the prior commit's already-`success` result for that same check name, satisfying the
+  polling loop's "no pending" condition on stale data. GitHub's own branch-protection check was what
+  actually caught this, not the orchestrator. **After any push mid-PR, poll `gh api
+  repos/.../commits/<exact-head-sha>/check-runs` (or at minimum confirm `headRefOid` in `gh pr view
+  --json headRefOid` matches the SHA you just pushed) instead of trusting `gh pr checks` alone** —
+  it's fine once the run has visibly re-triggered, but not to be trusted in the first few seconds
+  after a push.
+- 2026-08-04 (TRO-326/PR-B) — **After `git merge main` picks up a sibling bundle's new migrations,
+  `pnpm install` is not enough — the worktree's OWN database needs `pnpm exec tsx
+  src/db/migrate.ts` run against it too.** Merged PR-A's main (which added migrations 040/041) into
+  PR-B's branch; `gate.sh` failed with `tests:api` — 0/2 passed standalone, confirmed real, not the
+  load-flake class. Both failures were exactly PR-A's own new test files
+  (`association-cycle-protection.test.ts`, `blocks-relationship.test.ts`), which the merge brought
+  in as source but whose migrations had never touched *this* worktree's database — each worktree
+  gets its own isolated database at provision time (`worktree.sh`), so a sibling bundle merging new
+  migrations into `main` doesn't propagate to a database that already existed before that merge.
+  Running `migrate.ts` (idempotent, only applies what's missing) fixed it immediately; `gate.sh` went
+  from `fail` to `pass` with no code change. **Whenever a merge from `main` brings in files under
+  `api/src/db/migrations/`, re-run migrate before re-trusting the gate** — `pnpm install` only
+  refreshes `node_modules`, never touches a database.
