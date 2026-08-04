@@ -23,10 +23,24 @@ async function main() {
     process.exitCode = 1;
     return;
   }
-  if (process.env.LANGCHAIN_TRACING_V2 !== 'true') {
-    console.warn(
-      'LANGCHAIN_TRACING_V2 is not "true" — this invocation will NOT produce a LangSmith trace.'
+
+  // This script's entire purpose is the trace-link proof — a live call that
+  // produces no trace is worse than useless (it still spends real money).
+  // Both prerequisites must hold, or the paid call never happens: tracing
+  // must be exactly "true" (not merely truthy), and a LangSmith API key must
+  // be set under either the current or legacy env var name (both accepted
+  // by @langchain/core / langsmith — see agent/.env.example).
+  const tracingEnabled = process.env.LANGCHAIN_TRACING_V2 === 'true';
+  const langsmithApiKey = process.env.LANGCHAIN_API_KEY ?? process.env.LANGSMITH_API_KEY;
+  if (!tracingEnabled || !langsmithApiKey) {
+    console.error(
+      'Refusing to make a live (paid) model call: this script only exists to produce a ' +
+        'LangSmith trace-link proof, and tracing is not fully configured.' +
+        (!tracingEnabled ? ' LANGCHAIN_TRACING_V2 is not exactly "true".' : '') +
+        (!langsmithApiKey ? ' Neither LANGCHAIN_API_KEY nor LANGSMITH_API_KEY is set.' : '')
     );
+    process.exitCode = 1;
+    return;
   }
 
   const model = new ChatAnthropic({
