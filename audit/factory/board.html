@@ -119,21 +119,51 @@
 <div class="wrap">
   <header>
     <h1>Ship Factory</h1>
-    <span class="stamp">main@01c8582 · Fri, 31 Jul 2026 19:21:41 GMT</span>
+    <span class="stamp">main@0db1fd0 · Tue, 04 Aug 2026 01:54:59 GMT</span>
   </header>
 
   <div class="strip">
-    <div class="cell"><span class="k">In flight</span><span class="v">0</span></div>
+    <div class="cell"><span class="k">In flight</span><span class="v">2</span></div>
     <div class="cell"><span class="k">Open PRs</span><span class="v">0</span></div>
     <div class="cell"><span class="k">First-attempt pass</span>
       <span class="v ">14/24</span></div>
     <div class="cell"><span class="k">Spend (est.)</span>
-      <span class="v">$1405</span></div>
+      <span class="v">$2128</span></div>
   </div>
 
   <section class="panel">
     <h2>In flight</h2>
-    <ul><li class="empty">No ticket worktrees provisioned. The factory is idle.</li></ul>
+    <ul>
+  <li class="row ok">
+    <div class="row-head">
+      <span class="title">pr a ship api foundations</span>
+      <span class="tkt">TRO-325</span>
+      <span class="verdict">gate pass</span>
+      <span class="commits">0 commits</span>
+    </div>
+    <div class="live">last commit: Merge branch &#39;main&#39; into feat/pr-a-ship-api-foundations</div>
+    <div class="row-meta">
+      <span>feat/pr-a-ship-api-foundations</span>
+      <span>db ship_wt_tro_325</span>
+      <span>api :3633</span>
+      <span>web :5806</span>
+    </div>
+  </li>
+  <li class="row ok">
+    <div class="row-head">
+      <span class="title">pr b agent service foundation</span>
+      <span class="tkt">TRO-326</span>
+      <span class="verdict">gate pass</span>
+      <span class="commits">0 commits</span>
+    </div>
+    <div class="live">last commit: fix(deps): close 4 new advisories from agent/&#39;s langsmith transitive dep</div>
+    <div class="row-meta">
+      <span>feat/pr-b-agent-service-foundation</span>
+      <span>db ship_wt_tro_326</span>
+      <span>api :3698</span>
+      <span>web :5871</span>
+    </div>
+  </li></ul>
   </section>
 
   <section class="panel">
@@ -169,19 +199,23 @@
   <p class="basis">List-rate estimate over observed token counts — <strong>not billed spend</strong>.
      On a subscription plan the marginal cost is zero and this is API-equivalent value.</p>
   <div class="tokens">
-    <div><span class="k">output</span><span class="v">9,699,009</span></div>
-    <div><span class="k">cache write</span><span class="v">49,614,301</span></div>
-    <div><span class="k">cache read</span><span class="v">2,078,794,968</span></div>
-    <div><span class="k">raw input</span><span class="v">35,651</span></div>
+    <div><span class="k">output</span><span class="v">14,430,573</span></div>
+    <div><span class="k">cache write</span><span class="v">72,290,030</span></div>
+    <div><span class="k">cache read</span><span class="v">3,647,833,956</span></div>
+    <div><span class="k">raw input</span><span class="v">67,444</span></div>
   </div>
   <div class="cachebar" role="img"
-       aria-label="97 percent of token volume is cache reads">
-    <div class="fill" style="width:97.2%"></div>
+       aria-label="98 percent of token volume is cache reads">
+    <div class="fill" style="width:97.7%"></div>
   </div>
-  <p class="note">97% of all token volume is cache reads, billed at one tenth
+  <p class="note">98% of all token volume is cache reads, billed at one tenth
      the input rate. The economics of this workflow are prompt-cache economics.</p>
 </section>
   
+<section class="panel annunciator">
+  <h2>Attention</h2>
+  <ul class="warn"><li>TRO-325: worktree provisioned but no commits yet</li><li>TRO-326: worktree provisioned but no commits yet</li></ul>
+</section>
 
   <footer>
     Snapshot, not a live feed — regenerate with <code>node scripts/factory/board.mjs</code> and
