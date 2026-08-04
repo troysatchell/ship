@@ -336,7 +336,13 @@ scales.
 
 ### Deployment model
 
-Partially settled.
+**Settled (TRO-341 / FG-23).** Topology: **Ship-on-Render (`https://ship-rr6m.onrender.com`) +
+agent-on-Render (`https://ship-agent-t0zy.onrender.com`, current URL — see the redeploy note below,
+it changes on every clean-machine `apply`) + the Render Postgres `ship-db`
+(`dpg-d9kgth6417fc7386hhh0-a`) as the graded database.** This is the ticket's own recommended
+default, adopted without deviation: no AWS credentials have existed in this environment all sprint
+(re-verified this ticket: no `aws` CLI, no `AWS_*` env vars), so the AWS stack was never a live
+option to weigh against it.
 
 **Authentication does not expire.** Ship's session timeouts — fifteen minutes idle, twelve hours
 absolute — apply only to browser sessions. API tokens are handled first and bypass that logic;
@@ -350,19 +356,59 @@ running as them is what makes that safe by construction. **It can reach anything
 and nothing you could not.**
 
 **Private documents are currently hypothetical.** All 523 documents are workspace-visible and none
-are private. The risk is real in the schema and absent from the data.
+are private. The risk is real in the schema and absent from the data. That count is the local
+development database's; the graded `ship-db` is a **separate, smaller** dataset — 257 documents as
+of its last verified snapshot (`memory-bank/techContext.md`, 2026-07-28) — and does not
+automatically track a local worktree's seed. Closing that gap for the Test Case fixtures
+specifically is this ticket's seeding-plan section below.
 
 **Network path.** Production traffic must go through the content delivery network; the load
 balancer accepts nothing else.
 
-**Terraform, `/health` + `/ready`: done (TRO-313, TRO-315, TRO-316).** `agent/` is a Render docker
-web service (`terraform/render/agent_service.tf`), deployed in the same Render root as `ship`
-itself — target platform is Render, not AWS, because no AWS credentials have existed in this
-environment all sprint (verified again while building this: no `aws` CLI, no `AWS_*` env vars).
-`terraform plan` was captured and annotated (`terraform/render/plan/tro-316-agent-plan-annotated.md`);
-`terraform apply` and the destroy-and-redeploy proof are the one deliberately-undone piece,
-pending human confirmation per this repo's escalation policy (irreversible/outward-facing
-infrastructure actions require confirmation every time, no standing approval).
+**Terraform, `/health` + `/ready`: done, including `apply` (TRO-313, TRO-315, TRO-316).** `agent/`
+is a Render docker web service (`terraform/render/agent_service.tf`), deployed in the same Render
+root as `ship` itself — target platform is Render, not AWS, per the standing no-AWS-credentials
+fact above. `terraform apply` and a full destroy-and-redeploy proof both ran on 2026-08-04 with
+explicit human sign-off, scoped only to the new agent service
+(`terraform/render/plan/tro-316-destroy-redeploy-proof.md`): create → verified `/health`/`/ready`
+200 → targeted `destroy` of the agent alone (verified `ship`/`ship-db` untouched) → re-`apply` from
+config alone, no import → verified `/health`/`/ready` 200 again on the newly generated URL. **One
+piece that proof deliberately left open, now closed by this ticket:** `SHIP_API_TOKEN` was applied
+as a placeholder string; a real per-user token has since been minted (see "Login and the 403" below)
+and is staged in a gitignored `terraform/render/terraform.tfvars` for a human to fold into the
+next `apply` — not applied by this ticket, per its own stop conditions.
+
+**Confirmed (not assumed): which branch Render deploys, and whether merged code actually reaches
+it.** `git_branch` defaults to `"main"` in `variables.tf` for both services, and the live
+`terraform.tfstate` (main checkout, refreshed 2026-08-04) matches: both `render_web_service.ship`
+and `render_web_service.agent` show `runtime_source.docker.branch = "main"`,
+`auto_deploy = true`. Cross-checked directly against the Render API
+(`GET /v1/services/srv-d9kf2t942hec73aofrt0`): `autoDeploy: yes`, `branch: main` — config is
+correct. **But the live `ship` service has not actually redeployed since 2026-07-30**, observed
+three independent ways: (1) `GET /v1/services/.../deploys` and `.../events` list the last
+`deploy_ended`/`succeeded` at `2026-07-30T22:00:22Z`, commit `09a6895a` ("...ALB SG locked to
+CloudFront..."), triggered by an API call (this repo's own TF-10 verification session) — zero
+deploy events of any kind since, despite `main` receiving PR-A (`2f198f6`, 2026-08-03 20:07 EDT)
+and PR-B (`0db1fd0`, 2026-08-03 21:54 EDT) in the interim; (2) `GET /` on the live service returns
+`last-modified: Thu, 30 Jul 2026 21:59:21 GMT` on its static asset, consistent with the same stale
+build; (3) `GET /api/change-feed` (a PR-A route, `api/src/app.ts:401`) returns a bare `404 Cannot
+GET`, not an auth error — the route itself is absent from what's running. **So PR-A's change feed
+and `blocks` endpoints, and PR-D's UI surfaces, are not yet live on the graded Ship**, despite both
+being on `main` and despite `auto_deploy` being correctly configured — auto-deploy is not firing.
+Root cause not fully diagnosed: `gh api repos/troysatchell/ship/hooks` returns `[]` (no classic
+webhooks), which is suggestive but not conclusive, since Render's GitHub integration commonly runs
+through a GitHub App installation rather than a classic repo webhook, and this session's `gh` token
+cannot list App installations to check that directly. **Remediation is a single Render API call —
+not run by this ticket, live-infra action, flagged for the orchestrator:**
+```bash
+curl -X POST https://api.render.com/v1/services/srv-d9kf2t942hec73aofrt0/deploys \
+  -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
+```
+This triggers a deploy of the service's configured branch (`main`) HEAD — equivalent to what
+`auto_deploy` should already be doing on every push. Confirm after with `GET .../deploys?limit=1`
+(expect `status: "live"`, a `createdAt` after this call, `commit.id` matching current `main`) and
+`GET /api/change-feed` (expect no longer a bare 404 once the new code is live and reachable with
+auth).
 
 **Rollback trigger and procedure.** Two layers, neither of which is a bespoke script:
 1. **CI gates merge, not just deploy.** `.github/workflows/ci.yml`'s own header states it is "the
@@ -388,6 +434,80 @@ infrastructure actions require confirmation every time, no standing approval).
    receives traffic today. `/ready` can also legitimately be false on a healthy, freshly-promoted
    instance if Ship itself is briefly down, and that specific case must not be read as "the deploy
    failed."
+
+**Login and the 403 (TRO-341 / FG-23) — root-caused, not a WAF.** Two prior curl attempts against
+`POST https://ship-rr6m.onrender.com/api/auth/login` returned a platform-looking `403 Forbidden` —
+generic HTML body, `ratelimit-*` headers, `server: cloudflare`. Reproduced directly and traced to
+source, not guessed: the `ratelimit-*` headers are `loginLimiter`'s own (`api/src/app.ts:88-101`,
+`5;w=900` matches exactly), and `app.use('/api/auth', conditionalCsrf, authRoutes)`
+(`api/src/app.ts:371`) applies CSRF protection to **every** `/api/auth/*` route, login included, for
+any request that isn't already carrying a `Bearer` token (`conditionalCsrf`, `app.ts:64-71`). A bare
+POST with no prior `GET /api/csrf-token` (which sets the session cookie the sync check needs) fails
+that check; `csrf-sync` throws with no route-local handler to catch it, so the error falls through
+to Express's default `finalhandler`, which is exactly where the generic `<pre>Forbidden</pre>` HTML
+comes from — not a Cloudflare/Render edge rule. `cloudflare`/`cf-ray` headers appear on **every**
+response from this host, 200 or 403 alike (verified) — present, but not the actor. Proven by fixing
+it: `GET /api/csrf-token` with a cookie jar → `POST /api/auth/login` with that cookie plus
+`x-csrf-token: <token>` → `200`, real session, `dev@ship.local` (`isSuperAdmin: true`). A real
+per-user API token was then minted through that session (`POST /api/api-tokens`,
+`api/src/routes/api-tokens.ts`), name `fleetgraph-agent-tro-341`, no expiry, and verified working via
+`Authorization: Bearer` against both a plain route (`/api/auth/me`) and a `conditionalCsrf`-guarded
+one (`/api/documents` — Bearer correctly bypasses CSRF, `app.ts:66-68`). The raw value is not in this
+file or in git: it's in a gitignored `terraform/render/terraform.tfvars` in the FG-23 worktree,
+already the target location for `agent_service.tf`'s `var.ship_api_token` (`variables.tf:208-218`),
+waiting to be folded into the checked-out root's real `terraform.tfvars` and applied per the
+Terraform paragraph above.
+
+**Seeding the graded database with FG-3's fixture states (TRO-341 / FG-23) — plan, not executed.**
+`api/src/db/seed.ts`'s FG-3 block (`TRO-314`, merged to `main` 2026-08-03) is additive and
+self-gating: it checks `COUNT(*) FROM document_history` for the workspace first and no-ops if
+non-zero (`seed.ts:1262-1271`), same as every other block in the file ("already exists" checks
+before every insert) — this is what makes re-running the full `pnpm db:seed` against an
+already-seeded database safe rather than a duplicate-everything risk, *provided* the target
+database's existing rows were themselves produced by this same seed script, which `ship-db` is
+(`memory-bank/techContext.md`: seeded 2026-07-28, 257 documents, 11 users, 1 workspace — the same
+shapes `seed.ts` checks for). Two things stand between "safe in principle" and "runnable today":
+
+1. **`ship-db` has no public network path.** `ipAllowList` is unset (verified in
+   `terraform/render/plan/tro-316-agent-plan-annotated.md`'s import notes and re-confirmed by the
+   provider default) — "no IP addresses provided ⇒ private-network connections only." Reaching it
+   from outside Render requires the documented temporary-allowlist pattern
+   (`memory-bank/techContext.md:139-146`):
+   ```bash
+   curl -X PATCH https://api.render.com/v1/postgres/dpg-d9kgth6417fc7386hhh0-a \
+     -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
+     -d '{"ipAllowList":[{"cidrBlock":"<your-ip>/32","description":"temporary-fg23-seed"}]}'
+   # ...seed run below...  then immediately reset:
+   curl -X PATCH https://api.render.com/v1/postgres/dpg-d9kgth6417fc7386hhh0-a \
+     -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
+     -d '{"ipAllowList":[]}'
+   ```
+2. **Migrating/seeding against Render needs `NODE_ENV=production`** — that's the branch that turns
+   on SSL in `migrate.ts`/`seed.ts`, and requires `SESSION_SECRET` set or `app.ts` throws on boot
+   (`memory-bank/techContext.md:148`). The SSM fallback (`TRO-243`) is what lets that path work off
+   AWS.
+
+Full sequence, ready to run, **not run by this ticket** (writes to the live graded database — this
+ticket's own stop condition):
+```bash
+# 1. Get the external connection string (dashboard, or GET /v1/postgres/{id}/connection-info)
+#    after the temporary ipAllowList PATCH above has taken effect.
+export DATABASE_URL="<ship-db external connection string>"
+export NODE_ENV=production
+export SESSION_SECRET="<same value already in terraform.tfvars — required for app.ts's boot check
+                         even though seed.ts itself is the only thing actually running>"
+pnpm db:migrate   # idempotent, schema_migrations-tracked — confirms PR-A's schema is present;
+                   # likely a no-op today since the live `ship` service's own boot command already
+                   # runs `node dist/db/migrate.js` on every deploy (Dockerfile:75), but the pending
+                   # deploy above hasn't happened yet, so this is the one path that's certain either way.
+pnpm db:seed       # additive; prints "📋 FG-3 test case document ids (FLEETGRAPH.MD Test Cases 1-4)"
+                   # with the real ids for THIS database on success.
+```
+Then copy that printed block into the Test Cases table's `Trace Link` column below, replacing
+`Pending` — against `ship-db`'s ids, not this worktree's local scratch database's. Not done here: no
+`DATABASE_URL` for the live `ship-db` was obtained (the temporary-allowlist step above was not
+run), consistent with treating this as a live-write action requiring sign-off rather than a
+read.
 
 ---
 

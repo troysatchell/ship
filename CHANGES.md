@@ -21,6 +21,83 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-341 — [FG-23] The graded demo's environment — topology named, deploy gap found, 403 root-caused, real token minted
+
+**What was missing.** Nobody owned the environment the grader actually touches. FG-3 (TRO-314)
+seeds a local scratch database; FG-11 (TRO-316)'s scope was the agent service alone. Nothing named
+which Ship the deployed agent points at, whether merged code actually reaches it, or how FG-3's
+fixture states get into that database rather than a developer's local one.
+
+**Topology — settled, matching this ticket's own recommendation, no deviation.** Ship-on-Render
+(`ship-rr6m.onrender.com`) + agent-on-Render (`ship-agent-t0zy.onrender.com`, current URL) + the
+Render Postgres `ship-db` as the graded database. No AWS credentials have existed in this
+environment all sprint (re-verified: no `aws` CLI, no `AWS_*` env vars), so there was never a
+competing option to weigh.
+
+**Finding #1 — the live `ship` service has not redeployed since 2026-07-30, despite `auto_deploy`
+being correctly configured for `main`.** PR-A (merged `2f198f6`, 2026-08-03 20:07 EDT) and PR-B
+(merged `0db1fd0`, 2026-08-03 21:54 EDT) are both on `main`; neither has reached
+`ship-rr6m.onrender.com`. Verified three ways, not inferred from one: Render's own
+`/deploys`/`/events` API shows the last successful deploy at `2026-07-30T22:00:22Z` (commit
+`09a6895a`) and zero deploy events since; the live `GET /`'s `last-modified` header matches that
+same date; `GET /api/change-feed` (a PR-A route) returns a bare `404`, not an auth error — the code
+isn't running, not merely unreachable. `GET /v1/services/{id}` confirms `autoDeploy: yes,
+branch: main` — the config is right, the trigger isn't firing. Root cause not fully diagnosed
+(`gh api repos/troysatchell/ship/hooks` returns `[]`, suggestive but not conclusive since Render
+commonly integrates via a GitHub App rather than a classic webhook, and this session's `gh` token
+can't list App installations). **Remediation is a single Render API call
+(`POST /v1/services/{id}/deploys`) — not run by this ticket**, flagged for the orchestrator; see
+FLEETGRAPH.MD "Deployment model" for the exact command and how to confirm it worked.
+
+**Finding #2 — the reported login `403 Forbidden` root-caused: application CSRF protection, not a
+WAF.** Two prior curl attempts against `POST /api/auth/login` returned a platform-looking `403`
+(generic HTML, `ratelimit-*` headers, `server: cloudflare`). Traced to source: `ratelimit-*` is
+`loginLimiter`'s own headers (`api/src/app.ts:88-101`); `app.use('/api/auth', conditionalCsrf,
+authRoutes)` (`app.ts:371`) applies CSRF sync protection to login itself for any non-`Bearer`
+request, and an uncaught `csrf-sync` rejection falls through to Express's default `finalhandler` —
+that's where the generic `<pre>Forbidden</pre>` body comes from. Cloudflare/Render headers are
+present on every response from this host, 200 or 403 alike (verified) — infrastructure, not the
+actor. Proven by fixing it: `GET /api/csrf-token` (cookie) → `POST /api/auth/login` (that cookie +
+`x-csrf-token`) → `200`, real `dev@ship.local` session. No code change — this is expected CSRF
+behavior working as designed against a client that skips the handshake, not a bug.
+
+**A real per-user API token was minted** through that session (`POST /api/api-tokens`, name
+`fleetgraph-agent-tro-341`, no expiry) and verified working via `Authorization: Bearer` against
+both a plain route and a `conditionalCsrf`-guarded one. The raw value is not in this repo's history:
+it lives in a gitignored `terraform/render/terraform.tfvars` in the FG-23 worktree, staged for a
+human to fold into the real `terraform.tfvars` and apply — not applied by this ticket.
+
+**What changed.** `FLEETGRAPH.MD` "Deployment model" — topology named explicitly; the stale
+"`terraform apply` ... pending" language corrected to reflect TRO-316's now-completed
+destroy-and-redeploy proof; two new subsections ("Confirmed: which branch Render deploys, and
+whether merged code actually reaches it" and "Login and the 403") plus a full seeding-plan
+subsection with exact, not-yet-run commands for getting FG-3's fixture states into `ship-db`
+(temporary `ipAllowList` PATCH, `NODE_ENV=production` requirement, `pnpm db:migrate && pnpm
+db:seed`, and where the resulting Test Case document ids get recorded).
+
+**Deliberately NOT done, per this ticket's own stop conditions (live production/graded
+infrastructure, explicit human sign-off required):**
+- `pnpm db:seed` was not run against `ship-db` — the fixture states described in FLEETGRAPH.MD's
+  Test Cases table are not yet in the graded database, and its `Trace Link` column still reads
+  `Pending`, honestly, because they still are.
+- `terraform apply` was not run — the real `ship_api_token` is minted and staged, not wired into
+  the live agent's environment.
+- The redeploy of `ship` (Finding #1's remediation) was not triggered — PR-A/PR-D are on `main` but
+  not yet live.
+
+**How to run it.** Nothing to run — this ticket's committed change is documentation
+(`FLEETGRAPH.MD`) plus this entry. The three deliberately-undone actions above are each a single
+command, captured in full in FLEETGRAPH.MD's "Deployment model", ready for the orchestrator to run
+or explicitly bless.
+
+**How to roll it back.** Revert this commit — it only touches `FLEETGRAPH.MD` and `CHANGES.md`, no
+application or infrastructure code. The minted API token is a live side effect independent of git:
+revoking it is `DELETE /api/api-tokens/{id}` against `ship-rr6m.onrender.com` (token id
+`54a7fb2d-94f3-4619-8c93-8fa7512d059b`), or via the admin UI, if the token should not be used going
+forward.
+
+---
+
 ## TRO-316 — [FG-11] Terraform for the agent service — Render docker web service, `/health` health-check-gated deploy, plan captured and annotated
 
 **Part of bundle `TRO-326` ([PR-B] EPIC: Agent service foundation) — third and final sub-issue** on
