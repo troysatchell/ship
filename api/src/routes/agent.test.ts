@@ -3,6 +3,7 @@ import request from 'supertest'
 import crypto from 'crypto'
 import { createApp } from '../app.js'
 import { pool } from '../db/client.js'
+import { isAgentBaseUrlSecure } from './agent.js'
 
 /**
  * Regression tests for TRO-320 / FG-9: the chat panel's proxy route.
@@ -146,6 +147,51 @@ describe('POST /api/agent/chat (TRO-320 / FG-9)', () => {
     expect(res.status).toBe(503)
     expect(res.body.error).toBe('agent_not_configured')
     expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('returns 503 and never calls the agent when AGENT_API_BASE_URL is a non-loopback http: URL (CWE-319 — refuses to send X-Internal-Secret in cleartext, CodeRabbit PR #120)', async () => {
+    // AGENT_API_BASE_URL is a module-scope const resolved once at import —
+    // same reload pattern as GET /inbox's own path-preservation test.
+    const prevBaseUrl = process.env.AGENT_API_BASE_URL
+    process.env.AGENT_API_BASE_URL = 'http://agent.example.com'
+    vi.resetModules()
+    let freshApp: import('express').Express
+    try {
+      const { createApp: createFreshApp } = await import('../app.js')
+      freshApp = createFreshApp()
+    } finally {
+      if (prevBaseUrl === undefined) delete process.env.AGENT_API_BASE_URL
+      else process.env.AGENT_API_BASE_URL = prevBaseUrl
+    }
+
+    try {
+      // A fresh app instance has its own in-memory express-session store
+      // (app.ts: `session({...})` with no `store` configured), so the outer
+      // csrfToken/connect.sid pairing — minted against the ORIGINAL app —
+      // does not resolve here. Mint a fresh pairing against freshApp, the
+      // same way the outer beforeAll did. The bare `session_id=...` cookie
+      // is unaffected: that's Ship's own DB-backed auth session, looked up
+      // in the (real, shared) database, not held in any app instance's memory.
+      const bareSessionCookie = sessionCookie.split(';')[0] ?? sessionCookie
+      const freshCsrfRes = await request(freshApp).get('/api/csrf-token')
+      const freshCsrfToken = freshCsrfRes.body.token
+      const freshConnectSid = freshCsrfRes.headers['set-cookie']?.[0]?.split(';')[0] || ''
+      const combinedCookie = freshConnectSid ? `${bareSessionCookie}; ${freshConnectSid}` : bareSessionCookie
+
+      const fetchSpy = vi.spyOn(global, 'fetch')
+
+      const res = await request(freshApp)
+        .post('/api/agent/chat')
+        .set('Cookie', combinedCookie)
+        .set('x-csrf-token', freshCsrfToken)
+        .send(VALID_BODY)
+
+      expect(res.status).toBe(503)
+      expect(res.body.error).toBe('agent_not_configured')
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.resetModules()
+    }
   })
 
   it('forwards seedDocumentId/question plus the SESSION\'S OWN userId (never a client-supplied one) with the X-Internal-Secret header, and relays a 200 response verbatim', async () => {
@@ -427,5 +473,73 @@ describe('GET /api/agent/inbox (TRO-323 / FG-10)', () => {
 
     expect(res.status).toBe(502)
     expect(res.body.error).toBe('agent_unreachable')
+  })
+
+  it('returns 503 and never calls the agent when AGENT_API_BASE_URL is a non-loopback http: URL (CWE-319 — refuses to send X-Internal-Secret in cleartext, CodeRabbit PR #120)', async () => {
+    // AGENT_API_BASE_URL is a module-scope const resolved once at import —
+    // same reload pattern as the "preserves a path component" test above.
+    const prevBaseUrl = process.env.AGENT_API_BASE_URL
+    process.env.AGENT_API_BASE_URL = 'http://agent.example.com'
+    vi.resetModules()
+    let freshApp: import('express').Express
+    try {
+      const { createApp: createFreshApp } = await import('../app.js')
+      freshApp = createFreshApp()
+    } finally {
+      if (prevBaseUrl === undefined) delete process.env.AGENT_API_BASE_URL
+      else process.env.AGENT_API_BASE_URL = prevBaseUrl
+    }
+
+    try {
+      const fetchSpy = vi.spyOn(global, 'fetch')
+
+      // GET /inbox needs no CSRF pairing (conditionalCsrf only protects
+      // mutating methods) — reusing the outer, DB-backed sessionCookie
+      // against a fresh app instance is safe, exactly like the "preserves a
+      // path component" test above.
+      const res = await request(freshApp).get('/api/agent/inbox').set('Cookie', sessionCookie)
+
+      expect(res.status).toBe(503)
+      expect(res.body.error).toBe('agent_not_configured')
+      expect(fetchSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.resetModules()
+    }
+  })
+})
+
+describe('isAgentBaseUrlSecure (CWE-319, CodeRabbit PR #120)', () => {
+  /**
+   * Direct tests of the shared predicate both POST /chat and GET /inbox call
+   * before making their outbound fetch — cheaper than a module reload per
+   * case, and pins the exact hostname/scheme rules independently of either
+   * route's own integration tests above (which prove the predicate is
+   * actually wired in, not what it decides for a given URL).
+   */
+  it('rejects a non-loopback host over http:', () => {
+    expect(isAgentBaseUrlSecure('http://agent.example.com')).toBe(false)
+    expect(isAgentBaseUrlSecure('http://agent.example.com:3100')).toBe(false)
+    expect(isAgentBaseUrlSecure('http://10.0.0.5:3100')).toBe(false)
+  })
+
+  it('allows the loopback hostnames over http:', () => {
+    expect(isAgentBaseUrlSecure('http://localhost:3100')).toBe(true)
+    expect(isAgentBaseUrlSecure('http://127.0.0.1:3100')).toBe(true)
+    expect(isAgentBaseUrlSecure('http://[::1]:3100')).toBe(true)
+  })
+
+  it('allows any host over https: unconditionally', () => {
+    expect(isAgentBaseUrlSecure('https://agent.example.com')).toBe(true)
+    expect(isAgentBaseUrlSecure('https://10.0.0.5:3100')).toBe(true)
+    expect(isAgentBaseUrlSecure('https://localhost:3100')).toBe(true)
+  })
+
+  it('rejects an unparseable base URL rather than throwing', () => {
+    expect(() => isAgentBaseUrlSecure('not a url')).not.toThrow()
+    expect(isAgentBaseUrlSecure('not a url')).toBe(false)
+  })
+
+  it('rejects a non-http(s) scheme', () => {
+    expect(isAgentBaseUrlSecure('ftp://agent.example.com')).toBe(false)
   })
 })

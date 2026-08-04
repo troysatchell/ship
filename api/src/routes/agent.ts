@@ -45,6 +45,39 @@ const router: RouterType = Router();
 // module the way agent/src/config.ts does.
 const AGENT_API_BASE_URL = process.env.AGENT_API_BASE_URL || 'http://localhost:3100';
 
+// CWE-319 (cleartext transmission of a security-sensitive header): nothing
+// upstream stops AGENT_API_BASE_URL from being configured as a non-loopback
+// `http://` URL in a real deployment (it is read straight from process.env,
+// same house convention as CORS_ORIGIN above), which would send
+// X-Internal-Secret in cleartext over the network. Loopback http
+// (localhost/127.0.0.1/::1) is fine — that traffic never leaves the
+// machine, matching the default above and every existing dev/test setup.
+// `https:` is allowed unconditionally; any other `http:` host is rejected.
+// One shared check, called by both routes below before either ever makes
+// the outbound fetch. `URL#hostname` renders an IPv6 literal WITH its
+// brackets (`new URL('http://[::1]:3100').hostname === '[::1]'`, confirmed
+// directly against the WHATWG URL implementation Node uses) — `::1` alone
+// would never match.
+const AGENT_LOOPBACK_HOSTNAMES = new Set(['localhost', '127.0.0.1', '[::1]']);
+
+// Exported for direct unit testing (api/src/routes/agent.test.ts) — the
+// routes below also exercise it indirectly through the full request/response
+// cycle, but testing the predicate itself directly is cheaper and pins the
+// exact hostname/scheme rules without needing a module reload per case.
+export function isAgentBaseUrlSecure(baseUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    // An unparseable base URL can't be trusted either — fail closed, same
+    // posture as every other degradation path in this file.
+    return false;
+  }
+  if (parsed.protocol === 'https:') return true;
+  if (parsed.protocol === 'http:') return AGENT_LOOPBACK_HOSTNAMES.has(parsed.hostname);
+  return false;
+}
+
 // How long this proxy waits for the agent before giving up and degrading.
 // Shared by both routes below: an on-demand chat answer can walk up to
 // ON_DEMAND_DOCUMENT_CAP documents plus a real model call (agent/src/
@@ -120,6 +153,12 @@ router.post('/chat', authMiddleware, authed(async (req, res) => {
   const internalSecret = process.env.AGENT_INTERNAL_SECRET;
   if (!internalSecret) {
     console.error('[agent-proxy] AGENT_INTERNAL_SECRET is not set — refusing to call the agent service.');
+    res.status(503).json({ error: 'agent_not_configured' });
+    return;
+  }
+
+  if (!isAgentBaseUrlSecure(AGENT_API_BASE_URL)) {
+    console.error(`[agent-proxy] AGENT_API_BASE_URL (${AGENT_API_BASE_URL}) is a non-loopback http: URL — refusing to send X-Internal-Secret in cleartext.`);
     res.status(503).json({ error: 'agent_not_configured' });
     return;
   }
@@ -240,6 +279,12 @@ router.get('/inbox', authMiddleware, authed(async (req, res) => {
   const internalSecret = process.env.AGENT_INTERNAL_SECRET;
   if (!internalSecret) {
     console.error('[agent-proxy] AGENT_INTERNAL_SECRET is not set — refusing to call the agent service.');
+    res.status(503).json({ error: 'agent_not_configured' });
+    return;
+  }
+
+  if (!isAgentBaseUrlSecure(AGENT_API_BASE_URL)) {
+    console.error(`[agent-proxy] AGENT_API_BASE_URL (${AGENT_API_BASE_URL}) is a non-loopback http: URL — refusing to send X-Internal-Secret in cleartext.`);
     res.status(503).json({ error: 'agent_not_configured' });
     return;
   }
