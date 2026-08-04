@@ -135,33 +135,44 @@ semantics, not asserted as observed. This is the same posture the actual A11Y-1 
 (DERIVED from the spec's documented implicit live-region behavior for those roles), not observed
 through an actual assistive technology.
 
-**Regression tests:**
-- `agent/src/__tests__/server.test.ts` — 8 new cases for `POST /chat` (missing/wrong secret,
-  agent-not-configured, invalid body, the real `graph.invoke` call shape, a thrown invocation).
-  Confirmed failing (404, since the route didn't exist) before the fix, by temporarily stashing
-  `agent/src/{server,config,index}.ts` and re-running with the tests already in place.
+**Regression tests (counts re-verified by grepping the actual files, not carried over from an
+earlier draft of this entry):**
+- `agent/src/__tests__/server.test.ts` — 8 new cases for `POST /chat` (missing/wrong secret including
+  a same-length wrong secret that exercises the `timingSafeEqual` comparison itself rather than just
+  the length-mismatch guard in front of it, agent-not-configured, invalid body, the real
+  `graph.invoke` call shape, a thrown invocation). Confirmed failing (404, since the route didn't
+  exist) before the fix, by temporarily stashing `agent/src/{server,config,index}.ts` and re-running
+  with the tests already in place.
 - `agent/src/__tests__/config.test.ts` — extended for the new `agentInternalSecret` field.
-- `api/src/routes/agent.test.ts` (new) — 7 cases against a real Express app + real seeded
+- `api/src/routes/agent.test.ts` (new) — 8 cases against a real Express app + real seeded
   session/CSRF (same pattern as `change-feed.test.ts`/`blocks-relationship.test.ts`), with
-  `global.fetch` mocked so no real agent process is ever contacted: auth required, validation,
-  agent-not-configured, the exact forwarded body (proving `askingUserId` comes from the session, not
-  the request body), and both degraded-relay cases (agent 5xx, agent unreachable). Confirmed failing
-  (404) before the fix via the same stash-and-rerun method.
-- `web/src/components/AgentChatPanel.test.tsx` (new) — 11 cases covering all four of the ticket's
-  "how it will be proven" points: seeding without user input, cited-sources rendering, the
+  `global.fetch` mocked so no real agent process is ever contacted: auth required, validation
+  (including the question max-length rejection), agent-not-configured, the exact forwarded body
+  (proving `askingUserId` comes from the session, not the request body), and both degraded-relay
+  cases (agent 5xx, agent unreachable). Confirmed failing (404) before the fix via the same
+  stash-and-rerun method.
+- `web/src/components/AgentChatPanel.test.tsx` (new) — 12 cases covering all four of the ticket's
+  "how it will be proven" points — seeding without user input, cited-sources rendering, the
   no-citations failure state, the agent-unreachable/not-configured/5xx degraded states, and keyboard
-  reachability. Confirmed failing (module import error — the component didn't exist) before the fix
-  by temporarily moving `AgentChatPanel.tsx` out of the tree and re-running.
+  reachability — plus one covering a CodeRabbit-caught bug fixed in this same commit: the panel
+  previously kept showing a PREVIOUS document's answer/citations after the user navigated to a
+  different document, since `PropertiesPanel` re-renders this component with a new `documentId`
+  prop rather than remounting it. Confirmed failing (module import error — the component didn't
+  exist) before the fix by temporarily moving `AgentChatPanel.tsx` out of the tree and re-running.
 
 **How to run it.** `pnpm --filter @ship/agent test` · `pnpm --filter @ship/agent type-check` ·
 `source .factory-env && pnpm --filter @ship/api exec vitest run src/routes/agent.test.ts` ·
 `pnpm --filter @ship/web test -- src/components/AgentChatPanel.test.tsx`.
 
 **Rollback.** Revert this commit (or the range of commits carrying TRO-320's changes). No schema
-change and no migration to roll back. Unsetting `AGENT_INTERNAL_SECRET`/`AGENT_API_BASE_URL` in a
-deployed environment alone is sufficient to disable the feature without a code change — the chat
-panel degrades to its visible "not set up" message rather than breaking anything else in the
-4-panel layout.
+change and no migration to roll back. Unsetting `AGENT_INTERNAL_SECRET` in a deployed environment
+alone is sufficient to disable the feature without a code change — both sides fail closed on a
+missing secret (503 from `api/`, 500 from `agent/`), so the chat panel degrades to its visible "not
+set up" message rather than breaking anything else in the 4-panel layout. Unsetting
+`AGENT_API_BASE_URL` does NOT have the same effect — `api/src/routes/agent.ts` falls back to
+`http://localhost:3100` when it's unset, which in a real deployment just becomes an unreachable
+address (degrading as `502 agent_unreachable` rather than a clean, intentional disable) rather than
+disabling the feature outright.
 
 ---
 
