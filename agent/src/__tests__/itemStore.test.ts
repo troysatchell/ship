@@ -87,4 +87,75 @@ describe('InMemoryItemStore', () => {
     const ids = store.list('user-a').map((i) => i.id);
     expect(ids).toEqual(['blocking:high-older', 'blocking:high', 'blocking:low']);
   });
+
+  // TRO-321 / FG-8 — dismiss-with-dedup (proof #4: "a dismissed item is not
+  // re-created on the following poll").
+  describe('dismiss()', () => {
+    it('removes the item, same as clear()', () => {
+      const store = new InMemoryItemStore();
+      store.upsert(mention('mention:1', 'user-a'));
+
+      expect(store.dismiss('mention:1')).toBe(true);
+      expect(store.get('mention:1')).toBeUndefined();
+    });
+
+    it('returns false (no-op) for an item that does not currently exist', () => {
+      const store = new InMemoryItemStore();
+      expect(store.dismiss('no-such-item')).toBe(false);
+    });
+
+    it('an exact-version replay after dismiss is NOT resurrected by upsert (proof #4)', () => {
+      const store = new InMemoryItemStore();
+      const item = mention('mention:1', 'user-a');
+      store.upsert(item);
+
+      store.dismiss('mention:1');
+      // Simulates the immediate next poll re-deriving the identical mention
+      // (e.g. an agent restart re-scanning an overlapping lookback window).
+      store.upsert(item);
+
+      expect(store.get('mention:1')).toBeUndefined();
+      expect(store.all()).toHaveLength(0);
+    });
+
+    it('plain clear() (NOT dismiss()) does NOT protect against this — the two are different for a reason', () => {
+      // This is the control that proves dismiss() is doing real work, not
+      // that upsert()-by-id already made this safe for free.
+      const store = new InMemoryItemStore();
+      const item = mention('mention:1', 'user-a');
+      store.upsert(item);
+
+      store.clear('mention:1');
+      store.upsert(item);
+
+      expect(store.get('mention:1')).toBeDefined();
+    });
+
+    it('a genuinely NEW occurrence of a blocking_approval id (new blockedSince) is NOT suppressed by an earlier dismissal', () => {
+      const store = new InMemoryItemStore();
+      const first = blockingApproval('blocking:sprint-1:plan_approval', 'user-a', 1, '2026-01-01T00:00:00.000Z');
+      store.upsert(first);
+      store.dismiss('blocking:sprint-1:plan_approval');
+
+      // A LATER, genuinely new blocking-approval cycle for the same
+      // (document, field) id — different blockedSince, i.e. a different
+      // underlying document_history row.
+      const second = blockingApproval('blocking:sprint-1:plan_approval', 'user-a', 1, '2026-02-01T00:00:00.000Z');
+      store.upsert(second);
+
+      expect(store.get('blocking:sprint-1:plan_approval')).toBeDefined();
+      expect(store.get('blocking:sprint-1:plan_approval')?.blockedSince).toBe('2026-02-01T00:00:00.000Z');
+    });
+
+    it('an exact-version replay of a blocking_approval (same blockedSince) IS suppressed', () => {
+      const store = new InMemoryItemStore();
+      const item = blockingApproval('blocking:sprint-1:plan_approval', 'user-a', 1, '2026-01-01T00:00:00.000Z');
+      store.upsert(item);
+      store.dismiss('blocking:sprint-1:plan_approval');
+
+      store.upsert(item);
+
+      expect(store.get('blocking:sprint-1:plan_approval')).toBeUndefined();
+    });
+  });
 });

@@ -21,6 +21,186 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-321 — [FG-8] Nothing structurally stops the agent posting as a human — the human-in-the-loop gate
+
+**Last of four sub-issues on branch `feat/pr-c-graph-both-modes` (bundle `TRO-327` / [PR-C] EPIC),
+landing in this order: FG-5 (done) -> FG-7 (done) -> FG-6 (done) -> FG-8 (this commit). Deliberately
+last: it constrains the other three, and its strongest test is a negative assertion over the whole
+cycle those three built.**
+
+**The cost this closes.** Every claim FleetGraph makes about being safe rests on one rule: "Every
+output is either an action a query proved, or a draft a human confirms. The agent never has an
+opinion it expects you to act on." Living only in a prompt, that rule is a hope, not a gate. This
+ticket is the MVP's "at least one human-in-the-loop gate implemented" — the point where the rule
+becomes something a query can prove.
+
+**What was verified before designing anything:**
+- `document_history.automated_by` (`api/src/db/schema.sql:232`, `TEXT`, comment: "Identifies
+  automated change source (e.g., 'claude')") is the column proof #1 queries. `api/src/utils/
+  document-crud.ts`'s `logDocumentChange` is the only writer; `api/src/routes/issues.ts`'s
+  `PATCH /:id` (the plain `state` path) never passes it — only the separate `claude_metadata` path
+  does, which this ticket's write client never uses.
+- `POST /api/standups` (`api/src/routes/standups.ts`) is idempotent per (author, date) and attributes
+  `properties.author_id`/`created_by` straight from `req.userId` — resolved by `authMiddleware` from
+  whatever Bearer token the CALLER supplies, not a hardcoded identity. It creates blank template
+  content only; `PATCH /api/standups/:id` is the separate call that sets the drafted text.
+  `PATCH /api/issues/:id` is the SAME route a human editing an issue in Ship's own UI calls — not a
+  special agent path — and its `document_history` row's `changed_by` is likewise whichever user the
+  Bearer token resolves to.
+- `api/src/app.ts`'s `conditionalCsrf` skips CSRF for Bearer/API-token auth, verified by reading it —
+  the write calls below need no CSRF token, the same posture the agent's own read-only `ShipClient`
+  already relies on.
+- Re-checked this worktree's seeded database directly rather than assuming FG-6's prior "seeded"
+  note still held: it did not. `scripts/factory/gate.sh`'s own api test suite TRUNCATEs 16 tables in
+  its `beforeAll`, and this worktree's DB had been through at least one gate run since it was last
+  seeded — `SELECT COUNT(*) FROM documents` returned 0. The live-DB integration test below is
+  self-seeding for exactly this reason: it creates and tears down its own isolated workspace/user/
+  documents rather than depending on `pnpm db:seed`'s FG-3 fixtures being present.
+
+**What changed:**
+- `agent/src/shipClient.ts` — a NEW, write-capable surface, additive alongside the three existing
+  read-only `*Like` types (`ShipClientLike`/`OnDemandShipClientLike`/`DeepShipClientLike`, all
+  untouched): `GateShipClientLike` (`postStandup`/`setStandupContent`/`applyIssueTransition`) and its
+  implementation `GateShipClient`. Deliberately a SEPARATE CLASS from `ShipClient`, not an extension
+  of it: `ShipClient` binds one token at construction (the agent's own `SHIP_API_TOKEN`, wired once in
+  `index.ts` and reused for the process's lifetime), so adding write methods to that class would put a
+  write path one missed parameter away from silently running under the agent's own identity.
+  `GateShipClient` holds NO token field at all — every method takes the acting person's token as an
+  explicit, required per-call argument; there is no stored default to fall back to, so forgetting one
+  is a compile error, not a wrong-identity write at runtime. `plainTextToTipTapDoc` converts a draft's
+  plain text into the minimal TipTap doc shape every document type stores.
+- `agent/src/itemStore.ts` — `ItemStore` gains `dismiss(id)`, distinct from the existing `clear(id)`.
+  Verified (not assumed) that plain `clear()`-then-`upsert()` does NOT protect against a dismissed
+  item reappearing: `clear()` forgets a dismissal the instant the id leaves the map, so a later poll
+  re-deriving the same id (e.g. an agent restart re-scanning an overlapping lookback window) recreates
+  it. `dismiss()` remembers the item's CONTENT VERSION it was dismissed at (`versionKeyFor` —
+  `blockedSince` for `blocking_approval`, `evidence.commentId` for comment-sourced `mention`, the id
+  itself otherwise) and `upsert()` silently drops an exact-version replay, while a genuinely NEW
+  occurrence of the same id (a fresh approval cycle, new `blockedSince`) is not permanently suppressed.
+- `agent/src/draftStore.ts` — `ProposedTransition` gains an optional `status?:
+  'pending'|'accepted'|'rejected'` (normalized to `'pending'` by `upsert` when a producer — today only
+  `standupDraft.ts`'s `buildProposedTransitions` — doesn't set one, so that file needed no changes).
+  New `DraftStore.setProposedTransitionStatus(draftId, index, status)` — mutates ONLY the transition
+  at that index, refuses to act twice on the same one (already accepted/rejected is terminal, not a
+  toggle), matching proof #5's "applies exactly one."
+- `agent/src/gate.ts` (new) — the human-in-the-loop gate itself, NOT a new graph node (accepting/
+  discarding is a person acting from outside the graph, not something mid-run): `acceptDraft`
+  (posts the real standup, attributed via the accepting person's token, then `markPosted` + removes
+  the inbox item — accepts an optional person-edited `finalText`, defaulting to the draft's own
+  immutable `draftText`), `discardItem` (writes nothing; dispatches on item type — a `standup_draft`
+  also calls `markDismissed`, every type calls `itemStore.dismiss`), `acceptProposedTransition`
+  (the one Ship write for that transition, attributed via the accepting token, siblings untouched),
+  `rejectProposedTransition` (no token parameter at all — there is nothing for it to write).
+- `agent/src/graph.ts` — UNCHANGED except for its module docstring gaining a cross-reference; this
+  ticket's own regression test (`graphWriteBoundary.test.ts`) is the proof that it stays that way.
+
+**The negative test (proof #1) — this ticket's real deliverable.** Built BOTH forms the ticket
+offered, not just one:
+1. **Structural** (`agent/src/__tests__/graphWriteBoundary.test.ts`) — a real AST walk over
+   `graph.ts`'s own source via the TypeScript compiler API (already a devDependency; not a regex over
+   formatting): no identifier named `GateShipClient`/`GateShipClientLike` appears anywhere in the
+   file; no call expression invokes `.request(` (the one write-capable `ResilientClient` method); no
+   bare `fetch(` call; and `ProactiveDeps`/`OnDemandDeps`/`DeepDeps`'s `shipClient` fields are typed
+   ONLY as one of the three additive read-only `*Like` interfaces. Each checker is proven to have
+   teeth against a deliberately poisoned snippet in the same file, before being trusted against the
+   real one.
+2. **Live DB round-trip** (`agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts`) — imports
+   `createApp`/`pool` directly from `api/src/...` (the one deliberate cross-package import in this
+   whole bundle), starts the real Express app on an ephemeral port, creates an isolated workspace/
+   user/API-token/issue/sprint directly via SQL, seeds one real blocking-approval `document_history`
+   row, then runs `buildGraph`'s actual `proactive_fast` chain (`pollChangeFeed -> resolveMentions ->
+   detectBlockingApprovals -> commitInboxItems`) through a REAL `ResilientClient` against the REAL
+   running app and REAL seeded Postgres. Snapshots `document_history`'s row count AND max `id`
+   (a global `SERIAL`, so this catches a write anywhere in the whole database, not just this test's
+   own workspace) plus `documents`' count, before and after — asserts byte-for-byte equality. A
+   sanity assertion inside the same test confirms the run did real work first (a real blocking-
+   approval item, evidenced by the real seeded row) — the negative result is not vacuous "nothing
+   happened because nothing was read."
+   **Verified this test actually fails before the gate exists**, per the ticket's own instruction:
+   temporarily added a rogue `document_history` INSERT inside `commitInboxItems` (a raw `pool.query`
+   reached via a dynamic import, using the first inbox item's evidenced document as its target),
+   reran just this test, watched it fail (`documentHistoryCount: 2` vs expected `1`, `documentHistoryMaxId`
+   advanced by one) — then reverted the edit with `git checkout` and confirmed the DB's row count and
+   the rogue-marked row were both gone (the same `afterAll` cascade-delete that cleans up this test's
+   own fixtures caught it). `git diff agent/src/graph.ts` is empty in this commit.
+   Two control tests in the same file (`acceptProposedTransition`/`acceptDraft`, run through `gate.ts`
+   itself against the same live app) prove the counters DO move for a real accepted write, and that
+   the resulting `document_history`/`documents` rows are attributed to the accepting test user —
+   never an "agent identity," because none of this flow ever authenticates as one.
+
+**The other four proofs:**
+- **#2 (accept attributes correctly)** — `agent/src/__tests__/gate.test.ts` (fakes) and the live-DB
+  control tests above (real DB): `postStandup`/`applyIssueTransition` are always called with the
+  ACCEPTING token, never a stored one; the resulting rows' `changed_by`/`created_by`/`author_id` are
+  the accepting user's id and `automated_by` is `NULL`.
+- **#3 (discard writes nothing)** — `gate.test.ts`'s `discardItem` suite asserts zero calls on
+  `shipClient` for both a `standup_draft` and a non-draft item.
+- **#4 (dismissed item not re-created)** — `itemStore.test.ts`'s new `dismiss()` describe block
+  (including a control case proving plain `clear()` does NOT already provide this) and `gate.test.ts`'s
+  own dismiss-then-repoll case.
+- **#5 (exactly one transition applied)** — `gate.test.ts`: rejecting one and accepting a sibling on
+  the same draft results in exactly one `applyIssueTransition` call, and each transition's own
+  `status` moves independently.
+
+**Design decisions the ticket left open:**
+1. **Threading the accepting person's own token.** Nothing existing does per-call token injection —
+   `ShipClient`/`ResilientClient` both bind config at construction. Rather than widen either, every
+   `gate.ts` function and every `GateShipClientLike` method takes `token: string` as an explicit
+   parameter, and `GateShipClient` stores no token field to fall back to. This is intentionally NOT
+   symmetrical with `ShipClient` — the asymmetry is the point (see `shipClient.ts`'s own "gate's
+   write-capable client" section).
+2. **No new HTTP endpoint in this ticket.** The ticket's own framing: `gate.ts` is "a set of exported
+   functions/a small service module that FG-8's own future HTTP surface (or a later PR-D ticket) will
+   call." Wiring a route into `server.ts`/`index.ts` with nothing yet calling it (no UI, no PR-D) would
+   be dead code with no caller — the same "wired and testable, not invoked in production yet" posture
+   FG-6/FG-7 already used for their own unscheduled paths.
+3. **`acceptDraft` takes an optional `finalText`.** `draftStore.ts`'s own docstring (FG-6) explicitly
+   left "whatever a person edits to before posting is a DIFFERENT string that FG-8's accept-flow owns
+   capturing" as this ticket's job; `finalText` (default: the draft's own immutable `draftText`) is
+   that capture point.
+4. **Only `field: 'state'` transitions are accepted.** The only field `standupDraft.ts` ever produces
+   today; any other field fails loudly (`GateError`) rather than guessing a body shape for an untested
+   endpoint.
+5. **`discardItem` is ONE function dispatching on item type**, not two separate draft/non-draft
+   entrypoints — the ticket describes both cases but a single per-item-type dispatch reads more like
+   the "one inbox, one discard action" the ticket's own Snooze/dismiss section frames it as.
+
+**Bundle-level verification (all four tickets' combined diff, not just this one):**
+- **Two different node sequences, structurally proved.** `graph.test.ts` (FG-5/FG-7/FG-6, unchanged
+  by this ticket) already asserts `proactive_fast`'s fixed four-node chain against `on_demand`'s
+  variable-length `expandFrontier` loop; this ticket adds nothing here, only confirms via
+  `graphWriteBoundary.test.ts` that both paths' dependency shapes stay read-only.
+- **The negative test passes** — see above, both forms, both verified to fail (or in the live-DB
+  case, PROVEN to fail) before the gate held.
+- **Every model/Ship call goes through the resilient client** — grepped `agent/src/**/*.ts` for bare
+  `fetch(`/`XMLHttpRequest`/`axios`: zero matches outside `resilientClient.ts` itself (where
+  `this.fetchImpl` — defaulting to the real `fetch`, injectable for tests — is the one, intentional,
+  named exception). Every one of FG-5/FG-7/FG-6/FG-8's Ship calls goes through `ShipClient`/
+  `GateShipClient`, both of which only ever call `this.client.get`/`this.client.request` —
+  `ResilientClient` methods, never `fetch` directly.
+- **`CHANGES.md` appended by every ticket** — this entry, plus the three already present below.
+
+**How to run it.** `pnpm --filter @ship/agent test` · `pnpm --filter @ship/agent type-check`. The
+live-DB test additionally requires `DATABASE_URL` pointed at a migrated (not necessarily seeded)
+Ship database — set via this worktree's `.factory-env`.
+
+**Regression tests — 44 new/changed test cases across five files** (package total 233, up from
+189 before this ticket — two of FG-8's files, `gate.test.ts` and `graphWriteBoundary.test.ts`, are
+entirely new): 19 in `gate.test.ts` (accept/discard/accept-transition/reject-transition, all against
+stable fakes), 9 in `graphWriteBoundary.test.ts` (the structural proof, including its own
+self-verifying controls), 3 in `gateWriteBoundary.dbRoundTrip.test.ts` (the live-DB proof, real
+Postgres + real Express app, no fakes), plus additive cases in `itemStore.test.ts` (`dismiss()`,
+6 cases), `draftStore.test.ts` (`setProposedTransitionStatus`, 5 cases), and `shipClient.test.ts`
+(`GateShipClient`/`plainTextToTipTapDoc`, 6 cases).
+
+**How to roll it back.** Revert this commit. `gate.ts` and `GateShipClient` are net-new and called by
+nothing else in this bundle (no route wires them in yet — see design decision #2), and every change to
+`itemStore.ts`/`draftStore.ts` is additive (`dismiss`/`setProposedTransitionStatus` are new methods;
+`clear`/`markDismissed`/etc. are untouched) — FG-5/FG-7/FG-6's own behavior is unaffected by
+reverting this commit alone.
+
+---
+
 ## TRO-319 — [FG-6] The deep tier: a standup draft assembled from a whole day of activity, never posted or attributed by the agent
 
 **Third of four sub-issues on branch `feat/pr-c-graph-both-modes` (bundle `TRO-327` / [PR-C] EPIC),

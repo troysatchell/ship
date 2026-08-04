@@ -28,6 +28,19 @@
 
 export type DraftStatus = 'unseen' | 'viewed' | 'dismissed' | 'posted';
 
+/** A proposed transition's own accept/reject state (TRO-321 / FG-8) —
+ * separate from `StandupDraft.status`, deliberately: a draft's status is
+ * about the DRAFT TEXT (has it been posted?), while this is about ONE
+ * transition among possibly several the same draft carries. "Rejecting one
+ * proposed transition and accepting another applies exactly one" (the
+ * ticket's proof #5) needs per-transition state, not per-draft state, or
+ * accepting one would have no way to leave its siblings untouched. Absent
+ * (`undefined`) on a freshly-built `ProposedTransition` (e.g.
+ * `standupDraft.ts`'s `buildProposedTransitions`, which predates this ticket
+ * and does not set it) is normalized to `'pending'` by
+ * `InMemoryDraftStore.upsert` — see that method. */
+export type ProposedTransitionStatus = 'pending' | 'accepted' | 'rejected';
+
 /**
  * An issue state transition the agent OBSERVED (via `document_history`) or
  * inferred, attached to a draft with its evidence — never applied by the
@@ -35,7 +48,10 @@ export type DraftStatus = 'unseen' | 'viewed' | 'dismissed' | 'posted';
  * attached; a person accepts it. It never applies one."). Nothing in this
  * package ever calls a Ship endpoint that would apply one — see
  * `shipClient.ts`'s `DeepShipClientLike` docstring: the type this path reads
- * through has no write method to call in the first place.
+ * through has no write method to call in the first place. `gate.ts`
+ * (TRO-321 / FG-8) is the one place downstream that DOES apply one, via the
+ * separate, explicitly write-capable `GateShipClientLike` — never through
+ * this type.
  */
 export interface ProposedTransition {
   issueId: string;
@@ -52,6 +68,11 @@ export interface ProposedTransition {
     changedAt: string;
     changedBy: string | null;
   };
+  /** Optional so every existing `ProposedTransition` producer (just
+   * `standupDraft.ts`'s `buildProposedTransitions` today) keeps compiling
+   * unchanged — see this field's own type docstring for how the gap is
+   * closed once a transition is inside the store. */
+  status?: ProposedTransitionStatus;
 }
 
 export interface StandupDraft {
@@ -93,6 +114,16 @@ export interface DraftStore {
   /** FG-8's own future call, once posting exists. Not invoked by anything
    * in this ticket — no code path here posts a draft (hard limit). */
   markPosted(id: string): boolean;
+  /** Accepts or rejects ONE proposed transition on a draft, by its index
+   * within `proposedTransitions` — never any other transition on the same
+   * draft (TRO-321 / FG-8 proof #5). Returns `false`, and changes nothing,
+   * if: the draft doesn't exist, `index` is out of range, or that
+   * transition is not currently `'pending'` (already accepted/rejected —
+   * acting on it twice is refused, not silently repeated or overwritten).
+   * `gate.ts` is the only caller that applies the actual Ship write for
+   * `'accepted'`; this method only ever records the outcome, it never
+   * performs one itself. */
+  setProposedTransitionStatus(draftId: string, index: number, status: 'accepted' | 'rejected'): boolean;
   get(id: string): StandupDraft | undefined;
   /** Every draft for one person, newest window first. */
   listForPerson(personUserId: string): StandupDraft[];
@@ -126,6 +157,13 @@ export class InMemoryDraftStore implements DraftStore {
     const existing = this.drafts.get(draft.id);
     const full: StandupDraft = {
       ...draft,
+      // TRO-321 / FG-8: normalize every incoming transition's `status` to
+      // 'pending' when the producer didn't set one — `standupDraft.ts`'s
+      // `buildProposedTransitions` predates this field and never does. Once a
+      // transition is inside the store it always has a concrete status; only
+      // the producer-facing type leaves it optional (see that field's own
+      // docstring).
+      proposedTransitions: draft.proposedTransitions.map((t) => ({ ...t, status: t.status ?? 'pending' })),
       // A re-composed draft for the SAME window is fresh content — status
       // is not reset to 'unseen' on top of an already-viewed/dismissed/
       // posted draft, because nothing in this ticket ever re-composes a
@@ -141,6 +179,22 @@ export class InMemoryDraftStore implements DraftStore {
     };
     this.drafts.set(draft.id, full);
     return full;
+  }
+
+  setProposedTransitionStatus(draftId: string, index: number, status: 'accepted' | 'rejected'): boolean {
+    const existing = this.drafts.get(draftId);
+    if (!existing) return false;
+    const transition = existing.proposedTransitions[index];
+    // `status` is always normalized by `upsert` above, but a defensive
+    // fallback keeps this correct even against a hand-built fixture in a
+    // test that skips `upsert` — same defensive posture as this file's other
+    // `?? 'pending'`/`?? 'unseen'` normalizations.
+    if (!transition || (transition.status ?? 'pending') !== 'pending') return false;
+
+    const updated = [...existing.proposedTransitions];
+    updated[index] = { ...transition, status };
+    this.drafts.set(draftId, { ...existing, proposedTransitions: updated, updatedAt: this.now().toISOString() });
+    return true;
   }
 
   private setStatus(id: string, status: DraftStatus): boolean {

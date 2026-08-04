@@ -384,3 +384,154 @@ export class ShipClient {
     return this.getJson<DocumentListItem[]>(url.toString());
   }
 }
+
+// =============================================================================
+// The gate's write-capable client (TRO-321 / FG-8)
+// =============================================================================
+//
+// Everything above this line is a READ, on `ShipClient` or one of its three
+// `*Like` narrowings (`ShipClientLike`/`OnDemandShipClientLike`/
+// `DeepShipClientLike`) — every one of them Pick<ShipClient, ...>, and
+// `ShipClient` itself has no write method for any of them to accidentally
+// expose. That is deliberate and load-bearing (see `DeepShipClientLike`'s own
+// docstring): the proactive/on-demand/deep graph chains hold only these
+// types, so there is nothing on them to call even by mistake.
+//
+// This ticket is the one place in the whole bundle that needs an actual
+// write. `GateShipClient` is a SEPARATE class from `ShipClient`, not an
+// extension of it, for a specific reason: `ShipClient` binds ONE token at
+// construction time (`ShipClientOptions.token`) and the agent's production
+// instance (`index.ts`) is constructed with the agent's OWN `SHIP_API_TOKEN`
+// — reused for the whole process's lifetime, across every recipient a
+// proactive/deep run ever touches. Bolting write methods onto that same class
+// would put a write path one missed-parameter away from silently running
+// under the agent's own identity, which is exactly the failure this ticket
+// exists to prevent: "accepting is what performs the Ship write, under the
+// accepting person's own API token, attributed to them" (TRO-321's Scope,
+// verbatim) — not the agent's.
+//
+// `GateShipClient` holds NO token field at all. Every method takes `token` as
+// an explicit, required per-call argument. There is no constructor argument
+// or stored default to fall back to — a call site that forgets to pass one is
+// a TypeScript compile error, not a silent runtime default to the wrong
+// identity. This is the structural half of "MUST NOT use the agent's own
+// token to perform a write": the class is not CAPABLE of using any token
+// other than the one the caller hands it for that specific call.
+
+/** Response shape of `POST /api/standups` and `PATCH /api/standups/:id`
+ * (`standups.ts`) — both handlers return the same document shape. */
+export interface CreatedStandup {
+  id: string;
+  title: string;
+  document_type: string;
+  content: unknown;
+  properties: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * The gate's own write-capable surface (TRO-321 / FG-8) — an ADDITIVE
+ * interface, same pattern as `OnDemandShipClientLike`/`DeepShipClientLike`,
+ * but the one exception to every one of those being read-only. Nothing in
+ * `graph.ts` — or anywhere upstream of `gate.ts` — ever holds a value of this
+ * type; see `graph.ts`'s module docstring and `agent/src/__tests__/
+ * graphWriteBoundary.test.ts` for the proof that stays true.
+ */
+export interface GateShipClientLike {
+  /** `POST /api/standups` (`standups.ts`) — idempotent per (author, date) on
+   * Ship's own side (that route's existing-row check), attributed to
+   * whichever user `token` belongs to: Ship's `authMiddleware` resolves
+   * `req.userId` from the bearer token, and the route sets
+   * `properties.author_id`/`created_by` directly from `req.userId` — verified
+   * by reading the route, not assumed. Creates the document with Ship's own
+   * blank template content; `setStandupContent` below is what puts the
+   * drafted (and possibly person-edited) text into it. */
+  postStandup(token: string, date: string): Promise<CreatedStandup>;
+  /** `PATCH /api/standups/:id` (`standups.ts`) — sets a standup's content to
+   * `text`, converted to the minimal TipTap doc shape every document type in
+   * Ship stores (`plainTextToTipTapDoc`, `gate.ts`). Same attribution
+   * mechanism as `postStandup`: the route only allows the standup's own
+   * author (or an admin) to update it, checked against `token`'s resolved
+   * `req.userId`. */
+  setStandupContent(token: string, standupId: string, text: string): Promise<CreatedStandup>;
+  /** `PATCH /api/issues/:id` (`issues.ts`) — the SAME route a person editing
+   * the issue in Ship's own UI calls; this is not a special agent-only write
+   * path. `changed_by` on the `document_history` row this produces is
+   * `req.userId`, resolved from `token` — the agent identity never appears
+   * there because it never authenticates this call under its own identity
+   * (this method is the one exception to "every method in shipClient.ts is a
+   * read"). `automated_by` is never sent: `updateIssueSchema` (`issues.ts`)
+   * has no such field on the plain `state` path, only on the separate
+   * `claude_metadata` one this call never uses. */
+  applyIssueTransition(token: string, issueId: string, toState: string): Promise<void>;
+}
+
+/** Converts a plain-text draft (or person-edited text) into the minimal
+ * TipTap `doc` JSON every document type in Ship stores in its `content`
+ * column — one paragraph per line, matching the shape `standups.ts`'s own
+ * default content and `api/src/db/seed.ts`'s standup fixtures already use.
+ * Blank lines become empty paragraphs (TipTap's own convention for a blank
+ * line, matching `standups.ts`'s default `{ type: 'paragraph' }` with no
+ * `content` key) rather than being dropped, so the person's own paragraph
+ * breaks survive the round trip. */
+export function plainTextToTipTapDoc(text: string): { type: 'doc'; content: unknown[] } {
+  const lines = text.split('\n');
+  return {
+    type: 'doc',
+    content: lines.map((line) =>
+      line.length === 0
+        ? { type: 'paragraph' }
+        : { type: 'paragraph', content: [{ type: 'text', text: line }] }
+    ),
+  };
+}
+
+export interface GateShipClientOptions {
+  baseUrl: string;
+  /** Narrowed to just `.request` — every call this client makes is a
+   * non-idempotent write (POST/PATCH), so `ResilientClient.get`'s retry
+   * behavior (built for idempotent reads only) is never appropriate here;
+   * see `resilientClient.ts`'s own docstring for `request` vs `get`. */
+  client: Pick<ResilientClient, 'request'>;
+}
+
+export class GateShipClient implements GateShipClientLike {
+  private readonly base: string;
+  private readonly client: Pick<ResilientClient, 'request'>;
+
+  constructor(options: GateShipClientOptions) {
+    this.base = options.baseUrl.replace(/\/+$/, '');
+    this.client = options.client;
+  }
+
+  private authHeaders(token: string): Record<string, string> {
+    return { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' };
+  }
+
+  private async writeJson<T>(method: 'POST' | 'PATCH', url: string, token: string, body: unknown): Promise<T> {
+    const res = await this.client.request(url, {
+      method,
+      headers: this.authHeaders(token),
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      throw new ShipApiError(method, url, res.status);
+    }
+    return (await res.json()) as T;
+  }
+
+  async postStandup(token: string, date: string): Promise<CreatedStandup> {
+    return this.writeJson<CreatedStandup>('POST', `${this.base}/api/standups`, token, { date });
+  }
+
+  async setStandupContent(token: string, standupId: string, text: string): Promise<CreatedStandup> {
+    return this.writeJson<CreatedStandup>('PATCH', `${this.base}/api/standups/${standupId}`, token, {
+      content: plainTextToTipTapDoc(text),
+    });
+  }
+
+  async applyIssueTransition(token: string, issueId: string, toState: string): Promise<void> {
+    await this.writeJson<unknown>('PATCH', `${this.base}/api/issues/${issueId}`, token, { state: toState });
+  }
+}

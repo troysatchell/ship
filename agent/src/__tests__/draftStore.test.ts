@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { InMemoryDraftStore, type NewStandupDraft } from '../draftStore.js';
+import { InMemoryDraftStore, type NewStandupDraft, type ProposedTransition } from '../draftStore.js';
 
 function draft(id: string, personUserId: string, windowDate: string, overrides: Partial<NewStandupDraft> = {}): NewStandupDraft {
   return {
@@ -8,6 +8,18 @@ function draft(id: string, personUserId: string, windowDate: string, overrides: 
     windowDate,
     draftText: 'I moved issue X to In Review.',
     proposedTransitions: [],
+    ...overrides,
+  };
+}
+
+function transition(overrides: Partial<ProposedTransition> = {}): ProposedTransition {
+  return {
+    issueId: 'issue-1',
+    issueTitle: 'Build issue assignment flow',
+    field: 'state',
+    fromState: 'in_progress',
+    toState: 'in_review',
+    evidence: { kind: 'history', changedAt: '2026-08-04T09:00:00.000Z', changedBy: 'user-a' },
     ...overrides,
   };
 }
@@ -64,6 +76,56 @@ describe('InMemoryDraftStore', () => {
 
     expect(store.markViewed('d1')).toBe(true);
     expect(store.get('d1')?.status).toBe('viewed');
+  });
+
+  // TRO-321 / FG-8
+  describe('proposedTransitions status', () => {
+    it('upsert normalizes a producer-supplied transition with no status to "pending"', () => {
+      const store = new InMemoryDraftStore();
+      const d = store.upsert(draft('d1', 'user-a', '2026-08-01', { proposedTransitions: [transition()] }));
+
+      expect(d.proposedTransitions[0]?.status).toBe('pending');
+    });
+  });
+
+  describe('setProposedTransitionStatus', () => {
+    it('marks only the transition at the given index, leaving siblings untouched', () => {
+      const store = new InMemoryDraftStore();
+      store.upsert(
+        draft('d1', 'user-a', '2026-08-01', {
+          proposedTransitions: [transition({ issueId: 'issue-1' }), transition({ issueId: 'issue-2' })],
+        })
+      );
+
+      expect(store.setProposedTransitionStatus('d1', 0, 'accepted')).toBe(true);
+
+      const d = store.get('d1');
+      expect(d?.proposedTransitions[0]?.status).toBe('accepted');
+      expect(d?.proposedTransitions[1]?.status).toBe('pending');
+    });
+
+    it('returns false for an unknown draft id', () => {
+      const store = new InMemoryDraftStore();
+      expect(store.setProposedTransitionStatus('missing', 0, 'accepted')).toBe(false);
+    });
+
+    it('returns false for an out-of-range index', () => {
+      const store = new InMemoryDraftStore();
+      store.upsert(draft('d1', 'user-a', '2026-08-01', { proposedTransitions: [transition()] }));
+
+      expect(store.setProposedTransitionStatus('d1', 5, 'accepted')).toBe(false);
+    });
+
+    it('refuses to change a transition that is not currently pending (no toggling back and forth)', () => {
+      const store = new InMemoryDraftStore();
+      store.upsert(draft('d1', 'user-a', '2026-08-01', { proposedTransitions: [transition()] }));
+
+      expect(store.setProposedTransitionStatus('d1', 0, 'rejected')).toBe(true);
+      // Already rejected — trying to flip it to accepted (or reject it again) is refused.
+      expect(store.setProposedTransitionStatus('d1', 0, 'accepted')).toBe(false);
+      expect(store.setProposedTransitionStatus('d1', 0, 'rejected')).toBe(false);
+      expect(store.get('d1')?.proposedTransitions[0]?.status).toBe('rejected');
+    });
   });
 
   it('listForPerson only returns drafts for the requested person, newest window first', () => {
