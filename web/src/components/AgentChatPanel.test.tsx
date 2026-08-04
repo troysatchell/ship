@@ -31,12 +31,14 @@ const mockApiPost = vi.mocked(apiPost);
 // this repo's gate.sh forbids even in tests) is safe here because every
 // field the component touches is present with the right shape; anything
 // this fake omits (headers, body stream, etc.) is simply never called.
+// A real Response instance — no type assertion, and no drift from the
+// contract AgentChatPanel actually consumes (`ok`/`status`/`json()`).
+// Same helper shape as InboxSidebar.test.tsx / IssueBlockingSection.test.tsx.
 function jsonResponse(status: number, body: unknown): Response {
-  return {
-    ok: status >= 200 && status < 300,
+  return new Response(JSON.stringify(body), {
     status,
-    json: async () => body,
-  } as Response;
+    headers: { 'content-type': 'application/json' },
+  });
 }
 
 async function openPanel() {
