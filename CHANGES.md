@@ -21,6 +21,150 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-320 — [FG-9] The agent is unreachable from Ship — an in-context chat panel, not a standalone chatbot page
+
+**First of three sub-issues on branch `feat/pr-d-ship-ui-surfaces` (bundle `TRO-328` / [PR-D] EPIC:
+"Ship UI surfaces — in-context chat, the ranked inbox, blocks/blocked-by"), landing in this order:
+FG-9 (this commit) -> the inbox (TRO-323) -> blocks/blocked-by (TRO-334), each by a separate agent
+on the same branch. This commit touches only `agent/`'s new `POST /chat` route, `api/`'s new proxy
+route, and one new `web/` component — it does not touch inbox or blocks/blocked-by surfaces.**
+
+**The cost this closes.** MVP checkbox: "Agent chat and notifications are accessible in the UI." Brief
+constraint: "Chat interface must be embedded in context — no standalone chatbot pages." Before this
+ticket there was no route into the compiled graph's on-demand expansion path at all —
+`agent/src/index.ts`'s own comment said so plainly ("There is no route into the graph that supplies
+seedDocumentId/askingUserId yet") — so FG-7's on-demand expansion work (done, TRO-318) had no caller
+anywhere in the product.
+
+**What was verified before designing anything:**
+- `agent/src/server.ts` exposed only `GET /health`/`GET /ready`; `agent/src/index.ts` only
+  constructed `graph`/`itemStore`/`draftStore` inside its `isConfigComplete` branch, with no
+  reference available to a route handler.
+- No `AGENT_API_BASE_URL` (or equivalent) existed anywhere in `api/`, and zero references from
+  `web/` to the agent service.
+- The agent's Render URL is a separate, public-internet-reachable origin — no private networking
+  configured (FLEETGRAPH.MD's "Deployment model").
+
+**Architecture decision: proxy through `api/`, never call the agent directly from the browser.**
+The browser already authenticates to `api/` via session cookie + `authMiddleware`/`authed()`
+(`api/src/routes/ai.ts`'s pattern, reused verbatim here). The agent has no concept of a Ship browser
+session at all — inventing one would be a new, unnecessary trust boundary. So the browser only ever
+talks to `POST /api/agent/chat`, which forwards to the agent service server-to-server.
+
+**Security addition — flagged explicitly, not buried in the diff.** The agent's new route is
+reachable from the public internet (a Render service, no private networking). An unauthenticated
+chat endpoint would let anyone spend the configured Anthropic API budget and query the graph as an
+arbitrary `askingUserId`. New shared secret `AGENT_INTERNAL_SECRET` (documented in both
+`agent/.env.example` and `api/.env.example`, no default anywhere, no real value committed): sent as
+the `X-Internal-Secret` header on every outbound call from `api/src/routes/agent.ts`, validated in
+`agent/src/server.ts`'s `POST /chat` with a constant-time comparison (`node:crypto`'s
+`timingSafeEqual`, guarding the length-mismatch case first) BEFORE the graph is ever touched. Both
+sides fail CLOSED on a missing secret — the agent rejects every request when its own
+`AGENT_INTERNAL_SECRET` is unset (500, distinct from the 401 a wrong/missing header gets), and the
+`api/` proxy refuses to even place the call (503) under the same condition, rather than sending a
+request the agent is guaranteed to reject.
+
+**What changed:**
+- `agent/src/config.ts` — new `AgentConfig.agentInternalSecret` (`env.AGENT_INTERNAL_SECRET`, no
+  default). Deliberately NOT folded into `isConfigComplete()` — that gates `/ready` and the
+  proactive poller's start condition, neither of which this secret has anything to do with; a
+  missing secret makes `/chat` fail closed on its own.
+- `agent/src/server.ts` — new `POST /chat`: validates `X-Internal-Secret` (constant-time), then
+  requires the injected `graph` dep (`CreateServerDeps.graph?: Pick<CompiledGraph, 'invoke'>`,
+  optional — same pattern as `proactivePoll.ts`'s `ProactivePollerOptions.graph`) — absent means a
+  clean `503 agent_not_configured`, never a hang. Validates the body (`seedDocumentId`, `question`,
+  `askingUserId`, all required strings — no schema library added for three fields). Calls
+  `graph.invoke({ trigger: 'on_demand', input: question, seedDocumentId, askingUserId })` (FG-7's own
+  documented invocation shape) and relays `{ output, citedSources, expansionCapped }`. A thrown graph
+  invocation is caught and relayed as `502 graph_invoke_failed`, never a raw stack trace.
+- `agent/src/index.ts` — `graph` is now hoisted above the `isConfigComplete` branch
+  (`let graph: CompiledGraph | undefined`), assigned only when config is complete (unchanged
+  condition), and passed to `createServer(config, { graph })`. Closes the gap the module's own
+  docstring used to name.
+- `api/src/routes/agent.ts` (new) — `POST /chat`: `authMiddleware`/`authed()` (session-cookie auth,
+  same as `ai.ts`), validates `seedDocumentId`/`question`, reads `AGENT_API_BASE_URL`
+  (`process.env`, default `http://localhost:3100`, matching `api/src/index.ts`'s existing
+  `CORS_ORIGIN` convention — no dedicated env-loader module in this package) and
+  `AGENT_INTERNAL_SECRET`, forwards `askingUserId: req.userId` (the session's own user — never a
+  client-supplied value; the request body only ever reads `seedDocumentId`/`question`), with a 30s
+  `AbortController` timeout so a hung agent cannot hang this proxy. Degrades to `503
+  agent_not_configured` (secret unset), `502 agent_unavailable` (non-OK agent response or unexpected
+  body shape), or `502 agent_unreachable` (network failure/timeout) — never a raw passthrough of the
+  agent's own error body, never an unresolving request.
+- `api/src/openapi/schemas/agent.ts` (new) + `schemas/index.ts` — OpenAPI registration for
+  `POST /agent/chat` (`ship-openapi-endpoints` three-file pattern), verified present in
+  `api/openapi.json`/`api/openapi.yaml` after `pnpm --filter @ship/api openapi:generate`.
+- `api/src/app.ts` — mounts `app.use('/api/agent', conditionalCsrf, agentRoutes)`, same convention
+  as every other CSRF-protected router.
+- `web/src/components/AgentChatPanel.tsx` (new) — the chat panel itself. Takes ONE prop
+  (`documentId`); there is no way to type or select a different seed document, so every question is
+  seeded automatically. A collapsible section (native `<button aria-expanded>`, matching
+  `ContentHistoryPanel.tsx`'s precedent) containing a native `<input>` inside a `<form>` (Enter
+  submits natively — no custom `onKeyDown`). Renders cited sources with their `reason`. An answer
+  with an EMPTY `citedSources` array is rendered as a failure state (`role="alert"`), not as a normal
+  answer — FLEETGRAPH.MD: "the citation list is the trust mechanism," so an uncited answer is not
+  shown as though it were trustworthy. The result region's `role` switches between `"status"`
+  (loading/answered) and `"alert"` (any degraded case) so a screen reader is notified when it
+  changes — see the accessibility note below for what is/isn't claimed about this.
+- `web/src/components/sidebars/PropertiesPanel.tsx` — mounts `<AgentChatPanel documentId={document.id}
+  />` once, after the type-specific panel, for every document type (`return (<>{panel}<AgentChatPanel
+  .../></>)`), rather than adding it inside each of the five per-type sidebar components separately.
+  Satisfies "reachable from any document view" with one change instead of five, and cannot drift
+  between document types.
+- `agent/.env.example` / `api/.env.example` — document `AGENT_INTERNAL_SECRET` (both sides) and
+  `AGENT_API_BASE_URL`/`AGENT_INTERNAL_SECRET` (`api/` side), with the local-dev default and an
+  explicit "generate a real value per environment, never commit one" note. **Both new env vars need
+  setting in every deployed environment** (shadow, prod) before this feature works there — a missing
+  `AGENT_INTERNAL_SECRET` fails closed (503 from `api/`, 500 from `agent/`), not open, so the failure
+  mode is a visible degraded message in the chat panel, not a silent bypass.
+
+**Accessibility — claim provenance marked explicitly (`.claude/CLAUDE.md`).** Every interactive
+control is a real native element (`<button>`, `<input type="text">`, `<form>`), not an ARIA role
+bolted onto a `<div>`/`<li>` — the exact shape of A11Y-1 (`DocumentTreeItem.tsx`'s missing
+`tabIndex`/`onKeyDown`), which this does not repeat. `AgentChatPanel.test.tsx`'s keyboard-reachability
+tests OBSERVE (via jsdom's real `HTMLElement.focus()`/`document.activeElement`) that every control is
+genuinely focusable with no `tabIndex="-1"`, and OBSERVE the correct role/accessible name via
+`getByRole`. They do NOT claim a raw synthetic `keydown` activates these controls in the test run —
+`@testing-library/user-event` (which implements that translation) is not a dependency of this
+package (checked: `web/package.json`), and jsdom does not implement it as a side effect of
+`fireEvent.keyDown` on its own. That native activation is guaranteed by the browser once shipped,
+not something a jsdom-only test can produce evidence for — so it is marked as relying on native HTML
+semantics, not asserted as observed. This is the same posture the actual A11Y-1 regression test
+(`DocumentTreeItem.test.tsx`) already takes. Nothing here was verified against a real screen reader
+(no VoiceOver pass was run) — the `role="status"`/`role="alert"` claims are ARIA-structural
+(DERIVED from the spec's documented implicit live-region behavior for those roles), not observed
+through an actual assistive technology.
+
+**Regression tests:**
+- `agent/src/__tests__/server.test.ts` — 8 new cases for `POST /chat` (missing/wrong secret,
+  agent-not-configured, invalid body, the real `graph.invoke` call shape, a thrown invocation).
+  Confirmed failing (404, since the route didn't exist) before the fix, by temporarily stashing
+  `agent/src/{server,config,index}.ts` and re-running with the tests already in place.
+- `agent/src/__tests__/config.test.ts` — extended for the new `agentInternalSecret` field.
+- `api/src/routes/agent.test.ts` (new) — 7 cases against a real Express app + real seeded
+  session/CSRF (same pattern as `change-feed.test.ts`/`blocks-relationship.test.ts`), with
+  `global.fetch` mocked so no real agent process is ever contacted: auth required, validation,
+  agent-not-configured, the exact forwarded body (proving `askingUserId` comes from the session, not
+  the request body), and both degraded-relay cases (agent 5xx, agent unreachable). Confirmed failing
+  (404) before the fix via the same stash-and-rerun method.
+- `web/src/components/AgentChatPanel.test.tsx` (new) — 11 cases covering all four of the ticket's
+  "how it will be proven" points: seeding without user input, cited-sources rendering, the
+  no-citations failure state, the agent-unreachable/not-configured/5xx degraded states, and keyboard
+  reachability. Confirmed failing (module import error — the component didn't exist) before the fix
+  by temporarily moving `AgentChatPanel.tsx` out of the tree and re-running.
+
+**How to run it.** `pnpm --filter @ship/agent test` · `pnpm --filter @ship/agent type-check` ·
+`source .factory-env && pnpm --filter @ship/api exec vitest run src/routes/agent.test.ts` ·
+`pnpm --filter @ship/web test -- src/components/AgentChatPanel.test.tsx`.
+
+**Rollback.** Revert this commit (or the range of commits carrying TRO-320's changes). No schema
+change and no migration to roll back. Unsetting `AGENT_INTERNAL_SECRET`/`AGENT_API_BASE_URL` in a
+deployed environment alone is sufficient to disable the feature without a code change — the chat
+panel degrades to its visible "not set up" message rather than breaking anything else in the
+4-panel layout.
+
+---
+
 ## TRO-321 — [FG-8] Nothing structurally stops the agent posting as a human — the human-in-the-loop gate
 
 **Last of four sub-issues on branch `feat/pr-c-graph-both-modes` (bundle `TRO-327` / [PR-C] EPIC),
