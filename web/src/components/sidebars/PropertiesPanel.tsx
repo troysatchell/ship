@@ -12,6 +12,7 @@ import { ProjectSidebar } from '@/components/sidebars/ProjectSidebar';
 import { WeekSidebar } from '@/components/sidebars/WeekSidebar';
 import { ProgramSidebar } from '@/components/sidebars/ProgramSidebar';
 import { ContentHistoryPanel } from '@/components/ContentHistoryPanel';
+import { AgentChatPanel } from '@/components/AgentChatPanel';
 import { PlanQualityAssistant, RetroQualityAssistant } from '@/components/sidebars/QualityAssistant';
 import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { useAuth } from '@/hooks/useAuth';
@@ -606,7 +607,19 @@ export function PropertiesPanel({
     }
   }, [document, panelProps, onUpdate, highlightedFields, canApprove, userNames, handleApprovalUpdate, weeklyReviewState]);
 
-  return panel;
+  return (
+    <>
+      {panel}
+      {/* TRO-320 / FG-9: the in-context chat panel, reachable from every
+       * document type — mounted once here rather than inside each
+       * type-specific sidebar above, so it does not need to be added to (or
+       * risk drifting between) five separate components. Lives inside the
+       * existing Properties Sidebar; not a fifth panel. */}
+      <div className="px-4 pb-4">
+        <AgentChatPanel documentId={document.id} />
+      </div>
+    </>
+  );
 }
 
 // Re-export types for convenience
