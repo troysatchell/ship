@@ -22,6 +22,7 @@
  * — these are component tests against a stable fake network layer, never a
  * real HTTP call.
  */
+import { useState } from 'react';
 import { describe, it, expect, vi, beforeAll, beforeEach, afterEach, afterAll } from 'vitest';
 import { render, screen, fireEvent, act } from '@testing-library/react';
 import { QueryClientProvider } from '@tanstack/react-query';
@@ -174,6 +175,38 @@ async function openBlocksPicker() {
 
 async function openBlockedByPicker() {
   fireEvent.click(await screen.findByRole('button', { name: /add issue blocking this/i }));
+}
+
+/**
+ * Mirrors IssueSidebar.tsx's real usage
+ * (`<IssueBlockingSection key={issue.id} issueId={issue.id} />`): a "switch
+ * issue" button that changes both `issueId` and `key` together, exactly the
+ * way `PropertiesPanel` swapping the open issue does. Used to prove the
+ * `key` (CodeRabbit review, PR #120) actually forces a full remount — without
+ * it, React would reuse the same component instance across the id change and
+ * carry stale local state (a pending mutation's error, a
+ * disabled-while-submitting flag) into the new issue's UI.
+ */
+function IssueSwitcherHarness({ firstId, secondId }: { firstId: string; secondId: string }) {
+  const [openIssueId, setOpenIssueId] = useState(firstId);
+  return (
+    <>
+      <button type="button" onClick={() => setOpenIssueId(secondId)}>
+        Switch to other issue
+      </button>
+      <IssueBlockingSection key={openIssueId} issueId={openIssueId} />
+    </>
+  );
+}
+
+function renderSwitcher(firstId: string, secondId: string) {
+  return render(
+    <QueryClientProvider client={queryClient}>
+      <MemoryRouter>
+        <IssueSwitcherHarness firstId={firstId} secondId={secondId} />
+      </MemoryRouter>
+    </QueryClientProvider>
+  );
 }
 
 beforeEach(() => {
@@ -371,5 +404,86 @@ describe('IssueBlockingSection — keyboard reachability and screen-reader struc
     expect(await screen.findByText('Not blocked by any issues')).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Blocks' })).not.toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Blocked by' })).not.toBeInTheDocument();
+  });
+});
+
+describe('IssueBlockingSection — key resets state across issue switches (CodeRabbit review, PR #120)', () => {
+  const OPEN_ISSUE_1 = ISSUE_A;
+  const OPEN_ISSUE_2 = 'issue-open-2';
+
+  beforeEach(() => {
+    // Both "open issue" ids need their own forward/reverse-association GETs,
+    // and the options list is shared — a generic router, unlike `mockGets`
+    // (which hardcodes ISSUE_A as the only forward-associations id).
+    mockApiGet.mockImplementation(async (endpoint: string) => {
+      if (endpoint === '/api/issues') {
+        return jsonResponse(200, apiIssueList(ISSUE_C));
+      }
+      if (endpoint.startsWith('/api/documents/') && endpoint.endsWith('/associations?type=blocks')) {
+        return jsonResponse(200, []);
+      }
+      if (endpoint.startsWith('/api/documents/') && endpoint.endsWith('/reverse-associations?type=blocks')) {
+        return jsonResponse(200, []);
+      }
+      throw new Error(`Unexpected apiGet call in test: ${endpoint}`);
+    });
+  });
+
+  it('does not carry an in-flight "adding" state from the previous issue onto the newly-selected one', async () => {
+    let resolvePost: (value: Response) => void = () => {};
+    mockApiPost.mockReturnValue(new Promise((resolve) => { resolvePost = resolve; }));
+
+    renderSwitcher(OPEN_ISSUE_1, OPEN_ISSUE_2);
+
+    // Start adding a blocker on issue 1 — the mutation never resolves here.
+    await openBlocksPicker();
+    const option = await screen.findByRole('option', { name: /issue c/i });
+    fireEvent.click(option);
+
+    // IssueBlockingSection disables its own "Add issue this blocks" trigger
+    // while addingBlocks is true (component's own `disabled={addingBlocks}`).
+    const trigger1 = await screen.findByRole('button', { name: /add issue this blocks/i });
+    expect(trigger1).toBeDisabled();
+
+    // Switch to issue 2 BEFORE issue 1's mutation resolves.
+    fireEvent.click(screen.getByRole('button', { name: /switch to other issue/i }));
+
+    // Issue 2 gets a genuinely fresh IssueBlockingSection instance (the
+    // `key` change unmounts/remounts): its own trigger must be enabled,
+    // carrying none of issue 1's in-flight "adding" state. Before the fix
+    // (no `key`), React would have reused the same instance and this
+    // assertion would see the stale `addingBlocks: true` from issue 1.
+    const trigger2 = await screen.findByRole('button', { name: /add issue this blocks/i });
+    expect(trigger2).not.toBeDisabled();
+
+    // Let the abandoned mutation resolve so it can't leak into another test.
+    await act(async () => {
+      resolvePost(jsonResponse(201, {
+        id: 'assoc-x',
+        document_id: OPEN_ISSUE_1,
+        related_id: ISSUE_C.id,
+        relationship_type: 'blocks',
+      }));
+    });
+  });
+
+  it('does not carry a circular-blocks error message from the previous issue onto the newly-selected one', async () => {
+    mockApiPost.mockResolvedValue(jsonResponse(500, { error: 'Failed to create association' }));
+
+    renderSwitcher(OPEN_ISSUE_1, OPEN_ISSUE_2);
+
+    await openBlocksPicker();
+    const option = await screen.findByRole('option', { name: /issue c/i });
+    await act(async () => {
+      fireEvent.click(option);
+    });
+
+    expect(await screen.findByText(CIRCULAR_BLOCKS_MESSAGE)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /switch to other issue/i }));
+
+    // Issue 2's fresh instance must show no trace of issue 1's error state.
+    // Before the fix, the reused instance would still be rendering it.
+    expect(screen.queryByText(CIRCULAR_BLOCKS_MESSAGE)).not.toBeInTheDocument();
   });
 });

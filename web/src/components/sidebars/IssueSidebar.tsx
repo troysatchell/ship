@@ -485,8 +485,17 @@ export function IssueSidebar({
         * mutates its own data via api/src/routes/associations.ts, keyed off
         * issue.id alone. Not part of belongs_to (that array is containment
         * only - see associations.ts's own comment on why 'blocks' is
-        * excluded from it). */}
-      <IssueBlockingSection issueId={issue.id} />
+        * excluded from it).
+        *
+        * `key={issue.id}` (CodeRabbit review, PR #120): without it, when
+        * PropertiesPanel switches from issue A to issue B, React sees the
+        * same component type at the same position and reuses the existing
+        * instance instead of remounting it — so IssueBlockingSection's local
+        * state (a pending mutation's error, a disabled-while-submitting
+        * flag) can leak from issue A's session into issue B's freshly
+        * rendered UI. Keying on issue.id forces a full remount (and state
+        * reset) on every issue change. */}
+      <IssueBlockingSection key={issue.id} issueId={issue.id} />
 
       {/* Document Conversion */}
       {onConvert && (
