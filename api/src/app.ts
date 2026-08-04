@@ -42,6 +42,7 @@ import associationsRoutes from './routes/associations.js';
 import changeFeedRoutes from './routes/change-feed.js';
 import accountabilityRoutes from './routes/accountability.js';
 import aiRoutes from './routes/ai.js';
+import agentRoutes from './routes/agent.js';
 import weeklyPlansRoutes, { weeklyRetrosRouter } from './routes/weekly-plans.js';
 import { documentCommentsRouter, commentsRouter } from './routes/comments.js';
 import { setupSwagger } from './swagger.js';
@@ -405,6 +406,9 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
 
   // AI analysis routes - plan and retro quality feedback (CSRF protected)
   app.use('/api/ai', conditionalCsrf, aiRoutes);
+
+  // Agent chat proxy - forwards to the FleetGraph agent service (CSRF protected, TRO-320 / FG-9)
+  app.use('/api/agent', conditionalCsrf, agentRoutes);
 
   // Weekly plans routes - per-person accountability documents (CSRF protected)
   app.use('/api/weekly-plans', conditionalCsrf, weeklyPlansRoutes);

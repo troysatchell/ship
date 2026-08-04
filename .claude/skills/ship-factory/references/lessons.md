@@ -376,3 +376,34 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   of opening a bookkeeping PR after every single ticket** — the entries are non-urgent, gitignored
   from CodeRabbit's attention either way, and batching removes rebase churn from the tickets that
   actually matter.
+- 2026-08-04 (TRO-323/FG-10) — **The `git stash` ban was violated a 5th time (TRO-215,
+  TRO-208/TRO-206, TRO-319, now TRO-323) — this time with the FULL rule, reasoning, and G7c's own
+  existence stated verbatim in the dispatched agent's brief.** Restating the rule, even maximally,
+  has now empirically failed as a deterrent for this category of agent behavior — the actual fix was
+  always going to be mechanical (G7c), and it worked exactly as designed: caught 2 real `refs/stash`
+  writes (`push tmp/823f...`-style before/after comparisons on `agent/src/{server,index}.ts`, then
+  `api/src/routes/agent.ts` tests) via `.git/factory-stash-activity.log`, and G7c's baseline
+  mechanism means `stash-guard` now reports `fail` **permanently** for worktree `Ship-wt-tro_328`
+  — re-running `gate.sh` does not clear it, because the baseline is captured once, at that
+  worktree's first-ever gate run, and the log only grows.
+  **What was verified before treating this as non-blocking:** `git worktree list` showed no sibling
+  worktree existed concurrently (this run was solo — the actual data-loss risk the ban exists to
+  prevent could not have materialized this time); `git stash list` showed only a pre-existing,
+  untouched, days-old entry (`tro215-fix-temp`) — nothing from this incident is currently stashed,
+  both push/pop pairs cleanly resolved. The agent disclosed this itself in `CHANGES.md`, unprompted,
+  including naming the sanctioned alternative it should have used instead (`git show HEAD:<path>`
+  or copy-aside) — a real example of this repo's own provenance culture working even when the
+  underlying action was banned.
+  **Decision, orchestrator-made:** do NOT reset the per-worktree `.factory/stash-baseline-lines`
+  file to force a fresh "pass" — that would quietly erase the only durable evidence (gitignored,
+  worktree-local) that this happened, which is the opposite of "surface, don't hide." Instead:
+  `stash-guard: fail` stays in every future `gate.sh` run for this worktree's remaining life,
+  treated the same as this factory's other documented gate-check overrides (TRO-233's
+  `tests:not-weakened`, terraform tickets' `regression-test`) — an explicit, reasoned exception
+  recorded at the merge decision, not a silently green gate. Any future PR/merge for bundle TRO-328
+  must restate this reasoning rather than reporting `gate.sh: pass` unqualified.
+  **Not yet tried: blocking the command itself.** Every fix so far (repeated warnings, then G7c's
+  after-the-fact detection) has been reactive. A `git` alias or wrapper script that refuses `stash
+  push`/`pop` inside a path matching `Ship-wt-*` would prevent the write instead of merely detecting
+  it — worth proposing as a follow-up ticket rather than another lessons.md restatement, since this
+  file has now tried restatement five times.

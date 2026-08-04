@@ -48,6 +48,26 @@ export interface AgentConfig {
    * figure without re-deriving it from scratch. There is no production
    * traffic yet to measure a better number against. */
   onDemandDocumentCap: number;
+  /** Shared secret `POST /chat` requires on the `X-Internal-Secret` header
+   * (TRO-320 / FG-9). This agent's HTTP surface is reachable from the public
+   * internet (a Render service, no private networking configured) — without
+   * this check, anyone could spend the configured Anthropic API budget and
+   * query the graph as an arbitrary `askingUserId`. No default: `undefined`
+   * means `/chat` fails closed (every request rejected), never open. Must
+   * match the value `api/`'s `AGENT_API_BASE_URL`-calling route sends —
+   * see `api/.env.example`. */
+  agentInternalSecret: string | undefined;
+  /** How long `POST /chat` (server.ts) waits on `graph.invoke(...)` before
+   * giving up on ITS OWN response, in ms (CodeRabbit review, PR #120). The
+   * `api/` proxy that calls this route aborts its own outbound fetch after
+   * `AGENT_REQUEST_TIMEOUT_MS` (30s, `api/src/routes/agent.ts`) — but that
+   * only stops api/'s wait; it does nothing to this Express handler, which
+   * would otherwise keep awaiting a hung graph/model/Ship call indefinitely,
+   * consuming a request slot for a caller that already received a 502.
+   * Deliberately shorter than api/'s 30s bound so this process gives up
+   * first, while the caller is still there to receive something other than
+   * a connection reset. */
+  chatHandlerTimeoutMs: number;
 }
 
 const DEFAULT_PORT = 3100;
@@ -60,6 +80,9 @@ const DEFAULT_SELF_THROTTLE_RPM = 500;
 const DEFAULT_PROACTIVE_POLL_INTERVAL_MS = 60_000;
 const DEFAULT_PROACTIVE_INITIAL_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_ON_DEMAND_DOCUMENT_CAP = 12;
+// Shorter than api/'s own AGENT_REQUEST_TIMEOUT_MS (30_000ms,
+// api/src/routes/agent.ts) — see chatHandlerTimeoutMs's own docstring.
+const DEFAULT_CHAT_HANDLER_TIMEOUT_MS = 25_000;
 
 function positiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
@@ -95,12 +118,21 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     // silently disable expansion (`OnDemandDeps.documentCap`'s own docstring:
     // "required, not a nice-to-have").
     onDemandDocumentCap: positiveInt(env.ON_DEMAND_DOCUMENT_CAP, DEFAULT_ON_DEMAND_DOCUMENT_CAP),
+    agentInternalSecret: env.AGENT_INTERNAL_SECRET,
+    chatHandlerTimeoutMs: positiveInt(env.CHAT_HANDLER_TIMEOUT_MS, DEFAULT_CHAT_HANDLER_TIMEOUT_MS),
   };
 }
 
 /**
  * "Config loaded" half of /ready (TRO-313's proof section). The other half —
  * Ship reachability — is a live check, not a static one; see `health.ts`.
+ *
+ * Deliberately does NOT include `agentInternalSecret`: that field gates one
+ * route (`POST /chat`, TRO-320 / FG-9) and is checked there directly — folding
+ * it in here would make `/ready` (and the proactive poller's start condition,
+ * `index.ts`) depend on a value that has nothing to do with either. A missing
+ * secret makes `/chat` fail closed on its own; it does not make the process
+ * "not ready."
  */
 export function isConfigComplete(config: AgentConfig): boolean {
   return (

@@ -37,6 +37,8 @@ import { SelectionPersistenceProvider } from '@/contexts/SelectionPersistenceCon
 import { ActionItemsModal } from '@/components/ActionItemsModal';
 import { AccountabilityBanner } from '@/components/AccountabilityBanner';
 import { ProjectContextSidebar } from '@/components/sidebars/ProjectContextSidebar';
+import { InboxSidebar } from '@/components/InboxSidebar';
+import { useInboxQuery } from '@/hooks/useInboxQuery';
 
 type Mode = 'docs' | 'issues' | 'projects' | 'programs' | 'sprints' | 'team' | 'settings' | 'dashboard' | 'project-context';
 
@@ -58,6 +60,13 @@ export function AppLayout() {
   const [projectSetupWizardOpen, setProjectSetupWizardOpen] = useState(false);
   const [actionItemsModalOpen, setActionItemsModalOpen] = useState(false);
   const [actionItemsModalShownOnLoad, setActionItemsModalShownOnLoad] = useState(false);
+  // TRO-323 / FG-10: the ranked inbox overlay, toggled from the Icon Rail —
+  // NOT one of the routed `Mode`s below. It temporarily replaces the
+  // Contextual Sidebar's normal mode-based content ("the Icon Rail plus
+  // contextual sidebar is the natural home. No fifth panel" — the ticket's
+  // own words) without navigating anywhere, so whatever page was open stays
+  // open underneath it.
+  const [inboxOpen, setInboxOpen] = useState(false);
 
   // Session timeout handling
   const handleSessionTimeout = useCallback(() => {
@@ -81,6 +90,17 @@ export function AppLayout() {
   const { data: actionItemsData } = useActionItemsQuery();
   const hasActionItems = (actionItemsData?.items?.length ?? 0) > 0;
   const queryClient = useQueryClient();
+
+  // TRO-323 / FG-10: the agent's ranked inbox (mentions/blocking-approvals/
+  // drafts) — deliberately a SEPARATE query and badge from actionItemsData
+  // above. That is the accountability engine's "you owe a standup"; this is
+  // different data from a different store (agent/src/itemStore.ts), fetched
+  // here (not just inside InboxSidebar) so the rail badge reflects reality
+  // even while the panel is closed. React Query dedupes the identical
+  // queryKey, so this does not double the network request once the panel
+  // is opened.
+  const { data: inboxData } = useInboxQuery();
+  const hasInboxItems = inboxData?.status === 'ok' && inboxData.items.length > 0;
 
   // Celebration state for when user completes an accountability item
   const [isCelebrating, setIsCelebrating] = useState(false);
@@ -203,6 +223,14 @@ export function AppLayout() {
   const activeDocumentId = getActiveDocumentId();
 
   const handleModeClick = (mode: Mode) => {
+    // TRO-323/FG-10 follow-up (CodeRabbit review, PR #120): a normal
+    // rail-mode click must always close the Inbox overlay first — otherwise
+    // the Contextual Sidebar can show the Inbox overlay AND the
+    // newly-selected mode as simultaneously "active" (header text and
+    // `InboxSidebar` stay mounted while `activeMode` also changes underneath
+    // it). Every rail-mode `RailIcon` shares this one function, so this
+    // single reset covers all of them.
+    setInboxOpen(false);
     switch (mode) {
       case 'dashboard': void navigate('/my-week'); break;
       case 'docs': void navigate('/docs'); break;
@@ -383,6 +411,23 @@ export function AppLayout() {
               active={activeMode === 'dashboard'}
               onClick={() => handleModeClick('dashboard')}
             />
+            {/* TRO-323 / FG-10: NOT one of the routed handleModeClick cases
+              * above — toggles the Contextual Sidebar's content between the
+              * ranked inbox and whatever mode was already active, without
+              * navigating. Always un-collapses the sidebar so the toggle is
+              * never a no-op button (hideLeftSidebar/leftSidebarCollapsed
+              * would otherwise leave it invisible on some pages). */}
+            <RailIcon
+              icon={<InboxIcon />}
+              label="Inbox"
+              active={inboxOpen}
+              ariaExpanded={inboxOpen}
+              onClick={() => {
+                setInboxOpen((prev) => !prev);
+                setLeftSidebarCollapsed(false);
+              }}
+              showBadge={hasInboxItems}
+            />
             <RailIcon
               icon={<DocsIcon />}
               label="Docs"
@@ -452,116 +497,140 @@ export function AppLayout() {
         <aside
           className={cn(
             'flex flex-col border-r border-border transition-all duration-200 overflow-hidden select-none',
-            (leftSidebarCollapsed || hideLeftSidebar) ? 'w-0 border-r-0' : 'w-56'
+            // inboxOpen always wins: the Inbox rail icon must never be a
+            // silent no-op just because the sidebar happened to be
+            // collapsed, or hidden on a page like a weekly doc/standup
+            // (hideLeftSidebar) — TRO-323 / FG-10.
+            (leftSidebarCollapsed || hideLeftSidebar) && !inboxOpen ? 'w-0 border-r-0' : 'w-56'
           )}
-          aria-label="Document list"
+          aria-label={inboxOpen ? 'Inbox' : 'Document list'}
         >
           <div className="flex w-56 flex-col h-full">
             {/* Sidebar header */}
             <div className="flex h-10 items-center justify-between border-b border-border px-3">
               <h2 className="text-sm font-medium text-foreground m-0">
-                {activeMode === 'dashboard' && 'Dashboard'}
-                {activeMode === 'docs' && 'Docs'}
-                {activeMode === 'issues' && 'Issues'}
-                {activeMode === 'projects' && 'Projects'}
-                {activeMode === 'programs' && 'Programs'}
-                {activeMode === 'sprints' && 'Weeks'}
-                {activeMode === 'team' && 'Teams'}
-                {activeMode === 'settings' && 'Settings'}
-                {activeMode === 'project-context' && 'Project'}
+                {inboxOpen ? 'Inbox' : (
+                  <>
+                    {activeMode === 'dashboard' && 'Dashboard'}
+                    {activeMode === 'docs' && 'Docs'}
+                    {activeMode === 'issues' && 'Issues'}
+                    {activeMode === 'projects' && 'Projects'}
+                    {activeMode === 'programs' && 'Programs'}
+                    {activeMode === 'sprints' && 'Weeks'}
+                    {activeMode === 'team' && 'Teams'}
+                    {activeMode === 'settings' && 'Settings'}
+                    {activeMode === 'project-context' && 'Project'}
+                  </>
+                )}
               </h2>
-              <div className="flex items-center gap-1">
-                {activeMode === 'docs' && (
-                  <Tooltip content="New document">
+              {/* The mode-specific "New X" buttons and the collapse button
+                * are all about the underlying mode, which the Inbox overlay
+                * temporarily hides — showing them while inboxOpen would let
+                * you e.g. create a new document without ever leaving the
+                * inbox view, or "collapse" a sidebar the width formula above
+                * pins open anyway. Closing the inbox is the rail icon toggle
+                * itself (click Inbox again), so this whole row is simply
+                * absent while inboxOpen is true. */}
+              {!inboxOpen && (
+                <div className="flex items-center gap-1">
+                  {activeMode === 'docs' && (
+                    <Tooltip content="New document">
+                      <button
+                        onClick={() => { void handleCreateDocument(); }}
+                        className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-border hover:text-foreground transition-colors"
+                        aria-label="New document"
+                      >
+                        <PlusIcon />
+                      </button>
+                    </Tooltip>
+                  )}
+                  {activeMode === 'issues' && (
+                    <Tooltip content="New issue">
+                      <button
+                        onClick={() => { void handleCreateIssue(); }}
+                        className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-border hover:text-foreground transition-colors"
+                        aria-label="New issue"
+                      >
+                        <PlusIcon />
+                      </button>
+                    </Tooltip>
+                  )}
+                  {activeMode === 'projects' && (
+                    <Tooltip content="New project">
+                      <button
+                        onClick={handleCreateProject}
+                        className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-border hover:text-foreground transition-colors"
+                        aria-label="New project"
+                      >
+                        <PlusIcon />
+                      </button>
+                    </Tooltip>
+                  )}
+                  <Tooltip content="Collapse sidebar">
                     <button
-                      onClick={() => { void handleCreateDocument(); }}
+                      onClick={() => setLeftSidebarCollapsed(true)}
                       className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-border hover:text-foreground transition-colors"
-                      aria-label="New document"
+                      aria-label="Collapse sidebar"
                     >
-                      <PlusIcon />
+                      <CollapseLeftIcon />
                     </button>
                   </Tooltip>
-                )}
-                {activeMode === 'issues' && (
-                  <Tooltip content="New issue">
-                    <button
-                      onClick={() => { void handleCreateIssue(); }}
-                      className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-border hover:text-foreground transition-colors"
-                      aria-label="New issue"
-                    >
-                      <PlusIcon />
-                    </button>
-                  </Tooltip>
-                )}
-                {activeMode === 'projects' && (
-                  <Tooltip content="New project">
-                    <button
-                      onClick={handleCreateProject}
-                      className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-border hover:text-foreground transition-colors"
-                      aria-label="New project"
-                    >
-                      <PlusIcon />
-                    </button>
-                  </Tooltip>
-                )}
-                <Tooltip content="Collapse sidebar">
-                  <button
-                    onClick={() => setLeftSidebarCollapsed(true)}
-                    className="flex h-6 w-6 items-center justify-center rounded text-muted hover:bg-border hover:text-foreground transition-colors"
-                    aria-label="Collapse sidebar"
-                  >
-                    <CollapseLeftIcon />
-                  </button>
-                </Tooltip>
-              </div>
+                </div>
+              )}
             </div>
 
             {/* Sidebar content */}
             <div className="flex-1 overflow-auto py-2">
-              {activeMode === 'docs' && (
-                <DocumentsTree
-                  documents={documents}
-                  activeId={activeDocumentId}
-                  onSelect={(id) => void navigate(`/documents/${id}`)}
-                />
-              )}
-              {activeMode === 'issues' && (
-                <IssuesSidebar
-                  issues={issues}
-                  activeId={activeDocumentId}
-                  onUpdateIssue={updateIssue}
-                />
-              )}
-              {activeMode === 'projects' && (
-                <ProjectsList
-                  projects={projects}
-                  activeId={activeDocumentId}
-                  currentProjectId={currentDocumentProjectId}
-                  onUpdateProject={updateProject}
-                />
-              )}
-              {activeMode === 'programs' && (
-                <ProgramsList
-                  programs={programs}
-                  activeId={activeDocumentId}
-                  onSelect={(id) => void navigate(`/documents/${id}`)}
-                  onUpdateProgram={updateProgram}
-                />
-              )}
-              {activeMode === 'team' && (
-                <TeamSidebar />
-              )}
-              {activeMode === 'settings' && (
-                <div className="px-3 py-2 text-sm text-muted">Settings</div>
-              )}
-              {activeMode === 'dashboard' && (
-                <DashboardSidebar />
-              )}
-              {activeMode === 'project-context' && currentDocumentProjectId && (
-                <ProjectContextSidebar
-                  projectId={currentDocumentProjectId}
-                  activeDocumentId={activeDocumentId}
-                />
+              {inboxOpen ? (
+                <InboxSidebar onNavigate={() => setInboxOpen(false)} />
+              ) : (
+                <>
+                  {activeMode === 'docs' && (
+                    <DocumentsTree
+                      documents={documents}
+                      activeId={activeDocumentId}
+                      onSelect={(id) => void navigate(`/documents/${id}`)}
+                    />
+                  )}
+                  {activeMode === 'issues' && (
+                    <IssuesSidebar
+                      issues={issues}
+                      activeId={activeDocumentId}
+                      onUpdateIssue={updateIssue}
+                    />
+                  )}
+                  {activeMode === 'projects' && (
+                    <ProjectsList
+                      projects={projects}
+                      activeId={activeDocumentId}
+                      currentProjectId={currentDocumentProjectId}
+                      onUpdateProject={updateProject}
+                    />
+                  )}
+                  {activeMode === 'programs' && (
+                    <ProgramsList
+                      programs={programs}
+                      activeId={activeDocumentId}
+                      onSelect={(id) => void navigate(`/documents/${id}`)}
+                      onUpdateProgram={updateProgram}
+                    />
+                  )}
+                  {activeMode === 'team' && (
+                    <TeamSidebar />
+                  )}
+                  {activeMode === 'settings' && (
+                    <div className="px-3 py-2 text-sm text-muted">Settings</div>
+                  )}
+                  {activeMode === 'dashboard' && (
+                    <DashboardSidebar />
+                  )}
+                  {activeMode === 'project-context' && currentDocumentProjectId && (
+                    <ProjectContextSidebar
+                      projectId={currentDocumentProjectId}
+                      activeDocumentId={activeDocumentId}
+                    />
+                  )}
+                </>
               )}
             </div>
 
@@ -620,7 +689,7 @@ export function AppLayout() {
   );
 }
 
-function RailIcon({ icon, label, active, onClick, showBadge }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void; showBadge?: boolean }) {
+function RailIcon({ icon, label, active, onClick, showBadge, ariaExpanded }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void; showBadge?: boolean; ariaExpanded?: boolean }) {
   return (
     <Tooltip content={label} side="right">
       <button
@@ -630,6 +699,7 @@ function RailIcon({ icon, label, active, onClick, showBadge }: { icon: React.Rea
           active ? 'bg-border text-foreground' : 'text-muted hover:bg-border/50 hover:text-foreground'
         )}
         aria-label={label}
+        aria-expanded={ariaExpanded}
       >
         {icon}
         {showBadge && (
@@ -1861,6 +1931,15 @@ function DocsIcon() {
   return (
     <svg aria-hidden="true" className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+    </svg>
+  );
+}
+
+// TRO-323 / FG-10
+function InboxIcon() {
+  return (
+    <svg aria-hidden="true" className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 12h4l2 3h6l2-3h4M5 12l1.5-6.5A2 2 0 018.44 4h7.12a2 2 0 011.94 1.5L19 12v6a2 2 0 01-2 2H7a2 2 0 01-2-2v-6z" />
     </svg>
   );
 }

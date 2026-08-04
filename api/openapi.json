@@ -98,7 +98,7 @@
               "sprint",
               "parent"
             ],
-            "description": "Type of document association (containment only — see RelationshipTypeSchema for the full set including \"blocks\")"
+            "description": "Type of document association (containment only — see the Association schema's relationship_type field for the full set, which also includes \"blocks\")"
           }
         },
         "required": [
@@ -123,7 +123,7 @@
               "sprint",
               "parent"
             ],
-            "description": "Type of document association (containment only — see RelationshipTypeSchema for the full set including \"blocks\")"
+            "description": "Type of document association (containment only — see the Association schema's relationship_type field for the full set, which also includes \"blocks\")"
           },
           "title": {
             "type": "string",
@@ -5892,6 +5892,147 @@
         },
         "required": [
           "available"
+        ]
+      },
+      "AgentCitedSource": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "documentType": {
+            "type": "string",
+            "description": "Ship document_type of the cited source (e.g. \"issue\", \"sprint\", \"wiki\")"
+          },
+          "title": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why this document was pulled into the answer — FLEETGRAPH.MD: \"It names every document it pulled in and why,\" the trust mechanism the chat panel renders alongside each source."
+          }
+        },
+        "required": [
+          "documentId",
+          "documentType",
+          "title",
+          "reason"
+        ]
+      },
+      "AgentChatResponse": {
+        "type": "object",
+        "properties": {
+          "output": {
+            "type": "string",
+            "description": "The agent's answer"
+          },
+          "citedSources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentCitedSource"
+            }
+          },
+          "expansionCapped": {
+            "type": "boolean",
+            "description": "True if the on-demand expansion hit its document cap before the walk ran out of candidates on its own"
+          }
+        },
+        "required": [
+          "output",
+          "citedSources",
+          "expansionCapped"
+        ]
+      },
+      "AgentInboxItemEvidence": {
+        "type": "object",
+        "properties": {
+          "documentId": {
+            "type": "string"
+          },
+          "documentType": {
+            "type": "string"
+          },
+          "commentId": {
+            "type": "string"
+          }
+        }
+      },
+      "AgentInboxItemAction": {
+        "type": "object",
+        "properties": {
+          "label": {
+            "type": "string",
+            "description": "Button/link text for the direct action"
+          },
+          "href": {
+            "type": "string",
+            "description": "Where acting on this item takes the person — a concrete Ship document/route"
+          }
+        },
+        "required": [
+          "label",
+          "href"
+        ]
+      },
+      "AgentInboxItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable across polls for the same underlying fact — safe to use as a React key"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "mention",
+              "blocking_approval",
+              "standup_draft"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          },
+          "evidence": {
+            "$ref": "#/components/schemas/AgentInboxItemEvidence"
+          },
+          "action": {
+            "$ref": "#/components/schemas/AgentInboxItemAction"
+          },
+          "blockedCount": {
+            "type": "number",
+            "description": "blocking_approval only: how many OTHER people are currently blocked on this recipient's action"
+          },
+          "blockedSince": {
+            "type": "string",
+            "format": "date-time",
+            "description": "blocking_approval only: when the blocking condition first appeared",
+            "example": "2025-01-30T14:30:00.000Z"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "summary",
+          "evidence",
+          "action"
+        ]
+      },
+      "AgentInboxResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentInboxItem"
+            },
+            "description": "Already fully ranked by the agent (blocking_approval first, highest blockedCount first within that, ties broken by longest-waiting; then mention oldest-first; then standup_draft oldest-first) — this endpoint does no re-sorting."
+          }
+        },
+        "required": [
+          "items"
         ]
       }
     },
@@ -11853,6 +11994,98 @@
           },
           "429": {
             "description": "Rate limit exceeded (max 10 per hour)"
+          }
+        }
+      }
+    },
+    "/agent/chat": {
+      "post": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Ask the FleetGraph agent a question seeded by an open document",
+        "description": "Proxies to the agent service (AGENT_API_BASE_URL) over a shared-secret-authenticated internal call — the browser never calls the agent service directly, since it has no concept of a Ship session. askingUserId is taken from the authenticated session (never from the request body) and forwarded so the agent runs the on-demand expansion walk under that user's own visibility, not an elevated one. Returns a clean degraded shape — never a hang — when the agent is unreachable or not configured on either side.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "seedDocumentId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "description": "The document open when the question was asked. Seeds, but does not fence, the expansion walk.",
+                    "example": "550e8400-e29b-41d4-a716-446655440000"
+                  },
+                  "question": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  }
+                },
+                "required": [
+                  "seedDocumentId",
+                  "question"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The agent's answer, with every document it pulled in and why",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentChatResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing seedDocumentId or question, or question exceeds the max length"
+          },
+          "401": {
+            "description": "No valid session — the browser must be signed in (authMiddleware)"
+          },
+          "403": {
+            "description": "CSRF token missing or invalid for a session-cookie request (conditionalCsrf)"
+          },
+          "502": {
+            "description": "The agent service is unreachable, timed out, or returned an error"
+          },
+          "503": {
+            "description": "The agent is not configured — AGENT_INTERNAL_SECRET is unset on this side, so no request was sent"
+          }
+        }
+      }
+    },
+    "/agent/inbox": {
+      "get": {
+        "tags": [
+          "Agent"
+        ],
+        "summary": "Get the signed-in user's ranked FleetGraph inbox — mentions, blocking approvals, and standup drafts that need them",
+        "description": "Proxies to the agent service (AGENT_API_BASE_URL) over the same shared-secret-authenticated internal call POST /agent/chat uses. recipientUserId is taken from the authenticated session (never from a query param) and forwarded so nobody can read another person's inbox by editing the request. Returns a clean degraded shape — never a hang — when the agent is unreachable or not configured on either side.",
+        "responses": {
+          "200": {
+            "description": "The recipient's ranked inbox items, already sorted by the agent",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentInboxResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "No valid session — the browser must be signed in (authMiddleware)"
+          },
+          "502": {
+            "description": "The agent service is unreachable, timed out, or returned an error"
+          },
+          "503": {
+            "description": "The agent is not configured — AGENT_INTERNAL_SECRET is unset on this side, so no request was sent"
           }
         }
       }
