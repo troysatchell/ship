@@ -259,6 +259,305 @@ while those two remain breaks the build — files they add or edit import things
 
 ---
 
+## TRO-325 — [PR-A] EPIC: Ship-side API foundations (change feed, blocks relationship, fixtures)
+
+Bundle epic, one branch (`feat/pr-a-ship-api-foundations`) / one PR covering four sub-issues that
+ship together because they share a surface (`api/`, `shared/`, `db/`), not a root cause. Each
+sub-issue has its own entry below (this file lists newest-first, so look for the ticket ID): TRO-312
+[FG-1] change-feed endpoint, TRO-314 [FG-3] seed/fixture trigger-state work, TRO-332 [FG-14] cycle
+protection on `document_associations` (landed first per the epic's stated internal order — cycle
+protection must guard the new relationship before it exists), TRO-333 [FG-15] the `blocks`
+relationship. See each sub-issue's own entry for what was broken, what changed, how to run/test it,
+and how to roll it back individually.
+
+**Rollback (whole bundle).** Revert the branch's merge commit, or cherry-pick-revert each
+sub-issue's own commit individually — every sub-issue below is its own commit and its own change,
+not one undifferentiated diff.
+
+---
+
+## TRO-332 — [FG-14] Cycle protection on `document_associations` (A-blocks-B-blocks-A was insertable)
+
+**What was broken.** `document_associations` (`api/src/db/schema.sql:209-222`) had zero cycle
+protection. `prevent_circular_parent()` (`schema.sql:165`) only guards the single-valued
+`documents.parent_id` column; the junction table has no trigger, no depth cap, nothing. A caller
+could `POST /api/documents/:id/associations` A→B and then B→A (or the equivalent for any
+relationship_type) and both would succeed. That is latent in Ship today, independent of any agent
+code — the moment anything walks the association graph outward (the existing `/:id/context`
+ancestors CTE in `associations.ts`, and FleetGraph's planned traversal) it loops until something
+times out or the heap runs out.
+
+**What changed.** `api/src/db/migrations/040_prevent_circular_associations.sql` (new) adds
+`prevent_circular_association()` + `prevent_circular_association_trigger`
+(`BEFORE INSERT OR UPDATE ON document_associations`). Adapted from `prevent_circular_parent()` but
+generalized to a visited-set BFS (not a linear walk) because this table is not single-valued — a
+document can hold multiple outgoing edges of the same `relationship_type` (see
+"Multi-parent associations" in `associations-regression.test.ts`), so the association graph can
+fan out. Capped at 100 visited nodes so a pathological graph fails fast rather than hanging the
+insert.
+
+**Scope decision, recorded in the migration's own comment:** the cycle check is scoped **per
+`relationship_type`**, not across all types combined. A `parent` cycle and a `blocks` cycle (landing
+in TRO-333, migration 041) are different problems, and containment types are expected to legitimately
+co-exist with a `blocks` edge in the reverse direction — checking across types would reject that
+coexistence as a false-positive cycle.
+
+**Concurrency caveat, also recorded in the migration comment (PM review 2026-08-03):** a `BEFORE`
+trigger cannot guarantee acyclicity under concurrency — two edges that each close no cycle alone but
+together form one can both commit, since neither transaction's walk sees the other's uncommitted
+row. Not worth a `SERIALIZABLE` transaction or an advisory lock at this write volume (association
+writes are low-frequency, interactive edits, not a hot path); this trigger guards the common case and
+is explicitly not a proof of acyclicity. FG-7's future traversal must carry its own hard document cap
+and its own visited-set regardless of what the database promises here.
+
+**CodeRabbit triage: advisory-lock suggestion dismissed, not overlooked.** CodeRabbit flagged the
+trigger's BFS as needing a transaction-scoped advisory lock to close the concurrent-insert race.
+This is exactly the tradeoff the PM review already evaluated and declined two paragraphs above,
+in the migration's own comment, before CodeRabbit ever saw the diff — applying the suggestion here
+would silently reverse a recorded product decision, not fix an overlooked bug. Left as-is.
+
+**Migration numbering note:** TRO-333's own ticket body names `040_add_blocks_relationship.sql` as
+"the next free number." This ticket (TRO-332) landed first per the bundle epic's stated internal
+order ("FG-14 before FG-15 — cycle protection guards the new relationship"), so it claims migration
+040 and TRO-333's blocks migration is renumbered to 041. Recorded here explicitly since it deviates
+from TRO-333's literal filename instruction — the deviation preserves the epic's own ordering
+requirement rather than violating it silently.
+
+**Regression test.** `api/src/routes/association-cycle-protection.test.ts` (new, 5 cases): confirms
+the trigger actually exists on a migrated database (not assumed from the file — DB-1 means
+`pnpm db:migrate` can silently under-apply); rejects a 2-node cycle; rejects a 3-node cycle; allows a
+legitimate chain within the depth cap; confirms a same-pair edge of a *different* relationship_type
+does not cross-contaminate the check. Confirmed red first: ran against the unmigrated database (no
+040 applied) — 4 of 5 cases failed, the cycle-forming inserts succeeding silently and the
+"trigger exists" check finding zero rows in `pg_trigger`. After `pnpm db:migrate`, all 5 pass.
+Existing `circular-reference.test.ts` (parent_id trigger) and `associations-regression.test.ts` (12
+cases) both still pass unmodified — proof item 3 (existing association behavior unchanged).
+
+**How to run it.** `source .factory-env && pnpm db:migrate && pnpm --filter @ship/api exec vitest run src/routes/association-cycle-protection.test.ts src/routes/circular-reference.test.ts src/routes/associations-regression.test.ts`
+
+**How to roll it back.** Revert this commit (or `DROP TRIGGER prevent_circular_association_trigger ON document_associations; DROP FUNCTION prevent_circular_association();` directly). No data migration involved — the trigger only affects future INSERT/UPDATE, so rollback is safe on a database that already has non-cyclic data (the only kind this trigger ever allowed to be written).
+
+---
+
+## TRO-333 — [FG-15] `blocks` relationship: Ship can now express "issue A blocks issue B"
+
+**What was broken.** Ship's `relationship_type` enum was only containment
+(`parent | project | sprint | program`) — there was no way to express a dependency between two
+documents, and `document_links` (backlinks) had 0 rows. FG-19 (tracing a blocker whose impact
+crosses reporting lines) had no Ship view that could show it.
+
+**What changed.** Five edits, per the ticket's own PM-review scope amendment (2026-08-03), which
+supersedes the original edit #2:
+1. `api/src/db/migrations/041_add_blocks_relationship.sql` (new) — `ALTER TYPE relationship_type
+   ADD VALUE IF NOT EXISTS 'blocks'`, pattern copied from migration 017. Numbered 041, not 040 as
+   the ticket names — TRO-332 (FG-14, cycle protection) claimed 040 to land first per the bundle's
+   internal order; see TRO-332's CHANGES.md entry.
+2. `shared/src/types/document.ts` — **did not** add `'blocks'` to `BelongsToType` (the amendment).
+   Added `export type RelationshipType = BelongsToType | 'blocks'` alongside it for the API layer.
+3. `api/src/routes/associations.ts` — `'blocks'` added to `createAssociationSchema`'s zod enum and
+   to the `validTypes` runtime array (both call sites the ticket names).
+4. `api/src/utils/document-crud.ts` — the amendment's actual teeth. `getBelongsToAssociations`,
+   `getBelongsToAssociationsBatch`, and `syncBelongsToAssociations`'s DELETE are now all scoped to
+   `relationship_type IN ('parent','project','sprint','program')`. Without this, a `blocks` edge
+   would have appeared in every document's `belongs_to` array — consumed unfiltered by 10+ web
+   components (`ContextTreeNav`, `PropertiesPanel`, `IssuesList`, `UnifiedEditor`, the week tabs) —
+   rendering a blocking issue as if it were a parent/project, and `syncBelongsToAssociations` would
+   have silently deleted any `blocks` edges on a future caller that uses it for a "save" flow
+   (verified uncalled from any route today, but the DELETE was previously unscoped).
+5. **OpenAPI** (`/ship-openapi-endpoints`, verified in Swagger, not assumed): `common.ts` gets a new
+   `RelationshipTypeSchema` (the full 5-value enum) kept separate from `BelongsToTypeSchema` (still
+   4 values, containment only) for the same reason as edit #2. `backlinks.ts`'s `AssociationSchema`
+   and the `POST /documents/{id}/associations` body now use `RelationshipTypeSchema`. Confirmed by
+   running `pnpm openapi:generate` and inspecting `openapi.json`: both the `Association` component
+   schema and the POST body's inline enum list `"blocks"` alongside the four containment types.
+
+**Regression test.** `api/src/routes/blocks-relationship.test.ts` (new, 5 cases), covering the
+ticket's stated proof items: POST + GET round-trip; the reverse ("blocked by") query; FG-14's cycle
+trigger rejecting a `blocks`-specific cycle (not just the containment types it was built and tested
+against); the scope-amendment proof that a `blocks` edge does not leak into `belongs_to` while the
+generic associations GET still returns it; and a live call to `generateOpenAPIDocument()` asserting
+`'blocks'` appears in the generated spec (protects the Swagger registration itself, not just the
+route behavior). Confirmed red first: reverted `associations.ts`, `document-crud.ts`,
+`shared/src/types/document.ts`, and the two openapi schema files to their pre-fix HEAD versions
+(migrations 040/041 stayed applied), reran — all 5 cases failed, proof 1 with `expected 400 to be
+201` (the zod layer rejecting `'blocks'`, exactly as the ticket describes). Restored the fix, all 5
+pass, plus `associations-regression.test.ts` (12), `circular-reference.test.ts` (5),
+`association-cycle-protection.test.ts` (5), and `issues.test.ts` (27) all still pass unmodified.
+
+**How to run it.** `source .factory-env && pnpm db:migrate && pnpm build:shared && pnpm --filter @ship/api exec vitest run src/routes/blocks-relationship.test.ts`
+
+**How to roll it back.** Revert this commit. The enum value migration is additive (no data migration,
+nothing else references `'blocks'` yet outside this branch), so a rollback is safe — existing
+containment associations are completely unaffected either way.
+
+---
+
+## TRO-312 — [FG-1] `GET /api/change-feed` — "what changed since a cursor"
+
+**What was broken.** FleetGraph's proactive mode is defined as "observe state changes since a
+cursor." Ship's API had no way to ask that question: zero occurrences of `since`/`updated_since`
+as a query parameter anywhere in `api/src/routes/`, `GET /api/documents` sorts by
+`position, created_at` (recently-updated documents never surface at the head), and the endpoints
+that do sort `updated_at DESC` (two dashboard widgets, search, one week lookup) take no time
+filter. The proactive half of the agent's MVP had no input.
+
+**What changed.** `GET /api/change-feed?since=<iso>&limit=<n>` (new route,
+`api/src/routes/change-feed.ts`, mounted read-only/no-CSRF in `app.ts` next to `dashboard`/
+`activity`). Workspace-scoped and permission-filtered as the calling user (reuses
+`getVisibilityContext`/`VISIBILITY_FILTER_SQL` from `middleware/visibility.ts` — the same pattern
+`documents.ts`'s list route uses — joined onto `document_history`/`comments` since neither has its
+own visibility column). Returns three arrays — `documents`, `history` (from `document_history`),
+`comments` — each item carrying a `dedupe_key`.
+
+**Did not ship the naive version, per the ticket's explicit warning.** A high-water mark on
+`updated_at` (or on `document_history.id`, a `SERIAL` — same flaw, handed out pre-commit)
+*permanently* misses a row whose transaction commits after the cursor has already advanced past its
+timestamp: a slower transaction with an earlier timestamp can commit after a faster, later-stamped
+one a poll already saw and advanced past. The fix: the returned `next_cursor` is never advanced to
+"now" — it lags `Date.now()` by a fixed `CHANGE_FEED_LAG_MS` (5s, exported for tests). A change more
+recent than that safe cutoff is deliberately withheld and left for a later poll, once enough
+wall-clock time has passed that its transaction (and any earlier-timestamped sibling still in
+flight) is guaranteed to have committed. Stated plainly: this is a tunable safety margin, not a
+proof — it holds as long as `CHANGE_FEED_LAG_MS` exceeds the longest write transaction's duration.
+The cursor is also clamped to never regress behind a caller's own `since` (a caller polling faster
+than the lag window elapses would otherwise move its own cursor backwards).
+
+**A second permanent-miss path, found in CodeRabbit triage and fixed before merge: pagination could
+skip rows the same way the naive timestamp cursor could.** If any of the three categories hit
+`limit` (truncated), the original code still advanced the shared `next_cursor` all the way to
+`safeCutoff` — silently skipping every row of that category between the last one actually returned
+and `safeCutoff`, forever, the exact failure class this endpoint exists to prevent, just moved from
+the timestamp layer to the pagination layer. Fixed: when a category is truncated, `next_cursor` is
+capped at that category's last-returned row's timestamp instead, so the next poll re-covers the gap.
+A non-truncated category may then re-deliver a few already-seen rows in that re-covered window —
+expected and handled by `dedupe_key`, not a new bug. Also added: `since` in the future now 400s
+(previously silently accepted, producing an inverted or empty window with no error).
+
+**OpenAPI** (`/ship-openapi-endpoints`, verified in Swagger, not assumed):
+`api/src/openapi/schemas/change-feed.ts` (new) registers `GET /change-feed` with
+`ChangeFeedResponseSchema` (`ChangedDocument`/`ChangedHistoryEntry`/`ChangedComment`, each with
+`dedupe_key`) and is wired into `schemas/index.ts`. Confirmed by running `pnpm openapi:generate` and
+inspecting `openapi.json`: `paths['/change-feed'].get` is present with `since` (required) and
+`limit` (optional) query params and a `$ref` to `ChangeFeedResponse`.
+
+**Regression test.** `api/src/routes/change-feed.test.ts` (new, 5 cases): (1) a change committing
+inside the lag window is deferred from the first poll, then returned once the window elapses —
+proven with `vi.useFakeTimers({ toFake: ['Date'] })` advancing only the `Date` global (not
+`setTimeout`, so the real HTTP/DB round trips inside the test still run on real timers) rather than
+an actual sleep; (2) never returns a private document owned by another user, or any document in a
+different workspace; (3) the same change carries an identical `dedupe_key` across two polls with
+the same (overlapping) `since`; plus coverage that `document_history` and `comments` both appear
+with their own `dedupe_key` shapes, and that a missing/malformed `since` 400s. Confirmed red first:
+temporarily reverted `app.ts`'s mount (`git checkout HEAD -- api/src/app.ts`, restored after) so
+`/api/change-feed` 404s — all 5 cases failed with `expected 200 to be 404` / `expected 400 to be
+404`, i.e. the route did not exist yet, which is the correct "before" state for a brand-new
+endpoint. Restored the mount, all 5 pass.
+
+**How to run it.** `source .factory-env && pnpm --filter @ship/api exec vitest run src/routes/change-feed.test.ts`
+
+**How to roll it back.** Revert this commit. No migration, no schema change — the endpoint is
+purely additive (a new read-only route), so rollback removes the endpoint and nothing else.
+
+**Not verified:** whether `CHANGE_FEED_LAG_MS = 5000` is the right value for this deployment's
+actual longest write-transaction duration — chosen as a reasonable default, not measured against
+production transaction timing. If a transaction can genuinely run longer than 5s, the row it writes
+can still be permanently missed; this is the tunable margin the design accepts, not a guarantee.
+
+---
+
+## TRO-314 — [FG-3] Seed fixture work: the trigger states four FleetGraph use cases had no reachable input for
+
+**What was broken.** The agent drafts from observed Ship activity. The dev-database seed was a Week
+4 load-testing fixture built to a volume spec ("500+ documents, 100+ issues, 20+ users, 10+
+sprints") that never recorded any of that activity: `document_history` and `comments` were both
+always 0 rows, no issue ever had `started_at`/`completed_at` set (including ones marked `done`), and
+no week ever had `plan_approval` set. Verified directly against this worktree's own database before
+any change: `document_history=0`, `comments=0`, `issues_done_with_started_at=0`,
+`weeks_with_plan_approval=0` on a fresh `pnpm db:seed` run — matching the ticket's own baseline
+exactly. The code that writes all of these exists and runs in normal use (state-transition timestamps
+in `document-crud.ts`'s `getTimestampUpdates`, the `changed_since_approved` transition in
+`documents.ts:1074`/`projects.ts:864`); the seed simply never exercised any of it, so four of six
+FleetGraph use cases (`FLEETGRAPH.MD` Test Cases 1-4) had no reachable trigger state.
+
+**What changed.** `api/src/db/seed.ts` gets one new block (gated on `document_history` being empty,
+so a re-run against an already-fixtured database is a no-op — there is no natural unique key for a
+`document_history` row, a comment, or a `plan_approval` transition to `ON CONFLICT` against):
+
+- **`started_at`/`completed_at`** backfilled on every `done` issue: most spread across the last ~5
+  weeks (so "sitting for N days" has a realistic distribution), every 4th one closing inside the
+  current week (computed from the same `sprint_start_date` + `currentSprintNumber` the rest of the
+  file already uses for "current sprint" — not a separate day-count guess).
+- **`document_history`**: a state-change entry (an issue moved `in_progress` → `in_review`) and a
+  content-edit entry on a current-week `weekly_plan` — the ticket's Scope item 1 names "issues AND
+  weekly plans" explicitly, not issues alone.
+- **`comments`**: at least two carrying a literal `@Full Name` mention. Confirmed the actual
+  convention first rather than assuming a structured TipTap mark: `comments.content` is plain
+  `TEXT` (`schema.sql:325`) and `CommentDisplay.tsx` renders comment input as a bare
+  `<input type="text">` — there is no mention *node* on this column, so `@Name` literal text is the
+  real convention, not a gap in this fix.
+- **`plan_approval`** set on several weeks (4 total): one `changes_requested`, one
+  `changed_since_approved` (the "approved, then edited" transition), two plain `approved`.
+- **`reports_to`**: verified still 10 of 11 people (root `dev@ship.local` deliberately has none) —
+  not re-seeded, so the escalation-degrades path stays exercised.
+
+**Also constructs concrete document ids for `FLEETGRAPH.MD` Test Cases 1-4**, per the ticket's own
+proof requirement ("those ids go into the ticket" — posted as a comment on TRO-314):
+- **Case 1** (engineer, 3 assigned issues, activity since last standup): picks the current-sprint
+  engineer with the most non-`done` assigned issues, moves one to `in_review` with history, comments
+  on a second, backdates the third's `updated_at` 7 days, and creates a standup from 3 days ago as
+  the "since" anchor.
+- **Case 2** (person mentioned in 2 docs they don't own, blocking someone else's week): 2 mentions of
+  Alice Chen on issues she neither created nor is assigned to, plus Emma Johnson's week (Emma reports
+  to Alice per the existing `reportingHierarchy`) set to `changes_requested` with Alice as
+  `approved_by`.
+- **Case 3** (week with 4 success criteria, 3 issues closed mapping to 2): current Ship Core week's
+  `success_criteria` overwritten to a real 4-item array (the pre-existing per-sprint value was a
+  single string, not an array, at every other week — left alone everywhere else, only overwritten
+  for this one week), its 3 already-`done` current-sprint issues closing within the week's actual
+  Mon-Sun boundary.
+- **Case 4** (plan approved at version N, then edited to remove one criterion): the prior completed
+  week's `plan_history` captures an original 4-criterion version, `success_criteria` shrunk to 3, and
+  `plan_approval.state = 'changed_since_approved'`.
+
+**A bug found and fixed while building this** (not shipped, caught before commit): Test Case 3's
+block re-sets `completed_at` on the same 3 issues the backfill loop already touched, without
+re-deriving `started_at` — an earlier draft left the stale `started_at` in place, which could land
+*after* the newly-assigned `completed_at`, violating "coherently populated". Fixed by having Test
+Case 3 derive its own `started_at` from its own `completed_at` rather than trusting the earlier
+loop's value. Caught by the regression test itself (see below), not by inspection.
+
+**Regression test.** `api/src/db/__tests__/seedFixtures.test.ts` (new, 6 cases). Per this ticket's
+own hazard note ("do not point the test suite at the development database — running Ship's tests
+wipes whatever database they are aimed at"), this test creates a throwaway scratch database
+(`randomBytes`-named, same pattern as `migrationRunner.test.ts`), runs the full migration set against
+it via `runMigrations()` (so it matches what `pnpm dev`'s migrate-then-seed actually produces, not
+just `seed.ts`'s own internal `schema.sql` re-application), then spawns the real
+`tsx src/db/seed.ts` CLI against it — never `DATABASE_URL` itself. Asserts: `document_history`
+non-empty and covers both `issue` and `weekly_plan`; `comments` non-empty with ≥2 mentions;
+`started_at`/`completed_at` set and coherent (`started_at <= completed_at`) on every `done` issue,
+with at least one closing in the last 7 days; `plan_approval` set on ≥3 weeks including one
+`changed_since_approved`; at least one person with no `reports_to` and at least one with; and a
+second seed run against the same database is a clean no-op. Confirmed red first: ran the pre-fix
+`seed.ts` against a fresh scratch database and queried directly —
+`document_history=0, comments=0, issues_done_with_started_at=0, weeks_with_plan_approval=0`,
+matching the ticket's own baseline exactly. After the fix, all 6 cases pass, confirmed stable across
+4 consecutive runs (the block uses `Math.random()` for date offsets, so repeat runs were checked
+deliberately for boundary-condition flakiness — none observed).
+
+**How to run it.** `source .factory-env && pnpm --filter @ship/api exec vitest run src/db/__tests__/seedFixtures.test.ts`
+
+**How to roll it back.** Revert this commit. `seed.ts`'s new block is additive and gated on
+`document_history` being empty, so reverting it only stops *future* `pnpm db:seed` runs on a fresh
+database from populating these fields — it does not delete rows from a database that already ran
+the fixed version (the seed script itself is never destructive).
+
+**Not verified:** whether the exact narrative match to each `FLEETGRAPH.MD` test case row (e.g.
+"mapping to 2 of them" in Case 3) will read correctly once FleetGraph's own drafting logic exists —
+this ticket constructs the Ship-side *state*, not the agent's interpretation of it, which is Phase 2
+and out of scope here.
+
+---
+
 ## GitLab CI — shared runners were never enabled; every pipeline on `main` had been stuck or failing since `.gitlab-ci.yml` was added
 
 **What was broken.** `.gitlab-ci.yml` (added 2026-07-30, `3563fa3`) mirrors `.github/workflows/ci.yml`

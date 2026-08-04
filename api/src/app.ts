@@ -39,6 +39,7 @@ import claudeRoutes from './routes/claude.js';
 import activityRoutes from './routes/activity.js';
 import dashboardRoutes from './routes/dashboard.js';
 import associationsRoutes from './routes/associations.js';
+import changeFeedRoutes from './routes/change-feed.js';
 import accountabilityRoutes from './routes/accountability.js';
 import aiRoutes from './routes/ai.js';
 import weeklyPlansRoutes, { weeklyRetrosRouter } from './routes/weekly-plans.js';
@@ -395,6 +396,9 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
 
   // Dashboard routes are read-only GET endpoints - no CSRF needed
   app.use('/api/dashboard', dashboardRoutes);
+
+  // Change feed - read-only GET endpoint, no CSRF needed (FG-1 / TRO-312)
+  app.use('/api/change-feed', changeFeedRoutes);
 
   // Accountability routes - inference-based action items (read-only GET)
   app.use('/api/accountability', accountabilityRoutes);

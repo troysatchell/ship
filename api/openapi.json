@@ -98,7 +98,7 @@
               "sprint",
               "parent"
             ],
-            "description": "Type of document association"
+            "description": "Type of document association (containment only — see RelationshipTypeSchema for the full set including \"blocks\")"
           }
         },
         "required": [
@@ -123,7 +123,7 @@
               "sprint",
               "parent"
             ],
-            "description": "Type of document association"
+            "description": "Type of document association (containment only — see RelationshipTypeSchema for the full set including \"blocks\")"
           },
           "title": {
             "type": "string",
@@ -3309,6 +3309,47 @@
           "updated_at"
         ]
       },
+      "DocumentSearchResult": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "document_type": {
+            "type": "string",
+            "enum": [
+              "wiki",
+              "issue",
+              "program",
+              "project",
+              "sprint",
+              "person",
+              "weekly_plan",
+              "weekly_retro",
+              "standup",
+              "weekly_review"
+            ],
+            "description": "Type of document"
+          },
+          "title": {
+            "type": "string"
+          },
+          "ticket_number": {
+            "type": "integer",
+            "nullable": true,
+            "description": "Numeric ticket number, present on issue documents"
+          }
+        },
+        "required": [
+          "id",
+          "document_type",
+          "title",
+          "ticket_number"
+        ]
+      },
       "UploadRequest": {
         "type": "object",
         "properties": {
@@ -3749,9 +3790,10 @@
               "program",
               "project",
               "sprint",
-              "parent"
+              "parent",
+              "blocks"
             ],
-            "description": "Type of document association"
+            "description": "Type of document association, including the \"blocks\" dependency edge"
           },
           "created_at": {
             "type": "string",
@@ -3788,6 +3830,240 @@
           "related_id",
           "relationship_type",
           "created_at"
+        ]
+      },
+      "ChangedDocument": {
+        "type": "object",
+        "properties": {
+          "dedupe_key": {
+            "type": "string",
+            "description": "Stable key for de-duplicating this change across polls with overlapping windows"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "document_type": {
+            "type": "string",
+            "enum": [
+              "wiki",
+              "issue",
+              "program",
+              "project",
+              "sprint",
+              "person",
+              "weekly_plan",
+              "weekly_retro",
+              "standup",
+              "weekly_review"
+            ],
+            "description": "Type of document"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          },
+          "created_by": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          }
+        },
+        "required": [
+          "dedupe_key",
+          "id",
+          "document_type",
+          "title",
+          "updated_at",
+          "created_by"
+        ]
+      },
+      "ChangedHistoryEntry": {
+        "type": "object",
+        "properties": {
+          "dedupe_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "integer"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "field": {
+            "type": "string"
+          },
+          "old_value": {
+            "type": "string",
+            "nullable": true
+          },
+          "new_value": {
+            "type": "string",
+            "nullable": true
+          },
+          "changed_by": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "automated_by": {
+            "type": "string",
+            "nullable": true,
+            "description": "Automation source (e.g. \"claude\"), or null for a human change"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          }
+        },
+        "required": [
+          "dedupe_key",
+          "id",
+          "document_id",
+          "field",
+          "old_value",
+          "new_value",
+          "changed_by",
+          "automated_by",
+          "created_at"
+        ]
+      },
+      "ChangedComment": {
+        "type": "object",
+        "properties": {
+          "dedupe_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "comment_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Thread identifier (matches the TipTap commentId mark)",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "parent_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "author_id": {
+            "type": "string",
+            "nullable": true,
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "content": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          }
+        },
+        "required": [
+          "dedupe_key",
+          "id",
+          "document_id",
+          "comment_id",
+          "parent_id",
+          "author_id",
+          "content",
+          "resolved_at",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "ChangeFeedResponse": {
+        "type": "object",
+        "properties": {
+          "next_cursor": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Pass as `since` on the next poll. Lagged behind \"now\" by a fixed safety window so a slow transaction cannot be permanently missed — see the endpoint description.",
+            "example": "2025-01-30T14:30:00.000Z"
+          },
+          "documents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedDocument"
+            }
+          },
+          "documents_truncated": {
+            "type": "boolean",
+            "description": "True if `documents` hit `limit` and more may be pending in this window"
+          },
+          "history": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedHistoryEntry"
+            }
+          },
+          "history_truncated": {
+            "type": "boolean"
+          },
+          "comments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangedComment"
+            }
+          },
+          "comments_truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "next_cursor",
+          "documents",
+          "documents_truncated",
+          "history",
+          "history_truncated",
+          "comments",
+          "comments_truncated"
         ]
       },
       "IssueStats": {
@@ -9924,99 +10200,29 @@
         "tags": [
           "Search"
         ],
-        "summary": "Search documents",
-        "description": "Full-text search across all document types.",
+        "summary": "Search or browse documents",
+        "description": "Returns documents across the six primary types (wiki, issue, program, project, sprint, person). Omit `q` to browse the full list (used by the command palette); pass `q` to filter by title.",
         "parameters": [
           {
             "schema": {
-              "type": "string"
-            },
-            "required": true,
-            "name": "q",
-            "in": "query"
-          },
-          {
-            "schema": {
               "type": "string",
-              "enum": [
-                "wiki",
-                "issue",
-                "program",
-                "project",
-                "sprint",
-                "person",
-                "weekly_plan",
-                "weekly_retro",
-                "standup",
-                "weekly_review"
-              ],
-              "description": "Filter by document type"
+              "description": "Optional title search query. Omit to browse all documents.",
+              "example": "onboarding"
             },
             "required": false,
-            "name": "type",
-            "in": "query"
-          },
-          {
-            "schema": {
-              "type": "integer",
-              "minimum": 1,
-              "maximum": 100
-            },
-            "required": false,
-            "name": "limit",
+            "name": "q",
             "in": "query"
           }
         ],
         "responses": {
           "200": {
-            "description": "Document search results",
+            "description": "Matching documents",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "array",
                   "items": {
-                    "type": "object",
-                    "properties": {
-                      "id": {
-                        "type": "string",
-                        "format": "uuid",
-                        "description": "UUID identifier",
-                        "example": "550e8400-e29b-41d4-a716-446655440000"
-                      },
-                      "title": {
-                        "type": "string"
-                      },
-                      "document_type": {
-                        "type": "string",
-                        "enum": [
-                          "wiki",
-                          "issue",
-                          "program",
-                          "project",
-                          "sprint",
-                          "person",
-                          "weekly_plan",
-                          "weekly_retro",
-                          "standup",
-                          "weekly_review"
-                        ],
-                        "description": "Type of document"
-                      },
-                      "content_preview": {
-                        "type": "string",
-                        "nullable": true
-                      },
-                      "updated_at": {
-                        "type": "string"
-                      }
-                    },
-                    "required": [
-                      "id",
-                      "title",
-                      "document_type",
-                      "content_preview",
-                      "updated_at"
-                    ]
+                    "$ref": "#/components/schemas/DocumentSearchResult"
                   }
                 }
               }
@@ -10605,7 +10811,7 @@
           "Documents"
         ],
         "summary": "Add document association",
-        "description": "Add an association to a program, project, sprint, or parent document.",
+        "description": "Add an association to a program, project, sprint, or parent document, or a \"blocks\" dependency edge to another document.",
         "parameters": [
           {
             "schema": {
@@ -10637,9 +10843,10 @@
                       "program",
                       "project",
                       "sprint",
-                      "parent"
+                      "parent",
+                      "blocks"
                     ],
-                    "description": "Type of document association"
+                    "description": "Type of document association, including the \"blocks\" dependency edge"
                   }
                 },
                 "required": [
@@ -10749,6 +10956,54 @@
           },
           "404": {
             "description": "Document not found"
+          }
+        }
+      }
+    },
+    "/change-feed": {
+      "get": {
+        "tags": [
+          "Change Feed"
+        ],
+        "summary": "List changes since a cursor",
+        "description": "Workspace-scoped, permission-filtered feed of documents, document_history entries, and comments changed since `since`. The returned `next_cursor` is deliberately lagged behind \"now\" by a fixed safety window (not advanced to the request time) so that a transaction committing late is never permanently missed — pass it back as `since` on the next poll rather than using your own clock. Each item carries a `dedupe_key` stable across polls with overlapping windows.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time",
+              "description": "ISO 8601 datetime cursor — only changes strictly after this instant are returned",
+              "example": "2026-08-01T00:00:00.000Z"
+            },
+            "required": true,
+            "name": "since",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "exclusiveMinimum": true,
+              "description": "Max rows per source (documents/history/comments each capped independently). Default 100, max 500."
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Changes since the given cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangeFeedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid since or limit"
           }
         }
       }

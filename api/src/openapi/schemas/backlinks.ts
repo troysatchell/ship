@@ -3,7 +3,7 @@
  */
 
 import { z, registry } from '../registry.js';
-import { UuidSchema, DateTimeSchema, BelongsToTypeSchema } from './common.js';
+import { UuidSchema, DateTimeSchema, RelationshipTypeSchema } from './common.js';
 import { DocumentTypeSchema } from './documents.js';
 
 // ============== Backlink ==============
@@ -25,7 +25,7 @@ export const AssociationSchema = z.object({
   id: UuidSchema,
   document_id: UuidSchema,
   related_id: UuidSchema,
-  relationship_type: BelongsToTypeSchema,
+  relationship_type: RelationshipTypeSchema,
   created_at: DateTimeSchema,
   // Related document info
   related_title: z.string().optional(),
@@ -132,7 +132,7 @@ registry.registerPath({
   path: '/documents/{id}/associations',
   tags: ['Documents'],
   summary: 'Add document association',
-  description: 'Add an association to a program, project, sprint, or parent document.',
+  description: 'Add an association to a program, project, sprint, or parent document, or a "blocks" dependency edge to another document.',
   request: {
     params: z.object({
       id: UuidSchema,
@@ -142,7 +142,7 @@ registry.registerPath({
         'application/json': {
           schema: z.object({
             related_id: UuidSchema,
-            relationship_type: BelongsToTypeSchema,
+            relationship_type: RelationshipTypeSchema,
           }),
         },
       },
