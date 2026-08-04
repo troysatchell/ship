@@ -47,6 +47,17 @@ describe('RateLimiter', () => {
     expect(limiter.tryAcquire()).toBe(true);
   });
 
+  it('a call is pruned at exactly the windowMs boundary (strict t > windowStart, not >=)', () => {
+    const clock = makeClock();
+    const limiter = new RateLimiter({ maxPerWindow: 1, windowMs: 1000, now: clock.now });
+
+    expect(limiter.tryAcquire()).toBe(true); // recorded at t=0
+
+    clock.advance(1000); // now=1000, windowStart = now - windowMs = 0; t=0 is not > 0
+    expect(limiter.currentCount()).toBe(0); // pruned exactly at the boundary
+    expect(limiter.tryAcquire()).toBe(true); // capacity freed at exactly windowMs elapsed
+  });
+
   it('rejects an invalid maxPerWindow or non-positive windowMs at construction', () => {
     expect(() => new RateLimiter({ maxPerWindow: 0, windowMs: 1000 })).toThrow();
     expect(() => new RateLimiter({ maxPerWindow: 1, windowMs: 0 })).toThrow();
