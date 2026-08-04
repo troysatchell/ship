@@ -184,7 +184,7 @@ const countOf = (content, text) => {
 
 const fileCache = new Map();
 const netViolations = [];
-const emittedFor = new Map(); // `${file} ${full}` -> count already emitted
+const emittedFor = new Map(); // `${file} ${full}` -> count already emitted
 
 for (const v of violations) {
   if (!fileCache.has(v.file)) {
@@ -195,7 +195,7 @@ for (const v of violations) {
   }
   const { base: baseSrc, head: headSrc } = fileCache.get(v.file);
   const budget = Math.max(0, countOf(headSrc, v.full) - countOf(baseSrc, v.full));
-  const key = `${v.file} ${v.full}`;
+  const key = `${v.file} ${v.full}`;
   const already = emittedFor.get(key) ?? 0;
   if (already < budget) {
     emittedFor.set(key, already + 1);
