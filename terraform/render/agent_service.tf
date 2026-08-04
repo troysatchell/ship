@@ -28,12 +28,26 @@ resource "render_web_service" "agent" {
 
   # Same rationale as render_web_service.ship in web_service.tf: these are
   # Render-assigned/computed fields this config deliberately does not manage.
+  #
+  # maintenance_mode and pull_request_previews_enabled added 2026-08-04
+  # (TRO-341/FG-23): a plain env_vars-only update against this free-tier
+  # service failed with "Error updating service ... maintenance mode can
+  # only be configured for non-free tier services" — the provider re-sends
+  # this computed field's current value (enabled=false) on every update
+  # regardless of whether it changed, and Render's API rejects that field
+  # existing in the payload at all for a free-tier service. web_service.tf
+  # already carries pull_request_previews_enabled in its own ignore_changes
+  # for the identical drift reason (see its "Warning: Deprecated attribute"
+  # on every plan) — agent_service.tf just hadn't hit an update yet to
+  # surface the gap.
   lifecycle {
     ignore_changes = [
       notification_override,
       previews,
+      pull_request_previews_enabled,
       root_directory,
       runtime_source.docker.auto_deploy_trigger,
+      maintenance_mode,
     ]
   }
 
