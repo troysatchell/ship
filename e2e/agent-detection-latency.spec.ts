@@ -96,16 +96,17 @@ test.describe('FleetGraph detection latency (use case 2 — mentions)', () => {
         surfacedAtMs = Date.now();
         break;
       }
-      // review-pattern-ok: G7b's fixed-sleep checker (TEST-11 / TRO-233) flags
-      // this line, but it is the poll INTERVAL inside a bounded loop that
-      // re-checks a real, changing endpoint on every iteration and breaks the
-      // instant the real condition holds — not a blind "sleep, then assume
-      // done" stand-in for synchronization, which is what TEST-11's 619 sites
-      // actually are. This is the exact shape lessons.md #17 itself endorses
-      // ("await an observable event... poll for the duration") and the same
-      // pattern `agent/src/scripts/trace-invoke-proactive.ts` already uses for
-      // this identical measurement. `DEADLINE_MS` bounds total wait time; this
+      // G7b's fixed-sleep checker (TEST-11 / TRO-233) flags the line below,
+      // but it is the poll INTERVAL inside a bounded loop that re-checks a
+      // real, changing endpoint on every iteration and breaks the instant the
+      // real condition holds — not a blind "sleep, then assume done" stand-in
+      // for synchronization, which is what TEST-11's 619 sites actually are.
+      // This is the exact shape lessons.md #17 itself endorses ("await an
+      // observable event... poll for the duration") and the same pattern
+      // `agent/src/scripts/trace-invoke-proactive.ts` already uses for this
+      // identical measurement. `DEADLINE_MS` bounds total wait time; this
       // 500ms only bounds how often the real condition gets re-checked.
+      // review-pattern-ok: poll interval in a bounded, condition-checking loop, not a fixed sleep standing in for synchronization
       await new Promise((resolve) => setTimeout(resolve, 500));
     }
 
