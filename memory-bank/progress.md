@@ -49,8 +49,72 @@
 | **FleetGraph PR-D — Ship UI surfaces (chat, inbox, blocks/blocked-by)** | ✅ done (2026-08-04) — TRO-320/323/334, PR #120. Real scope gap (agent had no HTTP surface for chat/inbox) found and closed before dispatch. 17 CodeRabbit findings across 3 review rounds triaged to completion (12 fixed, 2 filed as `TRO-343`/`TRO-344`). One `git stash` violation (5th repo-wide occurrence) caught by `gate.sh`'s G7c, verified harmless, disclosed rather than papered over — merge decision explicitly kicked to the user, who approved it. Critical path A/B/C/D done; **G-MVP next.** |
 | **MVP submission night — docs + graded deploy** | ✅ done (2026-08-05, 03:00–03:40Z) — FLEETGRAPH.MD accuracy pass (all "Pending" architecture claims rewritten from code), 4 public LangSmith trace links verified, **both graded services found running pre-PR-C/D builds** and redeployed to `d124a50`, missing `AGENT_INTERNAL_SECRET`/`AGENT_API_BASE_URL` set via Render API, grader chat path verified end-to-end live. Doc changes uncommitted pending user's word. |
 | **Agent pill UI + standup dev env** | ✅ built (2026-08-05 PM) — floating FleetGraph pill on every screen (branch `feat/agent-panel`, unpushed), Properties-accordion chat retired, Inbox untouched; `dev.sh` agent-port bug found+fixed; fresh `ship_standup` DB + full local agent stack verified end-to-end (inbox + cited chat). Sign-in `alice.chen@ship.local`. |
+| **Factory wave — PR-E, PR-F, TRO-343/344/342** | ✅ **PR-E, PR-F, TRO-343 merged (2026-08-05 evening)** — TRO-343/TRO-344 waiting on CI, TRO-342 waiting on CI, both mergeable. PR-E/PR-F both had real merge conflicts against `main` from 3 concurrent branches, resolved via `merge-changes.mjs`. 3 new follow-up tickets filed (TRO-348/349/350). |
 
 ## Log
+
+### 2026-08-05 (evening) — Factory resumed on FleetGraph backlog: PR-E, PR-F merged; TRO-343 merged; TRO-344/TRO-342 in flight; 3 follow-ups filed
+
+**Trigger.** User: "start factory on backlog tickets regression test etc." Memory bank's last entry
+(this same day, PM) was already stale — `git log` showed 2 more PRs (#129 `feat/tro-346-blocker-fanout-walk`,
+#130 `fix/tro-345-tc1-tc3-seed-fixtures`) had merged since. Checked Linear directly rather than trust
+the bank: confirmed real remaining FleetGraph backlog was two bundles (PR-E, PR-F) plus 3 loose
+CodeRabbit-filed bugs (TRO-342/343/344); ShipShape Audit Remediation had only 2 low-priority leftovers
+(TRO-309/310), untouched this session by design (not deadline-relevant).
+
+**PR-F (TRO-330) — TRO-322 (FG-12) + TRO-338 (FG-20), merged (PR #133, `--merge`, `678d0f4`).**
+TRO-322 built the regression suite (2 required E2E flows, wired into both CI platforms) and proved the
+CI-rollback mechanism with **real evidence**, not config-reading: a throwaway GitHub PR + GitLab MR with
+a deliberate type error (both closed after proving the point — GitHub blocked the merge; GitLab
+surfaced a genuine unrelated finding, its shared runner has never run a single MR-triggered pipeline,
+`access_level: ref_protected`), plus two live local agent processes (one Ship-unreachable) proving the
+`/health`-vs-`/ready` liveness/readiness distinction actually catches the "boots but broken" gap
+FLEETGRAPH.MD had already flagged as unaddressed. TRO-338 built the golden set + draft-survival metric;
+its own acceptance test (context-stripped prompt moves the golden score while the regression suite
+stays green, in one run) is the proof, not a description of one. Disclosed gap, not hidden: the
+survival metric has no live caller (FG-8's accept flow has no HTTP route) — filed as **TRO-348**.
+
+**PR-E (TRO-329) — TRO-335 (FG-17 retro drafts) + TRO-336 (FG-18 scope-drift discrimination), merged
+(PR #134, `--merge`, `c217391`).** TRO-335 found and fixed a real bug mid-build: the first "closed
+this week" definition leaked 3 unrelated issues closed weeks earlier into a retro draft (6 surfaced vs.
+the fixture's real 3) — caught by checking against real seeded data, not assumed correct. TRO-336
+empirically disproved a fixed Levenshtein-similarity threshold before building against it (two real
+weakening edits scored *higher* similarity than a trivial typo) and instead narrowed the deterministic
+layer to exact-match-only, handing everything else to the model with a required MATERIAL/NOT MATERIAL
+verdict. FG-19 (blocker fan-out), originally this bundle's third sub-issue, had already shipped
+separately as TRO-346 before this session. Both sub-issues' agents independently flagged FLEETGRAPH.MD's
+graph diagram as 3 chains stale — filed as **TRO-349** rather than hand-edited mid-flight.
+
+**TRO-343 (React Query cache never cleared on login/logout) merged (PR #132, `--merge`, `cae37f9`).**
+Fix: `queryClient.clear()` in `useAuth.tsx`'s three identity-transition handlers. One real gap
+disclosed, not fixed (out of scope): impersonation-*start* uses a hard page reload, a different
+mechanism, still in `AdminDashboard.tsx`.
+
+**TRO-344 (circular-blocks 409 code) and TRO-342 (agent per-user Ship tokens) — PRs open (#135, #136),
+gate-verified pass, mergeable, waiting on GitHub CI.** TRO-342 closed the on-demand/chat half (the
+asking user's own token, minted ephemerally via the existing `api_tokens` table, revoked after) and
+correctly escalated the proactive-poll half rather than building speculative token-storage
+infrastructure — filed as **TRO-350** with concrete candidate shapes.
+
+**Two real process findings, not just ticket work — both written into `lessons.md`.** (1) A worktree's
+`gate.sh` is a snapshot from provisioning time; it does not pick up a sibling branch's own edits to the
+script until that branch reaches `main` — PR-E's first gate run reported `pass` without ever executing
+its own new agent tests, because `tests:agent` didn't exist in that worktree's copy yet. Caught only by
+independently running the suite by hand rather than trusting the gate verdict. (2) Two new load-sensitive
+flake identities surfaced under concurrent worktree load (`search.test.ts`, and a `documents.test.ts`
+pair with a CSRF-token test-setup race) — one of them content-adjacent to TRO-336's own subject matter,
+worth double-checking rather than assuming coincidence; root-caused via the actual stack trace (not just
+"passed standalone") before accepting as non-blocking.
+
+**Merge-conflict handling, correctly, not just once.** All three still-open branches (PR-E, PR-F,
+TRO-343) independently modify `CHANGES.md`/`scorecard.jsonl` at the same insertion point — every merge
+of `main` produced a real conflict, resolved with `scripts/factory/merge-changes.mjs` (never a naive
+3-way merge, which this repo's own tooling comment documents as silently welding one ticket's rollback
+text onto another's) and re-gated after each resolution, three rounds deep as each PR landed in turn.
+
+**Result so far.** 3 PRs merged (#132/#133/#134), all three remotes verified in sync after each. 2 PRs
+open, gate-green, mergeable, pending CI (#135/#136) — to be merged and closed out once green. 3 new
+follow-up tickets filed (TRO-348/349/350), all explicitly non-blocking for Thursday's deadline.
 
 ### 2026-08-05 (PM) — agent pill shipped locally; standup dev env stood up; dev.sh port bug fixed
 
