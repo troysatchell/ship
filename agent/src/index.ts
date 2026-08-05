@@ -66,6 +66,7 @@ import { ShipClient } from './shipClient.js';
 import { InMemoryItemStore, type ItemStore } from './itemStore.js';
 import { InMemoryDraftStore } from './draftStore.js';
 import { createProactivePoller } from './proactivePoll.js';
+import { FileCostTracker } from './costTracking.js';
 
 const config = loadConfig();
 
@@ -129,11 +130,21 @@ if (!isConfigComplete(config)) {
   });
   itemStore = new InMemoryItemStore();
   const draftStore = new InMemoryDraftStore();
+  // TRO-339 / FG-21: real per-invocation cost accounting for every model
+  // call this graph makes — see costTracking.ts's own module docstring for
+  // what was verified before adding this (LangSmith already captures usage
+  // natively, but held almost no development-spend history; ChatAnthropic's
+  // own response carries usage_metadata at runtime, which graph.ts's
+  // AnthropicModel interface was previously discarding by construction of
+  // the type). Appends to `agent/.cache/cost-ledger.jsonl` — query it via
+  // `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts`.
+  const costTracker = new FileCostTracker();
   graph = buildGraph(
     model,
     { shipClient, itemStore },
     { shipClient, documentCap: config.onDemandDocumentCap },
-    { shipClient, itemStore, draftStore }
+    { shipClient, itemStore, draftStore },
+    costTracker
   );
 
   const poller = createProactivePoller({
