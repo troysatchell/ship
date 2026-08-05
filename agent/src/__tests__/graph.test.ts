@@ -1555,6 +1555,23 @@ describe('buildGraph — plan-change discrimination (TRO-336 / FG-18)', () => {
     });
   });
 
+  describe('Defensive edge case — a MATERIAL verdict with nothing written after it', () => {
+    it('writes no draft/item and reports planChangeSkipReason: "empty_draft" rather than leaving the reason unexplained', async () => {
+      const model = fakeModel('MATERIAL'); // no blank line, no question text after it
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const compiled = buildGraph(model, undefined, undefined, deps({ itemStore, draftStore }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+
+      expect(model.invoke).toHaveBeenCalledTimes(1);
+      expect(result.planChangeSkipReason).toBe('empty_draft');
+      expect(result.planChangeDraftText).toBeUndefined();
+      expect(itemStore.all()).toHaveLength(0);
+      expect(draftStore.listForPerson(APPROVER_USER_ID)).toHaveLength(0);
+    });
+  });
+
   describe('Skipped when the week is not actually changed_since_approved', () => {
     it('makes no model call', async () => {
       const model = fakeModel('should never be called');

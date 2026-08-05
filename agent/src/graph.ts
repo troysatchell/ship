@@ -417,7 +417,7 @@ import {
   type PlanChangeSummary,
 } from './planChangeDraft.js';
 import { findLowestCommonManager, type LowestCommonManagerResult } from './roles.js';
-import type { CostTracker, RealUsage } from './costTracking.js';
+import type { CostTracker, InvocationSite, RealUsage } from './costTracking.js';
 
 /** The subset of ChatAnthropic's interface this graph actually needs — narrow
  * on purpose so tests can pass a plain object instead of a real client.
@@ -796,15 +796,22 @@ export const GraphState = Annotation.Root({
    * when the model's own `NOT MATERIAL` verdict decides a change that
    * survived the deterministic gate (e.g. a genuine typo) still is not
    * material — see the module docstring's "Why the model decides
-   * materiality here" section. Either way, `commitPlanChangeDraft` reads
-   * this to skip writing anything — identical shape to `retroSkipReason`/
-   * `blockerEscalationSkipReason`. */
+   * materiality here" section. `'empty_draft'` is the defensive edge case
+   * (CodeRabbit, TRO-336 PR review) where the model returns `MATERIAL` but
+   * writes nothing after the verdict line — never expected from a real
+   * model, but `commitPlanChangeDraft`'s own guard already refuses to write
+   * an empty draft either way; this reason exists so a caller inspecting
+   * `planChangeSkipReason` sees WHY nothing was written instead of the
+   * field staying `undefined` despite no draft existing. Whichever reason
+   * applies, `commitPlanChangeDraft` reads it to skip writing anything —
+   * identical shape to `retroSkipReason`/`blockerEscalationSkipReason`. */
   planChangeSkipReason: Annotation<
     | 'week_not_found'
     | 'not_changed_since_approval'
     | 'no_approver'
     | 'no_diff_source'
     | 'no_material_change'
+    | 'empty_draft'
     | undefined
   >({
     reducer: (current, update) => update ?? current,
@@ -1028,13 +1035,11 @@ function requireDeepDeps(deps: DeepDeps | undefined, nodeName: NodeName): DeepDe
  * rejection. */
 async function recordInvocation(
   tracker: CostTracker | undefined,
-  node:
-    | 'respond'
-    | 'composeAnswer'
-    | 'composeStandupDraft'
-    | 'composeBlockerEscalation'
-    | 'composeRetroDraft'
-    | 'composePlanChangeDraft',
+  // `InvocationSite` (`costTracking.ts`), not a hand-written duplicate union
+  // (CodeRabbit, TRO-336 PR review) — a second copy of this list had already
+  // drifted once in this same ticket (see `costTracking.ts`'s own module
+  // docstring), and this call site was the other place it could drift again.
+  node: InvocationSite,
   trigger: TriggerKind,
   model: string | undefined,
   usage: RealUsage | undefined,
@@ -1711,6 +1716,15 @@ export function buildGraph(
       const verdict = parseMaterialityVerdict(contentToString(result.content));
       if (!verdict.material) {
         return { planChangeSkipReason: 'no_material_change' as const };
+      }
+      if (!verdict.draftText) {
+        // Defensive (CodeRabbit, TRO-336 PR review): a `MATERIAL` verdict
+        // with nothing after it — never expected from a real model, but
+        // `commitPlanChangeDraft`'s own guard already refuses to write an
+        // empty draft either way. Naming the reason here means a caller
+        // inspecting `planChangeSkipReason` sees WHY, rather than it
+        // staying `undefined` despite no draft existing.
+        return { planChangeSkipReason: 'empty_draft' as const };
       }
       return { planChangeDraftText: verdict.draftText };
     })

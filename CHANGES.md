@@ -151,6 +151,36 @@ shipped separately as TRO-346 before this bundle's remaining two tickets started
 `blockerFanout.test.ts`'s own 8 cases plus `graph.test.ts`'s blocker-escalation describe block are
 still green in this same full-suite run. All three are satisfied.
 
+**CodeRabbit findings (5 captured on the cumulative branch diff, triaged directly, all fixed — 2
+major, 1 minor, 2 trivial):**
+- Fixed (major, real bug): `gatherPlanChange` trusted `getChangeFeed`'s `rows[0]` (after
+  filtering/sorting) as the OLDEST `success_criteria` edit since approval without checking
+  `history_truncated` — a truncated page cannot prove an earlier row wasn't cut off. Now declines
+  that source entirely when `history_truncated` is `true`, falling back to `plan_history` instead
+  of half-trusting a possibly-wrong "before" snapshot. New regression case.
+- Fixed (major, real bug): `graph.ts`'s `recordInvocation` kept its own hand-written duplicate of
+  `costTracking.ts`'s `InvocationSite` union for its `node` parameter — the EXACT class of drift
+  this same ticket's `INVOCATION_SITES` single-source-of-truth refactor (from TRO-335's own
+  CodeRabbit triage) was built to prevent, just in a second location that refactor didn't reach.
+  Now imports and uses `InvocationSite` directly.
+- Fixed (minor): a `MATERIAL` verdict with nothing written after it (never expected from a real
+  model) fell through to `commitPlanChangeDraft`'s existing empty-draftText guard silently — correct
+  behavior, but `planChangeSkipReason` stayed `undefined` despite nothing being written. Added
+  `'empty_draft'` as an explicit reason, plus a regression case.
+- Fixed (trivial): two unsafe casts in `planChangeDraft.ts` (`as ApprovalTrackingLike | null` —
+  redundant, `ShipDocument.properties.plan_approval` is already typed that way; `as { plan?: unknown
+  } | undefined` on a `plan_history` array entry) replaced with a real runtime narrowing guard
+  (`hasPlanField`) and the redundant assertion removed outright.
+- Fixed (trivial): `retroDraft.ts`'s closed-issue date-window filter (from TRO-335) compared ISO
+  timestamp STRINGS lexicographically — correct only as long as every timestamp is byte-identical
+  canonical format, which has held so far but is not guaranteed. Switched to numeric `Date.parse`
+  comparison with an explicit `Number.isNaN` guard, correct regardless of minor valid-ISO-8601
+  format variation.
+
+**Updated counts after triage:** `planChangeDraft.test.ts` gained 1 more regression case (26 → 27,
+the `history_truncated` guard); `graph.test.ts` gained 1 more (64 → 65, the `empty_draft` case).
+Full suite re-confirmed green after triage: 381/381.
+
 **Not yet wired: a real trigger route.** Same documented gap every prior deep-tier chain in this
 package has — nothing decides WHICH week's plan-change flag to check and WHEN. A future ticket's
 job, per FLEETGRAPH.MD's own Trigger Model section.

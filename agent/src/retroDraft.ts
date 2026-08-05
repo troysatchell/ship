@@ -255,6 +255,17 @@ export async function gatherWeekDelivery(
     };
   }
   const { startISO, endISO } = window;
+  // Numeric comparison, not lexicographic (CodeRabbit, TRO-336 PR review) —
+  // `startISO`/`endISO` are always canonical `.toISOString()` output, and a
+  // real `completed_at` from the API has been too so far, but parsing both
+  // sides to timestamps is correct regardless of any format variation
+  // (missing milliseconds, a different valid ISO 8601 offset notation)
+  // where a plain string comparison would silently give the wrong answer.
+  // `startISO`/`endISO` are this function's own output, never expected to
+  // fail to parse; `doc.completed_at` comes from the API, so `Number.isNaN`
+  // still guards it explicitly.
+  const startMs = Date.parse(startISO);
+  const endMs = Date.parse(endISO);
 
   let edges: AssociationReverseEdge[];
   try {
@@ -266,15 +277,12 @@ export async function gatherWeekDelivery(
   const resolved = await Promise.all(edges.map((edge) => tryGetDocument(client, edge.document_id)));
 
   const closedIssues: ClosedIssueDelivery[] = resolved
-    .filter(
-      (doc): doc is ShipDocument & { completed_at: string } =>
-        doc !== undefined &&
-        doc.document_type === 'issue' &&
-        doc.properties.state === 'done' &&
-        typeof doc.completed_at === 'string' &&
-        doc.completed_at >= startISO &&
-        doc.completed_at < endISO
-    )
+    .filter((doc): doc is ShipDocument & { completed_at: string } => {
+      if (doc === undefined || doc.document_type !== 'issue' || doc.properties.state !== 'done') return false;
+      if (typeof doc.completed_at !== 'string') return false;
+      const completedMs = Date.parse(doc.completed_at);
+      return !Number.isNaN(completedMs) && completedMs >= startMs && completedMs < endMs;
+    })
     .map((doc) => ({ issueId: doc.id, title: doc.title, completedAt: doc.completed_at }));
 
   return {

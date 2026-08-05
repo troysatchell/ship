@@ -286,6 +286,17 @@ function parseCriteriaSnapshot(planField: unknown): string[] | undefined {
   return parsed as string[];
 }
 
+/** Runtime narrowing guard for one `properties.plan_history` array entry —
+ * accepts any object (real entries carry `plan`/`timestamp`/`author_id`,
+ * `shared/src/types/document.ts`'s `PlanHistoryEntry`, but this file only
+ * ever reads `.plan`) and rejects a non-object entry outright, rather than
+ * casting (CodeRabbit, TRO-336 PR review). `plan` itself is read as
+ * `unknown` — `parseCriteriaSnapshot` (the only caller) already narrows it
+ * properly. */
+function hasPlanField(value: unknown): value is { plan?: unknown } {
+  return typeof value === 'object' && value !== null;
+}
+
 export interface PlanChangeSummary {
   weekId: string;
   weekTitle: string;
@@ -338,7 +349,10 @@ export async function gatherPlanChange(
   if (!week || week.document_type !== 'sprint') return undefined;
 
   const weekNumber = typeof week.properties.sprint_number === 'number' ? week.properties.sprint_number : 0;
-  const approval = (week.properties.plan_approval ?? null) as ApprovalTrackingLike | null;
+  // No cast needed (CodeRabbit, TRO-336 PR review) — `ShipDocument.properties.plan_approval`
+  // is already typed `ApprovalTrackingLike | null | undefined`; `?? null` alone
+  // narrows the `undefined` case away.
+  const approval = week.properties.plan_approval ?? null;
   const approvalState = approval?.state ?? null;
   const approverUserId = typeof approval?.approved_by === 'string' ? approval.approved_by : null;
   const currentCriteria = stringArray(week.properties.success_criteria);
@@ -364,12 +378,19 @@ export async function gatherPlanChange(
   if (typeof approval?.approved_at === 'string') {
     try {
       const feed = await client.getChangeFeed(approval.approved_at, options.changeFeedLimit ?? DEFAULT_CHANGE_FEED_LIMIT);
-      const rows = feed.history
-        .filter((h: ChangeFeedHistoryEntry) => h.document_id === weekId && h.field === 'success_criteria')
-        .sort((a, b) => a.created_at.localeCompare(b.created_at));
-      const oldest = rows[0];
-      if (oldest) {
-        beforeCriteria = parseCriteriaSnapshot(oldest.old_value);
+      // A truncated page (CodeRabbit, TRO-336 PR review) cannot prove
+      // `rows[0]` (after filtering+sorting) is genuinely the OLDEST edit
+      // since approval — an earlier row may have been cut off the page. This
+      // source is declined entirely in that case rather than half-trusted;
+      // the `plan_history` fallback below still gets a chance.
+      if (!feed.history_truncated) {
+        const rows = feed.history
+          .filter((h: ChangeFeedHistoryEntry) => h.document_id === weekId && h.field === 'success_criteria')
+          .sort((a, b) => a.created_at.localeCompare(b.created_at));
+        const oldest = rows[0];
+        if (oldest) {
+          beforeCriteria = parseCriteriaSnapshot(oldest.old_value);
+        }
       }
     } catch {
       beforeCriteria = undefined;
@@ -382,8 +403,8 @@ export async function gatherPlanChange(
   // fixture's actual shape, not a guess.
   if (!beforeCriteria) {
     const planHistory = Array.isArray(week.properties.plan_history) ? week.properties.plan_history : [];
-    const last = planHistory[planHistory.length - 1] as { plan?: unknown } | undefined;
-    beforeCriteria = last ? parseCriteriaSnapshot(last.plan) : undefined;
+    const last: unknown = planHistory[planHistory.length - 1];
+    beforeCriteria = hasPlanField(last) ? parseCriteriaSnapshot(last.plan) : undefined;
   }
 
   if (!beforeCriteria) {

@@ -206,6 +206,42 @@ describe('gatherPlanChange', () => {
     expect(summary?.alignment.removed).toEqual(['Only one criterion existed, per document_history']);
   });
 
+  it(
+    'declines a TRUNCATED document_history page entirely rather than half-trusting rows[0] as the ' +
+      'oldest edit, falling back to plan_history instead',
+    async () => {
+      const client = fakeClient({
+        getDocument: vi.fn().mockResolvedValue(weekDoc()),
+        getChangeFeed: vi.fn().mockResolvedValue({
+          ...emptyFeed(),
+          history_truncated: true,
+          history: [
+            {
+              id: 1,
+              document_id: 'week-1',
+              field: 'success_criteria',
+              // If this were trusted as "the oldest," it would produce a
+              // DIFFERENT (wrong) removed-criterion fact than plan_history's
+              // real snapshot below — proving the truncated page is actually
+              // declined, not just present-but-unused.
+              old_value: JSON.stringify(['A row that might not really be the oldest — page was truncated']),
+              new_value: JSON.stringify(EDITED_CRITERIA),
+              changed_by: 'user-owner-1',
+              automated_by: null,
+              created_at: '2026-07-31T00:00:00.000Z',
+              dedupe_key: 'history:1',
+            },
+          ],
+        }),
+      });
+
+      const summary = await gatherPlanChange(client, 'week-1');
+
+      expect(summary?.diffSourceFound).toBe(true);
+      expect(summary?.alignment.removed).toEqual(['CSRF protection verified on every mutating route']);
+    }
+  );
+
   it('takes the OLDEST document_history success_criteria row since approval, not just the latest', async () => {
     const client = fakeClient({
       getDocument: vi.fn().mockResolvedValue(weekDoc()),
