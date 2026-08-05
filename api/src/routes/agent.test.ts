@@ -5,6 +5,32 @@ import { createApp } from '../app.js'
 import { pool } from '../db/client.js'
 import { isAgentBaseUrlSecure } from './agent.js'
 
+/** Row shape for the `api_tokens` lookups the TRO-342 tests below run —
+ * named per RULE-21 rather than leaving `pool.query` rows implicitly `any`. */
+interface ApiTokenRow {
+  id: string
+  user_id: string
+  workspace_id: string
+  token_hash: string
+  expires_at: string | null
+  revoked_at: string | null
+}
+
+/**
+ * TRO-342's revoke is `await`ed inside `routes/agent.ts`'s `finally` block,
+ * but sending the HTTP response and that route handler's own async function
+ * actually settling are two independently-observable events (Express writes
+ * `res.json()`'s bytes before `finally` even starts running) — so a test
+ * awaiting `request(app).post(...)` can genuinely resolve microseconds
+ * before the revoke's own DB write commits. `expect.poll(...)` (vitest
+ * built-in, CodeRabbit review on this ticket) is the correct way to observe
+ * an async side effect this test has no direct handle on — it re-runs the
+ * callback until the assertion passes or `timeout` elapses, never a fixed
+ * sleep (lessons.md #17). Both call sites below share the same
+ * `POLL_OPTIONS` rather than hand-writing the interval/timeout twice.
+ */
+const POLL_OPTIONS = { timeout: 2000, interval: 25 };
+
 /**
  * Regression tests for TRO-320 / FG-9: the chat panel's proxy route.
  *
@@ -223,20 +249,118 @@ describe('POST /api/agent/chat (TRO-320 / FG-9)', () => {
     // follow one and forward X-Internal-Secret to a different host.
     expect(calledInit.redirect).toBe('error')
     const sentBody = JSON.parse(calledInit.body as string)
-    expect(sentBody).toEqual({
-      seedDocumentId: VALID_BODY.seedDocumentId,
-      question: VALID_BODY.question,
-      // The session's own user, never something the client could spoof by
-      // passing an askingUserId in the request body (the route only reads
-      // seedDocumentId/question from req.body — see agent.ts).
-      askingUserId: testUserId,
-    })
+    expect(sentBody.seedDocumentId).toBe(VALID_BODY.seedDocumentId)
+    expect(sentBody.question).toBe(VALID_BODY.question)
+    // The session's own user, never something the client could spoof by
+    // passing an askingUserId in the request body (the route only reads
+    // seedDocumentId/question from req.body — see agent.ts).
+    expect(sentBody.askingUserId).toBe(testUserId)
+
+    // TRO-342: a real, freshly-minted Ship API token for THIS user — not the
+    // agent's own shared SHIP_API_TOKEN, and not something the browser could
+    // have supplied itself (VALID_BODY carries no such field).
+    expect(typeof sentBody.askingUserToken).toBe('string')
+    expect(sentBody.askingUserToken).toMatch(/^ship_[0-9a-f]{64}$/)
+    expect(Object.keys(sentBody).sort()).toEqual(
+      ['askingUserId', 'askingUserToken', 'question', 'seedDocumentId'].sort()
+    )
+
+    const tokenHash = crypto.createHash('sha256').update(sentBody.askingUserToken as string).digest('hex')
+    const tokenResult = await pool.query<ApiTokenRow>(
+      `SELECT id, user_id, workspace_id, token_hash, expires_at, revoked_at FROM api_tokens WHERE token_hash = $1`,
+      [tokenHash]
+    )
+    expect(tokenResult.rows).toHaveLength(1)
+    const tokenRow = tokenResult.rows[0] as ApiTokenRow
+    expect(tokenRow.user_id).toBe(testUserId)
+    expect(tokenRow.workspace_id).toBe(testWorkspaceId)
+    // Real expiry — never a token that outlives the request it was minted
+    // for by default (agentTokens.ts's EPHEMERAL_TOKEN_EXPIRY_MS).
+    expect(tokenRow.expires_at).not.toBeNull()
+    // Revoked once the (mocked) agent call settled — bounds this token's
+    // real exposure window to "this one request", not just its expiry.
+    // `routes/agent.ts` awaits the revoke, but the HTTP response itself is
+    // written a moment before that await settles server-side (see the
+    // POLL_OPTIONS docstring above) — poll for the real condition.
+    await expect.poll(async () => {
+      const check = await pool.query<Pick<ApiTokenRow, 'revoked_at'>>(
+        `SELECT revoked_at FROM api_tokens WHERE id = $1`,
+        [tokenRow.id]
+      )
+      return check.rows[0]?.revoked_at != null
+    }, POLL_OPTIONS).toBe(true)
 
     expect(res.status).toBe(200)
     expect(res.body).toEqual(agentBody)
     // CWE-524 (CodeRabbit PR #120): a per-user, per-question answer must
     // never be servable from a browser's own HTTP cache.
     expect(res.headers['cache-control']).toBe('no-store')
+  })
+
+  it('TRO-342: mints a DIFFERENT ephemeral token for each request, even for the same user — never reuses one across calls', async () => {
+    // A `Response` body can only be read once (`.json()` consumes the
+    // stream) — `mockResolvedValue` would hand the SAME instance to both
+    // calls below, so the second one's `.json()` throws "Body is unusable".
+    // A fresh `Response` per invocation is required, not optional, for a
+    // test that makes more than one request against the same mock.
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ output: 'ok', citedSources: [], expansionCapped: false }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    )
+
+    const firstRes = await request(app).post('/api/agent/chat').set('Cookie', sessionCookie).set('x-csrf-token', csrfToken).send(VALID_BODY)
+    const secondRes = await request(app).post('/api/agent/chat').set('Cookie', sessionCookie).set('x-csrf-token', csrfToken).send(VALID_BODY)
+    expect(firstRes.status).toBe(200)
+    expect(secondRes.status).toBe(200)
+
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    const [, firstInit] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const [, secondInit] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    const firstBody = JSON.parse(firstInit.body as string)
+    const secondBody = JSON.parse(secondInit.body as string)
+    expect(firstBody.askingUserToken).not.toBe(secondBody.askingUserToken)
+
+    // Confirms this isn't just two random strings that happen to differ —
+    // both are real, distinct api_tokens rows for the same user (proving
+    // the migration 014 UNIQUE(user_id, workspace_id, name) constraint the
+    // agentTokens.ts docstring warns about is actually being avoided).
+    const rows = await pool.query<Pick<ApiTokenRow, 'id'>>(
+      `SELECT id FROM api_tokens WHERE user_id = $1 AND workspace_id = $2 AND name LIKE 'agent-chat:%'`,
+      [testUserId, testWorkspaceId]
+    )
+    expect(rows.rows.length).toBeGreaterThanOrEqual(2)
+  })
+
+  it('TRO-342: still revokes the minted token even when the agent call fails, so it never outlives a failed request', async () => {
+    vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'))
+
+    const beforeCount = (
+      await pool.query<Pick<ApiTokenRow, 'id'>>(
+        `SELECT id FROM api_tokens WHERE user_id = $1 AND workspace_id = $2 AND name LIKE 'agent-chat:%' AND revoked_at IS NOT NULL`,
+        [testUserId, testWorkspaceId]
+      )
+    ).rows.length
+
+    const res = await request(app)
+      .post('/api/agent/chat')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send(VALID_BODY)
+
+    expect(res.status).toBe(502)
+
+    // The revoke runs in a `finally` after the outbound fetch rejects — see
+    // the POLL_OPTIONS docstring above for why this still needs to poll
+    // rather than assert immediately, even though agent.ts `await`s it.
+    await expect.poll(async () => {
+      const result = await pool.query<Pick<ApiTokenRow, 'id'>>(
+        `SELECT id FROM api_tokens WHERE user_id = $1 AND workspace_id = $2 AND name LIKE 'agent-chat:%' AND revoked_at IS NOT NULL`,
+        [testUserId, testWorkspaceId]
+      )
+      return result.rows.length > beforeCount
+    }, POLL_OPTIONS).toBe(true)
   })
 
   it('degrades to a clean 502 when the agent returns 200 with a malformed citedSources element (crosses the trust boundary, so every element is validated)', async () => {

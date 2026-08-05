@@ -21,6 +21,134 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-342 — Agent's on-demand chat path now runs under the ASKING PERSON'S OWN Ship API token, not the shared `SHIP_API_TOKEN` env var
+
+**Filed from CodeRabbit review on PR #113 (TRO-341/FG-23), 2026-08-04 — explicitly "a filing, not a
+design." This entry closes the on-demand/chat half concretely; the proactive/steady-tier poll half
+is scoped out as a follow-up (TRO-350, filed alongside this entry) — see "Not closed" below.**
+
+**What was broken, verified by reading the code, not assumed from the ticket's framing.**
+FLEETGRAPH.MD's "Deployment model": *"There is no service account... the agent runs under each
+person's own token... it can reach anything you could reach, and nothing you could not."*
+`agent/src/index.ts` (pre-fix) built exactly ONE `ShipClient`, bound to `config.shipApiToken` (the
+process's single `SHIP_API_TOKEN` env var) at startup, and reused that SAME instance for
+`proactiveDeps`, `onDemandDeps`, AND `deepDeps` alike. `api/src/routes/agent.ts`'s `POST /chat`
+already threaded the real requesting user's identity through as `askingUserId` (from `req.userId`,
+never client-supplied) — but `askingUserId` only ever fed `expansion.ts`'s
+`passesAskerVisibility`, a belt-and-braces re-check; it was never turned into a credential. So
+`expansion.ts`'s own `visitDocument` docstring claim — "Ship's own `GET /api/documents/:id` 404s
+for a document this token's user cannot see... the agent runs under that user's own token" — was
+false for the actual deployed shape: the shared token (`dev@ship.local`, a super-admin) could see
+everything, so the "PRIMARY guarantee" that docstring described was not actually being enforced;
+only the secondary `passesAskerVisibility` check was doing real work. This also meant FG-7's own
+permission test ("a token for a user who cannot see a related document") only proved the
+belt-and-braces check, not that the *real* per-request identity mattered.
+
+**Scope investigated, not assumed** (the ticket's own open questions):
+- *"Should `ResilientClient`/`ShipClientLike` accept a token per call?"* — Yes, for the on-demand
+  path specifically. `OnDemandDeps.shipClient: OnDemandShipClientLike` (bound once, process
+  lifetime) became `OnDemandDeps.shipClientFactory: (token: string) => OnDemandShipClientLike` —
+  `resolveSeed`/`expandFrontier` (`graph.ts`) call it with `state.askingUserToken`, resolved fresh
+  on every graph invocation. `ShipClient`'s constructor already took `{ baseUrl, token, client }`
+  with `token` required — no new class needed, just calling `new ShipClient(...)` per on-demand
+  invocation instead of once at process startup, reusing the SAME underlying `ResilientClient` (the
+  circuit breaker/self-throttle are about Ship's own health, not caller identity).
+- *"Where would per-user tokens come from for the on-demand path?"* — Minted server-side, per
+  request, by `api/src/routes/agent.ts` (`POST /api/agent/chat`), reusing the EXISTING `api_tokens`
+  mechanism `routes/api-tokens.ts`'s self-service "generate a personal access token" flow already
+  uses (same table, same `ship_<hex>` format, same `authMiddleware` validation) — no new
+  infrastructure. New module: `api/src/services/agentTokens.ts` (`mintEphemeralAgentToken`,
+  `revokeAgentToken`), deliberately NOT a wrapper around `routes/api-tokens.ts`'s own handler (that
+  route is a human-facing flow with its own conflict/audit semantics not written for a system
+  caller). Each mint gets a random-suffixed name (`agent-chat:<uuid>`) — required, not cosmetic:
+  `migrations/014_api_tokens.sql`'s `UNIQUE(user_id, workspace_id, name)` is NOT scoped to active
+  rows, so a fixed name would collide with the same user's own prior (already-revoked) token on
+  their very next chat message. Short expiry (5 minutes) AND an explicit `await`ed revoke once the
+  agent call settles (`finally` block) — belt and braces: the revoke bounds real exposure to "this
+  one request," the expiry is the fallback if the process crashes before the revoke runs.
+- *"Does this change FG-8's human-gate design, or is it purely about the read side?"* — Purely the
+  read side. `agent/src/gate.ts` (FG-8's write path) is untouched — confirmed unmodified by this
+  diff — it already took `accepterToken` as a required per-call argument with no bound default
+  (`GateShipClient` has no token field at all), which is the SAME pattern this fix now applies to
+  the on-demand read path (`shipClientFactory`), just arrived at independently for the write side
+  earlier in the sprint.
+
+**What changed:**
+- `agent/src/graph.ts`: new `askingUserToken` state field (mirrors `askingUserId`'s own pattern);
+  new `requireAskingUserToken` guard (mirrors `requireTargetPersonUserId`/`requireBlockingIssueId` —
+  fails loudly, never falls back to a shared identity); `OnDemandDeps.shipClient` →
+  `shipClientFactory`; `resolveSeed`/`expandFrontier` resolve a fresh client from
+  `state.askingUserToken` on every call. `expansion.ts` is UNCHANGED — the factory indirection means
+  its function signatures never needed to grow a `token` parameter.
+- `agent/src/index.ts`: builds `resilientHttpClient` once, shared by the bound-token `shipClient`
+  (still used by `proactiveDeps`/`deepDeps` — both intentionally keep ONE shared token, see below)
+  and the new on-demand `shipClientFactory` closure.
+- `agent/src/server.ts`: `POST /chat`'s `ChatRequestBody`/`isValidChatRequestBody` require
+  `askingUserToken` (a non-empty string), matching `askingUserId`'s existing requiredness — every
+  real `/chat` call already requires `seedDocumentId`, which always routes into the token-requiring
+  expansion path, so this closes the contract rather than widening it.
+- `agent/src/scripts/trace-invoke-on-demand.ts`: updated to the new `shipClientFactory`/
+  `askingUserToken` shape (this manual dev script still runs under one operator-supplied
+  `SHIP_API_TOKEN`, which is correct for its own purpose — a human running it with their own token).
+- `api/src/services/agentTokens.ts` (new): `mintEphemeralAgentToken`/`revokeAgentToken`.
+- `api/src/routes/agent.ts`: `POST /chat` mints a token for `req.userId`/`req.workspaceId` after the
+  existing secret/base-URL checks (no point spending a DB row on a request about to be refused
+  anyway), sends it as `askingUserToken`, and revokes it in `finally`.
+- `agent/src/__tests__/graphWriteBoundary.test.ts`: `findDepsShipClientTypes` extended to also
+  resolve a `shipClientFactory` member's RETURN type (not just a plain `shipClient` field's own
+  type) — the FG-8 structural proof ("no Deps interface ever exposes a write-capable client") stays
+  fully enforced for the new shape, not silently exempted from it.
+
+**Not closed — scoped out, follow-up ticket TRO-350 filed.** The proactive/steady-tier poll
+(`agent/src/proactivePoll.ts`) has no requesting user — it decides WHO to surface something to, the
+reverse of the on-demand case — so `ProactiveDeps`/`DeepDeps` still bind ONE shared
+`config.shipApiToken` (unchanged, deliberately: `graph.ts`'s own docstrings for both interfaces now
+say so explicitly). Closing this properly needs new infrastructure this ticket's own scope section
+flagged as a real open question — where would a per-recipient token come from for a poll nobody
+triggered? — options include minting one long-lived token per known Ship user (needs a "who are the
+known users" enumeration and a storage/rotation scheme this codebase does not have) or something
+narrower (e.g. deriving a bounded per-recipient capability token, if Ship's `api_tokens` model grew
+scoping). TRO-350 records this recommendation and the design question for whoever picks it up —
+this ticket does not build that infrastructure speculatively per its own escalation criteria.
+
+**Regression tests, confirmed red on the unfixed code before implementing the fix (not just
+reasoned about) — reverted each file via `git show HEAD:<path>` after copying the fixed version
+aside to the scratchpad, never `git stash`, then restored the fixed version and re-ran full green:**
+- `agent/src/__tests__/graph.test.ts` — `describe('per-requesting-user Ship tokens (TRO-342)')`, 2
+  new cases. Against unfixed `graph.ts`: "resolves the client from THIS invocation's own
+  askingUserToken" failed with `shipClientFactory` called 0 times (the mechanism didn't exist); the
+  "missing askingUserToken throws" case failed with an unrelated crash
+  (`Cannot read properties of undefined (reading 'usage_metadata')`) instead of the expected clear
+  error — proving the guard didn't exist, not just that the test file was stale. Also updated 3
+  existing on-demand proof tests (`shipClient` → `shipClientFactory`, `askingUserToken` added to
+  their `invoke()` calls) and the "bare question" test.
+- `agent/src/__tests__/graphWriteBoundary.test.ts` — 1 new control case proving
+  `findDepsShipClientTypes` still catches a write-capable type even through the new
+  `shipClientFactory` shape.
+- `agent/src/__tests__/server.test.ts` — 1 new case: `POST /chat` with `askingUserToken` omitted.
+  Against unfixed `server.ts`: returned 200 (silently accepted and forwarded to the graph) instead
+  of the expected 400.
+- `api/src/routes/agent.test.ts` — 2 new cases (distinct tokens per request; revoke survives a
+  failed agent call) plus the existing "forwards seedDocumentId/question..." test extended with
+  real-DB assertions (token shape, `api_tokens` row exists for `testUserId`/`testWorkspaceId`,
+  `expires_at` set, `revoked_at` set after the request settles — polled via a real condition per
+  lessons.md #17, never a fixed sleep). Against unfixed `routes/agent.ts`: `sentBody.askingUserToken`
+  was `undefined`, no token row existed, and revoke assertions failed outright.
+
+**How to run it.** `source .factory-env` first (DB-truncation warning). `pnpm --filter @ship/agent
+test` (314 tests) and `pnpm --filter @ship/api test -- agent.test.ts` (needs the real worktree
+Postgres — `api_tokens` INSERTs/SELECTs are genuine DB round-trips, not mocked) both pass green.
+`pnpm --filter @ship/agent exec tsc --noEmit` and `pnpm --filter @ship/api exec tsc --noEmit` both
+clean (test files are excluded from both packages' `tsconfig.json`, so they were verified by
+actually running them, not by `tsc` alone).
+
+**Rollback.** Revert this commit. No schema/migration change — `agentTokens.ts` inserts into the
+EXISTING `api_tokens` table via the same shape `routes/api-tokens.ts` already writes, so reverting
+needs no data migration. Reverting restores the pre-fix shape: one shared `SHIP_API_TOKEN` used for
+every on-demand chat answer regardless of who asked.
+
+---
+
 ## TRO-344 — Circular-blocks error message is inferred from a bare 500, not a dedicated error code
 
 **Found by:** CodeRabbit, PR #120 (TRO-328 / [PR-D] / TRO-334), `web/src/hooks/useBlockingAssociations.ts:168`,

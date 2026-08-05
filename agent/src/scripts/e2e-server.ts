@@ -66,19 +66,32 @@ const fakeModel: AnthropicModel = {
   }),
 };
 
+// TRO-342: mirrors index.ts's own real wiring, including its post-TRO-342
+// shape — one shared ResilientClient, a bound-token ShipClient for the
+// proactive/deep tiers (no per-invocation requesting user to source a
+// per-call token from), and a per-invocation shipClientFactory for the
+// on-demand tier (resolveSeed/expandFrontier resolve a fresh client from
+// state.askingUserToken on every run). This e2e bootstrap's own callers
+// (e2e/fixtures/agentEnv.ts) already know a real Ship API token for
+// whichever user the on-demand E2E flow acts as, and pass it through as
+// askingUserToken on the POST /chat body — this file has nothing further
+// to do to support that.
+const resilientHttpClient = buildShipClient(config);
 const shipClient = new ShipClient({
   baseUrl: config.shipApiBaseUrl,
   // isConfigComplete() above already guarantees this is set.
   token: config.shipApiToken as string,
-  client: buildShipClient(config),
+  client: resilientHttpClient,
 });
+const onDemandShipClientFactory = (token: string): ShipClient =>
+  new ShipClient({ baseUrl: config.shipApiBaseUrl, token, client: resilientHttpClient });
 const itemStore: ItemStore = new InMemoryItemStore();
 const draftStore = new InMemoryDraftStore();
 
 const graph: CompiledGraph = buildGraph(
   fakeModel,
   { shipClient, itemStore },
-  { shipClient, documentCap: config.onDemandDocumentCap },
+  { shipClientFactory: onDemandShipClientFactory, documentCap: config.onDemandDocumentCap },
   { shipClient, itemStore, draftStore }
 );
 

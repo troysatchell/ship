@@ -544,6 +544,29 @@ export const GraphState = Annotation.Root({
     default: () => undefined,
   }),
 
+  /** The asking user's OWN Ship API token (TRO-342) — what `resolveSeed`/
+   * `expandFrontier` actually authenticate every outbound Ship call with,
+   * via `OnDemandDeps.shipClientFactory(state.askingUserToken)`. This is
+   * the field that makes `askingUserId` (above) more than a belt-and-braces
+   * label: before TRO-342, every on-demand run — regardless of who asked —
+   * shared the ONE `ShipClient` `index.ts` built from `SHIP_API_TOKEN` at
+   * process startup, so `passesAskerVisibility` was doing the ONLY real
+   * per-user visibility enforcement; Ship's own server-side 404 (the
+   * "PRIMARY guarantee" `expansion.ts`'s `visitDocument` docstring already
+   * claimed) was never actually gated on the real asker, because the
+   * shared token could see everything. Required whenever the expansion
+   * path actually runs (`requireAskingUserToken`, mirroring
+   * `requireTargetPersonUserId`/`requireBlockingIssueId`) — there is no
+   * fallback identity to run under instead (FLEETGRAPH.MD: "no service
+   * account"). Not read anywhere on the `proactive_fast`/`proactive_steady`
+   * or `proactive_deep` chains: neither has a requesting user to source a
+   * token from in the first place (see `ProactiveDeps`/`DeepDeps`'s own
+   * docstrings — both remain intentionally single-shared-token). */
+  askingUserToken: Annotation<string | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
   /** Documents discovered but not yet visited, kept sorted by relevance
    * (`sortFrontierByRelevance`) — a real priority queue, not a FIFO. Fully
    * replaced each node call (last-write-wins), unlike `inboxItems`: only
@@ -897,9 +920,28 @@ const DEFAULT_INITIAL_LOOKBACK_MS = 24 * 60 * 60 * 1000;
  * compile a call site that constructs `OnDemandDeps` without one — the cap
  * cannot be silently forgotten, only explicitly chosen. Production wires a
  * concrete number from config (`index.ts`); nothing in this file guesses one.
+ *
+ * `shipClientFactory`, not a bound `shipClient` (TRO-342): a single compiled
+ * graph (`index.ts` builds exactly one, reused for every `/chat` request AND
+ * every proactive poll tick) cannot hold a per-request value in a `deps`
+ * field injected once at `buildGraph()` time — `deps` is process-lifetime,
+ * `state` is per-invocation, which is exactly why `askingUserId`/
+ * `askingUserToken` live on `GraphState` instead. The factory is the seam:
+ * `resolveSeed`/`expandFrontier` call `deps.shipClientFactory(state.
+ * askingUserToken)` to get a client scoped to THIS run's own asker, never a
+ * shared one. Before this ticket, `OnDemandDeps.shipClient` was the exact
+ * same bound-token `ShipClient` instance `ProactiveDeps`/`DeepDeps` use —
+ * see those interfaces' own docstrings for why THEY keep a single shared
+ * token (no requesting user to source a per-call one from); on-demand is the
+ * one path with an actual requesting user attached to every invocation, so
+ * it is the one path this ticket closes. Production (`index.ts`) implements
+ * this as `(token) => new ShipClient({ baseUrl, token, client })` — cheap
+ * object construction reusing the SAME underlying `ResilientClient` (so the
+ * circuit breaker/self-throttle state, which is about Ship's health, not
+ * caller identity, still applies process-wide).
  */
 export interface OnDemandDeps {
-  shipClient: OnDemandShipClientLike;
+  shipClientFactory: (token: string) => OnDemandShipClientLike;
   /** Hard ceiling on documents pulled into context, counting the seed
    * itself. Required — see this interface's own docstring. */
   documentCap: number;
@@ -989,12 +1031,30 @@ function requireProactiveDeps(deps: ProactiveDeps | undefined, nodeName: NodeNam
 function requireOnDemandDeps(deps: OnDemandDeps | undefined, nodeName: NodeName): OnDemandDeps {
   if (!deps) {
     throw new Error(
-      `graph node "${nodeName}" requires OnDemandDeps (shipClient/documentCap) — buildGraph was ` +
-        'called with none. This node only runs when an on_demand trigger carries a ' +
+      `graph node "${nodeName}" requires OnDemandDeps (shipClientFactory/documentCap) — buildGraph ` +
+        'was called with none. This node only runs when an on_demand trigger carries a ' +
         '`seedDocumentId`; pass deps if the caller ever sets one.'
     );
   }
   return deps;
+}
+
+/** TRO-342: the on-demand expansion path has no identity to fall back to —
+ * there is no service account (FLEETGRAPH.MD). Same "fails loudly rather
+ * than silently" posture as `requireTargetPersonUserId`/
+ * `requireBlockingIssueId` below, and deliberately checked BEFORE
+ * `deps.shipClientFactory` is ever called, so a missing token can never
+ * resolve to a client built from `undefined`. */
+function requireAskingUserToken(state: GraphStateType, nodeName: NodeName): string {
+  if (!state.askingUserToken) {
+    throw new Error(
+      `graph node "${nodeName}" requires state.askingUserToken — the on-demand expansion walk ` +
+        'authenticates every outbound Ship call as the asking person, never a shared/default ' +
+        'identity (FLEETGRAPH.MD: "no service account"); pass askingUserToken when invoking the ' +
+        'graph with a seedDocumentId.'
+    );
+  }
+  return state.askingUserToken;
 }
 
 function requireDeepDeps(deps: DeepDeps | undefined, nodeName: NodeName): DeepDeps {
@@ -1229,8 +1289,14 @@ export function buildGraph(
       // GraphState, so narrow it explicitly rather than asserting.
       if (!state.seedDocumentId) return {};
 
+      // TRO-342: resolved from THIS invocation's own state, never a value
+      // fixed at buildGraph() time — see OnDemandDeps.shipClientFactory's
+      // own docstring for why.
+      const token = requireAskingUserToken(state, 'resolveSeed');
+      const client = deps.shipClientFactory(token);
+
       const seed = await visitDocument(
-        deps.shipClient,
+        client,
         state.seedDocumentId,
         { reason: 'the document you had open', hop: 0 },
         state.askingUserId,
@@ -1244,7 +1310,7 @@ export function buildGraph(
         return { visitedDocumentIds: [state.seedDocumentId] };
       }
 
-      const candidates = await buildCandidatesFromDocument(deps.shipClient, seed.doc, 1, {
+      const candidates = await buildCandidatesFromDocument(client, seed.doc, 1, {
         assigneeCandidateLimit: deps.assigneeCandidateLimit,
       });
 
@@ -1284,8 +1350,14 @@ export function buildGraph(
         return { frontier: rest };
       }
 
+      // TRO-342: same per-invocation resolution as resolveSeed — every hop
+      // of the SAME walk uses the SAME asker's token (state does not change
+      // mid-invocation), never a value fixed at buildGraph() time.
+      const token = requireAskingUserToken(state, 'expandFrontier');
+      const client = deps.shipClientFactory(token);
+
       const visited = await visitDocument(
-        deps.shipClient,
+        client,
         next.documentId,
         next,
         state.askingUserId,
@@ -1296,7 +1368,7 @@ export function buildGraph(
         return { visitedDocumentIds: [next.documentId], frontier: rest };
       }
 
-      const discovered = await buildCandidatesFromDocument(deps.shipClient, visited.doc, next.hop + 1, {
+      const discovered = await buildCandidatesFromDocument(client, visited.doc, next.hop + 1, {
         assigneeCandidateLimit: deps.assigneeCandidateLimit,
       });
 

@@ -94,12 +94,25 @@ async function main() {
   // trace-link script, so it is also the only place that can produce a real
   // measured composeAnswer data point (cost cliff #1/#2).
   const costTracker = new FileCostTracker();
-  const graph = buildGraph(model, undefined, { shipClient, documentCap: config.onDemandDocumentCap }, undefined, costTracker);
+  // TRO-342: OnDemandDeps.shipClient became shipClientFactory — this manual
+  // script has only ONE real token available (SHIP_API_TOKEN, checked
+  // above), so the factory just returns the same client regardless of the
+  // token argument it's called with. That is correct for THIS script's own
+  // purpose (a human runs it with their own token to produce a trace), not
+  // a workaround: production (index.ts) uses the argument for real.
+  const graph = buildGraph(
+    model,
+    undefined,
+    { shipClientFactory: () => shipClient, documentCap: config.onDemandDocumentCap },
+    undefined,
+    costTracker
+  );
 
   const result = await graph.invoke({
     trigger: 'on_demand',
     input: question,
     seedDocumentId,
+    askingUserToken: config.shipApiToken,
   });
 
   console.log('--- graph output ---');

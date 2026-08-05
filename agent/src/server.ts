@@ -18,6 +18,11 @@
  * here would let anyone spend the configured Anthropic API budget and query
  * as an arbitrary `askingUserId`. Degrades the same way `/ready` does when
  * `deps.graph` is absent (config incomplete): a clear 503, never a hang.
+ * `askingUserToken` (TRO-342) is likewise required in the body — the
+ * expansion walk (`graph.ts`'s `resolveSeed`/`expandFrontier`) authenticates
+ * every outbound Ship read as THIS token's own owner, never a shared
+ * process-level one; `api/src/routes/agent.ts` mints it fresh per request
+ * from the caller's own session, it is never client-suppliable.
  * Also bounded once the graph IS present (CodeRabbit review, PR #120):
  * `graph.invoke` races against `config.chatHandlerTimeoutMs`, aborted via a
  * real `AbortSignal` LangGraph itself honors — a 504 after that window,
@@ -111,6 +116,17 @@ interface ChatRequestBody {
   seedDocumentId: string;
   question: string;
   askingUserId: string;
+  /** The asking user's OWN Ship API token (TRO-342) — minted per-request by
+   * `api/src/routes/agent.ts` (never something a browser could supply
+   * itself; that route builds it server-side from the session's own
+   * `req.userId`) and required exactly like `askingUserId`: every real
+   * `/chat` call already carries a `seedDocumentId` (also required below),
+   * which always routes into `resolveSeed`/`expandFrontier` — so every
+   * request this validator accepts is one that will actually need a token
+   * to authenticate its Ship reads with. See `graph.ts`'s
+   * `requireAskingUserToken` for what happens if a caller upstream of this
+   * check is ever changed to omit it. */
+  askingUserToken: string;
 }
 
 function isValidChatRequestBody(body: unknown): body is ChatRequestBody {
@@ -119,7 +135,8 @@ function isValidChatRequestBody(body: unknown): body is ChatRequestBody {
   return (
     typeof b.seedDocumentId === 'string' && b.seedDocumentId.length > 0 &&
     typeof b.question === 'string' && b.question.trim().length > 0 &&
-    typeof b.askingUserId === 'string' && b.askingUserId.length > 0
+    typeof b.askingUserId === 'string' && b.askingUserId.length > 0 &&
+    typeof b.askingUserToken === 'string' && b.askingUserToken.length > 0
   );
 }
 
@@ -175,7 +192,7 @@ export function createServer(config: AgentConfig, deps: CreateServerDeps = {}): 
     }
 
     if (!isValidChatRequestBody(req.body)) {
-      res.status(400).json({ error: 'invalid_request', message: 'seedDocumentId, question, and askingUserId are all required strings' });
+      res.status(400).json({ error: 'invalid_request', message: 'seedDocumentId, question, askingUserId, and askingUserToken are all required strings' });
       return;
     }
 
@@ -220,6 +237,7 @@ export function createServer(config: AgentConfig, deps: CreateServerDeps = {}): 
           input: req.body.question,
           seedDocumentId: req.body.seedDocumentId,
           askingUserId: req.body.askingUserId,
+          askingUserToken: req.body.askingUserToken,
         },
         { signal: controller.signal }
       );

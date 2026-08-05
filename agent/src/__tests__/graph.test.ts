@@ -322,7 +322,7 @@ describe('buildGraph — on-demand expansion (TRO-318 / FG-7)', () => {
       'a comment on a different document — four named sources with reasons',
     async () => {
       const model: AnthropicModel = { invoke: vi.fn().mockResolvedValue({ content: 'It looks stalled because nobody has touched it in a week.' }) };
-      const onDemandDeps: OnDemandDeps = { shipClient: fourCitationClient(), documentCap: 4 };
+      const onDemandDeps: OnDemandDeps = { shipClientFactory: () => fourCitationClient(), documentCap: 4 };
       const compiled = buildGraph(model, undefined, onDemandDeps);
 
       const result = await compiled.invoke({
@@ -330,6 +330,7 @@ describe('buildGraph — on-demand expansion (TRO-318 / FG-7)', () => {
         input: 'Why is this issue stalled?',
         seedDocumentId: STALE_ISSUE_ID,
         askingUserId: EMMA_USER_ID,
+        askingUserToken: 'emma-token',
       });
 
       expect(result.citedSources).toHaveLength(4);
@@ -391,10 +392,15 @@ describe('buildGraph — on-demand expansion (TRO-318 / FG-7)', () => {
     };
 
     const model: AnthropicModel = { invoke: vi.fn().mockResolvedValue({ content: 'Summary.' }) };
-    const onDemandDeps: OnDemandDeps = { shipClient: client, documentCap: 3 };
+    const onDemandDeps: OnDemandDeps = { shipClientFactory: () => client, documentCap: 3 };
     const compiled = buildGraph(model, undefined, onDemandDeps);
 
-    const result = await compiled.invoke({ trigger: 'on_demand', input: 'What is going on here?', seedDocumentId: DENSE_SEED });
+    const result = await compiled.invoke({
+      trigger: 'on_demand',
+      input: 'What is going on here?',
+      seedDocumentId: DENSE_SEED,
+      askingUserToken: 'asker-token',
+    });
 
     // Never exceeds the cap — 10 real candidates existed, only `documentCap`
     // (3, including the seed) were ever pulled in.
@@ -441,7 +447,7 @@ describe('buildGraph — on-demand expansion (TRO-318 / FG-7)', () => {
     };
 
     const model: AnthropicModel = { invoke: vi.fn().mockResolvedValue({ content: 'Here is what is going on.' }) };
-    const onDemandDeps: OnDemandDeps = { shipClient: client, documentCap: 5 };
+    const onDemandDeps: OnDemandDeps = { shipClientFactory: () => client, documentCap: 5 };
     const compiled = buildGraph(model, undefined, onDemandDeps);
 
     const result = await compiled.invoke({
@@ -449,6 +455,7 @@ describe('buildGraph — on-demand expansion (TRO-318 / FG-7)', () => {
       input: 'What is going on with the team this week?',
       seedDocumentId: SEED_ID,
       askingUserId: ASKER_ID,
+      askingUserToken: 'asker-token',
     });
 
     const citedIds = result.citedSources.map((s) => s.documentId);
@@ -486,14 +493,96 @@ describe('buildGraph — on-demand expansion (TRO-318 / FG-7)', () => {
       getComments: vi.fn(),
       getIssuesByAssignee: vi.fn(),
     };
-    const compiled = buildGraph(model, undefined, { shipClient, documentCap: 10 });
+    // Never invoked either — a bare question routes straight into
+    // ingest -> respond without ever calling resolveSeed, so nothing here
+    // ever asks for a client, let alone a token (TRO-342).
+    const shipClientFactory = vi.fn().mockReturnValue(shipClient);
+    const compiled = buildGraph(model, undefined, { shipClientFactory, documentCap: 10 });
 
     const result = await compiled.invoke({ trigger: 'on_demand', input: '  no seed here  ' });
 
     expect(model.invoke).toHaveBeenCalledWith('no seed here');
+    expect(shipClientFactory).not.toHaveBeenCalled();
     expect(result.output).toBe('plain reply');
     expect(shipClient.getDocument).not.toHaveBeenCalled();
     expect(result.citedSources).toEqual([]);
+  });
+
+  describe('per-requesting-user Ship tokens (TRO-342)', () => {
+    /**
+     * Before TRO-342, `OnDemandDeps.shipClient` was ONE bound-token
+     * `ShipClient` instance, built once at process startup from the
+     * agent's own `SHIP_API_TOKEN` env var — the SAME instance backed every
+     * on-demand invocation, regardless of who asked. That contradicted
+     * FLEETGRAPH.MD's "no service account" argument on the read side, even
+     * though FG-8's write gate (`gate.ts`) already got this right.
+     *
+     * `shipClientFactory` is what closes that: `resolveSeed`/`expandFrontier`
+     * resolve a client from `state.askingUserToken` on EVERY invocation,
+     * never a value fixed at `buildGraph()` time. These two tests prove
+     * that directly, rather than trusting the field rename alone.
+     */
+    it('resolves the client from THIS invocation\'s own askingUserToken — two different askers never share a client', async () => {
+      const aliceClient = fourCitationClient();
+      const bobDoc = fixtureDoc({ id: 'bob-seed', title: "Bob's own document" });
+      const bobClient: OnDemandShipClientLike = {
+        getDocument: vi.fn().mockResolvedValue(bobDoc),
+        getAssociations: vi.fn().mockResolvedValue([]),
+        getReverseAssociations: vi.fn().mockResolvedValue([]),
+        getBacklinks: vi.fn().mockResolvedValue([]),
+        getComments: vi.fn().mockResolvedValue([]),
+        getIssuesByAssignee: vi.fn().mockResolvedValue([]),
+      };
+      const shipClientFactory = vi.fn((token: string) => (token === 'alice-token' ? aliceClient : bobClient));
+      const onDemandDeps: OnDemandDeps = { shipClientFactory, documentCap: 4 };
+      const model: AnthropicModel = { invoke: vi.fn().mockResolvedValue({ content: 'answer' }) };
+
+      const aliceResult = await buildGraph(model, undefined, onDemandDeps).invoke({
+        trigger: 'on_demand',
+        input: 'q1',
+        seedDocumentId: STALE_ISSUE_ID,
+        askingUserId: 'alice',
+        askingUserToken: 'alice-token',
+      });
+      const bobResult = await buildGraph(model, undefined, onDemandDeps).invoke({
+        trigger: 'on_demand',
+        input: 'q2',
+        seedDocumentId: 'bob-seed',
+        askingUserId: 'bob',
+        askingUserToken: 'bob-token',
+      });
+
+      expect(shipClientFactory).toHaveBeenCalledWith('alice-token');
+      expect(shipClientFactory).toHaveBeenCalledWith('bob-token');
+      // Alice's run only ever touched alice's client...
+      expect(aliceClient.getDocument).toHaveBeenCalledWith(STALE_ISSUE_ID);
+      expect(bobClient.getDocument).not.toHaveBeenCalledWith(STALE_ISSUE_ID);
+      // ...and Bob's run only ever touched Bob's — never crossed over.
+      expect(bobClient.getDocument).toHaveBeenCalledWith('bob-seed');
+      expect(aliceClient.getDocument).not.toHaveBeenCalledWith('bob-seed');
+      expect(aliceResult.citedSources.map((s) => s.documentId)).toContain(STALE_ISSUE_ID);
+      expect(bobResult.citedSources.map((s) => s.documentId)).toEqual(['bob-seed']);
+    });
+
+    it('throws a clear error — and never even calls shipClientFactory — when a seeded on_demand run carries no askingUserToken', async () => {
+      const shipClientFactory = vi.fn().mockReturnValue(fourCitationClient());
+      const onDemandDeps: OnDemandDeps = { shipClientFactory, documentCap: 4 };
+      const model: AnthropicModel = { invoke: vi.fn() };
+      const compiled = buildGraph(model, undefined, onDemandDeps);
+
+      await expect(
+        compiled.invoke({
+          trigger: 'on_demand',
+          input: 'hi',
+          seedDocumentId: STALE_ISSUE_ID,
+          askingUserId: EMMA_USER_ID,
+          // no askingUserToken
+        })
+      ).rejects.toThrow(/askingUserToken/);
+
+      expect(shipClientFactory).not.toHaveBeenCalled();
+      expect(model.invoke).not.toHaveBeenCalled();
+    });
   });
 });
 
