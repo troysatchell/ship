@@ -49,8 +49,14 @@
  * `commitBlockerEscalation` writes. Ranked LAST — see `TYPE_RANK` below —
  * matching FLEETGRAPH.MD's own "Who it notifies" section verbatim:
  * "Escalation to a manager exists but is last, and only after several
- * periods with no resolution." */
-export type InboxItemType = 'mention' | 'blocking_approval' | 'standup_draft' | 'blocker_escalation';
+ * periods with no resolution."
+ *
+ * `retro_draft` (TRO-335 / FG-17): the same lightweight-pointer shape again,
+ * for the retro-delivery draft `graph.ts`'s `commitRetroDraft` writes.
+ * Ranked alongside `standup_draft` (see `TYPE_RANK` below) — both are
+ * "drafts the agent has prepared for them," FLEETGRAPH.MD's own inbox list
+ * item #4, behind mentions/approvals and ahead of escalations. */
+export type InboxItemType = 'mention' | 'blocking_approval' | 'standup_draft' | 'blocker_escalation' | 'retro_draft';
 
 export interface InboxItemEvidence {
   /** The Ship document this item is evidenced by. The never-surface check
@@ -151,26 +157,32 @@ export interface ItemStore {
    * (ticket / FLEETGRAPH.MD Test Case 2: "approval first because another
    * person's week cannot start"), highest `blockedCount` first within
    * that, ties broken by longest-waiting (`blockedSince` ascending); then
-   * `mention` items, oldest first; then `standup_draft` items, oldest
-   * first (TRO-319 / FG-6 — FLEETGRAPH.MD's own enumerated inbox list puts
-   * "drafts prepared for them" last, item #4 of 4, behind mentions and
-   * blocking approvals — reacting to someone ELSE's need outranks a
-   * person's own not-yet-urgent paperwork); then `blocker_escalation`
-   * items, oldest first — ranked after everything else, including a
-   * person's OWN standup draft, matching FLEETGRAPH.MD's "Who it notifies"
-   * section verbatim: "Escalation to a manager exists but is last." */
+   * `mention` items, oldest first; then `standup_draft`/`retro_draft`
+   * items, oldest first within each (TRO-319 / FG-6, TRO-335 / FG-17 —
+   * FLEETGRAPH.MD's own enumerated inbox list puts "drafts prepared for
+   * them" behind mentions and blocking approvals — reacting to someone
+   * ELSE's need outranks a person's own not-yet-urgent paperwork); then
+   * `blocker_escalation` items, oldest first — ranked after everything
+   * else, including a person's own standup/retro drafts, matching
+   * FLEETGRAPH.MD's "Who it notifies" section verbatim: "Escalation to a
+   * manager exists but is last." */
   list(recipientUserId: string): InboxItem[];
   /** Every item currently stored, for tests/inspection. */
   all(): InboxItem[];
 }
 
 /** Type rank, lowest sorts first. `blocking_approval` before `mention`
- * before `standup_draft` before `blocker_escalation` — see `list()`'s own
- * docstring for why. */
+ * before `standup_draft`/`retro_draft` before `blocker_escalation` — see
+ * `list()`'s own docstring for why. `standup_draft` and `retro_draft` share
+ * a rank tier deliberately (both are "drafts prepared for them," neither
+ * outranks the other) — ties within a rank fall through to
+ * `compareInboxItems`'s generic `createdAt` comparison below, same as any
+ * other same-type tie. */
 const TYPE_RANK: Record<InboxItemType, number> = {
   blocking_approval: 0,
   mention: 1,
   standup_draft: 2,
+  retro_draft: 2,
   blocker_escalation: 3,
 };
 
@@ -206,9 +218,17 @@ function versionKeyFor(item: Pick<InboxItem, 'blockedSince' | 'evidence'>): stri
 }
 
 function compareInboxItems(a: InboxItem, b: InboxItem): number {
-  if (a.type !== b.type) {
-    return TYPE_RANK[a.type] - TYPE_RANK[b.type];
-  }
+  // Compare by RANK, not by type equality (TRO-335 / FG-17): `standup_draft`
+  // and `retro_draft` deliberately share a rank (see `TYPE_RANK`'s own
+  // docstring) but are still two DIFFERENT `type` values — the old
+  // `a.type !== b.type` early-return would have compared them as
+  // permanently "equal" (rank 2 - rank 2 = 0) and never reached the
+  // `createdAt` tie-break below, leaving their relative order to whatever
+  // `Array.prototype.sort`'s stability happened to preserve rather than the
+  // intended oldest-first ordering. Comparing ranks directly generalizes
+  // correctly for both same-type and shared-rank-different-type ties.
+  const rankDiff = TYPE_RANK[a.type] - TYPE_RANK[b.type];
+  if (rankDiff !== 0) return rankDiff;
   if (a.type === 'blocking_approval') {
     const countDiff = (b.blockedCount ?? 0) - (a.blockedCount ?? 0);
     if (countDiff !== 0) return countDiff;

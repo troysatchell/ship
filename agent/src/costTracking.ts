@@ -106,19 +106,26 @@ import { fileURLToPath } from 'node:url';
  * on-demand chat path (no expansion), `composeAnswer` is the on-demand path
  * WITH expansion (FG-7, "follows the graph outward" — the tier the cost
  * model's $0.065/$9,000-token figure describes), `composeStandupDraft` is
- * the deep-tier standup draft (FG-6), and `composeBlockerEscalation`
- * (TRO-346/TRO-337 / FG-19) is the cross-project blocker-escalation draft —
- * the fourth and, as of this ticket, final model call site in the graph.
- * FLEETGRAPH.MD's cost model also names "inbox assembly" and "retro draft"
- * tiers; neither has a value here because neither makes a model call in the
- * graph as built today — FG-5's `pollChangeFeed -> resolveMentions ->
- * detectBlockingApprovals -> commitInboxItems` chain has zero model calls
- * (documented in `graph.ts`'s own module docstring), and no retro-draft node
- * exists yet ("Phase 2 ... not fully done", `graph.ts:5-6`). Adding either
- * later costs nothing here: this union just grows, and every aggregation
- * function in this file already groups by whatever site values are actually
- * present in the data. */
-export type InvocationSite = 'respond' | 'composeAnswer' | 'composeStandupDraft' | 'composeBlockerEscalation';
+ * the deep-tier standup draft (FG-6), `composeBlockerEscalation`
+ * (TRO-346/TRO-337 / FG-19) is the cross-project blocker-escalation draft,
+ * and `composeRetroDraft` (TRO-335 / FG-17) is the retro-delivery draft —
+ * the fifth and, as of this ticket, final model call site in the graph.
+ * FLEETGRAPH.MD's cost model also names an "inbox assembly" tier; it has no
+ * value here because it makes no model call in the graph as built today —
+ * FG-5's `pollChangeFeed -> resolveMentions -> detectBlockingApprovals ->
+ * commitInboxItems` chain has zero model calls (documented in `graph.ts`'s
+ * own module docstring). Adding one later costs nothing here: this union
+ * just grows, and every aggregation function in this file already groups by
+ * whatever site values are actually present in the data — exactly what
+ * happened when `composeRetroDraft` itself was added, predicted verbatim by
+ * this docstring's own prior revision ("Adding either later costs nothing
+ * here: this union just grows"). */
+export type InvocationSite =
+  | 'respond'
+  | 'composeAnswer'
+  | 'composeStandupDraft'
+  | 'composeBlockerEscalation'
+  | 'composeRetroDraft';
 
 /** Real usage as `ChatAnthropic`'s own response carries it
  * (`@langchain/core`'s `UsageMetadata`) — kept minimal to exactly what this
