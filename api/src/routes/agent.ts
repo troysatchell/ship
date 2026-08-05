@@ -12,6 +12,21 @@
  * authMiddleware/authed(), same pattern as api/src/routes/ai.ts — and THIS
  * route forwards to the agent service on the browser's behalf.
  *
+ * TRO-342 (`services/agentTokens.ts`): POST /chat mints a short-lived Ship
+ * API token for `req.userId`/`req.workspaceId` — reusing the same
+ * `api_tokens` mechanism `routes/api-tokens.ts`'s self-service flow uses,
+ * called server-side instead of through a form — and sends it to the agent
+ * as `askingUserToken`. Before this, the "authenticates outbound to Ship
+ * itself under a real user's API token" claim two sentences up was true of
+ * the WRITE path (FG-8's gate, `agent/src/gate.ts`) but not the READ path:
+ * every on-demand expansion walk ran under the agent process's own single
+ * `SHIP_API_TOKEN`, regardless of who asked. The minted token is revoked
+ * (`finally`, below) once the agent call it was minted for has settled —
+ * see `agentTokens.ts`'s own docstring for the full lifecycle, including
+ * why a fixed token name would collide across a user's own successive
+ * requests.
+ *
+
  * Security note (read before touching AGENT_INTERNAL_SECRET): the agent
  * service is reachable from the public internet today (a Render service,
  * no private networking configured — FLEETGRAPH.MD's "Deployment model").
@@ -35,6 +50,7 @@
  */
 import { Router } from 'express';
 import { authMiddleware, authed } from '../middleware/auth.js';
+import { mintEphemeralAgentToken, revokeAgentToken, type MintedAgentToken } from '../services/agentTokens.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -163,6 +179,23 @@ router.post('/chat', authMiddleware, authed(async (req, res) => {
     return;
   }
 
+  // TRO-342: mint AFTER the two checks above (no point spending a real
+  // api_tokens row on a request that's about to be refused anyway), BEFORE
+  // the outbound fetch — the agent's on-demand expansion walk needs this to
+  // authenticate every Ship read it makes for this answer as `req.userId`
+  // themselves, never the agent's own shared identity. See
+  // `services/agentTokens.ts` for the full rationale, including why minting
+  // (not looking up an existing token) is required: most users have never
+  // generated one via the self-service flow.
+  let minted: MintedAgentToken;
+  try {
+    minted = await mintEphemeralAgentToken(req.userId, req.workspaceId);
+  } catch (err) {
+    console.error('[agent-proxy] failed to mint a per-user Ship API token for the agent:', err);
+    res.status(502).json({ error: 'agent_unavailable' });
+    return;
+  }
+
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), AGENT_REQUEST_TIMEOUT_MS);
 
@@ -173,15 +206,24 @@ router.post('/chat', authMiddleware, authed(async (req, res) => {
         'Content-Type': 'application/json',
         'X-Internal-Secret': internalSecret,
       },
-      body: JSON.stringify({ seedDocumentId, question: trimmedQuestion, askingUserId: req.userId }),
+      body: JSON.stringify({
+        seedDocumentId,
+        question: trimmedQuestion,
+        askingUserId: req.userId,
+        // TRO-342: the actual authentication for the walk's outbound Ship
+        // reads — askingUserId alone is only a visibility-check label
+        // (expansion.ts's passesAskerVisibility), never a credential.
+        askingUserToken: minted.token,
+      }),
       signal: controller.signal,
       // CWE-522 (insufficiently protected credentials): `fetch` defaults to
       // `redirect: 'follow'`, and a cross-origin redirect strips
-      // `Authorization` but NOT arbitrary headers like `X-Internal-Secret` —
-      // an unexpected redirect from a misconfigured/compromised
-      // AGENT_API_BASE_URL would silently forward the secret to whatever
-      // host it points at. Fail loudly instead: a redirect here is always a
-      // configuration error, never a legitimate response.
+      // `Authorization` but NOT arbitrary headers like `X-Internal-Secret`
+      // (or the `askingUserToken` sitting in the body) — an unexpected
+      // redirect from a misconfigured/compromised AGENT_API_BASE_URL would
+      // silently forward both to whatever host it points at. Fail loudly
+      // instead: a redirect here is always a configuration error, never a
+      // legitimate response.
       redirect: 'error',
     });
 
@@ -213,6 +255,18 @@ router.post('/chat', authMiddleware, authed(async (req, res) => {
     res.status(502).json({ error: 'agent_unreachable' });
   } finally {
     clearTimeout(timer);
+    // TRO-342: AWAITED (not fire-and-forget) — bounds this token's real
+    // exposure window as tightly as this process can: by the time this
+    // handler returns, the token minted for it is already revoked, not
+    // "revoked eventually, sometime after the response was already sent."
+    // Wrapped so a revoke failure (e.g. a pool hiccup) can never override
+    // the response already decided above — the token's own short expiry
+    // (agentTokens.ts) is the fallback guarantee if this itself fails.
+    try {
+      await revokeAgentToken(minted.id);
+    } catch (err) {
+      console.error('[agent-proxy] failed to revoke ephemeral agent token:', err);
+    }
   }
 }));
 
