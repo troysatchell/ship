@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef, type FormEvent } from 'react';
+import { useState, useCallback, useEffect, useMemo, useRef, type FormEvent } from 'react';
 import { ThinkingOrb } from 'thinking-orbs';
 import { apiPost } from '@/lib/api';
 import { cn } from '@/lib/cn';
@@ -67,6 +67,78 @@ const NO_CITATIONS_MESSAGE =
   "The agent answered without pointing to any source documents, so this answer isn't shown as trustworthy. Try rephrasing the question.";
 const NO_DOCUMENT_HINT = 'Open a document to ask about it';
 
+/** Per-word reveal cadence. The full answer is already in hand (the API is
+ * single-turn JSON, not a wire stream) — this is presentation-layer
+ * streaming, the words resolving out of blur. */
+const WORD_MS = 30;
+
+/** Each token is a word plus the whitespace that follows it (newlines
+ * included), so `whitespace-pre-wrap` renders paragraph breaks correctly
+ * mid-stream. */
+function tokenizeWords(text: string): string[] {
+  return text.match(/\S+\s*/g) ?? [];
+}
+
+/**
+ * One answered exchange: streams the text word by word on first render, then
+ * swaps to a single plain text node (lighter DOM, and screen-reader/find-in-
+ * page friendly). The sources block fades in only once the text completes —
+ * reading order is top to bottom, so nothing below the text should demand
+ * attention before the text is done. Deliberately NO auto-scroll anywhere.
+ */
+function AnswerBlock({ exchange }: { exchange: ChatExchange }) {
+  const output = exchange.output ?? '';
+  const words = useMemo(() => tokenizeWords(output), [output]);
+  const [revealed, setRevealed] = useState(0);
+  const done = revealed >= words.length;
+
+  useEffect(() => {
+    if (done) return;
+    const t = setTimeout(() => setRevealed((c) => c + 1), WORD_MS);
+    return () => clearTimeout(t);
+  }, [revealed, done]);
+
+  return (
+    <div className="space-y-2">
+      <p className="whitespace-pre-wrap text-sm text-foreground">
+        {done
+          ? output
+          : words.slice(0, revealed).map((word, i) => (
+              <span key={i} style={{ animation: 'agent-word-in 250ms ease-out both' }}>
+                {word}
+              </span>
+            ))}
+        {!done && (
+          <span
+            aria-hidden="true"
+            className="ml-0.5 inline-block h-3 w-0.5 translate-y-0.5 rounded-full bg-foreground"
+          />
+        )}
+      </p>
+
+      {done && (
+        <div style={{ animation: 'agent-fade-in 350ms ease-out both' }}>
+          <span className="text-xs font-medium text-muted">Sources</span>
+          <ul className="mt-1 space-y-1">
+            {(exchange.citedSources ?? []).map((source) => (
+              <li key={source.documentId} className="text-xs text-muted">
+                <span className="font-medium text-foreground">{source.title}</span>
+                {' — '}
+                {source.reason}
+              </li>
+            ))}
+          </ul>
+          {exchange.expansionCapped && (
+            <p className={cn('mt-1 text-[11px] italic text-muted')}>
+              There was more to explore than this answer could include.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 interface AgentChatPanelProps {
   /** The document currently open, or null on screens without one. Seeds
    * every question automatically — the only document-identifying prop. */
@@ -91,11 +163,20 @@ export function AgentChatPanel({ documentId, documentTitle, onBusyChange }: Agen
     onBusyChange?.(isBusy);
   }, [isBusy, onBusyChange]);
 
-  // Keep the newest exchange in view as answers stream in.
+  // Reading order is top to bottom: NEVER auto-scroll while an answer
+  // streams. The one scroll that happens is a single snap when a NEW
+  // question is submitted — it puts that question at the top of the
+  // viewport so its answer streams downward from there.
+  const latestExchangeRef = useRef<HTMLDivElement>(null);
+  const prevExchangeCountRef = useRef(0);
   useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, [exchanges]);
+    if (exchanges.length > prevExchangeCountRef.current) {
+      const container = scrollRef.current;
+      const el = latestExchangeRef.current;
+      if (container && el) container.scrollTop = el.offsetTop;
+    }
+    prevExchangeCountRef.current = exchanges.length;
+  }, [exchanges.length]);
 
   const handleSubmit = useCallback(
     async (e: FormEvent<HTMLFormElement>) => {
@@ -161,7 +242,9 @@ export function AgentChatPanel({ documentId, documentTitle, onBusyChange }: Agen
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
+      {/* `relative` so exchange offsetTop is measured against this container
+        * for the submit-time snap below. */}
+      <div ref={scrollRef} className="relative min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
         {exchanges.length === 0 && (
           <p className="text-sm text-muted">
             Ask about the document you have open — every answer names the documents it drew
@@ -172,7 +255,7 @@ export function AgentChatPanel({ documentId, documentTitle, onBusyChange }: Agen
         {exchanges.map((ex, i) => {
           const isLatest = i === exchanges.length - 1;
           return (
-            <div key={ex.id} className="space-y-2">
+            <div key={ex.id} ref={isLatest ? latestExchangeRef : undefined} className="space-y-2">
               <div>
                 <p className="text-sm font-medium text-foreground">{ex.question}</p>
                 <p className="text-[11px] text-muted">
@@ -180,28 +263,7 @@ export function AgentChatPanel({ documentId, documentTitle, onBusyChange }: Agen
                 </p>
               </div>
 
-              {ex.state === 'answered' && (
-                <div className="space-y-2">
-                  <p className="whitespace-pre-wrap text-sm text-foreground">{ex.output}</p>
-                  <div>
-                    <span className="text-xs font-medium text-muted">Sources</span>
-                    <ul className="mt-1 space-y-1">
-                      {(ex.citedSources ?? []).map((source) => (
-                        <li key={source.documentId} className="text-xs text-muted">
-                          <span className="font-medium text-foreground">{source.title}</span>
-                          {' — '}
-                          {source.reason}
-                        </li>
-                      ))}
-                    </ul>
-                    {ex.expansionCapped && (
-                      <p className={cn('mt-1 text-[11px] italic text-muted')}>
-                        There was more to explore than this answer could include.
-                      </p>
-                    )}
-                  </div>
-                </div>
-              )}
+              {ex.state === 'answered' && <AnswerBlock exchange={ex} />}
 
               {/* The LATEST degraded exchange renders through the role="alert"
                 * live region below instead, so assistive technology announces

@@ -137,14 +137,43 @@ describe('AgentChatPanel — history survives navigation (agent-pill design)', (
     });
 
     // Rendered — but pinned to the document it was asked about, and the
-    // loading state fully resolved.
-    const answer = screen.getByText('Issue A is stalled because of AUTH-1.');
+    // loading state fully resolved. (findBy: the answer streams in word by
+    // word before settling into a single text node.)
+    const answer = await screen.findByText('Issue A is stalled because of AUTH-1.');
     expect(answer).toBeInTheDocument();
     const exchange = answer.closest('div[class*="space-y"]');
     expect(exchange).not.toBeNull();
     expect(within(exchange as HTMLElement).queryByText(/asked about: issue b/i)).not.toBeInTheDocument();
     expect(screen.getByText(/asked about: issue a/i)).toBeInTheDocument();
     expect(screen.queryByText(/thinking/i)).not.toBeInTheDocument();
+  });
+});
+
+describe('AgentChatPanel — streaming presentation', () => {
+  it('reveals the answer word by word rather than all at once, then settles into a single text node', async () => {
+    mockApiPost.mockResolvedValue(
+      jsonResponse(200, {
+        output: 'Pistachio is your fastest growing flavor this month.',
+        citedSources: [{ documentId: 'd1', documentType: 'wiki', title: 'Sales', reason: 'source of the numbers' }],
+        expansionCapped: false,
+      })
+    );
+
+    render(<AgentChatPanel documentId="doc-1" documentTitle="Flavors" />);
+    await askQuestion('what is growing?');
+
+    // The response has resolved, but the full sentence must NOT be present
+    // as one text node yet — it is still being revealed. (getByText matches
+    // per-node, so the word-span phase cannot satisfy it.)
+    expect(screen.queryByText('Pistachio is your fastest growing flavor this month.')).not.toBeInTheDocument();
+
+    // The sources block waits for the text to finish — reading order is top
+    // to bottom, nothing below the text appears before the text is done.
+    expect(screen.queryByText('Sales')).not.toBeInTheDocument();
+
+    // Streaming completes: whole answer as one node, sources now shown.
+    expect(await screen.findByText('Pistachio is your fastest growing flavor this month.')).toBeInTheDocument();
+    expect(await screen.findByText('Sales')).toBeInTheDocument();
   });
 });
 
