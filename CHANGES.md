@@ -21,6 +21,79 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-347 — FG: AGENT_INTERNAL_SECRET / AGENT_API_BASE_URL live only in Render console — a clean terraform apply kills the chat/inbox demo path
+
+**What was missing.** PR-D (2026-08-05) introduced `AGENT_INTERNAL_SECRET` (required by both the
+agent service and the api service, matched on both sides) and `AGENT_API_BASE_URL` (required by
+the api service; its code default `http://localhost:3100` is meaningless on Render). Verified by
+grep before starting: `terraform/render/*.tf` had zero references to either name. Both were set
+live via the Render REST API directly on both services — the free-tier provider bug documented
+below `render_web_service.agent` blocks a plain `terraform apply` against that resource — and
+existed only in Render's own console/API state plus the operator-local
+`~/.ship-agent-internal-secret` (mode 600, correctly never in the repo). Consequence: a
+clean-machine `terraform apply`, or the destroy-and-redeploy operation FG-11's own proof exercises,
+recreated the services WITHOUT them, and every `/api/agent/*` call then 500'd
+(`internal_secret_not_configured`).
+
+**What changed, all in `terraform/render/`:**
+- `variables.tf` — new `var.agent_internal_secret` (`sensitive = true`, **no default** — Terraform
+  errors with "No value for required variable" if it's not supplied via `-var`/tfvars, the same
+  pattern `session_secret`/`anthropic_api_key`/etc. already use) and new `var.agent_api_base_url`
+  (not secret, default reproduces the current live agent URL, same "plain var, not derived"
+  pattern `cors_origin` already uses — deriving it from `render_web_service.agent.url` would create
+  a two-resource dependency cycle with `agent_service.tf`'s own `SHIP_API_BASE_URL`, which already
+  derives the opposite direction).
+- `agent_service.tf` — `AGENT_INTERNAL_SECRET` added to `render_web_service.agent`'s `env_vars`
+  (consumed by `agent/src/config.ts`'s `agentInternalSecret`, checked in `agent/src/server.ts`
+  before `POST /chat`/`GET /inbox` ever touch the graph or item store).
+- `web_service.tf` — `AGENT_INTERNAL_SECRET` and `AGENT_API_BASE_URL` added to
+  `render_web_service.ship`'s `env_vars` (both read directly from `process.env` in
+  `api/src/routes/agent.ts`, which proxies the browser's session-authenticated agent calls to the
+  agent service over a shared-secret `X-Internal-Secret` header).
+- `terraform.tfvars.example` — documents both new variables: `agent_internal_secret` alongside the
+  other required-no-default agent secrets, with a note that its real value currently lives only in
+  Render's env-var config and `~/.ship-agent-internal-secret`; `agent_api_base_url` alongside the
+  other commented optional overrides, noting the default must be updated after any apply that
+  recreates the agent service (new generated slug).
+- `README.md` — new "Known provider bug" section stating plainly that until the
+  `render-oss/render` free-tier bug is fixed upstream, changes to the *agent* service specifically
+  must still be applied via the Render REST API, not `terraform apply` — this config is the record
+  of intent, the API call is what executes it for that one resource. Links this ticket.
+
+**Not done, out of scope for this pass (code-only, no live infrastructure mutation permitted):**
+no `terraform apply`, no destroy-and-redeploy proof, no re-linking from `FLEETGRAPH.MD`'s
+"Deployment model" section (that file is outside `terraform/`, out of this ticket's file scope as
+assigned). The variables are declared and wired; getting the real values live on both services via
+`terraform apply` (for `ship`) and the Render REST API workaround (for `agent`, per the section
+above) is separate follow-up work requiring explicit sign-off, same as every other live-infra step
+in this config's history (see the TRO-299/TRO-316/TRO-341 entries below).
+
+**How to run it.**
+
+```bash
+cd terraform/render
+terraform init
+terraform validate
+# A real plan needs RENDER_API_KEY; without it, terraform plan fails early
+# with "Missing Render API Key" — expected, not a config error. With
+# placeholder -var values for every other required secret, plan resolves the
+# full variable/resource graph (no missing-variable errors) and stops at
+# that same auth error, confirming the new variables are recognized:
+terraform plan -input=false \
+  -var="session_secret=x" -var="anthropic_api_key=x" \
+  -var="langsmith_api_key=x" -var="ship_api_token=x" \
+  -var="agent_internal_secret=x"
+```
+
+**Rollback.** Revert this commit's changes to `terraform/render/variables.tf`,
+`terraform/render/agent_service.tf`, `terraform/render/web_service.tf`,
+`terraform/render/terraform.tfvars.example`, and `terraform/render/README.md`. No resource
+recreation is implied by the revert alone — Terraform state (if ever applied) would show the two
+env var entries removed from each service's `env_vars` map on the next `apply`/API call; the live
+values set out-of-band via the Render REST API are unaffected by a config-only revert either way.
+
+---
+
 ## Agent thinking-orb loading indicator (ad hoc, no Linear ticket — user-requested UI polish)
 
 **What changed.** Replaced the plain `"Thinking…"` / `"Loading your inbox…"` text-only loading states
