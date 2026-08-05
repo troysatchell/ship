@@ -1,6 +1,6 @@
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { buildGraph, type AnthropicModel } from '../graph.js';
 import {
@@ -86,9 +86,11 @@ describe('aggregateByNode', () => {
     ]);
 
     const respondStats = byNode.find((s) => s.node === 'respond');
-    expect(respondStats?.invocationCount).toBe(2);
-    expect(respondStats?.costPerRunUsd).toBeCloseTo(respondStats!.totalCostUsd / 2, 9);
-    expect(respondStats?.avgDocumentsPulled).toBeUndefined();
+    expect(respondStats).toBeDefined();
+    if (!respondStats) throw new Error('unreachable — asserted defined above');
+    expect(respondStats.invocationCount).toBe(2);
+    expect(respondStats.costPerRunUsd).toBeCloseTo(respondStats.totalCostUsd / 2, 9);
+    expect(respondStats.avgDocumentsPulled).toBeUndefined();
 
     const composeAnswerStats = byNode.find((s) => s.node === 'composeAnswer');
     expect(composeAnswerStats?.avgDocumentsPulled).toBe(7);
@@ -147,6 +149,69 @@ describe('FileCostTracker', () => {
     const tracker = new FileCostTracker({ ledgerPath: scratchLedgerPath() });
     expect(tracker.readAll()).toEqual([]);
   });
+
+  // Regression (CodeRabbit, TRO-339 round 2): readAll()'s own comment claims
+  // a line that doesn't parse is "skipped rather than thrown on," but before
+  // the fix `JSON.parse(line)` ran with no try/catch — a syntactically
+  // invalid line (not just wrong-shape JSON) threw an uncaught SyntaxError
+  // and aborted the whole report instead of being skipped. Before the fix
+  // this test failed with that SyntaxError propagating out of readAll(),
+  // not an import error.
+  it('skips a syntactically malformed JSON line and still returns the valid record', () => {
+    const ledgerPath = scratchLedgerPath();
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    const validRecord: ModelInvocationRecord = {
+      timestamp: '2026-08-04T00:00:00.000Z',
+      node: 'respond',
+      trigger: 'on_demand',
+      model: 'claude-haiku-4-5-20251001',
+      inputTokens: 1,
+      outputTokens: 1,
+    };
+    // A malformed (not just wrong-shape) line, as if a crash landed mid
+    // `appendFileSync` of the second record.
+    writeFileSync(ledgerPath, `${JSON.stringify(validRecord)}\n{ this is not valid json\n`, 'utf8');
+
+    const tracker = new FileCostTracker({ ledgerPath });
+    expect(tracker.readAll()).toEqual([validRecord]);
+  });
+
+  // Regression (CodeRabbit, TRO-339 round 2): `??` only falls through on
+  // null/undefined, so `AGENT_COST_LEDGER_PATH=` (an explicitly-empty env
+  // var — e.g. a blank line in a copied `.env.local`, matching
+  // `agent/.env.example`'s own template) used to resolve `ledgerPath` to
+  // `""` instead of falling through to the default. Before the fix this
+  // test failed because `withEmptyEnv.ledgerPath` was `""`, not equal to
+  // `withoutEnv.ledgerPath` (the real default) — not an import error.
+  it('treats an explicitly-empty AGENT_COST_LEDGER_PATH env var as unset, not as ""', () => {
+    const original = process.env.AGENT_COST_LEDGER_PATH;
+    try {
+      delete process.env.AGENT_COST_LEDGER_PATH;
+      const withoutEnv = new FileCostTracker();
+
+      process.env.AGENT_COST_LEDGER_PATH = '';
+      const withEmptyEnv = new FileCostTracker();
+
+      expect(withEmptyEnv.ledgerPath).toBe(withoutEnv.ledgerPath);
+      expect(withEmptyEnv.ledgerPath).not.toBe('');
+    } finally {
+      if (original === undefined) delete process.env.AGENT_COST_LEDGER_PATH;
+      else process.env.AGENT_COST_LEDGER_PATH = original;
+    }
+  });
+
+  it('treats an explicitly-empty options.ledgerPath the same way, for consistency', () => {
+    const original = process.env.AGENT_COST_LEDGER_PATH;
+    try {
+      delete process.env.AGENT_COST_LEDGER_PATH;
+      const withoutOption = new FileCostTracker();
+      const withEmptyOption = new FileCostTracker({ ledgerPath: '' });
+      expect(withEmptyOption.ledgerPath).toBe(withoutOption.ledgerPath);
+    } finally {
+      if (original === undefined) delete process.env.AGENT_COST_LEDGER_PATH;
+      else process.env.AGENT_COST_LEDGER_PATH = original;
+    }
+  });
 });
 
 // ============================================================================
@@ -203,5 +268,33 @@ describe('graph.ts wiring: real model usage is captured per invocation (TRO-339)
     };
     const graph = buildGraph(model);
     await expect(graph.invoke({ input: 'hi' })).resolves.toMatchObject({ output: 'hello' });
+  });
+
+  // Regression (CodeRabbit, TRO-339 round 2): a CostTracker.record() failure
+  // (e.g. FileCostTracker hitting a disk write error) must never fail the
+  // real model response it's merely accounting for. Before the fix,
+  // `recordInvocation` (graph.ts) called `tracker.record(...)` with no
+  // try/catch, so this throw propagated straight out of the `respond` node
+  // and `graph.invoke` rejected instead of resolving — this exact test
+  // failed with the thrown Error surfacing from `graph.invoke`, not an
+  // import error (graph.ts and costTracking.ts already resolve fine
+  // independent of this behavior).
+  it('does not let a throwing CostTracker.record() fail the graph response', async () => {
+    const model: AnthropicModel = {
+      invoke: vi.fn().mockResolvedValue({
+        content: 'hello',
+        usage_metadata: { input_tokens: 42, output_tokens: 7, total_tokens: 49 },
+      }),
+      model: 'claude-haiku-4-5-20251001',
+    };
+    const throwingCostTracker: CostTracker = {
+      record: () => {
+        throw new Error('simulated disk write failure');
+      },
+    };
+
+    const graph = buildGraph(model, undefined, undefined, undefined, throwingCostTracker);
+
+    await expect(graph.invoke({ input: 'What is going on?' })).resolves.toMatchObject({ output: 'hello' });
   });
 });

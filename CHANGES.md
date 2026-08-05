@@ -148,6 +148,46 @@ the recorded ledger file (`agent/.cache/cost-ledger.jsonl`) is gitignored and un
 either way. `FLEETGRAPH.MD`'s Development and Testing Costs table would need a manual revert back to
 *Pending* text alongside the code revert, since the two are otherwise independent files.
 
+**Round 2 (CodeRabbit + mechanical gate review, same branch, after the above):**
+- `agent/src/__tests__/costTracking.test.ts` — replaced a non-null assertion
+  (`respondStats!.totalCostUsd`) with an explicit `expect(respondStats).toBeDefined()` followed by a
+  narrowing `if (!respondStats) throw ...` before using it unguarded (repo rule: no `!` anywhere,
+  including tests — `gate.sh`'s G7b check).
+- `agent/src/graph.ts`'s `recordInvocation` — wrapped `tracker.record(...)` in try/catch so a
+  `CostTracker` failure (e.g. `FileCostTracker` hitting a disk write error) can no longer propagate
+  out of `respond`/`composeAnswer`/`composeStandupDraft` and fail an otherwise-successful model
+  response; logs `console.warn` (this codebase's existing convention) and does not rethrow.
+- `agent/src/costTracking.ts`'s `FileCostTracker.readAll()` — its own comment claimed a malformed
+  line is "skipped rather than thrown on," but `JSON.parse(line)` ran with no try/catch, so a
+  syntactically invalid line (not just wrong-shape JSON) threw uncaught and aborted the whole
+  report. Now wrapped; a bad line is skipped, matching the comment.
+- `agent/src/costTracking.ts`'s `FileCostTracker` constructor — `??` only falls through on
+  `null`/`undefined`, so `AGENT_COST_LEDGER_PATH=` (an explicitly-empty env var — matching this same
+  file's own `.env.example` template) resolved `ledgerPath` to `""` instead of the default. Changed
+  to `||` for both `options.ledgerPath` and the env var, so an empty string is treated as unset at
+  either source.
+- `agent/.env.example` — the `AGENT_COST_LEDGER_PATH` doc comment referenced a `cost:report`
+  package-script alias that has never existed (`agent/package.json` has no such script). Corrected
+  to the actual runnable command, matching what this same file's own bullets above and
+  `FLEETGRAPH.MD` already cited: `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts`
+  (re-verified working — real output pasted in the PR).
+- `agent/src/scripts/cost-report.ts` — `formatCostPerRun` (new, exported) now prints
+  `n/a (unpriced model invocation) — N of M invocation(s) unpriced` instead of a real-looking dollar
+  figure whenever a tier has any unpriced invocation. Note on the actual mechanism, since the
+  CodeRabbit finding's hypothesis didn't hold under inspection: `PerNodeStats.costPerRunUsd`
+  (`costTracking.ts`'s `aggregateByNode`) already divides `totalCostUsd` by the PRICED invocation
+  count, not the tier's total `invocationCount` — so the number itself was already a correct average
+  over the priced subset, not "total cost / total invocations" as hypothesized. The real problem was
+  presentation: printing that number next to `invocations: N` (the TOTAL count) with nothing to
+  indicate the two don't cover the same set, so a reader computing "total spend" as
+  `invocations * cost/run` would overstate it. `main()`'s invocation at module scope was also guarded
+  behind an `import.meta.url` check (same pattern as `api/src/db/ensureDatabase.ts`) so the new
+  `agent/src/__tests__/cost-report.test.ts` can import `formatCostPerRun`/`formatUsd` without the
+  script's side effects firing on import.
+- Every fix above has a regression test in `agent/src/__tests__/costTracking.test.ts` or the new
+  `agent/src/__tests__/cost-report.test.ts`, each confirmed failing (for the specific reason
+  described, not an import error) before its fix and passing after.
+
 ---
 
 ## TRO-334 — [FG-16] A blocking relationship nobody can see or set is not a feature — blocks/blocked-by in the issue sidebar

@@ -203,9 +203,18 @@ export class FileCostTracker implements CostTracker {
    * env var > the package-relative default. Reading the env var here (not
    * just in the reporting script) means `index.ts`'s real production
    * tracker and `cost-report.ts`'s reader are guaranteed to agree on the
-   * same file without the caller having to pass the override to both. */
+   * same file without the caller having to pass the override to both.
+   *
+   * An empty string is treated as unset at every step (CodeRabbit,
+   * TRO-339 round 2) — `??` alone only falls through on `null`/`undefined`,
+   * so `AGENT_COST_LEDGER_PATH=` (e.g. a blank line in a copied
+   * `.env.local`, matching `agent/.env.example`'s own template) would
+   * otherwise resolve `ledgerPath` to `""`, and `dirname("")`/`mkdirSync`
+   * downstream would misbehave. An explicit `options.ledgerPath: ''` gets
+   * the same treatment for consistency, so a caller can't hit the same bug
+   * by passing the option directly instead of via the env var. */
   constructor(options: FileCostTrackerOptions = {}) {
-    this.ledgerPath = options.ledgerPath ?? process.env.AGENT_COST_LEDGER_PATH ?? DEFAULT_LEDGER_PATH;
+    this.ledgerPath = options.ledgerPath || process.env.AGENT_COST_LEDGER_PATH || DEFAULT_LEDGER_PATH;
     this.now = options.now ?? (() => new Date());
   }
 
@@ -226,14 +235,24 @@ export class FileCostTracker implements CostTracker {
     const records: ModelInvocationRecord[] = [];
     for (const line of raw.split('\n')) {
       if (line.trim().length === 0) continue;
-      const parsed: unknown = JSON.parse(line);
+      // Both a syntactically invalid line (e.g. a partially-written last
+      // line from a crash mid-`appendFileSync`) and a validly-parsed but
+      // wrong-shape line are skipped rather than thrown on (CodeRabbit,
+      // TRO-339 round 2: the try/catch below is what actually makes that
+      // true — `JSON.parse` alone throws `SyntaxError` on the former, which
+      // this comment claimed was already handled but wasn't). A hand-edited
+      // or partially-written last line should not take down the whole
+      // report (same "never throws on bad input" posture as
+      // `expansion.ts`'s `fetchCommentSnippets`).
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue;
+      }
       if (isModelInvocationRecord(parsed)) {
         records.push(parsed);
       }
-      // A line that doesn't parse into the expected shape is skipped rather
-      // than thrown on — a hand-edited or partially-written last line
-      // should not take down the whole report (same "never throws on bad
-      // input" posture as `expansion.ts`'s `fetchCommentSnippets`).
     }
     return records;
   }

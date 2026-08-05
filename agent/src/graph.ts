@@ -552,7 +552,14 @@ function requireDeepDeps(deps: DeepDeps | undefined, nodeName: NodeName): DeepDe
  * call site that predates this ticket) or `usage` is `undefined` (the
  * injected model didn't report it — a bare test double, never the real
  * `ChatAnthropic`). Never invents a token count: absence of `usage` means
- * absence of a record, not a record of zero. */
+ * absence of a record, not a record of zero.
+ *
+ * `tracker.record(...)` itself is wrapped in try/catch (CodeRabbit,
+ * TRO-339 round 2): a cost-accounting side effect (e.g. `FileCostTracker`
+ * hitting a disk write failure) must never be able to fail the graph
+ * response for a model call that already succeeded. On failure this logs a
+ * warning (`console.warn`, this codebase's existing convention — see
+ * `index.ts`) and does not rethrow. */
 function recordInvocation(
   tracker: CostTracker | undefined,
   node: 'respond' | 'composeAnswer' | 'composeStandupDraft',
@@ -562,14 +569,18 @@ function recordInvocation(
   documentsPulled?: number
 ): void {
   if (!tracker || !usage) return;
-  tracker.record({
-    node,
-    trigger,
-    model: model ?? 'unknown',
-    inputTokens: usage.input_tokens,
-    outputTokens: usage.output_tokens,
-    documentsPulled,
-  });
+  try {
+    tracker.record({
+      node,
+      trigger,
+      model: model ?? 'unknown',
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      documentsPulled,
+    });
+  } catch (err) {
+    console.warn(`[agent] cost tracker failed to record a "${node}" invocation (non-fatal):`, err);
+  }
 }
 
 function requireTargetPersonUserId(state: GraphStateType, nodeName: NodeName): string {

@@ -16,7 +16,7 @@
  *   pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts
  *   pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- --ledger /path/to/other-ledger.jsonl
  */
-import { FileCostTracker, aggregate, aggregateByNode, invocationsByDay } from '../costTracking.js';
+import { FileCostTracker, aggregate, aggregateByNode, invocationsByDay, type PerNodeStats } from '../costTracking.js';
 
 function parseLedgerArg(argv: string[]): string | undefined {
   const flagIndex = argv.indexOf('--ledger');
@@ -24,12 +24,31 @@ function parseLedgerArg(argv: string[]): string | undefined {
   return argv[flagIndex + 1];
 }
 
-function formatUsd(value: number | undefined): string {
+export function formatUsd(value: number | undefined): string {
   if (value === undefined) return 'n/a (no priced invocations)';
   return `$${value.toFixed(6)}`;
 }
 
-function main(): void {
+/** The `cost/run` line for one tier (CodeRabbit, TRO-339 round 2). A tier's
+ * `costPerRunUsd` (costTracking.ts's `aggregateByNode`) already divides
+ * `totalCostUsd` by only the PRICED invocation count, not this tier's total
+ * `invocationCount` — so the number itself is a correct average over the
+ * priced subset. What was misleading is printing it next to `invocations: N`
+ * (the TOTAL count, including unpriced ones) with nothing to say the two
+ * numbers don't cover the same set — a reader computing "total spend" as
+ * `invocations * cost/run` would overstate it. Whenever this tier has any
+ * unpriced invocation, this reports `n/a` plus the unpriced count instead of
+ * a number that looks precise but doesn't match the adjacent invocation
+ * count, rather than showing a real (if partial) number silently. */
+export function formatCostPerRun(tier: PerNodeStats): string {
+  if (tier.unpricedInvocations > 0) {
+    const noun = tier.unpricedInvocations === 1 ? 'invocation' : 'invocations';
+    return `n/a (unpriced model invocation) — ${tier.unpricedInvocations} of ${tier.invocationCount} ${noun} unpriced`;
+  }
+  return formatUsd(tier.costPerRunUsd);
+}
+
+export function main(): void {
   const ledgerPath = parseLedgerArg(process.argv.slice(2)) ?? process.env.AGENT_COST_LEDGER_PATH;
   const tracker = new FileCostTracker(ledgerPath ? { ledgerPath } : {});
   const records = tracker.readAll();
@@ -62,7 +81,7 @@ function main(): void {
   for (const tier of aggregateByNode(records)) {
     console.log(`  ${tier.node}:`);
     console.log(`    invocations: ${tier.invocationCount}`);
-    console.log(`    cost/run:    ${formatUsd(tier.costPerRunUsd)}`);
+    console.log(`    cost/run:    ${formatCostPerRun(tier)}`);
     if (tier.avgDocumentsPulled !== undefined) {
       console.log(`    avg documents pulled: ${tier.avgDocumentsPulled.toFixed(2)}`);
     }
@@ -75,4 +94,13 @@ function main(): void {
   }
 }
 
-main();
+// Only run when executed directly (`tsx src/scripts/cost-report.ts`), not
+// when imported by a test — same guard `api/src/db/ensureDatabase.ts` and
+// `api/src/db/verifyMigrations.ts` already use for their own CLI entry
+// points, applied here (CodeRabbit, TRO-339 round 2) so
+// `cost-report.test.ts` can import `formatCostPerRun`/`formatUsd`/`main`
+// without the script's side effects (reading the real ledger, printing to
+// stdout) firing on import.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main();
+}
