@@ -17,15 +17,21 @@
  * drives — but `isConfigComplete` already requires the key today, so this
  * only matters once that changes.
  *
- * FG-7 wires the same `ShipClient` instance as `onDemandDeps.shipClient` —
- * it already satisfies `OnDemandShipClientLike` structurally (a strict
- * superset of `ShipClientLike`'s methods), so no second client is
- * constructed. `documentCap` comes from `config.onDemandDocumentCap` — see
- * that field's own docstring in `config.ts` for where the default number
- * comes from. There is no route into the graph that supplies
- * `seedDocumentId`/`askingUserId` yet (FG-9 owns the chat panel that will);
- * until then, `on_demand` invocations with no seed still take the
- * unchanged `ingest -> respond` path.
+ * FG-7 originally wired the same shared `ShipClient` instance as
+ * `onDemandDeps.shipClient` — TRO-342 (filed after FG-23/TRO-341 spotted
+ * that this contradicted FLEETGRAPH.MD's "no service account" argument)
+ * replaced that with `onDemandDeps.shipClientFactory`: a `(token) =>
+ * ShipClient` closure built once here, but constructing a FRESH `ShipClient`
+ * per on-demand invocation, bound to THAT invocation's own asker
+ * (`graph.ts`'s `resolveSeed`/`expandFrontier` call it with
+ * `state.askingUserToken`, sourced per-request — see `api/src/routes/
+ * agent.ts`'s own TRO-342 section for where that token comes from). The
+ * SAME underlying `resilientHttpClient` (below) backs both this factory and
+ * the shared-token `shipClient` used by `proactiveDeps`/`deepDeps` — the
+ * circuit breaker/self-throttle are about Ship's own health, not caller
+ * identity, so there is no reason to fragment that state per asker.
+ * `documentCap` comes from `config.onDemandDocumentCap` — see that field's
+ * own docstring in `config.ts` for where the default number comes from.
  *
  * FG-6 (TRO-319) wires `deepDeps` the same way: the same shared `ShipClient`
  * instance again (it also structurally satisfies `DeepShipClientLike`) and
@@ -122,12 +128,29 @@ if (!isConfigComplete(config)) {
     model: 'claude-haiku-4-5-20251001',
     maxTokens: 1024,
   });
+  // Built once, shared by the bound-token `shipClient` below AND the
+  // on-demand `shipClientFactory` (TRO-342) — the circuit breaker/
+  // self-throttle it carries are about Ship's own reachability, not caller
+  // identity, so there is no reason for a per-asker client to reset that
+  // state.
+  const resilientHttpClient = buildShipClient(config);
   const shipClient = new ShipClient({
     baseUrl: config.shipApiBaseUrl,
-    // isConfigComplete() already guarantees this is set.
+    // isConfigComplete() already guarantees this is set. Used for the
+    // proactive fast tier (`proactiveDeps`) and the deep tier (`deepDeps`)
+    // only — both intentionally still run under ONE shared token, since
+    // neither has a per-invocation requesting user to source a per-call one
+    // from (see `ProactiveDeps`/`DeepDeps`'s own docstrings in graph.ts).
     token: config.shipApiToken as string,
-    client: buildShipClient(config),
+    client: resilientHttpClient,
   });
+  // TRO-342: the on-demand path DOES have a requesting user on every
+  // invocation (the person asking in the chat panel), so it gets a FRESH
+  // `ShipClient` per invocation, bound to that person's own token — never
+  // the shared one above. See `OnDemandDeps.shipClientFactory`'s own
+  // docstring (graph.ts) for the full rationale.
+  const onDemandShipClientFactory = (token: string): ShipClient =>
+    new ShipClient({ baseUrl: config.shipApiBaseUrl, token, client: resilientHttpClient });
   itemStore = new InMemoryItemStore();
   const draftStore = new InMemoryDraftStore();
   // TRO-339 / FG-21: real per-invocation cost accounting for every model
@@ -142,7 +165,7 @@ if (!isConfigComplete(config)) {
   graph = buildGraph(
     model,
     { shipClient, itemStore },
-    { shipClient, documentCap: config.onDemandDocumentCap },
+    { shipClientFactory: onDemandShipClientFactory, documentCap: config.onDemandDocumentCap },
     { shipClient, itemStore, draftStore },
     costTracker
   );

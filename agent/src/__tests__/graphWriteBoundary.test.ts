@@ -22,13 +22,25 @@
  *      must go through `ResilientClient` (PR-B / TRO-315), never a raw
  *      fetch that bypasses its timeout/retry/breaker/self-throttle.
  *   4. `ProactiveDeps`/`OnDemandDeps`/`DeepDeps` — the three dependency
- *      shapes the graph's nodes actually receive — type their `shipClient`
- *      field as ONLY one of the three additive READ-ONLY interfaces
+ *      shapes the graph's nodes actually receive — type their Ship-client
+ *      member as ONLY one of the three additive READ-ONLY interfaces
  *      (`ShipClientLike`/`OnDemandShipClientLike`/`DeepShipClientLike`).
  *      Even if checks 1-3 somehow missed something, a node can only call
- *      what its own injected `deps.shipClient` exposes — this is the type
- *      contract that makes checks 1-3 provably exhaustive rather than "we
- *      didn't happen to find one."
+ *      what its own injected deps expose — this is the type contract that
+ *      makes checks 1-3 provably exhaustive rather than "we didn't happen
+ *      to find one."
+ *
+ *      `OnDemandDeps` (TRO-342) types this member `shipClientFactory:
+ *      (token: string) => OnDemandShipClientLike`, not a bare `shipClient:
+ *      OnDemandShipClientLike` field like the other two interfaces still
+ *      do — the on-demand path resolves a per-invocation client from
+ *      `state.askingUserToken` instead of holding one bound at
+ *      `buildGraph()` time (see `OnDemandDeps`'s own docstring in
+ *      graph.ts). `findDepsShipClientTypes` below checks EITHER shape: a
+ *      plain field's own type, or — for a function-typed member named
+ *      `shipClientFactory` — its RETURN type. Either way the type that
+ *      lands in `ALLOWED_SHIP_CLIENT_TYPES` is what a node can actually call
+ *      methods on, which is what this proof is actually about.
  *
  * `it('control: ...')` below proves this file's own checkers have teeth —
  * run against a deliberately poisoned snippet, each one fails, exactly as it
@@ -87,13 +99,30 @@ function findBareFetchCalls(source: ts.SourceFile): string[] {
 const DEPS_INTERFACES = ['ProactiveDeps', 'OnDemandDeps', 'DeepDeps'] as const;
 const ALLOWED_SHIP_CLIENT_TYPES = new Set(['ShipClientLike', 'OnDemandShipClientLike', 'DeepShipClientLike']);
 
+/**
+ * Resolves the actual read-only-interface TEXT a Deps interface's
+ * Ship-client member exposes, whichever of the two shapes it uses:
+ *   - `shipClient: <Type>` — a plain field (`ProactiveDeps`/`DeepDeps`,
+ *     and `OnDemandDeps` before TRO-342) — the type is the field's own type.
+ *   - `shipClientFactory: (token: string) => <Type>` — a function-typed
+ *     member (`OnDemandDeps` since TRO-342) — the type that matters is the
+ *     RETURN type, since that's what a node ends up holding and calling
+ *     methods on after `deps.shipClientFactory(token)`.
+ * Deliberately does NOT special-case which Deps interface uses which shape
+ * — a future Deps interface adopting the factory pattern (or reverting to a
+ * plain field) is still caught correctly either way.
+ */
 function findDepsShipClientTypes(source: ts.SourceFile): Record<string, string> {
   const found: Record<string, string> = {};
   walk(source, (node) => {
     if (ts.isInterfaceDeclaration(node) && (DEPS_INTERFACES as readonly string[]).includes(node.name.text)) {
       for (const member of node.members) {
-        if (ts.isPropertySignature(member) && member.name.getText(source) === 'shipClient' && member.type) {
+        if (!ts.isPropertySignature(member) || !member.type) continue;
+        const memberName = member.name.getText(source);
+        if (memberName === 'shipClient') {
           found[node.name.text] = member.type.getText(source);
+        } else if (memberName === 'shipClientFactory' && ts.isFunctionTypeNode(member.type)) {
+          found[node.name.text] = member.type.type.getText(source);
         }
       }
     }
@@ -175,6 +204,16 @@ describe('graph.ts never holds a write-capable client (TRO-321 / FG-8 proof #1, 
       const found = findDepsShipClientTypes(poisoned);
       expect(found.ProactiveDeps).toBe('GateShipClientLike');
       expect(ALLOWED_SHIP_CLIENT_TYPES.has(found.ProactiveDeps as string)).toBe(false);
+    });
+
+    it('findDepsShipClientTypes also catches a shipClientFactory whose RETURN type is write-capable (TRO-342 shape)', () => {
+      const poisoned = parse(
+        'poisoned.ts',
+        `interface OnDemandDeps { shipClientFactory: (token: string) => GateShipClientLike; }`
+      );
+      const found = findDepsShipClientTypes(poisoned);
+      expect(found.OnDemandDeps).toBe('GateShipClientLike');
+      expect(ALLOWED_SHIP_CLIENT_TYPES.has(found.OnDemandDeps as string)).toBe(false);
     });
   });
 });
