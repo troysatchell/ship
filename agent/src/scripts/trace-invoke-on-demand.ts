@@ -27,6 +27,7 @@ import { loadConfig } from '../config.js';
 import { buildShipClient } from '../server.js';
 import { buildGraph } from '../graph.js';
 import { ShipClient } from '../shipClient.js';
+import { FileCostTracker } from '../costTracking.js';
 
 async function main() {
   const config = loadConfig();
@@ -88,7 +89,12 @@ async function main() {
     client: buildShipClient(config),
   });
 
-  const graph = buildGraph(model, undefined, { shipClient, documentCap: config.onDemandDocumentCap });
+  // TRO-339 / FG-21: record this real invocation's real token usage AND the
+  // real documentsPulled count — this is the on-demand-expansion path's own
+  // trace-link script, so it is also the only place that can produce a real
+  // measured composeAnswer data point (cost cliff #1/#2).
+  const costTracker = new FileCostTracker();
+  const graph = buildGraph(model, undefined, { shipClient, documentCap: config.onDemandDocumentCap }, undefined, costTracker);
 
   const result = await graph.invoke({
     trigger: 'on_demand',
@@ -109,6 +115,8 @@ async function main() {
       config.langchainProject ?? '(default)'
     }" — compare its node sequence against trace-invoke.ts's proactive/on-demand-chat trace.`
   );
+  console.log(`Recorded to cost ledger: ${costTracker.ledgerPath}`);
+  console.log('Run `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` to see the aggregated numbers.');
 }
 
 main().catch((err) => {

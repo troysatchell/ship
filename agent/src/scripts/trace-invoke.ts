@@ -15,6 +15,7 @@
 import 'dotenv/config';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { buildGraph } from '../graph.js';
+import { FileCostTracker } from '../costTracking.js';
 
 async function main() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -51,7 +52,12 @@ async function main() {
     maxTokens: 128,
   });
 
-  const graph = buildGraph(model);
+  // TRO-339 / FG-21: record this real invocation's real token usage —
+  // this script is the one place in the package permitted to make a live
+  // call, so it is also the one place that can produce a REAL
+  // "development spend to date" data point rather than a projected one.
+  const costTracker = new FileCostTracker();
+  const graph = buildGraph(model, undefined, undefined, undefined, costTracker);
   const result = await graph.invoke({
     input:
       'In one sentence, confirm you are the FleetGraph agent foundation graph (TRO-313) running end to end.',
@@ -65,6 +71,8 @@ async function main() {
       process.env.LANGCHAIN_PROJECT ?? '(default)'
     }".`
   );
+  console.log(`Recorded to cost ledger: ${costTracker.ledgerPath}`);
+  console.log('Run `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` to see the aggregated numbers.');
 }
 
 main().catch((err) => {
