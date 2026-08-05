@@ -63,7 +63,7 @@ export function AgentPill({ documentId, documentTitle }: AgentPillProps) {
       {/* pointer-events re-enabled ONLY on the card and the pill themselves —
         * the invisible column around them must never swallow clicks meant
         * for the page underneath. */}
-      <div className="flex w-full max-w-[440px] flex-col items-stretch">
+      <div className="flex w-full max-w-[540px] flex-col items-stretch">
         {/* Hidden (not unmounted) while collapsed so chat history survives. */}
         <div
           ref={cardRef}

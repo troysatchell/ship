@@ -1065,3 +1065,11 @@ span[data-emoji] {
     transform: translateY(0);
   }
 }
+
+/* Scrollable but bar-less (agent chat card): content scrolls, no visible bar. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}

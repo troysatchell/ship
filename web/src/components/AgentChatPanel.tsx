@@ -72,25 +72,111 @@ const NO_DOCUMENT_HINT = 'Open a document to ask about it';
  * streaming, the words resolving out of blur. */
 const WORD_MS = 30;
 
-/** Each token is a word plus the whitespace that follows it (newlines
- * included), so `whitespace-pre-wrap` renders paragraph breaks correctly
- * mid-stream. */
+/** A word plus the whitespace that follows it. */
 function tokenizeWords(text: string): string[] {
   return text.match(/\S+\s*/g) ?? [];
 }
 
+/* ── Lightweight markdown for agent answers ────────────────────────────────
+ * The model emits a small, predictable subset — `**bold**`, `#`/`##`/`###`
+ * headings, `-` list items, and numeric citation refs like `[3]` that index
+ * into the cited-sources list below the answer. Parsed here by hand (scoped
+ * to exactly that subset) rather than pulling a markdown dependency into the
+ * bundle for four constructs. Raw markers never reach the screen — parsing
+ * happens BEFORE the word-by-word reveal, so `**` is invisible even
+ * mid-stream. */
+
+interface AnswerSeg {
+  text: string;
+  bold?: boolean;
+  cite?: boolean;
+  words: string[];
+}
+
+interface AnswerLine {
+  kind: 'h' | 'li' | 'p';
+  segs: AnswerSeg[];
+  /** Global word range [start, end) — drives the streaming reveal. */
+  start: number;
+  end: number;
+}
+
+function parseInline(text: string): Omit<AnswerSeg, 'words'>[] {
+  return text
+    .split(/(\*\*[^*]+\*\*|\[[0-9]+(?:\s*[-–,]\s*[0-9]+)*\])/g)
+    .filter((part) => part.length > 0)
+    .map((part) => {
+      if (part.startsWith('**') && part.endsWith('**')) {
+        return { text: part.slice(2, -2), bold: true };
+      }
+      if (part.startsWith('[')) {
+        return { text: part, cite: true };
+      }
+      return { text: part };
+    });
+}
+
+function parseAnswer(output: string): AnswerLine[] {
+  let counter = 0;
+  return output
+    .split('\n')
+    .map((raw) => raw.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      let kind: AnswerLine['kind'] = 'p';
+      let body = line;
+      const heading = line.match(/^#{1,3}\s+(.*)$/);
+      if (heading?.[1] !== undefined) {
+        kind = 'h';
+        body = heading[1];
+      } else if (/^[-*]\s+/.test(line)) {
+        kind = 'li';
+        body = line.replace(/^[-*]\s+/, '');
+      }
+      const segs = parseInline(body).map((seg) => ({ ...seg, words: tokenizeWords(seg.text) }));
+      const start = counter;
+      counter += segs.reduce((n, seg) => n + seg.words.length, 0);
+      return { kind, segs, start, end: counter };
+    });
+}
+
+function segClassName(seg: AnswerSeg): string | undefined {
+  if (seg.cite) return 'align-super text-[10px] text-muted';
+  if (seg.bold) return 'font-semibold';
+  return undefined;
+}
+
+/** One inline segment, either whole (done) or clipped to the reveal front. */
+function SegSpan({ seg, from, to }: { seg: AnswerSeg; from: number; to: number }) {
+  const cls = segClassName(seg);
+  if (to >= seg.words.length && from <= 0) {
+    return <span className={cls}>{seg.text}</span>;
+  }
+  return (
+    <span className={cls}>
+      {seg.words.slice(Math.max(0, from), Math.max(0, to)).map((word, i) => (
+        <span key={i} style={{ animation: 'agent-word-in 250ms ease-out both' }}>
+          {word}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /**
- * One answered exchange: streams the text word by word on first render, then
- * swaps to a single plain text node (lighter DOM, and screen-reader/find-in-
- * page friendly). The sources block fades in only once the text completes —
- * reading order is top to bottom, so nothing below the text should demand
- * attention before the text is done. Deliberately NO auto-scroll anywhere.
+ * One answered exchange: streams the text word by word on first render (the
+ * markdown is parsed first, so markers never flash on screen), then settles
+ * into whole styled text nodes. The sources block fades in only once the
+ * text completes — reading order is top to bottom, so nothing below the
+ * text should demand attention before the text is done. Deliberately NO
+ * auto-scroll anywhere.
  */
 function AnswerBlock({ exchange }: { exchange: ChatExchange }) {
   const output = exchange.output ?? '';
-  const words = useMemo(() => tokenizeWords(output), [output]);
+  const lines = useMemo(() => parseAnswer(output), [output]);
+  const totalWords = lines[lines.length - 1]?.end ?? 0;
   const [revealed, setRevealed] = useState(0);
-  const done = revealed >= words.length;
+  const done = revealed >= totalWords;
 
   useEffect(() => {
     if (done) return;
@@ -98,36 +184,73 @@ function AnswerBlock({ exchange }: { exchange: ChatExchange }) {
     return () => clearTimeout(t);
   }, [revealed, done]);
 
+  const cursor = (
+    <span
+      aria-hidden="true"
+      className="ml-0.5 inline-block h-3 w-0.5 translate-y-0.5 rounded-full bg-foreground"
+    />
+  );
+
   return (
     <div className="space-y-2">
-      <p className="whitespace-pre-wrap text-sm text-foreground">
-        {done
-          ? output
-          : words.slice(0, revealed).map((word, i) => (
-              <span key={i} style={{ animation: 'agent-word-in 250ms ease-out both' }}>
-                {word}
-              </span>
-            ))}
-        {!done && (
-          <span
-            aria-hidden="true"
-            className="ml-0.5 inline-block h-3 w-0.5 translate-y-0.5 rounded-full bg-foreground"
-          />
-        )}
-      </p>
+      <div className="space-y-1.5">
+        {lines.map((line, li) => {
+          // Lines beyond the reveal front don't exist yet; the line the
+          // front sits inside carries the cursor.
+          if (!done && line.start > revealed) return null;
+          const streamingHere = !done && revealed >= line.start && revealed < line.end;
+          const content = (
+            <>
+              {line.segs.map((seg, si) => {
+                // Per-segment window in this line's local word coordinates.
+                const segStart = line.segs.slice(0, si).reduce((n, s) => n + s.words.length, line.start);
+                return done ? (
+                  <SegSpan key={si} seg={seg} from={0} to={seg.words.length} />
+                ) : (
+                  <SegSpan key={si} seg={seg} from={0} to={revealed - segStart} />
+                );
+              })}
+              {streamingHere && cursor}
+            </>
+          );
+          if (line.kind === 'h') {
+            return (
+              <p key={li} className="mt-2 text-sm font-semibold text-foreground first:mt-0">
+                {content}
+              </p>
+            );
+          }
+          if (line.kind === 'li') {
+            return (
+              <p key={li} className="flex gap-1.5 text-sm text-foreground">
+                <span aria-hidden="true" className="text-muted">
+                  •
+                </span>
+                <span>{content}</span>
+              </p>
+            );
+          }
+          return (
+            <p key={li} className="text-sm text-foreground">
+              {content}
+            </p>
+          );
+        })}
+      </div>
 
       {done && (
         <div style={{ animation: 'agent-fade-in 350ms ease-out both' }}>
           <span className="text-xs font-medium text-muted">Sources</span>
-          <ul className="mt-1 space-y-1">
-            {(exchange.citedSources ?? []).map((source) => (
+          <ol className="mt-1 space-y-1">
+            {(exchange.citedSources ?? []).map((source, i) => (
               <li key={source.documentId} className="text-xs text-muted">
+                <span className="text-muted">{i + 1}.</span>{' '}
                 <span className="font-medium text-foreground">{source.title}</span>
                 {' — '}
                 {source.reason}
               </li>
             ))}
-          </ul>
+          </ol>
           {exchange.expansionCapped && (
             <p className={cn('mt-1 text-[11px] italic text-muted')}>
               There was more to explore than this answer could include.
@@ -244,7 +367,7 @@ export function AgentChatPanel({ documentId, documentTitle, onBusyChange }: Agen
     <div className="flex h-full min-h-0 flex-col">
       {/* `relative` so exchange offsetTop is measured against this container
         * for the submit-time snap below. */}
-      <div ref={scrollRef} className="relative min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
+      <div ref={scrollRef} className="scrollbar-none relative min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
         {exchanges.length === 0 && (
           <p className="text-sm text-muted">
             Ask about the document you have open — every answer names the documents it drew

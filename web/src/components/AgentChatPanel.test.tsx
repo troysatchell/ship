@@ -177,6 +177,36 @@ describe('AgentChatPanel — streaming presentation', () => {
   });
 });
 
+describe('AgentChatPanel — markdown rendering', () => {
+  it('renders **bold** as styled text with the star markers never on screen, and [n] refs as citation markers', async () => {
+    mockApiPost.mockResolvedValue(
+      jsonResponse(200, {
+        output: 'This belongs to the **Ship Core - Bug Fixes** project [3].',
+        citedSources: [{ documentId: 'd1', documentType: 'project', title: 'Ship Core - Bug Fixes', reason: 'the project it belongs to' }],
+        expansionCapped: false,
+      })
+    );
+
+    render(<AgentChatPanel documentId="doc-1" documentTitle="Capacity planning" />);
+    await askQuestion('what project is this a part of?');
+
+    // The sources block only appears once the stream completes — awaiting
+    // it synchronizes every assertion below with the finished answer.
+    expect(await screen.findByText(/the project it belongs to/)).toBeInTheDocument();
+
+    // Bold text lands styled (the segment carries the bold class; the
+    // selector also disambiguates from the sources-list title, which shows
+    // the same string)...
+    expect(screen.getByText('Ship Core - Bug Fixes', { selector: 'span.font-semibold' })).toBeInTheDocument();
+    // ...and raw markdown markers never appear anywhere in the answer.
+    expect(screen.queryByText(/\*\*/)).not.toBeInTheDocument();
+
+    // The [3] citation ref renders as a styled marker, not stripped — it
+    // indexes into the numbered sources list below the answer.
+    expect(screen.getByText('[3]')).toBeInTheDocument();
+  });
+});
+
 describe('AgentChatPanel — citations (TRO-320 / FG-9, proof 2)', () => {
   it('renders every cited source together with its reason', async () => {
     mockApiPost.mockResolvedValue(
