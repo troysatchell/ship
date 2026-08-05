@@ -119,13 +119,28 @@ import { fileURLToPath } from 'node:url';
  * whatever site values are actually present in the data — exactly what
  * happened when `composeRetroDraft` itself was added, predicted verbatim by
  * this docstring's own prior revision ("Adding either later costs nothing
- * here: this union just grows"). */
-export type InvocationSite =
-  | 'respond'
-  | 'composeAnswer'
-  | 'composeStandupDraft'
-  | 'composeBlockerEscalation'
-  | 'composeRetroDraft';
+ * here: this union just grows").
+ *
+ * Declared as a runtime array first, then narrowed to a type (CodeRabbit,
+ * TRO-335 PR review) — `isModelInvocationRecord` below needs the actual
+ * VALUES at runtime to validate a persisted JSONL line's `node` field, and
+ * a bare `type InvocationSite = 'a' | 'b' | ...` has no runtime
+ * representation to check against. Before this change that validator kept
+ * its own separate hardcoded literal list, which `composeRetroDraft` itself
+ * was originally added to `InvocationSite` WITHOUT also adding there —
+ * every persisted `composeRetroDraft` record would have silently failed
+ * `isModelInvocationRecord` and been dropped from `readInvocations()`,
+ * never counted in any cost report. One source of truth removes that class
+ * of drift structurally: adding a site here is now the only place it needs
+ * to be added. */
+export const INVOCATION_SITES = [
+  'respond',
+  'composeAnswer',
+  'composeStandupDraft',
+  'composeBlockerEscalation',
+  'composeRetroDraft',
+] as const;
+export type InvocationSite = (typeof INVOCATION_SITES)[number];
 
 /** Real usage as `ChatAnthropic`'s own response carries it
  * (`@langchain/core`'s `UsageMetadata`) — kept minimal to exactly what this
@@ -302,15 +317,16 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
  * type guard, never `as`" posture as `graph.ts`'s `hasStringText` and
  * `server.ts`'s `isValidChatRequestBody` (lessons.md #21: type the
  * boundary a JSON parse hands you). */
+function isInvocationSite(value: unknown): value is InvocationSite {
+  return typeof value === 'string' && (INVOCATION_SITES as readonly string[]).includes(value);
+}
+
 function isModelInvocationRecord(value: unknown): value is ModelInvocationRecord {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   return (
     typeof v.timestamp === 'string' &&
-    (v.node === 'respond' ||
-      v.node === 'composeAnswer' ||
-      v.node === 'composeStandupDraft' ||
-      v.node === 'composeBlockerEscalation') &&
+    isInvocationSite(v.node) &&
     typeof v.trigger === 'string' &&
     typeof v.model === 'string' &&
     isNonNegativeSafeInteger(v.inputTokens) &&

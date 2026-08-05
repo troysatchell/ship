@@ -161,7 +161,44 @@ TRO-346 itself set (that PR also did not update the diagram); flagged here rathe
 since redrawing the diagram correctly would mean re-verifying every other claim in an
 already-carefully-dated section, which is its own ticket's worth of work.
 
-**Rollback.** Revert the one commit on this branch (`retroDraft.ts` + its test; `shipClient.ts`/
+**CodeRabbit findings (8 captured, triaged directly, all fixed — 6 major/minor, 2 trivial):**
+- Fixed (major, real bug): `computeWeekWindow` fed the `weekNumber` DISPLAY fallback (`0`, used
+  when `properties.sprint_number` is missing) straight into date arithmetic, and an unparseable
+  `workspace_sprint_start_date` would let `new Date(...)` construct an `Invalid Date` that
+  `.toISOString()` then throws a `RangeError` on — a caller-visible crash, not a degrade. Now
+  returns `undefined` for either case; `gatherWeekDelivery` treats that identically to a failed
+  `getWeekDates` call (`weekDatesUnavailable: true`). Two new regression cases added.
+- Fixed (major, real bug): `costTracking.ts`'s `isModelInvocationRecord` kept its own separate
+  hardcoded `node` literal list, which `composeRetroDraft` was added to `InvocationSite` WITHOUT
+  also being added there — every persisted `composeRetroDraft` cost record would have silently
+  failed validation and been dropped from `readInvocations()`, never counted in any cost report.
+  Fixed by deriving both from one runtime array (`INVOCATION_SITES`), removing the class of drift
+  structurally rather than just fixing this one instance of it.
+- Fixed (minor): `graph.ts`'s top-of-file trigger overview for `proactive_retro` named only 2 of
+  the 4 skip conditions `gatherRetroActivity` actually checks — completed to name all 4.
+  `retroDraft.ts`'s own docstring wording ("a full month-plus") was imprecise for the closest of
+  the 3 pre-existing done issues (2026-07-10 is 24 days before the window, not "a month-plus") —
+  corrected to "more than three weeks."
+- Fixed (trivial): `buildRetroPrompt`'s per-issue `completedAt` render kept a now-unnecessary
+  `? ... : ''` conditional from before the date-window fix made the field required and
+  always-in-window — simplified to a direct read.
+- Fixed (trivial): the retro chain's "no write method" structural proof test compared
+  `Object.keys()` against a hand-written string array, which could silently drift from
+  `DeepShipClientLike` itself. Replaced with a `Record<keyof DeepShipClientLike, true>` literal —
+  now a future write method added to the type fails this test at COMPILE time, not just if someone
+  remembers to update the array by hand.
+- Fixed (trivial): added the suggested regression case for a `sprint_number`-missing week
+  (folded into the major `computeWeekWindow` fix above rather than filed separately).
+- Dismissed: none — every finding was either a real bug or a genuine precision/rigor gap; all 8
+  addressed.
+
+**Test counts after triage** (the "How to run it" paragraph above was written before this section):
+`retroDraft.test.ts` gained 2 more regression cases during triage (16 → 18, covering the
+`computeWeekWindow` fix); `graph.test.ts`'s own count is unchanged (still +12 over baseline, one
+existing case's implementation was strengthened, not a new case added). Full suite re-confirmed
+green after triage: 340/340.
+
+**Rollback.** Revert the commit(s) on this branch (`retroDraft.ts` + its test; `shipClient.ts`/
 `itemStore.ts`/`costTracking.ts`/`graph.ts`/`graph.test.ts`) and this entry. No schema or migration
 changes, no new API endpoints, no changes to `api/` or `web/`, no changes to `index.ts` — purely
 additive within `agent/`, so reverting is a clean subtraction with nothing else to unwind.

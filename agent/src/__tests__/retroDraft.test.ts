@@ -295,6 +295,42 @@ describe('gatherWeekDelivery', () => {
     expect(summary?.ownerUserId).toBe('user-owner-9');
     expect(client.getReverseAssociations).not.toHaveBeenCalled();
   });
+
+  it('reports weekDatesUnavailable: true when properties.sprint_number is missing — never silently computes a window from the display fallback of 0', async () => {
+    const client = fakeClient({
+      getDocument: vi.fn().mockResolvedValue(
+        // No `sprint_number` at all — `weekNumber` falls back to `0` for
+        // DISPLAY (see `WeekDeliverySummary.weekNumber`'s own docstring),
+        // which must NOT be fed into `computeWeekWindow` as though it were
+        // real (CodeRabbit, TRO-335 PR review).
+        doc({ id: 'week-11', title: 'Week ?', document_type: 'sprint', properties: { owner_id: 'user-owner-10', success_criteria: ['Ship it'] } })
+      ),
+      getReverseAssociations: vi.fn(),
+    });
+
+    const summary = await gatherWeekDelivery(client, 'week-11');
+
+    expect(summary?.weekDatesUnavailable).toBe(true);
+    expect(summary?.closedIssues).toEqual([]);
+    expect(client.getReverseAssociations).not.toHaveBeenCalled();
+  });
+
+  it('reports weekDatesUnavailable: true when workspace_sprint_start_date does not parse to a valid date — never throws', async () => {
+    const client = fakeClient({
+      getDocument: vi.fn().mockResolvedValue(
+        doc({ id: 'week-12', title: 'Week 1', document_type: 'sprint', properties: { sprint_number: 1, owner_id: 'user-owner-11', success_criteria: ['Ship it'] } })
+      ),
+      getWeekDates: vi.fn().mockResolvedValue({ workspace_sprint_start_date: 'not-a-real-date' }),
+      getReverseAssociations: vi.fn(),
+    });
+
+    await expect(gatherWeekDelivery(client, 'week-12')).resolves.not.toThrow();
+    const summary = await gatherWeekDelivery(client, 'week-12');
+
+    expect(summary?.weekDatesUnavailable).toBe(true);
+    expect(summary?.closedIssues).toEqual([]);
+    expect(client.getReverseAssociations).not.toHaveBeenCalled();
+  });
 });
 
 describe('buildRetroPrompt', () => {

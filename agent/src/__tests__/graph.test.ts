@@ -1302,11 +1302,24 @@ describe('buildGraph — retro delivery drafting (TRO-335 / FG-17)', () => {
   });
 
   describe('Proof — the drafted retro is never submitted by any code path this ticket adds', () => {
-    it('DeepShipClientLike exposes only read methods — there is no write method for this path to call', async () => {
+    it('DeepShipClientLike exposes only read methods — there is no write method for this path to call', () => {
+      // `Record<keyof DeepShipClientLike, true>` fails to COMPILE if a new
+      // member is ever added to the type without being listed here
+      // (CodeRabbit, TRO-335 PR review) — a future write method added to
+      // `DeepShipClientLike` breaks this test at typecheck time, not just if
+      // someone remembers to update a plain string array.
+      const readOnlySurface: Record<keyof DeepShipClientLike, true> = {
+        getAssociations: true,
+        getChangeFeed: true,
+        getDocument: true,
+        getIssuesByAssignee: true,
+        getPeople: true,
+        getReverseAssociations: true,
+        getWeekDates: true,
+        listDocuments: true,
+      };
       const client = testCase3Client();
-      expect(Object.keys(client).sort()).toEqual(
-        ['getAssociations', 'getChangeFeed', 'getDocument', 'getIssuesByAssignee', 'getPeople', 'getReverseAssociations', 'getWeekDates', 'listDocuments'].sort()
-      );
+      expect(Object.keys(client).sort()).toEqual(Object.keys(readOnlySurface).sort());
     });
 
     it('the drafted text is retrievable ONLY from DraftStore — commitRetroDraft never calls a submitting endpoint', async () => {

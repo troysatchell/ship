@@ -49,7 +49,8 @@
  *     `blockingIssueId` above. The only node in this chain that calls the
  *     model is `composeRetroDraft`, skipped entirely when
  *     `gatherRetroActivity` determines the trigger condition is not met (no
- *     success criteria, or no recorded owner) — see that section.
+ *     success criteria, no recorded owner, no computable calendar window, or
+ *     the week itself not found) — see that section.
  *
  * Model provider: Anthropic API directly (`@langchain/anthropic`), confirmed
  * by the maintainer 2026-08-03 — see TRO-313's own "one decision still open"

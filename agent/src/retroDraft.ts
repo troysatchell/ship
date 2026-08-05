@@ -41,8 +41,9 @@
  * da JOIN documents d ... WHERE da.related_id = '<TC3 week id>' AND
  * da.relationship_type = 'sprint'`) returned 6 `done` issues for that week,
  * not the 3 the fixture actually closed within it — 3 pre-existing ones
- * with `completed_at` dated 2026-06-29 through 2026-07-10, a full month-plus
- * before the week's own computed window (`2026-08-03T00:00:00Z` to
+ * with `completed_at` dated 2026-06-29 through 2026-07-10 — even the closest
+ * of the three (2026-07-10) is more than three weeks before the week's own
+ * computed window (`2026-08-03T00:00:00Z` to
  * `2026-08-10T00:00:00Z`, confirmed by direct computation against the real
  * `workspaces.sprint_start_date`). The associated+done definition is exactly
  * right for `completed_count`'s OWN purpose (a rough all-time completion
@@ -108,10 +109,30 @@ const SPRINT_DURATION_DAYS = 7;
  * multiple call sites use for a `DATE` column value that has round-tripped
  * through JSON, so a stray time-of-day component never shifts the computed
  * day.
+ *
+ * Returns `undefined` — never throws — when `sprintNumber` is not a real
+ * positive integer or `workspaceSprintStartDateISO` does not parse to a
+ * valid date (CodeRabbit, TRO-335 PR review: an earlier revision fed the
+ * `weekNumber` DISPLAY fallback of `0` straight into this function and let
+ * `new Date(...)` construct an `Invalid Date` silently, which
+ * `.toISOString()` then throws a `RangeError` on — a caller-visible crash
+ * for exactly the kind of malformed input this codebase's own "degrade
+ * gracefully, never crash or hang" requirement exists for, and the same
+ * class of bug this file's own module docstring already required a real
+ * database query to catch once). The caller (`gatherWeekDelivery`) treats
+ * `undefined` identically to a failed `getWeekDates` call —
+ * `weekDatesUnavailable: true`, no closed-issue set guessed at.
  */
-function computeWeekWindow(sprintNumber: number, workspaceSprintStartDateISO: string): { startISO: string; endISO: string } {
+function computeWeekWindow(
+  sprintNumber: number,
+  workspaceSprintStartDateISO: string
+): { startISO: string; endISO: string } | undefined {
+  if (!Number.isInteger(sprintNumber) || sprintNumber < 1) return undefined;
+
   const datePart = workspaceSprintStartDateISO.slice(0, 10);
   const base = new Date(`${datePart}T00:00:00Z`);
+  if (Number.isNaN(base.getTime())) return undefined;
+
   const start = new Date(base);
   start.setUTCDate(start.getUTCDate() + (sprintNumber - 1) * SPRINT_DURATION_DAYS);
   const end = new Date(start);
@@ -132,10 +153,13 @@ export interface ClosedIssueDelivery {
 export interface WeekDeliverySummary {
   weekId: string;
   weekTitle: string;
-  /** `0` when `properties.sprint_number` is absent/non-numeric — defensive
+  /** `0` when `properties.sprint_number` is absent/non-numeric — a DISPLAY
    * fallback only, never expected against a real `sprint` document
    * (`WeekProperties.sprint_number` is required by that type), same
-   * defensive posture as `weeks.ts`'s own `props.sprint_number || 1`. */
+   * defensive posture as `weeks.ts`'s own `props.sprint_number || 1`. Never
+   * fed into a date computation as though it were real — `computeWeekWindow`
+   * rejects it (not a positive integer) and `weekDatesUnavailable` is set
+   * instead of a window computed from a value known to be a placeholder. */
   weekNumber: number;
   /** `null` when the week has no recorded owner — `commitRetroDraft`
    * (`graph.ts`) has nobody to draft FOR in that case and skips, same
@@ -210,10 +234,16 @@ export async function gatherWeekDelivery(
     workspaceSprintStartDate = undefined;
   }
 
-  if (!workspaceSprintStartDate) {
-    // See `WeekDeliverySummary.weekDatesUnavailable`'s own docstring — no
-    // closed-issue set can be trusted without a real calendar window, so
-    // none is guessed at.
+  const window = workspaceSprintStartDate ? computeWeekWindow(weekNumber, workspaceSprintStartDate) : undefined;
+
+  if (!window) {
+    // Either `getWeekDates` itself failed/returned nothing usable, or
+    // `computeWeekWindow` refused a bad `sprintNumber`/start date (see that
+    // function's own docstring — this now also covers the
+    // `sprint_number`-missing case that `weekNumber`'s `0` display fallback
+    // used to feed it silently). See `WeekDeliverySummary.weekDatesUnavailable`'s
+    // own docstring — no closed-issue set can be trusted without a real
+    // calendar window, so none is guessed at.
     return {
       weekId: week.id,
       weekTitle: week.title,
@@ -224,8 +254,7 @@ export async function gatherWeekDelivery(
       weekDatesUnavailable: true,
     };
   }
-
-  const { startISO, endISO } = computeWeekWindow(weekNumber, workspaceSprintStartDate);
+  const { startISO, endISO } = window;
 
   let edges: AssociationReverseEdge[];
   try {
@@ -285,8 +314,9 @@ export function buildRetroPrompt(summary: WeekDeliverySummary): string {
   if (summary.closedIssues.length > 0) {
     lines.push(`Issues closed this week (${summary.closedIssues.length}):`);
     for (const issue of summary.closedIssues) {
-      const when = issue.completedAt ? ` (closed ${issue.completedAt})` : '';
-      lines.push(`- "${issue.title}"${when}`);
+      // `completedAt` is required and always verified in-window
+      // (`ClosedIssueDelivery`'s own docstring) — no conditional needed.
+      lines.push(`- "${issue.title}" (closed ${issue.completedAt})`);
     }
     lines.push('');
   } else {
