@@ -22,18 +22,14 @@ interface ApiTokenRow {
  * actually settling are two independently-observable events (Express writes
  * `res.json()`'s bytes before `finally` even starts running) — so a test
  * awaiting `request(app).post(...)` can genuinely resolve microseconds
- * before the revoke's own DB write commits. Polling for the real condition
- * (never a fixed sleep, lessons.md #17) is the correct way to observe an
- * async side effect this test has no direct handle on.
+ * before the revoke's own DB write commits. `expect.poll(...)` (vitest
+ * built-in, CodeRabbit review on this ticket) is the correct way to observe
+ * an async side effect this test has no direct handle on — it re-runs the
+ * callback until the assertion passes or `timeout` elapses, never a fixed
+ * sleep (lessons.md #17). Both call sites below share the same
+ * `POLL_OPTIONS` rather than hand-writing the interval/timeout twice.
  */
-async function waitForCondition(check: () => Promise<boolean>, timeoutMs = 2000, intervalMs = 25): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs
-  while (Date.now() < deadline) {
-    if (await check()) return true
-    await new Promise((resolve) => setTimeout(resolve, intervalMs))
-  }
-  return check()
-}
+const POLL_OPTIONS = { timeout: 2000, interval: 25 };
 
 /**
  * Regression tests for TRO-320 / FG-9: the chat panel's proxy route.
@@ -284,16 +280,15 @@ describe('POST /api/agent/chat (TRO-320 / FG-9)', () => {
     // Revoked once the (mocked) agent call settled — bounds this token's
     // real exposure window to "this one request", not just its expiry.
     // `routes/agent.ts` awaits the revoke, but the HTTP response itself is
-    // written a moment before that await settles server-side (see
-    // waitForCondition's own docstring) — poll for the real condition.
-    const revoked = await waitForCondition(async () => {
+    // written a moment before that await settles server-side (see the
+    // POLL_OPTIONS docstring above) — poll for the real condition.
+    await expect.poll(async () => {
       const check = await pool.query<Pick<ApiTokenRow, 'revoked_at'>>(
         `SELECT revoked_at FROM api_tokens WHERE id = $1`,
         [tokenRow.id]
       )
       return check.rows[0]?.revoked_at != null
-    })
-    expect(revoked).toBe(true)
+    }, POLL_OPTIONS).toBe(true)
 
     expect(res.status).toBe(200)
     expect(res.body).toEqual(agentBody)
@@ -357,16 +352,15 @@ describe('POST /api/agent/chat (TRO-320 / FG-9)', () => {
     expect(res.status).toBe(502)
 
     // The revoke runs in a `finally` after the outbound fetch rejects — see
-    // waitForCondition's own docstring for why this still needs to poll
+    // the POLL_OPTIONS docstring above for why this still needs to poll
     // rather than assert immediately, even though agent.ts `await`s it.
-    const revoked = await waitForCondition(async () => {
+    await expect.poll(async () => {
       const result = await pool.query<Pick<ApiTokenRow, 'id'>>(
         `SELECT id FROM api_tokens WHERE user_id = $1 AND workspace_id = $2 AND name LIKE 'agent-chat:%' AND revoked_at IS NOT NULL`,
         [testUserId, testWorkspaceId]
       )
       return result.rows.length > beforeCount
-    })
-    expect(revoked).toBe(true)
+    }, POLL_OPTIONS).toBe(true)
   })
 
   it('degrades to a clean 502 when the agent returns 200 with a malformed citedSources element (crosses the trust boundary, so every element is validated)', async () => {
