@@ -732,6 +732,70 @@ auth).
    instance if Ship itself is briefly down, and that specific case must not be read as "the deploy
    failed."
 
+**TRO-322 / FG-12 — both layers demonstrated, not just described, plus the "boots but broken" gap
+closed with real (not yet wired-live) tooling.** Three separate pieces of real, generated evidence
+— none of this is re-derived from the reasoning above; see CHANGES.md's TRO-322 entry for exact
+commands/output.
+
+1. **Layer 1, proven on both platforms with a throwaway, never-merged branch.** A branch
+   (`chore/tro-322-ci-rollback-proof-do-not-merge`) with one deliberate `pnpm type-check` failure
+   was pushed to both remotes and opened as a PR (GitHub #131) and an MR (GitLab !1), then closed
+   without merging once evidence was captured.
+   - **GitHub:** `typecheck · build · unit tests` failed in 44s; `gh pr view` reported
+     `mergeStateStatus: BLOCKED`. Exactly the documented behavior.
+   - **GitLab — a real, previously-undocumented gap found while proving this.** Pipeline #17998
+     (source `merge_request_event`) sat `pending` indefinitely against an ONLINE, IDLE shared
+     runner. Root cause, confirmed via the GitLab API: the runner (`Snapshot pipeline runner`, id
+     71) is configured `access_level: ref_protected`, and an MR pipeline runs against
+     `refs/merge-requests/N/head`, which is not a protected ref — so the runner structurally never
+     picks it up. Checked against this project's own pipeline history (`GET /projects/1602/
+     pipelines`): **every pipeline before this one — 20 of 20 checked — has `source: push`,
+     `ref: main`. This MR was the first `merge_request_event` pipeline in the project's history.**
+     Net effect: an MR's pipeline can never complete on GitLab today, for ANY branch, not just this
+     throwaway one. It does not silently pass, though — `GET /merge_requests/1` reported
+     `merge_status: can_be_merged` but `detailed_merge_status: ci_still_running`, which GitLab
+     treats as blocking (`only_allow_merge_if_pipeline_succeeds: true` on this project). So the
+     prevention property this section claims still holds in effect (a stuck-forever MR cannot be
+     merged), but not for the reason the header sentence implies ("CI gates merge" reads as "CI
+     runs and passes/fails," not "CI never starts and merging is refused because it never will").
+     This reconciles with `.gitlab-ci.yml`'s only working trigger being `push` to `main` — the
+     documented factory workflow (push GitLab direct, GitHub via PR, then re-sync) means GitLab CI
+     has only ever been exercised on already-decided `main` pushes, never as an actual merge gate.
+     **Not fixed here** — the runner's `access_level` is an instance-level GitLab setting outside
+     this project (owned by whoever registered runner 71), not something `.gitlab-ci.yml` or this
+     repo controls. Worth a follow-up ticket: either get the runner's access level changed, or stop
+     describing GitLab MR pipelines as a merge gate until it is.
+2. **Layer 2's gap, reproduced live, then closed with real (not yet auto-triggered) tooling.**
+   `agent/src/deployReadiness.ts` (`evaluateReadinessSamples`/`pollReadiness`) is the decision
+   function: a sustained run of not-ready samples (every sample in the window fails) warrants
+   correction; a single failure that recovers — the transient-Ship-blip case this section already
+   calls out — does not. Unit-tested (`deployReadiness.test.ts`, 10 cases, red-before-green proven
+   by mutating the sustained-vs-transient check and watching the transient-blip tests fail for
+   exactly that reason, then reverting). `agent/src/scripts/check-readiness-and-rollback.ts` is the
+   CLI: polls a real `/ready` URL, evaluates, and — dry-run by default — reports whether a rollback
+   is warranted (exit 2) without calling Render; `--execute --service-id <id>` (needs
+   `RENDER_API_KEY`) additionally looks up the most recent other `live` deploy via `GET .../deploys`
+   and re-triggers it via `POST .../deploys` with that deploy's `commitId`, Render's documented
+   mechanism for redeploying a specific prior commit.
+   **Proven by local simulation, real processes, real output** (not mocked): two real
+   `agent/src/index.ts` processes were started locally — one with `SHIP_API_BASE_URL` pointed at an
+   unreachable port (config complete, Ship unreachable — exactly this section's named gap) and one
+   pointed at a real, reachable stub. `curl` confirmed both returned `/health` → 200; only the
+   broken one returned `/ready` → 503 (`ship_unreachable`). Running
+   `check-readiness-and-rollback.ts --url .../ready --attempts 3 --interval-ms 1500` against each:
+   the broken instance reported `sustained_not_ready: all 3 sample(s) reported not-ready` and
+   exited 2; the healthy instance reported `healthy: every sample reported ready` and exited 0.
+   **Not wired to fire automatically against the live `ship`/`ship-agent` services in this change**
+   — doing so needs `RENDER_API_KEY` in a real scheduled trigger and a decision about cadence, which
+   is exactly the kind of outward-facing, credential-bearing infrastructure change this factory
+   reserves for explicit human sign-off (matching every prior live Render action in this document).
+   **Recommendation for that sign-off:** do NOT simply repoint `agent_health_check_path` at
+   `/ready` — this section's own transient-blip caveat means Render's platform check would then
+   demote a healthy instance during any brief Ship outage, trading one failure mode for a worse one.
+   Instead, schedule `check-readiness-and-rollback.ts --execute` (e.g. a few minutes after each
+   deploy, or on a short recurring interval) as the corrective layer described above, leaving
+   `/health` as Render's own promotion gate unchanged.
+
 **Login and the 403 (TRO-341 / FG-23) — root-caused, not a WAF.** Two prior curl attempts against
 `POST https://ship-rr6m.onrender.com/api/auth/login` returned a platform-looking `403 Forbidden` —
 generic HTML body, `ratelimit-*` headers, `server: cloudflare`. Reproduced directly and traced to
@@ -982,6 +1046,19 @@ script), the agent's public HTTP API (this script calls `buildGraph`/`graph.invo
 `POST /chat` or any other agent route), or the UI surfacing the item to a real user (no browser, no
 inbox render, no human ever looked at it in this run). Each of those is a real, separate hop a
 production deployment would add on top of this number, none of them measured here.
+
+**TRO-322 / FG-12 closed exactly that gap with a real, CI-run, automated test** —
+`e2e/agent-detection-latency.spec.ts` — rather than replacing this manual script (which stays a
+useful one-off trace-link tool). Unlike the measurement above, the E2E spec exercises the agent's
+real public HTTP API (`GET /api/agent/inbox`, api/'s real proxy, the agent's real `/inbox` route)
+against a real, separately-spawned agent process running its real production poll loop
+(`proactivePoll.ts`, not a hand-invoked `graph.invoke()` inside the test), and asserts elapsed time
+against this document's own "< 5 minutes" bar as a hard `expect()`, not a printed number. Local run
+(2026-08-05, both e2e specs together, 28.5s wall time): **observed 7,751ms**, comment write to the
+mention present via a real `GET /api/agent/inbox` call — comfortably inside both the 5-minute bar
+and a tighter CI-tuned operational bound built from real constants (`CHANGE_FEED_LAG_MS` +
+this fixture's configured poll interval + buffer). Wired into CI on both platforms (`ci.yml`/
+`.gitlab-ci.yml`'s `e2e-agent` job); see CHANGES.md's TRO-322 entry.
 
 ### Production Cost Projections
 

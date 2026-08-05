@@ -201,6 +201,17 @@ run_tests() { # run_tests <pkg>
 }
 run_tests api
 run_tests web
+# TRO-322 (FG-12): the agent package has its own regression suite and, like
+# api/web, its own vitest.config.ts the CI merge gate already runs
+# (`pnpm --filter @ship/agent test`, ci.yml/.gitlab-ci.yml's `verify` job,
+# treated as a hard fail with no quarantine baseline at all — the whole
+# point of "every agent behaviour needs a regression test" is that a
+# regression there actually blocks). gate.sh's own local eval had no
+# equivalent check before this ticket — `run_tests` already tolerates a
+# package absent from quarantine.json's `packages` key (testdiff.mjs:74
+# defaults to an empty knownFailing set), so this is zero-tolerance by
+# construction, matching CI.
+run_tests agent
 
 # --- G5: tests were not weakened -------------------------------------------
 # Agents MUST add regression tests, so test files are not frozen outright. What

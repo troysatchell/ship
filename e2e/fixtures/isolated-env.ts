@@ -273,7 +273,10 @@ export const test = base.extend<
 /**
  * Run database schema, migrations, and seed minimal test data
  */
-async function runMigrations(dbUrl: string): Promise<void> {
+// Exported alongside seedMinimalTestData for agentEnv.ts's reuse — see that
+// export's own comment just above seedMinimalTestData for why a second
+// fixture needs this rather than testcontainers' dbContainer fixture below.
+export async function runMigrations(dbUrl: string): Promise<void> {
   const pool = new Pool({ connectionString: dbUrl });
 
   try {
@@ -328,7 +331,14 @@ async function runMigrations(dbUrl: string): Promise<void> {
  * - Sprints for each program
  * - Issues with various states
  */
-async function seedMinimalTestData(pool: Pool): Promise<void> {
+// Exported (TRO-322 / FG-12) so e2e/fixtures/agentEnv.ts — a second,
+// lightweight fixture that does NOT use testcontainers (see that file's own
+// header for why: GitLab's shared runner cannot start a nested Docker
+// daemon, confirmed by .gitlab-ci.yml's `image-build` job comment) — can
+// seed the identical baseline (Bob Martinez, seeded issues, workspace) onto
+// whatever Postgres a CI-native `services:` block provides, rather than
+// forking a second copy of this ~500-line function to drift from this one.
+export async function seedMinimalTestData(pool: Pool): Promise<void> {
   // Hash the test password
   const passwordHash = await bcrypt.hash('admin123', 10);
 

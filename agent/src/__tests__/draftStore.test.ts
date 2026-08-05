@@ -67,7 +67,7 @@ describe('InMemoryDraftStore', () => {
     const store = new InMemoryDraftStore();
     expect(store.markViewed('missing')).toBe(false);
     expect(store.markDismissed('missing')).toBe(false);
-    expect(store.markPosted('missing')).toBe(false);
+    expect(store.markPosted('missing', 'whatever was posted')).toBe(false);
   });
 
   it('markViewed/markDismissed/markPosted update status and report true for a real id', () => {
@@ -76,6 +76,32 @@ describe('InMemoryDraftStore', () => {
 
     expect(store.markViewed('d1')).toBe(true);
     expect(store.get('d1')?.status).toBe('viewed');
+  });
+
+  // TRO-338 / FG-20 — the draft-survival metric's groundwork.
+  describe('markPosted retains finalText', () => {
+    it('stores finalText and status "posted", leaving the original draftText untouched', () => {
+      const store = new InMemoryDraftStore();
+      store.upsert(draft('d1', 'user-a', '2026-08-01', { draftText: 'I moved "X" to In Review.' }));
+
+      const ok = store.markPosted('d1', 'I moved "X" to In Review. Small edit here.');
+      expect(ok).toBe(true);
+
+      const stored = store.get('d1');
+      expect(stored?.status).toBe('posted');
+      expect(stored?.finalText).toBe('I moved "X" to In Review. Small edit here.');
+      // The immutable original — TRO-319's own guarantee — must survive
+      // markPosted exactly as composed, or the survival comparison this
+      // ticket adds would be comparing a draft against itself.
+      expect(stored?.draftText).toBe('I moved "X" to In Review.');
+    });
+
+    it('a draft that is never posted has finalText undefined', () => {
+      const store = new InMemoryDraftStore();
+      const d = store.upsert(draft('d1', 'user-a', '2026-08-01'));
+      expect(d.finalText).toBeUndefined();
+      expect(store.get('d1')?.finalText).toBeUndefined();
+    });
   });
 
   // TRO-321 / FG-8
