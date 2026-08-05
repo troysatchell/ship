@@ -9,18 +9,27 @@ TypeScript 5.7 (strict on everywhere; web tsconfig standalone — see systemPatt
 ## Daily commands
 
 ```bash
-pnpm dev            # scripts/dev.sh: creates DB ship_<worktree>, migrates+seeds fresh DBs,
-                    # picks free ports (API 3000+, web 5173+), writes .ports file
+pnpm dev            # scripts/dev.sh: creates DB from api/.env.local's DATABASE_URL, migrates+seeds
+                    # fresh DBs, picks free ports (API 3000+, web 5173+, agent 3100+), writes .ports
 pnpm db:seed        # idempotent; see seed volumes note below
 pnpm test           # api vitest ONLY (web units: pnpm --filter @ship/web test)
 # e2e: use /e2e-test-runner skill — never pnpm test:e2e directly (output explosion)
 pnpm build:web      # tsc && vite build → web/dist
 ```
 
-- Local Postgres (not Docker) is the assumed dev DB. Docker alt: `docker-compose.local.yml`, postgres on host port **5433**, creds ship/ship_dev_password/ship_dev.
+- **This box's actual dev Postgres is Docker** (`ship-audit-pg`, postgres:15-alpine, host port
+  **5433**, creds ship/ship_dev_password — verified 2026-08-05; `psql`/`pg_isready` not on PATH,
+  use `docker exec ship-audit-pg psql -U ship …`). Local dev DB since 2026-08-05: **`ship_standup`**
+  (base seed only); the audit-augmented `ship_dev` (638 docs) is intact on the same instance.
+- `pnpm dev` starts **three** services since Week 5 (api, web, agent). dev.sh gives the agent its
+  own PORT and exports `SHIP_API_BASE_URL`/`AGENT_API_BASE_URL` (fixed 2026-08-05 — before that the
+  agent stole the API's port and the API died EADDRINUSE). The agent loads **`agent/.env`** (plain
+  `dotenv/config`), NOT `.env.local`; needs `ANTHROPIC_API_KEY`, `SHIP_API_TOKEN` (mint per-user via
+  CSRF→login→`POST /api/api-tokens`), `AGENT_INTERNAL_SECRET` (must match api/.env.local's), and
+  locally `PROACTIVE_INITIAL_LOOKBACK_MS=604800000` (seed backdates fixtures past the 24h default).
 - Actual ports live in the repo-root `.ports` file while dev.sh runs; Vite proxies `/api`, `/collaboration`, `/events` to the API.
-- Login for seeded env: `dev@ship.local` / `admin123` (super-admin; login endpoint is rate-limited — get one session cookie and reuse it).
-- Health: `:3000/health` · Swagger: `:3000/api/docs/`.
+- Login for seeded env: `dev@ship.local` / `admin123` (super-admin; login endpoint is rate-limited — get one session cookie and reuse it). Standup-demo persona: `alice.chen@ship.local` / `admin123` (2 seeded mentions; her report Emma holds the blocked-approval fixture).
+- Health: `:<api-port>/health` · Swagger: `:<api-port>/api/docs/`.
 
 ## Audit tooling (ours)
 
