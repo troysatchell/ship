@@ -55,6 +55,12 @@ interface ChatExchange {
   message?: string;
 }
 
+const ArrowRightIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4" aria-hidden="true">
+    <path fillRule="evenodd" d="M3 10a.75.75 0 01.75-.75h9.69L10.22 6.03a.75.75 0 111.06-1.06l4.5 4.5a.75.75 0 010 1.06l-4.5 4.5a.75.75 0 11-1.06-1.06l3.22-3.22H3.75A.75.75 0 013 10z" clipRule="evenodd" />
+  </svg>
+);
+
 const NOT_CONFIGURED_MESSAGE = "The agent isn't set up in this environment yet.";
 const UNREACHABLE_MESSAGE = "Can't reach the agent right now. Try again in a bit.";
 const NO_CITATIONS_MESSAGE =
@@ -246,7 +252,10 @@ export function AgentChatPanel({ documentId, documentTitle, onBusyChange }: Agen
         <label htmlFor="agent-chat-question" className="sr-only">
           Ask a question about this document
         </label>
-        <div className="flex gap-2">
+        {/* Pill-shaped composer: the submit control is a circular arrow
+          * INSIDE the input's right end, not a separate labelled button —
+          * `aria-label="Ask"` keeps its accessible name. */}
+        <div className="relative">
           <input
             id="agent-chat-question"
             type="text"
@@ -254,14 +263,15 @@ export function AgentChatPanel({ documentId, documentTitle, onBusyChange }: Agen
             onChange={(e) => setQuestion(e.target.value)}
             placeholder={documentId ? 'Ask about this document…' : NO_DOCUMENT_HINT}
             disabled={!documentId || isBusy}
-            className="flex-1 rounded border border-border bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted disabled:opacity-50"
+            className="w-full rounded-full border border-border bg-transparent py-1.5 pl-4 pr-11 text-sm text-foreground placeholder:text-muted disabled:opacity-50"
           />
           <button
             type="submit"
+            aria-label="Ask"
             disabled={!documentId || isBusy || question.trim().length === 0}
-            className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-text disabled:opacity-50"
+            className="absolute right-1 top-1/2 flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-full bg-accent text-accent-text transition-opacity disabled:opacity-40"
           >
-            Ask
+            <ArrowRightIcon />
           </button>
         </div>
       </form>

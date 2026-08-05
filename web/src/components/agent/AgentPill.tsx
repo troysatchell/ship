@@ -59,7 +59,10 @@ export function AgentPill({ documentId, documentTitle }: AgentPillProps) {
 
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-4 z-40 flex justify-center px-4">
-      <div className="pointer-events-auto flex w-full max-w-[440px] flex-col items-stretch">
+      {/* pointer-events re-enabled ONLY on the card and the pill themselves —
+        * the invisible column around them must never swallow clicks meant
+        * for the page underneath. */}
+      <div className="flex w-full max-w-[440px] flex-col items-stretch">
         {/* Hidden (not unmounted) while collapsed so chat history survives. */}
         <div
           ref={cardRef}
@@ -73,7 +76,7 @@ export function AgentPill({ documentId, documentTitle }: AgentPillProps) {
               collapse();
             }
           }}
-          className="mb-2 flex h-[min(480px,60vh)] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
+          className="pointer-events-auto mb-2 flex h-[min(480px,60vh)] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
         >
           <AgentChatPanel
             documentId={documentId}
@@ -87,7 +90,7 @@ export function AgentPill({ documentId, documentTitle }: AgentPillProps) {
           type="button"
           onClick={() => (expanded ? collapse() : setExpanded(true))}
           aria-expanded={expanded}
-          className="mx-auto flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-sm font-medium text-foreground shadow-lg transition-colors hover:border-accent hover:text-accent"
+          className="pointer-events-auto mx-auto flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-sm font-medium text-foreground shadow-lg transition-colors hover:border-accent hover:text-accent"
         >
           <ThinkingOrb state={busy ? 'solving' : 'breathing'} size={20} />
           <span>FleetGraph</span>
