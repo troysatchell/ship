@@ -227,9 +227,10 @@ describe('AgentChatPanel — degraded states (TRO-320 / FG-9, proof 4)', () => {
 
     expect(screen.getByText(/thinking/i)).toBeInTheDocument();
     // ThinkingOrb renders with role="img" and its own per-state aria-label
-    // (thinking-orbs package contract) — asserted directly rather than
-    // trusting the visible "Thinking…" text alone to prove the orb mounted.
-    expect(screen.getByRole('img')).toBeInTheDocument();
+    // (thinking-orbs package contract) — matched by accessible name, not
+    // just role, so a wrong `state` prop (e.g. a typo) would fail this
+    // assertion instead of passing on role alone (CodeRabbit, PR #124).
+    expect(screen.getByRole('img', { name: /solv/i })).toBeInTheDocument();
 
     resolveFn(jsonResponse(200, { output: 'ok', citedSources: [{ documentId: 'd1', documentType: 'issue', title: 'X', reason: 'r' }], expansionCapped: false }));
     expect(await screen.findByText('ok')).toBeInTheDocument();
