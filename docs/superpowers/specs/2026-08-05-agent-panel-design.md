@@ -1,65 +1,60 @@
-# FleetGraph Agent Panel — Design
+# FleetGraph Agent Pill — Design
 
 **Date:** 2026-08-05
-**Status:** Approved (Troy, in-session)
+**Status:** Approved (Troy, in-session). Revised same day: originally a docked
+right-side panel with Chat/Inbox tabs; Troy redirected to a floating pill with the
+Inbox left untouched — "our agent makes sense to be available on every screen, since
+it can read every screen, floating pill at the bottom that we can click on and
+expand and keep inbox separate."
 **Scope:** `web/` only. No API or schema changes.
 
 ## Problem
 
-The agent barely registers as an agent interface. Its two surfaces are:
-
-- **"Ask FleetGraph" chat** — a collapsed accordion row at the bottom of the right
-  Properties Sidebar (`PropertiesPanel.tsx:618-620` mounting `AgentChatPanel.tsx`),
-  inside a sidebar hard-fixed at 256px (`Editor.tsx:1157,1160` — `w-64`).
-- **Agent Inbox** — `InboxSidebar.tsx`, rendered as an overlay in the left contextual
-  sidebar (`App.tsx:584-585`), hard-fixed at 224px (`w-56`, `App.tsx:504,508`).
-
-Both are cramped, visually anonymous, and split across opposite sides of the screen.
-Sidebars are not resizable anywhere in the app.
+The agent barely registers as an agent interface. The "Ask FleetGraph" chat is a
+collapsed accordion row at the bottom of the right Properties Sidebar
+(`PropertiesPanel.tsx:618-620` mounting `AgentChatPanel.tsx`), inside a sidebar
+hard-fixed at 256px (`Editor.tsx:1157,1160` — `w-64`). It is cramped, visually
+anonymous, and only exists on document screens.
 
 ## Design
 
-### 1. Placement & entry point
+### 1. Floating agent pill, available everywhere
 
-New `AgentPanel` component, owned by `App.tsx`, rendered as a right-side panel that
-**replaces the Properties sidebar while open**. Mechanism: the properties portal
-target (`<aside id="properties-portal">`, `App.tsx:657`) is hidden via CSS while the
-agent panel is open — it stays mounted so `Editor.tsx`'s `createPortal` keeps working,
-and Editor's own `rightSidebarCollapsed` state (`Editor.tsx:309-310`, Editor-local,
-separately persisted) is not touched.
+New `AgentPill` component, owned by `App.tsx` (inside the main-content wrapper), so
+it renders on **every screen** — dashboard, lists, editors. Two states:
 
-- The existing Inbox rail button becomes the **agent button**: orb icon, keeps the
-  unread badge, toggles the panel. `aria-expanded` preserved. Opening restores the
-  **last-used tab** (persisted; Chat on first ever open).
-- The left-sidebar inbox overlay (`inboxOpen` state and its rendering) and the
-  "Ask FleetGraph" accordion in `PropertiesPanel` are **removed**. The panel is the
-  single home for agent surfaces.
-- Persisted to localStorage (matching the `ship:leftSidebarCollapsed` pattern):
-  `ship:agentPanelOpen`, `ship:agentPanelTab`, `ship:agentPanelWidth`.
+- **Collapsed:** a floating pill centered at the bottom of the **main content area**
+  (never overlapping the icon rail, left sidebar, or properties sidebar): ThinkingOrb
+  icon + "FleetGraph". Subtle elevation; does not scroll with content.
+- **Expanded:** clicking the pill expands it upward into a chat card (~440px wide,
+  max-height ~60vh) anchored bottom-center. Esc or the card's close affordance
+  collapses it. Expanded/collapsed state persists (`ship:agentPillExpanded`,
+  matching the `ship:leftSidebarCollapsed` localStorage pattern).
 
-### 2. Panel anatomy
-
-- **Header:** ThinkingOrb + "FleetGraph" title + close button. The orb animates
-  (`state="solving"`) while a chat request is in flight; idle otherwise.
-- **Tabs:** `Chat` | `Inbox`. Inbox tab shows the badge count. Inbox tab renders the
-  existing `InboxSidebar` component unchanged (it already takes only an `onNavigate`
-  callback).
-- **Chat tab:** scrollable conversation history; input pinned at the bottom with a
-  context chip — "Asking about: *{document title}*" — showing which document seeds
-  the question. On routes with no open document the input is disabled with the hint
-  "Open a document to ask about it."
+**What this replaces:** the "Ask FleetGraph" accordion is removed from
+`PropertiesPanel.tsx`. **The Inbox is deliberately untouched** — rail button, badge,
+left-sidebar overlay (`App.tsx:584-585`) all stay exactly as they are.
 
 **Constraint preserved:** FG-9 / TRO-320's "chat must be embedded in context — no
-standalone chatbot pages." The panel is in-context (seeded by the open document;
-`POST /api/agent/chat` requires `seedDocumentId`, verified `agent.ts:139-141`), not a
-standalone page.
+standalone chatbot pages." The pill expands in place over the current screen, seeded
+by the open document (`POST /api/agent/chat` requires `seedDocumentId`, verified
+`agent.ts:139-141`); it is not a page or route.
+
+### 2. Chat card anatomy
+
+- **Header:** ThinkingOrb + "FleetGraph" title + collapse button. The orb animates
+  (`state="solving"`) while a request is in flight; idle otherwise.
+- **History:** scrollable conversation; input pinned at the bottom with a context
+  chip — "Asking about: *{document title}*" — showing which document seeds the
+  question. On screens with no open document the input is disabled with the hint
+  "Open a document to ask about it."
 
 ### 3. Chat history semantics
 
 - Client-side, session-only. **No backend change** — the API stays single-turn; the
-  panel renders an append-only list of exchanges.
-- History **survives document navigation**. Each exchange is tagged with the title of
-  the document it was seeded on.
+  card renders an append-only list of exchanges.
+- History **survives navigation and collapse/expand**. Each exchange is tagged with
+  the title of the document it was seeded on.
 - This replaces the current stale-response discard guard
   (`AgentChatPanel.tsx:94-106`): a response landing after navigation is appended
   under its own document tag instead of being thrown away. The guard's original
@@ -71,54 +66,45 @@ standalone page.
   degraded states render inline in the history. Live-region roles (separate fixed
   `role="alert"` / `role="status"` siblings) carry over.
 
-### 4. Resizing
+### 4. Accessibility
 
-New reusable `useResizablePanel(key, { default, min, max })` hook + `PanelResizeHandle`
-component:
-
-- Pointer-drag on the panel edge; double-click resets to default; width persisted to
-  localStorage under `key`.
-- Accessible per this repo's Section 508 bar: handle is `role="separator"` with
-  `aria-orientation="vertical"`, focusable, arrow keys adjust width in 16px steps.
-
-Applied to three panels:
-
-| Panel | Default | Min | Max |
-|---|---|---|---|
-| Agent panel (new) | 384px | 300 | 640 |
-| Properties sidebar | 256px (unchanged) | 220 | 480 |
-| Left contextual sidebar | 224px (unchanged) | 180 | 400 |
-
-The fixed `w-64` / `w-56` classes at `Editor.tsx:1157,1160` and `App.tsx:504,508`
-become inline widths driven by the hook.
+- Pill button: `aria-expanded`, accessible name "FleetGraph".
+- Expanded card: focus moves to the question input on expand; Esc collapses and
+  returns focus to the pill; card is a labelled region.
+- Existing live-region pattern for answers/errors carries over unchanged.
 
 ### 5. Component boundaries
 
-- `web/src/components/agent/AgentPanel.tsx` — panel shell: header, tabs, resize.
-  Depends on `AgentChatPanel` (refactored), `InboxSidebar` (unchanged),
-  `useResizablePanel`.
+- `web/src/components/agent/AgentPill.tsx` — pill + expand/collapse shell,
+  positioning, focus management, persistence.
 - `web/src/components/AgentChatPanel.tsx` — refactored from accordion-with-one-answer
-  to history list + seeded input. Same API client (`apiPost`), same degradation
-  states. Props: `documentId: string | null`, `documentTitle: string | null`.
-- `web/src/hooks/useResizablePanel.ts` + `web/src/components/PanelResizeHandle.tsx` —
-  shared by all three panels.
-- `App.tsx` — replaces `inboxOpen` with `agentPanelOpen`/`agentPanelTab`; rail button
-  rewired; renders `AgentPanel` beside the properties portal target.
+  to history list + seeded input, rendered inside the card. Same API client
+  (`apiPost`), same degradation states. Props: `documentId: string | null`,
+  `documentTitle: string | null`.
+- `App.tsx` — mounts `AgentPill` in the main-content wrapper; passes the active
+  document id/title (it already derives `activeDocumentId`, `App.tsx:223`).
+- `PropertiesPanel.tsx` — accordion mount removed (`:613-620`).
+
+Descoped from the earlier revision: sidebar drag-to-resize (the pill removes the
+cramped-agent motivation; may return as its own follow-up), Inbox-as-tab, the
+docked panel.
 
 ### 6. Testing
 
-- `App.inboxOverlay.test.tsx` → retargeted: rail button opens the panel on the
-  last-used tab; inbox content reachable via the Inbox tab.
 - `AgentChatPanel.test.tsx` → extended: history accumulates, exchanges tagged across
   `documentId` change, late response appends under original tag, degraded states,
   disabled-input state without a document.
-- New: panel toggle from rail, tab switching, width persistence, keyboard resize.
-- Untouched: `InboxSidebar.test.tsx`, `InboxSidebar.contrast.test.tsx` (component
-  reused as-is).
+- New `AgentPill` tests: renders on non-document screens, expand/collapse +
+  persistence, focus moves to input on expand and back to pill on Esc,
+  `aria-expanded`.
+- Untouched: all Inbox tests (`InboxSidebar.test.tsx`,
+  `InboxSidebar.contrast.test.tsx`, `App.inboxOverlay.test.tsx`) — the Inbox is not
+  part of this change.
 
 ## Non-goals
 
+- No Inbox changes of any kind.
 - No backend/API changes; no multi-turn agent memory server-side.
 - No persistence of chat history across reloads.
 - No standalone agent page or route.
-- No change to inbox ranking or data fetching (`useInboxQuery` stays).
+- No sidebar resizing.
