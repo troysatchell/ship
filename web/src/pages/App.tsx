@@ -39,6 +39,7 @@ import { AccountabilityBanner } from '@/components/AccountabilityBanner';
 import { ProjectContextSidebar } from '@/components/sidebars/ProjectContextSidebar';
 import { InboxSidebar } from '@/components/InboxSidebar';
 import { useInboxQuery } from '@/hooks/useInboxQuery';
+import { AgentPill } from '@/components/agent/AgentPill';
 
 type Mode = 'docs' | 'issues' | 'projects' | 'programs' | 'sprints' | 'team' | 'settings' | 'dashboard' | 'project-context';
 
@@ -221,6 +222,21 @@ export function AppLayout() {
   };
 
   const activeDocumentId = getActiveDocumentId();
+
+  // What seeds the agent pill's chat: the URL-derived document when on a
+  // document route, else whatever editor registered itself as current (covers
+  // weekly plans/standups, whose routes don't carry the id).
+  const agentSeedDocumentId = activeDocumentId ?? currentDocumentId ?? null;
+  const agentSeedDocumentTitle = useMemo(() => {
+    if (!agentSeedDocumentId) return null;
+    const titled =
+      documents.find((d) => d.id === agentSeedDocumentId) ??
+      issues.find((d) => d.id === agentSeedDocumentId) ??
+      projects.find((d) => d.id === agentSeedDocumentId);
+    if (titled) return titled.title ?? null;
+    // Programs are the one list keyed by `name` rather than `title`.
+    return programs.find((p) => p.id === agentSeedDocumentId)?.name ?? null;
+  }, [agentSeedDocumentId, documents, issues, projects, programs]);
 
   const handleModeClick = (mode: Mode) => {
     // TRO-323/FG-10 follow-up (CodeRabbit review, PR #120): a normal
@@ -638,7 +654,7 @@ export function AppLayout() {
         </aside>
 
         {/* Main content */}
-        <main id="main-content" className="flex flex-1 flex-col overflow-hidden" role="main" tabIndex={-1}>
+        <main id="main-content" className="relative flex flex-1 flex-col overflow-hidden" role="main" tabIndex={-1}>
           <ErrorBoundary>
             {/*
               Route chunks (BUN-1 / TRO-197) resolve here, inside <main>, so the
@@ -650,6 +666,9 @@ export function AppLayout() {
               <Outlet />
             </Suspense>
           </ErrorBoundary>
+          {/* The agent's one home on every screen — floats bottom-center of
+            * the content area, so it never overlaps the rail or sidebars. */}
+          <AgentPill documentId={agentSeedDocumentId} documentTitle={agentSeedDocumentTitle} />
         </main>
 
         {/* Properties sidebar landmark - always present for proper accessibility structure */}

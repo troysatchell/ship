@@ -1,21 +1,26 @@
 /**
- * Regression tests for TRO-320 / FG-9: the in-context chat panel.
+ * Regression tests for TRO-320 / FG-9's chat surface, reshaped by the
+ * 2026-08-05 agent-pill design (docs/superpowers/specs/).
  *
- * Covers the ticket's own "How it will be proven" list:
- *   1. Opening the panel on a document sends that document's id as the seed
- *      without user input.
+ * Covers the ticket's original "How it will be proven" list, adapted to the
+ * history-list shape:
+ *   1. Every question sends the open document's id as the seed without user
+ *      input; with no document open the input is disabled with a hint.
  *   2. Cited sources render with their reasons; an answer with no citations
  *      renders as a failure state.
  *   3. Keyboard reachability/operability — asserted structurally, not
  *      inferred from a lint rule (see the "keyboard reachability" describe
  *      block below for exactly what is/isn't claimed and why).
  *   4. Agent-unreachable state renders the degraded message.
+ * Plus the pill design's history semantics: exchanges survive navigation,
+ * tagged with the document they were asked about; a response landing after
+ * navigation is appended under its own tag, never the current document's.
  *
  * `apiPost` (web/src/lib/api.ts) is mocked throughout — these are component
  * tests against a stable fake network layer, never a real HTTP call.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act } from '@testing-library/react';
+import { render, screen, fireEvent, act, within } from '@testing-library/react';
 import { AgentChatPanel } from './AgentChatPanel';
 import { apiPost } from '@/lib/api';
 
@@ -25,12 +30,6 @@ vi.mock('@/lib/api', () => ({
 
 const mockApiPost = vi.mocked(apiPost);
 
-// Intentionally a PARTIAL Response — only the three fields AgentChatPanel
-// actually reads (`ok`/`status`/`json()`) — not a full Response instance.
-// `as Response` (a direct assertion, never `as unknown as Response`, which
-// this repo's gate.sh forbids even in tests) is safe here because every
-// field the component touches is present with the right shape; anything
-// this fake omits (headers, body stream, etc.) is simply never called.
 // A real Response instance — no type assertion, and no drift from the
 // contract AgentChatPanel actually consumes (`ok`/`status`/`json()`).
 // Same helper shape as InboxSidebar.test.tsx / IssueBlockingSection.test.tsx.
@@ -39,10 +38,6 @@ function jsonResponse(status: number, body: unknown): Response {
     status,
     headers: { 'content-type': 'application/json' },
   });
-}
-
-async function openPanel() {
-  fireEvent.click(screen.getByRole('button', { name: /ask fleetgraph/i }));
 }
 
 async function askQuestion(text: string) {
@@ -61,13 +56,12 @@ beforeEach(() => {
 });
 
 describe('AgentChatPanel — seeding (TRO-320 / FG-9, proof 1)', () => {
-  it('sends the open document\'s id as seedDocumentId without the user ever supplying it', async () => {
+  it("sends the open document's id as seedDocumentId without the user ever supplying it", async () => {
     mockApiPost.mockResolvedValue(
       jsonResponse(200, { output: 'answer', citedSources: [{ documentId: 'd1', documentType: 'issue', title: 'X', reason: 'r' }], expansionCapped: false })
     );
 
-    render(<AgentChatPanel documentId="issue-42" />);
-    await openPanel();
+    render(<AgentChatPanel documentId="issue-42" documentTitle="Fix login" />);
     await askQuestion('why is this stalled?');
 
     expect(mockApiPost).toHaveBeenCalledTimes(1);
@@ -79,13 +73,24 @@ describe('AgentChatPanel — seeding (TRO-320 / FG-9, proof 1)', () => {
     });
   });
 
-  it('renders no seed/document picker at all — the component takes no such input', () => {
-    render(<AgentChatPanel documentId="issue-42" />);
+  it('renders no seed/document picker at all — the question field is the only textbox, and no combobox exists', () => {
+    render(<AgentChatPanel documentId="issue-42" documentTitle="Fix login" />);
     expect(screen.queryByRole('combobox')).not.toBeInTheDocument();
-    expect(screen.queryByRole('textbox', { name: /document/i })).not.toBeInTheDocument();
+    expect(screen.getAllByRole('textbox')).toHaveLength(1);
   });
 
-  it('drops the previous answer/citations when the open document changes — PropertiesPanel re-renders this component with a new documentId rather than remounting it', async () => {
+  it('disables the input with a hint when no document is open — the API requires a seed document', () => {
+    render(<AgentChatPanel documentId={null} />);
+
+    const input = screen.getByRole('textbox', { name: /ask a question about this document/i });
+    expect(input).toBeDisabled();
+    expect(screen.getByText(/open a document to ask about it/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^ask$/i })).toBeDisabled();
+  });
+});
+
+describe('AgentChatPanel — history survives navigation (agent-pill design)', () => {
+  it('keeps a previous answer visible when the open document changes, tagged with the document it was asked about', async () => {
     mockApiPost.mockResolvedValue(
       jsonResponse(200, {
         output: 'Issue A is stalled because of AUTH-1.',
@@ -94,35 +99,35 @@ describe('AgentChatPanel — seeding (TRO-320 / FG-9, proof 1)', () => {
       })
     );
 
-    const { rerender } = render(<AgentChatPanel documentId="issue-A" />);
-    await openPanel();
+    const { rerender } = render(<AgentChatPanel documentId="issue-A" documentTitle="Issue A" />);
     await askQuestion('why is this stalled?');
     expect(await screen.findByText('Issue A is stalled because of AUTH-1.')).toBeInTheDocument();
 
     // The user navigates to a different document — same component instance,
-    // new documentId prop (this is what PropertiesPanel actually does; it
-    // does not key AgentChatPanel to force a remount).
-    rerender(<AgentChatPanel documentId="issue-B" />);
+    // new documentId prop (AgentPill does not key this component).
+    rerender(<AgentChatPanel documentId="issue-B" documentTitle="Issue B" />);
 
-    expect(screen.queryByText('Issue A is stalled because of AUTH-1.')).not.toBeInTheDocument();
-    expect(screen.queryByText('AUTH-1')).not.toBeInTheDocument();
+    // The exchange is still there, and its tag pins it to the document it
+    // was actually asked about — never the newly opened one.
+    expect(screen.getByText('Issue A is stalled because of AUTH-1.')).toBeInTheDocument();
+    expect(screen.getByText(/asked about: issue a/i)).toBeInTheDocument();
+    // The NEXT question would seed from issue-B, shown in the context chip.
+    expect(screen.getByText(/asking about:/i)).toBeInTheDocument();
+    expect(screen.getByText('Issue B')).toBeInTheDocument();
   });
 
-  it('discards a response that resolves AFTER the user has already navigated away — an in-flight request for issue A must never populate issue B\'s answer', async () => {
+  it("appends a response that resolves AFTER navigation under the ORIGINAL document's tag — an in-flight request for issue A must never read as issue B's answer", async () => {
     let resolveFn: (value: Response) => void = () => {};
     mockApiPost.mockReturnValue(new Promise((resolve) => { resolveFn = resolve; }));
 
-    const { rerender } = render(<AgentChatPanel documentId="issue-A" />);
-    await openPanel();
+    const { rerender } = render(<AgentChatPanel documentId="issue-A" documentTitle="Issue A" />);
     await askQuestion('why is this stalled?');
     // Request is now in flight for issue-A, unresolved.
 
-    // Navigate to issue-B WHILE the issue-A request is still pending. The
-    // reset effect clears the question/answer state back to idle (proven by
-    // the prior test) but does not collapse the panel itself.
-    rerender(<AgentChatPanel documentId="issue-B" />);
+    // Navigate to issue-B WHILE the issue-A request is still pending.
+    rerender(<AgentChatPanel documentId="issue-B" documentTitle="Issue B" />);
 
-    // The stale issue-A response now lands.
+    // The issue-A response now lands.
     await act(async () => {
       resolveFn(jsonResponse(200, {
         output: 'Issue A is stalled because of AUTH-1.',
@@ -131,9 +136,14 @@ describe('AgentChatPanel — seeding (TRO-320 / FG-9, proof 1)', () => {
       }));
     });
 
-    // Never rendered anywhere — including inside the now-collapsed panel,
-    // which the reset effect already closed when documentId changed.
-    expect(screen.queryByText('Issue A is stalled because of AUTH-1.')).not.toBeInTheDocument();
+    // Rendered — but pinned to the document it was asked about, and the
+    // loading state fully resolved.
+    const answer = screen.getByText('Issue A is stalled because of AUTH-1.');
+    expect(answer).toBeInTheDocument();
+    const exchange = answer.closest('div[class*="space-y"]');
+    expect(exchange).not.toBeNull();
+    expect(within(exchange as HTMLElement).queryByText(/asked about: issue b/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/asked about: issue a/i)).toBeInTheDocument();
     expect(screen.queryByText(/thinking/i)).not.toBeInTheDocument();
   });
 });
@@ -151,8 +161,7 @@ describe('AgentChatPanel — citations (TRO-320 / FG-9, proof 2)', () => {
       })
     );
 
-    render(<AgentChatPanel documentId="issue-42" />);
-    await openPanel();
+    render(<AgentChatPanel documentId="issue-42" documentTitle="Fix login" />);
     await askQuestion('why is this stalled?');
 
     expect(await screen.findByText('It is stalled because AUTH-12 blocks it.')).toBeInTheDocument();
@@ -167,8 +176,7 @@ describe('AgentChatPanel — citations (TRO-320 / FG-9, proof 2)', () => {
       jsonResponse(200, { output: 'some uncited text', citedSources: [], expansionCapped: false })
     );
 
-    render(<AgentChatPanel documentId="issue-42" />);
-    await openPanel();
+    render(<AgentChatPanel documentId="issue-42" documentTitle="Fix login" />);
     await askQuestion('why is this stalled?');
 
     // The failure state renders in place of the normal answer — the raw
@@ -184,8 +192,7 @@ describe('AgentChatPanel — degraded states (TRO-320 / FG-9, proof 4)', () => {
   it('renders a plain degraded message, never an unresolving spinner, when the agent is unreachable (network failure)', async () => {
     mockApiPost.mockRejectedValue(new Error('network error'));
 
-    render(<AgentChatPanel documentId="issue-42" />);
-    await openPanel();
+    render(<AgentChatPanel documentId="issue-42" documentTitle="Fix login" />);
     await askQuestion('why is this stalled?');
 
     const alert = await screen.findByRole('alert');
@@ -198,8 +205,7 @@ describe('AgentChatPanel — degraded states (TRO-320 / FG-9, proof 4)', () => {
   it('renders a plain degraded message when the proxy reports the agent is not configured (503)', async () => {
     mockApiPost.mockResolvedValue(jsonResponse(503, { error: 'agent_not_configured' }));
 
-    render(<AgentChatPanel documentId="issue-42" />);
-    await openPanel();
+    render(<AgentChatPanel documentId="issue-42" documentTitle="Fix login" />);
     await askQuestion('why is this stalled?');
 
     const alert = await screen.findByRole('alert');
@@ -209,8 +215,7 @@ describe('AgentChatPanel — degraded states (TRO-320 / FG-9, proof 4)', () => {
   it('renders a plain degraded message when the proxy relays a 502', async () => {
     mockApiPost.mockResolvedValue(jsonResponse(502, { error: 'agent_unavailable' }));
 
-    render(<AgentChatPanel documentId="issue-42" />);
-    await openPanel();
+    render(<AgentChatPanel documentId="issue-42" documentTitle="Fix login" />);
     await askQuestion('why is this stalled?');
 
     const alert = await screen.findByRole('alert');
@@ -221,8 +226,7 @@ describe('AgentChatPanel — degraded states (TRO-320 / FG-9, proof 4)', () => {
     let resolveFn: (value: Response) => void = () => {};
     mockApiPost.mockReturnValue(new Promise((resolve) => { resolveFn = resolve; }));
 
-    render(<AgentChatPanel documentId="issue-42" />);
-    await openPanel();
+    render(<AgentChatPanel documentId="issue-42" documentTitle="Fix login" />);
     await askQuestion('why is this stalled?');
 
     expect(screen.getByText(/thinking/i)).toBeInTheDocument();
@@ -231,8 +235,12 @@ describe('AgentChatPanel — degraded states (TRO-320 / FG-9, proof 4)', () => {
     // just role, so a wrong `state` prop (e.g. a typo) would fail this
     // assertion instead of passing on role alone (CodeRabbit, PR #124).
     expect(screen.getByRole('img', { name: /solv/i })).toBeInTheDocument();
+    // A second question cannot be fired while one is in flight.
+    expect(screen.getByRole('textbox', { name: /ask a question/i })).toBeDisabled();
 
-    resolveFn(jsonResponse(200, { output: 'ok', citedSources: [{ documentId: 'd1', documentType: 'issue', title: 'X', reason: 'r' }], expansionCapped: false }));
+    await act(async () => {
+      resolveFn(jsonResponse(200, { output: 'ok', citedSources: [{ documentId: 'd1', documentType: 'issue', title: 'X', reason: 'r' }], expansionCapped: false }));
+    });
     expect(await screen.findByText('ok')).toBeInTheDocument();
     expect(screen.queryByText(/thinking/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('img')).not.toBeInTheDocument();
@@ -250,45 +258,16 @@ describe('AgentChatPanel — keyboard reachability (TRO-320 / FG-9, proof 3)', (
    * bolted on. That is what is asserted here — concretely, per element, not
    * inferred from a lint pass.
    *
-   * What this DOES verify (observed, via jsdom's real `HTMLElement.focus`/
-   * `document.activeElement`, which jsdom implements faithfully): every
-   * control is a real focusable native element with the correct accessible
-   * role and name, and none carries `tabIndex="-1"` or any non-native
-   * role that would need custom key handling to be reachable at all.
-   *
-   * What this does NOT claim: that a raw synthetic `keydown` event
-   * activates these controls inside this test run. jsdom (unlike a real
-   * browser, and unlike `@testing-library/user-event`, which is not a
-   * dependency of this package — see web/package.json) does not implement
-   * the browser's native "Enter/Space activates a focused button" or
-   * "Enter inside a lone text input submits its form" behavior as a
-   * side effect of `fireEvent.keyDown`. Because every control here is a
-   * REAL `<button>`/`<input type="text">`/`<form>` rather than a div with a
-   * click handler, that native activation is guaranteed by the browser
-   * itself once shipped — it is not something this test can fabricate
-   * evidence for without a real browser, so it is not claimed as observed
-   * here. This is the same posture DocumentTreeItem.test.tsx (the actual
-   * A11Y-1 regression test) takes: prove native semantics structurally,
-   * not a synthetic key event.
+   * What this does NOT claim: that a raw synthetic `keydown` activates these
+   * controls inside this test run — jsdom does not implement the browser's
+   * native key-activation side effects, and `@testing-library/user-event`
+   * is not a dependency of this package. Because every control is a REAL
+   * native element, that activation is guaranteed by the browser itself
+   * once shipped. Same posture as DocumentTreeItem.test.tsx (the actual
+   * A11Y-1 regression test): prove native semantics structurally.
    */
-  it('the panel toggle is a real, focusable <button> with an accessible name and aria-expanded', () => {
-    render(<AgentChatPanel documentId="issue-42" />);
-
-    const toggle = screen.getByRole('button', { name: /ask fleetgraph/i });
-    expect(toggle.tagName).toBe('BUTTON');
-    expect(toggle).not.toHaveAttribute('tabindex', '-1');
-    expect(toggle).toHaveAttribute('aria-expanded', 'false');
-
-    toggle.focus();
-    expect(document.activeElement).toBe(toggle);
-
-    fireEvent.click(toggle);
-    expect(toggle).toHaveAttribute('aria-expanded', 'true');
-  });
-
-  it('the question field and submit control are a real, focusable <input> and <button> inside a <form>', async () => {
-    render(<AgentChatPanel documentId="issue-42" />);
-    await openPanel();
+  it('the question field and submit control are a real, focusable <input> and <button> inside a <form>', () => {
+    render(<AgentChatPanel documentId="issue-42" documentTitle="Fix login" />);
 
     const input = screen.getByRole('textbox', { name: /ask a question about this document/i });
     expect(input.tagName).toBe('INPUT');
@@ -307,8 +286,7 @@ describe('AgentChatPanel — keyboard reachability (TRO-320 / FG-9, proof 3)', (
   it('the answer/degraded region is a live region (role="status" or role="alert") so a screen reader is notified when it changes — verified as ARIA structure, not observed through an actual screen reader', async () => {
     mockApiPost.mockResolvedValue(jsonResponse(502, { error: 'agent_unavailable' }));
 
-    render(<AgentChatPanel documentId="issue-42" />);
-    await openPanel();
+    render(<AgentChatPanel documentId="issue-42" documentTitle="Fix login" />);
     await askQuestion('why is this stalled?');
 
     // role="alert" carries an implicit assertive live region per the ARIA

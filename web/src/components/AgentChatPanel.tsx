@@ -4,28 +4,30 @@ import { apiPost } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
 /**
- * In-context chat panel for the FleetGraph agent (TRO-320 / FG-9).
+ * In-context chat for the FleetGraph agent (TRO-320 / FG-9; reshaped by the
+ * 2026-08-05 agent-pill design — docs/superpowers/specs/).
  *
- * Lives inside the existing Properties Sidebar (mounted from
- * PropertiesPanel.tsx) rather than a fifth panel or a standalone page — the
- * ticket's own constraint: "Chat interface must be embedded in context — no
- * standalone chatbot pages." Every question is seeded with the currently
- * open document's id automatically; the user never types "about this
- * issue" (this component takes no `question`-scoping prop at all, only
- * `documentId`).
+ * Rendered inside the floating AgentPill card (components/agent/AgentPill.tsx)
+ * rather than the Properties Sidebar accordion it originally shipped as. The
+ * ticket's constraint is unchanged: "Chat interface must be embedded in
+ * context — no standalone chatbot pages." Every question is seeded with the
+ * currently open document's id automatically; the user never types "about
+ * this issue" (no `question`-scoping prop exists, only `documentId`). On
+ * screens with no open document the input is disabled with a hint — the API
+ * requires a seed document (api/src/routes/agent.ts rejects without one).
  *
- * Calls POST /api/agent/chat (api/src/routes/agent.ts), which proxies to
- * the FleetGraph agent service. Renders every cited source with the reason
- * it was pulled in — FLEETGRAPH.MD: "It names every document it pulled in
- * and why. That is the trust mechanism." An answer that comes back with NO
- * cited sources is deliberately rendered as a failure state rather than a
- * normal answer, for the same reason: an uncited answer has nothing to
- * verify it, so it is not shown as though it were trustworthy.
+ * History is an append-only, session-only list of exchanges. It survives
+ * navigation: each exchange is tagged with the document it was seeded on, so
+ * a response landing after the user has moved to another document is
+ * appended under its own tag rather than shown under the wrong document's
+ * context (the same mismatch the old discard-on-navigation guard existed to
+ * prevent, kept honest by the tag instead of by throwing the answer away).
  *
  * Degrades visibly (never an unresolving spinner) when the agent is
- * unreachable, not configured, or answers without evidence — matches FG-4's
- * established degradation contract on the outbound side, applied here to
- * this inbound surface.
+ * unreachable, not configured, or answers without evidence — an answer with
+ * NO cited sources is deliberately rendered as a failure state, because an
+ * uncited answer has nothing to verify it (FLEETGRAPH.MD: "It names every
+ * document it pulled in and why. That is the trust mechanism.").
  */
 
 export interface AgentCitedSource {
@@ -41,162 +43,169 @@ interface AgentChatSuccessResponse {
   expansionCapped: boolean;
 }
 
-type ChatState =
-  | { status: 'idle' }
-  | { status: 'loading' }
-  | { status: 'answered'; output: string; citedSources: AgentCitedSource[]; expansionCapped: boolean }
-  | { status: 'degraded'; message: string };
+interface ChatExchange {
+  id: number;
+  question: string;
+  seedDocumentId: string;
+  seedDocumentTitle: string | null;
+  state: 'loading' | 'answered' | 'degraded';
+  output?: string;
+  citedSources?: AgentCitedSource[];
+  expansionCapped?: boolean;
+  message?: string;
+}
 
 const NOT_CONFIGURED_MESSAGE = "The agent isn't set up in this environment yet.";
 const UNREACHABLE_MESSAGE = "Can't reach the agent right now. Try again in a bit.";
 const NO_CITATIONS_MESSAGE =
   "The agent answered without pointing to any source documents, so this answer isn't shown as trustworthy. Try rephrasing the question.";
-
-const ChevronDownIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4" aria-hidden="true">
-    <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
-  </svg>
-);
-
-const ChevronRightIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4" aria-hidden="true">
-    <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-  </svg>
-);
-
-const ChatIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" className="h-4 w-4" aria-hidden="true">
-    <path fillRule="evenodd" d="M18 10c0 3.866-3.582 7-8 7a8.841 8.841 0 01-4.083-.98L2 17l1.338-3.123C2.493 12.767 2 11.434 2 10c0-3.866 3.582-7 8-7s8 3.134 8 7zM7 9H5v2h2V9zm8 0h-2v2h2V9zM9 9h2v2H9V9z" clipRule="evenodd" />
-  </svg>
-);
+const NO_DOCUMENT_HINT = 'Open a document to ask about it';
 
 interface AgentChatPanelProps {
-  /** The document currently open. Seeds every question automatically —
-   * this is the only document-identifying prop the component takes. */
-  documentId: string;
+  /** The document currently open, or null on screens without one. Seeds
+   * every question automatically — the only document-identifying prop. */
+  documentId: string | null;
+  /** Title of the open document, shown in the context chip and recorded on
+   * each exchange's tag. Falls back to "this document" when unknown. */
+  documentTitle?: string | null;
+  /** Reports whether a request is in flight — the pill's header orb
+   * animates off this. */
+  onBusyChange?: (busy: boolean) => void;
 }
 
-export function AgentChatPanel({ documentId }: AgentChatPanelProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
+export function AgentChatPanel({ documentId, documentTitle, onBusyChange }: AgentChatPanelProps) {
   const [question, setQuestion] = useState('');
-  const [state, setState] = useState<ChatState>({ status: 'idle' });
+  const [exchanges, setExchanges] = useState<ChatExchange[]>([]);
+  const nextIdRef = useRef(0);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
-  // The reset effect below handles the case where a request already
-  // resolved before the user navigated. It does NOT protect a request still
-  // IN FLIGHT: if the user submits a question on issue A, then navigates to
-  // issue B before the response lands, the reset effect fires synchronously
-  // (state -> idle), but issue A's response arriving afterward would still
-  // call setState with issue A's answer — silently overwriting the freshly
-  // reset idle state with a stale answer now shown under issue B's context.
-  // This ref is the guard against exactly that: captured at submit time,
-  // compared after every await point, and any resolution for a document
-  // that is no longer open is discarded rather than rendered.
-  const currentDocumentIdRef = useRef(documentId);
+  const isBusy = exchanges.some((ex) => ex.state === 'loading');
 
-  // An answer/citation list belongs to exactly one document. PropertiesPanel
-  // re-renders this component with a new `documentId` (rather than
-  // remounting it) when the user navigates to a different document, so
-  // without this reset a previous document's answer would keep showing
-  // beside the newly-open one — exactly the kind of mismatch the citation
-  // list exists to prevent trusting.
   useEffect(() => {
-    currentDocumentIdRef.current = documentId;
-    setQuestion('');
-    setState({ status: 'idle' });
-  }, [documentId]);
+    onBusyChange?.(isBusy);
+  }, [isBusy, onBusyChange]);
+
+  // Keep the newest exchange in view as answers stream in.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [exchanges]);
 
   const handleSubmit = useCallback(
     async (e: FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       const trimmed = question.trim();
-      if (!trimmed || state.status === 'loading') return;
+      if (!trimmed || !documentId || isBusy) return;
 
-      const submittedForDocumentId = documentId;
-      const isStale = () => currentDocumentIdRef.current !== submittedForDocumentId;
+      const id = nextIdRef.current++;
+      setExchanges((prev) => [
+        ...prev,
+        {
+          id,
+          question: trimmed,
+          seedDocumentId: documentId,
+          seedDocumentTitle: documentTitle ?? null,
+          state: 'loading',
+        },
+      ]);
+      setQuestion('');
 
-      setState({ status: 'loading' });
+      // Updates THIS exchange by id, wherever it now sits in the list — a
+      // response that lands after the user navigated away is appended under
+      // the document it was actually asked about, never the current one.
+      const finish = (patch: Partial<ChatExchange>) => {
+        setExchanges((prev) => prev.map((ex) => (ex.id === id ? { ...ex, ...patch } : ex)));
+      };
+
       try {
         const res = await apiPost('/api/agent/chat', {
           seedDocumentId: documentId,
           question: trimmed,
         });
-        if (isStale()) return;
 
         if (res.status === 503) {
-          setState({ status: 'degraded', message: NOT_CONFIGURED_MESSAGE });
+          finish({ state: 'degraded', message: NOT_CONFIGURED_MESSAGE });
           return;
         }
         if (!res.ok) {
-          setState({ status: 'degraded', message: UNREACHABLE_MESSAGE });
+          finish({ state: 'degraded', message: UNREACHABLE_MESSAGE });
           return;
         }
 
         const data = (await res.json()) as AgentChatSuccessResponse;
-        if (isStale()) return;
-
         if (!data.citedSources || data.citedSources.length === 0) {
-          setState({ status: 'degraded', message: NO_CITATIONS_MESSAGE });
+          finish({ state: 'degraded', message: NO_CITATIONS_MESSAGE });
           return;
         }
 
-        setState({
-          status: 'answered',
+        finish({
+          state: 'answered',
           output: data.output,
           citedSources: data.citedSources,
           expansionCapped: data.expansionCapped,
         });
       } catch {
-        if (isStale()) return;
-        setState({ status: 'degraded', message: UNREACHABLE_MESSAGE });
+        finish({ state: 'degraded', message: UNREACHABLE_MESSAGE });
       }
     },
-    [question, documentId, state.status]
+    [question, documentId, documentTitle, isBusy]
   );
 
-  const isLoading = state.status === 'loading';
+  const latest = exchanges.length > 0 ? exchanges[exchanges.length - 1] : null;
 
   return (
-    <div className="border-t border-border pt-4 mt-4">
-      <button
-        type="button"
-        onClick={() => setIsExpanded((prev) => !prev)}
-        aria-expanded={isExpanded}
-        aria-controls="agent-chat-panel-content"
-        className="flex items-center gap-2 w-full text-left text-sm font-medium text-foreground hover:text-accent"
-      >
-        {isExpanded ? <ChevronDownIcon /> : <ChevronRightIcon />}
-        <ChatIcon />
-        <span>Ask FleetGraph</span>
-      </button>
+    <div className="flex h-full min-h-0 flex-col">
+      <div ref={scrollRef} className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
+        {exchanges.length === 0 && (
+          <p className="text-sm text-muted">
+            Ask about the document you have open — every answer names the documents it drew
+            from and why.
+          </p>
+        )}
 
-      {/* Rendered unconditionally (hidden via the `hidden` attribute, not
-        * unmounted) so `aria-controls="agent-chat-panel-content"` above
-        * never references an id that doesn't exist in the DOM — a dangling
-        * aria-controls target is itself an accessibility defect. */}
-      <div id="agent-chat-panel-content" hidden={!isExpanded} className="mt-3 space-y-3">
-        <form onSubmit={handleSubmit}>
-          <label htmlFor="agent-chat-question" className="sr-only">
-            Ask a question about this document
-          </label>
-          <div className="flex gap-2">
-            <input
-              id="agent-chat-question"
-              type="text"
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              placeholder="Ask about this document…"
-              disabled={isLoading}
-              className="flex-1 rounded border border-border bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted disabled:opacity-50"
-            />
-            <button
-              type="submit"
-              disabled={isLoading || question.trim().length === 0}
-              className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-text disabled:opacity-50"
-            >
-              Ask
-            </button>
-          </div>
-        </form>
+        {exchanges.map((ex, i) => {
+          const isLatest = i === exchanges.length - 1;
+          return (
+            <div key={ex.id} className="space-y-2">
+              <div>
+                <p className="text-sm font-medium text-foreground">{ex.question}</p>
+                <p className="text-[11px] text-muted">
+                  Asked about: {ex.seedDocumentTitle ?? 'this document'}
+                </p>
+              </div>
+
+              {ex.state === 'answered' && (
+                <div className="space-y-2">
+                  <p className="whitespace-pre-wrap text-sm text-foreground">{ex.output}</p>
+                  <div>
+                    <span className="text-xs font-medium text-muted">Sources</span>
+                    <ul className="mt-1 space-y-1">
+                      {(ex.citedSources ?? []).map((source) => (
+                        <li key={source.documentId} className="text-xs text-muted">
+                          <span className="font-medium text-foreground">{source.title}</span>
+                          {' — '}
+                          {source.reason}
+                        </li>
+                      ))}
+                    </ul>
+                    {ex.expansionCapped && (
+                      <p className={cn('mt-1 text-[11px] italic text-muted')}>
+                        There was more to explore than this answer could include.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* The LATEST degraded exchange renders through the role="alert"
+                * live region below instead, so assistive technology announces
+                * it; older ones are history and render inline. */}
+              {ex.state === 'degraded' && !isLatest && (
+                <p className="text-sm text-red-400">{ex.message}</p>
+              )}
+            </div>
+          );
+        })}
 
         {/* Two sibling live regions, each with a role FIXED for the lifetime
           * of the element, rather than one region whose role is switched
@@ -206,43 +215,56 @@ export function AgentChatPanel({ documentId }: AgentChatPanelProps) {
           * behavior is generally established when it is inserted, not
           * re-evaluated cleanly on every attribute change. */}
         <div role="alert">
-          {state.status === 'degraded' && (
-            <p className="text-sm text-red-400">{state.message}</p>
+          {latest?.state === 'degraded' && (
+            <p className="text-sm text-red-400">{latest.message}</p>
           )}
         </div>
 
         <div role="status">
-          {state.status === 'loading' && (
-            <p className="flex items-center gap-2 text-sm text-muted italic">
+          {latest?.state === 'loading' && (
+            <p className="flex items-center gap-2 text-sm italic text-muted">
               <ThinkingOrb state="solving" size={20} />
               Thinking…
             </p>
           )}
-
-          {state.status === 'answered' && (
-            <div className="space-y-2">
-              <p className="text-sm text-foreground whitespace-pre-wrap">{state.output}</p>
-              <div>
-                <span className="text-xs font-medium text-muted">Sources</span>
-                <ul className="mt-1 space-y-1">
-                  {state.citedSources.map((source) => (
-                    <li key={source.documentId} className="text-xs text-muted">
-                      <span className="font-medium text-foreground">{source.title}</span>
-                      {' — '}
-                      {source.reason}
-                    </li>
-                  ))}
-                </ul>
-                {state.expansionCapped && (
-                  <p className={cn('mt-1 text-[11px] italic text-muted')}>
-                    There was more to explore than this answer could include.
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
         </div>
       </div>
+
+      <form onSubmit={handleSubmit} className="border-t border-border p-3">
+        <p className="mb-2 truncate text-[11px] text-muted">
+          {documentId ? (
+            <>
+              Asking about:{' '}
+              <span className="font-medium text-foreground">
+                {documentTitle ?? 'this document'}
+              </span>
+            </>
+          ) : (
+            NO_DOCUMENT_HINT
+          )}
+        </p>
+        <label htmlFor="agent-chat-question" className="sr-only">
+          Ask a question about this document
+        </label>
+        <div className="flex gap-2">
+          <input
+            id="agent-chat-question"
+            type="text"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            placeholder={documentId ? 'Ask about this document…' : NO_DOCUMENT_HINT}
+            disabled={!documentId || isBusy}
+            className="flex-1 rounded border border-border bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-muted disabled:opacity-50"
+          />
+          <button
+            type="submit"
+            disabled={!documentId || isBusy || question.trim().length === 0}
+            className="rounded bg-accent px-3 py-1 text-sm font-medium text-accent-text disabled:opacity-50"
+          >
+            Ask
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
