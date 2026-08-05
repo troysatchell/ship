@@ -22,11 +22,15 @@ Sidebars are not resizable anywhere in the app.
 ### 1. Placement & entry point
 
 New `AgentPanel` component, owned by `App.tsx`, rendered as a right-side panel that
-**replaces the Properties sidebar while open** (properties collapses to `w-0`, reusing
-the existing collapse mechanism; the Editor's portal target stays mounted).
+**replaces the Properties sidebar while open**. Mechanism: the properties portal
+target (`<aside id="properties-portal">`, `App.tsx:657`) is hidden via CSS while the
+agent panel is open — it stays mounted so `Editor.tsx`'s `createPortal` keeps working,
+and Editor's own `rightSidebarCollapsed` state (`Editor.tsx:309-310`, Editor-local,
+separately persisted) is not touched.
 
 - The existing Inbox rail button becomes the **agent button**: orb icon, keeps the
-  unread badge, toggles the panel. `aria-expanded` preserved.
+  unread badge, toggles the panel. `aria-expanded` preserved. Opening restores the
+  **last-used tab** (persisted; Chat on first ever open).
 - The left-sidebar inbox overlay (`inboxOpen` state and its rendering) and the
   "Ask FleetGraph" accordion in `PropertiesPanel` are **removed**. The panel is the
   single home for agent surfaces.
@@ -103,7 +107,8 @@ become inline widths driven by the hook.
 
 ### 6. Testing
 
-- `App.inboxOverlay.test.tsx` → retargeted: rail button opens the panel's Inbox tab.
+- `App.inboxOverlay.test.tsx` → retargeted: rail button opens the panel on the
+  last-used tab; inbox content reachable via the Inbox tab.
 - `AgentChatPanel.test.tsx` → extended: history accumulates, exchanges tagged across
   `documentId` change, late response appends under original tag, degraded states,
   disabled-input state without a document.
