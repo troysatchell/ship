@@ -4,7 +4,7 @@
  *
  * Phase 2 (node design for the six FleetGraph use cases — see FLEETGRAPH.MD
  * "Graph Diagram" / "Node design rationale", both marked Pending) is still
- * not fully done. Four entry points exist so far, all sharing ONE compiled
+ * not fully done. Five entry points exist so far, all sharing ONE compiled
  * graph, selected by `trigger`:
  *
  *   on_demand (no seed document) -> ingest -> respond
@@ -30,6 +30,16 @@
  *     this chain that calls the model is `composeStandupDraft`, and it is
  *     skipped entirely (no model call, no spend) when the waste-control
  *     stop condition fires — see that section.
+ *
+ *   proactive_escalation -> detectBlockerFanout -> composeBlockerEscalation
+ *     -> commitBlockerEscalation
+ *     TRO-346/TRO-337 / FG-19's own addition — see the "Blocker escalation
+ *     fan-out" section below. Requires `blockingIssueId` (one invocation
+ *     evaluates ONE blocking issue), same required-field posture as
+ *     `targetPersonUserId` above. The only node in this chain that calls the
+ *     model is `composeBlockerEscalation`, skipped entirely when
+ *     `detectBlockerFanout` determines escalation is not warranted (no
+ *     model call, no spend) — see that section.
  *
  * Model provider: Anthropic API directly (`@langchain/anthropic`), confirmed
  * by the maintainer 2026-08-03 — see TRO-313's own "one decision still open"
@@ -129,6 +139,90 @@
  * chain to call even by mistake. Nothing this chain produces is ever
  * written to Ship; `DraftStore`/`ItemStore` are both entirely inside this
  * agent process.
+ *
+ * ---- Blocker escalation fan-out (TRO-346/TRO-337 / FG-19) ----------------
+ *
+ * FLEETGRAPH.MD's use case 5, verbatim: "An issue blocks work in two or more
+ * projects whose blocked people sit in different reporting lines" ->
+ * "the full impact, the lowest manager with authority over everyone
+ * blocked, and a drafted message to them." TRO-337 is the fuller spec;
+ * TRO-346 is the urgent framing of the identical work — this section
+ * closes both.
+ *
+ * Trigger-model decision (this ticket's own call, documented per its
+ * instruction, not re-litigated elsewhere): `proactive_escalation`, a NEW
+ * trigger requiring `blockingIssueId` — structurally identical to how FG-6
+ * added `proactive_deep` requiring `targetPersonUserId`, not a branch bolted
+ * onto the existing `proactive_fast`/`proactive_steady` chain. This was a
+ * real choice, not the only option, made against one VERIFIED fact:
+ * creating a `blocks` association writes only to `document_associations`
+ * (`api/src/routes/associations.ts`'s `POST /:id/associations`) — it never
+ * touches the blocking issue's own `documents.updated_at`, and no DB trigger
+ * does either (only migration 040's cycle-prevention trigger fires on that
+ * table, and it never writes to `documents`). `GET /api/change-feed`
+ * (`pollChangeFeed`'s own source) is built entirely from `documents.updated_at`
+ * plus `document_history` plus `comments` (`change-feed.ts`) — none of which
+ * a new `blocks` edge ever produces a row in. Concretely: `detectBlockingApprovals`
+ * (the ticket's own suggested "closest existing analog") works BECAUSE an
+ * approval-state change goes through the standard issue/week PATCH endpoint
+ * and writes a real `document_history` row; a `blocks` edge's creation has
+ * no equivalent row anywhere this agent can poll. Treating this like a
+ * `proactive_fast`/`proactive_steady` detection node would mean pretending
+ * to observe an event this agent's only proactive data source cannot
+ * carry — the chain would only "accidentally" re-evaluate a fan-out on some
+ * LATER, unrelated change to one of the involved documents, which is not a
+ * specification of the use case, it is a coincidence dressed up as
+ * detection. `on_demand` was the other real option (extending the existing
+ * expansion walk, which already resolves `blocks` edges for citation
+ * purposes) and was rejected because TRO-337 frames this as the agent
+ * SURFACING an escalation to a Director/PM ("no page joins them" — nobody
+ * would know to ask), not answering a question someone already knew to ask;
+ * FLEETGRAPH.MD's own "Who it notifies" section already treats manager
+ * escalation as something the agent produces, not something chat answers.
+ * Reusing the deep tier's exact compose/commit shape (`DeepDeps`,
+ * `DraftStore`/`ItemStore`, "draft only, never sent") was the ticket's own
+ * explicit instruction. `blockingIssueId` is required for the identical
+ * reason `targetPersonUserId` is (`requireBlockingIssueId`, mirroring
+ * `requireTargetPersonUserId`) — and, matching `proactive_deep`'s own
+ * documented gap, there is deliberately no scheduler in this file (or
+ * anywhere in this package) that decides WHICH issue's fan-out to check and
+ * WHEN; a real trigger route (e.g. driven by `document_associations` writes
+ * once Ship exposes them, or a periodic full scan) is a future ticket's job.
+ *
+ * `detectBlockerFanout` gathers the impact fan-out (`blockerFanout.ts`'s
+ * `gatherBlockerFanout` — which issues, which projects, which people; no
+ * model call) and THEN decides whether escalation is warranted at all —
+ * TRO-337's own trigger condition, both required: (a) two or more DISTINCT
+ * projects touched (the blocking issue's own project plus every distinct
+ * blocked-issue project — Test Case 5's shape is exactly one of each), and
+ * (b) two or more distinct blocked people who are NOT all in the same
+ * reporting line (`roles.ts`'s `findLowestCommonManager`, which returns
+ * `'same_reporting_line'` as an explicit, typed reason — TRO-337's own
+ * non-escalation proof #3). Either gate failing sets
+ * `blockerEscalationSkipReason` and skips straight through: no model call,
+ * no draft, no inbox item — the same "check before spending" posture
+ * `gatherStandupActivity`'s waste-control check already uses.
+ *
+ * `composeBlockerEscalation` is the ONLY node in this chain that calls the
+ * model — same shape as `composeAnswer`/`composeStandupDraft`: a
+ * deterministic prompt (`buildBlockerEscalationPrompt`) built entirely from
+ * the gathered fan-out and the LCA result, never from anything the model
+ * chooses on its own. It runs even when `findLowestCommonManager` returns
+ * `'no_common_manager'` (TRO-337's OWN verified-normal case: "reports_to is
+ * set on only 10 of 20 people... must handle a missing link as the normal
+ * case, not an exception") — the prompt says so plainly rather than
+ * asserting unproven authority, and `commitBlockerEscalation` routes the
+ * resulting draft to `highestReachableUserId` when one exists (TRO-337's
+ * other sanctioned degrade path), never fabricating a recipient.
+ *
+ * `commitBlockerEscalation` writes into the SAME two stores
+ * `commitStandupDraft` does — `DraftStore` (the drafted message text) and
+ * `ItemStore` (a lightweight `blocker_escalation` `InboxItem`, joining the
+ * same shared per-person inbox, ranked LAST per FLEETGRAPH.MD's "Who it
+ * notifies": "Escalation to a manager exists but is last"). Nothing in this
+ * chain — or anywhere upstream of `gate.ts` — ever sends the drafted
+ * message; `DeepShipClientLike` has no write method to call in the first
+ * place (same structural guarantee the deep tier already relies on).
  */
 
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
@@ -155,6 +249,8 @@ import {
   type PersonActivitySummary,
   type StandupAnchor,
 } from './standupDraft.js';
+import { buildBlockerEscalationPrompt, gatherBlockerFanout, type BlockerFanoutImpact } from './blockerFanout.js';
+import { findLowestCommonManager, type LowestCommonManagerResult } from './roles.js';
 import type { CostTracker, RealUsage } from './costTracking.js';
 
 /** The subset of ChatAnthropic's interface this graph actually needs — narrow
@@ -187,8 +283,12 @@ export interface AnthropicModel {
  * (FLEETGRAPH.MD) treats them as two cadences of the same deterministic
  * work, not different logic. `proactive_deep` (drafting, once-per-window
  * composition, TRO-319 / FG-6) routes to `gatherStandupActivity` — see the
- * module docstring's "Deep tier draft composition" section. */
-export type TriggerKind = 'on_demand' | 'proactive_fast' | 'proactive_steady' | 'proactive_deep';
+ * module docstring's "Deep tier draft composition" section.
+ * `proactive_escalation` (TRO-346/TRO-337 / FG-19) routes to
+ * `detectBlockerFanout` — see the module docstring's "Blocker escalation
+ * fan-out" section, including why this is its own trigger rather than a
+ * branch on the fast/steady chain. */
+export type TriggerKind = 'on_demand' | 'proactive_fast' | 'proactive_steady' | 'proactive_deep' | 'proactive_escalation';
 
 export const GraphState = Annotation.Root({
   /** The raw incoming request text (a question, a trigger payload, etc). */
@@ -370,6 +470,70 @@ export const GraphState = Annotation.Root({
     reducer: (current, update) => update ?? current,
     default: () => [],
   }),
+
+  // ---- Blocker escalation fan-out (TRO-346/TRO-337 / FG-19) ---------------
+
+  /** Which issue's fan-out this invocation evaluates — REQUIRED for
+   * `trigger: 'proactive_escalation'` (one invocation, one blocking issue;
+   * see the module docstring's "Blocker escalation fan-out" section).
+   * Same required-field posture as `targetPersonUserId`:
+   * `detectBlockerFanout` throws a clear error if this trigger runs without
+   * one, rather than silently doing nothing or guessing which issue. */
+  blockingIssueId: Annotation<string | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** The full impact fan-out `detectBlockerFanout` gathered
+   * (`blockerFanout.ts`'s `gatherBlockerFanout`) — which issues, projects,
+   * and people are touched. Set even when escalation turns out not to be
+   * warranted (`blockerEscalationSkipReason` set alongside it), so a caller
+   * can still inspect what was found. */
+  blockerFanoutImpact: Annotation<BlockerFanoutImpact | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** Set by `detectBlockerFanout` when escalation is NOT warranted —
+   * TRO-337's own explicit non-escalation cases (proof #3: same reporting
+   * line) plus the gates that must hold before the walk even asks the
+   * question (too few distinct projects/people to have a "different lines"
+   * problem at all, or the blocking issue itself was gone/inaccessible).
+   * `composeBlockerEscalation` reads this to skip its model call entirely,
+   * and `commitBlockerEscalation` reads it to skip writing anything —
+   * identical shape to `standupSkipReason`. */
+  blockerEscalationSkipReason: Annotation<
+    | 'issue_not_found'
+    | 'single_project'
+    | 'insufficient_people'
+    | 'same_reporting_line'
+    | 'people_unavailable'
+    | undefined
+  >({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** The lowest-common-manager result (`roles.ts`'s
+   * `findLowestCommonManager`) once `detectBlockerFanout` has determined
+   * escalation IS warranted. `reason: 'found'` carries a confirmed
+   * `managerUserId`; `reason: 'no_common_manager'` carries no confirmed
+   * manager but may carry `highestReachableUserId` — TRO-337's own
+   * "degrades to a usable answer" requirement. `undefined` when the run
+   * never reached that decision (escalation was skipped, or the node never
+   * ran). */
+  blockerEscalationManager: Annotation<LowestCommonManagerResult | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** The model's composed escalation message, once `composeBlockerEscalation`
+   * has run. `undefined` when the run was skipped
+   * (`blockerEscalationSkipReason` set). */
+  blockerEscalationDraftText: Annotation<string | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
 });
 
 export type GraphStateType = typeof GraphState.State;
@@ -390,6 +554,9 @@ export const NODE_NAMES = [
   'gatherStandupActivity',
   'composeStandupDraft',
   'commitStandupDraft',
+  'detectBlockerFanout',
+  'composeBlockerEscalation',
+  'commitBlockerEscalation',
 ] as const;
 export type NodeName = (typeof NODE_NAMES)[number];
 
@@ -571,7 +738,7 @@ function requireDeepDeps(deps: DeepDeps | undefined, nodeName: NodeName): DeepDe
  * rejection. */
 async function recordInvocation(
   tracker: CostTracker | undefined,
-  node: 'respond' | 'composeAnswer' | 'composeStandupDraft',
+  node: 'respond' | 'composeAnswer' | 'composeStandupDraft' | 'composeBlockerEscalation',
   trigger: TriggerKind,
   model: string | undefined,
   usage: RealUsage | undefined,
@@ -603,6 +770,21 @@ function requireTargetPersonUserId(state: GraphStateType, nodeName: NodeName): s
   return state.targetPersonUserId;
 }
 
+/** Same required-field posture as `requireTargetPersonUserId`, for the
+ * blocker-escalation chain (TRO-346/TRO-337 / FG-19) — see the module
+ * docstring's "Blocker escalation fan-out" section for why this is a
+ * required field rather than something the node discovers on its own. */
+function requireBlockingIssueId(state: GraphStateType, nodeName: NodeName): string {
+  if (!state.blockingIssueId) {
+    throw new Error(
+      `graph node "${nodeName}" requires state.blockingIssueId — one "proactive_escalation" ` +
+        'invocation evaluates exactly one blocking issue\'s fan-out; pass blockingIssueId when ' +
+        'invoking the graph with that trigger.'
+    );
+  }
+  return state.blockingIssueId;
+}
+
 /** `START`'s routing keys — a superset of `TriggerKind` because `on_demand`
  * itself splits into two different node chains depending on whether a seed
  * document is present (see the module docstring). `proactive_deep` and bare
@@ -615,14 +797,16 @@ type RouteKey =
   | 'on_demand_expand'
   | 'proactive_fast'
   | 'proactive_steady'
-  | 'proactive_deep';
+  | 'proactive_deep'
+  | 'proactive_escalation';
 
 /** Routes `START` by `state.trigger` (and, for `on_demand`, by whether a
  * seed document was given) — the seam that lets every mode share one graph
  * without any path knowing the others exist. `proactive_deep` now has a
  * `pathMap` entry too (TRO-319 / FG-6, below) — FG-7 already wired this
  * switch's `proactive_deep` case in anticipation, ahead of the node it
- * routes to existing. */
+ * routes to existing. `proactive_escalation` (TRO-346/TRO-337 / FG-19)
+ * follows the identical pattern. */
 function routeTrigger(state: GraphStateType): RouteKey {
   switch (state.trigger) {
     case 'on_demand':
@@ -633,6 +817,8 @@ function routeTrigger(state: GraphStateType): RouteKey {
       return 'proactive_steady';
     case 'proactive_deep':
       return 'proactive_deep';
+    case 'proactive_escalation':
+      return 'proactive_escalation';
   }
 }
 
@@ -914,12 +1100,147 @@ export function buildGraph(
 
       return {};
     })
+    // ---- Blocker escalation fan-out (TRO-346/TRO-337 / FG-19) -----------
+    .addNode('detectBlockerFanout', async (state: GraphStateType) => {
+      const deps = requireDeepDeps(deepDeps, 'detectBlockerFanout');
+      const blockingIssueId = requireBlockingIssueId(state, 'detectBlockerFanout');
+
+      const impact = await gatherBlockerFanout(deps.shipClient, blockingIssueId);
+      if (!impact) {
+        // The blocking issue itself is gone or invisible to this token —
+        // nothing to fan out from, not an error (same posture as
+        // `resolveSeed`'s own "seed itself is gone" branch).
+        return { blockerEscalationSkipReason: 'issue_not_found' as const };
+      }
+
+      // Gate (a): TRO-337's own trigger condition counts the blocking
+      // issue's own project alongside every distinct blocked-issue project
+      // ("an issue blocks work in TWO OR MORE projects") — Test Case 5's
+      // shape is exactly one of each.
+      if (impact.distinctProjectIds.length < 2) {
+        return { blockerFanoutImpact: impact, blockerEscalationSkipReason: 'single_project' as const };
+      }
+      // Gate (b) precondition: fewer than two distinct blocked PEOPLE means
+      // there is no "different reporting lines" question to ask at all —
+      // checked before the people-directory fetch below, so a fan-out with
+      // one (or zero) assigned blocked issues never pays for it.
+      if (impact.blockedPeopleUserIds.length < 2) {
+        return { blockerFanoutImpact: impact, blockerEscalationSkipReason: 'insufficient_people' as const };
+      }
+
+      // `ShipPerson` is a structural superset of `PersonDirectoryEntry`
+      // (`user_id`/`reportsTo`) — passed directly, same convention
+      // `proactive.ts`'s `buildBlockingApprovalItems` already uses for
+      // `findManagerUserId`.
+      //
+      // CodeRabbit (TRO-346 PR review): this is a Ship API call like any
+      // other in this file's proactive/deep paths, and the assignment's own
+      // Engineering Requirements mandate the agent "degrade gracefully if
+      // Ship is unreachable — it should not crash or hang indefinitely."
+      // The impact fan-out itself was already gathered successfully at this
+      // point (`gatherBlockerFanout` above already tolerates per-call
+      // failures internally); losing only the people directory should not
+      // crash the whole node.
+      let people: ShipPerson[];
+      try {
+        people = await deps.shipClient.getPeople();
+      } catch {
+        return { blockerFanoutImpact: impact, blockerEscalationSkipReason: 'people_unavailable' as const };
+      }
+      const manager = findLowestCommonManager(impact.blockedPeopleUserIds, people);
+
+      // Gate (b): TRO-337 proof #3 — already in the same reporting line
+      // does not escalate at all, no draft, no item.
+      if (manager.reason === 'same_reporting_line') {
+        return { blockerFanoutImpact: impact, blockerEscalationSkipReason: 'same_reporting_line' as const };
+      }
+
+      // `manager.reason` is 'found' or 'no_common_manager' here —
+      // `'single_person'` is structurally unreachable (gated above by the
+      // `blockedPeopleUserIds.length < 2` check), both remaining reasons
+      // warrant a drafted message (TRO-337's own degrade path for the
+      // latter — see `composeBlockerEscalation`).
+      return { blockerFanoutImpact: impact, blockerEscalationManager: manager };
+    })
+    .addNode('composeBlockerEscalation', async (state: GraphStateType) => {
+      requireDeepDeps(deepDeps, 'composeBlockerEscalation');
+      if (state.blockerEscalationSkipReason || !state.blockerFanoutImpact || !state.blockerEscalationManager) {
+        // Not warranted (a skip reason was set) or the gather step never
+        // reached a decision — no model call, no spend, same "check before
+        // spending" posture as `composeStandupDraft`'s own skip.
+        return {};
+      }
+
+      const prompt = buildBlockerEscalationPrompt(state.blockerFanoutImpact, state.blockerEscalationManager);
+      const result = await model.invoke(prompt);
+      await recordInvocation(costTracker, 'composeBlockerEscalation', state.trigger, model.model, result.usage_metadata);
+      return { blockerEscalationDraftText: contentToString(result.content) };
+    })
+    .addNode('commitBlockerEscalation', (state: GraphStateType) => {
+      const deps = requireDeepDeps(deepDeps, 'commitBlockerEscalation');
+      if (
+        state.blockerEscalationSkipReason ||
+        !state.blockerEscalationDraftText ||
+        !state.blockerFanoutImpact ||
+        !state.blockerEscalationManager
+      ) {
+        // Skipped, or nothing to commit (e.g. the compose step never ran) —
+        // never write a partial/empty draft.
+        return {};
+      }
+
+      // TRO-337's OWN degrade path: a confirmed manager when one exists,
+      // otherwise the best-available partial-authority fallback
+      // (`highestReachableUserId` — see `roles.ts`'s own docstring). If
+      // NEITHER exists (nobody in the group has any manager recorded at
+      // all), there is genuinely no one to route the draft to — the fan-out
+      // fact is real, but nothing is written, rather than inventing a
+      // recipient.
+      const recipientUserId = state.blockerEscalationManager.managerUserId ?? state.blockerEscalationManager.highestReachableUserId;
+      if (!recipientUserId) {
+        return {};
+      }
+
+      const now = deps.now ?? (() => new Date());
+      const windowDate = now().toISOString().slice(0, 10);
+      const draftId = `blocker-escalation:${state.blockerFanoutImpact.blockingIssueId}:${windowDate}`;
+
+      // Reuses `DraftStore`/`StandupDraft` AS-IS rather than introducing a
+      // parallel store (this ticket's own instruction: "using the existing
+      // ItemStore/DraftStore plumbing"). `personUserId`/`windowDate` are
+      // standup-tier field names but already generalize exactly to what an
+      // escalation draft needs: a per-recipient, per-day, upsertable text
+      // record with the same unseen/viewed/dismissed/posted lifecycle.
+      // `proposedTransitions` is always empty here — an escalation draft
+      // never proposes an issue state change.
+      const draft = deps.draftStore.upsert({
+        id: draftId,
+        personUserId: recipientUserId,
+        windowDate,
+        draftText: state.blockerEscalationDraftText,
+        proposedTransitions: [],
+      });
+
+      const impact = state.blockerFanoutImpact;
+      deps.itemStore.upsert({
+        id: draft.id,
+        recipientUserId,
+        type: 'blocker_escalation',
+        summary: `"${impact.blockingIssueTitle}" is blocking work across ${impact.distinctProjectIds.length} projects`,
+        evidence: { documentId: impact.blockingIssueId, documentType: 'issue' },
+        action: { label: 'Review drafted message', href: `/issue/${impact.blockingIssueId}` },
+        draftId: draft.id,
+      });
+
+      return {};
+    })
     .addConditionalEdges(START, routeTrigger, {
       on_demand_chat: 'ingest',
       on_demand_expand: 'resolveSeed',
       proactive_fast: 'pollChangeFeed',
       proactive_steady: 'pollChangeFeed',
       proactive_deep: 'gatherStandupActivity',
+      proactive_escalation: 'detectBlockerFanout',
     })
     .addEdge('ingest', 'respond')
     .addEdge('respond', END)
@@ -936,7 +1257,10 @@ export function buildGraph(
     .addEdge('composeAnswer', END)
     .addEdge('gatherStandupActivity', 'composeStandupDraft')
     .addEdge('composeStandupDraft', 'commitStandupDraft')
-    .addEdge('commitStandupDraft', END);
+    .addEdge('commitStandupDraft', END)
+    .addEdge('detectBlockerFanout', 'composeBlockerEscalation')
+    .addEdge('composeBlockerEscalation', 'commitBlockerEscalation')
+    .addEdge('commitBlockerEscalation', END);
 
   return graph.compile();
 }

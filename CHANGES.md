@@ -21,6 +21,119 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-346 — FG: Test Case 5's agent side does not exist — build the blocker fan-out walk
+
+**Also closes TRO-337 ([FG-19]) — same feature.** TRO-346 was the urgent PM-decision framing
+("build it or rescope the row before Early Sub"); TRO-337 is the fuller, more precise spec
+("proven by Test Case 5") and is what this build actually followed as its definition of done.
+The decision to build the real fan-out walk (not a rescoped/honest-placeholder row) was already
+made by the repo owner before this ticket started.
+
+**What changed.** FLEETGRAPH.MD's use case 5 — "An issue blocks work in two or more projects
+whose blocked people sit in different reporting lines: the full impact, the lowest manager with
+authority over everyone blocked, and a drafted message to them" — had no agent-side implementation.
+Ship's side (the `blocks` relationship, migration `041_add_blocks_relationship.sql`, and the
+blocks/blocked-by sidebar, PR #120) already existed; nothing traversed it. Four commits:
+
+1. **`agent/src/roles.ts`** — `findManagerUserId` was single-hop only. Added `findManagerChain`
+   (walks repeated `reports_to` hops to the root, with a cycle guard) and
+   `findLowestCommonManager` (the tree lowest-common-ancestor across N blocked people's manager
+   chains), returning a typed reason (`'found' | 'same_reporting_line' | 'single_person' |
+   'no_common_manager'`) rather than a bare nullable value. A missing `reports_to` link — the
+   VERIFIED normal case (only 10 of 20 seeded people have one) — degrades to an explicit
+   `'no_common_manager'` result plus a best-available `highestReachableUserId` fallback, never
+   throwing. Two people already in the same reporting line (identical direct manager, or one
+   manages the other) resolve to `'same_reporting_line'` so the caller knows not to escalate at
+   all — TRO-337's own proof #3.
+2. **`agent/src/itemStore.ts` / `costTracking.ts` / `gate.ts`** — a second draft-backed inbox item
+   type (`blocker_escalation`, ranked last per FLEETGRAPH.MD's "Escalation... is last"), a fourth
+   model-call site (`composeBlockerEscalation`) in the cost ledger, and `gate.ts`'s `discardItem`
+   generalized to dispatch on `item.draftId`'s presence rather than one hardcoded item-type name.
+3. **`agent/src/blockerFanout.ts`** (new) — deterministic fan-out gathering
+   (`gatherBlockerFanout`, no model call) and prompt assembly (`buildBlockerEscalationPrompt`),
+   matching `proactive.ts`/`standupDraft.ts`'s existing structure.
+4. **`agent/src/graph.ts`** — a new `proactive_escalation` trigger (requiring `blockingIssueId`,
+   same required-field posture as `proactive_deep`'s `targetPersonUserId`) and a three-node chain:
+   `detectBlockerFanout -> composeBlockerEscalation -> commitBlockerEscalation`, reusing `DeepDeps`
+   (widened with `getPeople`) exactly as the ticket instructed ("use the existing
+   ItemStore/DraftStore plumbing"). `detectBlockerFanout` gates escalation on BOTH of TRO-337's own
+   conditions (two or more distinct projects touched; blocked people not all in the same reporting
+   line) before any model call. The draft is never auto-sent — `DeepShipClientLike` has no write
+   method to call; a human decides via the existing `gate.ts` accept-flow, under their own token.
+
+**Trigger-model decision (documented in full in `graph.ts`'s own module docstring, "Blocker
+escalation fan-out" section).** Proactive, as its own new trigger — NOT a branch on the existing
+`pollChangeFeed -> resolveMentions -> detectBlockingApprovals` chain, and NOT `on_demand`. Verified,
+not assumed: creating a `blocks` association (`POST /:id/associations`, `associations.ts`) writes
+only to `document_associations` — it never touches the blocking issue's own `documents.updated_at`,
+and no DB trigger does either (migration 040's trigger only guards cycles on
+`document_associations` itself). `GET /api/change-feed` is built entirely from `updated_at` +
+`document_history` + `comments`, none of which a new `blocks` edge ever produces a row in — so a
+branch on the existing steady-tier chain could only "detect" a fan-out by coincidence, on some
+later unrelated change to one of the involved documents, not by observing the event that actually
+mattered. `on_demand` was the other real option (the existing expansion walk already resolves
+`blocks` edges for citations) and was rejected because TRO-337 frames this as the agent SURFACING
+an escalation to a Director/PM who wouldn't otherwise know to ask — matching FLEETGRAPH.MD's own
+"Who it notifies" framing of manager escalation as something the agent produces. As with
+`proactive_deep`, there is deliberately no scheduler that decides which issue's fan-out to check
+and when — a future ticket's job, same documented gap FG-6 left.
+
+**How to run it.** `pnpm --filter @ship/agent test` (or `pnpm test` from the worktree
+root with `DATABASE_URL` set via `.factory-env`). New/changed test files:
+`agent/src/__tests__/roles.test.ts` (+12 cases), `agent/src/__tests__/blockerFanout.test.ts` (new,
+8 cases), `agent/src/__tests__/graph.test.ts` (+10 cases, `describe('buildGraph — blocker
+escalation fan-out...')`). Full suite: 310/310 passing. `pnpm --filter @ship/agent type-check`
+clean. Confirmed red-before-green: reverted every touched source file to its pre-ticket state
+(files copied aside first, restored after — never `git stash`) and re-ran the new/extended test
+files; 21 of the new cases failed for the expected reasons (`findManagerChain`/
+`findLowestCommonManager is not a function`, `Cannot find module '../blockerFanout.js'`, and
+LangGraph's `Branch condition returned unknown or null destination` for the unrecognized
+`proactive_escalation` trigger) before the fix, all passing after.
+
+**No new UI surface.** TRO-337 is graph/backend-only — the drafted message is a
+`blocker_escalation` inbox item + a `DraftStore` record, read through the SAME existing chat/inbox
+surfaces every other drafted item already uses (`AgentChatPanel`/`InboxSidebar`, unchanged by this
+ticket).
+
+**Not yet wired: a real trigger route.** Same documented gap `proactive_deep` (FG-6) already has —
+nothing in this package decides WHICH blocking issue's fan-out to check and WHEN. A future ticket
+could drive this from a periodic scan of `blocks`-typed associations, or from Ship exposing
+`document_associations` writes on the change feed.
+
+**CodeRabbit findings (6 captured, triaged by the orchestrator):**
+- Fixed: `blockerFanout.ts`'s per-blocked-edge loop was fully sequential (document fetch, then
+  project resolution, one edge at a time) — parallelized with `Promise.all`, order preserved,
+  each edge's own two reads also started together rather than one waiting on the other. No bound
+  added (`blocks` fan-out is expected to stay small; a future ticket would need one for a page with
+  dozens of blocked issues).
+- Fixed: `resolveProjectRef`'s local `edges` variable was untyped (implicit `any` via unannotated
+  `let`) — now `AssociationForwardEdge[]`, matching the sibling declaration in
+  `gatherBlockerFanout`.
+- Fixed (correctly re-severitized): CodeRabbit marked the missing `getPeople()` error handling
+  "trivial," but it's a real gap against this assignment's own Engineering Requirement ("the agent
+  must degrade gracefully if Ship is unreachable — it should not crash or hang indefinitely") —
+  an unreachable Ship API during the people-directory fetch would have thrown past an already-
+  successful fan-out gather. Added a `people_unavailable` skip reason, same shape as the other
+  four skip reasons this node already returns.
+- Fixed: `roles.test.ts`'s 3-person LCA test was named "finds the common ancestor" while its own
+  assertion proves `reason === 'no_common_manager'` — renamed to match what it actually verifies.
+- Dismissed: memoizing manager-chain computation across `sameReportingLine`/
+  `allInSameReportingLine`/`findLowestCommonManager` (currently recomputes per pair) — real at
+  scale, but every call site in this codebase passes at most a handful of blocked people (TRO-337's
+  own use case: 2), so the O(n²) chain rebuilds are O(1) in practice. Deferred rather than adding
+  memoization complexity for a scale this feature doesn't operate at.
+- Dismissed: a redundant duplicate `compiled.invoke` call in one `graph.test.ts` case — the test's
+  assertions are still correct and still exercise the degrade path; the redundancy is cosmetic test
+  churn, not a coverage gap.
+
+**Rollback.** Revert the four commits on this branch (`roles.ts`/`roles.test.ts`;
+`itemStore.ts`/`costTracking.ts`/`gate.ts`; `blockerFanout.ts` + its test; `shipClient.ts`/
+`graph.ts`/`graph.test.ts`) and this entry. No schema or migration changes, no new API endpoints,
+no changes to `api/` or `web/` — purely additive within `agent/`, so reverting is a clean
+subtraction with nothing else to unwind.
+
+---
+
 ## TRO-347 — FG: AGENT_INTERNAL_SECRET / AGENT_API_BASE_URL live only in Render console — a clean terraform apply kills the chat/inbox demo path
 
 **What was missing.** PR-D (2026-08-05) introduced `AGENT_INTERNAL_SECRET` (required by both the

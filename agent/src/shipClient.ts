@@ -252,6 +252,16 @@ export type OnDemandShipClientLike = Pick<
  * lookup) — no existing `Pick` union covers that combination, so this is its
  * own type rather than a widening of either existing one.
  *
+ * `getPeople` added (TRO-346/TRO-337 / FG-19) — another STRICT ADDITION, same
+ * reasoning: the blocker-escalation chain (`graph.ts`'s
+ * `detectBlockerFanout`) reuses this exact deps shape (per that ticket's own
+ * instruction to "use the existing ItemStore/DraftStore plumbing"), and it is
+ * the one deep-tier consumer that needs the FULL people directory —
+ * `roles.ts`'s `findLowestCommonManager` walks arbitrarily many blocked
+ * people's manager chains, which needs every person's `reportsTo`, not one
+ * person's issue list. No existing deep-tier node called this before, so
+ * adding it here costs every other `DeepShipClientLike` consumer nothing.
+ *
  * Every method here is a READ. This is deliberate, not incidental: FG-6's
  * hard limits ("never applies an issue transition," "never creates ... any
  * document," "never writes anything that would read as though a person
@@ -262,7 +272,7 @@ export type OnDemandShipClientLike = Pick<
  */
 export type DeepShipClientLike = Pick<
   ShipClient,
-  'getIssuesByAssignee' | 'getChangeFeed' | 'getAssociations' | 'getDocument' | 'listDocuments'
+  'getIssuesByAssignee' | 'getChangeFeed' | 'getAssociations' | 'getDocument' | 'listDocuments' | 'getPeople'
 >;
 
 export interface ShipClientOptions {

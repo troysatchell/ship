@@ -100,22 +100,25 @@ import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-/** The three real `model.invoke()` call sites in `graph.ts`, and — per this
+/** The real `model.invoke()` call sites in `graph.ts`, and — per this
  * ticket's own framing — the closest thing this codebase has today to
  * FLEETGRAPH.MD's Cost Analysis "tier" vocabulary: `respond` is the bare
  * on-demand chat path (no expansion), `composeAnswer` is the on-demand path
  * WITH expansion (FG-7, "follows the graph outward" — the tier the cost
- * model's $0.065/$9,000-token figure describes), and `composeStandupDraft`
- * is the deep-tier standup draft (FG-6). FLEETGRAPH.MD's cost model also
- * names "inbox assembly" and "retro draft" tiers; neither has a value here
- * because neither makes a model call in the graph as built today — FG-5's
- * `pollChangeFeed -> resolveMentions -> detectBlockingApprovals ->
- * commitInboxItems` chain has zero model calls (documented in `graph.ts`'s
- * own module docstring), and no retro-draft node exists yet ("Phase 2 ...
- * not fully done", `graph.ts:5-6`). Adding either later costs nothing here:
- * this union just grows, and every aggregation function in this file
- * already groups by whatever site values are actually present in the data. */
-export type InvocationSite = 'respond' | 'composeAnswer' | 'composeStandupDraft';
+ * model's $0.065/$9,000-token figure describes), `composeStandupDraft` is
+ * the deep-tier standup draft (FG-6), and `composeBlockerEscalation`
+ * (TRO-346/TRO-337 / FG-19) is the cross-project blocker-escalation draft —
+ * the fourth and, as of this ticket, final model call site in the graph.
+ * FLEETGRAPH.MD's cost model also names "inbox assembly" and "retro draft"
+ * tiers; neither has a value here because neither makes a model call in the
+ * graph as built today — FG-5's `pollChangeFeed -> resolveMentions ->
+ * detectBlockingApprovals -> commitInboxItems` chain has zero model calls
+ * (documented in `graph.ts`'s own module docstring), and no retro-draft node
+ * exists yet ("Phase 2 ... not fully done", `graph.ts:5-6`). Adding either
+ * later costs nothing here: this union just grows, and every aggregation
+ * function in this file already groups by whatever site values are actually
+ * present in the data. */
+export type InvocationSite = 'respond' | 'composeAnswer' | 'composeStandupDraft' | 'composeBlockerEscalation';
 
 /** Real usage as `ChatAnthropic`'s own response carries it
  * (`@langchain/core`'s `UsageMetadata`) — kept minimal to exactly what this
@@ -297,7 +300,10 @@ function isModelInvocationRecord(value: unknown): value is ModelInvocationRecord
   const v = value as Record<string, unknown>;
   return (
     typeof v.timestamp === 'string' &&
-    (v.node === 'respond' || v.node === 'composeAnswer' || v.node === 'composeStandupDraft') &&
+    (v.node === 'respond' ||
+      v.node === 'composeAnswer' ||
+      v.node === 'composeStandupDraft' ||
+      v.node === 'composeBlockerEscalation') &&
     typeof v.trigger === 'string' &&
     typeof v.model === 'string' &&
     isNonNegativeSafeInteger(v.inputTokens) &&
