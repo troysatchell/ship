@@ -47,6 +47,18 @@
  * itemStore.ts's own docstring, FG-5/FG-6); this route does no ranking of
  * its own, only the same trust-boundary response validation POST /chat
  * already does for citedSources.
+ *
+ * POST /accept-draft (TRO-348): the missing wire into FG-8's own accept flow
+ * (`agent/src/gate.ts`'s `acceptDraft`) — that function existed, was tested,
+ * and had no HTTP caller anywhere in this codebase before this ticket. Same
+ * mint-forward-revoke shape as POST /chat's TRO-342 section, for the exact
+ * same reason: `acceptDraft` performs a real Ship WRITE (posts a standup)
+ * that must be attributed to the accepting person, never the agent's own
+ * identity — the ephemeral token minted here, forwarded as `accepterToken`,
+ * is what makes that true the same way `askingUserToken` does for the
+ * read-only expansion walk. `draftId` is taken from the request body (the
+ * person is accepting a SPECIFIC draft they were shown); `finalText` is
+ * optional — omitted means "post the draft unedited."
  */
 import { Router } from 'express';
 import { authMiddleware, authed } from '../middleware/auth.js';
@@ -410,6 +422,162 @@ router.get('/inbox', authMiddleware, authed(async (req, res) => {
     res.status(502).json({ error: 'agent_unreachable' });
   } finally {
     clearTimeout(timer);
+  }
+}));
+
+// ============== Accept draft (TRO-348) ==============
+
+// Matches the corresponding OpenAPI schema's finalText.max()
+// (api/src/openapi/schemas/agent.ts) — keep both in sync, same convention as
+// MAX_QUESTION_LENGTH above.
+const MAX_FINAL_TEXT_LENGTH = 4000;
+
+interface AgentAcceptDraftSuccessBody {
+  standupId: string;
+}
+
+function isAgentAcceptDraftSuccessBody(value: unknown): value is AgentAcceptDraftSuccessBody {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.standupId === 'string';
+}
+
+// The agent's own GateError responses (404/409, agent/src/server.ts) — a
+// domain outcome ("no such draft" / "already posted"), not a service
+// failure, so this route relays the agent's status code and message rather
+// than collapsing it into the generic 502 every other unexpected response
+// gets below.
+interface AgentGateErrorBody {
+  error: string;
+  message?: string;
+}
+
+function isAgentGateErrorBody(value: unknown): value is AgentGateErrorBody {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return typeof v.error === 'string' && (v.message === undefined || typeof v.message === 'string');
+}
+
+// POST /api/agent/accept-draft
+//
+// draftId identifies WHICH draft the person is accepting — always the id of
+// a draft this person was already shown (their own inbox item points at it),
+// never validated against ownership here: the agent's own `acceptDraft`
+// (gate.ts) has no per-person draft ownership check either (a draft is a
+// standalone record keyed by its own id, same as every other Ship resource
+// this codebase authorizes by capability-to-reach rather than a redundant
+// second ownership check). accepterToken is minted fresh below from THIS
+// session's own req.userId, exactly like askingUserToken on POST /chat — the
+// browser can never supply one itself.
+router.post('/accept-draft', authMiddleware, authed(async (req, res) => {
+  const { draftId, finalText } = req.body ?? {};
+
+  if (typeof draftId !== 'string' || draftId.length === 0) {
+    res.status(400).json({ error: 'draftId is required' });
+    return;
+  }
+  if (finalText !== undefined && typeof finalText !== 'string') {
+    res.status(400).json({ error: 'finalText must be a string when provided' });
+    return;
+  }
+  if (typeof finalText === 'string' && finalText.length > MAX_FINAL_TEXT_LENGTH) {
+    res.status(400).json({ error: `finalText must be ${MAX_FINAL_TEXT_LENGTH} characters or fewer` });
+    return;
+  }
+
+  const internalSecret = process.env.AGENT_INTERNAL_SECRET;
+  if (!internalSecret) {
+    console.error('[agent-proxy] AGENT_INTERNAL_SECRET is not set — refusing to call the agent service.');
+    res.status(503).json({ error: 'agent_not_configured' });
+    return;
+  }
+
+  if (!isAgentBaseUrlSecure(AGENT_API_BASE_URL)) {
+    console.error(`[agent-proxy] AGENT_API_BASE_URL (${AGENT_API_BASE_URL}) is a non-loopback http: URL — refusing to send X-Internal-Secret in cleartext.`);
+    res.status(503).json({ error: 'agent_not_configured' });
+    return;
+  }
+
+  // TRO-348, same posture as TRO-342's POST /chat minting: AFTER the checks
+  // above (no point spending a real api_tokens row on a request that's about
+  // to be refused anyway), BEFORE the outbound call — acceptDraft's Ship
+  // write must be attributed to THIS person, never the agent's own identity.
+  let minted: MintedAgentToken;
+  try {
+    minted = await mintEphemeralAgentToken(req.userId, req.workspaceId);
+  } catch (err) {
+    console.error('[agent-proxy] failed to mint a per-user Ship API token for the agent:', err);
+    res.status(502).json({ error: 'agent_unavailable' });
+    return;
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), AGENT_REQUEST_TIMEOUT_MS);
+
+  try {
+    const agentRes = await fetch(`${AGENT_API_BASE_URL}/accept-draft`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Internal-Secret': internalSecret,
+      },
+      body: JSON.stringify({
+        draftId,
+        // TRO-348: the actual authentication for the Ship write — never the
+        // agent's own SHIP_API_TOKEN (see this route's own module docstring).
+        accepterToken: minted.token,
+        finalText,
+      }),
+      signal: controller.signal,
+      // CWE-522: same posture as POST /chat/GET /inbox above — an unexpected
+      // redirect from a misconfigured/compromised AGENT_API_BASE_URL must
+      // never silently forward X-Internal-Secret or accepterToken elsewhere.
+      redirect: 'error',
+    });
+
+    if (!agentRes.ok) {
+      if (agentRes.status === 404 || agentRes.status === 409) {
+        // A domain outcome from gate.ts (no such draft / already posted),
+        // not a service failure — relay it distinctly so a future UI can
+        // render "already posted"/"not found" rather than a generic
+        // "agent unavailable" toast.
+        const data: unknown = await agentRes.json().catch(() => null);
+        const message = isAgentGateErrorBody(data) ? data.message : undefined;
+        res.status(agentRes.status).json({ error: 'gate_error', message });
+        return;
+      }
+      console.error(`[agent-proxy] agent service returned ${agentRes.status} for /accept-draft`);
+      res.status(502).json({ error: 'agent_unavailable' });
+      return;
+    }
+
+    const data: unknown = await agentRes.json();
+    if (!isAgentAcceptDraftSuccessBody(data)) {
+      console.error('[agent-proxy] agent service returned an unexpected response shape for /accept-draft');
+      res.status(502).json({ error: 'agent_unavailable' });
+      return;
+    }
+
+    // CWE-524: same posture as POST /chat/GET /inbox — a browser-cached copy
+    // of "your draft was just posted" served back later is stale at best.
+    res.set('Cache-Control', 'no-store');
+    res.status(200).json(data);
+  } catch (err) {
+    // Covers both a network failure and the abort timeout above — same
+    // posture as POST /chat/GET /inbox: one clean degraded shape, never a
+    // raw stack trace and never an unresolving request.
+    console.error('[agent-proxy] failed to reach agent service for /accept-draft:', err);
+    res.status(502).json({ error: 'agent_unreachable' });
+  } finally {
+    clearTimeout(timer);
+    // TRO-348, same posture as TRO-342's POST /chat: AWAITED, not
+    // fire-and-forget — bounds this token's real exposure window as tightly
+    // as this process can.
+    try {
+      await revokeAgentToken(minted.id);
+    } catch (err) {
+      console.error('[agent-proxy] failed to revoke ephemeral agent token:', err);
+    }
   }
 }));
 
