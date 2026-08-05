@@ -21,6 +21,119 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-324 — [FG-13] FLEETGRAPH.MD is missing the graph outline, the trace links and the measured cost
+
+**Second of two tickets on branch `feat/pr-g-mvp-cost-instrumentation-and-fleetgraph-docs` (bundle
+`TRO-331` / [PR-G] EPIC, G-MVP slice), landing on top of TRO-339 (FG-21)'s cost instrumentation
+without re-touching or contradicting it.** Closes the three remaining MVP checkboxes in
+`FLEETGRAPH.MD` that were pure documentation: the Graph Diagram, real trace links across genuinely
+different execution paths, and measured (not projected) cost/runs-per-day/detection-latency numbers.
+
+**What changed — all in `FLEETGRAPH.MD` except where noted:**
+- **Graph Diagram section** — a Mermaid flowchart, verified node-by-node against the real compiled
+  `StateGraph` in `agent/src/graph.ts` (every node/edge/conditional read directly off
+  `.addNode`/`.addEdge`/`.addConditionalEdges`, not reconstructed from the design brief). Covers
+  both modes through the same graph (`routeTrigger`'s real conditional edge), the on-demand
+  expansion self-loop (`expandFrontier`'s real `routeExpansionLoop` conditional edge), the proactive
+  fast/steady chain, the deep-tier draft chain, and the human-in-the-loop gate (`gate.ts` / FG-8,
+  shown as an external box — it is NOT a node in this `StateGraph`, and the on-demand chat/answer
+  paths do not route through it at all, only stored drafts and inbox items do).
+- **Two real, verified mismatches between the old prose and the actual code, surfaced rather than
+  smoothed over** (both documented as numbered notes directly under the diagram): (1) "the graph
+  branches on 'is a window open for this person'" — read against `graph.ts` directly, no such branch
+  exists anywhere in the compiled graph; deciding WHO gets a draft and WHEN is the job of a scheduler
+  that does not exist yet (`graph.ts`'s own module docstring says so). The thing that DOES exist,
+  `shouldGenerateDraftFor`'s ignore-threshold skip, is a different question (waste control, not
+  window timing). (2) The deep tier's "skip if ignored" behavior is a plain in-node `if`, not a
+  `StateGraph` conditional edge — unlike `expandFrontier`'s self-loop, which is a real conditional
+  edge, `composeStandupDraft` always runs as a graph node whether or not it calls the model.
+- **New "Execution Traces" section** (between Graph Diagram and Use Cases) — three real LangSmith
+  trace links in the same `fleetgraph-agent` project FG-21 used, verified via the LangSmith API
+  (`GET /runs/{id}`, `POST /runs/query`), showing genuinely different node sequences: bare on-demand
+  chat (9 child spans, FG-21's own trace, reused not re-run), on-demand expansion (47 child spans,
+  real 12-document cap-reached run against this worktree's own local Ship API), and proactive
+  deterministic (14 child spans, `total_tokens: 0` — confirmed no model call anywhere on this path,
+  at the trace level, not just in a source comment). Also discloses one real, unintended $0.000694
+  spend from a `pnpm exec tsx ... -- <args>` argument-parsing mistake (a literal `"--"` became the
+  seed document id) — a real trace exists for it too, not hidden, not counted as one of the two
+  required comparison traces.
+- **Cost Analysis — a clearly-delineated addition under "Development and Testing Costs"**, FG-21's
+  table itself untouched: `composeAnswer` now has 2 real measured invocations (mean $0.000852/run,
+  avg 6.00 documents pulled — reported as a floor-and-ceiling from 2 data points, explicitly not yet
+  a stable per-tier average), an honest "too little real history to estimate a runs-per-day rate"
+  finding (all recorded invocations fall within ~40 hours, one calendar day — reporting a same-day
+  raw count as a "rate" would be exactly the meaningless-number-from-a-near-zero-sample the ticket
+  warned against), and a real, timed detection-latency measurement: **5,185ms observed** (event
+  write to the item genuinely present in a real `ItemStore`, via real polling `proactive_steady`
+  graph invocations — never a blind fixed sleep) plus a **derived (not observed) ~60,031ms worst-case
+  bound** for a running 60-second-cadence production poller, explicitly never presented with the
+  observed number's confidence. The observed number's size is itself a real finding: Ship's own
+  `change-feed.ts` deliberately withholds anything more recent than `now - 5000ms`
+  (`CHANGE_FEED_LAG_MS`) as a correctness safety margin — the first attempt at this measurement (a
+  single tick fired within milliseconds of the write) reproducibly returned 0 items, which is what
+  led to reading that file and finding the real mechanism, not a bug in this ticket's own code.
+- **`agent/src/scripts/trace-invoke-proactive.ts` (new)** — the proactive tier's own trace-link
+  script; no equivalent existed before this ticket (only `trace-invoke.ts` and
+  `trace-invoke-on-demand.ts`, both `on_demand`). Same "deliberately NOT a test" posture as its two
+  siblings. This path calls no model by design, so it passes a stub `AnthropicModel` that throws if
+  ever actually invoked, rather than holding a real `ChatAnthropic` this script has no legitimate
+  reason to spend against. Doubles as the detection-latency measurement tool described above.
+  `agent/package.json` gets one new script alias, `trace:invoke-proactive`, matching its two
+  siblings' existing pattern.
+- **`agent/.env.local` (untracked, gitignored, this worktree's own)** — added `SHIP_API_BASE_URL`
+  (`http://localhost:3884`, this worktree's own local `pnpm --filter @ship/api dev`, never the
+  graded Render deployment) and a real `SHIP_API_TOKEN`, minted via `POST /api/auth/login` +
+  `POST /api/api-tokens` against this worktree's own seeded database (`ship_wt_tro_331`) for the
+  seed super-admin `dev@ship.local`. The `ANTHROPIC_API_KEY`/`LANGCHAIN_*`/`LANGSMITH_API_KEY` values
+  were already present from TRO-339 (FG-21)'s own work on this branch — not re-added.
+- **Top-of-file Status line** — corrected from "Phase 2 (graph architecture) not started" (stale;
+  Phase 2's actual graph code has existed since PR-C, 2026-08-04) to reflect that the graph is built
+  and now diagrammed, while naming the two remaining `Architecture Decisions`/Test Cases pieces that
+  are FG-22 (TRO-340)'s scope, not touched here.
+
+**What this ticket deliberately did NOT touch, per its own scope boundary:** the Test Cases table
+(still `Pending` trace-link rows, FG-22's job), Architecture Decisions' Framework/Node design
+rationale/State management write-ups (also FG-22, due Thursday not this ticket's deadline), Agent
+Responsibility/Use Cases/Trigger Model/Production Cost Projections (already complete, untouched), and
+FG-21's own Development and Testing Costs table content (only a clearly-delineated addition below it,
+per the brief's own instruction).
+
+**How to reproduce.** From this worktree, with `agent/.env.local` staged (`set -a; source
+agent/.env.local; set +a`) and this worktree's own local API running
+(`pnpm --filter @ship/api dev`, port from `.factory-env`):
+```bash
+pnpm --filter @ship/agent trace:invoke-on-demand -- <seedDocumentId> "<question>"
+pnpm --filter @ship/agent trace:invoke-proactive -- <seedDocumentId> "<Full Name>"
+pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts
+```
+
+**Regression tests.** None added — this ticket is pure documentation plus one new manual utility
+script (`trace-invoke-proactive.ts`) matching the existing, explicitly-not-tested
+`trace-invoke.ts`/`trace-invoke-on-demand.ts` precedent (both real, live-API-calling one-off tools
+deliberately excluded from `pnpm test`). No existing typed code was modified — only `agent/package.json`
+(one new script alias, data only) and `agent/.env.local` (untracked). `pnpm --filter @ship/agent test`
+(269/269) and `pnpm --filter @ship/agent type-check`/`lint` all pass unchanged from before this
+ticket, confirming nothing behavioral shifted.
+
+**How to roll it back.** Revert this commit (or the range of commits carrying TRO-324's changes).
+No schema change, no migration. `FLEETGRAPH.MD`'s Graph Diagram/Execution Traces sections and the
+Cost Analysis addition would need a manual revert back to their pre-ticket text (the old "Pending —
+Phase 2 not started" block) alongside the code revert, since the two are independent files.
+Deleting `agent/src/scripts/trace-invoke-proactive.ts` and its `package.json` script alias fully
+removes the new script; it has no other file depending on it. `agent/.env.local` is untracked and
+gitignored — reverting this ticket does not touch it either way.
+
+**A real gap noticed, not fixed (candidate follow-up ticket):** `scripts/factory/gate.sh`'s
+`run_tests` still only runs `api`/`web` (the same gap TRO-339/FG-21 already surfaced and left
+unfixed, for the same reason — `gate.sh` is outside a documentation ticket's file scope). Also
+noticed but out of scope: this ticket's `trace-invoke-proactive.ts` run produced 6 real, separately
+LangSmith-traced `proactive_steady` invocations in one script run (the detection-latency polling
+loop) — harmless (no cost, no side effect beyond real `ItemStore` writes inside that one script
+process) but worth knowing if someone later audits the `fleetgraph-agent` LangSmith project's run
+count and wonders why there are more `proactive_steady` traces than there were real "events."
+
+---
+
 ## TRO-339 — [FG-21] Cost per run is currently a projection with nothing measuring it — instrument tokens before the numbers are due
 
 **First of two tickets on branch `feat/pr-g-mvp-cost-instrumentation-and-fleetgraph-docs` (bundle
