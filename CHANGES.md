@@ -21,6 +21,110 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-345 — FG: Test Cases trace links blocked — TC1/TC3 seed fixtures silently no-op against the graded DB
+
+**Scope note.** This ticket names three items; only #1 (the code fix) is this entry's scope. #2
+(reseed the live graded `ship-db`) and #3 (run test cases against it, capture/share LangSmith
+traces, fill in `FLEETGRAPH.MD`'s Trace Link column) touch live production-adjacent infrastructure
+and are explicitly deferred to the orchestrator after this merges — not attempted here, and
+`FLEETGRAPH.MD` is untouched by this change.
+
+**What was broken, verified directly in `api/src/db/seed.ts` (pre-fix, at the commit this branch
+started from).** Test Case 1 (~line 1333) SELECTed an engineer with ≥3 non-`done` issues *in the
+sprint whose `number === currentSprintNumber`*; Test Case 3 (~line 1486) SELECTed *`done`* issues
+from that same current-sprint-relative query to backdate `completed_at` into the current week.
+`currentSprintNumber` is `sprint_start_date` plus real elapsed wall-clock time (`seed.ts:427`); the
+issue-to-sprint associations these two SELECTs depend on are frozen at whatever moment the base
+issue set was created. Reproduced directly (not just reasoned about) by seeding a scratch database
+fresh, then shifting `workspaces.sprint_start_date` back one sprint-width (7 days) and re-seeding:
+Test Case 1's `if (engineerRow && cnt >= 3)` guard silently skipped its whole block (no error, no
+console line — confirmed by grepping the seed's own stdout for the absent `✅ Test Case 1 fixture:`
+line), and Test Case 3's `success_criteria` was never set on the now-current sprint at all, because
+both fixtures lived inside the ONE global `document_history`-non-empty gate (`seed.ts:1262`, unchanged
+by this fix), and that gate was already closed from the same run's earlier, aligned pass — the exact
+landmine the ticket describes: a database whose Test Case 1/3 never fired has no way to retry them
+by re-running seed. This matches the ticket's own hypothesis on both fixtures, and matches the
+graded-DB finding recorded in `FLEETGRAPH.MD`'s "Graded-database fixture status" note (Test Case 1:
+0 engineers eligible in the current sprint; Test Case 3: 0 issues closed) exactly.
+
+**What changed, all in `api/src/db/seed.ts`.**
+- **Test Case 1 and Test Case 3 now CREATE their own issues** rather than selecting from whatever
+  the load-testing template happens to have associated with today's "current" sprint. A new shared
+  helper, `createFg3ShipCoreIssue`, inserts a Ship Core issue and wires up its program/sprint/project
+  associations the same way the existing `shipCoreIssues` loop already does (~line 707) — defined
+  once so Test Case 1 and 3's issue-creation can't drift out of sync with each other. Test Case 1
+  creates 3 issues assigned to a fixed engineer (Emma Johnson) directly in `currentShipCoreSprint`,
+  then applies the same narrative as before (one → `in_review` with `document_history`, one
+  commented, one `updated_at`-backdated 7 days). Test Case 3 creates 3 `done` issues directly in
+  `currentShipCoreSprint` with `completed_at` spread across the current week window — two sharing a
+  title theme with the sprint's first success criterion, one with the second, so "3 issues closed...
+  mapping to 2 of them" is a real, checkable structure and not an incidental count. Both anchor
+  "current sprint" via the same `sprintStartDate` + `currentSprintNumber` computation the rest of the
+  file already uses, hoisted above the gate so both sections can read it — but the *issues* they
+  create are current-sprint-authoritative on their own, with no dependency on any pre-existing row's
+  historical sprint assignment.
+- **Per-test-case idempotency guards, independent of the block-wide gate.** Test Case 1 and Test
+  Case 3 now live in their own `if` blocks *after* the original `fg3Baseline`-gated section closes,
+  each checking its own marker (`properties->>'fg3_fixture' = 'tc1'` / `'tc3'`) rather than the one
+  global `document_history`-non-empty check. This means a repaired seed run can create Test Case
+  1/3's rows against a database where Test Cases 2/4 already succeeded (and `document_history` is
+  therefore already non-empty) — Test Cases 2/4's own logic is untouched and stays inside the
+  original gate, so it is never re-run and cannot be duplicated or disturbed.
+- **No `!`, `as any`, or `as unknown as` added.** `maxTickets[shipCoreProgram.id] ?? 0` replaces the
+  file's existing `maxTickets[...]!++` pattern for the new code specifically (pre-existing uses of
+  `!` elsewhere in the file are untouched); engineer lookups use the file's own existing
+  `allUsers.find(...)` + truthiness-guard convention (already used by Test Cases 2/4) rather than
+  indexing into `shipCoreTeam`, which would have needed an assertion under this repo's
+  `noUncheckedIndexedAccess`.
+- Existing `✅ Test Case N fixture: ...` / `ℹ️  ... already seeded` console logging is preserved (and
+  extended per-test-case) — the direct fix for how this exact bug went unnoticed for days: a fixture
+  that silently didn't fire, with only an absent log line as evidence.
+
+**Regression test.** `api/src/db/__tests__/seedFixturesDrift.test.ts` (new). Builds the drifted
+precondition explicitly rather than assuming a fresh database happens to trigger the bug (a single
+fresh seed run is internally consistent — sprint creation, issue assignment, and the FG-3 fixture
+block all read the same `currentSprintNumber` in one invocation, so nothing can drift within it):
+seeds a throwaway scratch database once (fresh, succeeds), deletes ONLY Test Case 1/3's own
+marker-tagged issues and Test Case 1's standup, pushes `sprint_start_date` back exactly one
+sprint-width, then re-seeds — reproducing the graded DB's actual situation the day this bug was
+found. Assertions are written against the Ship-state `FLEETGRAPH.MD`'s Test Cases table describes
+(an engineer with 3 current-sprint issues showing the right narrative; a week with 4 success
+criteria and ≥3 issues closed inside it) rather than against this fix's own `fg3_fixture` marker, so
+they hold for any correct implementation, not just this one — the marker is used only in test setup
+(to precisely undo the fix's own footprint) and in the idempotency check (where the whole point is
+counting exactly what the marker tags). A third test re-seeds the same drifted database again and
+confirms: total document count is unchanged, both per-test-case markers still hold exactly 3 rows
+each, and stdout shows both `already seeded` lines.
+
+**Confirmed red first, for the right reason — observed, not derived.** Copied the fixed `seed.ts`
+aside, restored the pre-fix version via `git show HEAD:api/src/db/seed.ts` (not `git stash` — banned
+in this repo's worktrees, see `lessons.md`), and ran the new test against it: all 3 cases failed
+with real assertion errors — `expected 0 to be greater than 0` (Test Case 1: no engineer met the
+current-sprint threshold), `expected -1 to be 4` (Test Case 3: `success_criteria` was never an array
+on the current sprint — the whole FG-3 block, gated shut from the first pass, never ran a second
+time), and the idempotency test's stdout match failing (no per-test-case log lines exist pre-fix).
+Restored the fix and re-ran: all 3 pass, confirmed stable across 4 consecutive runs.
+
+**How to run it.**
+```
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/db/__tests__/seedFixturesDrift.test.ts src/db/__tests__/seedFixtures.test.ts
+```
+
+**How to roll it back.** Revert this commit. `seed.ts`'s changes are additive and gated (both the
+original `fg3Baseline` check and the two new per-test-case markers) — reverting only removes the
+ability of a *future* `pnpm db:seed` run to create Test Case 1/3's rows correctly; it does not
+delete rows from a database that already ran the fixed version, and the seed script itself remains
+non-destructive.
+
+**Not verified here, by design (out of scope — items #2/#3 above).** Whether re-seeding the live
+graded `ship-db` with this fix actually produces a passable LangSmith trace for Test Cases 1 and 3,
+and whether the narrative match to `FLEETGRAPH.MD`'s exact wording (e.g. "mapping to 2 of them")
+reads correctly to FleetGraph's own drafting logic once it runs against these rows — this fix
+constructs the Ship-side *state*, not the agent's interpretation of it.
+
+---
+
 ## TRO-346 — FG: Test Case 5's agent side does not exist — build the blocker fan-out walk
 
 **Also closes TRO-337 ([FG-19]) — same feature.** TRO-346 was the urgent PM-decision framing

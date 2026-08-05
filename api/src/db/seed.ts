@@ -1258,7 +1258,35 @@ async function seed() {
     // Ship-Workspace-specific block silently skip itself. A re-run of
     // `pnpm db:seed` against an already-fixtured database is a no-op for this
     // block, same as every check-before-insert block above it.
+    //
+    // TRO-345 update: Test Cases 1 and 3 no longer live inside this gate —
+    // see the two dedicated sections after this if/else closes, and their
+    // own comments, for why.
     // ==========================================================================
+
+    // Hoisted above the fg3Baseline gate: both the code still inside that
+    // gate below AND the Test Case 1 / Test Case 3 sections after it (which
+    // TRO-345 moved outside the gate) need these, and they are pure
+    // computations with no DB round-trip, so there is no cost to computing
+    // them unconditionally.
+    //
+    // "at least some closing inside the current week", computed from the
+    // same sprint_start_date + currentSprintNumber this file already uses
+    // for "current sprint" everywhere else — not a separate day-count guess.
+    const currentWeekStart = new Date(sprintStartDate);
+    currentWeekStart.setUTCDate(currentWeekStart.getUTCDate() + (currentSprintNumber - 1) * 7);
+    const currentWeekEnd = new Date(currentWeekStart);
+    currentWeekEnd.setUTCDate(currentWeekEnd.getUTCDate() + 7);
+    const currentShipCoreSprint = sprints.find(
+      s => s.programId === shipCoreProgram.id && s.number === currentSprintNumber
+    );
+
+    // Populated by every FG-3 sub-section below (inside and outside the
+    // gate) purely for the "here's what got created" printout at the end.
+    // A Linear comment on TRO-314 records these ids as "concrete document
+    // ids" per that ticket's own proof requirement.
+    const fg3TestCaseIds: Record<string, string> = {};
+
     const fg3Baseline = await pool.query(
       `SELECT COUNT(*) FROM document_history dh
        JOIN documents d ON d.id = dh.document_id
@@ -1270,19 +1298,7 @@ async function seed() {
     } else {
       console.log('🌱 Seeding FG-3 fixture trigger states (history, comments, timestamps, approvals)...');
 
-      // A Linear comment on TRO-314 records these ids as "concrete document ids"
-      // per the ticket's own proof requirement.
-      const fg3TestCaseIds: Record<string, string> = {};
-
       // ---- started_at / completed_at on closed issues (Scope item 3) --------
-      // "at least some closing inside the current week", computed from the
-      // same sprint_start_date + currentSprintNumber this file already uses
-      // for "current sprint" everywhere else — not a separate day-count guess.
-      const currentWeekStart = new Date(sprintStartDate);
-      currentWeekStart.setUTCDate(currentWeekStart.getUTCDate() + (currentSprintNumber - 1) * 7);
-      const currentWeekEnd = new Date(currentWeekStart);
-      currentWeekEnd.setUTCDate(currentWeekEnd.getUTCDate() + 7);
-
       // Not anchored to documents.created_at: this seed (like the rest of the
       // file) never backdates created_at to match an issue's conceptual
       // sprint — every row's created_at is essentially "whenever this seed
@@ -1327,101 +1343,6 @@ async function seed() {
         );
       }
       console.log(`✅ Backfilled started_at/completed_at on ${doneIssues.rows.length} done issues (${closedInCurrentWeek} closed inside the current week)`);
-
-      // ---- Test Case 1 (FLEETGRAPH.MD): engineer with 3 assigned issues, ----
-      // ---- activity since their last standup ---------------------------------
-      const currentShipCoreSprint = sprints.find(
-        s => s.programId === shipCoreProgram.id && s.number === currentSprintNumber
-      );
-      if (currentShipCoreSprint) {
-        // Excludes 'done' issues deliberately: Test Case 3 below needs the
-        // current sprint's done issues left untouched to close 3 of them
-        // within the week, and promoting an already-done issue to
-        // 'in_review' would also be a state regression, not the "moved
-        // forward" narrative this test case is for.
-        const engineerCandidate = await pool.query(
-          `SELECT d.properties->>'assignee_id' as assignee_id, count(*) as cnt
-           FROM documents d
-           JOIN document_associations da ON da.document_id = d.id
-             AND da.related_id = $1 AND da.relationship_type = 'sprint'
-           WHERE d.workspace_id = $2 AND d.document_type = 'issue'
-             AND d.properties->>'assignee_id' IS NOT NULL
-             AND d.properties->>'state' != 'done'
-           GROUP BY d.properties->>'assignee_id'
-           ORDER BY count(*) DESC
-           LIMIT 1`,
-          [currentShipCoreSprint.id, workspaceId]
-        );
-        const engineerRow = engineerCandidate.rows[0] as { assignee_id: string; cnt: string } | undefined;
-        if (engineerRow && parseInt(engineerRow.cnt, 10) >= 3) {
-          const engineer = allUsers.find((u: { id: string }) => u.id === engineerRow.assignee_id);
-          const engineerIssues = await pool.query(
-            `SELECT d.id, d.title, d.properties->>'state' as state
-             FROM documents d
-             JOIN document_associations da ON da.document_id = d.id
-               AND da.related_id = $1 AND da.relationship_type = 'sprint'
-             WHERE d.workspace_id = $2 AND d.document_type = 'issue' AND d.properties->>'assignee_id' = $3
-               AND d.properties->>'state' != 'done'
-             ORDER BY d.ticket_number
-             LIMIT 3`,
-            [currentShipCoreSprint.id, workspaceId, engineerRow.assignee_id]
-          );
-          const [issueA, issueB, issueC] = engineerIssues.rows as Array<
-            { id: string; title: string; state: string } | undefined
-          >;
-          if (engineer && issueA && issueB && issueC) {
-            // A standup from 3 days ago — the "since their last standup" anchor
-            // this test case's activity is measured against.
-            const standupResult = await pool.query(
-              `INSERT INTO documents (workspace_id, document_type, title, content, created_by, properties, created_at)
-               VALUES ($1, 'standup', $2, $3, $4, $5, NOW() - INTERVAL '3 days')
-               RETURNING id`,
-              [
-                workspaceId,
-                `Standup - ${engineer.name} (FG-3 fixture)`,
-                JSON.stringify({
-                  type: 'doc',
-                  content: [
-                    { type: 'paragraph', content: [{ type: 'text', text: `Yesterday: Working through ${issueA.title}.` }] },
-                    { type: 'paragraph', content: [{ type: 'text', text: 'Today: Continuing current sprint work.' }] },
-                    { type: 'paragraph', content: [{ type: 'text', text: 'Blockers: None' }] },
-                  ],
-                }),
-                engineer.id,
-                JSON.stringify({ author_id: engineer.id }),
-              ]
-            );
-            await createAssociation(pool, standupResult.rows[0].id, currentShipCoreSprint.id, 'sprint');
-            fg3TestCaseIds.testCase1_standup = standupResult.rows[0].id;
-
-            // issueA: moved to in_review 1 day ago (state-change history).
-            await pool.query(
-              `UPDATE documents SET properties = properties || '{"state":"in_review"}'::jsonb, updated_at = NOW() - INTERVAL '1 day' WHERE id = $1`,
-              [issueA.id]
-            );
-            await pool.query(
-              `INSERT INTO document_history (document_id, field, old_value, new_value, changed_by, created_at)
-               VALUES ($1, 'state', $2, 'in_review', $3, NOW() - INTERVAL '1 day')`,
-              [issueA.id, issueA.state, engineer.id]
-            );
-            fg3TestCaseIds.testCase1_movedToReview = issueA.id;
-
-            // issueB: commented on 1 day ago (standup draft material).
-            await pool.query(
-              `INSERT INTO comments (document_id, comment_id, author_id, workspace_id, content, created_at, updated_at)
-               VALUES ($1, gen_random_uuid(), $2, $3, $4, NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day')`,
-              [issueB.id, engineer.id, workspaceId, `Making progress on ${issueB.title} — should land by end of week.`]
-            );
-            fg3TestCaseIds.testCase1_commented = issueB.id;
-
-            // issueC: has not moved in 6+ days.
-            await pool.query(`UPDATE documents SET updated_at = NOW() - INTERVAL '7 days' WHERE id = $1`, [issueC.id]);
-            fg3TestCaseIds.testCase1_stale = issueC.id;
-
-            console.log(`✅ Test Case 1 fixture: engineer ${engineer.name} — moved ${issueA.id}, commented ${issueB.id}, stale ${issueC.id}`);
-          }
-        }
-      }
 
       // ---- Test Case 2 (FLEETGRAPH.MD): person mentioned in two documents ----
       // ---- they do not own, blocking one approval on someone else's week -----
@@ -1481,50 +1402,6 @@ async function seed() {
           fg3TestCaseIds.testCase2_blockedWeek = emmaWeek.rows[0].id;
         }
         console.log(`✅ Test Case 2 fixture: 2 mentions of ${alice.name}, blocked week ${fg3TestCaseIds.testCase2_blockedWeek || 'n/a'}`);
-      }
-
-      // ---- Test Case 3 (FLEETGRAPH.MD): week with 4 success criteria, 3 ------
-      // ---- issues closed during the week, mapping to 2 of them ---------------
-      if (currentShipCoreSprint) {
-        const criteria = [
-          'Sprint management flows end-to-end with no manual DB edits',
-          'Sprint timeline UI renders for every active week',
-          'Progress chart reflects real issue counts within 1 minute',
-          'Issue assignment flow ships behind a feature flag',
-        ];
-        await pool.query(
-          `UPDATE documents SET properties = properties || $1::jsonb WHERE id = $2`,
-          [JSON.stringify({ success_criteria: criteria }), currentShipCoreSprint.id]
-        );
-
-        const doneInCurrentSprint = await pool.query(
-          `SELECT d.id FROM documents d
-           JOIN document_associations da ON da.document_id = d.id
-             AND da.related_id = $1 AND da.relationship_type = 'sprint'
-           WHERE d.workspace_id = $2 AND d.document_type = 'issue' AND d.properties->>'state' = 'done'
-           ORDER BY d.ticket_number LIMIT 3`,
-          [currentShipCoreSprint.id, workspaceId]
-        );
-        const closedIds: string[] = [];
-        const windowMs = currentWeekEnd.getTime() - currentWeekStart.getTime();
-        for (let i = 0; i < doneInCurrentSprint.rows.length; i++) {
-          const issue = doneInCurrentSprint.rows[i] as { id: string };
-          const targetMs = Math.floor(((i + 1) * windowMs) / (doneInCurrentSprint.rows.length + 1));
-          const cappedMs = Math.max(60_000, Math.min(targetMs, Date.now() - currentWeekStart.getTime() - 1000));
-          const completedAt = new Date(currentWeekStart.getTime() + cappedMs);
-          // Re-derive started_at from this new completedAt rather than leaving
-          // the earlier backfill loop's value in place — that value was set
-          // relative to a DIFFERENT completedAt and can end up after this one,
-          // breaking the started_at <= completed_at invariant this fixture is
-          // supposed to hold.
-          const startDelayMs = Math.min(cappedMs, (1 + Math.floor(Math.random() * 2)) * 24 * 60 * 60 * 1000);
-          const startedAt = new Date(completedAt.getTime() - startDelayMs);
-          await pool.query(`UPDATE documents SET started_at = $1, completed_at = $2 WHERE id = $3`, [startedAt, completedAt, issue.id]);
-          closedIds.push(issue.id);
-        }
-        fg3TestCaseIds.testCase3_week = currentShipCoreSprint.id;
-        fg3TestCaseIds.testCase3_closedIssues = closedIds.join(',');
-        console.log(`✅ Test Case 3 fixture: week ${currentShipCoreSprint.id}, ${closedIds.length} issues closed within it (4 success criteria)`);
       }
 
       // ---- Test Case 4 (FLEETGRAPH.MD): plan approved at version N, then ----
@@ -1644,7 +1521,298 @@ async function seed() {
       // reportingHierarchy above (dev@ship.local is root, deliberately no
       // manager) — verified, not re-seeded, so the escalation-degrades path
       // stays exercised without this block touching it.
+    }
 
+    // Shared by the Test Case 1 and Test Case 3 sections below: both create
+    // their own Ship Core issues (TRO-345) rather than selecting pre-existing
+    // ones, and both need the same program/sprint/project associations wired
+    // up the same way the rest of this file already does it (see the
+    // shipCoreIssues loop above, ~line 707). Defined once so the two copies
+    // cannot drift out of sync with each other.
+    async function createFg3ShipCoreIssue(
+      title: string,
+      propertiesExtra: Record<string, unknown>,
+      sprintId: string,
+      projectId: string,
+      timestamps?: { startedAt: Date; completedAt: Date }
+    ): Promise<string> {
+      // `?? 0` rather than `!`: maxTickets is populated for every program
+      // earlier in this function (~line 654), but noUncheckedIndexedAccess
+      // still types the read as possibly undefined, and a fallback of 0 is
+      // exactly as safe here as the assertion would have been.
+      const nextTicketNumber = (maxTickets[shipCoreProgram.id] ?? 0) + 1;
+      maxTickets[shipCoreProgram.id] = nextTicketNumber;
+      const properties = {
+        priority: 'medium',
+        source: 'internal',
+        feedback_status: null,
+        rejection_reason: null,
+        ...propertiesExtra,
+      };
+      const issueResult = timestamps
+        ? await pool.query(
+            `INSERT INTO documents (workspace_id, document_type, title, properties, ticket_number, started_at, completed_at)
+             VALUES ($1, 'issue', $2, $3, $4, $5, $6)
+             RETURNING id`,
+            [workspaceId, title, JSON.stringify(properties), nextTicketNumber, timestamps.startedAt, timestamps.completedAt]
+          )
+        : await pool.query(
+            `INSERT INTO documents (workspace_id, document_type, title, properties, ticket_number)
+             VALUES ($1, 'issue', $2, $3, $4)
+             RETURNING id`,
+            [workspaceId, title, JSON.stringify(properties), nextTicketNumber]
+          );
+      const issueId = issueResult.rows[0].id;
+      await createAssociation(pool, issueId, shipCoreProgram.id, 'program');
+      await createAssociation(pool, issueId, sprintId, 'sprint');
+      await createAssociation(pool, issueId, projectId, 'project');
+      return issueId;
+    }
+
+    // ==========================================================================
+    // TRO-345: Test Case 1 (FLEETGRAPH.MD) — an engineer with 3 assigned
+    // issues; since their last standup, one moved to in review, they
+    // commented on another, and the third has not moved in 6 days.
+    //
+    // Root cause this replaces: the old version of this block lived INSIDE
+    // the fg3Baseline gate above and SELECTed an engineer from the current
+    // sprint's PRE-EXISTING issue assignments (`GROUP BY assignee_id ...
+    // HAVING count >= 3`). That only works while some engineer's
+    // assignments — frozen at whatever moment the base issue set was
+    // created — still happen to land in whichever sprint resolves as
+    // "current" *today*. `currentSprintNumber` is `sprintStartDate` plus
+    // real elapsed time (~line 427); the assignments are not. Verified
+    // against the graded DB (FG-23/TRO-341, 2026-08-04): base data from
+    // 2026-07-28, re-seeded 7 days later — two engineers had 3+ non-done
+    // issues, just never in the sprint this query insisted on. The
+    // `if (engineerRow && cnt >= 3)` guard then skipped the whole block —
+    // no error, no console line, no trace of it having tried.
+    //
+    // Fix: CREATE the 3 issues this test case needs, assigned to a fixed
+    // Ship Core engineer, associated directly to `currentShipCoreSprint` —
+    // so the fixture is authoritative over its own trigger state instead of
+    // hoping pre-existing data still qualifies. This also drops the old
+    // block's "Test Case 3 needs the sprint's done issues left untouched"
+    // coupling: Test Case 3 below creates its own 'done' issues too now, so
+    // the two no longer have to coordinate over a shared pool of
+    // pre-existing issues.
+    //
+    // Guard: a per-test-case marker (`properties->>'fg3_fixture' = 'tc1'`),
+    // checked independently of the block-wide `fg3Baseline` gate above and
+    // of Test Case 3's own guard below — not the single global
+    // `document_history`-non-empty check that gated the old version. That
+    // check is exactly the landmine this ticket exists to defuse: once
+    // ANYTHING in the block above ever runs (even just the weekly-plan
+    // `document_history` insert), `document_history` stays non-empty
+    // forever, and a database whose Test Case 1 never fired — e.g. the
+    // graded DB today — would stay stuck with no way to retry it. Living
+    // outside that gate, with its own marker, means a repaired seed run can
+    // create these rows against a database where Test Cases 2/4 already
+    // succeeded (and `document_history` is therefore already non-empty)
+    // without re-running or disturbing them.
+    // ==========================================================================
+    if (currentShipCoreSprint) {
+      const tc1Existing = await pool.query(
+        `SELECT COUNT(*) FROM documents
+         WHERE workspace_id = $1 AND document_type = 'issue' AND properties->>'fg3_fixture' = 'tc1'`,
+        [workspaceId]
+      );
+      if (parseInt(tc1Existing.rows[0].count, 10) > 0) {
+        console.log('ℹ️  Test Case 1 fixture already seeded (fg3_fixture=tc1 marker present)');
+      } else {
+        // Fixed engineer (not "whoever has enough issues") — matches this
+        // file's existing convention of naming a specific person for a
+        // specific narrative (see Test Cases 2 and 4 above/below), rather
+        // than Dev User, who doubles as the login/admin account this file
+        // prints credentials for at the end.
+        const engineer = allUsers.find((u: { name: string }) => u.name === 'Emma Johnson');
+        if (engineer) {
+          const issueATitle = 'Add pagination to issue list API';
+          const issueBTitle = 'Refactor comment thread rendering';
+          const issueCTitle = 'Fix flaky websocket reconnect test';
+          const issueAOriginalState = 'in_progress';
+
+          const issueAId = await createFg3ShipCoreIssue(
+            issueATitle,
+            { state: issueAOriginalState, assignee_id: engineer.id, fg3_fixture: 'tc1' },
+            currentShipCoreSprint.id,
+            currentShipCoreSprint.projectId
+          );
+          const issueBId = await createFg3ShipCoreIssue(
+            issueBTitle,
+            { state: 'in_progress', assignee_id: engineer.id, fg3_fixture: 'tc1' },
+            currentShipCoreSprint.id,
+            currentShipCoreSprint.projectId
+          );
+          const issueCId = await createFg3ShipCoreIssue(
+            issueCTitle,
+            { state: 'todo', assignee_id: engineer.id, fg3_fixture: 'tc1' },
+            currentShipCoreSprint.id,
+            currentShipCoreSprint.projectId
+          );
+
+          // A standup from 3 days ago — the "since their last standup" anchor
+          // this test case's activity is measured against.
+          const standupResult = await pool.query(
+            `INSERT INTO documents (workspace_id, document_type, title, content, created_by, properties, created_at)
+             VALUES ($1, 'standup', $2, $3, $4, $5, NOW() - INTERVAL '3 days')
+             RETURNING id`,
+            [
+              workspaceId,
+              `Standup - ${engineer.name} (FG-3 fixture)`,
+              JSON.stringify({
+                type: 'doc',
+                content: [
+                  { type: 'paragraph', content: [{ type: 'text', text: `Yesterday: Working through ${issueATitle}.` }] },
+                  { type: 'paragraph', content: [{ type: 'text', text: 'Today: Continuing current sprint work.' }] },
+                  { type: 'paragraph', content: [{ type: 'text', text: 'Blockers: None' }] },
+                ],
+              }),
+              engineer.id,
+              JSON.stringify({ author_id: engineer.id }),
+            ]
+          );
+          await createAssociation(pool, standupResult.rows[0].id, currentShipCoreSprint.id, 'sprint');
+          fg3TestCaseIds.testCase1_standup = standupResult.rows[0].id;
+
+          // issueA: moved to in_review 1 day ago (state-change history).
+          await pool.query(
+            `UPDATE documents SET properties = properties || '{"state":"in_review"}'::jsonb, updated_at = NOW() - INTERVAL '1 day' WHERE id = $1`,
+            [issueAId]
+          );
+          await pool.query(
+            `INSERT INTO document_history (document_id, field, old_value, new_value, changed_by, created_at)
+             VALUES ($1, 'state', $2, 'in_review', $3, NOW() - INTERVAL '1 day')`,
+            [issueAId, issueAOriginalState, engineer.id]
+          );
+          fg3TestCaseIds.testCase1_movedToReview = issueAId;
+
+          // issueB: commented on 1 day ago (standup draft material).
+          await pool.query(
+            `INSERT INTO comments (document_id, comment_id, author_id, workspace_id, content, created_at, updated_at)
+             VALUES ($1, gen_random_uuid(), $2, $3, $4, NOW() - INTERVAL '1 day', NOW() - INTERVAL '1 day')`,
+            [issueBId, engineer.id, workspaceId, `Making progress on ${issueBTitle} — should land by end of week.`]
+          );
+          fg3TestCaseIds.testCase1_commented = issueBId;
+
+          // issueC: has not moved in 6+ days.
+          await pool.query(`UPDATE documents SET updated_at = NOW() - INTERVAL '7 days' WHERE id = $1`, [issueCId]);
+          fg3TestCaseIds.testCase1_stale = issueCId;
+
+          console.log(`✅ Test Case 1 fixture: engineer ${engineer.name} — moved ${issueAId}, commented ${issueBId}, stale ${issueCId}`);
+        }
+      }
+    }
+
+    // ==========================================================================
+    // TRO-345: Test Case 3 (FLEETGRAPH.MD) — a week whose plan lists 4
+    // success criteria; 3 issues closed during the week, mapping to 2 of
+    // them.
+    //
+    // Root cause this replaces: same drift mechanism as Test Case 1 above.
+    // The old block SELECTed *existing* 'done' issues associated with
+    // `currentShipCoreSprint` and backdated their completed_at into the
+    // current week window — 0 rows when the sprint that resolves as
+    // "current" today has no pre-existing 'done' issues associated with it.
+    // Verified against the graded DB (FG-23/TRO-341): the fixture ran
+    // (found `currentShipCoreSprint`, unlike Test Case 1's `if` guard which
+    // never entered its body) but selected 0 issues, against a row that
+    // requires 3 — "0 issues closed", logged plainly, but still 0.
+    //
+    // Fix: CREATE 3 new 'done' issues directly in `currentShipCoreSprint`,
+    // with completed_at inside the current week window from the moment
+    // they are created, instead of hoping 'done' issues already associated
+    // with today's current sprint exist. Two of the three share a title
+    // theme with the first success criterion and one with the second, so
+    // "3 issues closed... mapping to 2 of them" is a real, checkable
+    // structure rather than an incidental count — criteria 3 and 4 are
+    // deliberately left with no matching issue for the agent to call out.
+    //
+    // Guard: its own marker (`properties->>'fg3_fixture' = 'tc3'`),
+    // independent of the block-wide `fg3Baseline` gate and of Test Case 1's
+    // guard above, for the same reason as Test Case 1: a repaired seed run
+    // must be able to create these rows against a database where Test
+    // Cases 2/4 already succeeded, without re-running or disturbing them.
+    // ==========================================================================
+    if (currentShipCoreSprint) {
+      const tc3Existing = await pool.query(
+        `SELECT COUNT(*) FROM documents
+         WHERE workspace_id = $1 AND document_type = 'issue' AND properties->>'fg3_fixture' = 'tc3'`,
+        [workspaceId]
+      );
+      if (parseInt(tc3Existing.rows[0].count, 10) > 0) {
+        console.log('ℹ️  Test Case 3 fixture already seeded (fg3_fixture=tc3 marker present)');
+      } else {
+        const engineer = allUsers.find((u: { name: string }) => u.name === 'Dev User');
+        if (engineer) {
+          const criteria = [
+            'Sprint management flows end-to-end with no manual DB edits',
+            'Sprint timeline UI renders for every active week',
+            'Progress chart reflects real issue counts within 1 minute',
+            'Issue assignment flow ships behind a feature flag',
+          ];
+          // A `properties || jsonb` merge of the same static array every
+          // time this guard is open — idempotent by construction even on a
+          // partial re-run, since it overwrites rather than appends.
+          await pool.query(
+            `UPDATE documents SET properties = properties || $1::jsonb WHERE id = $2`,
+            [JSON.stringify({ success_criteria: criteria }), currentShipCoreSprint.id]
+          );
+
+          // Spreads the 3 closures across the current week window rather
+          // than bunching them at one instant, capped at "now" so a week
+          // that has not fully elapsed yet never produces a future
+          // completed_at (same capping approach as the generic done-issue
+          // backfill above).
+          const windowMs = currentWeekEnd.getTime() - currentWeekStart.getTime();
+          const timingForSlot = (position: number, totalSlots: number): { startedAt: Date; completedAt: Date } => {
+            const targetMs = Math.floor((position * windowMs) / totalSlots);
+            const cappedMs = Math.max(60_000, Math.min(targetMs, Date.now() - currentWeekStart.getTime() - 1000));
+            const completedAt = new Date(currentWeekStart.getTime() + cappedMs);
+            const startDelayMs = Math.min(cappedMs, (1 + Math.floor(Math.random() * 2)) * 24 * 60 * 60 * 1000);
+            const startedAt = new Date(completedAt.getTime() - startDelayMs);
+            return { startedAt, completedAt };
+          };
+
+          const closedIds: string[] = [];
+          closedIds.push(
+            await createFg3ShipCoreIssue(
+              'Wire sprint management CRUD end-to-end', // maps criterion 0
+              { state: 'done', assignee_id: engineer.id, fg3_fixture: 'tc3' },
+              currentShipCoreSprint.id,
+              currentShipCoreSprint.projectId,
+              timingForSlot(1, 4)
+            )
+          );
+          closedIds.push(
+            await createFg3ShipCoreIssue(
+              'Remove last manual DB edit from sprint close-out', // also maps criterion 0
+              { state: 'done', assignee_id: engineer.id, fg3_fixture: 'tc3' },
+              currentShipCoreSprint.id,
+              currentShipCoreSprint.projectId,
+              timingForSlot(2, 4)
+            )
+          );
+          closedIds.push(
+            await createFg3ShipCoreIssue(
+              'Ship sprint timeline UI for active weeks', // maps criterion 1
+              { state: 'done', assignee_id: engineer.id, fg3_fixture: 'tc3' },
+              currentShipCoreSprint.id,
+              currentShipCoreSprint.projectId,
+              timingForSlot(3, 4)
+            )
+          );
+          // criteria 2 (progress chart) and 3 (issue assignment behind a
+          // flag) are deliberately left with no matching closed issue.
+
+          fg3TestCaseIds.testCase3_week = currentShipCoreSprint.id;
+          fg3TestCaseIds.testCase3_closedIssues = closedIds.join(',');
+          console.log(`✅ Test Case 3 fixture: week ${currentShipCoreSprint.id}, ${closedIds.length} issues closed within it (4 success criteria)`);
+        }
+      }
+    }
+
+    if (Object.keys(fg3TestCaseIds).length > 0) {
       console.log('');
       console.log('📋 FG-3 test case document ids (FLEETGRAPH.MD Test Cases 1-4):');
       for (const [key, id] of Object.entries(fg3TestCaseIds)) {
