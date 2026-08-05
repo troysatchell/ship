@@ -3,12 +3,12 @@
 A project intelligence agent for Ship, the project management tool built by the U.S. Department
 of the Treasury.
 
-**Status:** Phase 1 (agent definition) complete. Phase 2 (graph architecture) is built (FG-5/FG-6/
-FG-7/FG-8, `agent/src/graph.ts`) and diagrammed against that real code (FG-13 / TRO-324). The
-"Architecture Decisions" section's Framework/Node design rationale/State management write-ups and
-the Test Cases table's trace-link column remain *Pending* — both belong to FG-22 (TRO-340), a
-separate ticket, not touched here.
-Sections marked *Pending* are honestly empty rather than filled with placeholders.
+**Status:** Agent definition, graph architecture (FG-5/FG-6/FG-7/FG-8, `agent/src/graph.ts`),
+execution traces, trigger model, deployment model, and the Architecture Decisions write-ups are
+complete and written against the merged code (PRs #117, #120, #122) — every "settled" claim in
+this document names the file that implements it. The Test Cases table's trace-link column remains
+*Pending* (FG-22 / TRO-340): each row needs a run against its own fixture state, which is Early
+Submission work. Anything still marked *Pending* is honestly pending, not a placeholder.
 
 Last updated: August 5, 2026
 
@@ -102,6 +102,13 @@ posts. It never posts as the human, and never leaves an opinion the human is exp
 > has an opinion it expects you to act on.**
 
 That rule is what structurally prevents the agent becoming a complaint generator.
+
+Implemented in `agent/src/gate.ts` (TRO-321 / FG-8): every Ship write the gate can perform —
+accept a draft, accept or reject a single proposed transition, discard — takes the acting person's
+own token as an explicit parameter, and the gate's client type has no agent token to fall back to,
+so a write under the agent's identity is impossible by construction rather than by convention.
+Nothing upstream of the gate writes to Ship at all
+(`agent/src/__tests__/graphWriteBoundary.test.ts` is the proof).
 
 ### Who it notifies, and when
 
@@ -283,13 +290,14 @@ against the real Anthropic API (for the two on-demand traces) and the real local
 three), captured via the LangSmith API (`GET /runs/{id}` and `POST /runs/query`) the same way FG-21
 verified its own trace — never eyeballed from the console. All three sit in the same
 `fleetgraph-agent` LangSmith project (`c1e38b67-b458-4e8b-a680-be74ece5e1a6`) FG-21 already used, so
-they are directly comparable.
+they are directly comparable. Every trace link in this section is a public LangSmith share link —
+no login or org membership required to open it.
 
 | Path | Trigger | Trace | Child spans | Real cost |
 |---|---|---|---|---|
-| Bare on-demand chat (`ingest -> respond`, FG-2) | `on_demand`, no seed | [45c12238](https://smith.langchain.com/o/827be0c8-ee40-4854-9d37-e82820ec9263/projects/p/c1e38b67-b458-4e8b-a680-be74ece5e1a6/r/45c12238-df88-4c11-bd67-1ee27edc0736) | 9 | $0.000218 (FG-21's own trace, reused here — not re-run) |
-| On-demand expansion (`resolveSeed -> expandFrontier` ×9 `-> finalizeExpansion -> composeAnswer`, FG-7) | `on_demand`, real seed document (`96ed3528-…`, an issue with project/sprint/program associations) | [5e9d072b](https://smith.langchain.com/o/827be0c8-ee40-4854-9d37-e82820ec9263/projects/p/c1e38b67-b458-4e8b-a680-be74ece5e1a6/r/5e9d072b-0559-41ff-bbba-3fa4df218142) | 47 | $0.00101 |
-| Proactive deterministic (`pollChangeFeed -> resolveMentions -> detectBlockingApprovals -> commitInboxItems`, FG-5) | `proactive_steady`, real change-feed cursor | [88b0880a](https://smith.langchain.com/o/827be0c8-ee40-4854-9d37-e82820ec9263/projects/p/c1e38b67-b458-4e8b-a680-be74ece5e1a6/r/88b0880a-f4dd-4ac6-b496-1ae66235377a) | 14 | $0 (no model call anywhere on this path — verified: LangSmith itself reports `total_tokens: 0` for this run) |
+| Bare on-demand chat (`ingest -> respond`, FG-2) | `on_demand`, no seed | [45c12238](https://smith.langchain.com/public/53ee51bf-7f86-4ed5-bef2-3b0ecf9d596e/r/45c12238-df88-4c11-bd67-1ee27edc0736) | 9 | $0.000218 (FG-21's own trace, reused here — not re-run) |
+| On-demand expansion (`resolveSeed -> expandFrontier` ×9 `-> finalizeExpansion -> composeAnswer`, FG-7) | `on_demand`, real seed document (`96ed3528-…`, an issue with project/sprint/program associations) | [5e9d072b](https://smith.langchain.com/public/592b4f32-3c11-43ed-9abc-640c3f8257ee/r/5e9d072b-0559-41ff-bbba-3fa4df218142) | 47 | $0.00101 |
+| Proactive deterministic (`pollChangeFeed -> resolveMentions -> detectBlockingApprovals -> commitInboxItems`, FG-5) | `proactive_steady`, real change-feed cursor | [88b0880a](https://smith.langchain.com/public/8e698e3a-d0a4-47ba-97ee-de0098c5660d/r/88b0880a-f4dd-4ac6-b496-1ae66235377a) | 14 | $0 (no model call anywhere on this path — verified: LangSmith itself reports `total_tokens: 0` for this run) |
 
 **What genuinely differs between these three, verified via `GET /runs/{id}`'s own
 `child_run_ids`/`inputs`/`total_tokens` fields, not asserted:**
@@ -325,7 +333,7 @@ instead of being consumed as a separator — `pnpm --filter @ship/agent trace:in
 (via the package script) strips it; `pnpm exec tsx <script> -- <args>` (invoked directly) does not.
 The result was one real, unintended `on_demand_expand` invocation against an invalid seed id — real
 tokens spent (94 in / 120 out, $0.000694), real trace produced
-([9b24aa47](https://smith.langchain.com/o/827be0c8-ee40-4854-9d37-e82820ec9263/projects/p/c1e38b67-b458-4e8b-a680-be74ece5e1a6/r/9b24aa47-4260-4e0d-9b99-639b1806fc11), `documentsPulled: 0`,
+([9b24aa47](https://smith.langchain.com/public/ee2db601-70a1-474b-bbe2-603395438bfa/r/9b24aa47-4260-4e0d-9b99-639b1806fc11), `documentsPulled: 0`,
 `resolveSeed` failed to fetch the malformed id and correctly produced a "no accessible document"
 answer rather than fabricating one). Not used as either of the two required comparison traces above
 — reported here because it is real spend a reader of the cost ledger will otherwise not be able to
@@ -363,11 +371,12 @@ ranked — an inbox, not a stream.
 approval-blocking are structured lookups. The model composes prose and ranks; the floor underneath
 it is deterministic.
 
-**Use case 5 depends on work not yet done.** Ship cannot express "issue A blocks issue B" — the
-relationship types are only parent, project, sprint and program, and the backlinks table is empty.
-Ship has a containment tree and an org chart but no dependency graph. The decision is to add the
-missing relationship to Ship rather than design around it; scoped in
-`memory-bank/fleetgraph-backlog.md`.
+**Use case 5's Ship-side dependency has shipped; its agent side has not.** When this was first
+written, Ship could not express "issue A blocks issue B" at all. It now can: migration
+`041_add_blocks_relationship.sql` (FG-15 / TRO-333) added `blocks` to `relationship_type`,
+migration 040 rejects circular association chains, and PR #120 added the blocks/blocked-by sidebar
+(TRO-334). What remains is the agent's half of the use case — the impact fan-out,
+lowest-common-manager resolution, and drafted message — which no graph node implements yet.
 
 ---
 
@@ -388,6 +397,16 @@ activity beats six separate observations.
 
 The five-minute detection requirement binds only on the fast tier, which is deterministic and runs
 in about three seconds.
+
+**Implementation status (2026-08-04):** the steady tier is live — `agent/src/index.ts` starts the
+poll loop at `DEFAULT_PROACTIVE_POLL_INTERVAL_MS = 60_000` (`config.ts`), and each tick runs the
+deterministic `pollChangeFeed → resolveMentions → detectBlockingApprovals → commitInboxItems`
+chain, which is the traced proactive run in the Execution Traces section. The graph also accepts
+`proactive_fast` through the same chain, but the Ship-side in-process save hook that would trigger
+it is not built yet — today "fast" is simply this poll at whatever cadence it is configured to. The
+deep tier's composition path (`proactive_deep`) is implemented and tested end-to-end, but nothing
+yet schedules it per person — `index.ts`'s own module comment states there is no scheduler in the
+package that decides whose standup window is open.
 
 Polling works as the backbone because Ship's collaborative editor saves on a two-second delay and
 always stamps the last-updated time when it does, making that timestamp a complete signal for
@@ -423,34 +442,40 @@ a correct baseline, not something the design depends on.**
 **The cursor must lag.** Asking for everything updated since a saved timestamp permanently misses
 rows whose transaction commits after the cursor moved past their timestamp. An auto-incrementing
 history ID has the same flaw — those numbers are handed out before commit. The fix is to lag the
-cursor behind real time and de-duplicate.
+cursor behind real time and de-duplicate. **Implemented, on both sides:** the endpoint holds back
+rows newer than a safe cutoff (`CHANGE_FEED_LAG_MS = 5_000` in `change-feed.ts`), and the agent's
+poll loop (`agent/src/proactivePoll.ts`) advances its cursor only after a successful tick, so a
+failed poll re-reads the same window instead of skipping past it.
 
 **Both of Ship's rate limiters fail open.** On a cache outage the server-side ceiling disappears
 entirely, so the agent cannot treat it as a safety net and must throttle itself.
 
-### The blocking dependency
+### The blocking dependency (resolved — the change-feed shipped)
 
-**Ship's API has no way to ask what changed.** No "since this time" parameter exists anywhere. The
-main document listing endpoint sorts by position and creation date, so recently-updated documents
-never surface at the top. Paging is offset-only, and a source comment states proper cursor paging
-is a known gap. The endpoints that do sort by last-updated are fixed-purpose and take no time
-filter.
+**When this was written, Ship's API had no way to ask what changed.** No "since this time"
+parameter existed anywhere; the main document listing endpoint sorts by position and creation
+date, so recently-updated documents never surfaced; paging is offset-only. An agent deployed
+separately could not go around it — the production database sits in private subnets reachable
+only from the application's own servers.
 
-An agent deployed separately cannot go around this — the production database sits in private
-subnets reachable only from the application's own servers.
-
-The decision is to **add a change-feed endpoint to Ship** rather than move the agent inside the
+The decision was to **add a change-feed endpoint to Ship** rather than move the agent inside the
 network, because keeping permission enforcement inside Ship's own API matters in a system carrying
-federal performance ratings. The supporting index already exists — created by a migration that came
-directly out of the Week 4 audit, which found seven route modules sorting by last-updated with no
-index behind them.
+federal performance ratings. That endpoint now exists: `GET /api/change-feed`
+(`api/src/routes/change-feed.ts`, FG-1 / TRO-312, mounted in `app.ts`), backed by the
+last-updated index that came directly out of the Week 4 audit. It is the poll source the traced
+proactive run above actually used — the graph's `pollChangeFeed` node is a thin wrapper around it.
 
 ---
 
 ## Test Cases
 
-**Trace links pending — nothing is built yet.** Ship state and expected output are defined; traces
-follow as each is implemented.
+**The graph these cases exercise is built and merged** — PR #117 (proactive detection, on-demand
+expansion, standup drafts, the gate) and PR #120 (the UI surfaces) — and three of its four paths
+have already been traced against real data in the Execution Traces section above. The `Trace Link`
+column below stays `Pending` for a narrower reason than when this section was first written: each
+row needs a run against its own specific fixture state, and those fixtures are only partially
+constructed (see the graded-database status directly below). Filling the column is Early
+Submission work.
 
 **Graded-database fixture status (TRO-341/FG-23, 2026-08-04) — seeded, with one real gap found, not
 hidden.** `pnpm db:seed` ran against the graded `ship-db` (external connection, temporary IP
@@ -497,7 +522,7 @@ column below stays `Pending` until PR-C's graph actually runs against them.
 | 2 | A person mentioned in two documents they do not own, blocking one approval on someone else's week, with a standup draft waiting | A four-item ranked list, approval first because another person's week cannot start, each item carrying a direct action | Pending |
 | 3 | A week whose plan lists 4 success criteria; 3 issues closed during the week, mapping to 2 of them | A delivered section pre-filled from the 3 closed issues, mapped to their criteria, with the 2 unmatched criteria called out | Pending |
 | 4 | A weekly plan approved at version N, then edited to remove one success criterion | A before-and-after on the removed criterion plus a drafted question to the author, routed to the approver | Pending |
-| 5 | An issue in Project A blocking two issues in Project B whose assignees report to different managers | The impact fan-out, the lowest common manager, and a drafted message | Pending — requires the `blocks` relationship |
+| 5 | An issue in Project A blocking two issues in Project B whose assignees report to different managers | The impact fan-out, the lowest common manager, and a drafted message | Pending — the `blocks` relationship itself shipped (migration 041, FG-15 / TRO-333, plus PR #120's blocks/blocked-by sidebar); the agent-side fan-out walk does not exist yet |
 | 6 | A user opens the chat on an issue and asks why it is stalled; the answer requires its week, its blocking issue, and a comment on a different document | An answer drawing on all four documents, each named with the reason it was pulled in | Pending |
 
 **Most of these have no reachable trigger state today.** The development database is a load-testing
@@ -514,24 +539,40 @@ that should trigger the agent," which makes constructing them part of the assign
 
 ### Framework
 
-**Pending.** LangGraph is recommended by the brief and is the presumptive choice; anything else
-requires manual instrumentation to produce equivalent traces. Not yet committed.
+**Settled — LangGraph.** `@langchain/langgraph` is a real dependency of `agent/package.json`, and
+the whole agent is one `StateGraph` over a typed `Annotation.Root` state in `agent/src/graph.ts`.
+The traces in the Execution Traces section landed in LangSmith through LangGraph's native
+instrumentation — no manual instrumentation was needed, which is exactly why the brief
+recommended it.
 
 ### Node design rationale
 
-**Pending — Phase 2.** Two principles are fixed. Proactively, material accumulation and draft
-composition are separate stages running on different clocks — the graph collects continuously and
-composes per person per window. On demand, expansion from the seed document is an iterative loop
-with a hard cap, and that loop is the main source of different execution paths between runs.
+**Settled — implemented in `agent/src/graph.ts`.** One compiled graph serves every mode.
+`routeTrigger` branches from START on the trigger (plus `seedDocumentId` presence) into four
+paths: bare chat (`ingest → respond`); seeded expansion (`resolveSeed → expandFrontier`, a
+conditional self-loop that runs until the frontier empties or `documentCap` is hit, then
+`finalizeExpansion → composeAnswer`); the deterministic proactive chain
+(`pollChangeFeed → resolveMentions → detectBlockingApprovals → commitInboxItems`, no model call on
+the whole path); and the deep tier (`gatherStandupActivity → composeStandupDraft →
+commitStandupDraft`). Both principles this section fixed in advance survived implementation:
+accumulation and composition run on different clocks (the proactive chain commits material to the
+item store; the deep tier composes per person), and the expansion loop is the main source of
+run-to-run path difference — observed directly as 9 vs 47 vs 14 child spans across the three
+traces above.
 
 ### State management
 
-**Pending — Phase 2.** Three requirements are known. Between proactive runs the graph carries a
-lagged cursor. Between the steady and deep tiers it carries per-person accumulated material, keyed
-by person and window. Within a run, anything derived from a document is cached on the combination
-of document and content version — so ten people asking about the same week do not each re-read it.
-That cache key is load-bearing: keying it by viewer instead would change how the whole system
-scales.
+**Mostly settled — one of the three planned requirements is deliberately not built yet.** Within a
+run, all state lives in the graph's typed channels (`GraphState` in `graph.ts`); the expansion
+loop's `visitedDocumentIds` channel is what stops it re-reading a document it already pulled.
+Between proactive runs the carried state is exactly the lagged change-feed cursor, held in memory
+by `proactivePoll.ts` and advanced only on success. Per-person accumulated material lives in
+in-memory stores (`itemStore.ts`, `draftStore.ts`) by explicit, documented decision — see
+`itemStore.ts`'s header: one agent process, and every item is re-derivable from Ship's own state
+on the next poll, so a restart costs at most one 60-second cycle, not lost data. The third planned
+piece — a cross-request cache keyed on document + content version, so ten people asking about the
+same week do not each re-read it — is **not implemented**; every run re-fetches what it needs. The
+cache-key reasoning stands for whenever load makes it worth building.
 
 ### Deployment model
 
@@ -623,9 +664,43 @@ The identical procedure applies to the agent service (`srv-d9otunmgekts73eqs0h0`
 — re-check the current id via `terraform output agent_service_url`/state, since it changes on every
 clean-machine `apply`) whenever `agent/` code changes land on `main`.
 ```bash
-curl -X POST https://api.render.com/v1/services/srv-d9kf2t942hec73aofrt0/deploys \
+curl -X POST https://api.render.com/v1/services/srv-d9otunmgekts73eqs0h0/deploys \
   -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
 ```
+(An earlier revision of this section repeated the *ship* service id in the agent command above — a
+copy-paste error, corrected 2026-08-05.)
+
+**The gap recurred exactly as predicted, 2026-08-05 (pre-MVP-submission check).** Verified stale,
+observed directly, not inferred: `GET /` on the graded Ship still returned
+`last-modified: 2026-08-04T13:31:47Z` (the previous manual redeploy), `GET /api/agent/inbox`
+(a PR-D route) returned a bare `404`, and the agent service's own `/chat` and `/inbox` (also PR-D)
+returned `404` while `/health`/`/ready` returned `200` — both services were running pre-PR-C/PR-D
+builds. Auto-deploy had again not fired for any of the four merges since (#117, #120, #122, #123).
+Remediation: the standing procedure above, run against both services — deploys
+`dep-d9pajpnavr4c73b7l300` (ship) and `dep-d9pajpm7bikc73ap8c30` (agent), both building
+`main`@`d124a50`, triggered `2026-08-05T03:11Z`.
+
+**Post-deploy verification (2026-08-05T03:12–03:35Z), all observed, and it caught a second gap.**
+`GET /`'s `last-modified` moved to `2026-08-05T03:12:15Z`, and `GET /api/agent/inbox`
+unauthenticated flipped from bare `404` to `401` (route live, session-gated). But the agent's own
+`/chat` and `/inbox` then returned `500 internal_secret_not_configured` — the server's own
+explicit branch, not a crash. Cause: PR-D introduced `AGENT_INTERNAL_SECRET`, but Terraform cannot
+update the free-tier agent service (the render-oss/render provider bug above), and
+`terraform/render/*.tf` never gained the new variables at all (checked: zero references) — so the
+secret existed nowhere: not on the agent, and not on the ship service either, which was also
+missing `AGENT_API_BASE_URL` (the code default, `http://localhost:3100`, is meaningless on
+Render). Getting these into Terraform config is real follow-up work, tracked as `TRO-347`.
+Remediated via the Render REST API — the documented workaround for this exact provider bug: one
+minted secret set on both services, `AGENT_API_BASE_URL=https://ship-agent-t0zy.onrender.com` on
+ship, then one more deploy each (`dep-d9pal98ae00c73ek3t0g`, `dep-d9pal9lbedkc73bl7pf0`).
+Verified end-to-end as a grader would hit it, not just at the health check: agent `/chat`/`/inbox`
+without the secret now return `401` (was `500`); with it, `400` invalid-body — which proves the
+request passed both the secret gate *and* the graph-configured gate. Then a real browser-style
+session (CSRF token → login as the seeded dev user → `POST /api/agent/chat` against Test Case 2's
+fixture document `65f499b2-…`) returned a grounded answer naming the document, its week, and its
+project, with `citedSources` and the expansion-cap notice — the full
+session → api-proxy → internal-secret → graph → model chain, live on the graded deployment. The
+secret itself lives only in Render env config and the operator's local machine, not in the repo.
 This triggers a deploy of the service's configured branch (`main`) HEAD — equivalent to what
 `auto_deploy` should already be doing on every push. Confirm after with `GET .../deploys?limit=1`
 (expect `status: "live"`, a `createdAt` after this call, `commit.id` matching current `main`) and

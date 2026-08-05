@@ -117,6 +117,23 @@ jobs:
         continue-on-error: true
         run: pnpm --filter @ship/web test --reporter=json --outputFile="$GITHUB_WORKSPACE/web-tests.json"
 
+      # FleetGraph engineering requirement ("E2E tests covering both the
+      # proactive and on-demand modes ... Both tests must run in CI"): the
+      # agent suite exercises the proactive chain end-to-end (change-feed
+      # event -> mention/blocking-approval item committed to the store,
+      # graph.test.ts) and the on-demand chain (seeded question -> grounded,
+      # cited answer with visibility + cap proofs) against stable fakes, plus
+      # gateWriteBoundary.dbRoundTrip.test.ts's live-DB proof that a full
+      # proactive run writes nothing to Ship (needs DATABASE_URL; the CI
+      # database is already migrated above). The suite was fully green when
+      # this step was added (23 files / 280 tests), so unlike api/web there is
+      # no quarantine baseline: any failure here fails the job outright.
+      - name: Agent tests
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+          NODE_ENV: test
+        run: pnpm --filter @ship/agent test
+
       - name: Check for test regressions vs quarantine baseline
         run: |
           node scripts/factory/lib/testdiff.mjs \
