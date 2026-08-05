@@ -130,6 +130,19 @@ function assertSeedSucceeded(result: SpawnSyncReturns<string>): void {
   }
 }
 
+/** `rows[0]` is `T | undefined` under this repo's `noUncheckedIndexedAccess`.
+ * COUNT(*) and other single-row queries used throughout this file always
+ * return exactly one row in Postgres, so the throw below never actually
+ * fires — it exists so every call site can read the row without a non-null
+ * assertion (`!`), which this repo's review-pattern gate forbids adding. */
+function firstRow<T>(result: { rows: T[] }, context: string): T {
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error(`expected at least one row: ${context}`);
+  }
+  return row;
+}
+
 function runSeed(scratchUrl: string): SpawnSyncReturns<string> {
   return spawnSync(TSX_BIN, ['src/db/seed.ts'], {
     cwd: API_ROOT,
@@ -273,10 +286,8 @@ describe('seed.ts Test Case 1 / Test Case 3 fixtures against drifted base data (
   }, HOOK_TIMEOUT);
 
   it('Test Case 1: some engineer has 3 current-sprint issues showing the exact narrative FLEETGRAPH.MD row 1 requires', async () => {
-    const { currentSprintNumber } = resolveCurrentSprint(
-      (await pool.query<{ sprint_start_date: Date }>(`SELECT sprint_start_date FROM workspaces WHERE id = $1`, [workspaceId])).rows[0]!
-        .sprint_start_date
-    );
+    const wsRow = await pool.query<{ sprint_start_date: Date }>(`SELECT sprint_start_date FROM workspaces WHERE id = $1`, [workspaceId]);
+    const { currentSprintNumber } = resolveCurrentSprint(firstRow(wsRow, 'workspaces.sprint_start_date').sprint_start_date);
     const sprintRow = await resolveShipCoreSprint(pool, shipCoreProgramId, workspaceId, currentSprintNumber);
     expect(sprintRow, `a Ship Core sprint numbered ${currentSprintNumber} (today's "current") must exist`).toBeTruthy();
     if (!sprintRow) throw new Error('unreachable — asserted above');
@@ -320,14 +331,17 @@ describe('seed.ts Test Case 1 / Test Case 3 fixtures against drifted base data (
       `SELECT COUNT(*) FROM document_history WHERE document_id = ANY($1) AND field = 'state' AND new_value = 'in_review'`,
       [issueIds]
     );
-    expect(Number(history.rows[0]!.count), 'the in_review transition must be recorded in document_history').toBeGreaterThan(0);
+    expect(Number(firstRow(history, 'document_history count').count), 'the in_review transition must be recorded in document_history').toBeGreaterThan(0);
 
     // "they commented on another" — a comment authored by this engineer.
     const comments = await pool.query<{ count: string }>(
       `SELECT COUNT(*) FROM comments WHERE document_id = ANY($1) AND author_id = $2`,
       [issueIds, engineerRow.assignee_id]
     );
-    expect(Number(comments.rows[0]!.count), 'the engineer must have commented on one of their current-sprint issues').toBeGreaterThan(0);
+    expect(
+      Number(firstRow(comments, 'comments count').count),
+      'the engineer must have commented on one of their current-sprint issues'
+    ).toBeGreaterThan(0);
 
     // "the third has not moved in 6 days".
     const staleIssues = engineerIssues.rows.filter(r => r.updated_at.getTime() < Date.now() - 6 * 24 * 60 * 60 * 1000);
@@ -335,10 +349,8 @@ describe('seed.ts Test Case 1 / Test Case 3 fixtures against drifted base data (
   });
 
   it('Test Case 3: the current week has 4 success criteria and >= 3 issues closed inside it', async () => {
-    const { currentSprintNumber, weekStart, weekEnd } = resolveCurrentSprint(
-      (await pool.query<{ sprint_start_date: Date }>(`SELECT sprint_start_date FROM workspaces WHERE id = $1`, [workspaceId])).rows[0]!
-        .sprint_start_date
-    );
+    const wsRow = await pool.query<{ sprint_start_date: Date }>(`SELECT sprint_start_date FROM workspaces WHERE id = $1`, [workspaceId]);
+    const { currentSprintNumber, weekStart, weekEnd } = resolveCurrentSprint(firstRow(wsRow, 'workspaces.sprint_start_date').sprint_start_date);
     const sprintRow = await resolveShipCoreSprint(pool, shipCoreProgramId, workspaceId, currentSprintNumber);
     expect(sprintRow, `a Ship Core sprint numbered ${currentSprintNumber} (today's "current") must exist`).toBeTruthy();
     if (!sprintRow) throw new Error('unreachable — asserted above');
@@ -361,7 +373,7 @@ describe('seed.ts Test Case 1 / Test Case 3 fixtures against drifted base data (
       [sprintRow.id, workspaceId, weekStart, weekEnd]
     );
     expect(
-      Number(closed.rows[0]!.count),
+      Number(firstRow(closed, 'closed-in-week count').count),
       'Test Case 3 needs >= 3 issues closed inside the current week — 0 here means the fixture either ' +
         "didn't fire or backdated the wrong (stale) sprint's issues"
     ).toBeGreaterThanOrEqual(3);
@@ -376,9 +388,10 @@ describe('seed.ts Test Case 1 / Test Case 3 fixtures against drifted base data (
     expect(result.stdout).toMatch(/Test Case 3 fixture already seeded/);
 
     const after = await pool.query<{ count: string }>(`SELECT COUNT(*) FROM documents`);
-    expect(Number(after.rows[0]!.count), 're-seeding the already-fixtured drifted database must not create new rows').toBe(
-      Number(before.rows[0]!.count)
-    );
+    expect(
+      Number(firstRow(after, 'documents count after re-seed').count),
+      're-seeding the already-fixtured drifted database must not create new rows'
+    ).toBe(Number(firstRow(before, 'documents count before re-seed').count));
 
     const tc1Count = await pool.query<{ count: string }>(
       `SELECT COUNT(*) FROM documents WHERE workspace_id = $1 AND properties->>'fg3_fixture' = 'tc1'`,
@@ -388,7 +401,11 @@ describe('seed.ts Test Case 1 / Test Case 3 fixtures against drifted base data (
       `SELECT COUNT(*) FROM documents WHERE workspace_id = $1 AND properties->>'fg3_fixture' = 'tc3'`,
       [workspaceId]
     );
-    expect(Number(tc1Count.rows[0]!.count), 'Test Case 1 must still hold exactly the 3 issues it created, no duplicates').toBe(3);
-    expect(Number(tc3Count.rows[0]!.count), 'Test Case 3 must still hold exactly the 3 issues it created, no duplicates').toBe(3);
+    expect(Number(firstRow(tc1Count, 'tc1 marker count').count), 'Test Case 1 must still hold exactly the 3 issues it created, no duplicates').toBe(
+      3
+    );
+    expect(Number(firstRow(tc3Count, 'tc3 marker count').count), 'Test Case 3 must still hold exactly the 3 issues it created, no duplicates').toBe(
+      3
+    );
   }, HOOK_TIMEOUT);
 });
