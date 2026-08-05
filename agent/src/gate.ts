@@ -23,7 +23,12 @@
  * Scope, per the ticket:
  *  - Accept a draft: the real Ship write (`POST /api/standups` then
  *    `PATCH /api/standups/:id` to set its content), attributed to the
- *    accepting person, then `draftStore.markPosted`.
+ *    accepting person, then `draftStore.markPosted` — which, as of TRO-338 /
+ *    FG-20, also retains exactly what was posted (`finalText`) so the
+ *    draft-survival metric ("how much of a draft survives to the posted
+ *    version") can be computed and recorded here with zero labelling
+ *    effort — both texts (the original composition and what was actually
+ *    posted) are already in hand at this exact point.
  *  - Discard: writes nothing to Ship. Any draft-backed item (`standup_draft`,
  *    and `blocker_escalation` as of TRO-346/TRO-337 / FG-19) additionally
  *    marks its draft `dismissed`; every item type is removed from the
@@ -38,11 +43,22 @@
 import type { DraftStore, ProposedTransition } from './draftStore.js';
 import type { InboxItem, ItemStore } from './itemStore.js';
 import type { GateShipClientLike } from './shipClient.js';
+import { computeDraftSurvival, type DraftSurvivalTracker } from './draftSurvival.js';
 
 export interface GateDeps {
   shipClient: GateShipClientLike;
   itemStore: ItemStore;
   draftStore: DraftStore;
+  /** TRO-338 / FG-20's production signal — "how much of a draft survives
+   * to the posted version." Optional, same injection pattern as
+   * `graph.ts`'s `costTracker`: omitted, `acceptDraft` behaves exactly as
+   * it did before this ticket; passed, every real accept records one
+   * survival measurement. Nothing currently constructs the production
+   * `FileDraftSurvivalTracker` in `index.ts` for the same reason nothing
+   * calls `acceptDraft` from a real route yet (FG-8 has no HTTP surface
+   * wired up today) — the seam is real and tested; wiring it to a live
+   * caller is that future ticket's job, not this one's. */
+  draftSurvivalTracker?: DraftSurvivalTracker;
 }
 
 export class GateError extends Error {
@@ -89,13 +105,35 @@ export async function acceptDraft(
   const created = await deps.shipClient.postStandup(accepterToken, draft.windowDate);
   await deps.shipClient.setStandupContent(accepterToken, created.id, textToPost);
 
-  const marked = deps.draftStore.markPosted(draftId);
+  // finalText is REQUIRED as of TRO-338 / FG-20: this is the one moment
+  // this package ever learns what a person actually posted, and it must be
+  // retained now or it is gone — `draftStore.ts`'s own docstring on
+  // `finalText` explains why the comparison this ticket adds needs both
+  // versions captured here, not reconstructed later.
+  const marked = deps.draftStore.markPosted(draftId, textToPost);
   if (!marked) {
     // The Ship write above already succeeded — this would be an internal
     // inconsistency (the draft existed a few lines up), not a user-facing
     // failure to retry. Fails loudly rather than silently leaving the draft
     // stuck 'unseen'/'viewed' after a real post already happened.
     throw new GateError(`Ship write for draft ${draftId} succeeded, but markPosted failed unexpectedly`);
+  }
+
+  // TRO-338 / FG-20's production signal, recorded on every accepted draft:
+  // "how much of a draft survives to the posted version." Computed from
+  // exactly the two strings already in hand — draft.draftText (the
+  // immutable original) and textToPost (what was actually posted) — zero
+  // labelling effort, per the ticket. Non-fatal by construction, same
+  // posture as graph.ts's recordInvocation: a tracker failure must never
+  // undo or fail a Ship write that already succeeded.
+  if (deps.draftSurvivalTracker) {
+    try {
+      await deps.draftSurvivalTracker.record(
+        computeDraftSurvival(draftId, draft.personUserId, draft.draftText, textToPost)
+      );
+    } catch (err) {
+      console.warn(`[agent] draft survival tracker failed to record draft ${draftId} (non-fatal):`, err);
+    }
   }
 
   // The item pointing at this draft (same id, per graph.ts's
