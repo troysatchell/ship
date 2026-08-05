@@ -15,6 +15,21 @@ anthropic_api_key = "REPLACE_WITH_A_REAL_ANTHROPIC_API_KEY"
 langsmith_api_key = "REPLACE_WITH_A_REAL_LANGSMITH_API_KEY"
 ship_api_token    = "REPLACE_WITH_A_REAL_SHIP_API_TOKEN"   # a real user's Ship API token — see FLEETGRAPH.MD "Deployment model"
 
+# --- Agent <-> api shared secret (TRO-347) — no default, must be set -------
+# Shared by BOTH services (agent_service.tf and web_service.tf each read this
+# same variable) — the X-Internal-Secret value api/'s agent proxy sends and
+# the agent's own POST /chat / GET /inbox check before touching the graph or
+# item store. The two sides MUST hold the identical value.
+#
+# The real value currently lives ONLY in two places, neither of them this
+# repo: (1) Render's own env-var config on both the `ship` and `ship-agent`
+# services (set via the Render REST API directly — the free-tier provider
+# bug documented in agent_service.tf/README.md blocks a plain `terraform
+# apply` against the agent service), and (2) the operator-local
+# `~/.ship-agent-internal-secret` (mode 600). Generate a fresh value for any
+# new environment (e.g. `openssl rand -hex 32`) — never reuse that one.
+agent_internal_secret = "REPLACE_WITH_A_REAL_SHARED_SECRET"
+
 # Everything else below has a working default in variables.tf that
 # reproduces the existing live service; override only what you need to
 # change.
@@ -45,3 +60,11 @@ ship_api_token    = "REPLACE_WITH_A_REAL_SHIP_API_TOKEN"   # a real user's Ship 
 # agent_health_check_path = "/health"
 # langchain_project       = "fleetgraph-agent"
 # langchain_endpoint      = "https://api.smith.langchain.com"
+
+# agent_api_base_url default reproduces the current live agent's URL
+# (verified 2026-08-05). Not secret, but Render assigns a NEW slug on every
+# clean-machine apply that recreates the agent service — override this to
+# match afterward, or api/'s calls to the agent go to a dead URL. See
+# variables.tf for why this can't be derived automatically (would create a
+# dependency cycle with agent_service.tf's own SHIP_API_BASE_URL).
+# agent_api_base_url      = "https://ship-agent-t0zy.onrender.com"

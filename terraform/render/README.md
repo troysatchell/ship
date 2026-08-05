@@ -21,6 +21,45 @@ described in `memory-bank/techContext.md` with a config a clean machine can repr
 | `outputs.tf` | Non-sensitive outputs only (IDs, URL) |
 | `terraform.tfvars.example` | Placeholder values — copy to `terraform.tfvars` (gitignored) |
 
+## Known provider bug — `render_web_service.agent` cannot be updated by `terraform apply`
+
+**Applies only to the agent service (`render_web_service.agent` in `agent_service.tf`), on the
+free tier.** `terraform apply` fails on *any* field change against this specific resource —
+verified 2026-08-04 (TRO-341/FG-23) with `maintenance_mode`, and this is a `render-oss/render`
+provider bug, not a config mistake: the provider's `Update` API call unconditionally includes
+`maintenance_mode` in its payload regardless of whether it changed, and Render's API rejects that
+field's mere presence for a free-tier service. Adding the field to `lifecycle.ignore_changes`
+(already present on both `render_web_service.ship` and `render_web_service.agent` for the
+unrelated `pull_request_previews_enabled`/`previews`/etc. drift) does **not** fix this — it only
+suppresses what `terraform plan` *displays* as a diff, not what the provider actually sends in the
+`Update` request body. Do not spend more time tuning `ignore_changes` for this; that path is a
+documented dead end (`.claude/skills/ship-factory/references/lessons.md`, 2026-08-04 entry).
+
+**The workaround, in place since 2026-08-04 and still current:** apply changes to the live agent
+service via the Render REST API directly, not `terraform apply`. Render's API exposes both a
+per-key upsert (`PUT /v1/services/{id}/env-vars/{key}` — "add or update a particular environment
+variable") and a bulk replace (`PUT /v1/services/{id}/env-vars` — replaces the *entire* list, so an
+omitted key is deleted); the per-key form is what this repo has actually used against live
+infrastructure and verified working (`CHANGES.md`'s TRO-341 follow-up entry:
+`PUT /v1/services/{id}/env-vars/SHIP_API_TOKEN`, confirmed via `/health`/`/ready` 200 afterward).
+**An env-var PUT alone does not restart the running process** — that same entry needed a follow-up
+manual redeploy (`POST /v1/services/{id}/deploys`, the same call FLEETGRAPH.MD's "Deployment
+model" documents for the unrelated `auto_deploy` gap) before the new value took effect. This
+Terraform config stays the *record* of intent for the agent service — every field it declares is
+what the service is supposed to look like — but for this one resource, on this one plan, the REST
+API call (env-var PUT *and* the redeploy) is what actually executes the change. `terraform plan`
+against `render_web_service.agent` will keep showing a diff for anything set this way until the
+upstream provider bug is fixed (a plan showing "drift" here is expected, not a sign the API call
+failed).
+
+**Concretely, this is why `AGENT_INTERNAL_SECRET` (`agent_service.tf`'s copy) has to be applied
+this way today** ([TRO-347](https://linear.app/troysatchell/issue/TRO-347)) — even though the
+variable is now declared in this config (`variables.tf`), a `terraform apply` that would set it on
+the live free-tier agent service is expected to fail with the same provider error until Render or
+`render-oss/render` fixes the underlying bug. `web_service.tf`'s `render_web_service.ship` is not
+affected — plain `terraform apply` works normally against it, including for its own copies of
+`AGENT_INTERNAL_SECRET` and `AGENT_API_BASE_URL`.
+
 ## Why this directory is inside `terraform/`
 
 PR #41 (open, `fix/tf-2-unify-terraform-roots`, TF-2/TRO-235) adds

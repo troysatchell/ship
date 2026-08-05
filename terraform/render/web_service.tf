@@ -56,5 +56,25 @@ resource "render_web_service" "ship" {
     CORS_ORIGIN = {
       value = var.cors_origin
     }
+
+    # Agent proxy wiring (TRO-320/FG-9, TRO-323/FG-10; added to this config
+    # by TRO-347). api/src/routes/agent.ts forwards browser-authenticated
+    # requests to the agent service at this base URL, over a shared-secret
+    # X-Internal-Secret call — the browser never talks to the agent service
+    # directly. Both vars were previously live only in Render's own env-var
+    # config and the operator-local `~/.ship-agent-internal-secret`; a
+    # clean-machine apply recreated this service without them and every
+    # /api/agent/* call 500'd. See variables.tf for why AGENT_API_BASE_URL is
+    # a plain var rather than derived from render_web_service.agent.url
+    # (would create a two-resource dependency cycle with agent_service.tf's
+    # own SHIP_API_BASE_URL).
+    AGENT_API_BASE_URL = {
+      value = var.agent_api_base_url
+    }
+    # Sensitive input — see variables.tf. Must match agent_service.tf's copy
+    # of the same variable exactly.
+    AGENT_INTERNAL_SECRET = {
+      value = var.agent_internal_secret
+    }
   }
 }
