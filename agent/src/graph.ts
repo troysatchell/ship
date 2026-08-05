@@ -885,7 +885,87 @@ export type NodeName = (typeof NODE_NAMES)[number];
  * wired in `index.ts`; tests inject stable fakes. Optional on `buildGraph`
  * itself so every existing FG-2 on-demand test/call site keeps compiling
  * unchanged; a proactive node throws a clear error if it ever runs without
- * these, rather than silently doing nothing. */
+ * these, rather than silently doing nothing.
+ *
+ * ---- TRO-350: `shipClient` stays ONE shared token, investigated and left
+ * as an accepted, documented risk (not built) --------------------------
+ *
+ * The steady-tier poll (`proactivePoll.ts`'s `createProactivePoller`) has no
+ * requesting user on any invocation — it DECIDES who to surface a mention or
+ * blocking-approval item to; nothing triggers it on a specific person's
+ * behalf. That is a genuinely different shape than the on-demand gap TRO-342
+ * closed, not just an unclosed instance of the same one:
+ * `buildMentionItems`/`buildBlockingApprovalItems` (`proactive.ts`) read the
+ * change-feed page and its documents/comments BROADLY — a comment's literal
+ * text, a document's structured `properties.owner_id` — and only decide the
+ * RECIPIENT afterward (who was @mentioned, who owns/manages the blocked
+ * sprint). There is no `askingUserToken`-shaped field to add to `GraphState`
+ * here, because there is no asking user.
+ *
+ * Three shapes were weighed for closing this; none were built:
+ *
+ *  1. **One long-lived token per known Ship user, held by the agent.**
+ *     `GET /api/team/people` (`ShipPerson.user_id`, `shipClient.ts`) already
+ *     enumerates known users with a linked account, so "who to mint for" is
+ *     NOT actually the missing piece the ticket first assumed. What's
+ *     missing is storage: N *live, held* full-permission tokens sitting in
+ *     the agent process is a strictly larger attack surface than the ONE
+ *     already-known token today — `agentTokens.ts`'s mint/revoke pair
+ *     (TRO-342) is deliberately ephemeral and single-use per request; an
+ *     N-held-tokens cache is a different kind of thing, with rotation and
+ *     revoke-on-offboarding this codebase has never needed before. It is
+ *     also the one shape that actually pays the "N separate poll passes
+ *     every 60s" cost the ticket worried about, for little gain: the
+ *     change-feed page a pass reads is the same page regardless of which
+ *     recipient it's evaluated for, so N passes mostly re-fetch and discard
+ *     identical bytes N times.
+ *  2. **A narrower read-only, workspace-scoped, no-per-document-elevation
+ *     capability token.** The better shape IF this is ever built — stays at
+ *     one poll pass, and a true workspace-only scope (no `created_by`
+ *     bypass, no admin bypass) would be narrower than even one ordinary
+ *     user's own token, an actual improvement over today rather than a
+ *     lateral move. Not built now because `api_tokens`
+ *     (`api/src/db/schema.sql:254-267`, migration `014_api_tokens.sql`) has
+ *     no scope column — `authMiddleware.validateApiToken`
+ *     (`api/src/middleware/auth.ts`) resolves any token straight to
+ *     `userId`/`isSuperAdmin`, the full permission set of whichever real
+ *     user it belongs to, nothing narrower — and `getVisibilityContext`/
+ *     `VISIBILITY_FILTER_SQL` (`api/src/middleware/visibility.ts`,
+ *     `"visibility = 'workspace' OR created_by = $userId OR $isAdmin =
+ *     TRUE"`) is called from nearly every list/get route in the API (that
+ *     file's own DB-3 comment), so teaching it a scoped-token mode is a
+ *     change to Ship's core authorization surface, not an agent-local one.
+ *     Disproportionate for a ticket filed as an investigation, not a green
+ *     light to build.
+ *  3. **Redesign the detection logic to need no document-level access at
+ *     all.** Not available: resolving an `@mention` requires reading the
+ *     actual comment/document body (`mentions.ts`), and the
+ *     blocking-approval recipient requires reading the sprint document's own
+ *     `properties.owner_id` plus a manager lookup (`roles.ts`) — both are
+ *     necessarily document-level reads. A workspace-level surface narrow
+ *     enough to avoid document elevation would still have to carry document
+ *     content to do this job, which restates the elevation risk rather than
+ *     removing it.
+ *
+ * **Why accepted-risk is the right call for now, not a gap left open by
+ * default:** `visibility.ts`'s `isDocumentVisibleTo` (TRO-317 / FG-5,
+ * already live — not new work from this ticket) already prevents the harm
+ * this ticket is actually worried about — a person being SHOWN something
+ * they could not see themselves — by re-checking every candidate item
+ * against the RECIPIENT's own visibility before it is ever surfaced,
+ * mirroring the server's own visibility rule. What stays unmitigated is the
+ * poll's own READ running as a super-admin (`dev@ship.local`, FLEETGRAPH.MD
+ * "Login and the 403") — it can fetch a document's raw content even when no
+ * recipient will ever see anything derived from it. FLEETGRAPH.MD records
+ * that residual risk as real in the schema and, as of its own last verified
+ * check, absent from the data ("Private documents are currently
+ * hypothetical") — TRO-350 did not re-verify that count itself (no fresh
+ * query was run against either the local or graded database this session);
+ * treat it as the documented, dated claim it is, not a fresh observation.
+ * If that stops being true — a real private document lands in a database
+ * this agent polls — shape 2 above is the one to build first. `DeepDeps`
+ * below carries the identical shared-token shape and the identical
+ * reasoning; it is not restated there. */
 export interface ProactiveDeps {
   shipClient: ShipClientLike;
   itemStore: ItemStore;
@@ -969,6 +1049,15 @@ export interface OnDemandDeps {
  * than a second, parallel one). Kept as its own field — not folded into
  * `ProactiveDeps` — so a caller can wire the deep tier without also needing
  * a `shipClient` shaped for the (different) proactive-fast contract.
+ *
+ * `shipClient` here carries the identical single-shared-token shape
+ * `ProactiveDeps.shipClient` does, for the identical reason (no
+ * per-invocation requesting user to source a per-call token from —
+ * `targetPersonUserId` names who the draft is FOR, it is not an asker).
+ * TRO-350 investigated closing this for both interfaces together and left
+ * it as an accepted, documented risk rather than building new token
+ * infrastructure — see `ProactiveDeps`'s own docstring for the full
+ * reasoning; not restated here.
  */
 export interface DeepDeps {
   shipClient: DeepShipClientLike;
