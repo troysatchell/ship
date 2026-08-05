@@ -127,6 +127,36 @@ function isDocSummary(d: unknown): d is { id: string; title: string } {
  * @param title - Exact document title, e.g. `FIXTURE_DOC_LINK_SANITIZATION`
  * @returns The document id
  */
+/**
+ * Insert a 3x3 table via the `/table` slash command.
+ *
+ * Added for TRO-310 (TEST-11 batch 2). Replaces the blind
+ * click-sleep-type-sleep-click sequence `tables.spec.ts` used at every call
+ * site: the slash-command menu filters synchronously
+ * (`SlashCommands.tsx`'s `items()` does no async work beyond wrapping a
+ * `Promise`), so the only real conditions worth waiting for are the editor
+ * actually receiving focus before typing, and the filtered "Table" option
+ * rendering before it's clicked — both auto-retrying assertions rather than
+ * guessed durations.
+ *
+ * @param page - The Playwright page
+ * @param editor - Locator for the .ProseMirror editor element (already visible)
+ * @returns Locator for the inserted `<table>` element (already confirmed visible)
+ */
+export async function insertTableViaSlashCommand(page: Page, editor: Locator): Promise<Locator> {
+  await editor.click();
+  await expect(editor).toBeFocused({ timeout: 3000 });
+
+  await page.keyboard.type('/table');
+  const tableOption = page.getByRole('button', { name: /^Table Insert a table/i });
+  await expect(tableOption).toBeVisible({ timeout: 5000 });
+  await tableOption.click();
+
+  const table = editor.locator('table');
+  await expect(table).toBeVisible({ timeout: 3000 });
+  return table;
+}
+
 export async function openFixtureDocument(page: Page, title: string): Promise<string> {
   const res = await page.request.get('/api/documents?type=wiki');
   expect(

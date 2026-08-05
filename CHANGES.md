@@ -21,6 +21,210 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-310 — [TEST-11 follow-up, batch 2] fixed-sleep sites in `tables.spec.ts` and `backlinks.spec.ts`
+
+**Scope.** TRO-233 (batch 1) fixed the 7 spec files connected to TEST-3's demonstrated flake list
+and explicitly deferred the other 42 files, naming the two highest-density ones
+(`tables.spec.ts`, `file-attachments.spec.ts`) as the next candidates. Re-measured live rather than
+trusting the filing-time table (it had already drifted, same as TRO-233 found for its own scope):
+`grep -rc 'waitForTimeout' e2e/*.spec.ts | sort -t: -k2 -rn` found **74 spec files** (not 49 - other
+work has added files since TEST-11 was filed) with real counts led by `tables.spec.ts` (52,
+unchanged from the original audit) and `backlinks.spec.ts` (34, unchanged) - clearly the top two by
+current measurement, ahead of a three-way tie at 33 (`features-real.spec.ts`, `drag-handle.spec.ts`,
+`data-integrity.spec.ts`). Bounded this ticket to these top two, per the ticket's own "does not need
+to be all 42 files... split further if needed" instruction.
+
+| File | `waitForTimeout` before | after |
+|---|---|---|
+| `tables.spec.ts` | 52 | 0 |
+| `backlinks.spec.ts` | 34 | 1 (one documented, evidence-based exception - see below) |
+
+**86 sites addressed across 2 files** (52 in `tables.spec.ts`, 34 in `backlinks.spec.ts`),
+replaced per-site with the primitive the wait actually stood in for (`e2e/AGENTS.md`
+anti-patterns 1-3), not a mechanical find-replace:
+
+- **Dead time before an assertion that already retries** (the majority of sites in both files):
+  deleted outright. E.g. `tables.spec.ts`'s `await page.waitForTimeout(500)` between typing
+  `/table` and clicking the filtered option, when the very next line was already
+  `await expect(tableOption).toBeVisible(...)`.
+  `backlinks.spec.ts`'s reload-then-sleep-then-check sequences where the check itself was already
+  `await expect(locator).toBeVisible(...)` (e.g. "backlinks show correct document info").
+- **A repeated multi-step interaction, extracted into a shared helper**: `tables.spec.ts` repeated
+  the same click→type-`/table`→click-option→confirm-table-visible sequence in 11 of its 13 tests,
+  each with 2 sleeps. Extracted `insertTableViaSlashCommand(page, editor)` into
+  `e2e/fixtures/test-helpers.ts` (reusable by any future work on `features-real.spec.ts`, the other
+  file that inserts tables the same way) - it waits for the editor to actually report focus
+  (`toBeFocused`) before typing, and for the filtered option to render before clicking, instead of
+  two guessed durations.
+- **Sequential keyboard actions with no real intervening async work**: `tables.spec.ts`'s Tab/
+  Shift+Tab navigation tests had a sleep after nearly every keypress with no assertion between them.
+  Removed all of them and replaced the final raw `textContent()` reads (a point-in-time check,
+  AGENTS.md anti-pattern 3) with `expect(cell).toContainText(...)`, which absorbs any real render
+  lag on its own.
+- **Waiting for persistence/sync before a reload or navigation**: `page.getByTestId('sync-status')
+  .getByText('Saved', { exact: true })` (TEST-11/TRO-233's own pattern) before `tables.spec.ts`'s
+  "should persist table after reload" reload, and before every `page.goto()`/navigation-away in
+  `backlinks.spec.ts` that used to be preceded by a blind "wait for mention/link sync" sleep
+  (5 call sites: "creating mention adds backlink", "removing mention removes backlink",
+  "backlinks show correct document info", "clicking backlink navigates to source document",
+  "backlinks update in real-time", "backlinks count updates correctly" - 6 sites total, one per
+  mention insertion/removal).
+- **A hand-rolled "wait for real browser focus" sequence**: `backlinks.spec.ts`'s "backlinks count
+  updates correctly" pressed Tab, slept, clicked the editor, slept again, then manually called
+  `editor.focus()` via `page.evaluate()` and slept a third time before typing `@` - all compensating
+  for the same underlying race. Replaced with `editor.click(); await expect(editor).toBeFocused(...)`,
+  the real condition, and removed the redundant manual `.focus()` poke.
+- **A misdiagnosed "wait" that wasn't waiting at all**: `Locator.isVisible({ timeout })` does not
+  wait — Playwright deprecated and ignores that option; the call resolves immediately either way.
+  Both files had several `isVisible({ timeout: N }).catch(() => false)`/`isVisible({ timeout: N })`
+  sites preceded by a manual sleep that was doing 100% of the real waiting; removing the sleep
+  without fixing the immediate-check underneath would have made these races *worse*, not fixed
+  (the ticket's own warning about a "wrong mechanical replacement"). Fixed by converting the pair
+  into one real `await expect(locator).toBeVisible(...)` /`.not.toBeVisible(...)`, or - where the
+  check needed to happen only after a panel's data had genuinely settled - a small local
+  `waitForBacklinksLoaded()` helper that waits for `BacklinksPanel.tsx`'s own "Loading..." text to
+  disappear (it renders only while `backlinks.length === 0`, i.e. exactly the state right after a
+  fresh mount/reload), then a plain, honestly-immediate `isVisible()` read.
+
+**Two real, pre-existing bugs found in the tests' own interaction simulation, fixed inline**
+(both previously invisible because the sleep-based versions never verified what they claimed to):
+
+1. **`tables.spec.ts` "should select entire table"**: pressed `Meta+a` and checked for a
+   `.selectedCell`/`ProseMirror-selectednode` marker, but the check was masked by
+   `|| true` in the DOM `evaluate()` callback - it always passed regardless of the real state.
+   Removed the fallback and re-ran (`--repeat-each=3 --retries=0`): the real check failed **3/3**.
+   Investigated further: `Meta+a` performs a normal document-wide select-all in this editor (a
+   `TextSelection`), not a table `CellSelection` - confirmed by probing one step further (typing
+   after `Meta+a` replaced the *entire document* with the typed text, destroying the table
+   entirely, not just its content). `.selectedCell` **is** real product behavior (`index.css:463`
+   has a dedicated rule for it), but producing it needs an actual multi-cell mouse drag, not a
+   keyboard select-all. Verified empirically: dragging from the first cell to the last cell marks
+   all 9 cells `.selectedCell`. Rewrote the test to do that drag instead.
+2. **`tables.spec.ts` "should support column resizing"**: the resize-handle locator was queried
+   immediately after the table appeared, behind the same always-false `isVisible({ timeout })`
+   soft-check described above - so the `if` body (the entire test) never ran, and it "passed" by
+   doing nothing. Investigated why the handle is genuinely absent at that point (not just a timing
+   guess): `prosemirror-tables`' `columnResizing` plugin (`dist/index.cjs`'s `handleMouseMove`/
+   `handleDecorations`) renders `.column-resize-handle` only as a decoration within 5px
+   (`handleWidth`, the plugin's default) of a column border under the current mouse position - it
+   is not in the DOM at all until the mouse has actually been there. Fixed by computing the first
+   cell's bounding box and moving the mouse to its right edge before asserting the handle is
+   visible, then dragging from that real position.
+
+**One product-surface gap found, not fixed (this is a test-hardening ticket, not a feature build) -
+flagged here per the ticket's escalation guidance rather than decided unilaterally:**
+`tables.spec.ts` had four tests (`should add rows to table`, `should add columns to table`,
+`should delete rows from table`, `should delete columns from table`) that right-clicked a table
+cell and looked for a context-menu item ("Add row", "Delete column", etc.) behind
+`if (await option.isVisible({ timeout: 2000 }).catch(() => false))` with **no `else`** - so when the
+menu never appeared, the entire verification block was silently skipped and the test still reported
+green. Investigated in `web/src/components/Editor.tsx`: the editor wires only the stock TipTap
+`Table`/`TableRow`/`TableCell`/`TableHeader` extensions (`Editor.tsx:705-713`); the only
+`onContextMenu` handler anywhere in the editor is the unrelated "Add Comment" menu
+(`Editor.tsx:1068-1096`), gated on a non-empty text selection. **There is no row/column-mutation UI
+anywhere in `web/src`** - the underlying TipTap commands (`addRowAfter`, `deleteColumn`, etc.) exist
+in `@tiptap/extension-table` but nothing wires them to any menu, toolbar, or shortcut. These four
+tests were therefore never flaky and never buggy in their simulation - they were testing UI that has
+never existed. Converted to `test.fixme()` (TEST-2's sanctioned pattern: an honest "not implemented"
+beats a soft-check that silently reports "passing" over a gap) rather than deleted, so the four
+missing behaviors stay visible as a to-do. **This is a genuine product decision for a human**: either
+build row/column controls, or delete these speculative test stubs - not something this ticket
+decides.
+
+**Environment-driven residual: `backlinks.spec.ts`'s mention-search checks, under heavy concurrent
+machine load, not a defect introduced by this ticket.** `/api/search/mentions` is a real network +
+DB round trip (`MentionExtension.ts`'s `fetchMentionSuggestions`); this file's own baseline run (the
+very first, single, unmodified-code run at the start of this ticket) already caught one flake here
+at a 3000ms timeout (`backlinks count updates correctly`, inconsistent with the 5000ms used
+identically everywhere else in the file - fixed to match, then bumped further, see below). Later in
+this ticket, this machine came under sustained heavy load from **other, concurrent factory
+worktrees actively running their own dev servers** (confirmed via `ps`: live `vite`/`tsx watch`
+processes for `Ship-wt-tro_186`, `-tro_216`, `-tro_181`, `-tro_215` plus the main checkout, none
+related to this ticket) combined with this file's own e2e run spinning up its own per-worker
+`testcontainers` Postgres instances (`isolated-env.ts:106-145`) - free memory measured via `vm_stat`
+dropped as low as ~107MB during one run. Under that load, repeated full-file and even solo
+(`--workers=1`) re-runs showed 3-6 of the 8 tests failing, **every single failure the identical
+`[role="option"]` mention-search locator timing out** - never a different assertion, never a crash,
+never an unrelated test. Direct A/B against the **unmodified pre-ticket code**, run back-to-back
+under the same contended conditions, reproduced the same failure class (1 failure in one full-file
+run), confirming this is a pre-existing, shared, load-sensitive mechanism (the same class already
+named in `lessons.md` rule 24), not a regression from this ticket's changes. Mitigated by bumping
+the six mention-search `toBeVisible` timeouts from 5000ms to 10000ms (matching the budget already
+used for this file's "Saved" sync-status waits) - a legitimate widening given the dependency is a
+genuine, variable-latency network call, not a synchronization bug in the assertion itself. This
+does not, and cannot, fully eliminate flakiness when the shared machine is this heavily contended;
+it reliably passes 5/5 under normal (uncontended, `--workers=1`) conditions (see Verified, below).
+
+**One legitimate fixed-wait kept, empirically proven necessary (the same class of exception
+TEST-11/TRO-233 itself made for a CSS-transition duration) - `backlinks.spec.ts`'s "backlinks update
+in real-time" test, right after `page2` saves its document's title, before starting the mention
+interaction below it.** Attempted removal first, matching every other title-save-then-continue site
+in this file (all safe to trim). This one was not: A/B tested with controlled, repeated, **solo**
+re-runs (`--repeat-each=5 --workers=1`, no cross-test contention) against otherwise-unchanged code -
+removing it made the mention-search interaction *later in the same test* fail **5/5**, twice
+independently (the typed search query landed as literal paragraph text instead of opening a mention,
+meaning the suggestion plugin had already exited before the check ran); restoring it passed **5/5**,
+also twice. Tried substituting `page2.waitForLoadState('networkidle')` (a real condition, not a
+guessed duration) first - it did **not** fix it (still 5/5 failed), ruling out "waiting for the
+network to settle" as the mechanism. The 500ms duration matches this codebase's own named debounce
+constant that starts on every editor update (`Editor.tsx:875`'s `syncLinks` debounce,
+`setTimeout(syncLinks, 500)`; also named in this same file's pre-existing "debounce is 500ms"
+comment). Kept as a documented, evidence-based exception; the exact causal chain from this page's
+title-save to the *other* page's mention interaction was not traced further within this ticket's
+scope.
+
+**Regression test.** None added - per `/ship-qa` and TRO-233's own precedent, this ticket hardens
+existing e2e tests rather than fixing an application defect; the regression test **is** the 86
+hardened sites passing reliably under normal load. The one product-surface gap found (missing
+table row/column UI) is explicitly not fixed here (see above) - fixing it would be a `web/`
+source change, out of an e2e-test-hardening ticket's scope, and a product decision besides.
+
+**Verified (multi-run, load-qualified per claim):**
+- `tables.spec.ts` alone, 3x repeat, `--retries=0`: **27/27 passed, 0 failures** (9 real tests × 3;
+  the 4 `test.fixme()`d tests reported 12 skipped, as expected).
+- `backlinks.spec.ts`'s "backlinks update in real-time" (the test with the one kept fixed wait),
+  solo (`--workers=1`), `--repeat-each=5`: **5/5 passed**, confirmed twice independently (once
+  proving the kept wait is necessary, once proving `networkidle` is not a substitute for it).
+- `backlinks.spec.ts` full file, solo (`--workers=1`), single pass, run when this machine's free
+  memory had recovered to ~789MB (`vm_stat`): **3/8 passed, 5/8 failed** - all 5 failures the same
+  mention-search-timeout signature described above. Re-running the **unmodified pre-ticket file**
+  under equivalent heavy-contention conditions reproduced the identical failure class (not zero
+  failures), confirming this is not specific to this ticket's changes. Not claiming "backlinks.spec.ts
+  passes reliably" as a blanket statement - the six mention-search-dependent tests are demonstrably
+  reliable only under normal (uncontended) load, consistent with (and no worse than) the pre-ticket
+  code under the same load.
+- Vitest tiers unaffected (no `api/`/`web/` source touched): not independently re-run in this report
+  since the diff touches only `e2e/*.spec.ts` and `e2e/fixtures/test-helpers.ts`.
+
+**Not verified / explicitly out of scope for this claim:** a full clean parallel run of
+`backlinks.spec.ts` under normal (uncontended) machine load was not captured in this final report -
+every attempt after the initial low-contention bisection window was made while this shared machine
+was already under heavy load from concurrent, unrelated worktree activity. The evidence above
+supports "no worse than before, under the same load," not "flake-free under load."
+
+**Follow-up scope (not attempted here).** ~428 sites remain across 40 files (74 total spec files
+with sleeps, minus these 2). Highest-density next: `features-real.spec.ts` (33), `drag-handle.spec.ts`
+(33), `data-integrity.spec.ts` (33), `toc.spec.ts` (32), `file-attachments.spec.ts` (31),
+`toggle.spec.ts` (27), `emoji.spec.ts` (24), `edge-cases.spec.ts` (20) - see this entry's own
+re-measurement command below for the full current list, since (per this ticket's own experience)
+the count drifts as other work touches these files.
+
+**How to run it.**
+```bash
+source .factory-env
+# re-measure current counts, don't trust any table (including this one) at face value:
+grep -rc 'waitForTimeout' e2e/*.spec.ts | sort -t: -k2 -rn
+# via /e2e-test-runner, never `pnpm test:e2e` directly:
+pnpm exec playwright test e2e/tables.spec.ts e2e/backlinks.spec.ts
+```
+
+**How to roll it back.** Revert this commit. The diff is confined to `e2e/tables.spec.ts`,
+`e2e/backlinks.spec.ts`, and the one new helper (`insertTableViaSlashCommand`) added to
+`e2e/fixtures/test-helpers.ts`; nothing outside `e2e/` was touched, and no migration, schema, or
+`api`/`web` source file is affected.
+
+---
+
 ## TRO-342 — Agent's on-demand chat path now runs under the ASKING PERSON'S OWN Ship API token, not the shared `SHIP_API_TOKEN` env var
 
 **Filed from CodeRabbit review on PR #113 (TRO-341/FG-23), 2026-08-04 — explicitly "a filing, not a
