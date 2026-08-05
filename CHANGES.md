@@ -21,6 +21,75 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-349 — FLEETGRAPH.MD's Graph Diagram was 3 chains stale: `proactive_escalation`, `proactive_retro`, `proactive_plan_change` never added
+
+**Documentation-only.** `FLEETGRAPH.MD`'s "Graph Diagram" section (Mermaid flowchart, TRO-324/FG-13)
+documented only four of the seven trigger chains the compiled `StateGraph` in `agent/src/graph.ts`
+actually has. Three chains had landed since the diagram was last updated — `proactive_escalation`
+(blocker fan-out, TRO-346/TRO-337/FG-19), `proactive_retro` (retro drafts, TRO-335/FG-17), and
+`proactive_plan_change` (scope-drift discrimination, TRO-336/FG-18) — and none appeared in the
+diagram, even though all three were already fully implemented and covered by their own tests.
+
+**What changed, verified by reading `agent/src/graph.ts` directly (its `.addNode`/`.addEdge`/
+`.addConditionalEdges` calls and the `routeTrigger`/`RouteKey` switch), not guessed from the ticket
+title:**
+- Added `proactive_escalation` (`detectBlockerFanout -> composeBlockerEscalation ->
+  commitBlockerEscalation -> END`), `proactive_retro` (`gatherRetroActivity -> composeRetroDraft ->
+  commitRetroDraft -> END`), and `proactive_plan_change` (`detectPlanChange ->
+  composePlanChangeDraft -> commitPlanChangeDraft -> END`) to the Mermaid flowchart, matching the
+  existing diagram's own conventions exactly: a labeled `RT -->|"..."|` edge out of the
+  `routeTrigger` decision diamond naming the trigger and its required state field
+  (`blockingIssueId`/`weekId`), plain `-->` edges for the rest of each chain, a 🤖\* marker plus
+  inline skip-condition text on the one model-calling node in each chain (mirroring
+  `composeStandupDraft`'s existing footnote style — including `composePlanChangeDraft`'s extra
+  nuance that the model's own MATERIAL/NOT MATERIAL verdict, not just the deterministic gate, can
+  set the skip reason), and a dashed `END -.-> GATE` edge into the existing human-in-the-loop gate
+  box (verified against `gate.ts` directly: `acceptDraft`/`discardItem` dispatch on `draftId`
+  presence, not on a hardcoded item-type list, so the existing gate already handles these three new
+  draft-backed item types with no code change).
+- Added the three new `compose*` nodes to the existing `modelCall` Mermaid class alongside
+  `respond`/`composeAnswer`/`composeStandupDraft` — same amber fill, same convention.
+- Added a short dated note directly under the diagram's existing provenance paragraph, extending
+  "source-level verification covers the whole diagram" to name the three new chains explicitly, and
+  noting (per `graph.ts`'s own module docstring, which says so for each of the three) that none of
+  them has a real LangSmith trace yet either — same "no scheduler exists yet" posture already
+  documented for `proactive_deep`.
+- No edges, nodes, or wording in the pre-existing four chains were changed — purely additive.
+
+**How to verify.** Render the Mermaid block (any Mermaid-aware Markdown viewer, or paste into
+<https://mermaid.live>) and confirm seven distinct chains hang off the `RT` decision diamond, or
+diff the diagram's node/edge list against `agent/src/graph.ts`'s `buildGraph` function directly —
+every node name in the diagram is a literal `NODE_NAMES` entry in that file, and every edge in the
+diagram has a corresponding `.addEdge`/`.addConditionalEdges` call.
+
+**How to roll it back.** Revert this commit. No code, schema, or test changes — reverting restores
+`FLEETGRAPH.MD` and this `CHANGES.md` entry's removal to the pre-TRO-349 four-chain diagram; nothing
+else in the repository depends on this change.
+
+**Noticed, not fixed (out of this ticket's scope — it says "diagram," not "prose"):**
+- The "Node design rationale" section (`FLEETGRAPH.MD`, `## Architecture Decisions`) states
+  `routeTrigger` branches "into four paths," describing only the bare-chat, seeded-expansion,
+  deterministic-proactive, and deep-tier chains — now stale in the same way the diagram was, and not
+  a one-line fix (the surrounding sentence would need rewriting, not just appending a clause).
+- The "Use Cases" section's use-case-5 note still says the blocker-escalation "agent side... has not
+  [shipped]... which no graph node implements yet" — this is now factually wrong, since
+  `detectBlockerFanout`/`composeBlockerEscalation`/`commitBlockerEscalation` ship as of
+  TRO-346/TRO-337.
+- The "four constraints" bullet list directly under the diagram cites `routeTrigger`'s source as
+  having "one of five route keys" at `graph.ts:617-628`, and `expandFrontier`'s conditional edges at
+  `graph.ts:922-925`. `RouteKey` now has eight members and both line numbers are stale (routeTrigger
+  is at `graph.ts:1188-1205`, the `expandFrontier` conditional edges at `graph.ts:1867-1870` as of
+  this ticket) — roughly 900 lines of docstring/interface/node growth from TRO-335/336/346 shifted
+  everything below. `Note 1`/`Note 2`'s own line citations (`graph.ts:586-595`, `928-929`, `844-848`)
+  are likely equally stale for the same reason. None of this was touched here: correcting it needs
+  re-verifying each citation against current line numbers, which is a distinct task from adding the
+  three missing chains.
+- The "Trigger Model" tiers table (Fast/Steady/Deep) has no row for `proactive_escalation`, which
+  is neither a polling cadence nor a per-person schedule the way the other three are — worth a
+  scoping conversation, not a silent table edit.
+
+---
+
 ## TRO-342 — Agent's on-demand chat path now runs under the ASKING PERSON'S OWN Ship API token, not the shared `SHIP_API_TOKEN` env var
 
 **Filed from CodeRabbit review on PR #113 (TRO-341/FG-23), 2026-08-04 — explicitly "a filing, not a
