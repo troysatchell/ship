@@ -308,7 +308,7 @@ describe('POST /api/agent/chat (TRO-320 / FG-9)', () => {
     // calls below, so the second one's `.json()` throws "Body is unusable".
     // A fresh `Response` per invocation is required, not optional, for a
     // test that makes more than one request against the same mock.
-    vi.spyOn(global, 'fetch').mockImplementation(async () =>
+    const fetchSpy = vi.spyOn(global, 'fetch').mockImplementation(async () =>
       new Response(JSON.stringify({ output: 'ok', citedSources: [], expansionCapped: false }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
@@ -320,9 +320,11 @@ describe('POST /api/agent/chat (TRO-320 / FG-9)', () => {
     expect(firstRes.status).toBe(200)
     expect(secondRes.status).toBe(200)
 
-    const fetchMock = global.fetch as unknown as { mock: { calls: [string, RequestInit][] } }
-    const firstBody = JSON.parse(fetchMock.mock.calls[0]?.[1].body as string)
-    const secondBody = JSON.parse(fetchMock.mock.calls[1]?.[1].body as string)
+    expect(fetchSpy).toHaveBeenCalledTimes(2)
+    const [, firstInit] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    const [, secondInit] = fetchSpy.mock.calls[1] as [string, RequestInit]
+    const firstBody = JSON.parse(firstInit.body as string)
+    const secondBody = JSON.parse(secondInit.body as string)
     expect(firstBody.askingUserToken).not.toBe(secondBody.askingUserToken)
 
     // Confirms this isn't just two random strings that happen to differ —
