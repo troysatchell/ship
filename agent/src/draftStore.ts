@@ -97,6 +97,16 @@ export interface StandupDraft {
   status: DraftStatus;
   createdAt: string;
   updatedAt: string;
+  /** What was actually posted to Ship, set once by `markPosted` at accept
+   * time and never touched again (TRO-338 / FG-20). `undefined` until then
+   * — most drafts never reach `'posted'` at all (dismissed, or still
+   * sitting unseen), and this field has nothing to hold in those cases.
+   * Together with `draftText` (the immutable original), this is what makes
+   * the draft-survival metric possible with zero labelling effort: both
+   * versions are already sitting here the moment a person accepts —
+   * `draftSurvival.ts`'s `computeDraftSurvival` is a pure comparison of the
+   * two, no human ever asked to score anything. */
+  finalText?: string;
 }
 
 export type NewStandupDraft = Pick<StandupDraft, 'id' | 'personUserId' | 'windowDate' | 'draftText' | 'proposedTransitions'>;
@@ -111,9 +121,13 @@ export interface DraftStore {
   upsert(draft: NewStandupDraft): StandupDraft;
   markViewed(id: string): boolean;
   markDismissed(id: string): boolean;
-  /** FG-8's own future call, once posting exists. Not invoked by anything
-   * in this ticket — no code path here posts a draft (hard limit). */
-  markPosted(id: string): boolean;
+  /** FG-8's own call, from `gate.ts`'s `acceptDraft` — the one place in
+   * this package that actually posts a draft. `finalText` is REQUIRED
+   * (TRO-338 / FG-20): the whole point of this method retaining it is that
+   * the draft-survival comparison (`draftSurvival.ts`) needs both the
+   * original `draftText` and whatever was actually posted, and there is no
+   * legitimate call to "mark posted" without knowing what was posted. */
+  markPosted(id: string, finalText: string): boolean;
   /** Accepts or rejects ONE proposed transition on a draft, by its index
    * within `proposedTransitions` — never any other transition on the same
    * draft (TRO-321 / FG-8 proof #5). Returns `false`, and changes nothing,
@@ -212,8 +226,17 @@ export class InMemoryDraftStore implements DraftStore {
     return this.setStatus(id, 'dismissed');
   }
 
-  markPosted(id: string): boolean {
-    return this.setStatus(id, 'posted');
+  markPosted(id: string, finalText: string): boolean {
+    const existing = this.drafts.get(id);
+    if (!existing) return false;
+    // Not just `setStatus` — this is the one place `finalText` is ever
+    // written (TRO-338 / FG-20), and it is written exactly once: nothing
+    // in this class re-posts an already-`posted` draft (`gate.ts`'s
+    // `acceptDraft` refuses that before this is ever called), so there is
+    // no "second post" case that would need to decide whether to overwrite
+    // an existing `finalText`.
+    this.drafts.set(id, { ...existing, status: 'posted', finalText, updatedAt: this.now().toISOString() });
+    return true;
   }
 
   get(id: string): StandupDraft | undefined {

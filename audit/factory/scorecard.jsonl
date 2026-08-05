@@ -48,3 +48,5 @@
 {"ticket":"TRO-339","bundle":"TRO-331","attempt":1,"verdict":"fail","failedGates":["review-patterns"],"note":"stalled self-report, verified directly","ts":"2026-08-04"}
 {"ticket":"TRO-339","bundle":"TRO-331","attempt":2,"verdict":"pass","cr":{"findings":5,"triaged":5,"fixed":5},"note":"review-round fixes committed dc298ab; one tests:api flake (app.test.ts, load-sensitive TRO-277 class) cleared on re-run with no code change","ts":"2026-08-04"}
 {"ticket":"TRO-343","attempt":1,"verdict":"pass","crFindings":1,"crFixNow":1,"crNewTickets":0,"crDismissed":0,"ts":"2026-08-05T17:38:00Z"}
+{"ticket":"TRO-322","bundle":"TRO-330","attempt":1,"verdict":"pass","note":"CI rollback proof: throwaway PR #131 + GitLab MR !1, both closed cleanly","ts":"2026-08-05T18:20:00Z"}
+{"ticket":"TRO-338","bundle":"TRO-330","attempt":1,"verdict":"pass","note":"golden-set divergence proof + draft-survival mechanism; live wiring gap filed as TRO-348","ts":"2026-08-05T18:43:00Z"}
