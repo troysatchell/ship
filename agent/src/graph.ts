@@ -1,10 +1,10 @@
 /**
  * The compiled LangGraph graph (TRO-313 / FG-2; extended by TRO-317 / FG-5,
- * TRO-318 / FG-7, and TRO-319 / FG-6).
+ * TRO-318 / FG-7, TRO-319 / FG-6, TRO-335 / FG-17, and TRO-336 / FG-18).
  *
  * Phase 2 (node design for the six FleetGraph use cases — see FLEETGRAPH.MD
  * "Graph Diagram" / "Node design rationale", both marked Pending) is still
- * not fully done. Five entry points exist so far, all sharing ONE compiled
+ * not fully done. Seven entry points exist so far, all sharing ONE compiled
  * graph, selected by `trigger`:
  *
  *   on_demand (no seed document) -> ingest -> respond
@@ -40,6 +40,31 @@
  *     model is `composeBlockerEscalation`, skipped entirely when
  *     `detectBlockerFanout` determines escalation is not warranted (no
  *     model call, no spend) — see that section.
+ *
+ *   proactive_retro -> gatherRetroActivity -> composeRetroDraft ->
+ *     commitRetroDraft
+ *     TRO-335 / FG-17's own addition — see the "Retro delivery drafting"
+ *     section below. Requires `weekId` (one invocation drafts ONE week's
+ *     retro), same required-field posture as `targetPersonUserId`/
+ *     `blockingIssueId` above. The only node in this chain that calls the
+ *     model is `composeRetroDraft`, skipped entirely when
+ *     `gatherRetroActivity` determines the trigger condition is not met (no
+ *     success criteria, no recorded owner, no computable calendar window, or
+ *     the week itself not found) — see that section.
+ *
+ *   proactive_plan_change -> detectPlanChange -> composePlanChangeDraft ->
+ *     commitPlanChangeDraft
+ *     TRO-336 / FG-18's own addition — see the "Plan-change discrimination"
+ *     section below. Requires `weekId` — the SAME state field
+ *     `proactive_retro` requires, reused rather than duplicated because both
+ *     triggers key off one week's own id. The only node in this chain that
+ *     calls the model is `composePlanChangeDraft`, skipped entirely when
+ *     `detectPlanChange` determines the week was not actually edited after
+ *     approval, has no diffable "before" snapshot, or every criterion is
+ *     identical after whitespace normalization. `composePlanChangeDraft`
+ *     itself can ALSO end up writing nothing — the one chain in this
+ *     package where the model's own verdict, not just a deterministic
+ *     gate, decides whether anything gets drafted — see that section.
  *
  * Model provider: Anthropic API directly (`@langchain/anthropic`), confirmed
  * by the maintainer 2026-08-03 — see TRO-313's own "one decision still open"
@@ -223,6 +248,140 @@
  * chain — or anywhere upstream of `gate.ts` — ever sends the drafted
  * message; `DeepShipClientLike` has no write method to call in the first
  * place (same structural guarantee the deep tier already relies on).
+ *
+ * ---- Retro delivery drafting (TRO-335 / FG-17) ---------------------------
+ *
+ * FLEETGRAPH.MD's use case 3, verbatim: "When the retro window opens for a
+ * week whose plan carries at least one success criterion: pre-fill the
+ * delivered section from issues that actually closed in that week, mapped
+ * against each criterion, and call out the criteria with no matching closed
+ * work so they can be explained rather than silently dropped." Same
+ * trigger-model shape as FG-6/FG-19: a NEW trigger (`proactive_retro`)
+ * requiring `weekId`, not a branch bolted onto an existing chain — "the week
+ * ends" produces no change for a poller to observe in the first place
+ * (FLEETGRAPH.MD's own Trigger Model section: "nothing writes a row when a
+ * week ends... the trigger is date arithmetic on the week number, on a
+ * schedule, not an event"), so there is nothing here for `proactive_fast`/
+ * `proactive_steady` to detect even in principle. Same posture as FG-6/FG-19
+ * again: there is deliberately no scheduler in this file (or anywhere in
+ * this package) that decides WHICH week's retro window is open and WHEN; a
+ * real trigger route is a future ticket's job (`retroDraft.ts`'s own module
+ * docstring says so too).
+ *
+ * `gatherRetroActivity` fetches the week (a `sprint` document — see
+ * `retroDraft.ts`'s module docstring for the `weekly_plan`/`weekly_retro`
+ * naming trap this deliberately avoids) and every issue that closed within
+ * it (`retroDraft.ts`'s `gatherWeekDelivery` — no model call, but a real
+ * network call to compute the week's own calendar window; see that
+ * function's docstring for why a date window is load-bearing here and not
+ * optional polish). It then evaluates three gates itself, before any model
+ * spend: the week must carry at least one success criterion (the ticket's
+ * OWN condition, not a waste-control heuristic like FG-6's), it must have a
+ * recorded owner (the "who to draft for" this chain is drafting on behalf
+ * of — see `retroDraft.ts` for why `properties.owner_id` is safe to read as
+ * a plain `users.id` here), and its calendar window must have been
+ * computable at all (`weekDatesUnavailable` — the closed-issue set cannot
+ * be trusted otherwise). Any gate failing sets `retroSkipReason` and skips
+ * straight through: no model call, no draft, no inbox item — the same
+ * "check before spending" posture `gatherStandupActivity`'s waste-control
+ * check and `detectBlockerFanout`'s project/people gates already use.
+ *
+ * `composeRetroDraft` is the ONLY node in this chain that calls the
+ * model — same shape as `composeStandupDraft`/`composeBlockerEscalation`: a
+ * deterministic prompt (`buildRetroPrompt`) built entirely from the gathered
+ * `WeekDeliverySummary`, instructed to map each closed issue to the
+ * criterion/criteria it evidences and to name every criterion left
+ * unmatched (the ticket's own proof condition), never inventing an issue or
+ * criterion the gather step did not find.
+ *
+ * `commitRetroDraft` writes into the SAME two stores `commitStandupDraft`/
+ * `commitBlockerEscalation` do — `DraftStore` (the drafted delivered-section
+ * text, keyed `retro-draft:{weekId}`, an upsert on re-invocation for the
+ * same week) and `ItemStore` (a lightweight `retro_draft` `InboxItem`,
+ * joining the same shared per-person inbox, ranked alongside
+ * `standup_draft` — see `itemStore.ts`'s own `TYPE_RANK` docstring). Nothing
+ * in this chain — or anywhere upstream of `gate.ts` — ever submits the
+ * drafted retro; `DeepShipClientLike` has no write method to call in the
+ * first place (same structural guarantee every deep-tier chain relies on).
+ * The human "edits, adds unplanned work the agent cannot see, and submits"
+ * (the ticket's own words) — this chain never sees or drafts unplanned
+ * work, only what it can verify closed.
+ *
+ * ---- Plan-change discrimination (TRO-336 / FG-18) -------------------------
+ *
+ * FLEETGRAPH.MD's use case 4, verbatim: "A weekly plan is edited after it
+ * was approved" -> "What materially changed, before and after side by
+ * side, plus a drafted re-approval request or a drafted question to the
+ * author." The ticket's own framing is sharper: "the 'plan changed after
+ * approval' flag trips on typo fixes, so managers ignore it — and a quiet
+ * scope cut looks identical... The detection is not the missing piece —
+ * the discrimination is."
+ *
+ * "The detection" is Ship's own, already correct: `PATCH /api/weeks/:id`
+ * (`weeks.ts:1910-1921`) already flips `properties.plan_approval.state`
+ * from `'approved'` to `'changed_since_approved'` the instant
+ * `success_criteria`/`plan` changes on an approved week. This chain does
+ * NOT re-detect that — `detectPlanChange` reads it directly off the week
+ * document as its own trigger CONDITION (mirroring how `detectBlockerFanout`
+ * reads `blocks` associations rather than re-deriving them). Same trigger
+ * shape as FG-6/FG-17/FG-19 again: a required `weekId` (reusing the field
+ * `proactive_retro` already declares — see `GraphState`'s own comment on
+ * it), no scheduler in this file that decides which week's flag to check and
+ * when (a future ticket's job, identical posture to every prior deep-tier
+ * chain here).
+ *
+ * `detectPlanChange` gathers the "before"/"after" success-criteria snapshot
+ * and computes an alignment (`planChangeDraft.ts`'s `gatherPlanChange`/
+ * `alignCriteria`), for the real discrepancy this ticket found between its
+ * own "Verified" citations and what the reachable seed fixture actually
+ * populates — the same class of gap TRO-335 found in its own ticket. It
+ * gates on FOUR conditions before any model call: the week must actually be
+ * `'changed_since_approved'` (`not_changed_since_approval` skip otherwise —
+ * this is the ticket's OWN detection signal, already correct); it must have
+ * a recorded approver to route the draft to (`no_approver` skip); a usable
+ * "before" snapshot must exist (`no_diff_source` skip — never guessed at);
+ * and `alignCriteria` must find at least one criterion that is not
+ * EXACTLY identical after whitespace normalization (`no_material_change`
+ * skip otherwise) — this LAST gate is the full, provable guarantee behind
+ * "a whitespace... change must produce nothing," and no more than that:
+ * `alignCriteria` deliberately does NOT try to also classify a genuine
+ * character-level typo as non-material, because a first attempt at doing
+ * that with a similarity threshold was PROVEN WRONG against real example
+ * text (`planChangeDraft.ts`'s own module docstring has the numbers) — a
+ * fixed edit-distance score cannot reliably tell a typo from a weakened
+ * requirement, since both can land at similar or even inverted similarity
+ * scores depending on sentence length. Whitespace-only changes are the one
+ * case this file can prove without the model; everything else is a
+ * genuine judgment call.
+ *
+ * `composePlanChangeDraft` is the ONLY node in this chain that calls the
+ * model, and it is the ONE node in this entire package where the model
+ * decides more than phrasing — `buildPlanChangePrompt` requires a
+ * `MATERIAL`/`NOT MATERIAL` verdict as the first line of the response, and
+ * `parseMaterialityVerdict` (`planChangeDraft.ts`) reads it: `MATERIAL`
+ * sets `planChangeDraftText` to what follows; `NOT MATERIAL` sets
+ * `planChangeSkipReason: 'no_material_change'` — the SAME skip reason
+ * `detectPlanChange`'s deterministic gate can also set, now decided by the
+ * model instead for a case the deterministic gate correctly declined to
+ * judge. A malformed response (neither prefix) degrades to `MATERIAL` with
+ * the whole response as the draft — the asymmetric-cost reasoning
+ * FLEETGRAPH.MD's own "Precision, and why the bar moved" section states
+ * generally: a false positive here costs a few seconds to dismiss; a false
+ * negative silently reproduces the exact bug this ticket exists to fix.
+ *
+ * `commitPlanChangeDraft` writes into the SAME two stores every other
+ * deep-tier chain does — `DraftStore` (keyed `plan-change-draft:{weekId}`,
+ * an upsert on re-invocation for the same week) and `ItemStore` (a
+ * lightweight `plan_change_draft` `InboxItem`, addressed to the APPROVER —
+ * `plan_approval.approved_by` — joining the same shared per-person inbox,
+ * ranked alongside `standup_draft`/`retro_draft`). Nothing in this chain —
+ * or anywhere upstream of `gate.ts` — ever writes an approval state or
+ * sends the drafted question; `DeepShipClientLike` has no write method to
+ * call in the first place. The ticket names this explicitly as "the one
+ * place where violating [the draft-only gate] would be most tempting and
+ * most damaging, since these documents feed federal performance ratings" —
+ * enforced the same structural way every other hard limit in this package
+ * is: the type the graph holds has nothing to call.
  */
 
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
@@ -250,8 +409,15 @@ import {
   type StandupAnchor,
 } from './standupDraft.js';
 import { buildBlockerEscalationPrompt, gatherBlockerFanout, type BlockerFanoutImpact } from './blockerFanout.js';
+import { buildRetroPrompt, gatherWeekDelivery, type WeekDeliverySummary } from './retroDraft.js';
+import {
+  buildPlanChangePrompt,
+  gatherPlanChange,
+  parseMaterialityVerdict,
+  type PlanChangeSummary,
+} from './planChangeDraft.js';
 import { findLowestCommonManager, type LowestCommonManagerResult } from './roles.js';
-import type { CostTracker, RealUsage } from './costTracking.js';
+import type { CostTracker, InvocationSite, RealUsage } from './costTracking.js';
 
 /** The subset of ChatAnthropic's interface this graph actually needs — narrow
  * on purpose so tests can pass a plain object instead of a real client.
@@ -287,8 +453,20 @@ export interface AnthropicModel {
  * `proactive_escalation` (TRO-346/TRO-337 / FG-19) routes to
  * `detectBlockerFanout` — see the module docstring's "Blocker escalation
  * fan-out" section, including why this is its own trigger rather than a
- * branch on the fast/steady chain. */
-export type TriggerKind = 'on_demand' | 'proactive_fast' | 'proactive_steady' | 'proactive_deep' | 'proactive_escalation';
+ * branch on the fast/steady chain. `proactive_retro` (TRO-335 / FG-17)
+ * routes to `gatherRetroActivity` — see the module docstring's "Retro
+ * delivery drafting" section, same "own trigger, own required field"
+ * reasoning again. `proactive_plan_change` (TRO-336 / FG-18) routes to
+ * `detectPlanChange` — see the module docstring's "Plan-change
+ * discrimination" section, same reasoning once more. */
+export type TriggerKind =
+  | 'on_demand'
+  | 'proactive_fast'
+  | 'proactive_steady'
+  | 'proactive_deep'
+  | 'proactive_escalation'
+  | 'proactive_retro'
+  | 'proactive_plan_change';
 
 export const GraphState = Annotation.Root({
   /** The raw incoming request text (a question, a trigger payload, etc). */
@@ -534,6 +712,119 @@ export const GraphState = Annotation.Root({
     reducer: (current, update) => update ?? current,
     default: () => undefined,
   }),
+
+  // ---- Retro delivery drafting (TRO-335 / FG-17) --------------------------
+
+  /** Which week this invocation operates on — REQUIRED for both
+   * `trigger: 'proactive_retro'` (one invocation, one week's retro; see the
+   * module docstring's "Retro delivery drafting" section) AND
+   * `trigger: 'proactive_plan_change'` (one invocation, one week's
+   * plan-change check; see "Plan-change discrimination"). Shared rather
+   * than duplicated (`retroWeekId`/`planChangeWeekId`) because both triggers
+   * mean the same thing by it — a `sprint` document's id — and never run in
+   * the same invocation to collide over it. Same required-field posture as
+   * `targetPersonUserId`/`blockingIssueId`: `gatherRetroActivity`/
+   * `detectPlanChange` each throw a clear error if their own trigger runs
+   * without one, rather than silently doing nothing or guessing which week. */
+  weekId: Annotation<string | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** The full delivery summary `gatherRetroActivity` gathered
+   * (`retroDraft.ts`'s `gatherWeekDelivery`) — the week's success criteria,
+   * its owner, and every issue that closed within it. Set even when the
+   * trigger condition is not met (`retroSkipReason` set alongside it), so a
+   * caller can still inspect what was found. */
+  weekDeliverySummary: Annotation<WeekDeliverySummary | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** Set by `gatherRetroActivity` when the trigger condition is NOT met, or
+   * when the closed-issue set cannot be trusted — the week itself was
+   * gone/inaccessible/not a `sprint` document (`'week_not_found'`), it
+   * carries no success criteria at all (the ticket's own trigger condition:
+   * `'no_success_criteria'`), it has no recorded owner to draft for
+   * (`'no_owner'`), or its own calendar window could not be computed
+   * (`'week_dates_unavailable'` — see `retroDraft.ts`'s
+   * `WeekDeliverySummary.weekDatesUnavailable` for why this is a real,
+   * verified failure mode, not a theoretical one). `composeRetroDraft` reads
+   * this to skip its model call entirely, and `commitRetroDraft` reads it
+   * to skip writing anything — identical shape to `standupSkipReason`/
+   * `blockerEscalationSkipReason`. */
+  retroSkipReason: Annotation<
+    'week_not_found' | 'no_success_criteria' | 'no_owner' | 'week_dates_unavailable' | undefined
+  >({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** The model's composed "what I delivered" text, once `composeRetroDraft`
+   * has run. `undefined` when the run was skipped (`retroSkipReason` set). */
+  retroDraftText: Annotation<string | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  // ---- Plan-change discrimination (TRO-336 / FG-18) -----------------------
+
+  /** The full plan-change summary `detectPlanChange` gathered
+   * (`planChangeDraft.ts`'s `gatherPlanChange`) — the week's approval
+   * state, its approver, and (when reachable) the materiality-aligned
+   * criteria diff. Set even when the trigger condition is not met
+   * (`planChangeSkipReason` set alongside it), so a caller can still
+   * inspect what was found. */
+  planChangeSummary: Annotation<PlanChangeSummary | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** Set by `detectPlanChange` BEFORE any model call when the trigger
+   * condition is not met or the change cannot be trusted — the week itself
+   * was gone/inaccessible/not a `sprint` document (`'week_not_found'`); its
+   * `plan_approval.state` is not `'changed_since_approved'`, Ship's OWN
+   * detection signal not having fired (`'not_changed_since_approval'`); it
+   * has no recorded approver to route a draft to (`'no_approver'`); no
+   * "before" criteria snapshot could be found in either `document_history`
+   * or `plan_history` (`'no_diff_source'` — never guessed at, see
+   * `planChangeDraft.ts`'s own module docstring); or every criterion is
+   * identical after whitespace normalization (`'no_material_change'` —
+   * the ONE materiality question this file answers without the model, see
+   * `planChangeDraft.ts`'s `alignCriteria`). `'no_material_change'` can
+   * ALSO be set AFTER a model call, by `composePlanChangeDraft` itself,
+   * when the model's own `NOT MATERIAL` verdict decides a change that
+   * survived the deterministic gate (e.g. a genuine typo) still is not
+   * material — see the module docstring's "Why the model decides
+   * materiality here" section. `'empty_draft'` is the defensive edge case
+   * (CodeRabbit, TRO-336 PR review) where the model returns `MATERIAL` but
+   * writes nothing after the verdict line — never expected from a real
+   * model, but `commitPlanChangeDraft`'s own guard already refuses to write
+   * an empty draft either way; this reason exists so a caller inspecting
+   * `planChangeSkipReason` sees WHY nothing was written instead of the
+   * field staying `undefined` despite no draft existing. Whichever reason
+   * applies, `commitPlanChangeDraft` reads it to skip writing anything —
+   * identical shape to `retroSkipReason`/`blockerEscalationSkipReason`. */
+  planChangeSkipReason: Annotation<
+    | 'week_not_found'
+    | 'not_changed_since_approval'
+    | 'no_approver'
+    | 'no_diff_source'
+    | 'no_material_change'
+    | 'empty_draft'
+    | undefined
+  >({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
+
+  /** The model's composed question text, once `composePlanChangeDraft` has
+   * run. `undefined` when the run was skipped (`planChangeSkipReason`
+   * set). */
+  planChangeDraftText: Annotation<string | undefined>({
+    reducer: (current, update) => update ?? current,
+    default: () => undefined,
+  }),
 });
 
 export type GraphStateType = typeof GraphState.State;
@@ -557,6 +848,12 @@ export const NODE_NAMES = [
   'detectBlockerFanout',
   'composeBlockerEscalation',
   'commitBlockerEscalation',
+  'gatherRetroActivity',
+  'composeRetroDraft',
+  'commitRetroDraft',
+  'detectPlanChange',
+  'composePlanChangeDraft',
+  'commitPlanChangeDraft',
 ] as const;
 export type NodeName = (typeof NODE_NAMES)[number];
 
@@ -738,7 +1035,11 @@ function requireDeepDeps(deps: DeepDeps | undefined, nodeName: NodeName): DeepDe
  * rejection. */
 async function recordInvocation(
   tracker: CostTracker | undefined,
-  node: 'respond' | 'composeAnswer' | 'composeStandupDraft' | 'composeBlockerEscalation',
+  // `InvocationSite` (`costTracking.ts`), not a hand-written duplicate union
+  // (CodeRabbit, TRO-336 PR review) — a second copy of this list had already
+  // drifted once in this same ticket (see `costTracking.ts`'s own module
+  // docstring), and this call site was the other place it could drift again.
+  node: InvocationSite,
   trigger: TriggerKind,
   model: string | undefined,
   usage: RealUsage | undefined,
@@ -785,6 +1086,20 @@ function requireBlockingIssueId(state: GraphStateType, nodeName: NodeName): stri
   return state.blockingIssueId;
 }
 
+/** Same required-field posture as `requireTargetPersonUserId`/
+ * `requireBlockingIssueId`, for the retro-delivery chain (TRO-335 / FG-17) —
+ * see the module docstring's "Retro delivery drafting" section for why this
+ * is a required field rather than something the node discovers on its own. */
+function requireWeekId(state: GraphStateType, nodeName: NodeName): string {
+  if (!state.weekId) {
+    throw new Error(
+      `graph node "${nodeName}" requires state.weekId — one "proactive_retro"/"proactive_plan_change" ` +
+        'invocation operates on exactly one week; pass weekId when invoking the graph with either trigger.'
+    );
+  }
+  return state.weekId;
+}
+
 /** `START`'s routing keys — a superset of `TriggerKind` because `on_demand`
  * itself splits into two different node chains depending on whether a seed
  * document is present (see the module docstring). `proactive_deep` and bare
@@ -798,15 +1113,18 @@ type RouteKey =
   | 'proactive_fast'
   | 'proactive_steady'
   | 'proactive_deep'
-  | 'proactive_escalation';
+  | 'proactive_escalation'
+  | 'proactive_retro'
+  | 'proactive_plan_change';
 
 /** Routes `START` by `state.trigger` (and, for `on_demand`, by whether a
  * seed document was given) — the seam that lets every mode share one graph
  * without any path knowing the others exist. `proactive_deep` now has a
  * `pathMap` entry too (TRO-319 / FG-6, below) — FG-7 already wired this
  * switch's `proactive_deep` case in anticipation, ahead of the node it
- * routes to existing. `proactive_escalation` (TRO-346/TRO-337 / FG-19)
- * follows the identical pattern. */
+ * routes to existing. `proactive_escalation` (TRO-346/TRO-337 / FG-19),
+ * `proactive_retro` (TRO-335 / FG-17), and `proactive_plan_change`
+ * (TRO-336 / FG-18) all follow the identical pattern. */
 function routeTrigger(state: GraphStateType): RouteKey {
   switch (state.trigger) {
     case 'on_demand':
@@ -819,6 +1137,10 @@ function routeTrigger(state: GraphStateType): RouteKey {
       return 'proactive_deep';
     case 'proactive_escalation':
       return 'proactive_escalation';
+    case 'proactive_retro':
+      return 'proactive_retro';
+    case 'proactive_plan_change':
+      return 'proactive_plan_change';
   }
 }
 
@@ -1234,6 +1556,225 @@ export function buildGraph(
 
       return {};
     })
+    // ---- Retro delivery drafting (TRO-335 / FG-17) -----------------------
+    .addNode('gatherRetroActivity', async (state: GraphStateType) => {
+      const deps = requireDeepDeps(deepDeps, 'gatherRetroActivity');
+      const weekId = requireWeekId(state, 'gatherRetroActivity');
+
+      const summary = await gatherWeekDelivery(deps.shipClient, weekId);
+      if (!summary) {
+        // The week itself is gone, invisible to this token, or not actually
+        // a `sprint` document — nothing to draft from, not an error (same
+        // posture as `detectBlockerFanout`'s own "issue not found" branch).
+        return { retroSkipReason: 'week_not_found' as const };
+      }
+      // Gate (a): the ticket's OWN trigger condition — "a week whose plan
+      // carries at least one success criterion." Checked before the owner
+      // check below so the more fundamental "this week has no structured
+      // plan at all" reason is reported when both are true.
+      if (summary.successCriteria.length === 0) {
+        return { weekDeliverySummary: summary, retroSkipReason: 'no_success_criteria' as const };
+      }
+      // Gate (b): nobody to draft FOR — see `retroDraft.ts`'s module
+      // docstring for why `owner_id` is safe to read as a `users.id` here.
+      if (!summary.ownerUserId) {
+        return { weekDeliverySummary: summary, retroSkipReason: 'no_owner' as const };
+      }
+      // Gate (c): the closed-issue set itself cannot be trusted without a
+      // real calendar window — see `retroDraft.ts`'s
+      // `WeekDeliverySummary.weekDatesUnavailable` docstring for the real,
+      // verified failure mode this guards against (a stale issue leaking
+      // into a much later week's draft). Checked last since (a)/(b) are the
+      // ticket's own more fundamental trigger conditions.
+      if (summary.weekDatesUnavailable) {
+        return { weekDeliverySummary: summary, retroSkipReason: 'week_dates_unavailable' as const };
+      }
+      return { weekDeliverySummary: summary };
+    })
+    .addNode('composeRetroDraft', async (state: GraphStateType) => {
+      requireDeepDeps(deepDeps, 'composeRetroDraft');
+      if (state.retroSkipReason || !state.weekDeliverySummary) {
+        // Trigger condition not met, or the gather step never reached a
+        // decision — no model call, no spend, same "check before spending"
+        // posture as `composeStandupDraft`/`composeBlockerEscalation`.
+        return {};
+      }
+
+      const prompt = buildRetroPrompt(state.weekDeliverySummary);
+      const result = await model.invoke(prompt);
+      await recordInvocation(costTracker, 'composeRetroDraft', state.trigger, model.model, result.usage_metadata);
+      return { retroDraftText: contentToString(result.content) };
+    })
+    .addNode('commitRetroDraft', (state: GraphStateType) => {
+      const deps = requireDeepDeps(deepDeps, 'commitRetroDraft');
+      if (state.retroSkipReason || !state.retroDraftText || !state.weekDeliverySummary) {
+        // Skipped, or nothing to commit (e.g. the compose step never ran) —
+        // never write a partial/empty draft.
+        return {};
+      }
+      const summary = state.weekDeliverySummary;
+      const ownerUserId = summary.ownerUserId;
+      if (!ownerUserId) {
+        // Unreachable in practice — reaching this node with no
+        // `retroSkipReason` requires `gatherRetroActivity` to have already
+        // confirmed `ownerUserId` is set (see that node's own gate (b)).
+        // Kept as an explicit runtime guard rather than a type assertion,
+        // matching this file's existing style under `noUncheckedIndexedAccess`
+        // (lessons.md #16/#21).
+        return {};
+      }
+
+      // Stable per week — re-invoking for the same week is an upsert
+      // (matches `commitBlockerEscalation`'s own per-day upsert contract,
+      // scoped to a week instead of a day since a retro drafts once per
+      // week, not once per calendar day).
+      const draftId = `retro-draft:${summary.weekId}`;
+      const draft = deps.draftStore.upsert({
+        id: draftId,
+        personUserId: ownerUserId,
+        windowDate: `week-${summary.weekNumber}`,
+        draftText: state.retroDraftText,
+        proposedTransitions: [],
+      });
+
+      deps.itemStore.upsert({
+        id: draft.id,
+        recipientUserId: ownerUserId,
+        type: 'retro_draft',
+        summary:
+          summary.closedIssues.length > 0
+            ? `Your Week ${summary.weekNumber} retro draft is ready`
+            : `Your Week ${summary.weekNumber} retro draft is ready — no issues closed this week`,
+        evidence: { documentId: summary.weekId, documentType: 'sprint' },
+        action: { label: 'Review draft', href: `/retro-draft/${draft.id}` },
+        draftId: draft.id,
+      });
+
+      return {};
+    })
+    // ---- Plan-change discrimination (TRO-336 / FG-18) ---------------------
+    .addNode('detectPlanChange', async (state: GraphStateType) => {
+      const deps = requireDeepDeps(deepDeps, 'detectPlanChange');
+      const weekId = requireWeekId(state, 'detectPlanChange');
+
+      const summary = await gatherPlanChange(deps.shipClient, weekId, { changeFeedLimit: deps.changeFeedLimit });
+      if (!summary) {
+        // The week itself is gone, invisible to this token, or not actually
+        // a `sprint` document — nothing to evaluate, not an error (same
+        // posture as `detectBlockerFanout`'s own "issue not found" branch).
+        return { planChangeSkipReason: 'week_not_found' as const };
+      }
+      // Gate (a): the ticket's OWN detection signal — Ship's approval
+      // tracking already flipped to 'changed_since_approved'; if it hasn't,
+      // there is nothing post-approval to discriminate about yet.
+      if (summary.approvalState !== 'changed_since_approved') {
+        return { planChangeSummary: summary, planChangeSkipReason: 'not_changed_since_approval' as const };
+      }
+      // Gate (b): nobody to route the draft TO.
+      if (!summary.approverUserId) {
+        return { planChangeSummary: summary, planChangeSkipReason: 'no_approver' as const };
+      }
+      // Gate (c): no "before" snapshot found in either document_history or
+      // plan_history — see `planChangeDraft.ts`'s own module docstring for
+      // why this is a real, verified gap, not a theoretical one. Never
+      // guessed at.
+      if (!summary.diffSourceFound) {
+        return { planChangeSummary: summary, planChangeSkipReason: 'no_diff_source' as const };
+      }
+      // Gate (d): the ONE materiality question decided here, deterministically,
+      // never by the model — every criterion identical after whitespace
+      // normalization. Checked last since (a)-(c) are more fundamental "can
+      // we even evaluate this" gates. Anything that survives this gate
+      // (including a genuine character-level typo) still needs the model's
+      // own MATERIAL/NOT MATERIAL verdict — see `composePlanChangeDraft` and
+      // this file's module docstring for why.
+      if (!summary.alignment.hasAnyChange) {
+        return { planChangeSummary: summary, planChangeSkipReason: 'no_material_change' as const };
+      }
+      return { planChangeSummary: summary };
+    })
+    .addNode('composePlanChangeDraft', async (state: GraphStateType) => {
+      requireDeepDeps(deepDeps, 'composePlanChangeDraft');
+      if (state.planChangeSkipReason || !state.planChangeSummary) {
+        // A deterministic gate already failed (including the one
+        // materiality question `detectPlanChange` can answer on its own —
+        // whitespace-only), or the gather step never reached a decision —
+        // no model call, no spend, same "check before spending" posture as
+        // every other `compose*` node in this file.
+        return {};
+      }
+
+      const prompt = buildPlanChangePrompt(state.planChangeSummary);
+      const result = await model.invoke(prompt);
+      await recordInvocation(costTracker, 'composePlanChangeDraft', state.trigger, model.model, result.usage_metadata);
+
+      // The ONE node in this package where the model's own verdict — not
+      // just a deterministic gate — decides whether anything gets written.
+      // See this file's module docstring, "Plan-change discrimination", for
+      // why: a first deterministic attempt at this exact judgment (typo vs.
+      // weakened) was proven wrong against real text.
+      const verdict = parseMaterialityVerdict(contentToString(result.content));
+      if (!verdict.material) {
+        return { planChangeSkipReason: 'no_material_change' as const };
+      }
+      if (!verdict.draftText) {
+        // Defensive (CodeRabbit, TRO-336 PR review): a `MATERIAL` verdict
+        // with nothing after it — never expected from a real model, but
+        // `commitPlanChangeDraft`'s own guard already refuses to write an
+        // empty draft either way. Naming the reason here means a caller
+        // inspecting `planChangeSkipReason` sees WHY, rather than it
+        // staying `undefined` despite no draft existing.
+        return { planChangeSkipReason: 'empty_draft' as const };
+      }
+      return { planChangeDraftText: verdict.draftText };
+    })
+    .addNode('commitPlanChangeDraft', (state: GraphStateType) => {
+      const deps = requireDeepDeps(deepDeps, 'commitPlanChangeDraft');
+      if (state.planChangeSkipReason || !state.planChangeDraftText || !state.planChangeSummary) {
+        // Skipped, or nothing to commit (e.g. the compose step never ran) —
+        // never write a partial/empty draft, and NEVER write an approval
+        // state (the ticket's own hard limit) — `DeepShipClientLike` has no
+        // write method to call in the first place.
+        return {};
+      }
+      const summary = state.planChangeSummary;
+      const approverUserId = summary.approverUserId;
+      if (!approverUserId) {
+        // Unreachable in practice — reaching this node with no
+        // `planChangeSkipReason` requires `detectPlanChange` to have
+        // already confirmed `approverUserId` is set (see that node's own
+        // gate (b)). Kept as an explicit runtime guard rather than a type
+        // assertion, matching this file's existing style under
+        // `noUncheckedIndexedAccess` (lessons.md #16/#21).
+        return {};
+      }
+
+      // Stable per week — re-invoking while the week is still
+      // 'changed_since_approved' is an upsert (matches `commitRetroDraft`'s
+      // own per-week upsert contract).
+      const draftId = `plan-change-draft:${summary.weekId}`;
+      const { alignment } = summary;
+      const draft = deps.draftStore.upsert({
+        id: draftId,
+        personUserId: approverUserId,
+        windowDate: `week-${summary.weekNumber}`,
+        draftText: state.planChangeDraftText,
+        proposedTransitions: [],
+      });
+
+      const changeCount = alignment.removed.length + alignment.added.length + alignment.modified.length;
+      deps.itemStore.upsert({
+        id: draft.id,
+        recipientUserId: approverUserId,
+        type: 'plan_change_draft',
+        summary: `Week ${summary.weekNumber}'s plan changed after you approved it (${changeCount} criterion change${changeCount === 1 ? '' : 's'})`,
+        evidence: { documentId: summary.weekId, documentType: 'sprint' },
+        action: { label: 'Review draft', href: `/plan-change-draft/${draft.id}` },
+        draftId: draft.id,
+      });
+
+      return {};
+    })
     .addConditionalEdges(START, routeTrigger, {
       on_demand_chat: 'ingest',
       on_demand_expand: 'resolveSeed',
@@ -1241,6 +1782,8 @@ export function buildGraph(
       proactive_steady: 'pollChangeFeed',
       proactive_deep: 'gatherStandupActivity',
       proactive_escalation: 'detectBlockerFanout',
+      proactive_retro: 'gatherRetroActivity',
+      proactive_plan_change: 'detectPlanChange',
     })
     .addEdge('ingest', 'respond')
     .addEdge('respond', END)
@@ -1260,7 +1803,13 @@ export function buildGraph(
     .addEdge('commitStandupDraft', END)
     .addEdge('detectBlockerFanout', 'composeBlockerEscalation')
     .addEdge('composeBlockerEscalation', 'commitBlockerEscalation')
-    .addEdge('commitBlockerEscalation', END);
+    .addEdge('commitBlockerEscalation', END)
+    .addEdge('gatherRetroActivity', 'composeRetroDraft')
+    .addEdge('composeRetroDraft', 'commitRetroDraft')
+    .addEdge('commitRetroDraft', END)
+    .addEdge('detectPlanChange', 'composePlanChangeDraft')
+    .addEdge('composePlanChangeDraft', 'commitPlanChangeDraft')
+    .addEdge('commitPlanChangeDraft', END);
 
   return graph.compile();
 }
