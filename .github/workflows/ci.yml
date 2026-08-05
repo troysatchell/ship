@@ -221,6 +221,88 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  e2e-agent:
+    name: e2e · agent detection latency + grounded chat
+    runs-on: ubuntu-latest
+    # A doomed PR never spends minutes on browser install + two real server
+    # processes — same reasoning build-image's own `needs: verify` uses.
+    needs: verify
+    timeout-minutes: 15
+
+    # TRO-322 (FG-12): the required E2E coverage — "an event enters Ship and
+    # the agent surfaces it within the detection latency window" (timed) and
+    # "a user invokes the agent from the chat interface and gets a grounded
+    # response" — run here, on a plain postgres SERVICE container, not
+    # testcontainers. e2e/fixtures/isolated-env.ts's testcontainers-based
+    # Postgres needs a Docker daemon reachable from inside the job's own
+    # container, which GitLab's shared runner cannot provide (see
+    # .gitlab-ci.yml's image-build job comment) — a `services:` block like
+    # this one needs no such thing on EITHER platform, which is why
+    # e2e/fixtures/agentEnv.ts (this job's fixture) uses this mechanism
+    # instead. See that file's own header comment for the full reasoning.
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: ship
+          POSTGRES_PASSWORD: ship_ci_password
+          POSTGRES_DB: ship_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # agentEnv.ts's own database — this job's postgres service starts
+      # empty every run, so unlike `verify` there is no truncation hazard to
+      # worry about from a concurrent step.
+      E2E_AGENT_DATABASE_URL: postgresql://ship:ship_ci_password@localhost:5432/ship_ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.27.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # api/ and web/ get built by e2e/global-setup.ts itself (playwright's
+      # own globalSetup, unconditional on every `playwright test` run) — only
+      # agent/ needs building here, since global-setup.ts predates that
+      # package and does not know about it.
+      - name: Build shared + agent
+        run: |
+          pnpm build:shared
+          pnpm --filter @ship/agent build
+
+      - name: Install Playwright (chromium only)
+        run: pnpm exec playwright install --with-deps chromium
+
+      - name: Run FleetGraph agent E2E flows
+        env:
+          DATABASE_URL: ${{ env.E2E_AGENT_DATABASE_URL }}
+        run: pnpm exec playwright test e2e/agent-detection-latency.spec.ts e2e/agent-chat-grounded-response.spec.ts --workers=1
+
+      - name: Upload agent e2e artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-agent-results-${{ github.sha }}
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: warn
+          retention-days: 14
+
   inventory:
     name: source-code inventory
     runs-on: ubuntu-latest

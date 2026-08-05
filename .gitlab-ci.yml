@@ -8,6 +8,7 @@
 
 stages:
   - verify
+  - e2e
   - image
 
 variables:
@@ -84,6 +85,59 @@ verify:
     paths:
       - api-tests.json
       - web-tests.json
+
+# TRO-322 (FG-12): the required E2E coverage — "an event enters Ship and the
+# agent surfaces it within the detection latency window" (timed) and "a user
+# invokes the agent from the chat interface and gets a grounded response" —
+# on a plain postgres SERVICE container, not testcontainers.
+# e2e/fixtures/isolated-env.ts's testcontainers-based Postgres needs a Docker
+# daemon reachable from inside the job's own container — the exact capability
+# the image-build job below documents this runner cannot provide
+# ("mount: permission denied (are you root?)" starting docker:27-dind
+# privileged). A `services:` entry like this one needs no such thing on
+# either platform, which is why e2e/fixtures/agentEnv.ts (this job's fixture)
+# uses it instead — see that file's own header comment for the full
+# reasoning.
+e2e-agent:
+  extends: .node_env
+  stage: e2e
+  timeout: 15m
+  needs: ["verify"]
+  services:
+    - name: postgres:15-alpine
+      alias: postgres
+  variables:
+    POSTGRES_USER: ship
+    POSTGRES_PASSWORD: ship_ci_password
+    POSTGRES_DB: ship_ci
+    # agentEnv.ts's own database — this job's postgres service starts empty
+    # every run, so there is no truncation hazard from a concurrent step the
+    # way there could be sharing `verify`'s own database.
+    DATABASE_URL: "postgresql://ship:ship_ci_password@postgres:5432/ship_ci"
+  script:
+    - |
+      for i in $(seq 1 30); do
+        if (exec 3<>/dev/tcp/postgres/5432) 2>/dev/null; then
+          exec 3<&- 3>&-
+          break
+        fi
+        echo "waiting for postgres ($i/30)..."
+        sleep 2
+      done
+    # api/ and web/ get built by e2e/global-setup.ts itself (playwright's own
+    # globalSetup, unconditional on every `playwright test` run) — only
+    # agent/ needs building here, since global-setup.ts predates that
+    # package and does not know about it.
+    - pnpm build:shared
+    - pnpm --filter @ship/agent build
+    - pnpm exec playwright install --with-deps chromium
+    - pnpm exec playwright test e2e/agent-detection-latency.spec.ts e2e/agent-chat-grounded-response.spec.ts --workers=1
+  artifacts:
+    when: always
+    expire_in: 14 days
+    paths:
+      - test-results/
+      - playwright-report/
 
 inventory:
   extends: .node_env
