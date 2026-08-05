@@ -622,15 +622,45 @@ resource showing `ipAllowList: null` again.
 
 ### Development and Testing Costs
 
-**Pending — not yet instrumented.** Development has so far been design and codebase verification,
-with no agent invocations. Token accounting is added once the graph runs.
+**Instrumented as of TRO-339 (FG-21), 2026-08-05.** Every real `model.invoke()` call in
+`agent/src/graph.ts` (the `respond`, `composeAnswer`, and `composeStandupDraft` nodes — the only
+three that ever call the model) now records its real input/output tokens, model, and which node
+served it, to `agent/.cache/cost-ledger.jsonl`. The table below is that recorded data, reproduced
+verbatim by running `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` from the worktree — not an estimate.
 
 | Item | Amount |
 |---|---|
-| Claude API — input tokens | Pending |
-| Claude API — output tokens | Pending |
-| Total invocations during development | Pending |
-| Total development spend | Pending |
+| Claude API — input tokens | 33 |
+| Claude API — output tokens | 37 |
+| Total invocations during development | 1 |
+| Total development spend | $0.000218 |
+
+**Reconciliation.** The one recorded invocation was cross-checked directly against LangSmith's own
+usage reporting for the same trace (`fleetgraph-agent` project, queried via the LangSmith API,
+2026-08-05): LangSmith independently reports `prompt_tokens: 33`, `completion_tokens: 37`,
+`total_cost: 0.000218` for that exact call — an exact match, not a coincidence of rounding.
+
+**Why the total is this small.** Querying LangSmith's full history for this project (not just this
+ticket's own invocation) turned up only two prior real model calls, ever, in this sprint: one
+`trace-invoke.ts` smoke-test call from TRO-313/FG-2 (33 in / 38 out, $0.000223) and one failed call
+against a stale model id (0 tokens, $0). Both predate this ticket and were never captured anywhere.
+FG-5's proactive chain, FG-6's standup-draft composition, and FG-7's on-demand expansion have never
+once been invoked against the real Anthropic API this sprint — every test for all three uses a
+stable fake model, by design (`graph.test.ts`'s own docstring). So "no agent invocations yet" (this
+section's prior text) was accurate, not merely honest-but-stale: real spend really has been
+near-zero, and this ticket's instrumentation was landed before that changes, per its own premise —
+"instrumentation added after the fact cannot recover spend that was never recorded."
+
+**Per-tier measured cost**, to replace the projected $0.021 standup / $0.015 inbox / $0.052 retro /
+$0.065 on-demand figures below with observed ones once real traffic exists: only the bare on-demand
+chat path (`respond`, no seed document) has a real measurement yet — $0.000218/run. `composeAnswer`
+(the on-demand-with-expansion tier the $0.065 projection actually describes) and
+`composeStandupDraft` (the standup-draft tier) are fully wired to record the moment either one is
+invoked for real — `composeAnswer` additionally records documents-pulled-per-run (cost cliff #2) —
+but neither has ever run against the real API, so neither has a measured number to report yet. This
+is a real gap, not a placeholder: producing one requires a live Ship API and seeded database
+(`composeAnswer`) or a scheduled trigger nobody has built yet (`composeStandupDraft`, `graph.ts`'s
+own module docstring — "there is no scheduler in this file... that decides whose window is open").
 
 ### Production Cost Projections
 
