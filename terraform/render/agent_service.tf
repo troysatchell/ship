@@ -75,5 +75,17 @@ resource "render_web_service" "agent" {
     LANGCHAIN_PROJECT    = { value = var.langchain_project }
     LANGCHAIN_ENDPOINT   = { value = var.langchain_endpoint }
     LANGSMITH_API_KEY    = { value = var.langsmith_api_key }
+
+    # Shared secret the agent's own POST /chat and GET /inbox check on every
+    # request before either touches the graph or item store (agent/src/
+    # server.ts, via agent/src/config.ts's agentInternalSecret) — must match
+    # web_service.tf's copy of the same variable exactly, or every call from
+    # api/ gets rejected with 401. TRO-347: previously set only via the
+    # Render REST API (see this resource's lifecycle.ignore_changes comment
+    # above for why `terraform apply` can't reach this resource on the free
+    # tier) — never declared here, so a clean-machine apply silently deployed
+    # this service without it. Sensitive input, never a literal — see
+    # variables.tf.
+    AGENT_INTERNAL_SECRET = { value = var.agent_internal_secret }
   }
 }
