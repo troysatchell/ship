@@ -9,6 +9,7 @@ import {
 } from 'react';
 import { api, UserInfo, Workspace } from '@/lib/api';
 import { useWorkspace, WorkspaceWithRole } from '@/contexts/WorkspaceContext';
+import { queryClient } from '@/lib/queryClient';
 
 // Cache key for offline auth
 const AUTH_CACHE_KEY = 'ship:auth-cache';
@@ -135,6 +136,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async (email: string, password: string) => {
     const response = await api.auth.login(email, password);
     if (response.success && response.data) {
+      // TRO-343: an identity transition. Drop every cached query/mutation so
+      // this login can never serve data fetched under whoever was signed in
+      // before (shared/kiosk browser, or re-login as a different account
+      // without an intervening logout) — query keys throughout the app are
+      // not scoped by user id, so a stale cache hit here is a cross-user
+      // data leak, not just an outdated read.
+      queryClient.clear();
       setUser(response.data.user);
       setCurrentWorkspace(response.data.currentWorkspace);
       setWorkspaces(response.data.workspaces);
@@ -160,12 +168,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setWorkspaces([]);
     setImpersonating(null);
     clearCachedAuthData();
+    // TRO-343: identity transition - see the matching comment in login().
+    // Whoever signs in next on this browser must not inherit this session's
+    // cached query data.
+    queryClient.clear();
   }, [setCurrentWorkspace, setWorkspaces]);
 
   const endImpersonation = useCallback(async () => {
     const response = await api.admin.endImpersonation();
     if (response.success) {
       setImpersonating(null);
+      // TRO-343: identity transition back to the original admin user -
+      // drop whatever the impersonated user's session cached so it can't
+      // leak into the admin's own view.
+      queryClient.clear();
       // Refresh session to get original user context
       const meResponse = await api.auth.me();
       if (meResponse.success && meResponse.data) {

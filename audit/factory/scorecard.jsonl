@@ -47,5 +47,6 @@
 {"ticket":"TRO-334","bundle":"TRO-328","attempt":1,"verdict":"fail","failedGates":["stash-guard"],"note":"pre-existing TRO-323 exception carried forward; TRO-334 itself added zero new stash writes, confirmed via factory-stash-activity.log timestamps","ts":"2026-08-04T21:12:40Z"}
 {"ticket":"TRO-339","bundle":"TRO-331","attempt":1,"verdict":"fail","failedGates":["review-patterns"],"note":"stalled self-report, verified directly","ts":"2026-08-04"}
 {"ticket":"TRO-339","bundle":"TRO-331","attempt":2,"verdict":"pass","cr":{"findings":5,"triaged":5,"fixed":5},"note":"review-round fixes committed dc298ab; one tests:api flake (app.test.ts, load-sensitive TRO-277 class) cleared on re-run with no code change","ts":"2026-08-04"}
+{"ticket":"TRO-343","attempt":1,"verdict":"pass","crFindings":1,"crFixNow":1,"crNewTickets":0,"crDismissed":0,"ts":"2026-08-05T17:38:00Z"}
 {"ticket":"TRO-335","bundle":"TRO-329","attempt":1,"verdict":"pass","note":"found real date-window overcounting bug; 8 CodeRabbit findings triaged","ts":"2026-08-05T17:56:00Z"}
 {"ticket":"TRO-336","bundle":"TRO-329","attempt":1,"verdict":"pass","note":"empirically disproved fixed-threshold similarity approach before building; 13 CodeRabbit findings (both TRO-335/336) triaged","ts":"2026-08-05T18:50:00Z"}
