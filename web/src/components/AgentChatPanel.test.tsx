@@ -226,10 +226,15 @@ describe('AgentChatPanel — degraded states (TRO-320 / FG-9, proof 4)', () => {
     await askQuestion('why is this stalled?');
 
     expect(screen.getByText(/thinking/i)).toBeInTheDocument();
+    // ThinkingOrb renders with role="img" and its own per-state aria-label
+    // (thinking-orbs package contract) — asserted directly rather than
+    // trusting the visible "Thinking…" text alone to prove the orb mounted.
+    expect(screen.getByRole('img')).toBeInTheDocument();
 
     resolveFn(jsonResponse(200, { output: 'ok', citedSources: [{ documentId: 'd1', documentType: 'issue', title: 'X', reason: 'r' }], expansionCapped: false }));
     expect(await screen.findByText('ok')).toBeInTheDocument();
     expect(screen.queryByText(/thinking/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
 });
 

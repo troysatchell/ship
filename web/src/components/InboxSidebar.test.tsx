@@ -215,10 +215,16 @@ describe('InboxSidebar — degraded states', () => {
     renderInbox();
 
     expect(await screen.findByText(/loading your inbox/i)).toBeInTheDocument();
+    // ThinkingOrb renders with role="img" and its own per-state aria-label
+    // (thinking-orbs package contract) — asserted directly rather than
+    // trusting the visible "Loading your inbox…" text alone to prove the
+    // orb mounted.
+    expect(screen.getByRole('img')).toBeInTheDocument();
 
     resolveFn(jsonResponse(200, { items: [BLOCKING_ITEM] }));
     expect(await screen.findByText('AUTH-12 is waiting on your approval')).toBeInTheDocument();
     expect(screen.queryByText(/loading your inbox/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
 });
 

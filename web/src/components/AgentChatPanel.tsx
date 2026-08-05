@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect, useRef, type FormEvent } from 'react';
+import { ThinkingOrb } from 'thinking-orbs';
 import { apiPost } from '@/lib/api';
 import { cn } from '@/lib/cn';
 
@@ -212,7 +213,10 @@ export function AgentChatPanel({ documentId }: AgentChatPanelProps) {
 
         <div role="status">
           {state.status === 'loading' && (
-            <p className="text-sm text-muted italic">Thinking…</p>
+            <p className="flex items-center gap-2 text-sm text-muted italic">
+              <ThinkingOrb state="solving" size={20} />
+              Thinking…
+            </p>
           )}
 
           {state.status === 'answered' && (

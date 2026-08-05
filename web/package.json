@@ -58,6 +58,7 @@
     "react-dom": "^18.3.1",
     "react-router-dom": "^7.1.1",
     "tailwind-merge": "^2.6.0",
+    "thinking-orbs": "^0.2.0",
     "tippy.js": "^6.3.7",
     "y-indexeddb": "^9.0.12",
     "y-websocket": "^2.0.4",

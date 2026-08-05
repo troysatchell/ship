@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom';
+import { ThinkingOrb } from 'thinking-orbs';
 import { cn } from '@/lib/cn';
 import { useInboxQuery, type InboxItem, type InboxItemType } from '@/hooks/useInboxQuery';
 
@@ -98,7 +99,12 @@ export function InboxSidebar({ onNavigate }: InboxSidebarProps) {
         * whose politeness changes with its own content is unreliably
         * announced by assistive technology. */}
       <div role="status">
-        {isLoading && <p className="px-2 py-2 text-sm italic text-muted">Loading your inbox…</p>}
+        {isLoading && (
+          <p className="flex items-center gap-2 px-2 py-2 text-sm italic text-muted">
+            <ThinkingOrb state="solving" size={20} />
+            Loading your inbox…
+          </p>
+        )}
       </div>
       <div role="alert">
         {data?.status === 'degraded' && (
