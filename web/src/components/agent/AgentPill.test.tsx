@@ -47,6 +47,21 @@ describe('AgentPill — presence and expand/collapse', () => {
     expect(screen.queryByRole('region', { name: /fleetgraph chat/i })).not.toBeInTheDocument();
   });
 
+  it("collapsing swaps the card's display CLASS to hidden — the `hidden` attribute alone cannot hide it, because an author-level `flex` overrides the UA's [hidden]{display:none} in a real browser (jsdom loads no stylesheet, so only the class can be asserted here)", () => {
+    render(<AgentPill documentId="doc-1" documentTitle="Rollout plan" />);
+    const pill = screen.getByRole('button', { name: /fleetgraph/i });
+
+    fireEvent.click(pill);
+    const card = document.querySelector('[aria-label="FleetGraph chat"]');
+    expect(card).not.toBeNull();
+    expect(card).toHaveClass('flex');
+    expect(card).not.toHaveClass('hidden');
+
+    fireEvent.click(pill);
+    expect(card).toHaveClass('hidden');
+    expect(card).not.toHaveClass('flex');
+  });
+
   it('with no document open, the expanded card disables the input and shows the hint', () => {
     render(<AgentPill documentId={null} documentTitle={null} />);
     fireEvent.click(screen.getByRole('button', { name: /fleetgraph/i }));

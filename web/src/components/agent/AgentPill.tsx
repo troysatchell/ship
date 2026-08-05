@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ThinkingOrb } from 'thinking-orbs';
 import { AgentChatPanel } from '@/components/AgentChatPanel';
+import { cn } from '@/lib/cn';
 
 /**
  * The FleetGraph agent's one visible home: a floating pill at the bottom
@@ -76,7 +77,14 @@ export function AgentPill({ documentId, documentTitle }: AgentPillProps) {
               collapse();
             }
           }}
-          className="pointer-events-auto mb-2 flex h-[min(480px,60vh)] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl"
+          className={cn(
+            // display comes from the CLASS, not the `hidden` attribute alone:
+            // an author-level `flex` overrides the UA's `[hidden]{display:none}`
+            // in a real browser, so the attribute by itself never hides a
+            // flex container (invisible in jsdom, which loads no stylesheet).
+            expanded ? 'flex' : 'hidden',
+            'pointer-events-auto mb-2 h-[min(480px,60vh)] flex-col overflow-hidden rounded-xl border border-border bg-background shadow-2xl'
+          )}
         >
           <AgentChatPanel
             documentId={documentId}
