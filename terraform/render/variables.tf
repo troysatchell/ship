@@ -262,10 +262,16 @@ variable "agent_internal_secret" {
   # rather than deploying an agent that fails closed for every legitimate
   # caller while looking like a successful apply. `length(var....) > 0`
   # rather than `!= ""` so accidental leading/trailing whitespace-only input
-  # (e.g. a copy-paste artifact) is caught too.
+  # (e.g. a copy-paste artifact) is caught too. Also rejects the literal
+  # terraform.tfvars.example placeholder — copying that file without editing
+  # it would otherwise pass this check and deploy a "secret" every reader of
+  # this repo already knows.
   validation {
-    condition     = length(trimspace(var.agent_internal_secret)) > 0
-    error_message = "agent_internal_secret must not be empty (or whitespace-only)."
+    condition = (
+      length(trimspace(var.agent_internal_secret)) > 0 &&
+      var.agent_internal_secret != "REPLACE_WITH_A_REAL_SHARED_SECRET"
+    )
+    error_message = "agent_internal_secret must not be empty (or whitespace-only), and must not be the terraform.tfvars.example placeholder value."
   }
 }
 
