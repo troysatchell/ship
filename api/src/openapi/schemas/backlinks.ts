@@ -164,7 +164,8 @@ registry.registerPath({
       description: 'Document not found',
     },
     409: {
-      description: 'Association already exists',
+      description:
+        'Circular association: this edge would create a cycle in the relationship graph (`{"error": "CIRCULAR_ASSOCIATION"}`).',
     },
   },
 });

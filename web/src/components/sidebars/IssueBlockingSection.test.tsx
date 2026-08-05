@@ -29,7 +29,7 @@ import { QueryClientProvider } from '@tanstack/react-query';
 import { MemoryRouter } from 'react-router-dom';
 import { queryClient } from '@/lib/queryClient';
 import { IssueBlockingSection } from './IssueBlockingSection';
-import { CIRCULAR_BLOCKS_MESSAGE } from '@/hooks/useBlockingAssociations';
+import { CIRCULAR_BLOCKS_MESSAGE, GENERIC_ADD_FAILURE_MESSAGE } from '@/hooks/useBlockingAssociations';
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
 
 vi.mock('@/lib/api', () => ({
@@ -326,15 +326,16 @@ describe('IssueBlockingSection — reverse query + symmetric removal (TRO-334 / 
   });
 });
 
-describe('IssueBlockingSection — circular association error (TRO-334 / FG-16, proof 3)', () => {
-  it('translates the 500 this route actually returns for a cycle into a readable message, never the raw body text', async () => {
+describe('IssueBlockingSection — circular association error (TRO-334 / FG-16, proof 3; updated for TRO-344)', () => {
+  it('translates the dedicated 409 CIRCULAR_ASSOCIATION code into a readable message, never the raw body text', async () => {
     mockGets({ issues: apiIssueList(ISSUE_C), blocks: [], blockedBy: [] });
-    // The EXACT response observed by running this sequence (A blocks B, then
-    // POST B blocks A) against a real Express app + real Postgres trigger —
-    // see useBlockingAssociations.ts's docstring. The raw trigger text
-    // ("Circular blocks reference detected: ...") never reaches the client;
-    // only this generic, uninformative body does.
-    mockApiPost.mockResolvedValue(jsonResponse(500, { error: 'Failed to create association' }));
+    // TRO-344: `POST /:id/associations` (api/src/routes/associations.ts) now
+    // catches the circular-association trigger's distinguishing Postgres
+    // exception text specifically and maps it to this dedicated 409 + code,
+    // rather than the bare 500 every other failure on this route used to
+    // share with it. The raw trigger text ("Circular blocks reference
+    // detected: ...") still never reaches the client — only the code does.
+    mockApiPost.mockResolvedValue(jsonResponse(409, { error: 'CIRCULAR_ASSOCIATION' }));
 
     renderSection();
     await openBlocksPicker();
@@ -346,8 +347,28 @@ describe('IssueBlockingSection — circular association error (TRO-334 / FG-16, 
 
     const alert = await screen.findByText(CIRCULAR_BLOCKS_MESSAGE);
     expect(alert.closest('[role="alert"]')).not.toBeNull();
-    // The raw, uninformative body text is never shown to the user.
-    expect(screen.queryByText('Failed to create association')).not.toBeInTheDocument();
+    // The raw error code is never shown to the user.
+    expect(screen.queryByText('CIRCULAR_ASSOCIATION')).not.toBeInTheDocument();
+  });
+
+  it('TRO-344: an unrelated forced 500 renders the generic add-failure message, NOT the circular-blocks message', async () => {
+    mockGets({ issues: apiIssueList(ISSUE_C), blocks: [], blockedBy: [] });
+    // Before TRO-344, addBlocksEdge inferred "circular" from ANY 500 on this
+    // route. This is exactly the case that inference got wrong: a plain,
+    // unrelated server failure that happens to also be a 500.
+    mockApiPost.mockResolvedValue(jsonResponse(500, { error: 'Internal Server Error' }));
+
+    renderSection();
+    await openBlocksPicker();
+
+    const option = await screen.findByRole('option', { name: /issue c/i });
+    await act(async () => {
+      fireEvent.click(option);
+    });
+
+    const alert = await screen.findByText(GENERIC_ADD_FAILURE_MESSAGE);
+    expect(alert.closest('[role="alert"]')).not.toBeNull();
+    expect(screen.queryByText(CIRCULAR_BLOCKS_MESSAGE)).not.toBeInTheDocument();
   });
 });
 
@@ -478,7 +499,8 @@ describe('IssueBlockingSection — key resets state across issue switches (CodeR
   });
 
   it('does not carry a circular-blocks error message from the previous issue onto the newly-selected one', async () => {
-    mockApiPost.mockResolvedValue(jsonResponse(500, { error: 'Failed to create association' }));
+    // TRO-344: the cycle guard is now a dedicated 409 + code, not a bare 500.
+    mockApiPost.mockResolvedValue(jsonResponse(409, { error: 'CIRCULAR_ASSOCIATION' }));
 
     renderSwitcher(OPEN_ISSUE_1, OPEN_ISSUE_2);
 
