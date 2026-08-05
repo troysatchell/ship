@@ -50,3 +50,4 @@
 {"ticket":"TRO-343","attempt":1,"verdict":"pass","crFindings":1,"crFixNow":1,"crNewTickets":0,"crDismissed":0,"ts":"2026-08-05T17:38:00Z"}
 {"ticket":"TRO-322","bundle":"TRO-330","attempt":1,"verdict":"pass","note":"CI rollback proof: throwaway PR #131 + GitLab MR !1, both closed cleanly","ts":"2026-08-05T18:20:00Z"}
 {"ticket":"TRO-338","bundle":"TRO-330","attempt":1,"verdict":"pass","note":"golden-set divergence proof + draft-survival mechanism; live wiring gap filed as TRO-348","ts":"2026-08-05T18:43:00Z"}
+{"ticket":"TRO-342","attempt":1,"verdict":"pass","crFindings":1,"crFixNow":1,"note":"closed on-demand half (per-user token via ephemeral api_tokens mint+revoke); proactive-poll half escalated as TRO-350, correctly not built speculatively","ts":"2026-08-05T19:22:00Z"}
