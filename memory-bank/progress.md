@@ -48,8 +48,49 @@
 | **FleetGraph PR-C — the graph (proactive + on-demand + drafts + human gate)** | ✅ done (2026-08-04) — TRO-317/318/319/321, PR #117. FG-8's write-boundary tests (negative proof + real DB round-trip) independently re-verified by the orchestrator, not just trusted. Critical path A ∥ B → C done. |
 | **FleetGraph PR-D — Ship UI surfaces (chat, inbox, blocks/blocked-by)** | ✅ done (2026-08-04) — TRO-320/323/334, PR #120. Real scope gap (agent had no HTTP surface for chat/inbox) found and closed before dispatch. 17 CodeRabbit findings across 3 review rounds triaged to completion (12 fixed, 2 filed as `TRO-343`/`TRO-344`). One `git stash` violation (5th repo-wide occurrence) caught by `gate.sh`'s G7c, verified harmless, disclosed rather than papered over — merge decision explicitly kicked to the user, who approved it. Critical path A/B/C/D done; **G-MVP next.** |
 | **MVP submission night — docs + graded deploy** | ✅ done (2026-08-05, 03:00–03:40Z) — FLEETGRAPH.MD accuracy pass (all "Pending" architecture claims rewritten from code), 4 public LangSmith trace links verified, **both graded services found running pre-PR-C/D builds** and redeployed to `d124a50`, missing `AGENT_INTERNAL_SECRET`/`AGENT_API_BASE_URL` set via Render API, grader chat path verified end-to-end live. Doc changes uncommitted pending user's word. |
+| **Agent pill UI + standup dev env** | ✅ built (2026-08-05 PM) — floating FleetGraph pill on every screen (branch `feat/agent-panel`, unpushed), Properties-accordion chat retired, Inbox untouched; `dev.sh` agent-port bug found+fixed; fresh `ship_standup` DB + full local agent stack verified end-to-end (inbox + cited chat). Sign-in `alice.chen@ship.local`. |
 
 ## Log
+
+### 2026-08-05 (PM) — agent pill shipped locally; standup dev env stood up; dev.sh port bug fixed
+
+**Trigger.** Troy: the agent "doesn't visually present enough to even really register that it's an
+agent interface" in the fixed sidebar; wanted it bigger/resizable + a local env to test. Mid-design
+he redirected to the better shape: "available on every screen … floating pill at the bottom …
+keep inbox separate."
+
+**Design** (brainstormed, spec approved, revised once): floating bottom-center pill → expands to a
+chat card (~440px, h min(480px,60vh)) on every screen; Inbox untouched; sidebar resizing descoped.
+Spec: `docs/superpowers/specs/2026-08-05-agent-panel-design.md`. Built on `feat/agent-panel`
+(4 commits, unpushed): new `web/src/components/agent/AgentPill.tsx` (persistent toggle,
+`ship:agentPillExpanded`, focus in→input / Esc→back-to-pill, orb `breathing`/`solving` on busy),
+`AgentChatPanel.tsx` rewritten accordion→history list (session-only, survives navigation, each
+exchange tagged with the doc it was asked about — replaces the old discard-on-navigation guard
+while keeping its purpose; degradation contract + fixed-role live regions carried over),
+accordion removed from `PropertiesPanel.tsx`, pill mounted in `App.tsx` (seed id = URL doc ??
+CurrentDocumentContext; Programs are `name`-keyed, caught by tsc). 554/554 web tests, type-check
+clean; 19 tests cover the new semantics.
+
+**Real bug found: `pnpm dev` had been killing its own API since the agent package gained a dev
+script** — dev.sh's global `export PORT=$API_PORT` + `pnpm --parallel --recursive run dev` made
+the agent (dotenv never overrides exported env) bind the API's port; API died EADDRINUSE every
+start, surviving only when a tsx-restart race left the first instance alive. Fixed: agent gets its
+own probed port (3100), `SHIP_API_BASE_URL`/`AGENT_API_BASE_URL` exported so services find each
+other under port drift. Note: agent reads `agent/.env` (plain dotenv), NOT `.env.local`.
+
+**Standup env** (Troy: "more like a real standup, don't overdo the documents"): fresh
+`ship_standup` DB via one-line `api/.env.local` change — base seed only (11 users, 104 issues),
+which already carries the FG-3 fixtures, re-anchored to today so detectors fire; the 638-doc
+audit DB left intact. Local agent configured (fresh local-only shared secret — deliberately NOT
+`~/.ship-agent-internal-secret`, that's prod's; Alice API token minted via CSRF→login→
+`POST /api/api-tokens`; `PROACTIVE_INITIAL_LOOKBACK_MS=7d` because seed backdates fixtures 1–3
+days vs 24h default). **Verified observed, local:** Alice's inbox returns her 2 mentions;
+`/api/agent/chat` returns a grounded cited answer with expansion-cap notice. The seeded blocking
+approval correctly routes to Emma (owner, `changes_requested`), not Alice — recipient logic, not
+a gap. Sign-in: `alice.chen@ship.local` / `admin123`.
+
+**Next.** Troy browser-tests the pill; then PR. Early Sub items unchanged (FG-22 traces, PR-G
+slices, PRESEARCH phases).
 
 ### 2026-08-05 (03:00–03:40Z, MVP deadline night) — submission check found the demo path dead on the graded deploy; fixed, verified end-to-end
 

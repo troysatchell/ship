@@ -1040,3 +1040,36 @@ span[data-emoji] {
   color: rgba(251, 146, 60, 0.8);
   font-style: italic;
 }
+
+/* FleetGraph agent pill — streaming answer presentation (2026-08-05 design).
+ * Words resolve out of blur as the (already-complete) answer is revealed;
+ * the sources block fades in once the text finishes. */
+@keyframes agent-word-in {
+  from {
+    opacity: 0;
+    filter: blur(3px);
+  }
+  to {
+    opacity: 1;
+    filter: blur(0);
+  }
+}
+
+@keyframes agent-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scrollable but bar-less (agent chat card): content scrolls, no visible bar. */
+.scrollbar-none {
+  scrollbar-width: none;
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}

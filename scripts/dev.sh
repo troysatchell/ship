@@ -113,9 +113,11 @@ find_available_port() {
 echo "Finding available ports..."
 API_PORT=$(find_available_port $API_BASE)
 WEB_PORT=$(find_available_port $WEB_BASE)
+AGENT_PORT=$(find_available_port 3100)
 
 echo "Using API port: $API_PORT"
 echo "Using Web port: $WEB_PORT"
+echo "Using Agent port: $AGENT_PORT"
 
 # Write .ports file for reference
 cat > "$ROOT_DIR/.ports" << EOF
@@ -124,6 +126,7 @@ cat > "$ROOT_DIR/.ports" << EOF
 # DO NOT EDIT - will be overwritten on next dev start
 API=$API_PORT
 WEB=$WEB_PORT
+AGENT=$AGENT_PORT
 STARTED=$(date -Iseconds)
 WORKTREE=$(basename "$ROOT_DIR")
 EOF
@@ -136,19 +139,37 @@ cleanup() {
     rm -f "$ROOT_DIR/.ports"
     echo "Cleaned up .ports file"
   fi
+  # Both dev process groups are started as background jobs below; make sure
+  # neither outlives the wrapper.
+  [ -n "${APP_PID:-}" ] && kill "$APP_PID" 2>/dev/null
+  [ -n "${AGENT_PID:-}" ] && kill "$AGENT_PID" 2>/dev/null
 }
 trap cleanup EXIT INT TERM
 
-# Export environment variables and start dev servers
-export PORT=$API_PORT
+# Export environment variables and start dev servers.
+# PORT is deliberately NOT exported globally: agent/ also reads PORT (via
+# dotenv, which never overrides an exported var), so a global export makes
+# the agent race the API for the same socket — the API then dies with
+# EADDRINUSE on its own port. Each process group gets its own PORT below.
+# SHIP_API_BASE_URL / AGENT_API_BASE_URL are exported here because both
+# sides' ports can drift under find_available_port, and an exported value
+# wins over both packages' env files (api: envFile.ts precedence; agent:
+# dotenv default) — so the two services always find each other.
 export CORS_ORIGIN="http://localhost:$WEB_PORT"
 export VITE_PORT=$WEB_PORT
 export VITE_API_URL="http://localhost:$API_PORT"
+export SHIP_API_BASE_URL="http://localhost:$API_PORT"
+export AGENT_API_BASE_URL="http://localhost:$AGENT_PORT"
 
 echo "Starting dev servers..."
-echo "  API: http://localhost:$API_PORT"
-echo "  Web: http://localhost:$WEB_PORT"
+echo "  API:   http://localhost:$API_PORT"
+echo "  Web:   http://localhost:$WEB_PORT"
+echo "  Agent: http://localhost:$AGENT_PORT"
 echo ""
 
 cd "$ROOT_DIR"
-pnpm --parallel --recursive run dev
+PORT=$API_PORT pnpm --parallel --filter '!@ship/agent' --recursive run dev &
+APP_PID=$!
+PORT=$AGENT_PORT pnpm --filter @ship/agent run dev &
+AGENT_PID=$!
+wait $APP_PID $AGENT_PID
