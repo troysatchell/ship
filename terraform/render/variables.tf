@@ -217,6 +217,77 @@ variable "ship_api_token" {
   sensitive   = true
 }
 
+# --- Agent/api shared secret + wiring (TRO-347) -----------------------------
+#
+# PR-D (agent/src/server.ts, api/src/routes/agent.ts — TRO-320/FG-9,
+# TRO-323/FG-10) introduced these two env vars on 2026-08-05, but this config
+# gained zero references to either at the time (verified by grep). They were
+# set live via the Render REST API on both services directly instead — the
+# free-tier provider bug documented below `render_web_service.agent` in
+# agent_service.tf blocks a plain `terraform apply` for that resource — and
+# existed only in Render's own console/API state plus the operator-local
+# `~/.ship-agent-internal-secret` (mode 600, correctly never in this repo).
+# Consequence: a clean-machine `terraform apply`, or a destroy-and-redeploy
+# like FG-11's own proof, recreated the services WITHOUT them, and every
+# `/api/agent/*` call then 500'd (`internal_secret_not_configured`). These two
+# variables are the fix — see agent_service.tf and web_service.tf for where
+# each is consumed.
+
+variable "agent_internal_secret" {
+  description = <<-EOT
+    Shared secret sent as the `X-Internal-Secret` header on every api/ ->
+    agent call (TRO-320/FG-9, TRO-323/FG-10) and required by BOTH sides:
+    the agent's own POST /chat and GET /inbox (agent/src/server.ts, via
+    agent/src/config.ts's `agentInternalSecret`) check it before either ever
+    touches the graph or item store, and api/'s proxy
+    (api/src/routes/agent.ts) refuses to even call the agent (503) if its
+    own copy is unset. The two sides must hold the IDENTICAL value or the
+    agent rejects every call with 401 — consumed here by both
+    agent_service.tf (the agent's own copy) and web_service.tf (api's copy).
+
+    Sensitive, deliberately NO DEFAULT: an empty or placeholder default here
+    would deploy an agent that fails closed for every legitimate caller
+    (500 `internal_secret_not_configured`) while looking like a successful
+    `apply` — Terraform must error loudly ("No value for required variable")
+    if this isn't supplied, not silently ship a broken secret. Supply a real
+    generated value via a gitignored terraform.tfvars or -var — see
+    terraform.tfvars.example. The real value currently lives only in Render's
+    own env-var config for both services, and in the operator-local
+    `~/.ship-agent-internal-secret` (mode 600) — never put it in this repo.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
+variable "agent_api_base_url" {
+  description = <<-EOT
+    Base URL of the deployed agent service. Consumed only by web_service.tf:
+    api/src/routes/agent.ts reads `AGENT_API_BASE_URL` straight from
+    `process.env` with a `http://localhost:3100` fallback that is meaningless
+    once api/ is running on Render (TRO-347).
+
+    Deliberately NOT derived from `render_web_service.agent.url` the way
+    agent_service.tf's own `SHIP_API_BASE_URL` derives the opposite direction
+    (agent depends on ship's URL). Having web_service.tf derive this one too
+    would make `render_web_service.ship` and `render_web_service.agent` each
+    depend on the other's computed `.url` — a two-resource cycle Terraform
+    refuses to plan. Same shape of constraint `cors_origin` above documents
+    (there it's a same-resource self-reference; here it's a two-resource
+    cycle), and the same answer: track it as a plain variable instead of a
+    derived value.
+
+    Not secret, but must match the agent service's actual live URL for
+    chat/inbox to work at all. Render assigns that URL (a
+    `<slug>.onrender.com` suffix) at creation time and it changes on every
+    clean-machine apply that recreates the agent service (memory-bank/
+    activeContext.md) — this default reproduces the current live agent
+    (verified 2026-08-05, FLEETGRAPH.MD "Deployment model"); update it to
+    match after any apply that replaces `render_web_service.agent`.
+  EOT
+  type        = string
+  default     = "https://ship-agent-t0zy.onrender.com"
+}
+
 # --- Postgres ----------------------------------------------------------------
 
 variable "database_service_name" {
