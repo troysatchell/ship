@@ -24,7 +24,8 @@
  *  - Accept a draft: the real Ship write (`POST /api/standups` then
  *    `PATCH /api/standups/:id` to set its content), attributed to the
  *    accepting person, then `draftStore.markPosted`.
- *  - Discard: writes nothing to Ship. A `standup_draft` item additionally
+ *  - Discard: writes nothing to Ship. Any draft-backed item (`standup_draft`,
+ *    and `blocker_escalation` as of TRO-346/TRO-337 / FG-19) additionally
  *    marks its draft `dismissed`; every item type is removed from the
  *    person's own inbox via `itemStore.dismiss` (not `clear` — see that
  *    method's own docstring for why the distinction is proof #4).
@@ -108,13 +109,18 @@ export async function acceptDraft(
 
 /**
  * Discards one inbox item — writes NOTHING to Ship (proof #3). Dispatches on
- * the item's own `type`:
- *  - `standup_draft`: also marks the underlying draft `dismissed`
+ * whether the item points at a draft, not on its `type` literal:
+ *  - Draft-backed items (`item.draftId` set — `standup_draft` FG-6, and
+ *    `blocker_escalation` TRO-346/TRO-337 / FG-19, the second producer of
+ *    this shape) also mark the underlying draft `dismissed`
  *    (`draftStore.markDismissed`) — the ticket's own words ("Discard a
- *    draft: calls draftStore.markDismissed(id)").
- *  - `mention` / `blocking_approval`: no draft to touch; "the equivalent for
- *    a non-draft inbox item ... they just get dismissed from the inbox"
- *    (the ticket's own words) — `itemStore.dismiss` alone.
+ *    draft: calls draftStore.markDismissed(id)"). Checking `draftId`'s
+ *    presence rather than enumerating item types by name means a future
+ *    third draft-backed item type needs no edit here to get the same
+ *    correct behavior.
+ *  - `mention` / `blocking_approval` (no `draftId`): no draft to touch; "the
+ *    equivalent for a non-draft inbox item ... they just get dismissed from
+ *    the inbox" (the ticket's own words) — `itemStore.dismiss` alone.
  *
  * Either way, `itemStore.dismiss(itemId)` runs last, so the item is removed
  * from the inbox AND the dismissal is remembered at its current content
@@ -124,13 +130,7 @@ export function discardItem(deps: GateDeps, itemId: string): void {
   const item: InboxItem | undefined = deps.itemStore.get(itemId);
   if (!item) throw new GateError(`no such inbox item: ${itemId}`);
 
-  if (item.type === 'standup_draft') {
-    if (!item.draftId) {
-      // Should not happen — graph.ts's commitStandupDraft always sets
-      // draftId for a standup_draft item — but fails loudly rather than
-      // silently skipping the draft-side dismissal if it ever did.
-      throw new GateError(`standup_draft item ${itemId} has no draftId`);
-    }
+  if (item.draftId) {
     const draftDismissed = deps.draftStore.markDismissed(item.draftId);
     if (!draftDismissed) {
       throw new GateError(`no such draft: ${item.draftId} (referenced by item ${itemId})`);

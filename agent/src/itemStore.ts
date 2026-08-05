@@ -41,8 +41,16 @@
  * parallel "drafts inbox" would fragment exactly the surface FG-5 built.
  * The full draft text and any proposed transitions do NOT live here,
  * though (see `draftId` below) — this record is a lightweight pointer into
- * `draftStore.ts`'s `DraftStore`, not a duplicate of it. */
-export type InboxItemType = 'mention' | 'blocking_approval' | 'standup_draft';
+ * `draftStore.ts`'s `DraftStore`, not a duplicate of it.
+ *
+ * `blocker_escalation` (TRO-346/TRO-337 / FG-19): the same lightweight-
+ * pointer shape as `standup_draft` (also carries `draftId`), for the
+ * cross-project blocker escalation draft `graph.ts`'s
+ * `commitBlockerEscalation` writes. Ranked LAST — see `TYPE_RANK` below —
+ * matching FLEETGRAPH.MD's own "Who it notifies" section verbatim:
+ * "Escalation to a manager exists but is last, and only after several
+ * periods with no resolution." */
+export type InboxItemType = 'mention' | 'blocking_approval' | 'standup_draft' | 'blocker_escalation';
 
 export interface InboxItemEvidence {
   /** The Ship document this item is evidenced by. The never-surface check
@@ -147,18 +155,23 @@ export interface ItemStore {
    * first (TRO-319 / FG-6 — FLEETGRAPH.MD's own enumerated inbox list puts
    * "drafts prepared for them" last, item #4 of 4, behind mentions and
    * blocking approvals — reacting to someone ELSE's need outranks a
-   * person's own not-yet-urgent paperwork). */
+   * person's own not-yet-urgent paperwork); then `blocker_escalation`
+   * items, oldest first — ranked after everything else, including a
+   * person's OWN standup draft, matching FLEETGRAPH.MD's "Who it notifies"
+   * section verbatim: "Escalation to a manager exists but is last." */
   list(recipientUserId: string): InboxItem[];
   /** Every item currently stored, for tests/inspection. */
   all(): InboxItem[];
 }
 
 /** Type rank, lowest sorts first. `blocking_approval` before `mention`
- * before `standup_draft` — see `list()`'s own docstring for why. */
+ * before `standup_draft` before `blocker_escalation` — see `list()`'s own
+ * docstring for why. */
 const TYPE_RANK: Record<InboxItemType, number> = {
   blocking_approval: 0,
   mention: 1,
   standup_draft: 2,
+  blocker_escalation: 3,
 };
 
 /**

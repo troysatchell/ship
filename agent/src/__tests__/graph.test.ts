@@ -762,3 +762,281 @@ describe('buildGraph — deep tier draft composition (TRO-319 / FG-6)', () => {
     });
   });
 });
+
+describe('buildGraph — blocker escalation fan-out (TRO-346/TRO-337 / FG-19)', () => {
+  /**
+   * Synthetic fixture (not real seeded DB rows) — same posture as the
+   * on-demand expansion describe block above (`seed-dense`/`seed-visible`),
+   * because this describe block, like that one, never makes a live call;
+   * only the deep-tier standup describe block above needs real ids (it
+   * verifies its prompt content against a real fixture's exact facts).
+   *
+   * Org chart: engineer-a reports to manager-x; engineer-b reports to
+   * manager-y; both manager-x and manager-y report to director-1 — mirrors
+   * FLEETGRAPH.MD Test Case 5 exactly ("An issue in Project A blocking two
+   * issues in Project B whose assignees report to different managers").
+   */
+  const BLOCKER_ISSUE_ID = 'blocker-issue-1';
+  const PROJECT_A_ID = 'project-a';
+  const PROJECT_B_ID = 'project-b';
+  const BLOCKED_ISSUE_1 = 'blocked-issue-1';
+  const BLOCKED_ISSUE_2 = 'blocked-issue-2';
+  const ENGINEER_A = 'user-engineer-a';
+  const ENGINEER_B = 'user-engineer-b';
+  const MANAGER_X = 'user-manager-x';
+  const MANAGER_Y = 'user-manager-y';
+  const DIRECTOR_1 = 'user-director-1';
+
+  function doc(overrides: Partial<ShipDocument> & Pick<ShipDocument, 'id' | 'title'>): ShipDocument {
+    return { document_type: 'issue', content: null, visibility: 'workspace', created_by: null, properties: {}, ...overrides };
+  }
+
+  function person(userId: string, reportsTo: string | null) {
+    return { id: `person-doc:${userId}`, user_id: userId, name: userId, email: null, isArchived: false, isPending: false, reportsTo, role: null };
+  }
+
+  function differentManagersPeople() {
+    return [
+      person(ENGINEER_A, MANAGER_X),
+      person(ENGINEER_B, MANAGER_Y),
+      person(MANAGER_X, DIRECTOR_1),
+      person(MANAGER_Y, DIRECTOR_1),
+      person(DIRECTOR_1, null),
+    ];
+  }
+
+  function testCase5Client(overrides: Partial<DeepShipClientLike> = {}): DeepShipClientLike {
+    return {
+      getIssuesByAssignee: vi.fn().mockResolvedValue([]),
+      getChangeFeed: vi.fn().mockResolvedValue(emptyFeed()),
+      listDocuments: vi.fn().mockResolvedValue([]),
+      getPeople: vi.fn().mockResolvedValue(differentManagersPeople()),
+      getDocument: vi.fn(async (id: string) => {
+        if (id === BLOCKER_ISSUE_ID) return doc({ id: BLOCKER_ISSUE_ID, title: 'Vendor API is down' });
+        if (id === PROJECT_A_ID) return doc({ id: PROJECT_A_ID, title: 'Project A', document_type: 'project' });
+        if (id === PROJECT_B_ID) return doc({ id: PROJECT_B_ID, title: 'Project B', document_type: 'project' });
+        if (id === BLOCKED_ISSUE_1) return doc({ id: BLOCKED_ISSUE_1, title: 'Ship the checkout flow', properties: { assignee_id: ENGINEER_A } });
+        if (id === BLOCKED_ISSUE_2) return doc({ id: BLOCKED_ISSUE_2, title: 'Wire up billing', properties: { assignee_id: ENGINEER_B } });
+        throw new Error(`404: ${id}`);
+      }),
+      getAssociations: vi.fn(async (id: string, type?: string) => {
+        if (id === BLOCKER_ISSUE_ID && type === 'project') return [{ related_id: PROJECT_A_ID, relationship_type: 'project' }];
+        if (id === BLOCKER_ISSUE_ID && type === 'blocks') {
+          return [
+            { related_id: BLOCKED_ISSUE_1, relationship_type: 'blocks' },
+            { related_id: BLOCKED_ISSUE_2, relationship_type: 'blocks' },
+          ];
+        }
+        if ((id === BLOCKED_ISSUE_1 || id === BLOCKED_ISSUE_2) && type === 'project') {
+          return [{ related_id: PROJECT_B_ID, relationship_type: 'project' }];
+        }
+        return [];
+      }),
+      ...overrides,
+    };
+  }
+
+  function deps(overrides: Partial<DeepDeps> = {}): DeepDeps {
+    return {
+      shipClient: testCase5Client(),
+      itemStore: new InMemoryItemStore(),
+      draftStore: new InMemoryDraftStore(),
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  it('exposes every blocker-escalation node in NODE_NAMES on the compiled graph', () => {
+    expect(NODE_NAMES).toEqual(
+      expect.arrayContaining(['detectBlockerFanout', 'composeBlockerEscalation', 'commitBlockerEscalation'])
+    );
+  });
+
+  it('throws a clear error if a proactive_escalation trigger runs without DeepDeps, rather than silently no-op-ing', async () => {
+    const compiled = buildGraph(fakeModel('unused'));
+
+    await expect(
+      compiled.invoke({ trigger: 'proactive_escalation', blockingIssueId: BLOCKER_ISSUE_ID })
+    ).rejects.toThrow(/DeepDeps/);
+  });
+
+  it('throws a clear error if proactive_escalation runs without blockingIssueId, rather than guessing which issue', async () => {
+    const compiled = buildGraph(fakeModel('unused'), undefined, undefined, deps());
+
+    await expect(compiled.invoke({ trigger: 'proactive_escalation' })).rejects.toThrow(/blockingIssueId/);
+  });
+
+  describe('Test Case 5 — cross-project fan-out with different managers (proof: fan-out + LCA + draft)', () => {
+    it('computes the correct fan-out, the correct lowest common manager, and drafts a message routed to them', async () => {
+      const model = fakeModel('DRAFT: "Vendor API is down" is blocking checkout and billing work...');
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const compiled = buildGraph(model, undefined, undefined, deps({ itemStore, draftStore }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_escalation', blockingIssueId: BLOCKER_ISSUE_ID });
+
+      // The full impact fan-out: which issues, which projects, which people.
+      expect(result.blockerFanoutImpact?.blockedIssues).toHaveLength(2);
+      expect(result.blockerFanoutImpact?.distinctProjectIds.sort()).toEqual([PROJECT_A_ID, PROJECT_B_ID]);
+      expect(result.blockerFanoutImpact?.blockedPeopleUserIds.sort()).toEqual([ENGINEER_A, ENGINEER_B].sort());
+
+      // The correct lowest common manager — director-1, not either direct manager.
+      expect(result.blockerEscalationManager).toEqual({ managerUserId: DIRECTOR_1, reason: 'found' });
+      expect(result.blockerEscalationSkipReason).toBeUndefined();
+
+      // The model was given the real fan-out facts.
+      const prompt = (model.invoke as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+      expect(prompt).toContain('Vendor API is down');
+      expect(prompt).toContain('Ship the checkout flow');
+      expect(prompt).toContain('Wire up billing');
+
+      // A drafted message, routed to the lowest common manager, never sent.
+      const items = itemStore.list(DIRECTOR_1);
+      expect(items).toHaveLength(1);
+      const item = items[0];
+      if (!item) throw new Error('expected exactly one item');
+      expect(item.type).toBe('blocker_escalation');
+      expect(item.draftId).toBeDefined();
+
+      const stored = item.draftId ? draftStore.get(item.draftId) : undefined;
+      expect(stored?.draftText).toBe('DRAFT: "Vendor API is down" is blocking checkout and billing work...');
+      expect(stored?.status).toBe('unseen');
+      expect(stored?.personUserId).toBe(DIRECTOR_1);
+    });
+
+    it('re-invoking for the same issue on the same day is an upsert — no duplicate draft or item', async () => {
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const sharedDeps = deps({ itemStore, draftStore });
+      const compiled = buildGraph(fakeModel('draft text'), undefined, undefined, sharedDeps);
+
+      await compiled.invoke({ trigger: 'proactive_escalation', blockingIssueId: BLOCKER_ISSUE_ID });
+      await compiled.invoke({ trigger: 'proactive_escalation', blockingIssueId: BLOCKER_ISSUE_ID });
+
+      expect(itemStore.list(DIRECTOR_1)).toHaveLength(1);
+      expect(draftStore.listForPerson(DIRECTOR_1)).toHaveLength(1);
+    });
+  });
+
+  describe('Missing-link degrade (TRO-337 proof: one assignee with no reports_to degrades gracefully)', () => {
+    it('does not throw, and still drafts a message naming that no common manager could be confirmed', async () => {
+      const noManagerPeople = [
+        person(ENGINEER_A, MANAGER_X),
+        person(MANAGER_X, DIRECTOR_1),
+        person(DIRECTOR_1, null),
+        // engineer-b has NO reports_to at all — TRO-337's own verified
+        // normal case ("reports_to is set on only 10 of the 20 people").
+        person(ENGINEER_B, null),
+      ];
+      const model = fakeModel('DRAFT: no single manager confirmed, looping in the reachable contact...');
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const client = testCase5Client({ getPeople: vi.fn().mockResolvedValue(noManagerPeople) });
+      const compiled = buildGraph(model, undefined, undefined, deps({ shipClient: client, itemStore, draftStore }));
+
+      await expect(
+        compiled.invoke({ trigger: 'proactive_escalation', blockingIssueId: BLOCKER_ISSUE_ID })
+      ).resolves.not.toThrow();
+
+      const result = await compiled.invoke({ trigger: 'proactive_escalation', blockingIssueId: BLOCKER_ISSUE_ID });
+
+      expect(result.blockerEscalationManager?.reason).toBe('no_common_manager');
+      expect(result.blockerEscalationManager?.managerUserId).toBeNull();
+      // Routes to the highest reachable point — engineer-a's own chain root
+      // (director-1) is the only real data available.
+      expect(result.blockerEscalationManager?.highestReachableUserId).toBe(DIRECTOR_1);
+
+      const prompt = (model.invoke as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+      expect(prompt).toContain('No single manager could be confirmed');
+
+      // Still produces a USABLE answer — a real drafted item, routed to the
+      // highest reachable contact — not silence.
+      const items = itemStore.list(DIRECTOR_1);
+      expect(items).toHaveLength(1);
+    });
+  });
+
+  describe('Same reporting line (TRO-337 proof: does not escalate at all)', () => {
+    it('makes no model call and writes no draft/item when both blocked people share the same direct manager', async () => {
+      const sameLinePeople = [
+        person(ENGINEER_A, MANAGER_X),
+        person(ENGINEER_B, MANAGER_X), // same direct manager as engineer-a
+        person(MANAGER_X, DIRECTOR_1),
+        person(DIRECTOR_1, null),
+      ];
+      const model = fakeModel('should never be called');
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const client = testCase5Client({ getPeople: vi.fn().mockResolvedValue(sameLinePeople) });
+      const compiled = buildGraph(model, undefined, undefined, deps({ shipClient: client, itemStore, draftStore }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_escalation', blockingIssueId: BLOCKER_ISSUE_ID });
+
+      expect(model.invoke).not.toHaveBeenCalled();
+      expect(result.blockerEscalationSkipReason).toBe('same_reporting_line');
+      expect(result.blockerEscalationDraftText).toBeUndefined();
+      expect(itemStore.all()).toHaveLength(0);
+      expect(draftStore.listForPerson(DIRECTOR_1)).toHaveLength(0);
+      expect(draftStore.listForPerson(MANAGER_X)).toHaveLength(0);
+    });
+  });
+
+  describe('Skipped when the fan-out never spans two or more projects', () => {
+    it('makes no model call when both blocked issues sit in the SAME project as the blocking issue', async () => {
+      const model = fakeModel('should never be called');
+      const client = testCase5Client({
+        getAssociations: vi.fn(async (id: string, type?: string) => {
+          // Every project association resolves to the SAME project — no
+          // cross-project fan-out at all.
+          if (type === 'project') return [{ related_id: PROJECT_A_ID, relationship_type: 'project' }];
+          if (id === BLOCKER_ISSUE_ID && type === 'blocks') {
+            return [
+              { related_id: BLOCKED_ISSUE_1, relationship_type: 'blocks' },
+              { related_id: BLOCKED_ISSUE_2, relationship_type: 'blocks' },
+            ];
+          }
+          return [];
+        }),
+      });
+      const compiled = buildGraph(model, undefined, undefined, deps({ shipClient: client }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_escalation', blockingIssueId: BLOCKER_ISSUE_ID });
+
+      expect(model.invoke).not.toHaveBeenCalled();
+      expect(result.blockerEscalationSkipReason).toBe('single_project');
+    });
+  });
+
+  describe('Proof — the drafted message is never sent by any code path this ticket adds', () => {
+    it('DeepShipClientLike exposes only read methods — there is no write method for this path to call', async () => {
+      const client = testCase5Client();
+      // Every method on the fake is one of the six reads DeepShipClientLike
+      // declares; nothing resembling create/update/post/apply/send exists on
+      // it to call even by mistake (enforced structurally by the TYPE, not
+      // by this assertion — this documents the surface actually used).
+      expect(Object.keys(client).sort()).toEqual(
+        ['getAssociations', 'getChangeFeed', 'getDocument', 'getIssuesByAssignee', 'getPeople', 'listDocuments'].sort()
+      );
+    });
+
+    it('the drafted text is retrievable ONLY from DraftStore — commitBlockerEscalation never calls a sending endpoint', async () => {
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const compiled = buildGraph(fakeModel('a private escalation draft'), undefined, undefined, deps({ itemStore, draftStore }));
+
+      await compiled.invoke({ trigger: 'proactive_escalation', blockingIssueId: BLOCKER_ISSUE_ID });
+
+      // The InboxItem is a lightweight pointer — the actual prose lives only
+      // in DraftStore, never duplicated onto anything Ship-visible, and the
+      // draft's status starts 'unseen' (never 'posted' — nothing in this
+      // chain ever calls markPosted; only gate.ts's acceptDraft does, under
+      // a human's own token).
+      const item = itemStore.list(DIRECTOR_1)[0];
+      if (!item) throw new Error('expected exactly one item');
+      expect(item).not.toHaveProperty('draftText');
+      const stored = item.draftId ? draftStore.get(item.draftId) : undefined;
+      expect(stored?.draftText).toBe('a private escalation draft');
+      expect(stored?.status).toBe('unseen');
+    });
+  });
+});
