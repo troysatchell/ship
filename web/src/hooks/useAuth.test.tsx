@@ -105,7 +105,13 @@ function loginResponse(user: typeof userA, workspace: typeof workspaceA) {
 
 beforeEach(() => {
   queryClient.clear();
-  apiGet.mockClear();
+  // mockReset (not mockClear) - a test whose expected fetch never fires
+  // (the exact bug this file exists to catch) leaves a queued
+  // mockResolvedValueOnce unconsumed; mockClear only resets call history,
+  // so that stale queued response would silently answer the NEXT test's
+  // first apiGet call instead. mockReset drains the queue too.
+  apiGet.mockReset();
+  apiGet.mockResolvedValue(jsonResponse(200, { items: [] }));
   authMe.mockReset();
   authLogin.mockReset();
   authLogout.mockReset();
@@ -156,6 +162,49 @@ describe('useAuth — React Query cache cleared on identity transitions (TRO-343
     await waitFor(() => expect(inboxAsB.result.current.isSuccess).toBe(true));
 
     expect(apiGet, 'a fresh fetch must fire for the new identity, not a cache hit on A\'s data').toHaveBeenCalledTimes(2);
+    expect(
+      inboxAsB.result.current.data,
+      "B's view must not be served A's previously-cached inbox item"
+    ).toEqual({ status: 'ok', items: [inboxItem('mention:2', "B's mention")] });
+    inboxAsB.unmount();
+  });
+
+  it('clears user A\'s cached data on a direct login as user B with no intervening logout (CodeRabbit, PR #120 follow-up)', async () => {
+    // The test above always calls logout() before login(B) - since both now
+    // clear the cache, that alone can't tell login()'s own clear apart from
+    // logout()'s. This isolates login(): go A -> B by calling login() twice
+    // with no logout() in between (e.g. a session that expired server-side
+    // and was re-established as a different account), so only login()'s own
+    // clear can be responsible for the assertion below.
+    authMe.mockResolvedValue(NO_SESSION);
+    authLogin.mockResolvedValueOnce(loginResponse(userA, workspaceA));
+
+    const { result: auth } = renderHook(() => useAuth(), { wrapper: authWrapper });
+    await waitFor(() => expect(auth.current.loading).toBe(false));
+
+    await act(async () => {
+      const outcome = await auth.current.login('a@ship.dev', 'pw');
+      expect(outcome.success).toBe(true);
+    });
+
+    apiGet.mockResolvedValueOnce(jsonResponse(200, { items: [inboxItem('mention:1', "A's mention")] }));
+    const inboxAsA = renderHook(() => useInboxQuery(), { wrapper: inboxWrapper });
+    await waitFor(() => expect(inboxAsA.result.current.isSuccess).toBe(true));
+    expect(apiGet).toHaveBeenCalledTimes(1);
+    inboxAsA.unmount();
+
+    // --- Login directly as user B. No logout() call. ---
+    authLogin.mockResolvedValueOnce(loginResponse(userB, workspaceB));
+    await act(async () => {
+      const outcome = await auth.current.login('b@ship.dev', 'pw');
+      expect(outcome.success).toBe(true);
+    });
+
+    apiGet.mockResolvedValueOnce(jsonResponse(200, { items: [inboxItem('mention:2', "B's mention")] }));
+    const inboxAsB = renderHook(() => useInboxQuery(), { wrapper: inboxWrapper });
+    await waitFor(() => expect(inboxAsB.result.current.isSuccess).toBe(true));
+
+    expect(apiGet, 'login() alone must clear the cache - a fresh fetch must fire for B').toHaveBeenCalledTimes(2);
     expect(
       inboxAsB.result.current.data,
       "B's view must not be served A's previously-cached inbox item"
