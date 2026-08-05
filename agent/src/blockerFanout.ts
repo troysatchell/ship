@@ -89,7 +89,7 @@ async function resolveProjectRef(
   client: Pick<DeepShipClientLike, 'getAssociations' | 'getDocument'>,
   issueId: string
 ): Promise<{ id: string; title: string } | null> {
-  let edges;
+  let edges: AssociationForwardEdge[];
   try {
     edges = await client.getAssociations(issueId, 'project');
   } catch {
@@ -113,9 +113,16 @@ function assigneeIdOf(doc: ShipDocument): string | null {
  * to this token — nothing to fan out from, not an error.
  *
  * Fetches the blocking issue and its `blocks` edges first (sequentially —
- * the edges depend on nothing else), then each blocked issue's document and
- * project association in parallel per issue (independent reads), matching
- * `standupDraft.ts`'s `gatherPersonActivity` concurrency shape.
+ * the edges depend on nothing else), then every blocked edge concurrently
+ * (`Promise.all`, order preserved by index — each edge's own document fetch
+ * and project resolution also start together rather than one waiting on the
+ * other, since neither reads the other's result), matching
+ * `standupDraft.ts`'s `gatherPersonActivity` concurrency shape. CodeRabbit
+ * (TRO-346 PR review): the original sequential per-edge loop paid up to
+ * 3 round trips × N blocked issues in series; this is unbounded (no
+ * `documentCap`-style limit) because `blocks` fan-out is expected to stay
+ * small in practice (TRO-337's own use case is 2 blocked issues) — a page
+ * with dozens of blocked issues would need a bound this ticket doesn't add.
  */
 export async function gatherBlockerFanout(
   client: Pick<DeepShipClientLike, 'getDocument' | 'getAssociations'>,
@@ -133,20 +140,26 @@ export async function gatherBlockerFanout(
     edges = [];
   }
 
-  const blockedIssues: BlockedIssueImpact[] = [];
-  for (const edge of edges) {
-    const blockedDoc = await tryGetDocument(client, edge.related_id);
-    if (!blockedDoc) continue; // gone/inaccessible — not real, verified impact
-
-    const project = await resolveProjectRef(client, blockedDoc.id);
-    blockedIssues.push({
-      issueId: blockedDoc.id,
-      title: blockedDoc.title,
-      projectId: project?.id ?? null,
-      projectTitle: project?.title ?? null,
-      assigneeUserId: assigneeIdOf(blockedDoc),
-    });
-  }
+  const resolvedEdges = await Promise.all(
+    edges.map(async (edge) => {
+      const [blockedDoc, project] = await Promise.all([
+        tryGetDocument(client, edge.related_id),
+        resolveProjectRef(client, edge.related_id),
+      ]);
+      if (!blockedDoc) return null; // gone/inaccessible — not real, verified impact
+      const impact: BlockedIssueImpact = {
+        issueId: blockedDoc.id,
+        title: blockedDoc.title,
+        projectId: project?.id ?? null,
+        projectTitle: project?.title ?? null,
+        assigneeUserId: assigneeIdOf(blockedDoc),
+      };
+      return impact;
+    })
+  );
+  const blockedIssues: BlockedIssueImpact[] = resolvedEdges.filter(
+    (issue): issue is BlockedIssueImpact => issue !== null
+  );
 
   const distinctProjectIds = [
     ...new Set([blockingProject?.id, ...blockedIssues.map((b) => b.projectId)].filter((id): id is string => id !== null && id !== undefined)),

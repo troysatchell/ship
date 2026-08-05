@@ -503,7 +503,12 @@ export const GraphState = Annotation.Root({
    * and `commitBlockerEscalation` reads it to skip writing anything —
    * identical shape to `standupSkipReason`. */
   blockerEscalationSkipReason: Annotation<
-    'issue_not_found' | 'single_project' | 'insufficient_people' | 'same_reporting_line' | undefined
+    | 'issue_not_found'
+    | 'single_project'
+    | 'insufficient_people'
+    | 'same_reporting_line'
+    | 'people_unavailable'
+    | undefined
   >({
     reducer: (current, update) => update ?? current,
     default: () => undefined,
@@ -1127,7 +1132,21 @@ export function buildGraph(
       // (`user_id`/`reportsTo`) — passed directly, same convention
       // `proactive.ts`'s `buildBlockingApprovalItems` already uses for
       // `findManagerUserId`.
-      const people = await deps.shipClient.getPeople();
+      //
+      // CodeRabbit (TRO-346 PR review): this is a Ship API call like any
+      // other in this file's proactive/deep paths, and the assignment's own
+      // Engineering Requirements mandate the agent "degrade gracefully if
+      // Ship is unreachable — it should not crash or hang indefinitely."
+      // The impact fan-out itself was already gathered successfully at this
+      // point (`gatherBlockerFanout` above already tolerates per-call
+      // failures internally); losing only the people directory should not
+      // crash the whole node.
+      let people: ShipPerson[];
+      try {
+        people = await deps.shipClient.getPeople();
+      } catch {
+        return { blockerFanoutImpact: impact, blockerEscalationSkipReason: 'people_unavailable' as const };
+      }
       const manager = findLowestCommonManager(impact.blockedPeopleUserIds, people);
 
       // Gate (b): TRO-337 proof #3 — already in the same reporting line

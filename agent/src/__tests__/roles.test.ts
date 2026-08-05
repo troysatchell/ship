@@ -139,7 +139,7 @@ describe('findLowestCommonManager', () => {
     });
   });
 
-  it('finds the common ancestor across three people even when only two of them share a line', () => {
+  it('reports no common manager across three people even when only two of them share a line', () => {
     // engineer-3/engineer-4 share manager-c directly; engineer-1 sits in a
     // completely different tree with no common ancestor at all — so the
     // group as a whole has NO common manager, even though a sub-pair does.

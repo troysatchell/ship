@@ -100,6 +100,32 @@ nothing in this package decides WHICH blocking issue's fan-out to check and WHEN
 could drive this from a periodic scan of `blocks`-typed associations, or from Ship exposing
 `document_associations` writes on the change feed.
 
+**CodeRabbit findings (6 captured, triaged by the orchestrator):**
+- Fixed: `blockerFanout.ts`'s per-blocked-edge loop was fully sequential (document fetch, then
+  project resolution, one edge at a time) — parallelized with `Promise.all`, order preserved,
+  each edge's own two reads also started together rather than one waiting on the other. No bound
+  added (`blocks` fan-out is expected to stay small; a future ticket would need one for a page with
+  dozens of blocked issues).
+- Fixed: `resolveProjectRef`'s local `edges` variable was untyped (implicit `any` via unannotated
+  `let`) — now `AssociationForwardEdge[]`, matching the sibling declaration in
+  `gatherBlockerFanout`.
+- Fixed (correctly re-severitized): CodeRabbit marked the missing `getPeople()` error handling
+  "trivial," but it's a real gap against this assignment's own Engineering Requirement ("the agent
+  must degrade gracefully if Ship is unreachable — it should not crash or hang indefinitely") —
+  an unreachable Ship API during the people-directory fetch would have thrown past an already-
+  successful fan-out gather. Added a `people_unavailable` skip reason, same shape as the other
+  four skip reasons this node already returns.
+- Fixed: `roles.test.ts`'s 3-person LCA test was named "finds the common ancestor" while its own
+  assertion proves `reason === 'no_common_manager'` — renamed to match what it actually verifies.
+- Dismissed: memoizing manager-chain computation across `sameReportingLine`/
+  `allInSameReportingLine`/`findLowestCommonManager` (currently recomputes per pair) — real at
+  scale, but every call site in this codebase passes at most a handful of blocked people (TRO-337's
+  own use case: 2), so the O(n²) chain rebuilds are O(1) in practice. Deferred rather than adding
+  memoization complexity for a scale this feature doesn't operate at.
+- Dismissed: a redundant duplicate `compiled.invoke` call in one `graph.test.ts` case — the test's
+  assertions are still correct and still exercise the degrade path; the redundancy is cosmetic test
+  churn, not a coverage gap.
+
 **Rollback.** Revert the four commits on this branch (`roles.ts`/`roles.test.ts`;
 `itemStore.ts`/`costTracking.ts`/`gate.ts`; `blockerFanout.ts` + its test; `shipClient.ts`/
 `graph.ts`/`graph.test.ts`) and this entry. No schema or migration changes, no new API endpoints,
