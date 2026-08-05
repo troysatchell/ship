@@ -149,6 +149,304 @@ every on-demand chat answer regardless of who asked.
 
 ---
 
+## TRO-338 — [FG-20] Recorded model responses pin the output, so a prompt rewrite can break production while every test stays green
+
+**Bundle.** Second and final sub-issue in bundle TRO-330 ([PR-F] EPIC). TRO-322 (FG-12, previous
+entry below) built the regression suite this ticket's own premise depends on: recorded model
+responses make CI deterministic, and that is exactly why the suite structurally cannot see a
+prompt/context-assembly regression — the recording replays regardless of what the real prompt
+says. This ticket is the second half of that same question: "did the drafts get worse," not "did
+the code change behaviour."
+
+**Scope, verified before writing anything.** The only drafting node with an existing accept-and-post
+path is standup drafts (`gate.ts`'s `acceptDraft`, FG-8) — blocker-escalation drafts are, by
+FLEETGRAPH.MD's own hard limit, never sent anywhere Ship-side ("nothing in this chain ... ever
+sends the drafted message"), so there is no "posted version" to compare a blocker draft against,
+and retro drafts (TRO-335/FG-17) have no code in `agent/src` yet in this worktree (still `In
+Progress` in a sibling worktree). Draft-survival scope is therefore standup drafts only; the golden
+set (real activity + reference drafts) is likewise built against `standupDraft.ts`'s
+`PersonActivitySummary`/`buildStandupPrompt`, the only drafting prompt this bundle's tickets cover
+end to end.
+
+**Nothing about what any node drafts changed.** `standupDraft.ts`/`blockerFanout.ts`'s prompts are
+untouched — this ticket only adds the ability to score (golden set) and to record (draft survival),
+per its own contract.
+
+**1. The golden set — real activity states, human-written reference drafts.**
+- `agent/src/goldenSet.ts` — `GOLDEN_FIXTURES`, 3 fixtures. Fixture 1 (`engineer-three-issues`) is
+  the SAME real seeded row ids/titles `graph.test.ts`'s own "Test Case 1" fixture uses (verified
+  there against this worktree's seeded database's FG-3 block) — reused, not re-derived. Fixtures 2
+  (`zero-activity`) and 3 (`blocked-issue`) are the same real `PersonActivitySummary` shape, built
+  from realistic seed-convention titles rather than a second live row lookup — marked as such in
+  the file, per this repo's provenance rules (observed vs. modeled-on-observed). Each fixture
+  carries a reference draft written by hand for this ticket, not generated or edited from a model
+  draft.
+- `agent/src/textSimilarity.ts` — `computeTextSimilarity(a, b)`, a deterministic, dependency-free
+  Jaccard token-overlap scorer. One function answers two different comparisons this ticket needs
+  (golden-set: actual vs. reference; draft-survival: posted vs. original) rather than inventing two
+  metrics that could drift apart.
+- `agent/src/scripts/golden-set-compare.ts` — the on-demand runner. Deliberately NOT part of
+  `pnpm --filter @ship/agent test` / the CI gate (same posture as `trace-invoke.ts`, the only other
+  script in this package permitted a live model call): built the real prompt via the real
+  `buildStandupPrompt`, sends it to a real Anthropic call, scores against each fixture's reference,
+  exits non-zero below `--threshold` (default 0.25). Run it by hand when the prompt or model
+  changes: `pnpm --filter @ship/agent golden-set:compare -- [--threshold 0.25]`.
+
+**2. The acceptance test — real and runnable, not a description.**
+`agent/src/__tests__/goldenSet.test.ts` is TRO-338's own proof #1: "deliberately degrading the
+prompt ... must move the golden-set score measurably, while the FG-12 regression suite stays
+green." A CONTEXT-SENSITIVE stable fake model (deliberately different in kind from TRO-322's
+regression-suite fakes, which return one fixed string regardless of input) can only echo a fact if
+it is textually present in the prompt it receives. Fed the real `buildStandupPrompt(...)` output
+for each golden fixture's real activity, it produces a draft naming real facts; fed the same
+function's output for that activity STRIPPED to empty (the realistic shape of a context-assembly
+bug — the gatherer silently returned nothing for a person who actually has activity), it has
+nothing to echo. `scoreGoldenFixture` (real, unmocked) then shows the gap: every fixture's rich
+score exceeds its stripped score by > 0.15, stripped scores stay < 0.2 in absolute terms, rich
+scores stay > 0.25. This test runs in the SAME `pnpm --filter @ship/agent test` invocation as every
+other regression test in the package, none of which it touches — 362/362 tests pass together,
+which is the literal, structural half of the proof: in one real run, the pre-existing suite is
+unchanged (green) while this file's own assertions show the golden score moving. Both halves of
+the ticket's own acceptance bar are true in the same run, not asserted separately.
+
+**Confirmed red first, for the right reason.** Temporarily replaced the context-sensitive fake with
+a naive one that ignores the prompt entirely (the same shape TRO-322's regression fakes use) and
+re-ran: both divergence assertions failed with `expected 0 to be greater than 0.15` — a real, exact
+proof that a fake/model which does not actually respond to context produces zero measurable
+divergence, which is precisely the failure mode this test exists to catch. Reverted; 3/3 pass again.
+
+**3. Draft survival — the production signal, plumbed through FG-8's gate.**
+- `agent/src/draftStore.ts` — `StandupDraft` gains `finalText?: string`. `DraftStore.markPosted`'s
+  signature changes from `(id: string)` to `(id: string, finalText: string)` — REQUIRED, not
+  optional, because there is no legitimate "mark posted" call that doesn't know what was posted.
+  `draftText` (the immutable original, already retained since TRO-319) is untouched by this — the
+  two versions this metric compares were already half in place; the missing half was retaining what
+  was actually posted, which this ticket closes.
+- `agent/src/draftSurvival.ts` — `computeDraftSurvival` (pure), `DraftSurvivalRecord`, and
+  `FileDraftSurvivalTracker`, mirroring `costTracking.ts`'s exact shape (`Tracker` interface,
+  JSONL-append to `.cache/draft-survival-ledger.jsonl`, `readAll`/`aggregate`) — the same proven
+  pattern already reviewed in this package for "record a real per-event production observation,
+  non-blocking, never able to fail the real operation it accounts for."
+- `agent/src/gate.ts` — `GateDeps` gains an optional `draftSurvivalTracker`. `acceptDraft` now calls
+  `draftStore.markPosted(draftId, textToPost)` (passing what was actually posted) and, when a
+  tracker is injected, records one `DraftSurvivalRecord` computed from `draft.draftText` (original)
+  and `textToPost` (posted) — the two strings already in hand at that exact point, zero labelling
+  effort, exactly as the ticket specifies. Non-fatal by construction (try/catch, same posture as
+  `graph.ts`'s `recordInvocation`): a tracker failure can never undo or fail a Ship write that
+  already succeeded — proven by a test where the tracker's `record` rejects and `acceptDraft` still
+  returns its normal result.
+- **Not wired into `index.ts`.** Nothing in this package calls `acceptDraft` from a real HTTP route
+  today (FG-8 has no route wired up yet — confirmed by grep, same finding TRO-322 made about the
+  agent's HTTP surface) — there is no live caller to construct a production
+  `FileDraftSurvivalTracker` for. The seam is real, tested, and ready; wiring it to an actual accept
+  route is that future ticket's job, not this one's.
+
+**Confirmed red first, for the right reason.** Temporarily short-circuited the recording call in
+`gate.ts` (`if (false && deps.draftSurvivalTracker)`) and re-ran `gate.test.ts`'s new survival
+tests: both failed with `expected "vi.fn()" to be called 1 times, but got 0 times`. Reverted;
+23/23 pass again.
+
+**How to run it.**
+```
+source .factory-env
+pnpm --filter @ship/agent test
+
+# On-demand golden-set comparison (real Anthropic call, needs ANTHROPIC_API_KEY):
+set -a; source .env.local; set +a
+pnpm --filter @ship/agent golden-set:compare -- --threshold 0.25
+```
+
+**How to roll it back.** Revert this commit. `draftStore.ts`'s `markPosted` signature change is the
+only change here with a real caller (`gate.ts`'s `acceptDraft`, reverted in the same commit) —
+nothing else in this package or `index.ts` calls it, so there is no other call site to fix up.
+Every other file added by this ticket (`textSimilarity.ts`, `goldenSet.ts`, `draftSurvival.ts`,
+`scripts/golden-set-compare.ts`) is net-new and unused by production `index.ts`; deleting them
+removes this ticket's entire surface with nothing else to unwind.
+
+---
+
+## Bundle TRO-330 — [PR-F] EPIC: final status
+
+Both sub-issues done: TRO-322 (regression suite, both required E2E flows in CI on both platforms,
+rollback demonstrated) and TRO-338 (golden set, draft-survival metric), immediately above. Bundle
+definition of done, checked explicitly rather than assumed:
+
+- **Every named agent behaviour has a regression test.** Mentions/blocking-approval, on-demand
+  expansion, standup drafts, and blocker fan-out already had real coverage before this bundle
+  (TRO-322 verified it rather than duplicating it). Retro drafts (TRO-335) and scope drift (TRO-336)
+  are out of scope for both tickets in this bundle — neither has landed in `agent/src` as of this
+  branch; their regression tests are their own tickets' job once they do.
+- **Both required E2E flows pass in CI on both platforms.** TRO-322 built
+  `e2e/agent-detection-latency.spec.ts` and `e2e/agent-chat-grounded-response.spec.ts`, wired into
+  new `e2e-agent` jobs in both `ci.yml` and `.gitlab-ci.yml`. Passed locally, together, twice
+  (2/2, observed detection latency 7,751ms). **Not yet observed running for real in either CI
+  platform** — that happens on this bundle's actual PR, which per the epic's own convention opens
+  after both sub-issues are done (now).
+- **A deliberately broken build demonstrates rollback.** TRO-322's throwaway PR #131 / MR !1 —
+  real GitHub failure + `BLOCKED` merge status; a real, previously-undocumented GitLab finding
+  (MR pipelines never run on this project, `access_level: ref_protected`, first-ever
+  `merge_request_event` pipeline in the project's history) — plus a real local simulation of the
+  "boots but broken" gap and the corrective CLI that catches it. All in FLEETGRAPH.MD.
+  `terraform apply` never run; no real Render service touched.
+- **Draft-survival metric recorded in production, not just designed.** This ticket. The mechanism
+  is real and tested (`gate.ts`'s `acceptDraft`, proven with a fake tracker and a red-before-green
+  cycle) — but genuinely NOT YET recording anything in the actual live production agent, because
+  nothing calls `acceptDraft` from a real route yet (FG-8 has no HTTP surface wired up). This is a
+  real gap between "designed and provably correct" and "recording live data" — worth a follow-up
+  ticket to wire FG-8's accept route and construct the production `FileDraftSurvivalTracker` in
+  `index.ts`, not something this bundle's two tickets can close on their own, since neither one's
+  scope included building that route.
+- **`CHANGES.md` appended.** Both entries above.
+
+---
+
+## TRO-322 — [FG-12] Every agent behaviour needs a regression test and CI must roll back a bad deploy
+
+**Bundle.** First of two sub-issues in bundle TRO-330 ([PR-F] EPIC — "one branch, one PR, one
+CodeRabbit review"). The second, TRO-338 (FG-20, the golden set), is dispatched separately after
+this ticket's work is gated — not attempted here.
+
+**Scope, verified before writing anything.** The brief names six behaviours: mentions/blocking-
+approval detection, on-demand chat expansion, standup drafts, blocker fan-out, retro drafts, and
+scope drift. Read every existing agent test file first rather than assuming a gap: mentions/
+blocking-approval (`mentions.test.ts`, `proactive.test.ts`, `proactivePoll.test.ts`), on-demand
+expansion (`expansion.test.ts`), standup drafts (`standupDraft.test.ts`), and blocker fan-out
+(`blockerFanout.test.ts`, `roles.test.ts`) already have real, substantial coverage — confirmed
+directly in `graph.test.ts`, which drives `proactive_escalation` (blocker fan-out) through the
+actual compiled graph across 6 distinct scenarios (cross-project fan-out, missing-link degrade,
+same-reporting-line no-escalation, single-project skip, the never-sent proof), not just at the
+`blockerFanout.ts`/`roles.ts` unit level. **No new unit-level regression test was added for these
+four** — doing so would duplicate existing, real coverage, which the ticket's own contract says not
+to do. **Retro drafts (TRO-335/FG-17) and scope drift (TRO-336/FG-18) are both still `In Progress`
+in sibling worktrees as of this ticket, not `Done`, and neither has any code in `agent/src` yet**
+(verified: no `retroDraft.ts`, no scope-drift graph node, no `grep` hits for "scope drift" or
+"material change" in `agent/src`). The brief conditions retro drafts explicitly on TRO-335 landing;
+scope drift has no code to test either, for the identical reason, so it is treated the same way —
+both are out of scope for this ticket and will need their own regression tests once their tickets
+land.
+
+**What this ticket actually had to build: the E2E/CI/rollback layer, which had no prior coverage
+at all.**
+
+1. **The two required E2E flows did not exist, and neither did any e2e job in CI on either
+   platform** (`.github/workflows/ci.yml`/`.gitlab-ci.yml` had zero `playwright test` invocations —
+   confirmed by grep — despite `playwright.config.ts`'s reporter already branching on
+   `process.env.CI`, i.e. the harness was CI-ready but nothing ever called it).
+2. **The FLEETGRAPH.MD-documented rollback gap** — a deploy that boots (`/health` 200) but is
+   missing config or can't reach Ship still gets promoted, because Render's platform check watches
+   `/health`, never `/ready` — had no corrective mechanism, only a description of the gap.
+
+**1. New regression tests (agent package, red-before-green).**
+- `agent/src/deployReadiness.ts` + `agent/src/__tests__/deployReadiness.test.ts` (10 cases). Pure
+  decision logic: a readiness-poll window warrants a corrective action only when **every** sample
+  failed (sustained), never on one failure that recovers (FLEETGRAPH.MD's own transient-Ship-blip
+  caveat). Proven red-before-green by deliberately changing `failureCount === sampleCount` to
+  `failureCount > 0` and re-running: the two transient-blip tests failed with real assertion errors
+  (`expected true to be false`) for exactly the reason they exist to guard; reverted, all 10 green
+  again.
+- `agent/src/scripts/check-readiness-and-rollback.ts` + `agent/src/__tests__/
+  check-readiness-and-rollback.test.ts` (9 cases) — the CLI wrapper (arg parsing,
+  `findPreviousLiveDeploy`'s "most recent other live deploy" selection).
+
+**2. Both required E2E flows, new, running locally and wired into CI on both platforms.**
+- `e2e/agent-detection-latency.spec.ts` — posts a real `@Bob Martinez` comment via the real API,
+  then polls the real agent process's real `GET /api/agent/inbox` (through api/'s real proxy) until
+  the mention appears, asserting elapsed time against FLEETGRAPH.MD's own "< 5 minutes" bar as a
+  hard `expect()`. Local run: **observed 7,751ms**.
+- `e2e/agent-chat-grounded-response.spec.ts` — drives the real FleetGraph pill/chat panel in a real
+  browser against a real running web+api+agent stack, and asserts the rendered answer names its
+  seed document in a "Sources" list — `citedSources` is built structurally from the documents the
+  expansion walk actually visited (`finalizeExpansion`, `graph.ts`), independent of the model's own
+  text, so this proves real grounding even with a fake model response.
+- **New fixture, `e2e/fixtures/agentEnv.ts`, deliberately NOT `isolated-env.ts`'s testcontainers
+  mechanism.** `isolated-env.ts` needs a Docker daemon reachable from inside the test process, which
+  works on GitHub's `ubuntu-latest` runner but not on this project's GitLab shared runner (confirmed
+  separately — see the rollback section below). `agentEnv.ts` instead expects a Postgres reachable
+  via `DATABASE_URL`/`E2E_AGENT_DATABASE_URL` (a plain `services:` container in CI, the same native
+  mechanism `verify` already uses on both platforms) and creates its own randomly-named scratch
+  database on that server per worker (`createScratchDatabase`, cleaned up on teardown) — needed
+  because the two spec files' worker-scoped fixture setup does not reliably share one worker
+  process, and re-running `seedMinimalTestData` against a database that already has it throws a
+  real `duplicate key value violates unique constraint "users_email_key"` (caught by an actual first
+  trial run, not anticipated in the abstract). `runMigrations`/`seedMinimalTestData` are now exported
+  from `isolated-env.ts` so both fixtures share one seed definition instead of forking a second copy.
+  Mints real per-user Ship API tokens (CSRF → login → `POST /api/api-tokens`) for the agent's own
+  outbound calls, matching FLEETGRAPH.MD's "no service account" design.
+- `agent/src/scripts/e2e-server.ts` — mirrors `index.ts`'s real wiring (real `ShipClient`, real
+  `ItemStore`/`DraftStore`, the real compiled graph, the real proactive poller) with exactly one
+  substitution: a stable, deterministic fake in place of `ChatAnthropic`, per the ticket's own
+  mocking rule. `citedSources` staying real (see above) is what keeps this a genuine grounding proof
+  rather than a weakened one.
+- CI wiring: a new `e2e-agent` job in both `.github/workflows/ci.yml` and `.gitlab-ci.yml`, gated on
+  `verify` passing first, using a plain `postgres:15-alpine` service (not testcontainers), building
+  `shared`+`agent` (api/web are already built by `e2e/global-setup.ts`, which every `playwright
+  test` invocation runs unconditionally), then `playwright test e2e/agent-detection-latency.spec.ts
+  e2e/agent-chat-grounded-response.spec.ts --workers=1`.
+- `scripts/factory/gate.sh` now also runs `pnpm --filter @ship/agent test` (previously only api/web)
+  — CI already treated agent tests as a hard gate; the local eval had no equivalent check.
+- **Found and fixed three real bugs while proving the E2E specs actually pass** (not just written
+  and assumed correct): (a) the probe document's original title, "FleetGraph E2E Probe Issue",
+  collided with the chat pill's own accessible name ("FleetGraph"), so
+  `getByRole('button', { name: /FleetGraph/ })` matched two elements — renamed to "TRO-322 E2E
+  Probe Issue"; (b) `page.getByRole('alert')`/`getByRole('status')` were unscoped, and the document
+  sidebar renders its own unrelated alert/status regions per row — scoped both to the chat region
+  locator; (c) chaining `.getByText(title)` off an already-filtered `<ol>` locator resolved to every
+  `<li>` in a multi-source list, not just the target one — replaced with `toContainText` on the
+  already-resolved element. All three were caught by actually running the specs against the real
+  stack (`/e2e-test-runner` conventions, backgrounded, `test-results/summary.json` polled), not by
+  inspection.
+
+**3. Automatic rollback — demonstrated, both layers, with real evidence.** Full detail (commands,
+exact output, the GitLab finding) is in `FLEETGRAPH.MD`'s "Rollback trigger and procedure" section,
+under the new TRO-322 subsection. Summary:
+- **Layer 1 (CI gates merge).** A throwaway, never-merged branch with one deliberate type error was
+  pushed as PR #131 (GitHub) and MR !1 (GitLab), then closed once evidence was captured, never
+  merged. **GitHub:** the `verify` job failed in 44s; `mergeStateStatus: BLOCKED`. **GitLab — a
+  real, previously-undiscovered gap:** the pipeline never started (stuck `pending` against an
+  online, idle runner) because that runner is `access_level: ref_protected` and an MR pipeline runs
+  against an unprotected ref — confirmed this was the **first-ever** `merge_request_event` pipeline
+  in the project's history (every prior pipeline: `source: push`, `ref: main`). The MR still could
+  not be merged (`detailed_merge_status: ci_still_running`), so the prevention property holds in
+  effect, but GitLab CI is not actually gating merge requests on this project today, for any branch
+  — filed as a finding for a follow-up ticket, not fixed here (the runner setting is instance-level,
+  outside this project's or this repo's control).
+- **Layer 2 (the "boots but broken" gap FLEETGRAPH.MD names as uncovered).** Reproduced live with
+  two real local `agent/src/index.ts` processes — one pointed at an unreachable Ship, one at a
+  reachable stub — confirming both return `/health` → 200 while only the broken one returns `/ready`
+  → 503. `check-readiness-and-rollback.ts` (dry run) correctly distinguished them: sustained failure
+  + exit 2 on the broken instance, healthy + exit 0 on the working one. **Not wired to fire
+  automatically against the live `ship`/`ship-agent` Render services** — that needs `RENDER_API_KEY`
+  in a real scheduled trigger, an outward-facing, credential-bearing change this factory reserves
+  for explicit human sign-off. Recommendation (in FLEETGRAPH.MD): schedule this script rather than
+  repointing Render's `health_check_path` at `/ready`, which would trade the current gap for false
+  demotions during any brief, healthy Ship outage.
+
+**How to run it.**
+```
+# Agent unit tests (deployReadiness + check-readiness-and-rollback + everything pre-existing):
+source .factory-env
+pnpm --filter @ship/agent test
+
+# The two E2E flows (use /e2e-test-runner conventions — never foreground pnpm test:e2e):
+E2E_AGENT_DATABASE_URL=<a reachable Postgres, distinct from your worktree's own DATABASE_URL> \
+  pnpm exec playwright test e2e/agent-detection-latency.spec.ts e2e/agent-chat-grounded-response.spec.ts --workers=1
+
+# The rollback CLI, dry run, against any real /ready URL:
+pnpm --filter @ship/agent check:readiness -- --url https://ship-agent-t0zy.onrender.com/ready --attempts 3 --interval-ms 30000
+```
+
+**How to roll it back.** Revert this commit. The two new CI jobs (`e2e-agent` on both platforms)
+are additive stages that do not touch `verify`/`build-image`/`image-build`; removing them returns
+CI to its pre-TRO-322 shape with no other job depending on them (`needs: verify`, nothing needs
+`e2e-agent`). `agent/src/deployReadiness.ts` and `check-readiness-and-rollback.ts` are net-new,
+unused by production `index.ts`, and safe to delete outright. `e2e/fixtures/agentEnv.ts` and
+`agent/src/scripts/e2e-server.ts` are test-only and never imported by production code.
+`isolated-env.ts`'s two newly-exported functions (`runMigrations`, `seedMinimalTestData`) are a
+pure visibility widening (`function` → `export function`, no behavior change) — reverting them only
+breaks `agentEnv.ts`'s import, which reverts in the same commit anyway.
+
+---
+
 ## TRO-343 — React Query cache is never cleared on login/logout/impersonation — cross-user data leakage on shared browsers
 
 **Found by:** CodeRabbit, PR #120 (TRO-328 / [PR-D]), 2 findings (`web/src/hooks/useBlockingAssociations.ts:47`,

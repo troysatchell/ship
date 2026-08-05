@@ -17,7 +17,10 @@
     "test:coverage": "vitest run --coverage",
     "trace:invoke": "tsx src/scripts/trace-invoke.ts",
     "trace:invoke-on-demand": "tsx src/scripts/trace-invoke-on-demand.ts",
-    "trace:invoke-proactive": "tsx src/scripts/trace-invoke-proactive.ts"
+    "trace:invoke-proactive": "tsx src/scripts/trace-invoke-proactive.ts",
+    "check:readiness": "tsx src/scripts/check-readiness-and-rollback.ts",
+    "e2e:server": "tsx src/scripts/e2e-server.ts",
+    "golden-set:compare": "tsx src/scripts/golden-set-compare.ts"
   },
   "dependencies": {
     "@langchain/anthropic": "^0.3.16",

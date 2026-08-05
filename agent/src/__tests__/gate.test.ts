@@ -3,6 +3,7 @@ import { acceptDraft, acceptProposedTransition, discardItem, GateError, rejectPr
 import { InMemoryDraftStore, type NewStandupDraft, type ProposedTransition } from '../draftStore.js';
 import { InMemoryItemStore, type NewInboxItem } from '../itemStore.js';
 import type { CreatedStandup, GateShipClientLike } from '../shipClient.js';
+import type { DraftSurvivalRecord, DraftSurvivalTracker } from '../draftSurvival.js';
 
 const ACCEPTER_TOKEN = 'accepter-own-token-abc';
 const AGENT_TOKEN = 'agent-service-account-token-should-never-be-used-here';
@@ -191,6 +192,90 @@ describe('acceptDraft', () => {
       acceptDraft({ shipClient, itemStore, draftStore }, 'standup-draft:user-a:2026-08-04', ACCEPTER_TOKEN)
     ).rejects.toThrow(GateError);
     expect(shipClient.postStandup).not.toHaveBeenCalled();
+  });
+});
+
+// TRO-338 / FG-20's own acceptance test #2: "The draft-survival metric is
+// recorded on every accepted draft in FG-8's gate." Made real here — a
+// fake DraftSurvivalTracker, asserted against directly, not just described.
+describe('acceptDraft — draft survival recording (TRO-338 / FG-20)', () => {
+  function fakeSurvivalTracker(): DraftSurvivalTracker & { record: ReturnType<typeof vi.fn> } {
+    return { record: vi.fn(async (_entry: DraftSurvivalRecord) => {}) };
+  }
+
+  it('records similarity 1 and identical: true when the draft is posted completely unedited', async () => {
+    const shipClient = fakeGateClient();
+    const draftStore = new InMemoryDraftStore();
+    const itemStore = new InMemoryItemStore();
+    const draftSurvivalTracker = fakeSurvivalTracker();
+    draftStore.upsert(draftInput({ draftText: 'Original composed text.' }));
+    itemStore.upsert(standupDraftItem('standup-draft:user-a:2026-08-04'));
+
+    await acceptDraft(
+      { shipClient, itemStore, draftStore, draftSurvivalTracker },
+      'standup-draft:user-a:2026-08-04',
+      ACCEPTER_TOKEN
+    );
+
+    expect(draftSurvivalTracker.record).toHaveBeenCalledTimes(1);
+    const recorded = draftSurvivalTracker.record.mock.calls[0]?.[0] as DraftSurvivalRecord;
+    expect(recorded.draftId).toBe('standup-draft:user-a:2026-08-04');
+    expect(recorded.personUserId).toBe('user-a');
+    expect(recorded.identical).toBe(true);
+    expect(recorded.similarity).toBe(1);
+  });
+
+  it('records identical: false and a lower similarity when the person edits before posting', async () => {
+    const shipClient = fakeGateClient();
+    const draftStore = new InMemoryDraftStore();
+    const itemStore = new InMemoryItemStore();
+    const draftSurvivalTracker = fakeSurvivalTracker();
+    draftStore.upsert(draftInput({ draftText: 'Moved "Build issue assignment flow" to In Review.' }));
+    itemStore.upsert(standupDraftItem('standup-draft:user-a:2026-08-04'));
+
+    await acceptDraft(
+      { shipClient, itemStore, draftStore, draftSurvivalTracker },
+      'standup-draft:user-a:2026-08-04',
+      ACCEPTER_TOKEN,
+      'Completely different, hand-written from scratch.'
+    );
+
+    expect(draftSurvivalTracker.record).toHaveBeenCalledTimes(1);
+    const recorded = draftSurvivalTracker.record.mock.calls[0]?.[0] as DraftSurvivalRecord;
+    expect(recorded.identical).toBe(false);
+    expect(recorded.similarity).toBeLessThan(0.3);
+  });
+
+  it('works exactly as before when no draftSurvivalTracker is supplied — the dependency is optional', async () => {
+    const shipClient = fakeGateClient();
+    const draftStore = new InMemoryDraftStore();
+    const itemStore = new InMemoryItemStore();
+    draftStore.upsert(draftInput());
+    itemStore.upsert(standupDraftItem('standup-draft:user-a:2026-08-04'));
+
+    await expect(
+      acceptDraft({ shipClient, itemStore, draftStore }, 'standup-draft:user-a:2026-08-04', ACCEPTER_TOKEN)
+    ).resolves.toEqual({ standupId: 'standup-created-1' });
+  });
+
+  it('a tracker that throws does not fail the accept — the Ship write already succeeded', async () => {
+    const shipClient = fakeGateClient();
+    const draftStore = new InMemoryDraftStore();
+    const itemStore = new InMemoryItemStore();
+    const draftSurvivalTracker: DraftSurvivalTracker = {
+      record: vi.fn().mockRejectedValue(new Error('disk full')),
+    };
+    draftStore.upsert(draftInput());
+    itemStore.upsert(standupDraftItem('standup-draft:user-a:2026-08-04'));
+
+    const result = await acceptDraft(
+      { shipClient, itemStore, draftStore, draftSurvivalTracker },
+      'standup-draft:user-a:2026-08-04',
+      ACCEPTER_TOKEN
+    );
+
+    expect(result).toEqual({ standupId: 'standup-created-1' });
+    expect(draftStore.get('standup-draft:user-a:2026-08-04')?.status).toBe('posted');
   });
 });
 
