@@ -21,6 +21,91 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-343 — React Query cache is never cleared on login/logout/impersonation — cross-user data leakage on shared browsers
+
+**Found by:** CodeRabbit, PR #120 (TRO-328 / [PR-D]), 2 findings (`web/src/hooks/useBlockingAssociations.ts:47`,
+`web/src/hooks/useInboxQuery.ts:65`), CWE-200 Sensitive Data Exposure, Major.
+
+**Root cause, re-verified before implementing (2026-08-05), not just carried over from the ticket.**
+`grep -rn "queryClient\.(clear|removeQueries|resetQueries)" web/src` (excluding tests) still returned
+zero matches anywhere in the app. Not specific to the two hooks CodeRabbit flagged — every query-key
+factory in `web/src/hooks/*.ts` is unscoped by user id, so on a shared/kiosk browser, or during admin
+impersonation, whoever is logged in next can be served the previous identity's already-cached React
+Query data instead of a fresh fetch. `web/src/hooks/useAuth.tsx`'s three identity-transition handlers
+never touched the query cache at all before this fix: `login` (then lines 137-155), `logout` (then
+lines 157-164), `endImpersonation` (then lines 166-185).
+
+**Recommendation verified before applying, not applied blindly.** Read `useAuth.tsx` and `main.tsx`'s
+provider tree first, per the ticket's own instruction. Confirmed: (1) `web/src/lib/queryClient.ts`
+exports a module-level `queryClient` singleton (already imported directly, not via the `useQueryClient()`
+hook, by `MutationErrorToast.tsx`, `useDocumentWriteStatus.ts`, and `UnifiedDocumentPage.tsx` — the
+established pattern in this codebase, so `useAuth.tsx` follows it too); (2) `AuthProvider` in `main.tsx`
+is mounted inside `PersistQueryClientProvider`, so `queryClient.clear()` is reachable and meaningful from
+inside it; (3) this version's `@tanstack/query-persist-client-core` (`5.91.15`, read from
+`node_modules/.pnpm`) has **no debounce/throttle** on its persist subscription — `persistQueryClientSubscribe`
+saves to IndexedDB synchronously off every cache `'removed'`/`'added'`/`'updated'` event, and
+`QueryCache.clear()` (`query-core@5.90.16`) removes every query synchronously before any of those saves'
+async `persistClient()` write settles — so a single `queryClient.clear()` call reliably empties both the
+in-memory cache and (once the resulting persist write lands) the IndexedDB-backed store `useInboxQuery`
+uses, with no separate call needed for the SPA login/logout/end-impersonation flow this ticket's own
+proof scenario covers (no full page reload involved in any of those three).
+
+**What changed**, all in `web/src/hooks/useAuth.tsx`:
+- Added `import { queryClient } from '@/lib/queryClient';`.
+- `login`: `queryClient.clear()` added inside the `response.success && response.data` branch, before
+  `setUser(...)`, so the new identity can never be handed the previous one's cached data.
+- `logout`: `queryClient.clear()` added to the existing unconditional client-side reset (alongside
+  `setUser(null)`, `clearCachedAuthData()`), so whoever logs in next on this browser starts clean.
+- `endImpersonation`: `queryClient.clear()` added inside the `response.success` branch, right after
+  `setImpersonating(null)` and before the `api.auth.me()` refresh, so the admin's own view can't inherit
+  the impersonated user's cached data.
+
+**Known gap, deliberately not fixed here — out of this ticket's scope, not missed.** Impersonation
+*start* is a different code path with a different mechanism: `AdminDashboard.tsx`'s `handleImpersonate`
+(around line 128-140) calls `api.admin.startImpersonation(userId)` then does a hard
+`window.location.href = '/docs'` reload — there is no "start impersonation" handler inside `useAuth.tsx`
+for the ticket's recommended fix to touch (only `endImpersonation` lives there). The in-memory cache is
+naturally wiped by that reload (a fresh page load re-instantiates the `queryClient` module), but the
+IndexedDB-persisted store is not cleared before navigating away, so a stale persisted snapshot from the
+admin's own pre-impersonation session could still rehydrate into the newly-loaded page before the
+impersonated user's own queries refetch (bounded by each query's `staleTime`). Fixing this robustly needs
+its own investigation (clear the persisted store, awaited, before the navigation fires — or replace the
+hard reload with a client-side session refresh) and would touch `AdminDashboard.tsx`, a file outside this
+finding's named scope (`useBlockingAssociations.ts`/`useInboxQuery.ts`/`useAuth.tsx`). Flagging as a
+follow-up rather than fixing here to avoid drive-by scope creep.
+
+**Regression test — `web/src/hooks/useAuth.test.tsx` (new), 2 cases.** Drives the real
+`AuthProvider`/`useAuth()` against the app's actual `queryClient` singleton (same pattern as
+`useDocumentWriteStatus.test.tsx`) plus the real `useInboxQuery` hook (CodeRabbit's own suggested
+regression case, and the ticket's "more severe" of the two originally-flagged instances). Both cases
+match the ticket's own proof shape: populate the cache under one identity, transition to another via the
+real `login`/`logout`/`endImpersonation` functions, then mount a fresh `useInboxQuery()` and assert a
+second `apiGet` call fires (a genuine fetch) returning the new identity's mocked data — not a cache hit
+silently still holding the previous identity's item (`useInboxQuery`'s 30s `staleTime` is what makes a
+cache hit the observable, silent-looking bug otherwise).
+1. `does not serve user A's cached data after logout + login as user B` — the ticket's exact scenario.
+2. `does not serve the impersonated user's cached data once impersonation ends` — the third transition,
+   through `endImpersonation`.
+
+**Confirmed failing for the right reason before the fix.** Restored the pre-fix `useAuth.tsx` from `git
+show HEAD:web/src/hooks/useAuth.tsx` (copied the fixed file aside to the scratchpad first — never `git
+stash`, per this repo's ban) and re-ran the new test file: both cases failed with
+`AssertionError: a fresh fetch must fire ... expected "vi.fn()" to be called 2 times, but got 1 times` —
+a genuine assertion failure proving the stale-cache-hit bug, not an import error or a typo. Restored the
+fixed file from the scratchpad copy and re-ran: all 76 web test files / 559 tests pass, including both
+new cases.
+
+**How to run it.** `pnpm --filter @ship/web test -- src/hooks/useAuth.test.tsx` (root `pnpm test` is
+API-only). `source .factory-env` first per this repo's DB-truncation warning, though this test file makes
+no real network or database call — `api.auth.*`/`api.admin.endImpersonation`/`apiGet` are all mocked.
+
+**Rollback.** Revert this commit. No schema change, no migration. Reverting restores the pre-fix
+`useAuth.tsx` (cache never cleared on any identity transition) and removes the new test file; no data
+migration is needed either way since this only ever affected client-side React Query cache contents, never
+anything persisted server-side.
+
+---
+
 ## TRO-345 — FG: Test Cases trace links blocked — TC1/TC3 seed fixtures silently no-op against the graded DB
 
 **Scope note.** This ticket names three items; only #1 (the code fix) is this entry's scope. #2
