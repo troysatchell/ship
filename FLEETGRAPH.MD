@@ -3,10 +3,14 @@
 A project intelligence agent for Ship, the project management tool built by the U.S. Department
 of the Treasury.
 
-**Status:** Phase 1 (agent definition) complete. Phase 2 (graph architecture) not started.
+**Status:** Phase 1 (agent definition) complete. Phase 2 (graph architecture) is built (FG-5/FG-6/
+FG-7/FG-8, `agent/src/graph.ts`) and diagrammed against that real code (FG-13 / TRO-324). The
+"Architecture Decisions" section's Framework/Node design rationale/State management write-ups and
+the Test Cases table's trace-link column remain *Pending* — both belong to FG-22 (TRO-340), a
+separate ticket, not touched here.
 Sections marked *Pending* are honestly empty rather than filled with placeholders.
 
-Last updated: August 3, 2026
+Last updated: August 5, 2026
 
 ---
 
@@ -157,20 +161,176 @@ Roles are derived from structure, never read from a field:
 
 ## Graph Diagram
 
-**Pending — Phase 2 not started.** Node design, parallel fetch structure and conditional edges are
-the Phase 2 deliverable. Filling this in now would be guesswork.
+**Done (TRO-324 / FG-13, 2026-08-05).** Every node, edge and conditional below was read directly
+off the compiled `StateGraph` in `agent/src/graph.ts` — its `.addNode`/`.addEdge`/
+`.addConditionalEdges` calls, not the design brief. That source-level verification covers the whole
+diagram, including the `proactive_deep` chain. Trace-level verification is narrower: only the bare
+on-demand chat, on-demand expansion, and proactive fast/steady chains are additionally cross-checked
+against the real LangSmith traces in the "Execution Traces" section immediately below, which show the
+same node sequences actually executing for those three paths. The `proactive_deep` chain
+(`gatherStandupActivity -> composeStandupDraft -> commitStandupDraft`) is verified against source
+only, the same as the rest of the diagram — no real trace exists for it, because (per FG-21's own
+finding, restated in this file's Cost Analysis section) `composeStandupDraft` still has zero real
+invocations: no scheduler exists yet to trigger `proactive_deep` for a real person at all. Where the
+diagram disagrees with the summary bullets that used to stand in this section's place, that
+disagreement is called out explicitly rather than smoothed over — see the two notes after the
+diagram.
 
-Four things are already settled and will constrain it:
+```mermaid
+flowchart TD
+    START(["START"])
+    RT{"routeTrigger<br/>state.trigger + seedDocumentId presence"}
+    START --> RT
 
-- Both modes run through the same graph; only the entry trigger differs.
-- The proactive path accumulates material continuously but composes drafts **once per person per
-  window**, not once per change. The graph therefore branches on "is a window open for this
-  person" as well as on what changed.
-- The on-demand path expands outward from a seed document along associations, mentions and
-  history, with a hard cap on documents pulled in. That expansion loop is the main source of
-  genuinely different execution paths between runs.
-- One human-in-the-loop gate is required and already identified: every draft terminates at a
-  human, and the retro path must never set the approval state itself.
+    RT -->|"on_demand,<br/>no seedDocumentId"| ingest["ingest<br/>trim input — no model, no Ship call"]
+    ingest --> respond["respond 🤖<br/>model.invoke(input)"]
+    respond --> ENDchat(["END<br/>output: chat answer"])
+
+    RT -->|"on_demand,<br/>seedDocumentId set"| resolveSeed["resolveSeed<br/>visit seed doc, build initial frontier"]
+    resolveSeed --> expandFrontier["expandFrontier<br/>pop highest-ranked candidate,<br/>visit it, discover more, re-rank"]
+    expandFrontier -->|"routeExpansionLoop:<br/>frontier non-empty AND cap not reached"| expandFrontier
+    expandFrontier -->|"routeExpansionLoop:<br/>frontier empty OR documentCap reached"| finalizeExpansion["finalizeExpansion<br/>build citedSources — no model"]
+    finalizeExpansion --> composeAnswer["composeAnswer 🤖<br/>model.invoke(expansion prompt)<br/>+ capNoticeText() if capped"]
+    composeAnswer --> ENDanswer(["END<br/>output: answer + citedSources"])
+
+    RT -->|"proactive_fast OR proactive_steady<br/>— same chain, two poll cadences"| pollChangeFeed["pollChangeFeed<br/>GET change-feed + people — no model"]
+    pollChangeFeed --> resolveMentions["resolveMentions<br/>literal @Name + TipTap mentions — no model"]
+    resolveMentions --> detectBlockingApprovals["detectBlockingApprovals<br/>plan/review approval field — no model"]
+    detectBlockingApprovals --> commitInboxItems["commitInboxItems<br/>ItemStore.upsert / .clear"]
+    commitInboxItems --> ENDinbox(["END<br/>ItemStore updated"])
+
+    RT -->|"proactive_deep<br/>requires targetPersonUserId"| gatherStandupActivity["gatherStandupActivity<br/>anchor + moved/commented/stale;<br/>checks shouldGenerateDraftFor FIRST"]
+    gatherStandupActivity --> composeStandupDraft["composeStandupDraft 🤖*<br/>*model call SKIPPED in-node when<br/>standupSkipReason is set — note 2 below"]
+    composeStandupDraft --> commitStandupDraft["commitStandupDraft<br/>DraftStore.upsert + ItemStore.upsert;<br/>no-op if skipped or no draft text"]
+    commitStandupDraft --> ENDdraft(["END<br/>DraftStore + ItemStore updated"])
+
+    ENDinbox -.->|"item sits in ItemStore<br/>until a human acts"| GATE
+    ENDdraft -.->|"draft sits in DraftStore/ItemStore<br/>until a human decides"| GATE[["Human-in-the-loop gate<br/>gate.ts — FG-8 / TRO-321<br/>NOT a node in this StateGraph"]]
+    GATE -->|"acceptDraft / acceptProposedTransition<br/>accepting person's OWN token"| WRITE[("real Ship write")]
+    GATE -->|"discardItem / rejectProposedTransition"| NOWRITE["no Ship write"]
+
+    classDef modelCall fill:#fef3c7,stroke:#d97706,stroke-width:2px;
+    classDef external fill:#e5e7eb,stroke:#6b7280,stroke-width:2px,stroke-dasharray:5 5;
+    class respond,composeAnswer,composeStandupDraft modelCall;
+    class GATE,WRITE,NOWRITE external;
+```
+
+**The four constraints, verified against the diagram above, node by node:**
+
+- **Both modes run through the same graph; only the entry trigger differs.** True, and it is exactly
+  `routeTrigger` above — one `addConditionalEdges(START, routeTrigger, {...})` call in `graph.ts`,
+  reading `state.trigger` (and, for `on_demand`, whether `seedDocumentId` is set) to pick one of five
+  route keys. Confirmed against `routeTrigger`'s own source (`graph.ts:617-628`), not inferred.
+- **The on-demand path expands outward with a hard cap, and that loop is the main source of
+  genuinely different execution paths between runs.** True, and it is `expandFrontier`'s real
+  self-edge (`addConditionalEdges('expandFrontier', routeExpansionLoop, {...})`,
+  `graph.ts:922-925`) — a document-rich seed loops many times before the cap or an empty frontier
+  exits it; a sparse one exits after one or two hops. The "Execution Traces" section below shows this
+  concretely: a real run against a seed with project/sprint/program/assignee associations produced 47
+  child spans (many `expandFrontier` visits, cap reached at 12 documents) against 9 for the bare
+  on-demand chat path with no seed.
+- **One human-in-the-loop gate.** True, but it is not a node in this `StateGraph` at all — `gate.ts`
+  (FG-8 / TRO-321) is a separate module, called later, under the ACCEPTING PERSON'S OWN token, once
+  they open a drafted item and decide. Nothing in `graph.ts` ever writes to Ship (`DeepShipClientLike`
+  and `OnDemandShipClientLike` are read-only interfaces by construction — see `graph.ts`'s own module
+  docstring); `DraftStore`/`ItemStore` are both entirely in-process. The diagram shows this as an
+  external, dashed box specifically so it is not mistaken for part of the graph's own topology. Note
+  that the two `on_demand` paths (`ENDchat`/`ENDanswer`) do NOT route through this gate at all —
+  `respond`/`composeAnswer` return their output directly as the synchronous `/chat` response; there is
+  no stored draft to later accept or discard for a chat answer, only for standup drafts and proposed
+  transitions (the `proactive_deep` path) and inbox items (`proactive_fast`/`proactive_steady`).
+- **The proactive path composes drafts once per person per window, not once per change.** True as a
+  DESIGN COMMITMENT, but — see Note 1 below — this is **not currently a branch in the compiled
+  graph** the way the other three constraints are. Read on.
+
+**Note 1 — "is a window open" is not a graph branch today; it is an unbuilt external
+scheduler's job.** The old text in this section (now replaced) said the graph "branches on 'is a
+window open for this person'." Read against `graph.ts` directly, that branch does not exist anywhere
+in the compiled graph: there is no node or conditional edge anywhere in `buildGraph` that asks
+"has this person's standup window opened yet." The `proactive_deep` trigger requires a
+`targetPersonUserId` to already be known and passed in (`requireTargetPersonUserId`,
+`graph.ts:586-595`) — WHO gets a draft composed, and WHEN, is entirely the responsibility of a
+caller this graph does not contain. The module's own docstring says so directly:
+*"There is deliberately no scheduler in this file (or anywhere in this package) that decides WHOSE
+window is open and invokes the graph for them."* The thing that DOES live inside the graph and is
+easy to mistake for the same idea is `shouldGenerateDraftFor` (checked first thing inside
+`gatherStandupActivity`, `graph.ts:830`) — but that is a different question: "has this person been
+ignoring their last several drafts long enough that composing another one is waste" (cost cliff #3),
+evaluated only AFTER the graph has already been invoked for them. It is not "is it currently their
+window." Both are real, correct design commitments; only one of them is implemented as graph
+structure as of this ticket. This is exactly the kind of prose/code gap this repo's provenance rules
+exist to catch — recorded here rather than quietly reworded away.
+
+**Note 2 — the deep-tier "skip if ignored" behavior is an in-node data branch, not a StateGraph
+conditional edge.** Contrast this directly with `expandFrontier`'s self-loop, which IS a real
+`addConditionalEdges` call. `gatherStandupActivity -> composeStandupDraft -> commitStandupDraft` is
+three plain `.addEdge` calls (`graph.ts:928-929`) — `composeStandupDraft` always runs as a graph
+node, every single time, regardless of `standupSkipReason`. The skip is a plain `if
+(state.standupSkipReason) { return {}; }` inside that node's own function body
+(`graph.ts:844-848`), never calling `model.invoke` on that path. A LangSmith trace of a skipped run
+would show `composeStandupDraft` as a real, present, near-instant span with no model child run
+underneath it — structurally different from `expandFrontier`'s self-loop, where the NUMBER of
+`expandFrontier` spans in a trace varies run to run. The diagram marks this with a footnoted 🤖\* on
+the node rather than drawing a second decision diamond that does not correspond to a real edge in
+the code.
+
+---
+
+## Execution Traces
+
+**Done (TRO-324 / FG-13, 2026-08-05).** Three real LangSmith traces, produced in this worktree
+against the real Anthropic API (for the two on-demand traces) and the real local Ship API (all
+three), captured via the LangSmith API (`GET /runs/{id}` and `POST /runs/query`) the same way FG-21
+verified its own trace — never eyeballed from the console. All three sit in the same
+`fleetgraph-agent` LangSmith project (`c1e38b67-b458-4e8b-a680-be74ece5e1a6`) FG-21 already used, so
+they are directly comparable.
+
+| Path | Trigger | Trace | Child spans | Real cost |
+|---|---|---|---|---|
+| Bare on-demand chat (`ingest -> respond`, FG-2) | `on_demand`, no seed | [45c12238](https://smith.langchain.com/o/827be0c8-ee40-4854-9d37-e82820ec9263/projects/p/c1e38b67-b458-4e8b-a680-be74ece5e1a6/r/45c12238-df88-4c11-bd67-1ee27edc0736) | 9 | $0.000218 (FG-21's own trace, reused here — not re-run) |
+| On-demand expansion (`resolveSeed -> expandFrontier` ×9 `-> finalizeExpansion -> composeAnswer`, FG-7) | `on_demand`, real seed document (`96ed3528-…`, an issue with project/sprint/program associations) | [5e9d072b](https://smith.langchain.com/o/827be0c8-ee40-4854-9d37-e82820ec9263/projects/p/c1e38b67-b458-4e8b-a680-be74ece5e1a6/r/5e9d072b-0559-41ff-bbba-3fa4df218142) | 47 | $0.00101 |
+| Proactive deterministic (`pollChangeFeed -> resolveMentions -> detectBlockingApprovals -> commitInboxItems`, FG-5) | `proactive_steady`, real change-feed cursor | [88b0880a](https://smith.langchain.com/o/827be0c8-ee40-4854-9d37-e82820ec9263/projects/p/c1e38b67-b458-4e8b-a680-be74ece5e1a6/r/88b0880a-f4dd-4ac6-b496-1ae66235377a) | 14 | $0 (no model call anywhere on this path — verified: LangSmith itself reports `total_tokens: 0` for this run) |
+
+**What genuinely differs between these three, verified via `GET /runs/{id}`'s own
+`child_run_ids`/`inputs`/`total_tokens` fields, not asserted:**
+
+- **Node names.** The proactive trace's `POST /runs/query?trace=<id>` child list is exactly
+  `pollChangeFeed -> resolveMentions -> detectBlockingApprovals -> commitInboxItems` (plus LangGraph's
+  own internal `ChannelWrite`/`Branch` bookkeeping spans) — no `respond`, `composeAnswer`, or
+  `composeStandupDraft` node anywhere in it, confirming "no model" for this tier is true at the trace
+  level, not just in the source comment.
+- **Span count as a direct, observable proxy for the expansion loop's real variability.** 9 spans
+  (bare chat) vs. 47 spans (expansion, `documentCap=12` reached) vs. 14 spans (proactive, fixed
+  4-node chain) — three different real numbers for three genuinely different graph shapes, not one
+  execution path relabeled three ways.
+- **`inputs.seedDocumentId`/`inputs.trigger`, read back from LangSmith itself.** The expansion
+  trace's own recorded input shows `seedDocumentId: "96ed3528-c565-4c53-ad67-e157ecc60a8a"` and
+  `trigger: "on_demand"`; the proactive trace's shows `trigger: "proactive_steady"`,
+  `cursor: "2026-08-05T01:14:00.840Z"` — the actual arguments each run was invoked with, not
+  reconstructed after the fact.
+
+**How they were produced.** `pnpm --filter @ship/agent trace:invoke-on-demand -- 96ed3528-c565-4c53-ad67-e157ecc60a8a "What is going on with this issue, and what week and project is it part of?"`
+against this worktree's own local `pnpm --filter @ship/api dev` (port 3884, this worktree's own
+seeded database `ship_wt_tro_331` — never the graded Render deployment) produced the expansion
+trace. The proactive trace needed a new script — no equivalent to `trace-invoke.ts`/
+`trace-invoke-on-demand.ts` existed for FG-5's deterministic path before this ticket — so this ticket
+adds `agent/src/scripts/trace-invoke-proactive.ts` (`pnpm --filter @ship/agent trace:invoke-proactive`),
+covered in full in the Cost Analysis section's detection-latency writeup below, since the same run
+that produced this trace also produced this ticket's real detection-latency measurement.
+
+**One real cost incurred by a genuine mistake, disclosed rather than hidden.** While first invoking
+`trace-invoke-on-demand.ts` directly via `pnpm exec tsx ... -- <args>` (bypassing the package.json
+script alias), a literal `"--"` was passed through as the script's own `seedDocumentId` argument
+instead of being consumed as a separator — `pnpm --filter @ship/agent trace:invoke-on-demand -- <args>`
+(via the package script) strips it; `pnpm exec tsx <script> -- <args>` (invoked directly) does not.
+The result was one real, unintended `on_demand_expand` invocation against an invalid seed id — real
+tokens spent (94 in / 120 out, $0.000694), real trace produced
+([9b24aa47](https://smith.langchain.com/o/827be0c8-ee40-4854-9d37-e82820ec9263/projects/p/c1e38b67-b458-4e8b-a680-be74ece5e1a6/r/9b24aa47-4260-4e0d-9b99-639b1806fc11), `documentsPulled: 0`,
+`resolveSeed` failed to fetch the malformed id and correctly produced a "no accessible document"
+answer rather than fabricating one). Not used as either of the two required comparison traces above
+— reported here because it is real spend a reader of the cost ledger will otherwise not be able to
+account for, and because pretending it did not happen is exactly the kind of smoothing-over this
+repo's provenance rules exist to prevent.
 
 ---
 
@@ -622,15 +782,131 @@ resource showing `ipAllowList: null` again.
 
 ### Development and Testing Costs
 
-**Pending — not yet instrumented.** Development has so far been design and codebase verification,
-with no agent invocations. Token accounting is added once the graph runs.
+**Instrumented as of TRO-339 (FG-21), 2026-08-05.** Every real `model.invoke()` call in
+`agent/src/graph.ts` (the `respond`, `composeAnswer`, and `composeStandupDraft` nodes — the only
+three that ever call the model) now records its real input/output tokens, model, and which node
+served it, to `agent/.cache/cost-ledger.jsonl`. The table below is that recorded data, reproduced
+verbatim by running `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` from the worktree — not an estimate.
 
 | Item | Amount |
 |---|---|
-| Claude API — input tokens | Pending |
-| Claude API — output tokens | Pending |
-| Total invocations during development | Pending |
-| Total development spend | Pending |
+| Claude API — input tokens | 33 |
+| Claude API — output tokens | 37 |
+| Total invocations during development | 1 |
+| Total development spend | $0.000218 |
+
+**Reconciliation.** The one recorded invocation was cross-checked directly against LangSmith's own
+usage reporting for the same trace (`fleetgraph-agent` project, queried via the LangSmith API,
+2026-08-05): LangSmith independently reports `prompt_tokens: 33`, `completion_tokens: 37`,
+`total_cost: 0.000218` for that exact call — an exact match, not a coincidence of rounding.
+
+**Why the total is this small.** Querying LangSmith's full history for this project (not just this
+ticket's own invocation) turned up only two prior real model calls, ever, in this sprint: one
+`trace-invoke.ts` smoke-test call from TRO-313/FG-2 (33 in / 38 out, $0.000223) and one failed call
+against a stale model id (0 tokens, $0). Both predate this ticket and were never captured anywhere.
+FG-5's proactive chain, FG-6's standup-draft composition, and FG-7's on-demand expansion have never
+once been invoked against the real Anthropic API this sprint — every test for all three uses a
+stable fake model, by design (`graph.test.ts`'s own docstring). So "no agent invocations yet" (this
+section's prior text) was accurate, not merely honest-but-stale: real spend really has been
+near-zero, and this ticket's instrumentation was landed before that changes, per its own premise —
+"instrumentation added after the fact cannot recover spend that was never recorded."
+
+**Per-tier measured cost**, to replace the projected $0.021 standup / $0.015 inbox / $0.052 retro /
+$0.065 on-demand figures below with observed ones once real traffic exists: only the bare on-demand
+chat path (`respond`, no seed document) has a real measurement yet — $0.000218/run. `composeAnswer`
+(the on-demand-with-expansion tier the $0.065 projection actually describes) and
+`composeStandupDraft` (the standup-draft tier) are fully wired to record the moment either one is
+invoked for real — `composeAnswer` additionally records documents-pulled-per-run (cost cliff #2) —
+but neither has ever run against the real API, so neither has a measured number to report yet. This
+is a real gap, not a placeholder: producing one requires a live Ship API and seeded database
+(`composeAnswer`) or a scheduled trigger nobody has built yet (`composeStandupDraft`, `graph.ts`'s
+own module docstring — "there is no scheduler in this file... that decides whose window is open").
+
+**Update (TRO-324 / FG-13, 2026-08-05) — `composeAnswer` now has a real measurement too, and here is
+what "estimated runs per day" honestly is at this sample size.** Producing this ticket's own required
+trace-link proof (see "Execution Traces" above) meant running `composeAnswer` for real, twice — the
+`documentsPulled: 0` mistaken invocation and the real 12-document expansion run, both real API calls,
+both recorded to the same ledger FG-21 built. Reproduced verbatim by re-running FG-21's own
+`pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` from this worktree, 2026-08-05, after
+those two runs:
+
+| Item | Amount |
+|---|---|
+| `composeAnswer` — invocations | 2 |
+| `composeAnswer` — cost/run (mean over the 2 priced invocations) | $0.000852 |
+| `composeAnswer` — avg documents pulled | 6.00 (0 and 12 — the mistaken invocation and the real one) |
+| `respond` — cost/run (unchanged from FG-21 — not re-run by this ticket) | $0.000218 |
+| Total development spend to date, all nodes | $0.001922 (3 invocations, 567 input tokens, 271 output tokens) |
+
+`composeAnswer`'s $0.000852 mean is not yet a stable per-tier estimate — it is the average of exactly
+one near-zero-context run (a mistaken invalid seed id, 0 documents) and one real 12-document,
+cap-reached run, which is close to the opposite ends of what `composeAnswer` can cost. It replaces
+"no measurement yet" with a real floor and ceiling from 2 genuine data points, not a stable
+per-tier average from a meaningful sample — reported at exactly that confidence level, no more.
+`composeStandupDraft` still has zero real invocations (no scheduler exists to trigger
+`proactive_deep` for a real person — unchanged from FG-21's own finding, not re-investigated here,
+since building that scheduler is out of a documentation ticket's scope).
+
+**Estimated runs per day, observed: too little real history to estimate a rate, and that is the
+honest answer, not a placeholder.** `invocationsByDay` (the same function `cost-report.ts` already
+calls) buckets all 3 model-calling invocations on record under a single calendar day,
+`2026-08-05` — every real model invocation this entire sprint (this one plus FG-21's and FG-2's
+prior two) falls within roughly 40 hours of each other, and the ledger itself only exists from
+FG-21's 2026-08-05T00:28 entry onward. A "runs per day" RATE requires observing more than one day —
+dividing 3 invocations by "1 day of history" produces a number that LOOKS like a rate but is really
+just today's raw count, exactly the "meaningless number from a near-zero sample" this ticket's own
+brief warned against reporting with false confidence. The honestly comparable real-activity count
+this ticket DOES have: 6 real `proactive_steady` graph invocations (the "Execution Traces" /
+detection-latency polling loop below), also all on `2026-08-05`, also too few and too clustered in
+time to support a rate — reported here as a raw count, not annualized or extrapolated into anything
+resembling "runs/day in production."
+
+**Detection latency — one real, timed measurement, plus the structural bound it does not replace.**
+FLEETGRAPH.MD's own bar is "< 5 minutes from event appearing in Ship to the agent surfacing it,"
+and the ticket wants the achieved number, not just the 60-second poll-interval design target
+(`DEFAULT_PROACTIVE_POLL_INTERVAL_MS`, `agent/src/config.ts:80`). `agent/src/scripts/trace-invoke-proactive.ts`
+(new, this ticket) does the real thing: writes one real comment mentioning a real person
+(`@Bob Martinez`, literal-text convention, `mentions.ts`) on a real seeded issue in this worktree's
+local Ship API, records the wall-clock write instant, and polls with real, independently-traced
+`proactive_steady` graph invocations (never a blind fixed sleep — each poll re-checks the real
+`ItemStore` for the actual item) until the mention is genuinely present for that real recipient.
+
+Run 2026-08-05, real output:
+
+| | |
+|---|---|
+| Event written at | `2026-08-05T01:15:00.841Z` |
+| Surfaced in `ItemStore` at | `2026-08-05T01:15:06.026Z` |
+| **OBSERVED, this run** | **5,185ms** (6 real ticks, 1000ms apart, until the item was present) |
+| This run's own final tick's processing time alone (`graph.invoke()`, no wait) | 31ms |
+| **DERIVED worst-case bound for a running production poller** | **~60,031ms** = configured 60,000ms poll interval + this run's own single-tick processing time |
+
+**Why the observed number is ~5.2 seconds and not near-instant, and why that is a real finding, not
+noise.** The first attempt at this measurement — a single tick fired within milliseconds of the
+write — returned 0 items every time, reproducibly. Reading `api/src/routes/change-feed.ts` explained
+why: `CHANGE_FEED_LAG_MS = 5_000` deliberately withholds any row more recent than `now - 5000ms`, a
+real, correct safety margin against a slower transaction committing after a faster one's timestamp
+(exactly the "the cursor must lag" reliability point this document's own Trigger Model section
+already states in prose — this run is that mechanism's first real, measured confirmation). So the
+~5.2s observed number is dominated by that deliberate 5-second server-side safety margin, not by
+agent-side processing (which, per the 31ms figure above, is negligible) — a single agent process
+polling as fast as it safely can is bounded below by Ship's own lag margin, not by anything in
+`agent/`. This is a slightly OPTIMISTIC measurement relative to a real 60-second-cadence deployment,
+where an event landing just after a tick starts waits up to a full interval for the next one — the
+DERIVED ~60s bound above (not observed directly) covers that case. Both numbers are comfortably
+under the 5-minute bar; only the top one was actually measured, and the two are never presented with
+the same confidence.
+
+**Scope of the 5,185ms observed number, stated explicitly.** It covers steady-tier polling
+(`proactive_steady`, real `pollChangeFeed -> resolveMentions -> ... -> commitInboxItems` graph
+invocations) through in-process `ItemStore` insertion specifically — event write to the mention item
+being present in that in-memory store, and nothing past it. It does NOT exercise: the `proactive_fast`
+poll hook (a different cadence, never invoked by this measurement), any production persistence adapter
+for `ItemStore` (this run's store is the plain in-memory implementation, constructed fresh inside the
+script), the agent's public HTTP API (this script calls `buildGraph`/`graph.invoke` directly, never
+`POST /chat` or any other agent route), or the UI surfacing the item to a real user (no browser, no
+inbox render, no human ever looked at it in this run). Each of those is a real, separate hop a
+production deployment would add on top of this number, none of them measured here.
 
 ### Production Cost Projections
 

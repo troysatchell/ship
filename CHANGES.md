@@ -21,6 +21,296 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-324 — [FG-13] FLEETGRAPH.MD is missing the graph outline, the trace links and the measured cost
+
+**Second of two tickets on branch `feat/pr-g-mvp-cost-instrumentation-and-fleetgraph-docs` (bundle
+`TRO-331` / [PR-G] EPIC, G-MVP slice), landing on top of TRO-339 (FG-21)'s cost instrumentation
+without re-touching or contradicting it.** Closes the three remaining MVP checkboxes in
+`FLEETGRAPH.MD` that were pure documentation: the Graph Diagram, real trace links across genuinely
+different execution paths, and measured (not projected) cost/runs-per-day/detection-latency numbers.
+
+**What changed — all in `FLEETGRAPH.MD` except where noted:**
+- **Graph Diagram section** — a Mermaid flowchart, verified node-by-node against the real compiled
+  `StateGraph` in `agent/src/graph.ts` (every node/edge/conditional read directly off
+  `.addNode`/`.addEdge`/`.addConditionalEdges`, not reconstructed from the design brief). Covers
+  both modes through the same graph (`routeTrigger`'s real conditional edge), the on-demand
+  expansion self-loop (`expandFrontier`'s real `routeExpansionLoop` conditional edge), the proactive
+  fast/steady chain, the deep-tier draft chain, and the human-in-the-loop gate (`gate.ts` / FG-8,
+  shown as an external box — it is NOT a node in this `StateGraph`, and the on-demand chat/answer
+  paths do not route through it at all, only stored drafts and inbox items do).
+- **Two real, verified mismatches between the old prose and the actual code, surfaced rather than
+  smoothed over** (both documented as numbered notes directly under the diagram): (1) "the graph
+  branches on 'is a window open for this person'" — read against `graph.ts` directly, no such branch
+  exists anywhere in the compiled graph; deciding WHO gets a draft and WHEN is the job of a scheduler
+  that does not exist yet (`graph.ts`'s own module docstring says so). The thing that DOES exist,
+  `shouldGenerateDraftFor`'s ignore-threshold skip, is a different question (waste control, not
+  window timing). (2) The deep tier's "skip if ignored" behavior is a plain in-node `if`, not a
+  `StateGraph` conditional edge — unlike `expandFrontier`'s self-loop, which is a real conditional
+  edge, `composeStandupDraft` always runs as a graph node whether or not it calls the model.
+- **New "Execution Traces" section** (between Graph Diagram and Use Cases) — three real LangSmith
+  trace links in the same `fleetgraph-agent` project FG-21 used, verified via the LangSmith API
+  (`GET /runs/{id}`, `POST /runs/query`), showing genuinely different node sequences: bare on-demand
+  chat (9 child spans, FG-21's own trace, reused not re-run), on-demand expansion (47 child spans,
+  real 12-document cap-reached run against this worktree's own local Ship API), and proactive
+  deterministic (14 child spans, `total_tokens: 0` — confirmed no model call anywhere on this path,
+  at the trace level, not just in a source comment). Also discloses one real, unintended $0.000694
+  spend from a `pnpm exec tsx ... -- <args>` argument-parsing mistake (a literal `"--"` became the
+  seed document id) — a real trace exists for it too, not hidden, not counted as one of the two
+  required comparison traces.
+- **Cost Analysis — a clearly-delineated addition under "Development and Testing Costs"**, FG-21's
+  table itself untouched: `composeAnswer` now has 2 real measured invocations (mean $0.000852/run,
+  avg 6.00 documents pulled — reported as a floor-and-ceiling from 2 data points, explicitly not yet
+  a stable per-tier average), an honest "too little real history to estimate a runs-per-day rate"
+  finding (all recorded invocations fall within ~40 hours, one calendar day — reporting a same-day
+  raw count as a "rate" would be exactly the meaningless-number-from-a-near-zero-sample the ticket
+  warned against), and a real, timed detection-latency measurement: **5,185ms observed** (event
+  write to the item genuinely present in a real `ItemStore`, via real polling `proactive_steady`
+  graph invocations — never a blind fixed sleep) plus a **derived (not observed) ~60,031ms worst-case
+  bound** for a running 60-second-cadence production poller, explicitly never presented with the
+  observed number's confidence. The observed number's size is itself a real finding: Ship's own
+  `change-feed.ts` deliberately withholds anything more recent than `now - 5000ms`
+  (`CHANGE_FEED_LAG_MS`) as a correctness safety margin — the first attempt at this measurement (a
+  single tick fired within milliseconds of the write) reproducibly returned 0 items, which is what
+  led to reading that file and finding the real mechanism, not a bug in this ticket's own code.
+- **`agent/src/scripts/trace-invoke-proactive.ts` (new)** — the proactive tier's own trace-link
+  script; no equivalent existed before this ticket (only `trace-invoke.ts` and
+  `trace-invoke-on-demand.ts`, both `on_demand`). Same "deliberately NOT a test" posture as its two
+  siblings. This path calls no model by design, so it passes a stub `AnthropicModel` that throws if
+  ever actually invoked, rather than holding a real `ChatAnthropic` this script has no legitimate
+  reason to spend against. Doubles as the detection-latency measurement tool described above.
+  `agent/package.json` gets one new script alias, `trace:invoke-proactive`, matching its two
+  siblings' existing pattern.
+- **`agent/.env.local` (untracked, gitignored, this worktree's own)** — added `SHIP_API_BASE_URL`
+  (`http://localhost:3884`, this worktree's own local `pnpm --filter @ship/api dev`, never the
+  graded Render deployment) and a real `SHIP_API_TOKEN`, minted via `POST /api/auth/login` +
+  `POST /api/api-tokens` against this worktree's own seeded database (`ship_wt_tro_331`) for the
+  seed super-admin `dev@ship.local`. The `ANTHROPIC_API_KEY`/`LANGCHAIN_*`/`LANGSMITH_API_KEY` values
+  were already present from TRO-339 (FG-21)'s own work on this branch — not re-added.
+- **Top-of-file Status line** — corrected from "Phase 2 (graph architecture) not started" (stale;
+  Phase 2's actual graph code has existed since PR-C, 2026-08-04) to reflect that the graph is built
+  and now diagrammed, while naming the two remaining `Architecture Decisions`/Test Cases pieces that
+  are FG-22 (TRO-340)'s scope, not touched here.
+
+**What this ticket deliberately did NOT touch, per its own scope boundary:** the Test Cases table
+(still `Pending` trace-link rows, FG-22's job), Architecture Decisions' Framework/Node design
+rationale/State management write-ups (also FG-22, due Thursday not this ticket's deadline), Agent
+Responsibility/Use Cases/Trigger Model/Production Cost Projections (already complete, untouched), and
+FG-21's own Development and Testing Costs table content (only a clearly-delineated addition below it,
+per the brief's own instruction).
+
+**How to reproduce.** From this worktree, with `agent/.env.local` staged (`set -a; source
+agent/.env.local; set +a`) and this worktree's own local API running
+(`pnpm --filter @ship/api dev`, port from `.factory-env`):
+
+```bash
+pnpm --filter @ship/agent trace:invoke-on-demand -- <seedDocumentId> "<question>"
+pnpm --filter @ship/agent trace:invoke-proactive -- <seedDocumentId> "<Full Name>"
+pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts
+```
+
+**Regression tests.** None added — this ticket is pure documentation plus one new manual utility
+script (`trace-invoke-proactive.ts`) matching the existing, explicitly-not-tested
+`trace-invoke.ts`/`trace-invoke-on-demand.ts` precedent (both real, live-API-calling one-off tools
+deliberately excluded from `pnpm test`). No existing typed code was modified — only `agent/package.json`
+(one new script alias, data only) and `agent/.env.local` (untracked). `pnpm --filter @ship/agent test`
+(269/269) and `pnpm --filter @ship/agent type-check`/`lint` all pass unchanged from before this ticket —
+**that proves only that the existing, already-covered code paths did not regress.** `pnpm test`
+deliberately excludes `trace-invoke-proactive.ts` (same posture as its two siblings), so the 269/269
+count says nothing about whether the new script itself actually works — it is not evidence for the
+new utility, only evidence against a regression elsewhere. What DOES validate the new script is a real,
+timed execution of it: the detection-latency measurement in this file's Cost Analysis section (**5,185ms
+observed**, a real comment write through to a real `ItemStore` insertion, via real polling
+`proactive_steady` graph invocations against a live local Ship API, not a mock) — that run is the actual
+proof `trace-invoke-proactive.ts` works, produced by using it for its real purpose, not by a test count.
+
+**How to roll it back.** Revert this commit (or the range of commits carrying TRO-324's changes).
+No schema change, no migration. `FLEETGRAPH.MD`'s Graph Diagram/Execution Traces sections and the
+Cost Analysis addition would need a manual revert back to their pre-ticket text (the old "Pending —
+Phase 2 not started" block) alongside the code revert, since the two are independent files.
+Deleting `agent/src/scripts/trace-invoke-proactive.ts` and its `package.json` script alias fully
+removes the new script; it has no other file depending on it. `agent/.env.local` is untracked and
+gitignored — reverting this ticket does not touch it either way.
+
+**A real gap noticed, not fixed (candidate follow-up ticket):** `scripts/factory/gate.sh`'s
+`run_tests` still only runs `api`/`web` (the same gap TRO-339/FG-21 already surfaced and left
+unfixed, for the same reason — `gate.sh` is outside a documentation ticket's file scope). Also
+noticed but out of scope: this ticket's `trace-invoke-proactive.ts` run produced 6 real, separately
+LangSmith-traced `proactive_steady` invocations in one script run (the detection-latency polling
+loop) — harmless (no cost, no side effect beyond real `ItemStore` writes inside that one script
+process) but worth knowing if someone later audits the `fleetgraph-agent` LangSmith project's run
+count and wonders why there are more `proactive_steady` traces than there were real "events."
+
+---
+
+## TRO-339 — [FG-21] Cost per run is currently a projection with nothing measuring it — instrument tokens before the numbers are due
+
+**First of two tickets on branch `feat/pr-g-mvp-cost-instrumentation-and-fleetgraph-docs` (bundle
+`TRO-331` / [PR-G] EPIC, G-MVP slice). FG-13 (TRO-324) lands after this one on the same branch and
+depends on the numbers this ticket produces.**
+
+**The cost this closes.** `FLEETGRAPH.MD`'s Development and Testing Costs table was entirely
+*Pending — not yet instrumented* — honest, but a hole at MVP submission, and "instrumentation added
+after the fact cannot recover spend that was never recorded." Every real `model.invoke()` call in
+`agent/src/graph.ts` (`respond`, `composeAnswer`, `composeStandupDraft` — the only three) now
+records its input tokens, output tokens, which model, and which node/tier served it.
+
+**Investigated before building anything (both OBSERVED, not assumed):**
+- *"LangSmith captures much of this natively once PR-B wires it — check before building a parallel
+  counter"* (the ticket's own instruction). Queried the real `fleetgraph-agent` LangSmith project
+  directly via its API: LangSmith DOES capture per-LLM-run `prompt_tokens`/`completion_tokens`/
+  `total_cost` with zero extra wiring. But the project held exactly two runs, ever, before this
+  ticket — both manual `trace-invoke.ts`-style smoke-test calls, not real FG-5/FG-6/FG-7 traffic.
+  So LangSmith is real and worth reading first, exactly as instructed — but there was almost
+  nothing to recover, and a parallel, in-repo counter is still the right core deliverable: it
+  captures a `documentsPulled` field (FG-7's cost cliff #2) and a per-node "tier" label LangSmith
+  has no native concept of, and it produces a file this repo's own tickets can cite without a live
+  API key.
+- *Does `ChatAnthropic.invoke()` already carry usage independent of LangSmith?* Read
+  `@langchain/core`'s own `AIMessage`/`AIMessageChunk` typings directly
+  (`node_modules/@langchain/core/dist/messages/ai.d.ts`): yes, `usage_metadata` is real at runtime.
+  `graph.ts`'s own `AnthropicModel` interface narrowed `.invoke()`'s return type to
+  `{ content: unknown }` — discarding that data by construction of the type at all three real call
+  sites. Confirmed by direct reading, not assumed.
+
+**What changed:**
+- `agent/src/costTracking.ts` (new) — `CostTracker` interface (the injection seam, same pattern as
+  `ProactiveDeps`/`OnDemandDeps`/`DeepDeps`), `FileCostTracker` (the production implementation:
+  appends one JSONL row per invocation to `agent/.cache/cost-ledger.jsonl`, already covered by the
+  repo's existing root `.gitignore` `.cache` pattern — verified with `git check-ignore -v`, so no
+  `.gitignore` change was needed), and the aggregation functions FLEETGRAPH.MD's table and
+  `cost-report.ts` both call: `aggregate` (dev spend to date), `aggregateByNode` (measured cost per
+  tier, plus avg `documentsPulled` for `composeAnswer`), `invocationsByDay` (runs per day, observed).
+  Pricing (`costUsd`) is Anthropic's published `claude-haiku-4-5` rate ($1.00/$5.00 per million
+  input/output tokens) — independently cross-checked against a real LangSmith trace's own computed
+  `total_cost` for the same call, which matched exactly.
+- `agent/src/graph.ts` — widened `AnthropicModel.invoke`'s return type with an optional
+  `usage_metadata` field and an optional `model` field (both optional, so every existing test
+  double keeps compiling unchanged); added an optional 5th `costTracker` parameter to `buildGraph`;
+  wired all three real `model.invoke()` call sites (`respond`, `composeAnswer`,
+  `composeStandupDraft`) to forward usage to it via a new `recordInvocation` helper, which is a
+  no-op when either the tracker or the usage data is absent — never fabricates a token count.
+  `composeAnswer` additionally records `state.expandedDocuments.length` as `documentsPulled` (cost
+  cliff #2 — so FG-7's hard document cap can be tuned against evidence).
+- `agent/src/index.ts` — constructs one `FileCostTracker` and passes it into `buildGraph` alongside
+  the real deps, in the same `isConfigComplete` branch that wires the real model/Ship client today.
+- `agent/src/scripts/cost-report.ts` (new) — prints dev spend to date, per-tier measured cost, and
+  runs-per-day, all read from the ledger. **Run it:** `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts`
+  (deliberately no `package.json` script alias — `agent/package.json` is outside this ticket's file
+  scope; the direct `tsx` invocation is the exact runnable command, verified working).
+- `agent/src/scripts/trace-invoke.ts` / `trace-invoke-on-demand.ts` — both now construct and pass a
+  `FileCostTracker`, so every real (paid) invocation either script makes is recorded, not just
+  traced.
+- `agent/.env.example` — documented the new, optional `AGENT_COST_LEDGER_PATH` override.
+- `FLEETGRAPH.MD`'s "Development and Testing Costs" table (Cost Analysis section only — everything
+  else in that file is FG-13's, untouched here) — filled with the real recorded number: 1
+  invocation, 33 input tokens, 37 output tokens, $0.000218, reconciled directly against LangSmith's
+  own `total_cost` for that exact trace (exact match). Also documents why the number is this small
+  (this sprint's real model-call footprint has been near-zero until now — confirmed via LangSmith,
+  not assumed) and which tiers (`composeAnswer`, `composeStandupDraft`) are wired but have no real
+  measurement yet, and why (no live Ship API/seeded DB, and no scheduler, respectively — real gaps,
+  stated plainly).
+
+**The real number, and how it was obtained (not a mock).** Ran
+`pnpm --filter @ship/agent trace:invoke` for real, against the real Anthropic API, with real
+`agent/.env.local` credentials (sourced from the repo root's `.env`, one level up from this
+worktree) and `LANGCHAIN_TRACING_V2=true`. Result: one real invocation, 33 input / 37 output
+tokens, $0.000218 — appended to `agent/.cache/cost-ledger.jsonl` and printed by
+`pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts`. Cross-checked directly against LangSmith's own API
+response for that same trace (`prompt_tokens: 33`, `completion_tokens: 37`, `total_cost: 0.000218`)
+— exact match, the ticket's own proof bar ("the number reconciles against the provider's own usage
+reporting").
+
+**Regression test — `agent/src/__tests__/costTracking.test.ts` (new).** The load-bearing case:
+`buildGraph(model, undefined, undefined, undefined, costTracker)` with a fake model returning
+`usage_metadata`, invoked on the bare on-demand path, asserts the tracker recorded exactly one
+entry with the right node/trigger/model/tokens. Confirmed failing for the right reason before the
+fix: `costTracking.ts` has no dependency on `graph.ts`, so it type-checked and imported cleanly
+against the UNFIXED `graph.ts` (old 4-param `buildGraph`, old narrow `AnthropicModel`) — the test
+still ran, but failed with a plain assertion error (`expected [] to have a length of 1 but got +0`,
+not an import/module error), because the old code had no `costTracker` parameter and never referenced
+usage data. After the `graph.ts`/`index.ts` fix, the same test passes. Also covers: no record when
+the model returns no `usage_metadata` (a bare test double); no-op/no-throw when no tracker is
+injected at all; plus direct unit coverage of `costUsd`/`aggregate`/`aggregateByNode`/
+`invocationsByDay`/`FileCostTracker`'s file round-trip.
+
+**How to run it.** `pnpm --filter @ship/agent test -- src/__tests__/costTracking.test.ts` (this
+package's own `vitest`; `pnpm test` at the repo root is `api/`-only and would TRUNCATE the wrong
+database if `DATABASE_URL` is unset — `source .factory-env` first regardless, per this repo's own
+warning, though `agent/`'s tests touch no Postgres at all).
+
+**A real gap, surfaced rather than worked around: `scripts/factory/gate.sh`'s `run_tests` function
+only runs `api` and `web` package tests (`run_tests api`; `run_tests web`) — it does not invoke
+`agent/`'s own `pnpm --filter @ship/agent test` at all.** This ticket's regression test therefore
+passes locally and is genuinely real, but the factory gate as currently written would not have
+caught its absence. Not fixed here (`scripts/factory/gate.sh` is outside this ticket's file scope)
+— flagged for whoever owns the gate next.
+
+**What was NOT wired, and why (real gaps, not silent skips):**
+- **Cache hit rate for a derived-content cache (cost cliff #4).** No such cache exists anywhere in
+  this codebase — grepped `agent/src` for "cache"; the only hit is `rateLimiter.ts`'s unrelated
+  comment about Ship's own rate limiter failing open. Nothing to hook into.
+- **Outbound Ship request-rate visibility.** `rateLimiter.ts`'s `RateLimiter.currentCount()` already
+  gives a live snapshot of calls within the trailing self-throttle window — a real, existing hook —
+  but nothing currently reads or logs it. Wiring a periodic export is adjacent to this ticket's core
+  deliverable (per-invocation model-call accounting), not part of it; left as a follow-up.
+- **Measured `composeAnswer`/`composeStandupDraft` cost.** Both are fully wired to record the moment
+  either runs for real. Neither has: `composeAnswer` needs a live Ship API + seeded database (this
+  sandbox has neither running); `composeStandupDraft` needs a scheduler that decides whose standup
+  window is open, which does not exist anywhere in this package (`graph.ts`'s own module docstring
+  says so directly).
+
+**Rollback.** Revert this commit (or the range of commits carrying TRO-339's changes). No schema
+change, no migration — this ticket touches only `agent/src/**`, `agent/.env.example`,
+`FLEETGRAPH.MD`'s Cost Analysis section, and this file (`agent/package.json` is untouched — see the
+`cost-report.ts` bullet above for why). Reverting
+removes `costTracking.ts`, the `cost-report.ts` script, and the three `recordInvocation` call sites in
+`graph.ts` (which reverts to its pre-ticket 4-parameter `buildGraph` and narrow `AnthropicModel`);
+the recorded ledger file (`agent/.cache/cost-ledger.jsonl`) is gitignored and untouched by a revert
+either way. `FLEETGRAPH.MD`'s Development and Testing Costs table would need a manual revert back to
+*Pending* text alongside the code revert, since the two are otherwise independent files.
+
+**Round 2 (CodeRabbit + mechanical gate review, same branch, after the above):**
+- `agent/src/__tests__/costTracking.test.ts` — replaced a non-null assertion
+  (`respondStats!.totalCostUsd`) with an explicit `expect(respondStats).toBeDefined()` followed by a
+  narrowing `if (!respondStats) throw ...` before using it unguarded (repo rule: no `!` anywhere,
+  including tests — `gate.sh`'s G7b check).
+- `agent/src/graph.ts`'s `recordInvocation` — wrapped `tracker.record(...)` in try/catch so a
+  `CostTracker` failure (e.g. `FileCostTracker` hitting a disk write error) can no longer propagate
+  out of `respond`/`composeAnswer`/`composeStandupDraft` and fail an otherwise-successful model
+  response; logs `console.warn` (this codebase's existing convention) and does not rethrow.
+- `agent/src/costTracking.ts`'s `FileCostTracker.readAll()` — its own comment claimed a malformed
+  line is "skipped rather than thrown on," but `JSON.parse(line)` ran with no try/catch, so a
+  syntactically invalid line (not just wrong-shape JSON) threw uncaught and aborted the whole
+  report. Now wrapped; a bad line is skipped, matching the comment.
+- `agent/src/costTracking.ts`'s `FileCostTracker` constructor — `??` only falls through on
+  `null`/`undefined`, so `AGENT_COST_LEDGER_PATH=` (an explicitly-empty env var — matching this same
+  file's own `.env.example` template) resolved `ledgerPath` to `""` instead of the default. Changed
+  to `||` for both `options.ledgerPath` and the env var, so an empty string is treated as unset at
+  either source.
+- `agent/.env.example` — the `AGENT_COST_LEDGER_PATH` doc comment referenced a `cost:report`
+  package-script alias that has never existed (`agent/package.json` has no such script). Corrected
+  to the actual runnable command, matching what this same file's own bullets above and
+  `FLEETGRAPH.MD` already cited: `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts`
+  (re-verified working — real output pasted in the PR).
+- `agent/src/scripts/cost-report.ts` — `formatCostPerRun` (new, exported) now prints
+  `n/a (unpriced model invocation) — N of M invocation(s) unpriced` instead of a real-looking dollar
+  figure whenever a tier has any unpriced invocation. Note on the actual mechanism, since the
+  CodeRabbit finding's hypothesis didn't hold under inspection: `PerNodeStats.costPerRunUsd`
+  (`costTracking.ts`'s `aggregateByNode`) already divides `totalCostUsd` by the PRICED invocation
+  count, not the tier's total `invocationCount` — so the number itself was already a correct average
+  over the priced subset, not "total cost / total invocations" as hypothesized. The real problem was
+  presentation: printing that number next to `invocations: N` (the TOTAL count) with nothing to
+  indicate the two don't cover the same set, so a reader computing "total spend" as
+  `invocations * cost/run` would overstate it. `main()`'s invocation at module scope was also guarded
+  behind an `import.meta.url` check (same pattern as `api/src/db/ensureDatabase.ts`) so the new
+  `agent/src/__tests__/cost-report.test.ts` can import `formatCostPerRun`/`formatUsd` without the
+  script's side effects firing on import.
+- Every fix above has a regression test in `agent/src/__tests__/costTracking.test.ts` or the new
+  `agent/src/__tests__/cost-report.test.ts`, each confirmed failing (for the specific reason
+  described, not an import error) before its fix and passing after.
+
+---
+
 ## TRO-334 — [FG-16] A blocking relationship nobody can see or set is not a feature — blocks/blocked-by in the issue sidebar
 
 **Last of three sub-issues on branch `feat/pr-d-ship-ui-surfaces` (bundle `TRO-328` / [PR-D] EPIC:

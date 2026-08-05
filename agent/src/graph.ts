@@ -155,11 +155,30 @@ import {
   type PersonActivitySummary,
   type StandupAnchor,
 } from './standupDraft.js';
+import type { CostTracker, RealUsage } from './costTracking.js';
 
 /** The subset of ChatAnthropic's interface this graph actually needs — narrow
- * on purpose so tests can pass a plain object instead of a real client. */
+ * on purpose so tests can pass a plain object instead of a real client.
+ *
+ * `usage_metadata` and `model` (TRO-339 / FG-21) were added to this
+ * interface after confirming, by reading `@langchain/core`'s own
+ * `AIMessage`/`AIMessageChunk` typings directly, that a real
+ * `ChatAnthropic.invoke()` call genuinely returns both at runtime — this
+ * narrow interface was silently discarding them by construction of the
+ * type before this ticket. Both are optional so every existing test double
+ * (`{ invoke: () => ({ content: ... }) }`, no usage field, no model field)
+ * keeps compiling and passing unchanged; a double that omits `usage_metadata`
+ * simply produces no cost-tracking record for that call (see
+ * `recordInvocation` below), which is correct — this file must never
+ * fabricate a token count nobody reported. */
 export interface AnthropicModel {
-  invoke(input: string): Promise<{ content: unknown }>;
+  invoke(input: string): Promise<{ content: unknown; usage_metadata?: RealUsage }>;
+  /** The model identifier, when the injected model exposes one — the real
+   * `ChatAnthropic` instance does, via its own public `.model` field.
+   * Recording this per call (not once per `buildGraph` call) is what makes
+   * a future second model tier visible for free, per the ticket's own
+   * instruction. */
+  model?: string;
 }
 
 /** Why the graph is running this invocation. `on_demand` is FG-2's original
@@ -525,6 +544,54 @@ function requireDeepDeps(deps: DeepDeps | undefined, nodeName: NodeName): DeepDe
   return deps;
 }
 
+/** Forwards one real model call's usage to the injected `CostTracker`
+ * (TRO-339 / FG-21) — the seam every one of `respond`/`composeAnswer`/
+ * `composeStandupDraft` calls right after its own `model.invoke(...)`.
+ * A no-op, never throwing, when either `tracker` is `undefined` (no
+ * tracker was wired — every existing on-demand/proactive/deep test and
+ * call site that predates this ticket) or `usage` is `undefined` (the
+ * injected model didn't report it — a bare test double, never the real
+ * `ChatAnthropic`). Never invents a token count: absence of `usage` means
+ * absence of a record, not a record of zero.
+ *
+ * `tracker.record(...)` itself is wrapped in try/catch (CodeRabbit,
+ * TRO-339 round 2): a cost-accounting side effect (e.g. `FileCostTracker`
+ * hitting a disk write failure) must never be able to fail the graph
+ * response for a model call that already succeeded. On failure this logs a
+ * warning (`console.warn`, this codebase's existing convention — see
+ * `index.ts`) and does not rethrow.
+ *
+ * `async`, and `await`-ed by all three call sites below (CodeRabbit, GitHub
+ * PR #122 round): `CostTracker.record` itself is now async
+ * (`FileCostTracker.record` does a non-blocking `fs/promises` write instead
+ * of a blocking `mkdirSync`/`appendFileSync` pair) — awaiting it here, still
+ * inside the same try/catch, preserves the "never fails the real response"
+ * guarantee while letting a genuine write failure (rejection, not just a
+ * throw) still be caught and logged rather than becoming an unhandled
+ * rejection. */
+async function recordInvocation(
+  tracker: CostTracker | undefined,
+  node: 'respond' | 'composeAnswer' | 'composeStandupDraft',
+  trigger: TriggerKind,
+  model: string | undefined,
+  usage: RealUsage | undefined,
+  documentsPulled?: number
+): Promise<void> {
+  if (!tracker || !usage) return;
+  try {
+    await tracker.record({
+      node,
+      trigger,
+      model: model ?? 'unknown',
+      inputTokens: usage.input_tokens,
+      outputTokens: usage.output_tokens,
+      documentsPulled,
+    });
+  } catch (err) {
+    console.warn(`[agent] cost tracker failed to record a "${node}" invocation (non-fatal):`, err);
+  }
+}
+
 function requireTargetPersonUserId(state: GraphStateType, nodeName: NodeName): string {
   if (!state.targetPersonUserId) {
     throw new Error(
@@ -587,18 +654,24 @@ function routeExpansionLoop(state: GraphStateType): 'expandFrontier' | 'finalize
  * optional so every existing on-demand call site/test is unaffected; see
  * `ProactiveDeps`'s own docstring for why a missing dep fails loudly rather
  * than silently. `deepDeps` (TRO-319 / FG-6) is the same pattern again —
- * see `DeepDeps`'s own docstring.
+ * see `DeepDeps`'s own docstring. `costTracker` (TRO-339 / FG-21) follows the
+ * identical optional-injection pattern: omitted, every existing call site
+ * (this file's own tests included) is unaffected; passed, every real
+ * `model.invoke()` call site (`respond`/`composeAnswer`/`composeStandupDraft`)
+ * forwards its usage to it via `recordInvocation`.
  */
 export function buildGraph(
   model: AnthropicModel,
   proactiveDeps?: ProactiveDeps,
   onDemandDeps?: OnDemandDeps,
-  deepDeps?: DeepDeps
+  deepDeps?: DeepDeps,
+  costTracker?: CostTracker
 ) {
   const graph = new StateGraph(GraphState)
     .addNode('ingest', (state: GraphStateType) => ({ input: state.input.trim() }))
     .addNode('respond', async (state: GraphStateType) => {
       const result = await model.invoke(state.input);
+      await recordInvocation(costTracker, 'respond', state.trigger, model.model, result.usage_metadata);
       return { output: contentToString(result.content) };
     })
     .addNode('pollChangeFeed', async (state: GraphStateType) => {
@@ -738,6 +811,17 @@ export function buildGraph(
     .addNode('composeAnswer', async (state: GraphStateType) => {
       const prompt = buildExpansionPrompt(state.input, state.expandedDocuments);
       const result = await model.invoke(prompt);
+      // documentsPulled (cost cliff #2, TRO-339): how far this on-demand run
+      // expanded the graph, so FG-7's hard document cap can be tuned against
+      // evidence rather than guessed.
+      await recordInvocation(
+        costTracker,
+        'composeAnswer',
+        state.trigger,
+        model.model,
+        result.usage_metadata,
+        state.expandedDocuments.length
+      );
       const modelOutput = contentToString(result.content);
       const deps = requireOnDemandDeps(onDemandDeps, 'composeAnswer');
       const output = state.expansionCapped ? `${modelOutput}${capNoticeText(deps.documentCap)}` : modelOutput;
@@ -775,6 +859,7 @@ export function buildGraph(
 
       const prompt = buildStandupPrompt(state.standupActivity);
       const result = await model.invoke(prompt);
+      await recordInvocation(costTracker, 'composeStandupDraft', state.trigger, model.model, result.usage_metadata);
       const draftText = contentToString(result.content);
       const proposedTransitions = buildProposedTransitions(state.standupActivity.moved);
 
