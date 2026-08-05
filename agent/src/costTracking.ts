@@ -63,8 +63,8 @@
  *
  * ---- Concurrency (lessons.md #18: state it explicitly) -------------------
  *
- * `FileCostTracker.record` is a single `appendFileSync` call per invocation
- * — one `write(2)` syscall for the whole line, which POSIX guarantees does
+ * `FileCostTracker.record` is a single `appendFile` call per invocation —
+ * one `write(2)` syscall for the whole line, which POSIX guarantees does
  * not interleave with a concurrent process's own single-line append (this
  * is the same `O_APPEND` atomicity every log-shipping tool relies on for
  * lines well under the platform's atomic-write size). There is no
@@ -74,9 +74,29 @@
  * property this does NOT give you is a strict global write ORDER across
  * processes — irrelevant here, since aggregation only sums/group-bys rows,
  * never depends on their sequence.
+ *
+ * ---- Async, not blocking (CodeRabbit, GitHub PR #122 round — raised 3
+ * times now: local CLI pass, again, and now GitHub) --------------------
+ *
+ * `record` used to be `mkdirSync`/`appendFileSync` — a genuinely BLOCKING
+ * disk write in the middle of request handling, since `recordInvocation`
+ * (`graph.ts`) is called from all three real `model.invoke()` call sites
+ * (`respond`/`composeAnswer`/`composeStandupDraft`), which sit on `POST
+ * /chat`'s real handler chain (`server.ts`). Three independent review
+ * passes flagging the identical thing is convergent signal worth acting on
+ * even though earlier rounds judged it low-risk at near-zero real traffic.
+ * `record` is now `async`, using `node:fs/promises`'s `mkdir`/`appendFile`
+ * (non-blocking, same `O_APPEND`-per-line atomicity argument above still
+ * holds — `fs.promises.appendFile` still performs one `write(2)` for the
+ * whole line, just off the main thread via libuv). `graph.ts`'s
+ * `recordInvocation` is `async` and is `await`-ed at all three call sites,
+ * with the try/catch around `tracker.record(...)` preserved exactly as
+ * before: a cost-accounting failure still can never fail the real graph
+ * response it is merely accounting for.
  */
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { appendFile, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -142,7 +162,7 @@ export interface ModelInvocationRecord {
  * interfaces, all optional on `buildGraph`, all with one real production
  * implementation constructed in `index.ts`). */
 export interface CostTracker {
-  record(entry: Omit<ModelInvocationRecord, 'timestamp'> & { timestamp?: string }): void;
+  record(entry: Omit<ModelInvocationRecord, 'timestamp'> & { timestamp?: string }): Promise<void>;
 }
 
 /**
@@ -218,13 +238,13 @@ export class FileCostTracker implements CostTracker {
     this.now = options.now ?? (() => new Date());
   }
 
-  record(entry: Omit<ModelInvocationRecord, 'timestamp'> & { timestamp?: string }): void {
+  async record(entry: Omit<ModelInvocationRecord, 'timestamp'> & { timestamp?: string }): Promise<void> {
     const full: ModelInvocationRecord = {
       ...entry,
       timestamp: entry.timestamp ?? this.now().toISOString(),
     };
-    mkdirSync(dirname(this.ledgerPath), { recursive: true });
-    appendFileSync(this.ledgerPath, `${JSON.stringify(full)}\n`, 'utf8');
+    await mkdir(dirname(this.ledgerPath), { recursive: true });
+    await appendFile(this.ledgerPath, `${JSON.stringify(full)}\n`, 'utf8');
   }
 
   /** Every record currently on disk, in file order. `[]` if the ledger
@@ -258,6 +278,16 @@ export class FileCostTracker implements CostTracker {
   }
 }
 
+/** A token/document count is never negative, never fractional, and never
+ * outside the safe-integer range — `Number.isSafeInteger` alone already
+ * excludes `NaN`/`Infinity` (neither is an integer) as well as fractional
+ * values, so the explicit `>= 0` is the only extra condition needed on top
+ * of it (CodeRabbit, GitHub PR #122 round: `typeof x === 'number'` alone
+ * admits `-5`, `1.5`, `NaN`, and `Infinity`). */
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
 /** Structural validation for a parsed JSONL line — same "narrow with a
  * type guard, never `as`" posture as `graph.ts`'s `hasStringText` and
  * `server.ts`'s `isValidChatRequestBody` (lessons.md #21: type the
@@ -270,9 +300,9 @@ function isModelInvocationRecord(value: unknown): value is ModelInvocationRecord
     (v.node === 'respond' || v.node === 'composeAnswer' || v.node === 'composeStandupDraft') &&
     typeof v.trigger === 'string' &&
     typeof v.model === 'string' &&
-    typeof v.inputTokens === 'number' &&
-    typeof v.outputTokens === 'number' &&
-    (v.documentsPulled === undefined || typeof v.documentsPulled === 'number')
+    isNonNegativeSafeInteger(v.inputTokens) &&
+    isNonNegativeSafeInteger(v.outputTokens) &&
+    (v.documentsPulled === undefined || isNonNegativeSafeInteger(v.documentsPulled))
   );
 }
 
@@ -368,11 +398,26 @@ export function aggregateByNode(records: readonly ModelInvocationRecord[]): PerN
 }
 
 /** "Runs per day, observed" — invocation counts bucketed by the UTC
- * calendar day of `timestamp`, newest first. */
+ * calendar day of `timestamp`, newest first.
+ *
+ * Buckets by REAL parsed date, not a naive string slice (CodeRabbit, GitHub
+ * PR #122 round): `FileCostTracker.record`'s own signature
+ * (`Omit<ModelInvocationRecord, 'timestamp'> & { timestamp?: string }`) lets
+ * a caller pass an explicit `timestamp` that isn't necessarily canonical
+ * `Z`-suffixed UTC ISO (tests already do this) — a timestamp carrying a
+ * non-UTC offset that crosses midnight would misgroup under
+ * `timestamp.slice(0, 10)`, since that slice reads the string's own literal
+ * date portion, not its real UTC calendar day. Parsing with `new Date(...)`
+ * and re-deriving the day key from THAT value's own `.toISOString()`
+ * normalizes any offset to its real UTC day. A record whose timestamp does
+ * not parse to a valid `Date` is skipped rather than crashing the whole
+ * report or silently mis-bucketing it under a bogus key. */
 export function invocationsByDay(records: readonly ModelInvocationRecord[]): Array<{ day: string; count: number }> {
   const byDay = new Map<string, number>();
   for (const record of records) {
-    const day = record.timestamp.slice(0, 10); // YYYY-MM-DD, ISO 8601 prefix
+    const parsed = new Date(record.timestamp);
+    if (isNaN(parsed.getTime())) continue;
+    const day = parsed.toISOString().slice(0, 10); // YYYY-MM-DD, real parsed UTC day
     byDay.set(day, (byDay.get(day) ?? 0) + 1);
   }
   return [...byDay.entries()]

@@ -559,18 +559,27 @@ function requireDeepDeps(deps: DeepDeps | undefined, nodeName: NodeName): DeepDe
  * hitting a disk write failure) must never be able to fail the graph
  * response for a model call that already succeeded. On failure this logs a
  * warning (`console.warn`, this codebase's existing convention — see
- * `index.ts`) and does not rethrow. */
-function recordInvocation(
+ * `index.ts`) and does not rethrow.
+ *
+ * `async`, and `await`-ed by all three call sites below (CodeRabbit, GitHub
+ * PR #122 round): `CostTracker.record` itself is now async
+ * (`FileCostTracker.record` does a non-blocking `fs/promises` write instead
+ * of a blocking `mkdirSync`/`appendFileSync` pair) — awaiting it here, still
+ * inside the same try/catch, preserves the "never fails the real response"
+ * guarantee while letting a genuine write failure (rejection, not just a
+ * throw) still be caught and logged rather than becoming an unhandled
+ * rejection. */
+async function recordInvocation(
   tracker: CostTracker | undefined,
   node: 'respond' | 'composeAnswer' | 'composeStandupDraft',
   trigger: TriggerKind,
   model: string | undefined,
   usage: RealUsage | undefined,
   documentsPulled?: number
-): void {
+): Promise<void> {
   if (!tracker || !usage) return;
   try {
-    tracker.record({
+    await tracker.record({
       node,
       trigger,
       model: model ?? 'unknown',
@@ -662,7 +671,7 @@ export function buildGraph(
     .addNode('ingest', (state: GraphStateType) => ({ input: state.input.trim() }))
     .addNode('respond', async (state: GraphStateType) => {
       const result = await model.invoke(state.input);
-      recordInvocation(costTracker, 'respond', state.trigger, model.model, result.usage_metadata);
+      await recordInvocation(costTracker, 'respond', state.trigger, model.model, result.usage_metadata);
       return { output: contentToString(result.content) };
     })
     .addNode('pollChangeFeed', async (state: GraphStateType) => {
@@ -805,7 +814,7 @@ export function buildGraph(
       // documentsPulled (cost cliff #2, TRO-339): how far this on-demand run
       // expanded the graph, so FG-7's hard document cap can be tuned against
       // evidence rather than guessed.
-      recordInvocation(
+      await recordInvocation(
         costTracker,
         'composeAnswer',
         state.trigger,
@@ -850,7 +859,7 @@ export function buildGraph(
 
       const prompt = buildStandupPrompt(state.standupActivity);
       const result = await model.invoke(prompt);
-      recordInvocation(costTracker, 'composeStandupDraft', state.trigger, model.model, result.usage_metadata);
+      await recordInvocation(costTracker, 'composeStandupDraft', state.trigger, model.model, result.usage_metadata);
       const draftText = contentToString(result.content);
       const proposedTransitions = buildProposedTransitions(state.standupActivity.moved);
 

@@ -20,6 +20,20 @@ describe('formatCostPerRun', () => {
       { timestamp: '2026-08-04T00:00:00.000Z', node: 'respond', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 100, outputTokens: 50 },
       { timestamp: '2026-08-04T00:00:01.000Z', node: 'respond', trigger: 'on_demand', model: 'some-future-unpriced-model', inputTokens: 100, outputTokens: 50 },
     ]);
+    // Defensive runtime narrowing (CodeRabbit, GitHub PR #122 round):
+    // array-destructuring the first element of aggregateByNode(...)'s return
+    // types as `PerNodeStats | undefined` at the language level. Checked
+    // this file's actual `agent/tsconfig.json`: `noUncheckedIndexedAccess`
+    // is `true` at the repo root, but `agent/tsconfig.json` itself excludes
+    // `src/__tests__/**/*` (predates this PR — `agent/tsconfig.json:8`,
+    // unchanged since TRO-313/FG-2), so `pnpm --filter @ship/agent
+    // type-check` (`tsc --noEmit`, which resolves `agent/tsconfig.json` from
+    // its own directory) never actually type-checks this file at all —
+    // confirmed directly with `tsc --noEmit --listFiles`, which lists no
+    // `__tests__` file. So this was never a live type error to "fix"; the
+    // guard below is added anyway (lessons.md #16's posture: explicit
+    // narrowing over assumption, cheap insurance either way).
+    if (!tier) throw new Error('unreachable — aggregateByNode([...single node...]) always returns exactly one tier');
 
     expect(tier.invocationCount).toBe(2);
     expect(tier.unpricedInvocations).toBe(1);
@@ -38,6 +52,7 @@ describe('formatCostPerRun', () => {
     const [tier] = aggregateByNode([
       { timestamp: '2026-08-04T00:00:00.000Z', node: 'respond', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 100, outputTokens: 50 },
     ]);
+    if (!tier) throw new Error('unreachable — aggregateByNode([...single node...]) always returns exactly one tier');
 
     expect(tier.unpricedInvocations).toBe(0);
     expect(formatCostPerRun(tier)).toBe(formatUsd(tier.costPerRunUsd));

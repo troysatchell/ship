@@ -114,15 +114,45 @@ describe('invocationsByDay', () => {
       { day: '2026-08-01', count: 2 },
     ]);
   });
+
+  // Regression (CodeRabbit, GitHub PR #122 round): before the fix, the day
+  // key was `record.timestamp.slice(0, 10)` — a naive string slice of
+  // whatever offset the timestamp happened to carry, not its real UTC
+  // calendar day. `FileCostTracker.record`'s own signature lets a caller
+  // pass an explicit non-canonical `timestamp` (tests already do), so a
+  // record whose local-offset timestamp crosses UTC midnight used to be
+  // misbucketed under its own date portion instead of its real UTC day.
+  // `2026-08-04T23:30:00-05:00` is `2026-08-05T04:30:00.000Z` once parsed —
+  // a different calendar day than the `2026-08-04` the naive slice would
+  // have produced. Before the fix this test failed with `day: '2026-08-04'`
+  // (the un-parsed prefix), not an import/type error.
+  it('parses a non-UTC-offset timestamp and buckets it under its real UTC calendar day', () => {
+    const days = invocationsByDay([record({ timestamp: '2026-08-04T23:30:00-05:00' })]);
+    expect(days).toEqual([{ day: '2026-08-05', count: 1 }]);
+  });
+
+  // Regression: an unparseable timestamp used to pass straight through
+  // `.slice(0, 10)` and silently create a bogus bucket instead of being
+  // skipped. Before the fix this test failed because the result included an
+  // extra `{ day: 'not-a-real-t', count: 1 }`-shaped entry (sorted ahead of
+  // the real day since it string-compares greater), not because of a thrown
+  // error.
+  it('skips a record whose timestamp does not parse to a valid date', () => {
+    const days = invocationsByDay([
+      record({ timestamp: 'not-a-real-timestamp' }),
+      record({ timestamp: '2026-08-01T09:00:00.000Z' }),
+    ]);
+    expect(days).toEqual([{ day: '2026-08-01', count: 1 }]);
+  });
 });
 
 describe('FileCostTracker', () => {
-  it('round-trips a recorded invocation through the ledger file', () => {
+  it('round-trips a recorded invocation through the ledger file', async () => {
     const ledgerPath = scratchLedgerPath();
     const tracker = new FileCostTracker({ ledgerPath, now: () => new Date('2026-08-04T00:00:00.000Z') });
 
     expect(existsSync(ledgerPath)).toBe(false);
-    tracker.record({ node: 'respond', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 12, outputTokens: 34 });
+    await tracker.record({ node: 'respond', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 12, outputTokens: 34 });
 
     expect(existsSync(ledgerPath)).toBe(true);
     const rows = tracker.readAll();
@@ -137,11 +167,11 @@ describe('FileCostTracker', () => {
     });
   });
 
-  it('appends across multiple record() calls rather than overwriting', () => {
+  it('appends across multiple record() calls rather than overwriting', async () => {
     const ledgerPath = scratchLedgerPath();
     const tracker = new FileCostTracker({ ledgerPath, now: () => new Date('2026-08-04T00:00:00.000Z') });
-    tracker.record({ node: 'respond', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 1, outputTokens: 1 });
-    tracker.record({ node: 'composeAnswer', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 2, outputTokens: 2 });
+    await tracker.record({ node: 'respond', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 1, outputTokens: 1 });
+    await tracker.record({ node: 'composeAnswer', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 2, outputTokens: 2 });
     expect(tracker.readAll()).toHaveLength(2);
   });
 
@@ -200,6 +230,37 @@ describe('FileCostTracker', () => {
     }
   });
 
+  // Regression (CodeRabbit, GitHub PR #122 round): `isModelInvocationRecord`
+  // only checked `typeof v.inputTokens === 'number'`, which admits `-5`,
+  // `1.5`, `NaN`, and `Infinity` — a hand-edited or corrupted ledger line
+  // with a negative or fractional token count used to pass the guard and be
+  // included in every aggregation. Before the fix this test failed because
+  // `readAll()` returned all three records (the two malformed ones included),
+  // not just `validRecord` — a plain array-length/content mismatch, not a
+  // thrown error.
+  it('skips a record with a negative or fractional token count', () => {
+    const ledgerPath = scratchLedgerPath();
+    mkdirSync(dirname(ledgerPath), { recursive: true });
+    const validRecord: ModelInvocationRecord = {
+      timestamp: '2026-08-04T00:00:00.000Z',
+      node: 'respond',
+      trigger: 'on_demand',
+      model: 'claude-haiku-4-5-20251001',
+      inputTokens: 1,
+      outputTokens: 1,
+    };
+    const negativeInputTokens = { ...validRecord, inputTokens: -5 };
+    const fractionalOutputTokens = { ...validRecord, outputTokens: 1.5 };
+    writeFileSync(
+      ledgerPath,
+      `${JSON.stringify(validRecord)}\n${JSON.stringify(negativeInputTokens)}\n${JSON.stringify(fractionalOutputTokens)}\n`,
+      'utf8'
+    );
+
+    const tracker = new FileCostTracker({ ledgerPath });
+    expect(tracker.readAll()).toEqual([validRecord]);
+  });
+
   it('treats an explicitly-empty options.ledgerPath the same way, for consistency', () => {
     const original = process.env.AGENT_COST_LEDGER_PATH;
     try {
@@ -236,7 +297,7 @@ describe('graph.ts wiring: real model usage is captured per invocation (TRO-339)
       model: 'claude-haiku-4-5-20251001',
     };
     const records: Array<Parameters<CostTracker['record']>[0]> = [];
-    const costTracker: CostTracker = { record: (entry) => records.push(entry) };
+    const costTracker: CostTracker = { record: async (entry) => { records.push(entry); } };
 
     const graph = buildGraph(model, undefined, undefined, undefined, costTracker);
     await graph.invoke({ input: 'What is going on?' });
@@ -254,7 +315,7 @@ describe('graph.ts wiring: real model usage is captured per invocation (TRO-339)
   it('does not record anything when the model response carries no usage_metadata (a bare test double)', async () => {
     const model: AnthropicModel = { invoke: vi.fn().mockResolvedValue({ content: 'hello' }) };
     const records: Array<Parameters<CostTracker['record']>[0]> = [];
-    const costTracker: CostTracker = { record: (entry) => records.push(entry) };
+    const costTracker: CostTracker = { record: async (entry) => { records.push(entry); } };
 
     const graph = buildGraph(model, undefined, undefined, undefined, costTracker);
     await graph.invoke({ input: 'hi' });
@@ -296,5 +357,65 @@ describe('graph.ts wiring: real model usage is captured per invocation (TRO-339)
     const graph = buildGraph(model, undefined, undefined, undefined, throwingCostTracker);
 
     await expect(graph.invoke({ input: 'What is going on?' })).resolves.toMatchObject({ output: 'hello' });
+  });
+
+  // Regression (CodeRabbit, GitHub PR #122 round — raised 3 times total):
+  // `CostTracker.record()` must be genuinely awaited by `recordInvocation`
+  // (graph.ts), not fired-and-forgotten, so a caller can rely on the graph's
+  // own response promise not resolving until the cost write has actually
+  // settled (the same guarantee an `await fs.promises.appendFile(...)` gives
+  // over a blocking `appendFileSync`). This test controls exactly when the
+  // tracker's own promise resolves and asserts the graph's `invoke()`
+  // promise stays pending until then.
+  //
+  // Before the fix: `CostTracker.record` returned `void`, and `graph.ts`'s
+  // `recordInvocation` called `tracker.record(...)` without `await`-ing it
+  // (there was nothing to await against a `void`-returning interface) — so
+  // even a test double whose `record()` returned an unresolved Promise had
+  // that promise silently ignored, and the `respond` node returned its
+  // output immediately. This test failed with `invokeSettled` already
+  // `true` before `resolveRecord()` was ever called — a real behavioral
+  // assertion failure, not a type or import error.
+  it('awaits CostTracker.record() before the real response resolves', async () => {
+    const model: AnthropicModel = {
+      invoke: vi.fn().mockResolvedValue({
+        content: 'hello',
+        usage_metadata: { input_tokens: 42, output_tokens: 7, total_tokens: 49 },
+      }),
+      model: 'claude-haiku-4-5-20251001',
+    };
+
+    let resolveRecord: () => void = () => {
+      throw new Error('unreachable — assigned by the Promise executor below');
+    };
+    const recordPromise = new Promise<void>((resolve) => {
+      resolveRecord = resolve;
+    });
+    let recordCalled = false;
+    const deferredCostTracker: CostTracker = {
+      record: () => {
+        recordCalled = true;
+        return recordPromise;
+      },
+    };
+
+    const graph = buildGraph(model, undefined, undefined, undefined, deferredCostTracker);
+    const invokePromise = graph.invoke({ input: 'What is going on?' });
+    let invokeSettled = false;
+    void invokePromise.then(() => {
+      invokeSettled = true;
+    });
+
+    // Give the microtask/macrotask queue several turns to drain without
+    // ever resolving recordPromise — the graph's own promise must not have
+    // settled yet if recordInvocation genuinely awaits tracker.record().
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(recordCalled).toBe(true);
+    expect(invokeSettled).toBe(false);
+
+    resolveRecord();
+    await expect(invokePromise).resolves.toMatchObject({ output: 'hello' });
+    expect(invokeSettled).toBe(true);
   });
 });

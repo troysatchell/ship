@@ -64,24 +64,7 @@ import { buildShipClient } from '../server.js';
 import { buildGraph, type AnthropicModel } from '../graph.js';
 import { ShipClient } from '../shipClient.js';
 import { InMemoryItemStore } from '../itemStore.js';
-
-/** The one field this script actually needs from `GET /api/team/people`'s
- * response shape — typed explicitly rather than trusting `unknown` (repo
- * rule: type the boundary a JSON parse hands you, lessons.md #21). */
-interface PersonDirectoryEntry {
-  id: string;
-  name: string;
-  user_id?: string | null;
-}
-
-function isPersonDirectoryEntry(value: unknown): value is PersonDirectoryEntry {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    typeof (value as Record<string, unknown>).id === 'string' &&
-    typeof (value as Record<string, unknown>).name === 'string'
-  );
-}
+import { isPersonDirectoryEntry } from './personDirectory.js';
 
 function extractPeopleList(body: unknown): unknown[] {
   if (Array.isArray(body)) return body;
