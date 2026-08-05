@@ -149,6 +149,92 @@ every on-demand chat answer regardless of who asked.
 
 ---
 
+## TRO-344 — Circular-blocks error message is inferred from a bare 500, not a dedicated error code
+
+**Found by:** CodeRabbit, PR #120 (TRO-328 / [PR-D] / TRO-334), `web/src/hooks/useBlockingAssociations.ts:168`,
+Major, tagged "Heavy lift."
+
+**Root cause, `api/src/routes/associations.ts:97-146` (pre-fix).** `POST /:id/associations`'s catch-all
+mapped every exception raised inside its `try` block — the circular-association trigger, a database
+failure, the max-depth guard — to a bare `500 {"error":"Failed to create association"}`. The trigger's
+own distinguishing text (migration `040_prevent_circular_associations.sql`'s
+`RAISE EXCEPTION 'Circular % reference detected: ...'`) was `console.error`'d server-side and never
+reached the response body. The frontend (`web/src/hooks/useBlockingAssociations.ts`'s `addBlocksEdge`)
+inferred "this must be the cycle guard" from any 500 on this route, by elimination — every other
+rejection path on the route was already a distinct 4xx. A correct, disclosed, DERIVED inference, but
+fragile: any future 500-producing failure mode on this route would have been mislabeled as "this would
+create a circular blocking relationship."
+
+**What changed.**
+- `api/src/routes/associations.ts`: added `isCircularAssociationError()`, which narrows a caught
+  `unknown` via `error instanceof Error` and matches the trigger's specific message text
+  (`/^Circular \S+ reference detected:/`). The `POST /:id/associations` catch block now returns
+  `409 {"error": "CIRCULAR_ASSOCIATION"}` for that case specifically; every other failure on the route —
+  including the trigger's own *different* max-depth-exceeded message, and any plain database error —
+  still falls through to the unchanged `500 {"error":"Failed to create association"}`.
+- `api/src/openapi/schemas/backlinks.ts`: corrected the POST `/documents/{id}/associations` path's `409`
+  response description (previously stale — "Association already exists", which the route's
+  `ON CONFLICT ... DO UPDATE` upsert never actually produces) to describe the real
+  `CIRCULAR_ASSOCIATION` response.
+- `web/src/hooks/useBlockingAssociations.ts`: `addBlocksEdge` now checks `res.status === 409` and parses
+  the body (typed via a local `AddAssociationErrorBody` interface, never `any`) for
+  `body.error === 'CIRCULAR_ASSOCIATION'` before showing `CIRCULAR_BLOCKS_MESSAGE`. A bare 500 (or a 409
+  with any other code) now falls through to the already-existing `GENERIC_ADD_FAILURE_MESSAGE`, which is
+  now exported for tests. Updated the file's own doc comment, which previously documented the old
+  derived-500-inference in detail — that reasoning is now obsolete and would have misled the next reader.
+
+**Regression tests.**
+- `api/src/routes/association-cycle-protection.test.ts` (new `describe` block, supertest against the real
+  Express app via `createApp()`, unlike the file's existing trigger-level tests which write directly
+  against `document_associations`): "a real cycle attempt returns 409 with the specific
+  CIRCULAR_ASSOCIATION code" (A blocks B, then B blocks A) and "an unrelated forced 500 (a mocked DB
+  error on the INSERT) still returns 500, not the cycle code" — the second reassigns `pool.query` to
+  reject only the `INSERT INTO document_associations` statement, passing every other call through to the
+  real implementation (same reassign-then-restore-in-`finally` pattern as
+  `session-activity-race.test.ts`), and restores it in a `finally` block regardless of assertion outcome.
+- `web/src/hooks/useBlockingAssociations.test.ts` (new file): direct unit tests of `addBlocksEdge`'s
+  message-selection logic against a mocked `apiPost` returning real `Response` instances — a 409 +
+  `CIRCULAR_ASSOCIATION` renders `CIRCULAR_BLOCKS_MESSAGE`; a 409 with an unrelated code, a plain 500,
+  and a 400 all render `GENERIC_ADD_FAILURE_MESSAGE`; a 2xx resolves `{ ok: true }`.
+- `web/src/components/sidebars/IssueBlockingSection.test.tsx`: updated the two existing tests that
+  encoded the *old* behavior (mocking a bare 500 for the cycle case) to mock the new 409 +
+  `CIRCULAR_ASSOCIATION` response instead, and added a new test,
+  "TRO-344: an unrelated forced 500 renders the generic add-failure message, NOT the circular-blocks
+  message" — the exact scenario the old "any 500 = circular" inference got wrong.
+
+**Confirmed failing for the right reason before the fix.** Saved a diff of the fix-only files
+(`associations.ts`, `useBlockingAssociations.ts`, `backlinks.ts`) to the scratchpad, `git checkout --`'d
+them back to pre-fix `HEAD` (never `git stash`, per this repo's ban), and re-ran the new/updated tests:
+- Web (`pnpm --filter @ship/web test -- --run web/src/hooks/useBlockingAssociations.test.ts
+  web/src/components/sidebars/IssueBlockingSection.test.tsx`): 7 tests failed, all genuine
+  `AssertionError`s (`findByText` timing out against the wrong message, or an equality mismatch) — not
+  import errors or crashes.
+- API (`pnpm --filter @ship/api test -- --run src/routes/association-cycle-protection.test.ts`): exactly
+  the new "returns 409" test failed — `AssertionError: expected 500 to be 409` — while the new
+  "unrelated forced 500" test passed even pre-fix (expected: pre-fix, *every* failure on the route was
+  already 500, so that test doesn't distinguish old from new behavior on its own; it exists to guard the
+  fix from over-matching, not to prove the fix by itself). All 808 other pre-existing api tests still
+  passed. Reapplied the fix diff; all of the above went green.
+
+**How to run it.** `source .factory-env` first (api tests TRUNCATE 16 tables against whatever
+`DATABASE_URL` points at). `pnpm --filter @ship/api test -- --run
+src/routes/association-cycle-protection.test.ts src/routes/associations-regression.test.ts` and
+`pnpm --filter @ship/web test -- --run web/src/hooks/useBlockingAssociations.test.ts
+web/src/components/sidebars/IssueBlockingSection.test.tsx` (root `pnpm test` is API-only). One
+full-suite api run in the middle of this work showed 2 unrelated failures in `documents.test.ts`
+(`TypeError: Invalid value "undefined" for header "x-csrf-token"`) — re-ran `documents.test.ts` standalone
+twice (809/809 both times) and confirmed this matches the documented load-sensitive flake class
+(lessons.md rule 24: fails inside a loaded full run, passes standalone/on re-run), not a regression from
+this change; this branch touches neither CSRF nor `documents.test.ts`.
+
+**Rollback.** Revert this commit. No schema change, no migration — the migration 040 trigger and its
+message text are unchanged; only the route's error mapping and the frontend's message selection revert.
+Reverting restores the bare-500-for-everything behavior on `POST /:id/associations` and the
+derived-inference comment in `useBlockingAssociations.ts`, and removes the new test file
+(`web/src/hooks/useBlockingAssociations.test.ts`).
+
+---
+
 ## TRO-336 — [FG-18] The "plan changed after approval" flag trips on typo fixes, so managers ignore it — and a quiet scope cut looks identical
 
 **Bundle.** Second and final sub-issue built in TRO-329 ([PR-E] EPIC), after TRO-335 (FG-17,

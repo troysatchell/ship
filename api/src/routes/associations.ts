@@ -43,6 +43,20 @@ function isValidRelationshipType(value: unknown): value is RelationshipType {
   return typeof value === 'string' && validTypes.includes(value as RelationshipType);
 }
 
+// migration 040_prevent_circular_associations.sql's `prevent_circular_association()`
+// trigger raises this specific text (RAISE EXCEPTION 'Circular % reference
+// detected: ...', NEW.relationship_type) when an INSERT/UPDATE would close a
+// cycle. The same trigger also raises a *different* message ("Maximum
+// association depth (%) exceeded...") for its depth-cap guard, and both share
+// Postgres's default RAISE EXCEPTION sqlstate (P0001), so the code alone can't
+// distinguish them — only the message text identifies the cycle case
+// specifically (TRO-344).
+const CIRCULAR_ASSOCIATION_MESSAGE = /^Circular \S+ reference detected:/;
+
+function isCircularAssociationError(error: unknown): boolean {
+  return error instanceof Error && CIRCULAR_ASSOCIATION_MESSAGE.test(error.message);
+}
+
 // GET /api/documents/:id/associations - List all associations for a document
 router.get('/:id/associations', authMiddleware, async (req: Request, res: Response) => {
   try {
@@ -140,6 +154,13 @@ router.post('/:id/associations', authMiddleware, async (req: Request, res: Respo
 
     return res.status(201).json(result.rows[0]);
   } catch (error) {
+    if (isCircularAssociationError(error)) {
+      // Distinct 409 for the cycle guard specifically (TRO-344) — every other
+      // failure on this route (DB errors, the depth-cap guard) still falls
+      // through to the generic 500 below.
+      console.error('Circular association rejected:', error);
+      return res.status(409).json({ error: 'CIRCULAR_ASSOCIATION' });
+    }
     console.error('Error creating association:', error);
     return res.status(500).json({ error: 'Failed to create association' });
   }
