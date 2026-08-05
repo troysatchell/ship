@@ -21,6 +21,160 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-336 — [FG-18] The "plan changed after approval" flag trips on typo fixes, so managers ignore it — and a quiet scope cut looks identical
+
+**Bundle.** Second and final sub-issue built in TRO-329 ([PR-E] EPIC), after TRO-335 (FG-17,
+this same branch). `agent/src/retroDraft.ts`/`agent/src/blockerFanout.ts`/`graph.ts` were this
+ticket's closest precedent for a new draft-generating graph node and its regression test — followed
+directly, with one deliberate, documented departure (see "Why this ticket's design differs from
+every prior one" below).
+
+**Re-verified the ticket's own citations before trusting them — same discipline applied to
+TRO-335's week-window bug, and it found the same class of gap.** The ticket's "Verified" section
+cites `api/src/routes/documents.ts:1074` and `api/src/routes/projects.ts:864` as "both move approval
+to `changed_since_approved` after a post-approval edit," and says `document_history` "records body
+text only for weekly plans and retros... one of the few places the history table is sufficient on
+its own." Read directly, neither citation is the reachable mechanism:
+- `documents.ts:1074`'s transition fires when the CURRENT state is `'changes_requested'` (a
+  manager asked for changes, the author resubmitted) — a real, different transition, not "approved,
+  then edited." The transition this ticket actually needs — `'approved'` -> `'changed_since_approved'`
+  on `success_criteria`/`plan` changes — lives in `api/src/routes/weeks.ts:1910-1921`, operating on
+  the SPRINT document's own properties, not a `weekly_plan` document's TipTap body.
+- `document_history` genuinely does capture this correctly in real production usage
+  (`weeks.ts:1940-1952`'s `logDocumentChange(id, 'success_criteria', oldCriteria, newCriteria,
+  userId)`) — but the reachable FG-3 seed fixture (Test Case 4, `api/src/db/seed.ts:1407-1454`)
+  writes `properties` directly via raw SQL, bypassing that route (and `logDocumentChange`) entirely.
+  Queried this worktree's own freshly-seeded database directly: `document_history` has ZERO rows for
+  the fixture's week. The actual "before" value lives in `properties.plan_history`'s last entry,
+  whose `.plan` field the fixture repurposes to hold `JSON.stringify(originalCriteria)` — a JSON
+  array — even though that field normally holds free plan TEXT in real usage.
+- The finding IS reachable, confirmed the same way as TRO-335: `pnpm db:seed` against this
+  worktree's database (re-seeded after `gate.sh`'s own `tests:api` run truncated the prior seed —
+  the same "TRUNCATEs 16 tables in `beforeAll`" footgun lessons.md already documents) prints
+  `✅ Test Case 4 fixture: week <id> approved then edited (4 → 3 criteria)`, and a direct query
+  confirmed the week's `plan_approval.state` is `'changed_since_approved'` with a real approver.
+
+**What was broken (per the ticket's own framing, not re-litigated here):** the flag that should mean
+"a manager needs to look again" fires identically for a typo fix and a removed success criterion,
+so managers learned to ignore it — precisely the failure mode that makes a quiet scope cut invisible.
+
+**What changed — a new deep-tier chain, `proactive_plan_change`, reusing FG-6/FG-17/FG-19's
+established shape (own trigger, gather -> compose -> commit) with one deliberate exception:**
+1. **`agent/src/planChangeDraft.ts`** (new) — `gatherPlanChange` reads the week's approval state
+   directly (Ship's OWN already-correct detection signal — "the detection is not the missing piece,"
+   the ticket's own words) and finds a "before" success-criteria snapshot, preferring a real
+   `document_history` row (via `getChangeFeed`, correct for genuine production edits) and falling
+   back to `properties.plan_history`'s last entry ONLY when it parses as a JSON array (covers the
+   reachable seed fixture without guessing at a genuine free-text plan snapshot that happens not to
+   parse as JSON). `alignCriteria` then aligns the before/after criteria lists by
+   similarity-pairing.
+2. **`agent/src/itemStore.ts`** — a fourth draft-backed inbox item type (`plan_change_draft`, ranked
+   alongside `standup_draft`/`retro_draft`).
+3. **`agent/src/costTracking.ts`** — `INVOCATION_SITES` gained `composePlanChangeDraft` — a
+   one-line addition, exactly as the TRO-335 CodeRabbit-triage refactor to a single source of truth
+   was built to make trivial.
+4. **`agent/src/graph.ts`** — the new trigger (requiring `weekId`, REUSING the state field
+   `proactive_retro` already declares rather than adding a duplicate) and a three-node chain:
+   `detectPlanChange -> composePlanChangeDraft -> commitPlanChangeDraft`.
+
+**Why this ticket's design differs from every prior one — the model decides materiality, not just
+phrasing, and here is the evidence that forced that choice.** Every other deep-tier chain in this
+package decides its own skip/proceed gate deterministically and only ever asks the model to phrase
+an ALREADY-decided fact. The first draft of this ticket tried the same shape: a fixed
+Levenshtein-similarity threshold to classify a criterion pair as "cosmetic" (a typo) vs. "materially
+different" (weakened). **It was wrong, proven empirically before writing a single test against it:**
+```
+similarity("CSRF protection verified on every mutating route",
+           "CSRF protection verified on some mutating routes")  = 0.875   (a real WEAKENING)
+similarity("Session timeout matches the 15-minute policy",
+           "Session timeout matches the 30-minute policy")      = 0.955   (a real WEAKENING)
+similarity("Ship it", "Shipit")                                  = 0.857   (a trivial TYPO)
+```
+Two genuine weakenings score HIGHER similarity than a trivial typo in a short string — no fixed
+threshold separates them correctly, because edit distance measures characters, not meaning, and
+"materially is the whole ticket" (the ticket's own words) is exactly the claim that a naive
+(similarity-based, but still fundamentally statistical) diff cannot make this call. **Fixed** by
+narrowing what the deterministic layer decides to the ONE thing it can prove without ambiguity —
+exact equality after whitespace normalization — and handing everything else (a removed criterion,
+an added one, or a pair that plausibly corresponds but reads differently, INCLUDING a genuine
+typo) to the model, which alone can tell a typo from a weakening. `buildPlanChangePrompt` requires
+a `MATERIAL`/`NOT MATERIAL` verdict as the first line of the model's response;
+`parseMaterialityVerdict` reads it. A malformed response (neither prefix) degrades to `MATERIAL`
+with the whole response as the draft — the same asymmetric-cost reasoning FLEETGRAPH.MD's own
+"Precision, and why the bar moved" section already states for this package: a false positive costs
+a few seconds to dismiss, a false negative silently reproduces the exact bug this ticket exists to
+fix.
+
+**Consequence for the negative-case proof: two tiers, both real, honestly different in strength.**
+A pure whitespace-only edit is proven with ZERO model dependency — `detectPlanChange`'s deterministic
+gate skips before any model call, verified in the regression test by asserting `model.invoke` was
+never called. A genuine character-level typo's "produces nothing" behavior depends on the model
+correctly returning `NOT MATERIAL` — proven with a RECORDED, FIXED model response (the same
+"recorded model response so CI is deterministic" pattern this repo already uses for TRO-335's Test
+Case 3, applied here because materiality-of-a-rewording genuinely is a judgment call, not a fact).
+
+**Drafts only, and the ticket's own sharpest framing.** The ticket names this explicitly as "the one
+place where violating [the draft-only gate] would be most tempting and most damaging, since these
+documents feed federal performance ratings." Enforced the same structural way every hard limit in
+this package is: `DeepShipClientLike` has no write method for any node in this chain to call, proven
+by a compile-time-checked `Record<keyof DeepShipClientLike, true>` test (a future write method added
+to the type fails this test at compile time, not just if someone remembers to update a hand-written
+array). The drafted question is routed to the APPROVER (`plan_approval.approved_by`, verified to be
+a real `users.id` by reading the approval-setting route directly, `weeks.ts:3269`), never the plan's
+author — the approver reviews and either sends the question or re-approves.
+
+**How to run it.** `pnpm --filter @ship/agent test` (or `pnpm test` from the worktree root with
+`DATABASE_URL` set via `.factory-env`). New/changed test files: `agent/src/__tests__/planChangeDraft.test.ts`
+(new, 26 cases — `alignCriteria`'s whitespace/typo/removal/addition behavior, `gatherPlanChange`'s
+dual-source preference order and its graceful degradation, `parseMaterialityVerdict`'s verdict
+parsing including the "materialized" false-positive-substring guard) and `agent/src/__tests__/graph.test.ts`
+(+13 cases, `describe('buildGraph — plan-change discrimination...')`, including Test Case 4's own
+shape with a recorded/fixed `MATERIAL` response, a fully deterministic whitespace-only negative
+case, and a model-mediated typo-only negative case with a recorded `NOT MATERIAL` response). Full
+suite: 379/379 passing. `pnpm --filter @ship/agent type-check` clean. Confirmed red-before-green:
+saved the wiring diff aside (`git diff` to a scratch file, never `git stash`), reverted
+`graph.ts`/`itemStore.ts`/`costTracking.ts` to their pre-ticket state, and re-ran the new/extended
+test files — 12 of the 13 new `graph.test.ts` cases failed for the expected reasons (`NODE_NAMES`
+missing the three new nodes, and LangGraph's own `Branch condition returned unknown or null
+destination` for the unrecognized `proactive_plan_change` trigger); the 13th (a pure client-shape
+structural check, independent of graph wiring) correctly stayed green throughout, same as the
+analogous case in TRO-335's own red/green proof. `planChangeDraft.test.ts`'s own 26 cases stayed
+green throughout too, correctly, since that file's pure functions never depended on the graph
+wiring being reverted. Reapplied the saved diff (`git apply`) and re-ran the full suite to confirm
+all 379 green.
+
+**Bundle TRO-329's definition of done, checked now that this is the last sub-issue:** Test Case 3
+(TRO-335/FG-17) has a reachable trigger state (`pnpm db:seed`'s Test Case 3 fixture, re-verified
+this ticket by re-seeding) and a passing regression test (`retroDraft.test.ts`/`graph.test.ts`).
+Test Case 4 (this ticket) — same, verified directly above. Test Case 5 (FG-19/blocker fan-out)
+shipped separately as TRO-346 before this bundle's remaining two tickets started;
+`blockerFanout.test.ts`'s own 8 cases plus `graph.test.ts`'s blocker-escalation describe block are
+still green in this same full-suite run. All three are satisfied.
+
+**Not yet wired: a real trigger route.** Same documented gap every prior deep-tier chain in this
+package has — nothing decides WHICH week's plan-change flag to check and WHEN. A future ticket's
+job, per FLEETGRAPH.MD's own Trigger Model section.
+
+**No new UI surface.** Backend/graph-only — the drafted question is a `plan_change_draft` inbox
+item + a `DraftStore` record, read through the SAME existing chat/inbox surfaces every other
+drafted item already uses, unchanged by this ticket.
+
+**FLEETGRAPH.MD left untouched — the same pre-existing documentation gap TRO-335 already flagged,
+now one ticket further behind.** Its "Graph Diagram" Mermaid section does not show
+`proactive_escalation` (TRO-346) or `proactive_retro` (TRO-335); this ticket's `proactive_plan_change`
+chain is the same gap, not a new one. Not expanded on here for the same reason TRO-335 gave:
+redrawing the diagram correctly means re-verifying every other claim in an already-dated section.
+
+**Rollback.** Revert the commits on this branch that touch `planChangeDraft.ts` + its test,
+`itemStore.ts`/`costTracking.ts`/`graph.ts`/`graph.test.ts`, and this entry. No schema or migration
+changes, no new API endpoints, no changes to `api/` or `web/`, no changes to `index.ts` — purely
+additive within `agent/`, so reverting is a clean subtraction with nothing else to unwind. Reverting
+this ticket alone (leaving TRO-335's commits in place) is also safe: the two chains share only the
+`weekId` state field and the `DeepDeps`/`ItemStore`/`DraftStore` plumbing, none of which either
+ticket's own code depends on the other having added.
+
+---
+
 ## TRO-335 — [FG-17] At week's end someone reconstructs from memory what they delivered — Ship already holds the answer
 
 **Bundle.** First sub-issue built in TRO-329 ([PR-E] EPIC). TRO-336 (FG-18) is the bundle's other

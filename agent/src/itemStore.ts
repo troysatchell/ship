@@ -55,8 +55,22 @@
  * for the retro-delivery draft `graph.ts`'s `commitRetroDraft` writes.
  * Ranked alongside `standup_draft` (see `TYPE_RANK` below) — both are
  * "drafts the agent has prepared for them," FLEETGRAPH.MD's own inbox list
- * item #4, behind mentions/approvals and ahead of escalations. */
-export type InboxItemType = 'mention' | 'blocking_approval' | 'standup_draft' | 'blocker_escalation' | 'retro_draft';
+ * item #4, behind mentions/approvals and ahead of escalations.
+ *
+ * `plan_change_draft` (TRO-336 / FG-18): the same lightweight-pointer shape
+ * again, for the plan-change question `graph.ts`'s `commitPlanChangeDraft`
+ * writes — a materially-changed, already-approved weekly plan, drafted as a
+ * question back to the author for the APPROVER to review and send. Ranked
+ * alongside `standup_draft`/`retro_draft` for the same reason: it is a
+ * draft prepared for its recipient, not something blocking someone else's
+ * work the way `blocking_approval` is. */
+export type InboxItemType =
+  | 'mention'
+  | 'blocking_approval'
+  | 'standup_draft'
+  | 'blocker_escalation'
+  | 'retro_draft'
+  | 'plan_change_draft';
 
 export interface InboxItemEvidence {
   /** The Ship document this item is evidenced by. The never-surface check
@@ -157,25 +171,26 @@ export interface ItemStore {
    * (ticket / FLEETGRAPH.MD Test Case 2: "approval first because another
    * person's week cannot start"), highest `blockedCount` first within
    * that, ties broken by longest-waiting (`blockedSince` ascending); then
-   * `mention` items, oldest first; then `standup_draft`/`retro_draft`
-   * items, oldest first within each (TRO-319 / FG-6, TRO-335 / FG-17 —
-   * FLEETGRAPH.MD's own enumerated inbox list puts "drafts prepared for
-   * them" behind mentions and blocking approvals — reacting to someone
-   * ELSE's need outranks a person's own not-yet-urgent paperwork); then
-   * `blocker_escalation` items, oldest first — ranked after everything
-   * else, including a person's own standup/retro drafts, matching
-   * FLEETGRAPH.MD's "Who it notifies" section verbatim: "Escalation to a
-   * manager exists but is last." */
+   * `mention` items, oldest first; then `standup_draft`/`retro_draft`/
+   * `plan_change_draft` items, oldest first within each (TRO-319 / FG-6,
+   * TRO-335 / FG-17, TRO-336 / FG-18 — FLEETGRAPH.MD's own enumerated inbox
+   * list puts "drafts prepared for them" behind mentions and blocking
+   * approvals — reacting to someone ELSE's need outranks a person's own
+   * not-yet-urgent paperwork); then `blocker_escalation` items, oldest
+   * first — ranked after everything else, including a person's own
+   * standup/retro/plan-change drafts, matching FLEETGRAPH.MD's "Who it
+   * notifies" section verbatim: "Escalation to a manager exists but is
+   * last." */
   list(recipientUserId: string): InboxItem[];
   /** Every item currently stored, for tests/inspection. */
   all(): InboxItem[];
 }
 
 /** Type rank, lowest sorts first. `blocking_approval` before `mention`
- * before `standup_draft`/`retro_draft` before `blocker_escalation` — see
- * `list()`'s own docstring for why. `standup_draft` and `retro_draft` share
- * a rank tier deliberately (both are "drafts prepared for them," neither
- * outranks the other) — ties within a rank fall through to
+ * before `standup_draft`/`retro_draft`/`plan_change_draft` before
+ * `blocker_escalation` — see `list()`'s own docstring for why. The three
+ * "drafts prepared for them" types share one rank tier deliberately (none
+ * outranks another) — ties within a rank fall through to
  * `compareInboxItems`'s generic `createdAt` comparison below, same as any
  * other same-type tie. */
 const TYPE_RANK: Record<InboxItemType, number> = {
@@ -183,6 +198,7 @@ const TYPE_RANK: Record<InboxItemType, number> = {
   mention: 1,
   standup_draft: 2,
   retro_draft: 2,
+  plan_change_draft: 2,
   blocker_escalation: 3,
 };
 

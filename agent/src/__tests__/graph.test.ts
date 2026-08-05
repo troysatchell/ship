@@ -1338,3 +1338,327 @@ describe('buildGraph — retro delivery drafting (TRO-335 / FG-17)', () => {
     });
   });
 });
+
+describe('buildGraph — plan-change discrimination (TRO-336 / FG-18)', () => {
+  /**
+   * Synthetic fixture text matches FLEETGRAPH.MD's own Test Case 4 exactly
+   * ("a plan approved at version N, then edited to remove one success
+   * criterion") and this ticket's own real seed fixture text
+   * (`api/src/db/seed.ts`'s Test Case 4 block) — never a live model call,
+   * same posture as every other describe block in this file.
+   */
+  const WEEK_ID = 'week-13';
+  const APPROVER_USER_ID = 'user-approver-1';
+  const ORIGINAL_CRITERIA = [
+    'All auth endpoints covered by integration tests',
+    'Password reset flow ships behind a feature flag',
+    'Session timeout matches the 15-minute policy',
+    'CSRF protection verified on every mutating route',
+  ];
+  const EDITED_CRITERIA = ORIGINAL_CRITERIA.slice(0, 3);
+
+  function doc(overrides: Partial<ShipDocument> & Pick<ShipDocument, 'id' | 'title'>): ShipDocument {
+    return { document_type: 'issue', content: null, visibility: 'workspace', created_by: null, properties: {}, ...overrides };
+  }
+
+  function weekDoc(overrides: Partial<ShipDocument['properties']> = {}): ShipDocument {
+    return doc({
+      id: WEEK_ID,
+      title: 'Week 13',
+      document_type: 'sprint',
+      properties: {
+        sprint_number: 13,
+        success_criteria: EDITED_CRITERIA,
+        plan_approval: {
+          state: 'changed_since_approved',
+          approved_by: APPROVER_USER_ID,
+          approved_at: '2026-07-30T18:07:58.245Z',
+          approved_version_id: null,
+          comment: 'Approved — clear goals for the week.',
+        },
+        plan_history: [
+          { plan: JSON.stringify(ORIGINAL_CRITERIA), timestamp: '2026-07-30T18:07:58.245Z', author_id: 'user-owner-1', author_name: 'Dev User' },
+        ],
+        ...overrides,
+      },
+    });
+  }
+
+  function testCase4Client(overrides: Partial<DeepShipClientLike> = {}): DeepShipClientLike {
+    return {
+      getIssuesByAssignee: vi.fn().mockResolvedValue([]),
+      getChangeFeed: vi.fn().mockResolvedValue(emptyFeed()),
+      listDocuments: vi.fn().mockResolvedValue([]),
+      getPeople: vi.fn().mockResolvedValue([]),
+      getAssociations: vi.fn().mockResolvedValue([]),
+      getReverseAssociations: vi.fn().mockResolvedValue([]),
+      getWeekDates: vi.fn().mockResolvedValue({ workspace_sprint_start_date: '2026-05-18' }),
+      getDocument: vi.fn().mockResolvedValue(weekDoc()),
+      ...overrides,
+    };
+  }
+
+  function deps(overrides: Partial<DeepDeps> = {}): DeepDeps {
+    return {
+      shipClient: testCase4Client(),
+      itemStore: new InMemoryItemStore(),
+      draftStore: new InMemoryDraftStore(),
+      now: () => new Date('2026-08-05T12:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  it('exposes every plan-change node in NODE_NAMES on the compiled graph', () => {
+    expect(NODE_NAMES).toEqual(
+      expect.arrayContaining(['detectPlanChange', 'composePlanChangeDraft', 'commitPlanChangeDraft'])
+    );
+  });
+
+  it('throws a clear error if a proactive_plan_change trigger runs without DeepDeps, rather than silently no-op-ing', async () => {
+    const compiled = buildGraph(fakeModel('unused'));
+
+    await expect(compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID })).rejects.toThrow(/DeepDeps/);
+  });
+
+  it('throws a clear error if proactive_plan_change runs without weekId, rather than guessing which week', async () => {
+    const compiled = buildGraph(fakeModel('unused'), undefined, undefined, deps());
+
+    await expect(compiled.invoke({ trigger: 'proactive_plan_change' })).rejects.toThrow(/weekId/);
+  });
+
+  describe('Test Case 4 — one criterion removed after approval (recorded model response)', () => {
+    it('pre-fills a before-and-after on the removed criterion and drafts a question, routed to the approver', async () => {
+      // A recorded, fixed model response (same "recorded model response so
+      // CI is deterministic" pattern TRO-335's Test Case 3 already
+      // established) — required here specifically because THIS chain asks
+      // the model for a MATERIAL/NOT MATERIAL verdict, not just prose; see
+      // `planChangeDraft.ts`'s own module docstring for why a deterministic
+      // heuristic could not make this call reliably.
+      const recordedResponse =
+        'MATERIAL\n\n' +
+        'Hi — I noticed "CSRF protection verified on every mutating route" was removed from this week\'s ' +
+        'plan after I approved it. Could you help me understand why? Happy to re-approve once I understand ' +
+        'the change.';
+      const model = fakeModel(recordedResponse);
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const compiled = buildGraph(model, undefined, undefined, deps({ itemStore, draftStore }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+
+      // The gathered facts: the removed criterion, nothing added or
+      // modified, correctly aligned from plan_history (the reachable seed
+      // fixture's real shape).
+      expect(result.planChangeSummary?.alignment.removed).toEqual([
+        'CSRF protection verified on every mutating route',
+      ]);
+      expect(result.planChangeSummary?.alignment.added).toEqual([]);
+      expect(result.planChangeSummary?.alignment.modified).toEqual([]);
+      expect(result.planChangeSkipReason).toBeUndefined();
+
+      // The model was given the real removed criterion, nothing invented.
+      const prompt = (model.invoke as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as string;
+      expect(prompt).toContain('CSRF protection verified on every mutating route');
+      expect(prompt).not.toContain('Session timeout'); // unchanged criteria are not facts to report
+
+      // A drafted question, routed to the APPROVER (not the plan's owner),
+      // never sent.
+      const items = itemStore.list(APPROVER_USER_ID);
+      expect(items).toHaveLength(1);
+      const item = items[0];
+      if (!item) throw new Error('expected exactly one item');
+      expect(item.type).toBe('plan_change_draft');
+      expect(item.evidence).toEqual({ documentId: WEEK_ID, documentType: 'sprint' });
+      expect(item.draftId).toBeDefined();
+
+      const stored = item.draftId ? draftStore.get(item.draftId) : undefined;
+      expect(stored?.draftText).toBe(
+        'Hi — I noticed "CSRF protection verified on every mutating route" was removed from this week\'s ' +
+          'plan after I approved it. Could you help me understand why? Happy to re-approve once I understand ' +
+          'the change.'
+      );
+      expect(stored?.status).toBe('unseen');
+      expect(stored?.personUserId).toBe(APPROVER_USER_ID);
+      expect(stored?.proposedTransitions).toEqual([]);
+    });
+
+    it('re-invoking for the same week is an upsert — no duplicate draft or item', async () => {
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const sharedDeps = deps({ itemStore, draftStore });
+      const compiled = buildGraph(fakeModel('MATERIAL\n\ndraft text'), undefined, undefined, sharedDeps);
+
+      await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+      await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+
+      expect(itemStore.list(APPROVER_USER_ID)).toHaveLength(1);
+      expect(draftStore.listForPerson(APPROVER_USER_ID)).toHaveLength(1);
+    });
+  });
+
+  describe("Negative case (deterministic) — a whitespace-only edit produces nothing, and never even calls the model", () => {
+    it('makes NO model call at all — proven before the fix made it correctly not-fire', async () => {
+      const model = fakeModel('should never be called');
+      // Only whitespace differs from ORIGINAL_CRITERIA — every criterion is
+      // identical after normalization.
+      const client = testCase4Client({
+        getDocument: vi.fn().mockResolvedValue(
+          weekDoc({
+            success_criteria: [
+              'All auth endpoints covered by integration tests',
+              'Password reset flow ships behind a feature flag',
+              'Session timeout matches the 15-minute policy  ', // trailing whitespace
+              ' CSRF protection verified on every mutating route', // leading whitespace
+            ],
+          })
+        ),
+      });
+      const compiled = buildGraph(model, undefined, undefined, deps({ shipClient: client }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+
+      expect(model.invoke).not.toHaveBeenCalled();
+      expect(result.planChangeSkipReason).toBe('no_material_change');
+      expect(result.planChangeDraftText).toBeUndefined();
+    });
+  });
+
+  describe('Negative case (model-mediated) — a genuine typo-only edit calls the model, which correctly withholds a draft', () => {
+    it('calls the model (the deterministic gate cannot decide this on its own) and writes nothing when it returns NOT MATERIAL', async () => {
+      const model = fakeModel('NOT MATERIAL');
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      // A real one-character typo fix, not exactly equal after whitespace
+      // normalization — this MUST reach the model (it is not the
+      // deterministic whitespace-only case above).
+      const client = testCase4Client({
+        getDocument: vi.fn().mockResolvedValue(
+          weekDoc({
+            success_criteria: [
+              'All auth endpoints covered by integration tests',
+              'Password reset flow ships behind a feature flag',
+              'Session timeout matches the 15-minute policy',
+              'CSRF protection verified on every mutating rotue', // typo: rotue
+            ],
+          })
+        ),
+      });
+      const compiled = buildGraph(model, undefined, undefined, deps({ shipClient: client, itemStore, draftStore }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+
+      expect(model.invoke).toHaveBeenCalledTimes(1);
+      expect(result.planChangeSkipReason).toBe('no_material_change');
+      expect(result.planChangeDraftText).toBeUndefined();
+      expect(itemStore.all()).toHaveLength(0);
+      expect(draftStore.listForPerson(APPROVER_USER_ID)).toHaveLength(0);
+    });
+  });
+
+  describe('Skipped when the week is not actually changed_since_approved', () => {
+    it('makes no model call', async () => {
+      const model = fakeModel('should never be called');
+      const client = testCase4Client({
+        getDocument: vi.fn().mockResolvedValue(
+          weekDoc({ plan_approval: { state: 'approved', approved_by: APPROVER_USER_ID, approved_at: '2026-07-30T18:07:58.245Z', approved_version_id: null } })
+        ),
+      });
+      const compiled = buildGraph(model, undefined, undefined, deps({ shipClient: client }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+
+      expect(model.invoke).not.toHaveBeenCalled();
+      expect(result.planChangeSkipReason).toBe('not_changed_since_approval');
+    });
+  });
+
+  describe('Skipped when the week has no recorded approver', () => {
+    it('makes no model call', async () => {
+      const model = fakeModel('should never be called');
+      const client = testCase4Client({
+        getDocument: vi.fn().mockResolvedValue(
+          weekDoc({ plan_approval: { state: 'changed_since_approved', approved_by: null, approved_at: '2026-07-30T18:07:58.245Z', approved_version_id: null } })
+        ),
+      });
+      const compiled = buildGraph(model, undefined, undefined, deps({ shipClient: client }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+
+      expect(model.invoke).not.toHaveBeenCalled();
+      expect(result.planChangeSkipReason).toBe('no_approver');
+    });
+  });
+
+  describe('Skipped when no "before" snapshot can be found', () => {
+    it('makes no model call and never guesses at a diff', async () => {
+      const model = fakeModel('should never be called');
+      const client = testCase4Client({
+        getDocument: vi.fn().mockResolvedValue(weekDoc({ plan_history: [] })),
+      });
+      const compiled = buildGraph(model, undefined, undefined, deps({ shipClient: client }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+
+      expect(model.invoke).not.toHaveBeenCalled();
+      expect(result.planChangeSkipReason).toBe('no_diff_source');
+    });
+  });
+
+  describe('Skipped when the week itself is gone or invisible to this token', () => {
+    it('makes no model call and does not throw', async () => {
+      const model = fakeModel('should never be called');
+      const client = testCase4Client({ getDocument: vi.fn().mockRejectedValue(new Error('404: gone')) });
+      const compiled = buildGraph(model, undefined, undefined, deps({ shipClient: client }));
+
+      const result = await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+
+      expect(model.invoke).not.toHaveBeenCalled();
+      expect(result.planChangeSkipReason).toBe('week_not_found');
+    });
+  });
+
+  describe('Proof — no approval state is ever written by any code path this ticket adds', () => {
+    it('DeepShipClientLike exposes only read methods — there is no write method for this path to call', () => {
+      // `Record<keyof DeepShipClientLike, true>` fails to compile if a new
+      // member is ever added to the type without being listed here — same
+      // compile-time-checked proof pattern TRO-335's own retro chain uses.
+      const readOnlySurface: Record<keyof DeepShipClientLike, true> = {
+        getAssociations: true,
+        getChangeFeed: true,
+        getDocument: true,
+        getIssuesByAssignee: true,
+        getPeople: true,
+        getReverseAssociations: true,
+        getWeekDates: true,
+        listDocuments: true,
+      };
+      const client = testCase4Client();
+      expect(Object.keys(client).sort()).toEqual(Object.keys(readOnlySurface).sort());
+    });
+
+    it('the drafted text is retrievable ONLY from DraftStore — commitPlanChangeDraft never calls a write endpoint, and the week\'s own plan_approval is never touched', async () => {
+      const itemStore = new InMemoryItemStore();
+      const draftStore = new InMemoryDraftStore();
+      const getDocument = vi.fn().mockResolvedValue(weekDoc());
+      const client = testCase4Client({ getDocument });
+      const compiled = buildGraph(fakeModel('MATERIAL\n\na private plan-change draft'), undefined, undefined, deps({ shipClient: client, itemStore, draftStore }));
+
+      await compiled.invoke({ trigger: 'proactive_plan_change', weekId: WEEK_ID });
+
+      const item = itemStore.list(APPROVER_USER_ID)[0];
+      if (!item) throw new Error('expected exactly one item');
+      expect(item).not.toHaveProperty('draftText');
+      const stored = item.draftId ? draftStore.get(item.draftId) : undefined;
+      expect(stored?.draftText).toBe('a private plan-change draft');
+      expect(stored?.status).toBe('unseen');
+
+      // `getDocument` was never called with a write-shaped argument — it is
+      // a `Pick<..., 'getDocument'>` read call every time; there is no
+      // second, write-capable client anywhere in this invocation for a
+      // plan_approval write to have gone through even by mistake.
+      for (const call of getDocument.mock.calls) {
+        expect(call).toHaveLength(1); // getDocument(id) only — no write payload argument
+      }
+    });
+  });
+});

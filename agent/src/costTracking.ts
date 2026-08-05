@@ -108,9 +108,10 @@ import { fileURLToPath } from 'node:url';
  * model's $0.065/$9,000-token figure describes), `composeStandupDraft` is
  * the deep-tier standup draft (FG-6), `composeBlockerEscalation`
  * (TRO-346/TRO-337 / FG-19) is the cross-project blocker-escalation draft,
- * and `composeRetroDraft` (TRO-335 / FG-17) is the retro-delivery draft —
- * the fifth and, as of this ticket, final model call site in the graph.
- * FLEETGRAPH.MD's cost model also names an "inbox assembly" tier; it has no
+ * `composeRetroDraft` (TRO-335 / FG-17) is the retro-delivery draft, and
+ * `composePlanChangeDraft` (TRO-336 / FG-18) is the plan-change-question
+ * draft — the sixth and, as of this ticket, final model call site in the
+ * graph. FLEETGRAPH.MD's cost model also names an "inbox assembly" tier; it has no
  * value here because it makes no model call in the graph as built today —
  * FG-5's `pollChangeFeed -> resolveMentions -> detectBlockingApprovals ->
  * commitInboxItems` chain has zero model calls (documented in `graph.ts`'s
@@ -132,13 +133,15 @@ import { fileURLToPath } from 'node:url';
  * `isModelInvocationRecord` and been dropped from `readInvocations()`,
  * never counted in any cost report. One source of truth removes that class
  * of drift structurally: adding a site here is now the only place it needs
- * to be added. */
+ * to be added — proven immediately by TRO-336's own `composePlanChangeDraft`
+ * addition, a one-line change to this array with nothing else to update. */
 export const INVOCATION_SITES = [
   'respond',
   'composeAnswer',
   'composeStandupDraft',
   'composeBlockerEscalation',
   'composeRetroDraft',
+  'composePlanChangeDraft',
 ] as const;
 export type InvocationSite = (typeof INVOCATION_SITES)[number];
 
