@@ -21,6 +21,48 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## Agent thinking-orb loading indicator (ad hoc, no Linear ticket — user-requested UI polish)
+
+**What changed.** Replaced the plain `"Thinking…"` / `"Loading your inbox…"` text-only loading states
+in the two components that talk to the real FleetGraph agent — `AgentChatPanel.tsx` (`/api/agent/chat`)
+and `InboxSidebar.tsx` (`/api/agent/inbox`, via `useInboxQuery`) — with the `thinking-orbs` package's
+animated `<ThinkingOrb state="solving" size={20} />`, shown alongside the existing text (not replacing
+it), inside each component's existing `role="status"` live region.
+
+**Scope, deliberately narrow.** Two other loading spinners in `web/` were considered and excluded after
+tracing their actual data source: `QualityAssistant.tsx` calls `/api/ai/analyze-plan`/`/api/ai/analyze-retro`
+— a separate, pre-existing AI feature, not the FleetGraph agent — and `IssueBlockingSection.tsx`'s
+blocks/blocked-by spinner is a plain associations data fetch with no agent computation behind it at all.
+Adding an "agent thinking" indicator to either would misrepresent what's actually happening. Every other
+spinner in `web/` (the many inline `animate-spin` SVGs) is untouched.
+
+**Why this package.** `thinking-orbs@0.2.0` (MIT, verified on the public npm registry before adding):
+zero runtime dependencies beyond the `react`/`react-dom` peer deps already present, ~47KB unpacked
+(the built chunk in `web/dist` measures 14.81 kB / 6.13 kB gzipped — confirmed via a real `pnpm --filter
+@ship/web build`, not estimated). Built-in `prefers-reduced-motion` handling (renders a static frame,
+no animation, confirmed by reading the package's own README rather than assumed), `role="img"` +
+per-state `aria-label` out of the box, and theme auto-detection via `prefers-color-scheme` — which is
+exactly the mechanism Ship's own existing `dark:` Tailwind classes already rely on (`web/tailwind.config.*`
+has no `darkMode: 'class'` override and no theme-toggle JS was found), so no new wiring was needed for
+it to match Ship's existing dark-mode behavior.
+
+**How to run it.** `pnpm --filter @ship/web dev`, open a document, expand "Ask FleetGraph" and submit a
+question, or open the Inbox rail icon while `/api/agent/inbox` is in flight.
+
+**Verified.** `pnpm --filter @ship/web type-check` clean. `pnpm --filter @ship/web build` succeeds (shared
+built first). `pnpm --filter @ship/web lint`: 0 errors; the one warning inside `AgentChatPanel.tsx`
+(`no-misused-promises` on the existing async `handleSubmit` form handler) is pre-existing on `main`,
+confirmed by its match to the identical warning already present in `ApprovalButton.tsx` — this change
+only shifted its line number by one via the new import. `AgentChatPanel.test.tsx` and `InboxSidebar.test.tsx`
+both extended to assert the orb (`role="img"`) actually renders during the loading state and is gone
+once it resolves — not just the pre-existing text assertion — both confirmed passing; full suite (31
+tests across the two files plus `InboxSidebar.contrast.test.tsx`) green.
+
+**Rollback.** `pnpm remove thinking-orbs` in `web/`, revert the two component diffs and their test
+additions. No backend, schema, or data changes — pure frontend, fully reversible.
+
+---
+
 ## TRO-324 — [FG-13] FLEETGRAPH.MD is missing the graph outline, the trace links and the measured cost
 
 **Second of two tickets on branch `feat/pr-g-mvp-cost-instrumentation-and-fleetgraph-docs` (bundle

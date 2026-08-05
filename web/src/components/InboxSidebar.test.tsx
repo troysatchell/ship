@@ -215,10 +215,16 @@ describe('InboxSidebar — degraded states', () => {
     renderInbox();
 
     expect(await screen.findByText(/loading your inbox/i)).toBeInTheDocument();
+    // ThinkingOrb renders with role="img" and its own per-state aria-label
+    // (thinking-orbs package contract) — matched by accessible name, not
+    // just role, so a wrong `state` prop (e.g. a typo) would fail this
+    // assertion instead of passing on role alone (CodeRabbit, PR #124).
+    expect(screen.getByRole('img', { name: /solv/i })).toBeInTheDocument();
 
     resolveFn(jsonResponse(200, { items: [BLOCKING_ITEM] }));
     expect(await screen.findByText('AUTH-12 is waiting on your approval')).toBeInTheDocument();
     expect(screen.queryByText(/loading your inbox/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('img')).not.toBeInTheDocument();
   });
 });
 
