@@ -102,6 +102,15 @@ export interface ShipDocument {
     review_approval?: ApprovalTrackingLike | null;
     [key: string]: unknown;
   };
+  /** Raw `documents.completed_at` column (`schema.sql:140`, "When issue
+   * status first changed to done") — a real top-level column, not a
+   * `properties` key. `GET /api/documents/:id` (`documents.ts`) returns it
+   * unmodified via its own `{ ...doc, ... }` spread (verified by reading
+   * that handler directly, TRO-335 / FG-17), so it round-trips here as an
+   * ISO 8601 string or `null`. Optional/undefined for any document that
+   * predates this field being read (every existing `ShipDocument` producer
+   * in this file's test fixtures) — never fabricated when absent. */
+  completed_at?: string | null;
 }
 
 export interface ShipPerson {
@@ -219,6 +228,22 @@ export interface DocumentListItem {
   updated_at: string;
 }
 
+/** Narrow response shape read off `GET /api/weeks/:id` (TRO-335 / FG-17) —
+ * ONLY `workspace_sprint_start_date`, deliberately excluding every other
+ * field that route returns. MOST IMPORTANTLY it excludes that route's own
+ * `owner`/top-level `owner_id` (computed from `properties.assignee_ids[0]`
+ * — `extractSprintFromRow`, `weeks.ts:499-503`/`weeks.ts:1222` — a DIFFERENT
+ * value than `properties.owner_id`, this file's own module docstring's
+ * documented trap). `retroDraft.ts`'s `gatherWeekDelivery` reads
+ * `success_criteria`/`owner_id`/`sprint_number` from `getDocument`'s raw
+ * `properties` instead, same as every trap-avoiding consumer of this file —
+ * this type exists ONLY to reach the one fact `GET /api/documents/:id`
+ * never returns: the workspace's own sprint-cadence anchor, needed to
+ * compute which calendar days a given week actually spans. */
+export interface ShipWeekDates {
+  workspace_sprint_start_date: string;
+}
+
 /**
  * The on-demand expansion walk's own dependency surface (TRO-318 / FG-7) —
  * a STRICT ADDITION on top of `ShipClientLike`, not a widening of it.
@@ -262,6 +287,24 @@ export type OnDemandShipClientLike = Pick<
  * person's issue list. No existing deep-tier node called this before, so
  * adding it here costs every other `DeepShipClientLike` consumer nothing.
  *
+ * `getReverseAssociations` added (TRO-335 / FG-17) — another STRICT
+ * ADDITION, identical reasoning to `getPeople` above: the retro delivery
+ * chain (`graph.ts`'s `gatherRetroActivity`) needs every issue associated
+ * TO a given week (`relationship_type: 'sprint'`, the reverse direction from
+ * an issue's own forward `blocks`/`project` edges FG-19/FG-7 already read),
+ * which only `getReverseAssociations` exposes — `getAssociations` walks
+ * edges FROM a document, never edges pointing AT one. No existing deep-tier
+ * consumer called this before, so adding it costs every other
+ * `DeepShipClientLike` consumer nothing, same as every prior addition to
+ * this type.
+ *
+ * `getWeekDates` added (TRO-335 / FG-17), same file, same reasoning again —
+ * the retro delivery chain needs the workspace's sprint-cadence anchor to
+ * compute a week's actual calendar window, which `getDocument` alone cannot
+ * provide (verified directly, not assumed: `GET /api/documents/:id` never
+ * joins `workspaces`). See `ShipWeekDates`'s own docstring for why this is
+ * typed to expose only that one fact.
+ *
  * Every method here is a READ. This is deliberate, not incidental: FG-6's
  * hard limits ("never applies an issue transition," "never creates ... any
  * document," "never writes anything that would read as though a person
@@ -272,7 +315,14 @@ export type OnDemandShipClientLike = Pick<
  */
 export type DeepShipClientLike = Pick<
   ShipClient,
-  'getIssuesByAssignee' | 'getChangeFeed' | 'getAssociations' | 'getDocument' | 'listDocuments' | 'getPeople'
+  | 'getIssuesByAssignee'
+  | 'getChangeFeed'
+  | 'getAssociations'
+  | 'getReverseAssociations'
+  | 'getDocument'
+  | 'listDocuments'
+  | 'getPeople'
+  | 'getWeekDates'
 >;
 
 export interface ShipClientOptions {
@@ -392,6 +442,16 @@ export class ShipClient {
       url.searchParams.set('limit', String(limit));
     }
     return this.getJson<DocumentListItem[]>(url.toString());
+  }
+
+  /** `GET /api/weeks/:id` (`weeks.ts`), narrowed to ONLY
+   * `workspace_sprint_start_date` at the type level — see `ShipWeekDates`'s
+   * own docstring for why every other field this route returns (most
+   * importantly its `owner`/`owner_id`) is deliberately excluded. TRO-335 /
+   * FG-17's only consumer: `retroDraft.ts`'s `gatherWeekDelivery`, to
+   * compute which calendar days a week actually spans. */
+  async getWeekDates(weekId: string): Promise<ShipWeekDates> {
+    return this.getJson<ShipWeekDates>(`${this.base}/api/weeks/${weekId}`);
   }
 }
 

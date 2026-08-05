@@ -407,3 +407,33 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   push`/`pop` inside a path matching `Ship-wt-*` would prevent the write instead of merely detecting
   it — worth proposing as a follow-up ticket rather than another lessons.md restatement, since this
   file has now tried restatement five times.
+- 2026-08-05 (TRO-329/PR-E, orchestrator) — **`gate.sh` itself is a snapshot taken at worktree
+  provisioning time — a sibling bundle's own edits to `gate.sh` (not just to application code) do
+  not reach a worktree provisioned before that edit landed on `main`.** TRO-322 (bundle TRO-330,
+  provisioned first) added a `tests:agent` check running `pnpm --filter @ship/agent test`. TRO-329
+  (this bundle) was provisioned earlier and never picked it up, because that change was a commit on
+  TRO-330's own branch, not yet on `main`. The orchestrator ran `gate.sh` on TRO-329's worktree after
+  TRO-335/TRO-336 added `agent/src/__tests__/{retroDraft,planChangeDraft}.test.ts` and the gate
+  reported `verdict: pass` — genuinely, on every check it ran — but **the new agent tests were never
+  executed**, only counted by the static `regression-test` grep. Caught only because the orchestrator
+  independently ran `pnpm --filter @ship/agent test` by hand rather than trusting the gate's own
+  green verdict at face value; it happened to also pass (381/381), but the gate could not have told
+  either way. Same failure shape as the documented e2e-spec-vs-vitest-config gap (`ship-qa` SKILL,
+  "gate's regression-test check can be satisfied by a test the gate never runs") — this is that same
+  class one layer up: **the gate's own coverage of packages, not just of file patterns, can silently
+  fall behind a sibling branch's own gate.sh edits.** When a package's test suite is new to `gate.sh`
+  (agent tests were, this run), independently run that package's test command by hand in every
+  sibling worktree provisioned before the `gate.sh` change reached `main` — do not trust "pass" to
+  mean a check that didn't exist yet in that worktree's copy of the script.
+- 2026-08-05 (TRO-329/PR-E, orchestrator) — **Two more load-flake identities, joining the rule-24
+  set, both surfacing while 3 sibling worktrees ran gate.sh/tests concurrently:**
+  `api/src/routes/search.test.ts` (whole-file failure, one run) and
+  `api/src/routes/documents.test.ts`'s two "moves plan_approval/review_approval back to
+  changed_since_approved" cases (a different run). Both passed standalone per `gate.sh`'s own
+  re-run; the `documents.test.ts` pair's actual error — `TypeError: Invalid value "undefined" for
+  header "x-csrf-token"` — is a test-setup race (a CSRF-token fetch not settled before the next
+  request fired), not a `changed_since_approved` assertion failure, despite that being the exact
+  transition TRO-336 was reading in the same PR — worth naming explicitly because content-adjacency
+  to your own branch's change is a real reason to look closer, not a reason to assume it's real
+  without checking. Confirmed non-blocking by reading the actual stack trace, not just trusting
+  "passed standalone."

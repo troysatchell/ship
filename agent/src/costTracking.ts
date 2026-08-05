@@ -106,19 +106,44 @@ import { fileURLToPath } from 'node:url';
  * on-demand chat path (no expansion), `composeAnswer` is the on-demand path
  * WITH expansion (FG-7, "follows the graph outward" — the tier the cost
  * model's $0.065/$9,000-token figure describes), `composeStandupDraft` is
- * the deep-tier standup draft (FG-6), and `composeBlockerEscalation`
- * (TRO-346/TRO-337 / FG-19) is the cross-project blocker-escalation draft —
- * the fourth and, as of this ticket, final model call site in the graph.
- * FLEETGRAPH.MD's cost model also names "inbox assembly" and "retro draft"
- * tiers; neither has a value here because neither makes a model call in the
- * graph as built today — FG-5's `pollChangeFeed -> resolveMentions ->
- * detectBlockingApprovals -> commitInboxItems` chain has zero model calls
- * (documented in `graph.ts`'s own module docstring), and no retro-draft node
- * exists yet ("Phase 2 ... not fully done", `graph.ts:5-6`). Adding either
- * later costs nothing here: this union just grows, and every aggregation
- * function in this file already groups by whatever site values are actually
- * present in the data. */
-export type InvocationSite = 'respond' | 'composeAnswer' | 'composeStandupDraft' | 'composeBlockerEscalation';
+ * the deep-tier standup draft (FG-6), `composeBlockerEscalation`
+ * (TRO-346/TRO-337 / FG-19) is the cross-project blocker-escalation draft,
+ * `composeRetroDraft` (TRO-335 / FG-17) is the retro-delivery draft, and
+ * `composePlanChangeDraft` (TRO-336 / FG-18) is the plan-change-question
+ * draft — the sixth and, as of this ticket, final model call site in the
+ * graph. FLEETGRAPH.MD's cost model also names an "inbox assembly" tier; it has no
+ * value here because it makes no model call in the graph as built today —
+ * FG-5's `pollChangeFeed -> resolveMentions -> detectBlockingApprovals ->
+ * commitInboxItems` chain has zero model calls (documented in `graph.ts`'s
+ * own module docstring). Adding one later costs nothing here: this union
+ * just grows, and every aggregation function in this file already groups by
+ * whatever site values are actually present in the data — exactly what
+ * happened when `composeRetroDraft` itself was added, predicted verbatim by
+ * this docstring's own prior revision ("Adding either later costs nothing
+ * here: this union just grows").
+ *
+ * Declared as a runtime array first, then narrowed to a type (CodeRabbit,
+ * TRO-335 PR review) — `isModelInvocationRecord` below needs the actual
+ * VALUES at runtime to validate a persisted JSONL line's `node` field, and
+ * a bare `type InvocationSite = 'a' | 'b' | ...` has no runtime
+ * representation to check against. Before this change that validator kept
+ * its own separate hardcoded literal list, which `composeRetroDraft` itself
+ * was originally added to `InvocationSite` WITHOUT also adding there —
+ * every persisted `composeRetroDraft` record would have silently failed
+ * `isModelInvocationRecord` and been dropped from `readInvocations()`,
+ * never counted in any cost report. One source of truth removes that class
+ * of drift structurally: adding a site here is now the only place it needs
+ * to be added — proven immediately by TRO-336's own `composePlanChangeDraft`
+ * addition, a one-line change to this array with nothing else to update. */
+export const INVOCATION_SITES = [
+  'respond',
+  'composeAnswer',
+  'composeStandupDraft',
+  'composeBlockerEscalation',
+  'composeRetroDraft',
+  'composePlanChangeDraft',
+] as const;
+export type InvocationSite = (typeof INVOCATION_SITES)[number];
 
 /** Real usage as `ChatAnthropic`'s own response carries it
  * (`@langchain/core`'s `UsageMetadata`) — kept minimal to exactly what this
@@ -295,15 +320,16 @@ function isNonNegativeSafeInteger(value: unknown): value is number {
  * type guard, never `as`" posture as `graph.ts`'s `hasStringText` and
  * `server.ts`'s `isValidChatRequestBody` (lessons.md #21: type the
  * boundary a JSON parse hands you). */
+function isInvocationSite(value: unknown): value is InvocationSite {
+  return typeof value === 'string' && (INVOCATION_SITES as readonly string[]).includes(value);
+}
+
 function isModelInvocationRecord(value: unknown): value is ModelInvocationRecord {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   return (
     typeof v.timestamp === 'string' &&
-    (v.node === 'respond' ||
-      v.node === 'composeAnswer' ||
-      v.node === 'composeStandupDraft' ||
-      v.node === 'composeBlockerEscalation') &&
+    isInvocationSite(v.node) &&
     typeof v.trigger === 'string' &&
     typeof v.model === 'string' &&
     isNonNegativeSafeInteger(v.inputTokens) &&
