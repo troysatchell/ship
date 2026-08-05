@@ -163,11 +163,18 @@ Roles are derived from structure, never read from a field:
 
 **Done (TRO-324 / FG-13, 2026-08-05).** Every node, edge and conditional below was read directly
 off the compiled `StateGraph` in `agent/src/graph.ts` — its `.addNode`/`.addEdge`/
-`.addConditionalEdges` calls, not the design brief — and cross-checked against the real LangSmith
-traces in the "Execution Traces" section immediately below, which show the same node sequences
-actually executing. Where the diagram disagrees with the summary bullets that used to stand in this
-section's place, that disagreement is called out explicitly rather than smoothed over — see the two
-notes after the diagram.
+`.addConditionalEdges` calls, not the design brief. That source-level verification covers the whole
+diagram, including the `proactive_deep` chain. Trace-level verification is narrower: only the bare
+on-demand chat, on-demand expansion, and proactive fast/steady chains are additionally cross-checked
+against the real LangSmith traces in the "Execution Traces" section immediately below, which show the
+same node sequences actually executing for those three paths. The `proactive_deep` chain
+(`gatherStandupActivity -> composeStandupDraft -> commitStandupDraft`) is verified against source
+only, the same as the rest of the diagram — no real trace exists for it, because (per FG-21's own
+finding, restated in this file's Cost Analysis section) `composeStandupDraft` still has zero real
+invocations: no scheduler exists yet to trigger `proactive_deep` for a real person at all. Where the
+diagram disagrees with the summary bullets that used to stand in this section's place, that
+disagreement is called out explicitly rather than smoothed over — see the two notes after the
+diagram.
 
 ```mermaid
 flowchart TD
@@ -889,6 +896,17 @@ where an event landing just after a tick starts waits up to a full interval for 
 DERIVED ~60s bound above (not observed directly) covers that case. Both numbers are comfortably
 under the 5-minute bar; only the top one was actually measured, and the two are never presented with
 the same confidence.
+
+**Scope of the 5,185ms observed number, stated explicitly.** It covers steady-tier polling
+(`proactive_steady`, real `pollChangeFeed -> resolveMentions -> ... -> commitInboxItems` graph
+invocations) through in-process `ItemStore` insertion specifically — event write to the mention item
+being present in that in-memory store, and nothing past it. It does NOT exercise: the `proactive_fast`
+poll hook (a different cadence, never invoked by this measurement), any production persistence adapter
+for `ItemStore` (this run's store is the plain in-memory implementation, constructed fresh inside the
+script), the agent's public HTTP API (this script calls `buildGraph`/`graph.invoke` directly, never
+`POST /chat` or any other agent route), or the UI surfacing the item to a real user (no browser, no
+inbox render, no human ever looked at it in this run). Each of those is a real, separate hop a
+production deployment would add on top of this number, none of them measured here.
 
 ### Production Cost Projections
 

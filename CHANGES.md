@@ -101,6 +101,7 @@ per the brief's own instruction).
 **How to reproduce.** From this worktree, with `agent/.env.local` staged (`set -a; source
 agent/.env.local; set +a`) and this worktree's own local API running
 (`pnpm --filter @ship/api dev`, port from `.factory-env`):
+
 ```bash
 pnpm --filter @ship/agent trace:invoke-on-demand -- <seedDocumentId> "<question>"
 pnpm --filter @ship/agent trace:invoke-proactive -- <seedDocumentId> "<Full Name>"
@@ -112,8 +113,15 @@ script (`trace-invoke-proactive.ts`) matching the existing, explicitly-not-teste
 `trace-invoke.ts`/`trace-invoke-on-demand.ts` precedent (both real, live-API-calling one-off tools
 deliberately excluded from `pnpm test`). No existing typed code was modified — only `agent/package.json`
 (one new script alias, data only) and `agent/.env.local` (untracked). `pnpm --filter @ship/agent test`
-(269/269) and `pnpm --filter @ship/agent type-check`/`lint` all pass unchanged from before this
-ticket, confirming nothing behavioral shifted.
+(269/269) and `pnpm --filter @ship/agent type-check`/`lint` all pass unchanged from before this ticket —
+**that proves only that the existing, already-covered code paths did not regress.** `pnpm test`
+deliberately excludes `trace-invoke-proactive.ts` (same posture as its two siblings), so the 269/269
+count says nothing about whether the new script itself actually works — it is not evidence for the
+new utility, only evidence against a regression elsewhere. What DOES validate the new script is a real,
+timed execution of it: the detection-latency measurement in this file's Cost Analysis section (**5,185ms
+observed**, a real comment write through to a real `ItemStore` insertion, via real polling
+`proactive_steady` graph invocations against a live local Ship API, not a mock) — that run is the actual
+proof `trace-invoke-proactive.ts` works, produced by using it for its real purpose, not by a test count.
 
 **How to roll it back.** Revert this commit (or the range of commits carrying TRO-324's changes).
 No schema change, no migration. `FLEETGRAPH.MD`'s Graph Diagram/Execution Traces sections and the
