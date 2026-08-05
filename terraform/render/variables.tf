@@ -257,6 +257,16 @@ variable "agent_internal_secret" {
   EOT
   type        = string
   sensitive   = true
+
+  # CodeRabbit (TRO-347 PR review): reject an empty string at plan time
+  # rather than deploying an agent that fails closed for every legitimate
+  # caller while looking like a successful apply. `length(var....) > 0`
+  # rather than `!= ""` so accidental leading/trailing whitespace-only input
+  # (e.g. a copy-paste artifact) is caught too.
+  validation {
+    condition     = length(trimspace(var.agent_internal_secret)) > 0
+    error_message = "agent_internal_secret must not be empty (or whitespace-only)."
+  }
 }
 
 variable "agent_api_base_url" {

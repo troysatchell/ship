@@ -36,13 +36,21 @@ suppresses what `terraform plan` *displays* as a diff, not what the provider act
 documented dead end (`.claude/skills/ship-factory/references/lessons.md`, 2026-08-04 entry).
 
 **The workaround, in place since 2026-08-04 and still current:** apply changes to the live agent
-service via the Render REST API directly (`PUT /v1/services/{id}/env-vars/{key}`, or the
-equivalent endpoint for the field being changed), not `terraform apply`. This Terraform config
-stays the *record* of intent for the agent service — every field it declares is what the service
-is supposed to look like — but for this one resource, on this one plan, the REST API call is what
-actually executes the change. `terraform plan` against `render_web_service.agent` will keep
-showing a diff for anything set this way until the upstream provider bug is fixed (a plan showing
-"drift" here is expected, not a sign the API call failed).
+service via the Render REST API directly, not `terraform apply`. Render's API exposes both a
+per-key upsert (`PUT /v1/services/{id}/env-vars/{key}` — "add or update a particular environment
+variable") and a bulk replace (`PUT /v1/services/{id}/env-vars` — replaces the *entire* list, so an
+omitted key is deleted); the per-key form is what this repo has actually used against live
+infrastructure and verified working (`CHANGES.md`'s TRO-341 follow-up entry:
+`PUT /v1/services/{id}/env-vars/SHIP_API_TOKEN`, confirmed via `/health`/`/ready` 200 afterward).
+**An env-var PUT alone does not restart the running process** — that same entry needed a follow-up
+manual redeploy (`POST /v1/services/{id}/deploys`, the same call FLEETGRAPH.MD's "Deployment
+model" documents for the unrelated `auto_deploy` gap) before the new value took effect. This
+Terraform config stays the *record* of intent for the agent service — every field it declares is
+what the service is supposed to look like — but for this one resource, on this one plan, the REST
+API call (env-var PUT *and* the redeploy) is what actually executes the change. `terraform plan`
+against `render_web_service.agent` will keep showing a diff for anything set this way until the
+upstream provider bug is fixed (a plan showing "drift" here is expected, not a sign the API call
+failed).
 
 **Concretely, this is why `AGENT_INTERNAL_SECRET` (`agent_service.tf`'s copy) has to be applied
 this way today** ([TRO-347](https://linear.app/troysatchell/issue/TRO-347)) — even though the

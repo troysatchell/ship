@@ -87,10 +87,45 @@ terraform plan -input=false \
 
 **Rollback.** Revert this commit's changes to `terraform/render/variables.tf`,
 `terraform/render/agent_service.tf`, `terraform/render/web_service.tf`,
-`terraform/render/terraform.tfvars.example`, and `terraform/render/README.md`. No resource
-recreation is implied by the revert alone — Terraform state (if ever applied) would show the two
-env var entries removed from each service's `env_vars` map on the next `apply`/API call; the live
-values set out-of-band via the Render REST API are unaffected by a config-only revert either way.
+`terraform/render/terraform.tfvars.example`, and `terraform/render/README.md`. Reverting this
+config alone changes neither the live Render infrastructure nor any Terraform state file — it is a
+source-only change until something re-applies it. What "re-applies it" means differs by service:
+for `ship` (`render_web_service.ship`), a plain `terraform apply` after the revert would update
+both Terraform state and the live service, removing the two agent env vars for real. For `agent`
+(`render_web_service.agent`), the free-tier provider bug documented in `README.md`'s "Known
+provider bug" section means `terraform apply` cannot reach that resource at all — actually removing
+the vars from the live agent needs the same Render REST API workaround (`DELETE
+/v1/services/{id}/env-vars/{key}`, or the bulk `PUT` with the keys omitted) plus a follow-up
+redeploy, not `terraform apply`, until the upstream bug is fixed.
+
+**CodeRabbit triage (this PR's review, 4 findings; full detail in `.factory/coderabbit.json`):**
+1. *Major, `variables.tf`* — "remove `agent_api_base_url`'s hardcoded default so a clean apply
+   can't deploy Ship with a stale agent endpoint." **Declined, reasoned.** The identical tradeoff
+   already exists for `cors_origin` in this same file (a default that reproduces the current live
+   URL, explicitly documented as needing a manual update after any apply that generates a new one)
+   — `agent_api_base_url` can't be derived from `render_web_service.agent.url` without creating a
+   two-resource dependency cycle with `agent_service.tf`'s `SHIP_API_BASE_URL` (see that variable's
+   description). Making only the new variable required, while leaving the pre-existing `cors_origin`
+   on the default pattern, would be an inconsistent, unrequested design change to an already-accepted
+   convention — worth a follow-up ticket to reconsider both together, not a one-off fix here.
+2. *Minor, `CHANGES.md`* — clarify that a config-only revert doesn't touch live infra/state, and
+   that `ship` vs. `agent` need different re-apply paths. **Applied** — see the rewritten paragraph
+   above.
+3. *Major, `README.md`* — claimed the per-key `PUT /v1/services/{id}/env-vars/{key}` endpoint is
+   wrong/should be the bulk `PUT /v1/services/{id}/env-vars` instead. **Declined for the endpoint
+   claim, verified false**: Render's own public API reference (`https://api-docs.render.com/`)
+   lists both a per-key "Add or update a particular environment variable for a particular service"
+   operation and a separate bulk "Replace all environment variables" operation as distinct,
+   supported endpoints — and this repo's own history already used the per-key form successfully
+   against live infrastructure (`CHANGES.md`'s TRO-341 follow-up entry above: `PUT
+   /v1/services/{id}/env-vars/SHIP_API_TOKEN`, verified live via `/health`/`/ready` 200 afterward).
+   **The finding did surface one real, valid gap**, also visible in that same TRO-341 entry: an
+   env-var PUT alone doesn't restart the running process, so a follow-up deploy trigger is required
+   too. `README.md`'s "Known provider bug" section didn't mention that — fixed in a follow-up
+   commit on this branch.
+4. *Minor, `variables.tf`* — add a `validation` block rejecting an empty `agent_internal_secret`.
+   **Applied** (with `trimspace` so whitespace-only input is also caught, not just the exact empty
+   string) — see the commit adding it.
 
 ---
 
