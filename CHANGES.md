@@ -21,6 +21,149 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-322 — [FG-12] Every agent behaviour needs a regression test and CI must roll back a bad deploy
+
+**Scope, verified before writing anything.** The brief names six behaviours: mentions/blocking-
+approval detection, on-demand chat expansion, standup drafts, blocker fan-out, retro drafts, and
+scope drift. Read every existing agent test file first rather than assuming a gap: mentions/
+blocking-approval (`mentions.test.ts`, `proactive.test.ts`, `proactivePoll.test.ts`), on-demand
+expansion (`expansion.test.ts`), standup drafts (`standupDraft.test.ts`), and blocker fan-out
+(`blockerFanout.test.ts`, `roles.test.ts`) already have real, substantial coverage — confirmed
+directly in `graph.test.ts`, which drives `proactive_escalation` (blocker fan-out) through the
+actual compiled graph across 6 distinct scenarios (cross-project fan-out, missing-link degrade,
+same-reporting-line no-escalation, single-project skip, the never-sent proof), not just at the
+`blockerFanout.ts`/`roles.ts` unit level. **No new unit-level regression test was added for these
+four** — doing so would duplicate existing, real coverage, which the ticket's own contract says not
+to do. **Retro drafts (TRO-335/FG-17) and scope drift (TRO-336/FG-18) are both still `In Progress`
+in sibling worktrees as of this ticket, not `Done`, and neither has any code in `agent/src` yet**
+(verified: no `retroDraft.ts`, no scope-drift graph node, no `grep` hits for "scope drift" or
+"material change" in `agent/src`). The brief conditions retro drafts explicitly on TRO-335 landing;
+scope drift has no code to test either, for the identical reason, so it is treated the same way —
+both are out of scope for this ticket and will need their own regression tests once their tickets
+land.
+
+**What this ticket actually had to build: the E2E/CI/rollback layer, which had no prior coverage
+at all.**
+
+1. **The two required E2E flows did not exist, and neither did any e2e job in CI on either
+   platform** (`.github/workflows/ci.yml`/`.gitlab-ci.yml` had zero `playwright test` invocations —
+   confirmed by grep — despite `playwright.config.ts`'s reporter already branching on
+   `process.env.CI`, i.e. the harness was CI-ready but nothing ever called it).
+2. **The FLEETGRAPH.MD-documented rollback gap** — a deploy that boots (`/health` 200) but is
+   missing config or can't reach Ship still gets promoted, because Render's platform check watches
+   `/health`, never `/ready` — had no corrective mechanism, only a description of the gap.
+
+**1. New regression tests (agent package, red-before-green).**
+- `agent/src/deployReadiness.ts` + `agent/src/__tests__/deployReadiness.test.ts` (10 cases). Pure
+  decision logic: a readiness-poll window warrants a corrective action only when **every** sample
+  failed (sustained), never on one failure that recovers (FLEETGRAPH.MD's own transient-Ship-blip
+  caveat). Proven red-before-green by deliberately changing `failureCount === sampleCount` to
+  `failureCount > 0` and re-running: the two transient-blip tests failed with real assertion errors
+  (`expected true to be false`) for exactly the reason they exist to guard; reverted, all 10 green
+  again.
+- `agent/src/scripts/check-readiness-and-rollback.ts` + `agent/src/__tests__/
+  check-readiness-and-rollback.test.ts` (9 cases) — the CLI wrapper (arg parsing,
+  `findPreviousLiveDeploy`'s "most recent other live deploy" selection).
+
+**2. Both required E2E flows, new, running locally and wired into CI on both platforms.**
+- `e2e/agent-detection-latency.spec.ts` — posts a real `@Bob Martinez` comment via the real API,
+  then polls the real agent process's real `GET /api/agent/inbox` (through api/'s real proxy) until
+  the mention appears, asserting elapsed time against FLEETGRAPH.MD's own "< 5 minutes" bar as a
+  hard `expect()`. Local run: **observed 7,751ms**.
+- `e2e/agent-chat-grounded-response.spec.ts` — drives the real FleetGraph pill/chat panel in a real
+  browser against a real running web+api+agent stack, and asserts the rendered answer names its
+  seed document in a "Sources" list — `citedSources` is built structurally from the documents the
+  expansion walk actually visited (`finalizeExpansion`, `graph.ts`), independent of the model's own
+  text, so this proves real grounding even with a fake model response.
+- **New fixture, `e2e/fixtures/agentEnv.ts`, deliberately NOT `isolated-env.ts`'s testcontainers
+  mechanism.** `isolated-env.ts` needs a Docker daemon reachable from inside the test process, which
+  works on GitHub's `ubuntu-latest` runner but not on this project's GitLab shared runner (confirmed
+  separately — see the rollback section below). `agentEnv.ts` instead expects a Postgres reachable
+  via `DATABASE_URL`/`E2E_AGENT_DATABASE_URL` (a plain `services:` container in CI, the same native
+  mechanism `verify` already uses on both platforms) and creates its own randomly-named scratch
+  database on that server per worker (`createScratchDatabase`, cleaned up on teardown) — needed
+  because the two spec files' worker-scoped fixture setup does not reliably share one worker
+  process, and re-running `seedMinimalTestData` against a database that already has it throws a
+  real `duplicate key value violates unique constraint "users_email_key"` (caught by an actual first
+  trial run, not anticipated in the abstract). `runMigrations`/`seedMinimalTestData` are now exported
+  from `isolated-env.ts` so both fixtures share one seed definition instead of forking a second copy.
+  Mints real per-user Ship API tokens (CSRF → login → `POST /api/api-tokens`) for the agent's own
+  outbound calls, matching FLEETGRAPH.MD's "no service account" design.
+- `agent/src/scripts/e2e-server.ts` — mirrors `index.ts`'s real wiring (real `ShipClient`, real
+  `ItemStore`/`DraftStore`, the real compiled graph, the real proactive poller) with exactly one
+  substitution: a stable, deterministic fake in place of `ChatAnthropic`, per the ticket's own
+  mocking rule. `citedSources` staying real (see above) is what keeps this a genuine grounding proof
+  rather than a weakened one.
+- CI wiring: a new `e2e-agent` job in both `.github/workflows/ci.yml` and `.gitlab-ci.yml`, gated on
+  `verify` passing first, using a plain `postgres:15-alpine` service (not testcontainers), building
+  `shared`+`agent` (api/web are already built by `e2e/global-setup.ts`, which every `playwright
+  test` invocation runs unconditionally), then `playwright test e2e/agent-detection-latency.spec.ts
+  e2e/agent-chat-grounded-response.spec.ts --workers=1`.
+- `scripts/factory/gate.sh` now also runs `pnpm --filter @ship/agent test` (previously only api/web)
+  — CI already treated agent tests as a hard gate; the local eval had no equivalent check.
+- **Found and fixed three real bugs while proving the E2E specs actually pass** (not just written
+  and assumed correct): (a) the probe document's original title, "FleetGraph E2E Probe Issue",
+  collided with the chat pill's own accessible name ("FleetGraph"), so
+  `getByRole('button', { name: /FleetGraph/ })` matched two elements — renamed to "TRO-322 E2E
+  Probe Issue"; (b) `page.getByRole('alert')`/`getByRole('status')` were unscoped, and the document
+  sidebar renders its own unrelated alert/status regions per row — scoped both to the chat region
+  locator; (c) chaining `.getByText(title)` off an already-filtered `<ol>` locator resolved to every
+  `<li>` in a multi-source list, not just the target one — replaced with `toContainText` on the
+  already-resolved element. All three were caught by actually running the specs against the real
+  stack (`/e2e-test-runner` conventions, backgrounded, `test-results/summary.json` polled), not by
+  inspection.
+
+**3. Automatic rollback — demonstrated, both layers, with real evidence.** Full detail (commands,
+exact output, the GitLab finding) is in `FLEETGRAPH.MD`'s "Rollback trigger and procedure" section,
+under the new TRO-322 subsection. Summary:
+- **Layer 1 (CI gates merge).** A throwaway, never-merged branch with one deliberate type error was
+  pushed as PR #131 (GitHub) and MR !1 (GitLab), then closed once evidence was captured, never
+  merged. **GitHub:** the `verify` job failed in 44s; `mergeStateStatus: BLOCKED`. **GitLab — a
+  real, previously-undiscovered gap:** the pipeline never started (stuck `pending` against an
+  online, idle runner) because that runner is `access_level: ref_protected` and an MR pipeline runs
+  against an unprotected ref — confirmed this was the **first-ever** `merge_request_event` pipeline
+  in the project's history (every prior pipeline: `source: push`, `ref: main`). The MR still could
+  not be merged (`detailed_merge_status: ci_still_running`), so the prevention property holds in
+  effect, but GitLab CI is not actually gating merge requests on this project today, for any branch
+  — filed as a finding for a follow-up ticket, not fixed here (the runner setting is instance-level,
+  outside this project's or this repo's control).
+- **Layer 2 (the "boots but broken" gap FLEETGRAPH.MD names as uncovered).** Reproduced live with
+  two real local `agent/src/index.ts` processes — one pointed at an unreachable Ship, one at a
+  reachable stub — confirming both return `/health` → 200 while only the broken one returns `/ready`
+  → 503. `check-readiness-and-rollback.ts` (dry run) correctly distinguished them: sustained failure
+  + exit 2 on the broken instance, healthy + exit 0 on the working one. **Not wired to fire
+  automatically against the live `ship`/`ship-agent` Render services** — that needs `RENDER_API_KEY`
+  in a real scheduled trigger, an outward-facing, credential-bearing change this factory reserves
+  for explicit human sign-off. Recommendation (in FLEETGRAPH.MD): schedule this script rather than
+  repointing Render's `health_check_path` at `/ready`, which would trade the current gap for false
+  demotions during any brief, healthy Ship outage.
+
+**How to run it.**
+```
+# Agent unit tests (deployReadiness + check-readiness-and-rollback + everything pre-existing):
+source .factory-env
+pnpm --filter @ship/agent test
+
+# The two E2E flows (use /e2e-test-runner conventions — never foreground pnpm test:e2e):
+E2E_AGENT_DATABASE_URL=<a reachable Postgres, distinct from your worktree's own DATABASE_URL> \
+  pnpm exec playwright test e2e/agent-detection-latency.spec.ts e2e/agent-chat-grounded-response.spec.ts --workers=1
+
+# The rollback CLI, dry run, against any real /ready URL:
+pnpm --filter @ship/agent check:readiness -- --url https://ship-agent-t0zy.onrender.com/ready --attempts 3 --interval-ms 30000
+```
+
+**How to roll it back.** Revert this commit. The two new CI jobs (`e2e-agent` on both platforms)
+are additive stages that do not touch `verify`/`build-image`/`image-build`; removing them returns
+CI to its pre-TRO-322 shape with no other job depending on them (`needs: verify`, nothing needs
+`e2e-agent`). `agent/src/deployReadiness.ts` and `check-readiness-and-rollback.ts` are net-new,
+unused by production `index.ts`, and safe to delete outright. `e2e/fixtures/agentEnv.ts` and
+`agent/src/scripts/e2e-server.ts` are test-only and never imported by production code.
+`isolated-env.ts`'s two newly-exported functions (`runMigrations`, `seedMinimalTestData`) are a
+pure visibility widening (`function` → `export function`, no behavior change) — reverting them only
+breaks `agentEnv.ts`'s import, which reverts in the same commit anyway.
+
+---
+
 ## TRO-345 — FG: Test Cases trace links blocked — TC1/TC3 seed fixtures silently no-op against the graded DB
 
 **Scope note.** This ticket names three items; only #1 (the code fix) is this entry's scope. #2
