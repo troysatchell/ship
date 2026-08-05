@@ -23,6 +23,10 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ## TRO-322 — [FG-12] Every agent behaviour needs a regression test and CI must roll back a bad deploy
 
+**Bundle.** First of two sub-issues in bundle TRO-330 ([PR-F] EPIC — "one branch, one PR, one
+CodeRabbit review"). The second, TRO-338 (FG-20, the golden set), is dispatched separately after
+this ticket's work is gated — not attempted here.
+
 **Scope, verified before writing anything.** The brief names six behaviours: mentions/blocking-
 approval detection, on-demand chat expansion, standup drafts, blocker fan-out, retro drafts, and
 scope drift. Read every existing agent test file first rather than assuming a gap: mentions/
