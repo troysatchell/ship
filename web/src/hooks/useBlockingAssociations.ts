@@ -114,38 +114,31 @@ export function useInvalidateBlockingAssociations(issueId: string) {
 
 export type AddBlocksResult = { ok: true } | { ok: false; message: string };
 
+/** Shape of the error body `POST /:id/associations` sends on a 409. */
+interface AddAssociationErrorBody {
+  error?: string;
+}
+
 /**
- * The message shown when adding a `blocks` edge fails.
+ * The message shown when adding a `blocks` edge fails because it would close
+ * a cycle.
  *
- * Why this is the message used for ANY non-2xx from the add call (not just
- * ones that mention "circular" — that word never reaches the client, see
- * below): `POST /:id/associations` (api/src/routes/associations.ts:97-146)
- * already returns a specific 400 for the two other rejectable cases before
- * the INSERT ever runs — self-reference (line 126-128) and a missing
- * related document (line 121-123) — and the INSERT itself upserts on
- * conflict rather than erroring on a duplicate (line 134). Read in full,
- * the only INSERT-time failure left on this route is the
+ * `POST /:id/associations` (api/src/routes/associations.ts:97-155) already
+ * returns a specific 400 for the two other rejectable cases before the
+ * INSERT ever runs — self-reference and a missing related document — and the
+ * INSERT itself upserts on conflict rather than erroring on a duplicate. The
+ * only INSERT-time failure left on this route is the
  * `prevent_circular_association` trigger (migration
- * 040_prevent_circular_associations.sql), which raises a Postgres exception
- * that the route's catch-all (line 142-144) swallows into a bare
- * `{ error: 'Failed to create association' }` 500 — the *raw* trigger text
- * ("Circular blocks reference detected: document <id> is already reachable
- * from <id> via this relationship type") never leaves the server; it is
- * only ever `console.error`'d. Observed directly by running this exact
- * sequence (A blocks B, then POST B blocks A) against a real Express app +
- * real Postgres trigger: the second request came back `500
- * {"error":"Failed to create association"}`, with the RAISE EXCEPTION text
- * visible only in the server-side stderr capture, never in the response
- * body. So a 500 here is a DERIVED inference from control flow (every other
- * rejection path is already a 4xx) that it is the cycle guard, not a
- * message-text match against Postgres output the client never receives —
- * and translating the already-generic, uninformative 500 into this
- * specific, readable sentence is exactly the gap this ticket closes.
+ * 040_prevent_circular_associations.sql). The route now recognizes that
+ * trigger's distinguishing message text server-side and maps it to a
+ * dedicated `409 {"error": "CIRCULAR_ASSOCIATION"}` (TRO-344), so this
+ * message is shown only when that specific code comes back — no longer
+ * inferred from "any 500 on this route", which is what this ticket replaced.
  */
 export const CIRCULAR_BLOCKS_MESSAGE =
   "Couldn't add that — it would create a circular blocking relationship (this issue would end up blocking itself through a chain of dependencies).";
 
-const GENERIC_ADD_FAILURE_MESSAGE = "Couldn't add this blocking relationship. Please try again.";
+export const GENERIC_ADD_FAILURE_MESSAGE = "Couldn't add this blocking relationship. Please try again.";
 
 /** POST sourceId blocks targetId. Never throws — always resolves to a result. */
 export async function addBlocksEdge(sourceId: string, targetId: string): Promise<AddBlocksResult> {
@@ -157,14 +150,18 @@ export async function addBlocksEdge(sourceId: string, targetId: string): Promise
     if (res.ok) {
       return { ok: true };
     }
-    if (res.status === 500) {
-      return { ok: false, message: CIRCULAR_BLOCKS_MESSAGE };
+    if (res.status === 409) {
+      const body = (await res.json()) as AddAssociationErrorBody;
+      if (body.error === 'CIRCULAR_ASSOCIATION') {
+        return { ok: false, message: CIRCULAR_BLOCKS_MESSAGE };
+      }
     }
-    // 400 (self-reference / invalid input) and 404 (document not
-    // found/inaccessible) already carry a reasonably specific `error`
-    // string of their own server-side, but neither is guaranteed to be
-    // human-readable on its own (e.g. "Invalid input") — fall back to a
-    // generic, still-readable message rather than surfacing the raw body.
+    // 400 (self-reference / invalid input), 404 (document not
+    // found/inaccessible), and any other non-cycle failure (including a
+    // bare 500) already carry a reasonably specific `error` string of their
+    // own server-side, but none is guaranteed to be human-readable on its
+    // own (e.g. "Invalid input") — fall back to a generic, still-readable
+    // message rather than surfacing the raw body.
     return { ok: false, message: GENERIC_ADD_FAILURE_MESSAGE };
   } catch {
     return { ok: false, message: GENERIC_ADD_FAILURE_MESSAGE };
