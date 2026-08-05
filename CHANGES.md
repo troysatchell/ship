@@ -74,17 +74,20 @@ hard reload with a client-side session refresh) and would touch `AdminDashboard.
 finding's named scope (`useBlockingAssociations.ts`/`useInboxQuery.ts`/`useAuth.tsx`). Flagging as a
 follow-up rather than fixing here to avoid drive-by scope creep.
 
-**Regression test — `web/src/hooks/useAuth.test.tsx` (new), 2 cases.** Drives the real
+**Regression test — `web/src/hooks/useAuth.test.tsx` (new), 3 cases.** Drives the real
 `AuthProvider`/`useAuth()` against the app's actual `queryClient` singleton (same pattern as
 `useDocumentWriteStatus.test.tsx`) plus the real `useInboxQuery` hook (CodeRabbit's own suggested
-regression case, and the ticket's "more severe" of the two originally-flagged instances). Both cases
+regression case, and the ticket's "more severe" of the two originally-flagged instances). All three cases
 match the ticket's own proof shape: populate the cache under one identity, transition to another via the
 real `login`/`logout`/`endImpersonation` functions, then mount a fresh `useInboxQuery()` and assert a
 second `apiGet` call fires (a genuine fetch) returning the new identity's mocked data — not a cache hit
 silently still holding the previous identity's item (`useInboxQuery`'s 30s `staleTime` is what makes a
 cache hit the observable, silent-looking bug otherwise).
 1. `does not serve user A's cached data after logout + login as user B` — the ticket's exact scenario.
-2. `does not serve the impersonated user's cached data once impersonation ends` — the third transition,
+2. `clears user A's cached data on a direct login as user B with no intervening logout` (CodeRabbit,
+   PR #120 follow-up) — isolates `login()`'s own `clear()` call from `logout()`'s, added after CodeRabbit
+   flagged that the first two cases couldn't tell them apart.
+3. `does not serve the impersonated user's cached data once impersonation ends` — the third transition,
    through `endImpersonation`.
 
 **Confirmed failing for the right reason before the fix.** Restored the pre-fix `useAuth.tsx` from `git
