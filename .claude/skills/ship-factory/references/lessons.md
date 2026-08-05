@@ -425,3 +425,15 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   (agent tests were, this run), independently run that package's test command by hand in every
   sibling worktree provisioned before the `gate.sh` change reached `main` — do not trust "pass" to
   mean a check that didn't exist yet in that worktree's copy of the script.
+- 2026-08-05 (TRO-329/PR-E, orchestrator) — **Two more load-flake identities, joining the rule-24
+  set, both surfacing while 3 sibling worktrees ran gate.sh/tests concurrently:**
+  `api/src/routes/search.test.ts` (whole-file failure, one run) and
+  `api/src/routes/documents.test.ts`'s two "moves plan_approval/review_approval back to
+  changed_since_approved" cases (a different run). Both passed standalone per `gate.sh`'s own
+  re-run; the `documents.test.ts` pair's actual error — `TypeError: Invalid value "undefined" for
+  header "x-csrf-token"` — is a test-setup race (a CSRF-token fetch not settled before the next
+  request fired), not a `changed_since_approved` assertion failure, despite that being the exact
+  transition TRO-336 was reading in the same PR — worth naming explicitly because content-adjacency
+  to your own branch's change is a real reason to look closer, not a reason to assume it's real
+  without checking. Confirmed non-blocking by reading the actual stack trace, not just trusting
+  "passed standalone."

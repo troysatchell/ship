@@ -50,3 +50,4 @@
 {"ticket":"TRO-343","attempt":1,"verdict":"pass","crFindings":1,"crFixNow":1,"crNewTickets":0,"crDismissed":0,"ts":"2026-08-05T17:38:00Z"}
 {"ticket":"TRO-335","bundle":"TRO-329","attempt":1,"verdict":"pass","note":"found real date-window overcounting bug; 8 CodeRabbit findings triaged","ts":"2026-08-05T17:56:00Z"}
 {"ticket":"TRO-336","bundle":"TRO-329","attempt":1,"verdict":"pass","note":"empirically disproved fixed-threshold similarity approach before building; 13 CodeRabbit findings (both TRO-335/336) triaged","ts":"2026-08-05T18:50:00Z"}
+{"ticket":"TRO-329","attempt":2,"verdict":"fail","failedGates":["tests:api"],"note":"orchestrator-overridden: 2 load-sensitive flake identities (search.test.ts, documents.test.ts CSRF-race pair), both passed standalone, non-blocking per rule-24 class, confirmed via actual stack trace not just re-run","ts":"2026-08-05T19:05:00Z"}
