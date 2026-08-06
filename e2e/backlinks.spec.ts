@@ -30,14 +30,18 @@ async function createNewDocument(page: Page) {
 async function setDocumentTitle(page: Page, title: string) {
   const titleInput = page.getByPlaceholder('Untitled')
   await expect(titleInput).toBeVisible({ timeout: 5000 })
-  await titleInput.fill(title)
-  // The PATCH response itself confirms the server has the new title - no
-  // further wait is needed before whatever the caller does next (TRO-310;
-  // the extra fixed 500ms here was dead time after a real network wait).
-  await page.waitForResponse(
+  // Register the response listener BEFORE fill() triggers the PATCH - awaiting
+  // fill() first risks the response arriving before waitForResponse attaches,
+  // which would then hang on a future PATCH that never comes (CodeRabbit,
+  // PR review, TRO-310). The PATCH response itself confirms the server has
+  // the new title - no further wait is needed before whatever the caller
+  // does next.
+  const titlePatched = page.waitForResponse(
     resp => resp.url().includes('/api/documents/') && resp.request().method() === 'PATCH',
     { timeout: 5000 }
   )
+  await titleInput.fill(title)
+  await titlePatched
 }
 
 /**
