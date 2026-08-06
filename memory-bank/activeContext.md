@@ -2,9 +2,10 @@
 
 *The most-updated file in the bank. Read this first every session; rewrite it whenever focus shifts. Keep it under a screen — move finished work to progress.md.*
 
-**Last updated:** 2026-08-06 (early AM). Focus is **Week 5 — FleetGraph, Early Submission (Thu
-2026-08-06 23:59)**. Backlog is genuinely near-empty now — verify against live Linear before
-assuming anything below is still open.
+**Last updated:** 2026-08-06 (midday). Focus is **Week 5 — FleetGraph, Early Submission (Thu
+2026-08-06 23:59, TONIGHT)**. A pre-deadline gap review (PM pass, all findings live-verified)
+found the Early Submission deliverable itself unfinished and cut **TRO-356–361**; the earlier
+"backlog near-empty" state no longer holds.
 
 ## Where we are
 
@@ -31,13 +32,22 @@ needs a human product decision to build or delete).
 **Small bookkeeping PR #143 (review-ledger rows for TRO-349's dismissed findings) still open**,
 pending its own CI — non-code, mergeable on gate+CI green alone per the factory's own exception.
 
-## Immediate
+## Immediate — tonight's gap tickets (2026-08-06 review, all due today unless noted)
 
-- **Troy: read PR #138 (TRO-350) and decide** — merge as accepted-risk-documented, or ask for the
-  per-user token infrastructure to actually be built.
-- Merge PR #143 (bookkeeping) once its CI lands.
-- Early Submission Thu 2026-08-06 23:59: PRESEARCH.MD Phases 2–3 sections still not confirmed done
-  (last checked 2026-08-05 evening) — verify before the deadline.
+- **TRO-356 (Urgent): Test Cases table is 6/6 `Pending`** — the graded section itself. TRO-340 and
+  TRO-345 are marked Done but the trace runs (TRO-345 item 3) never happened; all blockers merged.
+- **TRO-357: re-seed graded ship-db** with PR #130's fixed TC1/TC3 fixtures — **needs Troy's
+  sign-off** (live graded infra).
+- **TRO-358: redeploy graded ship + agent** — both stale (3rd silent `auto_deploy` failure; ship
+  `last-modified` Aug 5 03:31, agent `/accept-draft` 404s). TRO-361 (Medium, by Sun) owns root cause.
+- **TRO-359: `e2e-agent` has NEVER passed on GitLab** — main red since PR-F added the job; fixture
+  server-boot dies on the GitLab runner, same specs green on GitHub Actions. Fix or disclose.
+- **TRO-360: PRESEARCH.MD Phases 2–3 missing** (template sections 4–9) — pure writing, now confirmed
+  (not just suspected).
+- **Troy decisions: PR #138 (TRO-350)** merge-or-build; **TRO-353** — inbox draft link 404s on the
+  live graded instance (comment on ticket: hide the link vs. build minimal accept page, tonight).
+- PR #143 merged (done). Suggested order: TRO-356 → TRO-360 → TRO-357+358 (one sign-off session) →
+  TRO-359.
 
 ## Open questions
 
