@@ -98,6 +98,35 @@ both — the `PRESEARCH.MD` sections and this entry — for the same reason.
 
 ---
 
+## TRO-362 — Action Items modal re-ambushes on every full page load, blocking the whole app until dismissed
+
+**The cost this closes.** Found live during Early Submission demo prep: on the graded deploy, the
+FleetGraph chat pill could not be clicked or typed into. The "Action Items" modal
+(`ActionItemsModal.tsx`, a Radix Dialog whose backdrop blocks the entire viewport) auto-opened on
+every **full page load** — login redirect, refresh, any direct document link — whenever the user
+has pending accountability items, because its shown-once guard (`App.tsx`,
+`actionItemsModalShownOnLoad`) was plain component state that resets on remount. A grader logging
+in hit it immediately; every click underneath it (verified with a headless browser: `click` times
+out) was swallowed until "Got it" was pressed. The e2e suite never saw this because
+`e2e/fixtures/isolated-env.ts` sets the `ship:disableActionItemsModal` kill switch — its own
+comment says "to avoid blocking interactions" — which real users don't have.
+
+**What changed.** The guard is now initialized from and persisted to
+`sessionStorage['ship:actionItemsModalShown']`: the modal auto-opens once per browser session
+instead of once per page load. The accountability banner remains the always-available reopen path,
+and the e2e kill switch is untouched.
+
+**How to verify.** `pnpm --filter @ship/web exec vitest run src/pages/App.actionItemsModalOncePerSession.test.tsx`
+— mounts AppLayout twice in one session (two simulated full page loads): auto-open on the first,
+none on the second, banner reopen still works, kill switch respected. Red-before-green verified:
+the remount assertion fails against the pre-fix `App.tsx`. Full web suite 568/568 and
+`pnpm --filter @ship/web type-check` clean.
+
+**Rollback.** Revert the commit; behavior returns to auto-open on every full page load. No
+schema, API, or e2e fixture changes.
+
+---
+
 ## TRO-356 — FG: Run all six Test Cases and fill the Trace Link column — the Early Submission graded table is still 6/6 Pending
 
 **The cost this closes.** FLEETGRAPH.MD's Test Cases table (graded tonight) had all six Trace Link
