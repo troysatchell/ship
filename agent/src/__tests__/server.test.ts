@@ -3,7 +3,10 @@ import request from 'supertest';
 import { loadConfig } from '../config.js';
 import { createServer } from '../server.js';
 import type { ShipReadClient } from '../health.js';
-import type { InboxItem } from '../itemStore.js';
+import { InMemoryItemStore, type InboxItem, type NewInboxItem } from '../itemStore.js';
+import { InMemoryDraftStore, type NewStandupDraft } from '../draftStore.js';
+import type { CreatedStandup, GateShipClientLike } from '../shipClient.js';
+import type { DraftSurvivalRecord, DraftSurvivalTracker } from '../draftSurvival.js';
 
 const READY_CONFIG = {
   ANTHROPIC_API_KEY: 'sk-test',
@@ -323,5 +326,254 @@ describe('GET /inbox', () => {
     const res = await request(app).get('/inbox').query({ recipientUserId: RECIPIENT }).set('X-Internal-Secret', SECRET);
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ items: [] });
+  });
+});
+
+// TRO-348: the missing HTTP route into `gate.ts`'s `acceptDraft` — FG-8 built
+// that function, tested it thoroughly in isolation (`gate.test.ts`), and
+// never wired it to anything a real request could reach (`grep -rn
+// "acceptDraft" agent/src api/src web/src`, excluding tests, found no
+// caller). These tests deliberately use REAL `InMemoryDraftStore`/
+// `InMemoryItemStore` instances (only the outbound Ship write is faked) so a
+// regression here proves the route actually drives `acceptDraft`'s real
+// logic end to end, not just that a mock was told what to return.
+describe('POST /accept-draft', () => {
+  const SECRET = 'test-internal-secret';
+  const ACCEPT_DRAFT_CONFIG = { ...READY_CONFIG, AGENT_INTERNAL_SECRET: SECRET };
+  const ACCEPTER_TOKEN = 'accepter-own-token-abc';
+  const DRAFT_ID = 'standup-draft:user-a:2026-08-04';
+
+  function fakeGateClient(): GateShipClientLike & {
+    postStandup: ReturnType<typeof vi.fn>;
+    setStandupContent: ReturnType<typeof vi.fn>;
+    applyIssueTransition: ReturnType<typeof vi.fn>;
+  } {
+    return {
+      postStandup: vi.fn(async (): Promise<CreatedStandup> => ({
+        id: 'standup-created-1',
+        title: 'Standup',
+        document_type: 'standup',
+        content: null,
+        properties: {},
+        created_at: '2026-08-04T00:00:00.000Z',
+        updated_at: '2026-08-04T00:00:00.000Z',
+      })),
+      setStandupContent: vi.fn(async (_token: string, standupId: string): Promise<CreatedStandup> => ({
+        id: standupId,
+        title: 'Standup',
+        document_type: 'standup',
+        content: null,
+        properties: {},
+        created_at: '2026-08-04T00:00:00.000Z',
+        updated_at: '2026-08-04T00:05:00.000Z',
+      })),
+      applyIssueTransition: vi.fn(async () => {}),
+    };
+  }
+
+  function draftInput(overrides: Partial<NewStandupDraft> = {}): NewStandupDraft {
+    return {
+      id: DRAFT_ID,
+      personUserId: 'user-a',
+      windowDate: '2026-08-04',
+      draftText: 'I moved AUTH-12 to In Review.',
+      proposedTransitions: [],
+      ...overrides,
+    };
+  }
+
+  function standupDraftItem(): NewInboxItem {
+    return {
+      id: DRAFT_ID,
+      recipientUserId: 'user-a',
+      type: 'standup_draft',
+      summary: 'Your standup draft is ready',
+      evidence: {},
+      action: { label: 'Review draft', href: `/standup-draft/${DRAFT_ID}` },
+      draftId: DRAFT_ID,
+    };
+  }
+
+  function seededStores() {
+    const draftStore = new InMemoryDraftStore();
+    const itemStore = new InMemoryItemStore();
+    draftStore.upsert(draftInput());
+    itemStore.upsert(standupDraftItem());
+    return { draftStore, itemStore };
+  }
+
+  it('returns 500 when the server itself has no AGENT_INTERNAL_SECRET configured — fails closed, not open', async () => {
+    const { draftStore, itemStore } = seededStores();
+    const gateShipClient = fakeGateClient();
+    const app = createServer(loadConfig(READY_CONFIG), { draftStore, itemStore, gateShipClient });
+    const res = await request(app).post('/accept-draft').send({ draftId: DRAFT_ID, accepterToken: ACCEPTER_TOKEN });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('internal_secret_not_configured');
+  });
+
+  it('returns 401 when the X-Internal-Secret header is missing', async () => {
+    const { draftStore, itemStore } = seededStores();
+    const gateShipClient = fakeGateClient();
+    const app = createServer(loadConfig(ACCEPT_DRAFT_CONFIG), { draftStore, itemStore, gateShipClient });
+    const res = await request(app).post('/accept-draft').send({ draftId: DRAFT_ID, accepterToken: ACCEPTER_TOKEN });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('unauthorized');
+  });
+
+  it('returns 401 for a wrong secret of the SAME length as the real one — exercises the timingSafeEqual comparison itself', async () => {
+    const { draftStore, itemStore } = seededStores();
+    const gateShipClient = fakeGateClient();
+    const app = createServer(loadConfig(ACCEPT_DRAFT_CONFIG), { draftStore, itemStore, gateShipClient });
+    const res = await request(app)
+      .post('/accept-draft')
+      .set('X-Internal-Secret', 'x'.repeat(SECRET.length))
+      .send({ draftId: DRAFT_ID, accepterToken: ACCEPTER_TOKEN });
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe('unauthorized');
+    expect(gateShipClient.postStandup).not.toHaveBeenCalled();
+  });
+
+  it('returns 503 (agent not configured) when the secret matches but draftStore/itemStore/gateShipClient were never wired — config incomplete', async () => {
+    const app = createServer(loadConfig(ACCEPT_DRAFT_CONFIG)); // no deps at all
+    const res = await request(app)
+      .post('/accept-draft')
+      .set('X-Internal-Secret', SECRET)
+      .send({ draftId: DRAFT_ID, accepterToken: ACCEPTER_TOKEN });
+    expect(res.status).toBe(503);
+    expect(res.body.error).toBe('agent_not_configured');
+  });
+
+  it('returns 400 when draftId is missing, even with a valid secret and real deps', async () => {
+    const { draftStore, itemStore } = seededStores();
+    const gateShipClient = fakeGateClient();
+    const app = createServer(loadConfig(ACCEPT_DRAFT_CONFIG), { draftStore, itemStore, gateShipClient });
+    const res = await request(app)
+      .post('/accept-draft')
+      .set('X-Internal-Secret', SECRET)
+      .send({ accepterToken: ACCEPTER_TOKEN });
+    expect(res.status).toBe(400);
+    expect(gateShipClient.postStandup).not.toHaveBeenCalled();
+  });
+
+  it('returns 400 when accepterToken is missing', async () => {
+    const { draftStore, itemStore } = seededStores();
+    const gateShipClient = fakeGateClient();
+    const app = createServer(loadConfig(ACCEPT_DRAFT_CONFIG), { draftStore, itemStore, gateShipClient });
+    const res = await request(app)
+      .post('/accept-draft')
+      .set('X-Internal-Secret', SECRET)
+      .send({ draftId: DRAFT_ID });
+    expect(res.status).toBe(400);
+    expect(gateShipClient.postStandup).not.toHaveBeenCalled();
+  });
+
+  // THE REGRESSION TEST (TRO-348): before this ticket, there was no route to
+  // even reach — this is the case that proves one now exists AND that it
+  // drives the real acceptDraft, including TRO-338's draft-survival metric,
+  // which had no live caller anywhere until this route existed.
+  it('calls the real acceptDraft: posts under the accepting person\'s own token, marks the draft posted, dismisses the inbox item, and records a draft-survival measurement', async () => {
+    const { draftStore, itemStore } = seededStores();
+    const gateShipClient = fakeGateClient();
+    const draftSurvivalTracker: DraftSurvivalTracker & { record: ReturnType<typeof vi.fn> } = {
+      record: vi.fn(async (_entry: DraftSurvivalRecord) => {}),
+    };
+    const app = createServer(loadConfig(ACCEPT_DRAFT_CONFIG), {
+      draftStore,
+      itemStore,
+      gateShipClient,
+      draftSurvivalTracker,
+    });
+
+    const res = await request(app)
+      .post('/accept-draft')
+      .set('X-Internal-Secret', SECRET)
+      .send({ draftId: DRAFT_ID, accepterToken: ACCEPTER_TOKEN });
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ standupId: 'standup-created-1' });
+    // Attribution: the Ship write happened under the ACCEPTING person's own
+    // token — gate.ts's non-negotiable, exercised here through the route.
+    expect(gateShipClient.postStandup).toHaveBeenCalledWith(ACCEPTER_TOKEN, '2026-08-04');
+    expect(gateShipClient.setStandupContent).toHaveBeenCalledWith(
+      ACCEPTER_TOKEN,
+      'standup-created-1',
+      'I moved AUTH-12 to In Review.'
+    );
+    // The draft is marked posted in the SAME store instance the route was
+    // given — proves the route reached the real store, not a copy.
+    expect(draftStore.get(DRAFT_ID)?.status).toBe('posted');
+    // The inbox item is gone.
+    expect(itemStore.get(DRAFT_ID)).toBeUndefined();
+    // TRO-338's metric actually fires through a live route for the first
+    // time — the assertion this whole ticket exists to make pass.
+    expect(draftSurvivalTracker.record).toHaveBeenCalledTimes(1);
+    expect(draftSurvivalTracker.record).toHaveBeenCalledWith(
+      expect.objectContaining({ draftId: DRAFT_ID, personUserId: 'user-a', identical: true })
+    );
+  });
+
+  it('posts a person-edited finalText when supplied, instead of the draft\'s own original text', async () => {
+    const { draftStore, itemStore } = seededStores();
+    const gateShipClient = fakeGateClient();
+    const app = createServer(loadConfig(ACCEPT_DRAFT_CONFIG), { draftStore, itemStore, gateShipClient });
+
+    const res = await request(app)
+      .post('/accept-draft')
+      .set('X-Internal-Secret', SECRET)
+      .send({ draftId: DRAFT_ID, accepterToken: ACCEPTER_TOKEN, finalText: 'Edited before posting.' });
+
+    expect(res.status).toBe(200);
+    expect(gateShipClient.setStandupContent).toHaveBeenCalledWith(
+      ACCEPTER_TOKEN,
+      'standup-created-1',
+      'Edited before posting.'
+    );
+  });
+
+  it('returns 404 (gate_error) when the draft does not exist', async () => {
+    const draftStore = new InMemoryDraftStore();
+    const itemStore = new InMemoryItemStore();
+    const gateShipClient = fakeGateClient();
+    const app = createServer(loadConfig(ACCEPT_DRAFT_CONFIG), { draftStore, itemStore, gateShipClient });
+
+    const res = await request(app)
+      .post('/accept-draft')
+      .set('X-Internal-Secret', SECRET)
+      .send({ draftId: 'no-such-draft', accepterToken: ACCEPTER_TOKEN });
+
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('gate_error');
+    expect(gateShipClient.postStandup).not.toHaveBeenCalled();
+  });
+
+  it('returns 409 (gate_error) when the draft was already posted', async () => {
+    const { draftStore, itemStore } = seededStores();
+    draftStore.markPosted(DRAFT_ID, 'already posted text');
+    const gateShipClient = fakeGateClient();
+    const app = createServer(loadConfig(ACCEPT_DRAFT_CONFIG), { draftStore, itemStore, gateShipClient });
+
+    const res = await request(app)
+      .post('/accept-draft')
+      .set('X-Internal-Secret', SECRET)
+      .send({ draftId: DRAFT_ID, accepterToken: ACCEPTER_TOKEN });
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('gate_error');
+    expect(gateShipClient.postStandup).not.toHaveBeenCalled();
+  });
+
+  it('returns 502 (never a hang or a raw stack trace) when the Ship write itself fails', async () => {
+    const { draftStore, itemStore } = seededStores();
+    const gateShipClient = fakeGateClient();
+    gateShipClient.postStandup.mockRejectedValueOnce(new Error('Ship unreachable'));
+    const app = createServer(loadConfig(ACCEPT_DRAFT_CONFIG), { draftStore, itemStore, gateShipClient });
+
+    const res = await request(app)
+      .post('/accept-draft')
+      .set('X-Internal-Secret', SECRET)
+      .send({ draftId: DRAFT_ID, accepterToken: ACCEPTER_TOKEN });
+
+    expect(res.status).toBe(502);
+    expect(res.body.error).toBe('accept_draft_failed');
   });
 });

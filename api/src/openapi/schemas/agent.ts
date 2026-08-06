@@ -8,6 +8,12 @@
  * "what needs you" surface proxies through `GET /agent/inbox` to the same
  * agent service's `GET /inbox`, which relays `itemStore.list()` verbatim
  * (already fully ranked — agent/src/itemStore.ts's own docstring).
+ *
+ * Extended again with the accept-draft schema (TRO-348) — the missing wire
+ * into FG-8's own `agent/src/gate.ts` `acceptDraft`, which existed, was
+ * tested, and had no HTTP caller anywhere in the codebase before this
+ * ticket. `POST /agent/accept-draft` proxies to the agent service's own new
+ * `POST /accept-draft`.
  */
 
 import { z, registry } from '../registry.js';
@@ -146,6 +152,62 @@ registry.registerPath({
     },
     502: {
       description: 'The agent service is unreachable, timed out, or returned an error',
+    },
+  },
+});
+
+// ============== Accept draft (TRO-348) ==============
+
+export const AgentAcceptDraftResponseSchema = z.object({
+  standupId: UuidSchema.openapi({ description: 'The Ship standup document just posted, attributed to the accepting person' }),
+}).openapi('AgentAcceptDraftResponse');
+
+registry.register('AgentAcceptDraftResponse', AgentAcceptDraftResponseSchema);
+
+registry.registerPath({
+  method: 'post',
+  path: '/agent/accept-draft',
+  tags: ['Agent'],
+  summary: 'Accept a FleetGraph standup draft — posts it to Ship under the accepting person\'s own token',
+  description: 'Proxies to the agent service (AGENT_API_BASE_URL) over the same shared-secret-authenticated internal call POST /agent/chat and GET /agent/inbox use. Performs a real Ship write (agent/src/gate.ts\'s acceptDraft): POST /api/standups then PATCH /api/standups/:id, attributed to the SIGNED-IN user via a short-lived Ship API token minted server-side for this one call — never a value the caller supplies, and never the agent\'s own identity. draftId identifies which draft to accept (the id a person\'s own inbox item already points at); finalText is optional and defaults to the draft\'s own original text when the person accepted it unedited.',
+  request: {
+    body: {
+      content: {
+        'application/json': {
+          schema: z.object({
+            draftId: z.string().min(1).openapi({ description: 'Id of the draft to accept, from the recipient\'s own inbox item (GET /agent/inbox)' }),
+            // Matches MAX_FINAL_TEXT_LENGTH in api/src/routes/agent.ts — keep both in sync.
+            finalText: z.string().max(4000).optional().openapi({ description: 'What the person actually posts, if they edited the draft before accepting. Omitted means the draft\'s own original text, unedited.' }),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The draft was posted to Ship as a real standup',
+      content: { 'application/json': { schema: AgentAcceptDraftResponseSchema } },
+    },
+    400: {
+      description: 'Missing draftId, or finalText present but not a string or over the max length',
+    },
+    401: {
+      description: 'No valid session — the browser must be signed in (authMiddleware)',
+    },
+    403: {
+      description: 'CSRF token missing or invalid for a session-cookie request (conditionalCsrf)',
+    },
+    404: {
+      description: 'No draft exists with the given draftId (agent/src/gate.ts\'s GateError, relayed)',
+    },
+    409: {
+      description: 'The draft was already posted (agent/src/gate.ts\'s GateError, relayed)',
+    },
+    503: {
+      description: 'The agent is not configured — AGENT_INTERNAL_SECRET is unset on this side, so no request was sent',
+    },
+    502: {
+      description: 'The agent service is unreachable, timed out, or returned an error, or minting the per-user Ship API token failed',
     },
   },
 });

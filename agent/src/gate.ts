@@ -47,8 +47,19 @@ import { computeDraftSurvival, type DraftSurvivalTracker } from './draftSurvival
 
 export interface GateDeps {
   shipClient: GateShipClientLike;
-  itemStore: ItemStore;
-  draftStore: DraftStore;
+  /** Narrowed to what this file's functions actually call (`get`/`dismiss`)
+   * — same "Pick, not the whole interface" convention `shipClient.ts` already
+   * uses for `OnDemandShipClientLike`/`DeepShipClientLike` (TRO-348: lets
+   * `server.ts`'s `POST /accept-draft` inject the SAME narrowed itemStore
+   * type its `/inbox` route already declares, `Pick<ItemStore, 'list' |
+   * 'dismiss'>`, which structurally satisfies this without a second, wider
+   * type threaded through `CreateServerDeps`). */
+  itemStore: Pick<ItemStore, 'get' | 'dismiss'>;
+  /** Narrowed the same way, to `get`/`markPosted`/`markDismissed`/
+   * `setProposedTransitionStatus` — every draftStore method any function in
+   * this file calls, across `acceptDraft`, `discardItem`,
+   * `acceptProposedTransition`, and `rejectProposedTransition`. */
+  draftStore: Pick<DraftStore, 'get' | 'markPosted' | 'markDismissed' | 'setProposedTransitionStatus'>;
   /** TRO-338 / FG-20's production signal — "how much of a draft survives
    * to the posted version." Optional, same injection pattern as
    * `graph.ts`'s `costTracker`: omitted, `acceptDraft` behaves exactly as
