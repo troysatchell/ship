@@ -159,6 +159,158 @@ does not do what was documented, for this project's current pnpm version.
 
 ---
 
+## TRO-358 — FG: graded `ship` + `ship-agent` both running stale builds — third `auto_deploy` silent failure, manually redeployed
+
+**What was missing.** `auto_deploy` (configured correctly on both Render services per TRO-341/FG-23
+and its follow-ups) had again not fired. Observed (not inferred) 2026-08-06, before any action:
+`GET https://ship-rr6m.onrender.com/` → `last-modified: Wed, 05 Aug 2026 03:31:28 GMT`; agent
+`POST /accept-draft` → `404` (TRO-348's route absent from the running build); agent `POST /chat` →
+`401` (secret gate intact, but on stale code). This is the pattern's third occurrence
+(2026-08-04 finding #1, 2026-08-05 pre-MVP-submission gap, now this). Root cause of why
+`auto_deploy` itself doesn't fire is still not diagnosed — out of scope for this ticket, tracked
+separately (lead noted below for TRO-361).
+
+**Service ids — confirmed live, not assumed.** `GET /v1/services?limit=100` (Render API) returned
+exactly two services: `ship` = `srv-d9kf2t942hec73aofrt0` (`ship-rr6m.onrender.com`) and
+`ship-agent` = `srv-d9otunmgekts73eqs0h0` (`ship-agent-t0zy.onrender.com`) — both ids match the
+ticket's own stated values and FLEETGRAPH.MD, i.e. the "changes on every clean-machine `apply`"
+caveat did not apply this time (no `apply` ran since the ids were last recorded). No `terraform`
+binary is present in this worktree and `terraform/render/` holds no local `.tfstate`, so the
+service-id check went through the Render REST API rather than `terraform output`, per the ticket's
+own fallback instruction.
+
+**Remediation — the documented runbook, run against both services, trigger call validated for a
+real HTTP success (not just "no curl error"):**
+
+```bash
+curl -sS -f --fail-with-body -X POST https://api.render.com/v1/services/srv-d9kf2t942hec73aofrt0/deploys \
+  -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
+curl -sS -f --fail-with-body -X POST https://api.render.com/v1/services/srv-d9otunmgekts73eqs0h0/deploys \
+  -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
+```
+
+`ship` → deploy `dep-d9q9qae7bikc738ojae0`, triggered `2026-08-06T14:41:45Z`. `ship-agent` → deploy
+`dep-d9q9qaid0e5s739938g0`, triggered `2026-08-06T14:41:46Z`. Both built commit `39a2581`
+(current GitHub `main`, PR #144, "docs(memory-bank): record full-backlog factory wave").
+
+**Bounded, foreground polling with explicit terminal-state checks** — this is the actual shape used
+(not a summary of it), addressing a CodeRabbit finding on this entry's first draft that the runbook
+only showed the trigger call, not the wait: a triggered deploy is not a live one (this ticket's own
+premise), so the loop must stop on a real terminal status, not just "not pending anymore." Fixed
+against a CodeRabbit finding on this entry's own first draft: the original version only `break`'d
+the inner loop on a terminal failure or a 20-attempt exhaustion, both of which let the outer loop
+— and the whole script — fall through and exit `0` even when a deploy never reached `live`. This
+version tracks a `failed` flag across both cases and the script exits non-zero unless every listed
+deployment actually reached `live`:
+
+```bash
+failed=0
+for id in dep-d9q9qae7bikc738ojae0:srv-d9kf2t942hec73aofrt0 \
+          dep-d9q9qaid0e5s739938g0:srv-d9otunmgekts73eqs0h0; do
+  DEP="${id%%:*}"; SVC="${id##*:}"
+  for i in $(seq 1 20); do   # bounded — ~25s * 20 = ~8.3min ceiling, not unbounded
+    STATUS=$(curl -sS "https://api.render.com/v1/services/$SVC/deploys/$DEP" \
+      -H "Authorization: Bearer $RENDER_API_KEY" | python3 -c \
+      "import json,sys;print(json.load(sys.stdin).get('status'))")
+    case "$STATUS" in
+      live) echo "$DEP live"; break ;;
+      build_failed|update_failed|pre_deploy_failed|canceled|deactivated)
+        echo "$DEP TERMINAL FAILURE: $STATUS" >&2
+        failed=1; break ;;  # stop and report — do not retry blindly
+      *)
+        if [ "$i" -eq 20 ]; then
+          echo "$DEP TIMEOUT: still $STATUS after 20 attempts" >&2
+          failed=1
+        else
+          sleep 25   # build_in_progress / update_in_progress / pre_deploy_in_progress / created
+        fi
+        ;;
+    esac
+  done
+done
+exit "$failed"
+```
+
+Polled `GET /v1/services/{id}/deploys/{deployId}` synchronously in the foreground this way — `
+ship-agent` reached `live` at `14:42:44Z` (attempt 1 of the bound), `ship` at `14:43:06Z`
+(attempt 2). Neither service ever reported `build_failed`/`update_failed`/`pre_deploy_failed`/
+`canceled`, so the failure branch and its documented "stop and report rather than guess" behavior
+were not exercised this run — the terminal-failure states above are Render's documented deploy
+status enum, not ones this specific run produced.
+
+**Post-deploy verification — all observed against the live redeployed instances, not just the
+triggering call's 2xx:**
+- `ship`'s `last-modified` moved from `Wed, 05 Aug 2026 03:31:28 GMT` to
+  `Thu, 06 Aug 2026 14:42:29 GMT` — forward past today's merges.
+- Agent `POST /accept-draft` (no body/secret): `404` → `401 {"error":"unauthorized"}` — the route
+  now exists and is correctly secret-gated (TRO-348's route was the thing verifiably absent before).
+- Agent `POST /chat` (no secret): `401` both before and after — expected; this endpoint fails
+  closed on a missing secret regardless of build freshness, so it was never useful for proving
+  staleness on its own (the `/accept-draft` 404→401 flip is the load-bearing route probe here).
+  `/health` → `200`, `/ready` → `200`.
+- **Env vars, names only, both services** (`GET /v1/services/{id}/env-vars`):
+  agent service has `AGENT_INTERNAL_SECRET`, `SHIP_API_TOKEN`, `SHIP_API_BASE_URL`, `NODE_ENV`,
+  `PORT`, `ANTHROPIC_API_KEY`, `LANGSMITH_API_KEY`, `LANGCHAIN_TRACING_V2`, `LANGCHAIN_PROJECT`,
+  `LANGCHAIN_ENDPOINT`. Ship service has `AGENT_API_BASE_URL`, `AGENT_INTERNAL_SECRET`,
+  `CORS_ORIGIN`, `SESSION_SECRET`, `DATABASE_URL`. **Correction to the ticket's literal proof
+  bullet, verified by reading the code, not assumed:** `AGENT_API_BASE_URL` is read only by
+  `api/src/routes/agent.ts:74` (the ship-side proxy) — `agent/src/config.ts`'s `AgentConfig` has no
+  field for it at all, and the agent process itself reads `SHIP_API_BASE_URL` instead (the reverse
+  direction, so the agent can call back into Ship). So "`AGENT_API_BASE_URL` present in the agent
+  service's env vars" was never a meaningful check for the agent process — the pairing the code
+  actually requires is `AGENT_INTERNAL_SECRET` on **both** sides (confirmed present on both) plus
+  `AGENT_API_BASE_URL` on ship (confirmed) and `SHIP_API_BASE_URL`/`SHIP_API_TOKEN` on the agent
+  (confirmed). All of it survived the redeploy.
+- **Full grader chat path, end-to-end, observed:** `GET /api/csrf-token` (cookie jar) →
+  `POST /api/auth/login` (`dev@ship.local`, csrf header) → `200`, real session → fresh
+  `GET /api/csrf-token` → `POST /api/agent/chat` with
+  `seedDocumentId: 65f499b2-8e8c-417c-8372-f60ff4ba8c75` (Test Case 2's fixture doc, per
+  FLEETGRAPH.MD's Test Cases table) → `200`, a grounded answer citing 12 documents
+  (`citedSources`), `expansionCapped: true`. The full session → api-proxy → internal-secret →
+  graph → model chain is live on the redeployed instance.
+
+**A lead for TRO-361 (not root-caused here, out of scope), observed while confirming service
+ids/deploy commits.** At trigger time, GitHub `main` (`39a2581`, what Render actually builds from —
+`terraform/render/variables.tf`'s `repo_url` default is `https://github.com/troysatchell/ship`) was
+one commit behind this repo's GitLab `main` (`7fb4ab4`, `git ls-remote origin main` against the
+GitLab remote). `git show --stat 7fb4ab4` confirms that commit only touched
+`.claude/CLAUDE.md`/`memory-bank/activeContext.md` — docs, not app code — so it did not affect what
+"redeploy to current main" needed to mean here, and both deploys correctly built GitHub's actual
+HEAD. But it is a second, structurally different way this factory's "stale build" symptom can occur
+independent of whatever is wrong with `auto_deploy` itself: this project's documented workflow
+(`ship-git-remote-topology`) pushes GitLab direct and syncs GitHub only via PR, and Render deploys
+exclusively from GitHub — so any commit that lands on GitLab `main` without a corresponding GitHub
+PR merge is invisible to Render regardless of `auto_deploy` health, and would present identically to
+this ticket's symptom (a live service behind "current main") even if the real `auto_deploy` bug were
+fixed. Worth checking as part of TRO-361's investigation: whether any of the three prior "silent
+failures" were actually this class rather than a genuine trigger/webhook fault. `autoDeploy: yes`,
+`branch: main`, `suspended: not_suspended` confirmed unchanged on both services post-redeploy — the
+config itself still looks correct, consistent with all three prior occurrences.
+
+**Deliberately not done — out of scope per this ticket.** No root-cause investigation of why
+`auto_deploy` didn't fire (tracked separately). No code change — this is a pure ops/infra ticket, so
+`scripts/factory/gate.sh`'s regression-test check is expected to fail here, same accepted exception
+as this project's terraform tickets.
+
+**How to run it.** Nothing to run locally — this entry documents two one-time live-infrastructure
+actions (Render API deploy triggers) plus their verification. The exact commands are captured above
+and match FLEETGRAPH.MD's "Standing operational procedure" for this exact scenario.
+
+**How to roll it back.** Not applicable in the usual sense — redeploying is not a code change to
+revert. If the new build needed to be un-done, the equivalent action is triggering another deploy
+of an earlier commit (`POST /v1/services/{id}/deploys` with a `commitId` from `GET .../deploys`), not
+a git revert; neither service's config (`autoDeploy`, `branch`) was changed by this ticket, so there
+is nothing there to roll back either. **One documented limitation, per CodeRabbit review**: per
+Render's own API docs, triggering a deploy (or a rollback) via the REST API does **not** disable
+`autoDeploy` the way a dashboard-initiated rollback does — so if a rollback is ever done this way, a
+subsequent push to GitHub `main` will silently replace it, re-introducing whatever the rollback was
+meant to undo. This ticket didn't do a rollback and didn't touch `autoDeploy`, so it's not exercised
+here, but the standing operational procedure in FLEETGRAPH.MD's Deployment model should note it:
+either explicitly `PATCH` `autoDeploy: false` before a rollback and restore it after, or treat the
+rollback as point-in-time only and verify the deployed commit again after any subsequent push.
+
+---
+
 ## TRO-357 — FG: graded `ship-db` re-seeded with the repaired TC1/TC3 fixtures (TRO-345 item 2)
 
 **What changed.** No code — a live-infrastructure data-ops action against the graded Postgres
