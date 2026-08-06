@@ -69,30 +69,34 @@ by listing the last 50 pipelines; only one `merge_request_event` pipeline exists
 entire history, and a manual `glab ci run` is rejected outright by `workflow:rules`, confirmed by
 trying it), so — matching this project's own documented sync convention — merged `origin/main`
 into the fix commit and pushed that directly to GitLab's `main`
-(`git push https://labs.gauntletai.com/troysatchell/Ship.git HEAD:main`, merge commit `1b9187d`).
+(`git push https://labs.gauntletai.com/troysatchell/Ship.git HEAD:main`).
 
-**Pipeline 18139** (https://labs.gauntletai.com/troysatchell/Ship/-/pipelines/18139):
-`verify` success, `inventory` success, **`e2e-agent` success** (job 61063, 65.8s — trace confirms
-`🎭 Playwright Run Summary: 2 passed (37.3s)`), overall pipeline **success**. `image-build` still
-`failed` — unchanged, pre-existing, `allow_failure: true`, the already-disclosed `dind` limitation
-this ticket's own scope explicitly excludes ("is NOT part of the red").
+Two pushes to GitLab `main`, both watched to completion: merge commit `1b9187d` (the
+127.0.0.1/`--host`/`tailBuffer` fix) → **pipeline 18139**, `e2e-agent` success (job 61063, 65.8s,
+`🎭 Playwright Run Summary: 2 passed (37.3s)`). `gate.sh`'s `review-patterns` check then flagged a
+non-null assertion in that same commit's `tailBuffer` (`chunks.shift()!.length`); fixed with an
+explicit `undefined` check, commit `d949e05` → **pipeline 18140**, `e2e-agent` success again (job
+61067, 68.4s, `🎭 Playwright Run Summary: 2 passed (39.5s)`). `d949e05` is the final, gate-clean
+state this entry describes; both pipelines are linked so the fix's actual GitLab history is
+checkable rather than only the last one.
 
 | | Before | After |
 |---|---|---|
 | Last 10 `main` pipelines (18007-18073) | 10/10 failed or canceled | — |
-| `e2e-agent` on GitLab `main` | never once green since PR-F | **green** (pipeline 18139) |
+| `e2e-agent` on GitLab `main` | never once green since PR-F | **green** (pipelines 18139, 18140) |
 | `image-build` (unrelated, pre-existing) | `allow_failure: true`, failing | unchanged |
 
 No disclosure fallback needed — the root cause was cheaply fixable (one file, ~30 lines, no new
 dependency) and is now proven green on the actual graded platform, not just downgraded to
 `allow_failure`.
 
-**Rollback.** Revert commit `2e0dce7` (`fix(e2e): bind agentEnv fixture servers to 127.0.0.1, not
-localhost`) on the feature branch, and revert the same change on GitLab `main` (it was pushed
-directly there for verification, ahead of the GitHub PR merging — `git revert` against GitLab
-`main`, or `git push` a pre-fix `agentEnv.ts` directly, same mechanism used to land it). No schema
-change, no migration, no `.gitlab-ci.yml` change — reverting restores the exact pre-fix behavior
-(`e2e-agent` red on GitLab, green on GitHub, as it was for pipelines 18007-18073).
+**Rollback.** Revert the two commits touching `e2e/fixtures/agentEnv.ts` (`2e0dce7` — the
+127.0.0.1/`--host`/`tailBuffer` fix — and `d949e05` — the follow-up non-null-assertion cleanup)
+on the feature branch, and revert the same change on GitLab `main` (it was pushed directly there
+for verification, ahead of the GitHub PR merging — `git revert` against GitLab `main`, or
+`git push` a pre-fix `agentEnv.ts` directly, same mechanism used to land it). No schema change, no
+migration, no `.gitlab-ci.yml` change — reverting restores the exact pre-fix behavior (`e2e-agent`
+red on GitLab, green on GitHub, as it was for pipelines 18007-18073).
 
 **Accepted gate exception.** This is a CI-infrastructure fix to a test fixture, not new product
 behavior — the two existing specs (`agent-detection-latency.spec.ts`,
