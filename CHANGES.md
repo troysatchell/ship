@@ -21,6 +21,144 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-356 — FG: Run all six Test Cases and fill the Trace Link column — the Early Submission graded table is still 6/6 Pending
+
+**The cost this closes.** FLEETGRAPH.MD's Test Cases table (graded tonight) had all six Trace Link
+cells reading `Pending`. Every blocker was already resolved on `main` before this ticket started —
+TC1/TC3 fixtures (TRO-345/PR #130), TC5's agent-side fan-out walk (TRO-346/PR #129) — what was
+missing was actually running the six cases and capturing public trace links.
+
+**What changed — all against THIS WORKTREE's own local database, never the graded `ship-db`
+(TRO-357/TRO-358's separate scope):**
+1. `pnpm db:seed` against `.factory-env`'s `DATABASE_URL`. All FG-3 fixture lines printed by name
+   (lessons.md's own "check every expected per-fixture success line" rule) — Test Cases 1–4 all
+   fired cleanly; TC1/TC3 no longer depend on a "current sprint" that drifts with real elapsed time
+   (TRO-345 already fixed that).
+2. Four new one-off trace-link scripts, matching `trace-invoke-proactive.ts`'s existing "deliberately
+   NOT a test, real model calls, real Ship API calls" posture — no equivalent existed for these four
+   `TriggerKind`s before this ticket:
+   - `agent/src/scripts/trace-invoke-deep.ts` (`proactive_deep`, Test Case 1)
+   - `agent/src/scripts/trace-invoke-retro.ts` (`proactive_retro`, Test Case 3)
+   - `agent/src/scripts/trace-invoke-plan-change.ts` (`proactive_plan_change`, Test Case 4)
+   - `agent/src/scripts/trace-invoke-escalation.ts` (`proactive_escalation`, Test Case 5)
+   Four matching `package.json` script aliases (`trace:invoke-deep`/`-retro`/`-plan-change`/
+   `-escalation`).
+3. Test Case 5's fixture (an issue in Project A `blocks` two issues in Project B, assignees in
+   different reporting lines) does not exist in `seed.ts` — built live via two real
+   `POST /api/documents/:id/associations` calls against pre-existing base-seed issues (Grace Lee,
+   reports to Bob Martinez; Henry Patel, reports to Carol Williams — common manager Dev User).
+   Test Case 6's fixture (a stalled issue needing its week, its blocking issue, and a comment on a
+   different document) is likewise built live: one new blocking issue, one `blocks` association, one
+   real comment on the seed issue's own week — via the real API, not raw SQL.
+4. All six cases run; each real LangSmith run shared public (`PUT /runs/{id}/share`) and verified to
+   resolve **logged out**. FLEETGRAPH.MD's Test Cases table filled in with all six links plus a
+   per-row one-line match note. Row 5's stale claim ("the agent-side fan-out walk does not exist
+   yet") is gone — replaced by the real trace showing it running.
+
+**Five of six rows are a full match; one is a genuine partial match, reported not papered over.**
+Row 2 (mentions + blocking approval): the 2 mentions detect and trace correctly. The
+blocking-approval half does **not** fire, and cannot — verified by reading every
+`logDocumentChange(..., 'plan_approval'|'review_approval', ...)` call site in
+`api/src/routes/weeks.ts`: every one of them writes `state: 'approved'` or `null`, both of which
+`agent/src/proactive.ts`'s `buildBlockingApprovalItems` treats as *resolving* an item, never
+creating one. `/request-plan-changes`/`/request-retro-changes` — the routes that actually enter a
+blocked state — update `properties` directly and never call `logDocumentChange` at all. No
+`document_history` row recording entry into a blocked approval state exists anywhere in this
+codebase's real write paths; confirmed empirically too (`proactive_steady` polled over a 6-day
+window against the fixture's own blocked week: 2 real mentions, zero `plan_approval` history
+entries). This is a Ship-routes gap, not an agent bug and not a fixture-construction problem — the
+identical gap exists even if the transition is made through Ship's own API rather than the seed's
+direct `UPDATE`. Full writeup, both rows' exact links, and every document id: FLEETGRAPH.MD's Test
+Cases section.
+
+**A real credential-exposure risk found and fixed mid-ticket.** The `on_demand` trigger's graph
+state carries `askingUserToken` (added by TRO-342, after TRO-324's own on-demand traces were
+captured) — LangSmith's public run-share API returns a shared run's full `inputs` verbatim,
+including that field, to anyone with the link. A first attempt at Test Case 6's trace was shared
+before this was noticed, briefly exposing a real (but local-only, not internet-reachable) Ship API
+token. Caught by inspecting the public API response directly rather than assuming safety by analogy
+to older traces (which predate `askingUserToken` existing at all). Recovered: the exposed token was
+revoked immediately (verified `401` after) and the LangSmith share deleted (verified `404` after).
+The trace actually linked in FLEETGRAPH.MD was produced with a single-use token, revoked via session
+auth immediately after the graph call returned and *before* the run was ever shared — so the token
+string embedded in the public trace is real but already dead. Flagged as a follow-up ticket
+candidate in FLEETGRAPH.MD itself (fixing `trace-invoke.ts`/`trace-invoke-on-demand.ts`'s own token
+handling is out of this ticket's scope, which is running cases and filling the table).
+
+**A second real, verified correction to this project's own documented tooling.** TRO-324's CHANGES.md
+entry states `pnpm --filter @ship/agent trace:invoke-on-demand -- <args>` (the package-script form,
+`--` included) "strips" the `--` before forwarding to the underlying script. Verified directly, this
+session, against this worktree's actual `pnpm --version` (10.27.0): it does not. The literal `"--"`
+token is forwarded through as the script's first CLI argument, exactly like the OTHER bypass form
+(`pnpm exec tsx ... -- <args>`) TRO-324's own entry already documented losing money to. Cost here:
+4 accidental (cheap, haiku, no real data) `proactive_deep` invocations before the pattern was
+recognized from a debug trace of `process.argv` — real spend, disclosed in the cost ledger, not
+hidden (see below). Fixed two ways: this ticket's own four new scripts filter a stray leading `--`
+out of `process.argv` defensively and their usage comments show the no-`--` form; their own module
+docstrings record the corrected finding. Not fixed here (existing scripts, out of this ticket's
+scope): `trace-invoke.ts`/`trace-invoke-on-demand.ts`'s own usage comments and FLEETGRAPH.MD's
+"How they were produced" prose (Execution Traces section, written under TRO-324) still show the
+now-known-incorrect `--` form — worth a follow-up.
+
+**Real spend, disclosed.** `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts`:
+11 real invocations, $0.009616 total (haiku, `maxTokens: 512`) — 6 `composeStandupDraft` (4
+accidental-`--` no-op drafts + 1 debug-instrumented-but-correct run, not used + 1 final real run,
+used), 1 each of `composeRetroDraft`/`composePlanChangeDraft`/`composeBlockerEscalation`, 2
+`composeAnswer` (the accidentally-exposed-token run, unshared/deleted, plus the final used one).
+Under a cent total; disclosed per this repo's "a real mistake, reported rather than smoothed over"
+provenance rule (same posture as TRO-324's own accidental-spend paragraph).
+
+**How to run it.** From this worktree, with Postgres reachable and `.factory-env` sourced:
+
+```bash
+source .factory-env
+pnpm db:seed
+pnpm dev:api   # background; port from .factory-env
+# stage agent/.env.local (gitignored) with SHIP_API_BASE_URL pointed at that port
+# and a real SHIP_API_TOKEN minted via POST /api/auth/login + POST /api/api-tokens
+set -a; source agent/.env.local; set +a
+pnpm --filter @ship/agent trace:invoke-deep <targetPersonUserId>
+pnpm --filter @ship/agent trace:invoke-retro <weekId>
+pnpm --filter @ship/agent trace:invoke-plan-change <weekId>
+pnpm --filter @ship/agent trace:invoke-escalation <blockingIssueId>
+pnpm --filter @ship/agent trace:invoke-on-demand <seedDocumentId> "<question>"
+```
+
+Document ids for every fixture (including the two constructed live rather than by `seed.ts`) are in
+FLEETGRAPH.MD's Test Cases section.
+
+**Verified.** `pnpm --filter @ship/agent type-check`/`lint` clean on the four new scripts.
+`pnpm --filter @ship/agent test` unaffected (269+/269+, no existing source touched — this ticket adds
+new scripts and one markdown file only). All six trace links independently re-verified logged out
+via two checks each: the page itself (200, byte-identical shell to an already-published good link —
+noted as NOT sufficient alone, since a fabricated share token returns the identical 200 shell) and
+the real, discriminating check, `GET https://api.smith.langchain.com/api/v1/public/{share_token}/run`
+with no auth header (200 with the real run's own `inputs`/`total_tokens`/`child_run_ids` for a
+genuine token, `404` for a fabricated one — confirmed both directions).
+
+**Regression tests.** None added — same accepted exception this project already applies to
+terraform/ops tickets (this ticket's own brief names it explicitly): a docs-plus-live-trace-capture
+ticket has no code behavior to assert against in `pnpm test`. `scripts/factory/gate.sh`'s G6
+regression-test check is expected to fail here; see the PR body for the explicit accept.
+
+**Rollback.** Revert this commit. `FLEETGRAPH.MD`'s Test Cases section reverts to its pre-ticket
+`Pending` state (a docs-only revert, independent of the code). The four new scripts and their
+`package.json` aliases can be deleted with no other file depending on them (same "purely additive"
+posture `trace-invoke-proactive.ts` itself documented). The two live-constructed fixtures (TC5's
+`blocks` associations, TC6's blocking issue + week comment) live only in this worktree's own local,
+throwaway database — reverting this commit does not touch them either way, and the database itself
+is discarded with the worktree.
+
+**A real gap noticed, not fixed (candidates for follow-up tickets):** (1) the blocking-approval
+detection gap above — `/request-plan-changes` and `/request-retro-changes` never log the
+`document_history` row the fast/steady tier needs to ever surface a blocking-approval item from a
+real user action; (2) `trace-invoke.ts`/`trace-invoke-on-demand.ts` trace real, live tokens into
+LangSmith state that a public share then exposes verbatim; (3) TRO-324's CHANGES.md entry and
+FLEETGRAPH.MD's Execution Traces section both still show the `--` invocation form this ticket found
+does not do what was documented, for this project's current pnpm version.
+
+---
+
 ## TRO-310 — [TEST-11 follow-up, batch 2] fixed-sleep sites in `tables.spec.ts` and `backlinks.spec.ts`
 
 **Scope.** TRO-233 (batch 1) fixed the 7 spec files connected to TEST-3's demonstrated flake list
