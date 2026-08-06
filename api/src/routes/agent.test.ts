@@ -644,6 +644,283 @@ describe('GET /api/agent/inbox (TRO-323 / FG-10)', () => {
   })
 })
 
+/**
+ * Regression tests for TRO-348: the missing HTTP route into FG-8's own
+ * `agent/src/gate.ts` `acceptDraft` — that function existed, was tested in
+ * isolation (`agent/src/__tests__/gate.test.ts`), and had no HTTP caller
+ * anywhere in the codebase before this ticket (`grep -rn "acceptDraft"
+ * agent/src api/src web/src`, excluding tests, found none). `POST
+ * /api/agent/accept-draft` is the api-side half of that missing wire — same
+ * architecture as POST /api/agent/chat above (no agent session concept,
+ * api/ proxies with the shared internal secret, mints a per-user ephemeral
+ * Ship API token so the eventual Ship write attributes to the accepting
+ * person). These tests never hit a real agent process: global.fetch is
+ * mocked so each case controls exactly what "the agent" returns.
+ */
+describe('POST /api/agent/accept-draft (TRO-348)', () => {
+  const app = createApp()
+  const testRunId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6)
+  const testEmail = `agent-accept-draft-${testRunId}@ship.local`
+  const testWorkspaceName = `Agent Accept Draft Test ${testRunId}`
+
+  let sessionCookie: string
+  let csrfToken: string
+  let testWorkspaceId: string
+  let testUserId: string
+
+  const originalFetch = global.fetch
+  const originalSecret = process.env.AGENT_INTERNAL_SECRET
+  const VALID_BODY = { draftId: 'standup-draft:user-a:2026-08-04' }
+
+  beforeAll(async () => {
+    const workspaceResult = await pool.query(
+      `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
+      [testWorkspaceName]
+    )
+    testWorkspaceId = workspaceResult.rows[0].id
+
+    const userResult = await pool.query(
+      `INSERT INTO users (email, password_hash, name) VALUES ($1, 'test-hash', 'Agent Accept Draft Test User') RETURNING id`,
+      [testEmail]
+    )
+    testUserId = userResult.rows[0].id
+
+    await pool.query(
+      `INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [testWorkspaceId, testUserId]
+    )
+
+    const sessionId = crypto.randomBytes(32).toString('hex')
+    await pool.query(
+      `INSERT INTO sessions (id, user_id, workspace_id, expires_at) VALUES ($1, $2, $3, now() + interval '1 hour')`,
+      [sessionId, testUserId, testWorkspaceId]
+    )
+    sessionCookie = `session_id=${sessionId}`
+
+    // /api/agent is CSRF-protected (conditionalCsrf, app.ts) for session-cookie
+    // auth — same pattern as POST /api/agent/chat above.
+    const csrfRes = await request(app).get('/api/csrf-token').set('Cookie', sessionCookie)
+    csrfToken = csrfRes.body.token
+    const connectSidCookie = csrfRes.headers['set-cookie']?.[0]?.split(';')[0] || ''
+    if (connectSidCookie) {
+      sessionCookie = `${sessionCookie}; ${connectSidCookie}`
+    }
+  })
+
+  afterAll(async () => {
+    await pool.query('DELETE FROM sessions WHERE user_id = $1', [testUserId])
+    await pool.query('DELETE FROM workspace_memberships WHERE user_id = $1', [testUserId])
+    await pool.query('DELETE FROM users WHERE id = $1', [testUserId])
+    await pool.query('DELETE FROM workspaces WHERE id = $1', [testWorkspaceId])
+  })
+
+  beforeEach(() => {
+    process.env.AGENT_INTERNAL_SECRET = 'test-internal-secret'
+  })
+
+  afterEach(() => {
+    global.fetch = originalFetch
+    if (originalSecret === undefined) delete process.env.AGENT_INTERNAL_SECRET
+    else process.env.AGENT_INTERNAL_SECRET = originalSecret
+  })
+
+  it('requires authentication — a valid CSRF pairing but no session cookie means 401, and the agent is never called', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch')
+
+    const anonCsrfRes = await request(app).get('/api/csrf-token')
+    const anonCsrfToken = anonCsrfRes.body.token
+    const anonCookie = anonCsrfRes.headers['set-cookie']?.[0]?.split(';')[0] || ''
+
+    const res = await request(app)
+      .post('/api/agent/accept-draft')
+      .set('Cookie', anonCookie)
+      .set('x-csrf-token', anonCsrfToken)
+      .send(VALID_BODY)
+
+    expect(res.status).toBe(401)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when draftId is missing, and never calls the agent', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch')
+    const res = await request(app)
+      .post('/api/agent/accept-draft')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({})
+    expect(res.status).toBe(400)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when finalText is present but not a string, and never calls the agent', async () => {
+    const fetchSpy = vi.spyOn(global, 'fetch')
+    const res = await request(app)
+      .post('/api/agent/accept-draft')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ draftId: VALID_BODY.draftId, finalText: 12345 })
+    expect(res.status).toBe(400)
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('returns 503 and never calls the agent when AGENT_INTERNAL_SECRET is not configured on this side', async () => {
+    delete process.env.AGENT_INTERNAL_SECRET
+    const fetchSpy = vi.spyOn(global, 'fetch')
+    const res = await request(app)
+      .post('/api/agent/accept-draft')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send(VALID_BODY)
+    expect(res.status).toBe(503)
+    expect(res.body.error).toBe('agent_not_configured')
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  // THE REGRESSION TEST (TRO-348): before this ticket, there was no route
+  // here at all — POST /api/agent/accept-draft 404d unconditionally. This is
+  // the case that proves the full browser -> api -> agent wire now exists,
+  // with the accepting person's own freshly-minted token forwarded as
+  // accepterToken (never the agent's own identity).
+  it('forwards draftId/finalText plus a freshly-minted per-user accepterToken with the X-Internal-Secret header, relays a 200 response verbatim, and revokes the token afterward', async () => {
+    const agentBody = { standupId: 'standup-created-1' }
+    const fetchSpy = vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify(agentBody), { status: 200, headers: { 'content-type': 'application/json' } })
+    )
+
+    const res = await request(app)
+      .post('/api/agent/accept-draft')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ draftId: VALID_BODY.draftId, finalText: 'Edited before posting.' })
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+    const [calledUrl, calledInit] = fetchSpy.mock.calls[0] as [string, RequestInit]
+    expect(calledUrl).toContain('/accept-draft')
+    expect(calledInit.method).toBe('POST')
+    expect((calledInit.headers as Record<string, string>)['X-Internal-Secret']).toBe('test-internal-secret')
+    // CWE-522: same posture as POST /chat/GET /inbox — a redirect here is
+    // always a configuration error, never legitimate.
+    expect(calledInit.redirect).toBe('error')
+    const sentBody = JSON.parse(calledInit.body as string)
+    expect(sentBody.draftId).toBe(VALID_BODY.draftId)
+    expect(sentBody.finalText).toBe('Edited before posting.')
+
+    // TRO-348: a real, freshly-minted Ship API token for THIS user — never
+    // the agent's own shared SHIP_API_TOKEN, and never something the
+    // browser could have supplied itself (the request body carries no such
+    // field).
+    expect(typeof sentBody.accepterToken).toBe('string')
+    expect(sentBody.accepterToken).toMatch(/^ship_[0-9a-f]{64}$/)
+    expect(Object.keys(sentBody).sort()).toEqual(['accepterToken', 'draftId', 'finalText'].sort())
+
+    const tokenHash = crypto.createHash('sha256').update(sentBody.accepterToken as string).digest('hex')
+    const tokenResult = await pool.query<ApiTokenRow>(
+      `SELECT id, user_id, workspace_id, token_hash, expires_at, revoked_at FROM api_tokens WHERE token_hash = $1`,
+      [tokenHash]
+    )
+    expect(tokenResult.rows).toHaveLength(1)
+    const tokenRow = tokenResult.rows[0] as ApiTokenRow
+    expect(tokenRow.user_id).toBe(testUserId)
+    expect(tokenRow.workspace_id).toBe(testWorkspaceId)
+    expect(tokenRow.expires_at).not.toBeNull()
+    // Revoked once the (mocked) agent call settled — see the POLL_OPTIONS
+    // docstring above (POST /api/agent/chat's own tests) for why this polls
+    // rather than asserting immediately, even though agent.ts awaits it.
+    await expect.poll(async () => {
+      const check = await pool.query<Pick<ApiTokenRow, 'revoked_at'>>(
+        `SELECT revoked_at FROM api_tokens WHERE id = $1`,
+        [tokenRow.id]
+      )
+      return check.rows[0]?.revoked_at != null
+    }, POLL_OPTIONS).toBe(true)
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual(agentBody)
+    // CWE-524: this is a one-time accept action, never something a browser
+    // cache should be allowed to replay.
+    expect(res.headers['cache-control']).toBe('no-store')
+  })
+
+  it('relays the agent\'s 404 (no such draft) as a distinct gate_error, not a generic agent_unavailable', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: 'gate_error', message: 'no such draft: missing-draft' }), {
+        status: 404,
+        headers: { 'content-type': 'application/json' },
+      })
+    )
+
+    const res = await request(app)
+      .post('/api/agent/accept-draft')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ draftId: 'missing-draft' })
+
+    expect(res.status).toBe(404)
+    expect(res.body.error).toBe('gate_error')
+  })
+
+  it('relays the agent\'s 409 (already posted) as a distinct gate_error, not a generic agent_unavailable', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ error: 'gate_error', message: `draft ${VALID_BODY.draftId} was already posted` }), {
+        status: 409,
+        headers: { 'content-type': 'application/json' },
+      })
+    )
+
+    const res = await request(app)
+      .post('/api/agent/accept-draft')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send(VALID_BODY)
+
+    expect(res.status).toBe(409)
+    expect(res.body.error).toBe('gate_error')
+  })
+
+  it('degrades to a clean 502 (never the agent\'s raw body) when the agent responds with an unrelated non-OK status', async () => {
+    vi.spyOn(global, 'fetch').mockResolvedValue(
+      new Response('Internal Server Error', { status: 500 })
+    )
+
+    const res = await request(app)
+      .post('/api/agent/accept-draft')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send(VALID_BODY)
+
+    expect(res.status).toBe(502)
+    expect(res.body.error).toBe('agent_unavailable')
+  })
+
+  it('degrades to a clean 502 (never a hang) when the outbound call to the agent throws, and still revokes the minted token', async () => {
+    vi.spyOn(global, 'fetch').mockRejectedValue(new Error('ECONNREFUSED'))
+
+    const beforeCount = (
+      await pool.query<Pick<ApiTokenRow, 'id'>>(
+        `SELECT id FROM api_tokens WHERE user_id = $1 AND workspace_id = $2 AND name LIKE 'agent-chat:%' AND revoked_at IS NOT NULL`,
+        [testUserId, testWorkspaceId]
+      )
+    ).rows.length
+
+    const res = await request(app)
+      .post('/api/agent/accept-draft')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send(VALID_BODY)
+
+    expect(res.status).toBe(502)
+    expect(res.body.error).toBe('agent_unreachable')
+
+    await expect.poll(async () => {
+      const result = await pool.query<Pick<ApiTokenRow, 'id'>>(
+        `SELECT id FROM api_tokens WHERE user_id = $1 AND workspace_id = $2 AND name LIKE 'agent-chat:%' AND revoked_at IS NOT NULL`,
+        [testUserId, testWorkspaceId]
+      )
+      return result.rows.length > beforeCount
+    }, POLL_OPTIONS).toBe(true)
+  })
+})
+
 describe('isAgentBaseUrlSecure (CWE-319, CodeRabbit PR #120)', () => {
   /**
    * Direct tests of the shared predicate both POST /chat and GET /inbox call

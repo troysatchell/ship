@@ -4622,6 +4622,16 @@ components:
           description: Already fully ranked by the agent (blocking_approval first, highest blockedCount first within that, ties broken by longest-waiting; then mention oldest-first; then standup_draft oldest-first) — this endpoint does no re-sorting.
       required:
         - items
+    AgentAcceptDraftResponse:
+      type: object
+      properties:
+        standupId:
+          type: string
+          format: uuid
+          description: The Ship standup document just posted, attributed to the accepting person
+          example: 550e8400-e29b-41d4-a716-446655440000
+      required:
+        - standupId
   parameters:
 {}
 paths:
@@ -7932,7 +7942,7 @@ paths:
         404:
           description: Document not found
         409:
-          description: Association already exists
+          description: "Circular association: this edge would create a cycle in the relationship graph (`{\"error\": \"CIRCULAR_ASSOCIATION\"}`)."
   /documents/{id}/associations/{relatedId}:
     delete:
       tags:
@@ -8618,5 +8628,48 @@ paths:
           description: No valid session — the browser must be signed in (authMiddleware)
         502:
           description: The agent service is unreachable, timed out, or returned an error
+        503:
+          description: The agent is not configured — AGENT_INTERNAL_SECRET is unset on this side, so no request was sent
+  /agent/accept-draft:
+    post:
+      tags:
+        - Agent
+      summary: Accept a FleetGraph standup draft — posts it to Ship under the accepting person's own token
+      description: "Proxies to the agent service (AGENT_API_BASE_URL) over the same shared-secret-authenticated internal call POST /agent/chat and GET /agent/inbox use. Performs a real Ship write (agent/src/gate.ts's acceptDraft): POST /api/standups then PATCH /api/standups/:id, attributed to the SIGNED-IN user via a short-lived Ship API token minted server-side for this one call — never a value the caller supplies, and never the agent's own identity. draftId identifies which draft to accept (the id a person's own inbox item already points at); finalText is optional and defaults to the draft's own original text when the person accepted it unedited."
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                draftId:
+                  type: string
+                  minLength: 1
+                  description: Id of the draft to accept, from the recipient's own inbox item (GET /agent/inbox)
+                finalText:
+                  type: string
+                  maxLength: 4000
+                  description: What the person actually posts, if they edited the draft before accepting. Omitted means the draft's own original text, unedited.
+              required:
+                - draftId
+      responses:
+        200:
+          description: The draft was posted to Ship as a real standup
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentAcceptDraftResponse"
+        400:
+          description: Missing draftId, or finalText present but not a string or over the max length
+        401:
+          description: No valid session — the browser must be signed in (authMiddleware)
+        403:
+          description: CSRF token missing or invalid for a session-cookie request (conditionalCsrf)
+        404:
+          description: No draft exists with the given draftId (agent/src/gate.ts's GateError, relayed)
+        409:
+          description: The draft was already posted (agent/src/gate.ts's GateError, relayed)
+        502:
+          description: The agent service is unreachable, timed out, or returned an error, or minting the per-user Ship API token failed
         503:
           description: The agent is not configured — AGENT_INTERNAL_SECRET is unset on this side, so no request was sent

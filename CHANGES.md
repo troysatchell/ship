@@ -225,6 +225,110 @@ pnpm exec playwright test e2e/tables.spec.ts e2e/backlinks.spec.ts
 
 ---
 
+## TRO-348 — FG-8's accept flow had no HTTP route: `acceptDraft` was real, tested, and never callable in production
+
+**Root cause, verified by reading the code, not assumed from the ticket's framing.**
+`agent/src/gate.ts`'s `acceptDraft` (TRO-321 / FG-8) is FG-8's human-in-the-loop write path — the
+accepting person's own token performs the Ship write, then `draftStore.markPosted` records what was
+posted, then (TRO-338 / FG-20) an optional `draftSurvivalTracker` records the draft-survival metric.
+All of it was real, unit-tested (`agent/src/__tests__/gate.test.ts`), and correct in isolation.
+`grep -rn "acceptDraft" agent/src api/src web/src`, excluding tests, found **no caller anywhere** —
+FG-8 built the gate logic but never wired it to an HTTP route. Consequence, confirmed directly rather
+than inferred: TRO-338's draft-survival metric could not record anything live, because nothing
+constructed a production `FileDraftSurvivalTracker` or ever called `acceptDraft` outside a test.
+
+**Checked before scoping, not assumed.** Whether any UI surface exists to accept/post a draft at all:
+`InboxSidebar.tsx` renders a `standup_draft` inbox item's action link to `/standup-draft/{draft.id}`
+(set by `agent/src/graph.ts`'s `commitStandupDraft`), but `web/src/main.tsx`'s `<Routes>` has **no**
+route matching that path — it falls through to `<Route path="*" element={<NotFoundPage />} />`.
+Confirmed by reading `main.tsx` directly: drafts are effectively **read-only and unreachable** in the
+shipped UI today, not merely "read-only." Building that review/accept page is a real frontend feature
+(text editing, buttons, a new document-adjacent page) — out of scope for this ticket, which is the
+missing HTTP wire, not the missing UI. Noted below as follow-up work, not built here.
+
+**What changed — the missing wire, browser-to-Ship, matching the existing `/chat`/`/inbox` pattern
+from PR-D.**
+- `agent/src/server.ts`: new `POST /accept-draft` — same `X-Internal-Secret` gate, same
+  503-when-unconfigured degradation as `/chat`/`/inbox`, checked before anything else since this
+  route performs a real Ship WRITE. Body is `{ draftId, accepterToken, finalText? }`; calls
+  `gate.ts`'s `acceptDraft` with the caller-supplied `accepterToken` (never a token this file holds
+  itself). A `GateError` (no such draft / already posted) maps to 404/409 respectively — a domain
+  outcome, distinct from the generic 502 an unreachable/misbehaving dependency gets.
+  `CreateServerDeps` gained `draftStore`, `gateShipClient`, `draftSurvivalTracker`; `itemStore` widened
+  from `Pick<ItemStore, 'list'>` to also carry `get`/`dismiss`.
+- `agent/src/gate.ts`: narrowed `GateDeps.itemStore`/`draftStore` from the full `ItemStore`/`DraftStore`
+  interfaces to `Pick`s of only the methods any function in the file calls — the same
+  "Pick, not the whole interface" convention `shipClient.ts` already uses for
+  `OnDemandShipClientLike`/`DeepShipClientLike`. Needed so `server.ts`'s narrowed dep types
+  structurally satisfy `acceptDraft`'s parameter without requiring a full store implementation in
+  every test fake. No behavior change — type-only.
+- `agent/src/index.ts`: hoisted `draftStore` above the `isConfigComplete` branch (same pattern
+  TRO-323 used for `itemStore`) and constructed two new production deps inside that branch: a
+  `GateShipClient` (built from the SAME shared `resilientHttpClient` every other outbound call uses;
+  holds no token itself, per-call only) and a real `FileDraftSurvivalTracker` — closing the exact gap
+  `gate.ts`'s own `GateDeps.draftSurvivalTracker` docstring named ("nothing currently constructs the
+  production `FileDraftSurvivalTracker`... because nothing calls `acceptDraft` from a real route yet").
+  All three now flow into `createServer`.
+- `api/src/routes/agent.ts`: new `POST /accept-draft` (mounted as `/api/agent/accept-draft`) —
+  `authMiddleware` + CSRF (`conditionalCsrf`, `app.ts`, unchanged mount), same mint-forward-revoke
+  shape as `POST /chat`'s TRO-342 section: mints a short-lived Ship API token for `req.userId` via the
+  existing `agentTokens.ts`, forwards it as `accepterToken` (never client-suppliable), relays the
+  agent's 404/409 distinctly from a generic 502, and revokes the token in an awaited `finally`.
+- `api/src/openapi/schemas/agent.ts`: registered `POST /agent/accept-draft` (schema, request body,
+  every response code including 404/409) and regenerated `api/openapi.json`/`api/openapi.yaml`
+  (`pnpm --filter @ship/api openapi:generate` — confirmed `/agent/accept-draft` present in the output).
+
+**Regression tests.**
+- `agent/src/__tests__/server.test.ts`: new `describe('POST /accept-draft')`, 11 cases against REAL
+  `InMemoryDraftStore`/`InMemoryItemStore` instances (only the outbound Ship write is faked) — 500/401
+  fail-closed cases, 503 when deps are unwired, 400 for missing `draftId`/`accepterToken`, the
+  regression case itself (posts under the accepting person's own token, marks the draft posted,
+  dismisses the inbox item, AND records a draft-survival measurement — the assertion this ticket
+  exists to make pass), a person-edited `finalText` case, 404/409 domain-error mapping, and a 502 for
+  a failed Ship write.
+- `api/src/routes/agent.test.ts`: new `describe('POST /api/agent/accept-draft (TRO-348)')`, 9 cases
+  against a real `createApp()` + real DB-backed session/CSRF (same pattern as the existing `/chat`
+  describe block) — auth required, validation, 503 when unconfigured, the regression case (forwards
+  `draftId`/`finalText` plus a freshly-minted per-user `accepterToken`, verified as a real
+  `api_tokens` row scoped to the test user, revoked after the call — polled via `expect.poll`, not a
+  fixed sleep), 404/409 relay, and 502 degradation with revoke-on-failure.
+
+**Confirmed failing for the right reason before the fix.** Copied the fixed `agent/src/{server,gate,
+index}.ts` and `api/src/{routes/agent.ts,openapi/schemas/agent.ts}` aside to the scratchpad (never
+`git stash`, per this repo's ban), overwrote each with `git show main:<path>`, and re-ran only the new
+tests:
+- `pnpm --filter @ship/agent test -- --run src/__tests__/server.test.ts -t accept-draft`: all 11 new
+  cases failed, every one against `main`'s code returning Express's default `404` (no route matches)
+  in place of the expected status — including the "no such draft" case, which coincidentally also
+  expects 404 but failed on `res.body.error` being `undefined` instead of `'gate_error'`, proving the
+  failure was "route doesn't exist" and not a false-positive status-code match.
+- `pnpm --filter @ship/api test -- --run src/routes/agent.test.ts -t accept-draft`: all 9 new cases
+  failed the same way (Express 404 in place of the expected status/body), while the pre-existing
+  `/chat`/`/inbox` tests in the same file were unaffected.
+Restored the fixed files, re-ran both suites: all cases passed (agent: 448/448 total; api: 35/35 in
+this file).
+
+**How to run it.** `source .factory-env` first (api tests TRUNCATE 16 tables against whatever
+`DATABASE_URL` points at). `pnpm --filter @ship/agent test` (448/448) and `pnpm --filter @ship/api
+test -- --run src/routes/agent.test.ts` (35/35) — root `pnpm test` is API-only and does not run the
+agent suite.
+
+**Not closed — follow-up work, deliberately not built here.**
+- No UI surface exists to actually accept a draft (see "Checked before scoping" above) — building the
+  `/standup-draft/:id` review/accept page is a real frontend feature, not wiring, and belongs in its
+  own ticket.
+- `gate.ts`'s `discardItem`, `acceptProposedTransition`, and `rejectProposedTransition` have the
+  identical defect — real, tested, no HTTP caller anywhere. This ticket wired `acceptDraft` only, per
+  its own scope; the other three are candidates for a follow-up ticket, same shape.
+
+**Rollback.** Revert this commit. No schema change, no migration. Reverting removes `POST
+/accept-draft` (agent) and `POST /api/agent/accept-draft` (api), restores `GateDeps`'s wider
+`itemStore`/`draftStore` types (no behavior change either way), and leaves `acceptDraft` exactly as
+uncalled in production as it was before — the draft-survival metric stops recording again, same as
+pre-fix.
+
+---
+
 ## TRO-349 — FLEETGRAPH.MD's Graph Diagram was 3 chains stale: `proactive_escalation`, `proactive_retro`, `proactive_plan_change` never added
 
 **Documentation-only.** `FLEETGRAPH.MD`'s "Graph Diagram" section (Mermaid flowchart, TRO-324/FG-13)
