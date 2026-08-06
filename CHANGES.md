@@ -90,6 +90,99 @@ else in the repository depends on this change.
 
 ---
 
+## TRO-309 — New CodeQL alerts (7, unrelated to TRO-307/308): triaged per-finding — 2 fixed, 5 dismissed with reason
+
+**Found incidentally** while verifying TRO-307/308's `js/missing-rate-limiting` count via
+`gh api repos/troysatchell/ship/code-scanning/alerts`. Re-queried the same endpoint at triage time
+(2026-08-05): all 7 were still open, at the same rule+path (one line number, `app.ts`'s
+`js/missing-token-validation`, shifted 282→299→334 over prior commits — same alert, tracked as one
+by GitHub across those edits). Each was investigated by reading the flagged code and its actual
+call graph, per this project's TRO-287/SEC-1 precedent ("read the code before trusting the label"),
+not fixed or dismissed on the rule name alone.
+
+**Fixed (2) — both genuine, both narrow input-validation patches:**
+
+- **`js/server-side-unvalidated-url-redirection`, `api/src/routes/caia-auth.ts:320`.** Real, exploitable
+  open redirect. `isValidReturnTo` rejected a literal `//` prefix but not a leading backslash.
+  Confirmed — not assumed — with Node's WHATWG-URL-spec-compliant `URL` parser (the same resolution
+  algorithm a browser runs on a `Location` header): `new URL('/\\evil.com',
+  'https://ship.example.com/x').href` → `https://evil.com/`. Also checked whether Express's own
+  `encodeurl` dependency (used internally by `res.redirect`) neutralizes this before the header goes
+  out — it does not touch backslash (it does percent-encode a raw tab into `%09`, which happens to
+  neutralize a second candidate bypass, `/\t/evil.com`, as an incidental side effect of an unrelated
+  library, not because anything here defends against it). Fix: `isValidReturnTo` now also rejects any
+  backslash in the value. `returnTo` is read directly from `req.query` at the callback with no
+  server-side binding to what was sent when the OAuth flow started, so it is fully attacker-supplied.
+- **`js/incomplete-sanitization`, `api/src/swagger.ts:59`.** Real completeness bug in `jsonToYaml`'s
+  string-quoting branch: it escaped `"` but never `\`, so a value ending in a bare backslash right
+  before the closing quote (e.g. a developer-authored OpenAPI description containing a Windows path)
+  produced a scalar whose last two characters read as an *escaped* quote, not the terminator —
+  invalid YAML. Not attacker-reachable today (the only caller, `/api/openapi.yaml`, always passes the
+  statically-generated `swaggerSpec`), so this is a correctness fix, not an exploit fix — fixed anyway
+  because it is exactly what CodeQL flagged, one line, and free of risk. Escape order matters:
+  backslash must be escaped before quotes, or the newly-inserted escape backslashes would themselves
+  need re-escaping.
+
+**Dismissed (5) — reasons and evidence, no code changed:**
+
+- **`js/missing-token-validation`, `api/src/app.ts:334` (`cookieParser` — the alert's tracked line
+  drifted here from 282/299 in earlier commits, same alert).** The full instance list (`gh api
+  .../alerts/2/instances`) names ~50 sink handlers across `admin-credentials.ts`, `agent.ts`, `ai.ts`,
+  `api-tokens.ts`, `associations.ts`, `auth.ts`, `backlinks.ts`, `comments.ts`, `files.ts`,
+  `documents.ts`, `iterations.ts`, `programs.ts`, `issues.ts`, `projects.ts`, `standups.ts` and more.
+  Checked every one of those router mount points in `app.ts` directly: every single one is wired as
+  `app.use('/api/<x>', conditionalCsrf, <x>Routes)`, where `conditionalCsrf` calls `csrf-sync`'s
+  `csrfSynchronisedProtection` for session-cookie requests (only skipping it for `Bearer `-prefixed
+  API-token requests, which are not vulnerable to CSRF because browsers never auto-attach them). This
+  is the TRO-287/SEC-1 shape exactly: the guard is present and applied router-wide before every
+  handler CodeQL names. CodeQL's static analysis does not appear to trace protection through a
+  locally-defined wrapper function that conditionally calls a recognized CSRF middleware — a tool
+  limitation, not a live gap. (Observed: the wiring in `app.ts`. Derived: why CodeQL's model misses
+  it — not independently confirmed against CodeQL's own source.)
+- **`js/identity-replacement`, `api/src/swagger.ts:70`.** `.replace(/^/, '')` — the empty-string
+  start-of-string anchor replaced with an empty string, mathematically a no-op (confirmed by reading
+  the regex, not inferred). Dead code, zero behavioral or security impact. Not fixed: removing a true
+  no-op has no observable before/after difference, so no red-then-green regression test is possible
+  for it — this ticket's own definition of done requires one for anything logged as "fixed."
+- **`js/incomplete-multi-character-sanitization` ×2, `web/src/components/editor/lowlight.test.ts:176,191`.**
+  `html.replace(/<[^>]*>/g, '')` — yes, a naive tag-stripper that a real HTML sanitizer must not use.
+  But `html` here is `editor.view.dom.innerHTML` from a TipTap instance rendering a **hardcoded
+  test-file string constant** (`'void setup() { pinMode(13, OUTPUT); }'` / `'just some text'`), and the
+  stripped result is compared only via `expect(text).toBe(source)` inside the vitest process. No
+  attacker-controlled input reaches this line; the string never renders to a real DOM or leaves the
+  test process. Confirmed by reading lines 162–192 directly.
+- **`js/incomplete-sanitization`, `web/src/lib/radixVersionDedupe.test.ts:47`.** `packageName.replace(/[/]/g,
+  '\\/')` builds a `RegExp` from a string without escaping a hypothetical embedded backslash. But
+  `packageName` here is drawn only from `radixPackagesInLockfile` (line 52–58 of the same file), itself
+  produced by matching `@radix-ui/[a-z-]+` against the repo's own committed `pnpm-lock.yaml` — real npm
+  package names cannot contain a backslash, and the value never leaves this test file. Confirmed by
+  reading the full data-flow, not assumed from the file extension alone.
+
+**Regression tests (fixes only).**
+- `api/src/routes/caia-auth.test.ts` (new): unit-tests the newly-exported `isValidReturnTo` directly —
+  accepts ordinary paths, rejects `//...`, rejects non-`/`-leading values, and rejects the `/\evil.com`
+  / `/a\evil.com` backslash bypass.
+- `api/src/swagger.test.ts` (new): unit-tests the newly-exported `jsonToYaml` directly — a plain string
+  passes through, a quoted string with only a `"` still escapes correctly, and a value with a trailing
+  or embedded backslash now escapes to a well-formed, correctly-terminated quoted scalar.
+
+**Confirmed failing for the right reason before the fix.** Copied both fixed files aside (never `git
+stash`, per this repo's ban), then swapped in a "pre-fix but exported" variant of each (`git show
+HEAD:<path>` plus just the `export` keyword added, so the new tests could import the function instead
+of failing on a missing export) and re-ran the two new test files: 4 of 9 cases failed, all genuine
+`AssertionError`s — `isValidReturnTo('/\\evil.com')` returned `true` instead of `false` (twice), and
+`jsonToYaml('trailing:\\')` returned `"trailing:\"` instead of `"trailing:\\"` (twice, including the
+combined backslash+quote case). Restored the real fix; all 9 passed.
+
+**How to run it.** `source .factory-env` first. `pnpm --filter @ship/api exec vitest run
+src/swagger.test.ts src/routes/caia-auth.test.ts`.
+
+**Rollback.** Revert this commit. No schema change, no migration. Reverting restores the pre-fix
+`isValidReturnTo` (backslash bypass reopens) and `jsonToYaml` (backslash-before-quote YAML bug
+reopens), and removes the two new test files. The 5 dismissed findings have no code to roll back.
+
+---
+
 ## TRO-342 — Agent's on-demand chat path now runs under the ASKING PERSON'S OWN Ship API token, not the shared `SHIP_API_TOKEN` env var
 
 **Filed from CodeRabbit review on PR #113 (TRO-341/FG-23), 2026-08-04 — explicitly "a filing, not a
