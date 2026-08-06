@@ -6,9 +6,13 @@ of the Treasury.
 **Status:** Agent definition, graph architecture (FG-5/FG-6/FG-7/FG-8, `agent/src/graph.ts`),
 execution traces, trigger model, deployment model, and the Architecture Decisions write-ups are
 complete and written against the merged code (PRs #117, #120, #122) — every "settled" claim in
-this document names the file that implements it. The Test Cases table's trace-link column remains
-*Pending* (FG-22 / TRO-340): each row needs a run against its own fixture state, which is Early
-Submission work. Anything still marked *Pending* is honestly pending, not a placeholder.
+this document names the file that implements it. **The Test Cases table's trace-link column is now
+filled (TRO-356, 2026-08-06)** — all six rows ran against this worktree's own local, freshly-seeded
+database, each with a real, public LangSmith trace link verified to resolve logged out. Five of six
+rows match their Expected Output exactly, observed directly in the traced draft/answer text. Row 2
+is the one exception: its mention-detection half is real and traced, but its blocking-approval half
+does not fire — verified as a real gap in Ship's own approval routes, not an agent bug or a fixture
+problem; see the Test Cases section below for the full finding.
 
 Last updated: August 6, 2026
 
@@ -501,12 +505,46 @@ proactive run above actually used — the graph's `pollChangeFeed` node is a thi
 ## Test Cases
 
 **The graph these cases exercise is built and merged** — PR #117 (proactive detection, on-demand
-expansion, standup drafts, the gate) and PR #120 (the UI surfaces) — and three of its four paths
-have already been traced against real data in the Execution Traces section above. The `Trace Link`
-column below stays `Pending` for a narrower reason than when this section was first written: each
-row needs a run against its own specific fixture state, and those fixtures are only partially
-constructed (see the graded-database status directly below). Filling the column is Early
-Submission work.
+expansion, standup drafts, the gate), PR #120 (the UI surfaces), and PR #129 (TRO-346/FG-19, the
+blocker-escalation fan-out walk Test Case 5 needs). Three real traces (bare on-demand chat,
+on-demand expansion, and `proactive_steady`) already existed in the Execution Traces section above
+before this section's own column was filled; four of the graph's seven `TriggerKind` values
+(`proactive_deep`, `proactive_escalation`, `proactive_retro`, `proactive_plan_change`) had never
+been traced anywhere in this document until this ticket.
+
+**Done (TRO-356, 2026-08-06).** All six rows below now have a real, public LangSmith trace link,
+produced against **this worktree's own local database** (`pnpm db:seed` against `.factory-env`'s
+`DATABASE_URL`, never the graded `ship-db` — that is TRO-357/TRO-358's separate scope) and this
+worktree's own local API (`pnpm dev:api`, port from `.factory-env`). Rows 1, 3, and 4 exercise the
+deep-tier draft-composition triggers (`proactive_deep`, `proactive_retro`, `proactive_plan_change`)
+— none of which had a trace-link script or a public trace anywhere in this document before this
+ticket; `agent/src/scripts/trace-invoke-{deep,retro,plan-change}.ts` are new, matching the existing
+`trace-invoke-proactive.ts`/`trace-invoke-on-demand.ts` pattern. Row 5 uses a new
+`trace-invoke-escalation.ts`, same pattern, for the `proactive_escalation` trigger TRO-346 built.
+Every trace was verified to resolve **logged out** — not just the page shell (a client-rendered SPA
+that returns an identical 200 shell for a fabricated share token too, verified directly and NOT
+trustworthy alone), but the backing `GET /api/v1/public/{share_token}/run` LangSmith API, checked
+against a real vs. a fabricated token to confirm it actually discriminates (200 with the real run's
+own inputs/token-count/child-run-count vs. 404).
+
+**One row is a partial match, reported rather than papered over (row 2).** The mention-detection
+half is real and traced: two `@Alice Chen` mentions from the FG-3 seed fixture surface correctly.
+The blocking-approval half does not, and this is a verified Ship-side gap, not a fixture problem or
+an agent bug: `agent/src/proactive.ts`'s `buildBlockingApprovalItems` only ever creates a NEW
+blocking item from a `document_history` row whose `field` is `plan_approval`/`review_approval` and
+whose `new_value.state` is neither `'approved'` nor absent. Reading every `logDocumentChange(...,
+'plan_approval', ...)` / `logDocumentChange(..., 'review_approval', ...)` call site in
+`api/src/routes/weeks.ts` (`/approve-plan`, `/unapprove-plan`, `/approve-review`) shows every one of
+them writes `state: 'approved'` or `null` — the exact two values `buildBlockingApprovalItems`
+treats as *resolving* an item, never creating one. `/request-plan-changes` and
+`/request-retro-changes` — the routes that actually PUT a week into a blocked state — update
+`properties.plan_approval`/`review_approval` directly and never call `logDocumentChange` for that
+field at all. So no document_history row recording entry into a blocked state exists anywhere in
+this codebase's real write paths — confirmed empirically too: polling `proactive_steady` over a
+6-day window against the FG-3 fixture's own blocked week returns the 2 real mentions and zero
+`plan_approval`/`review_approval` history entries (`changeFeedPage.history` inspected directly).
+The fixture's own direct-`UPDATE` construction (seed.ts's TC2 block) is not the cause — it would
+fail the identical way even if built entirely through Ship's own approval-workflow API.
 
 **Graded-database fixture status — all four resolved (TRO-357, 2026-08-06).** The gap below was
 closed by re-running the (by then repaired) seed against the graded database — history kept, not
@@ -563,17 +601,76 @@ database):
 | Test Case 3 — closed issues | `71eb8b0e-bcdb-4463-9e78-ce1a88cf2361`, `5f593b41-8668-4077-90cd-d4b99b4df79d`, `343d850f-dc9c-4c83-8f15-7f752cb9813d` |
 | Test Case 4 — week (approved then edited) | `0e44bc95-6ee9-4aa7-a6c0-41205bf87e85` |
 
-These are document ids the fixture states live at, not LangSmith trace links — the `Trace Link`
-column below stays `Pending` until PR-C's graph actually runs against them.
+**This worktree's own local fixture, TC1/TC3 now self-fixturing (TRO-345, PR #130).** Unlike the
+graded-db pass above, Test Cases 1 and 3 no longer depend on pre-existing issues happening to land
+in whatever sprint resolves as "current" — `api/src/db/seed.ts` now CREATES the 3 issues/week each
+needs directly, so both fired cleanly on a fresh `pnpm db:seed` run today:
+
+| Fixture | Document id |
+|---|---|
+| Test Case 1 — engineer (Emma Johnson, user id) | `7646949b-f39f-46f9-a007-2ce8b8137a74` |
+| Test Case 1 — moved to in_review | `afcb0603-46bf-43f1-a6b7-3f9d676a2d4d` |
+| Test Case 1 — commented | `69af9e2b-9044-410d-a476-760fbef33846` |
+| Test Case 1 — stale (no activity in 7 days) | `aa68b12f-a448-4bbf-a6d6-33407569827f` |
+| Test Case 2 — mention 1 | `8a7fd8fd-85b8-4dd9-bdd2-8ca4e8e79264` |
+| Test Case 2 — mention 2 | `ecf703b4-13d8-4855-aaa0-ed6ab42fe34b` |
+| Test Case 2 — blocked week (see the partial-match finding above) | `e96f2f49-b28e-481b-bdd8-47dcfda1a1c9` |
+| Test Case 3 — week | `aa161243-041c-499e-872c-26545a4cb6ef` |
+| Test Case 4 — week (approved then edited) | `7754bd4f-d940-4a6c-ac82-c72204f14d28` |
+| Test Case 5 — blocking issue (`blocks` associations added live, via the real API, not the seed) | `9e69830f-6568-4828-b9cf-e13acb279f63` |
+| Test Case 6 — seed issue (`blocks` + a week comment added live, via the real API) | `969262e7-7ad5-4804-9136-7502869280f5` |
+
+Test Case 5's fixture is not in `seed.ts` — no `blocks`-relationship fixture existed there before
+this ticket (verified: grepped the file). Constructed via two real `POST
+/api/documents/:id/associations` calls against pre-existing base-seed issues in different projects,
+assigned to people in genuinely different reporting lines (Grace Lee, reports to Bob Martinez;
+Henry Patel, reports to Carol Williams — both ultimately Dev User, confirmed via `GET
+/api/team/people`). Test Case 6's fixture is likewise constructed live: a new blocking issue plus a
+real comment on the seed issue's own week, via the real API — not a raw SQL insert.
 
 | # | Ship State | Expected Output | Trace Link |
 |---|---|---|---|
-| 1 | An engineer with 3 assigned issues; since their last standup, one moved to in review, they commented on another, and the third has not moved in 6 days | A draft standup naming the two that moved and what changed, flagging the third as sitting for 6 days, with a proposed state change on the one in review | Pending |
-| 2 | A person mentioned in two documents they do not own, blocking one approval on someone else's week, with a standup draft waiting | A four-item ranked list, approval first because another person's week cannot start, each item carrying a direct action | Pending |
-| 3 | A week whose plan lists 4 success criteria; 3 issues closed during the week, mapping to 2 of them | A delivered section pre-filled from the 3 closed issues, mapped to their criteria, with the 2 unmatched criteria called out | Pending |
-| 4 | A weekly plan approved at version N, then edited to remove one success criterion | A before-and-after on the removed criterion plus a drafted question to the author, routed to the approver | Pending |
-| 5 | An issue in Project A blocking two issues in Project B whose assignees report to different managers | The impact fan-out, the lowest common manager, and a drafted message | Pending — the `blocks` relationship itself shipped (migration 041, FG-15 / TRO-333, plus PR #120's blocks/blocked-by sidebar); the agent-side fan-out walk does not exist yet |
-| 6 | A user opens the chat on an issue and asks why it is stalled; the answer requires its week, its blocking issue, and a comment on a different document | An answer drawing on all four documents, each named with the reason it was pulled in | Pending |
+| 1 | An engineer with 3 assigned issues; since their last standup, one moved to in review, they commented on another, and the third has not moved in 6 days | A draft standup naming the two that moved and what changed, flagging the third as sitting for 6 days, with a proposed state change on the one in review | [8acb9a96](https://smith.langchain.com/public/3605ce55-784b-40ba-971a-08570648a07e/r/8acb9a96-25a3-4d52-9f26-f0306a1a0711) — matches: draft names both the moved and commented issues, flags the third's 7 days of inactivity, and carries one proposed transition (in_progress → in_review) |
+| 2 | A person mentioned in two documents they do not own, blocking one approval on someone else's week, with a standup draft waiting | A four-item ranked list, approval first because another person's week cannot start, each item carrying a direct action | [75c74a0b](https://smith.langchain.com/public/dc7c8673-25e9-423b-b526-3a53db2b160a/r/75c74a0b-f2bf-4b75-a134-c9d20ca51bb3) — **partial match, see finding above**: the 2 real mentions surface correctly; the blocking-approval item does not, and cannot, via any current Ship route |
+| 3 | A week whose plan lists 4 success criteria; 3 issues closed during the week, mapping to 2 of them | A delivered section pre-filled from the 3 closed issues, mapped to their criteria, with the 2 unmatched criteria called out | [6910e85c](https://smith.langchain.com/public/1b01b5a2-3dd1-496b-b8f2-f064394bf058/r/6910e85c-5d26-47d2-9582-8096b1672ea8) — matches: 3 closed issues mapped to criteria 1–2, criteria 3–4 explicitly called out as undelivered |
+| 4 | A weekly plan approved at version N, then edited to remove one success criterion | A before-and-after on the removed criterion plus a drafted question to the author, routed to the approver | [c6d75795](https://smith.langchain.com/public/3dfdbb29-6a5c-4365-89b4-a3a3f318c1a5/r/c6d75795-caa8-42b4-bf79-49ee5c1ca172) — matches: model verdict MATERIAL, drafted question correctly names the removed criterion (CSRF protection) |
+| 5 | An issue in Project A blocking two issues in Project B whose assignees report to different managers | The impact fan-out, the lowest common manager, and a drafted message | [8ab81ab8](https://smith.langchain.com/public/9d46d5e1-6ceb-4575-ae9d-c6a504893aea/r/8ab81ab8-7b80-4b88-83fd-072ed65ad537) — matches: 2 blocked issues across 2 projects, lowest common manager found (Dev User), drafted escalation message |
+| 6 | A user opens the chat on an issue and asks why it is stalled; the answer requires its week, its blocking issue, and a comment on a different document | An answer drawing on all four documents, each named with the reason it was pulled in | [2d251e49](https://smith.langchain.com/public/287ae116-652f-4421-afaf-c16e769c75ed/r/2d251e49-7245-40f8-b04f-f783208f7af3) — matches: answer cites the seed issue, its blocking issue, and its week (via the week's own comment), each with the reason it was pulled in |
+
+**How these were produced and verified.** `pnpm db:seed` against this worktree's own
+`.factory-env`-derived `DATABASE_URL`, then `pnpm dev:api` (this worktree's own port), then
+`agent/.env.local` (untracked, gitignored) staged with `SHIP_API_BASE_URL` pointed at that port and
+a real per-user `SHIP_API_TOKEN`. Rows 1/3/4/5 each used a new one-off script
+(`agent/src/scripts/trace-invoke-{deep,retro,plan-change,escalation}.ts`, matching
+`trace-invoke-proactive.ts`'s existing pattern — real model calls, deliberately not covered by
+`pnpm test`); row 2 used a direct `graph.invoke({ trigger: 'proactive_steady', cursor })` call over
+a 6-day window (an investigation script, not a committed trace-invoke-*.ts sibling — the finding
+above is why: this row could not be verified by simply running the existing tooling, it needed
+inspecting `changeFeedPage.history` directly to confirm the negative result); row 6 used the
+existing `trace-invoke-on-demand.ts`. Every link was verified to
+resolve **logged out** two ways: the page itself (200, matches the byte-identical shell of an
+already-known-good previously-published link) AND — the real check, since the page shell alone
+returns 200 for a fabricated share token too — `GET
+https://api.smith.langchain.com/api/v1/public/{share_token}/run` with no auth header, confirmed to
+return the real run's own `inputs`/`total_tokens`/`child_run_ids` for a genuine token and `404` for
+a fabricated one.
+
+**A real credential-exposure risk found and fixed while producing row 6.** The `on_demand` trigger's
+graph state carries `askingUserToken` (added by TRO-342, after TRO-324's two on-demand traces above
+were captured) — and LangSmith's public run API returns a shared run's full recorded `inputs`
+verbatim, including that field, to anyone with the link, no login required. A first attempt at row
+6's trace was shared before this was noticed, briefly exposing a real, live Ship API token (scoped
+only to this worktree's own local database, not reachable from outside this machine). Caught by
+diffing the public API response against what should never appear there, not assumed safe by
+analogy to the older traces. Recovered by revoking that token immediately (verified dead: `401`
+after) and deleting the LangSmith share (`DELETE .../share`, verified `404` after). Row 6's actual
+link above was produced with a single-use token minted specifically for that one invocation and
+revoked (via the session cookie, not the token itself) immediately after the graph call returned and
+before the run was ever shared — the token embedded in the public trace is real but already dead.
+**Follow-up worth its own ticket, not fixed here (out of this ticket's file scope):**
+`trace-invoke.ts`/`trace-invoke-on-demand.ts` should stop passing a live token into traced graph
+state at all (a scoped, already-expired token, or LangSmith input redaction, or excluding that field
+from what gets traced) — the exposure risk is structural to the script, not specific to this run.
 
 **Most of these have no reachable trigger state today.** The development database is a load-testing
 fixture built to a Week 4 specification, and it records none of the activity these drafts are built
