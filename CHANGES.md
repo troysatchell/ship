@@ -43,12 +43,14 @@ own fallback instruction.
 
 **Remediation — the documented runbook, run against both services, trigger call validated for a
 real HTTP success (not just "no curl error"):**
+
 ```bash
 curl -sS -f --fail-with-body -X POST https://api.render.com/v1/services/srv-d9kf2t942hec73aofrt0/deploys \
   -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
 curl -sS -f --fail-with-body -X POST https://api.render.com/v1/services/srv-d9otunmgekts73eqs0h0/deploys \
   -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
 ```
+
 `ship` → deploy `dep-d9q9qae7bikc738ojae0`, triggered `2026-08-06T14:41:45Z`. `ship-agent` → deploy
 `dep-d9q9qaid0e5s739938g0`, triggered `2026-08-06T14:41:46Z`. Both built commit `39a2581`
 (current GitHub `main`, PR #144, "docs(memory-bank): record full-backlog factory wave").
@@ -56,8 +58,15 @@ curl -sS -f --fail-with-body -X POST https://api.render.com/v1/services/srv-d9ot
 **Bounded, foreground polling with explicit terminal-state checks** — this is the actual shape used
 (not a summary of it), addressing a CodeRabbit finding on this entry's first draft that the runbook
 only showed the trigger call, not the wait: a triggered deploy is not a live one (this ticket's own
-premise), so the loop must stop on a real terminal status, not just "not pending anymore."
+premise), so the loop must stop on a real terminal status, not just "not pending anymore." Fixed
+against a CodeRabbit finding on this entry's own first draft: the original version only `break`'d
+the inner loop on a terminal failure or a 20-attempt exhaustion, both of which let the outer loop
+— and the whole script — fall through and exit `0` even when a deploy never reached `live`. This
+version tracks a `failed` flag across both cases and the script exits non-zero unless every listed
+deployment actually reached `live`:
+
 ```bash
+failed=0
 for id in dep-d9q9qae7bikc738ojae0:srv-d9kf2t942hec73aofrt0 \
           dep-d9q9qaid0e5s739938g0:srv-d9otunmgekts73eqs0h0; do
   DEP="${id%%:*}"; SVC="${id##*:}"
@@ -68,12 +77,22 @@ for id in dep-d9q9qae7bikc738ojae0:srv-d9kf2t942hec73aofrt0 \
     case "$STATUS" in
       live) echo "$DEP live"; break ;;
       build_failed|update_failed|pre_deploy_failed|canceled|deactivated)
-        echo "$DEP TERMINAL FAILURE: $STATUS"; break ;;  # stop and report — do not retry blindly
-      *) sleep 25 ;;  # build_in_progress / update_in_progress / pre_deploy_in_progress / created
+        echo "$DEP TERMINAL FAILURE: $STATUS" >&2
+        failed=1; break ;;  # stop and report — do not retry blindly
+      *)
+        if [ "$i" -eq 20 ]; then
+          echo "$DEP TIMEOUT: still $STATUS after 20 attempts" >&2
+          failed=1
+        else
+          sleep 25   # build_in_progress / update_in_progress / pre_deploy_in_progress / created
+        fi
+        ;;
     esac
   done
 done
+exit "$failed"
 ```
+
 Polled `GET /v1/services/{id}/deploys/{deployId}` synchronously in the foreground this way — `
 ship-agent` reached `live` at `14:42:44Z` (attempt 1 of the bound), `ship` at `14:43:06Z`
 (attempt 2). Neither service ever reported `build_failed`/`update_failed`/`pre_deploy_failed`/
@@ -143,7 +162,14 @@ and match FLEETGRAPH.MD's "Standing operational procedure" for this exact scenar
 revert. If the new build needed to be un-done, the equivalent action is triggering another deploy
 of an earlier commit (`POST /v1/services/{id}/deploys` with a `commitId` from `GET .../deploys`), not
 a git revert; neither service's config (`autoDeploy`, `branch`) was changed by this ticket, so there
-is nothing there to roll back either.
+is nothing there to roll back either. **One documented limitation, per CodeRabbit review**: per
+Render's own API docs, triggering a deploy (or a rollback) via the REST API does **not** disable
+`autoDeploy` the way a dashboard-initiated rollback does — so if a rollback is ever done this way, a
+subsequent push to GitHub `main` will silently replace it, re-introducing whatever the rollback was
+meant to undo. This ticket didn't do a rollback and didn't touch `autoDeploy`, so it's not exercised
+here, but the standing operational procedure in FLEETGRAPH.MD's Deployment model should note it:
+either explicitly `PATCH` `autoDeploy: false` before a rollback and restore it after, or treat the
+rollback as point-in-time only and verify the deployed commit again after any subsequent push.
 
 ---
 

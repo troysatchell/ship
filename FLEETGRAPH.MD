@@ -701,6 +701,13 @@ curl -X POST https://api.render.com/v1/services/srv-d9otunmgekts73eqs0h0/deploys
 (An earlier revision of this section repeated the *ship* service id in the agent command above — a
 copy-paste error, corrected 2026-08-05.)
 
+**Limitation, noted 2026-08-06 (TRO-358, CodeRabbit review):** triggering a deploy via the Render
+REST API — unlike a dashboard-initiated action — does **not** disable `autoDeploy`. If this
+procedure is ever used to roll back to an earlier commit rather than to catch up to `main`, a
+subsequent push to GitHub `main` will silently replace that rollback. Either `PATCH` the service
+with `autoDeploy: false` before a rollback and restore it after, or treat the rollback as
+point-in-time only and re-verify the deployed commit after any later push.
+
 **The gap recurred exactly as predicted, 2026-08-05 (pre-MVP-submission check).** Verified stale,
 observed directly, not inferred: `GET /` on the graded Ship still returned
 `last-modified: 2026-08-04T13:31:47Z` (the previous manual redeploy), `GET /api/agent/inbox`
