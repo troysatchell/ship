@@ -10,7 +10,7 @@ this document names the file that implements it. The Test Cases table's trace-li
 *Pending* (FG-22 / TRO-340): each row needs a run against its own fixture state, which is Early
 Submission work. Anything still marked *Pending* is honestly pending, not a placeholder.
 
-Last updated: August 5, 2026
+Last updated: August 6, 2026
 
 ---
 

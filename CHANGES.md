@@ -38,9 +38,10 @@ engineer-with-3-non-done-issues state and TC3's 3-issues-closed-in-week state ac
    name, owner match; 11 users / 1 workspace (unchanged from every prior recorded snapshot); the 5
    known TC2/TC4 fixture document ids each resolved to their previously-recorded type and title;
    `fg3_fixture='tc1'`/`'tc3'` counts were both 0, confirming the gap this ticket exists to close
-   was still open and unaddressed. Document count was 375 (up from the 257 last recorded
-   2026-07-28/08-04) — expected organic growth from 9 further days of activity against the live
-   graded deployment, not a wrong-database signal; every identity-bearing count/id matched exactly.
+   was still open and unaddressed. Document count was 375, up from the 257 documented on
+   2026-07-28 and re-confirmed unchanged as of the 2026-08-04 pre-seed check — expected organic
+   growth from the ~2 days of further activity against the live graded deployment since then, not a
+   wrong-database signal; every identity-bearing count/id matched exactly.
 3. `pnpm db:migrate` — `✅ All migrations already applied` (no-op; the live `ship` service's own
    boot already keeps this current).
 4. `pnpm db:seed` — additive. Printed, by name: `✅ Test Case 1 fixture: engineer Emma Johnson —
@@ -51,7 +52,8 @@ engineer-with-3-non-done-issues state and TC3's 3-issues-closed-in-week state ac
    1 standup, TC3's 3 issues, exactly as expected from the diff), `document_history` 1 → 2 (TC1's
    one state-change row), `fg3_fixture='tc1'` 0 → 3, `fg3_fixture='tc3'` 0 → 3. Directly queried:
    engineer Emma Johnson has exactly 3 non-`done` TC1 issues (`in_review`, `in_progress`, `todo`,
-   the last `updated_at` 7 days stale); the TC3 week carries 4 `success_criteria` with exactly 3
+   the last `updated_at` 7 days stale — satisfies the fixture's own "6+ days" threshold, see
+   `seed.ts`'s comment on that field); the TC3 week carries 4 `success_criteria` with exactly 3
    `done` TC3 issues completed inside the current week window. The 5 known TC2/TC4 ids
    re-checked and resolved to the same type/title as before the run — unchanged.
 6. `ipAllowList` reset to `[]` in the same script run (unconditionally, regardless of seed outcome),
@@ -69,25 +71,32 @@ engineer-with-3-non-done-issues state and TC3's 3-issues-closed-in-week state ac
 | TC2/TC4 known ids | resolve, 2026-08-04 type/title | resolve, same type/title (unchanged) |
 | `ipAllowList` | `null` (closed) | opened to 1×`/32` during the run, `null` again after |
 
-Real document ids created (also recorded in FLEETGRAPH.MD's Test Cases section):
+Document ids (also recorded in FLEETGRAPH.MD's Test Cases section) — **7 newly-created rows:**
 
 ```
 testCase1_standup:        85676a52-d676-429c-8d76-9c74b1bbdb8a
 testCase1_movedToReview:  cfc40bfe-4a77-48e3-938a-46412695f331
 testCase1_commented:      6e0ad162-7255-42ab-bd89-8250304913bf
 testCase1_stale:          e252bd46-b1e8-4f14-9bb5-2aa174e3f3df
-testCase3_week:           c8dfb32e-5b08-47d4-8150-af7728543ac4 (pre-existing week, properties updated)
 testCase3_closedIssues:   71eb8b0e-bcdb-4463-9e78-ce1a88cf2361, 5f593b41-8668-4077-90cd-d4b99b4df79d,
                            343d850f-dc9c-4c83-8f15-7f752cb9813d
 ```
 
+**1 pre-existing row, properties updated in place (not created):**
+
+```
+testCase3_week:            c8dfb32e-5b08-47d4-8150-af7728543ac4
+                            (Week 15 — already existed before this run; this seed pass merged
+                             success_criteria into its properties, nothing else changed)
+```
+
 **Observed vs derived.** Observed directly, this session: the pre/post row counts and ids above, the
 seed script's console output (including both named success lines), the two independent `ipAllowList`
-GETs. Derived: that the 375→257 document-count growth is organic live-deployment activity rather
-than a database-identity problem — inferred from every identity-bearing signal (workspace/user
-counts, 5 specific known document ids) matching exactly, not verified by inspecting the extra rows
-individually. Not verified: which specific documents account for the growth; not this ticket's scope
-to audit.
+GETs. Derived: that the 257→375 document-count growth (pre-seed baseline vs. this run's pre-seed
+check) is organic live-deployment activity rather than a database-identity problem — inferred from
+every identity-bearing signal (workspace/user counts, 5 specific known document ids) matching
+exactly, not verified by inspecting the extra rows individually. Not verified: which specific
+documents account for the growth; not this ticket's scope to audit.
 
 **Regression-test gate exception.** This ticket makes no source changes — it is a pure data-ops
 action against external infrastructure, same class as this project's terraform-ticket precedent
@@ -99,8 +108,12 @@ database" section (updated in place) for the full one-time sequence and its `Upd
 note.
 
 **How to roll it back.** The seed is additive and idempotent per test-case marker
-(`properties->>'fg3_fixture'`). Rolling back means manually deleting the 7 rows listed above by id;
-nothing else in the database was touched.
+(`properties->>'fg3_fixture'`). Rollback must **delete only the 7 newly-created document rows**
+listed above (the `testCase1_*` and `testCase3_closedIssues` ids) — do **not** delete
+`testCase3_week` (`c8dfb32e-...`), which is a pre-existing Week 15 document this run only updated.
+To fully revert that one: restore its prior `properties` (remove the `success_criteria` key this
+run added) and delete the one `document_history` row this run inserted (TC1's state-change entry;
+query by `document_id` = `testCase1_movedToReview`'s id). Nothing else in the database was touched.
 
 ---
 
