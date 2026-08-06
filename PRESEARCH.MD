@@ -511,6 +511,470 @@ The things that could blow the budget, worst first:
 
 ---
 
+## Phase 2: Graph Architecture
+
+**A note on how this phase was written, stated plainly rather than left implicit.** Phase 1 above
+was written before any of this existed — it settles the agent's responsibilities, its trigger model,
+and the rules governing what it may do without a human, all reasoned from Ship's *existing* code,
+never from a graph that hadn't been built yet. Phase 1 never names LangGraph, a `StateGraph`, or any
+node, because none had been chosen on August 3. Everything below was written after
+`agent/src/graph.ts` (1,889 lines — FG-2/FG-5/FG-6/FG-7/FG-17/FG-18/FG-19) was built, tested, and
+merged, reading the compiled graph's own `.addNode`/`.addEdge`/`.addConditionalEdges` calls directly,
+the same source-level verification FLEETGRAPH.MD's own "Graph Architecture" content already used.
+Where a choice below was made *during* implementation rather than settled in Phase 1 — a different
+thing from simply building what Phase 1 already decided — that is named in its own subsection rather
+than folded into the rest as if it had always been the plan.
+
+### 4. Node Design
+
+#### What nodes make up the graph, and what does each one do?
+
+Twenty-two nodes (`NODE_NAMES`, `graph.ts:857-880`), arranged into seven chains sharing one compiled
+`StateGraph`:
+
+| Chain | Trigger | Nodes | Calls the model? |
+|---|---|---|---|
+| Bare chat | `on_demand`, no seed | `ingest -> respond` | `respond` only |
+| On-demand expansion | `on_demand`, seed present | `resolveSeed -> expandFrontier` (looping) `-> finalizeExpansion -> composeAnswer` | `composeAnswer` only |
+| Proactive fast/steady | `proactive_fast` / `proactive_steady` | `pollChangeFeed -> resolveMentions -> detectBlockingApprovals -> commitInboxItems` | never |
+| Deep (standup drafts) | `proactive_deep` | `gatherStandupActivity -> composeStandupDraft -> commitStandupDraft` | `composeStandupDraft`, skippable |
+| Blocker escalation | `proactive_escalation` | `detectBlockerFanout -> composeBlockerEscalation -> commitBlockerEscalation` | `composeBlockerEscalation`, skippable |
+| Retro drafting | `proactive_retro` | `gatherRetroActivity -> composeRetroDraft -> commitRetroDraft` | `composeRetroDraft`, skippable |
+| Plan-change discrimination | `proactive_plan_change` | `detectPlanChange -> composePlanChangeDraft -> commitPlanChangeDraft` | `composePlanChangeDraft`, skippable — the one chain where the model's own verdict, not just a deterministic gate, decides whether anything is written |
+
+Read directly off `graph.ts`'s own node/edge calls (`graph.ts:1238-1889`), cross-checked against the
+module docstring's prose (`graph.ts:1-385`) rather than trusted from either alone — the two agree.
+FLEETGRAPH.MD's "Graph Diagram" section (TRO-324/FG-13) performed the identical source-level
+verification and reaches the same seven chains; this section restates it in prose because that is the
+form this template's question asks for, not because it found a disagreement.
+
+#### How does one compiled graph serve seven different triggers?
+
+`routeTrigger` (`graph.ts:1188-1205`) is the single `addConditionalEdges(START, routeTrigger, {...})`
+call (`graph.ts:1850`) every invocation passes through first. It reads `state.trigger`, and for
+`on_demand` specifically, whether `state.seedDocumentId` is set (`graph.ts:1189-1191`) — that presence
+check is what splits `on_demand` into the bare-chat and expansion paths, since `TriggerKind` itself
+only has one `on_demand` value (`graph.ts:462-469`). Every other chain maps one `TriggerKind` value to
+one `RouteKey` (`graph.ts:1170-1178`) directly, one-to-one.
+
+#### Which node is the one place any given chain calls the model, and why is that boundary drawn there?
+
+Six nodes call `model.invoke(...)`: `respond`, `composeAnswer`, `composeStandupDraft`,
+`composeBlockerEscalation`, `composeRetroDraft`, `composePlanChangeDraft` — one per chain, always the
+last node before that chain's own commit/end step, never the first. Every one of the six builds its
+prompt entirely from state a prior, model-free node already gathered (`buildExpansionPrompt`,
+`buildStandupPrompt`, `buildBlockerEscalationPrompt`, `buildRetroPrompt`, `buildPlanChangePrompt` —
+`graph.ts`'s own imports, `graph.ts:391-419`) — the model is never the thing deciding *what* evidence
+to look at, only how to phrase what a deterministic gather step already found. `AnthropicModel`
+(`graph.ts:436-444`) is the one injected interface every one of the six calls through, which is what
+lets every existing test substitute a plain object with no real API dependency (`graph.test.ts`'s own
+docstring, quoted in FLEETGRAPH.MD's Cost Analysis: "every test for all three uses a stable fake
+model, by design").
+
+#### Where does execution path genuinely vary run to run, and where does it stay fixed?
+
+`expandFrontier`'s self-loop (`routeExpansionLoop`, `graph.ts:1213-1215`, wired at `graph.ts:1867`) is
+the only real conditional self-edge in the graph — it keeps visiting while `state.frontier.length >
+0`, so a document-rich seed produces many `expandFrontier` visits before `documentCap` cuts it off,
+and a sparse one exits after one or two. This is not asserted from reading the loop alone:
+FLEETGRAPH.MD's Execution Traces section measured it — 9 real child spans for the bare-chat path, 47
+for an expansion run that reached `documentCap=12`, 14 for the fixed four-node proactive chain
+(FLEETGRAPH.MD:327-331) — three different real LangSmith trace shapes for three structurally
+different chains, the proactive one fixed by construction (four plain `.addEdge` calls, no
+conditional edge at all) and the expansion one genuinely variable.
+
+#### What was decided during implementation rather than settled in Phase 1?
+
+Three things, named plainly rather than left to look as if Phase 1 already knew them:
+
+1. **The framework itself.** Phase 1 above never names LangGraph — it settles *what* the agent must
+   do, not *how* it is built. `graph.ts`'s own module docstring records the choice: "Model provider:
+   Anthropic API directly (`@langchain/anthropic`), confirmed by the maintainer 2026-08-03"
+   (`graph.ts:69-73`) — decided when FG-2 started building, not something this document's own August 3
+   reasoning had reached.
+2. **Three of the seven chains got their own trigger, decided ticket by ticket, not planned as a
+   set.** Phase 1's use cases 3 ("draft the retro"), 4 ("what changed since you approved"), and 5
+   ("trace a blocker and route it") describe the same three problems in prose, but nothing in Phase 1
+   says any would become its own `TriggerKind` with its own required field. Each did, and each
+   ticket's own module-docstring section states its own reasoning rather than inheriting one from
+   Phase 1: `proactive_retro`/`proactive_plan_change` (TRO-335/FG-17, TRO-336/FG-18) both exist
+   because "the week ends" produces no row for a poller to observe (`graph.ts:259-269`, restated for
+   plan-change at `graph.ts:326-331`) — the same "nothing writes a row when a week ends" fact Phase
+   1's own Trigger Model section already names, now applied to a design decision Phase 1 never made;
+   `proactive_escalation` (TRO-346/TRO-337/FG-19) exists because a new `blocks` association write
+   touches no `documents.updated_at` and produces no `document_history` row either (`graph.ts:182-190`)
+   — verified against the association route's own source while building FG-19, not derived from Phase
+   1.
+3. **The on-demand path's per-asker token model (TRO-342) replaced an earlier, less-safe
+   implementation — it was not built this way from the start.** Phase 1's Constraints section (below)
+   states the intent: "the agent runs under each person's own token... it can reach anything you could
+   reach, and nothing you could not." FG-7's *first* implementation of on-demand expansion did not
+   actually do this: `graph.ts`'s own docstring on `askingUserToken` says so directly — "before
+   TRO-342, every on-demand run — regardless of who asked — shared the ONE `ShipClient` `index.ts`
+   built from `SHIP_API_TOKEN` at process startup... Ship's own server-side 404 was never actually
+   gated on the real asker, because the shared token could see everything" (`graph.ts:547-564`). The
+   principle was right in Phase 1; the code did not match it until a later ticket found and closed the
+   gap.
+
+---
+
+### 5. State Management
+
+#### What state lives inside one graph invocation, and how is it organized?
+
+All of it lives in `GraphState`, one `Annotation.Root` (`graph.ts:471-851`), grouped by the chain that
+owns each field: shared fields every chain can touch (`trigger`, `cursor`, `changeFeedPage`, `people`,
+`inboxItems`, `clearedItemIds`); on-demand expansion's own block (`seedDocumentId`, `askingUserId`,
+`askingUserToken`, `frontier`, `visitedDocumentIds`, `expandedDocuments`, `citedSources`,
+`expansionCapped`); the deep tier's own block (`targetPersonUserId`, `standupAnchor`,
+`standupActivity`, `standupSkipReason`, `standupDraftText`, `standupProposedTransitions`); and one
+further block each for blocker escalation, retro drafting, and plan-change discrimination, each with
+its own `...SkipReason`/`...DraftText` pair. `weekId` is the one field two chains share on purpose —
+`proactive_retro` and `proactive_plan_change` both mean the same thing by it, a `sprint` document's
+id, and never run in the same invocation to collide over it (`graph.ts:741-751`).
+
+Two reducer shapes do real work, not just bookkeeping: a **concatenating** reducer
+(`(current, update) => [...current, ...update]`) on fields more than one node in the same run can
+append to — `inboxItems`/`clearedItemIds` (`resolveMentions` and `detectBlockingApprovals` both
+produce `inboxItems`, and `commitStandupDraft` is a third producer onto the same field —
+`graph.ts:75-83`, `514-517`) and `visitedDocumentIds`/`expandedDocuments` (`expandFrontier`, called
+repeatedly by its own self-loop). Every other field is **last-write-wins** (`update ?? current`),
+because exactly one node ever produces it per run.
+
+#### What carries across separate proactive runs, and where does it actually live?
+
+Nothing in `GraphState` does — LangGraph resets every channel per invocation. The one piece of state
+genuinely carried between one `proactive_steady` tick and the next is the lagged change-feed cursor,
+held as a plain closure variable (`let cursor`, `agent/src/proactivePoll.ts:43`) inside
+`createProactivePoller`, advanced only after a tick's `graph.invoke(...)` call resolves successfully
+(`proactivePoll.ts:48-49`). A failed tick leaves `cursor` untouched (`proactivePoll.ts:50-52`), so the
+next tick re-reads the same window instead of skipping past it — the concrete implementation of the
+"self-correcting" polling property Phase 1's Trigger Model section already argued for in principle,
+now a specific two-line `catch` block rather than a design intention.
+
+#### Where do drafts and inbox items actually live, and what survives a restart?
+
+Both `ItemStore` and `DraftStore` are in-memory, single-process stores — `itemStore.ts:1-33`'s own
+docstring gives the reasoning: `agent/package.json` has no database dependency at all, one Render
+process serves everything (no horizontal scaling configured, per FLEETGRAPH.MD's Deployment model
+section), and every inbox item is re-derivable from Ship's own state on the next poll — a restart
+costs at most one poll cycle's delay (≤60s), never a permanently lost item.
+
+**That guarantee does not extend to drafts the same way, and this section says so rather than
+implying otherwise.** A mention or blocking-approval item is recomputed fresh from
+`change-feed`/`documents`/`team/people` every cycle — nothing agent-local to lose. A standup, retro,
+plan-change, or blocker-escalation draft's *composed text* is different in kind: it is the model's
+one-time output, held only in `DraftStore` (`draftStore.ts:1-27`'s own docstring: kept separate from
+`ItemStore` specifically because a draft carries data — full prose, proposed transitions — nothing
+else needs). A process restart with an unposted draft in `DraftStore` loses that draft's actual text;
+the underlying activity that would let a *future* invocation compose a replacement is still
+derivable, but the specific composition — including any edits a person may already be partway through
+— is not recoverable. Nothing in this codebase currently closes that gap; it is a real, named
+consequence of the in-memory choice, not a hidden one.
+
+#### What state-management piece was planned and never built?
+
+**Cross-request derived-content caching, keyed on document + content version.** FLEETGRAPH.MD's own
+"State management" section names this as the third of three planned pieces and states plainly that it
+"is not implemented; every run re-fetches what it needs" (FLEETGRAPH.MD:604-606) — the reasoning for
+building it stands (ten people asking about the same week should read it once, not ten times), but
+nothing in `graph.ts`, `expansion.ts`, or anywhere else in `agent/src` keys a cache off document id
+plus content version today. Worth being precise about the honesty point here: this specific idea does
+not appear anywhere in this document's own Phase 1 cost-cliff list above ("what this costs at 100
+projects and at 1,000" names only the nightly-pass-on-idle-projects cliff) — it was identified later,
+during the cost-analysis work that became FLEETGRAPH.MD's own cliffs list, not foreseen in this
+document's original pass.
+
+---
+
+### 6. Human-in-the-Loop Design
+
+#### Where is the one gate a human decision has to pass through?
+
+`agent/src/gate.ts` (TRO-321/FG-8) — and, as important as what it is, what it is *not*: it is not a
+node in the compiled `StateGraph` at all. It is a separate module, called later, once a person opens
+a drafted item and decides (`gate.ts:1-13`'s own docstring). FLEETGRAPH.MD's Graph Diagram section
+verified the same thing at the source level and drew the gate as an explicitly dashed, external box
+for exactly this reason (FLEETGRAPH.MD:270-279): "nothing in `graph.ts` ever writes to Ship
+(`DeepShipClientLike` and `OnDemandShipClientLike` are read-only interfaces by construction...
+`DraftStore`/`ItemStore` are both entirely in-process."
+
+#### What four operations does the gate expose, and what does each one write, or deliberately not write, to Ship?
+
+| Function | Ship write | What it does instead |
+|---|---|---|
+| `acceptDraft` (`gate.ts:105-157`) | `POST /api/standups` then `PATCH` its content, attributed to the accepting person | Marks the draft `posted`, dismisses its inbox item, records the draft-survival measurement if a tracker is wired |
+| `discardItem` (`gate.ts:178-196`) | None | Marks a draft-backed item's draft `dismissed`; dismisses the inbox item either way |
+| `acceptProposedTransition` (`gate.ts:227-256`) | One `PATCH /api/issues/:id`, attributed to the accepting person, only field `'state'` — any other field fails loudly rather than guessing an endpoint | Records that one transition (by index) `accepted`, leaving sibling transitions on the same draft untouched |
+| `rejectProposedTransition` (`gate.ts:264-272`) | None — does not even accept a token parameter | Records the transition `rejected`, terminal per `setProposedTransitionStatus`'s own contract, never later acceptable |
+
+#### How does a human's identity, not the agent's, end up on the Ship write?
+
+Every write-capable function above takes the acting person's own token as an explicit parameter —
+never reads one from config or the environment (`gate.ts:15-21`). The type that makes this structural
+rather than a convention is `GateShipClientLike` (`shipClient.ts`): it has no token field to fall back
+to, so a write under the agent's own identity is not a bug a careless call site could introduce —
+there is no code path in the package that could construct one. `agent/src/__tests__/
+graphWriteBoundary.test.ts` is the regression proof that nothing upstream of this file ever reaches a
+Ship write at all (cited by FLEETGRAPH.MD:111 for the identical claim).
+
+#### What does the agent do without waiting for a human, and where exactly is that line drawn?
+
+Unchanged from Phase 1's own rule, restated here because the template asks the question again in this
+phase, not because implementation moved the line: "acts, when a query proves it... drafts, when a
+model inferred it... never [writes a performance rating, sets an approval state, applies an issue
+transition, creates or deletes a document, or writes anything that would read as though a person
+wrote it]" (Phase 1, "What can it do without approval"). Implementation enforces the "never" list
+structurally, not by convention: `DeepShipClientLike`/`OnDemandShipClientLike` (`shipClient.ts`)
+expose no write method for any node in those chains to call even by mistake — restated at the end of
+every one of the module docstring's five chain sections (`graph.ts:162-166`, `249-250`, `379-384`),
+not asserted once and assumed to hold everywhere.
+
+#### What closed this loop end-to-end, and what took longer to wire up than the gate logic itself?
+
+**The gate logic existed, was unit-tested, and had zero callers for most of the sprint — a real gap,
+not a hypothetical one, closed later by a separate ticket.** FG-8/TRO-321 built and tested
+`acceptDraft` correctly in isolation. `CHANGES.md`'s TRO-348 entry records the exact discovery:
+`grep -rn "acceptDraft" agent/src api/src web/src`, excluding tests, "found no caller anywhere" — no
+HTTP route in `agent/src/server.ts`, no proxy route in `api/src/routes/agent.ts`, nothing. TRO-348 is
+what added `POST /accept-draft` to both (`server.ts:393-451` on the agent side, mirrored in `api/`'s
+own agent routes), and only then did `index.ts` construct a real `FileDraftSurvivalTracker` for
+production use (`index.ts:199-203`) — a dependency `gate.ts`'s own docstring on
+`draftSurvivalTracker` had already named as unbuilt ("nothing currently constructs the production
+`FileDraftSurvivalTracker`... because nothing calls `acceptDraft` from a real route yet"). This is the
+ticket's own worked example (TRO-360's brief names it directly) of a decision that happened *after*
+the original design, not one Phase 1 or FG-8 foresaw in this shape — recorded that way rather than
+folded silently into "the gate was built."
+
+**Even with the HTTP wire closed, no browser page reaches it yet.** TRO-348's own `CHANGES.md` entry
+found `InboxSidebar.tsx` renders a `standup_draft` item's action link to `/standup-draft/{draft.id}`,
+but `web/src/main.tsx`'s routes have no match for that path — it falls through to `NotFoundPage`.
+Drafts are reachable by direct HTTP call today, not yet by anyone using Ship's own UI. Named here as a
+current, real state rather than smoothed into "the human-in-the-loop design is complete."
+
+---
+
+### 7. Error and Failure Handling
+
+#### What must the agent do when Ship — or the model provider — is unreachable?
+
+The graded bar, verbatim from the brief (quoted in TRO-315's own ticket text): "All outbound calls
+from the agent (to Ship APIs, LLM providers, and any external tools) must implement explicit timeouts
+and retry logic with exponential backoff. The agent must degrade gracefully if Ship is unreachable —
+it should not crash or hang indefinitely." TRO-315's own status note records that the "demonstrated
+live in the Architecture Defense" half of that requirement is no longer a scheduling constraint (the
+defense already happened, confirmed by the maintainer 2026-08-03) — the engineering requirement
+itself still stands and still gates FG-5/FG-6/FG-7.
+
+#### What is the actual client-layer design, and what are the real numbers?
+
+`agent/src/resilientClient.ts`'s `ResilientClient` wraps four concerns for every call it makes: an
+explicit connect/read timeout via `AbortController` racing a timer (`timedFetch`,
+`resilientClient.ts:226-261`, never an unbounded `fetch`); retry with exponential backoff and full
+jitter on idempotent `GET` reads only (`get()`, `resilientClient.ts:168-200`; `request()` —
+non-idempotent — gets timeout and the breaker but never a retry, `resilientClient.ts:202-213`); a
+circuit breaker wrapping *each individual attempt*, not the whole retry sequence
+(`resilientClient.ts:16-23`'s own design note: this is what makes "returns 503 → retries with growing
+delays → opens the breaker" one coherent sequence rather than two); and self-throttling via an
+injected `RateLimiter`, because — Phase 1's own finding, still true — "both of Ship's rate limiters
+fail open" (Phase 1, "Reliability").
+
+The production numbers, all from `config.ts` (`DEFAULT_*` constants, `config.ts:73-85`, each
+independently overridable by env var):
+
+| Knob | Default | Env var |
+|---|---|---|
+| Ship request timeout | 5,000ms | `SHIP_REQUEST_TIMEOUT_MS` |
+| Breaker failure threshold | 5 consecutive failures | `SHIP_BREAKER_FAILURE_THRESHOLD` |
+| Breaker cooldown | 30,000ms | `SHIP_BREAKER_COOLDOWN_MS` |
+| Retry max attempts (GET only) | 3 (including the first) | `SHIP_RETRY_MAX_ATTEMPTS` |
+| Self-throttle ceiling | 500 requests/minute | `SHIP_SELF_THROTTLE_RPM`, well under Ship's shared ~6,000/min per-IP ceiling (Phase 1's own cost-model finding) |
+| Retry base delay | 200ms, doubling per attempt, capped at 16× base | `server.ts:102`'s `buildShipClient` |
+
+The circuit breaker (`circuitBreaker.ts`) is a deliberate copy, not a reinvention, of
+`api/src/utils/circuitBreaker.ts` (TRO-311/RULE-7) — copied specifically *because* that file's history
+matters: its first version had a genuine half-open concurrency race (a second call arriving while a
+trial call's `await fn()` was still in flight fell through the `state === 'open'` check and called
+`fn()` itself, breaking the "exactly one trial call" invariant), fixed in `273f058` with an explicit
+`else if (state === 'half-open') throw new CircuitOpenError()` guard (`circuitBreaker.ts:1-17`,
+`89-93`). This agent's breaker starts from the fixed version, and TRO-315's own regression-proof list
+carries the identical concurrent-half-open test forward (`__tests__/circuitBreaker.test.ts`).
+
+#### What is the degradation contract when Ship stays down, concretely?
+
+Every failure mode `ResilientClient.get()` can hit — 5xx, timeout, network error, or an already-open
+breaker — normalizes to one thing: `ShipUnreachableError`, message `"I can't reach Ship right now."`
+(`resilientClient.ts:77-85`), never a raw stack trace and never an unbounded hang. `/health`
+(`server.ts:231-233`) always returns 200 — process-alive only, no dependency check, deliberately what
+Render's own platform check points at. `/ready` (`health.ts:34-58`, `server.ts:235-247`) goes through
+the same resilient client, so once the breaker has actually tripped, `/ready` fails **fast** rather
+than paying out a full timeout+retry cycle on every poll — an explicit design property, not incidental
+(`health.ts:1-11`'s own docstring). `proactivePoll.ts`'s `tick()` never lets a failure reach the
+process boundary: every error is caught, forwarded to an optional `onError`, and the same cursor is
+retried next interval (`proactivePoll.ts:45-53`) — a failed tick costs a delay, never a crash and
+never a gap.
+
+#### Where is the actual coverage gap, verified by reading the code rather than trusting the client's own header comment?
+
+**`resilientClient.ts`'s own module docstring claims to be "a single outbound client layer used by
+every call the agent makes — Ship API and the model provider both" (`resilientClient.ts:1-3`). That
+claim does not hold in the real production wiring, and this section says so rather than repeating it
+uncritically.** `agent/src/index.ts:162-166` constructs the model client directly —
+`new ChatAnthropic({ apiKey, model: 'claude-haiku-4-5-20251001', maxTokens: 1024 })` — with no
+`ResilientClient`, no `CircuitBreaker`, and no explicit timeout of its own; only the *Ship* client
+(`buildShipClient(config)`, `index.ts:172`, feeding both the bound-token `ShipClient` and the
+per-asker `onDemandShipClientFactory`) actually goes through `ResilientClient`. The only bound on a
+hung model call in production is indirect: `server.ts`'s `/chat` handler races the *whole*
+`graph.invoke(...)` call against `config.chatHandlerTimeoutMs` (25,000ms default,
+`server.ts:313-325`) via an `AbortSignal` LangGraph itself honors — and `server.ts`'s own comment,
+written by whoever added that timeout, is explicit about what it does *not* do: "neither
+`AnthropicModel.invoke(input: string)`... nor any `ShipClientLike` method accepts or forwards a
+signal, even though the underlying `ResilientClient.get`/`request` DOES support one... So when the
+abort fires while a node's own `model.invoke()`... call is already in flight, THAT single call keeps
+running to completion server-side (confirmed with a throwaway probe... the node's own awaited promise
+settled ~3s after `invoke()` had already rejected)" (`server.ts:296-312`). Concretely: the *handler*
+gives up and returns a 504 to its caller within the configured bound, but the in-flight Anthropic call
+underneath it is not itself cancelled, retried, or breaker-protected — it is bounded only by whatever
+default `@langchain/anthropic` ships with, which this codebase does not override. This is a real,
+verifiable gap between what TRO-315's scope describes and what `index.ts` actually wires, not a
+hypothetical one — stated here rather than papered over with prose that assumes the docstring's claim
+is true.
+
+---
+
+## Phase 3: Stack and Deployment
+
+### 8. Deployment Model
+
+**This section summarizes; FLEETGRAPH.MD's own "Deployment model" section (its longest, most
+frequently updated section, spanning several separate verification passes from 2026-08-04 through
+2026-08-05) is the full operational record and is not reproduced here in full.** Every fact below
+names where in that section the fuller account lives.
+
+#### Where does this run, and why not the AWS stack Ship itself runs on?
+
+**Ship-on-Render (`ship-rr6m.onrender.com`) + agent-on-Render (a Render docker web service,
+`terraform/render/agent_service.tf`) + Render Postgres `ship-db` as the graded database** — the
+brief's own recommended default, adopted without deviation because no AWS credentials have existed in
+this environment all sprint (re-verified: no `aws` CLI, no `AWS_*` env vars — FLEETGRAPH.MD's
+Deployment model section, "Settled (TRO-341/FG-23)").
+
+#### Whose identity does the agent run under, and why is there no service account?
+
+Unchanged from Phase 1's own Constraints section below: every API token belongs to a real user, so
+the agent runs under each person's own token — restated in FLEETGRAPH.MD verbatim and, as Section 4
+above documents, only actually implemented this way for the on-demand path once TRO-342 landed.
+
+#### What is the promotion/rollback story, and what does each layer actually catch?
+
+Two layers, neither a bespoke script (FLEETGRAPH.MD's "Rollback trigger and procedure"): **CI gates
+merge** — a failing run never reaches `main`, so it never reaches Render's `auto_deploy` trigger
+either; and **Render's own health-check-gated promotion** is a liveness net, not a readiness one —
+`/health` returning 200 only proves the process is up, not that it can reach Ship or has its secrets.
+`agent/src/deployReadiness.ts`'s `evaluateReadinessSamples` is the decision function TRO-322/FG-12
+built to close that second gap: a *sustained* run of not-ready samples warrants a rollback; a single
+transient failure that recovers does not. `agent/src/scripts/check-readiness-and-rollback.ts` is the
+CLI — dry-run by default, `--execute` additionally re-triggers the last other `live` Render deploy.
+Proven by local simulation (two real `index.ts` processes, one pointed at an unreachable Ship, one
+reachable) rather than mocked, and explicitly **not wired to fire automatically** against the live
+services — that decision is reserved for explicit human sign-off, same posture as every other
+credential-bearing action in this project (FLEETGRAPH.MD, "TRO-322/FG-12 — both layers demonstrated").
+
+#### What went wrong in practice, and what did closing it actually cost?
+
+**Auto-deploy repeatedly did not fire on real merges, discovered by checking rather than trusting "CI
+green and PR merged."** FLEETGRAPH.MD records this happening at least twice — once found the live
+`ship` service six days stale despite two merged PRs, once again found four merges' worth of routes
+(`/api/change-feed`, `/api/agent/inbox`, `/chat`, `/inbox`) 404ing on the graded deployment
+(FLEETGRAPH.MD, "The gap recurred exactly as predicted, 2026-08-05"). Root cause is still not fully
+diagnosed (`gh api .../hooks` returns `[]`, suggestive of a GitHub App integration rather than a
+classic webhook, but not conclusive). The standing remediation — a direct
+`POST .../v1/services/{id}/deploys` call — is documented as the operating procedure until the root
+cause is found, not treated as fixed. A second, distinct gap surfaced *after* that remediation:
+`AGENT_INTERNAL_SECRET` shipped in code before Terraform gained the corresponding variables, so the
+newly-deployed routes 500'd with `internal_secret_not_configured` until the secret was set directly
+via the Render REST API — `terraform apply` itself cannot update the free-tier agent service at all,
+for any field, a verified provider bug (`ignore_changes` only suppresses the plan *diff*, not what the
+provider's `Update` call sends). Recorded in full in FLEETGRAPH.MD's "Post-deploy verification" and
+"Done, 2026-08-04" paragraphs — named here as the honest shape of what deployment actually cost, not
+summarized away as "deployed successfully."
+
+---
+
+### 9. Performance
+
+**Same posture as Section 8: FLEETGRAPH.MD's "Cost Analysis" section carries the full instrumented
+ledger; this section states the headline numbers it already measured, with citations, rather than
+re-deriving them.**
+
+#### What does detection latency actually measure, and what did it come out to?
+
+One real, timed run (`agent/src/scripts/trace-invoke-proactive.ts`, built for this measurement): a
+real comment mentioning a real person, written to a real seeded Ship API, then polled with real
+`proactive_steady` graph invocations (never a blind sleep) until the mention was genuinely present in
+`ItemStore`. **Observed: 5,185ms**, event write to item present (FLEETGRAPH.MD:1044-1052). That number
+is dominated by `change-feed.ts`'s own deliberate `CHANGE_FEED_LAG_MS = 5,000` safety margin, not by
+agent processing (31ms for the final tick's own `graph.invoke()`) — the same "cursor must lag"
+reliability point Phase 1's Trigger Model section already argued for in principle, now its first real
+measured confirmation. The **derived** (not directly observed) worst-case bound for a running
+60-second-cadence poller is ~60,031ms. A separate, CI-run E2E spec
+(`e2e/agent-detection-latency.spec.ts`, TRO-322/FG-12) exercises the real public HTTP API instead of a
+direct `graph.invoke()` call and observed **7,751ms** locally. Both are comfortably under the brief's
+5-minute bar; both are stated at the confidence level FLEETGRAPH.MD actually earned for them — one
+real number and one derived bound, never conflated.
+
+#### What is the real, measured per-invocation cost so far, separate from the projection?
+
+Instrumented via `agent/.cache/cost-ledger.jsonl` (TRO-339/FG-21) on every real `model.invoke()` call
+across the three model-calling nodes that have ever actually run against the live Anthropic API.
+Total real spend to date, all nodes: **$0.001922** across 3 invocations (FLEETGRAPH.MD:1003-1018) —
+`respond` (bare chat) at $0.000218/run, `composeAnswer` (expansion) averaging $0.000852/run across
+exactly two very different real runs (a 0-document mistaken invocation and a real 12-document,
+cap-reached run). `composeStandupDraft` has **zero** real invocations — not a placeholder, a stated
+fact: no scheduler exists anywhere in this package that decides whose standup window is open and
+invokes the graph for them (`graph.ts:130-134`, restated in FLEETGRAPH.MD's Graph Diagram "Note 1").
+The same is true of `composeBlockerEscalation`, `composeRetroDraft`, and `composePlanChangeDraft` —
+real, tested, never yet invoked against the real API, for the identical reason: each chain's own
+module-docstring section states plainly that no scheduler decides when it runs (`graph.ts:213-216`,
+`266-269`, `328-331`).
+
+#### What is the cost model at scale, and where does it break first?
+
+FLEETGRAPH.MD's Production Cost Projections table: **~$450/month at 100 users, ~$4,470 at 1,000,
+~$44,700 at 10,000** — about a third more than the detection design Phase 1 replaced, which was
+cheaper mainly because it declined to do anything (FLEETGRAPH.MD:1094-1128; Phase 1's own equivalent
+table above, produced before implementation, projected $595/$5,940 at 100/1,000 projects on different
+unit assumptions — the two are not directly comparable line items, and this section does not pretend
+they are). **On-demand answering dominates at 64% of spend**, because following the graph outward
+costs more input tokens than answering from one document — the direct cost of treating the open
+document as a starting point rather than a fence, the same correction Phase 1's own "What it reasons
+about on demand" section argued for. **The request-rate ceiling arrives before the budget does**:
+Ship's ~6,000 req/min per-source-IP limit starts binding around 2,000 users, while the bill is still
+under $9,000/month (FLEETGRAPH.MD:1139-1143) — matching Phase 1's own finding under the older cost
+model almost exactly.
+
+#### What is the single biggest lever on cost, and has it been pulled?
+
+FLEETGRAPH.MD's own cost model names it: **which model answers on-demand questions** — moving that
+tier to the cheaper model is projected to cut per-user cost from $4.47 to $3.32, a 26% reduction
+(FLEETGRAPH.MD:1147-1148), on the assumption that "high-volume drafting work runs on the cheaper
+model; the reasoning tiers run on the more capable one" (FLEETGRAPH.MD:1118-1119, restated from this
+document's own Phase 1 cost section above). **Checking the actual wiring changes the answer: there is
+no two-tier setup to move away from.** `index.ts:162-166` constructs exactly one `ChatAnthropic`
+instance — `model: 'claude-haiku-4-5-20251001'` — and passes that single object into `buildGraph` as
+the one `model` every node in the graph shares (`graph.ts`'s own `buildGraph(model: AnthropicModel,
+...)` signature takes one model for the whole graph, not one per chain). `respond`, `composeAnswer`
+(the on-demand/reasoning tier the projection assumes is on a pricier model), and every
+`compose*Draft` node all call the identical Haiku client. So the cost cliff, checked against the real
+code rather than the projection's own assumption, is not "pull this lever to save 26%" — the
+cheap-tier choice already applies everywhere, on-demand included, and the $4.47/$3.32 comparison in
+FLEETGRAPH.MD describes a tiering design that has not been built. Stated precisely rather than
+repeating the projection's framing unexamined: real production spend, to the extent the 3-invocation
+ledger says anything at all, is more likely to track the *cheaper* end of both cost tables above than
+either assumed.
+
+---
+
 ## Constraints carried forward
 
 **Authentication does not expire for a background agent.** Ship's session timeouts — fifteen
