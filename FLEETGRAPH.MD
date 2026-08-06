@@ -183,6 +183,19 @@ diagram disagrees with the summary bullets that used to stand in this section's 
 disagreement is called out explicitly rather than smoothed over — see the two notes after the
 diagram.
 
+**Updated (TRO-349, 2026-08-05).** Three chains were missing from the diagram above:
+`proactive_escalation` (`detectBlockerFanout -> composeBlockerEscalation ->
+commitBlockerEscalation`, TRO-346/TRO-337 / FG-19), `proactive_retro` (`gatherRetroActivity ->
+composeRetroDraft -> commitRetroDraft`, TRO-335 / FG-17), and `proactive_plan_change`
+(`detectPlanChange -> composePlanChangeDraft -> commitPlanChangeDraft`, TRO-336 / FG-18) — all three
+already implemented in `graph.ts` (`buildGraph`'s `.addNode`/`.addEdge`/`.addConditionalEdges` calls
+and the `routeTrigger`/`RouteKey` switch) but never added to this section. Added here the same way
+as the rest of the diagram — read directly off that source, not the design brief. Same
+source-only-verification posture as `proactive_deep`: `graph.ts`'s own module docstring states, for
+each of the three, that "there is deliberately no scheduler in this file (or anywhere in this
+package)" that decides when they run, so — same reasoning as `proactive_deep` above — no real
+LangSmith trace exists for any of the three yet either.
+
 ```mermaid
 flowchart TD
     START(["START"])
@@ -211,14 +224,32 @@ flowchart TD
     composeStandupDraft --> commitStandupDraft["commitStandupDraft<br/>DraftStore.upsert + ItemStore.upsert;<br/>no-op if skipped or no draft text"]
     commitStandupDraft --> ENDdraft(["END<br/>DraftStore + ItemStore updated"])
 
+    RT -->|"proactive_escalation<br/>requires blockingIssueId"| detectBlockerFanout["detectBlockerFanout<br/>gather impact fan-out;<br/>gates on projects/people/reporting line — no model"]
+    detectBlockerFanout --> composeBlockerEscalation["composeBlockerEscalation 🤖*<br/>*model call SKIPPED in-node when<br/>blockerEscalationSkipReason is set"]
+    composeBlockerEscalation --> commitBlockerEscalation["commitBlockerEscalation<br/>DraftStore.upsert + ItemStore.upsert;<br/>no-op if skipped or no recipient"]
+    commitBlockerEscalation --> ENDescalation(["END<br/>DraftStore + ItemStore updated"])
+
+    RT -->|"proactive_retro<br/>requires weekId"| gatherRetroActivity["gatherRetroActivity<br/>week's success criteria + closed issues;<br/>gates on criteria/owner/dates — no model"]
+    gatherRetroActivity --> composeRetroDraft["composeRetroDraft 🤖*<br/>*model call SKIPPED in-node when<br/>retroSkipReason is set"]
+    composeRetroDraft --> commitRetroDraft["commitRetroDraft<br/>DraftStore.upsert + ItemStore.upsert;<br/>no-op if skipped or no draft text"]
+    commitRetroDraft --> ENDretro(["END<br/>DraftStore + ItemStore updated"])
+
+    RT -->|"proactive_plan_change<br/>requires weekId"| detectPlanChange["detectPlanChange<br/>reads Ship's OWN changed_since_approved flag;<br/>gates on approver/diff source/whitespace-only — no model"]
+    detectPlanChange --> composePlanChangeDraft["composePlanChangeDraft 🤖*<br/>*model call SKIPPED in-node when<br/>planChangeSkipReason already set;<br/>MATERIAL/NOT MATERIAL verdict can<br/>ALSO set it after the call"]
+    composePlanChangeDraft --> commitPlanChangeDraft["commitPlanChangeDraft<br/>DraftStore.upsert + ItemStore.upsert;<br/>no-op if skipped or no draft text"]
+    commitPlanChangeDraft --> ENDplanchange(["END<br/>DraftStore + ItemStore updated"])
+
     ENDinbox -.->|"item sits in ItemStore<br/>until a human acts"| GATE
     ENDdraft -.->|"draft sits in DraftStore/ItemStore<br/>until a human decides"| GATE[["Human-in-the-loop gate<br/>gate.ts — FG-8 / TRO-321<br/>NOT a node in this StateGraph"]]
+    ENDescalation -.->|"draft sits in DraftStore/ItemStore<br/>until a human decides"| GATE
+    ENDretro -.->|"draft sits in DraftStore/ItemStore<br/>until a human decides"| GATE
+    ENDplanchange -.->|"draft sits in DraftStore/ItemStore<br/>until a human decides"| GATE
     GATE -->|"acceptDraft / acceptProposedTransition<br/>accepting person's OWN token"| WRITE[("real Ship write")]
     GATE -->|"discardItem / rejectProposedTransition"| NOWRITE["no Ship write"]
 
     classDef modelCall fill:#fef3c7,stroke:#d97706,stroke-width:2px;
     classDef external fill:#e5e7eb,stroke:#6b7280,stroke-width:2px,stroke-dasharray:5 5;
-    class respond,composeAnswer,composeStandupDraft modelCall;
+    class respond,composeAnswer,composeStandupDraft,composeBlockerEscalation,composeRetroDraft,composePlanChangeDraft modelCall;
     class GATE,WRITE,NOWRITE external;
 ```
 
