@@ -79,7 +79,43 @@ export interface AgentShipEnv {
 
 type WorkerFixtures = { agentShip: AgentShipEnv };
 
-async function waitForServer(url: string, timeoutMs: number): Promise<void> {
+/**
+ * Bounded ring buffer of a spawned process's own stdout+stderr, plus its
+ * exit event if one fires — attached unconditionally (not gated behind
+ * `DEBUG=1`, unlike the console-mirroring handlers below), so that if
+ * `waitForServer` ever times out on this process, the thrown error can
+ * quote what the process itself said instead of a bare "fetch failed".
+ * TRO-359: the original GitLab-only failure (pipeline 18073) threw with
+ * zero information about *why* the process the fetch was aimed at never
+ * answered — `vite preview`'s stdout/stderr were only ever mirrored when
+ * `debug` was true, so the one run that needed this evidence didn't have
+ * it. Capturing always, and printing only on the failure path, gets the
+ * diagnosis without adding noise to a passing run's log.
+ */
+function tailBuffer(proc: ChildProcess, label: string): () => string {
+  const chunks: string[] = [];
+  let totalLen = 0;
+  const CAP = 8000;
+  const push = (buf: Buffer) => {
+    const s = buf.toString();
+    chunks.push(s);
+    totalLen += s.length;
+    while (totalLen > CAP && chunks.length > 1) {
+      totalLen -= chunks.shift()!.length;
+    }
+  };
+  proc.stdout?.on('data', push);
+  proc.stderr?.on('data', push);
+  proc.on('exit', (code, signal) => {
+    push(Buffer.from(`\n[${label}] process exited: code=${code} signal=${signal}\n`));
+  });
+  proc.on('error', (err) => {
+    push(Buffer.from(`\n[${label}] process 'error' event: ${String(err)}\n`));
+  });
+  return () => (chunks.join('').slice(-CAP) || `(no output captured from ${label})`);
+}
+
+async function waitForServer(url: string, timeoutMs: number, getDiagnostics?: () => string): Promise<void> {
   const start = Date.now();
   let lastError: unknown;
   while (Date.now() - start < timeoutMs) {
@@ -98,7 +134,10 @@ async function waitForServer(url: string, timeoutMs: number): Promise<void> {
     }
     await new Promise((r) => setTimeout(r, 200));
   }
-  throw new Error(`Server at ${url} did not start within ${timeoutMs}ms. Last error: ${String(lastError)}`);
+  const diagnostics = getDiagnostics ? `\n--- captured process output ---\n${getDiagnostics()}` : '';
+  throw new Error(
+    `Server at ${url} did not start within ${timeoutMs}ms. Last error: ${String(lastError)}${diagnostics}`
+  );
 }
 
 /** Merges one or more raw `Set-Cookie` header values into a single `Cookie`
@@ -327,10 +366,23 @@ export const test = base.extend<{ agentShip: AgentShipEnv }, WorkerFixtures>({
       // proxy (api/src/routes/agent.ts) reads AGENT_API_BASE_URL and
       // AGENT_INTERNAL_SECRET from its OWN env at module load, so both must
       // be known and correct at api's spawn time, not discovered afterward.
+      // 127.0.0.1, not "localhost" — TRO-359. Node resolves the string
+      // "localhost" via a single DNS lookup whose result (IPv4 127.0.0.1 vs
+      // IPv6 ::1) depends on the container's own resolver config, and that
+      // config differs between GitHub Actions' bare ubuntu-latest VM (where
+      // this fixture has always been green) and GitLab CI's job, which runs
+      // inside a `node:22-bookworm` *container* (`.gitlab-ci.yml`'s
+      // `.node_env.image`) — a different network namespace with its own
+      // getaddrinfo behaviour. `api`/`agent` bind with a bare
+      // `.listen(PORT, cb)` (no host), which is dual-stack and answers
+      // either family regardless of which one "localhost" resolves to; the
+      // literal IP removes the ambiguity outright rather than depending on
+      // that being true for `vite preview` below too (it isn't — see its
+      // own comment).
       const apiPort = await getPort();
-      const apiUrl = `http://localhost:${apiPort}`;
+      const apiUrl = `http://127.0.0.1:${apiPort}`;
       const agentPort = await getPort();
-      const agentUrl = `http://localhost:${agentPort}`;
+      const agentUrl = `http://127.0.0.1:${agentPort}`;
       const internalSecret = `e2e-fixture-secret-${workerInfo.workerIndex}`;
 
       const apiProc: ChildProcess = spawn('node', ['dist/index.js'], {
@@ -348,7 +400,8 @@ export const test = base.extend<{ agentShip: AgentShipEnv }, WorkerFixtures>({
         stdio: debug ? 'inherit' : 'pipe',
       });
       apiProc.stderr?.on('data', (d) => console.error(`${tag} api: ${d.toString().trim()}`));
-      await waitForServer(`${apiUrl}/health`, 30_000);
+      const apiTail = tailBuffer(apiProc, `${tag} api`);
+      await waitForServer(`${apiUrl}/health`, 30_000, apiTail);
       if (debug) console.log(`${tag} api ready at ${apiUrl}`);
 
       const shipApiToken = await mintApiToken(apiUrl, devUserEmail, devUserPassword);
@@ -377,25 +430,46 @@ export const test = base.extend<{ agentShip: AgentShipEnv }, WorkerFixtures>({
         stdio: debug ? 'inherit' : 'pipe',
       });
       agentProc.stderr?.on('data', (d) => console.error(`${tag} agent: ${d.toString().trim()}`));
-      await waitForServer(`${agentUrl}/health`, 30_000);
+      const agentTail = tailBuffer(agentProc, `${tag} agent`);
+      await waitForServer(`${agentUrl}/health`, 30_000, agentTail);
       if (debug) console.log(`${tag} agent ready at ${agentUrl}`);
 
       const webPort = await getPort();
-      const webUrl = `http://localhost:${webPort}`;
-      const webProc: ChildProcess = spawn('npx', ['vite', 'preview', '--port', String(webPort), '--strictPort'], {
-        cwd: path.join(PROJECT_ROOT, 'web'),
-        env: {
-          ...process.env,
-          // vite.config.ts's preview proxy reads this to forward /api/* to
-          // the real api process — the browser only ever talks to webUrl.
-          API_PORT: String(apiPort),
-        },
-        stdio: debug ? 'inherit' : 'pipe',
-      });
+      const webUrl = `http://127.0.0.1:${webPort}`;
+      const webProc: ChildProcess = spawn(
+        'npx',
+        // --host 127.0.0.1, explicit — TRO-359 root cause. Vite's preview
+        // server, given no --host, resolves the string "localhost" to
+        // exactly ONE address via a single DNS lookup and binds ONLY to
+        // that family (unlike api/agent's dual-stack bind above). On
+        // GitHub Actions' bare ubuntu-latest runner that lookup has always
+        // landed on 127.0.0.1, so this fixture has only ever been proven
+        // there. GitLab CI runs this same job inside a `node:22-bookworm`
+        // container (`.gitlab-ci.yml`), a different network namespace
+        // whose "localhost" resolution is not guaranteed to agree — and
+        // every GitLab run of this job (pipelines 18007-18073) died at
+        // exactly this waitForServer call (agentEnv.ts's own line numbers
+        // confirmed against pipeline 18073's job trace: the api and agent
+        // waits above it never threw). Binding and fetching an explicit
+        // loopback literal on both ends removes the DNS step — and
+        // therefore the platform dependency — entirely.
+        ['vite', 'preview', '--port', String(webPort), '--strictPort', '--host', '127.0.0.1'],
+        {
+          cwd: path.join(PROJECT_ROOT, 'web'),
+          env: {
+            ...process.env,
+            // vite.config.ts's preview proxy reads this to forward /api/* to
+            // the real api process — the browser only ever talks to webUrl.
+            API_PORT: String(apiPort),
+          },
+          stdio: debug ? 'inherit' : 'pipe',
+        }
+      );
       webProc.stderr?.on('data', (d) => {
         if (debug) console.log(`${tag} web: ${d.toString().trim()}`);
       });
-      await waitForServer(webUrl, 30_000);
+      const webTail = tailBuffer(webProc, `${tag} web`);
+      await waitForServer(webUrl, 30_000, webTail);
       if (debug) console.log(`${tag} web ready at ${webUrl}`);
 
       // A second real token, this time for Bob — GET /api/agent/inbox always
