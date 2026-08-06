@@ -101,7 +101,8 @@ function tailBuffer(proc: ChildProcess, label: string): () => string {
     chunks.push(s);
     totalLen += s.length;
     while (totalLen > CAP && chunks.length > 1) {
-      totalLen -= chunks.shift()!.length;
+      const removed = chunks.shift();
+      if (removed !== undefined) totalLen -= removed.length;
     }
   };
   proc.stdout?.on('data', push);
