@@ -40,11 +40,22 @@ function isValidEmail(email: string): boolean {
 }
 
 /**
- * Validate returnTo URL is same-origin (prevent open redirect)
+ * Validate returnTo URL is same-origin (prevent open redirect).
+ *
+ * TRO-309 (CodeQL js/server-side-unvalidated-url-redirection): the original
+ * check only rejected a literal `//` prefix (protocol-relative). That misses
+ * a documented WHATWG-URL-parser bypass — browsers normalize a leading `\`
+ * to `/` when resolving a relative reference against an http(s) origin, so
+ * `/\evil.com` resolves identically to `//evil.com`. Confirmed with Node's
+ * spec-compliant `URL` parser (same algorithm browsers use to resolve a
+ * `Location` header): `new URL('/\\evil.com', 'https://ship.example.com/x')`
+ * -> `https://evil.com/`. Rejecting any backslash closes that path; there is
+ * no legitimate reason for an in-app `returnTo` path to contain one.
  */
-function isValidReturnTo(returnTo: string): boolean {
-  // Only allow relative paths starting with /
-  return returnTo.startsWith('/') && !returnTo.startsWith('//');
+export function isValidReturnTo(returnTo: string): boolean {
+  // Only allow relative paths starting with a single '/', with no backslash
+  // anywhere (see bypass note above).
+  return returnTo.startsWith('/') && !returnTo.startsWith('//') && !returnTo.includes('\\');
 }
 
 // GET /api/auth/caia/status - Check if CAIA auth is available
