@@ -50,12 +50,13 @@ carried forward":**
   `routeTrigger`'s dispatch (`graph.ts:1188-1205`), the six model-calling nodes, and where execution
   path is genuinely variable (`expandFrontier`'s self-loop) versus fixed (the four-node proactive
   chain) — backed by FLEETGRAPH.MD's own measured span counts (9/47/14).
-- **5. State Management** — `GraphState`'s full channel layout (`graph.ts:471-851`), the
-  concatenating-vs-last-write-wins reducer split, what actually carries across proactive runs (only
-  the poll cursor, a closure variable in `proactivePoll.ts`), and a named, real gap: an unposted
-  draft's composed text does not survive a process restart, which FLEETGRAPH.MD's own "restart costs
-  at most one poll cycle" guarantee does not cover (that guarantee is about `ItemStore`, not
-  `DraftStore`).
+- **5. State Management** — `GraphState`'s full channel layout (`graph.ts:471-851`, reset per
+  invocation by LangGraph) versus what is genuinely process-lifetime: the poll cursor (a closure
+  variable in `proactivePoll.ts`) plus the in-memory `ItemStore`/`DraftStore`, both of which persist
+  across every invocation and are lost only on a full process restart, not between runs. Names a real
+  gap within that: an unposted draft's composed text does not survive a process restart, which
+  FLEETGRAPH.MD's own "restart costs at most one poll cycle" guarantee does not cover (that guarantee
+  is about `ItemStore`, not `DraftStore`).
 - **6. Human-in-the-Loop Design** — `gate.ts`'s four operations and exactly what each does/does not
   write to Ship, and the ticket's own worked example of "decided later, not backdated": `acceptDraft`
   was built and unit-tested by FG-8/TRO-321 with zero real callers until TRO-348 wired
@@ -88,9 +89,12 @@ terraform-only tickets, e.g. TF-1/TF-3/TF-9).** This is a pure documentation cha
 code touched, so `scripts/factory/gate.sh`'s G6 (regression-test present) legitimately fails with
 nothing to show. Accepted as an explicit, reasoned exception rather than a silently green gate.
 
-**Rollback.** `git revert` this commit, or manually remove the `## Phase 2: Graph Architecture` /
-`## Phase 3: Stack and Deployment` sections from `PRESEARCH.MD` (everything between the Phase 1
-cost-cliff list and `## Constraints carried forward`). No other file changed.
+**Rollback.** `git revert` this commit — reverts both files together, which is the correct unit: it
+removes the `## Phase 2: Graph Architecture` / `## Phase 3: Stack and Deployment` sections from
+`PRESEARCH.MD` (everything between the Phase 1 cost-cliff list and `## Constraints carried forward`)
+AND this `CHANGES.md` entry itself in the same operation, so the changelog does not end up claiming
+sections exist that a manual, partial rollback removed. A manual (non-`revert`) rollback must remove
+both — the `PRESEARCH.MD` sections and this entry — for the same reason.
 
 ---
 

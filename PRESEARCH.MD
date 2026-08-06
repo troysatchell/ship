@@ -3,7 +3,9 @@
 A project intelligence agent for Ship, the project management tool built by the U.S. Department
 of the Treasury.
 
-Date: August 3, 2026
+Date: August 3, 2026 (Phase 1, sections 1-3, below). Phase 2 and Phase 3 (sections 4-9) were added
+2026-08-06, against the merged implementation — see each phase's own opening note for what that
+means for how they were written.
 
 ---
 
@@ -565,7 +567,12 @@ last node before that chain's own commit/end step, never the first. Every one of
 prompt entirely from state a prior, model-free node already gathered (`buildExpansionPrompt`,
 `buildStandupPrompt`, `buildBlockerEscalationPrompt`, `buildRetroPrompt`, `buildPlanChangePrompt` —
 `graph.ts`'s own imports, `graph.ts:391-419`) — the model is never the thing deciding *what* evidence
-to look at, only how to phrase what a deterministic gather step already found. `AnthropicModel`
+to look at. For five of the six, it also does not decide *whether* anything gets written — only how
+to phrase what a deterministic gather step already found. `composePlanChangeDraft` is the one
+exception, already flagged in the table above: its `MATERIAL`/`NOT MATERIAL` verdict
+(`parseMaterialityVerdict`, `planChangeDraft.ts`) can itself set `planChangeSkipReason` after the call,
+for a case (a genuine typo versus a weakened requirement) the deterministic gate correctly declined to
+judge — the model's output is a decision boundary there, not phrasing alone. `AnthropicModel`
 (`graph.ts:436-444`) is the one injected interface every one of the six calls through, which is what
 lets every existing test substitute a plain object with no real API dependency (`graph.test.ts`'s own
 docstring, quoted in FLEETGRAPH.MD's Cost Analysis: "every test for all three uses a stable fake
@@ -861,9 +868,23 @@ Deployment model section, "Settled (TRO-341/FG-23)").
 
 #### Whose identity does the agent run under, and why is there no service account?
 
-Unchanged from Phase 1's own Constraints section below: every API token belongs to a real user, so
-the agent runs under each person's own token — restated in FLEETGRAPH.MD verbatim and, as Section 4
-above documents, only actually implemented this way for the on-demand path once TRO-342 landed.
+Phase 1's Constraints section (below) states the principle: every API token belongs to a real user,
+so the agent runs under each person's own token. **That principle is not uniformly implemented, and
+this section says exactly where it does and does not hold rather than restating the principle as if
+it were.** Only the on-demand path runs under the asking person's own token, since TRO-342
+(Section 4 above). The proactive fast/steady chain (`ProactiveDeps.shipClient`) and the deep tier
+(`DeepDeps.shipClient`) both still bind ONE shared `ShipClient` to `config.shipApiToken` — the single
+env var minted from `dev@ship.local`, a real seeded super-admin (FLEETGRAPH.MD's "Login and the 403"
+section) — for every poll tick and every standup/retro/escalation/plan-change draft, regardless of
+which person the resulting item is ultimately shown to. This is a real, already-investigated gap, not
+a new one this document is raising for the first time: TRO-350 (filed as TRO-342's own deliberately
+left-open other half) reads the exact same fact and reaches an explicit "accepted-risk-documented"
+conclusion rather than a fix — its own reasoning for not escalating further matches Phase 1's:
+`dev@ship.local` is a real account, not synthetic, and "private documents are currently hypothetical"
+(all documents in both the local and graded databases are workspace-visible today). **That reasoning
+holds only as long as the data stays that way** — TRO-350's own scope section leaves the actual fix
+(per-recipient tokens for a poll no specific user triggered) as an open design question, not
+something this ticket resolves.
 
 #### What is the promotion/rollback story, and what does each layer actually catch?
 
@@ -925,9 +946,10 @@ real number and one derived bound, never conflated.
 
 #### What is the real, measured per-invocation cost so far, separate from the projection?
 
-Instrumented via `agent/.cache/cost-ledger.jsonl` (TRO-339/FG-21) on every real `model.invoke()` call
-across the three model-calling nodes that have ever actually run against the live Anthropic API.
-Total real spend to date, all nodes: **$0.001922** across 3 invocations (FLEETGRAPH.MD:1003-1018) —
+Instrumented via `agent/.cache/cost-ledger.jsonl` (TRO-339/FG-21) on every real `model.invoke()` call.
+Only **two** of the six model-calling nodes have ever actually run against the live Anthropic API —
+`respond` and `composeAnswer` — across **3** invocations total. Total real spend to date, all nodes:
+**$0.001922** (FLEETGRAPH.MD:1003-1018) —
 `respond` (bare chat) at $0.000218/run, `composeAnswer` (expansion) averaging $0.000852/run across
 exactly two very different real runs (a 0-document mistaken invocation and a real 12-document,
 cap-reached run). `composeStandupDraft` has **zero** real invocations — not a placeholder, a stated
