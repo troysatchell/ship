@@ -49,14 +49,23 @@ export function setupSwagger(app: Express): void {
 }
 
 // Simple JSON to YAML converter (no external dependency needed)
-function jsonToYaml(obj: unknown, indent = 0): string {
+export function jsonToYaml(obj: unknown, indent = 0): string {
   const spaces = '  '.repeat(indent);
 
   if (obj === null) return 'null';
   if (obj === undefined) return '';
   if (typeof obj === 'string') {
     if (obj.includes('\n') || obj.includes(':') || obj.includes('#')) {
-      return `"${obj.replace(/"/g, '\\"')}"`;
+      // TRO-309 (CodeQL js/incomplete-sanitization): backslashes must be
+      // escaped BEFORE quotes, and before this fix they were not escaped at
+      // all. A value ending in a bare backslash right before the closing
+      // quote (e.g. 'trailing:\\') produced `"trailing:\"` — a quoted YAML
+      // scalar whose last two characters read as an *escaped* double quote,
+      // not the terminator, leaving the string unterminated from the YAML
+      // parser's point of view. Escaping backslash first (so a literal `\`
+      // becomes `\\`) keeps the following `\"` an unambiguous, correctly
+      // escaped quote.
+      return `"${obj.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
     }
     return obj;
   }
