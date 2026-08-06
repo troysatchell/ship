@@ -21,6 +21,83 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-360 — FG: PRESEARCH.MD was missing Phases 2-3 — template sections 4-9 absent from a required deliverable file
+
+**Root cause, verified by reading the file, not assumed from the ticket's framing.** `PRESEARCH.MD`
+covers Phase 1 (sections 1-3: agent responsibility scoping, use cases, trigger model) thoroughly and
+then jumps straight from Phase 1's trigger-model subsections to "Constraints carried forward" — no
+Phase 2 (Graph Architecture: 4. Node Design, 5. State Management, 6. Human-in-the-Loop Design,
+7. Error and Failure Handling) or Phase 3 (Stack and Deployment: 8. Deployment Model, 9. Performance)
+heading anywhere in the file. Confirmed the file had not been touched since 2026-08-03 (git log), the
+same day Phase 1 was written and well before `agent/src/graph.ts`, `gate.ts`, `resilientClient.ts`,
+or `circuitBreaker.ts` existed.
+
+**Pure writing ticket, no research left per the ticket's own scope — every answer already settled and
+verifiable in `FLEETGRAPH.MD`, `agent/src/graph.ts`, and Linear tickets TRO-315 (FG-4, resilience) and
+TRO-311 (RULE-7, the circuit-breaker pattern this agent's breaker was copied from).** Read
+`FLEETGRAPH.MD` in full (1,173 lines — Architecture Decisions, Graph Diagram, Execution Traces, Cost
+Analysis, Deployment model sections) and `agent/src/graph.ts` in full (1,889 lines, including its own
+extensive module docstring documenting all seven trigger chains), plus `gate.ts`, `circuitBreaker.ts`,
+`resilientClient.ts`, `config.ts`, `health.ts`, `server.ts`, `itemStore.ts`, `draftStore.ts`, and
+`proactivePoll.ts` for file:line-level evidence, before writing anything.
+
+**What was added — all 9 template sections now present as named sections (`## Phase 2: Graph
+Architecture` / `### 4-7`, `## Phase 3: Stack and Deployment` / `### 8-9`), matching Phase 1's own
+observed-vs-derived evidence style, inserted between Phase 1's cost-cliff list and "Constraints
+carried forward":**
+
+- **4. Node Design** — the seven trigger chains and 22 nodes (`NODE_NAMES`, `graph.ts:857-880`),
+  `routeTrigger`'s dispatch (`graph.ts:1188-1205`), the six model-calling nodes, and where execution
+  path is genuinely variable (`expandFrontier`'s self-loop) versus fixed (the four-node proactive
+  chain) — backed by FLEETGRAPH.MD's own measured span counts (9/47/14).
+- **5. State Management** — `GraphState`'s full channel layout (`graph.ts:471-851`, reset per
+  invocation by LangGraph) versus what is genuinely process-lifetime: the poll cursor (a closure
+  variable in `proactivePoll.ts`) plus the in-memory `ItemStore`/`DraftStore`, both of which persist
+  across every invocation and are lost only on a full process restart, not between runs. Names a real
+  gap within that: an unposted draft's composed text does not survive a process restart, which
+  FLEETGRAPH.MD's own "restart costs at most one poll cycle" guarantee does not cover (that guarantee
+  is about `ItemStore`, not `DraftStore`).
+- **6. Human-in-the-Loop Design** — `gate.ts`'s four operations and exactly what each does/does not
+  write to Ship, and the ticket's own worked example of "decided later, not backdated": `acceptDraft`
+  was built and unit-tested by FG-8/TRO-321 with zero real callers until TRO-348 wired
+  `POST /accept-draft` — quoted directly from TRO-348's own `CHANGES.md` entry rather than restated
+  from memory.
+- **7. Error and Failure Handling** — `ResilientClient`'s real timeout/retry/breaker/self-throttle
+  numbers (5000ms / 3 attempts / threshold 5 / cooldown 30000ms / 500rpm, all from `config.ts`'s
+  `DEFAULT_*` constants) and the circuit breaker's TRO-311 provenance (copied post-fix, carrying the
+  half-open concurrency regression test forward). **One real gap found and reported, not smoothed
+  over:** `resilientClient.ts`'s own docstring claims to cover "Ship API and the model provider both,"
+  but `index.ts:162-166` constructs `ChatAnthropic` directly with no `ResilientClient` wrapping it —
+  only Ship calls actually go through the resilient layer. `server.ts`'s own `/chat` handler comment
+  independently confirms the same gap from the other side (an in-flight model call is not cancelled
+  by the handler's own timeout, only orphaned).
+- **8. Deployment Model** — summarized against FLEETGRAPH.MD's own much longer operational record
+  (Render topology, the CI-gates-merge + health-check-promotion rollback story,
+  `deployReadiness.ts`'s sustained-vs-transient distinction) rather than duplicated, with citations to
+  where the fuller account lives; includes the repeated auto-deploy-didn't-fire incidents as the
+  honest cost of shipping, not summarized away.
+- **9. Performance** — the one real, timed detection-latency measurement (5,185ms observed, ~60,031ms
+  derived worst-case bound, never conflated) and real per-invocation spend ($0.001922 total to date).
+  **One real correction found by checking the wiring instead of repeating the cost model's own
+  assumption:** the cost model's "biggest lever" (moving on-demand answers to a cheaper model, a
+  projected 26% cut) assumes a two-tier model setup that does not exist — `index.ts` wires exactly one
+  `claude-haiku-4-5-20251001` client into every node in the graph, so on-demand is already on the
+  cheap tier and there is no such lever to pull.
+
+**Regression-test gate exception, per this ticket class's established precedent (same as the
+terraform-only tickets, e.g. TF-1/TF-3/TF-9).** This is a pure documentation change — no application
+code touched, so `scripts/factory/gate.sh`'s G6 (regression-test present) legitimately fails with
+nothing to show. Accepted as an explicit, reasoned exception rather than a silently green gate.
+
+**Rollback.** `git revert` this commit — reverts both files together, which is the correct unit: it
+removes the `## Phase 2: Graph Architecture` / `## Phase 3: Stack and Deployment` sections from
+`PRESEARCH.MD` (everything between the Phase 1 cost-cliff list and `## Constraints carried forward`)
+AND this `CHANGES.md` entry itself in the same operation, so the changelog does not end up claiming
+sections exist that a manual, partial rollback removed. A manual (non-`revert`) rollback must remove
+both — the `PRESEARCH.MD` sections and this entry — for the same reason.
+
+---
+
 ## TRO-362 — Action Items modal re-ambushes on every full page load, blocking the whole app until dismissed
 
 **The cost this closes.** Found live during Early Submission demo prep: on the graded deploy, the
