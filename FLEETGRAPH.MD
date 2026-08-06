@@ -10,7 +10,7 @@ this document names the file that implements it. The Test Cases table's trace-li
 *Pending* (FG-22 / TRO-340): each row needs a run against its own fixture state, which is Early
 Submission work. Anything still marked *Pending* is honestly pending, not a placeholder.
 
-Last updated: August 5, 2026
+Last updated: August 6, 2026
 
 ---
 
@@ -508,40 +508,59 @@ row needs a run against its own specific fixture state, and those fixtures are o
 constructed (see the graded-database status directly below). Filling the column is Early
 Submission work.
 
-**Graded-database fixture status (TRO-341/FG-23, 2026-08-04) — seeded, with one real gap found, not
-hidden.** `pnpm db:seed` ran against the graded `ship-db` (external connection, temporary IP
-allowlist, reset immediately after). Pre-seed sanity check: 257 documents / 11 users / 0
-`document_history` rows, matching the documented 2026-07-28 snapshot exactly — confirming this
-database's existing rows really were produced by this same seed script, the precondition the
-seeding plan itself named. Post-seed:
+**Graded-database fixture status — all four resolved (TRO-357, 2026-08-06).** The gap below was
+closed by re-running the (by then repaired) seed against the graded database — history kept, not
+rewritten:
 
-- **Test Cases 2 and 4 fixtures created successfully** — document ids below, real and resolvable
-  in the graded database today.
-- **Test Case 3's fixture ran but produced 0 closed issues, not the 3 its own row requires.** The
-  fixture logic picks issues to close from the *current* sprint as Postgres's `NOW()` resolves it
-  today (2026-08-04) — six days after this database's issues were originally created
-  (2026-07-28) — and this database's specific existing issue set apparently has none eligible in
-  whatever sprint that now is. Recorded, not fixed here: this ticket's scope was seeding and
-  environment, not redesigning the fixture's sprint-selection logic.
-- **Test Case 1's fixture did not fire at all** — same root cause, sharper effect. Its precondition
-  (`SELECT ... WHERE state != 'done' GROUP BY assignee ... HAVING count >= 3` against the current
-  sprint) found no engineer meeting the threshold *in the current sprint specifically*, so the
-  `if (engineerRow && cnt >= 3)` guard silently skipped the entire block — no error, no console
-  output, confirmed by reading `api/src/db/seed.ts` directly rather than guessing from the absent
-  log line. Verified (observed) that engineers with 3+ non-done issues DO exist in this database in
-  *some* sprint (a direct query found two), just not the one the fixture insists on. **Test Case 1's
-  row stays `Pending` below — a real gap for whoever runs the graded demo to know about, not
-  something this seeding pass could silently paper over.**
+**Original run (TRO-341/FG-23, 2026-08-04) — seeded, with two real gaps found, not hidden.**
+`pnpm db:seed` ran against the graded `ship-db` (external connection, temporary IP allowlist, reset
+immediately after). Pre-seed sanity check: 257 documents / 11 users / 0 `document_history` rows,
+matching the documented 2026-07-28 snapshot exactly — confirming this database's existing rows
+really were produced by this same seed script, the precondition the seeding plan itself named.
+Post-seed: Test Cases 2 and 4 fixtures created successfully; Test Case 3's fixture ran but produced
+0 closed issues, not the 3 its own row requires; Test Case 1's fixture did not fire at all. Both
+gaps traced to the same root cause — the old fixture logic *selected* pre-existing issues from
+whatever sprint resolved as "current" *today*, and issue-to-sprint assignments (frozen at the
+2026-07-28 base-data creation) had drifted out of alignment with it six days later. Recorded, not
+fixed in that pass: its scope was seeding and environment, not redesigning the fixture's
+sprint-selection logic.
 
-Document ids that DID resolve, against the graded `ship-db` (not this worktree's local scratch
+**Fix (TRO-345, PR #130, merged to `main` 2026-08-05).** `api/src/db/seed.ts` reworked so Test
+Cases 1 and 3 **create** their own Ship Core issues directly in the current sprint, each behind its
+own idempotency marker (`properties->>'fg3_fixture' = 'tc1'`/`'tc3'`) independent of the block-wide
+`document_history`-non-empty gate — so a repaired seed run can create these rows against a database
+where Test Cases 2/4 (and that gate) had already fired, without disturbing them. Code only; the
+re-seed itself (item 2 of that ticket's scope) was deliberately held for sign-off.
+
+**Re-seed (TRO-357, 2026-08-06) — gap closed, both fixtures now fire.** Temporary IP allowlist
+opened to a single `/32`, pre-seed check (375 documents / 11 users / 1 workspace /
+1 `document_history` row — grown from the 2026-08-04 snapshot by organic activity against the live
+graded deployment in the intervening 9 days, not a wrong-database signal: the workspace/user counts
+and every known TC2/TC4 document id below matched exactly before proceeding), `pnpm db:migrate`
+(no-op, already current), `pnpm db:seed` (additive — printed `✅ Test Case 1 fixture` and
+`✅ Test Case 3 fixture` by name, then the `📋 FG-3 test case document ids` block below), allowlist
+reset to `[]` and reset confirmed via a follow-up `GET`. Post-seed: documents 375 → 382 (+7: TC1's
+3 issues + 1 standup, TC3's 3 issues), `document_history` 1 → 2 (TC1's one state-change row),
+`fg3_fixture='tc1'`/`'tc3'` issue counts 0 → 3 / 0 → 3. Directly queried and confirmed: engineer
+Emma Johnson now has exactly 3 non-done TC1 issues (`in_review`, `in_progress`, `todo`, the last
+untouched for 7 days); the TC3 week carries all 4 success criteria with exactly 3 `done` issues
+completed inside the current week window. TC2/TC4's ids (table below) still resolve to the same
+document type and title as the 2026-08-04 run — unchanged.
+
+Document ids that resolve, against the graded `ship-db` (not this worktree's local scratch
 database):
 
 | Fixture | Document id |
 |---|---|
+| Test Case 1 — standup anchor | `85676a52-d676-429c-8d76-9c74b1bbdb8a` |
+| Test Case 1 — moved to in_review | `cfc40bfe-4a77-48e3-938a-46412695f331` |
+| Test Case 1 — commented | `6e0ad162-7255-42ab-bd89-8250304913bf` |
+| Test Case 1 — stale (7 days untouched) | `e252bd46-b1e8-4f14-9bb5-2aa174e3f3df` |
 | Test Case 2 — mention 1 | `65f499b2-8e8c-417c-8372-f60ff4ba8c75` |
 | Test Case 2 — mention 2 | `a8a08536-d4ef-44a9-a9c1-12d1efe39dc4` |
 | Test Case 2 — blocked week | `e5adadd7-e574-4f6b-9893-3da2261cf463` |
-| Test Case 3 — week (0 issues closed within it — see gap above) | `c8dfb32e-5b08-47d4-8150-af7728543ac4` |
+| Test Case 3 — week (3 issues closed within it, 4 success criteria) | `c8dfb32e-5b08-47d4-8150-af7728543ac4` |
+| Test Case 3 — closed issues | `71eb8b0e-bcdb-4463-9e78-ce1a88cf2361`, `5f593b41-8668-4077-90cd-d4b99b4df79d`, `343d850f-dc9c-4c83-8f15-7f752cb9813d` |
 | Test Case 4 — week (approved then edited) | `0e44bc95-6ee9-4aa7-a6c0-41205bf87e85` |
 
 These are document ids the fixture states live at, not LangSmith trace links — the `Trace Link`
@@ -945,6 +964,12 @@ the Test Cases section above for exactly which fixtures resolved, which didn't, 
 temporary `ipAllowList` PATCH was applied, the seed ran over the external connection string, and the
 allowlist was reset to `[]` immediately after — confirmed via a second `GET` on the postgres
 resource showing `ipAllowList: null` again.
+
+**Update, 2026-08-06 (TRO-357).** This run's Test Case 1/3 gap (previous paragraph) was root-caused
+and fixed in `seed.ts` (TRO-345, PR #130, merged 2026-08-05), then the fix was run against this same
+graded database following this identical allowlist-open/close procedure — see the "Test Cases"
+section above ("Re-seed (TRO-357, 2026-08-06)") for the full before/after evidence. Both fixtures
+now fire; TC2/TC4 confirmed unchanged.
 
 ---
 
