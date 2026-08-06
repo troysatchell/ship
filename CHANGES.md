@@ -21,6 +21,91 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-359 — FG: `e2e-agent` had never passed on GitLab — `main` red on the graded platform since PR-F
+
+**Cost.** The brief requires both agent E2E flows to run in CI on the graded GitLab platform.
+`e2e-agent` was added to `.gitlab-ci.yml` in PR #133/PR-F (commit `678d0f4`) and failed on GitLab
+from that commit onward — every `main` pipeline since (18007 through 18073, 10 pipelines over ~30
+hours) was `failed` or `canceled`, with `e2e-agent` (not the pre-existing, already-disclosed
+`image-build allow_failure` job) as the actual red job. Last green `main` pipeline before the job
+existed: `cae37f9` / pipeline 18001 (2026-08-05 18:02).
+
+**Root cause — observed, not assumed.** Pulled pipeline 18073's job trace directly
+(`glab api projects/.../jobs/60924/trace`) rather than reasoning from the ticket's description.
+Both specs failed identically, at `e2e/fixtures/agentEnv.ts:101` (`waitForServer`'s own throw
+site) called from **line 398 specifically** — the `webUrl` (`vite preview`) wait, not the api
+(`:351`, called from :390) or agent (`:380`, called from :419) waits, both of which never threw.
+That pins the failure to one specific spawned process, not "the environment" generally.
+
+Cause: `vite preview`, given no `--host`, resolves the string `"localhost"` via a single DNS
+lookup and binds to exactly the one address family that lookup returns (IPv4 `127.0.0.1` **or**
+IPv6 `::1`, never both). `api`/`agent` bind with a bare `.listen(PORT, cb)` — no host — which is
+dual-stack and answers on either family regardless of resolution order, which is why they never
+showed this symptom. GitHub Actions' `e2e-agent` job (`.github/workflows/ci.yml`) runs directly on
+a bare `ubuntu-latest` VM; GitLab CI's `.node_env` template runs the identical job **inside a
+`node:22-bookworm` container** (`image:` key) — a different network namespace, with no guarantee
+its `localhost` resolution agrees with the bare VM's. Same fixture code, same spawn arguments,
+two different container/host networking layers — a platform difference, not a code regression.
+
+**"Identical specs are green on GitHub Actions" — re-verified myself, not trusted from the
+ticket.** `gh run view 31063152874 -R troysatchell/ship --json jobs` (the merge-to-main run for
+PR #144, chosen because it post-dates PR-F): `e2e · agent detection latency + grounded chat` →
+`success`. The ticket's own claim checked out, but independently, per this project's provenance
+rule — the whole point of TRO-359 was not trusting an unverified CI claim.
+
+**Fix — `e2e/fixtures/agentEnv.ts`.** Bind `vite preview` explicitly (`--host 127.0.0.1`) and
+point every fixture URL (api, agent, web) at the literal `127.0.0.1` instead of the hostname
+`localhost`, removing the DNS step — and the platform dependency — entirely. Also added
+`tailBuffer()`: every spawned process's stdout+stderr+exit is now captured unconditionally (`web`'s
+previously wasn't — only mirrored under `DEBUG=1`, so the one CI run that needed this evidence had
+none) and quoted in `waitForServer`'s thrown error, so a future recurrence of this failure class is
+diagnosable straight from the CI log instead of requiring a second pipeline run just to see it.
+
+**Verified — real GitLab pipeline, not just local.** Local run first (`e2e-test-runner` skill,
+against the `ship-audit-pg` container): 2/2 passed, no retries — a sanity check only, since this
+machine's own `localhost` resolution was never the failing case. Real proof: this repo's GitLab
+pipelines run almost exclusively on direct pushes to `main` (`ref: main, source: push` — confirmed
+by listing the last 50 pipelines; only one `merge_request_event` pipeline exists in the project's
+entire history, and a manual `glab ci run` is rejected outright by `workflow:rules`, confirmed by
+trying it), so — matching this project's own documented sync convention — merged `origin/main`
+into the fix commit and pushed that directly to GitLab's `main`
+(`git push https://labs.gauntletai.com/troysatchell/Ship.git HEAD:main`).
+
+Two pushes to GitLab `main`, both watched to completion: merge commit `1b9187d` (the
+127.0.0.1/`--host`/`tailBuffer` fix) → **pipeline 18139**, `e2e-agent` success (job 61063, 65.8s,
+`🎭 Playwright Run Summary: 2 passed (37.3s)`). `gate.sh`'s `review-patterns` check then flagged a
+non-null assertion in that same commit's `tailBuffer` (`chunks.shift()!.length`); fixed with an
+explicit `undefined` check, commit `d949e05` → **pipeline 18140**, `e2e-agent` success again (job
+61067, 68.4s, `🎭 Playwright Run Summary: 2 passed (39.5s)`). `d949e05` is the final, gate-clean
+state this entry describes; both pipelines are linked so the fix's actual GitLab history is
+checkable rather than only the last one.
+
+| | Before | After |
+|---|---|---|
+| Last 10 `main` pipelines (18007-18073) | 10/10 failed or canceled | — |
+| `e2e-agent` on GitLab `main` | never once green since PR-F | **green** (pipelines 18139, 18140) |
+| `image-build` (unrelated, pre-existing) | `allow_failure: true`, failing | unchanged |
+
+No disclosure fallback needed — the root cause was cheaply fixable (one file, ~30 lines, no new
+dependency) and is now proven green on the actual graded platform, not just downgraded to
+`allow_failure`.
+
+**Rollback.** Revert the two commits touching `e2e/fixtures/agentEnv.ts` (`2e0dce7` — the
+127.0.0.1/`--host`/`tailBuffer` fix — and `d949e05` — the follow-up non-null-assertion cleanup)
+on the feature branch, and revert the same change on GitLab `main` (it was pushed directly there
+for verification, ahead of the GitHub PR merging — `git revert` against GitLab `main`, or
+`git push` a pre-fix `agentEnv.ts` directly, same mechanism used to land it). No schema change, no
+migration, no `.gitlab-ci.yml` change — reverting restores the exact pre-fix behavior (`e2e-agent`
+red on GitLab, green on GitHub, as it was for pipelines 18007-18073).
+
+**Accepted gate exception.** This is a CI-infrastructure fix to a test fixture, not new product
+behavior — the two existing specs (`agent-detection-latency.spec.ts`,
+`agent-chat-grounded-response.spec.ts`) are the coverage, and this ticket fixes their *environment*,
+not their assertions. `scripts/factory/gate.sh`'s G6 regression-test check may legitimately report
+no new vitest test for this change; that's expected for this ticket class, not a gamed gate.
+
+---
+
 ## TRO-360 — FG: PRESEARCH.MD was missing Phases 2-3 — template sections 4-9 absent from a required deliverable file
 
 **Root cause, verified by reading the file, not assumed from the ticket's framing.** `PRESEARCH.MD`
