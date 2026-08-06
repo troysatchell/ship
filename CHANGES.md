@@ -21,6 +21,32 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-363 — Agent chat's no-document state was invisible — disabled input read as broken
+
+**The cost this closes.** Opening the FleetGraph pill from any screen without an open document
+(dashboard, My Week, list pages) gave a grayed-out input that cannot be typed into, explained only
+by a 50%-opacity placeholder and an 11px muted hint. Quiet enough that the maintainer read the
+whole chat as broken during Early Submission demo prep (2026-08-06) — a grader would too. The
+*behavior* is by design (the open document seeds every question, FG-9;
+`AgentChatPanel.tsx` `disabled={!documentId || isBusy}`); the *affordance* was the defect.
+
+**What changed — presentational only, no behavior change.** When the panel is open with no
+document and no chat history, the empty state is now a prominent accent-tinted callout
+("Open a document to start" + what FleetGraph does and what to do), and the hint line above the
+disabled input renders in `accent-text` emphasis instead of 11px muted. Palette discipline kept:
+`accent` stays fill-only (2.89:1 as text), `accent-text` (#2491ff, AA-safe) carries the text —
+per tailwind.config.js's own rules.
+
+**How to verify.** `pnpm --filter @ship/web exec vitest run src/components/AgentChatPanel.test.tsx`
+— two new assertions: the callout renders with `documentId={null}`, and is absent (original copy
+intact) with a document open. Existing disabled-input assertions unchanged. Full web suite green,
+type-check clean.
+
+**Rollback.** Revert the commit; the disabled state returns to the quiet placeholder-only version.
+No API, schema, or behavior changes.
+
+---
+
 ## TRO-359 — FG: `e2e-agent` had never passed on GitLab — `main` red on the graded platform since PR-F
 
 **Cost.** The brief requires both agent E2E flows to run in CI on the graded GitLab platform.
