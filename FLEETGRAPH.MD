@@ -521,6 +521,25 @@ logged-out state mid-review means log in again, not breakage; and chat requires 
 by design (the empty-state callout in the panel says so explicitly — a standalone chatbot is
 exactly what this agent is not).
 
+### Timed live detection test (deployed site, 2026-08-07)
+
+The grading requirement: an event introduced into Ship must surface within five minutes. Run
+against this exact deployment (graded `ship` + `ship-agent` as deployed 2026-08-06, `af573d3`),
+observed, not derived:
+
+- **T0 = 2026-08-07T14:50:13.130Z** — a real comment mentioning `@Iris Nguyen` written through
+  the real API (`POST /api/documents/65f499b2-…/comments` → HTTP 201, as `dev@ship.local`).
+- **T1 = 2026-08-07T14:50:55.759Z** — the mention item observed in Iris's own ranked inbox via
+  session-authed `GET /api/agent/inbox` — the same endpoint the UI's `useInboxQuery.ts` renders —
+  carrying `evidence.commentId` equal to the exact comment id written at T0.
+- **Observed: 42.6 seconds** end-to-end (bar: 300s), polling as the recipient every 10s.
+  Consistent with the architecture's derived bound: up-to-60s steady-tier tick + 5s change-feed
+  lag + poll granularity. A second probe the same hour landed at ~16s (the item's own `createdAt`
+  minus its comment's write timestamp) — same mechanism, luckier phase alignment with the tick.
+
+Reproduce it: log in (credentials above), comment `@Full Name` of any seeded person on any issue,
+then open that person's inbox (their login, same password) — the item appears on the next tick.
+
 ---
 
 ## Test Cases
