@@ -7,14 +7,16 @@ of the Treasury.
 execution traces, trigger model, deployment model, and the Architecture Decisions write-ups are
 complete and written against the merged code (PRs #117, #120, #122) — every "settled" claim in
 this document names the file that implements it. **The Test Cases table's trace-link column is now
-filled (TRO-356, 2026-08-06)** — all six rows ran against this worktree's own local, freshly-seeded
-database, each with a real, public LangSmith trace link verified to resolve logged out. Five of six
-rows match their Expected Output exactly, observed directly in the traced draft/answer text. Row 2
-is the one exception: its mention-detection half is real and traced, but its blocking-approval half
-does not fire — verified as a real gap in Ship's own approval routes, not an agent bug or a fixture
-problem; see the Test Cases section below for the full finding.
+filled (TRO-356, 2026-08-06)** — all six rows ran against a local, freshly-seeded
+database, each with a real, public LangSmith trace link verified to resolve logged out. **All six
+rows now match their Expected Output exactly** (TRO-364, 2026-08-07): row 2 was a partial match
+for four days — its blocking-approval half could not fire because Ship's own approval routes never
+logged the transition to `document_history` — fixed at the routes, re-fixtured, and re-traced; the
+resolved finding (original kept as history) is in the Test Cases section. A timed live detection
+test against the deployed site observed **42.6 seconds** event-to-inbox (bar: 5 minutes) — see
+Grader Access.
 
-Last updated: August 6, 2026
+Last updated: August 7, 2026
 
 ---
 
@@ -505,7 +507,9 @@ proactive run above actually used — the graph's `pollChangeFeed` node is a thi
 ## Grader Access
 
 Working credentials for the deployed site, verified by a real login against this exact deployment
-on 2026-08-07:
+on 2026-08-07. (Deliberately published: the grading brief requires working credentials, this
+deployment is a graded test environment, and every account holds only synthetic seed data — the
+same password `seed.ts` has always printed. Nothing here grants access to anything real.)
 
 | Field | Value |
 |---|---|

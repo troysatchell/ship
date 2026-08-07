@@ -1155,8 +1155,10 @@ describe('Sprints API', () => {
       expect(res.status).toBe(200)
 
       const row = await latestHistory('plan_approval')
-      expect(row, 'request-plan-changes must log the blocked state to document_history — the agent change feed reads it').toBeDefined()
-      expect(JSON.parse(row!.new_value!).state).toBe('changes_requested')
+      if (!row?.new_value) {
+        throw new Error('request-plan-changes must log the blocked state to document_history — the agent change feed reads it')
+      }
+      expect(JSON.parse(row.new_value).state).toBe('changes_requested')
     })
 
     it('request-retro-changes logs a review_approval history row with state changes_requested', async () => {
@@ -1169,8 +1171,10 @@ describe('Sprints API', () => {
       expect(res.status).toBe(200)
 
       const row = await latestHistory('review_approval')
-      expect(row, 'request-retro-changes must log the blocked state to document_history — the agent change feed reads it').toBeDefined()
-      expect(JSON.parse(row!.new_value!).state).toBe('changes_requested')
+      if (!row?.new_value) {
+        throw new Error('request-retro-changes must log the blocked state to document_history — the agent change feed reads it')
+      }
+      expect(JSON.parse(row.new_value).state).toBe('changes_requested')
     })
 
     it('editing an approved plan logs the changed_since_approved transition', async () => {
@@ -1188,9 +1192,11 @@ describe('Sprints API', () => {
       expect(editRes.status).toBe(200)
 
       const row = await latestHistory('plan_approval')
-      expect(row, 'the approved→edited transition must log plan_approval to document_history — it is the approver-routed blocking signal').toBeDefined()
-      expect(JSON.parse(row!.new_value!).state).toBe('changed_since_approved')
-      expect(JSON.parse(row!.old_value!).state).toBe('approved')
+      if (!row?.new_value || !row.old_value) {
+        throw new Error('the approved→edited transition must log plan_approval to document_history — it is the approver-routed blocking signal')
+      }
+      expect(JSON.parse(row.new_value).state).toBe('changed_since_approved')
+      expect(JSON.parse(row.old_value).state).toBe('approved')
     })
   })
 
