@@ -1378,30 +1378,12 @@ async function seed() {
           }
         }
 
-        // A week owned by Emma (reports to Alice per reportingHierarchy above)
-        // blocked pending Alice's approval — "blocking one approval on someone
-        // else's week".
-        const emmaWeek = await pool.query(
-          `SELECT id FROM documents
-           WHERE workspace_id = $1 AND document_type = 'sprint' AND properties->>'owner_id' = $2
-           ORDER BY (properties->>'sprint_number')::int DESC LIMIT 1`,
-          [workspaceId, emma.id]
-        );
-        if (emmaWeek.rows[0]) {
-          const blockedApproval = {
-            state: 'changes_requested',
-            approved_by: alice.id,
-            approved_at: null,
-            approved_version_id: null,
-            feedback: 'Please add rollout specifics before I can approve.',
-          };
-          await pool.query(
-            `UPDATE documents SET properties = properties || $1::jsonb WHERE id = $2`,
-            [JSON.stringify({ plan_approval: blockedApproval }), emmaWeek.rows[0].id]
-          );
-          fg3TestCaseIds.testCase2_blockedWeek = emmaWeek.rows[0].id;
-        }
-        console.log(`✅ Test Case 2 fixture: 2 mentions of ${alice.name}, blocked week ${fg3TestCaseIds.testCase2_blockedWeek || 'n/a'}`);
+        // The blocked-week half of Test Case 2 lives OUTSIDE this gate now —
+        // see the dedicated section below the gate. Its original in-gate form
+        // wrote state 'changes_requested' with no document_history row: routed
+        // to the wrong person (the owner, not approver Alice) and invisible to
+        // the change feed either way.
+        console.log(`✅ Test Case 2 fixture (mentions): 2 mentions of ${alice.name}`);
       }
 
       // ---- Test Case 4 (FLEETGRAPH.MD): plan approved at version N, then ----
@@ -1567,6 +1549,72 @@ async function seed() {
       await createAssociation(pool, issueId, sprintId, 'sprint');
       await createAssociation(pool, issueId, projectId, 'project');
       return issueId;
+    }
+
+    // ==========================================================================
+    // Test Case 2 (FLEETGRAPH.MD), blocked-week half — repaired and moved out
+    // of the fg3Baseline gate so it can apply to an already-fixtured database
+    // (the graded ship-db has non-empty document_history, which skips the
+    // whole gated block above).
+    //
+    // Modeled as approved-then-edited: Alice approved Emma's plan, Emma
+    // revised it, so the week now waits on Alice's re-approval.
+    // 'changed_since_approved' routes the inbox item to the APPROVER
+    // (agent/src/proactive.ts, buildBlockingApprovalItems) — matching the
+    // documented expected output ("blocking one approval on someone else's
+    // week"); the original 'changes_requested' state routed to the owner. The
+    // history row mirrors what PATCH /api/weeks/:id/plan writes for this
+    // transition, because the change feed only carries approval state through
+    // document_history.
+    // ==========================================================================
+    const tc2Alice = allUsers.find((u: { name: string }) => u.name === 'Alice Chen');
+    const tc2Emma = allUsers.find((u: { name: string }) => u.name === 'Emma Johnson');
+    if (tc2Alice && tc2Emma) {
+      const tc2Week = await pool.query(
+        `SELECT id, properties->'plan_approval' as plan_approval FROM documents
+         WHERE workspace_id = $1 AND document_type = 'sprint' AND properties->>'owner_id' = $2
+         ORDER BY (properties->>'sprint_number')::int DESC LIMIT 1`,
+        [workspaceId, tc2Emma.id]
+      );
+      if (tc2Week.rows[0]) {
+        const tc2WeekId = tc2Week.rows[0].id;
+        const tc2Approved = {
+          state: 'approved',
+          approved_by: tc2Alice.id,
+          approved_at: new Date(Date.now() - 2 * 24 * 60 * 60 * 1000).toISOString(),
+          approved_version_id: null,
+          comment: 'Plan looks solid — approved.',
+        };
+        const tc2Blocked = { ...tc2Approved, state: 'changed_since_approved' };
+
+        if (tc2Week.rows[0].plan_approval?.state !== 'changed_since_approved') {
+          await pool.query(
+            `UPDATE documents SET properties = properties || $1::jsonb WHERE id = $2`,
+            [JSON.stringify({ plan_approval: tc2Blocked }), tc2WeekId]
+          );
+        }
+
+        // Guard: the transition row itself is the idempotency marker —
+        // document_history has no natural key to ON CONFLICT against.
+        const tc2Existing = await pool.query(
+          `SELECT id FROM document_history
+           WHERE document_id = $1 AND field = 'plan_approval'
+             AND new_value LIKE '%changed_since_approved%'`,
+          [tc2WeekId]
+        );
+        if (tc2Existing.rows.length === 0) {
+          await pool.query(
+            `INSERT INTO document_history (document_id, field, old_value, new_value, changed_by, automated_by)
+             VALUES ($1, 'plan_approval', $2, $3, $4, NULL)`,
+            [tc2WeekId, JSON.stringify(tc2Approved), JSON.stringify(tc2Blocked), tc2Emma.id]
+          );
+          fg3TestCaseIds.testCase2_blockedWeek = tc2WeekId;
+          console.log(`✅ Test Case 2 fixture (blocked week): ${tc2WeekId} waits on ${tc2Alice.name}'s re-approval (changed_since_approved + history row)`);
+        } else {
+          fg3TestCaseIds.testCase2_blockedWeek = tc2WeekId;
+          console.log('ℹ️  Test Case 2 blocked-week fixture already seeded (changed_since_approved history row present)');
+        }
+      }
     }
 
     // ==========================================================================

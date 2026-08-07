@@ -21,6 +21,44 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-364 — FG: TC2's blocking-approval half never fires — approval transitions now reach document_history
+
+**The cost this closes.** Grader-flagged: Test Cases row 2 was a documented partial match — the
+blocking-approval item could not fire through any real Ship write path, because no route ever
+logged a `plan_approval`/`review_approval` blocked-state transition to `document_history`, and the
+agent's change feed only carries approval state through history rows. Separately, the TC2 fixture's
+`changes_requested` state routed the item to the owner (Emma) while the documented expected output
+requires the approver (Alice) to hold it.
+
+**What changed.**
+- `api/src/routes/weeks.ts`: `logDocumentChange` at three sites — `request-plan-changes` and
+  `request-retro-changes` log their `changes_requested` entry; `PATCH /:id/plan` logs the
+  `approved → changed_since_approved` transition (the approver-routed blocking signal). The
+  detector itself (`agent/src/proactive.ts`) needed no change — it was correct all along, starved
+  of input.
+- `api/src/db/seed.ts`: TC2 blocked-week fixture re-modeled approved-then-edited
+  (`changed_since_approved` + the matching history row, written in the exact shape the route now
+  writes) and moved out of the `fg3Baseline` gate, with the transition row itself as the
+  idempotency marker, so a re-seed applies it to the graded database whose `document_history` is
+  no longer empty.
+- `FLEETGRAPH.MD`: row 2's finding rewritten as resolved (original kept as history), new public
+  trace link for row 2, and a new Grader Access section (credentials live-verified).
+
+**How to run/test locally.** In `api/`, against a scratch database only (the suite TRUNCATEs):
+`DATABASE_URL=<scratch> npx vitest run src/routes/weeks.test.ts` — the describe block "approval
+transitions reach document_history" is the regression net; all three of its assertions failed on
+missing rows before the fix (red-before-green), and the full api suite passed 832/832 with it.
+Fixture proof: `pnpm db:seed` twice against a scratch DB — the second run must print the ℹ️
+already-seeded line for the TC2 blocked week — then the row-2 procedure in FLEETGRAPH.MD
+§Test Cases reproduces the four-item ranked list.
+
+**Rollback.** Revert the commit. Nothing schema-level: the fix writes ordinary `document_history`
+rows through the existing `logDocumentChange` util, and rows already written are inert data
+needing no cleanup. The seed change is additive and idempotent — an older seed re-run against a
+database this version touched is a no-op for the block.
+
+---
+
 ## TRO-363 — Agent chat's no-document state was invisible — disabled input read as broken
 
 **The cost this closes.** Opening the FleetGraph pill from any screen without an open document
