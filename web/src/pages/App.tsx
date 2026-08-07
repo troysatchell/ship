@@ -60,7 +60,14 @@ export function AppLayout() {
   const [workspaceSwitcherOpen, setWorkspaceSwitcherOpen] = useState(false);
   const [projectSetupWizardOpen, setProjectSetupWizardOpen] = useState(false);
   const [actionItemsModalOpen, setActionItemsModalOpen] = useState(false);
-  const [actionItemsModalShownOnLoad, setActionItemsModalShownOnLoad] = useState(false);
+  // Once per browser session, not once per mount: this is a Radix modal whose
+  // backdrop blocks the entire app, and component state resets on every full
+  // page load (login redirect, refresh, opening a shared link) — so without
+  // the sessionStorage backing it re-ambushed the user on each of those. The
+  // top banner stays as the always-available way to reopen the list.
+  const [actionItemsModalShownOnLoad, setActionItemsModalShownOnLoad] = useState(
+    () => sessionStorage.getItem('ship:actionItemsModalShown') === 'true'
+  );
   // TRO-323 / FG-10: the ranked inbox overlay, toggled from the Icon Rail —
   // NOT one of the routed `Mode`s below. It temporarily replaces the
   // Contextual Sidebar's normal mode-based content ("the Icon Rail plus
@@ -144,6 +151,7 @@ export function AppLayout() {
     if (!actionItemsModalShownOnLoad && hasActionItems && actionItemsData?.items) {
       setActionItemsModalOpen(true);
       setActionItemsModalShownOnLoad(true);
+      sessionStorage.setItem('ship:actionItemsModalShown', 'true');
     }
   }, [actionItemsModalShownOnLoad, hasActionItems, actionItemsData?.items]);
 
