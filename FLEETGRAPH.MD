@@ -502,6 +502,27 @@ proactive run above actually used — the graph's `pollChangeFeed` node is a thi
 
 ---
 
+## Grader Access
+
+Working credentials for the deployed site, verified by a real login against this exact deployment
+on 2026-08-07:
+
+| Field | Value |
+|---|---|
+| URL | `https://ship-rr6m.onrender.com` |
+| Email | `alice.chen@ship.local` |
+| Password | `admin123` |
+
+Every seeded user shares the password `admin123` (`api/src/db/seed.ts` — printed at seed time).
+`alice.chen@ship.local` is the account worth grading from: Test Case 2's ranked inbox items are
+addressed to her. `dev@ship.local` (same password) is the root admin when a sees-everything view
+is needed. Two operational notes: sessions idle out after 15 minutes (12 hours absolute) — a
+logged-out state mid-review means log in again, not breakage; and chat requires an open document
+by design (the empty-state callout in the panel says so explicitly — a standalone chatbot is
+exactly what this agent is not).
+
+---
+
 ## Test Cases
 
 **The graph these cases exercise is built and merged** — PR #117 (proactive detection, on-demand
@@ -527,24 +548,56 @@ trustworthy alone), but the backing `GET /api/v1/public/{share_token}/run` LangS
 against a real vs. a fabricated token to confirm it actually discriminates (200 with the real run's
 own inputs/token-count/child-run-count vs. 404).
 
-**One row is a partial match, reported rather than papered over (row 2).** The mention-detection
-half is real and traced: two `@Alice Chen` mentions from the FG-3 seed fixture surface correctly.
-The blocking-approval half does not, and this is a verified Ship-side gap, not a fixture problem or
-an agent bug: `agent/src/proactive.ts`'s `buildBlockingApprovalItems` only ever creates a NEW
+**Row 2 was a partial match for four days — fixed 2026-08-07; the original finding is kept below
+as history.** The mention-detection half was always real and traced: two `@Alice Chen` mentions
+from the FG-3 seed fixture surface correctly. The blocking-approval half did not, and this was a
+verified Ship-side gap, not a fixture problem or an agent bug: `agent/src/proactive.ts`'s
+`buildBlockingApprovalItems` only ever creates a NEW
 blocking item from a `document_history` row whose `field` is `plan_approval`/`review_approval` and
 whose `new_value.state` is neither `'approved'` nor absent. Reading every `logDocumentChange(...,
 'plan_approval', ...)` / `logDocumentChange(..., 'review_approval', ...)` call site in
-`api/src/routes/weeks.ts` (`/approve-plan`, `/unapprove-plan`, `/approve-review`) shows every one of
+`api/src/routes/weeks.ts` (`/approve-plan`, `/unapprove-plan`, `/approve-review`) showed every one of
 them writes `state: 'approved'` or `null` — the exact two values `buildBlockingApprovalItems`
 treats as *resolving* an item, never creating one. `/request-plan-changes` and
-`/request-retro-changes` — the routes that actually PUT a week into a blocked state — update
-`properties.plan_approval`/`review_approval` directly and never call `logDocumentChange` for that
-field at all. So no document_history row recording entry into a blocked state exists anywhere in
+`/request-retro-changes` — the routes that actually PUT a week into a blocked state — updated
+`properties.plan_approval`/`review_approval` directly and never called `logDocumentChange` for that
+field at all. (Worse, found while fixing: `PATCH /api/weeks/:id/plan` set
+`state: 'changed_since_approved'` in properties without logging it either — so *neither* of the
+detector's creating branches had a real producer.) So no document_history row recording entry into
+a blocked state existed anywhere in
 this codebase's real write paths — confirmed empirically too: polling `proactive_steady` over a
-6-day window against the FG-3 fixture's own blocked week returns the 2 real mentions and zero
+6-day window against the FG-3 fixture's own blocked week returned the 2 real mentions and zero
 `plan_approval`/`review_approval` history entries (`changeFeedPage.history` inspected directly).
-The fixture's own direct-`UPDATE` construction (seed.ts's TC2 block) is not the cause — it would
+The fixture's own direct-`UPDATE` construction (seed.ts's TC2 block) was not the cause — it would
 fail the identical way even if built entirely through Ship's own approval-workflow API.
+
+**The fix (2026-08-07, branch `troysatchell/tc2-blocking-approval-history`).** Two halves, both
+required:
+
+1. **Ship now logs every approval transition to `document_history`.** Three write sites in
+   `api/src/routes/weeks.ts`: `request-plan-changes` and `request-retro-changes` log their
+   `changes_requested` entry (owner-routed: "revise and resubmit"), and `PATCH /api/weeks/:id/plan`
+   logs the `approved → changed_since_approved` transition (approver-routed: "waiting on your plan
+   approval"). Covered by three red-before-green route tests in `api/src/routes/weeks.test.ts`
+   ("approval transitions reach document_history") — all three failed with zero history rows before
+   the fix, and the full api suite (832 tests) passes with it.
+2. **The TC2 fixture was re-modeled and moved out of the seed's `fg3Baseline` gate**
+   (`api/src/db/seed.ts`). Re-modeled as approved-then-edited — Alice approved Emma's plan, Emma
+   revised it, so the week waits on Alice's *re-approval* (`changed_since_approved`) — because the
+   detector routes `changes_requested` to the OWNER, meaning the old fixture state would have put
+   the item in Emma's inbox, not Alice's, even after fix #1; the documented expected output
+   requires the approver to hold it. Moved outside the gate (with the transition row itself as the
+   idempotency marker) because the graded database's `document_history` is no longer empty, which
+   skips the whole gated block on a re-seed.
+
+Re-run against a fresh scratch database (`ship_tc2fix_test`, seeded from scratch, blocked week
+`2b343bef-7ac0-45c7-b9d3-01e51238b9dc` "Week 16"), one process, shared in-memory stores:
+`proactive_deep` for Alice (her waiting standup draft), then `proactive_steady` over a 6-day
+window. Alice's ranked list came back exactly as documented — **4 items, blocking approval first**
+(`blocking_approval`, `mention`, `mention`, `standup_draft`) — and the steady run's public trace is
+row 2's link below, verified logged-out the same two ways as every other row (public page AND
+`GET /api/v1/public/{share_token}/run`: 200 with the run's own 14 child runs for the real token,
+404 for a fabricated one).
 
 **Graded-database fixture status — all four resolved (TRO-357, 2026-08-06).** The gap below was
 closed by re-running the (by then repaired) seed against the graded database — history kept, not
@@ -614,7 +667,7 @@ needs directly, so both fired cleanly on a fresh `pnpm db:seed` run today:
 | Test Case 1 — stale (no activity in 7 days) | `aa68b12f-a448-4bbf-a6d6-33407569827f` |
 | Test Case 2 — mention 1 | `8a7fd8fd-85b8-4dd9-bdd2-8ca4e8e79264` |
 | Test Case 2 — mention 2 | `ecf703b4-13d8-4855-aaa0-ed6ab42fe34b` |
-| Test Case 2 — blocked week (see the partial-match finding above) | `e96f2f49-b28e-481b-bdd8-47dcfda1a1c9` |
+| Test Case 2 — blocked week (re-modeled approved-then-edited 2026-08-07, see the resolved finding above; the 2026-08-07 trace ran on a fresh scratch database where this week seeded as `2b343bef-7ac0-45c7-b9d3-01e51238b9dc`) | `e96f2f49-b28e-481b-bdd8-47dcfda1a1c9` |
 | Test Case 3 — week | `aa161243-041c-499e-872c-26545a4cb6ef` |
 | Test Case 4 — week (approved then edited) | `7754bd4f-d940-4a6c-ac82-c72204f14d28` |
 | Test Case 5 — blocking issue (`blocks` associations added live, via the real API, not the seed) | `9e69830f-6568-4828-b9cf-e13acb279f63` |
@@ -631,7 +684,7 @@ real comment on the seed issue's own week, via the real API — not a raw SQL in
 | # | Ship State | Expected Output | Trace Link |
 |---|---|---|---|
 | 1 | An engineer with 3 assigned issues; since their last standup, one moved to in review, they commented on another, and the third has not moved in 6 days | A draft standup naming the two that moved and what changed, flagging the third as sitting for 6 days, with a proposed state change on the one in review | [8acb9a96](https://smith.langchain.com/public/3605ce55-784b-40ba-971a-08570648a07e/r/8acb9a96-25a3-4d52-9f26-f0306a1a0711) — matches: draft names both the moved and commented issues, flags the third's 7 days of inactivity, and carries one proposed transition (in_progress → in_review) |
-| 2 | A person mentioned in two documents they do not own, blocking one approval on someone else's week, with a standup draft waiting | A four-item ranked list, approval first because another person's week cannot start, each item carrying a direct action | [75c74a0b](https://smith.langchain.com/public/dc7c8673-25e9-423b-b526-3a53db2b160a/r/75c74a0b-f2bf-4b75-a134-c9d20ca51bb3) — **partial match, see finding above**: the 2 real mentions surface correctly; the blocking-approval item does not, and cannot, via any current Ship route |
+| 2 | A person mentioned in two documents they do not own, blocking one approval on someone else's week, with a standup draft waiting | A four-item ranked list, approval first because another person's week cannot start, each item carrying a direct action | [37526a99](https://smith.langchain.com/public/e5029c32-16e2-4957-82e7-b53a99b1a9dc/r/37526a99-acae-43a1-89a3-e256b22ab700) — **matches (2026-08-07, after the fix above)**: four-item ranked list for Alice — blocking approval first ("Week 16" waiting on her re-approval), both mentions, then her standup draft. The earlier partial-match trace ([75c74a0b](https://smith.langchain.com/public/dc7c8673-25e9-423b-b526-3a53db2b160a/r/75c74a0b-f2bf-4b75-a134-c9d20ca51bb3)) is kept for the record |
 | 3 | A week whose plan lists 4 success criteria; 3 issues closed during the week, mapping to 2 of them | A delivered section pre-filled from the 3 closed issues, mapped to their criteria, with the 2 unmatched criteria called out | [6910e85c](https://smith.langchain.com/public/1b01b5a2-3dd1-496b-b8f2-f064394bf058/r/6910e85c-5d26-47d2-9582-8096b1672ea8) — matches: 3 closed issues mapped to criteria 1–2, criteria 3–4 explicitly called out as undelivered |
 | 4 | A weekly plan approved at version N, then edited to remove one success criterion | A before-and-after on the removed criterion plus a drafted question to the author, routed to the approver | [c6d75795](https://smith.langchain.com/public/3dfdbb29-6a5c-4365-89b4-a3a3f318c1a5/r/c6d75795-caa8-42b4-bf79-49ee5c1ca172) — matches: model verdict MATERIAL, drafted question correctly names the removed criterion (CSRF protection) |
 | 5 | An issue in Project A blocking two issues in Project B whose assignees report to different managers | The impact fan-out, the lowest common manager, and a drafted message | [8ab81ab8](https://smith.langchain.com/public/9d46d5e1-6ceb-4575-ae9d-c6a504893aea/r/8ab81ab8-7b80-4b88-83fd-072ed65ad537) — matches: 2 blocked issues across 2 projects, lowest common manager found (Dev User), drafted escalation message |
@@ -643,10 +696,12 @@ real comment on the seed issue's own week, via the real API — not a raw SQL in
 a real per-user `SHIP_API_TOKEN`. Rows 1/3/4/5 each used a new one-off script
 (`agent/src/scripts/trace-invoke-{deep,retro,plan-change,escalation}.ts`, matching
 `trace-invoke-proactive.ts`'s existing pattern — real model calls, deliberately not covered by
-`pnpm test`); row 2 used a direct `graph.invoke({ trigger: 'proactive_steady', cursor })` call over
-a 6-day window (an investigation script, not a committed trace-invoke-*.ts sibling — the finding
-above is why: this row could not be verified by simply running the existing tooling, it needed
-inspecting `changeFeedPage.history` directly to confirm the negative result); row 6 used the
+`pnpm test`); row 2 (2026-08-07 re-run, after the fix) used a one-process investigation script (uncommitted,
+same posture as the original's): `proactive_deep` for Alice, then
+`graph.invoke({ trigger: 'proactive_steady', cursor })` over a 6-day window against the same
+in-memory stores — one process because `itemStore`/`draftStore` are deliberately in-memory, so the
+standup-draft item and the steady tick's items can only meet in one `ItemStore`, whose ranked
+`list()` output is the four-item claim; row 6 used the
 existing `trace-invoke-on-demand.ts`. Every link was verified to
 resolve **logged out** two ways: the page itself (200, matches the byte-identical shell of an
 already-known-good previously-published link) AND — the real check, since the page shell alone

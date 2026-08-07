@@ -1073,6 +1073,127 @@ describe('Sprints API', () => {
     })
   })
 
+  describe('approval transitions reach document_history (blocking-approval detection)', () => {
+    // The agent's blocking-approval detector (agent/src/proactive.ts,
+    // buildBlockingApprovalItems) reads plan_approval/review_approval rows from
+    // the change feed's document_history. These tests pin the three write paths
+    // that put a week into a blocked state to actually log that transition —
+    // without them no blocked-state entry ever reaches the feed (FLEETGRAPH.MD
+    // Test Case 2 finding).
+    let adminCookie: string
+    let adminCsrfToken: string
+    let adminUserId: string
+    let transitionSprintId: string
+
+    beforeAll(async () => {
+      const adminEmail = `history-admin-${testRunId}@ship.local`
+      const adminResult = await pool.query(
+        `INSERT INTO users (email, password_hash, name)
+         VALUES ($1, 'test-hash', 'History Admin User')
+         RETURNING id`,
+        [adminEmail]
+      )
+      adminUserId = adminResult.rows[0].id
+
+      await pool.query(
+        `INSERT INTO workspace_memberships (workspace_id, user_id, role)
+         VALUES ($1, $2, 'admin')`,
+        [testWorkspaceId, adminUserId]
+      )
+
+      const adminSessionId = crypto.randomBytes(32).toString('hex')
+      await pool.query(
+        `INSERT INTO sessions (id, user_id, workspace_id, expires_at)
+         VALUES ($1, $2, $3, now() + interval '1 hour')`,
+        [adminSessionId, adminUserId, testWorkspaceId]
+      )
+      adminCookie = `session_id=${adminSessionId}`
+
+      const csrfRes = await request(app)
+        .get('/api/csrf-token')
+        .set('Cookie', adminCookie)
+      adminCsrfToken = csrfRes.body.token
+      const connectSidCookie = csrfRes.headers['set-cookie']?.[0]?.split(';')[0] || ''
+      if (connectSidCookie) {
+        adminCookie = `${adminCookie}; ${connectSidCookie}`
+      }
+
+      const sprintResult = await pool.query(
+        `INSERT INTO documents (workspace_id, document_type, title, visibility, created_by, properties)
+         VALUES ($1, 'sprint', 'Sprint for Approval Transitions', 'workspace', $2, $3)
+         RETURNING id`,
+        [testWorkspaceId, testUserId, JSON.stringify({ sprint_number: 60, plan: 'Initial plan' })]
+      )
+      transitionSprintId = sprintResult.rows[0].id
+
+      await pool.query(
+        `INSERT INTO document_associations (document_id, related_id, relationship_type)
+         VALUES ($1, $2, 'program')`,
+        [transitionSprintId, testProgramId]
+      )
+    })
+
+    async function latestHistory(field: string): Promise<{ old_value: string | null; new_value: string | null } | undefined> {
+      const result = await pool.query(
+        `SELECT field, old_value, new_value
+         FROM document_history
+         WHERE document_id = $1 AND field = $2
+         ORDER BY id DESC
+         LIMIT 1`,
+        [transitionSprintId, field]
+      )
+      return result.rows[0]
+    }
+
+    it('request-plan-changes logs a plan_approval history row with state changes_requested', async () => {
+      const res = await request(app)
+        .post(`/api/weeks/${transitionSprintId}/request-plan-changes`)
+        .set('Cookie', adminCookie)
+        .set('x-csrf-token', adminCsrfToken)
+        .send({ feedback: 'Please add rollout specifics before I can approve.' })
+
+      expect(res.status).toBe(200)
+
+      const row = await latestHistory('plan_approval')
+      expect(row, 'request-plan-changes must log the blocked state to document_history — the agent change feed reads it').toBeDefined()
+      expect(JSON.parse(row!.new_value!).state).toBe('changes_requested')
+    })
+
+    it('request-retro-changes logs a review_approval history row with state changes_requested', async () => {
+      const res = await request(app)
+        .post(`/api/weeks/${transitionSprintId}/request-retro-changes`)
+        .set('Cookie', adminCookie)
+        .set('x-csrf-token', adminCsrfToken)
+        .send({ feedback: 'Retro is missing the incident follow-ups.' })
+
+      expect(res.status).toBe(200)
+
+      const row = await latestHistory('review_approval')
+      expect(row, 'request-retro-changes must log the blocked state to document_history — the agent change feed reads it').toBeDefined()
+      expect(JSON.parse(row!.new_value!).state).toBe('changes_requested')
+    })
+
+    it('editing an approved plan logs the changed_since_approved transition', async () => {
+      const approveRes = await request(app)
+        .post(`/api/weeks/${transitionSprintId}/approve-plan`)
+        .set('Cookie', adminCookie)
+        .set('x-csrf-token', adminCsrfToken)
+      expect(approveRes.status).toBe(200)
+
+      const editRes = await request(app)
+        .patch(`/api/weeks/${transitionSprintId}/plan`)
+        .set('Cookie', sessionCookie)
+        .set('x-csrf-token', csrfToken)
+        .send({ plan: 'Revised plan after approval' })
+      expect(editRes.status).toBe(200)
+
+      const row = await latestHistory('plan_approval')
+      expect(row, 'the approved→edited transition must log plan_approval to document_history — it is the approver-routed blocking signal').toBeDefined()
+      expect(JSON.parse(row!.new_value!).state).toBe('changed_since_approved')
+      expect(JSON.parse(row!.old_value!).state).toBe('approved')
+    })
+  })
+
   describe('GET /api/team/reviews', () => {
     let adminCookie2: string
 
