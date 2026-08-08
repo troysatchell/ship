@@ -1,5 +1,14 @@
 # PM scope gate — W4 requirements sweep
 
+> **Frozen baseline — do not read this as current.** This triage describes commit `ef87839` and has
+> not been regenerated since. Fixes for **W4-R35** (`migrationRunner.test.ts`'s sort-order mismatch),
+> **W4-R10(a)** (the type-safety "met" claim in `docs/IMPROVEMENTS.md`), and **W4-R42**
+> (`scripts/dev.sh`'s Postgres bootstrap) have since landed on this branch — the dispositions below,
+> including the "Fix now" rows for those three, still show the pre-fix state, deliberately.
+> `matrix.baseline.json` is the frozen "before" a later compare-mode run diffs against (W4-R34);
+> editing this file to agree with the present would destroy the ability to prove that delta. A
+> **compare-mode run**, not an edit to this file, is what will show the fix.
+
 **Input:** `gaps.md` (2026-08-08, commit 279fb8e6) — 10 PARTIAL, 0 MISSING of 54 active requirements.
 **Constraint on this pass:** scope judgement only. No Linear writes, no application source
 modified.

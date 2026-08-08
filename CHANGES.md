@@ -55,10 +55,13 @@ which depends on what else happens to be running on the host:
   CLI's "exits 0 when reachable" case both spin up their own ephemeral `net.createServer()` via
   `listen(0, ...)` (OS-assigned free port) and connect to that exact port — there is nothing external
   for the environment to disagree with.
-- **Guaranteed-closed, not "probably closed":** the "resolves false"/"exits non-zero" cases both use
-  `127.0.0.1:1` — port 1 is a reserved well-known port nothing binds to as a listener; this is the
-  pre-existing pattern `ensureDatabase.test.ts` already uses for its identical "unreachable" case,
-  not something new introduced here.
+- **Conventionally unused, not guaranteed-closed:** the "resolves false"/"exits non-zero" cases both
+  use `127.0.0.1:1` — port 1 is a reserved well-known port nothing *ordinarily* binds to, but that is
+  a convention, not a guarantee: a privileged process (root, or an admin-equivalent account) can
+  legally listen on it, and a host that does would make these two cases resolve `true`/exit `0` and
+  fail. This is the pre-existing pattern `ensureDatabase.test.ts` already uses for its identical
+  "unreachable" case, not something new introduced here, and the residual risk — however
+  unlikely in practice — is unchanged by this fix, which only addressed the port-5432 case above.
 - The unparseable-URL cases (both the async `isPostgresReachable` one and the new synchronous
   `resolveHostPort` one) never touch a socket at all.
 
