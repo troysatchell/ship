@@ -1,19 +1,18 @@
 {
   "mode": "baseline",
-  "commit": "83786819ea1ccc3cb261fcd8f4a387e9ce9498ec",
+  "commit": "ff46ae4638535f53b0c37e294f2f64c8fe3cf4a9",
   "dirty": true,
   "dirty_paths": [
-    "audit/requirements.config.yaml",
     "audit/requirements/REPORT.md",
     "audit/requirements/gaps.md",
     "audit/requirements/interpretations.md",
     "audit/requirements/matrix.baseline.json",
-    "audit/requirements/pm-triage.md",
+    "audit/requirements/pipeline/",
     "memory-bank/activeContext.md",
     "memory-bank/progress.md",
     "project guideliens/Gatsby_Analysis_Troy_Satchell_ES.docx"
   ],
-  "date": "2026-08-08T18:41:45Z",
+  "date": "2026-08-08T18:44:32Z",
   "config_hash": "ff5e1072e1d4009b242d04800963d5008242d52789a118bb63e7522cf0fa8bc2",
   "ticket_mapping": {
     "status": "BLOCKED",
@@ -1158,7 +1157,7 @@
     },
     {
       "id": "W4-R26",
-      "verdict": "ASSUMED",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
         "BLOCKED"
       ],
@@ -1195,10 +1194,10 @@
         }
       ],
       "verification": null,
-      "interpretation": null,
-      "assumption": "Traced R26's 'Navigate to terraform/ and run terraform init followed by terraform plan. Save the full plan output' as referring to the local-provider and Render-provider exercises the same quote just described (terraform/render/, audit/terraform/drift-demo/), not the pre-existing AWS terraform/*.tf root -- because a genuine full plan output was only ever captured for the former; the AWS root's live plan is structurally blocked (S3 backend + AWS credentials, neither available in this exercise) and only the blocking error was saved, never a full plan.",
+      "interpretation": "I-01",
+      "assumption": null,
       "suggested_scope": null,
-      "notes": "If R26 instead means the literal pre-existing AWS root at terraform/*.tf, the verdict drops to PARTIAL: init and validate succeeded and were saved, but no full plan output was ever obtained there -- only the backend-initialization error (audit/terraform/raw/root-plan-attempt.txt). See needs_ruling."
+      "notes": "Settled by ruling I-01 (interpretations.md, 2026-08-08): 'navigate to terraform/' means the local-provider and Render exercise directories the same W4 passage asks the student to author, not the pre-existing AWS infrastructure root. Under that ruling the requirement is satisfied \u2014 a genuine full plan output is saved under terraform/render/plan/ and the drift demo under audit/terraform/. The AWS root's blocked plan attempt (audit/terraform/raw/root-plan-attempt.txt: S3 remote backend plus AWS credentials, neither available for this exercise) does not count against it. Verdict is IMPLEMENTED-UNVERIFIED rather than VERIFIED because terraform init/plan was not re-executed during this sweep \u2014 the evidence is the saved plan artifacts, not a live run."
     },
     {
       "id": "W4-R27",
@@ -2252,14 +2251,7 @@
     }
   ],
   "orphan_tickets": [],
-  "needs_ruling": [
-    {
-      "id": "W4-R26",
-      "question": "Does W4-R26's 'Navigate to terraform/ and run terraform init followed by terraform plan. Save the full plan output' refer to the local-provider/Render-provider exercise directories (terraform/render/, audit/terraform/drift-demo/), where genuine full plan output was captured and saved, or to the pre-existing AWS terraform/*.tf root, where a live plan is structurally blocked (S3 remote backend + AWS credentials, neither available) and only the blocking error was saved (audit/terraform/raw/root-plan-attempt.txt)?",
-      "traced_under": "Assumed it refers to the local/Render exercise directories, since that is the only place a full plan output actually exists; if it means the AWS root specifically, W4-R26 drops from ASSUMED(satisfied) to PARTIAL.",
-      "cluster": "terraform"
-    }
-  ],
+  "needs_ruling": [],
   "commands_run": [
     {
       "command": "pnpm type-check",

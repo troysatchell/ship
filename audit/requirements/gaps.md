@@ -1,4 +1,4 @@
-# Requirements gaps — Ship (2026-08-08T18:41:45Z, commit 83786819ea1c)
+# Requirements gaps — Ship (2026-08-08T18:44:32Z, commit ff46ae463853)
 
 Ticket coverage is unknown for every row below: the Linear connector is unauthorized this sweep, so "unticketed" here means "not confirmed ticketed", not "confirmed missing a ticket".
 

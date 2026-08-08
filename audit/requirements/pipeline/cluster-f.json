@@ -1,0 +1,226 @@
+{
+  "cluster": "seed-deploy-submission",
+  "requirements": [
+    {
+      "id": "W4-R13",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/seed-augment.ts",
+          "line": 5,
+          "note": "script's own header comment: 'The built-in seed (api/src/db/seed.ts) produces ~257 documents and 11 users, short of ... 500 documents / 100 issues / 20 users / 10 sprints' (lines 5-7)"
+        },
+        {
+          "file": "api/src/db/seed.ts",
+          "line": 90,
+          "note": "teamMembers array, lines 90-102: dev@ship.local + 10 fake users = 11 users total from seed.ts alone (falls short of the 20+ floor by itself)"
+        },
+        {
+          "file": "api/src/db/seed.ts",
+          "line": 572,
+          "note": "shipCoreIssues array, lines 572-624: 36 hardcoded issue templates for the Ship Core program"
+        },
+        {
+          "file": "api/src/db/seed.ts",
+          "line": 627,
+          "note": "genericIssueTemplates array, lines 627-649: 17 issue templates"
+        },
+        {
+          "file": "api/src/db/seed.ts",
+          "line": 738,
+          "note": "otherPrograms = programs.filter(p => p.prefix !== 'SHIP') (4 programs) x genericIssueTemplates.length (17) loop at lines 739-805 = 68 issues; combined with the 36 shipCoreIssues (line 572) seed.ts alone produces 104 issues, already clearing the 100+ floor without any augmentation"
+        },
+        {
+          "file": "api/src/db/seed.ts",
+          "line": 244,
+          "note": "programsToSeed array, lines 244-250: 5 programs (SHIP, AUTH, API, UI, INFRA)"
+        },
+        {
+          "file": "api/src/db/seed.ts",
+          "line": 438,
+          "note": "sprint-creation loop, lines 429-450: for each of the 5 programs, sprintNum runs currentSprintNumber-3..+3 (7 values); workspace sprint_start_date is set ~3 months before seed time (line ~73-78), so currentSprintNumber is well above 3 and all 7 are positive/created -> 5 x 7 = 35 sprints from seed.ts alone, already clearing the 10+ floor"
+        },
+        {
+          "file": "audit/seed-augment.ts",
+          "line": 29,
+          "note": "TARGET_DOCUMENTS = 500, TARGET_USERS = 20 (lines 29-30) -- the augmenting script's explicit targets, matching audit/shipshape.config.yaml's seed: floors"
+        },
+        {
+          "file": "audit/seed-augment.ts",
+          "line": 97,
+          "note": "user top-up loop, lines 91-124: inserts audit.userNN@ship.local rows until user count reaches TARGET_USERS (20)"
+        },
+        {
+          "file": "audit/seed-augment.ts",
+          "line": 152,
+          "note": "document top-up, lines 148-234: docsNeeded = 500 - docCount; issuesToAdd = round(docsNeeded*0.64), wikisToAdd = remainder; inserts issue + wiki documents until total document count reaches TARGET_DOCUMENTS (500). Does not add any sprints."
+        }
+      ],
+      "suggested_verification": "controller row-count query (SELECT document_type, count(*) FROM documents GROUP BY 1; SELECT count(*) FROM users; count of document_type='sprint') after pnpm db:seed followed by npx tsx audit/seed-augment.ts",
+      "assumption": null,
+      "notes": "Static reading only, per instructions. api/src/db/seed.ts ALONE already clears two of the four floors (issues: 104 >= 100; sprints: 35 >= 10) but falls short on the other two (documents: ~257 vs 500 floor; users: 11 vs 20 floor, per the augmenting script's own documented baseline). audit/seed-augment.ts is written specifically to top up documents and users to exactly 500 and 20 respectively (hits the floor at the boundary, not with margin) and does not touch issues/sprints further beyond seed.ts's own output (though its issuesToAdd only adds more issues on top). Combined (seed.ts + seed-augment.ts, run in that order per the augment script's own usage comment), the code as written is intended to meet all four floors. Running `pnpm db:seed` alone, without also running audit/seed-augment.ts, would NOT meet the documents or users floors."
+    },
+    {
+      "id": "W4-R49",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "README.md",
+          "line": 22,
+          "note": "'ShipShape Audit — about this fork' section (lines 22-53): identifies this repo as a fork of US-Department-of-the-Treasury/ship, links audit deliverables, gives a 'Cold start (one command)' setup guide (./start.sh)"
+        },
+        {
+          "file": "README.md",
+          "line": 149,
+          "note": "'Getting Started' -> 'Prerequisites' (151-155) -> 'Setup' (157-177): clone + one-command (./start.sh) instructions, plus the manual step-by-step equivalent"
+        }
+      ],
+      "suggested_verification": "Cannot be fully verified from a local clone -- check the GitLab web UI directly (labs.gauntletai.com/troysatchell/Ship) for how branches are presented/labeled there, and `git ls-remote --heads origin` for a live cross-check that the local branch list matches the remote.",
+      "assumption": null,
+      "notes": "Branch labeling verified via read-only git commands, not file-citable (refs live under the excluded .git/ path per the evidence-root list) so described here instead of in `evidence`: `git remote -v` shows origin = https://labs.gauntletai.com/troysatchell/Ship.git (fetch+push, the GitLab-style host) plus a second push-only remote to https://github.com/troysatchell/ship.git (dual-push, consistent with prior session notes that GitHub main is PR-only); `upstream` = https://labs.gauntletai.com/byronmackay/ship, confirming this is a fork. `git branch -a` lists 150+ local and origin-tracked branches with clearly descriptive, per-finding names (e.g. fix/ts-1-web-tsconfig, fix/db-1-migration-runner, fix/a11y-1-sidebar-aria, fix/api-1-rate-limiter, fix/bun-1-code-splitting, fix/err-1-err-2-collab-socket, fix/tf-1-deletion-protection, fix/test-1-web-suite-green, measure/api-perf-compare-jul30, measure/db-query-compare-jul30, measure/a11y-compare-jul30, docs/improvement-documentation) -- naming convention is consistent and readable as 'clearly labeled'. Cannot determine from a local clone how GitLab's own web UI presents/labels these branches (badges, descriptions, default-branch marking, etc.) -- that is UI state this trace has no access to."
+    },
+    {
+      "id": "W4-R50",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 22,
+          "note": "Category 1 Type Safety: Before->After table at line 31, Root causes (incl. inline fix descriptions, e.g. 'Fixed with an AuthenticatedRequest type plus an authed(handler) wrapper' at line 73) at line 67, Reproducibility (exact commands) at line 100 -- all 5 elements present"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 117,
+          "note": "Category 2 Bundle Size: Before->After at 125, Root causes w/ fixes (e.g. '23 converted to React.lazy' line 149) at 147, Reproducibility at 167"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 178,
+          "note": "Category 3 API Performance: Before->After at 190, Root causes w/ fixes at 228, Reproducibility at 255"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 270,
+          "note": "Category 4 Database Queries: Before->After at 292, Root causes w/ fixes at 309, Reproducibility at 342"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 360,
+          "note": "Category 5 Test Quality: Before->After at 370, Root causes w/ fixes at 381, Reproducibility at 422"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 437,
+          "note": "Category 6 Error Handling: Before->After (incl. per-finding screenshot evidence table) at 456, Root causes at 490, Reproducibility at 514"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 530,
+          "note": "Category 7 Accessibility: Before->After at 541, Root causes w/ fixes at 568, Reproducibility at 593"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 608,
+          "note": "Category 8 Terraform/IaC: Before->After at 655, Root causes w/ fixes at 664, Reproducibility at 685"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "All 8 of 8 categories in docs/IMPROVEMENTS.md contain a before measurement, a root-cause explanation, a fix description, an after measurement, and a reproducibility section -- clearing the 7-category floor either way the 7-vs-8 ambiguity noted at the top of inventory.md is read. One structural caveat: 'fix description' is not a separately headed element -- it is embedded inline within each category's 'Root causes' prose (e.g. Category 1: 'Fixed with an AuthenticatedRequest type...'; Category 7: 'Fixed by removing the tree/treeitem roles...') rather than its own subsection. Content-wise all 5 elements are present in every category; this is a minor presentation note, not a gap."
+    },
+    {
+      "id": "W4-R51",
+      "verdict": "PARTIAL",
+      "evidence": [
+        {
+          "file": "docs/submission/DEMO-SCRIPT.md",
+          "line": 1,
+          "note": "titled 'Demo Video Script (3-5 min) — DRAFT for Troy to record'; a timed script with SHOW cues sourced from real docs/IMPROVEMENTS.md numbers, but explicitly a script to be recorded, not a video"
+        },
+        {
+          "file": "docs/submission/FLEETGRAPH-DEMO-SCRIPT.md",
+          "line": 1,
+          "note": "a second demo script (96 lines), also a script/plan rather than a produced video or a link to one"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Missing: the actual recorded video, or a link or embed to one. A grep across README.md and docs/submission/*.md for youtube / vimeo / loom / .mp4 / video-link turned up nothing outside an unrelated Notion-feature-research doc. The repo is plainly the intended home for this deliverable — a dedicated docs/submission/ directory, and a script referencing a companion Claude-artifact visual aid — so PARTIAL is more accurate than N/A. PARTIAL rather than MISSING because the script and material groundwork is complete and sourced from real measurements; only the recording and its link are absent.",
+      "suggested_scope": "Record the demo from the finished docs/submission/DEMO-SCRIPT.md and commit the link into the submission docs. No engineering work — the script, measurements and visual aid are already done; this is an owner action."
+    },
+    {
+      "id": "W4-R52",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "docs/submission/AI-COST-ANALYSIS.md",
+          "line": 34,
+          "note": "Section '2. Spend' (lines 34-66): measured (not estimated) dev cost -- 91 transcript files parsed, 21,413 API requests, priced at Anthropic list rates, total ~$2,385-2,714, cost-per-ticket/PR breakdown by model"
+        },
+        {
+          "file": "docs/submission/AI-COST-ANALYSIS.md",
+          "line": 68,
+          "note": "Section '3. Effectiveness' (lines 68-127): reflection on AI tool effectiveness for codebase comprehension, with concrete examples (caught its own audit-metric bug, drift between measurement and fix, reproduce-first discipline) and a 'Where humans stayed essential' subsection"
+        },
+        {
+          "file": "docs/submission/AI-COST-ANALYSIS.md",
+          "line": 129,
+          "note": "Section '4. What I'd change' (lines 129-148): further reflection/tradeoffs, 4 filled bullets"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Both required elements (dev spend + reflection on AI tool effectiveness) are fully present and substantive. Minor caveat: line 131 carries an author note '[FILL: this is Troy's call ... edit freely]' signaling the section is still open to editing, but it is followed immediately by real, specific content (not a blank TODO), so this does not block the verdict."
+    },
+    {
+      "id": "W4-R53",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "docs/submission/FLEETGRAPH-DEMO-SCRIPT.md",
+          "line": 6,
+          "note": "'Live site: https://ship-rr6m.onrender.com' -- names the actual public URL for this fork's deployment"
+        },
+        {
+          "file": "docs/submission/DEMO-SCRIPT.md",
+          "line": 69,
+          "note": "'The improved fork is live: ship-rr6m.onrender.com — deployed today from main.'"
+        },
+        {
+          "file": "terraform/render/README.md",
+          "line": 104,
+          "note": "table row: service srv-d9kf2t942hec73aofrt0, name ship, URL https://ship-rr6m.onrender.com -- 'Verified live, byte-for-byte match'"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 421,
+          "note": "records a GET https://ship-rr6m.onrender.com/ with an observed last-modified header, part of a Render-service verification entry"
+        }
+      ],
+      "suggested_verification": "Already directly observed in this trace via a read-only HTTPS GET (see notes). Controller may independently re-confirm, or check Render's dashboard/uptime history for a longer-window signal.",
+      "assumption": null,
+      "notes": "Performed the read-only GET this task authorized. https://ship-rr6m.onrender.com/health -> HTTP 200, body {\"status\":\"ok\"} (observed 2026-08-08 ~18:03 UTC) -- this is the URL the repo's own submission materials and terraform config identify as the fork's actual public deployment, and it is live and responding right now. Separately also checked the AWS URL named in this project's CLAUDE.md (https://ship.awsdev.treasury.gov/health): it returned HTTP 308, redirecting to https://273366117842-prod.awsc.caelum.treasury.gov/health (an internal-looking Treasury/CloudFront subdomain); that redirect target was not followed further (out of scope of a single read-only GET, and it is not the URL this fork's own docs point to as the graded deployment). Net: this fork's documented deployment target is demonstrably publicly accessible right now; the CLAUDE.md-referenced AWS URL appears to point at a different (possibly upstream/original) environment and its ultimate liveness was not established from here -- flagged as a discrepancy, not treated as evidence the app is down."
+    },
+    {
+      "id": "W4-R54",
+      "verdict": "PARTIAL",
+      "evidence": [
+        {
+          "file": "docs/submission/SOCIAL-POST.md",
+          "line": 1,
+          "note": "marked '> **DRAFT** — for Troy to personalize before posting.' Contains a fully drafted X post (line 12-14), LinkedIn post (line 21-37), and a 4-tweet X-thread version (lines 43-64), all tagging @GauntletAI"
+        },
+        {
+          "file": "docs/submission/SOCIAL-POST.md",
+          "line": 16,
+          "note": "references attaching up to 4 images from docs/submission/social-assets/ (5 PNG files present on disk, generated 2026-08-02)"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Missing: a link to (or other confirmation of) the post actually having been published. grep across README.md and docs/submission/*.md for x.com/twitter.com/linkedin.com post URLs returned nothing. The draft content and image assets are fully prepared and ready to post, including the required @GauntletAI tag, so PARTIAL (not N/A) -- the repo is plainly the intended home for this deliverable and the only missing piece is the actual-post link.",
+      "suggested_scope": "Publish the drafted post in docs/submission/SOCIAL-POST.md — copy and image assets are complete, including the required @GauntletAI tag — and record the post URL in the repo. No engineering work; an owner action."
+    }
+  ],
+  "needs_ruling": []
+}

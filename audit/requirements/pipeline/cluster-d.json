@@ -1,0 +1,228 @@
+{
+  "cluster": "ci-supply-chain",
+  "requirements": [
+    {
+      "id": "W4-R37",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 6,
+          "note": "triggers: push (branches: [main]), pull_request (all branches), workflow_dispatch — lines 6-10, satisfies 'every PR and commit'"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 92,
+          "note": "\"Build all packages\" step, run: pnpm build — satisfies 'build' check (also 'Build shared' at line 77-78)"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 89,
+          "note": "\"Lint\" step, run: pnpm lint — satisfies 'lint' check"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 80,
+          "note": "\"Type check\" step, run: pnpm type-check — satisfies 'type-check' check"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 103,
+          "note": "\"API unit tests\" step (also \"Web unit tests\" line 114, \"Agent tests\" line 131) — satisfies 'test' check"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 152,
+          "note": "\"API test coverage\" step (also \"Web test coverage\" line 158, \"Shared test coverage\" line 168) — satisfies 'coverage' check"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 193,
+          "note": "\"Dependency audit (pnpm audit) — baseline diff\" step — satisfies 'dependency audit (pnpm audit)' check"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 384,
+          "note": "codeql job, \"security scan (CodeQL)\" — satisfies 'security scan' check; job spans lines 384-428"
+        }
+      ],
+      "suggested_verification": "Trigger a PR and inspect the GitHub Actions run to confirm all jobs execute and go green; separately, `gh api repos/<owner>/<repo>/branches/main/protection` (live GitHub setting, not repo content) to confirm required status checks actually gate merge.",
+      "assumption": null,
+      "notes": "All seven named checks (build, lint, type-check, test, coverage, pnpm audit, security scan) are present with real file:line evidence and none is missing, so this is not PARTIAL on the seven-checks question. Two caveats. (1) Branch protection and merge-gate enforcement are GitHub repository settings, not repository content, and cannot be confirmed or denied by static inspection of this checkout, which is the only method this sweep used; neither direction is assumed. (2) SECURITY.md:81-88 names two required status checks (\"secrets-scan\", \"attestation-check\") that do not exist under those names anywhere in .github/workflows/ci.yml or .gitlab-ci.yml as currently written. That reads as stale or aspirational documentation rather than one of W4-R37's seven checks going missing: CodeQL already covers \"security scan\", and secrets scanning runs pre-commit via `comply opensource` (.husky/pre-commit) rather than in CI. Flagged for awareness, not scored as a defect in this requirement."
+    },
+    {
+      "id": "W4-R38",
+      "verdict": "PARTIAL",
+      "evidence": [
+        {
+          "file": "pnpm-lock.yaml",
+          "line": 1,
+          "note": "tracked in git (confirmed via `git ls-files`) — lockfile-committed half of the requirement is satisfied"
+        },
+        {
+          "file": "package.json",
+          "line": 41,
+          "note": "root: \"@axe-core/playwright\": \"^4.11.0\" — caret range, one of 12/14 root deps using ranges"
+        },
+        {
+          "file": "package.json",
+          "line": 46,
+          "note": "root: \"eslint\": \"9.39.5\" — one of only 2/14 exact pins in root package.json"
+        },
+        {
+          "file": "api/package.json",
+          "line": 26,
+          "note": "\"@aws-sdk/client-bedrock-runtime\": \"^3.987.0\" — one of 51/56 api deps using ranges"
+        },
+        {
+          "file": "api/package.json",
+          "line": 44,
+          "note": "\"ioredis\": \"5.11.1\" — one of only 4/56 exact pins in api/package.json"
+        },
+        {
+          "file": "web/package.json",
+          "line": 20,
+          "note": "\"@dnd-kit/core\": \"^6.3.1\" — one of 64/66 web deps using ranges"
+        },
+        {
+          "file": "web/package.json",
+          "line": 78,
+          "note": "\"@vitest/coverage-v8\": \"4.0.17\" — the ONLY exact pin (1/66) in web/package.json"
+        },
+        {
+          "file": "shared/package.json",
+          "line": 26,
+          "note": "\"@types/node\": \"^22.19.3\" — one of 3/4 shared deps using ranges"
+        },
+        {
+          "file": "agent/package.json",
+          "line": 30,
+          "note": "\"@langchain/anthropic\": \"^0.3.16\" — one of 12/13 agent deps using ranges"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Missing part: 'must be pinned' is not met for package.json versions. Counted every dependencies/devDependencies entry across the 5 actual workspace package.json files (root, api, web, shared, agent — pnpm-workspace.yaml:1-5 confirms only api/web/shared/agent are workspace members): 153 total entries, 142 use caret (^) range specifiers, only 9 are exact pins, 2 are internal `workspace:*` references. That is roughly 93% unpinned — widespread, not a nitpick, matching the requirement's own framing. Only the lockfile-committed half of R38 is satisfied. (research/configs/package.json is a leftover starter-template file, not a pnpm-workspace member per pnpm-workspace.yaml, and was excluded from this count as out of scope for 'the workspace'; it is itself 2/2 ranges if included.)",
+      "suggested_scope": "Pin each dependency to the version pnpm has already resolved in pnpm-lock.yaml, so the installed tree is unchanged by construction and the diff cannot alter behaviour; then verify with a clean install plus type-check and the suite. 144 of 153 workspace entries change. Hand-picking versions, or pinning to latest, converts a bookkeeping change into a dependency upgrade — if a clean install afterwards shows any resolution change, stop and reassess."
+    },
+    {
+      "id": "W4-R39",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 306,
+          "note": "`inventory` job header — a distinct CI job dedicated to producing the source-code inventory, spans lines 306-382"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 334,
+          "note": "\"Generate inventory\" step writes inventory/INVENTORY-${GITHUB_SHA}.md during the CI run itself (not a checked-in static file)"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 365,
+          "note": "\"Direct dependencies\" section runs `pnpm list --depth 0 --recursive` — packages + versions"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 371,
+          "note": "\"Licenses\" section runs `pnpm licenses list --prod` — license data per package"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 377,
+          "note": "\"Upload inventory\" step uploads the artifact as `source-inventory-${{ github.sha }}`, retention-days: 90 — the produced CI artifact"
+        }
+      ],
+      "suggested_verification": "Trigger the workflow and download the `source-inventory-<sha>` GitHub Actions artifact to confirm INVENTORY-<sha>.md actually contains non-empty package/version/license tables.",
+      "assumption": null,
+      "notes": "This satisfies the 'as part of the CI run' distinction explicitly — it is a real workflow step generating the file at run time and uploading it as an artifact, not a static file CI merely checks in. One caveat worth naming: the 'Direct dependencies' section uses `pnpm list --depth 0 --recursive` (ci.yml:365), which enumerates each workspace package's own direct dependencies only, not the full transitive closure — so 'a list of all packages' is only completely true for the separate 'Licenses' section (`pnpm licenses list`, which is not depth-restricted and normally covers the full resolved dependency tree). Not downgrading to PARTIAL since the acceptance evidence only requires a produced step + artifact, both of which exist, but flagging the depth-0 scoping gap for the record."
+    },
+    {
+      "id": "W4-R40",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "CHANGES.md",
+          "line": 7576,
+          "note": "heading \"TRO-244 (RULE-4) — CI pipeline was missing 3 of the 7 required checks (coverage, dependency audit, security scan)\" — dedicated deviation write-up"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 7640,
+          "note": "explicit line: \"Documented deviation (assignment rule 4 explicitly allows a deviation from a required check's naive form when given written justification — this is that justification)\" — the pnpm-audit baseline-diff-not-hard-gate deviation, spans 7632-7668"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 34,
+          "note": "inline comment justifying postgres:15-alpine pin vs prod's pg16, explicitly named as \"a real gap, tracked separately, and deliberately NOT papered over\" (lines 34-37)"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 104,
+          "note": "inline comment justifying `continue-on-error: true` on API/web unit-test steps against a quarantine baseline, so a pre-existing known failure doesn't silently block the real regression gate (lines 104-117)"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "CHANGES.md carries a full, named justification section for the one real deviation from a required check's naive form (pnpm audit gated on a baseline diff rather than raw exit code, because of 135 pre-existing findings), plus ci.yml itself documents smaller deviations (postgres version pin divergence from prod, continue-on-error test quarantine) inline at the point of the deviation. This is process-type and satisfied by documentation existing with real content, not by running anything."
+    },
+    {
+      "id": "W4-R41",
+      "verdict": "PARTIAL",
+      "evidence": [
+        {
+          "file": "docs/deployment-artifact-lifecycle.md",
+          "line": 1,
+          "note": "\"Deployment artifact lifecycle — build once, promote (TRO-246)\" — the required lifecycle doc, describes a 3-step progression (buildable image -> CI builds+pushes once by SHA -> Render switch to pull that image)"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 441,
+          "note": "build-image job: `needs: verify` — image is only built after typecheck/build/tests pass, i.e. built from already-tested source"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 491,
+          "note": "`TAGS=\"${IMAGE}:${GITHUB_SHA}\"` — image tagged with the immutable git commit SHA for provenance"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 459,
+          "note": "`SHOULD_PUSH` true only for an actual push to main (not PRs) — the image is pushed/promoted once per main commit, not rebuilt per environment, for this GHCR path"
+        },
+        {
+          "file": "docs/deployment-artifact-lifecycle.md",
+          "line": 106,
+          "note": "\"Render switch runbook (human-executed — HELD)\" — the step that would make the CI-built image what actually runs in production was explicitly NOT executed"
+        },
+        {
+          "file": "docs/deployment-artifact-lifecycle.md",
+          "line": 15,
+          "note": "\"Until that switch happens, Render performs its own, independent build of the same Dockerfile — same source, but a different build... That gap is what 'build once' closes\" — self-documents that build/release/run separation is not yet real for the live Render app"
+        },
+        {
+          "file": "docs/deployment-artifact-lifecycle.md",
+          "line": 223,
+          "note": "\"Did not modify scripts/deploy.sh / scripts/deploy-frontend.sh (the AWS path) — out of scope for this ticket\" — the lifecycle doc explicitly excludes the AWS deploy scripts from what it covers"
+        },
+        {
+          "file": "scripts/deploy.sh",
+          "line": 101,
+          "note": "\"# ALWAYS rebuild for 100% reliable deploys\", followed by `rm -rf shared/dist ... api/dist ...` and `pnpm build:shared && pnpm build:api` (lines 101-106) — rebuilds from source on every single deploy invocation, for whichever environment is passed; never consumes a pre-built, CI-produced artifact"
+        },
+        {
+          "file": "scripts/deploy-frontend.sh",
+          "line": 47,
+          "note": "\"Building shared package...\" / \"Building frontend...\" then `pnpm build:web` (lines 47-52) — same fresh-rebuild-per-invocation pattern for the frontend deploy path"
+        }
+      ],
+      "suggested_verification": "Execute the Render switch runbook (docs/deployment-artifact-lifecycle.md Step 1-4) and confirm via the Render dashboard's Deploys tab that the running service shows an image-based deploy (digest/tag) rather than \"building commit <sha>\"; separately, decide whether scripts/deploy.sh / scripts/deploy-frontend.sh should be retired or rewritten to pull a CI-built artifact instead of rebuilding, since as written they contradict this requirement for the AWS path.",
+      "assumption": null,
+      "notes": "Missing part: the CI half of build/release/run separation is real and well-built (build-image job builds the Docker image exactly once per commit, only after `verify` passes, tags it immutably by full git SHA, and only pushes on an actual main push — ci.yml:430-513) and the lifecycle is genuinely documented in dev docs (docs/deployment-artifact-lifecycle.md, satisfying that clause on its own). But 'the artifact produced in CI must be the artifact that runs in production' is not true today on either deploy path this repo has: (1) the Render/GHCR path this doc was written for has its promotion step explicitly held/not executed — Render still does its own from-source build, independent of CI's image; (2) the AWS EB/CloudFront scripts (scripts/deploy.sh, scripts/deploy-frontend.sh) — the ones documented as the operative deploy commands elsewhere in this repo's conventions — explicitly rebuild from source on every invocation and never touch the CI-built, SHA-tagged artifact at all, which is a direct contradiction of 'never rebuilt per environment.' The lifecycle doc itself is honest about this gap (it says so plainly at lines 15-25 and 219-225), which is why this is scored PARTIAL rather than MISSING: the pieces exist and are documented, they are just not wired together into an actual promoted-artifact production deploy on either path.",
+      "suggested_scope": "Not a small change. The CI half is already correct — one image per commit, built only after `verify` passes and tagged immutably by full git SHA (ci.yml:430-513) — and docs/deployment-artifact-lifecycle.md documents the lifecycle. What is missing is promotion: both deploy paths rebuild from source instead of running the CI artifact, and wiring that up is a deploy-pipeline change rather than a patch. Do not close this by softening the lifecycle doc, which is accurate about its own gap at lines 15-25 and 219-225."
+    }
+  ],
+  "needs_ruling": []
+}

@@ -1,0 +1,655 @@
+{
+  "cluster": "audit-report-baselines",
+  "requirements": [
+    {
+      "id": "W4-R1",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/ORIENTATION.md",
+          "line": 1,
+          "note": "orientation write-up, committed, stamped with commit/date"
+        },
+        {
+          "file": "audit/ORIENTATION.md",
+          "line": 9,
+          "note": "Phase 1: First Contact heading, opens section 1"
+        },
+        {
+          "file": "audit/ORIENTATION.md",
+          "line": 11,
+          "note": "section 1. Repository Overview"
+        },
+        {
+          "file": "audit/ORIENTATION.md",
+          "line": 70,
+          "note": "section 2. Data Model"
+        },
+        {
+          "file": "audit/ORIENTATION.md",
+          "line": 109,
+          "note": "section 3. Request Flow"
+        },
+        {
+          "file": "audit/ORIENTATION.md",
+          "line": 153,
+          "note": "section 4. Real-time Collaboration"
+        },
+        {
+          "file": "audit/ORIENTATION.md",
+          "line": 179,
+          "note": "section 5. TypeScript Patterns"
+        },
+        {
+          "file": "audit/ORIENTATION.md",
+          "line": 208,
+          "note": "section 6. Testing Infrastructure"
+        },
+        {
+          "file": "audit/ORIENTATION.md",
+          "line": 230,
+          "note": "section 7. Build and Deploy"
+        },
+        {
+          "file": "audit/ORIENTATION.md",
+          "line": 265,
+          "note": "section 8. Architecture Assessment"
+        },
+        {
+          "file": "project guideliens/GFA_Week_4_ShipShape_Updated.pdf",
+          "line": 12,
+          "note": "PDF page 12 (for PDF sources the `line` field carries the page number): 'Appendix: Codebase Orientation Checklist' opens here and lists the eight sections 1 Repository Overview / 2 Data Model / 3 Request Flow / 4 Real-time Collaboration / 5 TypeScript Patterns / 6 Testing Infrastructure (p.12) and 7 Build and Deploy / 8 Architecture Assessment (p.13) — the same section set audit/ORIENTATION.md covers"
+        },
+        {
+          "file": "README.md",
+          "line": 29,
+          "note": "root README lists audit/ORIENTATION.md as a submission deliverable"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Lives at audit/ORIENTATION.md rather than repo root or docs/ (the acceptance-evidence text's example location), but content matches the appendix's 8 sections exactly and the file is a committed, README-linked deliverable, so this reads as satisfying the requirement's Meaning-in-code criterion ('exist as a saved notes document in the repo')."
+    },
+    {
+      "id": "W4-R2",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "README.md",
+          "line": 26,
+          "note": "'Deliverable | Location' table header, part of the ShipShape submission section"
+        },
+        {
+          "file": "README.md",
+          "line": 29,
+          "note": "row: 'Codebase orientation — architecture write-up, traced request flow, 10x assessment' -> audit/ORIENTATION.md"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R3",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 137,
+          "note": "Type Safety — Baseline section"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 341,
+          "note": "Bundle Size — Baseline section"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 593,
+          "note": "API Response Time — Baseline section"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 774,
+          "note": "Database Query Efficiency — Baseline section"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1009,
+          "note": "Test Coverage & Quality — Baseline section"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1497,
+          "note": "Runtime Error & Edge Case (error-handling) — Baseline section"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1553,
+          "note": "Accessibility Compliance — Baseline section"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1609,
+          "note": "Terraform Plan Review — Baseline section (8th category, beyond the required 7)"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "AUDIT_REPORT.md contains a baseline for all 7 code/runtime categories the quote names plus an 8th (Terraform) — a superset, consistent with inventory.md's own note on the document's 7-vs-8 discrepancy."
+    },
+    {
+      "id": "W4-R4",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 145,
+          "note": "Type Safety '### Methodology' with exact grep/tsc commands"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 360,
+          "note": "Bundle '### Methodology' with build/measure/visualizer commands"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 601,
+          "note": "API-perf '### Methodology' with autocannon/bench-runner commands"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 785,
+          "note": "DB-query '### Methodology' with pg log/flow-capture commands"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1017,
+          "note": "Test-quality '### Methodology' with vitest/playwright commands"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1501,
+          "note": "Error-handling '### Methodology' (probe fault-injection description)"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1559,
+          "note": "A11y '### Methodology' (Lighthouse + axe-core commands)"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1615,
+          "note": "Terraform '### Methodology (reproducible)' with init/validate/plan commands"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R5",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 202,
+          "note": "Type Safety deliverable table, all cells filled with numbers"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 440,
+          "note": "Bundle deliverable table, all cells filled"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 641,
+          "note": "API-perf deliverable table (18 rows), all cells filled"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 823,
+          "note": "DB-query per-flow deliverable table, all cells filled"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1070,
+          "note": "Test-quality deliverable table, all cells filled"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1507,
+          "note": "Error-handling deliverable table, all cells filled"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1569,
+          "note": "A11y deliverable table, all cells filled"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1632,
+          "note": "Terraform deliverable table, all cells filled"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "grep for TODO/TBD/FIXME/blank-N/A placeholders across the whole report returned one legitimate 'n/a' (bundle category's Concurrency environment stamp, explained as not applicable to a static build analysis) and no unfilled deliverable-table cells."
+    },
+    {
+      "id": "W4-R6",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 249,
+          "note": "Type Safety '### Findings' — TS-1..TS-9, each with concrete evidence"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 477,
+          "note": "Bundle '### Findings' — BUN-1..BUN-9"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 691,
+          "note": "API-perf '### Findings' — API-1..API-6"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 878,
+          "note": "DB-query '### Findings' — DB-1..DB-10"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1167,
+          "note": "Test-quality '### Findings' — TEST-1..TEST-11"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1526,
+          "note": "Error-handling 'Findings (ranked)' — ERR-1..ERR-9"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1586,
+          "note": "A11y 'Findings (ranked)' — A11Y-1..A11Y-8"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1692,
+          "note": "Terraform 'Findings (ranked)' — TF-1..TF-6"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R7",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 34,
+          "note": "cross-category ranking table, all 68 findings given a Severity column (Critical/High/Medium/Low)"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 251,
+          "note": "'#### TS-1 · High —' per-finding severity label"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 693,
+          "note": "'#### API-1 · Critical ·' per-finding severity label"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 882,
+          "note": "'#### DB-1 — Critical —' per-finding severity label"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1528,
+          "note": "'1. ERR-1 · Critical —' per-finding severity label"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1588,
+          "note": "'1. A11Y-1 · High —' per-finding severity label"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1694,
+          "note": "'1. TF-1 · High —' per-finding severity label"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R8",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 2,
+          "note": "baseline stamped at commit 076a183, 2026-07-27"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 26,
+          "note": "'No application source (api/, web/, shared/) or infrastructure source (terraform/) was modified; the tree is dirty only under audit/, memory-bank/, .claude/' — self-report"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Independently reproduced via git, not just trusting the report's self-claim. The 5 commits dated 2026-07-28 that constitute the audit-baseline phase are c73e621 (chore: add ShipShape audit baseline...), 13b11b5 (docs: add codebase orientation write-up...), 56ae2aa (docs: correct legacy-column claim in CLAUDE.md; surface audit deliverables in README), b516ab7 (docs(audit): commit raw evidence...), and 149873a (audit: configure coverage tooling...). `git show --stat` on each shows every changed path under audit/, memory-bank/, .claude/, .gitignore, or README.md — none under api/, web/, shared/, or terraform/. The improvement phase begins immediately after, on 2026-07-29 (ea2dcd3 onward), and those commits (e.g. d6089be, 200241a, 9aa2d1c, 9f3885c, 4ff19da) DO touch api/ and web/ source — but that is the intended next phase (fixing findings), not the audit phase, so it is not a violation of this rule. One unrelated older commit, 1136dc9 ('fix: Resolve 6 critical production bugs found during audit #165', dated 2026-02-07), predates the ShipShape baseline by about 5 months and refers to a different, earlier audit outside this W4 sprint's scope — excluded from this judgment on that basis. History here is clean and separable, not intertwined."
+    },
+    {
+      "id": "W4-R9",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 206,
+          "note": "Total any types: 102"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 207,
+          "note": "Total type assertions (as): 1385 (158 as any, ~154 import/comment, 73 as const noted as corrections)"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 208,
+          "note": "Total non-null assertions (!): 47 tracked / 321 corrected"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 209,
+          "note": "Total @ts-ignore/@ts-expect-error: 1"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 210,
+          "note": "Strict mode enabled?: web/api/shared all yes, with web's missing inherited flags called out"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 211,
+          "note": "Strict-mode error count (if disabled): 0 as-configured, 102 with web's 3 missing flags restored"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 212,
+          "note": "Top 5 violation-dense files: 5 files listed with counts"
+        },
+        {
+          "file": "audit/type-safety/baseline.json",
+          "line": 1,
+          "note": "cross-checked: anyTotal 102, asTotal 1385, nonNullTotal 47/321, tsIgnoreTotal 1 all match the report verbatim"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "All 7 named metrics present and filled; baseline.json values match the markdown table exactly."
+    },
+    {
+      "id": "W4-R11",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 444,
+          "note": "Total production bundle (raw/gzip): 2,316.96 kB / 699.75 kB"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 446,
+          "note": "Largest chunk: assets/index-C2vAyoQ1.js, 2,073.70 kB raw / 587.93 kB gzip"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 447,
+          "note": "Number of chunks: 262"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 448,
+          "note": "Top 3 largest dependencies: highlight.js, emoji-picker-react, prosemirror-view, each with sizes"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 449,
+          "note": "Unused dependencies: @tanstack/query-sync-storage-persister identified"
+        },
+        {
+          "file": "audit/bundle/baseline.json",
+          "line": 1,
+          "note": "cross-checked: metrics block present with matching structure"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R14",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 609,
+          "note": "'Endpoint selection... Headless Chromium... ran every userFlows entry... recording all /api/* requests: 63 requests across 8 flows, 49 unique' — tracing methodology recorded"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 611,
+          "note": "endpoints picked 'by frequency x user-visibility and written back into audit/shipshape.config.yaml'"
+        },
+        {
+          "file": "audit/shipshape.config.yaml",
+          "line": 80,
+          "note": "keyEndpoints: list of 6 confirmed endpoints with method/path/flow-justification each"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 645,
+          "note": "same 6 endpoints appear as the rows of the deliverable table"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "The report names 6 endpoints (GET /api/documents?type=wiki, /api/issues, /api/documents, /api/documents/:id, /api/team/assignments, /api/weeks), not exactly the 5 the quote specifies. Tracing methodology (headless-Chromium request capture, frequency x user-visibility ranking) is fully documented and exceeds the bar; the discrepancy is only in the final count (6 vs 5), which is over-inclusive rather than a methodology gap."
+    },
+    {
+      "id": "W4-R15",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 645,
+          "note": "deliverable table: 6 endpoints x concurrency 10/25/50, each row has P50/P95/P99/req-s/errors filled"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 615,
+          "note": "'autocannon 8.0.0... P50/P95/P99 are computed exactly from every measured response, not interpolated'"
+        },
+        {
+          "file": "audit/api-perf/baseline.json",
+          "line": 1,
+          "note": "cross-checked: metrics block present with matching structure"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R17",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 825,
+          "note": "deliverable table 'per user flow' — all 5 named flows present (Load main page, View a document, List issues, Load sprint board, Search content), plus a bonus 'Load week dashboard' row"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 826,
+          "note": "columns: Total queries (steady/cold), Slowest query (ms), Slowest statement, Auth boilerplate, N+1 detected? — all filled per flow"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 851,
+          "note": "'Top-5 slowest statements' table with EXPLAIN 'Plan red flag' column (EXPLAIN ANALYZE evidence)"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 863,
+          "note": "'Missing-index candidates' table with verdicts (Add / No action / Rewrite query)"
+        },
+        {
+          "file": "audit/db-query/baseline.json",
+          "line": 1,
+          "note": "cross-checked: metrics block present with matching structure"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R19",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1074,
+          "note": "Total tests: 602 unit (451 api + 151 web) / 869 e2e"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1075,
+          "note": "Pass/Fail/Flaky — unit: 589 pass / 13 fail / 1 flaky"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1076,
+          "note": "Pass/Fail/Flaky — e2e: 3-run union, 858 clean / 0 always-fail / 11 flaky"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1077,
+          "note": "Suite runtime: api 12.0s, web 1.7s / e2e 541s/568s/543s across 3 runs"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1086,
+          "note": "flow-coverage matrix maps critical flows (incl. document CRUD, real-time collaboration/Yjs merge, auth: login/logout/session, sprint/week board) against coverage status"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1110,
+          "note": "'E2E flakiness — 3 identical runs, first-attempt outcomes' table"
+        },
+        {
+          "file": "audit/test-quality/baseline.json",
+          "line": 1,
+          "note": "cross-checked: metrics block present with matching structure"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "All required elements present: pass/fail counts, total runtime, 3-run flakiness identification, and a critical-user-flow-to-test-coverage mapping explicitly covering document CRUD, real-time sync, auth, and sprint management (the 4 flow categories the quote names)."
+    },
+    {
+      "id": "W4-R22",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1511,
+          "note": "Console errors during normal usage: 0 errors/0 warnings across 8 flows"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1512,
+          "note": "Unhandled promise rejections (server): 0 rejections, but 3 uncaught-exception process crashes noted"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1513,
+          "note": "Network disconnect recovery: Partial, with specifics"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1514,
+          "note": "Missing error boundaries: 2 exist, gaps enumerated (app shell, login/public routes, no router-root boundary)"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1515,
+          "note": "Silent failures identified: ERR-1, ERR-2, ERR-3, ERR-4 listed"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1528,
+          "note": "ERR-1 finding cites probe2-ws-drop / probe2d repro steps for the silent-failure claim"
+        },
+        {
+          "file": "audit/error-handling/baseline.json",
+          "line": 1,
+          "note": "cross-checked: metrics block present with matching structure"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R24",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1573,
+          "note": "Lighthouse a11y score per page: /my-week 95, /documents/:id 100, /issues 100, /weeks 100, /search 100"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1574,
+          "note": "Total Critical/Serious (axe): 2 Critical rules, 3 Serious rules, named"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1576,
+          "note": "Keyboard navigation per page: /issues Full (45/45), /my-week Full (20/20, focus ring 42/44)"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1577,
+          "note": "Color contrast failures: 25 nodes on /my-week, specifics named"
+        },
+        {
+          "file": "audit/AUDIT_REPORT.md",
+          "line": 1578,
+          "note": "Missing ARIA labels/roles: role=tree sidebar, aria-expanded on non-widget div, unnamed Radix dialog, unlabeled input+svgs"
+        },
+        {
+          "file": "audit/a11y/baseline.json",
+          "line": 1,
+          "note": "cross-checked: lighthousePerPage/axeCritical/axeSerious/contrastFailures all match the report verbatim"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    }
+  ],
+  "needs_ruling": []
+}

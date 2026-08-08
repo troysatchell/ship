@@ -1,13 +1,12 @@
 # Requirements Audit — Ship (GAUNTLET)
 
-**Commit:** 83786819ea1c (dirty tree) · **Date:** 2026-08-08T18:41:45Z · **Docs:** W4 `GFA_Week_4_ShipShape_Updated.pdf` (14 pp.; requirements p.2–11, orientation appendix p.12–13) · **Mode:** baseline
+**Commit:** ff46ae463853 (dirty tree) · **Date:** 2026-08-08T18:44:32Z · **Docs:** W4 `GFA_Week_4_ShipShape_Updated.pdf` (14 pp.; requirements p.2–11, orientation appendix p.12–13) · **Mode:** baseline
 
 ## Summary
 
 - **VERIFIED:** 2
-- **IMPLEMENTED-UNVERIFIED:** 41
+- **IMPLEMENTED-UNVERIFIED:** 42
 - **PARTIAL:** 10
-- **ASSUMED:** 1
 
 All 54 active W4 requirements are represented below, and two findings account for most of what is wrong. **The type-safety target is not met while the repo records it as met:** re-running the audit's own instrument at HEAD gives **1987 tracked violations against a 1535 baseline (+452, +29%)**, where W4-R10 asks for −25% (about −384 sites); `docs/IMPROVEMENTS.md:27-28` states "Verdict: met" on a sum-of-controlled-diffs accounting that it discloses openly, but the requirement's threshold is defined on the tracked total, which has never been below baseline at any measured point. **The test suite is red at HEAD:** `pnpm test` exits 1 — 830/832 passing, 2 failures at `api/src/db/__tests__/migrationRunner.test.ts:167,184`, both from a Postgres-versus-JavaScript sort-order mismatch inside the test itself rather than any migration defect. Those two drive W4-R10, W4-R33 and W4-R35; the remaining 7 PARTIAL rows are gaps the repo already documents. Everything else traced clean — but mostly statically, which the next section bounds.
 
@@ -20,8 +19,8 @@ What this sweep did and did not check. Read this before treating any row below a
 - **The e2e suite never ran.** `pnpm test:e2e` was not executed this sweep (600+ Playwright tests requiring the `/e2e-test-runner` protocol and Docker). W4-R21, W4-R36 and W4-R37 lean on suites that were traced but not executed: their evidence is the specs' existence and prior recorded runs, not a live result. No claim is made about the e2e suite in either direction.
 - **Ticket mapping is blocked.** The Linear connector is unauthorized, so every row's ticket cell reads `BLOCKED`. That means "not confirmed ticketed" — never "confirmed unticketed" — and orphan tickets could not be detected at all.
 - **This sweep wrote to the developer's database, which a read-only audit should not have done.** W4-R13's `VERIFIED` excerpt came from `pnpm db:seed && npx tsx audit/seed-augment.ts` run against the working database `ship_standup` rather than a throwaway one. `pnpm test` (W4-R10, W4-R35) then ran with that same `DATABASE_URL` exported, and `api/src/test/setup.ts:93-98` `TRUNCATE`s 15 tables — including `documents`, `users` and `workspaces` — in every api test file's `beforeAll`. So the audit reseeded the database and then destroyed it. It was re-seeded afterwards and is back at 500 documents / 255 issues / 20 users / 35 sprints, but the state behind W4-R13's excerpt no longer exists in that exact form; the excerpt is a true record of what was observed, not something re-runnable today.
-- **41 of 54 rows are `IMPLEMENTED-UNVERIFIED`** — statically traced to file:line with no behavioral check run against them. 2 rows are `VERIFIED` on captured command output and 1 is `ASSUMED` pending a ruling. Every command that did run this sweep is listed under "Verification performed" at the end of this report.
-- **The swept tree was dirty** — 9 path(s) did not match commit `83786819ea1c`. Of those, the only one this report cites is `memory-bank/activeContext.md` — citations into it are reproducible only against the working tree, not against the recorded commit. The rest are this sweep's own in-flight output and unrelated working files; the full list is `dirty_paths` in `matrix.baseline.json`. Where volatility made a citation unusable (W4-R35, `memory-bank/activeContext.md`) it was dropped and the claim moved into that row's notes with the reason.
+- **42 of 54 rows are `IMPLEMENTED-UNVERIFIED`** — statically traced to file:line with no behavioral check run against them. 2 rows are `VERIFIED` on captured command output. 1 row rests on a recorded interpretation ruling rather than on the requirement text alone; none is left un-ruled. Every command that did run this sweep is listed under "Verification performed" at the end of this report.
+- **The swept tree was dirty** — 8 path(s) did not match commit `ff46ae463853`. Of those, the only one this report cites is `memory-bank/activeContext.md` — citations into it are reproducible only against the working tree, not against the recorded commit. The rest are this sweep's own in-flight output and unrelated working files; the full list is `dirty_paths` in `matrix.baseline.json`. Where volatility made a citation unusable (W4-R35, `memory-bank/activeContext.md`) it was dropped and the claim moved into that row's notes with the reason.
 
 ## Matrix
 
@@ -52,7 +51,7 @@ What this sweep did and did not check. Read this before treating any row below a
 | W4-R23 | Three error-handling fixes landed, one covering a data-loss/confusion path,... | BLOCKED | `docs/IMPROVEMENTS.md:439`<br>`docs/IMPROVEMENTS.md:442`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
 | W4-R24 | The a11y baseline table is complete across the app's major pages. | BLOCKED | `audit/AUDIT_REPORT.md:1573`<br>`audit/AUDIT_REPORT.md:1574`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
 | W4-R25 | One of the two a11y thresholds is met with before/after scanner output. | BLOCKED | `audit/a11y/compare-phase2-jul30/after-phase2-jul30.md:70`<br>`audit/a11y/compare-phase2-jul30/after-phase2-jul30.md:72`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R26 | terraform/ inits and plans locally; the full plan output is saved as an art... | BLOCKED | `terraform/render/plan/plan-annotated.md:32`<br>`terraform/render/plan/tro-316-agent-plan-annotated.md:96`<br>+4 more | `ASSUMED` |
+| W4-R26 | terraform/ inits and plans locally; the full plan output is saved as an art... | BLOCKED | `terraform/render/plan/plan-annotated.md:32`<br>`terraform/render/plan/tro-316-agent-plan-annotated.md:96`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
 | W4-R27 | Every resource in the saved plan carries a one-sentence annotation + risk/b... | BLOCKED | `terraform/render/plan/plan-annotated.md:116`<br>`terraform/render/plan/tro-316-agent-plan-annotated.md:264`<br>+2 more | `PARTIAL` |
 | W4-R28 | A documented drift demo exists (local provider file edit or Render dashboar... | BLOCKED | `audit/terraform/baseline.md:63`<br>`audit/terraform/raw/drift-1-apply.txt:1`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
 | W4-R29 | A local-provider .tf config managing ≥2 local resources exists and plans cl... | BLOCKED | `audit/terraform/drift-demo/main.tf:6`<br>`audit/terraform/drift-demo/main.tf:17`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
@@ -142,14 +141,11 @@ Not determinable this sweep — ticket mapping is BLOCKED (see Summary). Re-run 
 
 _No individually blocked requirements_ (the ticket dimension is blocked globally — see Summary).
 
-- **W4-R26** `ASSUMED` — traced under: Traced R26's 'Navigate to terraform/ and run terraform init followed by terraform plan. Save the full plan output' as referring to the local-provider and Render-provider exercises the same quote just described (terraform/render/, audit/terraform/drift-demo/), not the pre-existing AWS terraform/*.tf root -- because a genuine full plan output was only ever captured for the former; the AWS root's live plan is structurally blocked (S3 backend + AWS credentials, neither available in this exercise) and only the blocking error was saved, never a full plan.
+### Interpretation rulings applied
 
-### Open ambiguity rulings needed
+These rows' verdicts depend on a recorded ruling, not on the requirement's text alone. Each ruling is permanent and lives in [`interpretations.md`](interpretations.md); future sweeps apply it silently rather than re-asking. A row is listed here so a reader can see that its verdict rested on a judgement call and check what that call was.
 
-Each of these is a yes/no question whose answer changes a verdict. They were traced under a stated assumption rather than guessed silently; a ruling recorded in `interpretations.md` will make future sweeps decide them automatically.
-
-- **W4-R26** — Does W4-R26's 'Navigate to terraform/ and run terraform init followed by terraform plan. Save the full plan output' refer to the local-provider/Render-provider exercise directories (terraform/render/, audit/terraform/drift-demo/), where genuine full plan output was captured and saved, or to the pre-existing AWS terraform/*.tf root, where a live plan is structurally blocked (S3 remote backend + AWS credentials, neither available) and only the blocking error was saved (audit/terraform/raw/root-plan-attempt.txt)?
-  - Traced under: Assumed it refers to the local/Render exercise directories, since that is the only place a full plan output actually exists; if it means the AWS root specifically, W4-R26 drops from ASSUMED(satisfied) to PARTIAL.
+- **W4-R26** — ruling `I-01`, verdict `IMPLEMENTED-UNVERIFIED`. Settled by ruling I-01 (interpretations.md, 2026-08-08): 'navigate to terraform/' means the local-provider and Render exercise directories the same W4 passage asks the student to author, not the pre-existing AWS infrastructure root.
 
 ## PM handoff
 
