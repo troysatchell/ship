@@ -87,6 +87,15 @@ only the two vitest projects, and bash isn't one of them — so it was proved in
 non-simulated end-to-end runs (below), not by a test the gate would run. Stopped short of fabricating
 a shell/bats test the gate never executes, which would satisfy the letter of "add a regression test"
 while proving nothing (the exact failure mode `.claude/skills/ship-qa/SKILL.md`'s e2e-spec-vs-vitest
+
+**Coverage gap in the test itself, stated plainly rather than left implicit:** the test calls
+`isPostgresReachable()` directly with real sockets — genuine behavioral coverage of the probe, not a
+stub. It does **not** cover `postgresReachable.ts`'s CLI wrapper (`main()` — argv/env parsing,
+`process.exit(reachable ? 0 : 1)`), which is the actual thing `scripts/dev.sh` invokes
+(`npx tsx src/db/postgresReachable.ts "$URL"`, branching on `$?`). If that exit-code mapping were
+inverted, this suite would stay green while the real integration broke. That gap is closed only by
+the manual end-to-end runs below, run twice, not by anything the gate re-executes on a future change
+to `main()`.
 gap describes, one layer up).
 
 **End-to-end proof (observed, run twice — once before and once after extracting
