@@ -1,0 +1,32 @@
+{
+  "range": "W4-R28..W4-R54",
+  "mappings": {
+    "W4-R28": { "tickets": [], "note": "drift-demo before/after plan output (audit/terraform/raw/drift-*.txt) exists but was produced directly during baseline audit capture, not via a tracked ticket" },
+    "W4-R29": { "tickets": ["TRO-299"], "note": "TF-10 explicitly names and verifies the pre-existing audit/terraform/drift-demo/ local-provider config (2 local files, pinned) against this requirement's wording, though it left the config in place rather than relocating it" },
+    "W4-R30": { "tickets": ["TRO-299"], "note": "TF-10's primary scope is writing terraform/render/*.tf declaring the Render web service for the deployed fork" },
+    "W4-R31": { "tickets": ["TRO-299"], "note": "TF-10's definition-of-done explicitly requires pinned provider versions in every module for both configs" },
+    "W4-R32": { "tickets": ["TRO-299", "TRO-242", "TRO-243", "TRO-246"], "note": "TF-10 declares+imports the Render service while DEPLOY-1/2 make the image buildable and secrets loadable off-AWS and RULE-5 switches Render to deploying the CI-built image, the chain needed for a clean-machine terraform-apply-only deploy" },
+    "W4-R33": { "tickets": [], "note": "aggregate rollup across all 8 categories' individual improvement tickets (R10/12/16/18/21/23/25 plus R29-32); no single ticket represents the whole claim" },
+    "W4-R34": { "tickets": ["TRO-305"], "note": "before/after proof is otherwise a process constraint applied to every ticket per TRO-241's own text, but this ticket is a dedicated fix for a self-admitted missing-proof gap" },
+    "W4-R35": { "tickets": [], "note": "TRO-241 explicitly classifies 'tests still pass / CI rollback' as a process constraint applied to every ticket rather than standalone work" },
+    "W4-R36": { "tickets": ["TRO-245"], "note": "RULE-3 is titled exactly this: a regression test for every bug found in the audit" },
+    "W4-R37": { "tickets": ["TRO-244"], "note": "RULE-4 adds the missing CI checks (coverage, pnpm audit, CodeQL security scan) alongside the pre-existing build/lint/type-check/test job" },
+    "W4-R38": { "tickets": [], "note": "verified live: api/package.json and web/package.json still use ^-range specifiers throughout; no ticket addresses pinning exact dependency versions" },
+    "W4-R39": { "tickets": ["TRO-244"], "note": "RULE-4's CI pipeline includes a dedicated inventory job producing the package/version/license list" },
+    "W4-R40": { "tickets": ["TRO-244"], "note": "RULE-4's description explicitly invokes this exact clause to justify its pnpm-audit baseline-diff approach, documented in CHANGES.md" },
+    "W4-R41": { "tickets": ["TRO-246", "TRO-242"], "note": "RULE-5 is the build-once/promote/SHA-tag ticket; DEPLOY-1 is called out in its own text as 'partial credit toward rule 5'" },
+    "W4-R42": { "tickets": ["TRO-247"], "note": "RULE-6 is titled exactly this: one-command local start from a clean checkout" },
+    "W4-R43": { "tickets": ["TRO-248", "TRO-311"], "note": "RULE-7 covers retries/timeouts/circuit breakers on outbound calls, with TRO-311 as a direct follow-up finding no pattern literally named a circuit breaker" },
+    "W4-R44": { "tickets": ["TRO-249"], "note": "RULE-8 is titled exactly this: CHANGES.md with what/how-to-run/how-to-roll-back" },
+    "W4-R45": { "tickets": [], "note": "TRO-241 classifies 'document your reasoning' as a process constraint applied to every ticket, not standalone work" },
+    "W4-R46": { "tickets": [], "note": "TRO-241 classifies 'no cosmetic changes' as a process constraint applied to every ticket, not standalone work" },
+    "W4-R47": { "tickets": [], "note": "TRO-241 classifies 'commit discipline' as a process constraint applied to every ticket, not standalone work" },
+    "W4-R48": { "tickets": [], "note": "docs/submission/DISCOVERY.md exists in the repo but was authored directly, not via a tracked ticket" },
+    "W4-R49": { "tickets": [], "note": "satisfied by general branch/PR naming discipline across all tickets rather than a dedicated ticket; no README-setup-guide ticket found" },
+    "W4-R50": { "tickets": ["TRO-305"], "note": "docs/IMPROVEMENTS.md was authored directly, but TRO-305 is the one ticket fixing a self-admitted gap in that doc's proof-of-reproducibility element for Category 6" },
+    "W4-R51": { "tickets": [], "note": "docs/submission/DEMO-SCRIPT.md exists but the video itself is an external deliverable authored directly, no ticket" },
+    "W4-R52": { "tickets": [], "note": "docs/submission/AI-COST-ANALYSIS.md exists in the repo but was authored directly, not via a tracked ticket" },
+    "W4-R53": { "tickets": ["TRO-299", "TRO-242", "TRO-243", "TRO-246"], "note": "same chain that made the fork deployable via Render terraform (config, buildable image, working secrets off-AWS, promoted image) is what makes it publicly reachable" },
+    "W4-R54": { "tickets": [], "note": "docs/submission/SOCIAL-POST.md and social-assets/ exist in the repo but were authored directly, not via a tracked ticket" }
+  }
+}

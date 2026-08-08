@@ -1,30 +1,36 @@
 {
   "mode": "baseline",
-  "commit": "c357c65c23f806d63a37a28c10f47ae0f60681e5",
+  "commit": "a830cf77cb6816b87d71fe4d171adc00e1a17ac9",
   "dirty": true,
   "dirty_paths": [
-    "audit/requirements/pipeline/cluster-b.json",
-    "audit/requirements/pm-triage.md",
+    "audit/requirements.config.yaml",
+    "audit/requirements/REPORT.md",
+    "audit/requirements/gaps.md",
+    "audit/requirements/matrix.baseline.json",
+    "audit/requirements/pipeline/README.md",
+    "audit/requirements/pipeline/merge-matrix.py",
+    "audit/requirements/pipeline/tickets-map-1.json",
+    "audit/requirements/pipeline/tickets-map-2.json",
+    "audit/requirements/pipeline/tickets-ship.json",
+    "audit/requirements/pipeline/write-report.py",
     "memory-bank/activeContext.md",
     "memory-bank/progress.md",
     "project guideliens/Gatsby_Analysis_Troy_Satchell_ES.docx"
   ],
-  "date": "2026-08-08T18:52:32Z",
-  "config_hash": "ff5e1072e1d4009b242d04800963d5008242d52789a118bb63e7522cf0fa8bc2",
+  "date": "2026-08-08T19:21:10Z",
+  "config_hash": "f43a33daf961131ad0add294e69fb02e1b59af6ca9f43797048ddcc1471cc906",
   "ticket_mapping": {
-    "status": "BLOCKED",
+    "status": "OK",
     "provider": "linear",
     "team": "TRO",
-    "reason": "Linear MCP server is unauthorized: only mcp__linear__authenticate / complete_authentication are exposed, and authenticate returned an OAuth URL requiring browser action. No ticket query tools available.",
-    "unblock": "Authorize the Linear connector in claude.ai connector settings or via /mcp, then re-run the sweep. Requirement -> code tracing is unaffected."
+    "project": "ShipShape Audit Remediation",
+    "scope": "The 123 issues in Linear project \"ShipShape Audit Remediation\" (TRO-164..249, TRO-276..311, TRO-354). Scoped by project, not by number range: the TRO team is a personal catch-all spanning six projects, and the Ship numbers are interleaved with them \u2014 TRO-250..275 belong to Clavira Pilot Readiness and TRO-312..365 mostly to FleetGraph (Week 5, same repo, different assignment). Sweeping the whole team would report ~200 false orphans from work this brief never covered."
   },
   "requirements": [
     {
       "id": "W4-R1",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "audit/ORIENTATION.md",
@@ -96,9 +102,7 @@
     {
       "id": "W4-R2",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "README.md",
@@ -120,9 +124,7 @@
     {
       "id": "W4-R3",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -174,9 +176,7 @@
     {
       "id": "W4-R4",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -228,9 +228,7 @@
     {
       "id": "W4-R5",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -282,9 +280,7 @@
     {
       "id": "W4-R6",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -336,9 +332,7 @@
     {
       "id": "W4-R7",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -385,9 +379,7 @@
     {
       "id": "W4-R8",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -410,7 +402,18 @@
       "id": "W4-R9",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-167",
+        "TRO-206",
+        "TRO-207",
+        "TRO-208",
+        "TRO-209",
+        "TRO-210",
+        "TRO-211",
+        "TRO-212",
+        "TRO-213",
+        "TRO-214",
+        "TRO-297",
+        "TRO-306"
       ],
       "evidence": [
         {
@@ -464,7 +467,18 @@
       "id": "W4-R10",
       "verdict": "PARTIAL",
       "tickets": [
-        "BLOCKED"
+        "TRO-167",
+        "TRO-206",
+        "TRO-207",
+        "TRO-208",
+        "TRO-209",
+        "TRO-210",
+        "TRO-211",
+        "TRO-212",
+        "TRO-213",
+        "TRO-214",
+        "TRO-297",
+        "TRO-306"
       ],
       "evidence": [
         {
@@ -513,7 +527,16 @@
       "id": "W4-R11",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-168",
+        "TRO-197",
+        "TRO-198",
+        "TRO-199",
+        "TRO-200",
+        "TRO-201",
+        "TRO-202",
+        "TRO-203",
+        "TRO-204",
+        "TRO-205"
       ],
       "evidence": [
         {
@@ -557,7 +580,16 @@
       "id": "W4-R12",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-168",
+        "TRO-197",
+        "TRO-198",
+        "TRO-199",
+        "TRO-200",
+        "TRO-201",
+        "TRO-202",
+        "TRO-203",
+        "TRO-204",
+        "TRO-205"
       ],
       "evidence": [
         {
@@ -600,9 +632,7 @@
     {
       "id": "W4-R13",
       "verdict": "VERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "audit/seed-augment.ts",
@@ -668,7 +698,16 @@
       "id": "W4-R14",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-166",
+        "TRO-172",
+        "TRO-173",
+        "TRO-174",
+        "TRO-175",
+        "TRO-176",
+        "TRO-177",
+        "TRO-280",
+        "TRO-302",
+        "TRO-304"
       ],
       "evidence": [
         {
@@ -702,7 +741,16 @@
       "id": "W4-R15",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-166",
+        "TRO-172",
+        "TRO-173",
+        "TRO-174",
+        "TRO-175",
+        "TRO-176",
+        "TRO-177",
+        "TRO-280",
+        "TRO-302",
+        "TRO-304"
       ],
       "evidence": [
         {
@@ -731,7 +779,16 @@
       "id": "W4-R16",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-166",
+        "TRO-172",
+        "TRO-173",
+        "TRO-174",
+        "TRO-175",
+        "TRO-176",
+        "TRO-177",
+        "TRO-280",
+        "TRO-302",
+        "TRO-304"
       ],
       "evidence": [
         {
@@ -770,7 +827,17 @@
       "id": "W4-R17",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-165",
+        "TRO-178",
+        "TRO-179",
+        "TRO-180",
+        "TRO-181",
+        "TRO-182",
+        "TRO-183",
+        "TRO-184",
+        "TRO-185",
+        "TRO-186",
+        "TRO-187"
       ],
       "evidence": [
         {
@@ -809,7 +876,17 @@
       "id": "W4-R18",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-165",
+        "TRO-178",
+        "TRO-179",
+        "TRO-180",
+        "TRO-181",
+        "TRO-182",
+        "TRO-183",
+        "TRO-184",
+        "TRO-185",
+        "TRO-186",
+        "TRO-187"
       ],
       "evidence": [
         {
@@ -848,7 +925,26 @@
       "id": "W4-R19",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-169",
+        "TRO-223",
+        "TRO-224",
+        "TRO-225",
+        "TRO-226",
+        "TRO-227",
+        "TRO-228",
+        "TRO-229",
+        "TRO-230",
+        "TRO-231",
+        "TRO-232",
+        "TRO-233",
+        "TRO-277",
+        "TRO-282",
+        "TRO-286",
+        "TRO-288",
+        "TRO-293",
+        "TRO-300",
+        "TRO-310",
+        "TRO-354"
       ],
       "evidence": [
         {
@@ -897,7 +993,8 @@
       "id": "W4-R20",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-169",
+        "TRO-229"
       ],
       "evidence": [
         {
@@ -941,7 +1038,13 @@
       "id": "W4-R21",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-225",
+        "TRO-226",
+        "TRO-227",
+        "TRO-228",
+        "TRO-230",
+        "TRO-288",
+        "TRO-300"
       ],
       "evidence": [
         {
@@ -980,7 +1083,23 @@
       "id": "W4-R22",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-164",
+        "TRO-188",
+        "TRO-189",
+        "TRO-190",
+        "TRO-191",
+        "TRO-192",
+        "TRO-193",
+        "TRO-194",
+        "TRO-195",
+        "TRO-196",
+        "TRO-276",
+        "TRO-284",
+        "TRO-285",
+        "TRO-289",
+        "TRO-290",
+        "TRO-296",
+        "TRO-301"
       ],
       "evidence": [
         {
@@ -1029,7 +1148,24 @@
       "id": "W4-R23",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-164",
+        "TRO-188",
+        "TRO-189",
+        "TRO-190",
+        "TRO-191",
+        "TRO-192",
+        "TRO-193",
+        "TRO-194",
+        "TRO-195",
+        "TRO-196",
+        "TRO-276",
+        "TRO-284",
+        "TRO-285",
+        "TRO-289",
+        "TRO-290",
+        "TRO-296",
+        "TRO-301",
+        "TRO-305"
       ],
       "evidence": [
         {
@@ -1073,7 +1209,18 @@
       "id": "W4-R24",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-170",
+        "TRO-215",
+        "TRO-216",
+        "TRO-217",
+        "TRO-218",
+        "TRO-219",
+        "TRO-220",
+        "TRO-221",
+        "TRO-222",
+        "TRO-281",
+        "TRO-291",
+        "TRO-298"
       ],
       "evidence": [
         {
@@ -1117,7 +1264,18 @@
       "id": "W4-R25",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-170",
+        "TRO-215",
+        "TRO-216",
+        "TRO-217",
+        "TRO-218",
+        "TRO-219",
+        "TRO-220",
+        "TRO-221",
+        "TRO-222",
+        "TRO-281",
+        "TRO-291",
+        "TRO-298"
       ],
       "evidence": [
         {
@@ -1156,7 +1314,17 @@
       "id": "W4-R26",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-171",
+        "TRO-234",
+        "TRO-235",
+        "TRO-236",
+        "TRO-237",
+        "TRO-238",
+        "TRO-239",
+        "TRO-278",
+        "TRO-283",
+        "TRO-292",
+        "TRO-303"
       ],
       "evidence": [
         {
@@ -1200,7 +1368,17 @@
       "id": "W4-R27",
       "verdict": "PARTIAL",
       "tickets": [
-        "BLOCKED"
+        "TRO-171",
+        "TRO-234",
+        "TRO-235",
+        "TRO-236",
+        "TRO-237",
+        "TRO-238",
+        "TRO-239",
+        "TRO-278",
+        "TRO-283",
+        "TRO-292",
+        "TRO-303"
       ],
       "evidence": [
         {
@@ -1233,9 +1411,7 @@
     {
       "id": "W4-R28",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "audit/terraform/baseline.md",
@@ -1268,7 +1444,7 @@
       "id": "W4-R29",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-299"
       ],
       "evidence": [
         {
@@ -1302,7 +1478,7 @@
       "id": "W4-R30",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-299"
       ],
       "evidence": [
         {
@@ -1346,7 +1522,7 @@
       "id": "W4-R31",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-299"
       ],
       "evidence": [
         {
@@ -1380,7 +1556,10 @@
       "id": "W4-R32",
       "verdict": "PARTIAL",
       "tickets": [
-        "BLOCKED"
+        "TRO-242",
+        "TRO-243",
+        "TRO-246",
+        "TRO-299"
       ],
       "evidence": [
         {
@@ -1423,9 +1602,7 @@
     {
       "id": "W4-R33",
       "verdict": "PARTIAL",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "project guideliens/GFA_Week_4_ShipShape_Updated.pdf",
@@ -1448,7 +1625,7 @@
       "id": "W4-R34",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-305"
       ],
       "evidence": [
         {
@@ -1486,9 +1663,7 @@
     {
       "id": "W4-R35",
       "verdict": "PARTIAL",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md",
@@ -1511,7 +1686,7 @@
       "id": "W4-R36",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-245"
       ],
       "evidence": [
         {
@@ -1560,7 +1735,7 @@
       "id": "W4-R37",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-244"
       ],
       "evidence": [
         {
@@ -1613,9 +1788,7 @@
     {
       "id": "W4-R38",
       "verdict": "PARTIAL",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "pnpm-lock.yaml",
@@ -1673,7 +1846,7 @@
       "id": "W4-R39",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-244"
       ],
       "evidence": [
         {
@@ -1712,7 +1885,7 @@
       "id": "W4-R40",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-244"
       ],
       "evidence": [
         {
@@ -1746,7 +1919,8 @@
       "id": "W4-R41",
       "verdict": "PARTIAL",
       "tickets": [
-        "BLOCKED"
+        "TRO-242",
+        "TRO-246"
       ],
       "evidence": [
         {
@@ -1805,7 +1979,7 @@
       "id": "W4-R42",
       "verdict": "PARTIAL",
       "tickets": [
-        "BLOCKED"
+        "TRO-247"
       ],
       "evidence": [
         {
@@ -1854,7 +2028,8 @@
       "id": "W4-R43",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-248",
+        "TRO-311"
       ],
       "evidence": [
         {
@@ -1908,7 +2083,7 @@
       "id": "W4-R44",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-249"
       ],
       "evidence": [
         {
@@ -1936,9 +2111,7 @@
     {
       "id": "W4-R45",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "docs/IMPROVEMENTS.md",
@@ -1970,9 +2143,7 @@
     {
       "id": "W4-R46",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "CHANGES.md",
@@ -1994,9 +2165,7 @@
     {
       "id": "W4-R47",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "CHANGES.md",
@@ -2023,9 +2192,7 @@
     {
       "id": "W4-R48",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "docs/submission/DISCOVERY.md",
@@ -2057,9 +2224,7 @@
     {
       "id": "W4-R49",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "README.md",
@@ -2082,7 +2247,7 @@
       "id": "W4-R50",
       "verdict": "IMPLEMENTED-UNVERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-305"
       ],
       "evidence": [
         {
@@ -2135,9 +2300,7 @@
     {
       "id": "W4-R51",
       "verdict": "PARTIAL",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "docs/submission/DEMO-SCRIPT.md",
@@ -2159,9 +2322,7 @@
     {
       "id": "W4-R52",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "docs/submission/AI-COST-ANALYSIS.md",
@@ -2189,7 +2350,10 @@
       "id": "W4-R53",
       "verdict": "VERIFIED",
       "tickets": [
-        "BLOCKED"
+        "TRO-242",
+        "TRO-243",
+        "TRO-246",
+        "TRO-299"
       ],
       "evidence": [
         {
@@ -2225,9 +2389,7 @@
     {
       "id": "W4-R54",
       "verdict": "PARTIAL",
-      "tickets": [
-        "BLOCKED"
-      ],
+      "tickets": [],
       "evidence": [
         {
           "file": "docs/submission/SOCIAL-POST.md",
@@ -2247,7 +2409,62 @@
       "notes": "Missing: a link to (or other confirmation of) the post actually having been published. grep across README.md and docs/submission/*.md for x.com/twitter.com/linkedin.com post URLs returned nothing. The draft content and image assets are fully prepared and ready to post, including the required @GauntletAI tag, so PARTIAL (not N/A) -- the repo is plainly the intended home for this deliverable and the only missing piece is the actual-post link."
     }
   ],
-  "orphan_tickets": [],
+  "orphan_tickets": [
+    {
+      "ticket": "TRO-240",
+      "title": "[DB-11] Main pg pool has no SSL config while migrate/seed do \u2014 blocks any managed-Postgres deploy",
+      "status": "Done",
+      "note": "maps to no inventory requirement"
+    },
+    {
+      "ticket": "TRO-241",
+      "title": "EPIC: Assignment implementation rules \u2014 not audit findings",
+      "status": "Done",
+      "note": "maps to no inventory requirement"
+    },
+    {
+      "ticket": "TRO-279",
+      "title": "[DB-12] Concurrent pnpm db:migrate is broken today \u2014 5 of 6 simultaneous schema applies fail",
+      "status": "Done",
+      "note": "maps to no inventory requirement"
+    },
+    {
+      "ticket": "TRO-287",
+      "title": "[SEC-1] RESOLVED \u2014 not a defect: admin router guard is present; the 200 was a fixture artefact",
+      "status": "Canceled",
+      "note": "maps to no inventory requirement"
+    },
+    {
+      "ticket": "TRO-294",
+      "title": "Direct-to-ALB health check URL in CLAUDE.md breaks once TF-7's CloudFront-only ALB security group ships",
+      "status": "Done",
+      "note": "maps to no inventory requirement"
+    },
+    {
+      "ticket": "TRO-295",
+      "title": "ALB security group may exceed AWS's rules-per-security-group quota once locked to CloudFront's prefix list (TF-7 follow-up)",
+      "status": "Done",
+      "note": "maps to no inventory requirement"
+    },
+    {
+      "ticket": "TRO-307",
+      "title": "[SECURITY] CodeQL: missing rate limiting across api/src/routes \u2014 18+ instances in weekly-plans.ts alone (js/missing-rate-limiting)",
+      "status": "Done",
+      "note": "maps to no inventory requirement"
+    },
+    {
+      "ticket": "TRO-308",
+      "title": "CodeQL js/missing-rate-limiting follow-up: 254 remaining route-file alerts + a genuinely unprotected SPA catch-all + admin.ts polynomial-redos",
+      "status": "Done",
+      "note": "maps to no inventory requirement"
+    },
+    {
+      "ticket": "TRO-309",
+      "title": "New CodeQL alerts (7, unrelated to TRO-307/308): sanitization, token validation, identity replacement, unvalidated redirect",
+      "status": "Done",
+      "note": "maps to no inventory requirement"
+    }
+  ],
   "needs_ruling": [],
   "commands_run": [
     {

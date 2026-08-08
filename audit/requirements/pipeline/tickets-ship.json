@@ -1,0 +1,617 @@
+[
+ {
+  "id": "TRO-164",
+  "title": "EPIC: Error Handling & Edge Cases \u2014 9 findings (2 Critical)",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-165",
+  "title": "EPIC: Database Query Efficiency \u2014 10 findings (1 Critical)",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-166",
+  "title": "EPIC: API Response Time \u2014 6 findings (1 Critical)",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-167",
+  "title": "EPIC: Type Safety \u2014 9 findings",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-168",
+  "title": "EPIC: Bundle Size \u2014 9 findings",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-169",
+  "title": "EPIC: Test Coverage & Quality \u2014 11 findings",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-170",
+  "title": "EPIC: Accessibility Compliance \u2014 8 findings",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-171",
+  "title": "EPIC: Terraform / IaC \u2014 6 findings",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-172",
+  "title": "[API-1] Throttled writes are silently dropped in production \u2014 rate limiter caps traffic at 100 req/min per IP",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-173",
+  "title": "[API-2] Issues list ships 380 KB on every load, 72% of it document bodies the list never renders",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-174",
+  "title": "[API-3] No response compression anywhere \u2014 the largest payload ships 15.4x larger than it needs to",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-175",
+  "title": "[API-4] Every \u2318K press re-downloads the entire 294 KB document corpus, bypassing the cache",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-176",
+  "title": "[API-5] Dashboard fans out one request per active week to fetch 10 bytes of standups",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-177",
+  "title": "[API-6] Every authenticated request performs a session write \u2014 all reads are writers",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-178",
+  "title": "[DB-1] pnpm db:migrate silently skips 32 of 42 migrations and exits 0, reporting success",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-179",
+  "title": "[DB-2] Every request writes to the sessions table \u2014 52\u201394% of per-flow queries are auth boilerplate",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-180",
+  "title": "[DB-3] 61% of all database time is query planning, not execution \u2014 nothing is ever cached",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-181",
+  "title": "[DB-4] Week dashboard N+1 \u2014 25 of the flow's 42 queries are one fan-out",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-182",
+  "title": "[DB-5] /api/issues list query fetches every issue's full document body \u2014 158 kB of unused text",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-183",
+  "title": "[DB-6] /api/weeks aggregate seq-scans all 813 association rows five times over",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-184",
+  "title": "[DB-7] Issue permalinks seq-scan the whole documents table \u2014 no index on ticket_number",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-185",
+  "title": "[DB-8] Planner underestimates the association batch by 28x and picks a sequential scan",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-186",
+  "title": "[DB-9] Sprint board and document view fire byte-identical requests two and three times",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-187",
+  "title": "[DB-10] No index on documents.updated_at despite ORDER BY updated_at DESC in seven route modules",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-188",
+  "title": "[ERR-1] Edits are permanently lost when the collaboration socket is unreachable \u2014 while the indicator reads \"Saved\"",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-189",
+  "title": "[ERR-2] A logged-out or revoked user keeps write access to documents via the collaboration socket",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-190",
+  "title": "[ERR-3] Rejected document writes are silently dropped while the indicator says \"Saved\"",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-191",
+  "title": "[ERR-4] Editing a document deleted by someone else continues silently into a ghost editor",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-192",
+  "title": "[ERR-5] Invalid path and query params return 500 Internal Server Error instead of 400/404",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-193",
+  "title": "[ERR-6] Dismissing a comment popover by clicking away orphans a highlight mark into saved document content",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-194",
+  "title": "[ERR-7] On a slow link the app looks hung for a minute with no loading affordance",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-195",
+  "title": "[ERR-8] Unbounded limit query param \u2014 negative and huge values both return the full payload",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-196",
+  "title": "[ERR-9] BacklinksPanel console.error storm buries real errors during the exact failures you'd debug",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-197",
+  "title": "[BUN-1] Every visitor downloads all 25 pages before the login form paints \u2014 zero route-level code splitting",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-198",
+  "title": "[BUN-2] The TipTap/ProseMirror/Yjs editor stack is 35.5% of the entry chunk and loads on every page",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-199",
+  "title": "[BUN-3] createLowlight(common) ships 37 syntax grammars \u2014 the largest npm package in the bundle",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-200",
+  "title": "[BUN-4] emoji-picker-react (39 kB gzip) loads on /login to serve one sidebar popover",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-201",
+  "title": "[BUN-5] Icon glob emits 245 chunks of which 209 are never referenced, plus a 245-entry map in the entry chunk",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-202",
+  "title": "[BUN-6] No chunking config \u2014 every app-code change invalidates all 588 kB gzip for returning users",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-203",
+  "title": "[BUN-7] Unused dependency @tanstack/query-sync-storage-persister",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-204",
+  "title": "[BUN-8] Two Radix packages resolve to duplicate versions and both copies ship",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-205",
+  "title": "[BUN-9] First paint blocks on a third-party Google Fonts stylesheet",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-206",
+  "title": "[TS-1] web/tsconfig.json doesn't extend the root config \u2014 102 latent type errors are invisible in the frontend",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-207",
+  "title": "[TS-2] The entire database-to-HTTP response path is implicitly any \u2014 707 pg queries, none typed",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-208",
+  "title": "[TS-3] The Yjs\u2194TipTap converter \u2014 the persistence path for every document's content \u2014 is fully untyped",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-209",
+  "title": "[TS-4] 236 non-null assertions on request auth context, all from one optional declaration",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-210",
+  "title": "[TS-5] The shared/ contract is bypassed \u2014 46 exported types, adopted by 13 of 198 web files",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-211",
+  "title": "[TS-6] No ESLint anywhere \u2014 pnpm lint is a silent no-op reporting success in CI",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-212",
+  "title": "[TS-7] as any silences type mismatches on a destructive bulk mutation and a SQL parameter",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-213",
+  "title": "[TS-8] 68% of flagged sites are in tests, where as any mocks decouple tests from the shapes they claim to verify",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-214",
+  "title": "[TS-9] web build and script files are never type-checked",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-215",
+  "title": "[A11Y-1] Workspace sidebar announces wrong roles and item counts to screen readers on every page",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-216",
+  "title": "[A11Y-2] aria-expanded on a plain div in the editor wrapper \u2014 invalid ARIA on the core editing surface",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-217",
+  "title": "[A11Y-3] /my-week fails color contrast on 25 elements \u2014 low-vision users can't read dashboard timestamps",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-218",
+  "title": "[A11Y-4] Radix popover on /issues opens as an unnamed role=dialog",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-219",
+  "title": "[A11Y-5] /search and /weeks render with no main landmark and no h1",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-220",
+  "title": "[A11Y-6] Document pages skip heading levels (h1 \u2192 h3), breaking the screen-reader outline",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-221",
+  "title": "[A11Y-7] Login page form is not contained in a landmark and has no main \u2014 and passes the repo's own a11y spec",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-222",
+  "title": "[A11Y-8] Issues table selection column has an empty table header",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-223",
+  "title": "[TEST-1] 13 web unit tests are failing and nothing in the repository ever runs them",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-224",
+  "title": "[TEST-2] 68 e2e tests can pass without executing a single assertion \u2014 including the only stored-XSS and audit-log-authz checks",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-225",
+  "title": "[TEST-3] Retries hide a test that fails on first attempt in 100% of runs; 11 tests flaked across 3 identical runs",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-226",
+  "title": "[TEST-4] Concurrent multi-client editing / Yjs merge has no test at all",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-227",
+  "title": "[TEST-5] Canceling an inline comment leaves an orphaned highlight mark in the saved document (real bug)",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-228",
+  "title": "[TEST-6] Allocation grid returns planId: null immediately after the plan is created (read-after-write race)",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-229",
+  "title": "[TEST-7] Coverage measurement is broken in api and entirely absent in web and shared",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-230",
+  "title": "[TEST-8] The landing page and the org chart have zero test coverage of any kind",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-231",
+  "title": "[TEST-9] pnpm test TRUNCATEs whatever database DATABASE_URL points at \u2014 including your dev database",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-232",
+  "title": "[TEST-10] E2E worker auto-sizing collapses to 1 worker on macOS \u2014 a 4x slowdown that discourages local runs",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-233",
+  "title": "[TEST-11] 619 fixed sleeps across 49 spec files \u2014 the mechanism behind the flakes",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-234",
+  "title": "[TF-1] Prod database and uploads bucket have no deletion protection \u2014 one careless apply from data loss",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-235",
+  "title": "[TF-2] Two divergent root configs manage the same infrastructure, and they have already drifted on security controls",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-236",
+  "title": "[TF-3] Pinned Terraform 1.6.0 can no longer init \u2014 expired provider-signing key breaks clean-machine bootstrap",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-237",
+  "title": "[TF-4] Flat root module has no committed provider lock file \u2014 provider versions float",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-238",
+  "title": "[TF-5] uploads S3 lifecycle rule has no filter/prefix \u2014 a validation warning that becomes a future error",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-239",
+  "title": "[TF-6] Secret generators have no keepers \u2014 regeneration logs out every user and rotates the DB password",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-240",
+  "title": "[DB-11] Main pg pool has no SSL config while migrate/seed do \u2014 blocks any managed-Postgres deploy",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-241",
+  "title": "EPIC: Assignment implementation rules \u2014 not audit findings",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-242",
+  "title": "[DEPLOY-1] Build the image from source and serve the SPA from the API",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-243",
+  "title": "[DEPLOY-2] Secrets loading hard-failed on any host that is not AWS",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-244",
+  "title": "[RULE-4] CI pipeline \u2014 GitHub Actions on every PR and commit, with source-code inventory",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-245",
+  "title": "[RULE-3] Regression test for every bug found in the audit",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-246",
+  "title": "[RULE-5] Build/release/run separation \u2014 build once, promote the artifact",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-247",
+  "title": "[RULE-6] One-command local start from a clean checkout",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-248",
+  "title": "[RULE-7] Retries, timeouts and circuit breakers on outbound calls",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-249",
+  "title": "[RULE-8] CHANGES.md \u2014 what was added, how to run it, how to roll it back",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-276",
+  "title": "[ERR-10] Any authenticated user can kill the API with one malformed WebSocket frame",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-277",
+  "title": "[TEST-12] Pre-existing load-sensitive flake in the api suite, invisible to the quarantine",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-278",
+  "title": "[TF-7] trust proxy 1 with ALB open to 0.0.0.0/0 makes req.ip spoofable",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-279",
+  "title": "[DB-12] Concurrent pnpm db:migrate is broken today \u2014 5 of 6 simultaneous schema applies fail",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-280",
+  "title": "[API-7] Rate limits are per-process, so the real ceiling is N instances \u00d7 configured",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-281",
+  "title": "[A11Y-9] Project context sidebar lists have no accessible name",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-282",
+  "title": "[TEST-13] Program Weeks tab links to a dead /sprints/ route and bounces the user out",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-283",
+  "title": "[TF-8] CloudFront compress=true on /api/* is inert \u2014 the cache policy never enables Accept-Encoding",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-284",
+  "title": "[ERR-11] Collaboration server drops inbound frames during the document load, so a client can never receive server state",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-285",
+  "title": "[ERR-12] getOrCreateDoc publishes an empty Y.Doc before loading it, so a second client can open a blank document",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-286",
+  "title": "[TEST-14] 60 of the 68 vacuous e2e tests remain, plus .husky/pre-commit is not marked executable",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-287",
+  "title": "[SEC-1] RESOLVED \u2014 not a defect: admin router guard is present; the 200 was a fixture artefact",
+  "status": "Canceled"
+ },
+ {
+  "id": "TRO-288",
+  "title": "[TEST-15] session-activity-race asserts exactly-once under load and fails CI on unrelated branches",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-289",
+  "title": "[ERR-13] PersonEditor saves with no error handling at all \u2014 the same silent-write failure ERR-3 fixed elsewhere",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-290",
+  "title": "[ERR-14] A window-focus refetch on a deleted document can unmount the editor and discard in-progress text",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-291",
+  "title": "Login error offers no recovery guidance for invalid credentials (WCAG 3.3.3)",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-292",
+  "title": "[TF-9] Committed binary tfplan in terraform/environments/shadow \u2014 plan artifacts don't belong in a public repo",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-293",
+  "title": "Three e2e tests assert a per-row issue quick-menu that does not exist in IssuesList \u2014 feature gap or dead tests, decide which",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-294",
+  "title": "Direct-to-ALB health check URL in CLAUDE.md breaks once TF-7's CloudFront-only ALB security group ships",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-295",
+  "title": "ALB security group may exceed AWS's rules-per-security-group quota once locked to CloudFront's prefix list (TF-7 follow-up)",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-296",
+  "title": "[ERR-15] Marks written via YXmlText.format() are not read back by yjsToJson \u2014 round-trip asymmetry in the persistence converter",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-297",
+  "title": "[TS-10] 398 floating/misused-promise sites surfaced by the new ESLint baseline \u2014 unawaited handlers are silent error swallows",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-298",
+  "title": "[A11Y-10] DashboardSidebar bg-accent/10 text-accent fails contrast (2.89:1) \u2014 newly reachable now that /search and /weeks render",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-299",
+  "title": "[TF-10] Category 8 improvement target: Render-provider Terraform config for the deployed fork \u2014 MISSING submission deliverable",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-300",
+  "title": "[TEST-16] session-activity-race flaked on main CI after the TEST-15 determinism fix \u2014 the structural-overlap fix does not hold under CI load",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-301",
+  "title": "[ERR-17] Document-by-id query sets retry:false and throws statusless errors \u2014 a 429 there is treated as permanent",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-302",
+  "title": "[API-8] Rate limiter hashes the session cookie with SHA-256 on every request \u2014 suspected cause of +12-18% P95 regression on cheap endpoints",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-303",
+  "title": "Module-version aws_s3_bucket.uploads (dev/shadow) has no prevent_destroy \u2014 same TF-1 gap, different location",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-304",
+  "title": "API-3 target still unmet: /api/documents has no pagination, the audit's own recommended fix for a 2nd P95-clearing endpoint",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-305",
+  "title": "Category 6 (error handling) fixes have zero screenshots/recordings \u2014 required per fix, self-admitted gap in IMPROVEMENTS.md",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-306",
+  "title": "TS-10 follow-up: web/src/pages/* floating/misused-promise burn-down (batch 1)",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-307",
+  "title": "[SECURITY] CodeQL: missing rate limiting across api/src/routes \u2014 18+ instances in weekly-plans.ts alone (js/missing-rate-limiting)",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-308",
+  "title": "CodeQL js/missing-rate-limiting follow-up: 254 remaining route-file alerts + a genuinely unprotected SPA catch-all + admin.ts polynomial-redos",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-309",
+  "title": "New CodeQL alerts (7, unrelated to TRO-307/308): sanitization, token validation, identity replacement, unvalidated redirect",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-310",
+  "title": "TEST-11 follow-up (batch 2): ~514 fixed-sleep sites across 42 spec files not covered by the TEST-3-connected batch",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-311",
+  "title": "RULE-7 follow-up: no pattern in the codebase is literally named a circuit breaker",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-354",
+  "title": "TEST-11 follow-up (batch 3): ~428 fixed-sleep sites remain across 40 spec files",
+  "status": "Backlog"
+ }
+]

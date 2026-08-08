@@ -16,6 +16,8 @@ baseline stopped being reproducible the moment that session ended.
 |---|---|
 | `cluster-{a..f}.json` | Raw trace output, one file per requirement cluster, from the Phase 3 fan-out. The evidence of record. |
 | `verification-results.json` | The controller's behavioral verification — commands actually run, their captured output, and the verdict overrides they justify. Overrides the cluster verdicts. |
+| `tickets-ship.json` | The Phase 2 ticket population: the 123 issues in Linear project "ShipShape Audit Remediation". Orphan detection runs against this set and nothing wider. |
+| `tickets-map-{1,2}.json` | Requirement → ticket mappings, split R1–R27 / R28–R54. Merged into the matrix's per-row `tickets`; anything in the population claimed by neither file becomes an orphan. |
 | `merge-matrix.py` | Merges the cluster files plus the verification results into `../matrix.baseline.json`. |
 | `write-report.py` | Renders `../REPORT.md` and `../gaps.md` from the matrix plus `../inventory.md`. |
 | `acceptance-check.py` | The plan's acceptance gate, verbatim. Must print `OK — 54 rows, verdicts sound`. |
@@ -43,6 +45,12 @@ Change the **source**, never the generated file:
 - A command was run and its result changes a verdict → add it to
   `verification-results.json`, which is where behavioral evidence belongs and
   is the only thing permitted to promote a row to `VERIFIED`.
+- Ticket coverage is wrong → edit `tickets-map-{1,2}.json`. If the ticket
+  *population* is wrong, fix `tickets.project` in `../../requirements.config.yaml`
+  and re-pull; do not widen the population to make orphans look tidier. Scoping
+  by project rather than by issue-number range is deliberate — this team's Ship
+  numbers are interleaved with two other products, and an unscoped sweep
+  reported 88 orphans where the truthful answer is 9.
 - A requirement was ambiguous and someone ruled on it → record the ruling in
   `../interpretations.md`, then apply it to the cluster entry (set
   `interpretation`, clear `assumption`, set the verdict the evidence now

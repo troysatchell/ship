@@ -12,7 +12,14 @@ docs:
 tickets:
   provider: linear
   team: TRO
-  project: null
+  # Load-bearing, not optional. The TRO team is a personal catch-all spanning six
+  # Linear projects, and the Ship issue numbers are interleaved with them: TRO-250..275
+  # are Clavira Pilot Readiness, TRO-312..365 are mostly FleetGraph (Week 5 — same repo,
+  # different assignment). Sweeping the team unscoped reported 88 orphan tickets, of
+  # which roughly 80 were simply other products' work. Scoped to this project it is 9,
+  # and those 9 are a real signal. Orphan detection is only meaningful against a
+  # deliberately chosen population.
+  project: "ShipShape Audit Remediation"
 
 # Roots searched during the trace phase. Application source alone is not enough for
 # this document set: the W4 brief's acceptance evidence lives largely in audit

@@ -74,18 +74,35 @@ def main():
     verifications = vfile.get("requirements", vfile)
     commands_run = vfile.get("commands", [])
 
-    # Ticket mapping is blocked this run; per report-format.md a blocked ticket
-    # dimension is written into every row's cell as ["BLOCKED"], so the matrix is
-    # self-describing rather than indistinguishable from "checked, none found".
-    ticket_status = "BLOCKED"
+    # Ticket mapping. Present only if the Phase 2 map files exist beside this
+    # script; otherwise the dimension is BLOCKED and per report-format.md every
+    # row's cell reads ["BLOCKED"], so the matrix is self-describing rather than
+    # indistinguishable from "checked, none found".
+    ticket_map = {}
+    for name in ("tickets-map-1.json", "tickets-map-2.json"):
+        p = os.path.join(SCRATCH, name)
+        if os.path.exists(p):
+            for rid, m in json.load(open(p)).get("mappings", {}).items():
+                ticket_map.setdefault(rid, {"tickets": [], "note": None})
+                ticket_map[rid]["tickets"] = sorted(
+                    set(ticket_map[rid]["tickets"]) | set(m.get("tickets") or []),
+                    key=lambda t: int(t.split("-")[1]))
+                ticket_map[rid]["note"] = m.get("note") or ticket_map[rid]["note"]
+
+    ticket_status = "OK" if ticket_map else "BLOCKED"
     blocked_cell = ["BLOCKED"] if ticket_status == "BLOCKED" else []
+
+    def cells(rid):
+        if ticket_status == "BLOCKED":
+            return list(blocked_cell)
+        return list(ticket_map.get(rid, {}).get("tickets") or [])
 
     reqs = []
     for rid in ids:
         e = entries.get(rid)
         if e is None:
             reqs.append({
-                "id": rid, "verdict": "BLOCKED", "tickets": list(blocked_cell),
+                "id": rid, "verdict": "BLOCKED", "tickets": cells(rid),
                 "evidence": [], "verification": None, "interpretation": None,
                 "assumption": None, "suggested_scope": None,
                 "notes": "No trace agent returned this requirement; re-run its cluster.",
@@ -118,7 +135,7 @@ def main():
         reqs.append({
             "id": rid,
             "verdict": verdict,
-            "tickets": list(blocked_cell),
+            "tickets": cells(rid),
             "evidence": e.get("evidence") or [],
             "verification": verification,
             "interpretation": e.get("interpretation"),
@@ -126,6 +143,20 @@ def main():
             "suggested_scope": e.get("suggested_scope"),
             "notes": notes,
         })
+
+    # Orphan tickets: in scope, but mapped to no requirement.
+    orphans = []
+    tpath = os.path.join(SCRATCH, "tickets-ship.json")
+    if ticket_status == "OK" and os.path.exists(tpath):
+        claimed = {tid for m in ticket_map.values() for tid in m["tickets"]}
+        for tk in json.load(open(tpath)):
+            if tk["id"] not in claimed:
+                orphans.append({
+                    "ticket": tk["id"],
+                    "title": tk["title"],
+                    "status": tk.get("status"),
+                    "note": "maps to no inventory requirement",
+                })
 
     cfg = os.path.join(REPO, "audit/requirements.config.yaml")
     dpaths = dirty_paths()
@@ -138,7 +169,21 @@ def main():
         "dirty_paths": dpaths,
         "date": sh("date -u +%Y-%m-%dT%H:%M:%SZ"),
         "config_hash": hashlib.sha256(open(cfg, "rb").read()).hexdigest(),
-        "ticket_mapping": {
+        "ticket_mapping": ({
+            "status": "OK",
+            "provider": "linear",
+            "team": "TRO",
+            "project": "ShipShape Audit Remediation",
+            "scope": ("The 123 issues in Linear project \"ShipShape Audit "
+                      "Remediation\" (TRO-164..249, TRO-276..311, TRO-354). "
+                      "Scoped by project, not by number range: the TRO team is a "
+                      "personal catch-all spanning six projects, and the Ship "
+                      "numbers are interleaved with them — TRO-250..275 belong to "
+                      "Clavira Pilot Readiness and TRO-312..365 mostly to "
+                      "FleetGraph (Week 5, same repo, different assignment). "
+                      "Sweeping the whole team would report ~200 false orphans "
+                      "from work this brief never covered."),
+        } if ticket_status == "OK" else {
             "status": ticket_status,
             "provider": "linear",
             "team": "TRO",
@@ -149,9 +194,9 @@ def main():
             "unblock": ("Authorize the Linear connector in claude.ai connector "
                         "settings or via /mcp, then re-run the sweep. Requirement "
                         "-> code tracing is unaffected."),
-        },
+        }),
         "requirements": reqs,
-        "orphan_tickets": [],
+        "orphan_tickets": orphans,
         "needs_ruling": needs_ruling,
         "commands_run": commands_run,
         "baselineRef": None,

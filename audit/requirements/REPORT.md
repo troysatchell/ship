@@ -1,6 +1,6 @@
 # Requirements Audit — Ship (GAUNTLET)
 
-**Commit:** c357c65c23f8 (dirty tree) · **Date:** 2026-08-08T18:52:32Z · **Docs:** W4 `GFA_Week_4_ShipShape_Updated.pdf` (14 pp.; requirements p.2–11, orientation appendix p.12–13) · **Mode:** baseline
+**Commit:** a830cf77cb68 (dirty tree) · **Date:** 2026-08-08T19:21:10Z · **Docs:** W4 `GFA_Week_4_ShipShape_Updated.pdf` (14 pp.; requirements p.2–11, orientation appendix p.12–13) · **Mode:** baseline
 
 ## Summary
 
@@ -10,76 +10,74 @@
 
 All 54 active W4 requirements are represented below, and two findings account for most of what is wrong. **The type-safety target is not met while the repo records it as met:** re-running the audit's own instrument at HEAD gives **1987 tracked violations against a 1535 baseline (+452, +29%)**, where W4-R10 asks for −25% (about −384 sites); `docs/IMPROVEMENTS.md:27-28` states "Verdict: met" on a sum-of-controlled-diffs accounting that it discloses openly, but the requirement's threshold is defined on the tracked total, which has never been below baseline at any measured point. **The test suite is red at HEAD:** `pnpm test` exits 1 — 830/832 passing, 2 failures at `api/src/db/__tests__/migrationRunner.test.ts:167,184`, both from a Postgres-versus-JavaScript sort-order mismatch inside the test itself rather than any migration defect. Those two drive W4-R10, W4-R33 and W4-R35; the remaining 7 PARTIAL rows are gaps the repo already documents. Everything else traced clean — but mostly statically, which the next section bounds.
 
-> **Ticket mapping BLOCKED.** Linear MCP server is unauthorized: only mcp__linear__authenticate / complete_authentication are exposed, and authenticate returned an OAuth URL requiring browser action. No ticket query tools available. **To unblock:** Authorize the Linear connector in claude.ai connector settings or via /mcp, then re-run the sweep. Requirement -> code tracing is unaffected.
-
 ## Coverage and limitations
 
 What this sweep did and did not check. Read this before treating any row below as proof.
 
 - **The e2e suite never ran.** `pnpm test:e2e` was not executed this sweep (600+ Playwright tests requiring the `/e2e-test-runner` protocol and Docker). W4-R21, W4-R36 and W4-R37 lean on suites that were traced but not executed: their evidence is the specs' existence and prior recorded runs, not a live result. No claim is made about the e2e suite in either direction.
-- **Ticket mapping is blocked.** The Linear connector is unauthorized, so every row's ticket cell reads `BLOCKED`. That means "not confirmed ticketed" — never "confirmed unticketed" — and orphan tickets could not be detected at all.
+- **Ticket mapping ran against live Linear data.** Scope: The 123 issues in Linear project "ShipShape Audit Remediation" (TRO-164..249, TRO-276..311, TRO-354). Scoped by project, not by number range: the TRO team is a personal catch-all spanning six projects, and the Ship numbers are interleaved with them — TRO-250..275 belong to Clavira Pilot Readiness and TRO-312..365 mostly to FleetGraph (Week 5, same repo, different assignment). Sweeping the whole team would report ~200 false orphans from work this brief never covered. 21 of 54 requirements have no ticket covering them and 9 in-scope tickets map to no requirement; both lists are below. A requirement without a ticket is not necessarily unfinished — much of this brief is process work that was done without being ticketed.
 - **This sweep wrote to the developer's database, which a read-only audit should not have done.** W4-R13's `VERIFIED` excerpt came from `pnpm db:seed && npx tsx audit/seed-augment.ts` run against the working database `ship_standup` rather than a throwaway one. `pnpm test` (W4-R10, W4-R35) then ran with that same `DATABASE_URL` exported, and `api/src/test/setup.ts:93-98` `TRUNCATE`s 15 tables — including `documents`, `users` and `workspaces` — in every api test file's `beforeAll`. So the audit reseeded the database and then destroyed it. It was re-seeded afterwards and is back at 500 documents / 255 issues / 20 users / 35 sprints, but the state behind W4-R13's excerpt no longer exists in that exact form; the excerpt is a true record of what was observed, not something re-runnable today.
 - **42 of 54 rows are `IMPLEMENTED-UNVERIFIED`** — statically traced to file:line with no behavioral check run against them. 2 rows are `VERIFIED` on captured command output. 1 row rests on a recorded interpretation ruling rather than on the requirement text alone; none is left un-ruled. Every command that did run this sweep is listed under "Verification performed" at the end of this report.
-- **The swept tree was dirty** — 5 path(s) did not match commit `c357c65c23f8`. Of those, the only one this report cites is `memory-bank/activeContext.md` — citations into it are reproducible only against the working tree, not against the recorded commit. The rest are this sweep's own in-flight output and unrelated working files; the full list is `dirty_paths` in `matrix.baseline.json`. Where volatility made a citation unusable (W4-R35, `memory-bank/activeContext.md`) it was dropped and the claim moved into that row's notes with the reason.
+- **The swept tree was dirty** — 13 path(s) did not match commit `a830cf77cb68`. Of those, the only one this report cites is `memory-bank/activeContext.md` — citations into it are reproducible only against the working tree, not against the recorded commit. The rest are this sweep's own in-flight output and unrelated working files; the full list is `dirty_paths` in `matrix.baseline.json`. Where volatility made a citation unusable (W4-R35, `memory-bank/activeContext.md`) it was dropped and the claim moved into that row's notes with the reason.
 
 ## Matrix
 
 | ID | Requirement (short) | Ticket(s) | Evidence | Verdict |
 |---|---|---|---|---|
-| W4-R1 | Orientation checklist answers exist as a saved notes document in the repo. | BLOCKED | `audit/ORIENTATION.md:1`<br>`audit/ORIENTATION.md:9`<br>+10 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R2 | The orientation notes from W4-R1 are committed and referenced by the submis... | BLOCKED | `README.md:26`<br>`README.md:29` | `IMPLEMENTED-UNVERIFIED` |
-| W4-R3 | audit/AUDIT_REPORT.md exists with a baseline section per category. | BLOCKED | `audit/AUDIT_REPORT.md:137`<br>`audit/AUDIT_REPORT.md:341`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R4 | Each category baseline in AUDIT_REPORT.md has a Methodology subsection with... | BLOCKED | `audit/AUDIT_REPORT.md:145`<br>`audit/AUDIT_REPORT.md:360`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R5 | Each category's deliverable table in AUDIT_REPORT.md is filled with measure... | BLOCKED | `audit/AUDIT_REPORT.md:202`<br>`audit/AUDIT_REPORT.md:440`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R6 | Each category baseline lists concrete findings. | BLOCKED | `audit/AUDIT_REPORT.md:249`<br>`audit/AUDIT_REPORT.md:477`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R7 | Findings in AUDIT_REPORT.md carry severity ranks. | BLOCKED | `audit/AUDIT_REPORT.md:34`<br>`audit/AUDIT_REPORT.md:251`<br>+5 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R8 | No application-code changes in the commit range of the audit phase. | BLOCKED | `audit/AUDIT_REPORT.md:2`<br>`audit/AUDIT_REPORT.md:26` | `IMPLEMENTED-UNVERIFIED` |
-| W4-R9 | The type-safety baseline table in AUDIT_REPORT.md is complete (all 7 metrics). | BLOCKED | `audit/AUDIT_REPORT.md:206`<br>`audit/AUDIT_REPORT.md:207`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R10 | Post-improvement violation count ≤ 75% of baseline with meaningful types; s... | BLOCKED | `audit/type-safety/baseline.json:32`<br>`docs/IMPROVEMENTS.md:24`<br>+5 more | `PARTIAL` |
-| W4-R11 | The bundle baseline table in AUDIT_REPORT.md is complete. | BLOCKED | `audit/AUDIT_REPORT.md:444`<br>`audit/AUDIT_REPORT.md:446`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R12 | Vite build output (web/) shrinks per one of the two thresholds with analyze... | BLOCKED | `docs/IMPROVEMENTS.md:119`<br>`docs/IMPROVEMENTS.md:122`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R13 | api/src/db/seed.ts (or an augmenting script) produces at least those row co... | BLOCKED | `audit/seed-augment.ts:5`<br>`api/src/db/seed.ts:90`<br>+8 more | `VERIFIED` |
-| W4-R14 | AUDIT_REPORT.md names 5 endpoints with the tracing method recorded. | BLOCKED | `audit/AUDIT_REPORT.md:609`<br>`audit/AUDIT_REPORT.md:611`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R15 | The API baseline table has P50/P95/P99 per endpoint at the three concurrenc... | BLOCKED | `audit/AUDIT_REPORT.md:645`<br>`audit/AUDIT_REPORT.md:615`<br>+1 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R16 | Two endpoints' P95 drop ≥20% under identical-conditions re-benchmark, with... | BLOCKED | `audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md:101`<br>`audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md:47`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R17 | The DB baseline table covers the 5 named flows with counts, slowest-query t... | BLOCKED | `audit/AUDIT_REPORT.md:825`<br>`audit/AUDIT_REPORT.md:826`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R18 | One flow's query count or the slowest query improves per threshold with EXP... | BLOCKED | `audit/db-query/compare-phase2-jul30/after-phase2-jul30.md:54`<br>`audit/db-query/compare-phase2-jul30/after-phase2-jul30.md:56`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R19 | The test baseline table (totals, pass/fail/flaky, runtime, uncovered critic... | BLOCKED | `audit/AUDIT_REPORT.md:1074`<br>`audit/AUDIT_REPORT.md:1075`<br>+5 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R20 | Coverage tooling runs for api and web packages and per-package numbers are... | BLOCKED | `api/vitest.config.ts:27`<br>`web/vitest.config.ts:39`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R21 | Three new regression-catching tests (or 3 flaky-test RCAs) exist, each with... | BLOCKED | `docs/IMPROVEMENTS.md:362`<br>`docs/IMPROVEMENTS.md:378`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R22 | The error-handling baseline table is complete with repro steps for silent f... | BLOCKED | `audit/AUDIT_REPORT.md:1511`<br>`audit/AUDIT_REPORT.md:1512`<br>+5 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R23 | Three error-handling fixes landed, one covering a data-loss/confusion path,... | BLOCKED | `docs/IMPROVEMENTS.md:439`<br>`docs/IMPROVEMENTS.md:442`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R24 | The a11y baseline table is complete across the app's major pages. | BLOCKED | `audit/AUDIT_REPORT.md:1573`<br>`audit/AUDIT_REPORT.md:1574`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R25 | One of the two a11y thresholds is met with before/after scanner output. | BLOCKED | `audit/a11y/compare-phase2-jul30/after-phase2-jul30.md:70`<br>`audit/a11y/compare-phase2-jul30/after-phase2-jul30.md:72`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R26 | terraform/ inits and plans locally; the full plan output is saved as an art... | BLOCKED | `terraform/render/plan/plan-annotated.md:32`<br>`terraform/render/plan/tro-316-agent-plan-annotated.md:96`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R27 | Every resource in the saved plan carries a one-sentence annotation + risk/b... | BLOCKED | `terraform/render/plan/plan-annotated.md:116`<br>`terraform/render/plan/tro-316-agent-plan-annotated.md:264`<br>+2 more | `PARTIAL` |
-| W4-R28 | A documented drift demo exists (local provider file edit or Render dashboar... | BLOCKED | `audit/terraform/baseline.md:63`<br>`audit/terraform/raw/drift-1-apply.txt:1`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R29 | A local-provider .tf config managing ≥2 local resources exists and plans cl... | BLOCKED | `audit/terraform/drift-demo/main.tf:6`<br>`audit/terraform/drift-demo/main.tf:17`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R30 | A Render-provider .tf config declaring the fork's web service exists and pl... | BLOCKED | `terraform/render/versions.tf:5`<br>`terraform/render/web_service.tf:9`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R31 | required_providers blocks pin exact versions in both configs. | BLOCKED | `audit/terraform/drift-demo/main.tf:11`<br>`terraform/render/versions.tf:9`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R32 | terraform apply alone deploys the fork; no manual deploy scripts required f... | BLOCKED | `terraform/render/plan/tro-316-destroy-redeploy-proof.md:88`<br>`terraform/render/plan/IMPORT-LOG.md:21`<br>+4 more | `PARTIAL` |
-| W4-R33 | Every category's improvement target (W4-R10/12/16/18/21/23/25 and Terraform... | BLOCKED | `project guideliens/GFA_Week_4_ShipShape_Updated.pdf` p.7<br>`docs/IMPROVEMENTS.md:618` | `PARTIAL` |
-| W4-R34 | Each improvement has paired before/after measurements under identical condi... | BLOCKED | `docs/IMPROVEMENTS.md:1`<br>`audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md:11`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R35 | The suite is green at every improvement merge point. | BLOCKED | `audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md:25`<br>`audit/db-query/compare-phase2-jul30/after-phase2-jul30.md:22` | `PARTIAL` |
-| W4-R36 | Each audit finding ID maps to a regression test; external-service mocks are... | BLOCKED | `CHANGES.md:9724`<br>`CHANGES.md:11142`<br>+5 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R37 | .github/workflows/ contains workflows running all seven checks on PR + push... | BLOCKED | `.github/workflows/ci.yml:6`<br>`.github/workflows/ci.yml:92`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R38 | package.json files use exact versions; pnpm-lock.yaml committed. | BLOCKED | `pnpm-lock.yaml:1`<br>`package.json:41`<br>+7 more | `PARTIAL` |
-| W4-R39 | A CI step emits a package/version/license inventory artifact. | BLOCKED | `.github/workflows/ci.yml:306`<br>`.github/workflows/ci.yml:334`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R40 | Skipped/altered CI checks are documented with reasons. | BLOCKED | `CHANGES.md:7576`<br>`CHANGES.md:7640`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R41 | CI builds once, tags with SHA, deploys promote that artifact; lifecycle doc... | BLOCKED | `docs/deployment-artifact-lifecycle.md:1`<br>`.github/workflows/ci.yml:441`<br>+7 more | `PARTIAL` |
-| W4-R42 | A single script boots app + database from clean checkout; README documents it. | BLOCKED | `start.sh:68`<br>`scripts/dev.sh:78`<br>+5 more | `PARTIAL` |
-| W4-R43 | Outbound calls (pg pool, WebSocket, external) have assessed retry/timeout/b... | BLOCKED | `CHANGES.md:10769`<br>`CHANGES.md:10810`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R44 | CHANGES.md at repo root covers every improvement with run/test/rollback notes. | BLOCKED | `CHANGES.md:1`<br>`CHANGES.md:10828`<br>+1 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R45 | Per-improvement reasoning write-ups exist (CHANGES.md or improvement docs). | BLOCKED | `docs/IMPROVEMENTS.md:22`<br>`docs/IMPROVEMENTS.md:67`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R46 | Improvement commits contain substantive changes tied to category targets. | BLOCKED | `CHANGES.md:4941`<br>`CHANGES.md:10769` | `IMPLEMENTED-UNVERIFIED` |
-| W4-R47 | Git history shows per-improvement branches/commits with descriptive messages. | BLOCKED | `CHANGES.md:10763`<br>`CHANGES.md:14335`<br>+1 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R48 | A discovery write-up with 3 entries, each carrying the 4 elements incl. fil... | BLOCKED | `docs/submission/DISCOVERY.md:6`<br>`docs/submission/DISCOVERY.md:30`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R49 | The fork hosts improvement branches with clear names; README has a setup gu... | BLOCKED | `README.md:22`<br>`README.md:149` | `IMPLEMENTED-UNVERIFIED` |
-| W4-R50 | Per-category improvement docs contain those 5 elements. | BLOCKED | `docs/IMPROVEMENTS.md:22`<br>`docs/IMPROVEMENTS.md:117`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R51 | Not code-traceable; an external video deliverable. | BLOCKED | `docs/submission/DEMO-SCRIPT.md:1`<br>`docs/submission/FLEETGRAPH-DEMO-SCRIPT.md:1` | `PARTIAL` |
-| W4-R52 | Not code-traceable; a written analysis deliverable. | BLOCKED | `docs/submission/AI-COST-ANALYSIS.md:34`<br>`docs/submission/AI-COST-ANALYSIS.md:68`<br>+1 more | `IMPLEMENTED-UNVERIFIED` |
-| W4-R53 | The fork is deployed at a public URL. | BLOCKED | `docs/submission/FLEETGRAPH-DEMO-SCRIPT.md:6`<br>`docs/submission/DEMO-SCRIPT.md:69`<br>+2 more | `VERIFIED` |
-| W4-R54 | Not code-traceable; external post. | BLOCKED | `docs/submission/SOCIAL-POST.md:1`<br>`docs/submission/SOCIAL-POST.md:16` | `PARTIAL` |
+| W4-R1 | Orientation checklist answers exist as a saved notes document in the repo. | — | `audit/ORIENTATION.md:1`<br>`audit/ORIENTATION.md:9`<br>+10 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R2 | The orientation notes from W4-R1 are committed and referenced by the submis... | — | `README.md:26`<br>`README.md:29` | `IMPLEMENTED-UNVERIFIED` |
+| W4-R3 | audit/AUDIT_REPORT.md exists with a baseline section per category. | — | `audit/AUDIT_REPORT.md:137`<br>`audit/AUDIT_REPORT.md:341`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R4 | Each category baseline in AUDIT_REPORT.md has a Methodology subsection with... | — | `audit/AUDIT_REPORT.md:145`<br>`audit/AUDIT_REPORT.md:360`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R5 | Each category's deliverable table in AUDIT_REPORT.md is filled with measure... | — | `audit/AUDIT_REPORT.md:202`<br>`audit/AUDIT_REPORT.md:440`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R6 | Each category baseline lists concrete findings. | — | `audit/AUDIT_REPORT.md:249`<br>`audit/AUDIT_REPORT.md:477`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R7 | Findings in AUDIT_REPORT.md carry severity ranks. | — | `audit/AUDIT_REPORT.md:34`<br>`audit/AUDIT_REPORT.md:251`<br>+5 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R8 | No application-code changes in the commit range of the audit phase. | — | `audit/AUDIT_REPORT.md:2`<br>`audit/AUDIT_REPORT.md:26` | `IMPLEMENTED-UNVERIFIED` |
+| W4-R9 | The type-safety baseline table in AUDIT_REPORT.md is complete (all 7 metrics). | TRO-167, TRO-206, TRO-207, TRO-208, TRO-209, TRO-210, TRO-211, TRO-212, TRO-213, TRO-214, TRO-297, TRO-306 | `audit/AUDIT_REPORT.md:206`<br>`audit/AUDIT_REPORT.md:207`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R10 | Post-improvement violation count ≤ 75% of baseline with meaningful types; s... | TRO-167, TRO-206, TRO-207, TRO-208, TRO-209, TRO-210, TRO-211, TRO-212, TRO-213, TRO-214, TRO-297, TRO-306 | `audit/type-safety/baseline.json:32`<br>`docs/IMPROVEMENTS.md:24`<br>+5 more | `PARTIAL` |
+| W4-R11 | The bundle baseline table in AUDIT_REPORT.md is complete. | TRO-168, TRO-197, TRO-198, TRO-199, TRO-200, TRO-201, TRO-202, TRO-203, TRO-204, TRO-205 | `audit/AUDIT_REPORT.md:444`<br>`audit/AUDIT_REPORT.md:446`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R12 | Vite build output (web/) shrinks per one of the two thresholds with analyze... | TRO-168, TRO-197, TRO-198, TRO-199, TRO-200, TRO-201, TRO-202, TRO-203, TRO-204, TRO-205 | `docs/IMPROVEMENTS.md:119`<br>`docs/IMPROVEMENTS.md:122`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R13 | api/src/db/seed.ts (or an augmenting script) produces at least those row co... | — | `audit/seed-augment.ts:5`<br>`api/src/db/seed.ts:90`<br>+8 more | `VERIFIED` |
+| W4-R14 | AUDIT_REPORT.md names 5 endpoints with the tracing method recorded. | TRO-166, TRO-172, TRO-173, TRO-174, TRO-175, TRO-176, TRO-177, TRO-280, TRO-302, TRO-304 | `audit/AUDIT_REPORT.md:609`<br>`audit/AUDIT_REPORT.md:611`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R15 | The API baseline table has P50/P95/P99 per endpoint at the three concurrenc... | TRO-166, TRO-172, TRO-173, TRO-174, TRO-175, TRO-176, TRO-177, TRO-280, TRO-302, TRO-304 | `audit/AUDIT_REPORT.md:645`<br>`audit/AUDIT_REPORT.md:615`<br>+1 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R16 | Two endpoints' P95 drop ≥20% under identical-conditions re-benchmark, with... | TRO-166, TRO-172, TRO-173, TRO-174, TRO-175, TRO-176, TRO-177, TRO-280, TRO-302, TRO-304 | `audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md:101`<br>`audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md:47`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R17 | The DB baseline table covers the 5 named flows with counts, slowest-query t... | TRO-165, TRO-178, TRO-179, TRO-180, TRO-181, TRO-182, TRO-183, TRO-184, TRO-185, TRO-186, TRO-187 | `audit/AUDIT_REPORT.md:825`<br>`audit/AUDIT_REPORT.md:826`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R18 | One flow's query count or the slowest query improves per threshold with EXP... | TRO-165, TRO-178, TRO-179, TRO-180, TRO-181, TRO-182, TRO-183, TRO-184, TRO-185, TRO-186, TRO-187 | `audit/db-query/compare-phase2-jul30/after-phase2-jul30.md:54`<br>`audit/db-query/compare-phase2-jul30/after-phase2-jul30.md:56`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R19 | The test baseline table (totals, pass/fail/flaky, runtime, uncovered critic... | TRO-169, TRO-223, TRO-224, TRO-225, TRO-226, TRO-227, TRO-228, TRO-229, TRO-230, TRO-231, TRO-232, TRO-233, TRO-277, TRO-282, TRO-286, TRO-288, TRO-293, TRO-300, TRO-310, TRO-354 | `audit/AUDIT_REPORT.md:1074`<br>`audit/AUDIT_REPORT.md:1075`<br>+5 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R20 | Coverage tooling runs for api and web packages and per-package numbers are... | TRO-169, TRO-229 | `api/vitest.config.ts:27`<br>`web/vitest.config.ts:39`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R21 | Three new regression-catching tests (or 3 flaky-test RCAs) exist, each with... | TRO-225, TRO-226, TRO-227, TRO-228, TRO-230, TRO-288, TRO-300 | `docs/IMPROVEMENTS.md:362`<br>`docs/IMPROVEMENTS.md:378`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R22 | The error-handling baseline table is complete with repro steps for silent f... | TRO-164, TRO-188, TRO-189, TRO-190, TRO-191, TRO-192, TRO-193, TRO-194, TRO-195, TRO-196, TRO-276, TRO-284, TRO-285, TRO-289, TRO-290, TRO-296, TRO-301 | `audit/AUDIT_REPORT.md:1511`<br>`audit/AUDIT_REPORT.md:1512`<br>+5 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R23 | Three error-handling fixes landed, one covering a data-loss/confusion path,... | TRO-164, TRO-188, TRO-189, TRO-190, TRO-191, TRO-192, TRO-193, TRO-194, TRO-195, TRO-196, TRO-276, TRO-284, TRO-285, TRO-289, TRO-290, TRO-296, TRO-301, TRO-305 | `docs/IMPROVEMENTS.md:439`<br>`docs/IMPROVEMENTS.md:442`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R24 | The a11y baseline table is complete across the app's major pages. | TRO-170, TRO-215, TRO-216, TRO-217, TRO-218, TRO-219, TRO-220, TRO-221, TRO-222, TRO-281, TRO-291, TRO-298 | `audit/AUDIT_REPORT.md:1573`<br>`audit/AUDIT_REPORT.md:1574`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R25 | One of the two a11y thresholds is met with before/after scanner output. | TRO-170, TRO-215, TRO-216, TRO-217, TRO-218, TRO-219, TRO-220, TRO-221, TRO-222, TRO-281, TRO-291, TRO-298 | `audit/a11y/compare-phase2-jul30/after-phase2-jul30.md:70`<br>`audit/a11y/compare-phase2-jul30/after-phase2-jul30.md:72`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R26 | terraform/ inits and plans locally; the full plan output is saved as an art... | TRO-171, TRO-234, TRO-235, TRO-236, TRO-237, TRO-238, TRO-239, TRO-278, TRO-283, TRO-292, TRO-303 | `terraform/render/plan/plan-annotated.md:32`<br>`terraform/render/plan/tro-316-agent-plan-annotated.md:96`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R27 | Every resource in the saved plan carries a one-sentence annotation + risk/b... | TRO-171, TRO-234, TRO-235, TRO-236, TRO-237, TRO-238, TRO-239, TRO-278, TRO-283, TRO-292, TRO-303 | `terraform/render/plan/plan-annotated.md:116`<br>`terraform/render/plan/tro-316-agent-plan-annotated.md:264`<br>+2 more | `PARTIAL` |
+| W4-R28 | A documented drift demo exists (local provider file edit or Render dashboar... | — | `audit/terraform/baseline.md:63`<br>`audit/terraform/raw/drift-1-apply.txt:1`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R29 | A local-provider .tf config managing ≥2 local resources exists and plans cl... | TRO-299 | `audit/terraform/drift-demo/main.tf:6`<br>`audit/terraform/drift-demo/main.tf:17`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R30 | A Render-provider .tf config declaring the fork's web service exists and pl... | TRO-299 | `terraform/render/versions.tf:5`<br>`terraform/render/web_service.tf:9`<br>+4 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R31 | required_providers blocks pin exact versions in both configs. | TRO-299 | `audit/terraform/drift-demo/main.tf:11`<br>`terraform/render/versions.tf:9`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R32 | terraform apply alone deploys the fork; no manual deploy scripts required f... | TRO-242, TRO-243, TRO-246, TRO-299 | `terraform/render/plan/tro-316-destroy-redeploy-proof.md:88`<br>`terraform/render/plan/IMPORT-LOG.md:21`<br>+4 more | `PARTIAL` |
+| W4-R33 | Every category's improvement target (W4-R10/12/16/18/21/23/25 and Terraform... | — | `project guideliens/GFA_Week_4_ShipShape_Updated.pdf` p.7<br>`docs/IMPROVEMENTS.md:618` | `PARTIAL` |
+| W4-R34 | Each improvement has paired before/after measurements under identical condi... | TRO-305 | `docs/IMPROVEMENTS.md:1`<br>`audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md:11`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R35 | The suite is green at every improvement merge point. | — | `audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md:25`<br>`audit/db-query/compare-phase2-jul30/after-phase2-jul30.md:22` | `PARTIAL` |
+| W4-R36 | Each audit finding ID maps to a regression test; external-service mocks are... | TRO-245 | `CHANGES.md:9724`<br>`CHANGES.md:11142`<br>+5 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R37 | .github/workflows/ contains workflows running all seven checks on PR + push... | TRO-244 | `.github/workflows/ci.yml:6`<br>`.github/workflows/ci.yml:92`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R38 | package.json files use exact versions; pnpm-lock.yaml committed. | — | `pnpm-lock.yaml:1`<br>`package.json:41`<br>+7 more | `PARTIAL` |
+| W4-R39 | A CI step emits a package/version/license inventory artifact. | TRO-244 | `.github/workflows/ci.yml:306`<br>`.github/workflows/ci.yml:334`<br>+3 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R40 | Skipped/altered CI checks are documented with reasons. | TRO-244 | `CHANGES.md:7576`<br>`CHANGES.md:7640`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R41 | CI builds once, tags with SHA, deploys promote that artifact; lifecycle doc... | TRO-242, TRO-246 | `docs/deployment-artifact-lifecycle.md:1`<br>`.github/workflows/ci.yml:441`<br>+7 more | `PARTIAL` |
+| W4-R42 | A single script boots app + database from clean checkout; README documents it. | TRO-247 | `start.sh:68`<br>`scripts/dev.sh:78`<br>+5 more | `PARTIAL` |
+| W4-R43 | Outbound calls (pg pool, WebSocket, external) have assessed retry/timeout/b... | TRO-248, TRO-311 | `CHANGES.md:10769`<br>`CHANGES.md:10810`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R44 | CHANGES.md at repo root covers every improvement with run/test/rollback notes. | TRO-249 | `CHANGES.md:1`<br>`CHANGES.md:10828`<br>+1 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R45 | Per-improvement reasoning write-ups exist (CHANGES.md or improvement docs). | — | `docs/IMPROVEMENTS.md:22`<br>`docs/IMPROVEMENTS.md:67`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R46 | Improvement commits contain substantive changes tied to category targets. | — | `CHANGES.md:4941`<br>`CHANGES.md:10769` | `IMPLEMENTED-UNVERIFIED` |
+| W4-R47 | Git history shows per-improvement branches/commits with descriptive messages. | — | `CHANGES.md:10763`<br>`CHANGES.md:14335`<br>+1 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R48 | A discovery write-up with 3 entries, each carrying the 4 elements incl. fil... | — | `docs/submission/DISCOVERY.md:6`<br>`docs/submission/DISCOVERY.md:30`<br>+2 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R49 | The fork hosts improvement branches with clear names; README has a setup gu... | — | `README.md:22`<br>`README.md:149` | `IMPLEMENTED-UNVERIFIED` |
+| W4-R50 | Per-category improvement docs contain those 5 elements. | TRO-305 | `docs/IMPROVEMENTS.md:22`<br>`docs/IMPROVEMENTS.md:117`<br>+6 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R51 | Not code-traceable; an external video deliverable. | — | `docs/submission/DEMO-SCRIPT.md:1`<br>`docs/submission/FLEETGRAPH-DEMO-SCRIPT.md:1` | `PARTIAL` |
+| W4-R52 | Not code-traceable; a written analysis deliverable. | — | `docs/submission/AI-COST-ANALYSIS.md:34`<br>`docs/submission/AI-COST-ANALYSIS.md:68`<br>+1 more | `IMPLEMENTED-UNVERIFIED` |
+| W4-R53 | The fork is deployed at a public URL. | TRO-242, TRO-243, TRO-246, TRO-299 | `docs/submission/FLEETGRAPH-DEMO-SCRIPT.md:6`<br>`docs/submission/DEMO-SCRIPT.md:69`<br>+2 more | `VERIFIED` |
+| W4-R54 | Not code-traceable; external post. | — | `docs/submission/SOCIAL-POST.md:1`<br>`docs/submission/SOCIAL-POST.md:16` | `PARTIAL` |
 
 ## Gaps
 
@@ -135,7 +133,19 @@ What this sweep did and did not check. Read this before treating any row below a
 
 ## Orphan tickets
 
-Not determinable this sweep — ticket mapping is BLOCKED (see Summary). Re-run after authorizing the Linear connector to populate this section.
+9 in-scope tickets map to no W4 requirement. That is expected rather than alarming: the sprint did work this brief never asked for, and review follow-ups rarely trace to a requirement of their own. Listed so nothing is invisible.
+
+| Ticket | Status | Title |
+|---|---|---|
+| TRO-240 | Done | [DB-11] Main pg pool has no SSL config while migrate/seed do — blocks any managed-Postgres deploy |
+| TRO-241 | Done | EPIC: Assignment implementation rules — not audit findings |
+| TRO-279 | Done | [DB-12] Concurrent pnpm db:migrate is broken today — 5 of 6 simultaneous schema applies fail |
+| TRO-287 | Canceled | [SEC-1] RESOLVED — not a defect: admin router guard is present; the 200 was a fixture artefact |
+| TRO-294 | Done | Direct-to-ALB health check URL in CLAUDE.md breaks once TF-7's CloudFront-only ALB security group ships |
+| TRO-295 | Done | ALB security group may exceed AWS's rules-per-security-group quota once locked to CloudFront's prefix list (TF-7 follow-up) |
+| TRO-307 | Done | [SECURITY] CodeQL: missing rate limiting across api/src/routes — 18+ instances in weekly-plans.ts alone (js/missing-rate-limiting) |
+| TRO-308 | Done | CodeQL js/missing-rate-limiting follow-up: 254 remaining route-file alerts + a genuinely unprotected SPA catch-all + admin.ts polynomial-redos |
+| TRO-309 | Done | New CodeQL alerts (7, unrelated to TRO-307/308): sanitization, token validation, identity replacement, unvalidated redirect |
 
 ## Blocked / assumed
 

@@ -112,9 +112,19 @@ A("- **The e2e suite never ran.** `pnpm test:e2e` was not executed this sweep (6
   "W4-R36 and W4-R37 lean on suites that were traced but not executed: their evidence "
   "is the specs' existence and prior recorded runs, not a live result. No claim is "
   "made about the e2e suite in either direction.")
-A("- **Ticket mapping is blocked.** The Linear connector is unauthorized, so every "
-  "row's ticket cell reads `BLOCKED`. That means \"not confirmed ticketed\" — never "
-  "\"confirmed unticketed\" — and orphan tickets could not be detected at all.")
+_tm = matrix.get("ticket_mapping", {})
+if _tm.get("status") == "OK":
+    _unticketed = len([r for r in matrix["requirements"] if not r["tickets"]])
+    A(f"- **Ticket mapping ran against live Linear data.** Scope: {_tm['scope']} "
+      f"{_unticketed} of {len(matrix['requirements'])} requirements have no ticket "
+      f"covering them and {len(matrix['orphan_tickets'])} in-scope tickets map to no "
+      "requirement; both lists are below. A requirement without a ticket is not "
+      "necessarily unfinished — much of this brief is process work that was done "
+      "without being ticketed.")
+else:
+    A("- **Ticket mapping is blocked.** The Linear connector is unauthorized, so every "
+      "row's ticket cell reads `BLOCKED`. That means \"not confirmed ticketed\" — never "
+      "\"confirmed unticketed\" — and orphan tickets could not be detected at all.")
 A("- **This sweep wrote to the developer's database, which a read-only audit should "
   "not have done.** W4-R13's `VERIFIED` excerpt came from "
   "`pnpm db:seed && npx tsx audit/seed-augment.ts` run against the working database "
@@ -187,8 +197,23 @@ else:
 
 A("## Orphan tickets")
 A("")
-A("Not determinable this sweep — ticket mapping is BLOCKED (see Summary). "
-  "Re-run after authorizing the Linear connector to populate this section.")
+if _tm.get("status") != "OK":
+    A("Not determinable this sweep — ticket mapping is BLOCKED (see Summary). "
+      "Re-run after authorizing the Linear connector to populate this section.")
+elif not matrix["orphan_tickets"]:
+    A("None — every in-scope ticket maps to at least one requirement.")
+else:
+    A(f"{len(matrix['orphan_tickets'])} in-scope ticket"
+      f"{'' if len(matrix['orphan_tickets']) == 1 else 's'} map to no W4 "
+      "requirement. That is expected rather than alarming: "
+      "the sprint did work this brief never asked for, and review follow-ups "
+      "rarely trace to a requirement of their own. Listed so nothing is invisible.")
+    A("")
+    A("| Ticket | Status | Title |")
+    A("|---|---|---|")
+    for o in matrix["orphan_tickets"]:
+        ttl = o["title"].replace("|", "\\|")
+        A(f"| {o['ticket']} | {o.get('status') or '—'} | {ttl} |")
 A("")
 
 blocked = [r for r in matrix["requirements"] if r["verdict"] == "BLOCKED"]
@@ -284,9 +309,14 @@ G = []
 B = G.append
 B(f"# Requirements gaps — Ship ({matrix['date']}, commit {matrix['commit'][:12]})")
 B("")
-B("Ticket coverage is unknown for every row below: the Linear connector is "
-  "unauthorized this sweep, so \"unticketed\" here means \"not confirmed "
-  "ticketed\", not \"confirmed missing a ticket\".")
+if _tm.get("status") == "OK":
+    B("Ticket coverage below is live Linear data. Each gap lists the tickets that "
+      "map to it, or says none does — a gap with no ticket is the one most likely "
+      "to be forgotten.")
+else:
+    B("Ticket coverage is unknown for every row below: the Linear connector is "
+      "unauthorized this sweep, so \"unticketed\" here means \"not confirmed "
+      "ticketed\", not \"confirmed missing a ticket\".")
 B("")
 B("## Unticketed requirements")
 B("")
@@ -298,6 +328,9 @@ for r in gaps_rows:
     B(f"- **Quote:** {e.get('Quote', '(see inventory)')}")
     B(f"- **Source:** {e.get('Source', '')}")
     B(f"- **Meaning in code:** {e.get('Meaning in code', '')}")
+    if _tm.get("status") == "OK":
+        B("- **Tickets:** " + (", ".join(r["tickets"]) if r["tickets"]
+                               else "none map to this requirement"))
     B(f"- **What is missing:** {r['notes'] or '(not specified)'}")
     B(f"- **Suggested scope:** {r.get('suggested_scope') or '(not specified)'}")
     if r["evidence"]:
@@ -305,7 +338,14 @@ for r in gaps_rows:
     B("")
 B("## Orphan tickets")
 B("")
-B("Not determinable — ticket mapping BLOCKED (Linear connector unauthorized).")
+if _tm.get("status") != "OK":
+    B("Not determinable — ticket mapping BLOCKED (Linear connector unauthorized).")
+elif not matrix["orphan_tickets"]:
+    B("None.")
+else:
+    for o in matrix["orphan_tickets"]:
+        B(f"- {o['ticket']} \"{o['title']}\" ({o.get('status') or '—'}) — "
+          "maps to no W4 requirement.")
 B("")
 open(os.path.join(D, "gaps.md"), "w").write("\n".join(G) + "\n")
 
