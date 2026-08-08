@@ -16,7 +16,7 @@ resolved finding (original kept as history) is in the Test Cases section. A time
 test against the deployed site observed **42.6 seconds** event-to-inbox (bar: 5 minutes) — see
 Grader Access.
 
-Last updated: August 7, 2026
+Last updated: August 8, 2026
 
 ---
 
@@ -182,12 +182,16 @@ on-demand chat, on-demand expansion, and proactive fast/steady chains are additi
 against the real LangSmith traces in the "Execution Traces" section immediately below, which show the
 same node sequences actually executing for those three paths. The `proactive_deep` chain
 (`gatherStandupActivity -> composeStandupDraft -> commitStandupDraft`) is verified against source
-only, the same as the rest of the diagram — no real trace exists for it, because (per FG-21's own
-finding, restated in this file's Cost Analysis section) `composeStandupDraft` still has zero real
-invocations: no scheduler exists yet to trigger `proactive_deep` for a real person at all. Where the
-diagram disagrees with the summary bullets that used to stand in this section's place, that
-disagreement is called out explicitly rather than smoothed over — see the two notes after the
-diagram.
+only, the same as the rest of the diagram — no real, publicly-linked trace for it appears in the
+"Execution Traces" section below. That is no longer because the node has never really run: the cost
+ledger (this file's Cost Analysis section) records one real `composeStandupDraft` invocation,
+timestamped 2026-08-07 — this section's own prior "still has zero real invocations" claim was stale
+and is corrected as of TRO-366 (2026-08-08); see the Cost Analysis section for the fix. That
+invocation's trace was never captured into this document, which is the actual reason no trace
+appears below. Separately, and still true: no scheduler exists to trigger `proactive_deep` for a
+real person on any ongoing basis — one recorded invocation is not a scheduler. Where the diagram
+disagrees with the summary bullets that used to stand in this section's place, that disagreement is
+called out explicitly rather than smoothed over — see the two notes after the diagram.
 
 **Updated (TRO-349, 2026-08-05).** Three chains were missing from the diagram above:
 `proactive_escalation` (`detectBlockerFanout -> composeBlockerEscalation ->
@@ -1209,34 +1213,68 @@ those two runs:
 
 | Item | Amount |
 |---|---|
-| `composeAnswer` — invocations | 2 |
+| `composeAnswer` — invocations (2026-08-05 snapshot) | 2 |
 | `composeAnswer` — cost/run (mean over the 2 priced invocations) | $0.000852 |
 | `composeAnswer` — avg documents pulled | 6.00 (0 and 12 — the mistaken invocation and the real one) |
 | `respond` — cost/run (unchanged from FG-21 — not re-run by this ticket) | $0.000218 |
-| Total development spend to date, all nodes | $0.001922 (3 invocations, 567 input tokens, 271 output tokens) |
+| Total development spend as of 2026-08-05 | $0.001922 (3 invocations, 567 input tokens, 271 output tokens) |
 
-`composeAnswer`'s $0.000852 mean is not yet a stable per-tier estimate — it is the average of exactly
-one near-zero-context run (a mistaken invalid seed id, 0 documents) and one real 12-document,
-cap-reached run, which is close to the opposite ends of what `composeAnswer` can cost. It replaces
-"no measurement yet" with a real floor and ceiling from 2 genuine data points, not a stable
-per-tier average from a meaningful sample — reported at exactly that confidence level, no more.
-`composeStandupDraft` still has zero real invocations (no scheduler exists to trigger
-`proactive_deep` for a real person — unchanged from FG-21's own finding, not re-investigated here,
-since building that scheduler is out of a documentation ticket's scope).
+`composeAnswer`'s $0.000852 mean, at the time, was not yet a stable per-tier estimate — it was the
+average of exactly one near-zero-context run (a mistaken invalid seed id, 0 documents) and one real
+12-document, cap-reached run, close to the opposite ends of what `composeAnswer` can cost. It
+replaced "no measurement yet" with a real floor and ceiling from 2 genuine data points — a snapshot
+the ledger has since moved past. See the refresh immediately below.
 
-**Estimated runs per day, observed: too little real history to estimate a rate, and that is the
-honest answer, not a placeholder.** `invocationsByDay` (the same function `cost-report.ts` already
-calls) buckets all 3 model-calling invocations on record under a single calendar day,
-`2026-08-05` — every real model invocation this entire sprint (this one plus FG-21's and FG-2's
-prior two) falls within roughly 40 hours of each other, and the ledger itself only exists from
-FG-21's 2026-08-05T00:28 entry onward. A "runs per day" RATE requires observing more than one day —
-dividing 3 invocations by "1 day of history" produces a number that LOOKS like a rate but is really
-just today's raw count, exactly the "meaningless number from a near-zero sample" this ticket's own
-brief warned against reporting with false confidence. The honestly comparable real-activity count
-this ticket DOES have: 6 real `proactive_steady` graph invocations (the "Execution Traces" /
-detection-latency polling loop below), also all on `2026-08-05`, also too few and too clustered in
-time to support a rate — reported here as a raw count, not annualized or extrapolated into anything
-resembling "runs/day in production."
+**Refreshed (TRO-366, 2026-08-08) — the ledger kept growing after that 2026-08-05 snapshot, and this
+file had not caught up.** A grader running the exact command this document names as its own
+reproduction method got real numbers this file no longer matched: 7 invocations against the 3
+published above, $0.006055 against $0.001922. Reproduced verbatim by running
+`pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` on 2026-08-08. **Configuration note:**
+this ticket's own factory worktree (`Ship-wt-tro_366`) has made zero real Anthropic API calls, so its
+own `agent/.cache/cost-ledger.jsonl` does not exist; the command was run against the project's
+long-lived development checkout instead, whose ledger is where every real invocation across this
+sprint's FleetGraph tickets has actually accumulated (gitignored, per-checkout, never committed — the
+same property that let this drift in the first place, since no committed artifact ever forced the two
+to reconcile).
+
+| Item | Amount |
+|---|---|
+| `composeAnswer` — invocations | 6 |
+| `composeAnswer` — cost/run (mean over the 6 priced invocations) | $0.000876 |
+| `composeAnswer` — avg documents pulled | 6.50 (12, 12, 12, 1, 1, 1 across the six real runs) |
+| `composeStandupDraft` — invocations | 1 |
+| `composeStandupDraft` — cost/run | $0.000798 |
+| **Total development spend to date, all nodes in this ledger** | **$0.006055 (7 invocations, 1,860 input tokens, 839 output tokens)** |
+
+The total above is `composeAnswer` + `composeStandupDraft` only — everything the queried ledger
+currently holds. It does **not** include `respond`'s $0.000218 from the 2026-08-05 table above: that
+record (FG-21's single measurement, cross-checked against LangSmith at the time) is not itself a row
+in this ledger snapshot. Where it went is not established here — either it lived in a different,
+since-discarded worktree's own local ledger and never reached this checkout's, or it predates this
+checkout's ledger history. Disclosed as an open gap, not papered over; the $0.000852/2-invocation
+table above is left as dated history rather than silently dropped.
+
+`composeAnswer`'s cost/run moved from the 2026-08-05 snapshot's 2-sample $0.000852 to a 6-sample
+$0.000876 — three more 12-document runs and three 1-document runs are on the ledger the same day
+(2026-08-05), never previously reported here. Six samples is still a small n, reported at that
+confidence level and no higher.
+
+**`composeStandupDraft` no longer has zero real invocations — this file's own prior claim to that
+effect (here, and in the Graph Diagram section above) was stale and is corrected as of this update.**
+The ledger's newest entry, timestamped 2026-08-07, is a real `composeStandupDraft` invocation. No
+scheduler exists to trigger `proactive_deep` for a real person on any ongoing basis — that remains
+true and unchanged — but "no scheduler yet" and "zero real invocations" are different claims, and
+this file had conflated them.
+
+**Estimated runs per day, observed: still too little real history for a rate, but no longer a single
+calendar day.** `invocationsByDay` on the refreshed ledger buckets the 7 model-calling invocations
+across **two** calendar days — `2026-08-05` (6) and `2026-08-07` (1) — not the single day this
+section previously reported. Two clustered days still cannot honestly support a "runs per day" rate;
+reported here as two raw daily counts, not annualized or extrapolated into anything resembling
+"runs/day in production." The separately-tracked real-activity count TRO-324/FG-13 also reported — 6
+real `proactive_steady` graph invocations (the "Execution Traces" / detection-latency polling loop
+below), all on `2026-08-05` — is a different measurement, unaffected by this update, and still too
+clustered to support a rate on its own.
 
 **Detection latency — one real, timed measurement, plus the structural bound it does not replace.**
 FLEETGRAPH.MD's own bar is "< 5 minutes from event appearing in Ship to the agent surfacing it,"

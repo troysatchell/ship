@@ -21,6 +21,61 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-366 — FleetGraph's cost figures were 3x stale, and one sentence flatly contradicted the ledger sitting next to it
+
+**The cost this closes.** A grader running the exact command `FLEETGRAPH.MD`'s own Cost Analysis
+section names as its reproduction method got real numbers this file no longer matched: published
+3 invocations / $0.001922 total spend vs. the ledger's actual 7 / $0.006055 (a 3x understatement),
+and `composeAnswer`'s published cost/run ($0.000852) was stale too (actual $0.000876, now over 6
+priced runs instead of 2). Separately, one sentence — "`composeStandupDraft` still has zero real
+invocations" — was flatly false: the ledger's newest entry, timestamped 2026-08-07, IS a real
+`composeStandupDraft` invocation. That sentence appeared twice (Cost Analysis, and again in the
+Graph Diagram section's reasoning for why no trace exists for the `proactive_deep` chain).
+
+**What was NOT wrong, checked before touching anything.** The measurement methodology itself: a real
+per-invocation ledger (`agent/.cache/cost-ledger.jsonl`, `costTracking.ts`'s `FileCostTracker`)
+written by `graph.ts`'s `recordInvocation`, cross-checked against LangSmith. Measured vs. projected
+figures are correctly kept separate. Only the transcribed numbers (and the one now-false sentence)
+were stale — the cost section's structure is unchanged.
+
+**What changed — `FLEETGRAPH.MD` only, no code.**
+- "Last updated" banner: August 7 → August 8, 2026.
+- Cost Analysis: added a "Refreshed (TRO-366, 2026-08-08)" block with fresh figures reproduced
+  verbatim from `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` — 7 invocations,
+  1,860 input / 839 output tokens, $0.006055 total; `composeAnswer` 6 invocations @ $0.000876/run,
+  avg 6.50 documents pulled (12, 12, 12, 1, 1, 1); `composeStandupDraft` 1 invocation @
+  $0.000798/run. States plainly that the total does NOT include the original `respond` tier's
+  $0.000218 (that record is not present in the ledger this table was read from — disclosed as an
+  open gap, not papered over) and that the ledger now spans two calendar days, not one. The original
+  FG-21/FG-13 tables are left in place as dated history, not deleted.
+- Deleted the false "zero real invocations" sentence in both places it appeared and replaced it with
+  what is actually true: one real invocation exists (2026-08-07), but no scheduler exists to trigger
+  `proactive_deep` for a real person on any ongoing basis — a different, still-true claim this file
+  had conflated with "zero invocations."
+- Added a regression test (`agent/src/__tests__/fleetgraphCostFigures.test.ts`) that parses the
+  published cost figures directly out of `FLEETGRAPH.MD` and asserts them against a fresh
+  `cost-report.ts` run over a scratch ledger seeded with the same six `composeAnswer` records the
+  document now cites — so this cannot silently rot again without the test catching it.
+
+**Configuration note (provenance).** This ticket's own factory worktree (`Ship-wt-tro_366`) is
+freshly branched from `main` and has made zero real Anthropic API calls — its own
+`agent/.cache/cost-ledger.jsonl` does not exist, and running the report command inside it prints
+"No invocations recorded yet." The published figures were reproduced by pointing `cost-report.ts` at
+the project's long-lived development checkout's ledger (via `--ledger <path>`, a read-only operation
+— nothing was written to that checkout), which is where every real invocation across this sprint's
+FleetGraph tickets has actually accumulated. Stated explicitly because it is exactly the kind of
+environment-dependent fact this project's provenance rules ask to be surfaced, not assumed away.
+
+**How to verify.** `pnpm --filter @ship/agent exec vitest run src/__tests__/fleetgraphCostFigures.test.ts`.
+Manually: `source .factory-env && pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts --
+--ledger <path to a checkout with real ledger history>` and compare against `FLEETGRAPH.MD`'s
+"Refreshed (TRO-366...)" table.
+
+**Rollback.** Revert the commit. Documentation and test-only; no schema, code, or runtime behavior
+changes.
+
+---
+
 ## W4-SWEEPA (CI fix) — `postgresReachable.test.ts`'s "defaults to 5432" case depended on the host, not the code
 
 Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other items; each is its own commit.
