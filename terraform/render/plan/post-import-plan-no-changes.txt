@@ -13,3 +13,38 @@ Warning: Deprecated attribute
 
 The attribute "pull_request_previews_enabled" is deprecated. Refer to the
 provider documentation for details.
+
+====================================================================
+ANNOTATION -- one sentence per resource (added, not part of the raw
+capture above; the raw output between the header and this line is
+unedited -- see IMPORT-LOG.md for how it was produced)
+====================================================================
+
+Both lines refreshed here are "no changes" reads of resources that were
+already imported into state on 2026-07-30 (IMPORT-LOG.md) -- this file is
+proof the live infrastructure still matches the committed config, not a
+plan to create or change anything.
+
+Resource: render_postgres.ship  [id=dpg-d9kgth6417fc7386hhh0-a]
+What it is: The real, live production Render Postgres 16 instance backing
+  the deployed Ship app -- not a placeholder or a plan-only object.
+Blast radius: This is the one database holding all production Ship
+  documents, issues, wiki content, and session data. An attribute change
+  that forces replacement (e.g. `database_name`, `version`, region) would
+  destroy this instance outright -- unlike the AWS root's Aurora cluster
+  (audit/terraform/baseline.md, TF-1), Render Postgres has no
+  Terraform-driven final-snapshot step, so a forced replace here is
+  unrecoverable data loss unless a manual Render backup exists. Even an
+  in-place value change on a live database carries real risk since there
+  is no second copy.
+
+Resource: render_web_service.ship  [id=srv-d9kf2t942hec73aofrt0]
+What it is: The real, live production Render web service currently
+  serving https://ship-rr6m.onrender.com.
+Blast radius: An in-place field change (e.g. an env var) triggers a
+  redeploy/restart -- brief downtime, in-flight requests dropped, and if
+  the changed var is `SESSION_SECRET` every active user session is
+  invalidated (logs everyone out). A forced replace (e.g. `name` or
+  `region` change) creates a brand-new service at a brand-new
+  Render-assigned URL -- the old URL goes dark, and anything bookmarking
+  or linking to it (including this repo's own docs) breaks until updated.

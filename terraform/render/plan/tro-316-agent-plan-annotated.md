@@ -274,6 +274,19 @@ Changes to Outputs:
   decision to a human (escalation gate 2) — unchanged by this session. TRO-326's own brief names
   the identical situation as a "known gap carried from Week 4."
 
+## Annotation — one sentence per resource
+
+Capture 1 (missing `RENDER_API_KEY`) produced **zero resources** — Terraform errored during
+provider setup, before it reached the point of building a resource graph, so there is nothing to
+annotate for that capture; the table below covers Capture 2, the one capture that actually
+produced a plan.
+
+| Resource | Action | What it is | Blast radius | Safe or risky |
+|---|---|---|---|---|
+| `render_postgres.ship` | **create** | A new, empty Render Postgres 16 instance (free plan, oregon; `database_name = "ship_34oc"` in this capture) — proposed again here for the same reason `plan-annotated.md` (TF-10) first documented: this capture's Terraform state has no record of the already-imported live `ship-db` (`dpg-d9kgth6417fc7386hhh0-a`, see `IMPORT-LOG.md`). This ticket did not cause that gap and does not resolve it. | If actually applied against a state in this condition, it stands up a **second, empty, unseeded** database next to the real one — no destructive effect on the live `ship-db`'s existing data. The real risk is downstream: anyone who later points the app's `DATABASE_URL` at this new instance instead of the real one would see Ship come up with **zero** documents/issues/wiki content — a full-looking data-loss incident that is actually a wrong-database mistake, not data actually being deleted. | **Safe as a plan** (nothing created by planning); **risky to apply** without first resolving which state/adoption path is authoritative — see `README.md`'s adoption memo. |
+| `render_web_service.agent` | **create** | The FleetGraph agent's own Render web service (FG-11) — Docker compute on the free plan, `health_check_path = "/health"`, `dockerfile_path = "./agent/Dockerfile"`, nine sensitive env vars (`ANTHROPIC_API_KEY`, `SHIP_API_TOKEN`, `LANGSMITH_API_KEY`, etc.), attached to `environment_id = "evm-d9kf2t7avr4c73asbmig"`. | A pure addition — nothing else in this config or the live infrastructure references it yet, so applying it can only create a new, isolated service. The agent is stateless (calls out to Ship's API and Anthropic/LangSmith, holds no data of its own per FG-2/FG-4), so if it is later destroyed the only loss is the agent's own runtime availability, not any stored data. `tro-316-destroy-redeploy-proof.md` in this same directory **verified live** that destroying and recreating it does not touch `render_web_service.ship`/`render_postgres.ship`. | **Safe** — verified in practice, not just planned (see the destroy-redeploy proof). |
+| `render_web_service.ship` | **create** | The main Ship web app service — again proposed as a fresh create in this capture for the identical state-gap reason as `render_postgres.ship` above, not a change this ticket is making. In reality this fronts the live, in-use `ship-rr6m.onrender.com` application. | If a `create` plan like this one were ever applied against a state that genuinely lacks the import, it stands up a second, empty-config web service rather than modifying the real one. The higher-stakes case is the inverse: if a *future* apply runs against a state where the real service **is** imported (as `post-import-plan-no-changes.txt` shows it currently is) and the config has since drifted — a changed `dockerfile_path`, `branch`, or `env_vars` key — Render would perform an in-place update or a forced replace of the **live** app: a redeploy/restart at minimum (dropping in-flight requests), or, on forced replace, a brand-new URL that leaves the old one dark. | **Not safe to blindly apply** without first confirming which state/adoption path is active — same caveat as `render_postgres.ship`, see `README.md`'s adoption memo. |
+
 ## What this plan does and does NOT establish
 
 **Established (observed):**
