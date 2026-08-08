@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
 """Regression tests for acceptance-check.py's own pass/fail logic.
 
-This gate decides whether the requirements matrix silently dropped a
-requirement or shipped a malformed row; a false PASS here means a real
-defect reaches REPORT.md/gaps.md/pm-triage.md undetected. Two rounds of
-CodeRabbit review on PR #154 found false-pass paths in this exact script,
-so its own logic gets tested directly rather than trusted by inspection.
+This gate decides whether the requirements matrix silently dropped,
+duplicated, or misdescribed a requirement; a false PASS here means a real
+defect reaches REPORT.md/gaps.md/pm-triage.md undetected. Three rounds of
+CodeRabbit review on PR #154 found false-pass paths in this exact script —
+each round fixed the specific holes found, and each round still left more,
+because "check harder" doesn't bound the search. This file takes the
+inverted approach instead: enumerate every kind of matrix that SHOULD fail
+the gate, and assert each one does. `FindFirstViolationTests` has one test
+per entry in that enumeration (see its class docstring for the full list);
+a future hole shows up here as a missing test case to add, not as a fourth
+review round.
 
 Run: python3 audit/requirements/pipeline/test_acceptance_check.py
  or: python3 -m unittest audit/requirements/pipeline/test_acceptance_check -v
@@ -59,6 +65,29 @@ class HasContentTests(unittest.TestCase):
 
 
 class FindFirstViolationTests(unittest.TestCase):
+    """One test per kind of matrix that SHOULD fail the gate — the inverted
+    enumeration, not the failures someone happened to imagine while writing
+    the checker. Coverage as of the third CodeRabbit review round:
+
+    1. missing row                    -> test_missing_active_requirement_still_caught
+    2. duplicate row                  -> test_duplicate_row_fails
+    3. unknown row (ID not active)    -> test_unknown_id_in_matrix_fails
+    4. bad verdict                    -> test_unknown_verdict_fails_and_names_the_bad_value
+    5. empty evidence (blank excerpt) -> test_whitespace_only_result_excerpt_fails
+    6. VERIFIED without verification  -> test_verified_with_no_verification_object_fails
+    7. MISSING absent from gaps.md    -> test_missing_row_matched_by_substring_now_fails
+    8. ASSUMED without assumption     -> test_whitespace_only_assumption_fails,
+                                          test_assumed_with_missing_assumption_key_fails
+    9. PARTIAL without suggested_scope -> test_partial_without_suggested_scope_fails
+    9b. MISSING without suggested_scope -> test_missing_without_suggested_scope_fails
+        (same check as 9, applies to both verdicts per report-format.md;
+        tested separately since only PARTIAL was covered before this round)
+
+    Every one of 1-5, 7, 8's whitespace variant, and 9 already existed
+    before this class docstring was written; 2, 3, 6, 8's missing-key
+    variant, and 9b were added alongside it.
+    """
+
     def test_missing_row_matched_by_substring_now_fails(self):
         # Regression for the reported bug: W4-R1 is MISSING, but gaps.md
         # only has a "### W4-R10" heading (which the old `"W4-R1" in
@@ -74,6 +103,32 @@ class FindFirstViolationTests(unittest.TestCase):
         matrix = make_matrix({"id": "W4-R1", "verdict": "MISSING", "suggested_scope": "do x"})
         gap_ids = acceptance_check.parse_gap_ids("### W4-R1 — MISSING\n- x\n")
         self.assertIsNone(acceptance_check.find_first_violation(matrix, ["W4-R1"], gap_ids))
+
+    def test_duplicate_row_fails(self):
+        # Regression for round 3: every active ID present (just one, here),
+        # plus a second row with the same ID. `{r["id"] for r in ...}`
+        # collapses this to one set member, so the old check never noticed.
+        matrix = make_matrix(
+            {"id": "W4-R1", "verdict": "N/A"},
+            {"id": "W4-R1", "verdict": "N/A"},
+        )
+        violation = acceptance_check.find_first_violation(matrix, ["W4-R1"], set())
+        self.assertIsNotNone(violation)
+        self.assertIn("more than once", violation)
+        self.assertIn("W4-R1", violation)
+
+    def test_unknown_id_in_matrix_fails(self):
+        # Regression for round 3: every active ID present, plus an extra
+        # row whose ID was never in active_ids at all (invented, mistyped,
+        # or a retired ID merge-matrix.py should have excluded).
+        matrix = make_matrix(
+            {"id": "W4-R1", "verdict": "N/A"},
+            {"id": "W4-R99", "verdict": "N/A"},
+        )
+        violation = acceptance_check.find_first_violation(matrix, ["W4-R1"], set())
+        self.assertIsNotNone(violation)
+        self.assertIn("not active", violation)
+        self.assertIn("W4-R99", violation)
 
     def test_unknown_verdict_fails_and_names_the_bad_value(self):
         matrix = make_matrix({"id": "W4-R2", "verdict": "VERIFED"})  # typo for VERIFIED
@@ -108,9 +163,26 @@ class FindFirstViolationTests(unittest.TestCase):
         self.assertIsNotNone(violation)
         self.assertIn("VERIFIED without evidence", violation)
 
+    def test_verified_with_no_verification_object_fails(self):
+        # Distinct from the whitespace-excerpt case above: the "verification"
+        # key is absent entirely (r.get("verification") is None), not merely
+        # present-but-blank.
+        matrix = make_matrix({"id": "W4-R4b", "verdict": "VERIFIED"})
+        violation = acceptance_check.find_first_violation(matrix, ["W4-R4b"], set())
+        self.assertIsNotNone(violation)
+        self.assertIn("VERIFIED without evidence", violation)
+
     def test_whitespace_only_assumption_fails(self):
         matrix = make_matrix({"id": "W4-R5", "verdict": "ASSUMED", "assumption": "   "})
         violation = acceptance_check.find_first_violation(matrix, ["W4-R5"], set())
+        self.assertIsNotNone(violation)
+        self.assertIn("ASSUMED without stated assumption", violation)
+
+    def test_assumed_with_missing_assumption_key_fails(self):
+        # Distinct from the whitespace-value case above: the "assumption"
+        # key is absent entirely, not present-but-blank.
+        matrix = make_matrix({"id": "W4-R5b", "verdict": "ASSUMED"})
+        violation = acceptance_check.find_first_violation(matrix, ["W4-R5b"], set())
         self.assertIsNotNone(violation)
         self.assertIn("ASSUMED without stated assumption", violation)
 
@@ -123,6 +195,17 @@ class FindFirstViolationTests(unittest.TestCase):
         violation = acceptance_check.find_first_violation(matrix, ["W4-R6"], set())
         self.assertIsNotNone(violation)
         self.assertIn("PARTIAL without suggested_scope", violation)
+
+    def test_missing_without_suggested_scope_fails(self):
+        # Same check as the PARTIAL case above, exercised for the other
+        # verdict report-format.md's field rule names. gap_ids includes the
+        # row's own ID so the gaps.md-heading check passes first and doesn't
+        # mask the suggested_scope check being tested here.
+        matrix = make_matrix({"id": "W4-R6b", "verdict": "MISSING", "suggested_scope": None})
+        gap_ids = {"W4-R6b"}
+        violation = acceptance_check.find_first_violation(matrix, ["W4-R6b"], gap_ids)
+        self.assertIsNotNone(violation)
+        self.assertIn("MISSING without suggested_scope", violation)
 
     def test_missing_active_requirement_still_caught(self):
         matrix = make_matrix({"id": "W4-R7", "verdict": "N/A"})
