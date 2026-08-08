@@ -25,6 +25,16 @@
  *    then ...`, branching on `$?`). Without this, an inverted
  *    `process.exit(reachable ? 0 : 1)` in `main()` would leave every test
  *    above green while the real integration silently broke.
+ *
+ * One case in block 1 binds a real `net.Server` on the IPv6 loopback
+ * address (`::1`) end-to-end. That's an environment assumption a host with
+ * IPv6 loopback disabled won't satisfy, so it's gated behind a real
+ * capability probe (`ipv6LoopbackAvailable()`) and registered as `it.skip`
+ * — not silently absorbed — when the bind isn't possible; see that
+ * function's doc comment. The pure `resolveHostPort` IPv6 bracket-stripping
+ * assertions in block 2 never touch a socket and always run: those are the
+ * actual guarantee against the bracket-stripping regression, not the
+ * end-to-end case.
  */
 import { execFile } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -60,6 +70,20 @@ function isErrorWithNumericCode(error: unknown): error is { code: number } {
 }
 
 /**
+ * Same narrowing shape as `isErrorWithNumericCode`, but for Node's
+ * errno-style `code` (a string like `'EADDRNOTAVAIL'`, e.g. on a
+ * `net.Server`'s `'error'` event) rather than a numeric exit code.
+ */
+function isErrorWithStringCode(error: unknown): error is { code: string } {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof (error as Record<'code', unknown>).code === 'string'
+  );
+}
+
+/**
  * Runs the real CLI as a subprocess and returns its actual exit code.
  * `execFile`'s promise rejects on non-zero exit; the code is recovered from
  * the rejection rather than assumed, so a spawn failure (missing `npx`, a
@@ -79,6 +103,59 @@ async function runCli(url: string): Promise<number> {
     }
     throw error;
   }
+}
+
+/**
+ * True when this host can actually bind a TCP listener on the IPv6 loopback
+ * address (`::1`). Answered by attempting the real bind, not by inspecting
+ * `os.networkInterfaces()` or similar — the test below is about to do the
+ * same bind, so the probe needs to observe the same failure mode it would.
+ *
+ * Only the two error codes that specifically mean "IPv6 loopback isn't
+ * available on this host" are treated as "unavailable" and swallowed:
+ * `EADDRNOTAVAIL` (loopback interface has no ::1 address configured) and
+ * `EAFNOSUPPORT` (the address family isn't supported at all). Anything else
+ * rethrows — an unexpected bind failure should fail the test loudly, not be
+ * silently absorbed into "must be an environment thing".
+ */
+async function ipv6LoopbackAvailable(): Promise<boolean> {
+  const probe = net.createServer();
+  try {
+    await new Promise<void>((resolve, reject) => {
+      probe.once('error', reject);
+      probe.listen(0, '::1', () => resolve());
+    });
+    return true;
+  } catch (error) {
+    if (isErrorWithStringCode(error) && (error.code === 'EADDRNOTAVAIL' || error.code === 'EAFNOSUPPORT')) {
+      return false;
+    }
+    throw error;
+  } finally {
+    // Fire-and-forget: if the bind failed, the server never held an open
+    // handle and close() is a harmless no-op; if it succeeded, this frees
+    // the ephemeral port immediately rather than waiting on the caller.
+    probe.close();
+  }
+}
+
+// Decided once at module load (top-level await — this file is ESM), so the
+// probe result is available before `describe`/`it` register their tests,
+// and so the same decision is used consistently by every test in the file
+// rather than re-probed per test.
+const IPV6_LOOPBACK_AVAILABLE = await ipv6LoopbackAvailable();
+if (!IPV6_LOOPBACK_AVAILABLE) {
+  // Loud, not silent: printed unconditionally so a skip is visible in test
+  // output rather than looking identical to "ran and passed". The pure
+  // resolveHostPort IPv6 bracket-stripping assertions below still run
+  // unconditionally regardless of this — they need no socket at all, and
+  // they're where the actual bracket-stripping regression would surface.
+  console.warn(
+    '[postgresReachable.test.ts] SKIPPING "resolves true against an IPv6 listener" — ' +
+      'IPv6 loopback (::1) is not bindable on this host (EADDRNOTAVAIL/EAFNOSUPPORT). ' +
+      'The unconditional resolveHostPort IPv6 parsing tests still cover the bracket-' +
+      'stripping regression this end-to-end case exists to double-check.'
+  );
 }
 
 describe('isPostgresReachable', () => {
@@ -118,7 +195,15 @@ describe('isPostgresReachable', () => {
     await expect(isPostgresReachable('not-a-url')).resolves.toBe(false);
   });
 
-  it('resolves true against an IPv6 listener addressed via a bracketed URL', async () => {
+  // Registered as a real `it` only when this host can actually bind ::1
+  // (see ipv6LoopbackAvailable() above and its console.warn when it can't).
+  // `it.skip` marks the case as skipped in the test report — visibly absent,
+  // not a silent pass — rather than the test body running and doing nothing
+  // on a host without IPv6 loopback. The unconditional resolveHostPort IPv6
+  // cases in the next describe block are the ones that must never be
+  // allowed to skip: this one is corroborating end-to-end evidence on top
+  // of them, not the only place the regression could be caught.
+  (IPV6_LOOPBACK_AVAILABLE ? it : it.skip)('resolves true against an IPv6 listener addressed via a bracketed URL', async () => {
     // End-to-end version of the resolveHostPort bracket-stripping regression
     // below: a real listener on ::1, reached through the bracketed URL form
     // Postgres connection strings actually use. Before the fix this always
