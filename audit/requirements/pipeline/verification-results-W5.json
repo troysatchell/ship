@@ -1,0 +1,84 @@
+{
+  "requirements": {
+    "W5-R23": {
+      "verdict": "VERIFIED",
+      "verification": {
+        "command": "curl https://ship-agent-t0zy.onrender.com/health  and  /ready",
+        "result_excerpt": "/health -> HTTP 200 in 13.365544s  {\"status\":\"ok\"}\n/ready  -> HTTP 200 in 0.231733s  {\"status\":\"ready\"}"
+      },
+      "notes": "Both endpoints required by the requirement were probed live by the controller on 2026-08-08 and both answered 200. The remaining clauses (terraform/ describes the deployment, covers the agent service, environment-specific config with no committed secrets) were traced statically to terraform/render/agent_service.tf and variables.tf. Note the ~13s first-byte time on /health: consistent with a cold start on Render's free tier, which is worth knowing against the <5-minute detection budget but does not breach it."
+    },
+    "W5-R29": {
+      "verdict": "PARTIAL",
+      "notes": "The measured-cost METHOD is sound and correctly labelled 'not an estimate' \u2014 a real per-invocation ledger written by graph.ts's recordInvocation and cross-checked against LangSmith. The published FIGURES are stale. Controller re-ran the exact command FLEETGRAPH.MD cites as its own reproduction method (`pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts`) on 2026-08-08 and got composeAnswer $0.000876/run over 6 invocations and composeStandupDraft $0.000798/run over 1 invocation, against the document's $0.000852 and an explicit claim of zero composeStandupDraft invocations. Smallest fix: re-run the command and paste its current output.",
+      "suggested_scope": "Re-run `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` and paste its current output into FLEETGRAPH.MD's per-tier cost table. The instrument is correct; only the transcribed figures are old."
+    },
+    "W5-R47": {
+      "verdict": "PARTIAL",
+      "verification": null,
+      "notes": "Controller confirmed the staleness by direct re-run rather than inference. Reported: 3 invocations / 567 input / 271 output / $0.001922. Actual at HEAD: 7 invocations / 1,860 input / 839 output / $0.006055 \u2014 roughly 3x. The ledger's newest entry (agent/.cache/cost-ledger.jsonl, node=composeStandupDraft, timestamp 2026-08-07T14:36:16.889Z) postdates the document's own 'Last updated: August 7, 2026' banner, so this was available and unreconciled rather than a stale snapshot. Directly contradicts FLEETGRAPH.MD:1223's 'composeStandupDraft still has zero real invocations'.",
+      "suggested_scope": "Same single action as W5-R29 \u2014 one command, then replace the three development-spend figures (invocations, input/output tokens, total) with what it prints, and delete the 'composeStandupDraft still has zero real invocations' sentence, which the ledger contradicts."
+    },
+    "W5-R48": {
+      "verdict": "PARTIAL",
+      "notes": "Invocation count reported as 3; the ledger holds 7 (verified by the controller both by parsing agent/.cache/cost-ledger.jsonl directly and by re-running cost-report.ts). Same single fix as W5-R47.",
+      "suggested_scope": "Covered by the W5-R29 re-run: the invocation count comes from the same command."
+    },
+    "W5-R49": {
+      "verdict": "PARTIAL",
+      "notes": "Total development spend reported as $0.001922; re-run gives $0.006055. Same single fix as W5-R47 \u2014 the instrument is right, the transcription is old.",
+      "suggested_scope": "Covered by the W5-R29 re-run: total spend comes from the same command."
+    }
+  },
+  "commands": [
+    {
+      "command": "curl -sS https://ship-agent-t0zy.onrender.com/health",
+      "result": "HTTP 200 in 13.37s \u2014 {\"status\":\"ok\"}",
+      "bears_on": [
+        "W5-R23"
+      ],
+      "note": "Live probe of the deployed agent, 2026-08-08. Long first-byte time is a free-tier cold start."
+    },
+    {
+      "command": "curl -sS https://ship-agent-t0zy.onrender.com/ready",
+      "result": "HTTP 200 in 0.23s \u2014 {\"status\":\"ready\"}",
+      "bears_on": [
+        "W5-R23"
+      ],
+      "note": null
+    },
+    {
+      "command": "pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts",
+      "result": "7 invocations / 1,860 input / 839 output / $0.006055; composeAnswer 6 runs @ $0.000876, composeStandupDraft 1 run @ $0.000798",
+      "bears_on": [
+        "W5-R29",
+        "W5-R47",
+        "W5-R48",
+        "W5-R49"
+      ],
+      "note": "The command FLEETGRAPH.MD names as its own reproduction method. Read-only. Its output contradicts the figures the document publishes."
+    },
+    {
+      "command": "pnpm test / pnpm test:e2e (agent + e2e suites)",
+      "result": "NOT RUN",
+      "bears_on": [
+        "W5-R35",
+        "W5-R38",
+        "W5-R39",
+        "W5-R40",
+        "W5-R41",
+        "W5-R42"
+      ],
+      "note": "Not executed this sweep. The e2e suite needs Docker and the /e2e-test-runner protocol, and the api suite TRUNCATEs whatever DATABASE_URL points at. Rows leaning on these are traced, not verified, and say so."
+    },
+    {
+      "command": "timed detection-latency test",
+      "result": "NOT RUN",
+      "bears_on": [
+        "W5-R27",
+        "W5-R28"
+      ],
+      "note": "Not re-run by this sweep. The repo records a 42.6s measurement against the deployed site (FLEETGRAPH.MD:539, commit 02f1bf0, 2026-08-07) and a CI-wired spec asserting the 5-minute bound; that is the evidence, and it is historical rather than freshly observed."
+    }
+  ]
+}

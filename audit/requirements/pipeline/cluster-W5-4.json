@@ -1,0 +1,107 @@
+{
+  "cluster": "deploy-perf",
+  "requirements": [
+    {
+      "id": "W5-R23",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "terraform/render/agent_service.tf", "line": 13, "note": "resource \"render_web_service\" \"agent\" — terraform/render/ describes the deployment and it covers the agent service specifically (not the ship web service), satisfying parts (a) and (b)." },
+        { "file": "terraform/render/agent_service.tf", "line": 89, "note": "AGENT_INTERNAL_SECRET = { value = var.agent_internal_secret } — no literal secret value in the .tf file, sourced from a variable. This wiring was added by commit 857186b (2026-08-05); before that it did not exist in Terraform at all (see notes)." },
+        { "file": "terraform/render/variables.tf", "line": 236, "note": "variable \"agent_internal_secret\" — sensitive = true, no default, with a validation block rejecting empty/whitespace and the tfvars.example placeholder value, so a real value cannot be committed by accident." },
+        { "file": "terraform/render/terraform.tfvars.example", "line": 31, "note": "Tracked file holds only the placeholder REPLACE_WITH_A_REAL_SHARED_SECRET. Confirmed via `git ls-files terraform/render` that the real terraform.tfvars is NOT tracked (only terraform.tfvars.example is); repo-root .gitignore's unanchored `*.tfvars`/`*.tfstate*` patterns cover terraform/render/ recursively. No committed secret values found in any .tf file (grepped agent_service.tf/web_service.tf/postgres.tf for literal `value = \"...\"` assignments outside `var.`/`tostring`; only non-secret NODE_ENV=\"production\" and LANGCHAIN_TRACING_V2=\"true\" matched)." },
+        { "file": "agent/src/server.ts", "line": 231, "note": "app.get('/health', (_req, res) => { res.status(200).json({ status: 'ok' }); }); — part (d)." },
+        { "file": "agent/src/server.ts", "line": 235, "note": "app.get('/ready', async (_req, res) => { ... }); checks Ship reachability and config completeness — part (e)." }
+      ],
+      "suggested_verification": "Live GET on the deployed agent's /health and /ready (e.g. https://ship-agent-t0zy.onrender.com/health and /ready, the URL recorded in terraform/render/plan/tro-316-destroy-redeploy-proof.md) — not run here, read-only trace.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "All five parts (a)-(e) hold in the CURRENT repo state. History matters here: the orientation's lead was accurate as of before 2026-08-05 — AGENT_INTERNAL_SECRET and AGENT_API_BASE_URL existed only in Render's console/API state (variables.tf's own TRO-347 comment block, lines ~228-236, documents this: 'existed only in Render's own console/API state... a clean-machine terraform apply... recreated the services WITHOUT them, and every /api/agent/* call then 500'd'). That cut both ways: no secret was committed, but a clean-machine apply could not reproduce a WORKING service. Commit 857186b (2026-08-05, 'declare and wire AGENT_INTERNAL_SECRET / AGENT_API_BASE_URL') fixed exactly this by adding both as proper Terraform variables consumed in agent_service.tf and web_service.tf. As of this trace, both facts the orientation asked about are true only historically; the present config satisfies no-committed-secrets AND reproducibility. See W5-R25's note: the saved destroy-redeploy proof predates this fix by one day, so the fix itself has not been re-verified with a fresh destroy/apply."
+    },
+    {
+      "id": "W5-R24",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "terraform/render/plan/tro-316-agent-plan-annotated.md", "line": 1, "note": "\"Captured terraform plan — the FleetGraph agent service (TRO-316 / FG-11)\", dated 2026-08-03, Terraform 1.9.8 / render-oss/render 1.9.1 — a saved plan artifact specific to the agent deployment." },
+        { "file": "terraform/render/plan/tro-316-agent-plan-annotated.md", "line": 96, "note": "Captured `terraform plan` text output (Capture 2, non-empty placeholder RENDER_API_KEY) showing the full 3-resource plan including render_web_service.agent, ending 'Plan: 3 to add, 0 to change, 0 to destroy.' (line 241)." },
+        { "file": "terraform/render/plan/tro-316-agent-plan-annotated.md", "line": 262, "note": "\"## Reading this plan\" and \"## What this plan does and does NOT establish\" sections — the annotation the requirement asks for, explicitly separating what was observed vs. not established (e.g., real apply against Render's live API was never attempted in this capture)." },
+        { "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md", "line": 20, "note": "The later destroy-redeploy proof's own sequence opens with `terraform plan -var-file=terraform.tfvars -out=plan.tfplan # 1 to add, 0 to change, 0 to destroy` before the apply, confirming plan-before-deploy discipline was also followed for the actual live apply, not just the disclosure-only capture above." }
+      ],
+      "suggested_verification": "Re-run `terraform plan -var-file=terraform.tfvars` in terraform/render and diff against tro-316-agent-plan-annotated.md to confirm no undocumented drift since 2026-08-03.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R25",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md", "line": 1, "note": "\"Destroy-and-redeploy proof — the FleetGraph agent service (TRO-316 / FG-11)\", dated 2026-08-04, scoped explicitly to render_web_service.agent (not ship/ship-db, which the doc says 'stay on their Week-4 import, unchanged, deliberately')." },
+        { "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md", "line": 70, "note": "Step 2 — targeted destroy: `terraform destroy -target=render_web_service.agent`, then curl proof the agent URL now 404s while https://ship-rr6m.onrender.com/health still returns 200 (ship untouched)." },
+        { "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md", "line": 88, "note": "Step 3 — re-apply from config alone (`terraform apply -var-file=terraform.tfvars -auto-approve`, no -target, no import): a NEW resource id (srv-d9otunmgekts73eqs0h0 vs. the original srv-d9otu2pt0dsc73brot60) and a NEW URL (ship-agent-t0zy.onrender.com vs. ship-agent-e0cr.onrender.com), both GET /health and GET /ready returning 200 on the freshly re-created instance — the strongest form of proof (a genuinely different resource, not a cached response from the destroyed one)." }
+      ],
+      "suggested_verification": "Repeat the identical destroy/apply sequence against the CURRENT agent_service.tf (which now includes AGENT_INTERNAL_SECRET/AGENT_API_BASE_URL) and re-check /health and /ready on the newly created instance.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "This proves the property for the correct/primary service per this cluster's orientation: it targets render_web_service.agent specifically (ship/ship-db are explicitly excluded and left untouched, by deliberate human-approved scope). The mechanism itself — real destroy, real re-apply with no import and no manual step, both /health and /ready verified 200 on a genuinely new resource — is real and observed, not merely asserted. One caveat worth flagging: this proof (commit 8e06e76, 2026-08-04) predates commit 857186b (2026-08-05), which added AGENT_INTERNAL_SECRET and AGENT_API_BASE_URL to agent_service.tf/web_service.tf. So the exact config version exercised in this proof did not yet include those two env vars/variables — the destroy-redeploy property has not been independently re-demonstrated against the current, slightly larger config. Nothing here suggests it would fail (agent_internal_secret follows the same 'sensitive, no default, supplied via gitignored tfvars' pattern already proven for anthropic_api_key/langsmith_api_key/ship_api_token in this same proof), but it is a genuinely untested delta, not a verified one. Separately, the proof's own \"one caveat, not hidden\" section notes SHIP_API_TOKEN was a placeholder string, not a real per-user token — so this proof establishes infrastructure reproducibility, not that the redeployed agent can authenticate against Ship."
+    },
+    {
+      "id": "W5-R27",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 528, "note": "\"### Timed live detection test (deployed site, 2026-08-07)\" — run against the graded deployment (`ship` + `ship-agent` as deployed 2026-08-06, commit af573d3)." },
+        { "file": "FLEETGRAPH.MD", "line": 534, "note": "T0 = 2026-08-07T14:50:13.130Z — a real comment mentioning @Iris Nguyen written via the real API (POST /api/documents/.../comments, HTTP 201)." },
+        { "file": "FLEETGRAPH.MD", "line": 536, "note": "T1 = 2026-08-07T14:50:55.759Z — the mention item observed in the recipient's own ranked inbox via a session-authed GET /api/agent/inbox call, matched on evidence.commentId." },
+        { "file": "FLEETGRAPH.MD", "line": 539, "note": "\"Observed: 42.6 seconds\" end-to-end against a 300s (5 minute) bar — the measured figure this requirement asks for, explicitly labeled \"observed, not derived\" (line 532)." }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "This section was added by commit 02f1bf0 (\"docs(TRO-364): record the timed live detection test — 42.6s observed on the deployed site\", 2026-08-07) — a git history fact confirmed via `git show --stat 02f1bf0` (19 insertions to FLEETGRAPH.MD, this exact section). The controller's rule against running timed tests applies to me; this is a citation of an already-recorded measurement in the repo, not a fresh run."
+    },
+    {
+      "id": "W5-R28",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 507, "note": "\"## Grader Access\" — working URL + credentials for the deployed site, \"verified by a real login against this exact deployment on 2026-08-07\"." },
+        { "file": "FLEETGRAPH.MD", "line": 516, "note": "Table of grader-usable credentials: URL https://ship-rr6m.onrender.com, alice.chen@ship.local / admin123 (every seeded user shares this password, printed by api/src/db/seed.ts)." },
+        { "file": "FLEETGRAPH.MD", "line": 544, "note": "\"Reproduce it: log in (credentials above), comment @Full Name of any seeded person on any issue, then open that person's inbox (their login, same password) — the item appears on the next tick.\" — a documented procedure a third party (grader) can follow without any of our tooling." },
+        { "file": "e2e/agent-detection-latency.spec.ts", "line": 128, "note": "expect(observedMs).toBeLessThan(5 * 60 * 1000) — a second, automated reproduction path: a CI-run e2e spec that writes a real comment and polls the real /api/agent/inbox route, asserting the same <5-minute bar as a hard expect() rather than a printed number." }
+      ],
+      "suggested_verification": "Follow FLEETGRAPH.MD's own \"Reproduce it\" steps (line 544) against the live site, or run the e2e-test-runner skill against e2e/agent-detection-latency.spec.ts.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Two independent reproduction paths exist: a manual documented procedure against the live deployed site with published grader credentials (FLEETGRAPH.MD), and an automated CI-wired e2e spec that exercises the agent's real production poll loop and public HTTP API. Neither was re-run here — read-only trace, controller owns command execution."
+    },
+    {
+      "id": "W5-R29",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 1162, "note": "\"Instrumented as of TRO-339 (FG-21), 2026-08-05.\" Every real model.invoke() call in agent/src/graph.ts's respond/composeAnswer/composeStandupDraft nodes records real input/output tokens to agent/.cache/cost-ledger.jsonl; the table is \"reproduced verbatim by running pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts... not an estimate.\"" },
+        { "file": "FLEETGRAPH.MD", "line": 1175, "note": "\"Reconciliation\" — the recorded invocation's cost was independently cross-checked against LangSmith's own usage reporting for the same trace and matched exactly (prompt_tokens 33, completion_tokens 37, total_cost 0.000218) — corroborating evidence this is measured, not modeled." },
+        { "file": "FLEETGRAPH.MD", "line": 1213, "note": "\"composeAnswer — cost/run (mean over the 2 priced invocations) | $0.000852\" — a measured per-run figure for the on-demand-with-expansion tier." },
+        { "file": "FLEETGRAPH.MD", "line": 1215, "note": "\"respond — cost/run (unchanged from FG-21 — not re-run by this ticket) | $0.000218\" — a measured per-run figure for the bare on-demand chat tier." },
+        { "file": "agent/src/graph.ts", "line": 1242, "note": "await recordInvocation(costTracker, 'respond', state.trigger, model.model, result.usage_metadata); — the actual instrumentation call site producing the ledger entries FLEETGRAPH.MD's cost-report.ts reads." }
+      ],
+      "suggested_verification": "Re-run `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` from the agent worktree and confirm the printed figures still match FLEETGRAPH.MD's table.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "The figure is reported per-node/per-tier (respond vs. composeAnswer), not as one aggregate \"cost per graph run\" number — a defensible reading given the graph has multiple distinct paths (bare chat vs. expansion vs. standup draft) that genuinely cost different amounts, rather than a gap. Distinct from this, FLEETGRAPH.MD's \"Production Cost Projections\" section (line 1320) separately gives PROJECTED per-tier costs ($0.021/$0.015/$0.052/$0.065), explicitly under an \"Assumptions\" heading and never merged into the measured table above — this is exactly the measured-vs-projected separation the audit brief asks to check for, and it is done correctly here: the measured figures are labeled \"not an estimate\" and cross-checked against LangSmith; the projected figures are clearly scoped to \"Production Cost Projections\" > \"Assumptions.\""
+    },
+    {
+      "id": "W5-R30",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 1227, "note": "\"Estimated runs per day, observed: too little real history to estimate a rate, and that is the honest answer, not a placeholder.\" — for the DEVELOPMENT-measured data (3 model-calling invocations, all within ~40 hours), the doc explicitly argues against producing a rate figure and states why (dividing 3 invocations by \"1 day of history\" would produce a number that looks like a rate but is really just a raw count)." },
+        { "file": "FLEETGRAPH.MD", "line": 1307, "note": "\"Assumptions\" under Production Cost Projections: unit ratios from the live database (15 projects, 523 documents, 254 issues, 20 people)." },
+        { "file": "FLEETGRAPH.MD", "line": 1313, "note": "\"Proactive runs per project per day: 1,440 polls... plus one draft composition per person per window — about 1.3 standup drafts and 1.3 inbox assemblies per project per working day, and roughly 1.3 retro drafts per project per week.\"" },
+        { "file": "FLEETGRAPH.MD", "line": 1316, "note": "\"On-demand invocations per user per day: 2\"" },
+        { "file": "FLEETGRAPH.MD", "line": 1322, "note": "\"Estimated runs per day, per 1,000 users: ~1,000 standup drafts, ~1,000 inbox assemblies, ~200 retro drafts, 2,000 on-demand answers.\" — the actual required figure, tied to stated assumptions immediately above it." }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Two distinct 'runs per day' treatments appear in the document, for two different questions. The development-measurement subsection (line 1227) explicitly declines to convert its 3 real invocations into a rate, and argues why — a defended non-answer, appropriate given \"too little history\" is the honest finding there. The Production Cost Projections subsection (lines 1301-1323) is the one that actually answers this requirement: a documented \"estimated runs per day\" figure scaled per 1,000 users, with its assumptions (unit ratios from the live DB, proactive poll cadence, on-demand invocations/user/day) stated immediately above it. This satisfies \"documented and defended,\" not merely present."
+    }
+  ],
+  "needs_ruling": []
+}

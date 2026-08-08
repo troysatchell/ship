@@ -57,15 +57,24 @@ produces confidence instead of a warning:
 import json
 import re
 import sys
+import os
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[3]
-MATRIX_PATH = REPO / "audit/requirements/matrix.baseline.json"
-INVENTORY_PATH = REPO / "audit/requirements/inventory.md"
-GAPS_PATH = REPO / "audit/requirements/gaps.md"
 
-HEADING_RE = re.compile(r"^## (W4-R\d+)\s*$")
-GAP_HEADING_RE = re.compile(r"^### (W4-R\d+)(?:\s|$)", re.MULTILINE)
+# Which requirement document this gate is checking. Unset/W4 keeps the original
+# W4 paths, so W4's committed baseline stays reproducible; DOC=W5 checks the W5
+# artifact set with the same logic — the false-pass bugs this file pins are not
+# W4-specific and a forked copy would only pin them for one document.
+DOC = os.environ.get("DOC", "W4").upper()
+_SFX = "" if DOC == "W4" else f"-{DOC}"
+
+MATRIX_PATH = REPO / f"audit/requirements/matrix.baseline{_SFX}.json"
+INVENTORY_PATH = REPO / f"audit/requirements/inventory{_SFX}.md"
+GAPS_PATH = REPO / f"audit/requirements/gaps{_SFX}.md"
+
+HEADING_RE = re.compile(rf"^## ({DOC}-R\d+)\s*$")
+GAP_HEADING_RE = re.compile(rf"^### ({DOC}-R\d+)(?:\s|$)", re.MULTILINE)
 
 # report-format.md's "## Verdict tiers" table, verbatim. Anything outside
 # this set — a typo like "VERIFED", or a value from a different sweep's

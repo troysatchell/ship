@@ -9,8 +9,15 @@ import pathlib
 # Repo root derived from this file's location (<repo>/audit/requirements/pipeline),
 # so the pipeline reproduces from any clone rather than one machine.
 REPO = str(pathlib.Path(__file__).resolve().parents[3])
+# Which requirement document this run is for. Unset/W4 keeps the original W4
+# paths byte-for-byte, so W4's committed baseline stays reproducible; DOC=W5
+# switches to the W5 artifact set. One pipeline, two document sets — a forked
+# copy would drift the moment either side was fixed.
+DOC = os.environ.get("DOC", "W4").upper()
+_SFX = "" if DOC == "W4" else f"-{DOC}"
+
 D = os.path.join(REPO, "audit/requirements")
-matrix = json.load(open(os.path.join(D, "matrix.baseline.json")))
+matrix = json.load(open(os.path.join(D, f"matrix.baseline{_SFX}.json")))
 
 ORDER = ["VERIFIED", "IMPLEMENTED-UNVERIFIED", "PARTIAL", "MISSING", "N/A",
          "BLOCKED", "ASSUMED"]
@@ -18,8 +25,8 @@ ORDER = ["VERIFIED", "IMPLEMENTED-UNVERIFIED", "PARTIAL", "MISSING", "N/A",
 
 def parse_inventory():
     entries, cur = {}, None
-    for line in open(os.path.join(D, "inventory.md")):
-        m = re.match(r"^## (W4-R\d+)\s*$", line)
+    for line in open(os.path.join(D, f"inventory{_SFX}.md")):
+        m = re.match(rf"^## ({DOC}-R\d+)\s*$", line)
         if m:
             cur = m.group(1)
             entries[cur] = {}
@@ -80,20 +87,51 @@ for v in ORDER:
         A(f"- **{v}:** {tally[v]}")
 A("")
 n_partial = tally.get("PARTIAL", 0)
-A(f"All {len(matrix['requirements'])} active W4 requirements are represented below, "
-  "and two findings account for most of what is wrong. **The type-safety target is "
-  "not met while the repo records it as met:** re-running the audit's own instrument "
-  "at HEAD gives **1987 tracked violations against a 1535 baseline (+452, +29%)**, "
-  "where W4-R10 asks for −25% (about −384 sites); `docs/IMPROVEMENTS.md:27-28` states "
-  "\"Verdict: met\" on a sum-of-controlled-diffs accounting that it discloses openly, "
-  "but the requirement's threshold is defined on the tracked total, which has never "
-  "been below baseline at any measured point. **The test suite is red at HEAD:** "
-  "`pnpm test` exits 1 — 830/832 passing, 2 failures at "
-  "`api/src/db/__tests__/migrationRunner.test.ts:167,184`, both from a "
-  "Postgres-versus-JavaScript sort-order mismatch inside the test itself rather than "
-  "any migration defect. Those two drive W4-R10, W4-R33 and W4-R35; the remaining "
-  f"{n_partial - 3} PARTIAL rows are gaps the repo already documents. Everything else "
-  "traced clean — but mostly statically, which the next section bounds.")
+n_missing = tally.get("MISSING", 0)
+
+# The Summary is DERIVED from the matrix, never hardcoded. An earlier version had
+# W4's two findings written into the prose; when the pipeline was parameterized for
+# W5 the paths followed but the sentences did not, and W5's report opened by
+# describing W4's type-safety target. A report that states another document's
+# findings is worse than no report, and nothing in the gate could catch it.
+def _lead(r):
+    """One clause a reader must ACT on.
+
+    Prefers suggested_scope — what would close the gap — over the notes' first
+    sentence. Notes routinely open by stating what already works ("Mapping itself
+    is complete...", "fully satisfy this requirement..."), so a first-sentence
+    extract turns a worst-first list into a list that reads as praise. That is
+    not a formatting nitpick: the Summary is where a reader stops.
+    """
+    for field in ("suggested_scope", "notes"):
+        v = (r.get(field) or "").strip()
+        if not v:
+            continue
+        first = re.split(r"(?<=[.!?])\s", v)[0].strip()
+        if len(first) < 40 and len(v) > len(first):      # too terse to stand alone
+            first = v
+        return first if len(first) <= 260 else first[:257].rstrip() + "..."
+    return short(r["id"])
+
+worst = [r for r in matrix["requirements"] if r["verdict"] == "MISSING"] + \
+        [r for r in matrix["requirements"] if r["verdict"] == "PARTIAL"]
+
+_nv = tally.get('VERIFIED', 0)
+A(f"All {len(matrix['requirements'])} active {DOC} requirements are represented below. "
+  f"{_nv} carr{'ies' if _nv == 1 else 'y'} green behavioural evidence, "
+  f"{tally.get('IMPLEMENTED-UNVERIFIED', 0)} are traced to file:line without a behavioural "
+  f"check, and {n_missing + n_partial} fall short — {n_missing} `MISSING`, {n_partial} `PARTIAL`.")
+A("")
+if worst:
+    A("**The findings a reader must act on, worst first:**")
+    A("")
+    for r in worst[:6]:
+        A(f"- **{r['id']}** (`{r['verdict']}`) — {_lead(r)}")
+    if len(worst) > 6:
+        A(f"- …and {len(worst) - 6} further `PARTIAL` row(s); all of them, with the smallest "
+          f"change that would close each, are in the Gaps section below and in `gaps{_SFX}.md`.")
+else:
+    A("Nothing traced `MISSING` or `PARTIAL`.")
 A("")
 if matrix.get("ticket_mapping", {}).get("status") == "BLOCKED":
     tm = matrix["ticket_mapping"]
@@ -302,7 +340,7 @@ for r in matrix["requirements"]:
         A("  ```")
         A("")
 
-open(os.path.join(D, "REPORT.md"), "w").write("\n".join(L) + "\n")
+open(os.path.join(D, f"REPORT{_SFX}.md"), "w").write("\n".join(L) + "\n")
 
 # ---- gaps.md (the PM handoff file) ----
 G = []
@@ -347,7 +385,7 @@ else:
         B(f"- {o['ticket']} \"{o['title']}\" ({o.get('status') or '—'}) — "
           "maps to no W4 requirement.")
 B("")
-open(os.path.join(D, "gaps.md"), "w").write("\n".join(G) + "\n")
+open(os.path.join(D, f"gaps{_SFX}.md"), "w").write("\n".join(G) + "\n")
 
 print("wrote REPORT.md and gaps.md")
 print(f"gap rows: {len(gaps_rows)}  blocked: {len(blocked)}  assumed: {len(assumed)}")

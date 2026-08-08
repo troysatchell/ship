@@ -20,8 +20,17 @@ Loads acceptance-check.py via importlib rather than a normal import because
 its filename has a hyphen, which is not legal in a Python module name.
 """
 import importlib.util
+import os
 import unittest
 from pathlib import Path
+
+# Pin the document set BEFORE importing the module under test. acceptance-check.py
+# reads DOC from the environment at import time to build its ID regexes, and every
+# fixture below uses W4-R ids. Without this line a developer who happens to have
+# DOC=W5 exported gets 3 failures that look like real defects and are not — the
+# test would be reporting on the shell, not the code. Same class as lessons.md
+# rule 25; the pin makes these tests answer the same way on every machine.
+os.environ["DOC"] = "W4"
 
 MODULE_PATH = Path(__file__).resolve().parent / "acceptance-check.py"
 _spec = importlib.util.spec_from_file_location("acceptance_check", MODULE_PATH)
