@@ -51,7 +51,12 @@ export interface HostPort {
 export function resolveHostPort(databaseUrl: string): HostPort | null {
   try {
     const url = new URL(databaseUrl);
-    return { host: url.hostname || 'localhost', port: Number(url.port) || 5432 };
+    // `url.port === ''` means the URL specified no port at all — default to
+    // 5432. Deliberately NOT `Number(url.port) || 5432`: port 0 is a valid,
+    // explicit port, and it is also falsy, so a `||` default would silently
+    // rewrite an explicit `:0` to 5432 instead of honoring what the URL said.
+    const port = url.port === '' ? 5432 : Number(url.port);
+    return { host: url.hostname || 'localhost', port };
   } catch {
     return null;
   }

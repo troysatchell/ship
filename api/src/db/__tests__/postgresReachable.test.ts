@@ -42,6 +42,24 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const API_ROOT = join(__dirname, '..', '..', '..');
 
 /**
+ * True when `error` is a non-null object carrying a numeric `code` —
+ * narrowed explicitly rather than asserted, since the catch variable is
+ * `unknown` and execFile's rejection value is read off it without any
+ * runtime guarantee of shape. Reading `.code` off an unnarrowed `unknown`
+ * (e.g. via `as { code?: unknown }`) would throw its own TypeError if
+ * `error` ever turned out to be `null`/a primitive, masking the original
+ * failure instead of rethrowing it.
+ */
+function isErrorWithNumericCode(error: unknown): error is { code: number } {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof (error as Record<'code', unknown>).code === 'number'
+  );
+}
+
+/**
  * Runs the real CLI as a subprocess and returns its actual exit code.
  * `execFile`'s promise rejects on non-zero exit; the code is recovered from
  * the rejection rather than assumed, so a spawn failure (missing `npx`, a
@@ -56,9 +74,8 @@ async function runCli(url: string): Promise<number> {
     });
     return 0;
   } catch (error) {
-    const code = (error as { code?: unknown }).code;
-    if (typeof code === 'number') {
-      return code;
+    if (isErrorWithNumericCode(error)) {
+      return error.code;
     }
     throw error;
   }
@@ -118,6 +135,13 @@ describe('resolveHostPort', () => {
 
   it('uses the explicit port when the URL specifies one', () => {
     expect(resolveHostPort('postgresql://127.0.0.1:5433/whatever')).toEqual({ host: '127.0.0.1', port: 5433 });
+  });
+
+  it('preserves an explicit port 0 rather than defaulting it to 5432', () => {
+    // Number('0') is 0, and 0 is falsy — a `Number(url.port) || 5432` default
+    // would silently rewrite this explicit port to 5432. Port must come
+    // through as the number 0, unchanged.
+    expect(resolveHostPort('postgresql://127.0.0.1:0/whatever')).toEqual({ host: '127.0.0.1', port: 0 });
   });
 
   it('returns null, rather than throwing, for an unparseable URL', () => {
