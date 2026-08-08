@@ -146,6 +146,62 @@ no behavior change for any caller of `buildShipClient`/Ship-side clients.
 
 ---
 
+## TRO-370 — FLEETGRAPH.MD described two agent capabilities the code does not have
+
+**The cost this closes.** Two claims in `FLEETGRAPH.MD` described a smaller system than actually
+exists, both verified directly against source before touching the document (per this ticket's own
+instruction — no invented work):
+- **W5-R9.** The Agent Responsibility section listed "linking a document to the issue or week it
+  refers to, when the reference is unambiguous" as one of four actions the agent takes without
+  approval, with no caveat marking it as forward-looking (unlike other aspirational statements
+  elsewhere in the file). Grepped `agent/src`: no write to `document_associations` on any path, and
+  `shipClient.ts`'s entire write surface is `postStandup`/`setStandupContent`/`applyIssueTransition`
+  — nothing resembling a link-creation call. Zero implementation.
+- **W5-R11.** The role-derivation section presented a Director/PM/Engineer table as settled fact.
+  `agent/src/roles.ts`'s own module docstring disclaims it directly: "FLEETGRAPH.MD's
+  Director/PM/Engineer taxonomy is real but not needed by anything in this ticket's scope... left
+  for whichever later FG ticket routes an escalation or needs to tell a Director apart from a PM."
+  Only single-hop/full-chain manager-lookup functions (`findManagerUserId`/`findManagerChain`) exist
+  — real, tested, and used for escalation routing — never the three-role taxonomy itself.
+  Separately, the Deployment Model section's identity claim ("every token belongs to a real user...
+  it can reach anything you could reach, and nothing you could not") was a blanket statement that
+  predates TRO-342: the on-demand tier does run under a fresh per-request token bound to the asking
+  person, but the proactive (fast/steady) and deep tiers still run under ONE shared token by explicit
+  design (`index.ts`'s `ProactiveDeps`/`DeepDeps` wiring — neither trigger has a per-invocation
+  asking person to source a token from), and the document never said so.
+
+**Fix — caveat, not implement**, per the ticket's own guidance (implement only if genuinely trivial;
+neither capability is). An accurate document describing a smaller system beats a confident one
+describing a fiction.
+
+**What changed — `FLEETGRAPH.MD` only, no code.**
+- The "linking a document" bullet now carries an explicit "not yet built" marker with the grep
+  evidence inline, and distinguishes it from the other three actions in the same list, which ARE
+  implemented and correctly sit outside `gate.ts`.
+- The Director/PM/Engineer table now carries a "not yet built — this table is a design, not a
+  running taxonomy" note quoting `roles.ts`'s own docstring, and states precisely what IS
+  implemented (`findManagerUserId`/`findManagerChain`) and what it cannot answer.
+- The "There is no service account" identity claim now names the two token regimes separately —
+  on-demand's per-request token vs. proactive/deep's one shared token — and states plainly that a
+  proactive draft about one person is read/written under the shared token's own visibility and
+  permissions, not that person's.
+
+**Regression test — explicit exception, not fabricated.** No robust mechanical test exists for "does
+a markdown paragraph correctly describe the absence of a feature," and this ticket's own guidance is
+not to fabricate a brittle one to satisfy the check. TRO-368's `server.test.ts`/`config.test.ts`
+additions and TRO-366's new `fleetgraphCostFigures.test.ts` (both in this same branch) satisfy the
+branch-level `regression-test` gate check mechanically; this ticket's own proof is the two source
+greps and the `roles.ts` docstring read, transcribed into `FLEETGRAPH.MD` and into this entry, and
+re-checkable by anyone with `grep`.
+
+**How to verify.** `grep -rn "createAssociation\|linkDocument" agent/src` (no hits outside this
+entry/`FLEETGRAPH.MD` itself); read `agent/src/roles.ts:1-9`; read `agent/src/index.ts`'s
+`onDemandShipClientFactory` vs. the shared `shipClient` passed to `proactiveDeps`/`deepDeps`.
+
+**Rollback.** Revert the commit. Documentation-only; no schema, code, or runtime behavior changes.
+
+---
+
 ## W4-SWEEPA (CI fix) — `postgresReachable.test.ts`'s "defaults to 5432" case depended on the host, not the code
 
 Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other items; each is its own commit.

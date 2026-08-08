@@ -87,7 +87,13 @@ the agent produces when it is not certain.
 **It acts, when a query proves it** — each of these is a structured lookup with no interpretation:
 
 - Resolving mentions to people to user accounts, and assembling those into someone's list
-- Linking a document to the issue or week it refers to, when the reference is unambiguous
+- Linking a document to the issue or week it refers to, when the reference is unambiguous —
+  **not yet built (verified TRO-370, 2026-08-08).** No implementation exists anywhere in
+  `agent/src`: no write to `document_associations` on any code path, no such method on
+  `ShipClient` (`shipClient.ts`'s write surface is exactly `postStandup`, `setStandupContent`,
+  `applyIssueTransition`). The other three actions in this list are real and implemented outside
+  `gate.ts` (`agent/src/graph.ts`'s write boundary, `graphWriteBoundary.test.ts`'s proof); this one
+  is a described capability with no code behind it.
 - Writing its own drafts and items, attributed to the agent
 - Clearing its own item when the condition ends
 
@@ -162,13 +168,23 @@ not one of the twenty people has it filled in.
 
 Project membership lives in a separate associations table, alongside owner and assignee fields.
 
-Roles are derived from structure, never read from a field:
+Roles are derived from structure, never read from a field — as a **design**:
 
 | Role | How it is derived |
 |---|---|
 | Director | People reporting to them two or more levels deep; owns programs |
 | Project manager | Owns projects or weeks; appears as approver on plans |
 | Engineer | Has issues assigned; nobody reports to them |
+
+**Not yet built (verified TRO-370, 2026-08-08): this table is a design, not a running taxonomy.**
+`agent/src/roles.ts`'s own module docstring says so directly — "FLEETGRAPH.MD's Director/PM/Engineer
+taxonomy is real but not needed by anything in this ticket's scope... left for whichever later FG
+ticket routes an escalation or needs to tell a Director apart from a PM." What IS implemented and
+real is narrower: `findManagerUserId`/`findManagerChain` (`roles.ts`) walk `reports_to` one hop or
+to the root — enough to answer "who has authority to unblock this plan approval" and "who is the
+lowest manager over everyone currently blocked" (TRO-337's escalation routing), never enough to
+answer "is this person a Director." No code anywhere in `agent/src` computes "reports to them two or
+more levels deep" or "owns projects or weeks" to label someone with one of these three roles.
 
 ---
 
@@ -818,11 +834,21 @@ absolute — apply only to browser sessions. API tokens are handled first and by
 they are bounded only by their own expiry, which can be unset, and by explicit revocation. A
 headless agent needs no re-authentication schedule.
 
-**There is no service account.** Every API token belongs to a real user, so the agent runs under
-each person's own token. This matters more under the current design than it did before — following
-the graph outward from the open document means reaching documents the person did not open, and
-running as them is what makes that safe by construction. **It can reach anything you could reach,
-and nothing you could not.**
+**There is no service account, but which token backs a call depends on the tier** (corrected TRO-370,
+2026-08-08 — the claim below held unqualified until TRO-342 split the tiers, and this section never
+caught up). **On-demand** (`respond`/`composeAnswer`) uses a fresh, per-request token bound to the
+ASKING person specifically (TRO-342, `index.ts`'s `onDemandShipClientFactory`) — following the graph
+outward from the open document means reaching documents the person did not open, and running as them
+is what makes THIS tier safe by construction: **it can reach anything they could reach, and nothing
+they could not.** **Proactive (fast/steady) and deep** — mention resolution, blocking-approval
+detection, and every draft-composing trigger (standup, retro, plan-change, escalation) — run under
+ONE shared token instead, by explicit design: none of those triggers has a single per-invocation
+asking person to source a per-call token from (`ProactiveDeps`/`DeepDeps`'s own docstrings in
+`graph.ts`; `index.ts:182-189` builds this one shared `shipClient` and passes it to both). That
+token currently belongs to a real seeded super-admin account, not a synthetic identity
+(`dev@ship.local` — see "On the choice of identity" below), so "no service account" still holds in
+that narrower sense — but a proactive draft about Alice's own standup is read and written under the
+admin token's own visibility and permissions, not Alice's.
 
 **Private documents are currently hypothetical.** All 523 documents are workspace-visible and none
 are private. The risk is real in the schema and absent from the data. That count is the local
