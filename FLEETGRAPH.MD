@@ -1157,6 +1157,38 @@ graded database following this identical allowlist-open/close procedure — see 
 section above ("Re-seed (TRO-357, 2026-08-06)") for the full before/after evidence. Both fixtures
 now fire; TC2/TC4 confirmed unchanged.
 
+### Outbound Call Resilience
+
+**Added TRO-368, 2026-08-08.** The brief's requirement is explicit: "All outbound calls from the
+agent (to Ship APIs, LLM providers, and any external tools) must implement explicit timeouts and
+retry logic with exponential backoff." Every outbound call class this package actually makes,
+checked directly against source rather than assumed:
+
+| Class | Timeout / backoff coverage | Where |
+|---|---|---|
+| Ship API (reads + writes) | Explicit `timeoutMs`; retry with exponential backoff + jitter (idempotent GET reads only); a circuit breaker with a half-open probe; self-throttling under Ship's own per-IP ceiling, since both of Ship's own rate limiters fail open (see "Reliability" above) | `resilientClient.ts`'s `ResilientClient`, built once via `buildShipClient` (`server.ts`) and shared by every `ShipClient`/`GateShipClient` in the process |
+| LLM provider (Anthropic, `ChatAnthropic`) | Explicit `timeout` (`clientOptions.timeout`, forwarded to the raw `@anthropic-ai/sdk` client) and `maxRetries` (`@langchain/core`'s own `AsyncCaller`, exponential backoff + jitter via `p-retry` — verified by reading `async_caller.cjs`, not assumed from the option's name) | `server.ts`'s `anthropicModelParams`/`buildAnthropicModel` — the one place this package constructs the real `ChatAnthropic` used in production (`index.ts`) |
+| Any other external tool | None exist today. Grepped `agent/src` for outbound calls outside the two classes above: every other `fetch()` call site is a one-off manual CLI script (`trace-invoke-proactive.ts`, `check-readiness-and-rollback.ts`) hitting the Ship API directly, not a third service. LangSmith tracing is `@langchain/core`'s own env-var-driven auto-instrumentation (`index.ts`'s own docstring: "there is nothing to wire up here beyond loading `.env`"), not a call site this package constructs or controls. | — |
+
+**What changed, and what this section corrects.** Before TRO-368, this document's retry/fallback
+coverage named only the Ship API class (the table's first row, already accurate) — it never named
+the LLM-provider call as its own class, and the code matched that gap exactly: `index.ts`'s
+`ChatAnthropic` construction (`agent/src/index.ts:162`, pre-fix) had no `timeout` or `maxRetries` at
+all, silently inheriting `@anthropic-ai/sdk`'s own 10-minute default timeout and
+`AsyncCallerParams`' 6-retry default. `server.ts`'s own `/chat` handler comment already conceded the
+consequence: a hung model call "keeps running to completion server-side" even after the handler's
+own `chatHandlerTimeoutMs` gives up *waiting* on it, because the `AbortSignal` that bounds the
+handler does not reach inside a single in-flight `AnthropicModel.invoke()` call — that gap mattered
+even more for `composeStandupDraft`/`composeBlockerEscalation`/`composeRetroDraft`/
+`composePlanChangeDraft`, which share the same model instance but run outside any HTTP handler at
+all once a scheduler exists to trigger them, so nothing bounded those calls either. Fixed by giving
+`ChatAnthropic` explicit, chosen values (20s timeout; 2 retries, three total attempts — matching
+`resilientClient.ts`'s own `DEFAULT_RETRY_MAX_ATTEMPTS` for Ship's idempotent reads) rather than the
+library's unexamined defaults; every `ChatAnthropic` construction in this package (the production one
+and the seven one-off trace/golden-set scripts) now sets both explicitly and consistently. Full
+reasoning for the chosen numbers lives in `config.ts`'s `anthropicRequestTimeoutMs`/
+`anthropicMaxRetries` docstrings.
+
 ---
 
 ## Cost Analysis

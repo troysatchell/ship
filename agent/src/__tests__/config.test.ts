@@ -23,6 +23,11 @@ describe('loadConfig', () => {
     // CodeRabbit review, PR #120 — shorter than api/'s own
     // AGENT_REQUEST_TIMEOUT_MS (30s, api/src/routes/agent.ts).
     expect(config.chatHandlerTimeoutMs).toBe(25_000);
+    // TRO-368 — explicit, chosen values for the LLM-provider call, never
+    // silently left to @anthropic-ai/sdk's own 10-minute timeout /
+    // AsyncCallerParams' own 6-retry default.
+    expect(config.anthropicRequestTimeoutMs).toBe(20_000);
+    expect(config.anthropicMaxRetries).toBe(2);
   });
 
   it('reads every value from the provided env map, not process.env', () => {
@@ -43,6 +48,8 @@ describe('loadConfig', () => {
       ON_DEMAND_DOCUMENT_CAP: '20',
       AGENT_INTERNAL_SECRET: 'shared-secret-abc',
       CHAT_HANDLER_TIMEOUT_MS: '12000',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '15000',
+      ANTHROPIC_MAX_RETRIES: '4',
     });
 
     expect(config).toEqual({
@@ -62,6 +69,8 @@ describe('loadConfig', () => {
       onDemandDocumentCap: 20,
       agentInternalSecret: 'shared-secret-abc',
       chatHandlerTimeoutMs: 12000,
+      anthropicRequestTimeoutMs: 15000,
+      anthropicMaxRetries: 4,
     });
   });
 

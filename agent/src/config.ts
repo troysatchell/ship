@@ -68,6 +68,45 @@ export interface AgentConfig {
    * first, while the caller is still there to receive something other than
    * a connection reset. */
   chatHandlerTimeoutMs: number;
+  /** Per-request timeout, in ms, for the raw Anthropic HTTP call underneath
+   * every `ChatAnthropic.invoke()` in this package (TRO-368). Passed as
+   * `clientOptions.timeout` — the only place `@langchain/anthropic` exposes
+   * it (`AnthropicInput` has no top-level `timeout` field; it forwards
+   * `clientOptions` straight into the `@anthropic-ai/sdk` client, verified
+   * by reading `chat_models.cjs` directly, not assumed). The SDK's own
+   * unconfigured default is 10 MINUTES — appropriate for a batch job, not
+   * for a call sitting inside `server.ts`'s `/chat` handler, whose own
+   * `chatHandlerTimeoutMs` above races `graph.invoke()` against an abort
+   * signal that (per that handler's own comment) does NOT reach this
+   * call once it is in flight, so an unbounded model call keeps running to
+   * completion server-side even after the handler has already responded.
+   * Chosen well under `chatHandlerTimeoutMs` (25s default) so a single slow
+   * call fails fast enough to leave room for a retry (see
+   * `anthropicMaxRetries` below) inside that same handler budget, while
+   * comfortably covering a real haiku completion under normal network
+   * conditions (low single-digit seconds observed in this sprint's own
+   * traced runs — see FLEETGRAPH.MD's Execution Traces section). Matters
+   * even more for `composeStandupDraft`/`composeBlockerEscalation`/
+   * `composeRetroDraft`/`composePlanChangeDraft`, which share this same
+   * `ChatAnthropic` instance (`index.ts`) but run outside any HTTP handler
+   * at all once a scheduler exists to trigger them — nothing bounds those
+   * today except this value. */
+  anthropicRequestTimeoutMs: number;
+  /** Max retry attempts (`ChatAnthropic`'s own `maxRetries` field, which
+   * `@langchain/core`'s `AsyncCaller` applies with exponential backoff and
+   * jitter via `p-retry` — verified by reading `async_caller.cjs`, not
+   * assumed from the option's name) for a failed Anthropic call. The raw
+   * `@anthropic-ai/sdk` client's own retry logic is hardcoded OFF inside
+   * `@langchain/anthropic` ("Prefer LangChain built-in retries",
+   * `chat_models.cjs`) specifically so this is the one number in effect —
+   * an unset value here would silently fall back to `AsyncCallerParams`'
+   * documented default of 6, which is unexamined library behavior, not a
+   * chosen one. 2 (three total attempts) matches
+   * `resilientClient.ts`'s own `DEFAULT_RETRY_MAX_ATTEMPTS` for Ship's
+   * idempotent reads — enough to absorb a transient network blip or a 429
+   * without compounding cost and latency for a call that, unlike a Ship
+   * GET, is not free to repeat. */
+  anthropicMaxRetries: number;
 }
 
 const DEFAULT_PORT = 3100;
@@ -83,6 +122,12 @@ const DEFAULT_ON_DEMAND_DOCUMENT_CAP = 12;
 // Shorter than api/'s own AGENT_REQUEST_TIMEOUT_MS (30_000ms,
 // api/src/routes/agent.ts) — see chatHandlerTimeoutMs's own docstring.
 const DEFAULT_CHAT_HANDLER_TIMEOUT_MS = 25_000;
+// See anthropicRequestTimeoutMs's own docstring for why 20s and not the
+// SDK's 10-minute default.
+const DEFAULT_ANTHROPIC_REQUEST_TIMEOUT_MS = 20_000;
+// See anthropicMaxRetries's own docstring for why 2 and not AsyncCallerParams'
+// default of 6.
+const DEFAULT_ANTHROPIC_MAX_RETRIES = 2;
 
 function positiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
@@ -120,6 +165,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     onDemandDocumentCap: positiveInt(env.ON_DEMAND_DOCUMENT_CAP, DEFAULT_ON_DEMAND_DOCUMENT_CAP),
     agentInternalSecret: env.AGENT_INTERNAL_SECRET,
     chatHandlerTimeoutMs: positiveInt(env.CHAT_HANDLER_TIMEOUT_MS, DEFAULT_CHAT_HANDLER_TIMEOUT_MS),
+    anthropicRequestTimeoutMs: positiveInt(
+      env.ANTHROPIC_REQUEST_TIMEOUT_MS,
+      DEFAULT_ANTHROPIC_REQUEST_TIMEOUT_MS
+    ),
+    anthropicMaxRetries: positiveInt(env.ANTHROPIC_MAX_RETRIES, DEFAULT_ANTHROPIC_MAX_RETRIES),
   };
 }
 

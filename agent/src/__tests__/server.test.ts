@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
 import { loadConfig } from '../config.js';
-import { createServer } from '../server.js';
+import { createServer, anthropicModelParams, buildAnthropicModel } from '../server.js';
 import type { ShipReadClient } from '../health.js';
 import { InMemoryItemStore, type InboxItem, type NewInboxItem } from '../itemStore.js';
 import { InMemoryDraftStore, type NewStandupDraft } from '../draftStore.js';
@@ -575,5 +575,74 @@ describe('POST /accept-draft', () => {
 
     expect(res.status).toBe(502);
     expect(res.body.error).toBe('accept_draft_failed');
+  });
+});
+
+describe('anthropicModelParams / buildAnthropicModel (TRO-368)', () => {
+  // Requirement: "All outbound calls from the agent (to Ship APIs, LLM
+  // providers, and any external tools) must implement explicit timeouts and
+  // retry logic with exponential backoff." Ship API calls already had this
+  // (resilientClient.ts); the LLM-provider call did not — `index.ts`
+  // constructed `ChatAnthropic` with no `timeout`/`maxRetries`, silently
+  // inheriting the SDK's own 10-minute timeout and AsyncCaller's 6-retry
+  // default. This asserts the values actually reaching the constructor are
+  // explicit and configured, not the library's own unexamined defaults.
+
+  it('carries an explicit request timeout and retry count, not the library defaults', () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: 'sk-test',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '20000',
+      ANTHROPIC_MAX_RETRIES: '2',
+    });
+    const params = anthropicModelParams(config);
+
+    expect(params.clientOptions.timeout).toBe(20000);
+    expect(params.maxRetries).toBe(2);
+    // Neither is the library's own inherited default — the whole point of
+    // this ticket is that those defaults (10 minutes; 6 retries) are wrong
+    // for a call sitting inside a request handler.
+    expect(params.clientOptions.timeout).not.toBe(600_000);
+    expect(params.maxRetries).not.toBe(6);
+  });
+
+  it('reads the timeout and retry count from config, not a hardcoded literal', () => {
+    // Different from the default-value test above: proves the params
+    // function actually forwards whatever config carries, rather than
+    // happening to match a hardcoded number that looks configurable.
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: 'sk-test',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '9000',
+      ANTHROPIC_MAX_RETRIES: '5',
+    });
+    const params = anthropicModelParams(config);
+
+    expect(params.clientOptions.timeout).toBe(9000);
+    expect(params.maxRetries).toBe(5);
+  });
+
+  it('builds a real ChatAnthropic instance whose own public clientOptions carries the explicit timeout', () => {
+    // clientOptions is a public field on the constructed instance itself
+    // (verified by reading @langchain/anthropic's chat_models.cjs — it is
+    // assigned directly from the constructor's fields.clientOptions, never
+    // defaulted away) — this is the one piece of the fix checkable on the
+    // real object, not just on the plain params passed in. maxRetries is
+    // consumed by @langchain/core's AsyncCaller into a `protected` field on
+    // that instance, so it is asserted at the params layer above instead of
+    // read back off the model here.
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: 'sk-test',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '20000',
+    });
+    const model = buildAnthropicModel(config);
+
+    expect(model.clientOptions.timeout).toBe(20000);
+  });
+
+  it('defaults to explicit, chosen values when neither env var is set — never an unset field left to the library', () => {
+    const config = loadConfig({ ANTHROPIC_API_KEY: 'sk-test' });
+    const params = anthropicModelParams(config);
+
+    expect(params.clientOptions.timeout).toBe(20_000);
+    expect(params.maxRetries).toBe(2);
   });
 });

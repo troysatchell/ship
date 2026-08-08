@@ -76,6 +76,76 @@ changes.
 
 ---
 
+## TRO-368 — The LLM-provider call had no timeout or retry/backoff; a hung Anthropic call ran forever server-side
+
+**The cost this closes.** The brief requires explicit timeouts and retry logic with exponential
+backoff on every outbound call class, naming LLM providers specifically. Ship API calls were already
+compliant (`resilientClient.ts`: explicit `timeoutMs`, retry with backoff + jitter, a circuit
+breaker). The LLM call was not: `agent/src/index.ts:162` (pre-fix) constructed
+`new ChatAnthropic({ apiKey, model, maxTokens })` with no `timeout` and no `maxRetries`, silently
+inheriting `@anthropic-ai/sdk`'s own 10-**minute** default timeout and `AsyncCallerParams`' 6-retry
+default. `server.ts`'s own `/chat` handler comment already conceded the consequence: a hung model
+call "keeps running to completion server-side" even after the handler's own `chatHandlerTimeoutMs`
+(25s) gives up *waiting* for it, because the `AbortSignal` that bounds the handler never reaches
+inside a single in-flight `AnthropicModel.invoke()` call. The gap mattered even more for
+`composeStandupDraft`/`composeBlockerEscalation`/`composeRetroDraft`/`composePlanChangeDraft`, which
+share the same model instance but run outside any HTTP handler at all once a scheduler exists to
+trigger them — nothing bounded those calls either.
+
+**What changed.**
+- `agent/src/config.ts`: two new explicit `AgentConfig` fields, `anthropicRequestTimeoutMs` (default
+  20,000ms) and `anthropicMaxRetries` (default 2 — three total attempts, matching
+  `resilientClient.ts`'s own `DEFAULT_RETRY_MAX_ATTEMPTS` for Ship's idempotent reads), each with a
+  docstring explaining why that number and not the library's own inherited default.
+- `agent/src/server.ts`: new exported `anthropicModelParams(config)`/`buildAnthropicModel(config)` —
+  the one place this package decides what a real `ChatAnthropic` is configured with, so the
+  production wiring and the regression test below share exactly one definition. `maxRetries` maps to
+  `@langchain/core`'s own `AsyncCaller` (exponential backoff + jitter via `p-retry`, verified by
+  reading `async_caller.cjs`); `timeout` is forwarded via `clientOptions.timeout` — the only place
+  `@langchain/anthropic` exposes a per-request timeout (`AnthropicInput` has no top-level `timeout`
+  field, verified by reading `chat_models.d.ts`/`.cjs` directly).
+- `agent/src/index.ts`: now calls `buildAnthropicModel(config)` instead of constructing
+  `ChatAnthropic` inline.
+- All seven other `ChatAnthropic` construction sites in `agent/src/scripts/` (`trace-invoke.ts`,
+  `trace-invoke-on-demand.ts`, `trace-invoke-retro.ts`, `trace-invoke-plan-change.ts`,
+  `trace-invoke-escalation.ts`, `trace-invoke-deep.ts`, `golden-set-compare.ts`) — one-off manual
+  CLI tools, checked as the ticket asked — now set the same explicit `maxRetries`/
+  `clientOptions.timeout` values too, so the whole package is consistent rather than only the
+  server path being configured.
+- `FLEETGRAPH.MD`: new "Outbound Call Resilience" subsection (under Architecture Decisions) naming
+  every outbound call class this package makes — Ship API, LLM provider, and confirming (by grep) no
+  third external-tool class exists — with each one's timeout/backoff coverage in one table.
+
+**Regression test — new, `agent/src/__tests__/server.test.ts`.** Four `it()` cases in a new
+`describe('anthropicModelParams / buildAnthropicModel (TRO-368)', ...)` block assert the constructed
+params carry the explicit, configured `timeout`/`maxRetries` values (not the library's defaults of
+10 minutes / 6 retries), that they come from config rather than a hardcoded literal, that the real
+constructed `ChatAnthropic` instance's own public `clientOptions.timeout` reflects it, and that
+unset env vars fall back to the chosen defaults rather than an unset field. (`maxRetries` is asserted
+at the params layer, not read back off the instance — `@langchain/core`'s `AsyncCaller.maxRetries`
+is a `protected` field in the library's own `.d.ts`, not safely readable from outside without a cast
+this repo bans.) Two `config.test.ts` assertions cover the new `AgentConfig` fields' defaults and
+explicit-env wiring.
+
+**Confirmed red before green.** Reverted `config.ts`/`server.ts`/`index.ts` to their pre-fix `HEAD`
+state (via `git checkout --`, restored after from a captured patch — never `git stash`) and re-ran
+the new tests: 6 failures. Two in `config.test.ts` were genuine `AssertionError`s (`expected
+undefined to be 20000`, and a `toEqual` diff missing the two new keys). Four in `server.test.ts` were
+`TypeError: anthropicModelParams is not a function` / `buildAnthropicModel is not a function` — the
+correct "red" for a capability that did not exist yet on `HEAD`, not a broken/mistyped test (the
+other 39 pre-existing tests in the same two files still passed on the reverted code, confirming the
+failures were isolated to the new assertions). Restored the fix; same tests now pass, 45/45 across
+both files.
+
+**How to run/test it.** `source .factory-env && pnpm --filter @ship/agent exec vitest run
+src/__tests__/server.test.ts src/__tests__/config.test.ts` — 45/45. Full package:
+`pnpm --filter @ship/agent test` — 452/452. `pnpm type-check` clean across all four packages.
+
+**Rollback.** Revert the commit. No schema change, no new env var is required (both have defaults),
+no behavior change for any caller of `buildShipClient`/Ship-side clients.
+
+---
+
 ## W4-SWEEPA (CI fix) — `postgresReachable.test.ts`'s "defaults to 5432" case depended on the host, not the code
 
 Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other items; each is its own commit.
