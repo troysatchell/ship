@@ -27,20 +27,20 @@
     "golden-set:compare": "tsx src/scripts/golden-set-compare.ts"
   },
   "dependencies": {
-    "@langchain/anthropic": "^0.3.16",
-    "@langchain/core": "^0.3.40",
-    "@langchain/langgraph": "^0.2.44",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2"
+    "@langchain/anthropic": "0.3.34",
+    "@langchain/core": "0.3.80",
+    "@langchain/langgraph": "0.2.74",
+    "dotenv": "16.6.1",
+    "express": "4.22.1"
   },
   "devDependencies": {
-    "@types/express": "^5.0.0",
-    "@types/node": "^22.19.3",
+    "@types/express": "5.0.6",
+    "@types/node": "22.19.5",
     "@vitest/coverage-v8": "4.0.17",
-    "supertest": "^7.1.4",
-    "@types/supertest": "^6.0.3",
-    "tsx": "^4.19.2",
-    "typescript": "^5.7.2",
-    "vitest": "^4.0.16"
+    "supertest": "7.2.2",
+    "@types/supertest": "6.0.3",
+    "tsx": "4.21.0",
+    "typescript": "5.9.3",
+    "vitest": "4.0.17"
   }
 }

@@ -38,20 +38,20 @@
     "postinstall": "git config merge.ours.driver true && (command -v comply >/dev/null 2>&1 || echo '\\n⚠️  comply CLI not installed - pre-commit hooks require it\\n   Install with: pip install comply-cli\\n')"
   },
   "devDependencies": {
-    "@axe-core/playwright": "^4.11.0",
-    "@playwright/test": "^1.57.0",
-    "@testcontainers/postgresql": "^11.11.0",
-    "@types/supertest": "^6.0.3",
-    "@vitest/ui": "^4.0.16",
+    "@axe-core/playwright": "4.11.0",
+    "@playwright/test": "1.57.0",
+    "@testcontainers/postgresql": "11.11.0",
+    "@types/supertest": "6.0.3",
+    "@vitest/ui": "4.0.17",
     "eslint": "9.39.5",
-    "get-port": "^7.1.0",
-    "husky": "^9.1.7",
-    "prettier": "^3.4.2",
-    "supertest": "^7.1.4",
-    "testcontainers": "^11.11.0",
-    "typescript": "^5.7.2",
+    "get-port": "7.1.0",
+    "husky": "9.1.7",
+    "prettier": "3.7.4",
+    "supertest": "7.2.2",
+    "testcontainers": "11.11.0",
+    "typescript": "5.9.3",
     "typescript-eslint": "8.65.0",
-    "vitest": "^4.0.16"
+    "vitest": "4.0.17"
   },
   "pnpm": {
     "// overrides (BUN-8 / TRO-204)": "cmdk pins @radix-ui/react-primitive via a caret range (^2.0.2) and resolves it to 2.1.4/react-slot 1.2.4, while @radix-ui/react-dialog|popover|tooltip each pin the exact older 2.1.3/1.2.3 internally - so both trees shipped. Force the newer pair everywhere: diffing the built dist confirmed 2.1.4/1.2.4 is a strict superset (react-slot 1.2.4 only adds React.lazy-child support over 1.2.3; react-primitive's logic is byte-identical between 2.1.3 and 2.1.4), so converging up is behavior-safe. Remove this override once react-dialog/popover/tooltip publish a release that pins 2.1.4+/1.2.4+ themselves.",
