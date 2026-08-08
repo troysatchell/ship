@@ -14,14 +14,28 @@ tickets:
   team: TRO
   project: null
 
+# Roots searched during the trace phase. Application source alone is not enough for
+# this document set: the W4 brief's acceptance evidence lives largely in audit
+# artifacts, CI config, IaC, and repo-root docs, so those are evidence roots too.
 code_roots:
   - api/src
   - web/src
   - shared/src
+  - audit                 # AUDIT_REPORT.md + per-category baseline/compare artifacts
+  - terraform             # Category 8 (Terraform) evidence
+  - .github               # CI workflow evidence
+  - scripts               # one-command start, deploy scripts
+  - docs                  # dev docs, improvement + submission docs
+  - e2e                   # Playwright specs cited as regression-test evidence
+  - .                     # repo-root files only (CHANGES.md, README.md, start.sh, package.json)
 exclude:
   - node_modules
   - dist
-  - audit
+  - build
+  - coverage
+  - test-results
+  - .git
+  - audit/requirements    # the skill's own output — never cite it as evidence
 
 # Gaps handoff target after each sweep (invoked via the Skill tool).
 pm_skill: ship-pm
@@ -33,7 +47,12 @@ pdf_tool: "node ~/.claude/skills/requirements-audit/scripts/pdf/pdf2md.mjs"
 # Commands available for behavioral verification; keys are labels the inventory's
 # "Acceptance evidence" field references; values run from the repo root.
 verify:
-  test: "pnpm test"                       # root test = @ship/api vitest only
+  # Root `test` runs api + web + agent (package.json:test = test:api && test:web && test:agent),
+  # not @ship/api alone. It needs DATABASE_URL exported (`set -a; . ./api/.env.local; set +a`) —
+  # without it all 77 api files fail on "DATABASE_URL must be set", which looks like a suite
+  # failure but is an unset env var. Never read its exit code through a pipe: `pnpm test | tail`
+  # reports tail's status (0) and hides a real failure.
+  test: "pnpm test"
   webtest: "pnpm --filter @ship/web test"
   e2e: "pnpm test:e2e"                    # Playwright, per-worker Postgres testcontainers — heavy, needs Docker
   typecheck: "pnpm type-check"
