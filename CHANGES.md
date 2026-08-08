@@ -21,11 +21,72 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## W4-SWEEPA (item 2 of 3) — type-safety improvement verdict corrected to "not met"
+
+Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other two items; each is its own
+commit.
+
+**What was broken.** `docs/IMPROVEMENTS.md` §1 (Type Safety) recorded the category's verdict against
+W4-R10 ("eliminate 25% of the 1535 tracked violations") as **met**, based on a sum of controlled
+per-ticket diffs (TS-1 + TS-3 + TS-4 = 411 ≥ 384). Re-running the audit's own instrument at HEAD —
+`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web api shared`, the exact command
+`audit/type-safety/baseline.md:14-18` prescribes — does not support "met" against the requirement's
+own literal threshold, which is defined on the tracked total, not the per-ticket sum.
+
+**Own recount (observed this session, at HEAD `5126a03`, 2026-08-08):**
+`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web api shared` returned
+web `any 23 / as 659 / non-null 5 / ts-ignore 3`, api `any 27 / as 1212 / non-null 42 / ts-ignore 5`,
+shared `any 0 / as 11 / non-null 0 / ts-ignore 0`. Summed per `baseline.md:77`'s own formula
+(`any + as + ! + ts-ignore`, `as any` not double-counted since it's a subset of `as`): any **50**,
+as **1882**, non-null **47**, ts-ignore **8** → **1987 tracked violations**. Against
+`audit/type-safety/baseline.json`'s recorded `metrics.violationsTotal: 1535`, that is **+452 (+29%)**
+— the wrong direction, where W4-R10 requires **−25%** (≈−384, target ≤1151). This independently
+matches the number already recorded in `audit/requirements/pipeline/verification-results.json`
+(`W4-R10`) and `audit/requirements/REPORT.md:36,84` from a separate audit pass earlier the same day
+— cross-checked, not assumed.
+
+**What this is not.** `docs/IMPROVEMENTS.md`'s pre-existing lines 27-28 (now reworded, see diff)
+already disclosed the inference plainly — "met, by the sum of controlled per-ticket diffs — not by a
+live recount, which the tracked metric cannot support today" — and the adjacent table already
+printed the baseline-to-then figure with "Up 243" in the open. This was not a concealed claim. The
+defect is that the document's **verdict** field said "met" against a requirement whose literal
+threshold is the tracked total, and that total has never measured below baseline at any point this
+sprint (1535 → 1778 → 1987).
+
+**What changed.** `docs/IMPROVEMENTS.md`, §1 (Type Safety):
+- Verdict restated as **NOT MET against the requirement's literal threshold**, with the reasoning
+  spelled out (tracked total only ever measured up, per-ticket sum answers a different question than
+  the one the requirement asks).
+- Before → After table gained a third data column (`HEAD 5126a03, this session's recount`, 1987) and
+  a full breakdown of this session's count, sourced and formula-cited.
+- The genuine per-ticket wins are kept, not deleted: total `any` (web+api+shared) 102 → 50, halved
+  and independently reconfirmed this session; `req.userId!`/`req.workspaceId!` 236 → 0, also
+  reconfirmed this session (`grep -rEn 'req\.(userId|workspaceId)!' api/src --include='*.ts'` → 0
+  hits).
+- The "controlled per-ticket sum" paragraph is kept as supporting evidence for real work done, with
+  a sentence added clarifying it does not restate or substitute for the verdict.
+
+**Regression test.** None added. This is a documentation correction to a verdict field describing a
+static-analysis count, not a code change with observable behavior — a test asserting "the doc says
+X" would only test the doc against itself, which is not a meaningful regression guard. Honest
+absence, not an oversight: `.claude/skills/ship-qa/SKILL.md` and the factory's own
+`test.fixme()`/empty-test rules are about code paths, and this ticket has none.
+
+**How to run it (to reproduce the recount).**
+`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web api shared` from the repo root, then
+sum any + as + non-null + ts-ignore per `audit/type-safety/baseline.md:77`'s formula and compare
+against `audit/type-safety/baseline.json`'s `metrics.violationsTotal` (1535).
+
+**How to roll it back.** Revert this commit. `docs/IMPROVEMENTS.md` §1's verdict returns to "met,"
+which overstates the type-safety category's status against a live recount at HEAD.
+
+---
+
 ## W4-SWEEPA (item 1 of 3) — migration-runner regression test made collation-independent
 
 Bundle: W4-SWEEPA — a wave-4 correctness sweep of three unrelated items grouped for one review
-pass, not one root cause. See items 2 and 3 below (this file lists newest-first, so they sit
-directly under this entry) for the other two; each is its own commit.
+pass, not one root cause. Search this file for `W4-SWEEPA` for the other two items (each is its own
+commit; this file lists newest-first, so later items land above this entry, not below it).
 
 **What was broken.** `api/src/db/__tests__/migrationRunner.test.ts:167,184` (both the "applies
 every migration file" and "clean no-op on a second invocation" cases) compared
