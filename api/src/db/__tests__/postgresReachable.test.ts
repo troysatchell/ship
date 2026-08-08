@@ -4,19 +4,27 @@
  * address, instead of stopping at `ensureDatabase.ts`'s unreachable-database
  * message).
  *
- * These exercise the real TCP check against a real, throwaway `net.Server`
- * (the "reachable" case) and a real closed port (the "unreachable" case) —
- * no mocked sockets, so a change to the timeout/error-handling wiring would
- * actually be caught here rather than by an assertion on a stub.
+ * Three `describe` blocks:
  *
- * The second `describe` block below spawns the actual CLI
- * (`npx tsx src/db/postgresReachable.ts <url>`) as a subprocess and asserts
- * on its real exit code — the exact contract `scripts/dev.sh` depends on
- * (`if (... && npx tsx src/db/postgresReachable.ts "$URL"); then ...`,
- * branching on `$?`). The first block covers `isPostgresReachable()` the
- * function; without the second, an inverted `process.exit(reachable ? 0 : 1)`
- * in `main()` would leave every test above green while the real integration
- * silently broke.
+ * 1. `isPostgresReachable` — the real TCP check against a real, throwaway
+ *    `net.Server` (the "reachable" case) and a real, guaranteed-closed port
+ *    (the "unreachable" case) — no mocked sockets, so a change to the
+ *    timeout/error-handling wiring would actually be caught here.
+ * 2. `resolveHostPort` — the pure URL -> { host, port } parsing
+ *    `isPostgresReachable` uses internally, asserted directly rather than
+ *    through a socket probe. Kept separate on purpose: a version of this
+ *    suite once asserted "defaults to 5432" by connecting to 127.0.0.1:5432
+ *    and expecting a refusal, which only holds when nothing else on the host
+ *    happens to be listening there — it wasn't, in CI (GitHub Actions runs a
+ *    Postgres service on 5432), so a correct probe result failed the test.
+ *    Every case here is deterministic regardless of what is or isn't
+ *    listening anywhere.
+ * 3. The CLI (`npx tsx src/db/postgresReachable.ts <url>`) as a subprocess,
+ *    asserting on its real exit code — the exact contract `scripts/dev.sh`
+ *    depends on (`if (... && npx tsx src/db/postgresReachable.ts "$URL");
+ *    then ...`, branching on `$?`). Without this, an inverted
+ *    `process.exit(reachable ? 0 : 1)` in `main()` would leave every test
+ *    above green while the real integration silently broke.
  */
 import { execFile } from 'node:child_process';
 import { dirname, join } from 'node:path';
@@ -24,7 +32,7 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import net from 'net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { isPostgresReachable } from '../postgresReachable.js';
+import { isPostgresReachable, resolveHostPort } from '../postgresReachable.js';
 
 const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -92,15 +100,28 @@ describe('isPostgresReachable', () => {
   it('resolves false, rather than throwing, for an unparseable URL', async () => {
     await expect(isPostgresReachable('not-a-url')).resolves.toBe(false);
   });
+});
 
-  it('defaults to port 5432 when the URL specifies none', async () => {
-    // Port 1 refuses; the default-port branch is exercised by omitting a port
-    // from a URL that otherwise behaves like the refused-connection case
-    // above (127.0.0.1:5432 is not expected to be listening in this test
-    // environment — see ensureDatabase.ts's own header on why loopback:1 is
-    // used instead where a guaranteed-closed port matters more than testing
-    // the default itself).
-    await expect(isPostgresReachable('postgresql://127.0.0.1/whatever', 200)).resolves.toBe(false);
+describe('resolveHostPort', () => {
+  // Pure parsing, no socket involved — deliberately not asserted via a probe.
+  // A prior version of this suite tested "defaults to 5432" by connecting to
+  // 127.0.0.1:5432 and asserting the connection was refused, which is only
+  // true when nothing else on the host happens to be listening there. It
+  // wasn't, in CI: GitHub Actions runs a Postgres service on 5432, the probe
+  // correctly returned reachable, and the test failed — not because the code
+  // was wrong, but because the assertion depended on the environment instead
+  // of the behavior. Asserting directly on the parsed { host, port } has no
+  // such dependency: it is true or false the same way on every machine.
+  it('defaults to port 5432 when the URL specifies none', () => {
+    expect(resolveHostPort('postgresql://127.0.0.1/whatever')).toEqual({ host: '127.0.0.1', port: 5432 });
+  });
+
+  it('uses the explicit port when the URL specifies one', () => {
+    expect(resolveHostPort('postgresql://127.0.0.1:5433/whatever')).toEqual({ host: '127.0.0.1', port: 5433 });
+  });
+
+  it('returns null, rather than throwing, for an unparseable URL', () => {
+    expect(resolveHostPort('not-a-url')).toBeNull();
   });
 });
 

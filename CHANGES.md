@@ -21,6 +21,69 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## W4-SWEEPA (CI fix) — `postgresReachable.test.ts`'s "defaults to 5432" case depended on the host, not the code
+
+Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other items; each is its own commit.
+Fixes a test added by the item-3 commit above, caught by CI on PR #154 rather than locally.
+
+**What was broken.** `resolves false when nothing is listening` and `defaults to port 5432 when the
+URL specifies none` were two different assertions on the same underlying claim, but the second one
+proved it the wrong way: it called `isPostgresReachable('postgresql://127.0.0.1/whatever', 200)` and
+asserted the result was `false`, i.e. it inferred "the default is 5432" from "nothing answered on
+5432" — true on the machine this was written and tested on (this worktree's Postgres is on 5433),
+false on the GitHub Actions runner, which runs its own Postgres service **on 5432**. CI failed with
+exactly that one new test, the probe correctly returning `true`. Same defect class as item 1: an
+assertion that encodes an assumption about the environment (there, Postgres collation; here, which
+ports are free on the host) instead of the behavior. The comment on the old test said the assumption
+out loud ("127.0.0.1:5432 is not expected to be listening in this test environment") and shipped it
+anyway — and the local gate passed *specifically because* it ran somewhere that assumption held, so
+it could never have caught this either.
+
+**What changed.** `api/src/db/postgresReachable.ts`: extracted the URL parsing that
+`isPostgresReachable` was doing inline into a new pure function, `resolveHostPort(databaseUrl):
+{ host, port } | null` — same default-port rule (`Number(url.port) || 5432`), no socket involved.
+`isPostgresReachable` now calls it internally; behavior unchanged. `postgresReachable.test.ts`: the
+old socket-probe "defaults to 5432" case is replaced with a new `describe('resolveHostPort', ...)`
+block (3 cases) that asserts directly on the parsed `{ host, port }` value — deterministic on every
+machine, since it never opens a socket. Also added an explicit-port case (`:5433` round-trips) for
+symmetry.
+
+**Audited the rest of the file for the same shape, as asked, and found no other case with it.**
+Every other socket-touching assertion in the file falls into one of two safe patterns, neither of
+which depends on what else happens to be running on the host:
+- **Self-consistent (listener == target):** `isPostgresReachable`'s "resolves true" case and the
+  CLI's "exits 0 when reachable" case both spin up their own ephemeral `net.createServer()` via
+  `listen(0, ...)` (OS-assigned free port) and connect to that exact port — there is nothing external
+  for the environment to disagree with.
+- **Guaranteed-closed, not "probably closed":** the "resolves false"/"exits non-zero" cases both use
+  `127.0.0.1:1` — port 1 is a reserved well-known port nothing binds to as a listener; this is the
+  pre-existing pattern `ensureDatabase.test.ts` already uses for its identical "unreachable" case,
+  not something new introduced here.
+- The unparseable-URL cases (both the async `isPostgresReachable` one and the new synchronous
+  `resolveHostPort` one) never touch a socket at all.
+
+**Regression test — proved this fixes the actual reported failure, not just a plausible one.**
+Started a real `postgres:16` container bound to host port 5432
+(`docker run -d --rm -p 5432:5432 -e POSTGRES_PASSWORD=x postgres:16`) to reproduce the CI condition
+exactly. Confirmed the *old* logic fails under it: ran the pre-fix `isPostgresReachable` implementation
+standalone against `postgresql://127.0.0.1/whatever` — returned `true` (correctly reachable), which is
+exactly what made the old assertion (`.resolves.toBe(false)`) fail. Then ran the *new* full test file
+in the same environment (something genuinely listening on 5432): 8/8 green, because no case in it
+probes 5432 anymore. Also re-proved the ordinary red-then-green for the new `resolveHostPort`
+assertions: temporarily changed its default from 5432 to 5433, reran — 1 failure, exactly
+`defaults to port 5432 when the URL specifies none` (`AssertionError: expected { port: 5433 } to
+deeply equal { port: 5432 }`), the other 7 cases unaffected; reverted (`git diff --stat` back to
+empty), reran: 8/8 green. Stopped and removed the test Postgres container afterward.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run postgresReachable.test.ts`
+
+**How to roll it back.** Revert this commit. `resolveHostPort` collapses back into
+`isPostgresReachable`'s inline parsing (behavior identical either way), and the "defaults to 5432"
+case goes back to being asserted via a socket probe against 127.0.0.1:5432 — which will fail again on
+any host, CI or otherwise, that happens to have something listening there.
+
+---
+
 ## W4-SWEEPA (item 3 of 3) — one-command start now bootstraps Postgres via Docker
 
 Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other two items; each is its own

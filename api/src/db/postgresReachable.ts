@@ -29,19 +29,45 @@
  */
 import net from 'net';
 
+export interface HostPort {
+  host: string;
+  port: number;
+}
+
+/**
+ * Pure URL -> { host, port } resolution, with the same default-port rule
+ * `isPostgresReachable` uses. Split out so the "a URL with no port defaults
+ * to 5432" behavior can be asserted directly, on the parsed value, rather
+ * than inferred from whether a socket connect happened to succeed —
+ * `postgresReachable.test.ts` used to assert this by probing
+ * `127.0.0.1:5432` and expecting a refusal, which is only true when nothing
+ * else on the host happens to be listening there. It wasn't, in CI: GitHub
+ * Actions runs a Postgres service on 5432, the probe correctly returned
+ * `true`, and the test failed — not because the code was wrong, but because
+ * the assertion depended on the environment instead of the behavior. Returns
+ * `null` (rather than throwing) for an unparseable URL, same as the old
+ * inline try/catch.
+ */
+export function resolveHostPort(databaseUrl: string): HostPort | null {
+  try {
+    const url = new URL(databaseUrl);
+    return { host: url.hostname || 'localhost', port: Number(url.port) || 5432 };
+  } catch {
+    return null;
+  }
+}
+
 export function isPostgresReachable(databaseUrl: string, timeoutMs = 2000): Promise<boolean> {
   return new Promise(resolve => {
-    let url: URL;
-    try {
-      url = new URL(databaseUrl);
-    } catch {
+    const resolved = resolveHostPort(databaseUrl);
+    if (!resolved) {
       resolve(false);
       return;
     }
 
     const socket = net.createConnection({
-      host: url.hostname || 'localhost',
-      port: Number(url.port) || 5432,
+      host: resolved.host,
+      port: resolved.port,
       timeout: timeoutMs,
     });
 
