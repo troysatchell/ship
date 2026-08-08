@@ -21,6 +21,108 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## W4-SWEEPA (item 3 of 3) — one-command start now bootstraps Postgres via Docker
+
+Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other two items; each is its own
+commit.
+
+**What was broken.** `./start.sh` and `scripts/dev.sh` failed with an actionable but manual-step
+error (`api/src/db/ensureDatabase.ts:53-61`'s `unreachableMessage()`, thrown around line 93) when no
+Postgres server was reachable at the resolved `DATABASE_URL`, and stopped there. W4-R42 requires one
+command to start the full composed system "without any manual setup steps beyond installing
+dependencies" — telling the user to go start Postgres themselves is exactly the manual step the
+requirement rules out. Everything downstream of a reachable server already worked and was
+idempotent.
+
+**What changed.**
+- `scripts/dev.sh` (not `start.sh`, not `ensureDatabase.ts` — see placement reasoning below), a new
+  step 2.5 between resolving `DATABASE_URL` and creating `api/.env.local`: if neither an explicit
+  `DATABASE_URL` env var nor an existing `api/.env.local` pinned a database (the only case this
+  script picked its own default), and that default is unreachable, and `docker-compose.local.yml`
+  exists and `docker` is on PATH, it runs `docker compose -p ship -f docker-compose.local.yml up -d
+  postgres`, polls for the container to report healthy (up to 60s), and repoints
+  `RESOLVED_DATABASE_URL` at the container's real address
+  (`ship:ship_dev_password@localhost:5433`, from the compose file's own `postgres` service
+  definition) before continuing into the existing `ensureDatabase.ts` / `migrate.ts` /
+  `verifyMigrations.ts` / `seed.ts` flow, unmodified.
+- The compose project name is pinned to `-p ship` rather than left to Docker Compose's
+  directory-derived default. **Observed, not assumed:** running `docker compose -f
+  docker-compose.local.yml config --format json` from the main checkout reports project name `ship`;
+  the identical command from this worktree reports `ship-wt-w4_sweepa`. Left unpinned, each worktree
+  that hit this path would start its own separate container all trying to bind the compose file's
+  fixed `5433:5432` host port mapping — colliding with each other and with the single shared
+  container (`ship-postgres-1`) this repo's own factory tooling already runs everything against
+  (`.claude/skills/ship-factory/references/lessons.md` #8). Pinning the name means every worktree
+  reuses or creates that same one container instead.
+- `api/src/db/postgresReachable.ts` (new) — extracted the reachability check into a small, typed,
+  testable module (`isPostgresReachable(url, timeoutMs?)`, a plain TCP connect, exit-code CLI
+  wrapper) rather than an inline `node -e` snippet in the shell script, matching the existing
+  `ensureDatabase.ts`/`migrate.ts` pattern of "typed logic in `api/src/db/`, `scripts/dev.sh` is thin
+  glue that shells out to it via `npx tsx`."
+- `api/src/db/ensureDatabase.ts` was **not** modified. Its `unreachableMessage()` stays the fallback,
+  used verbatim when Docker itself is unavailable, `docker-compose.local.yml` is missing, or the
+  compose command itself fails (e.g. a port collision with a Postgres running outside this
+  project's compose namespace) — this change only ever adds a path to success in front of it; it
+  never replaces the message or hangs in its place.
+
+**Placement decision.** `scripts/dev.sh`, not `start.sh` or a new node entry point. Both `./start.sh`
+(via `exec "$ROOT_DIR/scripts/dev.sh"`) and `pnpm dev` (`package.json`'s `"dev": "./scripts/dev.sh"`)
+funnel through this one file — it is the single place `DATABASE_URL` is resolved and the only place
+that already calls `ensureDatabase.ts`. `pnpm dev:api`/`pnpm dev:web` bypass it entirely (they run
+`tsx watch`/`vite` directly with no database bootstrap of their own, and are out of scope for "one
+command starts the full composed system"). Putting the bootstrap here means both `./start.sh` and
+`pnpm dev` get it automatically, from one implementation, exactly the reasoning `start.sh`'s own
+header already gives for not duplicating `scripts/dev.sh`'s logic.
+
+**Regression test.** `api/src/db/__tests__/postgresReachable.test.ts` (new, 4 cases) — real TCP
+sockets, no mocks: an ephemeral `net.createServer()` for the reachable case, a guaranteed-refused
+loopback port for the unreachable case (same pattern `ensureDatabase.test.ts` already uses), an
+unparseable-URL case, and the default-port branch. Confirmed red first: temporarily inverted the
+`connect`/`error` branches in `postgresReachable.ts` (`finish(false)` on connect, `finish(true)` on
+error) and re-ran — 3 of 4 cases failed with `AssertionError: expected true to be false`, the correct
+failure shape, not an import error. Reverted (`git diff --stat` back to empty) and re-ran: 4/4 green.
+The bash orchestration itself (the Docker bring-up, health-poll, and URL-repoint in `scripts/dev.sh`)
+has no vitest-reachable seam — per `.claude/skills/ship-qa/SKILL.md`'s tiers table, the gate executes
+only the two vitest projects, and bash isn't one of them — so it was proved instead by genuine,
+non-simulated end-to-end runs (below), not by a test the gate would run. Stopped short of fabricating
+a shell/bats test the gate never executes, which would satisfy the letter of "add a regression test"
+while proving nothing (the exact failure mode `.claude/skills/ship-qa/SKILL.md`'s e2e-spec-vs-vitest
+gap describes, one layer up).
+
+**End-to-end proof (observed, run twice — once before and once after extracting
+`postgresReachable.ts`, both identical in outcome).** Stopped the real `ship-postgres-1` container,
+removed this worktree's `api/.env.local`, unset `DATABASE_URL`, and ran the real `./scripts/dev.sh`
+(via `timeout`, not simulated) from a shell with neither set. Observed, in order: "Postgres
+unreachable at the default local address", the container starting and reporting healthy, a new
+`api/.env.local` created pointing at `ship:ship_dev_password@localhost:5433/ship_ship_wt_w4_sweepa`,
+`ensureDatabase.ts` creating that database, all 46 migrations applying, `verifyMigrations.ts`
+confirming 46/46, `seed.ts` completing, and the API/web/agent dev servers all starting successfully
+("API server running on http://localhost:3001", Vite ready, agent listening). Cleaned up afterward:
+killed the spawned dev-server processes, restored this worktree's real `api/.env.local`
+(`ship_wt_w4_sweepa`, unaffected throughout — the throwaway run used a different database name),
+dropped the throwaway `ship_ship_wt_w4_sweepa` database, removed the `.ports` file the run wrote, and
+confirmed `ship-postgres-1` and the factory's own `ship_wt_w4_sweepa` database were intact.
+
+**Known limitation, stated rather than hidden:** if two worktrees hit the unreachable-Postgres path
+at truly the same moment on a machine with no container yet running, `docker compose -p ship ... up
+-d postgres` from the second one racing the first could still surface a transient error from Docker
+itself (compose is not designed to be invoked concurrently against the same project by two
+processes) — the code treats any such failure the same as "compose failed for any other reason"
+(falls through to `ensureDatabase.ts`'s error, doesn't hang), but a "wait and retry" for this specific
+race was judged out of scope for this ticket rather than added speculatively.
+
+**How to run it.** Stop any running Postgres (`docker stop ship-postgres-1` if using the project's
+own container), remove `api/.env.local` if present, `unset DATABASE_URL`, then run `./start.sh` (or
+`pnpm dev`) — it should bring Postgres up itself rather than exiting with the unreachable-database
+message. Test: `source .factory-env && cd api && npx vitest run postgresReachable.test.ts`.
+
+**How to roll it back.** Revert this commit (three files: `scripts/dev.sh`,
+`api/src/db/postgresReachable.ts`, `api/src/db/__tests__/postgresReachable.test.ts`).
+`start.sh`/`scripts/dev.sh` return to exiting with `ensureDatabase.ts`'s unreachable-database message
+when Postgres is not already running, requiring the user to start it manually first.
+
+---
+
 ## W4-SWEEPA (item 2 of 3) — type-safety improvement verdict corrected to "not met"
 
 Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other two items; each is its own
