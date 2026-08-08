@@ -1,0 +1,37 @@
+# requirements-audit per-repo config
+# Written by `/requirements-audit init` 2026-08-08 — hand-edit freely; the skill re-reads it every run.
+# The skill hardcodes nothing repo-specific: if a fact about this repo matters, it lives here.
+
+docs:
+  # `id` prefixes requirement IDs (W4 -> W4-R12). `sha256` is filled at extraction;
+  # a later mismatch stops the sweep and offers re-extraction.
+  - id: W4
+    path: "project guideliens/GFA_Week_4_ShipShape_Updated.pdf"
+    sha256: null
+
+tickets:
+  provider: linear
+  team: TRO
+  project: null
+
+code_roots:
+  - api/src
+  - web/src
+  - shared/src
+exclude:
+  - node_modules
+  - dist
+  - audit
+
+# Gaps handoff target after each sweep (invoked via the Skill tool).
+pm_skill: ship-pm
+
+# Commands available for behavioral verification; keys are labels the inventory's
+# "Acceptance evidence" field references; values run from the repo root.
+verify:
+  test: "pnpm test"                       # root test = @ship/api vitest only
+  webtest: "pnpm --filter @ship/web test"
+  e2e: "pnpm test:e2e"                    # Playwright, per-worker Postgres testcontainers — heavy, needs Docker
+  typecheck: "pnpm type-check"
+verify_urls:
+  app: "http://localhost:5173"            # WEB port per repo-root .ports; API port floats — always read .ports, never assume 3000
