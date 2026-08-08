@@ -1,9 +1,24 @@
 # PM scope gate — W4 requirements sweep
 
 **Input:** `gaps.md` (2026-08-08, commit 279fb8e6) — 10 PARTIAL, 0 MISSING of 54 active requirements.
-**Constraint on this pass:** scope judgement only. No Linear writes (connector unauthorized this
-run anyway), no application source modified. Ticket coverage is unknown, so nothing below is
-claimed to be unticketed — only ungated.
+**Constraint on this pass:** scope judgement only. No Linear writes, no application source
+modified.
+
+**Ticket coverage (added after this triage was written).** The Linear connector was unauthorized
+when these dispositions were made, so nothing below was claimed to be unticketed. It has since
+been authorized and the mapping run against the 123 issues in project *ShipShape Audit
+Remediation*. It does not change a single disposition, but it sharpens two of them:
+
+- **W4-R38 (dependency pinning) has no ticket at all.** Of the ten gaps below it is the only one
+  where nothing in the project covers the work — `[RULE-4]`/TRO-244 covers `pnpm audit` scanning,
+  not pinning. It was already "ships now"; it is now also the only gap nobody has written down.
+- **W4-R10, W4-R35 and W4-R33 each have tickets that name the gap outright** — TRO-304 records the
+  API-3 target as still unmet, TRO-305 records the error-handling fixes as having zero screenshots.
+  These are self-documenting gap tickets: the project already knows, which is a point in its
+  favour and removes any excuse about discovery.
+
+Nine in-scope tickets map to no requirement (`REPORT.md` → Orphan tickets). None needs action here:
+they are security and infrastructure work the W4 brief never asked for.
 
 The ordering principle is grading impact divided by cost, not severity alone. Several of these are
 cheap enough that deferring them costs more in explanation than in engineering.
