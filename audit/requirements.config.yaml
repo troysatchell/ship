@@ -17,17 +17,41 @@ tickets:
 # Roots searched during the trace phase. Application source alone is not enough for
 # this document set: the W4 brief's acceptance evidence lives largely in audit
 # artifacts, CI config, IaC, and repo-root docs, so those are evidence roots too.
+#
+# There is deliberately no `.` entry. `.` made every other root redundant and — since
+# `exclude` only removes build output and the skill's own directory — admitted the
+# whole repo (research/, .superpowers/, "project guideliens/"). The comment that used
+# to sit on it claimed "repo-root files only", which nothing enforced. Root-level
+# files are therefore listed one by one below.
 code_roots:
-  - api/src
-  - web/src
-  - shared/src
+  # Workspace packages, whole — not just src/, because package.json and
+  # vitest.config.ts are themselves cited evidence (W4-R20, W4-R38). Build output
+  # inside them is removed by `exclude`.
+  - api
+  - web
+  - shared
+  - agent                 # 4th workspace member per pnpm-workspace.yaml
   - audit                 # AUDIT_REPORT.md + per-category baseline/compare artifacts
   - terraform             # Category 8 (Terraform) evidence
   - .github               # CI workflow evidence
   - scripts               # one-command start, deploy scripts
   - docs                  # dev docs, improvement + submission docs
   - e2e                   # Playwright specs cited as regression-test evidence
-  - .                     # repo-root files only (CHANGES.md, README.md, start.sh, package.json)
+  - memory-bank           # sprint working memory: live-deploy + CI state (W4-R30, W4-R32).
+                          # Volatile — rewritten each session, so line citations into it
+                          # age fast; prefer a committed artifact where one exists.
+  # Repo-root files the W4 requirements actually cite. Enumerated, not globbed.
+  - CHANGES.md
+  - README.md
+  - start.sh
+  - package.json
+  - pnpm-lock.yaml
+  - pnpm-workspace.yaml
+  - docker-compose.local.yml
+#
+# Not a code root, but always citable: the requirement source documents named under
+# `docs:` above. They are cited by page (the evidence entry's `line` carries the page
+# number), never searched for implementing code.
 exclude:
   - node_modules
   - dist

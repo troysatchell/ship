@@ -17,14 +17,21 @@ cheap enough that deferring them costs more in explanation than in engineering.
 The engineering gap and the documentation gap are different problems and should not be bundled.
 
 **(a) Correct the claim — applier tier, minutes, mandatory.**
-`docs/IMPROVEMENTS.md:24` records this category's verdict as met. Re-running the audit's own
+`docs/IMPROVEMENTS.md:24-28` records this category's verdict as met. Re-running the audit's own
 instrument at HEAD gives 1987 tracked violations against a 1535 baseline — up 29%, where the
 target is down 25%. A grader who re-runs `count.sh` (the command the repo's own `baseline.md:14-18`
 tells them to run) gets 1987 and finds a document claiming success. That converts an unmet target
 into an accuracy problem, which is the more expensive failure: it puts every other "met" claim in
-that document under suspicion. This is precisely the unmarked-inference pattern `CLAUDE.md`
-already warns about, and it is cheap to fix — restate the verdict as not met, keep the real
-per-ticket wins, and show the tracked total honestly.
+that document under suspicion.
+
+Worth being precise about what the defect is, because the document is more honest than the
+headline suggests. It is *not* an unmarked inference: line 28 marks it explicitly — "met, by the
+sum of controlled per-ticket diffs — not by a live recount, which the tracked metric cannot
+support today" — and the table directly beneath prints 1535 → 1778, "Up 243", in the open. The
+reasoning is disclosed. What fails is narrower and harder to argue away: the requirement's literal
+threshold is defined on the tracked total, and the tracked total has never been below baseline.
+Cheap to fix — restate the verdict as not met against that threshold, keep the real per-ticket
+wins, and show the tracked total honestly.
 
 **(b) Close the gap — real ticket, not this pass.**
 Worth stating plainly because it changes what the fix should be: the *meaningful* sub-metric moved

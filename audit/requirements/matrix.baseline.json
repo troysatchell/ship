@@ -1,9 +1,20 @@
 {
   "mode": "baseline",
-  "commit": "279fb8e6ffd73c0f5dedc3996a64653a4bb707fd",
+  "commit": "83786819ea1ccc3cb261fcd8f4a387e9ce9498ec",
   "dirty": true,
-  "date": "2026-08-08T18:09:20Z",
-  "config_hash": "8fb16daddd96352075fab842f2cdbf132ce0edba48b0e7db9cb27a1e536f078b",
+  "dirty_paths": [
+    "audit/requirements.config.yaml",
+    "audit/requirements/REPORT.md",
+    "audit/requirements/gaps.md",
+    "audit/requirements/interpretations.md",
+    "audit/requirements/matrix.baseline.json",
+    "audit/requirements/pm-triage.md",
+    "memory-bank/activeContext.md",
+    "memory-bank/progress.md",
+    "project guideliens/Gatsby_Analysis_Troy_Satchell_ES.docx"
+  ],
+  "date": "2026-08-08T18:41:45Z",
+  "config_hash": "ff5e1072e1d4009b242d04800963d5008242d52789a118bb63e7522cf0fa8bc2",
   "ticket_mapping": {
     "status": "BLOCKED",
     "provider": "linear",
@@ -15,7 +26,9 @@
     {
       "id": "W4-R1",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/ORIENTATION.md",
@@ -68,9 +81,9 @@
           "note": "section 8. Architecture Assessment"
         },
         {
-          "file": "audit/requirements/source-W4.md",
-          "line": 332,
-          "note": "appendix's 8 sections are titled identically (1 Repository Overview .. 8 Architecture Assessment); confirms ORIENTATION.md's section set matches the appendix, not cited as audit evidence per requirements.config.yaml exclusion"
+          "file": "project guideliens/GFA_Week_4_ShipShape_Updated.pdf",
+          "line": 12,
+          "note": "PDF page 12 (for PDF sources the `line` field carries the page number): 'Appendix: Codebase Orientation Checklist' opens here and lists the eight sections 1 Repository Overview / 2 Data Model / 3 Request Flow / 4 Real-time Collaboration / 5 TypeScript Patterns / 6 Testing Infrastructure (p.12) and 7 Build and Deploy / 8 Architecture Assessment (p.13) \u2014 the same section set audit/ORIENTATION.md covers"
         },
         {
           "file": "README.md",
@@ -81,12 +94,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "Lives at audit/ORIENTATION.md rather than repo root or docs/ (the acceptance-evidence text's example location), but content matches the appendix's 8 sections exactly and the file is a committed, README-linked deliverable, so this reads as satisfying the requirement's Meaning-in-code criterion ('exist as a saved notes document in the repo')."
     },
     {
       "id": "W4-R2",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "README.md",
@@ -102,12 +118,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R3",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -153,12 +172,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "AUDIT_REPORT.md contains a baseline for all 7 code/runtime categories the quote names plus an 8th (Terraform) \u2014 a superset, consistent with inventory.md's own note on the document's 7-vs-8 discrepancy."
     },
     {
       "id": "W4-R4",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -204,12 +226,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R5",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -255,12 +280,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "grep for TODO/TBD/FIXME/blank-N/A placeholders across the whole report returned one legitimate 'n/a' (bundle category's Concurrency environment stamp, explained as not applicable to a static build analysis) and no unfilled deliverable-table cells."
     },
     {
       "id": "W4-R6",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -306,12 +334,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R7",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -352,12 +383,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R8",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -373,12 +407,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "Independently reproduced via git, not just trusting the report's self-claim. The 5 commits dated 2026-07-28 that constitute the audit-baseline phase are c73e621 (chore: add ShipShape audit baseline...), 13b11b5 (docs: add codebase orientation write-up...), 56ae2aa (docs: correct legacy-column claim in CLAUDE.md; surface audit deliverables in README), b516ab7 (docs(audit): commit raw evidence...), and 149873a (audit: configure coverage tooling...). `git show --stat` on each shows every changed path under audit/, memory-bank/, .claude/, .gitignore, or README.md \u2014 none under api/, web/, shared/, or terraform/. The improvement phase begins immediately after, on 2026-07-29 (ea2dcd3 onward), and those commits (e.g. d6089be, 200241a, 9aa2d1c, 9f3885c, 4ff19da) DO touch api/ and web/ source \u2014 but that is the intended next phase (fixing findings), not the audit phase, so it is not a violation of this rule. One unrelated older commit, 1136dc9 ('fix: Resolve 6 critical production bugs found during audit #165', dated 2026-02-07), predates the ShipShape baseline by about 5 months and refers to a different, earlier audit outside this W4 sprint's scope \u2014 excluded from this judgment on that basis. History here is clean and separable, not intertwined."
     },
     {
       "id": "W4-R9",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -424,12 +461,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "All 7 named metrics present and filled; baseline.json values match the markdown table exactly."
     },
     {
       "id": "W4-R10",
       "verdict": "PARTIAL",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/type-safety/baseline.json",
@@ -458,8 +498,8 @@
         },
         {
           "file": "CHANGES.md",
-          "line": 9765,
-          "note": "TS-4 ticket's own admission: 'a live current-total-vs-1535 snapshot cannot cleanly demonstrate the category's cumulative progress' because unrelated development moves the denominator"
+          "line": 9785,
+          "note": "TS-4 ticket's own admission, verbatim: \"This means a live \\\"current total vs. 1535\\\" snapshot cannot cleanly demonstrate the category's cumulative progress - unrelated development moves it in both directions\" (sentence runs 9785-9786)"
         },
         {
           "file": "CHANGES.md",
@@ -470,12 +510,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
-      "notes": "DEVIATING from the dispatch instruction to default this to IMPLEMENTED-UNVERIFIED, because the numeric-threshold question is independently checkable without any forbidden command: I re-ran the audit's own read-only count.sh (bash ~/.claude/skills/type-safety-audit/scripts/count.sh api web shared) at current HEAD (279fb8e6, 2026-08-08, branch main) and got api 27 any / 1212 as / 42 non-null / 5 ts-ignore, web 23/659/5/3, shared 0/11/0/0 -> tracked total = 1987. That is HIGHER than both the 1535 baseline and the repo's own docs/IMPROVEMENTS.md figure of 1778 (measured 2026-07-31) -- the trend across the whole remediation window is upward, not a 25% reduction. No compare artifact exists at all under audit/type-safety/ (only baseline.json/baseline.md). Individual tickets (TS-1..TS-10, ~10 tickets) do real, well-evidenced, narrowly-scoped type-safety fixes with genuine before/after diffs (e.g. api explicit_any 78->36, req.userId!/req.workspaceId! 236->0) -- this is not fabricated work -- but the category's own literal acceptance test ('post-improvement violation count <=75% of baseline') has not been true at any point measured, including today. This is exactly the unmarked-inference pattern .claude/CLAUDE.md warns about: the project's own doc asserts 'Verdict: met' while its own adjacent table shows the tracked number went up, not down. Controller re-measured this at HEAD rather than trusting the repo's claim, because docs/IMPROVEMENTS.md records the type-safety target as met. It is not met \u2014 the tracked total moved the wrong way. Re-ran the audit's own instrument (`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web api shared`, the exact command baseline.md:14-18 records) and summed by baseline.md:77's own formula (any + as + ! + ts-ignore, as-any not double-counted): any 50, as 1882, non-null 47, ts-ignore 8 = 1987 tracked violations, against a recorded baseline of 1535 (audit/type-safety/baseline.json metrics.violationsTotal). That is +452 (+29%), where the requirement asks for -25% (about -384). The honest nuance, which the headline number hides: explicit `any` actually halved (102 -> 50), a real improvement in the most meaningful sub-metric; the rise is driven almost entirely by `as` assertions (1385 -> 1882), a metric baseline.md:62 itself documents as over-counting by 15-20% because it catches import/export aliases, comments, and `as const`. So the direction of the tracked total is not in doubt, but the tracked total is a noisy proxy. Separately, the other half of this requirement's acceptance evidence: `pnpm type-check` is green (exit 0, all 4 packages), `pnpm test` exits 1 with 2 failures (see W4-R35)."
+      "suggested_scope": "Two separable changes, and only the first is small. (a) Restate the verdict at docs/IMPROVEMENTS.md:24-28 as not met against the tracked total, keeping the real per-ticket wins and printing 1987 vs 1535 plainly \u2014 minutes of documentation work, and it stops a grader re-running count.sh from finding a success claim that the instrument contradicts. (b) Closing the gap itself is not small: it needs the `as` assertion growth (1385 -> 1882) genuinely reduced, or the baseline re-measured with the corrected pattern audit/type-safety/baseline.md:62 already documents \u2014 applied to the baseline as well as to HEAD, with both numbers published.",
+      "notes": "docs/IMPROVEMENTS.md:27-28 records this category as \"Verdict: met, by the sum of controlled per-ticket diffs \u2014 not by a live recount, which the tracked metric cannot support today\", and the table directly beneath it prints the tracked total as 1535 -> 1778, \"Up 243\", openly. So the inference behind \"met\" is marked, not hidden; what fails is narrower and harder to argue away \u2014 the requirement's literal threshold (\"post-improvement violation count <= 75% of baseline\") is defined on the tracked total, and the tracked total has not been below 1535 at any point measured. The alternative accounting the document uses to reach \"met\" sums controlled per-ticket diffs: TS-1 (156) + TS-3 (19) + TS-4 (236 raw) = 411 >= 384 (IMPROVEMENTS.md:57). The underlying work is real and well-evidenced rather than fabricated \u2014 TS-1..TS-10 make narrowly scoped fixes with genuine before/after diffs (api explicit_any 78 -> 36; req.userId! / req.workspaceId! 236 -> 0). Two further records from the repo's own history point the same way: CHANGES.md:9785-9786 is the TS-4 ticket's admission that \"a live \\\"current total vs. 1535\\\" snapshot cannot cleanly demonstrate the category's cumulative progress - unrelated development moves it in both directions\", and CHANGES.md:9780 records that ticket's own live re-run at commit 42e60d9 already finding a tracked total of 1747 \u2014 above baseline \u2014 before its fix was applied. No compare artifact exists under audit/type-safety/ at all; only baseline.json and baseline.md. Re-measured at HEAD rather than accepted from the repo's own record. `bash ~/.claude/skills/type-safety-audit/scripts/count.sh <web> <api> <shared>` \u2014 the exact instrument audit/type-safety/baseline.md:14-18 prescribes \u2014 returned web 23 any / 659 as / 5 non-null / 3 ts-ignore, api 27 / 1212 / 42 / 5, shared 0 / 11 / 0 / 0. Summed by baseline.md:77's own formula (any + as + ! + ts-ignore, as-any not double-counted): any 50, as 1882, non-null 47, ts-ignore 8 = 1987 tracked violations, against the 1535 baseline recorded in audit/type-safety/baseline.json (metrics.violationsTotal). That is +452 (+29%) where the requirement asks for -25% (about -384 sites), so the literal threshold is not met at HEAD on 2026-08-08. The nuance the headline number hides: explicit `any` halved (102 -> 50), a real gain in the most meaningful sub-metric, and the rise is driven almost entirely by `as` assertions (1385 -> 1882) \u2014 a pattern baseline.md:62 itself documents as over-counting by 15-20% because it catches import/export aliases, comments and `as const`. The direction of the tracked total is not in doubt, but the tracked total is a noisy proxy. The other half of this requirement's acceptance evidence: `pnpm type-check` is green (exit 0, all 4 packages); `pnpm test` exits 1 with 2 failures (see W4-R35)."
     },
     {
       "id": "W4-R11",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -511,12 +554,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R12",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/IMPROVEMENTS.md",
@@ -552,12 +598,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "No compare artifact exists physically under audit/bundle/ (only baseline.json/baseline.md/stats.json + the measure.mjs script itself -- no after-*.json/md was saved there). The before/after proof instead lives in docs/IMPROVEMENTS.md Section 2 and the CHANGES.md TRO-197+198+199+200+202 entry, both evidence-root files, with real numbers, stated methodology/conditions, and a reproduction command. The number decisively clears the 20% code-splitting threshold (up to 80.5%), so despite the artifact-location gap this is not treated as PARTIAL."
     },
     {
       "id": "W4-R13",
       "verdict": "VERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/seed-augment.ts",
@@ -616,12 +665,15 @@
       },
       "interpretation": null,
       "assumption": null,
-      "notes": "Static reading only, per instructions. api/src/db/seed.ts ALONE already clears two of the four floors (issues: 104 >= 100; sprints: 35 >= 10) but falls short on the other two (documents: ~257 vs 500 floor; users: 11 vs 20 floor, per the augmenting script's own documented baseline). audit/seed-augment.ts is written specifically to top up documents and users to exactly 500 and 20 respectively (hits the floor at the boundary, not with margin) and does not touch issues/sprints further beyond seed.ts's own output (though its issuesToAdd only adds more issues on top). Combined (seed.ts + seed-augment.ts, run in that order per the augment script's own usage comment), the code as written is intended to meet all four floors. Running `pnpm db:seed` alone, without also running audit/seed-augment.ts, would NOT meet the documents or users floors. All four seed floors met live on 2026-08-08. `pnpm db:seed` alone is NOT sufficient \u2014 it is idempotent and left the database at 264 documents / 11 users, below the 500 and 20 floors. The floors are reached only after audit/seed-augment.ts, which the brief's \"or write your own seed script\" clause permits."
+      "suggested_scope": null,
+      "notes": "Static reading only, per instructions. api/src/db/seed.ts ALONE already clears two of the four floors (issues: 104 >= 100; sprints: 35 >= 10) but falls short on the other two (documents: ~257 vs 500 floor; users: 11 vs 20 floor, per the augmenting script's own documented baseline). audit/seed-augment.ts is written specifically to top up documents and users to exactly 500 and 20 respectively (hits the floor at the boundary, not with margin) and does not touch issues/sprints further beyond seed.ts's own output (though its issuesToAdd only adds more issues on top). Combined (seed.ts + seed-augment.ts, run in that order per the augment script's own usage comment), the code as written is intended to meet all four floors. Running `pnpm db:seed` alone, without also running audit/seed-augment.ts, would NOT meet the documents or users floors. All four seed floors met live on 2026-08-08. `pnpm db:seed` alone is NOT sufficient \u2014 it is idempotent and left the database at 264 documents / 11 users, below the 500 and 20 floors. The floors are reached only after audit/seed-augment.ts, which the brief's \"or write your own seed script\" clause permits. Side effect, disclosed rather than omitted: this command wrote to the developer's working database `ship_standup` rather than to a throwaway one, and that database was then truncated by the api unit suite (api/src/test/setup.ts:93-98 TRUNCATEs 15 tables, including documents, users and workspaces, in every api test file's beforeAll) before being re-seeded back to the 500 / 255 / 20 / 35 state above. The excerpt is a true record of what was observed; the exact database state behind it no longer exists. See REPORT.md, \"Coverage and limitations\"."
     },
     {
       "id": "W4-R14",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -647,12 +699,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "The report names 6 endpoints (GET /api/documents?type=wiki, /api/issues, /api/documents, /api/documents/:id, /api/team/assignments, /api/weeks), not exactly the 5 the quote specifies. Tracing methodology (headless-Chromium request capture, frequency x user-visibility ranking) is fully documented and exceeds the bar; the discrepancy is only in the final count (6 vs 5), which is over-inclusive rather than a methodology gap."
     },
     {
       "id": "W4-R15",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -673,12 +728,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R16",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md",
@@ -709,12 +767,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "Two endpoints (GET /api/issues and GET /api/documents), each independently and robustly clearing the >=20% P95 bar at every tested concurrency, with root-cause notes and before/after benchmarks under documented identical conditions (same seed, same hardware, same autocannon methodology). The phase2-jul30 document alone is honest that it doesn't cleanly reach 2/2 at the strict headline concurrency; the later documents-pagination-jul31 fix closes that gap. Combined, the target is met."
     },
     {
       "id": "W4-R17",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -745,12 +806,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R18",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/db-query/compare-phase2-jul30/after-phase2-jul30.md",
@@ -781,12 +845,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R19",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -827,17 +894,20 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "All required elements present: pass/fail counts, total runtime, 3-run flakiness identification, and a critical-user-flow-to-test-coverage mapping explicitly covering document CRUD, real-time sync, auth, and sprint management (the 4 flow categories the quote names)."
     },
     {
       "id": "W4-R20",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "api/vitest.config.ts",
-          "line": 24,
-          "note": "coverage block: provider 'v8', reporter includes 'json-summary', threshold statements:43"
+          "line": 27,
+          "note": "coverage block, lines 27-38: provider 'v8', reporter includes 'json-summary' (line 29), thresholds.statements 43 (line 37)"
         },
         {
           "file": "web/vitest.config.ts",
@@ -868,12 +938,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R21",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/IMPROVEMENTS.md",
@@ -904,12 +977,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
-      "notes": "Controller ran `pnpm test`: exit 1, 830/832 passing, 2 failures in migrationRunner.test.ts (see W4-R35). `pnpm test:e2e` was not run this sweep."
+      "suggested_scope": null,
+      "notes": "`pnpm test` at HEAD: exit 1, 830/832 passing, 2 failures in migrationRunner.test.ts (see W4-R35). `pnpm test:e2e` was not run this sweep, so the e2e specs cited as evidence for this requirement are traced but not executed."
     },
     {
       "id": "W4-R22",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -950,12 +1026,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R23",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/IMPROVEMENTS.md",
@@ -991,12 +1070,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R24",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/AUDIT_REPORT.md",
@@ -1032,12 +1114,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R25",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/a11y/compare-phase2-jul30/after-phase2-jul30.md",
@@ -1068,12 +1153,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "A new, previously-unreachable Serious color-contrast finding (TRO-298, DashboardSidebar) appeared on /weeks and /search as a side effect of the A11Y-5 routing fix, but neither page is among the 3 key pages the target is scored against, so it does not change the verdict per the artifact's own reasoning."
     },
     {
       "id": "W4-R26",
       "verdict": "ASSUMED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "terraform/render/plan/plan-annotated.md",
@@ -1109,12 +1197,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": "Traced R26's 'Navigate to terraform/ and run terraform init followed by terraform plan. Save the full plan output' as referring to the local-provider and Render-provider exercises the same quote just described (terraform/render/, audit/terraform/drift-demo/), not the pre-existing AWS terraform/*.tf root -- because a genuine full plan output was only ever captured for the former; the AWS root's live plan is structurally blocked (S3 backend + AWS credentials, neither available in this exercise) and only the blocking error was saved, never a full plan.",
+      "suggested_scope": null,
       "notes": "If R26 instead means the literal pre-existing AWS root at terraform/*.tf, the verdict drops to PARTIAL: init and validate succeeded and were saved, but no full plan output was ever obtained there -- only the backend-initialization error (audit/terraform/raw/root-plan-attempt.txt). See needs_ruling."
     },
     {
       "id": "W4-R27",
       "verdict": "PARTIAL",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "terraform/render/plan/plan-annotated.md",
@@ -1140,12 +1231,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": "Scope annotation to the resources that appear in each saved plan artifact rather than to every Terraform block in the repo \u2014 the requirement's unit is the plan output, which is a far smaller set. terraform/render/plan/plan-annotated.md already does this correctly at 2/2; extend the same per-resource sentence plus blast-radius note to tro-316-agent-plan-annotated.md and post-import-plan-no-changes.txt. Pure documentation, no deployment risk.",
       "notes": "PARTIAL under either reading of R26. Best single case is terraform/render/plan/plan-annotated.md at 2/2 resources annotated with individual blast-radius rows. Across all saved plan artifacts in the repo, coverage is uneven: 2/2 (plan-annotated.md), ~1/3 fully individuated (tro-316-agent-plan-annotated.md), 0/2 (post-import-plan-no-changes.txt). The larger AWS inventory (74 root + 66 module resource blocks) is accounted for by category/tier, not literally 'every resource' with its own sentence -- roughly 13-15 of 74 root blocks get an individual annotation, the rest share grouped sentences. No single document annotates every resource of a full plan output for the whole infrastructure."
     },
     {
       "id": "W4-R28",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/terraform/baseline.md",
@@ -1171,12 +1265,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "Full before/after pair exists and is exactly the 'local provider file edit, re-plan diff captured' case the requirement's Meaning-in-code names. The genuinely equivalent Render-side drift demo (dashboard change -> plan diff) is explicitly NOT reproducible per audit/terraform/baseline.md:82, but the requirement only needs one demonstrated case and this one is complete."
     },
     {
       "id": "W4-R29",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/terraform/drift-demo/main.tf",
@@ -1202,12 +1299,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R30",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "terraform/render/versions.tf",
@@ -1243,12 +1343,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R31",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/terraform/drift-demo/main.tf",
@@ -1274,12 +1377,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "Both configs use exact pins (=, not ~>), which is the stricter reading of 'pinned' -- clean pass, no caveats."
     },
     {
       "id": "W4-R32",
       "verdict": "PARTIAL",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md",
@@ -1315,17 +1421,20 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": "No small change closes this, and part of it is blocked upstream: the Render provider bug forces manual REST calls for real field updates, and auto_deploy is broken (TRO-361, open), so a clean `terraform apply` cannot currently be demonstrated for the primary service. The smallest honest move is to keep documenting the constraint rather than claim the property; revisit when TRO-361 resolves or the provider bug is fixed upstream.",
       "notes": "Partial capability, not full satisfaction. What exists: one resource (the agent service) was proven genuinely reproducible via terraform apply alone on a clean state (destroy + recreate + live health check). What is missing: (1) the primary fork service was only ever imported, never created by a clean apply -- the clean-apply path is documented but unexercised for it; (2) the repo's own README explicitly disclaims replacing scripts/deploy.sh/deploy-frontend.sh, so AWS manual deploy scripts remain unreplaced; (3) the agent service has a documented provider bug that forces manual Render REST API calls for real field updates on the free tier; (4) the live/graded deployment's actual recent deploys were manual Render API calls because auto_deploy is broken (TRO-361, open). 'Deployable from a clean machine using only terraform apply, replacing manual deploy steps' is not true in current practice."
     },
     {
       "id": "W4-R33",
       "verdict": "PARTIAL",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
-          "file": "audit/requirements/inventory.md",
-          "line": 6,
-          "note": "the document's own recorded 7-vs-8 category-count inconsistency"
+          "file": "project guideliens/GFA_Week_4_ShipShape_Updated.pdf",
+          "line": 7,
+          "note": "PDF page 7 (for PDF sources the `line` field carries the page number): \"Category 8: Terraform Plan Review\" \u2014 while p.2 (\"baseline measurements for all 7 categories\"), p.10 and p.11 each say \"all 7 categories\". The 7-vs-8 count inconsistency is in the source document itself, not in the audit's reading of it"
         },
         {
           "file": "docs/IMPROVEMENTS.md",
@@ -1336,12 +1445,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
-      "notes": "Roll-up over the 7 non-Terraform categories this cluster traced: Bundle (R12), API perf (R16), DB query (R18), Tests (R21), Error handling (R23), and A11y (R25) each clear their stated target per the evidence above -- 6/7 met. Type safety (R10) does NOT clear its target: the project's own docs/IMPROVEMENTS.md claims 'met' via a sum-of-controlled-diffs accounting, but the literal tracked violation total the target is defined on has only ever been measured going UP (1535 baseline -> 1778 on 2026-07-31 -> 1987 on a live recheck today, 2026-08-08 at HEAD 279fb8e6), never down. So 'improve all 8 categories' is not satisfied as written, regardless of which of the two 7-vs-8 readings is used (type-safety is common to both readings, so the ambiguity noted in the inventory header does not change this verdict -- no ASSUMED/needs_ruling emitted for that reason). Terraform (category 8) is outside this cluster's assigned IDs and was only spot-checked, not fully traced; its 'met' claim in docs/IMPROVEMENTS.md should be confirmed by whichever cluster owns W4-R26..R32."
+      "suggested_scope": "No separate work. This is a roll-up that is PARTIAL solely because W4-R10 is; it resolves the moment W4-R10 resolves. Opening work against it would duplicate that ticket.",
+      "notes": "Roll-up over the 7 non-Terraform categories. Bundle (W4-R12), API perf (W4-R16), DB query (W4-R18), Tests (W4-R21), Error handling (W4-R23) and A11y (W4-R25) each clear their stated target on the evidence traced for those rows \u2014 6/7 met. Type safety (W4-R10) does not: docs/IMPROVEMENTS.md claims \"met\" via a sum-of-controlled-diffs accounting, but the literal tracked violation total the target is defined on has only ever been measured going UP (1535 baseline -> 1778 on 2026-07-31 -> 1987 on a live recount on 2026-08-08 at HEAD 279fb8e6), never down. So \"improve all 8 categories\" is not satisfied as written under either reading of the source document's 7-vs-8 category count \u2014 type safety is common to both readings, so that ambiguity does not change this verdict and no ASSUMED/needs-ruling item is raised for it. Terraform (category 8) is traced by W4-R26..R32; its \"met\" claim at docs/IMPROVEMENTS.md:618 was spot-checked here rather than independently deep-traced."
     },
     {
       "id": "W4-R34",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/IMPROVEMENTS.md",
@@ -1372,12 +1484,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
-      "notes": "Before/after proof exists for every one of the 7 categories this cluster examined, each with stated identical-conditions methodology and a reproduction command. This is a distinct question from whether the improvement itself clears its numeric bar (see R10/R33 notes) -- R34 only asks that paired measurements exist, which they do."
+      "suggested_scope": null,
+      "notes": "Before/after proof exists for every one of the 7 categories examined in this sweep, each with stated identical-conditions methodology and a reproduction command. That is a distinct question from whether the improvement clears its numeric bar (see the W4-R10 and W4-R33 notes) \u2014 W4-R34 asks only that paired measurements exist, which they do."
     },
     {
       "id": "W4-R35",
       "verdict": "PARTIAL",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md",
@@ -1388,22 +1503,20 @@
           "file": "audit/db-query/compare-phase2-jul30/after-phase2-jul30.md",
           "line": 22,
           "note": "same suite run after DB fixes: 'all passed, 0 failures' (2026-07-30, commit 34a0aeb)"
-        },
-        {
-          "file": "memory-bank/activeContext.md",
-          "line": 25,
-          "note": "GitLab pipeline 18266 at 32e54ba (2026-08-07): 'success -- verify, inventory, e2e-agent all green'"
         }
       ],
       "verification": null,
       "interpretation": null,
       "assumption": null,
-      "notes": "Multiple point-in-time snapshots in CHANGES.md and the compare artifacts show the suite green immediately after various improvement commits, and memory-bank/activeContext.md records a recent green CI pipeline (2026-08-07). None of this is a live run at the current HEAD (279fb8e6, 2026-08-08) performed by me -- that is explicitly the controller's job per the dispatch instructions. Suite is NOT green: `pnpm test` exits 1 with 830/832 tests passing and 2 failures, both in api/src/db/__tests__/migrationRunner.test.ts (lines 167 and 184). Cause confirmed by direct observation, not inferred: the test compares a Postgres-ordered result (`SELECT version FROM schema_migrations ORDER BY version`, line 115) against a JavaScript `[...expected].sort()`, and the two orderings genuinely disagree on the pair 020_document_associations / 020b_sprint_assignee_ids \u2014 Postgres returns 020b first, JS `.sort()` returns 020_ first. Environment caveat that must not be dropped: an earlier run of the same command failed all 77 files with 'DATABASE_URL must be set' because the shell lacked the env var; the 830/832 figure is from the re-run with api/.env.local loaded. `pnpm type-check` is separately green (exit 0, all 4 packages). E2E (`pnpm test:e2e`) was NOT run this sweep \u2014 600+ Playwright tests requiring the /e2e-test-runner protocol \u2014 so no claim is made about it either way."
+      "suggested_scope": "Compare like with like in api/src/db/__tests__/migrationRunner.test.ts: sort both sides in JavaScript, or make the query's ordering collation-explicit, so 020_document_associations and 020b_sprint_assignee_ids order identically on both sides. One test file, two assertions (lines 167 and 184). No migration and no application change \u2014 nothing is wrong with the migrations themselves.",
+      "notes": "Multiple point-in-time snapshots in CHANGES.md and the compare artifacts show the suite green immediately after various improvement commits. One further data point could not be given a reproducible citation and is therefore recorded here rather than in evidence: memory-bank/activeContext.md records GitLab pipeline 18266 at 32e54ba (2026-08-07) as \"success \u2014 verify, inventory, e2e-agent all green\", but that file is the sprint's working memory, rewritten every session and uncommitted-modified in the working tree at sweep time, so no stable file:line resolves to it. None of the snapshot evidence is a live run at the swept HEAD; the live result is below. Suite is NOT green at HEAD: `pnpm test` exits 1 with 830/832 tests passing and 2 failures, both in api/src/db/__tests__/migrationRunner.test.ts (lines 167 and 184). The cause was confirmed by direct observation rather than inferred: the test compares a Postgres-ordered result (`SELECT version FROM schema_migrations ORDER BY version`, line 115) against a JavaScript `[...expected].sort()`, and the two orderings genuinely disagree on the pair 020_document_associations / 020b_sprint_assignee_ids \u2014 Postgres returns 020b first, JavaScript `.sort()` returns 020_ first. An environment caveat that must not be dropped: an earlier run of the same command failed all 77 files with \"DATABASE_URL must be set\" because the shell lacked the env var; the 830/832 figure comes from the re-run with api/.env.local loaded. `pnpm type-check` is separately green (exit 0, all 4 packages). E2E (`pnpm test:e2e`) was NOT run this sweep \u2014 600+ Playwright tests requiring the /e2e-test-runner protocol \u2014 so no claim is made about it either way."
     },
     {
       "id": "W4-R36",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "CHANGES.md",
@@ -1444,12 +1557,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "No single consolidated finding-ID -> test file:line index/table exists; the mapping is real but decentralized across ~135 dated CHANGES.md ticket entries, each of which names its own regression test file(s) under a 'Regression tests' heading and tags the finding ID (TS-*/BUN-*/API-*/DB-*/TEST-*/ERR-*/A11Y-*) in its own section header. Spot-checked for external-service mocking (AWS SSM in api/src/config/ssm.test.ts) and found stable vi.mock fakes; grepped api/src, web/src and e2e for non-localhost https:// literals in test files and found none used as live calls (the one hit, e2e/session-timeout.spec.ts:489, is a phishing-redirect security test string, not an actual outbound call)."
     },
     {
       "id": "W4-R37",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": ".github/workflows/ci.yml",
@@ -1495,12 +1611,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
-      "notes": "All seven named checks (build, lint, type-check, test, coverage, pnpm audit, security scan) are present with real file:line evidence and none is missing, so this is not PARTIAL on the seven-checks question. Two caveats: (1) branch protection / merge-gate enforcement is a GitHub repo setting, not repo content \u2014 it cannot be confirmed or denied from static inspection of this checkout, per the orientation for this cluster; not assuming either way. (2) SECURITY.md:81-88 describes two required status checks by name (\"secrets-scan\", \"attestation-check\") that do not exist under those names anywhere in .github/workflows/ci.yml or .gitlab-ci.yml as currently written \u2014 this reads as stale/aspirational documentation rather than evidence of a missing check from R37's specific seven, since CodeQL already covers 'security scan' and secrets-scanning instead runs pre-commit via `comply opensource` (.husky/pre-commit) rather than in CI; flagged for awareness, not treated as a defect in this requirement."
+      "suggested_scope": null,
+      "notes": "All seven named checks (build, lint, type-check, test, coverage, pnpm audit, security scan) are present with real file:line evidence and none is missing, so this is not PARTIAL on the seven-checks question. Two caveats. (1) Branch protection and merge-gate enforcement are GitHub repository settings, not repository content, and cannot be confirmed or denied by static inspection of this checkout, which is the only method this sweep used; neither direction is assumed. (2) SECURITY.md:81-88 names two required status checks (\"secrets-scan\", \"attestation-check\") that do not exist under those names anywhere in .github/workflows/ci.yml or .gitlab-ci.yml as currently written. That reads as stale or aspirational documentation rather than one of W4-R37's seven checks going missing: CodeQL already covers \"security scan\", and secrets scanning runs pre-commit via `comply opensource` (.husky/pre-commit) rather than in CI. Flagged for awareness, not scored as a defect in this requirement."
     },
     {
       "id": "W4-R38",
       "verdict": "PARTIAL",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "pnpm-lock.yaml",
@@ -1551,12 +1670,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": "Pin each dependency to the version pnpm has already resolved in pnpm-lock.yaml, so the installed tree is unchanged by construction and the diff cannot alter behaviour; then verify with a clean install plus type-check and the suite. 144 of 153 workspace entries change. Hand-picking versions, or pinning to latest, converts a bookkeeping change into a dependency upgrade \u2014 if a clean install afterwards shows any resolution change, stop and reassess.",
       "notes": "Missing part: 'must be pinned' is not met for package.json versions. Counted every dependencies/devDependencies entry across the 5 actual workspace package.json files (root, api, web, shared, agent \u2014 pnpm-workspace.yaml:1-5 confirms only api/web/shared/agent are workspace members): 153 total entries, 142 use caret (^) range specifiers, only 9 are exact pins, 2 are internal `workspace:*` references. That is roughly 93% unpinned \u2014 widespread, not a nitpick, matching the requirement's own framing. Only the lockfile-committed half of R38 is satisfied. (research/configs/package.json is a leftover starter-template file, not a pnpm-workspace member per pnpm-workspace.yaml, and was excluded from this count as out of scope for 'the workspace'; it is itself 2/2 ranges if included.)"
     },
     {
       "id": "W4-R39",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": ".github/workflows/ci.yml",
@@ -1587,12 +1709,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "This satisfies the 'as part of the CI run' distinction explicitly \u2014 it is a real workflow step generating the file at run time and uploading it as an artifact, not a static file CI merely checks in. One caveat worth naming: the 'Direct dependencies' section uses `pnpm list --depth 0 --recursive` (ci.yml:365), which enumerates each workspace package's own direct dependencies only, not the full transitive closure \u2014 so 'a list of all packages' is only completely true for the separate 'Licenses' section (`pnpm licenses list`, which is not depth-restricted and normally covers the full resolved dependency tree). Not downgrading to PARTIAL since the acceptance evidence only requires a produced step + artifact, both of which exist, but flagging the depth-0 scoping gap for the record."
     },
     {
       "id": "W4-R40",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "CHANGES.md",
@@ -1618,12 +1743,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "CHANGES.md carries a full, named justification section for the one real deviation from a required check's naive form (pnpm audit gated on a baseline diff rather than raw exit code, because of 135 pre-existing findings), plus ci.yml itself documents smaller deviations (postgres version pin divergence from prod, continue-on-error test quarantine) inline at the point of the deviation. This is process-type and satisfied by documentation existing with real content, not by running anything."
     },
     {
       "id": "W4-R41",
       "verdict": "PARTIAL",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/deployment-artifact-lifecycle.md",
@@ -1674,12 +1802,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": "Not a small change. The CI half is already correct \u2014 one image per commit, built only after `verify` passes and tagged immutably by full git SHA (ci.yml:430-513) \u2014 and docs/deployment-artifact-lifecycle.md documents the lifecycle. What is missing is promotion: both deploy paths rebuild from source instead of running the CI artifact, and wiring that up is a deploy-pipeline change rather than a patch. Do not close this by softening the lifecycle doc, which is accurate about its own gap at lines 15-25 and 219-225.",
       "notes": "Missing part: the CI half of build/release/run separation is real and well-built (build-image job builds the Docker image exactly once per commit, only after `verify` passes, tags it immutably by full git SHA, and only pushes on an actual main push \u2014 ci.yml:430-513) and the lifecycle is genuinely documented in dev docs (docs/deployment-artifact-lifecycle.md, satisfying that clause on its own). But 'the artifact produced in CI must be the artifact that runs in production' is not true today on either deploy path this repo has: (1) the Render/GHCR path this doc was written for has its promotion step explicitly held/not executed \u2014 Render still does its own from-source build, independent of CI's image; (2) the AWS EB/CloudFront scripts (scripts/deploy.sh, scripts/deploy-frontend.sh) \u2014 the ones documented as the operative deploy commands elsewhere in this repo's conventions \u2014 explicitly rebuild from source on every invocation and never touch the CI-built, SHA-tagged artifact at all, which is a direct contradiction of 'never rebuilt per environment.' The lifecycle doc itself is honest about this gap (it says so plainly at lines 15-25 and 219-225), which is why this is scored PARTIAL rather than MISSING: the pieces exist and are documented, they are just not wired together into an actual promoted-artifact production deploy on either path."
     },
     {
       "id": "W4-R42",
       "verdict": "PARTIAL",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "start.sh",
@@ -1720,12 +1851,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": "About 20 lines in start.sh: when Postgres is unreachable and docker-compose.local.yml is present, offer to start that container and wait for it to become healthy, keeping the current message from api/src/db/ensureDatabase.ts:53-61 as the fallback. No application code, and the README already documents the limitation honestly, so only the script changes.",
       "notes": "PARTIAL. Everything downstream of an already-reachable Postgres server is genuinely one-command and self-healing: dependency install, shared build, database creation, migration, migration verification, seeding, dynamic port selection, and starting both servers \u2014 all idempotent, all in scripts/dev.sh, all documented in README's 'Cold start' section. But the script only creates/migrates/seeds a database ON a Postgres SERVER that is already running; it does not start the Postgres server process itself. From a truly clean checkout on a machine with no Postgres running (native service stopped, no Docker container up), `./start.sh` fails immediately with the exact message observed today ('ERROR: Cannot reach PostgreSQL at localhost:5433. Start it, then re-run ./start.sh' \u2014 produced by api/src/db/ensureDatabase.ts:53-61's unreachableMessage(), thrown at line 93) and requires a manual step (start a local Postgres service, or `docker compose -f docker-compose.local.yml up -d postgres`) before re-running \u2014 which is manual setup beyond 'installing dependencies' under a strict reading of the quote. The README is honest about this (README.md:55-70) rather than hiding it, so the documentation half of R42 is fully met; the 'single command boots app + database... without manual setup beyond installing dependencies' half is not, for the database-server-startup step specifically. No mock external services were found to be needed for local dev (the only external call, AWS SSM, is gated behind NODE_ENV=production in api/src/index.ts:15-17), so that clause of the quote is not in play."
     },
     {
       "id": "W4-R43",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "CHANGES.md",
@@ -1771,12 +1905,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": null
     },
     {
       "id": "W4-R44",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "CHANGES.md",
@@ -1797,12 +1934,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "A full-text sweep of all 140 top-level entries (script-based: split CHANGES.md on top-level '## ' headers, search each section for any of 'roll back' / 'rollback' / 'revert') found zero entries with no rollback-related text at all \u2014 every entry names how to undo its change (most under an explicit 'Rollback.' / 'How to roll it back.' / 'Roll back.' heading; a handful phrase it as 'git revert <commit>' inline). This directly contradicts the a-priori concern in the brief that most entries would lack rollback notes \u2014 they do not. 'How to run it' / regression-test sections are present in the large majority as well (a smaller number of entries, mostly triage/investigation tickets like TRO-309's CodeQL triage or TRO-179's session-write fix, fold the run/test instructions into differently-labeled prose sections such as 'Reproducibility' rather than a literal 'How to run it' heading, but the substance \u2014 an exact command plus expected result \u2014 is present on spot-check)."
     },
     {
       "id": "W4-R45",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/IMPROVEMENTS.md",
@@ -1828,12 +1968,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "Reasoning is present at scale (docs/IMPROVEMENTS.md's 8 'Root causes' sections plus CHANGES.md's 140 per-ticket entries, each generally structured as problem/what-changed/why), but the literal word 'tradeoff' appears only 5 times across the whole CHANGES.md and 0 times in docs/IMPROVEMENTS.md \u2014 the tradeoff content is present as substance (e.g. 'why this doesn't duplicate existing protection', 'why the sum-of-diffs method, not a live recount') rather than under a consistently labeled 'Tradeoffs' heading. Traced as met on substance, not on a literal-heading search."
     },
     {
       "id": "W4-R46",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "CHANGES.md",
@@ -1849,38 +1992,44 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "Judgement is a negative claim across ~1527 commits in git history; verified by sampling git log messages (all ticket-tagged, all describing a substantive behavior change: e.g. 'fix(db): make pool connectionTimeoutMillis and pool size env-tunable (TRO-248)', 'feat(api): circuit breaker for the Redis rate-limit store (RULE-7 / TRO-311)') and grepping CHANGES.md for 'cosmetic'/'rename'/'reformat' framing \u2014 every hit found describes something explicitly NOT counted as cosmetic or explains why a cosmetic-looking change was in fact required. No instance found of a rename/reformat/comment-only change being claimed as satisfying a category's improvement target. Not an exhaustive read of all 140 CHANGES.md entries or all 1527 commits."
     },
     {
       "id": "W4-R47",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
-          "file": ".git/refs (branch listing)",
-          "line": 1,
-          "note": "git branch -a shows dedicated per-finding branches, e.g. fix/rule-6-one-command-start, fix/rule-7-retries-timeouts, fix/rule-7-redis-circuit-breaker, plus one per audit finding across every category (fix/ts-*, fix/bun-*, fix/db-*, fix/err-*, fix/a11y-*, fix/test-*, fix/tf-*, fix/api-*)"
+          "file": "CHANGES.md",
+          "line": 10763,
+          "note": "\"**Rollback.** Revert the merge of `fix/rule-6-one-command-start`\" \u2014 the RULE-6 one-command-start improvement landed on its own named branch and was merged as a unit"
         },
         {
           "file": "CHANGES.md",
-          "line": 10769,
-          "note": "commit 1474cb1 'Merge #58: feat: one-command local start from a clean checkout (RULE-6)' \u2014 R42's work landed as its own PR/branch with a descriptive, ticket-tagged message"
+          "line": 14335,
+          "note": "\"**Rollback.** Revert the merge of `fix/ssm-fallback` (`5b72a79`)\" \u2014 a second improvement on its own named branch, recorded with its merge SHA"
         },
         {
           "file": "CHANGES.md",
-          "line": 10769,
-          "note": "commit a1ad4f3 'Merge #56: fix(config): bounded SSM retry, env-tunable pool timing (RULE-7)' \u2014 R43's work landed as its own PR/branch, separately from RULE-6"
+          "line": 14357,
+          "note": "\"**Rollback.** Revert the merge of `feat/render-deploy` (`bace770`)\" \u2014 a third improvement on its own named branch, recorded with its merge SHA"
         }
       ],
       "verification": null,
       "interpretation": null,
       "assumption": null,
-      "notes": "git log --all --oneline --grep for RULE-6/RULE-7/TRO-247/TRO-248/TRO-311 confirms each landed via its own conventional-commit-style, ticket-tagged commits (b35b817 'feat: add start.sh...(TRO-247)', 1ed03a4 'feat(api): add ensureDatabase and verifyMigrations helpers (TRO-247)', 505e542 'feat(db): make pool connectionTimeoutMillis and pool size env-tunable (TRO-248)', 1e4b68f 'fix(config): bounded timeout + jittered retry for SSM secret loading (TRO-248)', af056fa/dbae2af 'feat: circuit breaker for the Redis rate-limit store (RULE-7 / TRO-311)'), merged through numbered PRs (#58, #56), on their own named branches, distinct from unrelated tickets' branches."
+      "suggested_scope": null,
+      "notes": "The primary evidence for this requirement is git history, which has no file:line form, so it is recorded here rather than in `evidence`; the three CHANGES.md citations above are the in-file corroboration, each rollback instruction naming the branch its improvement landed on. Verified with `git show -s` and `git branch -a` at the sweep commit. Merge commits: 1474cb1 \"Merge #58: feat: one-command local start from a clean checkout (RULE-6)\" and a1ad4f3 \"Merge #56: fix(config): bounded SSM retry, env-tunable pool timing (RULE-7)\" \u2014 RULE-6 and RULE-7 landed separately, through separately numbered PRs. Their constituent commits are conventional-commit style and ticket-tagged: b35b817 \"feat: add start.sh, one-command local start from a clean checkout (TRO-247)\", 1ed03a4 \"feat(api): add ensureDatabase and verifyMigrations helpers (TRO-247)\", 505e542 \"feat(db): make pool connectionTimeoutMillis and pool size env-tunable (TRO-248)\", 1e4b68f \"fix(config): bounded timeout + jittered retry for SSM secret loading (TRO-248)\", af056fa \"feat(api): circuit breaker for the Redis rate-limit store (RULE-7 / TRO-311)\" and dbae2af \"feat: circuit breaker for the Redis rate-limit store (RULE-7 / TRO-311)\". `git branch -a --list 'fix/*'` returns 83 refs, one per audit finding across every category (fix/ts-*, fix/bun-*, fix/db-*, fix/err-*, fix/a11y-*, fix/test-*, fix/tf-*, fix/api-*), including fix/rule-6-one-command-start, fix/rule-7-retries-timeouts and fix/rule-7-redis-circuit-breaker. Not behaviourally verified: no command re-derives \"descriptive\" as a property of a message."
     },
     {
       "id": "W4-R48",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/submission/DISCOVERY.md",
@@ -1906,12 +2055,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "All three entries carry all four required elements (thing, file path + line range, what/why-it-matters, future application). Entry 1's location citation is more distributed than entries 2 and 3 \u2014 it spans three separate citations (a single-line package.json reference, a range into the audit's own baseline.md rather than source, and a file named with a line count instead of a range) rather than one clean file:line-range into source code, since the discovery itself (an untyped driver generic) manifests across 707 call sites rather than one location. Entry 2's line numbers (134-175, 184) match the source exactly as of the commit that authored the doc (136c041) but have since drifted ~48 lines in HEAD because later unrelated commits added code above that block in api/src/app.ts \u2014 normal citation drift in an actively-developed file, not a fabricated citation. Entry 3's citations remain exact against current HEAD. The document's own header says '> **DRAFT** \u2014 for Troy to personalize before submission,' flagging voice/framing as unfinished, but every technical claim is sourced and verified against the repo, so this does not affect the requirement's acceptance bar (a discovery doc with 3 complete entries)."
     },
     {
       "id": "W4-R49",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "README.md",
@@ -1927,12 +2079,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "Branch labeling verified via read-only git commands, not file-citable (refs live under the excluded .git/ path per the evidence-root list) so described here instead of in `evidence`: `git remote -v` shows origin = https://labs.gauntletai.com/troysatchell/Ship.git (fetch+push, the GitLab-style host) plus a second push-only remote to https://github.com/troysatchell/ship.git (dual-push, consistent with prior session notes that GitHub main is PR-only); `upstream` = https://labs.gauntletai.com/byronmackay/ship, confirming this is a fork. `git branch -a` lists 150+ local and origin-tracked branches with clearly descriptive, per-finding names (e.g. fix/ts-1-web-tsconfig, fix/db-1-migration-runner, fix/a11y-1-sidebar-aria, fix/api-1-rate-limiter, fix/bun-1-code-splitting, fix/err-1-err-2-collab-socket, fix/tf-1-deletion-protection, fix/test-1-web-suite-green, measure/api-perf-compare-jul30, measure/db-query-compare-jul30, measure/a11y-compare-jul30, docs/improvement-documentation) -- naming convention is consistent and readable as 'clearly labeled'. Cannot determine from a local clone how GitLab's own web UI presents/labels these branches (badges, descriptions, default-branch marking, etc.) -- that is UI state this trace has no access to."
     },
     {
       "id": "W4-R50",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/IMPROVEMENTS.md",
@@ -1942,7 +2097,7 @@
         {
           "file": "docs/IMPROVEMENTS.md",
           "line": 117,
-          "note": "Category 2 Bundle Size: Before->After at 125, Root causes w/ fixes (e.g. '23 converted to React.lazy' line 150) at 147, Reproducibility at 167"
+          "note": "Category 2 Bundle Size: Before->After at 125, Root causes w/ fixes (e.g. '23 converted to React.lazy' line 149) at 147, Reproducibility at 167"
         },
         {
           "file": "docs/IMPROVEMENTS.md",
@@ -1978,12 +2133,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "All 8 of 8 categories in docs/IMPROVEMENTS.md contain a before measurement, a root-cause explanation, a fix description, an after measurement, and a reproducibility section -- clearing the 7-category floor either way the 7-vs-8 ambiguity noted at the top of inventory.md is read. One structural caveat: 'fix description' is not a separately headed element -- it is embedded inline within each category's 'Root causes' prose (e.g. Category 1: 'Fixed with an AuthenticatedRequest type...'; Category 7: 'Fixed by removing the tree/treeitem roles...') rather than its own subsection. Content-wise all 5 elements are present in every category; this is a minor presentation note, not a gap."
     },
     {
       "id": "W4-R51",
       "verdict": "PARTIAL",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/submission/DEMO-SCRIPT.md",
@@ -1999,12 +2157,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
-      "notes": "Missing: the actual recorded video (or a link/embed to one). grep across README.md and docs/submission/*.md for youtube/vimeo/loom/.mp4/video-link turned up nothing outside an unrelated Notion-feature-research doc. The repo is plainly the intended home for this deliverable (dedicated docs/submission/ dir, script references a companion Claude-artifact visual aid), so MISSING/PARTIAL is more accurate than N/A per the cluster orientation; scored PARTIAL because the script/material groundwork is fully done and sourced from real measurements, only the recording+link is absent."
+      "suggested_scope": "Record the demo from the finished docs/submission/DEMO-SCRIPT.md and commit the link into the submission docs. No engineering work \u2014 the script, measurements and visual aid are already done; this is an owner action.",
+      "notes": "Missing: the actual recorded video, or a link or embed to one. A grep across README.md and docs/submission/*.md for youtube / vimeo / loom / .mp4 / video-link turned up nothing outside an unrelated Notion-feature-research doc. The repo is plainly the intended home for this deliverable \u2014 a dedicated docs/submission/ directory, and a script referencing a companion Claude-artifact visual aid \u2014 so PARTIAL is more accurate than N/A. PARTIAL rather than MISSING because the script and material groundwork is complete and sourced from real measurements; only the recording and its link are absent."
     },
     {
       "id": "W4-R52",
       "verdict": "IMPLEMENTED-UNVERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/submission/AI-COST-ANALYSIS.md",
@@ -2025,12 +2186,15 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": null,
       "notes": "Both required elements (dev spend + reflection on AI tool effectiveness) are fully present and substantive. Minor caveat: line 131 carries an author note '[FILL: this is Troy's call ... edit freely]' signaling the section is still open to editing, but it is followed immediately by real, specific content (not a blank TODO), so this does not block the verdict."
     },
     {
       "id": "W4-R53",
       "verdict": "VERIFIED",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/submission/FLEETGRAPH-DEMO-SCRIPT.md",
@@ -2059,12 +2223,15 @@
       },
       "interpretation": null,
       "assumption": null,
-      "notes": "Performed the read-only GET this task authorized. https://ship-rr6m.onrender.com/health -> HTTP 200, body {\"status\":\"ok\"} (observed 2026-08-08 ~18:03 UTC) -- this is the URL the repo's own submission materials and terraform config identify as the fork's actual public deployment, and it is live and responding right now. Separately also checked the AWS URL named in this project's CLAUDE.md (https://ship.awsdev.treasury.gov/health): it returned HTTP 308, redirecting to https://273366117842-prod.awsc.caelum.treasury.gov/health (an internal-looking Treasury/CloudFront subdomain); that redirect target was not followed further (out of scope of a single read-only GET, and it is not the URL this fork's own docs point to as the graded deployment). Net: this fork's documented deployment target is demonstrably publicly accessible right now; the CLAUDE.md-referenced AWS URL appears to point at a different (possibly upstream/original) environment and its ultimate liveness was not established from here -- flagged as a discrepancy, not treated as evidence the app is down. Live and publicly reachable, confirmed by the controller on 2026-08-08. URL discrepancy worth resolving, not a downtime finding: this fork's own submission docs and Render terraform point at ship-rr6m.onrender.com (200 OK), while CLAUDE.md names https://ship.awsdev.treasury.gov, which returns 308 redirecting to an internal *.caelum.treasury.gov host that was not followed. Two deployments appear to exist; the brief's 'publicly accessible' bar is met by the Render one."
+      "suggested_scope": null,
+      "notes": "Performed the read-only GET this task authorized. https://ship-rr6m.onrender.com/health -> HTTP 200, body {\"status\":\"ok\"} (observed 2026-08-08 ~18:03 UTC) -- this is the URL the repo's own submission materials and terraform config identify as the fork's actual public deployment, and it is live and responding right now. Separately also checked the AWS URL named in this project's CLAUDE.md (https://ship.awsdev.treasury.gov/health): it returned HTTP 308, redirecting to https://273366117842-prod.awsc.caelum.treasury.gov/health (an internal-looking Treasury/CloudFront subdomain); that redirect target was not followed further (out of scope of a single read-only GET, and it is not the URL this fork's own docs point to as the graded deployment). Net: this fork's documented deployment target is demonstrably publicly accessible right now; the CLAUDE.md-referenced AWS URL appears to point at a different (possibly upstream/original) environment and its ultimate liveness was not established from here -- flagged as a discrepancy, not treated as evidence the app is down. Live and publicly reachable, confirmed on 2026-08-08. A URL discrepancy worth resolving, not a downtime finding: this fork's own submission docs and Render terraform point at ship-rr6m.onrender.com (200 OK), while CLAUDE.md names https://ship.awsdev.treasury.gov, which returns 308 redirecting to an internal *.caelum.treasury.gov host that was not followed. Two deployments appear to exist; the brief's \"publicly accessible\" bar is met by the Render one."
     },
     {
       "id": "W4-R54",
       "verdict": "PARTIAL",
-      "tickets": [],
+      "tickets": [
+        "BLOCKED"
+      ],
       "evidence": [
         {
           "file": "docs/submission/SOCIAL-POST.md",
@@ -2080,6 +2247,7 @@
       "verification": null,
       "interpretation": null,
       "assumption": null,
+      "suggested_scope": "Publish the drafted post in docs/submission/SOCIAL-POST.md \u2014 copy and image assets are complete, including the required @GauntletAI tag \u2014 and record the post URL in the repo. No engineering work; an owner action.",
       "notes": "Missing: a link to (or other confirmation of) the post actually having been published. grep across README.md and docs/submission/*.md for x.com/twitter.com/linkedin.com post URLs returned nothing. The draft content and image assets are fully prepared and ready to post, including the required @GauntletAI tag, so PARTIAL (not N/A) -- the repo is plainly the intended home for this deliverable and the only missing piece is the actual-post link."
     }
   ],
@@ -2090,6 +2258,63 @@
       "question": "Does W4-R26's 'Navigate to terraform/ and run terraform init followed by terraform plan. Save the full plan output' refer to the local-provider/Render-provider exercise directories (terraform/render/, audit/terraform/drift-demo/), where genuine full plan output was captured and saved, or to the pre-existing AWS terraform/*.tf root, where a live plan is structurally blocked (S3 remote backend + AWS credentials, neither available) and only the blocking error was saved (audit/terraform/raw/root-plan-attempt.txt)?",
       "traced_under": "Assumed it refers to the local/Render exercise directories, since that is the only place a full plan output actually exists; if it means the AWS root specifically, W4-R26 drops from ASSUMED(satisfied) to PARTIAL.",
       "cluster": "terraform"
+    }
+  ],
+  "commands_run": [
+    {
+      "command": "pnpm type-check",
+      "result": "exit 0 \u2014 all 4 packages Done (green)",
+      "bears_on": [
+        "W4-R10",
+        "W4-R33"
+      ],
+      "note": null
+    },
+    {
+      "command": "pnpm test",
+      "result": "exit 1 \u2014 830/832 passing; 2 failures, both in api/src/db/__tests__/migrationRunner.test.ts:167,184",
+      "bears_on": [
+        "W4-R10",
+        "W4-R21",
+        "W4-R33",
+        "W4-R35"
+      ],
+      "note": "An earlier run of the same command failed all 77 api files with \"DATABASE_URL must be set\" because the shell lacked the env var \u2014 an environment failure, not a suite failure. The 830/832 figure is the re-run with api/.env.local loaded. This run used the developer's database; see \"Coverage and limitations\"."
+    },
+    {
+      "command": "bash ~/.claude/skills/type-safety-audit/scripts/count.sh <web> <api> <shared>",
+      "result": "web 23/659/5/3, api 27/1212/42/5, shared 0/11/0/0 \u2192 1987 tracked violations vs a 1535 baseline (+452, +29%)",
+      "bears_on": [
+        "W4-R10",
+        "W4-R33"
+      ],
+      "note": "Read-only. Counts are any / as / non-null / ts-ignore, summed by audit/type-safety/baseline.md:77's formula."
+    },
+    {
+      "command": "pnpm db:seed && npx tsx audit/seed-augment.ts   # then a row-count query against ship_standup",
+      "result": "documents 500, issues 255, users 20, sprints 35 \u2014 all four floors met",
+      "bears_on": [
+        "W4-R13"
+      ],
+      "note": "Writes to the database. Ran against the developer's working database rather than a throwaway one; disclosed under \"Coverage and limitations\"."
+    },
+    {
+      "command": "curl -sS -w '%{http_code}' --max-time 25 https://ship-rr6m.onrender.com/health",
+      "result": "HTTP 200 in 0.227139s, body {\"status\":\"ok\"}",
+      "bears_on": [
+        "W4-R53"
+      ],
+      "note": "GET only, per the skill's non-mutating probe rule."
+    },
+    {
+      "command": "pnpm test:e2e",
+      "result": "NOT RUN",
+      "bears_on": [
+        "W4-R21",
+        "W4-R36",
+        "W4-R37"
+      ],
+      "note": "600+ Playwright tests requiring the /e2e-test-runner protocol and Docker. No claim is made about the e2e suite in either direction."
     }
   ],
   "baselineRef": null
