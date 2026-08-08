@@ -164,7 +164,9 @@ if a ruling governs the requirement, apply it silently. Never re-ask.
 ## Extraction procedure
 
 1. Compare the PDF's current sha256 against `docs[].sha256` in config. Match →
-   inventory is current, skip extraction. Mismatch or null → proceed.
+   inventory is current, skip extraction. Null (never extracted) → proceed.
+   Mismatch while an inventory already exists → STOP and ask the user whether
+   to re-extract; on yes, apply the ID rules above (stable IDs, retirement).
 2. Read the PDF page-by-page (Read tool `pages` parameter, <=20 pages per call).
 3. Write entries in document order. Quotes copied exactly, page numbers recorded.
 4. Update `docs[].sha256` in the config (`shasum -a 256 <pdf>`).
