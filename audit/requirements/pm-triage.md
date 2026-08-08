@@ -168,7 +168,7 @@ are among the cheapest points available in the whole brief.
 | W4-R41 | Defer — post-submission | — |
 | W4-R51, W4-R54 | Owner action, no ticket | — |
 
-**Not gated by this pass:** the 41 `IMPLEMENTED-UNVERIFIED` requirements. They have file:line
+**Not gated by this pass:** the 42 `IMPLEMENTED-UNVERIFIED` requirements. They have file:line
 traces and no behavioural verification, which is a statement about this sweep's coverage, not a
 defect list. Re-running with the Linear connector authorized and the e2e suite executed would move
 most of them without any code changing.

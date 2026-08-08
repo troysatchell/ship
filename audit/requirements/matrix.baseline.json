@@ -1,18 +1,15 @@
 {
   "mode": "baseline",
-  "commit": "ff46ae4638535f53b0c37e294f2f64c8fe3cf4a9",
+  "commit": "c357c65c23f806d63a37a28c10f47ae0f60681e5",
   "dirty": true,
   "dirty_paths": [
-    "audit/requirements/REPORT.md",
-    "audit/requirements/gaps.md",
-    "audit/requirements/interpretations.md",
-    "audit/requirements/matrix.baseline.json",
-    "audit/requirements/pipeline/",
+    "audit/requirements/pipeline/cluster-b.json",
+    "audit/requirements/pm-triage.md",
     "memory-bank/activeContext.md",
     "memory-bank/progress.md",
     "project guideliens/Gatsby_Analysis_Troy_Satchell_ES.docx"
   ],
-  "date": "2026-08-08T18:44:32Z",
+  "date": "2026-08-08T18:52:32Z",
   "config_hash": "ff5e1072e1d4009b242d04800963d5008242d52789a118bb63e7522cf0fa8bc2",
   "ticket_mapping": {
     "status": "BLOCKED",
@@ -1438,7 +1435,7 @@
         {
           "file": "docs/IMPROVEMENTS.md",
           "line": 618,
-          "note": "Category 8 (Terraform) 'Verdict: met' per the project's own doc -- not independently deep-traced by this cluster (belongs to a different requirements cluster, W4-R26..R32)"
+          "note": "Category 8 (Terraform) records 'Verdict: met' in the project's own doc; this row does not re-derive that claim, which is traced separately under W4-R26..R32"
         }
       ],
       "verification": null,

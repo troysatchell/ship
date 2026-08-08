@@ -1,6 +1,6 @@
 # Requirements Audit — Ship (GAUNTLET)
 
-**Commit:** ff46ae463853 (dirty tree) · **Date:** 2026-08-08T18:44:32Z · **Docs:** W4 `GFA_Week_4_ShipShape_Updated.pdf` (14 pp.; requirements p.2–11, orientation appendix p.12–13) · **Mode:** baseline
+**Commit:** c357c65c23f8 (dirty tree) · **Date:** 2026-08-08T18:52:32Z · **Docs:** W4 `GFA_Week_4_ShipShape_Updated.pdf` (14 pp.; requirements p.2–11, orientation appendix p.12–13) · **Mode:** baseline
 
 ## Summary
 
@@ -20,7 +20,7 @@ What this sweep did and did not check. Read this before treating any row below a
 - **Ticket mapping is blocked.** The Linear connector is unauthorized, so every row's ticket cell reads `BLOCKED`. That means "not confirmed ticketed" — never "confirmed unticketed" — and orphan tickets could not be detected at all.
 - **This sweep wrote to the developer's database, which a read-only audit should not have done.** W4-R13's `VERIFIED` excerpt came from `pnpm db:seed && npx tsx audit/seed-augment.ts` run against the working database `ship_standup` rather than a throwaway one. `pnpm test` (W4-R10, W4-R35) then ran with that same `DATABASE_URL` exported, and `api/src/test/setup.ts:93-98` `TRUNCATE`s 15 tables — including `documents`, `users` and `workspaces` — in every api test file's `beforeAll`. So the audit reseeded the database and then destroyed it. It was re-seeded afterwards and is back at 500 documents / 255 issues / 20 users / 35 sprints, but the state behind W4-R13's excerpt no longer exists in that exact form; the excerpt is a true record of what was observed, not something re-runnable today.
 - **42 of 54 rows are `IMPLEMENTED-UNVERIFIED`** — statically traced to file:line with no behavioral check run against them. 2 rows are `VERIFIED` on captured command output. 1 row rests on a recorded interpretation ruling rather than on the requirement text alone; none is left un-ruled. Every command that did run this sweep is listed under "Verification performed" at the end of this report.
-- **The swept tree was dirty** — 8 path(s) did not match commit `ff46ae463853`. Of those, the only one this report cites is `memory-bank/activeContext.md` — citations into it are reproducible only against the working tree, not against the recorded commit. The rest are this sweep's own in-flight output and unrelated working files; the full list is `dirty_paths` in `matrix.baseline.json`. Where volatility made a citation unusable (W4-R35, `memory-bank/activeContext.md`) it was dropped and the claim moved into that row's notes with the reason.
+- **The swept tree was dirty** — 5 path(s) did not match commit `c357c65c23f8`. Of those, the only one this report cites is `memory-bank/activeContext.md` — citations into it are reproducible only against the working tree, not against the recorded commit. The rest are this sweep's own in-flight output and unrelated working files; the full list is `dirty_paths` in `matrix.baseline.json`. Where volatility made a citation unusable (W4-R35, `memory-bank/activeContext.md`) it was dropped and the claim moved into that row's notes with the reason.
 
 ## Matrix
 
