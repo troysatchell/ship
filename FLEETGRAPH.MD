@@ -965,9 +965,9 @@ auth).
    failed."
 
 **TRO-322 / FG-12 — both layers demonstrated, not just described, plus the "boots but broken" gap
-closed with real (not yet wired-live) tooling.** Three separate pieces of real, generated evidence
-— none of this is re-derived from the reasoning above; see CHANGES.md's TRO-322 entry for exact
-commands/output.
+closed with real tooling; TRO-367 then wired that tooling to an automatic trigger.** Three separate
+pieces of real, generated evidence — none of this is re-derived from the reasoning above; see
+CHANGES.md's TRO-322 entry for exact commands/output, and its TRO-367 entry for the trigger itself.
 
 1. **Layer 1, proven on both platforms with a throwaway, never-merged branch.** A branch
    (`chore/tro-322-ci-rollback-proof-do-not-merge`) with one deliberate `pnpm type-check` failure
@@ -997,7 +997,8 @@ commands/output.
      this project (owned by whoever registered runner 71), not something `.gitlab-ci.yml` or this
      repo controls. Worth a follow-up ticket: either get the runner's access level changed, or stop
      describing GitLab MR pipelines as a merge gate until it is.
-2. **Layer 2's gap, reproduced live, then closed with real (not yet auto-triggered) tooling.**
+2. **Layer 2's gap, reproduced live, closed with real tooling, and — as of TRO-367 (W5-R36, the only
+   `MISSING` requirement in the Week 5 sweep) — actually WIRED to an automatic trigger.**
    `agent/src/deployReadiness.ts` (`evaluateReadinessSamples`/`pollReadiness`) is the decision
    function: a sustained run of not-ready samples (every sample in the window fails) warrants
    correction; a single failure that recovers — the transient-Ship-blip case this section already
@@ -1008,7 +1009,16 @@ commands/output.
    is warranted (exit 2) without calling Render; `--execute --service-id <id>` (needs
    `RENDER_API_KEY`) additionally looks up the most recent other `live` deploy via `GET .../deploys`
    and re-triggers it via `POST .../deploys` with that deploy's `commitId`, Render's documented
-   mechanism for redeploying a specific prior commit.
+   mechanism for redeploying a specific prior commit. Its own `poll -> evaluate -> decide -> call
+   Render` pipeline is factored out as `runReadinessCheck` specifically so a test can exercise the
+   FULL chain end to end against injected fakes (a fake `/ready` poller and a fake Render `fetch`,
+   never a real network call) — see `check-readiness-and-rollback.test.ts`'s `runReadinessCheck`
+   suite (6 cases: healthy → no action, transient → no action, dry-run → reports without calling
+   Render, missing API key → reports without calling Render, sustained failure with `--execute` →
+   actually calls Render's documented rollback endpoint with the correct previous commit id, plus
+   one case proving the sample/evaluation logging point). Confirmed red first: every new case failed
+   with `TypeError: runReadinessCheck is not a function` against the pre-TRO-367 script, then passed
+   once `runReadinessCheck` was added.
    **Proven by local simulation, real processes, real output** (not mocked): two real
    `agent/src/index.ts` processes were started locally — one with `SHIP_API_BASE_URL` pointed at an
    unreachable port (config complete, Ship unreachable — exactly this section's named gap) and one
@@ -1017,16 +1027,30 @@ commands/output.
    `check-readiness-and-rollback.ts --url .../ready --attempts 3 --interval-ms 1500` against each:
    the broken instance reported `sustained_not_ready: all 3 sample(s) reported not-ready` and
    exited 2; the healthy instance reported `healthy: every sample reported ready` and exited 0.
-   **Not wired to fire automatically against the live `ship`/`ship-agent` services in this change**
-   — doing so needs `RENDER_API_KEY` in a real scheduled trigger and a decision about cadence, which
-   is exactly the kind of outward-facing, credential-bearing infrastructure change this factory
-   reserves for explicit human sign-off (matching every prior live Render action in this document).
-   **Recommendation for that sign-off:** do NOT simply repoint `agent_health_check_path` at
-   `/ready` — this section's own transient-blip caveat means Render's platform check would then
+   **The trigger itself: `.github/workflows/agent-rollback-check.yml`.** Runs on a 15-minute
+   `schedule:` (cron) plus `workflow_dispatch`, structurally asserted by
+   `agentRollbackWorkflow.test.ts` (the `on:` block declares `schedule:`/`cron:`, not only manual
+   dispatch; the readiness step passes `--execute`; `cancel-in-progress: false` so a scheduled tick
+   never interrupts a rollback already in flight). It calls
+   `check-readiness-and-rollback.ts --execute` against the real agent `/ready` URL, gated on two
+   repository secrets — `RENDER_API_KEY` and `RENDER_AGENT_SERVICE_ID` — that this change does NOT
+   and cannot set: provisioning real credentials against a live production service is exactly the
+   outward-facing, credential-bearing infrastructure step this factory's escalation policy reserves
+   for explicit human sign-off, matching every other live Render/Terraform action in this document.
+   Until a human sets both, a "check secrets are configured" step reports a `::warning::` annotation
+   on every scheduled run and every other step (including the readiness check itself) is skipped —
+   neither failing loudly nor silently doing nothing.
+   **What this closes, and what remains open, stated precisely.** Observed: the trigger is wired
+   (the workflow file exists, fires unattended on a schedule, and its full decision-to-action
+   pipeline is proven correct against fakes). Derived, not observed: that it will correctly redeploy
+   the previous commit *against the actually-deployed production service* — no version of this
+   trigger, in this change, has ever made a real call to Render's API, and no live rollback has ever
+   been exercised against `ship-agent`. The remaining step is exactly the credential provisioning
+   above, which is a human action, not a code change; the next scheduled run after both secrets are
+   set is this trigger's first real, unattended exercise, and that run should be watched the first
+   time. Do NOT simply repoint `agent_health_check_path` at `/ready` instead of using this
+   trigger — this section's own transient-blip caveat means Render's platform check would then
    demote a healthy instance during any brief Ship outage, trading one failure mode for a worse one.
-   Instead, schedule `check-readiness-and-rollback.ts --execute` (e.g. a few minutes after each
-   deploy, or on a short recurring interval) as the corrective layer described above, leaving
-   `/health` as Render's own promotion gate unchanged.
 
 **Login and the 403 (TRO-341 / FG-23) — root-caused, not a WAF.** Two prior curl attempts against
 `POST https://ship-rr6m.onrender.com/api/auth/login` returned a platform-looking `403 Forbidden` —

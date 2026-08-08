@@ -8,20 +8,32 @@
  * the full reasoning and the sustained-vs-transient distinction this script
  * is built around.
  *
- * NOT wired into any live trigger against production in this change. This is
- * deliberate: running it automatically against a real Render service needs
- * `RENDER_API_KEY` and a decision about WHEN it runs (a scheduled job, a
- * post-deploy webhook) — both are the kind of outward-facing, irreversible-
- * if-wrong infrastructure change this factory's escalation policy reserves
- * for explicit human sign-off (`.claude/skills/ship-factory/references/
- * escalation.md`; see also FLEETGRAPH.MD's own precedent of "explicit human
- * sign-off" on every prior live Render/Terraform action). This script is the
- * real, tested, runnable mechanism — proven in `deployReadiness.test.ts`
- * (the decision logic) and by local simulation against real running agent
- * server processes (see CHANGES.md's TRO-322 entry for the transcript) — the
- * remaining step (actually scheduling it with real credentials against the
- * live service) is a recommendation for a human to apply, not something this
- * script does on its own.
+ * WIRED (TRO-367 / W5-R36) into an automatic trigger: `.github/workflows/
+ * agent-rollback-check.yml` runs this script with `--execute` on a schedule
+ * (every 15 minutes) plus `workflow_dispatch`. That workflow is the "WHEN it
+ * runs" decision this docstring used to say was still open. What it does NOT
+ * do, and could not do inside this factory's escalation policy
+ * (`.claude/skills/ship-factory/references/escalation.md`), is provision the
+ * two secrets (`RENDER_API_KEY`, `RENDER_AGENT_SERVICE_ID`) the workflow
+ * needs to actually reach Render — that is exactly the outward-facing,
+ * credential-bearing step every prior live Render/Terraform action in
+ * FLEETGRAPH.MD required explicit human sign-off for, and the workflow
+ * itself refuses to guess: `parseArgs` rejects `--execute` without
+ * `--service-id` (below), and `main()` refuses to proceed without
+ * `RENDER_API_KEY`. Until a human sets both secrets, the workflow runs on
+ * schedule, finds nothing configured, and reports a warning annotation
+ * rather than either failing loudly or silently doing nothing — see that
+ * workflow file's own comments. The full poll -> evaluate -> decide -> call
+ * Render pipeline is exported as `runReadinessCheck` below specifically so a
+ * test can exercise it end to end against fakes — see
+ * `check-readiness-and-rollback.test.ts`'s `runReadinessCheck` suite, the
+ * dry-run/simulated-failure demonstration in place of a live exercise. This
+ * script's own decision logic is separately proven in `deployReadiness.test.ts`,
+ * and the underlying "boots but broken" gap it closes was proven once by
+ * local simulation against real running agent server processes (see
+ * CHANGES.md's TRO-322 entry for that transcript) — neither of those was
+ * against the actually-deployed production service, and no live rollback has
+ * ever been exercised against it.
  *
  * Usage:
  *   tsx src/scripts/check-readiness-and-rollback.ts \
@@ -38,9 +50,15 @@
  * deploys` with that deploy's `commitId` — Render's documented mechanism for
  * redeploying a specific prior commit on a docker/branch-tracking service.
  */
-import { evaluateReadinessSamples, pollReadiness, type ReadinessFetcher } from '../deployReadiness.js';
+import {
+  evaluateReadinessSamples,
+  pollReadiness,
+  type ReadinessEvaluation,
+  type ReadinessFetcher,
+  type ReadinessSample,
+} from '../deployReadiness.js';
 
-interface ParsedArgs {
+export interface ParsedArgs {
   url: string;
   attempts: number;
   intervalMs: number;
@@ -95,7 +113,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   return { url, attempts, intervalMs, serviceId, execute };
 }
 
-interface RenderDeploy {
+export interface RenderDeploy {
   id: string;
   commit?: { id?: string };
   status: string;
@@ -114,7 +132,11 @@ export function findPreviousLiveDeploy(
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 }
 
-async function rollbackViaRenderApi(serviceId: string, apiKey: string, fetchImpl: typeof fetch): Promise<void> {
+async function rollbackViaRenderApi(
+  serviceId: string,
+  apiKey: string,
+  fetchImpl: typeof fetch
+): Promise<RenderDeploy> {
   const deploysRes = await fetchImpl(
     `https://api.render.com/v1/services/${serviceId}/deploys?limit=20`,
     { headers: { Authorization: `Bearer ${apiKey}` } }
@@ -148,50 +170,123 @@ async function rollbackViaRenderApi(serviceId: string, apiKey: string, fetchImpl
     throw new Error(`POST .../deploys (rollback) failed: ${rollbackRes.status} ${await rollbackRes.text()}`);
   }
   console.log('Rollback deploy triggered successfully.');
+  return target;
+}
+
+/**
+ * Dependencies for `runReadinessCheck` — everything the pipeline needs to
+ * poll, decide, and (conditionally) act, all injectable so a test can run
+ * the FULL trigger — poll -> evaluate -> decide -> call Render — against
+ * fakes only, never a real network call. This is the TRO-367 wiring: before
+ * this function existed, `pollReadiness`/`evaluateReadinessSamples` (the
+ * decision) and `rollbackViaRenderApi` (the action) were each unit-tested in
+ * isolation, but nothing proved they were actually wired together end to
+ * end. See `check-readiness-and-rollback.test.ts`'s `runReadinessCheck`
+ * suite for that proof.
+ */
+export interface RunCheckDeps {
+  fetcher: ReadinessFetcher;
+  /** Used only for the Render API calls inside `rollbackViaRenderApi` — never for polling `/ready` (that's `fetcher`). */
+  fetchImpl: typeof fetch;
+  /** Render API key. `main()` reads this from `process.env.RENDER_API_KEY`; tests inject it directly so nothing here ever touches `process.env`. */
+  apiKey: string | undefined;
+  now?: () => Date;
+  sleep?: (ms: number) => Promise<void>;
+  /** Called once, right after polling and evaluating, before any rollback
+   * action is attempted. Lets `main()` print the sample/evaluation lines in
+   * the same place it always has without `runReadinessCheck` owning any
+   * console output itself. Tests omit it. */
+  onEvaluated?: (samples: readonly ReadinessSample[], evaluation: ReadinessEvaluation) => void;
+}
+
+export type RunCheckOutcome = 'healthy' | 'transient' | 'dry_run_warn' | 'missing_api_key' | 'rolled_back';
+
+export interface RunCheckResult {
+  outcome: RunCheckOutcome;
+  evaluation: ReadinessEvaluation;
+  samples: ReadinessSample[];
+  /** Set only when `outcome === 'rolled_back'` — the deploy that was re-triggered. */
+  rolledBackTo?: RenderDeploy;
+}
+
+/**
+ * The automatic trigger's full decision-to-action pipeline: poll `/ready`,
+ * decide whether the failure is sustained (`evaluateReadinessSamples`), and
+ * — only when the caller asked for `--execute` and a Render API key is
+ * available — actually call Render to redeploy the previous known-good
+ * commit (`rollbackViaRenderApi`). `main()` is a thin wrapper that supplies
+ * the real `fetch`/`process.env.RENDER_API_KEY` and translates the result
+ * into console output + exit codes; a test supplies fakes for both and
+ * asserts on the returned `RunCheckResult` instead.
+ */
+export async function runReadinessCheck(args: ParsedArgs, deps: RunCheckDeps): Promise<RunCheckResult> {
+  const samples = await pollReadiness({
+    url: args.url,
+    attempts: args.attempts,
+    intervalMs: args.intervalMs,
+    fetcher: deps.fetcher,
+    now: deps.now,
+    sleep: deps.sleep,
+  });
+  const evaluation = evaluateReadinessSamples(samples);
+  deps.onEvaluated?.(samples, evaluation);
+
+  if (!evaluation.rollbackWarranted) {
+    return { outcome: evaluation.failureCount === 0 ? 'healthy' : 'transient', evaluation, samples };
+  }
+
+  if (!args.execute) {
+    return { outcome: 'dry_run_warn', evaluation, samples };
+  }
+
+  if (!deps.apiKey) {
+    return { outcome: 'missing_api_key', evaluation, samples };
+  }
+
+  // args.serviceId is guaranteed by parseArgs when args.execute is true.
+  const rolledBackTo = await rollbackViaRenderApi(args.serviceId as string, deps.apiKey, deps.fetchImpl);
+  return { outcome: 'rolled_back', evaluation, samples, rolledBackTo };
 }
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
-  const fetcher: ReadinessFetcher = { get: (url) => fetch(url) };
   console.log(`Polling ${args.url} — ${args.attempts} attempt(s), ${args.intervalMs}ms apart...`);
-  const samples = await pollReadiness({
-    url: args.url,
-    attempts: args.attempts,
-    intervalMs: args.intervalMs,
-    fetcher,
+  const result = await runReadinessCheck(args, {
+    fetcher: { get: (url) => fetch(url) },
+    fetchImpl: fetch,
+    apiKey: process.env.RENDER_API_KEY,
+    onEvaluated: (samples, evaluation) => {
+      for (const s of samples) {
+        console.log(`  ${s.at}  ready=${s.ready}  reason=${s.reason}`);
+      }
+      console.log(`Evaluation: ${JSON.stringify(evaluation)}`);
+    },
   });
-  for (const s of samples) {
-    console.log(`  ${s.at}  ready=${s.ready}  reason=${s.reason}`);
+
+  switch (result.outcome) {
+    case 'healthy':
+    case 'transient':
+      console.log('No sustained readiness failure detected. No action taken.');
+      return;
+    case 'dry_run_warn':
+      console.error(`SUSTAINED READINESS FAILURE: ${result.evaluation.reason}`);
+      console.error(
+        'Dry run (pass --execute --service-id <id> with RENDER_API_KEY set to actually roll back). ' +
+          'Exiting 2 to signal "rollback warranted" to a caller that wants to alert on this.'
+      );
+      process.exitCode = 2;
+      return;
+    case 'missing_api_key':
+      console.error(`SUSTAINED READINESS FAILURE: ${result.evaluation.reason}`);
+      console.error('--execute was passed but RENDER_API_KEY is not set. Refusing to guess a credential.');
+      process.exitCode = 1;
+      return;
+    case 'rolled_back':
+      console.error(`SUSTAINED READINESS FAILURE: ${result.evaluation.reason}`);
+      // rollbackViaRenderApi already logged the "Rolling back..." / "...triggered successfully." lines.
+      return;
   }
-
-  const evaluation = evaluateReadinessSamples(samples);
-  console.log(`Evaluation: ${JSON.stringify(evaluation)}`);
-
-  if (!evaluation.rollbackWarranted) {
-    console.log('No sustained readiness failure detected. No action taken.');
-    return;
-  }
-
-  console.error(`SUSTAINED READINESS FAILURE: ${evaluation.reason}`);
-
-  if (!args.execute) {
-    console.error(
-      'Dry run (pass --execute --service-id <id> with RENDER_API_KEY set to actually roll back). ' +
-        'Exiting 2 to signal "rollback warranted" to a caller that wants to alert on this.'
-    );
-    process.exitCode = 2;
-    return;
-  }
-
-  const apiKey = process.env.RENDER_API_KEY;
-  if (!apiKey) {
-    console.error('--execute was passed but RENDER_API_KEY is not set. Refusing to guess a credential.');
-    process.exitCode = 1;
-    return;
-  }
-  // args.serviceId is guaranteed by parseArgs when args.execute is true.
-  await rollbackViaRenderApi(args.serviceId as string, apiKey, fetch);
 }
 
 // Only run when executed directly (`tsx src/scripts/check-readiness-and-rollback.ts`),

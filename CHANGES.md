@@ -21,6 +21,120 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-367 — [W5-R36] The rollback CLI existed and was tested, but nothing automatic ever triggered it
+
+**Bundle.** Grouped with TRO-369 on branch `fix/w5-ci-rollback-and-gitlab-agent-tests` (both CI
+config); each is its own commit with its own entry here. This closes W5-R36, the only `MISSING`
+requirement in the entire Week 5 sweep (`audit/requirements/REPORT-W5.md`,
+`audit/requirements/gaps-W5.md`) — requirement text: "If a CI run fails, the deployment must be
+rolled back automatically — do not allow a failing build to remain deployed."
+
+**What was actually broken, verified before writing anything.** Not what it sounds like: CI already
+gates merge (a failing build never reaches `main`), and Render's own health-check-gated promotion
+already keeps a bad deploy that never passes `/health` from ever receiving traffic. Neither of those
+is what was missing. `agent/src/scripts/check-readiness-and-rollback.ts` (TRO-322) — a real, unit-
+tested CLI that polls `/ready`, detects a *sustained* failure (a deploy that boots but is missing
+config or can't reach Ship — the one case neither existing layer catches), and can redeploy the
+previous known-good commit via Render's API — existed and worked, but its own docstring said so
+plainly: *"NOT wired into any live trigger against production."* Confirmed directly: no cron
+workflow, no post-deploy step, nothing in `.github/workflows/` or `.gitlab-ci.yml` ever invoked it.
+TRO-322 and TRO-330 (both `Done`) built and tested the capability; neither wired a trigger.
+
+**What changed — the trigger, plus a refactor to make it provably wired rather than merely present.**
+
+1. **`agent/src/scripts/check-readiness-and-rollback.ts`: extracted `runReadinessCheck`.** Before
+   this ticket, `pollReadiness`/`evaluateReadinessSamples` (the decision) and `rollbackViaRenderApi`
+   (the action, previously a private, un-exported function returning `void`) were each tested in
+   isolation inside `main()`'s body — nothing proved they were actually wired together end to end.
+   `runReadinessCheck(args, deps)` now owns the full `poll -> evaluate -> decide -> call Render`
+   pipeline as one exported, injectable function (`RunCheckDeps`: `fetcher`, `fetchImpl`, `apiKey`,
+   optional `now`/`sleep`/`onEvaluated`), returning a `RunCheckResult` with one of five outcomes
+   (`healthy`, `transient`, `dry_run_warn`, `missing_api_key`, `rolled_back`). `rollbackViaRenderApi`
+   now returns the `RenderDeploy` it redeployed instead of `void`, so a caller (or a test) can assert
+   on exactly what got rolled back to. `main()` is now a thin wrapper: real `fetch`/
+   `process.env.RENDER_API_KEY` in, console output + exit codes out — behavior-identical for the real
+   CLI (same stdout/stderr lines, same exit codes 0/1/2), verified by re-reading the diff line by
+   line against the pre-refactor version rather than assumed.
+2. **The trigger itself: `.github/workflows/agent-rollback-check.yml` (new file).** Runs on
+   `schedule:` (`cron: '*/15 * * * *'`, every 15 minutes) plus `workflow_dispatch` for a manual run.
+   `concurrency: { group: agent-rollback-check, cancel-in-progress: false }` so a scheduled tick
+   never interrupts a rollback already in flight. A first step checks that both `RENDER_API_KEY` and
+   `RENDER_AGENT_SERVICE_ID` repository secrets are set (via `env:`, never interpolated directly into
+   the shell body); if either is missing, every later step is skipped and the run emits a
+   `::warning::` annotation naming exactly what's missing and why — visible on every scheduled run,
+   never silent, never a false "failure." Once both are set, the readiness step runs
+   `pnpm --filter @ship/agent check:readiness --url https://ship-agent-t0zy.onrender.com/ready
+   --attempts 3 --interval-ms 30000 --service-id "$RENDER_AGENT_SERVICE_ID" --execute` — dry-run
+   removed, so a genuinely sustained failure now redeploys the previous live deploy without a human
+   running anything.
+3. **`FLEETGRAPH.MD`'s "Rollback trigger and procedure" section** (the W5-R37 half of this pair,
+   already satisfied in prose before this ticket) updated to state the trigger is real: what fires
+   it, what it does on a sustained failure, the two secrets it needs and why this change can't set
+   them, and — stated precisely, not implied — what remains unproven until a human provisions those
+   secrets and the first live scheduled run actually executes.
+
+**Regression tests — confirmed red for the right reason before the fix, green after.**
+- `agent/src/__tests__/check-readiness-and-rollback.test.ts` — added a `runReadinessCheck` suite
+  (6 new cases: every sample ready → `healthy`, no Render call; a single failure that recovers mid-
+  window → `transient`, no Render call even with `--execute` and a real key; sustained failure
+  without `--execute` → `dry_run_warn`, no Render call; sustained failure with `--execute` but no
+  `RENDER_API_KEY` → `missing_api_key`, no Render call; sustained failure with `--execute` and a key
+  → `rolled_back`, and asserts the exact Render calls made — `GET .../deploys?limit=20` then
+  `POST .../deploys` with `{"commitId":"good-sha"}`, the previous live deploy's commit, never the
+  current one; and one case on the `onEvaluated` callback firing exactly once before any Render
+  call). Every case injects a fake `fetcher` (never a real `/ready` request) and a fake `fetchImpl`
+  (never a real Render API call) — the dry-run/simulated-failure demonstration this ticket's HARD
+  CONSTRAINT calls for in place of a live exercise. **Confirmed red first:** restored the pre-fix
+  script via `git show HEAD:agent/src/scripts/check-readiness-and-rollback.ts` (never `git stash`),
+  ran the suite — all 6 new cases failed with `TypeError: (0 , __vite_ssr_import_1__
+  .runReadinessCheck) is not a function`, i.e. the wiring genuinely did not exist. Restored the fix;
+  all 6 passed. Full file: 15/15.
+- `agent/src/__tests__/agentRollbackWorkflow.test.ts` (new file, 4 cases) — asserts the workflow's
+  own structure: fires on `schedule:`/`cron:` (not only manual dispatch), its readiness step passes
+  `--execute` guarded by `--service-id`/`RENDER_API_KEY`/`RENDER_AGENT_SERVICE_ID`,
+  `cancel-in-progress: false`, and at least 6 steps are gated on the secrets-configured check. No
+  YAML parser (see `gitlabCiAgentTests.test.ts`'s entry below for why); plain-text/regex assertions
+  against the file. **Confirmed red first:** moved the new workflow file aside — all 4 cases failed
+  with `ENOENT: no such file or directory`, the correct signal that the trigger did not exist yet.
+  Restored it; all 4 passed.
+- Full agent suite after both additions: **34 files / 464 tests, all green**
+  (`pnpm --filter @ship/agent test`).
+
+**What was demonstrated, and what was not — stated precisely, per this ticket's HARD CONSTRAINT.**
+- **Observed, proven in this change:** the trigger exists, fires automatically and unattended (a
+  cron schedule, not a button a human clicks), and its full decision-to-action pipeline — poll,
+  evaluate sustained-vs-transient, and (only on sustained failure with `--execute` and a key) call
+  Render's documented rollback endpoint with the correct previous-commit target — is provably wired
+  together, against fakes, in a test that fails without the fix and passes with it.
+- **Not observed, explicitly not attempted, per the constraint:** no live production rollback or
+  redeploy was performed. No call — successful or not — was made to Render's real API from this
+  change. No terraform command was run. The workflow's own secret-gated design means its first real,
+  unattended exercise happens only after a human sets `RENDER_API_KEY`/`RENDER_AGENT_SERVICE_ID` on
+  the repository and the next scheduled tick fires — that run has never happened and should be
+  watched the first time it does.
+
+**How to run it.**
+```
+source .factory-env
+pnpm --filter @ship/agent test                                    # full suite, 34 files / 464 tests
+pnpm --filter @ship/agent test -- check-readiness-and-rollback     # 15/15
+pnpm --filter @ship/agent test -- agentRollbackWorkflow            # 4/4
+
+# Dry-run the CLI locally against a real (but unreachable) URL — safe, no
+# Render call, since --execute is not passed:
+pnpm --filter @ship/agent check:readiness --url https://ship-agent-t0zy.onrender.com/ready \
+  --attempts 3 --interval-ms 30000
+```
+
+**How to roll it back.** Revert this commit. `.github/workflows/agent-rollback-check.yml` is a new,
+additive file — deleting it removes the trigger entirely with no other workflow depending on it.
+`runReadinessCheck`/the `rollbackViaRenderApi` return-type change are internal to
+`check-readiness-and-rollback.ts`, which is not imported by any production code path (`index.ts`
+never imports it) — reverting is safe and affects only this script and its own tests. The
+`FLEETGRAPH.MD` edit is confined to the "Rollback trigger and procedure" section.
+
+---
+
 ## W4-SWEEPA (CI fix) — `postgresReachable.test.ts`'s "defaults to 5432" case depended on the host, not the code
 
 Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other items; each is its own commit.
