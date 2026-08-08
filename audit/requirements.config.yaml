@@ -7,7 +7,7 @@ docs:
   # a later mismatch stops the sweep and offers re-extraction.
   - id: W4
     path: "project guideliens/GFA_Week_4_ShipShape_Updated.pdf"
-    sha256: null
+    sha256: d385bcc4af6341956c532b6ae558c9405de77f46bb14301fd4bda3e35e3af311
 
 tickets:
   provider: linear
@@ -25,6 +25,10 @@ exclude:
 
 # Gaps handoff target after each sweep (invoked via the Skill tool).
 pm_skill: ship-pm
+
+# Mechanical PDF text backend (bundled pdf-inspector wrapper): extract caches
+# text to audit/requirements/source-<docID>.md and verifies every Quote against it.
+pdf_tool: "node ~/.claude/skills/requirements-audit/scripts/pdf/pdf2md.mjs"
 
 # Commands available for behavioral verification; keys are labels the inventory's
 # "Acceptance evidence" field references; values run from the repo root.
