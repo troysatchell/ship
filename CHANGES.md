@@ -135,6 +135,87 @@ never imports it) — reverting is safe and affects only this script and its own
 
 ---
 
+## TRO-369 — [W5-R35] The agent's regression tests never ran on GitLab, the platform this submission is graded on
+
+**Bundle.** Grouped with TRO-367 on branch `fix/w5-ci-rollback-and-gitlab-agent-tests` (both CI
+config); each is its own commit with its own entry here.
+
+**What was actually broken, verified before writing anything.** `.gitlab-ci.yml`'s own header states
+GitLab is "the actual submission target" (assignment Submission Requirements: "GitLab Repository").
+Read both CI files fully before touching either, per the ticket's own instruction, rather than
+assuming line numbers: `.gitlab-ci.yml` contained exactly one `@ship/agent` filter line —
+`pnpm --filter @ship/agent build` — and it lives inside the `e2e-agent` job (then line 132, confirmed
+by direct read of the file, not inferred), never inside `verify`, and never `pnpm --filter @ship/
+agent test` anywhere. `.github/workflows/ci.yml:131-135` runs `pnpm --filter @ship/agent test` inside
+the `verify` job with `DATABASE_URL`/`NODE_ENV: test`. So on GitHub, all six FleetGraph use cases'
+regression tests run and pass; on GitLab, the platform this submission is actually graded from, the
+agent package had zero test coverage running at all — not degraded, not partial, genuinely zero.
+
+**What changed.** `.gitlab-ci.yml`'s `verify` job `script:` gained one new line,
+`pnpm --filter @ship/agent test`, placed after the existing api/web test steps and before the
+testdiff regression check, with a comment explaining the fix and why it carries no `|| true` (unlike
+api/web, the agent suite has no quarantine baseline to diff against — per `ci.yml`'s own comment on
+its equivalent step, it was fully green when that step was first added, so any failure here is meant
+to fail the job outright). No new job, no new service container: `verify`'s existing `postgres:15-
+alpine` service and job-level `variables: { DATABASE_URL: "$CI_DATABASE_URL", NODE_ENV: test }`
+already cover this step — the same `DATABASE_URL`/`NODE_ENV` env `ci.yml:131-135` sets per-step,
+here already active for the whole job. `e2e-agent`'s own `pnpm --filter @ship/agent build` is
+unchanged and still correct: it builds the compiled agent for the Playwright flows that job runs, a
+genuinely different need from the vitest suite (which runs against TS source directly, no build
+step, matching how `ci.yml`'s own "Agent tests" step needs no preceding `pnpm --filter @ship/agent
+build` either).
+
+**Regression test — confirmed red for the right reason before the fix, green after.**
+- `agent/src/__tests__/gitlabCiAgentTests.test.ts` (new file, 6 cases). No YAML parser: neither
+  `js-yaml` nor `yaml` is a declared dependency of any package in this repo (both appear only
+  transitively, under lint/build tooling — see the root `package.json`'s own `js-yaml` override
+  comment), and `require.resolve('yaml')` from inside `agent/` only resolves via this machine's
+  global `/Users/troy/node_modules` — not portable to CI, so not usable in a test the gate runs
+  there. Instead, `extractJobBody(yaml, jobName)` slices a named top-level job's own text block
+  (every line indented under its `<name>:` header, stopping at the first non-blank unindented line —
+  this file's own 2-space-indent convention makes that boundary exact) and asserts against that
+  slice, so a match counts only if it is actually inside the named job. Cases: two self-checks on
+  the slicer itself (finds `verify`, correctly excludes `e2e-agent`'s content — using `stage: e2e` as
+  the boundary marker rather than the substring `"e2e-agent"`, which `verify`'s own new comment
+  legitimately references by name; throws on an unknown job name); `verify` invokes
+  `pnpm --filter @ship/agent test`; `verify` sets `DATABASE_URL`/`NODE_ENV: test`; the agent test
+  line carries no `|| true`; `e2e-agent` still builds but never tests the agent package. **Confirmed
+  red first:** restored the pre-fix `.gitlab-ci.yml` via `git show HEAD:.gitlab-ci.yml` (never `git
+  stash`), ran the suite — 2 of 6 cases failed with real `AssertionError`s (`expected [structure] to
+  match /pnpm --filter @ship\/agent test\b/`, and `expected an agent test line inside the verify job:
+  expected undefined to be defined`), the other 4 correctly already passing (they assert pre-existing
+  structure this ticket didn't need to change). Restored the fix; all 6 passed.
+- **Independently validated with a real YAML parser** (Python's `yaml`, available on this machine,
+  used only for one-off validation per the ticket's own instruction — not added as a project
+  dependency): `yaml.safe_load('.gitlab-ci.yml')` parses without error, and
+  `doc['verify']['script']` contains `'pnpm --filter @ship/agent test'` as its own list item (no
+  `|| true` suffix), with `doc['verify']['variables'] == {'DATABASE_URL': '$CI_DATABASE_URL',
+  'NODE_ENV': 'test'}` — confirms the hand-written vitest slicer's result matches a real parser's,
+  independently.
+- Full agent suite after this addition: **34 files / 464 tests, all green**
+  (`pnpm --filter @ship/agent test`).
+
+**What was not verified.** This change was proven by static assertion (the file's own structure) and
+independent YAML parsing, not by an actual GitLab pipeline run — this worktree has no credentials to
+trigger one, and doing so is outside this ticket's scope. The next push to GitLab is the first real
+confirmation that `verify` executes the agent suite there.
+
+**How to run it.**
+```
+source .factory-env
+pnpm --filter @ship/agent test                          # full suite, 34 files / 464 tests
+pnpm --filter @ship/agent test -- gitlabCiAgentTests     # 6/6
+
+# One-off structural validation with a real YAML parser (not a project dependency):
+python3 -c "import yaml; d = yaml.safe_load(open('.gitlab-ci.yml')); print(d['verify']['script'])"
+```
+
+**How to roll it back.** Revert this commit. The change is a single added line (plus its explanatory
+comment) inside `.gitlab-ci.yml`'s `verify` job and one new, additive test file — removing the line
+returns GitLab CI to its pre-TRO-369 shape with nothing else depending on it.
+
+---
+
 ## W4-SWEEPA (CI fix) — `postgresReachable.test.ts`'s "defaults to 5432" case depended on the host, not the code
 
 Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other items; each is its own commit.
