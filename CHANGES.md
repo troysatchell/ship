@@ -74,29 +74,43 @@ command starts the full composed system"). Putting the bootstrap here means both
 `pnpm dev` get it automatically, from one implementation, exactly the reasoning `start.sh`'s own
 header already gives for not duplicating `scripts/dev.sh`'s logic.
 
-**Regression test.** `api/src/db/__tests__/postgresReachable.test.ts` (new, 4 cases) — real TCP
-sockets, no mocks: an ephemeral `net.createServer()` for the reachable case, a guaranteed-refused
-loopback port for the unreachable case (same pattern `ensureDatabase.test.ts` already uses), an
-unparseable-URL case, and the default-port branch. Confirmed red first: temporarily inverted the
-`connect`/`error` branches in `postgresReachable.ts` (`finish(false)` on connect, `finish(true)` on
-error) and re-ran — 3 of 4 cases failed with `AssertionError: expected true to be false`, the correct
-failure shape, not an import error. Reverted (`git diff --stat` back to empty) and re-ran: 4/4 green.
-The bash orchestration itself (the Docker bring-up, health-poll, and URL-repoint in `scripts/dev.sh`)
-has no vitest-reachable seam — per `.claude/skills/ship-qa/SKILL.md`'s tiers table, the gate executes
-only the two vitest projects, and bash isn't one of them — so it was proved instead by genuine,
-non-simulated end-to-end runs (below), not by a test the gate would run. Stopped short of fabricating
-a shell/bats test the gate never executes, which would satisfy the letter of "add a regression test"
-while proving nothing (the exact failure mode `.claude/skills/ship-qa/SKILL.md`'s e2e-spec-vs-vitest
+**Regression test.** `api/src/db/__tests__/postgresReachable.test.ts` (6 cases, two `describe`
+blocks):
 
-**Coverage gap in the test itself, stated plainly rather than left implicit:** the test calls
-`isPostgresReachable()` directly with real sockets — genuine behavioral coverage of the probe, not a
-stub. It does **not** cover `postgresReachable.ts`'s CLI wrapper (`main()` — argv/env parsing,
-`process.exit(reachable ? 0 : 1)`), which is the actual thing `scripts/dev.sh` invokes
-(`npx tsx src/db/postgresReachable.ts "$URL"`, branching on `$?`). If that exit-code mapping were
-inverted, this suite would stay green while the real integration broke. That gap is closed only by
-the manual end-to-end runs below, run twice, not by anything the gate re-executes on a future change
-to `main()`.
-gap describes, one layer up).
+1. **`isPostgresReachable()` directly** (4 cases) — real TCP sockets, no mocks: an ephemeral
+   `net.createServer()` for the reachable case, a guaranteed-refused loopback port for the
+   unreachable case (same pattern `ensureDatabase.test.ts` already uses), an unparseable-URL case,
+   and the default-port branch. Confirmed red first: temporarily inverted the `connect`/`error`
+   branches in `postgresReachable.ts` (`finish(false)` on connect, `finish(true)` on error) and
+   re-ran — 3 of 4 cases failed with `AssertionError: expected true to be false`, the correct failure
+   shape, not an import error. Reverted (`git diff --stat` back to empty) and re-ran: 4/4 green.
+2. **The CLI's exit code, as a subprocess** (2 cases) — spawns the real `npx tsx
+   src/db/postgresReachable.ts <url>` (via `execFile`, not a mocked `child_process`) from `api/`, the
+   exact invocation and cwd `scripts/dev.sh` uses, and asserts on the numeric exit code recovered
+   from the rejection, not on stdout text: 0 when reachable, non-zero when not. Added after an
+   explicit ask to close the coverage gap noted below, rather than leave it stated and unaddressed.
+   Confirmed red first, on the actual regression this closes: temporarily inverted `main()`'s
+   `process.exit(reachable ? 0 : 1)` to `process.exit(reachable ? 1 : 0)` — the two new CLI cases
+   failed (`AssertionError: expected 1 to be +0` and `expected +0 not to be +0`) while the four
+   `isPostgresReachable()` cases stayed green, confirming the failure was specifically in `main()`'s
+   mapping, not the underlying probe. Reverted (`git diff --stat` back to empty) and re-ran: 6/6
+   green.
+
+The bash orchestration itself (the Docker bring-up, health-poll, and URL-repoint in `scripts/dev.sh`)
+still has no vitest-reachable seam — per `.claude/skills/ship-qa/SKILL.md`'s tiers table, the gate
+executes only the two vitest projects, and bash isn't one of them — so that part was proved instead
+by genuine, non-simulated end-to-end runs (below), not by a test the gate would run. Stopped short of
+fabricating a shell/bats test the gate never executes, which would satisfy the letter of "add a
+regression test" while proving nothing (the exact failure mode `.claude/skills/ship-qa/SKILL.md`'s
+e2e-spec-vs-vitest gap describes, one layer up).
+
+**Coverage gap, previously open, now closed:** an earlier version of this entry stated that the test
+covered `isPostgresReachable()` but not `main()`'s CLI exit-code mapping — the actual contract
+`scripts/dev.sh` depends on — and that an inverted mapping would have stayed green. Case 2 above
+closes exactly that gap, confirmed red-then-green against the actual inversion described. What is
+still not covered by any vitest test, and is covered only by the manual end-to-end runs below: the
+bash-side Docker bring-up, health-poll loop, and `RESOLVED_DATABASE_URL` repoint in `scripts/dev.sh`
+itself.
 
 **End-to-end proof (observed, run twice — once before and once after extracting
 `postgresReachable.ts`, both identical in outcome).** Stopped the real `ship-postgres-1` container,
