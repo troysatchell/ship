@@ -25,44 +25,64 @@ Two provenance notes up front, resolved same-day and kept for the audit trail:
 types — `any` → `unknown` without narrowing does not count."* (`AUDIT_REPORT.md`, Type Safety §
 Recommended improvement plan)
 
-**Verdict: met, by the sum of controlled per-ticket diffs — not by a live recount, which the
-tracked metric cannot support today.**
+**Verdict: NOT MET against the requirement's literal threshold.** The requirement is defined on the
+tracked `count.sh` total ("25% of the 1535 tracked violations"), and that total has never measured
+below baseline at any point this sprint — 1535 → 1778 → **1987** (this session's recount, below).
+The per-ticket sum-of-diffs argument this section originally led with is real and stays below, but
+it answers a different question ("did the fixed tickets individually reduce what they targeted") —
+it is not a substitute for the literal metric the target names, and should not have been reported as
+"met" against it. Corrected here rather than left standing, per this repo's own provenance rule:
+mark a derived claim as derived, and check the specific number a requirement names rather than a
+related one that moved the right direction.
 
 ### Before → After
 
-| Metric | Baseline (076a183, 2026-07-27) | This commit (09a6895), directly verified | Note |
-|---|---|---|---|
-| Tracked total (`count.sh`, web+api+shared) | 1535 | **1778** | Up 243 — ~30 unrelated tickets added code/tests in the window; not a regression signal |
-| api `explicit_any` | 78 | **36** | −42, and the one clean tracked-metric win that survives a live recount |
-| api non-null, tracked pattern | 42 | **42** | Unchanged — the pattern's bracket bug (documented in the baseline itself) never counted these sites |
-| api non-null, corrected pattern | 286 | **53** | −233 |
-| `req.userId!` / `req.workspaceId!` raw occurrences | 236 | **0** | −236, fully retired |
-| `yjsConverter.ts` + `y-protocols.d.ts` `any` sites | 19 (12+7) | **0** | −19 |
-| `web/tsconfig.json` extends root? | No | **Yes** | directly verified — file now reads `"extends": "../tsconfig.json"` |
+| Metric | Baseline (076a183, 2026-07-27) | 09a6895 (2026-07-30-ish, prior recount) | **HEAD (`5126a03`, 2026-08-08), this session's recount** | Note |
+|---|---|---|---|---|
+| Tracked total (`count.sh`, web+api+shared) | 1535 | 1778 | **1987** | +452 / **+29%** vs baseline. Requirement needs −25% (≈−384, target ≤1151). Never once measured below baseline. |
+| Total `any` (web+api+shared) | 102 | — | **50** | −52, halved — genuine, verified this session |
+| `req.userId!` / `req.workspaceId!` raw occurrences | 236 | 0 | **0** | −236, fully retired, still 0 this session |
+| `web/tsconfig.json` extends root? | No | Yes | **Yes** | directly verified — file still reads `"extends": "../tsconfig.json"` |
 
-The tracked total *rising* 1535→1778 is exactly the trap `.claude/CLAUDE.md` warns about: a naive
-"recount now vs. baseline" would read as failure. It isn't — TS-1's own fix entry independently
-found the same drift (the audit's 102 latent tsc errors had already become 156 by the time that
-ticket ran, before any fix was applied), confirming the codebase grew in the interim rather than
-the fixes regressing.
+**This session's recount, in full** (`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web
+api shared`, run against this worktree at `5126a03`, 2026-08-08): any 50 (web 23 + api 27 + shared
+0) + as 1882 (web 659 + api 1212 + shared 11) + non-null 47 (web 5 + api 42 + shared 0) + ts-ignore 8
+(web 3 + api 5 + shared 0) = **1987**, summed per this baseline's own formula (`baseline.md:77`,
+`any + as + ! + ts-ignore`, `as any` not double-counted since it is a subset of `as`). Against the
+recorded baseline `metrics.violationsTotal: 1535` (`audit/type-safety/baseline.json`), that is
+**+452 (+29%)** — the wrong direction and well short of the −25% target, whether compared to the
+original baseline or to either intermediate recount.
 
-**Why the sum-of-diffs method, not a live recount:** two independent mechanisms defeat a naive
-recount. (1) `count.sh`'s non-null pattern `[a-zA-Z0-9_\)\]]!…` has a documented BSD-grep bracket
-bug (recorded in the baseline's own Methodology) that closes the character class early — it never
-counted `req.userId!`-shaped assertions, so TS-4 retiring 236 of them moves the tracked number by
-zero (42→42, confirmed above). (2) ~30 tickets unrelated to type safety merged into `main` between
-the baseline snapshot and these fixes, adding new `as`/`any` sites the way any active codebase
-does. Both are stated plainly rather than smoothed into one "25% achieved" number.
+The tracked total has *risen* at every measurement point this sprint: 1535 → 1778 → 1987. The first
+rise (1535→1778) was flagged in this document's earlier draft as "exactly the trap `.claude/CLAUDE.md`
+warns about" and left the verdict at "met" anyway, reasoning from the per-ticket sum instead. That
+reasoning wasn't wrong on its own terms — TS-1's own fix entry independently found the same drift
+(the audit's 102 latent tsc errors had already become 156 by the time that ticket ran) — but the
+requirement's threshold is written against the tracked total, not against the per-ticket sum, and on
+that number there has been no point this sprint where the target was actually met.
 
-**Controlled per-ticket sum:** TS-1 (156) + TS-3 (19) + TS-4 (236, raw occurrence count) = **411 ≥
-384**, using only the three tickets with a single unambiguous count-with-comparable-methodology —
-before TS-2 or TS-6 are even added. (The brief's approximation "~130 TS-1 + ~45 TS-2 + 19 TS-3 +
-233 TS-4 ≈ 427" is close but not exact against `CHANGES.md`: TS-1's own re-measurement is 156, not
-~130, because the audit's 102 had already drifted before the fix landed; TS-3 is 19, confirmed; and
-TS-4 is 236 raw / 233 by the corrected-metric delta (286→53), both confirmed above. TS-2 has no
-single clean "~45" figure in `CHANGES.md` — its contribution is 6 of 7 untyped row mappers retyped
-plus 154 newly-typed `pool.query<Row>()` call sites, which the tracked metric was never built to
-count in the first place.)
+**Why the tracked total doesn't move the way the per-ticket sum suggests it should:** two
+independent mechanisms explain the gap, though neither changes the verdict above — they explain the
+number, they don't substitute for it. (1) `count.sh`'s non-null pattern `[a-zA-Z0-9_\)\]]!…` has a
+documented BSD-grep bracket bug (recorded in the baseline's own Methodology) that closes the
+character class early — it never counted `req.userId!`-shaped assertions, so TS-4 retiring 236 of
+them moves the tracked number by zero (42→42, confirmed above). (2) ~30+ tickets unrelated to type
+safety merged into `main` across the sprint, adding new `as`/`any` sites the way any active codebase
+does — the tracked total is a live number in a moving codebase, not a metric that only this
+category's tickets touch.
+
+**Controlled per-ticket sum (supporting evidence for the real work done, not a restatement of the
+verdict):** TS-1 (156) + TS-3 (19) + TS-4 (236, raw occurrence count) = **411 ≥ 384**, using only
+the three tickets with a single unambiguous count-with-comparable-methodology — before TS-2 or TS-6
+are even added. (The brief's approximation "~130 TS-1 + ~45 TS-2 + 19 TS-3 + 233 TS-4 ≈ 427" is
+close but not exact against `CHANGES.md`: TS-1's own re-measurement is 156, not ~130, because the
+audit's 102 had already drifted before the fix landed; TS-3 is 19, confirmed; and TS-4 is 236 raw /
+233 by the corrected-metric delta (286→53), both confirmed above. TS-2 has no single clean "~45"
+figure in `CHANGES.md` — its contribution is 6 of 7 untyped row mappers retyped plus 154 newly-typed
+`pool.query<Row>()` call sites, which the tracked metric was never built to count in the first
+place.) This number is real and the tickets behind it genuinely reduced what they targeted — it is
+just not the number the requirement's literal threshold is defined on, which is why the verdict
+above is scored against the tracked total instead.
 
 ### Root causes
 
@@ -111,6 +131,13 @@ pnpm lint                                                                       
 ```
 All of the above except the ESLint run were executed directly against `09a6895` while compiling
 this document; results are quoted in the table above.
+
+**This session (2026-08-08, HEAD `5126a03`)** re-ran two of the above independently, without
+re-running TS-1/TS-3/TS-6's checks (out of scope for this correction — a verdict fix, not a
+re-audit of every ticket): the `count.sh` line, whose full breakdown and total (1987) is quoted
+above; and the `req.userId!`/`req.workspaceId!` grep, which still returns 0. Both are marked
+directly verified above for that reason; the other rows in the "prior recount" column are carried
+forward from the 09a6895 compile and not independently re-confirmed this session.
 
 ---
 

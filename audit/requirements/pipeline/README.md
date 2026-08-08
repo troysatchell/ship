@@ -20,7 +20,8 @@ baseline stopped being reproducible the moment that session ended.
 | `tickets-map-{1,2}.json` | Requirement → ticket mappings, split R1–R27 / R28–R54. Merged into the matrix's per-row `tickets`; anything in the population claimed by neither file becomes an orphan. |
 | `merge-matrix.py` | Merges the cluster files plus the verification results into `../matrix.baseline.json`. |
 | `write-report.py` | Renders `../REPORT.md` and `../gaps.md` from the matrix plus `../inventory.md`. |
-| `acceptance-check.py` | The plan's acceptance gate, verbatim. Must print `OK — 54 rows, verdicts sound`. |
+| `acceptance-check.py` | The acceptance gate. Must print `OK — 54 rows, verdicts sound`. No longer verbatim from `docs/superpowers/plans/2026-08-08-requirements-audit-skill.md`'s Step 3 snippet: two rounds of CodeRabbit review on PR #154 found false-pass paths in that original logic (a count-based fallback for missing rows that could match on quantity while the wrong IDs were missing, `assert`s compiled out under `python -O`, a MISSING-row check that matched by raw substring instead of gaps.md's actual headings, and an unrecognized-verdict value that matched no branch and sailed through) — all fixed here, none in the plan doc, which is left as a historical record of what was run. |
+| `test_acceptance_check.py` | Regression tests for `acceptance-check.py`'s own pass/fail logic (`python3 audit/requirements/pipeline/test_acceptance_check.py`). Pins the false-pass bugs above so they can't silently return. |
 
 ## Regenerating
 

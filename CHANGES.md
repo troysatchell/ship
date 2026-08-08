@@ -21,6 +21,309 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## W4-SWEEPA (CI fix) — `postgresReachable.test.ts`'s "defaults to 5432" case depended on the host, not the code
+
+Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other items; each is its own commit.
+Fixes a test added by the item-3 commit above, caught by CI on PR #154 rather than locally.
+
+**What was broken.** `resolves false when nothing is listening` and `defaults to port 5432 when the
+URL specifies none` were two different assertions on the same underlying claim, but the second one
+proved it the wrong way: it called `isPostgresReachable('postgresql://127.0.0.1/whatever', 200)` and
+asserted the result was `false`, i.e. it inferred "the default is 5432" from "nothing answered on
+5432" — true on the machine this was written and tested on (this worktree's Postgres is on 5433),
+false on the GitHub Actions runner, which runs its own Postgres service **on 5432**. CI failed with
+exactly that one new test, the probe correctly returning `true`. Same defect class as item 1: an
+assertion that encodes an assumption about the environment (there, Postgres collation; here, which
+ports are free on the host) instead of the behavior. The comment on the old test said the assumption
+out loud ("127.0.0.1:5432 is not expected to be listening in this test environment") and shipped it
+anyway — and the local gate passed *specifically because* it ran somewhere that assumption held, so
+it could never have caught this either.
+
+**What changed.** `api/src/db/postgresReachable.ts`: extracted the URL parsing that
+`isPostgresReachable` was doing inline into a new pure function, `resolveHostPort(databaseUrl):
+{ host, port } | null` — same default-port rule (`Number(url.port) || 5432`), no socket involved.
+`isPostgresReachable` now calls it internally; behavior unchanged. `postgresReachable.test.ts`: the
+old socket-probe "defaults to 5432" case is replaced with a new `describe('resolveHostPort', ...)`
+block (3 cases) that asserts directly on the parsed `{ host, port }` value — deterministic on every
+machine, since it never opens a socket. Also added an explicit-port case (`:5433` round-trips) for
+symmetry.
+
+**Audited the rest of the file for the same shape, as asked, and found no other case with it.**
+Every other socket-touching assertion in the file falls into one of two safe patterns, neither of
+which depends on what else happens to be running on the host:
+- **Self-consistent (listener == target):** `isPostgresReachable`'s "resolves true" case and the
+  CLI's "exits 0 when reachable" case both spin up their own ephemeral `net.createServer()` via
+  `listen(0, ...)` (OS-assigned free port) and connect to that exact port — there is nothing external
+  for the environment to disagree with.
+- **Conventionally unused, not guaranteed-closed:** the "resolves false"/"exits non-zero" cases both
+  use `127.0.0.1:1` — port 1 is a reserved well-known port nothing *ordinarily* binds to, but that is
+  a convention, not a guarantee: a privileged process (root, or an admin-equivalent account) can
+  legally listen on it, and a host that does would make these two cases resolve `true`/exit `0` and
+  fail. This is the pre-existing pattern `ensureDatabase.test.ts` already uses for its identical
+  "unreachable" case, not something new introduced here, and the residual risk — however
+  unlikely in practice — is unchanged by this fix, which only addressed the port-5432 case above.
+- The unparseable-URL cases (both the async `isPostgresReachable` one and the new synchronous
+  `resolveHostPort` one) never touch a socket at all.
+
+**Regression test — proved this fixes the actual reported failure, not just a plausible one.**
+Started a real `postgres:16` container bound to host port 5432
+(`docker run -d --rm -p 5432:5432 -e POSTGRES_PASSWORD=x postgres:16`) to reproduce the CI condition
+exactly. Confirmed the *old* logic fails under it: ran the pre-fix `isPostgresReachable` implementation
+standalone against `postgresql://127.0.0.1/whatever` — returned `true` (correctly reachable), which is
+exactly what made the old assertion (`.resolves.toBe(false)`) fail. Then ran the *new* full test file
+in the same environment (something genuinely listening on 5432): 8/8 green, because no case in it
+probes 5432 anymore. Also re-proved the ordinary red-then-green for the new `resolveHostPort`
+assertions: temporarily changed its default from 5432 to 5433, reran — 1 failure, exactly
+`defaults to port 5432 when the URL specifies none` (`AssertionError: expected { port: 5433 } to
+deeply equal { port: 5432 }`), the other 7 cases unaffected; reverted (`git diff --stat` back to
+empty), reran: 8/8 green. Stopped and removed the test Postgres container afterward.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run postgresReachable.test.ts`
+
+**How to roll it back.** Revert this commit. `resolveHostPort` collapses back into
+`isPostgresReachable`'s inline parsing (behavior identical either way), and the "defaults to 5432"
+case goes back to being asserted via a socket probe against 127.0.0.1:5432 — which will fail again on
+any host, CI or otherwise, that happens to have something listening there.
+
+---
+
+## W4-SWEEPA (item 3 of 3) — one-command start now bootstraps Postgres via Docker
+
+Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other two items; each is its own
+commit.
+
+**What was broken.** `./start.sh` and `scripts/dev.sh` failed with an actionable but manual-step
+error (`api/src/db/ensureDatabase.ts:53-61`'s `unreachableMessage()`, thrown around line 93) when no
+Postgres server was reachable at the resolved `DATABASE_URL`, and stopped there. W4-R42 requires one
+command to start the full composed system "without any manual setup steps beyond installing
+dependencies" — telling the user to go start Postgres themselves is exactly the manual step the
+requirement rules out. Everything downstream of a reachable server already worked and was
+idempotent.
+
+**What changed.**
+- `scripts/dev.sh` (not `start.sh`, not `ensureDatabase.ts` — see placement reasoning below), a new
+  step 2.5 between resolving `DATABASE_URL` and creating `api/.env.local`: if neither an explicit
+  `DATABASE_URL` env var nor an existing `api/.env.local` pinned a database (the only case this
+  script picked its own default), and that default is unreachable, and `docker-compose.local.yml`
+  exists and `docker` is on PATH, it runs `docker compose -p ship -f docker-compose.local.yml up -d
+  postgres`, polls for the container to report healthy (up to 60s), and repoints
+  `RESOLVED_DATABASE_URL` at the container's real address
+  (`ship:ship_dev_password@localhost:5433`, from the compose file's own `postgres` service
+  definition) before continuing into the existing `ensureDatabase.ts` / `migrate.ts` /
+  `verifyMigrations.ts` / `seed.ts` flow, unmodified.
+- The compose project name is pinned to `-p ship` rather than left to Docker Compose's
+  directory-derived default. **Observed, not assumed:** running `docker compose -f
+  docker-compose.local.yml config --format json` from the main checkout reports project name `ship`;
+  the identical command from this worktree reports `ship-wt-w4_sweepa`. Left unpinned, each worktree
+  that hit this path would start its own separate container all trying to bind the compose file's
+  fixed `5433:5432` host port mapping — colliding with each other and with the single shared
+  container (`ship-postgres-1`) this repo's own factory tooling already runs everything against
+  (`.claude/skills/ship-factory/references/lessons.md` #8). Pinning the name means every worktree
+  reuses or creates that same one container instead.
+- `api/src/db/postgresReachable.ts` (new) — extracted the reachability check into a small, typed,
+  testable module (`isPostgresReachable(url, timeoutMs?)`, a plain TCP connect, exit-code CLI
+  wrapper) rather than an inline `node -e` snippet in the shell script, matching the existing
+  `ensureDatabase.ts`/`migrate.ts` pattern of "typed logic in `api/src/db/`, `scripts/dev.sh` is thin
+  glue that shells out to it via `npx tsx`."
+- `api/src/db/ensureDatabase.ts` was **not** modified. Its `unreachableMessage()` stays the fallback,
+  used verbatim when Docker itself is unavailable, `docker-compose.local.yml` is missing, or the
+  compose command itself fails (e.g. a port collision with a Postgres running outside this
+  project's compose namespace) — this change only ever adds a path to success in front of it; it
+  never replaces the message or hangs in its place.
+
+**Placement decision.** `scripts/dev.sh`, not `start.sh` or a new node entry point. Both `./start.sh`
+(via `exec "$ROOT_DIR/scripts/dev.sh"`) and `pnpm dev` (`package.json`'s `"dev": "./scripts/dev.sh"`)
+funnel through this one file — it is the single place `DATABASE_URL` is resolved and the only place
+that already calls `ensureDatabase.ts`. `pnpm dev:api`/`pnpm dev:web` bypass it entirely (they run
+`tsx watch`/`vite` directly with no database bootstrap of their own, and are out of scope for "one
+command starts the full composed system"). Putting the bootstrap here means both `./start.sh` and
+`pnpm dev` get it automatically, from one implementation, exactly the reasoning `start.sh`'s own
+header already gives for not duplicating `scripts/dev.sh`'s logic.
+
+**Regression test.** `api/src/db/__tests__/postgresReachable.test.ts` (6 cases, two `describe`
+blocks):
+
+1. **`isPostgresReachable()` directly** (4 cases) — real TCP sockets, no mocks: an ephemeral
+   `net.createServer()` for the reachable case, a guaranteed-refused loopback port for the
+   unreachable case (same pattern `ensureDatabase.test.ts` already uses), an unparseable-URL case,
+   and the default-port branch. Confirmed red first: temporarily inverted the `connect`/`error`
+   branches in `postgresReachable.ts` (`finish(false)` on connect, `finish(true)` on error) and
+   re-ran — 3 of 4 cases failed with `AssertionError: expected true to be false`, the correct failure
+   shape, not an import error. Reverted (`git diff --stat` back to empty) and re-ran: 4/4 green.
+2. **The CLI's exit code, as a subprocess** (2 cases) — spawns the real `npx tsx
+   src/db/postgresReachable.ts <url>` (via `execFile`, not a mocked `child_process`) from `api/`, the
+   exact invocation and cwd `scripts/dev.sh` uses, and asserts on the numeric exit code recovered
+   from the rejection, not on stdout text: 0 when reachable, non-zero when not. Added after an
+   explicit ask to close the coverage gap noted below, rather than leave it stated and unaddressed.
+   Confirmed red first, on the actual regression this closes: temporarily inverted `main()`'s
+   `process.exit(reachable ? 0 : 1)` to `process.exit(reachable ? 1 : 0)` — the two new CLI cases
+   failed (`AssertionError: expected 1 to be +0` and `expected +0 not to be +0`) while the four
+   `isPostgresReachable()` cases stayed green, confirming the failure was specifically in `main()`'s
+   mapping, not the underlying probe. Reverted (`git diff --stat` back to empty) and re-ran: 6/6
+   green.
+
+The bash orchestration itself (the Docker bring-up, health-poll, and URL-repoint in `scripts/dev.sh`)
+still has no vitest-reachable seam — per `.claude/skills/ship-qa/SKILL.md`'s tiers table, the gate
+executes only the two vitest projects, and bash isn't one of them — so that part was proved instead
+by genuine, non-simulated end-to-end runs (below), not by a test the gate would run. Stopped short of
+fabricating a shell/bats test the gate never executes, which would satisfy the letter of "add a
+regression test" while proving nothing (the exact failure mode `.claude/skills/ship-qa/SKILL.md`'s
+e2e-spec-vs-vitest gap describes, one layer up).
+
+**Coverage gap, previously open, now closed:** an earlier version of this entry stated that the test
+covered `isPostgresReachable()` but not `main()`'s CLI exit-code mapping — the actual contract
+`scripts/dev.sh` depends on — and that an inverted mapping would have stayed green. Case 2 above
+closes exactly that gap, confirmed red-then-green against the actual inversion described. What is
+still not covered by any vitest test, and is covered only by the manual end-to-end runs below: the
+bash-side Docker bring-up, health-poll loop, and `RESOLVED_DATABASE_URL` repoint in `scripts/dev.sh`
+itself.
+
+**End-to-end proof (observed, run twice — once before and once after extracting
+`postgresReachable.ts`, both identical in outcome).** Stopped the real `ship-postgres-1` container,
+removed this worktree's `api/.env.local`, unset `DATABASE_URL`, and ran the real `./scripts/dev.sh`
+(via `timeout`, not simulated) from a shell with neither set. Observed, in order: "Postgres
+unreachable at the default local address", the container starting and reporting healthy, a new
+`api/.env.local` created pointing at `ship:ship_dev_password@localhost:5433/ship_ship_wt_w4_sweepa`,
+`ensureDatabase.ts` creating that database, all 46 migrations applying, `verifyMigrations.ts`
+confirming 46/46, `seed.ts` completing, and the API/web/agent dev servers all starting successfully
+("API server running on http://localhost:3001", Vite ready, agent listening). Cleaned up afterward:
+killed the spawned dev-server processes, restored this worktree's real `api/.env.local`
+(`ship_wt_w4_sweepa`, unaffected throughout — the throwaway run used a different database name),
+dropped the throwaway `ship_ship_wt_w4_sweepa` database, removed the `.ports` file the run wrote, and
+confirmed `ship-postgres-1` and the factory's own `ship_wt_w4_sweepa` database were intact.
+
+**Known limitation, stated rather than hidden:** if two worktrees hit the unreachable-Postgres path
+at truly the same moment on a machine with no container yet running, `docker compose -p ship ... up
+-d postgres` from the second one racing the first could still surface a transient error from Docker
+itself (compose is not designed to be invoked concurrently against the same project by two
+processes) — the code treats any such failure the same as "compose failed for any other reason"
+(falls through to `ensureDatabase.ts`'s error, doesn't hang), but a "wait and retry" for this specific
+race was judged out of scope for this ticket rather than added speculatively.
+
+**How to run it.** Stop any running Postgres (`docker stop ship-postgres-1` if using the project's
+own container), remove `api/.env.local` if present, `unset DATABASE_URL`, then run `./start.sh` (or
+`pnpm dev`) — it should bring Postgres up itself rather than exiting with the unreachable-database
+message. Test: `source .factory-env && cd api && npx vitest run postgresReachable.test.ts`.
+
+**How to roll it back.** Revert this commit (three files: `scripts/dev.sh`,
+`api/src/db/postgresReachable.ts`, `api/src/db/__tests__/postgresReachable.test.ts`).
+`start.sh`/`scripts/dev.sh` return to exiting with `ensureDatabase.ts`'s unreachable-database message
+when Postgres is not already running, requiring the user to start it manually first.
+
+---
+
+## W4-SWEEPA (item 2 of 3) — type-safety improvement verdict corrected to "not met"
+
+Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other two items; each is its own
+commit.
+
+**What was broken.** `docs/IMPROVEMENTS.md` §1 (Type Safety) recorded the category's verdict against
+W4-R10 ("eliminate 25% of the 1535 tracked violations") as **met**, based on a sum of controlled
+per-ticket diffs (TS-1 + TS-3 + TS-4 = 411 ≥ 384). Re-running the audit's own instrument at HEAD —
+`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web api shared`, the exact command
+`audit/type-safety/baseline.md:14-18` prescribes — does not support "met" against the requirement's
+own literal threshold, which is defined on the tracked total, not the per-ticket sum.
+
+**Own recount (observed this session, at HEAD `5126a03`, 2026-08-08):**
+`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web api shared` returned
+web `any 23 / as 659 / non-null 5 / ts-ignore 3`, api `any 27 / as 1212 / non-null 42 / ts-ignore 5`,
+shared `any 0 / as 11 / non-null 0 / ts-ignore 0`. Summed per `baseline.md:77`'s own formula
+(`any + as + ! + ts-ignore`, `as any` not double-counted since it's a subset of `as`): any **50**,
+as **1882**, non-null **47**, ts-ignore **8** → **1987 tracked violations**. Against
+`audit/type-safety/baseline.json`'s recorded `metrics.violationsTotal: 1535`, that is **+452 (+29%)**
+— the wrong direction, where W4-R10 requires **−25%** (≈−384, target ≤1151). This independently
+matches the number already recorded in `audit/requirements/pipeline/verification-results.json`
+(`W4-R10`) and `audit/requirements/REPORT.md:36,84` from a separate audit pass earlier the same day
+— cross-checked, not assumed.
+
+**What this is not.** `docs/IMPROVEMENTS.md`'s pre-existing lines 27-28 (now reworded, see diff)
+already disclosed the inference plainly — "met, by the sum of controlled per-ticket diffs — not by a
+live recount, which the tracked metric cannot support today" — and the adjacent table already
+printed the baseline-to-then figure with "Up 243" in the open. This was not a concealed claim. The
+defect is that the document's **verdict** field said "met" against a requirement whose literal
+threshold is the tracked total, and that total has never measured below baseline at any point this
+sprint (1535 → 1778 → 1987).
+
+**What changed.** `docs/IMPROVEMENTS.md`, §1 (Type Safety):
+- Verdict restated as **NOT MET against the requirement's literal threshold**, with the reasoning
+  spelled out (tracked total only ever measured up, per-ticket sum answers a different question than
+  the one the requirement asks).
+- Before → After table gained a third data column (`HEAD 5126a03, this session's recount`, 1987) and
+  a full breakdown of this session's count, sourced and formula-cited.
+- The genuine per-ticket wins are kept, not deleted: total `any` (web+api+shared) 102 → 50, halved
+  and independently reconfirmed this session; `req.userId!`/`req.workspaceId!` 236 → 0, also
+  reconfirmed this session (`grep -rEn 'req\.(userId|workspaceId)!' api/src --include='*.ts'` → 0
+  hits).
+- The "controlled per-ticket sum" paragraph is kept as supporting evidence for real work done, with
+  a sentence added clarifying it does not restate or substitute for the verdict.
+
+**Regression test.** None added. This is a documentation correction to a verdict field describing a
+static-analysis count, not a code change with observable behavior — a test asserting "the doc says
+X" would only test the doc against itself, which is not a meaningful regression guard. Honest
+absence, not an oversight: `.claude/skills/ship-qa/SKILL.md` and the factory's own
+`test.fixme()`/empty-test rules are about code paths, and this ticket has none.
+
+**How to run it (to reproduce the recount).**
+`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web api shared` from the repo root, then
+sum any + as + non-null + ts-ignore per `audit/type-safety/baseline.md:77`'s formula and compare
+against `audit/type-safety/baseline.json`'s `metrics.violationsTotal` (1535).
+
+**How to roll it back.** Revert this commit. `docs/IMPROVEMENTS.md` §1's verdict returns to "met,"
+which overstates the type-safety category's status against a live recount at HEAD.
+
+---
+
+## W4-SWEEPA (item 1 of 3) — migration-runner regression test made collation-independent
+
+Bundle: W4-SWEEPA — a wave-4 correctness sweep of three unrelated items grouped for one review
+pass, not one root cause. Search this file for `W4-SWEEPA` for the other two items (each is its own
+commit; this file lists newest-first, so later items land above this entry, not below it).
+
+**What was broken.** `api/src/db/__tests__/migrationRunner.test.ts:167,184` (both the "applies
+every migration file" and "clean no-op on a second invocation" cases) compared
+`recordedVersions(pool)` — the list of applied migrations read back with Postgres's `ORDER BY
+version` — against `expectedVersionsFromDisk()`, which is sorted with JavaScript's
+`Array.prototype.sort()`. Those two collations disagree on exactly one pair out of the 46 migration
+names: **observed directly**, `SELECT v FROM (VALUES ('020_document_associations'),
+('020b_sprint_assignee_ids')) t(v) ORDER BY v` returns `020b_sprint_assignee_ids` first, while
+`['020_document_associations','020b_sprint_assignee_ids'].sort()` in Node returns
+`020_document_associations` first. The migration runner itself was not at fault — both tests failed
+with a runner that had genuinely applied all 46 migrations, only reordered relative to the JS-sorted
+expectation.
+
+**What changed.** `recordedVersions()` (`migrationRunner.test.ts:113-136`) now sorts its own result
+with JS `.sort()` before returning it, so both sides of every `toEqual` comparison use the same
+collation. The comparison itself is untouched: still a strict, ordered array-identity check via
+`toEqual`, not a count or `expect.arrayContaining` — this test is the regression test for DB-1 /
+TRO-178 ("the migration runner must apply every migration or fail"), and loosening the assertion
+would have destroyed the guarantee it exists to protect. The SQL `ORDER BY version` stays in the
+query for anyone reading it in isolation; it's now redundant for this comparison, not wrong.
+
+**Regression proof — red, then green, then re-proved red.**
+1. **Red on unfixed code (observed before any change here):** ran
+   `pnpm --filter @ship/api test -- migrationRunner.test.ts` against the pre-fix file. Both
+   assertions failed with `AssertionError: expected [...] to deeply equal [...]`, diff showing
+   `020_document_associations` and `020b_sprint_assignee_ids` transposed — the exact collation
+   mismatch above, not an import error or a typo.
+2. **Green after the fix:** `cd api && npx vitest run migrationRunner.test.ts` — 7/7 passed in
+   558ms, isolated.
+3. **Re-proved the test still catches a real skip, with the fix in place:** temporarily edited
+   `api/src/db/migrationRunner.ts`'s `runPendingMigrations` to filter
+   `020b_sprint_assignee_ids.sql` out of the file list before applying it, reran the same command.
+   Both assertions failed again — this time correctly: `expected [...44 versions] to deeply equal
+   [...45 versions]`, diff showing `020b_sprint_assignee_ids` missing entirely. Reverted the
+   sabotage (`git diff --stat api/src/db/migrationRunner.ts` back to empty) and reran: 7/7 green
+   again. The collation fix did not weaken the DB-1 guarantee.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run migrationRunner.test.ts`
+
+**How to roll it back.** Revert this commit. The two assertions return to comparing a
+Postgres-collated array against a JS-sorted one, which will intermittently fail depending on
+whether the 020/020b pair (or any future migration pair with the same collation disagreement) is
+present — the test will start failing on a runner that is actually correct.
+
+---
+
 ## TRO-364 — FG: TC2's blocking-approval half never fires — approval transitions now reach document_history
 
 **The cost this closes.** Grader-flagged: Test Cases row 2 was a documented partial match — the

@@ -1,5 +1,14 @@
 # Requirements gaps — Ship (2026-08-08T19:21:10Z, commit a830cf77cb68)
 
+> **Frozen baseline — do not read this as current.** This handoff describes commit `ef87839` and has
+> not been regenerated since. Fixes for **W4-R35** (`migrationRunner.test.ts`'s sort-order mismatch),
+> **W4-R10(a)** (the type-safety "met" claim in `docs/IMPROVEMENTS.md`), and **W4-R42**
+> (`scripts/dev.sh`'s Postgres bootstrap) have since landed on this branch — the gap descriptions
+> below still show the pre-fix state, deliberately. `matrix.baseline.json` is the frozen "before" a
+> later compare-mode run diffs against (W4-R34); editing this file to agree with the present would
+> destroy the ability to prove that delta. A **compare-mode run**, not an edit to this file, is what
+> will show the fix.
+
 Ticket coverage below is live Linear data. Each gap lists the tickets that map to it, or says none does — a gap with no ticket is the one most likely to be forgotten.
 
 ## Unticketed requirements
