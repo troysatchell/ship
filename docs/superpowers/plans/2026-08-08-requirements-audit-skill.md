@@ -716,3 +716,122 @@ Modes: init / baseline / compare <label> / extract. Ship's config:
 ```markdown
 - [Requirements-audit skill](requirements-audit-skill.md) — PDF guidelines → traceability matrix; Ship shakedown done; gaps hand off to ship-pm
 ```
+
+### Task 11: Optional pdf_tool backend (pdf-inspector wrapper) — amendment
+
+Added mid-shakedown at Troy's request. Gives the skill an optional mechanical
+text-extraction backend: cached source text + verbatim-quote verification,
+with the visual Read path unchanged as default and scanned-PDF fallback.
+
+**Files:**
+- Create: `~/.claude/skills/requirements-audit/scripts/pdf/package.json` (via npm)
+- Create: `~/.claude/skills/requirements-audit/scripts/pdf/pdf2md.mjs`
+- Modify: `~/.claude/skills/requirements-audit/references/config-template.yaml` (add `pdf_tool`)
+- Modify: `~/.claude/skills/requirements-audit/SKILL.md` (Phase 1 addition)
+- Modify: `~/.claude/skills/requirements-audit/references/inventory-format.md` (extraction procedure additions)
+
+**Interfaces:**
+- Consumes: existing extraction procedure (steps 1–5) and config schema.
+- Produces: `pdf_tool` config field (nullable command string); cached source text at `<repo>/audit/requirements/source-<docID>.md`; wrapper CLI contract: `node pdf2md.mjs <pdf-path>` prints markdown to stdout, `--type` prints the classification (TextBased/Scanned/ImageBased/Mixed) instead.
+
+- [ ] **Step 1: Create the wrapper package**
+
+```bash
+mkdir -p ~/.claude/skills/requirements-audit/scripts/pdf
+cd ~/.claude/skills/requirements-audit/scripts/pdf
+npm init -y >/dev/null
+npm install @firecrawl/pdf-inspector
+```
+
+- [ ] **Step 2: Write `pdf2md.mjs`**
+
+```javascript
+#!/usr/bin/env node
+// Wrapper for @firecrawl/pdf-inspector: prints a PDF's markdown to stdout.
+// Usage: node pdf2md.mjs <file.pdf> [--type]
+//   --type  print only the classification (TextBased/Scanned/ImageBased/Mixed)
+import { readFileSync } from 'fs';
+import { processPdf } from '@firecrawl/pdf-inspector';
+
+const file = process.argv[2];
+if (!file) {
+  console.error('usage: pdf2md.mjs <file.pdf> [--type]');
+  process.exit(2);
+}
+const result = processPdf(readFileSync(file));
+if (process.argv.includes('--type')) {
+  console.log(result.pdfType);
+  process.exit(0);
+}
+if (result.markdown == null) {
+  console.error(`no extractable text (pdfType=${result.pdfType})`);
+  process.exit(1);
+}
+console.log(result.markdown);
+```
+
+(If the installed package's API surface differs — e.g. named export, options
+object, or `pdfType` casing — adapt the wrapper to the actual API per the
+package's README/types, keeping the CLI contract above identical.)
+
+- [ ] **Step 3: Verify the wrapper on the W4 PDF**
+
+```bash
+node ~/.claude/skills/requirements-audit/scripts/pdf/pdf2md.mjs \
+  "/Users/troy/repos/GAUNTLET/Ship/project guideliens/GFA_Week_4_ShipShape_Updated.pdf" --type
+node ~/.claude/skills/requirements-audit/scripts/pdf/pdf2md.mjs \
+  "/Users/troy/repos/GAUNTLET/Ship/project guideliens/GFA_Week_4_ShipShape_Updated.pdf" | head -20
+```
+
+Expected: `TextBased` (or `text_based`-style casing), then recognizable brief
+markdown ("ShipShape", "Before You Start", ...).
+
+- [ ] **Step 4: Add `pdf_tool` to the config template**
+
+Append to `references/config-template.yaml` after the `pm_skill` block:
+
+```yaml
+
+# Optional mechanical PDF text backend. A command that takes a PDF path argument
+# and prints its markdown/text to stdout (the skill's bundled wrapper:
+# "node ~/.claude/skills/requirements-audit/scripts/pdf/pdf2md.mjs").
+# When set, extract caches the output to audit/requirements/source-<docID>.md
+# and verifies every inventory Quote against it. null = visual extraction only.
+pdf_tool: null
+```
+
+- [ ] **Step 5: Extend SKILL.md Phase 1**
+
+In `SKILL.md`, append one more bullet to the Phase 1 section after the
+user-skim-gate bullet:
+
+```markdown
+- `pdf_tool` configured → run it with `--type` first: scanned/image-only PDFs
+  fall back to the visual path (the tool does no OCR). Text-based PDFs: cache
+  the tool's stdout to `audit/requirements/source-<docID>.md`, then after
+  writing inventory entries verify EVERY Quote is a whitespace-normalized
+  substring of that cache; any miss = stop and fix the quote before the skim
+  gate. The cache is an artifact — commit it with the inventory.
+```
+
+- [ ] **Step 6: Extend inventory-format.md extraction procedure**
+
+Append after step 5 of the Extraction procedure:
+
+```markdown
+6. When config `pdf_tool` is set and the PDF is text-based: cache the tool's
+   markdown output to `audit/requirements/source-<docID>.md` before writing
+   entries, and after writing them verify every Quote against the cache —
+   normalize whitespace (collapse runs, strip soft hyphens/ligatures) on both
+   sides and require a substring match. A failed match is an extraction error:
+   fix the quote, never the cache. Page numbers still come from the PDF itself.
+```
+
+- [ ] **Step 7: Verify the three edited files**
+
+```bash
+python3 -c "import yaml,os; yaml.safe_load(open(os.path.expanduser('~/.claude/skills/requirements-audit/references/config-template.yaml'))); print('YAML OK')"
+grep -c "pdf_tool" ~/.claude/skills/requirements-audit/SKILL.md ~/.claude/skills/requirements-audit/references/config-template.yaml ~/.claude/skills/requirements-audit/references/inventory-format.md
+```
+
+Expected: `YAML OK`; each file reports ≥1 `pdf_tool` hit.

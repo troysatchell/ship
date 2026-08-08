@@ -71,6 +71,11 @@ tickets:
 code_roots: [api/src, web/src, shared/src]
 exclude: [node_modules, dist, audit]
 pm_skill: ship-pm                    # repo's PM skill to hand gaps to; null = passive handoff
+pdf_tool: null                       # optional: command emitting markdown text for a PDF path
+                                     # (e.g. the skill's bundled pdf-inspector wrapper). When set,
+                                     # extract caches the text and mechanically verifies every
+                                     # inventory Quote against it; vision path remains the
+                                     # fallback and the scanned-PDF route.
 verify:                              # commands available for behavioral checks
   test: "npm test --workspace api"
   e2e: "npm run test:e2e"
@@ -139,6 +144,11 @@ readable.
    are mandatory; interpretation lives only in the "Meaning in code" field.
    Record the PDF sha256 in config. Ask the user to skim the inventory once
    before the first sweep; their edits are authoritative thereafter.
+   When `pdf_tool` is configured and the PDF is text-based, extract also caches
+   the tool's markdown output to `audit/requirements/source-<docID>.md` and
+   mechanically verifies every Quote is a substring of it (whitespace-
+   normalized) — a failed quote check stops extraction. Scanned/image PDFs and
+   repos without the tool use the visual path unchanged.
 3. **Ticket mapping** — pull the configured Linear team's tickets, match to
    requirement IDs by content, record both directions (unticketed requirements,
    orphan tickets). Linear unreachable → ticket cells `BLOCKED`, run continues.
