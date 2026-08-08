@@ -117,6 +117,27 @@ describe('isPostgresReachable', () => {
   it('resolves false, rather than throwing, for an unparseable URL', async () => {
     await expect(isPostgresReachable('not-a-url')).resolves.toBe(false);
   });
+
+  it('resolves true against an IPv6 listener addressed via a bracketed URL', async () => {
+    // End-to-end version of the resolveHostPort bracket-stripping regression
+    // below: a real listener on ::1, reached through the bracketed URL form
+    // Postgres connection strings actually use. Before the fix this always
+    // resolved false (ENOTFOUND on the literal string '[::1]'), regardless
+    // of whether anything was listening.
+    server = net.createServer();
+    const port = await new Promise<number>((resolve, reject) => {
+      server?.listen(0, '::1', () => {
+        const address = server?.address();
+        if (address && typeof address === 'object') {
+          resolve(address.port);
+        } else {
+          reject(new Error('server did not report a port'));
+        }
+      });
+    });
+
+    await expect(isPostgresReachable(`postgresql://[::1]:${port}/whatever`)).resolves.toBe(true);
+  });
 });
 
 describe('resolveHostPort', () => {
@@ -142,6 +163,22 @@ describe('resolveHostPort', () => {
     // would silently rewrite this explicit port to 5432. Port must come
     // through as the number 0, unchanged.
     expect(resolveHostPort('postgresql://127.0.0.1:0/whatever')).toEqual({ host: '127.0.0.1', port: 0 });
+  });
+
+  it('strips the brackets from an IPv6 host literal', () => {
+    // `new URL('postgresql://[::1]:5432/whatever').hostname` is the string
+    // `'[::1]'`, brackets included — valid for a URL, but net.createConnection
+    // treats '[::1]' as an ordinary (unresolvable) hostname, not the IPv6
+    // address ::1, and fails with ENOTFOUND against it. Host must come
+    // through unbracketed.
+    expect(resolveHostPort('postgresql://[::1]:5432/whatever')).toEqual({ host: '::1', port: 5432 });
+  });
+
+  it('strips the brackets from a full IPv6 host literal', () => {
+    expect(resolveHostPort('postgresql://[2001:db8::1]:5432/whatever')).toEqual({
+      host: '2001:db8::1',
+      port: 5432,
+    });
   });
 
   it('returns null, rather than throwing, for an unparseable URL', () => {

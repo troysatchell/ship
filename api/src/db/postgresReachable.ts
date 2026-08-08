@@ -56,7 +56,20 @@ export function resolveHostPort(databaseUrl: string): HostPort | null {
     // explicit port, and it is also falsy, so a `||` default would silently
     // rewrite an explicit `:0` to 5432 instead of honoring what the URL said.
     const port = url.port === '' ? 5432 : Number(url.port);
-    return { host: url.hostname || 'localhost', port };
+    // WHATWG `URL` keeps IPv6 host literals bracketed (`hostname` for
+    // `postgresql://[::1]:5432/db` is the 5-character string `[::1]`, not
+    // `::1`) — correct for a URL, but `net.createConnection`/`dns.lookup`
+    // do not accept that bracketed form as a host. Observed directly:
+    // `net.isIP('[::1]')` is `0` (not recognized as an IP at all) while
+    // `net.isIP('::1')` is `6`, and connecting to a real IPv6 listener with
+    // `{ host: '[::1]', port }` fails with `ENOTFOUND` while `{ host: '::1',
+    // port }` connects — so every IPv6 DATABASE_URL previously read as
+    // unreachable regardless of whether Postgres was actually listening.
+    const hostname =
+      url.hostname.startsWith('[') && url.hostname.endsWith(']')
+        ? url.hostname.slice(1, -1)
+        : url.hostname;
+    return { host: hostname || 'localhost', port };
   } catch {
     return null;
   }
