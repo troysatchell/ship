@@ -31,10 +31,13 @@ tickets" mode can build on the same artifacts without rework.
 6. **Ambiguity = ask + log.** Ambiguous requirements trigger one yes/no
    question in the main session; the ruling is recorded permanently and never
    re-asked.
-7. **Gaps are persisted and handed off**, not drafted inline: written to
-   `gaps.md` for another agent (e.g., the PM agent) to consume, with a pointer
-   appended to the repo memory bank when one exists. Nothing is ever
-   auto-created in Linear.
+7. **Gaps are persisted and handed to the repo's PM skill.** Written to
+   `gaps.md`, then the configured PM skill (Ship: `ship-pm`, the factory's
+   scope-gate owner) is invoked with that file so PM judgment — should these
+   exist as tickets? — happens in the same run. Repos without a PM skill fall
+   back to passive handoff: `gaps.md` plus a pointer appended to the repo
+   memory bank when one exists. Nothing is ever auto-created in Linear by this
+   skill; ticket creation stays behind the PM's own process.
 8. **Behavioral evidence gates VERIFIED.** Static file:line tracing alone earns
    a lower tier.
 9. **Structure: one phased skill** (Approach A) following ShipShape audit
@@ -67,6 +70,7 @@ tickets:
   project: null                      # optional narrowing
 code_roots: [api/src, web/src, shared/src]
 exclude: [node_modules, dist, audit]
+pm_skill: ship-pm                    # repo's PM skill to hand gaps to; null = passive handoff
 verify:                              # commands available for behavioral checks
   test: "npm test --workspace api"
   e2e: "npm run test:e2e"
@@ -76,8 +80,10 @@ verify:                              # commands available for behavioral checks
 `init` mode writes this by auto-detection (finds PDFs in folders whose names
 match guideline/brief patterns — e.g. `project guideliens/`, `ProjectGuidelines/`,
 `docs/requirements/` — reuses verified commands from `audit/shipshape.config.yaml`
-when present) and asks brief yes/no questions only for what it cannot detect.
-Detected candidates are confirmed with the user before being written to config.
+when present, and scans `.claude/skills/` for a PM-role skill by name/description
+match, e.g. `ship-pm`) and asks brief yes/no questions only for what it cannot
+detect. Detected candidates are confirmed with the user before being written to
+config.
 
 ### Artifacts: `<repo>/audit/requirements/`
 
@@ -142,8 +148,13 @@ readable.
    it; `VERIFIED` only on green captured output. Inventories over ~25
    requirements may fan out tracing to parallel subagents by requirement
    cluster; ambiguity questions always return to the main session.
-5. **Report + handoff** — write `matrix.json`, `REPORT.md`, `gaps.md`; append a
-   one-line pointer to the repo memory bank if one exists.
+5. **Report + handoff** — write `matrix.json`, `REPORT.md`, `gaps.md`. If
+   `pm_skill` is configured, invoke it with the `gaps.md` path and a one-line
+   framing ("requirements sweep found N unticketed requirements and M orphan
+   tickets; apply your scope gate") so PM judgment runs immediately; the PM
+   skill owns everything downstream (whether gaps become tickets, triage of
+   orphans). Otherwise: passive handoff — `gaps.md` plus a one-line pointer
+   appended to the repo memory bank if one exists.
 
 ## Error handling
 
@@ -161,6 +172,9 @@ Rule: never silently downgrade missing evidence into a confident verdict.
 - **Question-flood cap:** a first sweep asks only blocking ambiguity questions;
   the rest proceed as `ASSUMED` with the assumption stated in the report, so a
   sweep always finishes. `ASSUMED` items are listed for later rulings.
+- **Configured `pm_skill` not found in the repo:** warn in the report and fall
+  back to passive handoff (`gaps.md` + memory-bank pointer). Never a run
+  failure — the audit's own artifacts are already complete by this phase.
 
 ## Testing & acceptance
 
@@ -174,9 +188,10 @@ Shakedown: run `baseline` on Ship against the Week 4 ShipShape PDF.
 
 ## Future (explicitly deferred)
 
-- **PM mode:** drafting ticket text from `gaps.md` and assisting ticket
-  creation pre-PM. The gaps file and stable requirement IDs are the designed
-  seam for this; no other provisions now.
+- **Deeper PM integration:** the `pm_skill` handoff already routes gaps into
+  the factory's scope gate. Deferred: this skill drafting ticket text itself,
+  or running as a formal pre-spec step in the factory pipeline. Stable
+  requirement IDs + `gaps.md` remain the seam.
 - **Ticket providers beyond Linear** (config `provider` field is the seam).
 
 ## Out of scope (YAGNI)
