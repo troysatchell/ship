@@ -4,21 +4,9 @@
 **Constraint on this pass:** scope judgement only. No Linear writes, no application source
 modified.
 
-**Ticket coverage (added after this triage was written).** The Linear connector was unauthorized
-when these dispositions were made, so nothing below was claimed to be unticketed. It has since
-been authorized and the mapping run against the 123 issues in project *ShipShape Audit
-Remediation*. It does not change a single disposition, but it sharpens two of them:
-
-- **W4-R38 (dependency pinning) has no ticket at all.** Of the ten gaps below it is the only one
-  where nothing in the project covers the work — `[RULE-4]`/TRO-244 covers `pnpm audit` scanning,
-  not pinning. It was already "ships now"; it is now also the only gap nobody has written down.
-- **W4-R10, W4-R35 and W4-R33 each have tickets that name the gap outright** — TRO-304 records the
-  API-3 target as still unmet, TRO-305 records the error-handling fixes as having zero screenshots.
-  These are self-documenting gap tickets: the project already knows, which is a point in its
-  favour and removes any excuse about discovery.
-
-Nine in-scope tickets map to no requirement (`REPORT.md` → Orphan tickets). None needs action here:
-they are security and infrastructure work the W4 brief never asked for.
+**Ticket coverage** was unknown when the dispositions below were made — the Linear connector was
+unauthorized. It is known now, and gated separately in **Pass 2** at the end of this file. No
+disposition below changes.
 
 The ordering principle is grading impact divided by cost, not severity alone. Several of these are
 cheap enough that deferring them costs more in explanation than in engineering.
@@ -187,3 +175,95 @@ are among the cheapest points available in the whole brief.
 traces and no behavioural verification, which is a statement about this sweep's coverage, not a
 defect list. Re-running with the Linear connector authorized and the e2e suite executed would move
 most of them without any code changing.
+
+---
+
+# Pass 2 — the ticket dimension
+
+Gated separately because it arrived separately: Phase 2 was blocked when Pass 1 ran. Inputs are
+the live mapping against the 123 issues in Linear project *ShipShape Audit Remediation* — 21
+requirements with no covering ticket, and 9 tickets covering no requirement.
+
+**Headline: none of the 21 and none of the 9 imply work that should exist.** But gating them
+surfaced something that does, and it is larger than either list.
+
+## Is "no ticket" ever itself a defect?
+
+Almost never, and it is worth saying why so this does not get re-asked. A ticket is a coordination
+artifact, not a deliverable. The brief grades the repository and the submission, not the tracker.
+Filing tickets retroactively against finished work would be pure theatre — and actively harmful
+here, because it would decouple the ticket record from the git log that 10% of the grade is read
+off.
+
+There is exactly one case where a missing ticket is a real signal: **the requirement is not
+satisfied and nobody has written down that it isn't.** That is the difference between "done
+without a ticket" and "not done and not tracked." Only that second case is a defect.
+
+Sorting the 21 on that test:
+
+- **18 are done, just done without a ticket** — verdicted `VERIFIED` or `IMPLEMENTED-UNVERIFIED`.
+  This includes W4-R1–R8, the audit report itself. Requiring a ticket for the audit report is
+  backwards: the report *generated* the tickets. The findings became TRO-172…239; the document
+  that produced them cannot also be one of its own outputs. Same for the submission artifacts
+  (R48, R49, R52) — authored directly, which git history confirms. **No action, and no ticket.**
+- **W4-R33** is a roll-up over the category targets and is `PARTIAL` only because W4-R10 is. It
+  resolves when R10 does. **No separate ticket** — a ticket for an aggregate would be a second
+  place to forget to close.
+- **W4-R51 / W4-R54** (demo video, social post) are owner actions, already dispositioned. A ticket
+  does not record a video.
+- **W4-R35 and W4-R38 are the only two that meet the test**: real open work, `PARTIAL`, nothing in
+  the tracker. Both are already **"fix now"** from Pass 1. That makes the ticket question moot —
+  work being done this session does not need a tracker entry, it needs doing. **Conditional
+  ruling:** if either is *not* fixed before submission, it must be ticketed at that point, because
+  then it becomes untracked known-broken work, which is the one shape this project cannot afford.
+
+## The 9 orphans — all dismissed, with reasons
+
+| Ticket | Ruling |
+|---|---|
+| TRO-241 | EPIC container for the `RULE-*` tickets. Its children map to requirements; containers don't. Modelling artifact, not a gap. |
+| TRO-287 | Canceled, "not a defect — the 200 was a fixture artefact." A withdrawn non-defect with its reasoning recorded is the system working. |
+| TRO-240, TRO-279 | Real DB findings (pool SSL, concurrent `db:migrate`) beyond the brief's query-efficiency ask. They made a managed-Postgres deploy possible. Correctly orphans. |
+| TRO-294, TRO-295 | TF-7 follow-ups on the ALB/CloudFront lockdown. Infrastructure the brief never scoped. |
+| TRO-307, TRO-308, TRO-309 | CodeQL alerts. Read these the other way round: W4-R37 requires CI to run a security scan, and these tickets **are that scan's output**. They are indirect evidence the clause works, not evidence of drift. |
+
+**What would change this:** an orphan that described *unfinished* work in a graded category. None
+of these nine does — eight are Done and one is a documented cancellation.
+
+## The finding this gate actually produced
+
+Answering "does this imply work" honestly means naming what the ticket data exposed, which is not
+about tickets at all.
+
+**The project's own definition of done is not met by tickets already marked Done.** Its description
+states a finding is done when "its compare-mode measurement proves the delta under identical
+conditions **and** the full suite still passes: `pnpm test`, `pnpm --filter @ship/web test`, and
+the Playwright suite." Against that bar, at HEAD:
+
+- `pnpm test` exits 1. So the second clause fails for **all 121** tickets marked Done.
+- Only 3 of 8 categories (`api-perf`, `db-query`, `a11y`) have a `compare-*` artifact directory.
+  The other five record before/after as prose in `docs/IMPROVEMENTS.md` — real numbers, but not
+  the re-runnable comparison the first clause demands. Type safety has neither, and its recorded
+  number moved the wrong way.
+
+This is the same defect class as Pass 1's headline: **a stated standard that the artifacts do not
+meet, asserted as met.** It was invisible until the ticket dimension existed, because "121 Done"
+reads as finished until you check what Done was defined to mean.
+
+**Ruling:** this is in scope, it is needed, and it is cheap. Two acceptable resolutions, and one
+unacceptable one:
+
+1. **Make the DoD true** — fix the red suite (already "fix now", applier tier, ~10 minutes). That
+   alone repairs the second clause for all 121 tickets at once. Best value in this entire triage.
+2. **Amend the DoD** to what was actually applied, if compare-mode-per-category was never the real
+   intent. Honest, and cheaper than retro-fitting five compare artifacts under a deadline.
+3. **Keep both as they are** — not acceptable. A project description asserting a standard its own
+   Done tickets do not meet is exactly the pattern `.claude/CLAUDE.md` was written about, and it
+   is worse than either fix because it is the one a grader can check in thirty seconds.
+
+Route (1) is already scheduled. Do it, then decide about (2) for the compare-artifact clause with
+the deadline in view — retro-fitting five compare directories is not obviously worth it, and saying
+so plainly in the project description costs nothing.
+
+**Not in scope for this gate:** whether TRO-354 (the one open ticket, ~428 remaining fixed-sleep
+sites) should ship before submission. It is a mechanical batch with no requirement depending on it.
