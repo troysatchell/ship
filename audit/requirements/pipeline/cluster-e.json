@@ -1,0 +1,225 @@
+{
+  "cluster": "devex-docs-resilience",
+  "requirements": [
+    {
+      "id": "W4-R42",
+      "verdict": "PARTIAL",
+      "evidence": [
+        {
+          "file": "start.sh",
+          "line": 68,
+          "note": "start.sh execs scripts/dev.sh unchanged after a Node/pnpm preflight; it is the documented single entry point"
+        },
+        {
+          "file": "scripts/dev.sh",
+          "line": 78,
+          "note": "dev.sh runs ensureDatabase.ts, migrate.ts, verifyMigrations.ts, seed.ts on every invocation (idempotent, self-healing)"
+        },
+        {
+          "file": "api/src/db/ensureDatabase.ts",
+          "line": 53,
+          "note": "unreachableMessage() builds the exact text 'ERROR: Cannot reach PostgreSQL at HOST:PORT. Start it, then re-run ./start.sh...' — thrown from ensureDatabase() at line 93 when the initial client.connect() gets ECONNREFUSED/ENOTFOUND/ETIMEDOUT"
+        },
+        {
+          "file": "api/src/db/ensureDatabase.ts",
+          "line": 93,
+          "note": "connection-error branch converts a raw pg connect failure into the actionable unreachableMessage and throws — set -e in dev.sh then stops the script before servers start"
+        },
+        {
+          "file": "README.md",
+          "line": 37,
+          "note": "README has a 'Cold start (one command)' section documenting ./start.sh from a clean checkout"
+        },
+        {
+          "file": "README.md",
+          "line": 55,
+          "note": "README explicitly says: 'No native Postgres installed? Bring up one of the two bundled Docker options first, then point start.sh at it with DATABASE_URL' — a manual pre-step, not part of the one command"
+        },
+        {
+          "file": "README.md",
+          "line": 69,
+          "note": "'If Postgres isn't reachable at all, ./start.sh fails immediately and says exactly what to start' — the README itself documents that the single command does not start the database server"
+        }
+      ],
+      "suggested_verification": "On a machine with no Postgres server running anywhere (no native service, no docker-compose container), run `./start.sh` from a clean checkout and observe whether it succeeds unaided or requires a manual `docker compose ... up`/`brew services start postgresql` first.",
+      "assumption": null,
+      "notes": "PARTIAL. Everything downstream of an already-reachable Postgres server is genuinely one-command and self-healing: dependency install, shared build, database creation, migration, migration verification, seeding, dynamic port selection, and starting both servers — all idempotent, all in scripts/dev.sh, all documented in README's 'Cold start' section. But the script only creates/migrates/seeds a database ON a Postgres SERVER that is already running; it does not start the Postgres server process itself. From a truly clean checkout on a machine with no Postgres running (native service stopped, no Docker container up), `./start.sh` fails immediately with the exact message observed today ('ERROR: Cannot reach PostgreSQL at localhost:5433. Start it, then re-run ./start.sh' — produced by api/src/db/ensureDatabase.ts:53-61's unreachableMessage(), thrown at line 93) and requires a manual step (start a local Postgres service, or `docker compose -f docker-compose.local.yml up -d postgres`) before re-running — which is manual setup beyond 'installing dependencies' under a strict reading of the quote. The README is honest about this (README.md:55-70) rather than hiding it, so the documentation half of R42 is fully met; the 'single command boots app + database... without manual setup beyond installing dependencies' half is not, for the database-server-startup step specifically. No mock external services were found to be needed for local dev (the only external call, AWS SSM, is gated behind NODE_ENV=production in api/src/index.ts:15-17), so that clause of the quote is not in play.",
+      "suggested_scope": "About 20 lines in start.sh: when Postgres is unreachable and docker-compose.local.yml is present, offer to start that container and wait for it to become healthy, keeping the current message from api/src/db/ensureDatabase.ts:53-61 as the fallback. No application code, and the README already documents the limitation honestly, so only the script changes."
+    },
+    {
+      "id": "W4-R43",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "CHANGES.md",
+          "line": 10769,
+          "note": "TRO-248 (RULE-7) entry: explicit row-by-row assessment of every outbound-call boundary (pg pool, statement_timeout, server timeouts, HTTP 429 retry, SSM, circuit breakers) re-verified against current code, not just the ticket text"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 10810,
+          "note": "row 6: circuit-breaker assessment finds the WebSocket already protected by y-websocket's backoff reconnect + Editor.tsx's permanent-failure shouldConnect=false gating (ERR-1/ERR-2) — 'assessed, no change', with the reasoning spelled out rather than left as a bare gap"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 10828,
+          "note": "'What changed' section documents the two real fixes (poolConfig.ts, ssm.ts) each with the failure mode it protects against"
+        },
+        {
+          "file": "api/src/db/poolConfig.ts",
+          "line": 1,
+          "note": "file header documents the exact failure mode: fixed 2000ms connectionTimeoutMillis against a slow-cold-start managed Postgres causes every connection attempt in that window to fail and crash-loop under restart-on-crash infra"
+        },
+        {
+          "file": "api/src/db/client.ts",
+          "line": 40,
+          "note": "client.ts actually calls resolvePoolTiming(process.env) and wires connectionTimeoutMillis/max into the real pg.Pool — not just a design doc"
+        },
+        {
+          "file": "api/src/config/ssm.ts",
+          "line": 93,
+          "note": "sendWithRetry: 5s per-attempt AbortController timeout, up to 3 attempts with full-jitter backoff, ParameterNotFound classified non-retryable — SSMClient constructed with maxAttempts:1 so this is the sole retry layer"
+        },
+        {
+          "file": "api/src/utils/circuitBreaker.ts",
+          "line": 1,
+          "note": "generic CircuitBreaker (closed/open/half-open) added under TRO-311 as a RULE-7 follow-up, explicitly built for the one outbound dependency (Redis rate-limit store) that had retry/timeout but no breaker"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 4665,
+          "note": "TRO-311 entry: 'What was broken' explains why TRO-248 correctly left the WebSocket alone but the codebase still had zero code literally structured as a circuit breaker; 'Why this doesn't duplicate TRO-248's existing protection' documents the specific failure mode (repeated doomed calls during a sustained outage) the new breaker protects against"
+        }
+      ],
+      "suggested_verification": "pnpm --filter @ship/api exec vitest run src/db/__tests__/poolConfig.test.ts src/config/ssm.test.ts src/utils/__tests__/circuitBreaker.test.ts",
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R44",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "CHANGES.md",
+          "line": 1,
+          "note": "CHANGES.md exists at repo root, 14364 lines, 140 top-level '## ' improvement entries"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 10828,
+          "note": "representative entry (TRO-248): 'What changed' (what was added), a fenced 'How to run it' command block, a 'Regression tests' section (how to test), and a 'Rollback' section with concrete revert instructions"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 10897,
+          "note": "'Rollback. Revert this ticket's commits. client.ts and ssm.ts return to their previous inline values with no functional loss elsewhere...' — a concrete, specific rollback instruction, not boilerplate"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "A full-text sweep of all 140 top-level entries (script-based: split CHANGES.md on top-level '## ' headers, search each section for any of 'roll back' / 'rollback' / 'revert') found zero entries with no rollback-related text at all — every entry names how to undo its change (most under an explicit 'Rollback.' / 'How to roll it back.' / 'Roll back.' heading; a handful phrase it as 'git revert <commit>' inline). This directly contradicts the a-priori concern in the brief that most entries would lack rollback notes — they do not. 'How to run it' / regression-test sections are present in the large majority as well (a smaller number of entries, mostly triage/investigation tickets like TRO-309's CodeQL triage or TRO-179's session-write fix, fold the run/test instructions into differently-labeled prose sections such as 'Reproducibility' rather than a literal 'How to run it' heading, but the substance — an exact command plus expected result — is present on spot-check)."
+    },
+    {
+      "id": "W4-R45",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 22,
+          "note": "per-category section (Type Safety) with 'Before -> After' table, then 'Root causes' subsection giving what changed + why the original was suboptimal, per improvement (TS-1, TS-2, TS-3, TS-4, TS-6)"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 67,
+          "note": "'Root causes' subsection: e.g. TS-4 explains the original optional userId?/workspaceId? typing forced 236 unsafe non-null assertions, and why AuthenticatedRequest + an authed() wrapper (a type guard, not a cast) is the better fix"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 10810,
+          "note": "TRO-248's circuit-breaker row is itself a tradeoff writeup: explains why NOT adding a second breaker on the WebSocket is the right call (would duplicate existing protection) rather than reflexively adding one"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 4687,
+          "note": "TRO-311: 'Why this doesn't duplicate TRO-248's existing protection' is an explicit tradeoff/rationale section distinguishing bounded-cost-per-call (retry/timeout) from stop-trying-during-sustained-outage (breaker)"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Reasoning is present at scale (docs/IMPROVEMENTS.md's 8 'Root causes' sections plus CHANGES.md's 140 per-ticket entries, each generally structured as problem/what-changed/why), but the literal word 'tradeoff' appears only 5 times across the whole CHANGES.md and 0 times in docs/IMPROVEMENTS.md — the tradeoff content is present as substance (e.g. 'why this doesn't duplicate existing protection', 'why the sum-of-diffs method, not a live recount') rather than under a consistently labeled 'Tradeoffs' heading. Traced as met on substance, not on a literal-heading search."
+    },
+    {
+      "id": "W4-R46",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "CHANGES.md",
+          "line": 4941,
+          "note": "explicit awareness of the cosmetic-fix trap in-repo: '**Why a naive fix would have been cosmetic.**' section reasoning through why a superficial `as any` swap would not count, before doing the real fix"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 10769,
+          "note": "sampled entry (TRO-248) ties every change to a specific measurable target (connection-timeout/pool-size tunability, SSM retry) with a documented failure mode, not a rename/reformat"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Judgement is a negative claim across ~1527 commits in git history; verified by sampling git log messages (all ticket-tagged, all describing a substantive behavior change: e.g. 'fix(db): make pool connectionTimeoutMillis and pool size env-tunable (TRO-248)', 'feat(api): circuit breaker for the Redis rate-limit store (RULE-7 / TRO-311)') and grepping CHANGES.md for 'cosmetic'/'rename'/'reformat' framing — every hit found describes something explicitly NOT counted as cosmetic or explains why a cosmetic-looking change was in fact required. No instance found of a rename/reformat/comment-only change being claimed as satisfying a category's improvement target. Not an exhaustive read of all 140 CHANGES.md entries or all 1527 commits."
+    },
+    {
+      "id": "W4-R47",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "CHANGES.md",
+          "line": 10763,
+          "note": "\"**Rollback.** Revert the merge of `fix/rule-6-one-command-start`\" — the RULE-6 one-command-start improvement landed on its own named branch and was merged as a unit"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 14335,
+          "note": "\"**Rollback.** Revert the merge of `fix/ssm-fallback` (`5b72a79`)\" — a second improvement on its own named branch, recorded with its merge SHA"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 14357,
+          "note": "\"**Rollback.** Revert the merge of `feat/render-deploy` (`bace770`)\" — a third improvement on its own named branch, recorded with its merge SHA"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "The primary evidence for this requirement is git history, which has no file:line form, so it is recorded here rather than in `evidence`; the three CHANGES.md citations above are the in-file corroboration, each rollback instruction naming the branch its improvement landed on. Verified with `git show -s` and `git branch -a` at the sweep commit. Merge commits: 1474cb1 \"Merge #58: feat: one-command local start from a clean checkout (RULE-6)\" and a1ad4f3 \"Merge #56: fix(config): bounded SSM retry, env-tunable pool timing (RULE-7)\" — RULE-6 and RULE-7 landed separately, through separately numbered PRs. Their constituent commits are conventional-commit style and ticket-tagged: b35b817 \"feat: add start.sh, one-command local start from a clean checkout (TRO-247)\", 1ed03a4 \"feat(api): add ensureDatabase and verifyMigrations helpers (TRO-247)\", 505e542 \"feat(db): make pool connectionTimeoutMillis and pool size env-tunable (TRO-248)\", 1e4b68f \"fix(config): bounded timeout + jittered retry for SSM secret loading (TRO-248)\", af056fa \"feat(api): circuit breaker for the Redis rate-limit store (RULE-7 / TRO-311)\" and dbae2af \"feat: circuit breaker for the Redis rate-limit store (RULE-7 / TRO-311)\". `git branch -a --list 'fix/*'` returns 83 refs, one per audit finding across every category (fix/ts-*, fix/bun-*, fix/db-*, fix/err-*, fix/a11y-*, fix/test-*, fix/tf-*, fix/api-*), including fix/rule-6-one-command-start, fix/rule-7-retries-timeouts and fix/rule-7-redis-circuit-breaker. Not behaviourally verified: no command re-derives \"descriptive\" as a property of a message."
+    },
+    {
+      "id": "W4-R48",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "docs/submission/DISCOVERY.md",
+          "line": 6,
+          "note": "entry 1: 'pg's query() generic defaults to any' — thing named, cites api/package.json:46, audit/type-safety/baseline.md:123-131, api/src/routes/rowTypes.ts (77 lines; actual file is 76 lines, off-by-one), what-it-does/why-it-matters paragraph, 'How I'd apply it next time' paragraph"
+        },
+        {
+          "file": "docs/submission/DISCOVERY.md",
+          "line": 30,
+          "note": "entry 2: Express trust-proxy hop-count semantics, cites api/src/app.ts:134-175 (comment+function) and :184 (application site) — verified accurate against the commit (136c041) that authored this doc: comment starts line 134, resolveTrustProxyHops at 165, app.set('trust proxy'...) at line 184"
+        },
+        {
+          "file": "docs/submission/DISCOVERY.md",
+          "line": 54,
+          "note": "entry 3: CREATE TABLE IF NOT EXISTS is check-then-create not atomic, cites api/src/db/migrationRunner.ts:44-66 and :307-352 — verified accurate against current HEAD: DUPLICATE_OBJECT_SQLSTATES set at line 35/MIGRATION_ADVISORY_LOCK_KEY at line 66, runMigrations() at exactly line 307"
+        },
+        {
+          "file": "api/src/db/migrationRunner.ts",
+          "line": 307,
+          "note": "confirms entry 3's line-307 citation for export async function runMigrations(...) is exact"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "All three entries carry all four required elements (thing, file path + line range, what/why-it-matters, future application). Entry 1's location citation is more distributed than entries 2 and 3 — it spans three separate citations (a single-line package.json reference, a range into the audit's own baseline.md rather than source, and a file named with a line count instead of a range) rather than one clean file:line-range into source code, since the discovery itself (an untyped driver generic) manifests across 707 call sites rather than one location. Entry 2's line numbers (134-175, 184) match the source exactly as of the commit that authored the doc (136c041) but have since drifted ~48 lines in HEAD because later unrelated commits added code above that block in api/src/app.ts — normal citation drift in an actively-developed file, not a fabricated citation. Entry 3's citations remain exact against current HEAD. The document's own header says '> **DRAFT** — for Troy to personalize before submission,' flagging voice/framing as unfinished, but every technical claim is sourced and verified against the repo, so this does not affect the requirement's acceptance bar (a discovery doc with 3 complete entries)."
+    }
+  ],
+  "needs_ruling": []
+}

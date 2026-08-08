@@ -1,0 +1,32 @@
+{
+  "range": "W4-R1..W4-R27",
+  "mappings": {
+    "W4-R1": { "tickets": [], "note": "orientation checklist is a pre-audit writing task, never tracked as a ticket" },
+    "W4-R2": { "tickets": [], "note": "orientation-notes-in-submission is a doc-reference task, no ticket covers it" },
+    "W4-R3": { "tickets": [], "note": "AUDIT_REPORT.md baseline sections were written directly, predating any ticket" },
+    "W4-R4": { "tickets": [], "note": "per-category methodology documentation is report-writing, no corresponding ticket" },
+    "W4-R5": { "tickets": [], "note": "filling baseline-number tables is report-writing, no corresponding ticket" },
+    "W4-R6": { "tickets": [], "note": "findings enumeration predates ticket creation (findings became the tickets, not the reverse)" },
+    "W4-R7": { "tickets": [], "note": "severity ranking predates ticket creation; no ticket documents the ranking exercise itself" },
+    "W4-R8": { "tickets": [], "note": "a git-history discipline constraint about the audit phase; no ticket can satisfy it" },
+    "W4-R9": { "tickets": ["TRO-167", "TRO-206", "TRO-207", "TRO-208", "TRO-209", "TRO-210", "TRO-211", "TRO-212", "TRO-213", "TRO-214", "TRO-297", "TRO-306"], "note": "TS-1..10 findings + Type Safety EPIC are the source of the any/assertion/non-null/ts-ignore/strict-mode baseline counts" },
+    "W4-R10": { "tickets": ["TRO-167", "TRO-206", "TRO-207", "TRO-208", "TRO-209", "TRO-210", "TRO-211", "TRO-212", "TRO-213", "TRO-214", "TRO-297", "TRO-306"], "note": "same TS-* findings + EPIC are the fix work driving the 25% violation-reduction target" },
+    "W4-R11": { "tickets": ["TRO-168", "TRO-197", "TRO-198", "TRO-199", "TRO-200", "TRO-201", "TRO-202", "TRO-203", "TRO-204", "TRO-205"], "note": "BUN-1..9 findings + Bundle Size EPIC constitute the size/chunk/dependency baseline table" },
+    "W4-R12": { "tickets": ["TRO-168", "TRO-197", "TRO-198", "TRO-199", "TRO-200", "TRO-201", "TRO-202", "TRO-203", "TRO-204", "TRO-205"], "note": "same BUN-* findings + EPIC are the fix work toward the 15%/20% reduction target" },
+    "W4-R13": { "tickets": [], "note": "no ticket addresses seeding 500+ docs / 100+ issues / 20+ users / 10+ sprints specifically" },
+    "W4-R14": { "tickets": ["TRO-166", "TRO-172", "TRO-173", "TRO-174", "TRO-175", "TRO-176", "TRO-177", "TRO-280", "TRO-302", "TRO-304"], "note": "API-1..8 findings + API Response Time EPIC identify the endpoints that were traced and profiled" },
+    "W4-R15": { "tickets": ["TRO-166", "TRO-172", "TRO-173", "TRO-174", "TRO-175", "TRO-176", "TRO-177", "TRO-280", "TRO-302", "TRO-304"], "note": "same API-* findings + EPIC underlie the P50/P95/P99 concurrency benchmark table" },
+    "W4-R16": { "tickets": ["TRO-166", "TRO-172", "TRO-173", "TRO-174", "TRO-175", "TRO-176", "TRO-177", "TRO-280", "TRO-302", "TRO-304"], "note": "TRO-304 states the P95 target is still unmet and TRO-302 documents a P95 regression; remaining API-* tickets are the fix work" },
+    "W4-R17": { "tickets": ["TRO-165", "TRO-178", "TRO-179", "TRO-180", "TRO-181", "TRO-182", "TRO-183", "TRO-184", "TRO-185", "TRO-186", "TRO-187"], "note": "DB-1..10 findings + DB Query Efficiency EPIC constitute the query-count/EXPLAIN/index/N+1 baseline" },
+    "W4-R18": { "tickets": ["TRO-165", "TRO-178", "TRO-179", "TRO-180", "TRO-181", "TRO-182", "TRO-183", "TRO-184", "TRO-185", "TRO-186", "TRO-187"], "note": "same DB-* findings + EPIC are the fix work toward the 20%-count / 50%-slowest-query target; DB-11/DB-12 excluded as SSL/migration-concurrency issues unrelated to query counts" },
+    "W4-R19": { "tickets": ["TRO-169", "TRO-223", "TRO-224", "TRO-225", "TRO-226", "TRO-227", "TRO-228", "TRO-229", "TRO-230", "TRO-231", "TRO-232", "TRO-233", "TRO-277", "TRO-282", "TRO-286", "TRO-288", "TRO-293", "TRO-300", "TRO-310", "TRO-354"], "note": "TEST-1..16 findings + Test Coverage EPIC constitute the pass/fail/flaky/critical-flow-coverage baseline" },
+    "W4-R20": { "tickets": ["TRO-169", "TRO-229"], "note": "TRO-229 (TEST-7: coverage broken in api, absent in web/shared) is the direct match for configuring coverage tooling and reporting per-package numbers" },
+    "W4-R21": { "tickets": ["TRO-225", "TRO-226", "TRO-227", "TRO-228", "TRO-230", "TRO-288", "TRO-300"], "note": "TEST-3/15/16 are flaky-test RCAs; TEST-4/5/6/8 add regression tests for previously-untested critical paths (Yjs merge, real bugs, zero-coverage pages)" },
+    "W4-R22": { "tickets": ["TRO-164", "TRO-188", "TRO-189", "TRO-190", "TRO-191", "TRO-192", "TRO-193", "TRO-194", "TRO-195", "TRO-196", "TRO-276", "TRO-284", "TRO-285", "TRO-289", "TRO-290", "TRO-296", "TRO-301"], "note": "ERR-1..17 findings + Error Handling EPIC constitute the console-error/rejection/disconnect/boundary/silent-failure baseline" },
+    "W4-R23": { "tickets": ["TRO-164", "TRO-188", "TRO-189", "TRO-190", "TRO-191", "TRO-192", "TRO-193", "TRO-194", "TRO-195", "TRO-196", "TRO-276", "TRO-284", "TRO-285", "TRO-289", "TRO-290", "TRO-296", "TRO-301", "TRO-305"], "note": "ERR-* fixes are the 3+ error-handling fixes required (several involve real data-loss/confusion, e.g. ERR-1/ERR-3); TRO-305 self-documents the still-missing screenshot/recording evidence" },
+    "W4-R24": { "tickets": ["TRO-170", "TRO-215", "TRO-216", "TRO-217", "TRO-218", "TRO-219", "TRO-220", "TRO-221", "TRO-222", "TRO-281", "TRO-291", "TRO-298"], "note": "A11Y-1..10 findings + TRO-291 (WCAG 3.3.3) + Accessibility EPIC constitute the Lighthouse/contrast/ARIA/keyboard baseline" },
+    "W4-R25": { "tickets": ["TRO-170", "TRO-215", "TRO-216", "TRO-217", "TRO-218", "TRO-219", "TRO-220", "TRO-221", "TRO-222", "TRO-281", "TRO-291", "TRO-298"], "note": "same A11Y-* findings + EPIC are the fix work toward the 10-point Lighthouse gain or critical/serious violation fixes" },
+    "W4-R26": { "tickets": ["TRO-171", "TRO-234", "TRO-235", "TRO-236", "TRO-237", "TRO-238", "TRO-239", "TRO-278", "TRO-283", "TRO-292", "TRO-303"], "note": "TF-1..9 findings + Terraform EPIC came from running/reviewing terraform init and plan; TRO-236 (TF-3) is a direct terraform-init-failure finding" },
+    "W4-R27": { "tickets": ["TRO-171", "TRO-234", "TRO-235", "TRO-236", "TRO-237", "TRO-238", "TRO-239", "TRO-278", "TRO-283", "TRO-292", "TRO-303"], "note": "same TF-* findings + EPIC are the per-resource issues surfaced while examining/annotating the plan output" }
+  }
+}

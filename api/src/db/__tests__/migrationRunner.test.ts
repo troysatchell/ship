@@ -110,11 +110,32 @@ async function dropDatabase(name: string): Promise<void> {
   }
 }
 
+/**
+ * Versions recorded in schema_migrations, sorted in JS rather than left in the
+ * order Postgres's `ORDER BY` returned them.
+ *
+ * Why: Postgres's default collation and JavaScript's `Array.prototype.sort()`
+ * disagree on at least one pair of migration names — `020_document_associations`
+ * vs `020b_sprint_assignee_ids`. Postgres orders `020b_...` first; JS orders
+ * `020_...` first (observed directly: `SELECT v FROM (VALUES
+ * ('020_document_associations'),('020b_sprint_assignee_ids')) t(v) ORDER BY v`
+ * returns 020b first, while `[...].sort()` on the same two strings returns
+ * 020_ first). The callers below compare this result against
+ * `expectedVersionsFromDisk()`, which is JS-sorted — so leaving this list in
+ * SQL order made the comparison collation-dependent instead of correctness-
+ * dependent, and it failed on a migration set that was actually complete.
+ *
+ * Sorting here (not by dropping the SQL `ORDER BY`, which stays for anyone
+ * reading the query in isolation) makes both sides of every comparison use the
+ * same JS collation, while the comparison itself stays a strict, ordered
+ * `toEqual` — still full identity, not a count or a subset check, so a runner
+ * that skips or duplicates a migration still fails it.
+ */
 async function recordedVersions(pool: pg.Pool): Promise<string[]> {
   const res = await pool.query<{ version: string }>(
     'SELECT version FROM schema_migrations ORDER BY version'
   );
-  return res.rows.map(r => r.version);
+  return res.rows.map(r => r.version).sort();
 }
 
 /**
