@@ -65,6 +65,13 @@ adopting either number.
   catches a reintroduced caret (`"husky": "^9.1.7"` round-tripped through it: fails dirty, passes
   clean) before wiring it up. Wired into `.husky/pre-commit`, gated so it only runs when one of the
   five manifests is actually staged.
+- `api/src/__tests__/pinnedDependencies.test.ts` (new) — the same real assertion as
+  `check-pinned-deps.sh`, as a proper vitest regression test the gate actually executes under
+  `pnpm test` (lessons.md rule 13: a pre-commit-only check is not where the gate's regression-test
+  rule is satisfied). One `it` per manifest; exempts `workspace:*` and any package name present in
+  root `package.json`'s `pnpm.overrides`. Confirmed red-before-green: temporarily reverted
+  `web/package.json`'s `react` to `^18.3.1` and reran — failed with `dependencies.react: ^18.3.1`
+  named exactly, restored, reran green.
 
 **One `pnpm.overrides` interaction worth naming.** `web/package.json`'s `postcss` (`^8.4.49`) has an
 active override (`postcss: ">=8.5.12"`, GHSA-driven, root `package.json`'s `pnpm.overrides`). Even
