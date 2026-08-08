@@ -8,6 +8,22 @@ docs:
   - id: W4
     path: "project guideliens/GFA_Week_4_ShipShape_Updated.pdf"
     sha256: d385bcc4af6341956c532b6ae558c9405de77f46bb14301fd4bda3e35e3af311
+  # Never swept yet — sha256 null so the next `extract`/`baseline` run performs a
+  # first extraction (and stops at the user-skim gate per inventory-format.md).
+  #
+  # NOT scoped by the `tickets:` block below. That block's `project:
+  # "ShipShape Audit Remediation"` is W4's Linear project; W5 work lives in a
+  # different one, "FleetGraph — Week 5 Project Intelligence Agent". The config
+  # schema has one `tickets.project` for the whole file — it has no field to map
+  # a specific `docs[]` entry to its own project, so a W5 sweep (baseline or
+  # compare) must first re-scope `tickets.project` to the FleetGraph project, run,
+  # then re-scope back to "ShipShape Audit Remediation" before a W4 sweep runs
+  # again. Do not run W4 and W5 in the same sweep without doing this — whichever
+  # project isn't current will get the other's ~80-orphan false-signal problem
+  # this file's tickets comment already describes.
+  - id: W5
+    path: "project guideliens/GFA_Week_5_FleetGraph_Updated (1).pdf"
+    sha256: null
 
 tickets:
   provider: linear
