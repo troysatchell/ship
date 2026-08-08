@@ -21,6 +21,57 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## W4-SWEEPA (item 1 of 3) — migration-runner regression test made collation-independent
+
+Bundle: W4-SWEEPA — a wave-4 correctness sweep of three unrelated items grouped for one review
+pass, not one root cause. See items 2 and 3 below (this file lists newest-first, so they sit
+directly under this entry) for the other two; each is its own commit.
+
+**What was broken.** `api/src/db/__tests__/migrationRunner.test.ts:167,184` (both the "applies
+every migration file" and "clean no-op on a second invocation" cases) compared
+`recordedVersions(pool)` — the list of applied migrations read back with Postgres's `ORDER BY
+version` — against `expectedVersionsFromDisk()`, which is sorted with JavaScript's
+`Array.prototype.sort()`. Those two collations disagree on exactly one pair out of the 46 migration
+names: **observed directly**, `SELECT v FROM (VALUES ('020_document_associations'),
+('020b_sprint_assignee_ids')) t(v) ORDER BY v` returns `020b_sprint_assignee_ids` first, while
+`['020_document_associations','020b_sprint_assignee_ids'].sort()` in Node returns
+`020_document_associations` first. The migration runner itself was not at fault — both tests failed
+with a runner that had genuinely applied all 46 migrations, only reordered relative to the JS-sorted
+expectation.
+
+**What changed.** `recordedVersions()` (`migrationRunner.test.ts:113-136`) now sorts its own result
+with JS `.sort()` before returning it, so both sides of every `toEqual` comparison use the same
+collation. The comparison itself is untouched: still a strict, ordered array-identity check via
+`toEqual`, not a count or `expect.arrayContaining` — this test is the regression test for DB-1 /
+TRO-178 ("the migration runner must apply every migration or fail"), and loosening the assertion
+would have destroyed the guarantee it exists to protect. The SQL `ORDER BY version` stays in the
+query for anyone reading it in isolation; it's now redundant for this comparison, not wrong.
+
+**Regression proof — red, then green, then re-proved red.**
+1. **Red on unfixed code (observed before any change here):** ran
+   `pnpm --filter @ship/api test -- migrationRunner.test.ts` against the pre-fix file. Both
+   assertions failed with `AssertionError: expected [...] to deeply equal [...]`, diff showing
+   `020_document_associations` and `020b_sprint_assignee_ids` transposed — the exact collation
+   mismatch above, not an import error or a typo.
+2. **Green after the fix:** `cd api && npx vitest run migrationRunner.test.ts` — 7/7 passed in
+   558ms, isolated.
+3. **Re-proved the test still catches a real skip, with the fix in place:** temporarily edited
+   `api/src/db/migrationRunner.ts`'s `runPendingMigrations` to filter
+   `020b_sprint_assignee_ids.sql` out of the file list before applying it, reran the same command.
+   Both assertions failed again — this time correctly: `expected [...44 versions] to deeply equal
+   [...45 versions]`, diff showing `020b_sprint_assignee_ids` missing entirely. Reverted the
+   sabotage (`git diff --stat api/src/db/migrationRunner.ts` back to empty) and reran: 7/7 green
+   again. The collation fix did not weaken the DB-1 guarantee.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run migrationRunner.test.ts`
+
+**How to roll it back.** Revert this commit. The two assertions return to comparing a
+Postgres-collated array against a JS-sorted one, which will intermittently fail depending on
+whether the 020/020b pair (or any future migration pair with the same collation disagreement) is
+present — the test will start failing on a runner that is actually correct.
+
+---
+
 ## TRO-364 — FG: TC2's blocking-approval half never fires — approval transitions now reach document_history
 
 **The cost this closes.** Grader-flagged: Test Cases row 2 was a documented partial match — the
