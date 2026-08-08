@@ -91,7 +91,7 @@ config.
 |---|---|
 | `inventory.md` | One entry per requirement (see format below). Human-editable; user edits are authoritative. |
 | `interpretations.md` | Ambiguity rulings: `I-##`, question asked, ruling, date, governed requirement IDs. |
-| `matrix.json` | Machine-readable trace per requirement: tickets, evidence `{file, line, note}`, verdict, verification `{command, result_excerpt}`. |
+| `matrix.baseline.json` / `matrix.after-<label>.json` | Machine-readable trace per requirement: tickets, evidence `{file, line, note}`, verdict, verification `{command, result_excerpt}`. |
 | `REPORT.md` | Human report: verdict counts up top, full matrix table, gaps, orphan tickets, deltas in compare mode. |
 | `gaps.md` | Handoff for another agent: unticketed requirements (with source quotes) and orphan tickets. |
 
@@ -148,7 +148,8 @@ readable.
    it; `VERIFIED` only on green captured output. Inventories over ~25
    requirements may fan out tracing to parallel subagents by requirement
    cluster; ambiguity questions always return to the main session.
-5. **Report + handoff** — write `matrix.json`, `REPORT.md`, `gaps.md`. If
+5. **Report + handoff** — write `matrix.baseline.json` (compare:
+   `matrix.after-<label>.json`), `REPORT.md`, `gaps.md`. If
    `pm_skill` is configured, invoke it with the `gaps.md` path and a one-line
    framing ("requirements sweep found N unticketed requirements and M orphan
    tickets; apply your scope gate") so PM judgment runs immediately; the PM
@@ -180,7 +181,7 @@ Rule: never silently downgrade missing evidence into a confident verdict.
 
 Shakedown: run `baseline` on Ship against the Week 4 ShipShape PDF.
 
-- Every inventory row appears in `matrix.json` and `REPORT.md` (no silent drops).
+- Every inventory row appears in `matrix.baseline.json` and `REPORT.md` (no silent drops).
 - Every `VERIFIED` verdict carries the command and a captured output excerpt.
 - Every `MISSING` requirement appears in `gaps.md`.
 - Determinism: a second baseline with no code changes yields identical verdicts.
