@@ -368,12 +368,29 @@ export function AgentChatPanel({ documentId, documentTitle, onBusyChange }: Agen
       {/* `relative` so exchange offsetTop is measured against this container
         * for the submit-time snap below. */}
       <div ref={scrollRef} className="scrollbar-none relative min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
-        {exchanges.length === 0 && (
-          <p className="text-sm text-muted">
-            Ask about the document you have open — every answer names the documents it drew
-            from and why.
-          </p>
-        )}
+        {exchanges.length === 0 &&
+          (documentId ? (
+            <p className="text-sm text-muted">
+              Ask about the document you have open — every answer names the documents it drew
+              from and why.
+            </p>
+          ) : (
+            // TRO-363: with no document open the input below is disabled by
+            // design (the open document seeds every question — FG-9), but a
+            // grayed input with a muted hint read as "broken" to real users.
+            // This callout is the loud version of that state. Palette note:
+            // `accent` is fill-only (2.89:1 as text); `accent-text` is the
+            // AA-safe accent for text — see tailwind.config.js.
+            <div className="rounded-lg border border-accent/40 bg-accent/10 p-3 text-sm">
+              <p className="font-medium text-foreground">Open a document to start</p>
+              <p className="mt-1 text-foreground/80">
+                FleetGraph answers questions about the document you are viewing, so the box
+                below stays disabled until one is open. Open an issue, project, or doc —
+                then ask about it here. Every answer names the documents it drew from and
+                why.
+              </p>
+            </div>
+          ))}
 
         {exchanges.map((ex, i) => {
           const isLatest = i === exchanges.length - 1;
@@ -422,18 +439,20 @@ export function AgentChatPanel({ documentId, documentTitle, onBusyChange }: Agen
       </div>
 
       <form onSubmit={handleSubmit} className="border-t border-border p-3">
-        <p className="mb-2 truncate text-[11px] text-muted">
-          {documentId ? (
-            <>
-              Asking about:{' '}
-              <span className="font-medium text-foreground">
-                {documentTitle ?? 'this document'}
-              </span>
-            </>
-          ) : (
-            NO_DOCUMENT_HINT
-          )}
-        </p>
+        {/* TRO-363: the no-document hint gets accent-text emphasis instead of
+          * 11px muted — it is the reason the input is disabled, not metadata. */}
+        {documentId ? (
+          <p className="mb-2 truncate text-[11px] text-muted">
+            Asking about:{' '}
+            <span className="font-medium text-foreground">
+              {documentTitle ?? 'this document'}
+            </span>
+          </p>
+        ) : (
+          <p className="mb-2 truncate text-xs font-medium text-accent-text">
+            {NO_DOCUMENT_HINT}
+          </p>
+        )}
         <label htmlFor="agent-chat-question" className="sr-only">
           Ask a question about this document
         </label>

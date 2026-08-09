@@ -1,0 +1,166 @@
+{
+  "cluster": "modes-chat-graph",
+  "requirements": [
+    {
+      "id": "W5-R1",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "web/src/pages/App.tsx", "line": 679, "note": "<AgentPill documentId={agentSeedDocumentId} .../> is rendered inside <main>, inside AppLayout — the shell wrapping every route under '/' (documents/issues/projects/sprints/etc), so the chat surface is present on every document view, never a separate page." },
+        { "file": "web/src/pages/App.tsx", "line": 237, "note": "agentSeedDocumentId = activeDocumentId ?? currentDocumentId ?? null — derives the chat's scope from whatever document/issue/sprint is currently open." },
+        { "file": "web/src/components/agent/AgentPill.tsx", "line": 89, "note": "<AgentChatPanel documentId={documentId} documentTitle={documentTitle} .../> — the pill forwards the open document's id straight into the chat panel." },
+        { "file": "web/src/components/AgentChatPanel.tsx", "line": 331, "note": "apiPost('/api/agent/chat', { seedDocumentId: documentId, question: trimmed }) — the current document id is sent as the chat request's context on every question." }
+      ],
+      "suggested_verification": "pnpm --filter @ship/web test -- AgentChatPanel.test.tsx; or run e2e/agent-chat-grounded-response.spec.ts via /e2e-test-runner",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R2",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "web/src/components/AgentChatPanel.tsx", "line": 331, "note": "Request body carries seedDocumentId: documentId — the specific entity being viewed." },
+        { "file": "agent/src/graph.ts", "line": 1298, "note": "resolveSeed node calls visitDocument(client, state.seedDocumentId, ...) — the graph's answer is built starting from the exact document the chat request named." },
+        { "file": "agent/src/graph.ts", "line": 1388, "note": "finalizeExpansion: citedSources built directly from expandedDocuments (the walk seeded by seedDocumentId) — grounding is structural, never left to the model's own text." },
+        { "file": "e2e/agent-chat-grounded-response.spec.ts", "line": 82, "note": "await expect(chatRegion.getByText('Sources')).toBeVisible(...) — 'Sources' only renders once citedSources is non-empty (AnswerBlock's own done && gate), so this is the e2e assertion that the response was grounded." }
+      ],
+      "suggested_verification": "/e2e-test-runner e2e/agent-chat-grounded-response.spec.ts",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R3",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "web/src/main.tsx", "line": 153, "note": "Full <Routes> tree for the app (both the outer App() and inner AppRoutes()) runs from here through line 276 — every route the router will ever match." },
+        { "file": "web/src/main.tsx", "line": 234, "note": "Start of the full path list (dashboard, my-week, docs, documents/:id, issues, projects, programs, sprints, team, feedback, settings) through line 272's catch-all — no 'chat' path anywhere in it." },
+        { "file": "web/src/pages/App.tsx", "line": 679, "note": "Chat is reachable only as AgentPill, mounted inside the shared layout — not as a routed page (see W5-R1)." }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Absence check: grepped web/src/main.tsx (the sole react-router route table in the repo — no other router/routes file exists under web/src) case-insensitively for 'chat' — zero matches. Also grepped all of web/src for a route path literal containing '/chat' — zero matches. The only chat-related file is AgentChatPanel.tsx, mounted exclusively inside AgentPill (App.tsx:679), which lives in the shared AppLayout, not behind its own route."
+    },
+    {
+      "id": "W5-R4",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/graph.ts", "line": 1850, "note": "addConditionalEdges(START, routeTrigger, { on_demand_chat: 'ingest', on_demand_expand: 'resolveSeed', proactive_fast: 'pollChangeFeed', proactive_steady: 'pollChangeFeed', ... }) — both an on-demand and a proactive path exist as real routed branches of the one graph." },
+        { "file": "agent/src/server.ts", "line": 316, "note": "POST /chat: deps.graph.invoke({ trigger: 'on_demand', ... }) — the user-invoked entry point." },
+        { "file": "agent/src/proactivePoll.ts", "line": 48, "note": "tick(): options.graph.invoke({ trigger: 'proactive_steady', cursor: since }) — the unattended entry point, called on a setInterval (proactivePoll.ts:56-58) and once at process startup (index.ts:232)." },
+        { "file": "agent/src/__tests__/graph.test.ts", "line": 126, "note": "Test invokes the compiled graph with trigger: 'proactive_fast' and asserts it polls the change feed rather than calling the model." },
+        { "file": "agent/src/__tests__/graph.test.ts", "line": 482, "note": "Test invokes the compiled graph with trigger: 'on_demand' and a seedDocumentId, exercising the on-demand expansion path." },
+        { "file": "FLEETGRAPH.MD", "line": 335, "note": "Execution Traces table: real LangSmith trace links for an on_demand run (bare chat, row at line 335) and a proactive_steady run (row at line 337) — both modes actually ran, not just coded." }
+      ],
+      "suggested_verification": "pnpm --filter @ship/agent test -- graph.test.ts",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R5",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/index.ts", "line": 221, "note": "createProactivePoller({ graph, intervalMs: config.proactivePollIntervalMs, ... }) — started with poller.start() (line 229) and one immediate poller.tick() (line 232) at process boot, with no user session involved." },
+        { "file": "agent/src/graph.ts", "line": 1274, "note": "commitInboxItems node: deps.itemStore.upsert(item) for every produced item — writes proactive findings into the shared ItemStore." },
+        { "file": "api/src/routes/agent.ts", "line": 358, "note": "GET /inbox (mounted at /api/agent/inbox, api/src/app.ts:411) proxies the agent's itemStore.list() to the browser, session-authed." },
+        { "file": "web/src/hooks/useInboxQuery.ts", "line": 118, "note": "apiGet('/api/agent/inbox') — the user-visible surface that reads the delivered findings." },
+        { "file": "FLEETGRAPH.MD", "line": 534, "note": "'Timed live detection test (deployed site, 2026-08-07)': a real comment mentioning @Iris Nguyen (T0) observed in her ranked inbox via GET /api/agent/inbox (T1), 42.6s later, against the actual deployed ship-rr6m.onrender.com + agent service — the proactive path actually delivered a finding to a user-visible surface, dated and reproducible." }
+      ],
+      "suggested_verification": "Reproduce FLEETGRAPH.MD's own repro steps (log in, comment @Full Name on an issue, open that person's inbox) or run e2e/agent-detection-latency.spec.ts via /e2e-test-runner",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R6",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/graph.ts", "line": 1231, "note": "export function buildGraph(...) constructs exactly ONE StateGraph(GraphState) (line 1238), compiled once at the end (graph.compile(), line 1886)." },
+        { "file": "agent/src/graph.ts", "line": 1850, "note": "addConditionalEdges(START, routeTrigger, {...}) is the SINGLE dispatch point inside that one graph for every trigger value — on_demand_chat/on_demand_expand (chat) alongside proactive_fast/proactive_steady/proactive_deep/proactive_escalation/proactive_retro/proactive_plan_change (proactive) — not two separate graphs that merely share node names." },
+        { "file": "agent/src/index.ts", "line": 213, "note": "graph = buildGraph(model, {shipClient, itemStore}, {...}, {...}, costTracker) — buildGraph is called exactly once for the whole process; the result is assigned to the single `graph` variable." },
+        { "file": "agent/src/index.ts", "line": 221, "note": "createProactivePoller({ graph, ... }) — the proactive entry point is wired to that SAME `graph` reference." },
+        { "file": "agent/src/index.ts", "line": 239, "note": "createServer(config, { graph, itemStore, draftStore, gateShipClient, draftSurvivalTracker }) — the on-demand/chat entry point (POST /chat) is wired to the IDENTICAL `graph` reference, not a second build." },
+        { "file": "agent/src/proactivePoll.ts", "line": 48, "note": "options.graph.invoke({ trigger: 'proactive_steady', cursor: since }) — the proactive tick calls .invoke() on the shared compiled graph." },
+        { "file": "agent/src/server.ts", "line": 316, "note": "deps.graph.invoke({ trigger: 'on_demand', ... }, { signal: controller.signal }) — the chat route calls .invoke() on the same shared compiled graph." }
+      ],
+      "suggested_verification": "pnpm --filter @ship/agent test -- graph.test.ts (already asserts both trigger families route through the one compiled graph's NODE_NAMES)",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Core claim verified, no divergence found: index.ts constructs the graph exactly once and passes the identical object reference to both the poller (proactive) and the server (on-demand/chat). This is not two parallel implementations that merely look alike — it is literally one JS object with two callers."
+    },
+    {
+      "id": "W5-R16",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/graph.ts", "line": 1245, "note": "pollChangeFeed node (through detectBlockingApprovals/commitInboxItems at line 1283), wired START -> pollChangeFeed -> resolveMentions -> detectBlockingApprovals -> commitInboxItems -> END via addEdge at lines 1862-1865." },
+        { "file": "agent/src/index.ts", "line": 190, "note": "itemStore = new InMemoryItemStore() — the SAME instance is passed into proactiveDeps (line 215) and into createServer (line 239), so what the proactive chain writes is exactly what /inbox reads." },
+        { "file": "api/src/routes/agent.ts", "line": 358, "note": "GET /inbox relays itemStore.list() end-to-end to the browser." },
+        { "file": "FLEETGRAPH.MD", "line": 528, "note": "'Timed live detection test (deployed site, 2026-08-07)': trigger through graph to a delivered result, observed end to end against the real deployment — a mention write at T0 surfaced in the recipient's inbox at T1, 42.6s later." }
+      ],
+      "suggested_verification": "Reproduce per FLEETGRAPH.MD's own steps, or run e2e/agent-detection-latency.spec.ts via /e2e-test-runner",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R20",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/gate.ts", "line": 105, "note": "acceptDraft(deps, draftId, accepterToken, finalText) — the one function anywhere in this package that ever performs a real Ship write; every other node/store in the graph is structurally read-only or agent-process-local (see graphWriteBoundary.test.ts)." },
+        { "file": "agent/src/__tests__/graphWriteBoundary.test.ts", "line": 148, "note": "describe block proving graph.ts never holds or calls a write-capable Ship client anywhere in the file — the graph itself cannot act without going through the gate." },
+        { "file": "agent/src/__tests__/gate.test.ts", "line": 182, "note": "it('refuses to accept an already-posted draft a second time') — a test proving acceptDraft's own guard, not just documentation." },
+        { "file": "agent/src/server.ts", "line": 393, "note": "app.post('/accept-draft', ...) — the HTTP wire that actually calls gate.ts's acceptDraft (line 426), closing the gap TRO-348 targeted." },
+        { "file": "api/src/routes/agent.ts", "line": 472, "note": "router.post('/accept-draft', authMiddleware, authed(...)) — the session-authed Ship-side route that proxies to the agent's /accept-draft, mounted at /api/agent (api/src/app.ts:411) and OpenAPI-registered (api/src/openapi/schemas/agent.ts:167-169)." }
+      ],
+      "suggested_verification": "pnpm --filter @ship/agent test -- gate.test.ts graphWriteBoundary.test.ts",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "acceptDraft is now genuinely reachable end-to-end (agent HTTP route -> api proxy route -> OpenAPI), closing the specific 'no HTTP caller' gap TRO-348 targeted — confirmed still fixed. However the other three gate functions (discardItem, acceptProposedTransition, rejectProposedTransition) remain fully unreachable: grep for each name across agent/src, api/src, web/src finds zero callers outside gate.ts itself, its own tests, and doc-comment cross-references — no HTTP route exists for any of the three. Separately, even acceptDraft has no UI call site: grep for 'accept-draft'/'acceptDraft'/'draftId' across web/src returns nothing, and InboxSidebar.tsx explicitly states 'There is no escalation UI here at all; that is out of this ticket's scope' — every inbox item renders only as a navigation <Link>, never an accept/reject control. The requirement's own acceptance bar (file:line of the gate + a test proving unapproved action is blocked) is met by acceptDraft alone regardless of UI, so this does not change the verdict, but a real Ship user today can only trigger acceptDraft via a direct API/Swagger/MCP-tool call, not by clicking anything in the product."
+    },
+    {
+      "id": "W5-R21",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "terraform/render/agent_service.tf", "line": 64, "note": "SHIP_API_BASE_URL = { value = render_web_service.ship.url } — the deployed agent's Ship API base URL is derived directly from the SAME Terraform-managed 'ship' web service resource, not a literal, mock, or fixture host." },
+        { "file": "agent/src/config.ts", "line": 97, "note": "shipApiBaseUrl: env.SHIP_API_BASE_URL ?? DEFAULT_SHIP_API_BASE_URL — the agent reads its Ship base URL from the environment at runtime; in the deployed Render environment that env var is the terraform-injected real Ship URL above, not the localhost dev default." },
+        { "file": "FLEETGRAPH.MD", "line": 516, "note": "Grader Access table: URL https://ship-rr6m.onrender.com — the real deployed Ship instance the agent reads from." },
+        { "file": "FLEETGRAPH.MD", "line": 534, "note": "Timed live detection test: 'a real comment mentioning @Iris Nguyen written through the real API (POST /api/documents/.../comments -> HTTP 201, as dev@ship.local)' and the mention observed in her real inbox — a live run against real Ship data, not a mocked response, dated 2026-08-07 against commit af573d3 (verified present in git log)." }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R22",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "web/src/pages/App.tsx", "line": 679, "note": "<AgentPill .../> — the chat surface, present on every screen inside AppLayout." },
+        { "file": "web/src/pages/App.tsx", "line": 447, "note": "Icon Rail inbox toggle button (active={inboxOpen}, ariaExpanded={inboxOpen}) that flips inboxOpen, rendering InboxSidebar as an overlay (line 608-609) — the notification surface, reachable via a rail icon on every screen." },
+        { "file": "web/src/components/InboxSidebar.tsx", "line": 92, "note": "export function InboxSidebar(...) renders useInboxQuery()'s ranked items as real <Link> elements the user can act on." },
+        { "file": "e2e/agent-chat-grounded-response.spec.ts", "line": 43, "note": "page.getByRole('button', { name: /FleetGraph/ }) — e2e test drives the actual chat pill/panel in the browser." },
+        { "file": "e2e/agent-detection-latency.spec.ts", "line": 88, "note": "page.request.get(`${agentShip.apiUrl}/api/agent/inbox`) — e2e test exercises the identical endpoint (comment at line 14-16 of that file notes it is 'the identical endpoint InboxSidebar.tsx's useInboxQuery calls') the notification surface renders from." }
+      ],
+      "suggested_verification": "/e2e-test-runner e2e/agent-chat-grounded-response.spec.ts e2e/agent-detection-latency.spec.ts",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R57",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "web/src/main.tsx", "line": 153, "note": "Full route table (through line 276) — no 'chat' path anywhere; same absence check as W5-R3." },
+        { "file": "web/src/components/AgentChatPanel.tsx", "line": 13, "note": "Module docstring states the constraint directly: \"The ticket's constraint is unchanged: 'Chat interface must be embedded in context — no standalone chatbot pages.'\"" },
+        { "file": "web/src/pages/App.tsx", "line": 679, "note": "Chat is mounted only as AgentPill inside the shared AppLayout, never behind its own route." }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Same evidence/absence check as W5-R3 — this requirement restates it as a hard constraint. Confirmed no standalone chatbot route or page exists anywhere in web/src."
+    }
+  ],
+  "needs_ruling": []
+}

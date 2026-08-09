@@ -437,3 +437,86 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   to your own branch's change is a real reason to look closer, not a reason to assume it's real
   without checking. Confirmed non-blocking by reading the actual stack trace, not just trusting
   "passed standalone."
+
+- 2026-08-08 (TRO-366/W5-DOC, orchestrator) — **`git stash` violated a 6th time (TRO-215,
+  TRO-208/TRO-206, TRO-319, TRO-323, now TRO-366), and this one had no mitigating circumstance.**
+  TRO-323's write was verified as a solo run, so the cross-worktree risk could not have materialized.
+  This time **two sibling agents were working concurrently** (`Ship-wt-tro_367`, `Ship-wt-tro_371`)
+  when the push landed at `00:30:10Z`, with an unrelated pre-existing entry (`tro215-fix-temp`)
+  sitting on the shared stack. The window was live; it just wasn't hit. Same trigger as always —
+  wanting the pre-change tree back to compare timings — and the agent self-disclosed, popped by exact
+  ref, and verified. Confirmed afterwards: tro_366's tree clean, all 4 review commits intact, the
+  sibling's stash untouched. **Per TRO-323's precedent, `.factory/stash-baseline-lines` was NOT reset**
+  — `stash-guard: fail` stays permanent for that worktree as the durable evidence, and the merge
+  decision restates the reasoning rather than reporting an unqualified pass. Prevention is now filed
+  as **TRO-378** (a `git` wrapper refusing `stash` under `Ship-wt-*`); restatement has failed six
+  times and is not going to start working on the seventh.
+27. **An automation that acts on a signal must distinguish "the thing failed" from "I could not
+    observe the thing." 3 findings across 2 tickets in one wave, all Major, all on the
+    automatic-rollback path (TRO-367, TRO-368).** The dominant shape: a monitoring result and an
+    application result share one representation, so the actuator cannot tell them apart.
+    - `pollReadiness` recorded a *thrown fetch* as `ready: false`, so three network failures between
+      the runner and the service read as a sustained application failure — meaning a DNS blip would
+      have **rolled back a healthy production service.** The automation would have caused the outage
+      it exists to prevent. Give observation failures their own non-actionable outcome.
+    - The same script's production fetcher had **no timeout**, so a stalled readiness probe never
+      returned — on the very branch whose sibling ticket (TRO-368) existed because an outbound call
+      had no explicit timeout. A rule fixed in one file is not fixed in the codebase.
+    - A per-attempt timeout is not a budget. 20s × (1 + 2 retries) + backoff silently exceeded the
+      caller's own handler deadline, so the "explicit timeout" still let work outlive its requester.
+      **State the arithmetic next to the constants**, against the deadline it must fit inside.
+    Before shipping anything that acts automatically, ask: *what does this do when it cannot see?*
+    "It assumes the worst and takes the corrective action" is the wrong answer whenever the
+    corrective action is itself disruptive.
+- 2026-08-08 (TRO-367/W5-CI, orchestrator) — **New load-flake identity, and this one appeared with NO
+  sibling gate running:** `api/src/collaboration/__tests__/session-revocation.test.ts::does not persist
+  document writes attempted after the session is revoked`. Failed inside a full `gate.sh` run, passed
+  standalone, then passed again on a full re-run with no code change. What makes it worth recording
+  separately from the rest of the rule-24 set: the branch it failed on **changes zero `api/` files**
+  (it touches only `agent/`, `.github/`, `.gitlab-ci.yml`, `CHANGES.md`, `FLEETGRAPH.MD`), so the diff
+  could not causally reach that test — and gates were being run strictly serially, so the documented
+  "sibling worktree under load" explanation did not apply either. A websocket/session-revocation timing
+  test is inherently the most load-sensitive shape in this suite; single-gate load appears to be
+  sufficient on its own. **Check `git diff --name-only main...HEAD` for the failing test's package
+  before spending time on a suspected regression** — a failure in a package the branch never touched is
+  strong evidence of the flake class, and it is a much faster discriminator than re-running.
+- 2026-08-08 (TRO-371/W5-CHG, orchestrator) — **A ticket's measured counts can be wrong by an order of
+  magnitude when they came from a warning-only detector.** TRO-371 asserted "13 CHANGES.md entries have
+  no rollback instructions" and named 14 tickets; the real count was **1**, and the one real gap was not
+  on the list. All 14 named entries already had rollback sections under `**Roll back.**` /
+  `**Rollback.**` — phrasings `merge-changes.mjs`'s `RUN_RE` does not match. That tool's own header says
+  it warns rather than fails *because* its regex false-positives; the defect was a sweep treating its
+  output as a count. An agent following the ticket faithfully would have churned 12 healthy entries.
+  **When a ticket states a count, have the agent re-derive it from the file before acting on it, and
+  treat a large discrepancy as information rather than an obstacle** — here it made the work smaller,
+  not larger, which is why it was completed rather than escalated. Filed as TRO-372.
+- 2026-08-08 (wave preflight, orchestrator) — **`ship-audit-pg` is gone; the live container is
+  `ship-postgres-1`.** `ship-audit-pg` is `Exited (255)` and `ship-postgres-1` now holds
+  `0.0.0.0:5433->5432`. `worktree.sh` still defaults `FACTORY_PG_CONTAINER=ship-audit-pg` and will fail
+  provisioning until that default is fixed — pass `FACTORY_PG_CONTAINER=ship-postgres-1` explicitly.
+  Credentials, port, and `DATABASE_URL` shape are unchanged, so `gate.sh` and the test suites are
+  unaffected once the worktree exists; only provisioning breaks.
+
+## Concurrency
+
+24. **Never run two `gate.sh` invocations concurrently against the same Postgres container.**
+    Observed 2026-08-08 during the W4-sweep run: with three worktrees active, one gate's api suite
+    failed broadly (75, then 68 of ~77 files) on Postgres connection errors while a sibling gate
+    ran — root-caused via `ps aux` to the shared `ship-postgres-1` container being interrupted, not
+    to any code change. Per-ticket *databases* isolate data; they do not isolate the container
+    itself. Serialize gate runs, or accept that a broad connection-error failure under concurrency
+    is an environment artifact and must be re-run alone before it is believed. The same run also
+    produced `coderabbit rc=1` on two branches, matching the documented concurrent-load pattern.
+
+25. **A test whose outcome depends on the host environment is not a test of the code.**
+    Two instances landed within three commits of each other on 2026-08-08. (a)
+    `migrationRunner.test.ts` compared a Postgres-ordered query against a JS `.sort()` — it failed
+    on any database whose collation disagrees with JS, and passed on others, while the migrations
+    were fine either way. (b) The fix's own new `postgresReachable.test.ts` asserted a probe of
+    `127.0.0.1:5432` returns `false` "because nothing is expected to be listening" — true locally
+    (Postgres mapped to 5433), false in CI (Actions runs Postgres on 5432). **`gate.sh` cannot
+    catch this class**: it passed both times, because it ran in the environment the assumption held
+    in. Only CI, running somewhere different, caught the second one. When a test's comment has to
+    state an environmental assumption to justify the assertion, that is the signal — assert on the
+    pure logic (the resolved port, the parsed value) or use a resource you can guarantee (loopback
+    port 1), never on what happens to be listening or on how a server happens to collate.

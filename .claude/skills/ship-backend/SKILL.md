@@ -3,9 +3,10 @@ name: ship-backend
 description: >-
   Backend engineering brief for Ship's api package — Express + raw pg (no ORM), the mandatory
   OpenAPI registration pattern, numbered migrations, session/auth semantics, the Yjs collaboration
-  server, and the test-database hazards that destroy data when ignored. Use when working in `api/`,
-  when a ticket is an API-*, DB-*, or ERR-* finding, or as the role brief injected into a factory
-  agent working on the backend.
+  server, and the test-database hazards that destroy data when ignored. Use whenever a ticket
+  touches `api/` or `shared/` — including FleetGraph and agent-service work, which carries no
+  audit-finding prefix — as well as for API-*, DB-* or ERR-* audit findings, or as the role brief
+  injected into a factory agent working on the backend.
 ---
 
 # Ship backend

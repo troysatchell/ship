@@ -1,0 +1,422 @@
+{
+  "cluster": "improvement-targets",
+  "requirements": [
+    {
+      "id": "W4-R10",
+      "verdict": "PARTIAL",
+      "evidence": [
+        {
+          "file": "audit/type-safety/baseline.json",
+          "line": 32,
+          "note": "baseline violationsTotal=1535 (anyTotal 102 + asTotal 1385 + nonNullTotal 47 + tsIgnoreTotal 1), the number '25% reduction' / '384 sites' is defined against"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 24,
+          "note": "Category 1 target quoted verbatim: eliminate 25% of 1535 tracked violations ~= 384 sites"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 35,
+          "note": "repo's own before/after table: tracked total (count.sh, web+api+shared) baseline 1535 -> 1778 on commit 09a6895 (2026-07-31) -- an INCREASE, not the required decrease"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 28,
+          "note": "repo claims 'Verdict: met, by the sum of controlled per-ticket diffs -- not by a live recount, which the tracked metric cannot support today'"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 57,
+          "note": "alternative accounting: TS-1(156)+TS-3(19)+TS-4(236 raw)=411 >= 384, used to justify 'met' despite the aggregate not moving"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 9785,
+          "note": "TS-4 ticket's own admission, verbatim: \"This means a live \\\"current total vs. 1535\\\" snapshot cannot cleanly demonstrate the category's cumulative progress - unrelated development moves it in both directions\" (sentence runs 9785-9786)"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 9780,
+          "note": "TS-4 ticket's own live re-run at an earlier commit (42e60d9) already found tracked total 1747, higher than the 1535 baseline, before this ticket's fix was even applied"
+        }
+      ],
+      "suggested_verification": "pnpm --filter @ship/api exec tsc --noEmit && pnpm --filter @ship/web type-check && pnpm test -- confirms suite-green component only; does not change the numeric-target finding below",
+      "assumption": null,
+      "notes": "docs/IMPROVEMENTS.md:27-28 records this category as \"Verdict: met, by the sum of controlled per-ticket diffs \u2014 not by a live recount, which the tracked metric cannot support today\", and the table directly beneath it prints the tracked total as 1535 -> 1778, \"Up 243\", openly. So the inference behind \"met\" is marked, not hidden; what fails is narrower and harder to argue away \u2014 the requirement's literal threshold (\"post-improvement violation count <= 75% of baseline\") is defined on the tracked total, and the tracked total has not been below 1535 at any point measured. The alternative accounting the document uses to reach \"met\" sums controlled per-ticket diffs: TS-1 (156) + TS-3 (19) + TS-4 (236 raw) = 411 >= 384 (IMPROVEMENTS.md:57). The underlying work is real and well-evidenced rather than fabricated \u2014 TS-1..TS-10 make narrowly scoped fixes with genuine before/after diffs (api explicit_any 78 -> 36; req.userId! / req.workspaceId! 236 -> 0). Two further records from the repo's own history point the same way: CHANGES.md:9785-9786 is the TS-4 ticket's admission that \"a live \\\"current total vs. 1535\\\" snapshot cannot cleanly demonstrate the category's cumulative progress - unrelated development moves it in both directions\", and CHANGES.md:9780 records that ticket's own live re-run at commit 42e60d9 already finding a tracked total of 1747 \u2014 above baseline \u2014 before its fix was applied. No compare artifact exists under audit/type-safety/ at all; only baseline.json and baseline.md.",
+      "suggested_scope": "Two separable changes, and only the first is small. (a) Restate the verdict at docs/IMPROVEMENTS.md:24-28 as not met against the tracked total, keeping the real per-ticket wins and printing 1987 vs 1535 plainly \u2014 minutes of documentation work, and it stops a grader re-running count.sh from finding a success claim that the instrument contradicts. (b) Closing the gap itself is not small: it needs the `as` assertion growth (1385 -> 1882) genuinely reduced, or the baseline re-measured with the corrected pattern audit/type-safety/baseline.md:62 already documents \u2014 applied to the baseline as well as to HEAD, with both numbers published."
+    },
+    {
+      "id": "W4-R12",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 119,
+          "note": "target quoted verbatim: cut initial-load bundle by 20% (600.75 -> <=480.60 kB gzip)"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 122,
+          "note": "'Verdict: met.' route-level reduction -64.9% to -80.5%, far exceeding the 20% bar"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 130,
+          "note": "before/after table: /login 601.47->117.34kB (-80.5%), /docs 601.47->181.92kB (-69.8%), /documents/:id 601.47->211.39kB (-64.9%)"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 12693,
+          "note": "TRO-197..202 (BUN-1/2/3/4/6) entry: 'The audit's target was 600.75 -> <=480.60 kB gzip. Every route clears it.'"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 12714,
+          "note": "stated identical-conditions methodology: same Node/pnpm/gzip level, baseline rebuilt from main at 4d74602 in an isolated git archive copy"
+        },
+        {
+          "file": "audit/bundle/measure.mjs",
+          "line": 1,
+          "note": "the analyzer script actually used to produce the before/after numbers (reads dist/.vite/manifest.json route closures)"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "No compare artifact exists physically under audit/bundle/ (only baseline.json/baseline.md/stats.json + the measure.mjs script itself -- no after-*.json/md was saved there). The before/after proof instead lives in docs/IMPROVEMENTS.md Section 2 and the CHANGES.md TRO-197+198+199+200+202 entry, both evidence-root files, with real numbers, stated methodology/conditions, and a reproduction command. The number decisively clears the 20% code-splitting threshold (up to 80.5%), so despite the artifact-location gap this is not treated as PARTIAL."
+    },
+    {
+      "id": "W4-R16",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 101,
+          "note": "target verdict section: at headline c=25 only 1/6 endpoints (issues, -30.68%) clears 20% P95; documents/:id only clears it at c=50, so this document alone leaves the '>=2 endpoints' question open"
+        },
+        {
+          "file": "audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 47,
+          "note": "GET /api/issues P95 clears >=20% at every concurrency: -31.3%/-30.7%/-39.4% (c=10/25/50), with root cause (API-2 dropped d.content from list SELECT, api/src/routes/issues.ts:345-348)"
+        },
+        {
+          "file": "audit/api-perf/documents-pagination-jul31.md",
+          "line": 118,
+          "note": "follow-up fix (TRO-304) for GET /api/documents: P95 40.127->9.662ms c=10 (-75.9%), 73.975->24.719ms c=25 (-66.6%), 292.14->42.435ms c=50 (-85.5%)"
+        },
+        {
+          "file": "audit/api-perf/documents-pagination-jul31.md",
+          "line": 144,
+          "note": "combined target verdict: 'GET /api/documents now clears the >=20% P95 bar at every tested concurrency... Reading the category target ... it is now met: 2/2'"
+        },
+        {
+          "file": "audit/api-perf/documents-pagination-jul31.md",
+          "line": 171,
+          "note": "root cause documented: DEFAULT_DOCUMENTS_LIST_LIMIT=100 replaces an unconditional full-corpus (500-row) response"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Two endpoints (GET /api/issues and GET /api/documents), each independently and robustly clearing the >=20% P95 bar at every tested concurrency, with root-cause notes and before/after benchmarks under documented identical conditions (same seed, same hardware, same autocannon methodology). The phase2-jul30 document alone is honest that it doesn't cleanly reach 2/2 at the strict headline concurrency; the later documents-pagination-jul31 fix closes that gap. Combined, the target is met."
+    },
+    {
+      "id": "W4-R18",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/db-query/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 54,
+          "note": "target quoted: >=20% query-count reduction on >=1 flow, OR >=50% improvement on slowest query, with before/after EXPLAIN ANALYZE"
+        },
+        {
+          "file": "audit/db-query/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 56,
+          "note": "'Met -- by both routes'"
+        },
+        {
+          "file": "audit/db-query/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 43,
+          "note": "'List issues' flow: 17->13 steady-state queries, -23.5%, clears the 20% bar within the 5 required flows"
+        },
+        {
+          "file": "audit/db-query/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 60,
+          "note": "slowest query (UPDATE sessions SET last_activity...) max 4.764ms(baseline) -> 0.614ms(compare), -87.1%, far exceeding the 50% bar"
+        },
+        {
+          "file": "audit/db-query/compare-phase2-jul30/raw/explain-plans.txt",
+          "line": 1,
+          "note": "before/after EXPLAIN ANALYZE plans backing the DB-5/DB-6/DB-7/DB-8 findings cited in the verdict section"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R20",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "api/vitest.config.ts",
+          "line": 27,
+          "note": "coverage block, lines 27-38: provider 'v8', reporter includes 'json-summary' (line 29), thresholds.statements 43 (line 37)"
+        },
+        {
+          "file": "web/vitest.config.ts",
+          "line": 39,
+          "note": "coverage block: provider 'v8', reporter includes 'json-summary', threshold statements:20"
+        },
+        {
+          "file": "api/package.json",
+          "line": 17,
+          "note": "\"test:coverage\": \"vitest run --coverage\" script exists"
+        },
+        {
+          "file": "web/package.json",
+          "line": 16,
+          "note": "\"test:coverage\": \"vitest run --coverage\" script exists"
+        },
+        {
+          "file": "audit/test-quality/runs/coverage/api-coverage-summary.json",
+          "line": 1,
+          "note": "reported api totals: lines 40.52%, statements 40.34%, functions 40.9%, branches 33.44%"
+        },
+        {
+          "file": "audit/test-quality/runs/coverage/web-coverage-summary.json",
+          "line": 1,
+          "note": "reported web totals: lines 28.53%, statements 27.63%, functions 25.6%, branches 19.38%"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R21",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 362,
+          "note": "target quoted: 3 meaningful tests OR 3 flaky RCAs, both available; 'Verdict: met, past target on both prongs'"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 378,
+          "note": "Concurrent multi-client Yjs merge test: 'did not exist' -> '4 new tests'; collaboration/index.ts function coverage 67.24%->70.68%"
+        },
+        {
+          "file": "api/src/collaboration/__tests__/concurrent-merge.test.ts",
+          "line": 13,
+          "note": "risk-comment doc block: 'TRO-226 / TEST-4 ... The CRDT is the whole justification for the Yjs architecture ... Before this file nothing verified any of that against the real server.'"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 397,
+          "note": "TEST-3 flaky-test RCA: root cause corrected from the audit's original hypothesis (Yjs timing) to the real one (shared-state dependency across worker DB), demonstrated wrong not just fixed"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 410,
+          "note": "TEST-12 flaky-test RCA (post-baseline): vi.clearAllMocks() leak + missing cross-process DB guard, fixed with a session-level Postgres advisory lock"
+        }
+      ],
+      "suggested_verification": "pnpm test (api+web unit) and /e2e-test-runner for the e2e suite -- confirms the 'meaningful/catches a real regression' tests and RCA fixes are currently green",
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R23",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 439,
+          "note": "target quoted: 3 error-handling gaps fixed, >=1 real data-loss/confusion scenario"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 442,
+          "note": "'Verdict: met -- 11 gaps fixed', including the mandatory data-loss fix (ERR-1) and the security fix (ERR-2)"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 460,
+          "note": "ERR-1 before/after: 'typed text inDb=false, still false 20s after socket healed; after reload, final DB content \"\" -- permanent loss' -> distinct not-syncing state blocks the false Saved label"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 478,
+          "note": "Screenshot evidence table: per-finding Coverage / File(s) / How-reproduced columns for all 11 findings, e.g. ERR-2 has both a before and after screenshot"
+        },
+        {
+          "file": "docs/screenshots/error-handling/ERR-1-after-not-saved-indicator.png",
+          "line": 1,
+          "note": "confirmed on disk (16 files total under docs/screenshots/error-handling/, ls verified 2026-08-08)"
+        },
+        {
+          "file": "docs/screenshots/error-handling/ERR-2-before-saved-while-session-valid.png",
+          "line": 1,
+          "note": "confirmed on disk; ERR-2 is the one fix with a real before+after screenshot pair"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R25",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/a11y/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 70,
+          "note": "target quoted: +10 Lighthouse points on lowest-scoring page OR all Critical/Serious cleared on 3 most important pages"
+        },
+        {
+          "file": "audit/a11y/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 72,
+          "note": "Prong 1 (Lighthouse +10): NOT met -- my-week only +5 (95->100), /weeks and /search each -5"
+        },
+        {
+          "file": "audit/a11y/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 73,
+          "note": "Prong 2 (Critical/Serious cleared on 3 key pages): MET -- my-week, document view+editor-focused, issues+menu/expanded all 0 Critical/0 Serious across every measured state"
+        },
+        {
+          "file": "audit/a11y/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 75,
+          "note": "'Verdict: category improvement target is satisfied, via Prong 2.'"
+        },
+        {
+          "file": "audit/a11y/compare-phase2-jul30/axe/document_view.json",
+          "line": 1,
+          "note": "raw axe scan backing the document-view 0/0/0/0 figure in the table"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "A new, previously-unreachable Serious color-contrast finding (TRO-298, DashboardSidebar) appeared on /weeks and /search as a side effect of the A11Y-5 routing fix, but neither page is among the 3 key pages the target is scored against, so it does not change the verdict per the artifact's own reasoning."
+    },
+    {
+      "id": "W4-R33",
+      "verdict": "PARTIAL",
+      "evidence": [
+        {
+          "file": "project guideliens/GFA_Week_4_ShipShape_Updated.pdf",
+          "line": 7,
+          "note": "PDF page 7 (for PDF sources the `line` field carries the page number): \"Category 8: Terraform Plan Review\" \u2014 while p.2 (\"baseline measurements for all 7 categories\"), p.10 and p.11 each say \"all 7 categories\". The 7-vs-8 count inconsistency is in the source document itself, not in the audit's reading of it"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 618,
+          "note": "Category 8 (Terraform) records 'Verdict: met' in the project's own doc; this row does not re-derive that claim, which is traced separately under W4-R26..R32"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Roll-up over the 7 non-Terraform categories. Bundle (W4-R12), API perf (W4-R16), DB query (W4-R18), Tests (W4-R21), Error handling (W4-R23) and A11y (W4-R25) each clear their stated target on the evidence traced for those rows \u2014 6/7 met. Type safety (W4-R10) does not: docs/IMPROVEMENTS.md claims \"met\" via a sum-of-controlled-diffs accounting, but the literal tracked violation total the target is defined on has only ever been measured going UP (1535 baseline -> 1778 on 2026-07-31 -> 1987 on a live recount on 2026-08-08 at HEAD 279fb8e6), never down. So \"improve all 8 categories\" is not satisfied as written under either reading of the source document's 7-vs-8 category count \u2014 type safety is common to both readings, so that ambiguity does not change this verdict and no ASSUMED/needs-ruling item is raised for it. Terraform (category 8) is traced by W4-R26..R32; its \"met\" claim at docs/IMPROVEMENTS.md:618 was spot-checked here rather than independently deep-traced.",
+      "suggested_scope": "No separate work. This is a roll-up that is PARTIAL solely because W4-R10 is; it resolves the moment W4-R10 resolves. Opening work against it would duplicate that ticket."
+    },
+    {
+      "id": "W4-R34",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 1,
+          "note": "document header states its own provenance: compiled from AUDIT_REPORT.md baselines, CHANGES.md's dated fix entries, and the formal compare artifacts under audit/a11y and audit/api-perf"
+        },
+        {
+          "file": "audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 11,
+          "note": "identical-conditions methodology stated explicitly: same hardware/OS/Node, isolated worktree/DB, deterministic seed verified byte-identical to baseline"
+        },
+        {
+          "file": "audit/db-query/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 12,
+          "note": "identical-conditions methodology stated: same PG major version container, statement logging scoped, data volume verified byte-identical to baseline"
+        },
+        {
+          "file": "audit/a11y/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 7,
+          "note": "identical-conditions methodology: same tool versions (Lighthouse 11.7.1, axe-core 4.11.0), same viewport, same 5 pages/states, same data volume"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 24,
+          "note": "even the category that fails its numeric target (type safety) still carries a real paired before/after measurement, satisfying the process-level 'proof is mandatory' requirement even though the improvement itself falls short"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Before/after proof exists for every one of the 7 categories examined in this sweep, each with stated identical-conditions methodology and a reproduction command. That is a distinct question from whether the improvement clears its numeric bar (see the W4-R10 and W4-R33 notes) \u2014 W4-R34 asks only that paired measurements exist, which they do."
+    },
+    {
+      "id": "W4-R35",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/api-perf/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 25,
+          "note": "'pnpm test -> 55 API test files/662 tests + 49 web test files/420 tests, all passed, 0 failures' (2026-07-30, commit 15e6cb0)"
+        },
+        {
+          "file": "audit/db-query/compare-phase2-jul30/after-phase2-jul30.md",
+          "line": 22,
+          "note": "same suite run after DB fixes: 'all passed, 0 failures' (2026-07-30, commit 34a0aeb)"
+        }
+      ],
+      "suggested_verification": "pnpm test (api unit suite, requires local PostgreSQL) and /e2e-test-runner for the full e2e suite at current HEAD -- per dispatch instructions this was not run in this session since the shared dev database is owned by the controller",
+      "assumption": null,
+      "notes": "Multiple point-in-time snapshots in CHANGES.md and the compare artifacts show the suite green immediately after various improvement commits. One further data point could not be given a reproducible citation and is therefore recorded here rather than in evidence: memory-bank/activeContext.md records GitLab pipeline 18266 at 32e54ba (2026-08-07) as \"success \u2014 verify, inventory, e2e-agent all green\", but that file is the sprint's working memory, rewritten every session and uncommitted-modified in the working tree at sweep time, so no stable file:line resolves to it. None of the snapshot evidence is a live run at the swept HEAD; the live result is below.",
+      "suggested_scope": "Compare like with like in api/src/db/__tests__/migrationRunner.test.ts: sort both sides in JavaScript, or make the query's ordering collation-explicit, so 020_document_associations and 020b_sprint_assignee_ids order identically on both sides. One test file, two assertions (lines 167 and 184). No migration and no application change \u2014 nothing is wrong with the migrations themselves."
+    },
+    {
+      "id": "W4-R36",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "CHANGES.md",
+          "line": 9724,
+          "note": "TS-4/TRO-209 entry's 'Regression tests' section names exact files/tests: api/src/__tests__/auth.test.ts, api/src/routes/auth.test.ts"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 11142,
+          "note": "TS-3/TRO-208 entry's 'Regression test' section names api/src/utils/__tests__/yjsConverter.test.ts with red-before-green detail"
+        },
+        {
+          "file": "api/src/collaboration/__tests__/concurrent-merge.test.ts",
+          "line": 14,
+          "note": "TEST-4/TRO-226 finding ID named directly in the test file's own doc comment"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 12841,
+          "note": "BUN-1..6 entry's 'Regression tests' section lists 6 specific web/src/**/*.test.ts(x) files, each tied to its BUN-N finding"
+        },
+        {
+          "file": "docs/IMPROVEMENTS.md",
+          "line": 502,
+          "note": "ERR-10/ERR-11/ERR-12 root-cause section names the exact shared architectural class and which tests exercise it"
+        },
+        {
+          "file": "api/src/config/ssm.test.ts",
+          "line": 33,
+          "note": "vi.mock('@aws-sdk/client-ssm', ...) -- external AWS SSM calls are mocked with a stable fake (mockResolvedValueOnce/mockImplementation), not a live call"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 7832,
+          "note": "TRO-305 (screenshot ticket) explicitly documents the one legitimate exception: 'Regression test: none -- this ticket produces documentation/evidence, not application behavior', consistent for doc-only tickets"
+        }
+      ],
+      "suggested_verification": "pnpm test -- to confirm every named regression test currently passes",
+      "assumption": null,
+      "notes": "No single consolidated finding-ID -> test file:line index/table exists; the mapping is real but decentralized across ~135 dated CHANGES.md ticket entries, each of which names its own regression test file(s) under a 'Regression tests' heading and tags the finding ID (TS-*/BUN-*/API-*/DB-*/TEST-*/ERR-*/A11Y-*) in its own section header. Spot-checked for external-service mocking (AWS SSM in api/src/config/ssm.test.ts) and found stable vi.mock fakes; grepped api/src, web/src and e2e for non-localhost https:// literals in test files and found none used as live calls (the one hit, e2e/session-timeout.spec.ts:489, is a phishing-redirect security test string, not an actual outbound call)."
+    }
+  ],
+  "needs_ruling": []
+}

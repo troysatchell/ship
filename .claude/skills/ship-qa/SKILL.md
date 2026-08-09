@@ -143,6 +143,56 @@ retry is **a flake, not a pass** — the run is green and the defect is still th
 - Flake detection is Tier 2 (`/test-quality-audit compare <label>`) and expensive by nature — it
   needs the suite run repeatedly. Batch it per category, don't run it per ticket.
 
+## The host is not under test
+
+Different from flakiness above: a flake disagrees with itself on one host across repeated runs.
+This class disagrees with itself **across** hosts — deterministic and confidently wrong on each
+one, which is harder to catch, because no single run looks suspicious.
+
+Two instances landed ~30 minutes apart on `fix/w4-sweep-correctness` (2026-08-08; `lessons.md`
+rule 25 has the incident log, this is the standing rule going forward):
+
+- `migrationRunner.test.ts`'s `recordedVersions()` returned a Postgres `ORDER BY version` result
+  and compared it via `toEqual` against `expectedVersionsFromDisk()`'s JS `.sort()`. Postgres and
+  JS disagree on exactly one pair out of 46 migration names — `020_document_associations` vs
+  `020b_sprint_assignee_ids` — so the test failed on any database whose collation orders that pair
+  the JS-losing way, and passed on others, regardless of whether the runner had applied every
+  migration correctly. Fixed (`5126a03`) by sorting `recordedVersions()`'s own result in JS too, so
+  both sides of the comparison collate the same way.
+- That fix's own new test, `postgresReachable.test.ts`, asserted that probing `127.0.0.1:5432`
+  resolves `false` "because nothing is expected to be listening in this test environment." True
+  where it was written (that worktree's Postgres is on 5433); false in CI, where GitHub Actions
+  runs Postgres on 5432. A correct probe result failed the test.
+
+**`gate.sh` cannot catch this class, structurally.** It runs once, in one environment — it can only
+confirm an assumption holds *here*. Only a second, disagreeing environment (CI, both times)
+exposes it. A `gate.sh` pass on a test shaped like this means "true on this machine," nothing more.
+
+**The tell:** the test's own comment stated the environmental assumption out loud to justify the
+assertion, and it shipped anyway. If a test needs a sentence about the host to explain why it
+passes, that sentence is the bug report — read your own diff for it before committing.
+
+What to do instead:
+
+- **Sort or normalize both sides of a comparison in the same engine.** Never compare a database's
+  ordering against a language's, even when one side looks "obviously" already sorted.
+- **Assert on pure logic wherever the behavior is pure.** The port-default case was fixed by
+  extracting `resolveHostPort(databaseUrl): HostPort | null` out of `isPostgresReachable` and
+  asserting the parsed value directly — no socket, same answer on every machine. CodeRabbit's
+  review on the same PR suggested the opposite fix: mock `net.createConnection` and assert on its
+  call arguments. That would have stayed green forever — it proves the mock is wired up, never that
+  the parsing is right. Prefer the seam that removes the environment, not the one that fakes it.
+- **Where a resource is genuinely needed, bind your own and read back its real address** — don't
+  assume a well-known one is free or occupied. `postgresReachable.test.ts`'s "reachable" case does
+  this (`server.listen(0, '127.0.0.1', ...)`, then connects to whatever port the OS handed back).
+  Its "unreachable" case still asserts against `127.0.0.1:1` as a "guaranteed-closed" port — flagged
+  the same day as a residual, unfixed risk: a privileged process can legally bind port 1, so that's
+  the identical assumption in miniature, just one that happens to hold on ordinary dev and CI boxes.
+  Prefer bind-and-read-back over any port you merely believe is unused.
+- **Don't write "guaranteed" in a comment unless it is one.** If the sentence needs a specific host
+  or CI provider to stay true, it's an assumption, not a guarantee — mark it as derived per this
+  project's claim-provenance rule, or better, remove the need for it entirely.
+
 ## The api test-database hazard
 
 `api/src/test/setup.ts` `TRUNCATE`s 16 tables in the `beforeAll` of **every** api test file. This is

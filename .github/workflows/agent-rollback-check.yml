@@ -1,0 +1,143 @@
+name: Agent readiness check (automatic rollback trigger)
+
+# TRO-367 (W5-R36, the only MISSING requirement in the Week 5 sweep):
+# "If a CI run fails, the deployment must be rolled back automatically — do
+# not allow a failing build to remain deployed." Two layers already existed
+# and are documented in FLEETGRAPH.MD's "Rollback trigger and procedure"
+# section: (1) CI gates merge, so a failing build never reaches `main` and
+# never reaches Render's `auto_deploy`; (2) Render's own health-check-gated
+# promotion keeps serving the previous deploy when a new one never passes
+# `/health`. Neither catches a deploy that boots cleanly (passes `/health`,
+# which makes no dependency check) but is missing config or cannot reach
+# Ship — `agent/src/deployReadiness.ts`'s own module docstring has the full
+# reasoning. `agent/src/scripts/check-readiness-and-rollback.ts` is the
+# tested, runnable corrective tool for exactly that gap; before this
+# workflow existed, nothing ever invoked it — its own docstring said so
+# plainly ("NOT wired into any live trigger against production").
+#
+# THIS is that trigger. On a schedule (and on manual dispatch), it polls the
+# live agent's own `/ready` endpoint and — only when EVERY sample in the
+# window reports not-ready (a SUSTAINED failure; `evaluateReadinessSamples`
+# deliberately does not act on a single transient blip, matching
+# FLEETGRAPH.MD's own caveat that a briefly-unreachable Ship must not trigger
+# a rollback) — calls `check-readiness-and-rollback.ts --execute`, which
+# looks up the most recent OTHER `live` Render deploy and re-triggers it via
+# Render's documented `POST /v1/services/{id}/deploys` mechanism. No human
+# needs to notice the failure or run a command for this to happen.
+#
+# Requires two repository secrets this change does NOT and cannot set:
+#   RENDER_API_KEY           - a Render API key scoped to the agent service.
+#   RENDER_AGENT_SERVICE_ID  - e.g. srv-d9otunmgekts73eqs0h0 (the id changes
+#                               on a clean-machine `terraform apply` — see
+#                               terraform/render/plan/*.md — so re-check
+#                               `terraform output agent_service_url` /
+#                               Render's dashboard before rotating it).
+# Provisioning real credentials against a live production service is exactly
+# the outward-facing, credential-bearing infrastructure step this factory's
+# escalation policy reserves for explicit human sign-off
+# (.claude/skills/ship-factory/references/escalation.md), matching every
+# other live Render/Terraform action FLEETGRAPH.MD documents. Until a human
+# sets both secrets, the "check secrets are configured" step below reports a
+# warning annotation and every other step is skipped — the workflow neither
+# fails loudly (spamming a human who hasn't signed off yet) nor silently
+# does nothing (the annotation is visible on every scheduled run). Once both
+# secrets are set, the very next scheduled run becomes the first real,
+# unattended exercise of this trigger — see CHANGES.md's TRO-367 entry and
+# this PR's own report for exactly what was (and was not) demonstrated
+# before that point: the poll -> evaluate -> decide -> call-Render pipeline
+# is proven end to end in `agent/src/__tests__/check-readiness-and-rollback
+# .test.ts`'s `runReadinessCheck` suite, against fakes only — this workflow
+# has never made a real call to Render, and no live rollback has ever been
+# exercised against the actually-deployed service.
+on:
+  schedule:
+    # Every 15 minutes. FLEETGRAPH.MD's own recommendation for this trigger
+    # ("a few minutes after each deploy, or on a short recurring interval")
+    # — a fixed interval covers both a post-deploy check and ongoing
+    # readiness drift without needing to hook Render's own deploy-completed
+    # event, which this project has no webhook access to configure.
+    - cron: '*/15 * * * *'
+  workflow_dispatch: {}
+
+concurrency:
+  # Never cancel a run that might be mid-rollback; a fresh scheduled trigger
+  # 15 minutes later queues behind it instead.
+  group: agent-rollback-check
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AGENT_READY_URL: https://ship-agent-t0zy.onrender.com/ready
+
+jobs:
+  check-and-rollback:
+    name: poll /ready, roll back on sustained failure
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check required secrets are configured
+        id: secrets_check
+        # Read secrets only via env: (never interpolated directly into the
+        # script body) — the conventional-safe pattern; GitHub Actions masks
+        # secret values in logs either way, but this also sidesteps any
+        # shell-metacharacter surprise if a secret value ever contained one.
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_AGENT_SERVICE_ID: ${{ secrets.RENDER_AGENT_SERVICE_ID }}
+        run: |
+          if [ -z "$RENDER_API_KEY" ] || [ -z "$RENDER_AGENT_SERVICE_ID" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::RENDER_API_KEY and/or RENDER_AGENT_SERVICE_ID repository secrets are not set. The automatic rollback trigger (TRO-367) is wired but inert until a human provisions both — see this workflow file's own header comment and FLEETGRAPH.MD's 'Rollback trigger and procedure' section. Skipping the readiness check for this run."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: steps.secrets_check.outputs.configured == 'true'
+        with:
+          # This workflow carries production credentials (RENDER_API_KEY) once
+          # provisioned; a persisted git credential in the runner's local
+          # config is an unnecessary exposure this job never needs — it only
+          # reads files, never pushes.
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: steps.secrets_check.outputs.configured == 'true'
+        with:
+          version: 10.27.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: steps.secrets_check.outputs.configured == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.secrets_check.outputs.configured == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared (agent depends on its dist)
+        if: steps.secrets_check.outputs.configured == 'true'
+        run: pnpm build:shared
+
+      # Dry-run by default; --execute is what makes this call Render for
+      # real, and only after a SUSTAINED failure (evaluateReadinessSamples).
+      # A transient blip recovers within the 3-sample, 30s-apart window and
+      # never reaches this line's rollback branch — see
+      # deployReadiness.ts / check-readiness-and-rollback.ts for the
+      # decision logic this step is invoking, and that script's own tests
+      # for the end-to-end proof against fakes.
+      - name: Check agent readiness, roll back on sustained failure
+        if: steps.secrets_check.outputs.configured == 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_AGENT_SERVICE_ID: ${{ secrets.RENDER_AGENT_SERVICE_ID }}
+        run: |
+          pnpm --filter @ship/agent check:readiness \
+            --url "$AGENT_READY_URL" \
+            --attempts 3 \
+            --interval-ms 30000 \
+            --service-id "$RENDER_AGENT_SERVICE_ID" \
+            --execute

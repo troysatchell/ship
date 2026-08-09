@@ -1950,6 +1950,18 @@ router.patch('/:id/plan', authMiddleware, authed(async (req, res) => {
         );
       }
     }
+    if (newProps.plan_approval?.state === 'changed_since_approved' &&
+        currentProps.plan_approval?.state === 'approved') {
+      // The approved→edited transition is the approver-routed blocking signal;
+      // it only reaches the agent's change feed through document_history.
+      await logDocumentChange(
+        id as string,
+        'plan_approval',
+        JSON.stringify(currentProps.plan_approval),
+        JSON.stringify(newProps.plan_approval),
+        userId
+      );
+    }
 
     // Broadcast celebration when plan is added
     if (data.plan && data.plan.trim() !== '') {
@@ -3560,6 +3572,16 @@ router.post('/:id/request-plan-changes', authMiddleware, authed(async (req, res)
       [JSON.stringify(newProps), id]
     );
 
+    // The change feed only carries approval state through document_history —
+    // without this row the blocked state is invisible to the agent.
+    await logDocumentChange(
+      id as string,
+      'plan_approval',
+      currentProps.plan_approval ? JSON.stringify(currentProps.plan_approval) : null,
+      JSON.stringify(newProps.plan_approval),
+      userId
+    );
+
     // Notify the sprint owner that changes were requested
     const sprintOwnerId = sprint.sprint_owner_id;
     if (sprintOwnerId) {
@@ -3650,6 +3672,16 @@ router.post('/:id/request-retro-changes', authMiddleware, authed(async (req, res
       `UPDATE documents SET properties = $1, updated_at = now()
        WHERE id = $2 AND document_type = 'sprint'`,
       [JSON.stringify(newProps), id]
+    );
+
+    // Same as request-plan-changes: the agent's change feed reads approval
+    // state from document_history only.
+    await logDocumentChange(
+      id as string,
+      'review_approval',
+      currentProps.review_approval ? JSON.stringify(currentProps.review_approval) : null,
+      JSON.stringify(newProps.review_approval),
+      userId
     );
 
     // Notify the sprint owner that changes were requested

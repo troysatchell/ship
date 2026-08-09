@@ -1,5 +1,11 @@
-import { describe, expect, it } from 'vitest';
-import { findPreviousLiveDeploy, parseArgs } from '../scripts/check-readiness-and-rollback.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  findPreviousLiveDeploy,
+  parseArgs,
+  runReadinessCheck,
+  type ParsedArgs,
+} from '../scripts/check-readiness-and-rollback.js';
+import type { ReadinessFetcher } from '../deployReadiness.js';
 
 describe('parseArgs', () => {
   it('parses a minimal dry-run invocation with defaults', () => {
@@ -72,5 +78,272 @@ describe('findPreviousLiveDeploy', () => {
 
   it('returns undefined on an empty deploy list', () => {
     expect(findPreviousLiveDeploy([], undefined)).toBeUndefined();
+  });
+});
+
+// TRO-367 (W5-R36) — proof that the trigger is actually WIRED, not just that
+// its pieces individually work. `parseArgs` above and
+// `evaluateReadinessSamples`/`pollReadiness` (deployReadiness.test.ts) were
+// each already unit-tested in isolation before this ticket; nothing proved
+// the decision ("sustained failure") actually reaches the action ("call
+// Render"). Every case here is a dry-run / simulated-failure demonstration —
+// `fetcher` never makes a real request to a live `/ready` endpoint, and
+// `fetchImpl` never makes a real call to Render's API — exactly what this
+// ticket's HARD CONSTRAINT calls for in place of a live exercise.
+describe('runReadinessCheck (the wired trigger: poll -> evaluate -> decide -> act)', () => {
+  function readyFetcher(): ReadinessFetcher {
+    return { get: vi.fn().mockResolvedValue(new Response(null, { status: 200 })) };
+  }
+  function notReadyFetcher(): ReadinessFetcher {
+    return { get: vi.fn().mockResolvedValue(new Response(null, { status: 503 })) };
+  }
+  /** Every poll REJECTS — a fetch/DNS/network failure reaching the service at
+   * all, as opposed to `notReadyFetcher` above, which reaches it and gets a
+   * real 503. This is the "we could not reach the service to ask" case fix 1
+   * exists for, as distinct from "the service told us it is not ready". */
+  function fetchFailingFetcher(message = 'fetch failed: getaddrinfo ENOTFOUND'): ReadinessFetcher {
+    return { get: vi.fn().mockRejectedValue(new Error(message)) };
+  }
+
+  it('takes no Render action when every sample is ready', async () => {
+    const args = parseArgs(['--url', 'https://example.com/ready', '--attempts', '2', '--interval-ms', '0']);
+    const fetchImpl = vi.fn();
+
+    const result = await runReadinessCheck(args, {
+      fetcher: readyFetcher(),
+      fetchImpl,
+      apiKey: undefined,
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.outcome).toBe('healthy');
+    expect(result.evaluation.rollbackWarranted).toBe(false);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('does NOT call Render on a transient failure that recovers mid-window, even with --execute and a real key', async () => {
+    const args = parseArgs([
+      '--url', 'https://example.com/ready',
+      '--attempts', '3', '--interval-ms', '0',
+      '--service-id', 'srv-agent-123', '--execute',
+    ]);
+    const fetcher: ReadinessFetcher = {
+      get: vi
+        .fn()
+        .mockResolvedValueOnce(new Response(null, { status: 503 }))
+        .mockResolvedValueOnce(new Response(null, { status: 200 }))
+        .mockResolvedValueOnce(new Response(null, { status: 200 })),
+    };
+    const fetchImpl = vi.fn();
+
+    const result = await runReadinessCheck(args, {
+      fetcher,
+      fetchImpl,
+      apiKey: 'fake-render-key',
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.outcome).toBe('transient');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('reports "rollback warranted" without calling Render when --execute was not passed (dry run)', async () => {
+    const args = parseArgs(['--url', 'https://example.com/ready', '--attempts', '3', '--interval-ms', '0']);
+    const fetchImpl = vi.fn();
+
+    const result = await runReadinessCheck(args, {
+      fetcher: notReadyFetcher(),
+      fetchImpl,
+      apiKey: 'fake-render-key',
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.outcome).toBe('dry_run_warn');
+    expect(result.evaluation.rollbackWarranted).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  // Fix 1 (CodeRabbit, PR #157): a thrown fetch is recorded by `pollReadiness`
+  // as `ready: false` with a `fetch_failed: ...` reason — the same shape as a
+  // real 503. Without this distinction, a GitHub-to-Render DNS or network
+  // outage would roll back a perfectly healthy service: the automation
+  // causing an outage in response to its own blindness.
+  it('reports "monitoring_error" (not a rollback) when every sample is a fetch/poll failure, and never calls Render', async () => {
+    const args = parseArgs([
+      '--url', 'https://example.com/ready',
+      '--attempts', '3', '--interval-ms', '0',
+      '--service-id', 'srv-agent-123', '--execute',
+    ]);
+    const fetchImpl = vi.fn();
+
+    const result = await runReadinessCheck(args, {
+      fetcher: fetchFailingFetcher(),
+      fetchImpl,
+      apiKey: 'fake-render-key',
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.outcome).toBe('monitoring_error');
+    // evaluateReadinessSamples itself can't tell the two apart (every sample
+    // failed either way) — the distinction is made one layer up, in
+    // runReadinessCheck, which is exactly what this test guards.
+    expect(result.evaluation.rollbackWarranted).toBe(true);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('still treats a sustained failure as rollback-warranted when at least one sample is a REAL not-ready response, even mixed with fetch failures', async () => {
+    // One poll never reaches the service at all, the other does and gets a
+    // real 503 — this is a genuine signal from the service, not pure
+    // monitoring blindness, so it must NOT be swallowed as monitoring_error.
+    const fetcher: ReadinessFetcher = {
+      get: vi
+        .fn()
+        .mockRejectedValueOnce(new Error('fetch failed: network blip'))
+        .mockResolvedValueOnce(new Response(null, { status: 503 })),
+    };
+    const args = parseArgs(['--url', 'https://example.com/ready', '--attempts', '2', '--interval-ms', '0']);
+
+    const result = await runReadinessCheck(args, {
+      fetcher,
+      fetchImpl: vi.fn(),
+      apiKey: undefined,
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.outcome).toBe('dry_run_warn');
+  });
+
+  // Fix 3 (CodeRabbit, PR #157): `parseArgs` refuses `--execute` without
+  // `--service-id`, but `runReadinessCheck` takes a `ParsedArgs` object
+  // directly and must not assume every caller went through `parseArgs` — a
+  // hand-built args object (as here) with `execute: true` and no
+  // `serviceId` must never reach `rollbackViaRenderApi` with `undefined`.
+  it('reports "missing_service_id" and does not call Render when execute is true but serviceId is not set', async () => {
+    const args: ParsedArgs = {
+      url: 'https://example.com/ready',
+      attempts: 2,
+      intervalMs: 0,
+      serviceId: undefined,
+      execute: true,
+    };
+    const fetchImpl = vi.fn();
+
+    const result = await runReadinessCheck(args, {
+      fetcher: notReadyFetcher(),
+      fetchImpl,
+      apiKey: 'fake-render-key',
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.outcome).toBe('missing_service_id');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('reports "missing_api_key" and does not call Render when --execute was passed but no RENDER_API_KEY is available', async () => {
+    const args = parseArgs([
+      '--url', 'https://example.com/ready',
+      '--attempts', '2', '--interval-ms', '0',
+      '--service-id', 'srv-agent-123', '--execute',
+    ]);
+    const fetchImpl = vi.fn();
+
+    const result = await runReadinessCheck(args, {
+      fetcher: notReadyFetcher(),
+      fetchImpl,
+      apiKey: undefined,
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.outcome).toBe('missing_api_key');
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('on a sustained failure with --execute and a key, actually calls Render to redeploy the previous live deploy', async () => {
+    const args = parseArgs([
+      '--url', 'https://example.com/ready',
+      '--attempts', '3', '--interval-ms', '0',
+      '--service-id', 'srv-agent-123', '--execute',
+    ]);
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify([
+            { deploy: { id: 'dep-broken', status: 'live', createdAt: '2026-08-08T00:00:00Z', commit: { id: 'broken-sha' } } },
+            { deploy: { id: 'dep-good', status: 'live', createdAt: '2026-08-07T00:00:00Z', commit: { id: 'good-sha' } } },
+          ]),
+          { status: 200 }
+        )
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify({ id: 'dep-new' }), { status: 201 }));
+
+    const result = await runReadinessCheck(args, {
+      fetcher: notReadyFetcher(),
+      fetchImpl,
+      apiKey: 'fake-render-key',
+      sleep: vi.fn().mockResolvedValue(undefined),
+    });
+
+    expect(result.outcome).toBe('rolled_back');
+    expect(result.rolledBackTo?.id).toBe('dep-good');
+    expect(result.rolledBackTo?.commit?.id).toBe('good-sha');
+
+    // Confirms the trigger actually reaches Render's documented rollback
+    // mechanism (POST .../deploys with the previous commit id) — not just
+    // that the decision logic ran. Both calls are against `fetchImpl`, a
+    // fake; neither ever leaves this process.
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    const rollbackCall = fetchImpl.mock.calls[1] as [string, RequestInit];
+    expect(rollbackCall[0]).toBe('https://api.render.com/v1/services/srv-agent-123/deploys');
+    expect(rollbackCall[1]).toMatchObject({ method: 'POST' });
+    expect(JSON.parse(String(rollbackCall[1].body))).toEqual({ commitId: 'good-sha' });
+  });
+
+  // Fix 6 (CodeRabbit, PR #157): the previous version of this test used
+  // HEALTHY samples with no `--execute`, so no Render call ever happened —
+  // it could only prove `onEvaluated` was called, never that it ran BEFORE a
+  // rollback, because there was no rollback in the test at all. This version
+  // uses a sustained-failure `--execute` case that actually reaches
+  // `rollbackViaRenderApi`, and records both `onEvaluated` and every
+  // `fetchImpl` call into one shared, ordered array so the ordering claim is
+  // actually checked.
+  it('calls onEvaluated exactly once, before any Render call, on a sustained failure with --execute', async () => {
+    const args = parseArgs([
+      '--url', 'https://example.com/ready',
+      '--attempts', '2', '--interval-ms', '0',
+      '--service-id', 'srv-agent-123', '--execute',
+    ]);
+    const events: string[] = [];
+    let fetchImplCallCount = 0;
+    const fetchImpl = vi.fn(async () => {
+      fetchImplCallCount += 1;
+      events.push(`fetchImpl:${fetchImplCallCount}`);
+      if (fetchImplCallCount === 1) {
+        return new Response(
+          JSON.stringify([
+            { deploy: { id: 'dep-broken', status: 'live', createdAt: '2026-08-08T00:00:00Z', commit: { id: 'broken-sha' } } },
+            { deploy: { id: 'dep-good', status: 'live', createdAt: '2026-08-07T00:00:00Z', commit: { id: 'good-sha' } } },
+          ]),
+          { status: 200 }
+        );
+      }
+      return new Response(JSON.stringify({ id: 'dep-new' }), { status: 201 });
+    });
+
+    const result = await runReadinessCheck(args, {
+      fetcher: notReadyFetcher(),
+      fetchImpl,
+      apiKey: 'fake-render-key',
+      sleep: vi.fn().mockResolvedValue(undefined),
+      onEvaluated: (samples, evaluation) => {
+        events.push('onEvaluated');
+        expect(samples).toHaveLength(2);
+        expect(evaluation.rollbackWarranted).toBe(true);
+      },
+    });
+
+    expect(result.outcome).toBe('rolled_back');
+    expect(events.filter((e) => e === 'onEvaluated')).toHaveLength(1);
+    expect(events).toEqual(['onEvaluated', 'fetchImpl:1', 'fetchImpl:2']);
   });
 });

@@ -1,0 +1,80 @@
+{
+  "cluster": "observability",
+  "requirements": [
+    {
+      "id": "W5-R14",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 333, "note": "Execution Traces table header (Path | Trigger | Trace | Child spans | Real cost)" },
+        { "file": "FLEETGRAPH.MD", "line": 335, "note": "Trace link row 1: bare on-demand chat, LangSmith share link https://smith.langchain.com/public/53ee51bf-.../r/45c12238-..." },
+        { "file": "FLEETGRAPH.MD", "line": 336, "note": "Trace link row 2: on-demand expansion, LangSmith share link https://smith.langchain.com/public/592b4f32-.../r/5e9d072b-..." },
+        { "file": "FLEETGRAPH.MD", "line": 337, "note": "Trace link row 3: proactive deterministic, LangSmith share link https://smith.langchain.com/public/8e698e3a-.../r/88b0880a-..." }
+      ],
+      "suggested_verification": "Open the linked LangSmith share URLs (doc claims no auth required) and confirm each resolves to a real run in the fleetgraph-agent project.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "11 distinct smith.langchain.com URLs appear across FLEETGRAPH.MD total (grep count), 3 of them in the Execution Traces section itself, satisfying the acceptance evidence's literal scope ('trace links present in FLEETGRAPH.md'). PRESEARCH.MD has zero LangSmith links, but acceptance evidence for this ID names only FLEETGRAPH.md, so that is not treated as a gap here. Link contents not opened (off-machine, requires auth per instructions) — treated as evidence a link was submitted, not evidence of what it shows."
+    },
+    {
+      "id": "W5-R15",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 335, "note": "Row 1 Path column: 'Bare on-demand chat (ingest -> respond, FG-2)', Trigger: 'on_demand, no seed', 9 child spans" },
+        { "file": "FLEETGRAPH.MD", "line": 336, "note": "Row 2 Path column: 'On-demand expansion (resolveSeed -> expandFrontier x9 -> finalizeExpansion -> composeAnswer, FG-7)', Trigger: 'on_demand, real seed document', 47 child spans" },
+        { "file": "FLEETGRAPH.MD", "line": 337, "note": "Row 3 Path column: 'Proactive deterministic (pollChangeFeed -> resolveMentions -> detectBlockingApprovals -> commitInboxItems, FG-5)', Trigger: 'proactive_steady, real change-feed cursor', 14 child spans, $0 real cost (no model call)" },
+        { "file": "FLEETGRAPH.MD", "line": 339, "note": "Heading: 'What genuinely differs between these three, verified via GET /runs/{id}'s own child_run_ids/inputs/total_tokens fields, not asserted'" },
+        { "file": "FLEETGRAPH.MD", "line": 342, "note": "Node-names bullet: proactive trace's POST /runs/query child list is exactly pollChangeFeed->resolveMentions->detectBlockingApprovals->commitInboxItems, no respond/composeAnswer/composeStandupDraft node anywhere in it" },
+        { "file": "FLEETGRAPH.MD", "line": 347, "note": "Span-count bullet: 9 (bare chat) vs 47 (expansion, documentCap=12 reached) vs 14 (proactive, fixed 4-node chain) as 'three different real numbers for three genuinely different graph shapes'" },
+        { "file": "FLEETGRAPH.MD", "line": 351, "note": "Inputs bullet: expansion trace's recorded input shows seedDocumentId + trigger:'on_demand'; proactive trace's shows trigger:'proactive_steady', cursor:'2026-08-05T01:14:00.840Z' — read back from LangSmith itself" }
+      ],
+      "suggested_verification": "Open the three linked LangSmith share URLs directly and confirm each shows the documented node sequence, span count, and recorded trigger/input fields; or reproduce with `pnpm --filter @ship/agent trace:invoke-on-demand` and `trace:invoke-proactive` and diff the resulting traces.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "This clears the PARTIAL bar the brief describes ('asserts they differ but does not say how') — FLEETGRAPH.MD names the specific condition each trace ran under (on_demand/no-seed, on_demand/real-seed, proactive_steady/real-cursor), the specific node sequence exercised per trace, and cites specific LangSmith-recorded fields (child_run_ids, inputs.seedDocumentId, inputs.trigger, total_tokens) as the basis, rather than a bare 'these differ' claim. That said, per instructions I did not follow the three URLs myself (off-machine, requires auth to fully inspect) — the verdict credits the repo's documented methodology and specificity, not independent confirmation that the linked traces actually contain what is described. Raw links for reference (not verified by me): https://smith.langchain.com/public/53ee51bf-7f86-4ed5-bef2-3b0ecf9d596e/r/45c12238-df88-4c11-bd67-1ee27edc0736 ; https://smith.langchain.com/public/592b4f32-3c11-43ed-9abc-640c3f8257ee/r/5e9d072b-0559-41ff-bbba-3fa4df218142 ; https://smith.langchain.com/public/8e698e3a-d0a4-47ba-97ee-de0098c5660d/r/88b0880a-f4dd-4ac6-b496-1ae66235377a (dated 2026-08-05 per FLEETGRAPH.MD:325)."
+    },
+    {
+      "id": "W5-R17",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/config.ts", "line": 18, "note": "AgentConfig.langchainTracingV2 docstring: 'Whether LangSmith tracing is enabled (LANGCHAIN_TRACING_V2=true)'" },
+        { "file": "agent/src/config.ts", "line": 99, "note": "loadConfig(): langchainTracingV2: env.LANGCHAIN_TRACING_V2 === 'true' — actual tracing config wiring" },
+        { "file": "agent/src/index.ts", "line": 97, "note": "if (!config.langchainTracingV2) { console.warn(...) } — tracing state checked at process startup" },
+        { "file": "FLEETGRAPH.MD", "line": 335, "note": "Trace link 1 of >= 2 required, distinct execution path (bare on-demand chat)" },
+        { "file": "FLEETGRAPH.MD", "line": 337, "note": "Trace link 3 (proactive deterministic) — a second, materially different path from link 1, satisfying '>= 2 differing' links" }
+      ],
+      "suggested_verification": "Set LANGCHAIN_TRACING_V2=true and LANGCHAIN_API_KEY/LANGSMITH_API_KEY, run `pnpm --filter @ship/agent trace:invoke-on-demand -- <seedId> <question>`, and confirm a new run appears in the fleetgraph-agent LangSmith project.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R55",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/graph.ts", "line": 387, "note": "import { Annotation, END, START, StateGraph } from '@langchain/langgraph';" },
+        { "file": "agent/src/graph.ts", "line": 1238, "note": "const graph = new StateGraph(GraphState) — buildGraph() constructs the agent's graph using LangGraph's StateGraph, not a hand-rolled pipeline" },
+        { "file": "agent/package.json", "line": 32, "note": "\"@langchain/langgraph\": \"^0.2.44\" declared alongside \"@langchain/anthropic\" and \"@langchain/core\"" }
+      ],
+      "suggested_verification": "`pnpm --filter @ship/agent build` (tsc) or `pnpm --filter @ship/agent test` to confirm graph.ts compiles and runs against @langchain/langgraph's StateGraph API.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "LangGraph is the framework in use, so the manual-instrumentation fallback branch of this requirement does not apply — the 'or equivalent manual instrumentation' clause is moot here, not unmet."
+    },
+    {
+      "id": "W5-R56",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/index.ts", "line": 5, "note": "Module docstring: 'LangSmith tracing is controlled entirely by env vars ... that @langchain/core reads itself — there is nothing to wire up here beyond loading .env before anything else runs, and warning loudly if tracing looks off, since the brief requires traces from the first invocation, not bolted on later.'" },
+        { "file": "agent/src/index.ts", "line": 83, "note": "import 'dotenv/config'; — first import in the entrypoint, loads tracing env vars before any other module code runs" },
+        { "file": "agent/src/index.ts", "line": 97, "note": "if (!config.langchainTracingV2) { console.warn('[agent] LANGCHAIN_TRACING_V2 is not \"true\" ...') } — runs unconditionally at process startup, on every boot of the real server, not inside a script" },
+        { "file": "agent/Dockerfile", "line": 62, "note": "CMD [\"node\", \"dist/index.js\"] — confirms index.ts (compiled) is the actual container entrypoint used in deployment, not just a dev/demo script" },
+        { "file": "agent/src/scripts/trace-invoke.ts", "line": 17, "note": "import { buildGraph } from '../graph.js'; — the manual trace-demonstration script reuses the identical production graph/config code path, not a separate instrumentation" }
+      ],
+      "suggested_verification": "Check live Render deploy logs for the '[agent] LANGCHAIN_TRACING_V2 is not \"true\"' warning line (its absence implies tracing is on) on the currently deployed agent process, or hit a live endpoint that exercises the graph and confirm a corresponding trace appears in LangSmith.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Git history corroborates 'day one': commit 3c5f94c (2026-08-03, 'feat(agent): agent service foundation — LangGraph + LangSmith, /health + /ready (TRO-313 / FG-2)') is the first commit that created agent/src/index.ts and agent/src/config.ts, and it already contains this exact LANGCHAIN_TRACING_V2 config field and startup warning (confirmed via `git show 3c5f94c:agent/src/index.ts` and `:agent/src/config.ts`) — not something added later for submission. Commit SHA cited as a git-history fact per the no-file:line evidence rule, not as a file:line citation."
+    }
+  ],
+  "needs_ruling": []
+}

@@ -1,0 +1,182 @@
+{
+  "cluster": "design-deliverable",
+  "requirements": [
+    {
+      "id": "W5-R7",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 23, "note": "\"## Agent Responsibility\" heading opens the section" },
+        { "file": "FLEETGRAPH.MD", "line": 25, "note": "\"### What the agent is for\" subsection begins the scope definition" },
+        { "file": "FLEETGRAPH.MD", "line": 35, "note": "\"The obvious response is to grade the writing. We tried that framing and rejected it.\" — a stated alternative, rejected with reasoning (surveillance-tool argument, wrong-problem argument), not a bare assertion" },
+        { "file": "FLEETGRAPH.MD", "line": 44, "note": "\"The agent saves time and surfaces obligations. It does not audit compliance.\" — the scope statement the section commits to" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Meets the brief's bar: a decision (scope = time-saving/surfacing, not compliance-grading), its tradeoff, and an explicitly named-and-rejected alternative (\"grade the writing\"), not just a heading with a sentence under it."
+    },
+    {
+      "id": "W5-R8",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 46, "note": "\"### What it monitors proactively\" subsection" },
+        { "file": "FLEETGRAPH.MD", "line": 52, "note": "7-row table: event -> how observed -> what the agent does with it (state change, assignee change, comment, body edit, mention, approval flip, week boundary)" },
+        { "file": "FLEETGRAPH.MD", "line": 62, "note": "\"Nothing in Ship writes a row when a week ends... which is why a purely change-driven design is insufficient\" — names a real gap in the monitoring mechanism rather than glossing over it" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Answered concretely and specifically (7 distinct observed-state categories with the exact mechanism each is detected through), one of the four W5-R8..R11 questions answered most thoroughly."
+    },
+    {
+      "id": "W5-R9",
+      "verdict": "PARTIAL",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 82, "note": "\"### What it does without approval, and what always needs a human\"" },
+        { "file": "FLEETGRAPH.MD", "line": 87, "note": "\"It acts, when a query proves it\" — 4 bullets: resolve mentions to accounts, link a document to the issue/week it refers to when unambiguous, write its own drafts/items, clear its own item" },
+        { "file": "agent/src/graph.ts", "line": 1258, "note": "resolveMentions node — implements bullet 1 (mention resolution), matches doc" },
+        { "file": "agent/src/graph.ts", "line": 1274, "note": "commitInboxItems node — implements bullet 3 (writing its own drafts/items via ItemStore.upsert)" },
+        { "file": "agent/src/itemStore.ts", "line": 289, "note": "ItemStore.clear() — implements bullet 4 (clearing its own item when the condition ends)" },
+        { "file": "agent/src/gate.ts", "line": 1, "note": "whole file inspected: the 4 \"acts\" items never route through gate.ts (only acceptDraft/discardItem/acceptProposedTransition/rejectProposedTransition do), consistent with the doc's claim that these are ungated" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": "Either implement the second \"acts\" bullet (\"linking a document to the issue or week it refers to, when the reference is unambiguous\" — a query-proved association write) as a graph node, or add the same explicit not-yet-built caveat this file already applies elsewhere (e.g. the Graph Diagram's Note 1, or Use Case 5's \"its agent side has not [shipped]\") to that bullet instead of presenting it as a live capability.",
+      "notes": "3 of the 4 named autonomous actions (mention resolution, writing own drafts/items, clearing own items) are implemented and verified to stay outside the gate, matching the doc. The 4th — \"linking a document to the issue or week it refers to, when the reference is unambiguous\" — has no implementation anywhere in agent/src (grep for link/createAssociation/postAssociation/unambiguous across the whole directory found nothing but an unrelated docstring use of the word \"unambiguous\"). Unlike other undone work in this document (Graph Diagram Note 1, Use Case 5's notes), this gap is not flagged as aspirational where it is stated."
+    },
+    {
+      "id": "W5-R10",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 94, "note": "\"It drafts, when a model inferred it... never posts as the human\"" },
+        { "file": "FLEETGRAPH.MD", "line": 97, "note": "\"It never does these at all\": performance ratings, approval/week-status/ownership writes, issue-state transitions (proposes only), document create/archive/delete, anything written as though a person wrote it" },
+        { "file": "agent/src/gate.ts", "line": 105, "note": "acceptDraft() — the only path that posts a standup, and only under the accepting person's own token" },
+        { "file": "agent/src/gate.ts", "line": 227, "note": "acceptProposedTransition() — the only path that applies an issue-state transition, one at a time, only under the accepting person's own token; matches doc's \"may propose one... a person accepts it\"" },
+        { "file": "agent/src/shipClient.ts", "line": 511, "note": "GateShipClientLike interface exposes only postStandup/setStandupContent/applyIssueTransition — no method exists anywhere for setting approval state, week status, ownership, or creating/archiving/deleting a document, matching the doc's \"never does\" list structurally, not just by convention" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Strong match: the named human-gated actions are exactly the two things gate.ts exposes, and the named never-do actions have no corresponding write capability anywhere in the codebase, not merely an unused one."
+    },
+    {
+      "id": "W5-R11",
+      "verdict": "PARTIAL",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 151, "note": "\"### How it knows who is on a project and what their role is\" — 3-source explanation (workspace_memberships is auth-only, person docs' job_role is unreliable free text, project membership lives in the associations table) plus a Director/PM/Engineer role-derivation table" },
+        { "file": "agent/src/blockerFanout.ts", "line": 88, "note": "resolveProjectRef() calls client.getAssociations(issueId, 'project') (line 94) — the real project-membership lookup the doc describes, working code" },
+        { "file": "agent/src/roles.ts", "line": 1, "note": "module docstring states in plain terms: \"FLEETGRAPH.MD's Director/PM/Engineer taxonomy is real but not needed by anything in this ticket's scope... left for whichever later FG ticket\" — the file only ever implements single-hop and full manager-chain lookups (findManagerUserId line 33, findManagerChain, findLowestCommonManager), never the Director/PM/Engineer derivation FLEETGRAPH.MD tabulates" },
+        { "file": "FLEETGRAPH.MD", "line": 817, "note": "\"There is no service account... the agent runs under each person's own token... It can reach anything you could reach, and nothing you could not\" — stated as a general architectural guarantee" },
+        { "file": "agent/src/index.ts", "line": 173, "note": "shipClient built once with a single config.shipApiToken (line 180), used by both proactiveDeps and deepDeps; code comment at line 177 states plainly \"both intentionally still run under ONE shared token\"" },
+        { "file": "agent/src/graph.ts", "line": 1048, "note": "requireAskingUserToken() — its own comment scopes the per-asker-token guarantee to \"the on-demand expansion walk\" specifically, not the proactive/deep tiers" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": "Either implement the Director/PM/Engineer role derivation the table describes (a function analogous to roles.ts's existing manager-chain walk, deriving role from reporting-depth/ownership as tabulated) or narrow this section's claim to what's built (project membership + single-hop manager lookup for escalation only); separately, add one sentence disclosing that proactive/deep-tier polling runs under one shared account's visibility (agent/src/index.ts:173-183) while only on-demand chat runs under the asking person's own token (agent/src/graph.ts:1048-1057) — the current \"each person's own token... nothing you could not [reach]\" framing in the Deployment model section is not qualified by tier, and this section (where the membership/role question is actually answered) does not mention the distinction at all.",
+      "notes": "Two gaps, not one. (1) Project membership lookup is real code (blockerFanout.ts's getAssociations(issueId,'project')), but the Director/PM/Engineer role-derivation table is documentation only — roles.ts's own docstring admits the taxonomy is unimplemented. (2) The earlier-flagged single-shared-token concern is confirmed still true, but only partially: TRO-342 fixed the on-demand path to use each asker's own token (graph.ts:1048-1057, requireAskingUserToken), but the proactive/steady/deep tiers — the paths that actually do the continuous project/people scanning this requirement is about — still run under one shared admin-minted token (index.ts:173-183) by explicit, intentional design. FLEETGRAPH.MD's blanket \"no service account... nothing you could not [reach]\" claim (line 817-821) does not carry this per-tier distinction, and it is not disclosed at all in the section that answers W5-R11 (lines 151-172)."
+    },
+    {
+      "id": "W5-R12",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/proactivePoll.ts", "line": 41, "note": "createProactivePoller() / start() (line 55) — a plain setInterval driving graph.invoke({trigger: 'proactive_steady', ...}), no session, no request, no browser involved" },
+        { "file": "agent/src/index.ts", "line": 229, "note": "poller.start() called unconditionally at process startup once config is complete — nothing gates it on a user being present" },
+        { "file": "FLEETGRAPH.MD", "line": 337, "note": "Execution Traces table's third row: a real LangSmith trace (88b0880a) captured under trigger \"proactive_steady\", cursor-based, with 0 model tokens/cost — a captured run of this exact unattended path" },
+        { "file": "FLEETGRAPH.MD", "line": 438, "note": "\"Implementation status\": \"the steady tier is live — agent/src/index.ts starts the poll loop at DEFAULT_PROACTIVE_POLL_INTERVAL_MS = 60_000\"" }
+      ],
+      "suggested_verification": "Start the agent service with SHIP_API_TOKEN/ANTHROPIC_API_KEY configured, close every browser tab/session, and observe a poll tick's ItemStore update in logs or via GET /inbox after 60s — pnpm --filter @ship/agent exec tsx src/scripts/trace-invoke-proactive.ts reproduces the same trigger manually if a live 60s wait is impractical.",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R13",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 420, "note": "\"## Trigger Model\" / \"### The decision: hybrid, with polling as the backbone\" — 3-tier table (fast/steady/deep) with latency figures" },
+        { "file": "FLEETGRAPH.MD", "line": 453, "note": "\"### The tradeoffs\" — an 8-row comparison table across polling-only / webhooks-only / hybrid (changes needed, coverage, missed events, week boundaries, mention latency, idle cost, uptime coupling, testability)" },
+        { "file": "FLEETGRAPH.MD", "line": 466, "note": "\"Webhooks alone fail for two verified reasons\" — explicit rejection of the alternative with named mechanisms (no outbound webhook/DB-notify channel in Ship; a week ending produces no event to hook)" },
+        { "file": "FLEETGRAPH.MD", "line": 472, "note": "\"Polling alone is genuinely viable and was the runner-up\" — states the cost of the runner-up alternative (up to 60s latency) and why hybrid still won (one hook's cost, self-correcting on failure)" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Well above the \"defensible\" bar the brief sets for this requirement: a stated decision, a multi-dimension tradeoff table, and both rejected alternatives argued individually with named mechanisms, not just asserted."
+    },
+    {
+      "id": "W5-R18",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 23, "note": "Agent Responsibility section completed (see W5-R7/R8/R9/R10/R11 evidence)" },
+        { "file": "FLEETGRAPH.MD", "line": 382, "note": "\"## Use Cases\" — 6-row table, all 6 rows carry Role, Trigger, Agent detects/produces, and Human decides filled with substantive, distinct content (not placeholders)" },
+        { "file": "FLEETGRAPH.MD", "line": 397, "note": "notes below the table name a deliberately removed 7th candidate use case and why (standup-thinness detection folded into use case 1), showing the count reflects a real design decision, not padding" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "6 use cases, each with all 4 required columns filled distinctly (verified row by row, not just counted) — satisfies the >=5 threshold with margin."
+    },
+    {
+      "id": "W5-R19",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 175, "note": "\"## Graph Diagram\" — full mermaid flowchart (lines 205-260) plus a \"four constraints, verified against the diagram... node by node\" analysis (lines 262-319) including two self-critical notes on where the diagram and the compiled graph's actual structure diverge (scheduler gaps)" },
+        { "file": "agent/src/graph.ts", "line": 1239, "note": "22 .addNode() calls (ingest through commitPlanChangeDraft) — matches the diagram's 22 processing nodes name-for-name, 0 differences" },
+        { "file": "agent/src/graph.ts", "line": 1850, "note": "addConditionalEdges(START, routeTrigger, {...}) — 8 route keys (on_demand_chat, on_demand_expand, proactive_fast, proactive_steady, proactive_deep, proactive_escalation, proactive_retro, proactive_plan_change) map to the diagram's 8 documented entry branches" },
+        { "file": "agent/src/graph.ts", "line": 1867, "note": "addConditionalEdges('expandFrontier', routeExpansionLoop, {...}) — the diagram's one real self-loop, matches" },
+        { "file": "agent/src/graph.ts", "line": 1188, "note": "actual routeTrigger() function — FLEETGRAPH.MD line 267 cites this as \"graph.ts:617-628\" and claims it picks \"one of five route keys\"; the real function is 570 lines further down and returns one of 8 route key values (5 was correct before TRO-349 added 3 proactive chains; the diagram itself was updated, this supporting paragraph was not)" },
+        { "file": "agent/src/graph.ts", "line": 1867, "note": "FLEETGRAPH.MD line 271 cites the expandFrontier conditional edge as \"graph.ts:922-925\"; the real call is at line 1867 (945 lines off)" },
+        { "file": "agent/src/graph.ts", "line": 1123, "note": "FLEETGRAPH.MD line 296 cites requireTargetPersonUserId at \"graph.ts:586-595\"; the real function is at line 1123 (537 lines off)" },
+        { "file": "agent/src/graph.ts", "line": 1419, "note": "FLEETGRAPH.MD line 300 cites the shouldGenerateDraftFor check as \"graph.ts:830\"; the real check is at line 1419 (589 lines off)" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Structurally the diagram is accurate: independently re-derived the node list and edge/route-key structure straight from graph.ts and found 0 nodes and 0 edges/branches that differ from what FLEETGRAPH.MD documents (down to the two honestly-flagged \"not a real graph branch\" notes). But the prose paragraph directly under the diagram that claims to have \"confirmed against source, not inferred\" carries at least 4 stale line-number citations (each 500-950 lines off from the function it names) and one stale count (\"one of five route keys\" — true before TRO-349 added 3 chains, false now, at 8). True underlying claims, false citations backing them — the diagram content itself is not undermined, but the specific source-verification apparatus around it is out of date and should be refreshed before this is cited as line-level-verified."
+    },
+    {
+      "id": "W5-R26",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 420, "note": "same Trigger Model section as W5-R13" },
+        { "file": "FLEETGRAPH.MD", "line": 453, "note": "same tradeoffs table as W5-R13" },
+        { "file": "FLEETGRAPH.MD", "line": 466, "note": "explicit argued rejection of the webhooks-only alternative" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Identical basis to W5-R13 (both grade the same section); documented and defended, not merely stated — satisfies the brief's own explicit standard that \"there is no correct answer, there is a defensible one.\""
+    },
+    {
+      "id": "W5-R53",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 205, "note": "mermaid flowchart covers both on_demand sub-paths (ingest/respond and resolveSeed/expandFrontier/finalizeExpansion/composeAnswer) and all 6 proactive trigger chains (fast/steady shared chain, deep, escalation, retro, plan_change) — both modes present" },
+        { "file": "agent/src/graph.ts", "line": 1239, "note": "22 addNode calls match the diagram's 22 nodes 1:1 (same verification as W5-R19)" },
+        { "file": "agent/src/graph.ts", "line": 1850, "note": "addConditionalEdges(START, routeTrigger, {...}) — the branching condition (state.trigger + seedDocumentId presence) matches the diagram's RT decision diamond and its 8 labeled branches" },
+        { "file": "FLEETGRAPH.MD", "line": 248, "note": "diagram also depicts the human-in-the-loop gate as an explicit external (dashed) box, correctly NOT as a StateGraph node, per graph.ts's own module docstring" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Same finding as W5-R19: the diagram itself (node types, edges, branching conditions, both modes) matches the built graph exactly (0 differences), but the line-number citations in the prose immediately following it that claim source-level verification are stale in several places (see W5-R19's evidence) — a documentation-currency defect, not a structural one."
+    },
+    {
+      "id": "W5-R54",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 763, "note": "\"## Architecture Decisions\" with 4 subsections: Framework (765), Node design rationale (773), State management (788), Deployment model (802) — all four required topics present" },
+        { "file": "FLEETGRAPH.MD", "line": 767, "note": "Framework: names the decision (LangGraph), verifies it against package.json and real LangSmith traces, and gives the reason the brief's recommended path was followed (\"no manual instrumentation was needed\")" },
+        { "file": "FLEETGRAPH.MD", "line": 790, "note": "State management: explicit decision (in-memory ItemStore/DraftStore) with a stated tradeoff (\"a restart costs at most one 60-second cycle, not lost data\") and an explicitly named deferred piece (\"a cross-request cache... is not implemented\")" },
+        { "file": "FLEETGRAPH.MD", "line": 804, "note": "Deployment model: Render-vs-AWS decision argued from a verified fact (\"no AWS credentials have existed in this environment all sprint... never a live option to weigh against it\"), plus extensive real deployment evidence (terraform apply, destroy/redeploy proof, a documented provider bug and its workaround)" },
+        { "file": "FLEETGRAPH.MD", "line": 776, "note": "Node design rationale states routeTrigger \"branches from START on the trigger... into four paths\" (bare chat, seeded expansion, the deterministic proactive chain, the deep tier)" },
+        { "file": "agent/src/graph.ts", "line": 1850, "note": "the actual addConditionalEdges(START, routeTrigger, {...}) call has 8 route-key destinations / 7 distinct chains (on_demand_chat, on_demand_expand, proactive_fast+steady sharing one chain, proactive_deep, proactive_escalation, proactive_retro, proactive_plan_change) — the escalation/retro/plan_change chains (added by TRO-349, per the Graph Diagram section's own \"Updated\" note at FLEETGRAPH.MD:192) are not reflected in this \"four paths\" count" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "All four required topics (framework, node design, state management, deployment model) carry a real stated decision, its tradeoff, and — for framework and deployment model especially — an explicitly rejected or absent alternative, meeting the brief's \"defensible decision\" bar. One staleness worth flagging: the Node design rationale's \"four paths\" enumeration predates TRO-349's addition of the escalation/retro/plan_change proactive chains and was never updated to match, even though the Graph Diagram section two levels up in the same file was (and says so explicitly). Cosmetic relative to the section's actual decisions, but the same kind of drift as W5-R19's stale citations."
+    }
+  ],
+  "needs_ruling": []
+}

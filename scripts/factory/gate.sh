@@ -339,8 +339,26 @@ if [ -n "$GIT_COMMON_DIR" ] && [ -f "${WT_ROOT}/.husky/reference-transaction" ];
   CURRENT_LINES=0
   [ -f "$STASH_LOG" ] && CURRENT_LINES="$(wc -l < "$STASH_LOG" | tr -d ' ')"
   if [ "$CURRENT_LINES" -gt "$BASELINE_LINES" ]; then
+    # The log is SHARED across every worktree (deliberately — see above), so a
+    # raw line count blames this worktree for a sibling's stash. Observed
+    # 2026-08-08: one agent stashed in Ship-wt-tro_366 and all THREE concurrent
+    # worktrees' gates failed stash-guard, turning one violation into a
+    # wave-wide block. Each line already records `cwd=<worktree>`, so attribute
+    # by it. Compare on the last whitespace-delimited field to avoid a prefix
+    # match — `cwd=/…/Ship` is a prefix of `cwd=/…/Ship-wt-tro_366`, so the
+    # main checkout would otherwise absorb every worktree's activity.
     NEW_ENTRIES="$(tail -n "+$((BASELINE_LINES + 1))" "$STASH_LOG")"
-    record stash-guard fail "git stash was used during this ticket's work — banned (lessons.md, TRO-215): $(echo "$NEW_ENTRIES" | wc -l | tr -d ' ') new refs/stash write(s), see ${STASH_LOG}"
+    MINE="$(printf '%s\n' "$NEW_ENTRIES" | awk -v w="cwd=${WT_ROOT}" 'NF && $NF == w')"
+    OTHERS="$(printf '%s\n' "$NEW_ENTRIES" | awk -v w="cwd=${WT_ROOT}" 'NF && $NF != w')"
+    MINE_N=0; [ -n "$MINE" ] && MINE_N="$(printf '%s\n' "$MINE" | wc -l | tr -d ' ')"
+    OTHERS_N=0; [ -n "$OTHERS" ] && OTHERS_N="$(printf '%s\n' "$OTHERS" | wc -l | tr -d ' ')"
+    if [ "$MINE_N" -gt 0 ]; then
+      record stash-guard fail "git stash was used during this ticket's work — banned (lessons.md, TRO-215): ${MINE_N} new refs/stash write(s) from this worktree, see ${STASH_LOG}"
+    else
+      # Surfaced rather than silently passed: a sibling stashing is a real risk
+      # to THIS worktree's uncommitted work, it is just not this ticket's fault.
+      record stash-guard pass "no refs/stash activity from this worktree (${OTHERS_N} write(s) by sibling worktree(s) — not attributed here; see ${STASH_LOG})"
+    fi
   else
     record stash-guard pass "no refs/stash activity since this worktree started gating"
   fi

@@ -61,18 +61,35 @@
  * `CreateServerDeps.itemStore` so `GET /inbox` can call `.list()` on the
  * exact same store FG-5/FG-6's producers write into — never a second,
  * separately-constructed store that could drift from what the poller fills.
+ *
+ * TRO-348 closes FG-8's own gap: `gate.ts`'s `acceptDraft` (TRO-321) was
+ * real, tested, and correct in isolation, but had no HTTP caller anywhere in
+ * the codebase — a `grep -rn "acceptDraft" agent/src api/src web/src`
+ * excluding tests found none — so TRO-338's draft-survival metric could never
+ * record anything live either. `draftStore` is now hoisted the same way
+ * `itemStore` was for FG-10 (previously a `const` scoped inside the
+ * `isConfigComplete` branch, invisible to `createServer`), and two new deps
+ * are constructed alongside it: `gateShipClient` (a `GateShipClient`, built
+ * from the same shared `resilientHttpClient` as everything else — see that
+ * variable's own comment — but holding no token itself; every call takes the
+ * accepting person's own token as an explicit argument, same structural
+ * guarantee `gate.ts`'s module docstring describes) and `draftSurvivalTracker`
+ * (a real `FileDraftSurvivalTracker`, where before nothing in production ever
+ * constructed one). All three are passed to `createServer` so `POST
+ * /accept-draft` (`server.ts`) can call `acceptDraft` for real, with the
+ * draft-survival metric now actually being recorded on every accepted draft.
  */
 
 import 'dotenv/config';
-import { ChatAnthropic } from '@langchain/anthropic';
 import { loadConfig, isConfigComplete } from './config.js';
-import { createServer, buildShipClient } from './server.js';
+import { createServer, buildShipClient, buildAnthropicModel } from './server.js';
 import { buildGraph, type CompiledGraph } from './graph.js';
-import { ShipClient } from './shipClient.js';
+import { ShipClient, GateShipClient, type GateShipClientLike } from './shipClient.js';
 import { InMemoryItemStore, type ItemStore } from './itemStore.js';
-import { InMemoryDraftStore } from './draftStore.js';
+import { InMemoryDraftStore, type DraftStore } from './draftStore.js';
 import { createProactivePoller } from './proactivePoll.js';
 import { FileCostTracker } from './costTracking.js';
+import { FileDraftSurvivalTracker, type DraftSurvivalTracker } from './draftSurvival.js';
 
 const config = loadConfig();
 
@@ -102,6 +119,24 @@ let graph: CompiledGraph | undefined;
 // createServer's /inbox degrades to a clear 503 rather than calling .list()
 // on nothing (server.ts).
 let itemStore: ItemStore | undefined;
+// Hoisted the same way again (TRO-348) — undefined here means createServer's
+// /accept-draft degrades to a clear 503 rather than calling a method on
+// nothing (server.ts). This is the SAME store deepDeps below writes standup
+// drafts into; /accept-draft must read/mark-posted on that exact instance,
+// never a second, separately-constructed one that could drift from what the
+// deep-tier poller fills.
+let draftStore: DraftStore | undefined;
+// Hoisted the same way again (TRO-348) — undefined here means createServer's
+// /accept-draft degrades to a clear 503. This is `gate.ts`'s own
+// write-capable client, the one place in this whole package that performs a
+// Ship write; see `shipClient.ts`'s "gate's write-capable client" section for
+// why it is a separate class from `ShipClient` and holds no token itself.
+let gateShipClient: GateShipClientLike | undefined;
+// Hoisted the same way again (TRO-348 / closing TRO-338's own gap) —
+// undefined here means /accept-draft still works, just without recording the
+// draft-survival metric (`gate.ts`'s `acceptDraft` already treats a missing
+// tracker as "don't record," non-fatally).
+let draftSurvivalTracker: DraftSurvivalTracker | undefined;
 
 if (!isConfigComplete(config)) {
   // server.ts checks agentInternalSecret BEFORE deps.graph/deps.itemStore —
@@ -123,11 +158,21 @@ if (!isConfigComplete(config)) {
   // Config complete: wire the real graph (real model, real Ship client, the
   // in-memory item store — see itemStore.ts for why in-memory is the right
   // call for this ticket) and start the steady-tier poller.
-  const model = new ChatAnthropic({
-    apiKey: config.anthropicApiKey,
-    model: 'claude-haiku-4-5-20251001',
-    maxTokens: 1024,
-  });
+  // TRO-368: explicit timeout + retry/backoff for the LLM-provider call —
+  // the one outbound call class the resilientClient.ts layer never covered
+  // (that file's own docstring claims "Ship API and the model provider
+  // both", but grepping it turns up no Anthropic-specific code at all).
+  // Unconfigured, `@anthropic-ai/sdk` defaults to a 10-MINUTE timeout and
+  // `AsyncCallerParams` defaults `maxRetries` to 6 — both inherited library
+  // defaults, not chosen ones, and exactly what let `server.ts`'s own
+  // comment on this handler concede that a hung call here "keeps running to
+  // completion server-side" after `chatHandlerTimeoutMs` gives up on
+  // *waiting* for it. Built via `buildAnthropicModel` (server.ts) rather
+  // than inline, so the exact params this real construction uses are the
+  // same ones `server.test.ts` asserts on — see
+  // `anthropicRequestTimeoutMs`/`anthropicMaxRetries` in config.ts for the
+  // chosen values and the full reasoning.
+  const model = buildAnthropicModel(config);
   // Built once, shared by the bound-token `shipClient` below AND the
   // on-demand `shipClientFactory` (TRO-342) — the circuit breaker/
   // self-throttle it carries are about Ship's own reachability, not caller
@@ -152,7 +197,19 @@ if (!isConfigComplete(config)) {
   const onDemandShipClientFactory = (token: string): ShipClient =>
     new ShipClient({ baseUrl: config.shipApiBaseUrl, token, client: resilientHttpClient });
   itemStore = new InMemoryItemStore();
-  const draftStore = new InMemoryDraftStore();
+  draftStore = new InMemoryDraftStore();
+  // TRO-348: the SAME `resilientHttpClient` every other outbound call above
+  // shares — its circuit breaker/self-throttle are about Ship's own health,
+  // not caller identity, so a write path has no more reason to fragment that
+  // state than the on-demand read path did (see `onDemandShipClientFactory`'s
+  // own comment). `GateShipClient` itself holds no token — see
+  // `shipClient.ts`'s "gate's write-capable client" section.
+  gateShipClient = new GateShipClient({ baseUrl: config.shipApiBaseUrl, client: resilientHttpClient });
+  // TRO-348: closes the gap `gate.ts`'s own `GateDeps.draftSurvivalTracker`
+  // docstring named — "nothing currently constructs the production
+  // `FileDraftSurvivalTracker` ... because nothing calls `acceptDraft` from a
+  // real route yet." Now something does (the /accept-draft route below).
+  draftSurvivalTracker = new FileDraftSurvivalTracker();
   // TRO-339 / FG-21: real per-invocation cost accounting for every model
   // call this graph makes — see costTracking.ts's own module docstring for
   // what was verified before adding this (LangSmith already captures usage
@@ -188,7 +245,7 @@ if (!isConfigComplete(config)) {
   );
 }
 
-const app = createServer(config, { graph, itemStore });
+const app = createServer(config, { graph, itemStore, draftStore, gateShipClient, draftSurvivalTracker });
 
 app.listen(config.port, () => {
   console.log(`[agent] listening on :${config.port}`);

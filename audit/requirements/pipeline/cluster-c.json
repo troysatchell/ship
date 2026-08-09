@@ -1,0 +1,242 @@
+{
+  "cluster": "terraform",
+  "requirements": [
+    {
+      "id": "W4-R26",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "terraform/render/plan/plan-annotated.md",
+          "line": 32,
+          "note": "full 'terraform plan' output captured and saved (render_postgres.ship + render_web_service.ship, '2 to add'), commands documented lines 10-17, reproducible"
+        },
+        {
+          "file": "terraform/render/plan/tro-316-agent-plan-annotated.md",
+          "line": 96,
+          "note": "second full saved plan output (3 resources, 'Plan: 3 to add'), same terraform/render root"
+        },
+        {
+          "file": "terraform/render/plan/post-import-plan-no-changes.txt",
+          "line": 1,
+          "note": "third saved plan output, post-import 'No changes' confirmation"
+        },
+        {
+          "file": "audit/terraform/raw/root-init.txt",
+          "line": 1,
+          "note": "terraform init on the pre-existing AWS root (terraform/*.tf) succeeded and was saved"
+        },
+        {
+          "file": "audit/terraform/raw/root-plan-attempt.txt",
+          "line": 1,
+          "note": "the AWS root's own 'terraform plan' is NOT a full plan output -- it is a saved backend-init error ('Backend initialization required...s3'); S3 backend + AWS credentials are required and were not available"
+        },
+        {
+          "file": "audit/terraform/baseline.md",
+          "line": 5,
+          "note": "repo's own baseline states plainly: 'A live terraform plan is not runnable here' for the AWS root, and frames the local/Render work as the cloud-free substitute the brief actually describes"
+        }
+      ],
+      "suggested_verification": "cd terraform/render && terraform init -input=false && terraform plan -var-file=terraform.tfvars (requires a real RENDER_API_KEY sourced from .env) to reconfirm reproducibility of the saved output",
+      "assumption": null,
+      "notes": "Settled by ruling I-01 (interpretations.md, 2026-08-08): 'navigate to terraform/' means the local-provider and Render exercise directories the same W4 passage asks the student to author, not the pre-existing AWS infrastructure root. Under that ruling the requirement is satisfied \u2014 a genuine full plan output is saved under terraform/render/plan/ and the drift demo under audit/terraform/. The AWS root's blocked plan attempt (audit/terraform/raw/root-plan-attempt.txt: S3 remote backend plus AWS credentials, neither available for this exercise) does not count against it. Verdict is IMPLEMENTED-UNVERIFIED rather than VERIFIED because terraform init/plan was not re-executed during this sweep \u2014 the evidence is the saved plan artifacts, not a live run.",
+      "interpretation": "I-01"
+    },
+    {
+      "id": "W4-R27",
+      "verdict": "PARTIAL",
+      "evidence": [
+        {
+          "file": "terraform/render/plan/plan-annotated.md",
+          "line": 116,
+          "note": "annotation table gives one blast-radius sentence per resource, 2/2 resources in that plan (render_postgres.ship, render_web_service.ship) -- full coverage for that specific plan"
+        },
+        {
+          "file": "terraform/render/plan/tro-316-agent-plan-annotated.md",
+          "line": 264,
+          "note": "narrative 'Reading this plan' section only, not a per-resource table; covers render_web_service.agent in detail but disposes of the other 2 of 3 plan resources (render_postgres.ship, render_web_service.ship) in one shared paragraph pointing back to the other document -- partial for this plan"
+        },
+        {
+          "file": "terraform/render/plan/post-import-plan-no-changes.txt",
+          "line": 1,
+          "note": "raw plan output only, zero annotation (0/2 resources)"
+        },
+        {
+          "file": "audit/terraform/baseline.md",
+          "line": 36,
+          "note": "'Annotated inventory + blast radius' section covers the AWS side, but it is a static resource-inventory annotation (no live plan was achievable), organized into 4 risk tiers; roughly 13-15 resources/resource-types get an individual named row (aws_rds_cluster.aurora, aws_s3_bucket.uploads, aws_vpc.main, aws_cloudfront_distribution.frontend, etc.) while the remaining ~59 of the 74 root resource blocks are folded into grouped one-sentence categories (e.g. Tier 3's '12 aws_ssm_parameter.*', Tier 4's 'all IAM (roles, policies, attachments, instance profile)')"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "PARTIAL under either reading of R26. Best single case is terraform/render/plan/plan-annotated.md at 2/2 resources annotated with individual blast-radius rows. Across all saved plan artifacts in the repo, coverage is uneven: 2/2 (plan-annotated.md), ~1/3 fully individuated (tro-316-agent-plan-annotated.md), 0/2 (post-import-plan-no-changes.txt). The larger AWS inventory (74 root + 66 module resource blocks) is accounted for by category/tier, not literally 'every resource' with its own sentence -- roughly 13-15 of 74 root blocks get an individual annotation, the rest share grouped sentences. No single document annotates every resource of a full plan output for the whole infrastructure.",
+      "suggested_scope": "Scope annotation to the resources that appear in each saved plan artifact rather than to every Terraform block in the repo \u2014 the requirement's unit is the plan output, which is a far smaller set. terraform/render/plan/plan-annotated.md already does this correctly at 2/2; extend the same per-resource sentence plus blast-radius note to tro-316-agent-plan-annotated.md and post-import-plan-no-changes.txt. Pure documentation, no deployment risk."
+    },
+    {
+      "id": "W4-R28",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/terraform/baseline.md",
+          "line": 63,
+          "note": "'Drift detection demonstration (cloud-free, hashicorp/local)' section walks through the full before/after sequence"
+        },
+        {
+          "file": "audit/terraform/raw/drift-1-apply.txt",
+          "line": 1,
+          "note": "baseline apply: 2 local_file resources created"
+        },
+        {
+          "file": "audit/terraform/raw/drift-2-clean-plan.txt",
+          "line": 1,
+          "note": "BEFORE: clean re-plan shows 'No changes. Your infrastructure matches the configuration.'"
+        },
+        {
+          "file": "audit/terraform/raw/drift-3-drift-plan.txt",
+          "line": 1,
+          "note": "AFTER: following an out-of-band manual edit to both generated files, re-plan detects the drift ('Plan: 2 to add, 0 to change, 0 to destroy' -- Terraform proposes recreating both files back to declared content)"
+        }
+      ],
+      "suggested_verification": "cd audit/terraform/drift-demo && terraform init && terraform apply && terraform plan (expect 'No changes'); manually edit generated/app.config.json and generated/app.env; terraform plan again (expect a non-empty plan) to reconfirm the captured sequence",
+      "assumption": null,
+      "notes": "Full before/after pair exists and is exactly the 'local provider file edit, re-plan diff captured' case the requirement's Meaning-in-code names. The genuinely equivalent Render-side drift demo (dashboard change -> plan diff) is explicitly NOT reproducible per audit/terraform/baseline.md:82, but the requirement only needs one demonstrated case and this one is complete."
+    },
+    {
+      "id": "W4-R29",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/terraform/drift-demo/main.tf",
+          "line": 6,
+          "note": "required_providers block, hashicorp/local pinned"
+        },
+        {
+          "file": "audit/terraform/drift-demo/main.tf",
+          "line": 17,
+          "note": "resource 1: local_file.app_config"
+        },
+        {
+          "file": "audit/terraform/drift-demo/main.tf",
+          "line": 28,
+          "note": "resource 2: local_file.env_file -- satisfies 'at least two local resources'"
+        },
+        {
+          "file": "audit/terraform/raw/drift-1-apply.txt",
+          "line": 1,
+          "note": "terraform apply succeeded for both resources, plan matched intent ('Plan: 2 to add, 0 to change, 0 to destroy' then 'Apply complete! Resources: 2 added')"
+        }
+      ],
+      "suggested_verification": "cd audit/terraform/drift-demo && terraform init && terraform plan (expect 'No changes' against the already-applied state, or a clean 2-resource create plan against empty state)",
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R30",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "terraform/render/versions.tf",
+          "line": 5,
+          "note": "required_providers render = { source = \"render-oss/render\" ... }"
+        },
+        {
+          "file": "terraform/render/web_service.tf",
+          "line": 9,
+          "note": "resource \"render_web_service\" \"ship\" -- the fork's web service, docker runtime pointed at this repo/branch/Dockerfile (repo_url = github.com/troysatchell/ship, branch = main, dockerfile_path = ./Dockerfile)"
+        },
+        {
+          "file": "terraform/render/agent_service.tf",
+          "line": 13,
+          "note": "a second render_web_service resource (agent) in the same config"
+        },
+        {
+          "file": "terraform/render/plan/plan-annotated.md",
+          "line": 41,
+          "note": "captured plan proposing to create render_web_service.ship with the fork's live-matching config"
+        },
+        {
+          "file": "terraform/render/plan/IMPORT-LOG.md",
+          "line": 18,
+          "note": "this config was reconciled and imported against the actual live Render service (srv-d9kf2t942hec73aofrt0, ship-rr6m.onrender.com) until 'No changes. Your infrastructure matches the configuration' -- i.e. the config now genuinely represents the deployed fork, not a hypothetical"
+        },
+        {
+          "file": "memory-bank/activeContext.md",
+          "line": 20,
+          "note": "confirms ship-rr6m.onrender.com is the currently live/graded deploy this config declares"
+        }
+      ],
+      "suggested_verification": "cd terraform/render && terraform init && terraform plan -var-file=terraform.tfvars (requires RENDER_API_KEY) -- expect 'No changes' against the already-imported ship/ship-db state",
+      "assumption": null,
+      "notes": null
+    },
+    {
+      "id": "W4-R31",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        {
+          "file": "audit/terraform/drift-demo/main.tf",
+          "line": 11,
+          "note": "local provider: version = \"2.5.2\" -- exact pin, no ~> range"
+        },
+        {
+          "file": "terraform/render/versions.tf",
+          "line": 9,
+          "note": "render provider: version = \"1.9.1\" -- exact pin, no ~> range"
+        },
+        {
+          "file": "terraform/render/versions.tf",
+          "line": 7,
+          "note": "comment explicitly states the intent: 'Exact pin, not a `~>` range: verified as the latest stable release on the public registry on 2026-07-30'"
+        },
+        {
+          "file": "terraform/render/.terraform.lock.hcl",
+          "line": 4,
+          "note": "committed lock file records version = \"1.9.1\", constraints = \"1.9.1\" matching the exact pin"
+        }
+      ],
+      "suggested_verification": "terraform -chdir=terraform/render init && terraform -chdir=terraform/render providers; terraform -chdir=audit/terraform/drift-demo init && terraform -chdir=audit/terraform/drift-demo providers -- confirm resolved versions equal the pinned versions exactly",
+      "assumption": null,
+      "notes": "Both configs use exact pins (=, not ~>), which is the stricter reading of 'pinned' -- clean pass, no caveats."
+    },
+    {
+      "id": "W4-R32",
+      "verdict": "PARTIAL",
+      "evidence": [
+        {
+          "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md",
+          "line": 88,
+          "note": "genuine proof: render_web_service.agent destroyed then re-created using only 'terraform apply', no import, no manual step; verified live via curl /health and /ready afterward -- real clean-apply capability demonstrated for one resource"
+        },
+        {
+          "file": "terraform/render/plan/IMPORT-LOG.md",
+          "line": 21,
+          "note": "for the primary fork service, 'terraform apply was never run' -- render_web_service.ship / render_postgres.ship were adopted via terraform import of the pre-existing hand-built resources, not created by a clean apply; the README's Option B (clean-machine apply) was documented but never actually executed for the main service"
+        },
+        {
+          "file": "terraform/render/README.md",
+          "line": 9,
+          "note": "repo's own doc states plainly: 'This does not replace scripts/deploy.sh/scripts/deploy-frontend.sh. Those deploy to AWS ... Render is a separate, parallel target' -- directly contradicts 'the Render deployment replaces any manual deploy steps'"
+        },
+        {
+          "file": "terraform/render/README.md",
+          "line": 24,
+          "note": "'Known provider bug -- render_web_service.agent cannot be updated by terraform apply' on the free tier; the documented workaround is manual Render REST API calls (env-var PUT plus a manual redeploy POST), not terraform apply"
+        },
+        {
+          "file": "memory-bank/activeContext.md",
+          "line": 48,
+          "note": "'auto_deploy is still broken (TRO-361): tonight's two ship deploys were manual Render API calls, both verified live' -- the actual live/graded Render deployment currently depends on manual steps in practice, and TRO-361 (root-cause fix) is still open as of 2026-08-07/08"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 10921,
+          "note": "scripts/deploy.sh, scripts/deploy-web.sh, and scripts/terraform.sh still route prod deploys to the AWS terraform/ root -- the AWS manual-script deploy path remains live and in active use, unreplaced"
+        }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "notes": "Partial capability, not full satisfaction. What exists: one resource (the agent service) was proven genuinely reproducible via terraform apply alone on a clean state (destroy + recreate + live health check). What is missing: (1) the primary fork service was only ever imported, never created by a clean apply -- the clean-apply path is documented but unexercised for it; (2) the repo's own README explicitly disclaims replacing scripts/deploy.sh/deploy-frontend.sh, so AWS manual deploy scripts remain unreplaced; (3) the agent service has a documented provider bug that forces manual Render REST API calls for real field updates on the free tier; (4) the live/graded deployment's actual recent deploys were manual Render API calls because auto_deploy is broken (TRO-361, open). 'Deployable from a clean machine using only terraform apply, replacing manual deploy steps' is not true in current practice.",
+      "suggested_scope": "No small change closes this, and part of it is blocked upstream: the Render provider bug forces manual REST calls for real field updates, and auto_deploy is broken (TRO-361, open), so a clean `terraform apply` cannot currently be demonstrated for the primary service. The smallest honest move is to keep documenting the constraint rather than claim the property; revisit when TRO-361 resolves or the provider bug is fixed upstream."
+    }
+  ],
+  "needs_ruling": []
+}

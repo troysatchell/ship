@@ -3,9 +3,10 @@ name: ship-frontend
 description: >-
   Frontend engineering brief for Ship's web package — React 18 + Vite + TipTap/Yjs, the 4-panel
   layout, the one shared Editor, Tailwind palette, USWDS icons, RTL/jsdom testing, and the
-  accessibility patterns that automated tooling cannot verify. Use when working in `web/`, when a
-  ticket is a TS-*, BUN-*, or A11Y-* finding, or as the role brief injected into a factory agent
-  working on the frontend.
+  accessibility patterns that automated tooling cannot verify. Use whenever a ticket touches
+  `web/` — including FleetGraph UI surfaces (chat panel, ranked inbox, blocks/blocked-by), which
+  carry no audit-finding prefix — as well as for TS-*, BUN-* or A11Y-* audit findings, or as the
+  role brief injected into a factory agent working on the frontend.
 ---
 
 # Ship frontend
@@ -100,10 +101,12 @@ is how a "tests pass" claim gets made about a suite that never ran.
 
 - Web has **16 test files** (`web/src/**/*.test.ts?(x)`), jsdom + Testing Library, no MSW — network
   is stubbed per test.
-- **13 web tests are known-failing** and quarantined by identity in
-  `audit/factory/quarantine.json` (TEST-1 / TRO-223). The factory gate compares failure identities
-  against that baseline, so an unrelated new break is caught even though the totals stay at 13.
-  Never add an entry to make your branch green; removing one because you genuinely fixed the test
+- **`audit/factory/quarantine.json` currently lists `knownFailing: 0` for both api and web.** The
+  13 web failures that once lived there were TEST-1 / TRO-223 and were fixed on 2026-07-29, and
+  their entries deleted as the file's own comment required. Both suites are green on arrival, which
+  raises the bar rather than lowering it: **any failure the gate sees now is new and yours.** The
+  gate still compares failure *identities* against that baseline, so quarantining is a mechanism,
+  not a fixed list. Never add an entry to make your branch green; removing one you genuinely fixed
   is the only legitimate edit.
 - **Playwright specs in `e2e/` are not run by the factory gate** — neither vitest config includes
   them (`api` pins `src/**/*.test.ts`; `web`'s root is `web/`). A regression test that exists only

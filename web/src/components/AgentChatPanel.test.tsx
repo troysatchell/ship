@@ -87,6 +87,26 @@ describe('AgentChatPanel — seeding (TRO-320 / FG-9, proof 1)', () => {
     expect(screen.getByText(/open a document to ask about it/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /^ask$/i })).toBeDisabled();
   });
+
+  // TRO-363: the disabled state above existed but was invisible in practice —
+  // a 50%-opacity placeholder and an 11px muted hint were quiet enough that a
+  // real user (the maintainer, during demo prep) read the whole chat as
+  // broken. The empty panel must now say loudly WHY the input is disabled and
+  // WHAT to do about it.
+  it('renders a prominent explanation of the disabled state when no document is open (TRO-363)', () => {
+    render(<AgentChatPanel documentId={null} />);
+
+    expect(screen.getByText(/open a document to start/i)).toBeInTheDocument();
+    expect(screen.getByText(/open an issue, project, or doc/i)).toBeInTheDocument();
+  });
+
+  it('does not render the no-document callout once a document is open (TRO-363)', () => {
+    render(<AgentChatPanel documentId="doc-1" documentTitle="Some issue" />);
+
+    expect(screen.queryByText(/open a document to start/i)).not.toBeInTheDocument();
+    // The document-open empty state keeps its original copy.
+    expect(screen.getByText(/every answer names the documents/i)).toBeInTheDocument();
+  });
 });
 
 describe('AgentChatPanel — history survives navigation (agent-pill design)', () => {

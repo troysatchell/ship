@@ -1,0 +1,88 @@
+{
+  "requirements": {
+    "W4-R13": {
+      "verdict": "VERIFIED",
+      "verification": {
+        "command": "pnpm db:seed && npx tsx audit/seed-augment.ts  # then row-count query against ship_standup",
+        "result_excerpt": "        metric         | actual \n-----------------------+--------\n documents (floor 500) |    500\n issues (floor 100)    |    255\n users (floor 20)      |     20\n sprints (floor 10)    |     35"
+      },
+      "notes": "All four seed floors met live on 2026-08-08. `pnpm db:seed` alone is NOT sufficient — it is idempotent and left the database at 264 documents / 11 users, below the 500 and 20 floors. The floors are reached only after audit/seed-augment.ts, which the brief's \"or write your own seed script\" clause permits. Side effect, disclosed rather than omitted: this command wrote to the developer's working database `ship_standup` rather than to a throwaway one, and that database was then truncated by the api unit suite (api/src/test/setup.ts:93-98 TRUNCATEs 15 tables, including documents, users and workspaces, in every api test file's beforeAll) before being re-seeded back to the 500 / 255 / 20 / 35 state above. The excerpt is a true record of what was observed; the exact database state behind it no longer exists. See REPORT.md, \"Coverage and limitations\"."
+    },
+    "W4-R35": {
+      "verdict": "PARTIAL",
+      "notes": "Suite is NOT green at HEAD: `pnpm test` exits 1 with 830/832 tests passing and 2 failures, both in api/src/db/__tests__/migrationRunner.test.ts (lines 167 and 184). The cause was confirmed by direct observation rather than inferred: the test compares a Postgres-ordered result (`SELECT version FROM schema_migrations ORDER BY version`, line 115) against a JavaScript `[...expected].sort()`, and the two orderings genuinely disagree on the pair 020_document_associations / 020b_sprint_assignee_ids — Postgres returns 020b first, JavaScript `.sort()` returns 020_ first. An environment caveat that must not be dropped: an earlier run of the same command failed all 77 files with \"DATABASE_URL must be set\" because the shell lacked the env var; the 830/832 figure comes from the re-run with api/.env.local loaded. `pnpm type-check` is separately green (exit 0, all 4 packages). E2E (`pnpm test:e2e`) was NOT run this sweep — 600+ Playwright tests requiring the /e2e-test-runner protocol — so no claim is made about it either way."
+    },
+    "W4-R10": {
+      "verdict": "PARTIAL",
+      "notes": "Re-measured at HEAD rather than accepted from the repo's own record. `bash ~/.claude/skills/type-safety-audit/scripts/count.sh <web> <api> <shared>` — the exact instrument audit/type-safety/baseline.md:14-18 prescribes — returned web 23 any / 659 as / 5 non-null / 3 ts-ignore, api 27 / 1212 / 42 / 5, shared 0 / 11 / 0 / 0. Summed by baseline.md:77's own formula (any + as + ! + ts-ignore, as-any not double-counted): any 50, as 1882, non-null 47, ts-ignore 8 = 1987 tracked violations, against the 1535 baseline recorded in audit/type-safety/baseline.json (metrics.violationsTotal). That is +452 (+29%) where the requirement asks for -25% (about -384 sites), so the literal threshold is not met at HEAD on 2026-08-08. The nuance the headline number hides: explicit `any` halved (102 -> 50), a real gain in the most meaningful sub-metric, and the rise is driven almost entirely by `as` assertions (1385 -> 1882) — a pattern baseline.md:62 itself documents as over-counting by 15-20% because it catches import/export aliases, comments and `as const`. The direction of the tracked total is not in doubt, but the tracked total is a noisy proxy. The other half of this requirement's acceptance evidence: `pnpm type-check` is green (exit 0, all 4 packages); `pnpm test` exits 1 with 2 failures (see W4-R35)."
+    },
+    "W4-R53": {
+      "verdict": "VERIFIED",
+      "verification": {
+        "command": "curl -sS -w '%{http_code}' --max-time 25 https://ship-rr6m.onrender.com/health",
+        "result_excerpt": "HTTP 200 in 0.227139s\nbody: {\"status\":\"ok\"}"
+      },
+      "notes": "Live and publicly reachable, confirmed on 2026-08-08. A URL discrepancy worth resolving, not a downtime finding: this fork's own submission docs and Render terraform point at ship-rr6m.onrender.com (200 OK), while CLAUDE.md names https://ship.awsdev.treasury.gov, which returns 308 redirecting to an internal *.caelum.treasury.gov host that was not followed. Two deployments appear to exist; the brief's \"publicly accessible\" bar is met by the Render one."
+    },
+    "W4-R21": {
+      "notes": "`pnpm test` at HEAD: exit 1, 830/832 passing, 2 failures in migrationRunner.test.ts (see W4-R35). `pnpm test:e2e` was not run this sweep, so the e2e specs cited as evidence for this requirement are traced but not executed."
+    }
+  },
+  "commands": [
+    {
+      "command": "pnpm type-check",
+      "result": "exit 0 — all 4 packages Done (green)",
+      "bears_on": [
+        "W4-R10",
+        "W4-R33"
+      ],
+      "note": null
+    },
+    {
+      "command": "pnpm test",
+      "result": "exit 1 — 830/832 passing; 2 failures, both in api/src/db/__tests__/migrationRunner.test.ts:167,184",
+      "bears_on": [
+        "W4-R10",
+        "W4-R21",
+        "W4-R33",
+        "W4-R35"
+      ],
+      "note": "An earlier run of the same command failed all 77 api files with \"DATABASE_URL must be set\" because the shell lacked the env var — an environment failure, not a suite failure. The 830/832 figure is the re-run with api/.env.local loaded. This run used the developer's database; see \"Coverage and limitations\"."
+    },
+    {
+      "command": "bash ~/.claude/skills/type-safety-audit/scripts/count.sh <web> <api> <shared>",
+      "result": "web 23/659/5/3, api 27/1212/42/5, shared 0/11/0/0 → 1987 tracked violations vs a 1535 baseline (+452, +29%)",
+      "bears_on": [
+        "W4-R10",
+        "W4-R33"
+      ],
+      "note": "Read-only. Counts are any / as / non-null / ts-ignore, summed by audit/type-safety/baseline.md:77's formula."
+    },
+    {
+      "command": "pnpm db:seed && npx tsx audit/seed-augment.ts   # then a row-count query against ship_standup",
+      "result": "documents 500, issues 255, users 20, sprints 35 — all four floors met",
+      "bears_on": [
+        "W4-R13"
+      ],
+      "note": "Writes to the database. Ran against the developer's working database rather than a throwaway one; disclosed under \"Coverage and limitations\"."
+    },
+    {
+      "command": "curl -sS -w '%{http_code}' --max-time 25 https://ship-rr6m.onrender.com/health",
+      "result": "HTTP 200 in 0.227139s, body {\"status\":\"ok\"}",
+      "bears_on": [
+        "W4-R53"
+      ],
+      "note": "GET only, per the skill's non-mutating probe rule."
+    },
+    {
+      "command": "pnpm test:e2e",
+      "result": "NOT RUN",
+      "bears_on": [
+        "W4-R21",
+        "W4-R36",
+        "W4-R37"
+      ],
+      "note": "600+ Playwright tests requiring the /e2e-test-runner protocol and Docker. No claim is made about the e2e suite in either direction."
+    }
+  ]
+}

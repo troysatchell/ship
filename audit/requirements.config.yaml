@@ -1,0 +1,119 @@
+# requirements-audit per-repo config
+# Written by `/requirements-audit init` 2026-08-08 — hand-edit freely; the skill re-reads it every run.
+# The skill hardcodes nothing repo-specific: if a fact about this repo matters, it lives here.
+
+docs:
+  # `id` prefixes requirement IDs (W4 -> W4-R12). `sha256` is filled at extraction;
+  # a later mismatch stops the sweep and offers re-extraction.
+  - id: W4
+    path: "project guideliens/GFA_Week_4_ShipShape_Updated.pdf"
+    sha256: d385bcc4af6341956c532b6ae558c9405de77f46bb14301fd4bda3e35e3af311
+  # Never swept yet — sha256 null so the next `extract`/`baseline` run performs a
+  # first extraction (and stops at the user-skim gate per inventory-format.md).
+  #
+  # NOT scoped by the `tickets:` block below. That block's `project:
+  # "ShipShape Audit Remediation"` is W4's Linear project; W5 work lives in a
+  # different one, "FleetGraph — Week 5 Project Intelligence Agent". The config
+  # schema has one `tickets.project` for the whole file — it has no field to map
+  # a specific `docs[]` entry to its own project, so a W5 sweep (baseline or
+  # compare) must first re-scope `tickets.project` to the FleetGraph project, run,
+  # then re-scope back to "ShipShape Audit Remediation" before a W4 sweep runs
+  # again. Do not run W4 and W5 in the same sweep without doing this — whichever
+  # project isn't current will get the other's ~80-orphan false-signal problem
+  # this file's tickets comment already describes.
+  - id: W5
+    path: "project guideliens/GFA_Week_5_FleetGraph_Updated (1).pdf"
+    sha256: 2e9d2409d392232a4acf2bff8d8d614e891c980dbc4f043edc972fa2c37d861d
+
+tickets:
+  provider: linear
+  team: TRO
+  # Load-bearing, not optional. The TRO team is a personal catch-all spanning six
+  # Linear projects, and the Ship issue numbers are interleaved with them: TRO-250..275
+  # are Clavira Pilot Readiness, TRO-312..365 are mostly FleetGraph (Week 5 — same repo,
+  # different assignment). Sweeping the team unscoped reported 88 orphan tickets, of
+  # which roughly 80 were simply other products' work. Scoped to this project it is 9,
+  # and those 9 are a real signal. Orphan detection is only meaningful against a
+  # deliberately chosen population.
+  # CURRENTLY SCOPED TO W5. Week 5 is the live work; W4 is a frozen baseline whose
+  # matrix is already published, so its ticket dimension does not need re-running.
+  # If a W4 sweep is ever re-run, set this back to "ShipShape Audit Remediation"
+  # first — leaving it on FleetGraph would report W4's 123 tickets as orphans and
+  # FleetGraph's as W4 coverage. One scalar, two document sets: mutually exclusive.
+  project: "FleetGraph — Week 5 Project Intelligence Agent"
+
+# Roots searched during the trace phase. Application source alone is not enough for
+# this document set: the W4 brief's acceptance evidence lives largely in audit
+# artifacts, CI config, IaC, and repo-root docs, so those are evidence roots too.
+#
+# There is deliberately no `.` entry. `.` made every other root redundant and — since
+# `exclude` only removes build output and the skill's own directory — admitted the
+# whole repo (research/, .superpowers/, "project guideliens/"). The comment that used
+# to sit on it claimed "repo-root files only", which nothing enforced. Root-level
+# files are therefore listed one by one below.
+code_roots:
+  # Workspace packages, whole — not just src/, because package.json and
+  # vitest.config.ts are themselves cited evidence (W4-R20, W4-R38). Build output
+  # inside them is removed by `exclude`.
+  - api
+  - web
+  - shared
+  - agent                 # 4th workspace member per pnpm-workspace.yaml
+  - audit                 # AUDIT_REPORT.md + per-category baseline/compare artifacts
+  - terraform             # Category 8 (Terraform) evidence
+  - .github               # CI workflow evidence
+  - scripts               # one-command start, deploy scripts
+  - docs                  # dev docs, improvement + submission docs
+  - e2e                   # Playwright specs cited as regression-test evidence
+  - memory-bank           # sprint working memory: live-deploy + CI state (W4-R30, W4-R32).
+                          # Volatile — rewritten each session, so line citations into it
+                          # age fast; prefer a committed artifact where one exists.
+  # Repo-root files the W4 requirements actually cite. Enumerated, not globbed.
+  - CHANGES.md
+  - README.md
+  # W5's two graded deliverable files. Uppercase .MD on disk — a case-sensitive
+  # match on ".md" misses them. 37 of W5's 57 requirements cite FLEETGRAPH.MD, so
+  # omitting these traces most of the Week 5 brief as MISSING against evidence
+  # that is sitting in the repo — the same false-gap failure the code_roots
+  # comment above describes for the audit tree.
+  - FLEETGRAPH.MD
+  - PRESEARCH.MD
+  - start.sh
+  - package.json
+  - pnpm-lock.yaml
+  - pnpm-workspace.yaml
+  - docker-compose.local.yml
+#
+# Not a code root, but always citable: the requirement source documents named under
+# `docs:` above. They are cited by page (the evidence entry's `line` carries the page
+# number), never searched for implementing code.
+exclude:
+  - node_modules
+  - dist
+  - build
+  - coverage
+  - test-results
+  - .git
+  - audit/requirements    # the skill's own output — never cite it as evidence
+
+# Gaps handoff target after each sweep (invoked via the Skill tool).
+pm_skill: ship-pm
+
+# Mechanical PDF text backend (bundled pdf-inspector wrapper): extract caches
+# text to audit/requirements/source-<docID>.md and verifies every Quote against it.
+pdf_tool: "node ~/.claude/skills/requirements-audit/scripts/pdf/pdf2md.mjs"
+
+# Commands available for behavioral verification; keys are labels the inventory's
+# "Acceptance evidence" field references; values run from the repo root.
+verify:
+  # Root `test` runs api + web + agent (package.json:test = test:api && test:web && test:agent),
+  # not @ship/api alone. It needs DATABASE_URL exported (`set -a; . ./api/.env.local; set +a`) —
+  # without it all 77 api files fail on "DATABASE_URL must be set", which looks like a suite
+  # failure but is an unset env var. Never read its exit code through a pipe: `pnpm test | tail`
+  # reports tail's status (0) and hides a real failure.
+  test: "pnpm test"
+  webtest: "pnpm --filter @ship/web test"
+  e2e: "pnpm test:e2e"                    # Playwright, per-worker Postgres testcontainers — heavy, needs Docker
+  typecheck: "pnpm type-check"
+verify_urls:
+  app: "http://localhost:5173"            # WEB port per repo-root .ports; API port floats — always read .ports, never assume 3000

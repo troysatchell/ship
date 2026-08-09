@@ -6,11 +6,17 @@ of the Treasury.
 **Status:** Agent definition, graph architecture (FG-5/FG-6/FG-7/FG-8, `agent/src/graph.ts`),
 execution traces, trigger model, deployment model, and the Architecture Decisions write-ups are
 complete and written against the merged code (PRs #117, #120, #122) — every "settled" claim in
-this document names the file that implements it. The Test Cases table's trace-link column remains
-*Pending* (FG-22 / TRO-340): each row needs a run against its own fixture state, which is Early
-Submission work. Anything still marked *Pending* is honestly pending, not a placeholder.
+this document names the file that implements it. **The Test Cases table's trace-link column is now
+filled (TRO-356, 2026-08-06)** — all six rows ran against a local, freshly-seeded
+database, each with a real, public LangSmith trace link verified to resolve logged out. **All six
+rows now match their Expected Output exactly** (TRO-364, 2026-08-07): row 2 was a partial match
+for four days — its blocking-approval half could not fire because Ship's own approval routes never
+logged the transition to `document_history` — fixed at the routes, re-fixtured, and re-traced; the
+resolved finding (original kept as history) is in the Test Cases section. A timed live detection
+test against the deployed site observed **42.6 seconds** event-to-inbox (bar: 5 minutes) — see
+Grader Access.
 
-Last updated: August 5, 2026
+Last updated: August 8, 2026
 
 ---
 
@@ -81,7 +87,13 @@ the agent produces when it is not certain.
 **It acts, when a query proves it** — each of these is a structured lookup with no interpretation:
 
 - Resolving mentions to people to user accounts, and assembling those into someone's list
-- Linking a document to the issue or week it refers to, when the reference is unambiguous
+- Linking a document to the issue or week it refers to, when the reference is unambiguous —
+  **not yet built (verified TRO-370, 2026-08-08).** No implementation exists anywhere in
+  `agent/src`: no write to `document_associations` on any code path, no such method on
+  `ShipClient` (`shipClient.ts`'s write surface is exactly `postStandup`, `setStandupContent`,
+  `applyIssueTransition`). The other three actions in this list are real and implemented outside
+  `gate.ts` (`agent/src/graph.ts`'s write boundary, `graphWriteBoundary.test.ts`'s proof); this one
+  is a described capability with no code behind it.
 - Writing its own drafts and items, attributed to the agent
 - Clearing its own item when the condition ends
 
@@ -156,13 +168,23 @@ not one of the twenty people has it filled in.
 
 Project membership lives in a separate associations table, alongside owner and assignee fields.
 
-Roles are derived from structure, never read from a field:
+Roles are derived from structure, never read from a field — as a **design**:
 
 | Role | How it is derived |
 |---|---|
 | Director | People reporting to them two or more levels deep; owns programs |
 | Project manager | Owns projects or weeks; appears as approver on plans |
 | Engineer | Has issues assigned; nobody reports to them |
+
+**Not yet built (verified TRO-370, 2026-08-08): this table is a design, not a running taxonomy.**
+`agent/src/roles.ts`'s own module docstring says so directly — "FLEETGRAPH.MD's Director/PM/Engineer
+taxonomy is real but not needed by anything in this ticket's scope... left for whichever later FG
+ticket routes an escalation or needs to tell a Director apart from a PM." What IS implemented and
+real is narrower: `findManagerUserId`/`findManagerChain` (`roles.ts`) walk `reports_to` one hop or
+to the root — enough to answer "who has authority to unblock this plan approval" and "who is the
+lowest manager over everyone currently blocked" (TRO-337's escalation routing), never enough to
+answer "is this person a Director." No code anywhere in `agent/src` computes "reports to them two or
+more levels deep" or "owns projects or weeks" to label someone with one of these three roles.
 
 ---
 
@@ -176,12 +198,29 @@ on-demand chat, on-demand expansion, and proactive fast/steady chains are additi
 against the real LangSmith traces in the "Execution Traces" section immediately below, which show the
 same node sequences actually executing for those three paths. The `proactive_deep` chain
 (`gatherStandupActivity -> composeStandupDraft -> commitStandupDraft`) is verified against source
-only, the same as the rest of the diagram — no real trace exists for it, because (per FG-21's own
-finding, restated in this file's Cost Analysis section) `composeStandupDraft` still has zero real
-invocations: no scheduler exists yet to trigger `proactive_deep` for a real person at all. Where the
-diagram disagrees with the summary bullets that used to stand in this section's place, that
-disagreement is called out explicitly rather than smoothed over — see the two notes after the
-diagram.
+only, the same as the rest of the diagram — no real, publicly-linked trace for it appears in the
+"Execution Traces" section below. That is no longer because the node has never really run: the cost
+ledger (this file's Cost Analysis section) records one real `composeStandupDraft` invocation,
+timestamped 2026-08-07 — this section's own prior "still has zero real invocations" claim was stale
+and is corrected as of TRO-366 (2026-08-08); see the Cost Analysis section for the fix. That
+invocation's trace was never captured into this document, which is the actual reason no trace
+appears below. Separately, and still true: no scheduler exists to trigger `proactive_deep` for a
+real person on any ongoing basis — one recorded invocation is not a scheduler. Where the diagram
+disagrees with the summary bullets that used to stand in this section's place, that disagreement is
+called out explicitly rather than smoothed over — see the two notes after the diagram.
+
+**Updated (TRO-349, 2026-08-05).** Three chains were missing from the diagram above:
+`proactive_escalation` (`detectBlockerFanout -> composeBlockerEscalation ->
+commitBlockerEscalation`, TRO-346/TRO-337 / FG-19), `proactive_retro` (`gatherRetroActivity ->
+composeRetroDraft -> commitRetroDraft`, TRO-335 / FG-17), and `proactive_plan_change`
+(`detectPlanChange -> composePlanChangeDraft -> commitPlanChangeDraft`, TRO-336 / FG-18) — all three
+already implemented in `graph.ts` (`buildGraph`'s `.addNode`/`.addEdge`/`.addConditionalEdges` calls
+and the `routeTrigger`/`RouteKey` switch) but never added to this section. Added here the same way
+as the rest of the diagram — read directly off that source, not the design brief. Same
+source-only-verification posture as `proactive_deep`: `graph.ts`'s own module docstring states, for
+each of the three, that "there is deliberately no scheduler in this file (or anywhere in this
+package)" that decides when they run, so — same reasoning as `proactive_deep` above — no real
+LangSmith trace exists for any of the three yet either.
 
 ```mermaid
 flowchart TD
@@ -211,14 +250,32 @@ flowchart TD
     composeStandupDraft --> commitStandupDraft["commitStandupDraft<br/>DraftStore.upsert + ItemStore.upsert;<br/>no-op if skipped or no draft text"]
     commitStandupDraft --> ENDdraft(["END<br/>DraftStore + ItemStore updated"])
 
+    RT -->|"proactive_escalation<br/>requires blockingIssueId"| detectBlockerFanout["detectBlockerFanout<br/>gather impact fan-out;<br/>gates on projects/people/reporting line — no model"]
+    detectBlockerFanout --> composeBlockerEscalation["composeBlockerEscalation 🤖*<br/>*model call SKIPPED in-node when<br/>blockerEscalationSkipReason is set"]
+    composeBlockerEscalation --> commitBlockerEscalation["commitBlockerEscalation<br/>DraftStore.upsert + ItemStore.upsert;<br/>no-op if skipped or no recipient"]
+    commitBlockerEscalation --> ENDescalation(["END<br/>DraftStore + ItemStore updated"])
+
+    RT -->|"proactive_retro<br/>requires weekId"| gatherRetroActivity["gatherRetroActivity<br/>week's success criteria + closed issues;<br/>gates on criteria/owner/dates — no model"]
+    gatherRetroActivity --> composeRetroDraft["composeRetroDraft 🤖*<br/>*model call SKIPPED in-node when<br/>retroSkipReason is set"]
+    composeRetroDraft --> commitRetroDraft["commitRetroDraft<br/>DraftStore.upsert + ItemStore.upsert;<br/>no-op if skipped or no draft text"]
+    commitRetroDraft --> ENDretro(["END<br/>DraftStore + ItemStore updated"])
+
+    RT -->|"proactive_plan_change<br/>requires weekId"| detectPlanChange["detectPlanChange<br/>reads Ship's OWN changed_since_approved flag;<br/>gates on approver/diff source/whitespace-only — no model"]
+    detectPlanChange --> composePlanChangeDraft["composePlanChangeDraft 🤖*<br/>*model call SKIPPED in-node when<br/>planChangeSkipReason already set;<br/>MATERIAL/NOT MATERIAL verdict can<br/>ALSO set it after the call"]
+    composePlanChangeDraft --> commitPlanChangeDraft["commitPlanChangeDraft<br/>DraftStore.upsert + ItemStore.upsert;<br/>no-op if skipped or no draft text"]
+    commitPlanChangeDraft --> ENDplanchange(["END<br/>DraftStore + ItemStore updated"])
+
     ENDinbox -.->|"item sits in ItemStore<br/>until a human acts"| GATE
     ENDdraft -.->|"draft sits in DraftStore/ItemStore<br/>until a human decides"| GATE[["Human-in-the-loop gate<br/>gate.ts — FG-8 / TRO-321<br/>NOT a node in this StateGraph"]]
+    ENDescalation -.->|"draft sits in DraftStore/ItemStore<br/>until a human decides"| GATE
+    ENDretro -.->|"draft sits in DraftStore/ItemStore<br/>until a human decides"| GATE
+    ENDplanchange -.->|"draft sits in DraftStore/ItemStore<br/>until a human decides"| GATE
     GATE -->|"acceptDraft / acceptProposedTransition<br/>accepting person's OWN token"| WRITE[("real Ship write")]
     GATE -->|"discardItem / rejectProposedTransition"| NOWRITE["no Ship write"]
 
     classDef modelCall fill:#fef3c7,stroke:#d97706,stroke-width:2px;
     classDef external fill:#e5e7eb,stroke:#6b7280,stroke-width:2px,stroke-dasharray:5 5;
-    class respond,composeAnswer,composeStandupDraft modelCall;
+    class respond,composeAnswer,composeStandupDraft,composeBlockerEscalation,composeRetroDraft,composePlanChangeDraft modelCall;
     class GATE,WRITE,NOWRITE external;
 ```
 
@@ -467,63 +524,251 @@ proactive run above actually used — the graph's `pollChangeFeed` node is a thi
 
 ---
 
+## Grader Access
+
+Working credentials for the deployed site, verified by a real login against this exact deployment
+on 2026-08-07. (Deliberately published: the grading brief requires working credentials, this
+deployment is a graded test environment, and every account holds only synthetic seed data — the
+same password `seed.ts` has always printed. Nothing here grants access to anything real.)
+
+| Field | Value |
+|---|---|
+| URL | `https://ship-rr6m.onrender.com` |
+| Email | `alice.chen@ship.local` |
+| Password | `admin123` |
+
+Every seeded user shares the password `admin123` (`api/src/db/seed.ts` — printed at seed time).
+`alice.chen@ship.local` is the account worth grading from: Test Case 2's ranked inbox items are
+addressed to her. `dev@ship.local` (same password) is the root admin when a sees-everything view
+is needed. Two operational notes: sessions idle out after 15 minutes (12 hours absolute) — a
+logged-out state mid-review means log in again, not breakage; and chat requires an open document
+by design (the empty-state callout in the panel says so explicitly — a standalone chatbot is
+exactly what this agent is not).
+
+### Timed live detection test (deployed site, 2026-08-07)
+
+The grading requirement: an event introduced into Ship must surface within five minutes. Run
+against this exact deployment (graded `ship` + `ship-agent` as deployed 2026-08-06, `af573d3`),
+observed, not derived:
+
+- **T0 = 2026-08-07T14:50:13.130Z** — a real comment mentioning `@Iris Nguyen` written through
+  the real API (`POST /api/documents/65f499b2-…/comments` → HTTP 201, as `dev@ship.local`).
+- **T1 = 2026-08-07T14:50:55.759Z** — the mention item observed in Iris's own ranked inbox via
+  session-authed `GET /api/agent/inbox` — the same endpoint the UI's `useInboxQuery.ts` renders —
+  carrying `evidence.commentId` equal to the exact comment id written at T0.
+- **Observed: 42.6 seconds** end-to-end (bar: 300s), polling as the recipient every 10s.
+  Consistent with the architecture's derived bound: up-to-60s steady-tier tick + 5s change-feed
+  lag + poll granularity. A second probe the same hour landed at ~16s (the item's own `createdAt`
+  minus its comment's write timestamp) — same mechanism, luckier phase alignment with the tick.
+
+Reproduce it: log in (credentials above), comment `@Full Name` of any seeded person on any issue,
+then open that person's inbox (their login, same password) — the item appears on the next tick.
+
+---
+
 ## Test Cases
 
 **The graph these cases exercise is built and merged** — PR #117 (proactive detection, on-demand
-expansion, standup drafts, the gate) and PR #120 (the UI surfaces) — and three of its four paths
-have already been traced against real data in the Execution Traces section above. The `Trace Link`
-column below stays `Pending` for a narrower reason than when this section was first written: each
-row needs a run against its own specific fixture state, and those fixtures are only partially
-constructed (see the graded-database status directly below). Filling the column is Early
-Submission work.
+expansion, standup drafts, the gate), PR #120 (the UI surfaces), and PR #129 (TRO-346/FG-19, the
+blocker-escalation fan-out walk Test Case 5 needs). Three real traces (bare on-demand chat,
+on-demand expansion, and `proactive_steady`) already existed in the Execution Traces section above
+before this section's own column was filled; four of the graph's seven `TriggerKind` values
+(`proactive_deep`, `proactive_escalation`, `proactive_retro`, `proactive_plan_change`) had never
+been traced anywhere in this document until this ticket.
 
-**Graded-database fixture status (TRO-341/FG-23, 2026-08-04) — seeded, with one real gap found, not
-hidden.** `pnpm db:seed` ran against the graded `ship-db` (external connection, temporary IP
-allowlist, reset immediately after). Pre-seed sanity check: 257 documents / 11 users / 0
-`document_history` rows, matching the documented 2026-07-28 snapshot exactly — confirming this
-database's existing rows really were produced by this same seed script, the precondition the
-seeding plan itself named. Post-seed:
+**Done (TRO-356, 2026-08-06).** All six rows below now have a real, public LangSmith trace link,
+produced against **this worktree's own local database** (`pnpm db:seed` against `.factory-env`'s
+`DATABASE_URL`, never the graded `ship-db` — that is TRO-357/TRO-358's separate scope) and this
+worktree's own local API (`pnpm dev:api`, port from `.factory-env`). Rows 1, 3, and 4 exercise the
+deep-tier draft-composition triggers (`proactive_deep`, `proactive_retro`, `proactive_plan_change`)
+— none of which had a trace-link script or a public trace anywhere in this document before this
+ticket; `agent/src/scripts/trace-invoke-{deep,retro,plan-change}.ts` are new, matching the existing
+`trace-invoke-proactive.ts`/`trace-invoke-on-demand.ts` pattern. Row 5 uses a new
+`trace-invoke-escalation.ts`, same pattern, for the `proactive_escalation` trigger TRO-346 built.
+Every trace was verified to resolve **logged out** — not just the page shell (a client-rendered SPA
+that returns an identical 200 shell for a fabricated share token too, verified directly and NOT
+trustworthy alone), but the backing `GET /api/v1/public/{share_token}/run` LangSmith API, checked
+against a real vs. a fabricated token to confirm it actually discriminates (200 with the real run's
+own inputs/token-count/child-run-count vs. 404).
 
-- **Test Cases 2 and 4 fixtures created successfully** — document ids below, real and resolvable
-  in the graded database today.
-- **Test Case 3's fixture ran but produced 0 closed issues, not the 3 its own row requires.** The
-  fixture logic picks issues to close from the *current* sprint as Postgres's `NOW()` resolves it
-  today (2026-08-04) — six days after this database's issues were originally created
-  (2026-07-28) — and this database's specific existing issue set apparently has none eligible in
-  whatever sprint that now is. Recorded, not fixed here: this ticket's scope was seeding and
-  environment, not redesigning the fixture's sprint-selection logic.
-- **Test Case 1's fixture did not fire at all** — same root cause, sharper effect. Its precondition
-  (`SELECT ... WHERE state != 'done' GROUP BY assignee ... HAVING count >= 3` against the current
-  sprint) found no engineer meeting the threshold *in the current sprint specifically*, so the
-  `if (engineerRow && cnt >= 3)` guard silently skipped the entire block — no error, no console
-  output, confirmed by reading `api/src/db/seed.ts` directly rather than guessing from the absent
-  log line. Verified (observed) that engineers with 3+ non-done issues DO exist in this database in
-  *some* sprint (a direct query found two), just not the one the fixture insists on. **Test Case 1's
-  row stays `Pending` below — a real gap for whoever runs the graded demo to know about, not
-  something this seeding pass could silently paper over.**
+**Row 2 was a partial match for four days — fixed 2026-08-07; the original finding is kept below
+as history.** The mention-detection half was always real and traced: two `@Alice Chen` mentions
+from the FG-3 seed fixture surface correctly. The blocking-approval half did not, and this was a
+verified Ship-side gap, not a fixture problem or an agent bug: `agent/src/proactive.ts`'s
+`buildBlockingApprovalItems` only ever creates a NEW
+blocking item from a `document_history` row whose `field` is `plan_approval`/`review_approval` and
+whose `new_value.state` is neither `'approved'` nor absent. Reading every `logDocumentChange(...,
+'plan_approval', ...)` / `logDocumentChange(..., 'review_approval', ...)` call site in
+`api/src/routes/weeks.ts` (`/approve-plan`, `/unapprove-plan`, `/approve-review`) showed every one of
+them writes `state: 'approved'` or `null` — the exact two values `buildBlockingApprovalItems`
+treats as *resolving* an item, never creating one. `/request-plan-changes` and
+`/request-retro-changes` — the routes that actually PUT a week into a blocked state — updated
+`properties.plan_approval`/`review_approval` directly and never called `logDocumentChange` for that
+field at all. (Worse, found while fixing: `PATCH /api/weeks/:id/plan` set
+`state: 'changed_since_approved'` in properties without logging it either — so *neither* of the
+detector's creating branches had a real producer.) So no document_history row recording entry into
+a blocked state existed anywhere in
+this codebase's real write paths — confirmed empirically too: polling `proactive_steady` over a
+6-day window against the FG-3 fixture's own blocked week returned the 2 real mentions and zero
+`plan_approval`/`review_approval` history entries (`changeFeedPage.history` inspected directly).
+The fixture's own direct-`UPDATE` construction (seed.ts's TC2 block) was not the cause — it would
+fail the identical way even if built entirely through Ship's own approval-workflow API.
 
-Document ids that DID resolve, against the graded `ship-db` (not this worktree's local scratch
+**The fix (2026-08-07, branch `troysatchell/tc2-blocking-approval-history`).** Two halves, both
+required:
+
+1. **Ship now logs every approval transition to `document_history`.** Three write sites in
+   `api/src/routes/weeks.ts`: `request-plan-changes` and `request-retro-changes` log their
+   `changes_requested` entry (owner-routed: "revise and resubmit"), and `PATCH /api/weeks/:id/plan`
+   logs the `approved → changed_since_approved` transition (approver-routed: "waiting on your plan
+   approval"). Covered by three red-before-green route tests in `api/src/routes/weeks.test.ts`
+   ("approval transitions reach document_history") — all three failed with zero history rows before
+   the fix, and the full api suite (832 tests) passes with it.
+2. **The TC2 fixture was re-modeled and moved out of the seed's `fg3Baseline` gate**
+   (`api/src/db/seed.ts`). Re-modeled as approved-then-edited — Alice approved Emma's plan, Emma
+   revised it, so the week waits on Alice's *re-approval* (`changed_since_approved`) — because the
+   detector routes `changes_requested` to the OWNER, meaning the old fixture state would have put
+   the item in Emma's inbox, not Alice's, even after fix #1; the documented expected output
+   requires the approver to hold it. Moved outside the gate (with the transition row itself as the
+   idempotency marker) because the graded database's `document_history` is no longer empty, which
+   skips the whole gated block on a re-seed.
+
+Re-run against a fresh scratch database (`ship_tc2fix_test`, seeded from scratch, blocked week
+`2b343bef-7ac0-45c7-b9d3-01e51238b9dc` "Week 16"), one process, shared in-memory stores:
+`proactive_deep` for Alice (her waiting standup draft), then `proactive_steady` over a 6-day
+window. Alice's ranked list came back exactly as documented — **4 items, blocking approval first**
+(`blocking_approval`, `mention`, `mention`, `standup_draft`) — and the steady run's public trace is
+row 2's link below, verified logged-out the same two ways as every other row (public page AND
+`GET /api/v1/public/{share_token}/run`: 200 with the run's own 14 child runs for the real token,
+404 for a fabricated one).
+
+**Graded-database fixture status — all four resolved (TRO-357, 2026-08-06).** The gap below was
+closed by re-running the (by then repaired) seed against the graded database — history kept, not
+rewritten:
+
+**Original run (TRO-341/FG-23, 2026-08-04) — seeded, with two real gaps found, not hidden.**
+`pnpm db:seed` ran against the graded `ship-db` (external connection, temporary IP allowlist, reset
+immediately after). Pre-seed sanity check: 257 documents / 11 users / 0 `document_history` rows,
+matching the documented 2026-07-28 snapshot exactly — confirming this database's existing rows
+really were produced by this same seed script, the precondition the seeding plan itself named.
+Post-seed: Test Cases 2 and 4 fixtures created successfully; Test Case 3's fixture ran but produced
+0 closed issues, not the 3 its own row requires; Test Case 1's fixture did not fire at all. Both
+gaps traced to the same root cause — the old fixture logic *selected* pre-existing issues from
+whatever sprint resolved as "current" *today*, and issue-to-sprint assignments (frozen at the
+2026-07-28 base-data creation) had drifted out of alignment with it six days later. Recorded, not
+fixed in that pass: its scope was seeding and environment, not redesigning the fixture's
+sprint-selection logic.
+
+**Fix (TRO-345, PR #130, merged to `main` 2026-08-05).** `api/src/db/seed.ts` reworked so Test
+Cases 1 and 3 **create** their own Ship Core issues directly in the current sprint, each behind its
+own idempotency marker (`properties->>'fg3_fixture' = 'tc1'`/`'tc3'`) independent of the block-wide
+`document_history`-non-empty gate — so a repaired seed run can create these rows against a database
+where Test Cases 2/4 (and that gate) had already fired, without disturbing them. Code only; the
+re-seed itself (item 2 of that ticket's scope) was deliberately held for sign-off.
+
+**Re-seed (TRO-357, 2026-08-06) — gap closed, both fixtures now fire.** Temporary IP allowlist
+opened to a single `/32`, pre-seed check (375 documents / 11 users / 1 workspace /
+1 `document_history` row — grown from the 2026-08-04 snapshot by organic activity against the live
+graded deployment in the intervening 9 days, not a wrong-database signal: the workspace/user counts
+and every known TC2/TC4 document id below matched exactly before proceeding), `pnpm db:migrate`
+(no-op, already current), `pnpm db:seed` (additive — printed `✅ Test Case 1 fixture` and
+`✅ Test Case 3 fixture` by name, then the `📋 FG-3 test case document ids` block below), allowlist
+reset to `[]` and reset confirmed via a follow-up `GET`. Post-seed: documents 375 → 382 (+7: TC1's
+3 issues + 1 standup, TC3's 3 issues), `document_history` 1 → 2 (TC1's one state-change row),
+`fg3_fixture='tc1'`/`'tc3'` issue counts 0 → 3 / 0 → 3. Directly queried and confirmed: engineer
+Emma Johnson now has exactly 3 non-done TC1 issues (`in_review`, `in_progress`, `todo`, the last
+untouched for 7 days); the TC3 week carries all 4 success criteria with exactly 3 `done` issues
+completed inside the current week window. TC2/TC4's ids (table below) still resolve to the same
+document type and title as the 2026-08-04 run — unchanged.
+
+Document ids that resolve, against the graded `ship-db` (not this worktree's local scratch
 database):
 
 | Fixture | Document id |
 |---|---|
+| Test Case 1 — standup anchor | `85676a52-d676-429c-8d76-9c74b1bbdb8a` |
+| Test Case 1 — moved to in_review | `cfc40bfe-4a77-48e3-938a-46412695f331` |
+| Test Case 1 — commented | `6e0ad162-7255-42ab-bd89-8250304913bf` |
+| Test Case 1 — stale (7 days untouched) | `e252bd46-b1e8-4f14-9bb5-2aa174e3f3df` |
 | Test Case 2 — mention 1 | `65f499b2-8e8c-417c-8372-f60ff4ba8c75` |
 | Test Case 2 — mention 2 | `a8a08536-d4ef-44a9-a9c1-12d1efe39dc4` |
 | Test Case 2 — blocked week | `e5adadd7-e574-4f6b-9893-3da2261cf463` |
-| Test Case 3 — week (0 issues closed within it — see gap above) | `c8dfb32e-5b08-47d4-8150-af7728543ac4` |
+| Test Case 3 — week (3 issues closed within it, 4 success criteria) | `c8dfb32e-5b08-47d4-8150-af7728543ac4` |
+| Test Case 3 — closed issues | `71eb8b0e-bcdb-4463-9e78-ce1a88cf2361`, `5f593b41-8668-4077-90cd-d4b99b4df79d`, `343d850f-dc9c-4c83-8f15-7f752cb9813d` |
 | Test Case 4 — week (approved then edited) | `0e44bc95-6ee9-4aa7-a6c0-41205bf87e85` |
 
-These are document ids the fixture states live at, not LangSmith trace links — the `Trace Link`
-column below stays `Pending` until PR-C's graph actually runs against them.
+**This worktree's own local fixture, TC1/TC3 now self-fixturing (TRO-345, PR #130).** Unlike the
+graded-db pass above, Test Cases 1 and 3 no longer depend on pre-existing issues happening to land
+in whatever sprint resolves as "current" — `api/src/db/seed.ts` now CREATES the 3 issues/week each
+needs directly, so both fired cleanly on a fresh `pnpm db:seed` run today:
+
+| Fixture | Document id |
+|---|---|
+| Test Case 1 — engineer (Emma Johnson, user id) | `7646949b-f39f-46f9-a007-2ce8b8137a74` |
+| Test Case 1 — moved to in_review | `afcb0603-46bf-43f1-a6b7-3f9d676a2d4d` |
+| Test Case 1 — commented | `69af9e2b-9044-410d-a476-760fbef33846` |
+| Test Case 1 — stale (no activity in 7 days) | `aa68b12f-a448-4bbf-a6d6-33407569827f` |
+| Test Case 2 — mention 1 | `8a7fd8fd-85b8-4dd9-bdd2-8ca4e8e79264` |
+| Test Case 2 — mention 2 | `ecf703b4-13d8-4855-aaa0-ed6ab42fe34b` |
+| Test Case 2 — blocked week (re-modeled approved-then-edited 2026-08-07, see the resolved finding above; the 2026-08-07 trace ran on a fresh scratch database where this week seeded as `2b343bef-7ac0-45c7-b9d3-01e51238b9dc`) | `e96f2f49-b28e-481b-bdd8-47dcfda1a1c9` |
+| Test Case 3 — week | `aa161243-041c-499e-872c-26545a4cb6ef` |
+| Test Case 4 — week (approved then edited) | `7754bd4f-d940-4a6c-ac82-c72204f14d28` |
+| Test Case 5 — blocking issue (`blocks` associations added live, via the real API, not the seed) | `9e69830f-6568-4828-b9cf-e13acb279f63` |
+| Test Case 6 — seed issue (`blocks` + a week comment added live, via the real API) | `969262e7-7ad5-4804-9136-7502869280f5` |
+
+Test Case 5's fixture is not in `seed.ts` — no `blocks`-relationship fixture existed there before
+this ticket (verified: grepped the file). Constructed via two real `POST
+/api/documents/:id/associations` calls against pre-existing base-seed issues in different projects,
+assigned to people in genuinely different reporting lines (Grace Lee, reports to Bob Martinez;
+Henry Patel, reports to Carol Williams — both ultimately Dev User, confirmed via `GET
+/api/team/people`). Test Case 6's fixture is likewise constructed live: a new blocking issue plus a
+real comment on the seed issue's own week, via the real API — not a raw SQL insert.
 
 | # | Ship State | Expected Output | Trace Link |
 |---|---|---|---|
-| 1 | An engineer with 3 assigned issues; since their last standup, one moved to in review, they commented on another, and the third has not moved in 6 days | A draft standup naming the two that moved and what changed, flagging the third as sitting for 6 days, with a proposed state change on the one in review | Pending |
-| 2 | A person mentioned in two documents they do not own, blocking one approval on someone else's week, with a standup draft waiting | A four-item ranked list, approval first because another person's week cannot start, each item carrying a direct action | Pending |
-| 3 | A week whose plan lists 4 success criteria; 3 issues closed during the week, mapping to 2 of them | A delivered section pre-filled from the 3 closed issues, mapped to their criteria, with the 2 unmatched criteria called out | Pending |
-| 4 | A weekly plan approved at version N, then edited to remove one success criterion | A before-and-after on the removed criterion plus a drafted question to the author, routed to the approver | Pending |
-| 5 | An issue in Project A blocking two issues in Project B whose assignees report to different managers | The impact fan-out, the lowest common manager, and a drafted message | Pending — the `blocks` relationship itself shipped (migration 041, FG-15 / TRO-333, plus PR #120's blocks/blocked-by sidebar); the agent-side fan-out walk does not exist yet |
-| 6 | A user opens the chat on an issue and asks why it is stalled; the answer requires its week, its blocking issue, and a comment on a different document | An answer drawing on all four documents, each named with the reason it was pulled in | Pending |
+| 1 | An engineer with 3 assigned issues; since their last standup, one moved to in review, they commented on another, and the third has not moved in 6 days | A draft standup naming the two that moved and what changed, flagging the third as sitting for 6 days, with a proposed state change on the one in review | [8acb9a96](https://smith.langchain.com/public/3605ce55-784b-40ba-971a-08570648a07e/r/8acb9a96-25a3-4d52-9f26-f0306a1a0711) — matches: draft names both the moved and commented issues, flags the third's 7 days of inactivity, and carries one proposed transition (in_progress → in_review) |
+| 2 | A person mentioned in two documents they do not own, blocking one approval on someone else's week, with a standup draft waiting | A four-item ranked list, approval first because another person's week cannot start, each item carrying a direct action | [37526a99](https://smith.langchain.com/public/e5029c32-16e2-4957-82e7-b53a99b1a9dc/r/37526a99-acae-43a1-89a3-e256b22ab700) — **matches (2026-08-07, after the fix above)**: four-item ranked list for Alice — blocking approval first ("Week 16" waiting on her re-approval), both mentions, then her standup draft. The earlier partial-match trace ([75c74a0b](https://smith.langchain.com/public/dc7c8673-25e9-423b-b526-3a53db2b160a/r/75c74a0b-f2bf-4b75-a134-c9d20ca51bb3)) is kept for the record |
+| 3 | A week whose plan lists 4 success criteria; 3 issues closed during the week, mapping to 2 of them | A delivered section pre-filled from the 3 closed issues, mapped to their criteria, with the 2 unmatched criteria called out | [6910e85c](https://smith.langchain.com/public/1b01b5a2-3dd1-496b-b8f2-f064394bf058/r/6910e85c-5d26-47d2-9582-8096b1672ea8) — matches: 3 closed issues mapped to criteria 1–2, criteria 3–4 explicitly called out as undelivered |
+| 4 | A weekly plan approved at version N, then edited to remove one success criterion | A before-and-after on the removed criterion plus a drafted question to the author, routed to the approver | [c6d75795](https://smith.langchain.com/public/3dfdbb29-6a5c-4365-89b4-a3a3f318c1a5/r/c6d75795-caa8-42b4-bf79-49ee5c1ca172) — matches: model verdict MATERIAL, drafted question correctly names the removed criterion (CSRF protection) |
+| 5 | An issue in Project A blocking two issues in Project B whose assignees report to different managers | The impact fan-out, the lowest common manager, and a drafted message | [8ab81ab8](https://smith.langchain.com/public/9d46d5e1-6ceb-4575-ae9d-c6a504893aea/r/8ab81ab8-7b80-4b88-83fd-072ed65ad537) — matches: 2 blocked issues across 2 projects, lowest common manager found (Dev User), drafted escalation message |
+| 6 | A user opens the chat on an issue and asks why it is stalled; the answer requires its week, its blocking issue, and a comment on a different document | An answer drawing on all four documents, each named with the reason it was pulled in | [2d251e49](https://smith.langchain.com/public/287ae116-652f-4421-afaf-c16e769c75ed/r/2d251e49-7245-40f8-b04f-f783208f7af3) — matches: answer cites the seed issue, its blocking issue, and its week (via the week's own comment), each with the reason it was pulled in |
+
+**How these were produced and verified.** `pnpm db:seed` against this worktree's own
+`.factory-env`-derived `DATABASE_URL`, then `pnpm dev:api` (this worktree's own port), then
+`agent/.env.local` (untracked, gitignored) staged with `SHIP_API_BASE_URL` pointed at that port and
+a real per-user `SHIP_API_TOKEN`. Rows 1/3/4/5 each used a new one-off script
+(`agent/src/scripts/trace-invoke-{deep,retro,plan-change,escalation}.ts`, matching
+`trace-invoke-proactive.ts`'s existing pattern — real model calls, deliberately not covered by
+`pnpm test`); row 2 (2026-08-07 re-run, after the fix) used a one-process investigation script (uncommitted,
+same posture as the original's): `proactive_deep` for Alice, then
+`graph.invoke({ trigger: 'proactive_steady', cursor })` over a 6-day window against the same
+in-memory stores — one process because `itemStore`/`draftStore` are deliberately in-memory, so the
+standup-draft item and the steady tick's items can only meet in one `ItemStore`, whose ranked
+`list()` output is the four-item claim; row 6 used the
+existing `trace-invoke-on-demand.ts`. Every link was verified to
+resolve **logged out** two ways: the page itself (200, matches the byte-identical shell of an
+already-known-good previously-published link) AND — the real check, since the page shell alone
+returns 200 for a fabricated share token too — `GET
+https://api.smith.langchain.com/api/v1/public/{share_token}/run` with no auth header, confirmed to
+return the real run's own `inputs`/`total_tokens`/`child_run_ids` for a genuine token and `404` for
+a fabricated one.
+
+**A real credential-exposure risk found and fixed while producing row 6.** The `on_demand` trigger's
+graph state carries `askingUserToken` (added by TRO-342, after TRO-324's two on-demand traces above
+were captured) — and LangSmith's public run API returns a shared run's full recorded `inputs`
+verbatim, including that field, to anyone with the link, no login required. A first attempt at row
+6's trace was shared before this was noticed, briefly exposing a real, live Ship API token (scoped
+only to this worktree's own local database, not reachable from outside this machine). Caught by
+diffing the public API response against what should never appear there, not assumed safe by
+analogy to the older traces. Recovered by revoking that token immediately (verified dead: `401`
+after) and deleting the LangSmith share (`DELETE .../share`, verified `404` after). Row 6's actual
+link above was produced with a single-use token minted specifically for that one invocation and
+revoked (via the session cookie, not the token itself) immediately after the graph call returned and
+before the run was ever shared — the token embedded in the public trace is real but already dead.
+**Follow-up worth its own ticket, not fixed here (out of this ticket's file scope):**
+`trace-invoke.ts`/`trace-invoke-on-demand.ts` should stop passing a live token into traced graph
+state at all (a scoped, already-expired token, or LangSmith input redaction, or excluding that field
+from what gets traced) — the exposure risk is structural to the script, not specific to this run.
 
 **Most of these have no reachable trigger state today.** The development database is a load-testing
 fixture built to a Week 4 specification, and it records none of the activity these drafts are built
@@ -589,11 +834,21 @@ absolute — apply only to browser sessions. API tokens are handled first and by
 they are bounded only by their own expiry, which can be unset, and by explicit revocation. A
 headless agent needs no re-authentication schedule.
 
-**There is no service account.** Every API token belongs to a real user, so the agent runs under
-each person's own token. This matters more under the current design than it did before — following
-the graph outward from the open document means reaching documents the person did not open, and
-running as them is what makes that safe by construction. **It can reach anything you could reach,
-and nothing you could not.**
+**There is no service account, but which token backs a call depends on the tier** (corrected TRO-370,
+2026-08-08 — the claim below held unqualified until TRO-342 split the tiers, and this section never
+caught up). **On-demand** (`respond`/`composeAnswer`) uses a fresh, per-request token bound to the
+ASKING person specifically (TRO-342, `index.ts`'s `onDemandShipClientFactory`) — following the graph
+outward from the open document means reaching documents the person did not open, and running as them
+is what makes THIS tier safe by construction: **it can reach anything they could reach, and nothing
+they could not.** **Proactive (fast/steady) and deep** — mention resolution, blocking-approval
+detection, and every draft-composing trigger (standup, retro, plan-change, escalation) — run under
+ONE shared token instead, by explicit design: none of those triggers has a single per-invocation
+asking person to source a per-call token from (`ProactiveDeps`/`DeepDeps`'s own docstrings in
+`graph.ts`; `index.ts:182-189` builds this one shared `shipClient` and passes it to both). That
+token currently belongs to a real seeded super-admin account, not a synthetic identity
+(`dev@ship.local` — see "On the choice of identity" below), so "no service account" still holds in
+that narrower sense — but a proactive draft about Alice's own standup is read and written under the
+admin token's own visibility and permissions, not Alice's.
 
 **Private documents are currently hypothetical.** All 523 documents are workspace-visible and none
 are private. The risk is real in the schema and absent from the data. That count is the local
@@ -670,6 +925,13 @@ curl -X POST https://api.render.com/v1/services/srv-d9otunmgekts73eqs0h0/deploys
 (An earlier revision of this section repeated the *ship* service id in the agent command above — a
 copy-paste error, corrected 2026-08-05.)
 
+**Limitation, noted 2026-08-06 (TRO-358, CodeRabbit review):** triggering a deploy via the Render
+REST API — unlike a dashboard-initiated action — does **not** disable `autoDeploy`. If this
+procedure is ever used to roll back to an earlier commit rather than to catch up to `main`, a
+subsequent push to GitHub `main` will silently replace that rollback. Either `PATCH` the service
+with `autoDeploy: false` before a rollback and restore it after, or treat the rollback as
+point-in-time only and re-verify the deployed commit after any later push.
+
 **The gap recurred exactly as predicted, 2026-08-05 (pre-MVP-submission check).** Verified stale,
 observed directly, not inferred: `GET /` on the graded Ship still returned
 `last-modified: 2026-08-04T13:31:47Z` (the previous manual redeploy), `GET /api/agent/inbox`
@@ -733,9 +995,9 @@ auth).
    failed."
 
 **TRO-322 / FG-12 — both layers demonstrated, not just described, plus the "boots but broken" gap
-closed with real (not yet wired-live) tooling.** Three separate pieces of real, generated evidence
-— none of this is re-derived from the reasoning above; see CHANGES.md's TRO-322 entry for exact
-commands/output.
+closed with real tooling; TRO-367 then wired that tooling to an automatic trigger.** Three separate
+pieces of real, generated evidence — none of this is re-derived from the reasoning above; see
+CHANGES.md's TRO-322 entry for exact commands/output, and its TRO-367 entry for the trigger itself.
 
 1. **Layer 1, proven on both platforms with a throwaway, never-merged branch.** A branch
    (`chore/tro-322-ci-rollback-proof-do-not-merge`) with one deliberate `pnpm type-check` failure
@@ -765,7 +1027,8 @@ commands/output.
      this project (owned by whoever registered runner 71), not something `.gitlab-ci.yml` or this
      repo controls. Worth a follow-up ticket: either get the runner's access level changed, or stop
      describing GitLab MR pipelines as a merge gate until it is.
-2. **Layer 2's gap, reproduced live, then closed with real (not yet auto-triggered) tooling.**
+2. **Layer 2's gap, reproduced live, closed with real tooling, and — as of TRO-367 (W5-R36, the only
+   `MISSING` requirement in the Week 5 sweep) — actually WIRED to an automatic trigger.**
    `agent/src/deployReadiness.ts` (`evaluateReadinessSamples`/`pollReadiness`) is the decision
    function: a sustained run of not-ready samples (every sample in the window fails) warrants
    correction; a single failure that recovers — the transient-Ship-blip case this section already
@@ -776,7 +1039,16 @@ commands/output.
    is warranted (exit 2) without calling Render; `--execute --service-id <id>` (needs
    `RENDER_API_KEY`) additionally looks up the most recent other `live` deploy via `GET .../deploys`
    and re-triggers it via `POST .../deploys` with that deploy's `commitId`, Render's documented
-   mechanism for redeploying a specific prior commit.
+   mechanism for redeploying a specific prior commit. Its own `poll -> evaluate -> decide -> call
+   Render` pipeline is factored out as `runReadinessCheck` specifically so a test can exercise the
+   FULL chain end to end against injected fakes (a fake `/ready` poller and a fake Render `fetch`,
+   never a real network call) — see `check-readiness-and-rollback.test.ts`'s `runReadinessCheck`
+   suite (6 cases: healthy → no action, transient → no action, dry-run → reports without calling
+   Render, missing API key → reports without calling Render, sustained failure with `--execute` →
+   actually calls Render's documented rollback endpoint with the correct previous commit id, plus
+   one case proving the sample/evaluation logging point). Confirmed red first: every new case failed
+   with `TypeError: runReadinessCheck is not a function` against the pre-TRO-367 script, then passed
+   once `runReadinessCheck` was added.
    **Proven by local simulation, real processes, real output** (not mocked): two real
    `agent/src/index.ts` processes were started locally — one with `SHIP_API_BASE_URL` pointed at an
    unreachable port (config complete, Ship unreachable — exactly this section's named gap) and one
@@ -785,16 +1057,30 @@ commands/output.
    `check-readiness-and-rollback.ts --url .../ready --attempts 3 --interval-ms 1500` against each:
    the broken instance reported `sustained_not_ready: all 3 sample(s) reported not-ready` and
    exited 2; the healthy instance reported `healthy: every sample reported ready` and exited 0.
-   **Not wired to fire automatically against the live `ship`/`ship-agent` services in this change**
-   — doing so needs `RENDER_API_KEY` in a real scheduled trigger and a decision about cadence, which
-   is exactly the kind of outward-facing, credential-bearing infrastructure change this factory
-   reserves for explicit human sign-off (matching every prior live Render action in this document).
-   **Recommendation for that sign-off:** do NOT simply repoint `agent_health_check_path` at
-   `/ready` — this section's own transient-blip caveat means Render's platform check would then
+   **The trigger itself: `.github/workflows/agent-rollback-check.yml`.** Runs on a 15-minute
+   `schedule:` (cron) plus `workflow_dispatch`, structurally asserted by
+   `agentRollbackWorkflow.test.ts` (the `on:` block declares `schedule:`/`cron:`, not only manual
+   dispatch; the readiness step passes `--execute`; `cancel-in-progress: false` so a scheduled tick
+   never interrupts a rollback already in flight). It calls
+   `check-readiness-and-rollback.ts --execute` against the real agent `/ready` URL, gated on two
+   repository secrets — `RENDER_API_KEY` and `RENDER_AGENT_SERVICE_ID` — that this change does NOT
+   and cannot set: provisioning real credentials against a live production service is exactly the
+   outward-facing, credential-bearing infrastructure step this factory's escalation policy reserves
+   for explicit human sign-off, matching every other live Render/Terraform action in this document.
+   Until a human sets both, a "check secrets are configured" step reports a `::warning::` annotation
+   on every scheduled run and every other step (including the readiness check itself) is skipped —
+   neither failing loudly nor silently doing nothing.
+   **What this closes, and what remains open, stated precisely.** Observed: the trigger is wired
+   (the workflow file exists, fires unattended on a schedule, and its full decision-to-action
+   pipeline is proven correct against fakes). Derived, not observed: that it will correctly redeploy
+   the previous commit *against the actually-deployed production service* — no version of this
+   trigger, in this change, has ever made a real call to Render's API, and no live rollback has ever
+   been exercised against `ship-agent`. The remaining step is exactly the credential provisioning
+   above, which is a human action, not a code change; the next scheduled run after both secrets are
+   set is this trigger's first real, unattended exercise, and that run should be watched the first
+   time. Do NOT simply repoint `agent_health_check_path` at `/ready` instead of using this
+   trigger — this section's own transient-blip caveat means Render's platform check would then
    demote a healthy instance during any brief Ship outage, trading one failure mode for a worse one.
-   Instead, schedule `check-readiness-and-rollback.ts --execute` (e.g. a few minutes after each
-   deploy, or on a short recurring interval) as the corrective layer described above, leaving
-   `/health` as Render's own promotion gate unchanged.
 
 **Login and the 403 (TRO-341 / FG-23) — root-caused, not a WAF.** Two prior curl attempts against
 `POST https://ship-rr6m.onrender.com/api/auth/login` returned a platform-looking `403 Forbidden` —
@@ -915,6 +1201,72 @@ temporary `ipAllowList` PATCH was applied, the seed ran over the external connec
 allowlist was reset to `[]` immediately after — confirmed via a second `GET` on the postgres
 resource showing `ipAllowList: null` again.
 
+**Update, 2026-08-06 (TRO-357).** This run's Test Case 1/3 gap (previous paragraph) was root-caused
+and fixed in `seed.ts` (TRO-345, PR #130, merged 2026-08-05), then the fix was run against this same
+graded database following this identical allowlist-open/close procedure — see the "Test Cases"
+section above ("Re-seed (TRO-357, 2026-08-06)") for the full before/after evidence. Both fixtures
+now fire; TC2/TC4 confirmed unchanged.
+
+### Outbound Call Resilience
+
+**Added TRO-368, 2026-08-08.** The brief's requirement is explicit: "All outbound calls from the
+agent (to Ship APIs, LLM providers, and any external tools) must implement explicit timeouts and
+retry logic with exponential backoff." Every outbound call class this package actually makes,
+checked directly against source rather than assumed:
+
+| Class | Timeout / backoff coverage | Where |
+|---|---|---|
+| Ship API (reads + writes) | Explicit `timeoutMs`; retry with exponential backoff + jitter (idempotent GET reads only); a circuit breaker with a half-open probe; self-throttling under Ship's own per-IP ceiling, since both of Ship's own rate limiters fail open (see "Reliability" above) | `resilientClient.ts`'s `ResilientClient`, built once via `buildShipClient` (`server.ts`) and shared by every `ShipClient`/`GateShipClient` in the process |
+| LLM provider (Anthropic, `ChatAnthropic`) | Explicit `timeout` (`clientOptions.timeout`, forwarded to the raw `@anthropic-ai/sdk` client) and `maxRetries` (`@langchain/core`'s own `AsyncCaller`, exponential backoff + jitter via `p-retry` — verified by reading `async_caller.cjs`, not assumed from the option's name) | `server.ts`'s `anthropicModelParams`/`buildAnthropicModel` — the one place this package constructs the real `ChatAnthropic` used in production (`index.ts`) |
+| Any other external tool (production paths) | None exist today. Every production request path (`/chat`, `/inbox`, `/accept-draft`, the proactive poller) makes outbound calls through exactly the two resilient classes above — no third service. | — |
+
+**Manual CLI scripts are OUTSIDE this resilience story — stated explicitly, not left implicit
+(CodeRabbit review, PR #156, finding 5).** The table above covers *production* request paths only.
+Grepping `agent/src/scripts` turns up two scripts that make real outbound calls with **no timeout or
+retry policy of their own**, and neither goes through `resilientClient.ts`:
+- `trace-invoke-proactive.ts` — its two direct `fetch()` calls (`GET /api/team/people`,
+  `POST .../comments`) are bare, unbounded fetches; they bypass even the `ShipClient`/
+  `ResilientClient` this same script constructs for the rest of its work (its own `shipClient`
+  variable, built via `buildShipClient(config)`, is never used for either call).
+- `check-readiness-and-rollback.ts` — its readiness-polling loop (`fetcher.get: (url) => fetch(url)`)
+  and its Render API calls (`rollbackViaRenderApi`: `GET`/`POST https://api.render.com/v1/services/
+  {id}/deploys`) are both bare `fetch()`. The Render API is a genuinely different external service
+  from Ship API or Anthropic — this document previously (and incorrectly) implied no third service
+  existed; it does, it is just not on a production path.
+
+Neither script runs on a request a real user's browser can trigger — both are human-invoked CLI
+tools, explicitly not wired into any live trigger (`check-readiness-and-rollback.ts`'s own docstring:
+"NOT wired into any live trigger against production in this change") — so this gap does not weaken
+`/chat`/`/inbox`/`/accept-draft`'s own coverage. It is a real gap in the scripts themselves: a hung
+Render API call or a hung `/ready` poll has nothing bounding it today. `check-readiness-and-rollback.ts`'s
+readiness-polling half is being given an explicit timeout concurrently, on **PR #157** — not yet true
+on this branch, so not claimed as done here. The Render-API half and `trace-invoke-proactive.ts`'s two
+calls remain unbounded as of this document's own last-updated date; a future ticket, not this one,
+would need to either route them through `ResilientClient` or accept the same explicit exclusion this
+paragraph now states for manual tooling.
+
+**What changed, and what this section corrects.** Before TRO-368, this document's retry/fallback
+coverage named only the Ship API class (the table's first row, already accurate) — it never named
+the LLM-provider call as its own class, and the code matched that gap exactly: `index.ts`'s
+`ChatAnthropic` construction (`agent/src/index.ts:162`, pre-fix) had no `timeout` or `maxRetries` at
+all, silently inheriting `@anthropic-ai/sdk`'s own 10-minute default timeout and
+`AsyncCallerParams`' 6-retry default. `server.ts`'s own `/chat` handler comment already conceded the
+consequence: a hung model call "keeps running to completion server-side" even after the handler's
+own `chatHandlerTimeoutMs` gives up *waiting* on it, because the `AbortSignal` that bounds the
+handler does not reach inside a single in-flight `AnthropicModel.invoke()` call — that gap mattered
+even more for `composeStandupDraft`/`composeBlockerEscalation`/`composeRetroDraft`/
+`composePlanChangeDraft`, which share the same model instance but run outside any HTTP handler at
+all once a scheduler exists to trigger them, so nothing bounded those calls either. Fixed by giving
+`ChatAnthropic` explicit, chosen values rather than the library's unexamined defaults; every
+`ChatAnthropic` construction in this package (the production one and the seven one-off trace/
+golden-set scripts) now sets both explicitly and consistently. **Updated (CodeRabbit review, PR #156,
+finding 1):** the original values (20s timeout, 2 retries/three total attempts — chosen to match
+`resilientClient.ts`'s own `DEFAULT_RETRY_MAX_ATTEMPTS`) could collectively outlive `/chat`'s own
+`chatHandlerTimeoutMs` deadline (worst case ~3 × 20s plus backoff, versus a 25s handler budget) —
+lowered to 8s timeout / 1 retry (two total attempts), whose worst case (~18s) fits inside that budget
+with margin. Full reasoning and the exact arithmetic live in `config.ts`'s
+`anthropicRequestTimeoutMs`/`anthropicMaxRetries` docstrings and `anthropicWorstCaseCallMs`.
+
 ---
 
 ## Cost Analysis
@@ -971,34 +1323,68 @@ those two runs:
 
 | Item | Amount |
 |---|---|
-| `composeAnswer` — invocations | 2 |
+| `composeAnswer` — invocations (2026-08-05 snapshot) | 2 |
 | `composeAnswer` — cost/run (mean over the 2 priced invocations) | $0.000852 |
 | `composeAnswer` — avg documents pulled | 6.00 (0 and 12 — the mistaken invocation and the real one) |
 | `respond` — cost/run (unchanged from FG-21 — not re-run by this ticket) | $0.000218 |
-| Total development spend to date, all nodes | $0.001922 (3 invocations, 567 input tokens, 271 output tokens) |
+| Total development spend as of 2026-08-05 | $0.001922 (3 invocations, 567 input tokens, 271 output tokens) |
 
-`composeAnswer`'s $0.000852 mean is not yet a stable per-tier estimate — it is the average of exactly
-one near-zero-context run (a mistaken invalid seed id, 0 documents) and one real 12-document,
-cap-reached run, which is close to the opposite ends of what `composeAnswer` can cost. It replaces
-"no measurement yet" with a real floor and ceiling from 2 genuine data points, not a stable
-per-tier average from a meaningful sample — reported at exactly that confidence level, no more.
-`composeStandupDraft` still has zero real invocations (no scheduler exists to trigger
-`proactive_deep` for a real person — unchanged from FG-21's own finding, not re-investigated here,
-since building that scheduler is out of a documentation ticket's scope).
+`composeAnswer`'s $0.000852 mean, at the time, was not yet a stable per-tier estimate — it was the
+average of exactly one near-zero-context run (a mistaken invalid seed id, 0 documents) and one real
+12-document, cap-reached run, close to the opposite ends of what `composeAnswer` can cost. It
+replaced "no measurement yet" with a real floor and ceiling from 2 genuine data points — a snapshot
+the ledger has since moved past. See the refresh immediately below.
 
-**Estimated runs per day, observed: too little real history to estimate a rate, and that is the
-honest answer, not a placeholder.** `invocationsByDay` (the same function `cost-report.ts` already
-calls) buckets all 3 model-calling invocations on record under a single calendar day,
-`2026-08-05` — every real model invocation this entire sprint (this one plus FG-21's and FG-2's
-prior two) falls within roughly 40 hours of each other, and the ledger itself only exists from
-FG-21's 2026-08-05T00:28 entry onward. A "runs per day" RATE requires observing more than one day —
-dividing 3 invocations by "1 day of history" produces a number that LOOKS like a rate but is really
-just today's raw count, exactly the "meaningless number from a near-zero sample" this ticket's own
-brief warned against reporting with false confidence. The honestly comparable real-activity count
-this ticket DOES have: 6 real `proactive_steady` graph invocations (the "Execution Traces" /
-detection-latency polling loop below), also all on `2026-08-05`, also too few and too clustered in
-time to support a rate — reported here as a raw count, not annualized or extrapolated into anything
-resembling "runs/day in production."
+**Refreshed (TRO-366, 2026-08-08) — the ledger kept growing after that 2026-08-05 snapshot, and this
+file had not caught up.** A grader running the exact command this document names as its own
+reproduction method got real numbers this file no longer matched: 7 invocations against the 3
+published above, $0.006055 against $0.001922. Reproduced verbatim by running
+`pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` on 2026-08-08. **Configuration note:**
+this ticket's own factory worktree (`Ship-wt-tro_366`) has made zero real Anthropic API calls, so its
+own `agent/.cache/cost-ledger.jsonl` does not exist; the command was run against the project's
+long-lived development checkout instead, whose ledger is where every real invocation across this
+sprint's FleetGraph tickets has actually accumulated (gitignored, per-checkout, never committed — the
+same property that let this drift in the first place, since no committed artifact ever forced the two
+to reconcile).
+
+| Item | Amount |
+|---|---|
+| `composeAnswer` — invocations | 6 |
+| `composeAnswer` — cost/run (mean over the 6 priced invocations) | $0.000876 |
+| `composeAnswer` — avg documents pulled | 6.50 (12, 12, 12, 1, 1, 1 across the six real runs) |
+| `composeStandupDraft` — invocations | 1 |
+| `composeStandupDraft` — cost/run | $0.000798 |
+| **Total development spend to date, all nodes in this ledger** | **$0.006055 (7 invocations, 1,860 input tokens, 839 output tokens)** |
+
+The total above is `composeAnswer` + `composeStandupDraft` only — everything the queried ledger
+currently holds. It does **not** include `respond`'s $0.000218 from the 2026-08-05 table above: that
+record (FG-21's single measurement, cross-checked against LangSmith at the time) is not itself a row
+in this ledger snapshot. Where it went is not established here — either it lived in a different,
+since-discarded worktree's own local ledger and never reached this checkout's, or it predates this
+checkout's ledger history. Disclosed as an open gap, not papered over; the $0.000852/2-invocation
+table above is left as dated history rather than silently dropped.
+
+`composeAnswer`'s cost/run moved from the 2026-08-05 snapshot's 2-sample $0.000852 to a 6-sample
+$0.000876 — three more 12-document runs and three 1-document runs are on the ledger the same day
+(2026-08-05), never previously reported here. Six samples is still a small n, reported at that
+confidence level and no higher.
+
+**`composeStandupDraft` no longer has zero real invocations — this file's own prior claim to that
+effect (here, and in the Graph Diagram section above) was stale and is corrected as of this update.**
+The ledger's newest entry, timestamped 2026-08-07, is a real `composeStandupDraft` invocation. No
+scheduler exists to trigger `proactive_deep` for a real person on any ongoing basis — that remains
+true and unchanged — but "no scheduler yet" and "zero real invocations" are different claims, and
+this file had conflated them.
+
+**Estimated runs per day, observed: still too little real history for a rate, but no longer a single
+calendar day.** `invocationsByDay` on the refreshed ledger buckets the 7 model-calling invocations
+across **two** calendar days — `2026-08-05` (6) and `2026-08-07` (1) — not the single day this
+section previously reported. Two clustered days still cannot honestly support a "runs per day" rate;
+reported here as two raw daily counts, not annualized or extrapolated into anything resembling
+"runs/day in production." The separately-tracked real-activity count TRO-324/FG-13 also reported — 6
+real `proactive_steady` graph invocations (the "Execution Traces" / detection-latency polling loop
+below), all on `2026-08-05` — is a different measurement, unaffected by this update, and still too
+clustered to support a rate on its own.
 
 **Detection latency — one real, timed measurement, plus the structural bound it does not replace.**
 FLEETGRAPH.MD's own bar is "< 5 minutes from event appearing in Ship to the agent surfacing it,"
