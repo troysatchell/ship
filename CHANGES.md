@@ -52,10 +52,17 @@ were stale — the cost section's structure is unchanged.
   what is actually true: one real invocation exists (2026-08-07), but no scheduler exists to trigger
   `proactive_deep` for a real person on any ongoing basis — a different, still-true claim this file
   had conflated with "zero invocations."
-- Added a regression test (`agent/src/__tests__/fleetgraphCostFigures.test.ts`) that parses the
-  published cost figures directly out of `FLEETGRAPH.MD` and asserts them against a fresh
-  `cost-report.ts` run over a scratch ledger seeded with the same six `composeAnswer` records the
-  document now cites — so this cannot silently rot again without the test catching it.
+- Added a regression test (`agent/src/__tests__/fleetgraphCostFigures.test.ts`) that writes a frozen
+  fixture ledger — the same seven records (six `composeAnswer`, one `composeStandupDraft`) the
+  document now cites — via `FileCostTracker`, then calls `costTracking.ts`'s real `aggregate`/
+  `aggregateByNode` functions directly (the same ones `cost-report.ts` itself calls) and asserts the
+  result against the figures parsed straight out of `FLEETGRAPH.MD`. **Correction (CodeRabbit review,
+  PR #156, finding 3):** this entry originally said the test "runs `cost-report.ts`" — it does not;
+  it calls `aggregate`/`aggregateByNode` directly against the fixture, never shelling out to or
+  importing the script itself. Asserting against a frozen fixture rather than driving the actual CLI
+  is deliberate, not a shortcut: it is what keeps the test independent of host state (this worktree's
+  own `.cache/cost-ledger.jsonl` does not exist — see the Configuration note below), so the test's
+  design is correct as written and was not changed to match this now-corrected sentence.
 
 **Configuration note (provenance).** This ticket's own factory worktree (`Ship-wt-tro_366`) is
 freshly branched from `main` and has made zero real Anthropic API calls — its own
