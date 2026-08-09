@@ -100,6 +100,82 @@ behavior is affected either way.
 
 ---
 
+## W4-R27 — Annotated terraform plan output explaining every resource and its blast radius
+
+**The cost this closes.** The W4 brief requires every resource in the repo's saved `terraform
+plan` output to carry its own sentence explaining what it is plus a blast-radius note saying what
+actually breaks if it's changed, replaced, or destroyed — not a restatement of the resource type.
+`terraform/render/plan/plan-annotated.md` already did this at 2/2 resources; the rest of the saved
+plan artifacts under `terraform/` and `audit/terraform/` did not.
+
+**Scope, deliberately narrow.** The unit is resources appearing in **saved plan/apply/destroy
+output artifacts**, not every `resource` block in `.tf` source (~74 root + ~66 module blocks on
+the AWS side alone — a different, much larger job the requirement doesn't ask for). No `.tf` file
+was touched; no `terraform init`/`plan`/`apply` was run — this is annotation of output that
+already existed on disk.
+
+**Inventory performed** (`grep -rl` for `Plan: N to add`/`No changes. Your infrastructure` across
+`terraform/` and `audit/terraform/`, cross-checked against every file in `terraform/render/plan/`
+and `audit/terraform/raw/`):
+
+| Artifact | Resources found | Annotated before | Annotated now |
+|---|---|---|---|
+| `terraform/render/plan/plan-annotated.md` | 2 (`render_postgres.ship`, `render_web_service.ship`) | 2/2 — the existing model | unchanged |
+| `terraform/render/plan/tro-316-agent-plan-annotated.md` | Capture 1: 0 (errored pre-plan); Capture 2: 3 (`render_postgres.ship`, `render_web_service.agent`, `render_web_service.ship`) | 1/3 individuated | 3/3 |
+| `terraform/render/plan/post-import-plan-no-changes.txt` | 2 (`render_postgres.ship`, `render_web_service.ship`, refreshed not created) | 0/2, no annotation | 2/2 |
+| `terraform/render/plan/tro-316-destroy-redeploy-proof.md` | 1 (`render_web_service.agent`, taken through create→destroy→re-create, all actually executed) | narrated, not in per-resource table form | 1/1, plus flagged as the one entry whose blast radius is **observed** (curl-verified) rather than inferred from plan text |
+| `audit/terraform/raw/drift-{1-apply,2-clean-plan,3-drift-plan}.txt` | 2 (`local_file.app_config`, `local_file.env_file`, same pair recurring across all 3 files) | 0 — raw captures only | 2/2, added to `audit/terraform/baseline.md`'s existing drift-detection narrative (see "where annotated" below) |
+| `audit/terraform/raw/root-plan-attempt.txt` | 0 — plan errored on backend init (`S3 backend`) before generating a resource graph | n/a | n/a — nothing to annotate, noted rather than fabricated |
+
+**Left out, with reason:**
+- `audit/terraform/raw/{root-init,root-validate,prod-init,prod-validate}.txt` — `init`/`validate`
+  output, contain no `+ resource`/`Plan: N to add` content.
+- `audit/terraform/baseline.json` — structured findings/metrics JSON, not captured CLI plan output.
+- `audit/terraform/baseline.md`'s existing AWS tier/category table (74 root + 66 module resources)
+  — sourced from a static `grep` of `.tf` source (`livePlanRunnable: false` in `baseline.json`;
+  the only live AWS plan attempt is `root-plan-attempt.txt`, which produced zero resources), not
+  from a saved plan artifact — explicitly the reading this ticket's scope excludes. Left as-is.
+- `terraform/*.tf`, `terraform/modules/*`, `terraform/environments/*`,
+  `audit/terraform/drift-demo/main.tf` — Terraform source, out of scope by the brief.
+- `audit/terraform/drift-demo/terraform.tfstate` and `generated/{app.config.json,app.env}` — state
+  and apply output, not plan text.
+- `terraform/.claude/deploy-logs/*.jsonl` — present but empty (0 bytes), no content to read.
+
+**Where annotated, and how.** Each new annotation is additive — no existing captured plan/apply
+text was altered, only appended to or, for the plain-`.txt` file, followed by a clearly marked
+`ANNOTATION` block:
+- `tro-316-agent-plan-annotated.md`: new "## Annotation — one sentence per resource" table
+  (matching `plan-annotated.md`'s columns) added after the existing "## Reading this plan" prose,
+  which was left intact rather than rewritten.
+- `post-import-plan-no-changes.txt`: an `ANNOTATION` section appended below the raw capture,
+  explicitly marked as added and not part of the original evidence.
+- `tro-316-destroy-redeploy-proof.md`: a one-row table added before "## Sequence, exactly as run",
+  since this file's blast-radius claim is uniquely backed by live curl checks rather than plan text.
+- `audit/terraform/baseline.md`: a two-row table added to the existing "Drift detection
+  demonstration" section, since the AWS-side convention already splits raw captures
+  (`audit/terraform/raw/`) from their narrative/annotation home (`baseline.md`) — followed rather
+  than duplicating the same 2-resource table into three near-identical raw `.txt` files.
+
+**Ambiguity flagged, not resolved.** `tro-316-agent-plan-annotated.md`'s existing prose (left
+unedited) already notes that its Capture 2 again proposes creating `render_postgres.ship` /
+`render_web_service.ship` as if never imported, even though `IMPORT-LOG.md` (same directory)
+records a successful import on 2026-07-30. This pre-existing discrepancy was not introduced or
+resolved by this change — the new annotation table describes what the plan shows and defers to
+the file's own existing explanation rather than asserting which state is authoritative.
+
+**How to verify.** Read the four changed files; every added block is prose/markdown, nothing
+executable. `git diff --stat` shows only additions (66 insertions, 0 deletions) across
+`audit/terraform/baseline.md`, `terraform/render/plan/post-import-plan-no-changes.txt`,
+`terraform/render/plan/tro-316-agent-plan-annotated.md`, and
+`terraform/render/plan/tro-316-destroy-redeploy-proof.md`. No regression test applies — this is
+documentation with no executable behavior to assert against.
+
+**Rollback.** Revert the commit. All four edits are pure additions (new sections/tables appended
+after or below existing content); no line of previously-captured plan/apply output was changed or
+removed, so a revert restores the files to byte-identical prior state with no side effects.
+
+---
+
 ## TRO-367 — [W5-R36] The rollback CLI existed and was tested, but nothing automatic ever triggered it
 
 **Bundle.** Grouped with TRO-369 on branch `fix/w5-ci-rollback-and-gitlab-agent-tests` (both CI
