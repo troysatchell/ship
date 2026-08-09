@@ -385,6 +385,7 @@
  */
 
 import { Annotation, END, START, StateGraph } from '@langchain/langgraph';
+import type { RunnableConfig } from '@langchain/core/runnables';
 import type { ChangeFeedResponse, DeepShipClientLike, OnDemandShipClientLike, ShipClientLike, ShipPerson } from './shipClient.js';
 import type { ItemStore, NewInboxItem } from './itemStore.js';
 import { buildBlockingApprovalItems, buildMentionItems, pollChangeFeed } from './proactive.js';
@@ -434,7 +435,24 @@ import type { CostTracker, InvocationSite, RealUsage } from './costTracking.js';
  * `recordInvocation` below), which is correct — this file must never
  * fabricate a token count nobody reported. */
 export interface AnthropicModel {
-  invoke(input: string): Promise<{ content: unknown; usage_metadata?: RealUsage }>;
+  /** `options.signal` (TRO-379) — the ONE piece of `ChatAnthropic.invoke`'s
+   * real second parameter this narrow interface exposes, because it is the
+   * one a caller needs to cancel an in-flight call. Confirmed against the
+   * library's own types, not assumed from the option's name:
+   * `@langchain/core`'s `BaseLanguageModelCallOptions` (what
+   * `ChatAnthropic.invoke`'s real second parameter is typed as) extends
+   * `RunnableConfig`, which declares `signal?: AbortSignal` ("Abort signal
+   * for this call. If provided, the call will be aborted when the signal is
+   * aborted" — `runnables/types.d.ts`). And it is genuinely wired, not just
+   * accepted: reading `@langchain/anthropic`'s `chat_models.cjs` directly,
+   * `_generateNonStreaming` forwards `options.signal` into
+   * `completionWithRetry`, which passes `{ signal: options.signal }` both to
+   * `this.caller.callWithOptions` (races the whole retry-wrapped call
+   * against the signal) AND straight through to
+   * `this.batchClient.messages.create(request, options)` — the raw
+   * `@anthropic-ai/sdk` client's own request options, which is what actually
+   * aborts the underlying fetch rather than merely abandoning its promise. */
+  invoke(input: string, options?: { signal?: AbortSignal }): Promise<{ content: unknown; usage_metadata?: RealUsage }>;
   /** The model identifier, when the injected model exposes one — the real
    * `ChatAnthropic` instance does, via its own public `.model` field.
    * Recording this per call (not once per `buildGraph` call) is what makes
@@ -1477,9 +1495,54 @@ export function buildGraph(
     .addNode('finalizeExpansion', (state: GraphStateType) => {
       return { citedSources: buildCitedSources(state.expandedDocuments) };
     })
-    .addNode('composeAnswer', async (state: GraphStateType) => {
+    .addNode('composeAnswer', async (state: GraphStateType, config: RunnableConfig) => {
       const prompt = buildExpansionPrompt(state.input, state.expandedDocuments);
-      const result = await model.invoke(prompt);
+      // TRO-379: `config.signal` is the SAME signal `server.ts`'s `/chat`
+      // handler passed to `graph.invoke(..., { signal: controller.signal })`
+      // — LangGraph's own task runner threads the top-level invoke's signal
+      // into every node's `config` (verified by reading
+      // `@langchain/langgraph`'s `pregel/retry.cjs` directly: `_runWithRetry`
+      // builds `config = { ...config, signal }` from that same signal before
+      // calling `pregelTask.proc.invoke(input, config)`). Forwarding it here
+      // makes cancellation part of THIS FILE'S OWN contract with
+      // `AnthropicModel`, rather than something a caller has to trust an
+      // injected implementation happens to provide on its own — because
+      // "the effective per-call budget is whatever time is actually left
+      // when this node runs" only holds for whichever `AnthropicModel` is
+      // wired in if IT respects `options.signal`, and `composeAnswer` is
+      // the one place responsible for offering it that signal.
+      //
+      // OBSERVED, not assumed (a throwaway probe against a plain-object
+      // `AnthropicModel` — `invoke: (input, options) => fetch(url, {
+      // signal: options?.signal })`, no LangChain machinery at all — run
+      // through this exact node BEFORE this line existed): with no options
+      // argument, `options.signal` was `undefined` at the fetch call and a
+      // request to a local server that never responds stayed open well
+      // past the handler's own timeout; the test server never even saw the
+      // socket close. That is the literal bug this line fixes for any
+      // `AnthropicModel` implementation.
+      //
+      // One further wrinkle worth recording because it very nearly hid the
+      // above from red/green testing entirely: the SAME probe run against
+      // the real `ChatAnthropic` (this package's actual production model)
+      // showed the underlying HTTP call being cancelled at the handler's
+      // real deadline EVEN WITHOUT this line — because
+      // `@langchain/langgraph`'s own `RunnableCallable.invoke` (`utils.cjs`)
+      // runs every node function inside
+      // `AsyncLocalStorageProviderSingleton.runWithConfig(mergedConfig,
+      // ...)`, and `ChatAnthropic.invoke()` — being a LangChain `Runnable`
+      // — calls `ensureConfig()` internally, which reads that AMBIENT
+      // config (via `node:async_hooks`) whenever no explicit options are
+      // passed (`@langchain/core`'s `runnables/config.cjs`). So `ChatAnthropic`
+      // specifically was already protected by an undocumented side channel
+      // this file's own code never asked for, which is worse, not better —
+      // a future model swap to anything that ISN'T a LangChain `Runnable`
+      // (a direct-fetch wrapper, a caching proxy, a different provider)
+      // would have silently lost that protection with no code here changing
+      // at all. This line is what makes the guarantee belong to `graph.ts`
+      // instead of to an implementation detail of whichever model happens
+      // to be injected.
+      const result = await model.invoke(prompt, { signal: config.signal });
       // documentsPulled (cost cliff #2, TRO-339): how far this on-demand run
       // expanded the graph, so FG-7's hard document cap can be tuned against
       // evidence rather than guessed.

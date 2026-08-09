@@ -112,6 +112,118 @@ to exactly the sustained-poll-only coverage TRO-367 shipped.
 
 ---
 
+## TRO-379 — The /chat handler's abort signal never reached `composeAnswer`'s own Anthropic call, and the retry+timeout budget ignored pre-model work
+
+**The cost this closes.** TRO-368 gave the Anthropic call an explicit per-attempt timeout and retry
+budget; CodeRabbit review PR #156 sized that budget (`anthropicWorstCaseCallMs`, 18,000ms with the
+production defaults) to fit inside `chatHandlerTimeoutMs` (25,000ms). Both are real and unaffected
+by this ticket. Two narrower holes remained, both of which W5's requirements sweep scored W5-R43
+`PARTIAL` on:
+1. **The budget ignored pre-model work.** `resolveSeed`/`expandFrontier` (`graph.ts`) — the on-demand
+   path's Ship reads — run BEFORE `composeAnswer` ever calls the model, and nothing accounted for
+   how long they take. `config.ts`'s own comment admitted the ~7s margin was an unstated assumption,
+   never enforced anywhere.
+2. **`composeAnswer` never forwarded the handler's `AbortSignal` into `model.invoke()`.**
+   `server.ts`'s own `/chat` handler comment said so plainly and even cited a "throwaway probe"
+   claiming the underlying model call kept running ~3s after the handler had already given up.
+
+**That second claim turned out to be WRONG for this package's actual production model, and the
+fix required finding out why before trusting either the ticket's diagnosis or the existing
+comment.** A first version of the regression test below — a REAL `ChatAnthropic` pointed at a local
+hanging HTTP server, the exact pattern TRO-368's own tests use — passed even against the UNFIXED
+`composeAnswer`. Traced to source, not assumed: `@langchain/langgraph`'s `RunnableCallable.invoke`
+(`utils.cjs`) runs every node function inside `AsyncLocalStorageProviderSingleton.
+runWithConfig(mergedConfig, ...)`, where `mergedConfig` already carries the top-level `graph.invoke(
+..., { signal })`'s signal (traced through `pregel/retry.cjs`'s `_runWithRetry`). Because
+`ChatAnthropic.invoke()` is a LangChain `Runnable`, it calls `ensureConfig()` internally
+(`@langchain/core`'s `runnables/config.cjs`), which reads that AMBIENT config via `node:async_hooks`
+whenever no explicit options are passed — so `ChatAnthropic` was already, silently, cancelled by a
+side channel this file never asked for. Re-tested with a plain-object `AnthropicModel` implementation
+(`invoke: (input, options) => fetch(url, { signal: options?.signal })`, structurally identical to
+`graph.ts`'s own narrow interface but NOT a LangChain `Runnable`) through the same real
+`buildGraph`/`createServer` stack: that request genuinely never received a signal and stayed open —
+the `afterEach` hook that tries to close the local test server even timed out waiting for the
+connection to drain. That is the real, reproducible version of the bug: not specific to
+`ChatAnthropic`, but a real gap in `composeAnswer`'s own contract with the `AnthropicModel`
+interface it depends on — a future swap to any non-LangChain model implementation would have
+silently lost the (undocumented) protection `ChatAnthropic` happened to have.
+
+**What changed.**
+- `agent/src/graph.ts`: `AnthropicModel.invoke` now accepts an optional
+  `options?: { signal?: AbortSignal }` second parameter (confirmed against `@langchain/core`'s own
+  types — `BaseLanguageModelCallOptions extends RunnableConfig`, which declares `signal?:
+  AbortSignal` — and against `@langchain/anthropic`'s `chat_models.cjs`, which forwards it all the
+  way to `@anthropic-ai/sdk`'s own `messages.create(request, options)` call, the thing that actually
+  aborts the underlying fetch). The `composeAnswer` node now takes a `config: RunnableConfig` second
+  parameter and calls `model.invoke(prompt, { signal: config.signal })` — the SAME signal
+  `server.ts`'s `/chat` handler raced `graph.invoke()` against. Because that signal fires at a fixed
+  point relative to when the HANDLER started (not when `composeAnswer` happens to run), the effective
+  per-call budget is automatically whatever time is genuinely left — not a fresh
+  `anthropicWorstCaseCallMs` window that ignores how long `resolveSeed`/`expandFrontier` already
+  took. Full citation of the ambient-propagation finding above lives on this node's own comment.
+- `agent/src/config.ts`: new `AgentConfig.anthropicPreModelWorkAllowanceMs` field
+  (`ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS`, default 7,000ms — names `anthropicWorstCaseCallMs`'s own
+  "about 7s of margin" comment as a real number instead of prose) and a new exported
+  `assertAnthropicBudgetFitsHandlerDeadline(config)`, which throws when
+  `anthropicWorstCaseCallMs(anthropicRequestTimeoutMs, anthropicMaxRetries) +
+  anthropicPreModelWorkAllowanceMs` exceeds `chatHandlerTimeoutMs`. With the production defaults:
+  `18,000ms + 7,000ms = 25,000ms`, exactly `chatHandlerTimeoutMs`'s own default — fits with zero
+  slack to spare, which is why the number is now checked rather than assumed.
+- `agent/src/index.ts`: calls `assertAnthropicBudgetFitsHandlerDeadline(config)` once, at startup,
+  right after `loadConfig()` — independent of `isConfigComplete`, since all four numbers involved
+  carry real defaults regardless of whether `ANTHROPIC_API_KEY`/`SHIP_API_TOKEN` are set. A
+  misconfigured budget now crashes the process at boot rather than surfacing as a mystery timeout
+  once a real slow request hits it.
+- `agent/src/server.ts`: corrected the `/chat` handler's own comment — removed the "settled ~3s
+  after `invoke()` had already rejected" claim (disproven above) and replaced it with what was
+  actually verified, plus the one gap that DOES remain unfixed and out of this ticket's scope:
+  `ShipClientLike` (`shipClient.ts`) still does not accept or forward a signal, so a Ship HTTP read
+  already in flight when the handler aborts still runs to completion server-side.
+
+**Regression test — new, `agent/src/__tests__/composeAnswerAbortPropagation.test.ts`.** A REAL
+`buildGraph`/`createServer` stack, a fake `OnDemandShipClientLike` whose `getDocument` delays 300ms
+(simulating `resolveSeed`'s real Ship read consuming most of a 500ms `CHAT_HANDLER_TIMEOUT_MS`
+budget), and a plain-object `AnthropicModel` that does a real `fetch()` to a local `node:http` server
+that never responds. No live Anthropic or Ship call anywhere in the file. Asserts the handler returns
+504 near its own 500ms deadline (not a fresh per-attempt window), that the model call genuinely
+started (`attemptCount === 1`), and — after a 1s grace window — that the underlying connection was
+actually torn down (`req.on('close', ...)` fired on the test server).
+
+**Confirmed red before green.** Copied the fixed `agent/src/graph.ts` aside (never `git stash` — see
+`.claude/skills/ship-factory/references/lessons.md`), restored `git show HEAD:agent/src/graph.ts`
+(the unfixed `composeAnswer`, no signal forwarded), and re-ran the new test alone:
+
+```
+❯ aborts the in-flight model request once the handler times out, even though the model call only
+  started AFTER most of the budget was already spent on resolveSeed
+AssertionError: expected false to be true // Object.is equality
+- Expected: true
++ Received: false
+ ❯ src/__tests__/composeAnswerAbortPropagation.test.ts:182:29
+FAIL … Error: Hook timed out in 10000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally
+with "hookTimeout".
+ ❯ src/__tests__/composeAnswerAbortPropagation.test.ts:68:3 (afterEach — hangingServer.close())
+```
+
+The `afterEach` hook itself timed out trying to close the local test server — a connection was
+genuinely still open, the literal "an Anthropic request keeps running server-side after the handler
+returns 504" symptom. Restored the fix; the same test passed, and stayed green across two more full
+runs.
+
+**How to run it.**
+`source .factory-env && pnpm --filter @ship/agent exec vitest run src/__tests__/composeAnswerAbortPropagation.test.ts src/__tests__/config.test.ts`
+— 21/21. Full package: `pnpm --filter @ship/agent test` — 496/496. `pnpm type-check` clean across
+all four packages.
+
+**Rollback.** Revert the commit. `ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS` has a default, so no env
+var needs unsetting anywhere it was never configured; the startup assertion only ever rejects a
+configuration the code already assumed was safe, so removing it changes no passing behavior. The
+`AnthropicModel.invoke` signature change is additive (new parameter is optional) and does not affect
+any other call site in the file.
+
+---
+
 ## TRO-373 — FLEETGRAPH.MD's cited cost-report command could not reproduce the published figures on a fresh clone
 
 **The cost this closes.** `FLEETGRAPH.MD`'s Cost Analysis section publishes measured figures (7
