@@ -21,6 +21,85 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-350 — Proactive/steady-tier poll still uses the agent's shared `SHIP_API_TOKEN` — investigated, closed as accepted-risk-documented, no code change
+
+**Filed alongside TRO-342, 2026-08-05, explicitly as an investigate-and-recommend ticket, not a
+build-it-regardless one** — see that ticket's own "Not closed" paragraph above. This entry is the
+investigation's outcome: **no infrastructure was built.** A docstring addition to `agent/src/graph.ts`
+(`ProactiveDeps`, with a pointer from `DeepDeps`) is the only change, recording the recommendation so
+whoever eventually picks this up does not have to re-derive it.
+
+**What was verified by reading the code (not assumed from the ticket's own framing).**
+`agent/src/proactivePoll.ts`'s `createProactivePoller.tick()` invokes the compiled graph with
+`trigger: 'proactive_steady'` and a cursor only — no requesting user anywhere in the call. Its node
+chain (`pollChangeFeed → resolveMentions → detectBlockingApprovals → commitInboxItems`,
+`agent/src/graph.ts`) reads via `ProactiveDeps.shipClient`, one `ShipClientLike` bound once, at
+process startup, to `config.shipApiToken` (`agent/src/index.ts:136-146`) — unchanged by TRO-342,
+correctly: `agent/src/proactive.ts`'s `buildMentionItems`/`buildBlockingApprovalItems` read the
+change-feed page and its documents/comments BROADLY (a comment's literal text; a sprint's
+`properties.owner_id`) and only decide the RECIPIENT afterward — there is no per-invocation asker to
+source a per-call token from the way on-demand's `askingUserToken` does. `DeepDeps.shipClient`
+(the deep-tier standup-draft path) has the identical shape for the identical reason.
+
+**The ticket's own candidate shapes, each checked against real code, not weighed abstractly:**
+1. *One long-lived token per known Ship user.* `GET /api/team/people` (`ShipPerson.user_id`,
+   `agent/src/shipClient.ts`) already enumerates known users with a linked account — the "who are
+   the known users" gap the ticket named turned out to be smaller than assumed. What's genuinely
+   missing is storage: N live, held, full-permission tokens in the agent process is a strictly
+   larger attack surface than the one already-known token today (`agent/src/services` has no
+   analog — `api/src/services/agentTokens.ts`'s mint/revoke pair, TRO-342, is deliberately
+   ephemeral/single-use, not a cache), plus rotation/revoke-on-offboarding this codebase has never
+   needed. It is also the one shape that pays the "N separate poll passes every 60s" cost the
+   ticket itself worried about, for little gain — the change-feed page is the same page regardless
+   of which recipient it's evaluated for.
+2. *A narrower read-only, workspace-scoped, no-per-document-elevation capability token.* The better
+   shape if this is ever built — stays at one poll pass; a true workspace-only scope (no
+   `created_by` bypass, no admin bypass) is narrower than even one ordinary user's own token, a real
+   improvement over today. Not built now: `api_tokens` (`api/src/db/schema.sql:254-267`, migration
+   `014_api_tokens.sql`) has no scope column — confirmed by reading both the DDL and
+   `api/src/middleware/auth.ts`'s `validateApiToken`, which resolves any token straight to
+   `userId`/`isSuperAdmin`, nothing narrower. `getVisibilityContext`/`VISIBILITY_FILTER_SQL`
+   (`api/src/middleware/visibility.ts`, `"visibility = 'workspace' OR created_by = $userId OR
+   $isAdmin = TRUE"`) is called from nearly every list/get route in the API (that file's own DB-3
+   comment) — teaching it a scoped-token mode is a change to Ship's core authorization surface, not
+   an agent-local one. Disproportionate for an investigation ticket.
+3. *Redesign detection to need no document-level access at all.* Not available: resolving an
+   `@mention` requires the comment/document body; the blocking-approval recipient requires the
+   sprint's own `properties.owner_id` plus a manager lookup. Both are inherently document-level
+   reads — a workspace-level surface narrow enough to avoid elevation would still have to carry
+   document content to do the job.
+
+**Why accepted-risk, not a forced build.** `agent/src/visibility.ts`'s `isDocumentVisibleTo`
+(TRO-317 / FG-5, already live — not new work here) already prevents the harm this ticket is actually
+about — a person being SHOWN something they could not see themselves — by re-checking every
+candidate item against the RECIPIENT's own visibility before it is ever surfaced. What stays
+unmitigated is the poll's own READ running as a super-admin (`dev@ship.local` — FLEETGRAPH.MD's
+"Login and the 403" section): it can fetch a document's raw content even when no recipient will ever
+see anything derived from it. FLEETGRAPH.MD records that residual risk as real in the schema and, as
+of its own last verified check, absent from the data ("Private documents are currently
+hypothetical" — all 523 local documents workspace-visible, none private). **This ticket did not
+re-verify that count** — no fresh query was run against either the local worktree database (present
+but unseeded) or the graded database this session; the claim is carried forward as the dated,
+documented fact it already was, not re-observed. If it stops being true, shape 2 above is the one to
+build first.
+
+**Explicitly out of scope, untouched.** FG-8's write gate (`agent/src/gate.ts`) — already correct,
+unrelated to this read-path question.
+
+**Human read required before merge.** This ticket touches agent auth/token semantics even though no
+runtime behavior changed — the docstring addition documents a standing security tradeoff (an
+elevated shared token performing broad reads). A human should read the recommendation, not just
+trust a green gate, before this merges.
+
+**How to run it.** No runtime change. `pnpm --filter @ship/agent exec tsc --noEmit` clean (verified
+this session). No new tests: nothing here changes observable behavior, so there is no red-before-green
+regression to write — the deliverable is the recorded recommendation itself.
+
+**Rollback.** Revert this commit. Removes the docstring addition only; no schema, config, or runtime
+behavior is affected either way.
+
+---
+
 ## W4-R38 — Dependency versions pinned exactly; lockfile pinning half of the requirement now holds
 
 **The cost this closes.** The W4 brief requires dependency versions to be pinned in `package.json`
