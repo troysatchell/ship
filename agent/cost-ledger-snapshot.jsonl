@@ -1,0 +1,7 @@
+{"node":"composeAnswer","trigger":"on_demand","model":"claude-haiku-4-5-20251001","inputTokens":435,"outputTokens":211,"documentsPulled":12,"timestamp":"2026-08-05T14:32:41.562Z"}
+{"node":"composeAnswer","trigger":"on_demand","model":"claude-haiku-4-5-20251001","inputTokens":405,"outputTokens":122,"documentsPulled":12,"timestamp":"2026-08-05T15:01:21.929Z"}
+{"node":"composeAnswer","trigger":"on_demand","model":"claude-haiku-4-5-20251001","inputTokens":373,"outputTokens":44,"documentsPulled":12,"timestamp":"2026-08-05T15:08:40.306Z"}
+{"node":"composeAnswer","trigger":"on_demand","model":"claude-haiku-4-5-20251001","inputTokens":95,"outputTokens":159,"documentsPulled":1,"timestamp":"2026-08-05T15:19:42.278Z"}
+{"node":"composeAnswer","trigger":"on_demand","model":"claude-haiku-4-5-20251001","inputTokens":95,"outputTokens":97,"documentsPulled":1,"timestamp":"2026-08-05T15:20:10.868Z"}
+{"node":"composeAnswer","trigger":"on_demand","model":"claude-haiku-4-5-20251001","inputTokens":109,"outputTokens":116,"documentsPulled":1,"timestamp":"2026-08-05T15:20:53.019Z"}
+{"node":"composeStandupDraft","trigger":"proactive_deep","model":"claude-haiku-4-5-20251001","inputTokens":348,"outputTokens":90,"timestamp":"2026-08-07T14:36:16.889Z"}
