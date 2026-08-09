@@ -118,6 +118,30 @@ rule is missing from the brief** — add it to `lessons.md`. **Three or more mea
 holding** — a stated rule ignored three times does not need restating louder, it needs a mechanical
 check in `gate.sh`.
 
+### Dismissal is where your judgment actually gets tested
+
+**Measured 2026-08-08, 21 PRs, 256 CodeRabbit comments.** Overall acceptance was **23%** — so
+roughly three of every four findings were dismissed. That is not automatically wrong; many were
+correctly dismissed. What makes it worth your attention is *where* the dismissals cluster:
+
+- PRs carrying **≥20 comments accepted 11%**. PRs carrying **<20 accepted 45%**. Same reviewer,
+  same repo, same week — the only variable is how much there was to read.
+- **All 5 performance findings that week were dismissed. 0% accepted.** A category at zero is not a
+  triage outcome, it is a blind spot: either the reviewer is useless at perf here, or nobody is
+  actually assessing them. Both need saying out loud, and you must be able to name which.
+- On the largest PR of the week a **Critical was dismissed**, on a PR where 85 findings competed
+  for attention.
+
+**Concrete obligations this puts on you:**
+
+1. When a PR's review exceeds ~20 comments, treat your own dismissals as suspect. Re-read the
+   Criticals and Majors before signing them off. Volume degrades judgment before it degrades
+   throughput, and it does so silently.
+2. Never dismiss a Critical or Major without a written reason in the ledger naming something real —
+   a row count, a call frequency, a convention. "Not applicable here" is not a reason.
+3. A category sitting at 0% acceptance across a week is a standing item for you, not for the
+   reviewer. Explain it or start accepting.
+
 Also read the dismissed list. Dismissals are legitimate, but a growing pile in one category means
 you are talking the factory out of real feedback.
 

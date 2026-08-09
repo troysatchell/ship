@@ -89,8 +89,10 @@ project came from ignoring it. In a PR body:
 - **There is a known load-sensitive flake** (`session-activity-race`). A new failure that passes
   standalone is not automatically a flake — say which you believe and why. The gate reports
   standalone results precisely so this call is made on evidence.
-- **The 13 quarantined web tests** are a fixed baseline. A PR that fixes some should remove them
-  from `quarantine.json` in that PR — that is the one legitimate edit to the file.
+- **The quarantine is empty** — `knownFailing: 0` for api and web since 2026-07-29, when TEST-1 /
+  TRO-223 fixed the last 13 web failures. Treat that as a sharper bar, not a formality: every
+  failure the gate reports is new. A PR that *adds* an entry is gaming the gate and is a finding;
+  removing one it genuinely fixed is the only legitimate edit.
 - **Fixed sleeps are the flake mechanism.** `waitForTimeout` density is why tests fail on slower
   machines. A new one in a PR is a finding.
 

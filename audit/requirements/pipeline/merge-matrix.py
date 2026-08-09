@@ -11,9 +11,16 @@ import pathlib
 # so the pipeline reproduces from any clone rather than one machine.
 REPO = str(pathlib.Path(__file__).resolve().parents[3])
 SCRATCH = os.path.dirname(os.path.abspath(__file__))
-INV = os.path.join(REPO, "audit/requirements/inventory.md")
-OUT = os.path.join(REPO, "audit/requirements/matrix.baseline.json")
-VERIF = os.path.join(SCRATCH, "verification-results.json")
+# Which requirement document this run is for. Unset/W4 keeps the original W4
+# paths byte-for-byte, so W4's committed baseline stays reproducible; DOC=W5
+# switches to the W5 artifact set. One pipeline, two document sets — a forked
+# copy would drift the moment either side was fixed.
+DOC = os.environ.get("DOC", "W4").upper()
+_SFX = "" if DOC == "W4" else f"-{DOC}"
+
+INV = os.path.join(REPO, f"audit/requirements/inventory{_SFX}.md")
+OUT = os.path.join(REPO, f"audit/requirements/matrix.baseline{_SFX}.json")
+VERIF = os.path.join(SCRATCH, f"verification-results{_SFX}.json")
 
 VALID = {"VERIFIED", "IMPLEMENTED-UNVERIFIED", "PARTIAL", "MISSING", "N/A",
          "BLOCKED", "ASSUMED"}
@@ -42,7 +49,7 @@ def active_ids():
     ids, retired = [], set()
     cur = None
     for line in open(INV):
-        m = re.match(r"^## (W4-R\d+)\s*$", line)
+        m = re.match(rf"^## ({DOC}-R\d+)\s*$", line)
         if m:
             cur = m.group(1)
             ids.append(cur)
@@ -56,7 +63,7 @@ def main():
 
     entries = {}
     needs_ruling = []
-    for path in sorted(glob.glob(os.path.join(SCRATCH, "cluster-*.json"))):
+    for path in sorted(glob.glob(os.path.join(SCRATCH, f"cluster{_SFX}-*.json"))):
         data = json.load(open(path))
         for r in data.get("requirements", []):
             rid = r["id"]
@@ -79,7 +86,8 @@ def main():
     # row's cell reads ["BLOCKED"], so the matrix is self-describing rather than
     # indistinguishable from "checked, none found".
     ticket_map = {}
-    for name in ("tickets-map-1.json", "tickets-map-2.json"):
+    for name in ([f"tickets-map{_SFX}-1.json", f"tickets-map{_SFX}-2.json"]
+             if DOC == "W4" else [f"tickets-map{_SFX}.json"]):
         p = os.path.join(SCRATCH, name)
         if os.path.exists(p):
             for rid, m in json.load(open(p)).get("mappings", {}).items():
@@ -121,6 +129,14 @@ def main():
                 verification = v["verification"]
             if v.get("notes"):
                 notes = (notes + " " if notes else "") + v["notes"]
+            # A verification result that CHANGES a verdict must be able to supply
+            # the fields the new verdict requires. Without this, an override that
+            # turns a row PARTIAL/MISSING inherits the cluster's null
+            # suggested_scope and the acceptance gate fails the run — which is
+            # the gate working, but the fix belongs here rather than in the data.
+            if v.get("suggested_scope"):
+                e = dict(e)
+                e["suggested_scope"] = v["suggested_scope"]
 
         if verdict not in VALID:
             print(f"WARN: {rid} invalid verdict {verdict!r}", file=sys.stderr)
@@ -146,7 +162,7 @@ def main():
 
     # Orphan tickets: in scope, but mapped to no requirement.
     orphans = []
-    tpath = os.path.join(SCRATCH, "tickets-ship.json")
+    tpath = os.path.join(SCRATCH, f"tickets-ship{_SFX}.json")
     if ticket_status == "OK" and os.path.exists(tpath):
         claimed = {tid for m in ticket_map.values() for tid in m["tickets"]}
         for tk in json.load(open(tpath)):

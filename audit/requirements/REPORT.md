@@ -1,15 +1,6 @@
 # Requirements Audit — Ship (GAUNTLET)
 
-> **Frozen baseline — do not read this as current.** This report describes commit `ef87839` and has
-> not been regenerated since. Fixes for **W4-R35** (`migrationRunner.test.ts`'s sort-order mismatch),
-> **W4-R10(a)** (the type-safety "met" claim in `docs/IMPROVEMENTS.md`), and **W4-R42**
-> (`scripts/dev.sh`'s Postgres bootstrap) have since landed on this branch — the verdicts and prose
-> below still show the pre-fix state, deliberately. `matrix.baseline.json` is the frozen "before" a
-> later compare-mode run diffs against (W4-R34); editing this file to agree with the present would
-> destroy the ability to prove that delta. A **compare-mode run**, not an edit to this file, is what
-> will show the fix.
-
-**Commit:** a830cf77cb68 (dirty tree) · **Date:** 2026-08-08T19:21:10Z · **Docs:** W4 `GFA_Week_4_ShipShape_Updated.pdf` (14 pp.; requirements p.2–11, orientation appendix p.12–13) · **Mode:** baseline
+**Commit:** 85598041c438 (dirty tree) · **Date:** 2026-08-08T22:11:12Z · **Docs:** W4 `GFA_Week_4_ShipShape_Updated.pdf` (14 pp.; requirements p.2–11, orientation appendix p.12–13) · **Mode:** baseline
 
 ## Summary
 
@@ -17,7 +8,17 @@
 - **IMPLEMENTED-UNVERIFIED:** 42
 - **PARTIAL:** 10
 
-All 54 active W4 requirements are represented below, and two findings account for most of what is wrong. **The type-safety target is not met while the repo records it as met:** re-running the audit's own instrument at HEAD gives **1987 tracked violations against a 1535 baseline (+452, +29%)**, where W4-R10 asks for −25% (about −384 sites); `docs/IMPROVEMENTS.md:27-28` states "Verdict: met" on a sum-of-controlled-diffs accounting that it discloses openly, but the requirement's threshold is defined on the tracked total, which has never been below baseline at any measured point. **The test suite is red at HEAD:** `pnpm test` exits 1 — 830/832 passing, 2 failures at `api/src/db/__tests__/migrationRunner.test.ts:167,184`, both from a Postgres-versus-JavaScript sort-order mismatch inside the test itself rather than any migration defect. Those two drive W4-R10, W4-R33 and W4-R35; the remaining 7 PARTIAL rows are gaps the repo already documents. Everything else traced clean — but mostly statically, which the next section bounds.
+All 54 active W4 requirements are represented below. 2 carry green behavioural evidence, 42 are traced to file:line without a behavioural check, and 10 fall short — 0 `MISSING`, 10 `PARTIAL`.
+
+**The findings a reader must act on, worst first:**
+
+- **W4-R10** (`PARTIAL`) — Two separable changes, and only the first is small.
+- **W4-R27** (`PARTIAL`) — Scope annotation to the resources that appear in each saved plan artifact rather than to every Terraform block in the repo — the requirement's unit is the plan output, which is a far smaller set.
+- **W4-R32** (`PARTIAL`) — No small change closes this, and part of it is blocked upstream: the Render provider bug forces manual REST calls for real field updates, and auto_deploy is broken (TRO-361, open), so a clean `terraform apply` cannot currently be demonstrated for the primar...
+- **W4-R33** (`PARTIAL`) — No separate work. This is a roll-up that is PARTIAL solely because W4-R10 is; it resolves the moment W4-R10 resolves. Opening work against it would duplicate that ticket.
+- **W4-R35** (`PARTIAL`) — Compare like with like in api/src/db/__tests__/migrationRunner.test.ts: sort both sides in JavaScript, or make the query's ordering collation-explicit, so 020_document_associations and 020b_sprint_assignee_ids order identically on both sides.
+- **W4-R38** (`PARTIAL`) — Pin each dependency to the version pnpm has already resolved in pnpm-lock.yaml, so the installed tree is unchanged by construction and the diff cannot alter behaviour; then verify with a clean install plus type-check and the suite.
+- …and 4 further `PARTIAL` row(s); all of them, with the smallest change that would close each, are in the Gaps section below and in `gaps.md`.
 
 ## Coverage and limitations
 
@@ -27,7 +28,7 @@ What this sweep did and did not check. Read this before treating any row below a
 - **Ticket mapping ran against live Linear data.** Scope: The 123 issues in Linear project "ShipShape Audit Remediation" (TRO-164..249, TRO-276..311, TRO-354). Scoped by project, not by number range: the TRO team is a personal catch-all spanning six projects, and the Ship numbers are interleaved with them — TRO-250..275 belong to Clavira Pilot Readiness and TRO-312..365 mostly to FleetGraph (Week 5, same repo, different assignment). Sweeping the whole team would report ~200 false orphans from work this brief never covered. 21 of 54 requirements have no ticket covering them and 9 in-scope tickets map to no requirement; both lists are below. A requirement without a ticket is not necessarily unfinished — much of this brief is process work that was done without being ticketed.
 - **This sweep wrote to the developer's database, which a read-only audit should not have done.** W4-R13's `VERIFIED` excerpt came from `pnpm db:seed && npx tsx audit/seed-augment.ts` run against the working database `ship_standup` rather than a throwaway one. `pnpm test` (W4-R10, W4-R35) then ran with that same `DATABASE_URL` exported, and `api/src/test/setup.ts:93-98` `TRUNCATE`s 15 tables — including `documents`, `users` and `workspaces` — in every api test file's `beforeAll`. So the audit reseeded the database and then destroyed it. It was re-seeded afterwards and is back at 500 documents / 255 issues / 20 users / 35 sprints, but the state behind W4-R13's excerpt no longer exists in that exact form; the excerpt is a true record of what was observed, not something re-runnable today.
 - **42 of 54 rows are `IMPLEMENTED-UNVERIFIED`** — statically traced to file:line with no behavioral check run against them. 2 rows are `VERIFIED` on captured command output. 1 row rests on a recorded interpretation ruling rather than on the requirement text alone; none is left un-ruled. Every command that did run this sweep is listed under "Verification performed" at the end of this report.
-- **The swept tree was dirty** — 13 path(s) did not match commit `a830cf77cb68`. Of those, the only one this report cites is `memory-bank/activeContext.md` — citations into it are reproducible only against the working tree, not against the recorded commit. The rest are this sweep's own in-flight output and unrelated working files; the full list is `dirty_paths` in `matrix.baseline.json`. Where volatility made a citation unusable (W4-R35, `memory-bank/activeContext.md`) it was dropped and the claim moved into that row's notes with the reason.
+- **The swept tree was dirty** — 5 path(s) did not match commit `85598041c438`. Of those, the only one this report cites is `memory-bank/activeContext.md` — citations into it are reproducible only against the working tree, not against the recorded commit. The rest are this sweep's own in-flight output and unrelated working files; the full list is `dirty_paths` in `matrix.baseline.json`. Where volatility made a citation unusable (W4-R35, `memory-bank/activeContext.md`) it was dropped and the claim moved into that row's notes with the reason.
 
 ## Matrix
 

@@ -437,3 +437,27 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   to your own branch's change is a real reason to look closer, not a reason to assume it's real
   without checking. Confirmed non-blocking by reading the actual stack trace, not just trusting
   "passed standalone."
+
+## Concurrency
+
+24. **Never run two `gate.sh` invocations concurrently against the same Postgres container.**
+    Observed 2026-08-08 during the W4-sweep run: with three worktrees active, one gate's api suite
+    failed broadly (75, then 68 of ~77 files) on Postgres connection errors while a sibling gate
+    ran — root-caused via `ps aux` to the shared `ship-postgres-1` container being interrupted, not
+    to any code change. Per-ticket *databases* isolate data; they do not isolate the container
+    itself. Serialize gate runs, or accept that a broad connection-error failure under concurrency
+    is an environment artifact and must be re-run alone before it is believed. The same run also
+    produced `coderabbit rc=1` on two branches, matching the documented concurrent-load pattern.
+
+25. **A test whose outcome depends on the host environment is not a test of the code.**
+    Two instances landed within three commits of each other on 2026-08-08. (a)
+    `migrationRunner.test.ts` compared a Postgres-ordered query against a JS `.sort()` — it failed
+    on any database whose collation disagrees with JS, and passed on others, while the migrations
+    were fine either way. (b) The fix's own new `postgresReachable.test.ts` asserted a probe of
+    `127.0.0.1:5432` returns `false` "because nothing is expected to be listening" — true locally
+    (Postgres mapped to 5433), false in CI (Actions runs Postgres on 5432). **`gate.sh` cannot
+    catch this class**: it passed both times, because it ran in the environment the assumption held
+    in. Only CI, running somewhere different, caught the second one. When a test's comment has to
+    state an environmental assumption to justify the assertion, that is the signal — assert on the
+    pure logic (the resolved port, the parsed value) or use a resource you can guarantee (loopback
+    port 1), never on what happens to be listening or on how a server happens to collate.

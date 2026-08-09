@@ -5,14 +5,21 @@ description: >-
   unbundled ticket) to coding sub-agents in an isolated worktree, gate it on evidence, open one PR
   per bundle, triage the CodeRabbit review into new tickets, and keep going until every ticket is
   terminal. Use when the user says "run the factory", "work the tickets", "keep grinding the
-  backlog", or wants autonomous remediation of the 68 audit findings. Stops only at defined human
+  backlog", or wants autonomous delivery of the current project's ticket queue. Stops only at defined human
   gates.
 ---
 
 # Ship Factory
 
 You are the **orchestrator**. You hold the board and the gates; sub-agents do the building.
-This skill exists because Ship has ~75 open remediation tickets and a hard deadline, and because
+**Current work (2026-08-08): Week 5, `FleetGraph — Week 5 Project Intelligence Agent`.** That is the
+default project for selection, briefs, and measurement. Week 4's `ShipShape Audit Remediation` is
+**past** — 121 of its 123 tickets are Done and it is worked only to close a specific residual
+(`TRO-354`, or a W4 requirement gap named by `audit/requirements/`). Do not pull W4 tickets as
+general queue-filler; a wave spent on last week's grade is a wave not spent on this week's.
+Re-read this paragraph at the start of every run: it is the one thing in this file that goes stale.
+
+This skill exists because Ship carries a large remediation backlog against a hard deadline, and because
 the grading rubric rewards things a naive "fix it" loop destroys: one branch per improvement,
 before/after measurement, a regression test per bug, and an honest git history.
 
@@ -116,6 +123,34 @@ Working a bundle:
   of the bundle still ships.** One stuck ticket must not hold four finished ones hostage.
 - The bundle's own definition of done (in the epic body) is checked in addition to each sub-issue's.
 
+### Bundles have a size ceiling, and it is not a style preference
+
+**Measured 2026-08-08 across 21 PRs (2026-08-02→08, CodeRabbit export, 256 comments):**
+
+| PR size | comments posted | accepted | acceptance |
+|---|---|---|---|
+| **≥20 comments** | 168 | 20 | **11%** |
+| **<20 comments** | 88 | 40 | **45%** |
+
+Acceptance falls **four-fold** as review volume rises. Two PRs (#107 at 85 comments, #108 at 61)
+produced 57% of the week's entire finding volume between them and accepted 15% and 11% of it. On
+#107 — the largest PR of the week — a **Critical finding was posted and dismissed**. Every
+performance finding all week (5 across 3 PRs) was dismissed: 0% accepted.
+
+The honest reading is not "CodeRabbit gets noisier on big PRs." It is that **we stop reading
+properly.** Bundling was adopted to stop a stalled review queue, and it works — but its cost lands
+somewhere invisible, in dismissals nobody re-examines, and that cost is now measured.
+
+So:
+
+- **Target under 20 review comments per PR.** That is roughly 3–5 related sub-issues, not eight.
+- **A bundle whose review exceeds ~40 comments is over-bundled.** Say so in the report, and split
+  the next one rather than defending this one.
+- **Never dismiss a Critical or a Major on a PR carrying more than 20 comments without writing the
+  reason in the ledger.** That is exactly where the one dismissed Critical went.
+- **Dismissals are the metric to watch, not throughput.** A 90%-acceptance PR (#122: 9 of 10) means
+  the review was read. An 11%-acceptance PR means it was survived.
+
 **A ticket earns its own PR only when it is genuinely separable *and* the bundle would otherwise be
 unreviewable — and that is a call to make out loud in the report, not silently.**
 
@@ -163,11 +198,18 @@ stop and report exactly what blocks you.
 
 ### 1. Select the next bundle (or ticket)
 
-Pull open issues from Linear, **team `Troysatchell`**, scoped to the project the run is for —
-`ShipShape Audit Remediation` for audit remediation, `FleetGraph — Week 5 Project Intelligence
-Agent` for Week 5. Scope matters: that workspace also holds several unrelated projects (an iOS app,
-a healthcare copilot, and a separate security audit at `TRO-250`–`TRO-275`). **Confirm which project
-the run is for before selecting anything, and never dispatch outside it.**
+Pull open issues from Linear, **team `Troysatchell`**, scoped to the project the run is for.
+**Default: `FleetGraph — Week 5 Project Intelligence Agent`** — that is the live work.
+`ShipShape Audit Remediation` is Week 4 and effectively closed (121/123 Done); select from it only
+for a named residual, never as queue-filler.
+
+Scope is load-bearing, and issue numbers will not give it to you. This team holds six projects whose
+numbers **interleave**: `TRO-250`–`275` are a separate product's security audit, `TRO-312`–`365` are
+mostly FleetGraph, and the W4 project is `TRO-164`–`249` plus `TRO-276`–`311` plus `TRO-354`. There
+is also an iOS app and a healthcare copilot in the same team. Measured 2026-08-08: scoping a sweep by
+number range instead of by project produced **88 orphan tickets where the true answer was 9** — the
+other ~80 were other products' work. **Filter by project via the API. Never infer scope from a
+ticket-number range, and never dispatch outside the selected project.**
 
 **Select bundles first.** If open work has `[PR-x] EPIC` parents, the selectable unit is the bundle
 and its sub-issues are never selected independently. Order bundles by their epic's declared position
