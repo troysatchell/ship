@@ -1194,7 +1194,32 @@ checked directly against source rather than assumed:
 |---|---|---|
 | Ship API (reads + writes) | Explicit `timeoutMs`; retry with exponential backoff + jitter (idempotent GET reads only); a circuit breaker with a half-open probe; self-throttling under Ship's own per-IP ceiling, since both of Ship's own rate limiters fail open (see "Reliability" above) | `resilientClient.ts`'s `ResilientClient`, built once via `buildShipClient` (`server.ts`) and shared by every `ShipClient`/`GateShipClient` in the process |
 | LLM provider (Anthropic, `ChatAnthropic`) | Explicit `timeout` (`clientOptions.timeout`, forwarded to the raw `@anthropic-ai/sdk` client) and `maxRetries` (`@langchain/core`'s own `AsyncCaller`, exponential backoff + jitter via `p-retry` — verified by reading `async_caller.cjs`, not assumed from the option's name) | `server.ts`'s `anthropicModelParams`/`buildAnthropicModel` — the one place this package constructs the real `ChatAnthropic` used in production (`index.ts`) |
-| Any other external tool | None exist today. Grepped `agent/src` for outbound calls outside the two classes above: every other `fetch()` call site is a one-off manual CLI script (`trace-invoke-proactive.ts`, `check-readiness-and-rollback.ts`) hitting the Ship API directly, not a third service. LangSmith tracing is `@langchain/core`'s own env-var-driven auto-instrumentation (`index.ts`'s own docstring: "there is nothing to wire up here beyond loading `.env`"), not a call site this package constructs or controls. | — |
+| Any other external tool (production paths) | None exist today. Every production request path (`/chat`, `/inbox`, `/accept-draft`, the proactive poller) makes outbound calls through exactly the two resilient classes above — no third service. | — |
+
+**Manual CLI scripts are OUTSIDE this resilience story — stated explicitly, not left implicit
+(CodeRabbit review, PR #156, finding 5).** The table above covers *production* request paths only.
+Grepping `agent/src/scripts` turns up two scripts that make real outbound calls with **no timeout or
+retry policy of their own**, and neither goes through `resilientClient.ts`:
+- `trace-invoke-proactive.ts` — its two direct `fetch()` calls (`GET /api/team/people`,
+  `POST .../comments`) are bare, unbounded fetches; they bypass even the `ShipClient`/
+  `ResilientClient` this same script constructs for the rest of its work (its own `shipClient`
+  variable, built via `buildShipClient(config)`, is never used for either call).
+- `check-readiness-and-rollback.ts` — its readiness-polling loop (`fetcher.get: (url) => fetch(url)`)
+  and its Render API calls (`rollbackViaRenderApi`: `GET`/`POST https://api.render.com/v1/services/
+  {id}/deploys`) are both bare `fetch()`. The Render API is a genuinely different external service
+  from Ship API or Anthropic — this document previously (and incorrectly) implied no third service
+  existed; it does, it is just not on a production path.
+
+Neither script runs on a request a real user's browser can trigger — both are human-invoked CLI
+tools, explicitly not wired into any live trigger (`check-readiness-and-rollback.ts`'s own docstring:
+"NOT wired into any live trigger against production in this change") — so this gap does not weaken
+`/chat`/`/inbox`/`/accept-draft`'s own coverage. It is a real gap in the scripts themselves: a hung
+Render API call or a hung `/ready` poll has nothing bounding it today. `check-readiness-and-rollback.ts`'s
+readiness-polling half is being given an explicit timeout concurrently, on **PR #157** — not yet true
+on this branch, so not claimed as done here. The Render-API half and `trace-invoke-proactive.ts`'s two
+calls remain unbounded as of this document's own last-updated date; a future ticket, not this one,
+would need to either route them through `ResilientClient` or accept the same explicit exclusion this
+paragraph now states for manual tooling.
 
 **What changed, and what this section corrects.** Before TRO-368, this document's retry/fallback
 coverage named only the Ship API class (the table's first row, already accurate) — it never named
@@ -1208,12 +1233,15 @@ handler does not reach inside a single in-flight `AnthropicModel.invoke()` call 
 even more for `composeStandupDraft`/`composeBlockerEscalation`/`composeRetroDraft`/
 `composePlanChangeDraft`, which share the same model instance but run outside any HTTP handler at
 all once a scheduler exists to trigger them, so nothing bounded those calls either. Fixed by giving
-`ChatAnthropic` explicit, chosen values (20s timeout; 2 retries, three total attempts — matching
-`resilientClient.ts`'s own `DEFAULT_RETRY_MAX_ATTEMPTS` for Ship's idempotent reads) rather than the
-library's unexamined defaults; every `ChatAnthropic` construction in this package (the production one
-and the seven one-off trace/golden-set scripts) now sets both explicitly and consistently. Full
-reasoning for the chosen numbers lives in `config.ts`'s `anthropicRequestTimeoutMs`/
-`anthropicMaxRetries` docstrings.
+`ChatAnthropic` explicit, chosen values rather than the library's unexamined defaults; every
+`ChatAnthropic` construction in this package (the production one and the seven one-off trace/
+golden-set scripts) now sets both explicitly and consistently. **Updated (CodeRabbit review, PR #156,
+finding 1):** the original values (20s timeout, 2 retries/three total attempts — chosen to match
+`resilientClient.ts`'s own `DEFAULT_RETRY_MAX_ATTEMPTS`) could collectively outlive `/chat`'s own
+`chatHandlerTimeoutMs` deadline (worst case ~3 × 20s plus backoff, versus a 25s handler budget) —
+lowered to 8s timeout / 1 retry (two total attempts), whose worst case (~18s) fits inside that budget
+with margin. Full reasoning and the exact arithmetic live in `config.ts`'s
+`anthropicRequestTimeoutMs`/`anthropicMaxRetries` docstrings and `anthropicWorstCaseCallMs`.
 
 ---
 
