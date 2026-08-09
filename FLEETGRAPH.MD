@@ -1003,9 +1003,11 @@ point-in-time only and re-verify the deployed commit after any later push.
    failed."
 
 **TRO-322 / FG-12 — both layers demonstrated, not just described, plus the "boots but broken" gap
-closed with real tooling; TRO-367 then wired that tooling to an automatic trigger.** Three separate
-pieces of real, generated evidence — none of this is re-derived from the reasoning above; see
-CHANGES.md's TRO-322 entry for exact commands/output, and its TRO-367 entry for the trigger itself.
+closed with real tooling; TRO-367 then wired that tooling to an automatic trigger, and TRO-383 added
+a second trigger, driven by CI failure itself rather than by polling.** Three separate pieces of real,
+generated evidence — none of this is re-derived from the reasoning above; see CHANGES.md's TRO-322
+entry for exact commands/output, its TRO-367 entry for the polling trigger, and its TRO-383 entry for
+the CI-failure trigger.
 
 1. **Layer 1, proven on both platforms with a throwaway, never-merged branch.** A branch
    (`chore/tro-322-ci-rollback-proof-do-not-merge`) with one deliberate `pnpm type-check` failure
@@ -1089,6 +1091,40 @@ CHANGES.md's TRO-322 entry for exact commands/output, and its TRO-367 entry for 
    time. Do NOT simply repoint `agent_health_check_path` at `/ready` instead of using this
    trigger — this section's own transient-blip caveat means Render's platform check would then
    demote a healthy instance during any brief Ship outage, trading one failure mode for a worse one.
+3. **TRO-383 — a second trigger, driven by CI failure itself, not by polling.** W5-R36's requirement
+   text is literal: "If a CI run fails, the deployment must be rolled back automatically." The
+   polling trigger above satisfies the *spirit* — it eventually notices a bad deploy — but nothing
+   about it is CAUSED BY a CI run failing; a build that merges green and whose CI later fails against
+   `main` (a post-merge rerun, a dependency regression only caught after merge) sits uncovered until
+   the next scheduled tick, if at all. `.github/workflows/ci-failure-rollback.yml` closes that literal
+   gap: it fires on the `workflow_run` event for `ci.yml`'s own `CI` workflow completing, filtered to
+   `conclusion == 'failure'` on `main` (a PR's own run never matches — its `head_branch` is the PR's
+   branch, not `main`).
+   **It does not call Render just because CI failed.** A single red CI run is not evidence the
+   deployed service is broken — this repo's own `lessons.md` records three distinct load-flake
+   identities (`session-revocation.test.ts`, `programWeeksNav`, `auth.test.ts::extend-session`) that
+   failed CI in one day on branches touching no file they could reach. So this trigger reuses the
+   identical sustained-readiness decision the polling trigger already uses
+   (`check-readiness-and-rollback.ts`'s `evaluateReadinessSamples`): a CI failure only earns an
+   immediate readiness check, sooner than the next 15-minute tick — the check itself still requires
+   EVERY sample in the window to report the live `/ready` endpoint unready before it will call Render.
+   A flaky unrelated test cannot make `/ready` report unready, so it cannot cause a rollback by itself.
+   **It shares the polling trigger's own concurrency group** (`agent-rollback-check`) rather than a
+   new one — verified against GitHub's own documentation (Actions > Using jobs > Using concurrency),
+   which states concurrency group names are scoped repository-wide, not per workflow file: two
+   workflow files declaring the same group genuinely serialize against each other. A distinct group
+   name would have let both triggers call Render at once; sharing this one means a CI-failure-prompted
+   check and a scheduled tick queue behind each other instead.
+   **Same secret gating, same honesty caveat as the polling trigger.** `RENDER_API_KEY` /
+   `RENDER_AGENT_SERVICE_ID` gate every real step identically; unset, the workflow reports a
+   `::warning::` annotation and does nothing else. Structurally asserted by
+   `ciFailureRollbackWorkflow.test.ts` (the `on:` block's `workflow_run`/`types`/`branches`, the job's
+   `conclusion == 'failure'` condition, the shared concurrency group read from both files rather than
+   hardcoded, `--execute` behind the secrets gate). **Observed: the trigger exists, its condition and
+   guard structure are proven against the real YAML, and its readiness-check step is the same,
+   already-proven pipeline the polling trigger uses. Not observed: this trigger has never fired for
+   real — no CI run has failed against `main` since it was added — and, exactly as with the polling
+   trigger, no live call to Render's API has ever been made from either trigger.**
 
 **Login and the 403 (TRO-341 / FG-23) — root-caused, not a WAF.** A bare
 `POST https://ship-rr6m.onrender.com/api/auth/login` returns a platform-looking `403 Forbidden` —
@@ -1218,6 +1254,34 @@ calls remain unbounded as of this document's own last-updated date; a future tic
 would need to either route them through `ResilientClient` or accept the same explicit exclusion this
 paragraph now states for manual tooling.
 
+**A per-call timeout is not the same guarantee as a request-scoped deadline (TRO-379, 2026-08-09).**
+The table above bounds each *individual* outbound call. It says nothing about whether a call can
+outlive the `/chat` request that started it, and those are different properties:
+
+- **The budget is now enforced at startup, not asserted in a comment.** `config.ts`'s
+  `anthropicPreModelWorkAllowanceMs` (default 7,000 ms) turns a number that previously existed only
+  as prose into a checked constant, and `assertAnthropicBudgetFitsHandlerDeadline` (called from
+  `index.ts` right after `loadConfig`) throws when
+  `anthropicWorstCaseCallMs(...) + anthropicPreModelWorkAllowanceMs > chatHandlerTimeoutMs`. With
+  production defaults that is `18,000 ms + 7,000 ms = 25,000 ms`, exactly `chatHandlerTimeoutMs` —
+  zero slack, and a misconfigured deployment now fails to boot rather than surfacing later as an
+  unexplained 504.
+- **The model call's cancellation is now explicit rather than accidental.** `composeAnswer` receives
+  the node's `RunnableConfig` and passes `config.signal` into `model.invoke(prompt, { signal })` —
+  the same signal `/chat` hands to `graph.invoke`. Worth recording *why*: `ChatAnthropic` was
+  already being cancelled before this change, but only because LangGraph runs each node inside
+  `AsyncLocalStorageProviderSingleton.runWithConfig` and `ChatAnthropic`, as a LangChain `Runnable`,
+  picks that ambient config up via `ensureConfig()`. That is undocumented library behaviour a version
+  bump could remove silently, with no test failing. A model implementation that is *not* a
+  `Runnable` never received the signal at all — which is the bug
+  `composeAnswerAbortPropagation.test.ts` reproduces and pins.
+- **Known and still open: Ship reads do not take a signal.** `ShipClientLike` neither accepts nor
+  forwards an `AbortSignal`, so a Ship read in flight when `/chat` aborts runs to completion
+  server-side. It is bounded by `ResilientClient`'s own `timeoutMs` — so it cannot hang
+  indefinitely — but it is not coupled to the caller's deadline. Tracked as **TRO-385**; stated here
+  rather than left for a reader to discover, since the table above would otherwise read as full
+  coverage.
+
 **What changed, and what this section corrects.** Before TRO-368, this document's retry/fallback
 coverage named only the Ship API class (the table's first row, already accurate) — it never named
 the LLM-provider call as its own class, and the code matched that gap exactly: `index.ts`'s
@@ -1279,12 +1343,12 @@ command today reproduces whatever the ledger holds *now*, not this table. For th
 reproducible figures, and the command that actually gets them from a fresh clone (TRO-373), see
 "Refreshed (TRO-366, 2026-08-08)" below.
 
-| Item | Amount |
+| Item (historical — 2026-08-05 snapshot, superseded) | Amount |
 |---|---|
-| Claude API — input tokens | 33 |
-| Claude API — output tokens | 37 |
-| Total invocations during development | 1 |
-| Total development spend | $0.000218 |
+| Claude API — input tokens, as of 2026-08-05 | 33 |
+| Claude API — output tokens, as of 2026-08-05 | 37 |
+| Invocations recorded as of 2026-08-05 | 1 |
+| Development spend as of 2026-08-05 | $0.000218 |
 
 **Reconciliation and why the total was this small.** The one recorded invocation was cross-checked
 directly against LangSmith's own usage reporting for the same trace: an exact match

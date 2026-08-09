@@ -342,21 +342,39 @@ export function createServer(config: AgentConfig, deps: CreateServerDeps = {}): 
     //
     // Full honesty about what this does NOT do (read before trusting a
     // "cancelled" claim you didn't verify — CLAUDE.md's own provenance
-    // rule): neither `AnthropicModel.invoke(input: string)` (this file's own
-    // narrow model interface, `graph.ts`) nor any `ShipClientLike` method
-    // (`shipClient.ts`) accepts or forwards a signal, even though the
-    // underlying `ResilientClient.get`/`request` (`resilientClient.ts`) DOES
-    // support one — nothing in `graph.ts`'s node bodies threads `config`
-    // through to either call today. So when the abort fires while a node's
-    // own `model.invoke()`/Ship HTTP call is already in flight, THAT single
-    // call keeps running to completion server-side (confirmed with a
-    // throwaway probe against the real package: the node's own awaited
-    // promise settled ~3s after `invoke()` had already rejected) — this
-    // timeout bounds THIS HANDLER'S response, not every byte of work the
-    // graph kicked off. Threading the signal into `AnthropicModel`/
-    // `ShipClientLike` themselves would close that gap; it is a real,
-    // separately-scoped change to graph.ts's node bodies and every caller
-    // of those interfaces, not a one-line addition here.
+    // rule):
+    //
+    // TRO-379 closed HALF of this gap: `graph.ts`'s `composeAnswer` — the
+    // one node on the on-demand path that calls the model — now explicitly
+    // forwards this exact signal into `model.invoke()`. See that node's own
+    // comment for the mechanism AND a correction to what this comment used
+    // to claim here: an earlier version said a "throwaway probe" showed the
+    // node's own awaited promise settling "~3s after `invoke()` had already
+    // rejected" (i.e. NOT cancelled). Re-tested directly against a REAL
+    // graph run before fixing anything: that claim was WRONG for
+    // `ChatAnthropic` specifically — `@langchain/langgraph`'s own node
+    // wrapper already threads this signal into any call `ChatAnthropic`
+    // makes via an ambient `AsyncLocalStorage` mechanism neither this file
+    // nor `graph.ts` ever asked for (full citation on `composeAnswer`). It
+    // was NOT wrong, though, for `AnthropicModel` as a general contract — a
+    // plain, non-LangChain implementation of that same narrow interface
+    // (just `invoke: (input, options) => fetch(url, { signal:
+    // options?.signal })`) genuinely never received a signal and genuinely
+    // stayed open past this handler's own deadline, which is the real,
+    // reproducible version of the bug this ticket fixed.
+    //
+    // `ShipClientLike` (`shipClient.ts`) is the gap that remains: no method
+    // on it accepts or forwards a signal, even though the underlying
+    // `ResilientClient.get`/`request` (`resilientClient.ts`) DOES support
+    // one — nothing in `graph.ts`'s `resolveSeed`/`expandFrontier` threads
+    // `config` through to it today. So when the abort fires while a Ship
+    // HTTP read is already in flight, THAT call keeps running to completion
+    // server-side — this timeout bounds THIS HANDLER'S response, not every
+    // byte of Ship-read work the graph kicked off before the model was ever
+    // reached. Threading the signal into `ShipClientLike` too would close
+    // that remaining gap; TRO-379's own ticket text scoped the fix to "the
+    // Anthropic call" specifically, so it is left here as a real,
+    // separately-scoped follow-up rather than folded in silently.
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.chatHandlerTimeoutMs);
     try {

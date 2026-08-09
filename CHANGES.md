@@ -145,6 +145,282 @@ either re-applying this fix's substance or accepting those inaccuracies back int
 
 ---
 
+## TRO-384 — every inbox item linked to a 404
+
+**The cost this closes.** Clicking through Alice's mentions in the ranked inbox landed on "no page
+available" every single time. **Root cause, confirmed by reading the code, not re-derived.** Four
+sites built an `action.href` for an inbox item by interpolating `document_type` straight into the
+path, or by hardcoding a singular segment:
+- `agent/src/proactive.ts:90` — `` `/${parentDoc.document_type}/${parentDoc.id}` `` (comment mention)
+- `agent/src/proactive.ts:113` — `` `/${fullDoc.document_type}/${fullDoc.id}` `` (document-body mention)
+- `agent/src/proactive.ts:221` — `` `/${sprint.document_type}/${sprint.id}` `` (blocked approval)
+- `agent/src/graph.ts:1714` — `` `/issue/${impact.blockingIssueId}` `` (blocker-escalation draft,
+  singular and hardcoded)
+
+`web/src/main.tsx` routes everything plural (`issues/:id`, `sprints/:id`, `programs/:id/*`, …) or
+through the catch-all `documents/:id/*`; every `document_type` value in the live dev database
+(`wiki`, `issue`, `project`, `sprint`, `program`, `person`, `standup`, `weekly_plan`, `weekly_retro`,
+`weekly_review` — all ten checked) has **no** matching singular route, so all four sites always fell
+through to `<Route path="*" element={<NotFoundPage />} />`.
+
+**What changed.** All four sites now emit `` `/documents/${id}` `` — the one route
+(`web/src/main.tsx:239`, `documents/:id/*` → `UnifiedDocumentPage`) that renders every document type,
+because in this repo everything is a document. Deliberately **not** a singular→plural mapping table:
+that would reintroduce the exact coupling that broke (a map that has to be updated whenever a route
+or a document type changes). One canonical route has no drift surface.
+
+Grepped `agent/src` for every `href:` site to confirm completeness — found the four above plus three
+more in `graph.ts` (`/standup-draft/:id`, `/retro-draft/:id`, `/plan-change-draft/:id`, lines 1580,
+1810, 1933) that route to pages which genuinely do not exist yet. Those are **out of scope** here
+(tracked separately as TRO-353) and were left untouched — confirmed by re-grepping after this change
+that all three still read exactly as before.
+
+**Regression test — structural, not a string check.**
+`agent/src/__tests__/inboxHrefRoutes.test.ts` parses the actual `<Route path="...">` table out of
+`web/src/main.tsx` (excluding the two pure catch-alls, `"*"` and `"/*"`, which exist to render "no
+page available" — including them would make every href trivially "resolve") and compiles each pattern
+into a matcher (`:param` → `[^/]+`, trailing `/*` → optional splat tail). It then calls the real
+`buildMentionItems`/`buildBlockingApprovalItems` (`proactive.ts`) and runs the compiled LangGraph
+through the blocker-escalation path (`graph.ts`'s `commitBlockerEscalation`) with fixtures mirroring
+`proactive.test.ts`/`graph.test.ts`'s own conventions, captures the **actual runtime href** each
+produces, and asserts it resolves against a real route. One case uses `document_type: 'weekly_plan'`
+specifically (not `'issue'`) to prove this isn't accidentally passing only for the one type whose
+name happens to look route-shaped. A `describe('route parser sanity...')` block also asserts the
+matcher itself is discriminating — it accepts `/documents/abc-123` and rejects `/issue/abc-123`,
+`/sprint/abc-123`, `/weekly_plan/abc-123` — so a future rename or removal of the `documents/:id/*`
+route fails this test by breaking real route resolution, not by string mismatch; a hardcoded
+`'/documents/'` check would keep passing even after the app started 404ing again.
+
+**Confirmed failing for the right reason before the fix.** Copied the fixed `agent/src/{proactive,
+graph}.ts` aside to the scratchpad (never `git stash`, per this repo's ban), overwrote each with
+`git show HEAD:<path>`, and re-ran only the new file:
+`pnpm --filter @ship/agent test -- inboxHrefRoutes` — all 4 site-coverage cases failed, naming the
+exact bad pre-fix paths:
+```
+expected '/weekly_plan/plan-1' to be '/documents/plan-1'
+expected '/wiki/wiki-1' to be '/documents/wiki-1'
+expected '/sprint/sprint-1' to be '/documents/sprint-1'
+expected '/issue/blocker-issue-1' to be '/documents/blocker-issue-1'
+```
+The 4 route-parser sanity cases passed throughout (they test the matcher itself, not the fix). All
+495 other tests in the suite were unaffected. Restored the fixed files and re-ran: all 499/499 pass
+(36 files).
+
+**How to run it.** `source .factory-env` first. `pnpm --filter @ship/agent test -- inboxHrefRoutes`
+for just this file, or `pnpm --filter @ship/agent test` for the full suite (499/499). `pnpm
+type-check` passes clean across all four workspace packages.
+
+**Roll back.** Revert this commit. No schema change, no migration, no new dependency. Reverting
+restores the four `href:` sites to their pre-fix singular/type-interpolated form (every inbox item
+404s again, as before) and removes `agent/src/__tests__/inboxHrefRoutes.test.ts`. The three
+out-of-scope `graph.ts` draft hrefs (`/standup-draft/:id`, `/retro-draft/:id`,
+`/plan-change-draft/:id`) are untouched either way.
+
+---
+
+## TRO-383 — a literal CI-failure rollback trigger, distinct from the sustained-readiness poll
+
+**The requirement, verbatim.** W5-R36: "If a CI run fails, the deployment must be rolled back
+automatically — do not allow a failing build to remain deployed." TRO-367 already built
+`.github/workflows/agent-rollback-check.yml`, which rolls back on a *sustained* `/ready` failure
+discovered by a 15-minute poll. Real, tested, and it closes the "boots but broken" gap FLEETGRAPH.MD
+documents — but nothing about it is CAUSED BY a CI run failing; a build that merges green and whose
+CI later fails against `main` sat uncovered by a trigger that only notices once the deployed service
+itself stops responding. This ticket's own scope holds that readiness-polling does not satisfy the
+requirement's literal wording (`audit/requirements/gaps-W5.md`'s W5-R36 entry quotes it verbatim),
+which names the CI run itself as the trigger, not just the eventual state of what it deployed.
+**Provenance note, checked rather than assumed:** the ticket brief cited this as ruling "I-03" in
+`audit/requirements/interpretations.md`; that file holds only I-01 as of this change — no I-03 entry
+exists there. Recorded here rather than silently relied on; a future pass should add one.
+
+**What changed.**
+1. **`.github/workflows/ci-failure-rollback.yml` (new file).** Fires on `workflow_run` for `ci.yml`'s
+   `CI` workflow completing, filtered to `conclusion == 'failure'` on `main`
+   (`workflows: ['CI']`, `types: [completed]`, `branches: [main]`). The job itself is additionally
+   gated `if: github.event.workflow_run.conclusion == 'failure'`.
+2. **Anti-flake guard (the judgment call this ticket turns on).** This workflow does NOT call Render
+   just because CI failed. `lessons.md` records three distinct load-flake identities
+   (`session-revocation.test.ts`, `programWeeksNav`, `auth.test.ts::extend-session`) that failed CI in
+   one day (TRO-380) on branches touching no file they could reach — a trigger that acted on a bare
+   failing conclusion would have rolled back production for every one of those. Instead, a CI failure
+   only prompts an immediate run of the exact same sustained-readiness check the cron already uses
+   (`check-readiness-and-rollback.ts`'s `evaluateReadinessSamples`): every sample in a real polling
+   window against the live `/ready` endpoint must report not-ready before Render is ever called. A
+   flaky unrelated unit test cannot make the deployed agent's `/ready` endpoint report unready, so it
+   cannot, by itself, cause a rollback.
+3. **Concurrency, verified rather than assumed.** Reuses `agent-rollback-check.yml`'s own
+   `concurrency: group: agent-rollback-check` instead of inventing a new one. Checked GitHub's own
+   documentation directly (Actions > Using jobs > Using concurrency): "If you have multiple workflows
+   in the same repository, concurrency group names must be unique across workflows to avoid canceling
+   in-progress jobs or runs from other workflows" — concurrency groups are scoped repository-wide, not
+   per workflow file, so two files sharing a group genuinely serialize against each other. A distinct
+   group name would have let both triggers call Render at once.
+4. **Same secret gating as the cron trigger.** `RENDER_API_KEY` / `RENDER_AGENT_SERVICE_ID` gate every
+   real step identically; unset, a `::warning::` annotation fires and every other step is skipped.
+5. **`FLEETGRAPH.MD`'s "Rollback trigger and procedure" section** updated with a new numbered item
+   describing this trigger's condition, anti-flake reasoning, and concurrency sharing, keeping the
+   section's existing honesty about what has and has not been exercised live.
+
+**Regression test — `agent/src/__tests__/ciFailureRollbackWorkflow.test.ts` (new file, 10 cases).**
+Asserts the trigger condition (`workflow_run`/`types: [completed]`/`branches: [main]`, the job's
+`conclusion == 'failure'` condition, `--execute` behind the secrets gate, and the shared concurrency
+group — read from both workflow files rather than hardcoded, so a future drift in either file's group
+fails this test too) against the actual, comment-stripped YAML, following
+`agentRollbackWorkflow.test.ts`'s existing pattern (a `run:`/job-body isolator that strips comments)
+and `gitlabCiAgentTests.test.ts`'s anchored near-miss rejection (a bare `/failure/` substring match
+would also accept `conclusion == 'failure_ignored'`; the actual regex requires the literal closing
+quote immediately after `failure`). **Confirmed red first, twice:** changed the job's `if:` condition
+to `conclusion == 'success'` — 2 cases failed (`AssertionError: expected '    if:
+github.event.workflow_run.conclusion == ...success'... to match /github\.event\.workflow_run\.conclus
+ion\s*==\s*'failure'/`); separately changed `branches: [main]` to `branches: [staging]` — the
+`workflow_run` trigger-condition case failed (`AssertionError: expected '...branches: [staging]' to
+match /branches:\s*\[\s*main\s*\]/`). Both reverted; full suite green again (500/500,
+`pnpm --filter @ship/agent test`).
+
+**Inner-loop results (per this ticket's brief, not the full `gate.sh`).**
+- `pnpm type-check` — pass (no source changes outside a new YAML file and a new test file).
+- `pnpm --filter @ship/agent test` — 500/500, 36 files.
+- `node scripts/factory/review-patterns.mjs main` — pass.
+- `node scripts/factory/merge-changes.mjs --check CHANGES.md` — pass.
+
+**What was demonstrated, and what was not — stated precisely.**
+- **Observed:** the trigger fires on the correct GitHub event/condition (proven structurally against
+  the real, executable YAML, not a comment); it shares the polling trigger's concurrency group
+  (verified against both files' actual content and against GitHub's documented semantics for that
+  field); its readiness-check step invokes the exact same, already-tested pipeline the polling
+  trigger uses.
+- **Not observed, per this ticket's hard constraint:** no CI run has failed against `main` since this
+  workflow was added, so it has never fired for real. No call — successful or not — was made to
+  Render's real API from this change. No `terraform apply` was run.
+
+**How to run it.**
+```
+source .factory-env
+pnpm --filter @ship/agent test -- ciFailureRollbackWorkflow    # 10/10
+pnpm --filter @ship/agent test                                 # full suite, 36 files / 500 tests
+```
+
+**Roll back.** Delete `.github/workflows/ci-failure-rollback.yml` and
+`agent/src/__tests__/ciFailureRollbackWorkflow.test.ts` — both new, additive files with no other code
+depending on them. Revert the `FLEETGRAPH.MD` edit (confined to the new numbered item under "Rollback
+trigger and procedure"). `agent-rollback-check.yml` (TRO-367) and its own tests are untouched by this
+change and continue to function identically without it — removing this trigger returns the project
+to exactly the sustained-poll-only coverage TRO-367 shipped.
+
+---
+
+## TRO-379 — The /chat handler's abort signal never reached `composeAnswer`'s own Anthropic call, and the retry+timeout budget ignored pre-model work
+
+**The cost this closes.** TRO-368 gave the Anthropic call an explicit per-attempt timeout and retry
+budget; CodeRabbit review PR #156 sized that budget (`anthropicWorstCaseCallMs`, 18,000ms with the
+production defaults) to fit inside `chatHandlerTimeoutMs` (25,000ms). Both are real and unaffected
+by this ticket. Two narrower holes remained, both of which W5's requirements sweep scored W5-R43
+`PARTIAL` on:
+1. **The budget ignored pre-model work.** `resolveSeed`/`expandFrontier` (`graph.ts`) — the on-demand
+   path's Ship reads — run BEFORE `composeAnswer` ever calls the model, and nothing accounted for
+   how long they take. `config.ts`'s own comment admitted the ~7s margin was an unstated assumption,
+   never enforced anywhere.
+2. **`composeAnswer` never forwarded the handler's `AbortSignal` into `model.invoke()`.**
+   `server.ts`'s own `/chat` handler comment said so plainly and even cited a "throwaway probe"
+   claiming the underlying model call kept running ~3s after the handler had already given up.
+
+**That second claim turned out to be WRONG for this package's actual production model, and the
+fix required finding out why before trusting either the ticket's diagnosis or the existing
+comment.** A first version of the regression test below — a REAL `ChatAnthropic` pointed at a local
+hanging HTTP server, the exact pattern TRO-368's own tests use — passed even against the UNFIXED
+`composeAnswer`. Traced to source, not assumed: `@langchain/langgraph`'s `RunnableCallable.invoke`
+(`utils.cjs`) runs every node function inside `AsyncLocalStorageProviderSingleton.
+runWithConfig(mergedConfig, ...)`, where `mergedConfig` already carries the top-level `graph.invoke(
+..., { signal })`'s signal (traced through `pregel/retry.cjs`'s `_runWithRetry`). Because
+`ChatAnthropic.invoke()` is a LangChain `Runnable`, it calls `ensureConfig()` internally
+(`@langchain/core`'s `runnables/config.cjs`), which reads that AMBIENT config via `node:async_hooks`
+whenever no explicit options are passed — so `ChatAnthropic` was already, silently, cancelled by a
+side channel this file never asked for. Re-tested with a plain-object `AnthropicModel` implementation
+(`invoke: (input, options) => fetch(url, { signal: options?.signal })`, structurally identical to
+`graph.ts`'s own narrow interface but NOT a LangChain `Runnable`) through the same real
+`buildGraph`/`createServer` stack: that request genuinely never received a signal and stayed open —
+the `afterEach` hook that tries to close the local test server even timed out waiting for the
+connection to drain. That is the real, reproducible version of the bug: not specific to
+`ChatAnthropic`, but a real gap in `composeAnswer`'s own contract with the `AnthropicModel`
+interface it depends on — a future swap to any non-LangChain model implementation would have
+silently lost the (undocumented) protection `ChatAnthropic` happened to have.
+
+**What changed.**
+- `agent/src/graph.ts`: `AnthropicModel.invoke` now accepts an optional
+  `options?: { signal?: AbortSignal }` second parameter (confirmed against `@langchain/core`'s own
+  types — `BaseLanguageModelCallOptions extends RunnableConfig`, which declares `signal?:
+  AbortSignal` — and against `@langchain/anthropic`'s `chat_models.cjs`, which forwards it all the
+  way to `@anthropic-ai/sdk`'s own `messages.create(request, options)` call, the thing that actually
+  aborts the underlying fetch). The `composeAnswer` node now takes a `config: RunnableConfig` second
+  parameter and calls `model.invoke(prompt, { signal: config.signal })` — the SAME signal
+  `server.ts`'s `/chat` handler raced `graph.invoke()` against. Because that signal fires at a fixed
+  point relative to when the HANDLER started (not when `composeAnswer` happens to run), the effective
+  per-call budget is automatically whatever time is genuinely left — not a fresh
+  `anthropicWorstCaseCallMs` window that ignores how long `resolveSeed`/`expandFrontier` already
+  took. Full citation of the ambient-propagation finding above lives on this node's own comment.
+- `agent/src/config.ts`: new `AgentConfig.anthropicPreModelWorkAllowanceMs` field
+  (`ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS`, default 7,000ms — names `anthropicWorstCaseCallMs`'s own
+  "about 7s of margin" comment as a real number instead of prose) and a new exported
+  `assertAnthropicBudgetFitsHandlerDeadline(config)`, which throws when
+  `anthropicWorstCaseCallMs(anthropicRequestTimeoutMs, anthropicMaxRetries) +
+  anthropicPreModelWorkAllowanceMs` exceeds `chatHandlerTimeoutMs`. With the production defaults:
+  `18,000ms + 7,000ms = 25,000ms`, exactly `chatHandlerTimeoutMs`'s own default — fits with zero
+  slack to spare, which is why the number is now checked rather than assumed.
+- `agent/src/index.ts`: calls `assertAnthropicBudgetFitsHandlerDeadline(config)` once, at startup,
+  right after `loadConfig()` — independent of `isConfigComplete`, since all four numbers involved
+  carry real defaults regardless of whether `ANTHROPIC_API_KEY`/`SHIP_API_TOKEN` are set. A
+  misconfigured budget now crashes the process at boot rather than surfacing as a mystery timeout
+  once a real slow request hits it.
+- `agent/src/server.ts`: corrected the `/chat` handler's own comment — removed the "settled ~3s
+  after `invoke()` had already rejected" claim (disproven above) and replaced it with what was
+  actually verified, plus the one gap that DOES remain unfixed and out of this ticket's scope:
+  `ShipClientLike` (`shipClient.ts`) still does not accept or forward a signal, so a Ship HTTP read
+  already in flight when the handler aborts still runs to completion server-side.
+
+**Regression test — new, `agent/src/__tests__/composeAnswerAbortPropagation.test.ts`.** A REAL
+`buildGraph`/`createServer` stack, a fake `OnDemandShipClientLike` whose `getDocument` delays 300ms
+(simulating `resolveSeed`'s real Ship read consuming most of a 500ms `CHAT_HANDLER_TIMEOUT_MS`
+budget), and a plain-object `AnthropicModel` that does a real `fetch()` to a local `node:http` server
+that never responds. No live Anthropic or Ship call anywhere in the file. Asserts the handler returns
+504 near its own 500ms deadline (not a fresh per-attempt window), that the model call genuinely
+started (`attemptCount === 1`), and — after a 1s grace window — that the underlying connection was
+actually torn down (`req.on('close', ...)` fired on the test server).
+
+**Confirmed red before green.** Copied the fixed `agent/src/graph.ts` aside (never `git stash` — see
+`.claude/skills/ship-factory/references/lessons.md`), restored `git show HEAD:agent/src/graph.ts`
+(the unfixed `composeAnswer`, no signal forwarded), and re-ran the new test alone:
+
+```
+❯ aborts the in-flight model request once the handler times out, even though the model call only
+  started AFTER most of the budget was already spent on resolveSeed
+AssertionError: expected false to be true // Object.is equality
+- Expected: true
++ Received: false
+ ❯ src/__tests__/composeAnswerAbortPropagation.test.ts:182:29
+FAIL … Error: Hook timed out in 10000ms.
+If this is a long-running hook, pass a timeout value as the last argument or configure it globally
+with "hookTimeout".
+ ❯ src/__tests__/composeAnswerAbortPropagation.test.ts:68:3 (afterEach — hangingServer.close())
+```
+
+The `afterEach` hook itself timed out trying to close the local test server — a connection was
+genuinely still open, the literal "an Anthropic request keeps running server-side after the handler
+returns 504" symptom. Restored the fix; the same test passed, and stayed green across two more full
+runs.
+
+**How to run it.**
+`source .factory-env && pnpm --filter @ship/agent exec vitest run src/__tests__/composeAnswerAbortPropagation.test.ts src/__tests__/config.test.ts`
+— 21/21. Full package: `pnpm --filter @ship/agent test` — 496/496. `pnpm type-check` clean across
+all four packages.
+
+**Rollback.** Revert the commit. `ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS` has a default, so no env
+var needs unsetting anywhere it was never configured; the startup assertion only ever rejects a
+configuration the code already assumed was safe, so removing it changes no passing behavior. The
+`AnthropicModel.invoke` signature change is additive (new parameter is optional) and does not affect
+any other call site in the file.
+
+---
+
 ## TRO-373 — FLEETGRAPH.MD's cited cost-report command could not reproduce the published figures on a fresh clone
 
 **The cost this closes.** `FLEETGRAPH.MD`'s Cost Analysis section publishes measured figures (7

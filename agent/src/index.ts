@@ -81,7 +81,7 @@
  */
 
 import 'dotenv/config';
-import { loadConfig, isConfigComplete } from './config.js';
+import { loadConfig, isConfigComplete, assertAnthropicBudgetFitsHandlerDeadline } from './config.js';
 import { createServer, buildShipClient, buildAnthropicModel } from './server.js';
 import { buildGraph, type CompiledGraph } from './graph.js';
 import { ShipClient, GateShipClient, type GateShipClientLike } from './shipClient.js';
@@ -92,6 +92,12 @@ import { FileCostTracker } from './costTracking.js';
 import { FileDraftSurvivalTracker, type DraftSurvivalTracker } from './draftSurvival.js';
 
 const config = loadConfig();
+
+// TRO-379: fail loudly at startup rather than once a slow real request
+// exposes a budget that never held together — independent of
+// isConfigComplete (see assertAnthropicBudgetFitsHandlerDeadline's own
+// docstring for why these four fields are always checkable).
+assertAnthropicBudgetFitsHandlerDeadline(config);
 
 if (!config.langchainTracingV2) {
   console.warn(
