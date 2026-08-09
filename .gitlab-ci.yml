@@ -76,6 +76,20 @@ verify:
     # below, so CI would tell you it broke but not which test.
     - pnpm --filter @ship/api test --reporter=json --outputFile="$CI_PROJECT_DIR/api-tests.json" || true
     - pnpm --filter @ship/web test --reporter=json --outputFile="$CI_PROJECT_DIR/web-tests.json" || true
+    # TRO-369: mirrors ci.yml's own "Agent tests" step (ci.yml:131-135) — this
+    # is the platform this submission is actually graded on (assignment
+    # Submission Requirements: "GitLab Repository", see this file's own
+    # header), and until now it invoked `pnpm --filter @ship/agent build`
+    # (the e2e-agent job below) but never `pnpm --filter @ship/agent test`,
+    # so none of the six FleetGraph use cases' regression tests ran here at
+    # all. DATABASE_URL/NODE_ENV are already set at job level above (the same
+    # `variables:` block api/web use), matching ci.yml's per-step env for the
+    # same command. No `|| true`, same as ci.yml: unlike api/web, the agent
+    # suite has no quarantine baseline (per ci.yml's own comment on its
+    # equivalent step, it was fully green when that step was added), so any
+    # failure here fails the job outright rather than going through the
+    # testdiff regression check below.
+    - pnpm --filter @ship/agent test
     # The real gate: fails the job on any NEW failure vs the quarantine baseline.
     - node scripts/factory/lib/testdiff.mjs --package api --current api-tests.json --baseline audit/factory/quarantine.json --repo-root "$CI_PROJECT_DIR"
     - node scripts/factory/lib/testdiff.mjs --package web --current web-tests.json --baseline audit/factory/quarantine.json --repo-root "$CI_PROJECT_DIR"
