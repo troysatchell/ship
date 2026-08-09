@@ -140,7 +140,8 @@ sources of truth before dispatching anything new — they drift independently.
 ```bash
 git worktree list                      # what exists on disk
 git branch -a --list 'fix/*' 'feat/*'  # what has commits
-# Linear: issues in "In Progress" for project ShipShape Audit Remediation
+# Linear: issues in "In Progress" for THIS RUN'S project (look it up; do not
+# hardcode — the active project changes between sprints)
 ```
 
 Then, per worktree:
@@ -167,11 +168,19 @@ Two mechanical notes:
 
 ## 5. Board hygiene
 
-- **Never dispatch outside project `ShipShape Audit Remediation`** in team `Troysatchell`. That
-  workspace also holds an iOS app, a healthcare copilot, and a separate security audit at
-  `TRO-250`–`TRO-275`. They are not factory work.
-- **CodeRabbit-derived tickets carry the `coderabbit` label** and must never be counted toward the
-  68-finding audit baseline — that number is submitted and fixed.
+- **Never dispatch outside the run's active project** in team `Troysatchell`. As of 2026-08-08 that
+  is `FleetGraph — Week 5 Project Intelligence Agent`; `ShipShape Audit Remediation` is Week 4 and
+  closed at 121/123. **Confirm the active project at the start of every run rather than trusting
+  this line** — it is the sentence in this file most likely to be stale.
+
+  The team holds six projects, including an iOS app, a healthcare copilot, and another product's
+  security audit at `TRO-250`–`TRO-275`. Their issue numbers **interleave** with Ship's, so a
+  number range will not tell you which project a ticket belongs to. Filter by project via the API.
+  Measured 2026-08-08: scoping by number range instead reported 88 orphan tickets where the true
+  answer was 9.
+- **CodeRabbit-derived tickets carry the `coderabbit` label.** They were never counted toward Week
+  4's 68-finding audit baseline, which is submitted and fixed. Apply the same discipline to any
+  future baseline: a finding discovered by review is not part of the baseline it was found against.
 - A batched branch's PR **lists every ticket it closes**, and all of them move together: In Progress
   → In Review → Done. A batch where one ticket silently stays open is worse than no batch.
 - Escalation blocks **the ticket, not the run**. Mark it, move to the next eligible ticket, hold the

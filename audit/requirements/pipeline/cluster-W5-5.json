@@ -1,0 +1,193 @@
+{
+  "cluster": "engineering-requirements",
+  "requirements": [
+    {
+      "id": "W5-R35",
+      "verdict": "PARTIAL",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 388, "note": "Use Cases table row 1 (standup draft, Engineer)" },
+        { "file": "agent/src/__tests__/standupDraft.test.ts", "line": 116, "note": "describe('gatherPersonActivity — Test Case 1 (FLEETGRAPH.MD / TRO-319 proof #1)') — regression test for use case 1" },
+        { "file": "agent/src/__tests__/graph.test.ts", "line": 689, "note": "describe('Test Case 1 — 3 assigned issues: one moved, one commented, one stale (proof #1)') under 'buildGraph — deep tier draft composition' — end-to-end regression test for use case 1" },
+        { "file": "FLEETGRAPH.MD", "line": 389, "note": "Use Cases table row 2 (ranked inbox, Anyone)" },
+        { "file": "agent/src/__tests__/proactive.test.ts", "line": 257, "note": "describe('buildBlockingApprovalItems — routing decisions') — regression test for the blocking-approval half of use case 2" },
+        { "file": "agent/src/__tests__/mentions.test.ts", "line": 4, "note": "describe('extractPersonMentionDocIds') — regression test for the mention half of use case 2" },
+        { "file": "agent/src/__tests__/itemStore.test.ts", "line": 33, "note": "describe('InMemoryItemStore') — regression test for the ranked-list store use case 2 relies on" },
+        { "file": "FLEETGRAPH.MD", "line": 390, "note": "Use Cases table row 3 (retro draft, Engineer or PM)" },
+        { "file": "agent/src/__tests__/retroDraft.test.ts", "line": 29, "note": "describe('gatherWeekDelivery') — regression test for use case 3" },
+        { "file": "FLEETGRAPH.MD", "line": 391, "note": "Use Cases table row 4 (plan-change materiality, Director)" },
+        { "file": "agent/src/__tests__/planChangeDraft.test.ts", "line": 126, "note": "describe('gatherPlanChange') — regression test for use case 4" },
+        { "file": "FLEETGRAPH.MD", "line": 392, "note": "Use Cases table row 5 (blocker escalation fan-out, Director or PM)" },
+        { "file": "agent/src/__tests__/blockerFanout.test.ts", "line": 18, "note": "describe('gatherBlockerFanout') — regression test for use case 5" },
+        { "file": "agent/src/__tests__/graph.test.ts", "line": 855, "note": "describe('buildGraph — blocker escalation fan-out (TRO-346/TRO-337 / FG-19)') — end-to-end regression test for use case 5" },
+        { "file": "FLEETGRAPH.MD", "line": 393, "note": "Use Cases table row 6 (context-aware chat, Anyone)" },
+        { "file": "agent/src/__tests__/graph.test.ts", "line": 223, "note": "describe('buildGraph — on-demand expansion (TRO-318 / FG-7)') — end-to-end regression test for use case 6" },
+        { "file": "agent/src/__tests__/expansion.test.ts", "line": 89, "note": "describe('buildCandidatesFromDocument') — supporting unit coverage for use case 6" },
+        { "file": ".github/workflows/ci.yml", "line": 131, "note": "'Agent tests' step runs `pnpm --filter @ship/agent test`, which vitest resolves via include: ['src/**/*.test.ts'] (agent/vitest.config.ts) — this is the suite containing every file cited above" },
+        { "file": ".gitlab-ci.yml", "line": 132, "note": "GitLab's `e2e-agent` job runs `pnpm --filter @ship/agent build` only — grepped the entire file for '@ship/agent' and 'agent test': no invocation of `pnpm --filter @ship/agent test` (or any equivalent) exists anywhere in .gitlab-ci.yml. The agent unit-test suite that holds all 6 use-case regression tests never executes on GitLab CI." },
+        { "file": ".gitlab-ci.yml", "line": 1, "note": "Header comment: 'the actual submission target (assignment Submission Requirements: \"GitLab Repository\")' — GitLab, not GitHub, is this repo's own documented statement of the graded platform" }
+      ],
+      "suggested_verification": "pnpm --filter @ship/agent test (locally, or observe it running inside .github/workflows/ci.yml's 'Agent tests' step on a real CI run)",
+      "assumption": null,
+      "suggested_scope": "Add a `pnpm --filter @ship/agent test` invocation (with DATABASE_URL/NODE_ENV=test, mirroring .github/workflows/ci.yml lines 131-135) to .gitlab-ci.yml's `verify` job, so the same 6-use-case regression coverage that already runs on GitHub Actions also runs on the platform the assignment names as the actual submission target.",
+      "notes": "Mapping itself is complete: all 6 FLEETGRAPH.MD use cases have a named, real regression test (0 uncovered). Missing: on GitLab CI — this repo's own .gitlab-ci.yml states GitLab is 'the actual submission target' — the agent package's unit-test suite (which holds every one of these regression tests) is never invoked; .gitlab-ci.yml only builds the agent package for its e2e-agent job, never runs `pnpm --filter @ship/agent test`. Only GitHub Actions currently executes this suite. `scripts/factory/gate.sh` also runs it (CHANGES.md:2253) but that is a local factory eval gate, not either platform's CI."
+    },
+    {
+      "id": "W5-R36",
+      "verdict": "MISSING",
+      "evidence": [
+        { "file": "agent/src/scripts/check-readiness-and-rollback.ts", "line": 11, "note": "Module docstring: 'NOT wired into any live trigger against production in this change' — the only rollback-capable tool in the repo requires a human to invoke it manually with --execute --service-id and a RENDER_API_KEY" },
+        { "file": "agent/src/scripts/check-readiness-and-rollback.ts", "line": 178, "note": "Without --execute (the default), the script only reports and exits 2; it never calls Render" },
+        { "file": "FLEETGRAPH.MD", "line": 947, "note": "'This is the primary rollback: prevention before promotion, not correction after.' — the documented Layer 1 (CI gates merge) is explicitly described as prevention, not automatic rollback of an already-deployed build" },
+        { "file": "FLEETGRAPH.MD", "line": 1020, "note": "Layer 2 (the readiness-based corrective tool): 'Not wired to fire automatically against the live ship/ship-agent services in this change'" },
+        { "file": ".github/workflows/ci.yml", "line": 1, "note": "Grepped the entire file for 'rollback': zero matches outside one comment referencing a separate runbook (line 503) — no CI step reverts, redeploys a prior image, or calls any rollback mechanism on failure" },
+        { "file": ".gitlab-ci.yml", "line": 1, "note": "Grepped the entire file for 'rollback': zero matches — no rollback step exists in the GitLab pipeline either" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": "Wire check-readiness-and-rollback.ts --execute into an automatic trigger (a scheduled job or a CI post-deploy step) so a sustained CI/deploy failure actually redeploys the previous known-good commit without a human running the CLI by hand — this is explicitly named as not-yet-done in both the script's own docstring and FLEETGRAPH.MD.",
+      "notes": "Nothing in the repo makes a CI failure automatically roll back the deployed agent. What exists instead: (1) CI gates merge, so a failing commit never reaches `main` and is therefore never deployed at all (prevention, not rollback of a live deployment) — the repo's own FLEETGRAPH.MD says so explicitly; (2) a corrective CLI (check-readiness-and-rollback.ts) that CAN redeploy a prior commit via the Render API, fully tested (deployReadiness.test.ts, check-readiness-and-rollback.test.ts) and proven by local simulation, but is dry-run by default and, per its own docstring, deliberately not wired to any automatic trigger against the live service."
+    },
+    {
+      "id": "W5-R37",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 942, "note": "'Rollback trigger and procedure. Two layers, neither of which is a bespoke script:' — the section this requirement asks for" },
+        { "file": "FLEETGRAPH.MD", "line": 943, "note": "Layer 1 trigger/procedure: CI gates merge, Render only builds from `main`, which never receives a failing commit" },
+        { "file": "FLEETGRAPH.MD", "line": 949, "note": "Layer 2 trigger/procedure: Render's health-check-gated promotion, and its explicitly named gap (a deploy that boots but is misconfigured/can't-reach-Ship still gets promoted, because Render watches /health not /ready)" },
+        { "file": "FLEETGRAPH.MD", "line": 1000, "note": "Layer 2's gap closed with real (not auto-wired) tooling: agent/src/deployReadiness.ts's sustained-vs-transient decision function and check-readiness-and-rollback.ts's CLI, described with exact usage and what it does/does not do" },
+        { "file": "FLEETGRAPH.MD", "line": 972, "note": "Layer 1 demonstrated with a real throwaway broken PR/MR on both GitHub and GitLab, including an honestly-disclosed GitLab gap (MR pipelines never run on this project) found while proving it" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "This is a `process` requirement and clears the 'defensible decision, argued' bar: two named trigger layers, their tradeoffs, an honestly-disclosed uncovered case (the 'boots but broken' gap), and a real demonstration for each layer — not a bare heading with a sentence under it."
+    },
+    {
+      "id": "W5-R38",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "e2e/agent-detection-latency.spec.ts", "line": 31, "note": "describe('FleetGraph detection latency (use case 2 — mentions)') — E2E spec for the proactive mode" },
+        { "file": "e2e/agent-chat-grounded-response.spec.ts", "line": 27, "note": "describe('FleetGraph chat grounded response (use case 6 — on-demand expansion)') — E2E spec for the on-demand mode" }
+      ],
+      "suggested_verification": "pnpm exec playwright test e2e/agent-detection-latency.spec.ts e2e/agent-chat-grounded-response.spec.ts --workers=1 (per e2e/fixtures/agentEnv.ts's own setup requirements)",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R39",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "e2e/agent-detection-latency.spec.ts", "line": 46, "note": "A real event (a comment mentioning @Bob Martinez) is posted via the real API — 'writeAtMs' captured" },
+        { "file": "e2e/agent-detection-latency.spec.ts", "line": 87, "note": "Bounded poll loop against the real agent's GET /api/agent/inbox until the mention surfaces" },
+        { "file": "e2e/agent-detection-latency.spec.ts", "line": 128, "note": "expect(observedMs).toBeLessThan(5 * 60 * 1000) — the actual latency assertion, tied to FLEETGRAPH.MD's '<5 minutes' bar, asserted unconditionally regardless of the CI-speed poll-loop deadline used above it" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R40",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "e2e/agent-chat-grounded-response.spec.ts", "line": 40, "note": "Navigates to the seeded probe document (the entity in view) before opening chat — establishes context-aware scope" },
+        { "file": "e2e/agent-chat-grounded-response.spec.ts", "line": 52, "note": "Drives the real chat UI: fills the question, clicks Ask" },
+        { "file": "e2e/agent-chat-grounded-response.spec.ts", "line": 82, "note": "expect(chatRegion.getByText('Sources')).toBeVisible() — asserts a grounded (source-naming) response" },
+        { "file": "e2e/agent-chat-grounded-response.spec.ts", "line": 96, "note": "Asserts the sources list contains the actual seed document's own title — not a generic 'grounded' claim" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R41",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": ".github/workflows/ci.yml", "line": 290, "note": "e2e-agent job step 'Run FleetGraph agent E2E flows': `pnpm exec playwright test e2e/agent-detection-latency.spec.ts e2e/agent-chat-grounded-response.spec.ts --workers=1`" },
+        { "file": ".gitlab-ci.yml", "line": 134, "note": "e2e-agent job: identical playwright invocation of both specs" }
+      ],
+      "suggested_verification": "glab ci list --ref main -R troysatchell/ship (or equivalent) to confirm the current e2e-agent job status on the graded GitLab pipeline",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Both specs are wired into a CI job on both platforms. On the historical-gap lead: TRO-359 (memory-bank/progress.md and CHANGES.md:391-472) documents that `e2e-agent` had genuinely never passed on GitLab from the job's introduction (PR-F, commit 678d0f4) through at least 10 consecutive `main` pipelines (18007-18073) — a real vite-preview/localhost DNS-resolution platform difference, not a flake. This was root-caused and fixed (commit 2e0dce7, follow-up d949e05) and verified green on real GitLab pipelines 18139 and 18140 (job traces captured in CHANGES.md). memory-bank/activeContext.md (last updated 2026-08-07) records two later re-confirmations at newer commits: pipeline 18196 at af573d3 and pipeline 18266 at 32e54ba, both 'success' with 'e2e-agent job green.' Current HEAD (8559804) is several commits ahead of 32e54ba but none of the intervening commits touch agent/, e2e/, .github/workflows/ci.yml, or .gitlab-ci.yml (confirmed via `git diff --stat 32e54ba..HEAD`), so nothing has changed that would invalidate that last-observed-green state. I did not myself trigger or poll a live GitLab pipeline (read-only constraint) — this is derived from the repo's own dated verification records, not a fresh observation."
+    },
+    {
+      "id": "W5-R42",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/scripts/e2e-server.ts", "line": 61, "note": "fakeModel: AnthropicModel with a deterministic invoke() — 'this script never constructs a real ChatAnthropic client, so the key is never read or billed' (comment at line 41-43)" },
+        { "file": "e2e/fixtures/agentEnv.ts", "line": 418, "note": "ANTHROPIC_API_KEY: 'e2e-placeholder-not-a-real-key' — comment confirms the e2e agent process never constructs a real model client" },
+        { "file": "agent/src/__tests__/graph.test.ts", "line": 7, "note": "function fakeModel(response: string): AnthropicModel — every graph.test.ts case injects this stable fake, never a real ChatAnthropic instance" },
+        { "file": "agent/src/__tests__/shipClient.test.ts", "line": 13, "note": "new ShipClient({ baseUrl: 'https://ship.example.gov/', ..., client }) — client is an injected mock, never a real fetch/ResilientClient" },
+        { "file": "agent/src/__tests__/graphWriteBoundary.test.ts", "line": 195, "note": "The one 'fetch(' occurrence outside comments is a string literal fed into an AST parser to test a static-analysis linter — never an executed network call" }
+      ],
+      "suggested_verification": "grep -rn \"fetch(\\|smith.langchain\\|onrender.com\\|api.anthropic.com\" agent/src/__tests__ e2e/*.spec.ts and manually confirm no hit is a live call (already done by hand for this trace; a scripted check would give repeatable proof)",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "No live Ship or LLM call found anywhere in the agent unit-test suite (agent/src/__tests__/*.test.ts, all 31 files) or the two agent E2E specs. Every Ship API interaction in tests goes through an injected mock client or a fake AnthropicModel; the e2e specs spin up real api/agent/web processes against an ephemeral, per-worker scratch Postgres database (not Ship's deployed/production instance), with the LLM substituted for a deterministic fake — consistent with the brief's own carve-out that 'running against real Ship data' describes the deployed agent, not the test suite."
+    },
+    {
+      "id": "W5-R43",
+      "verdict": "PARTIAL",
+      "evidence": [
+        { "file": "agent/src/resilientClient.ts", "line": 168, "note": "get(): explicit retry loop up to retry.maxAttempts, honoring Retry-After when present" },
+        { "file": "agent/src/resilientClient.ts", "line": 226, "note": "timedFetch(): explicit timeoutMs bound via AbortController + setTimeout, throws TimeoutError" },
+        { "file": "agent/src/resilientClient.ts", "line": 263, "note": "backoffDelay(): exponential backoff (baseDelayMs * 2^(attempt-1), capped at maxDelayMs) with full jitter" },
+        { "file": "agent/src/server.ts", "line": 91, "note": "buildShipClient() wires config.shipRequestTimeoutMs and { maxAttempts: config.shipRetryMaxAttempts, baseDelayMs: 200 } into every outbound Ship API call (both the bound-token client and the on-demand per-user client factory in index.ts share this one instance)" },
+        { "file": "agent/src/index.ts", "line": 162, "note": "const model = new ChatAnthropic({ apiKey: config.anthropicApiKey, model: 'claude-haiku-4-5-20251001', maxTokens: 1024 }) — no timeout, maxRetries, or backoff option is passed; the LLM provider call is NOT routed through ResilientClient" },
+        { "file": "agent/src/server.ts", "line": 298, "note": "Code's own comment admits the gap directly: 'neither AnthropicModel.invoke(input: string) ... nor any ShipClientLike method ... accepts or forwards a signal' and a model call already in flight 'keeps running to completion server-side' after the handler's own timeout fires" },
+        { "file": "agent/package.json", "line": 1, "note": "dependencies list only @langchain/anthropic, @langchain/core, @langchain/langgraph, express, dotenv — confirms Ship API and the Anthropic LLM are the only two outbound-call classes; no other 'external tools' exist to check" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": "Route the ChatAnthropic call in agent/src/index.ts through the same explicit-timeout + exponential-backoff discipline ResilientClient already gives Ship API calls — either pass ChatAnthropic's own `timeout`/`maxRetries` constructor options explicitly (documenting the chosen values, not relying on library defaults) or wrap model.invoke() in an equivalent bounded-retry helper.",
+      "notes": "Ship API calls (via ResilientClient, shared by every ShipClient/GateShipClient instance in the package) fully satisfy this requirement: explicit timeoutMs, exponential backoff with jitter, and a circuit breaker on top. The LLM provider call (ChatAnthropic, agent/src/index.ts:162) has no explicit timeout or retry/backoff configured anywhere in this codebase — it relies entirely on whatever @langchain/anthropic's internal defaults are, which the requirement's own wording ('must implement explicit timeouts and retry logic') does not credit. There are no other external-tool outbound clients in the package."
+    },
+    {
+      "id": "W5-R44",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "agent/src/health.ts", "line": 33, "note": "checkReady(): Ship-unreachable path returns { ready: false, reason: 'ship_unreachable: ...' } from a caught, normalized error — never rethrows or hangs" },
+        { "file": "agent/src/resilientClient.ts", "line": 77, "note": "ShipUnreachableError: 'I can not reach Ship right now.' — the plain, user-safe, bounded failure every Ship-reachability failure normalizes to (native Error.cause preserves the original for logs)" },
+        { "file": "agent/src/server.ts", "line": 268, "note": "POST /chat returns 503 agent_not_configured immediately (no attempt to invoke a graph with nothing wired) when config/Ship setup is incomplete" },
+        { "file": "agent/src/__tests__/health.test.ts", "line": 40, "note": "it('is not ready when the client rejects (Ship unreachable, breaker open, timeout, etc.)') — regression test for the required behaviour" },
+        { "file": "agent/src/__tests__/resilientClient.test.ts", "line": 103, "note": "await expect(client.get(...)).rejects.toBeInstanceOf(ShipUnreachableError) — regression test proving a bounded, typed failure rather than a hang or crash" }
+      ],
+      "suggested_verification": "pnpm --filter @ship/agent test -- health.test.ts resilientClient.test.ts",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Scoped narrowly to what W5-R44 actually asks (degrade gracefully if SHIP is unreachable) — distinct from W5-R43's LLM-provider gap, which is a different outbound call. Ship-unreachable behaviour is well implemented and unit-tested: bounded by ResilientClient's timeout+retry, then normalized to ShipUnreachableError, surfaced as 503/ship_unreachable, never a raw crash or unbounded hang."
+    },
+    {
+      "id": "W5-R45",
+      "verdict": "PARTIAL",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 942, "note": "'Rollback trigger and procedure' section documents Ship-reachability degradation as part of Layer 2 ('/ready (config complete AND Ship reachable, FG-4's resilient client)')" },
+        { "file": "FLEETGRAPH.MD", "line": 477, "note": "'Reliability' subsection (under Trigger Model) documents the change-feed cursor-lag fix and that 'both of Ship's own rate limiters fail open,' requiring agent self-throttling" },
+        { "file": "FLEETGRAPH.MD", "line": 1012, "note": "'Proven by local simulation, real processes, real output' — two real agent processes (one Ship-unreachable, one healthy) run locally, /ready polled and evaluated by check-readiness-and-rollback.ts, output recorded inline" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": "Add a dedicated 'retry strategy and fallback behaviour' subsection to FLEETGRAPH.MD that names ALL outbound call classes explicitly (Ship API AND the LLM provider) and their respective timeout/backoff coverage — including disclosing the LLM-provider gap found under W5-R43 rather than leaving it undocumented — and capture a record (transcript, screenshot, or a dated memory-bank note) that the Architecture Defense's graceful-degradation demo actually happened.",
+      "notes": "Missing two things. (1) FLEETGRAPH.MD's retry/fallback documentation is scattered across the Rollback and Reliability subsections and covers only Ship-reachability degradation — it never mentions that the LLM provider call has no explicit timeout/backoff (the W5-R43 gap), so the documentation is incomplete relative to what the code actually does. (2) 'a record of the defense demonstration': memory-bank/progress.md:369 (dated 2026-08-03) flags the Architecture Defense's graceful-degradation demo as an open, unresolved item at that time ('FG-4's graceful-degradation demo must exist by then'), and no later memory-bank or CHANGES.md entry records that the defense itself was actually held or that a demonstration record was captured — only the underlying local-simulation evidence (FLEETGRAPH.MD:1012-1019) exists, which is preparation for a defense, not a record that one occurred."
+    },
+    {
+      "id": "W5-R46",
+      "verdict": "PARTIAL",
+      "evidence": [
+        { "file": "CHANGES.md", "line": 1, "note": "144 top-level (## ) entries counted across the file" },
+        { "file": "CHANGES.md", "line": 2292, "note": "TRO-322 entry: '**How to run it.**' with exact commands, and '**How to roll it back.**' with exact revert instructions — example of a complete entry (all three: what/run/rollback)" },
+        { "file": "CHANGES.md", "line": 2306, "note": "TRO-322's rollback section names exactly what is safe to revert/delete and why" },
+        { "file": "CHANGES.md", "line": 2136, "note": "'Bundle TRO-330 — [PR-F] EPIC: final status' — a rollup/status entry with no how-to-run or rollback section of its own (it instead says 'CHANGES.md appended. Both entries above.', deferring to the two complete entries that follow it)" },
+        { "file": "CHANGES.md", "line": 968, "note": "'## TRO-310 ...' example among 13 entries found carrying a run/verify description but no dedicated rollback section (heuristic scan; see notes)" }
+      ],
+      "suggested_verification": "A scripted per-entry check (split on '^## ' headers, then grep each block for a Rollback/'How to roll it back' heading and a How-to-run/verify heading or an inline pnpm/tsx/curl command) — this is what produced the counts in this note; rerunning it after any future entries land would keep the count current.",
+      "assumption": null,
+      "suggested_scope": "Add explicit 'How to roll it back' sections to the 13 entries identified as missing one (e.g. TRO-232, TRO-210, TRO-280, TRO-180, TRO-298, TRO-218+TRO-222, TRO-286, TRO-216, TRO-282, TRO-223, TRO-226, TRO-173+TRO-182, TRO-201, TRO-305, TRO-294, TRO-302, TRO-203+TRO-204), and a 'How to run/test it locally' description to the 6 entries missing that instead.",
+      "notes": "Of 144 top-level entries, 124 (~86%) carry a recognizable heading/instruction for both 'how to run and test it locally' and 'how to roll it back' (in addition to the narrative 'what was built' every entry has by construction). 13 entries have run/test instructions but no rollback section — confirming the trace-rules' expectation that rollback is the most-omitted element. 6 entries have a rollback section but no explicit run/test instructions. 1 entry ('Bundle TRO-330') has neither on its own, but it is an EPIC status rollup that explicitly defers to the two complete entries immediately following it, not an undocumented addition in its own right. This is a heuristic text-pattern count (bolded headings + inline pnpm/tsx/curl commands), not an exhaustive manual read of all 144 entries — a few borderline classifications are possible at the margins, but the overall proportions (large majority complete, rollback the more commonly missing element) should hold."
+    }
+  ],
+  "needs_ruling": []
+}

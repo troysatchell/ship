@@ -1,4 +1,4 @@
-# Requirements gaps — Ship (2026-08-08T19:21:10Z, commit a830cf77cb68)
+# Requirements gaps — Ship (2026-08-08T22:11:12Z, commit 85598041c438)
 
 Ticket coverage below is live Linear data. Each gap lists the tickets that map to it, or says none does — a gap with no ticket is the one most likely to be forgotten.
 

@@ -130,6 +130,878 @@ version this pins to in the first place).
 
 ---
 
+## TRO-367 — [W5-R36] The rollback CLI existed and was tested, but nothing automatic ever triggered it
+
+**Bundle.** Grouped with TRO-369 on branch `fix/w5-ci-rollback-and-gitlab-agent-tests` (both CI
+config); each is its own commit with its own entry here. This closes W5-R36, the only `MISSING`
+requirement in the entire Week 5 sweep (`audit/requirements/REPORT-W5.md`,
+`audit/requirements/gaps-W5.md`) — requirement text: "If a CI run fails, the deployment must be
+rolled back automatically — do not allow a failing build to remain deployed."
+
+**What was actually broken, verified before writing anything.** Not what it sounds like: CI already
+gates merge (a failing build never reaches `main`), and Render's own health-check-gated promotion
+already keeps a bad deploy that never passes `/health` from ever receiving traffic. Neither of those
+is what was missing. `agent/src/scripts/check-readiness-and-rollback.ts` (TRO-322) — a real, unit-
+tested CLI that polls `/ready`, detects a *sustained* failure (a deploy that boots but is missing
+config or can't reach Ship — the one case neither existing layer catches), and can redeploy the
+previous known-good commit via Render's API — existed and worked, but its own docstring said so
+plainly: *"NOT wired into any live trigger against production."* Confirmed directly: no cron
+workflow, no post-deploy step, nothing in `.github/workflows/` or `.gitlab-ci.yml` ever invoked it.
+TRO-322 and TRO-330 (both `Done`) built and tested the capability; neither wired a trigger.
+
+**What changed — the trigger, plus a refactor to make it provably wired rather than merely present.**
+
+1. **`agent/src/scripts/check-readiness-and-rollback.ts`: extracted `runReadinessCheck`.** Before
+   this ticket, `pollReadiness`/`evaluateReadinessSamples` (the decision) and `rollbackViaRenderApi`
+   (the action, previously a private, un-exported function returning `void`) were each tested in
+   isolation inside `main()`'s body — nothing proved they were actually wired together end to end.
+   `runReadinessCheck(args, deps)` now owns the full `poll -> evaluate -> decide -> call Render`
+   pipeline as one exported, injectable function (`RunCheckDeps`: `fetcher`, `fetchImpl`, `apiKey`,
+   optional `now`/`sleep`/`onEvaluated`), returning a `RunCheckResult` with one of five outcomes
+   (`healthy`, `transient`, `dry_run_warn`, `missing_api_key`, `rolled_back`) — **now seven; Round 2
+   below adds `monitoring_error` and `missing_service_id`.** `rollbackViaRenderApi`
+   now returns the `RenderDeploy` it redeployed instead of `void`, so a caller (or a test) can assert
+   on exactly what got rolled back to. `main()` is now a thin wrapper: real `fetch`/
+   `process.env.RENDER_API_KEY` in, console output + exit codes out — behavior-identical for the real
+   CLI (same stdout/stderr lines, same exit codes 0/1/2), verified by re-reading the diff line by
+   line against the pre-refactor version rather than assumed.
+2. **The trigger itself: `.github/workflows/agent-rollback-check.yml` (new file).** Runs on
+   `schedule:` (`cron: '*/15 * * * *'`, every 15 minutes) plus `workflow_dispatch` for a manual run.
+   `concurrency: { group: agent-rollback-check, cancel-in-progress: false }` so a scheduled tick
+   never interrupts a rollback already in flight. A first step checks that both `RENDER_API_KEY` and
+   `RENDER_AGENT_SERVICE_ID` repository secrets are set (via `env:`, never interpolated directly into
+   the shell body); if either is missing, every later step is skipped and the run emits a
+   `::warning::` annotation naming exactly what's missing and why — visible on every scheduled run,
+   never silent, never a false "failure." Once both are set, the readiness step runs
+   `pnpm --filter @ship/agent check:readiness --url https://ship-agent-t0zy.onrender.com/ready
+   --attempts 3 --interval-ms 30000 --service-id "$RENDER_AGENT_SERVICE_ID" --execute` — dry-run
+   removed, so a genuinely sustained failure now redeploys the previous live deploy without a human
+   running anything.
+3. **`FLEETGRAPH.MD`'s "Rollback trigger and procedure" section** (the W5-R37 half of this pair,
+   already satisfied in prose before this ticket) updated to state the trigger is real: what fires
+   it, what it does on a sustained failure, the two secrets it needs and why this change can't set
+   them, and — stated precisely, not implied — what remains unproven until a human provisions those
+   secrets and the first live scheduled run actually executes.
+
+**Regression tests — confirmed red for the right reason before the fix, green after.**
+- `agent/src/__tests__/check-readiness-and-rollback.test.ts` — added a `runReadinessCheck` suite
+  (6 new cases: every sample ready → `healthy`, no Render call; a single failure that recovers mid-
+  window → `transient`, no Render call even with `--execute` and a real key; sustained failure
+  without `--execute` → `dry_run_warn`, no Render call; sustained failure with `--execute` but no
+  `RENDER_API_KEY` → `missing_api_key`, no Render call; sustained failure with `--execute` and a key
+  → `rolled_back`, and asserts the exact Render calls made — `GET .../deploys?limit=20` then
+  `POST .../deploys` with `{"commitId":"good-sha"}`, the previous live deploy's commit, never the
+  current one; and one case on the `onEvaluated` callback firing exactly once before any Render
+  call). Every case injects a fake `fetcher` (never a real `/ready` request) and a fake `fetchImpl`
+  (never a real Render API call) — the dry-run/simulated-failure demonstration this ticket's HARD
+  CONSTRAINT calls for in place of a live exercise. **Confirmed red first:** restored the pre-fix
+  script via `git show HEAD:agent/src/scripts/check-readiness-and-rollback.ts` (never `git stash`),
+  ran the suite — all 6 new cases failed with `TypeError: (0 , __vite_ssr_import_1__
+  .runReadinessCheck) is not a function`, i.e. the wiring genuinely did not exist. Restored the fix;
+  all 6 passed. Full file: 15/15.
+- `agent/src/__tests__/agentRollbackWorkflow.test.ts` (new file, 4 cases) — asserts the workflow's
+  own structure: fires on `schedule:`/`cron:` (not only manual dispatch), its readiness step passes
+  `--execute` guarded by `--service-id`/`RENDER_API_KEY`/`RENDER_AGENT_SERVICE_ID`,
+  `cancel-in-progress: false`, and at least 6 steps are gated on the secrets-configured check. No
+  YAML parser (see `gitlabCiAgentTests.test.ts`'s entry below for why); plain-text/regex assertions
+  against the file. **Confirmed red first:** moved the new workflow file aside — all 4 cases failed
+  with `ENOENT: no such file or directory`, the correct signal that the trigger did not exist yet.
+  Restored it; all 4 passed.
+- Full agent suite after both additions: **34 files / 464 tests, all green**
+  (`pnpm --filter @ship/agent test`).
+
+**What was demonstrated, and what was not — stated precisely, per this ticket's HARD CONSTRAINT.**
+- **Observed, proven in this change:** the trigger exists, fires automatically and unattended (a
+  cron schedule, not a button a human clicks), and its full decision-to-action pipeline — poll,
+  evaluate sustained-vs-transient, and (only on sustained failure with `--execute` and a key) call
+  Render's documented rollback endpoint with the correct previous-commit target — is provably wired
+  together, against fakes, in a test that fails without the fix and passes with it.
+- **Not observed, explicitly not attempted, per the constraint:** no live production rollback or
+  redeploy was performed. No call — successful or not — was made to Render's real API from this
+  change. No terraform command was run. The workflow's own secret-gated design means its first real,
+  unattended exercise happens only after a human sets `RENDER_API_KEY`/`RENDER_AGENT_SERVICE_ID` on
+  the repository and the next scheduled tick fires — that run has never happened and should be
+  watched the first time it does.
+
+**How to run it.**
+```
+source .factory-env
+pnpm --filter @ship/agent test                                    # full suite, 34 files / 464 tests
+pnpm --filter @ship/agent test -- check-readiness-and-rollback     # 15/15
+pnpm --filter @ship/agent test -- agentRollbackWorkflow            # 4/4
+
+# Dry-run the CLI locally against a real (but unreachable) URL — safe, no
+# Render call, since --execute is not passed:
+pnpm --filter @ship/agent check:readiness --url https://ship-agent-t0zy.onrender.com/ready \
+  --attempts 3 --interval-ms 30000
+```
+
+**How to roll it back.** Revert this commit (and, if Round 2 below has already landed, the Round 2
+commits too — `git log --oneline -- agent/src/scripts/check-readiness-and-rollback.ts
+.github/workflows/agent-rollback-check.yml` finds all of them). `.github/workflows/agent-rollback-
+check.yml` is a new, additive file — deleting it removes the trigger entirely with no other workflow
+depending on it. `runReadinessCheck`/the `rollbackViaRenderApi` return-type change are internal to
+`check-readiness-and-rollback.ts`, which is not imported by any production code path (`index.ts`
+never imports it) — reverting is safe and affects only this script and its own tests. The
+`FLEETGRAPH.MD` edit is confined to the "Rollback trigger and procedure" section.
+
+**Round 2 (CodeRabbit review, PR #157) — six findings, all on the automatic-rollback path, the code
+with autonomous authority to redeploy production. One theme: the trigger could fire wrongly, or
+hang, or be proven by a test that could not actually tell.**
+
+1. **(Major) `pollReadiness` recording a thrown fetch as `ready: false` let a network outage roll
+   back a healthy service.** `evaluateReadinessSamples` cannot tell "the service said 503" from "we
+   never reached the service" — both are `ready: false` to it. A GitHub-to-Render DNS blip during the
+   scheduled poll would therefore look identical to a sustained application failure and trigger a
+   real redeploy of a service that was never actually broken — the automation causing an outage in
+   response to its own blindness. Fixed in `runReadinessCheck`: when every sample's `reason` starts
+   with `fetch_failed` (i.e., not even one sample got a real response from the service), a new
+   `monitoring_error` outcome is returned before any of the `--execute`/`apiKey`/`serviceId` branches
+   run — `rollbackViaRenderApi` is never reached. A sample set that mixes a fetch failure with a real
+   503 is deliberately NOT treated as `monitoring_error` (the service did respond at least once, which
+   is a real signal) — covered by its own test.
+2. **(Major) The production `/ready` fetcher had no timeout.** Ironic given this same wave's PR #156
+   exists because a different outbound call had none. `main()`'s fetcher now passes
+   `{ signal: AbortSignal.timeout(READINESS_POLL_TIMEOUT_MS) }` (10s, documented inline) so a stalled
+   request rejects instead of hanging for the workflow's `timeout-minutes: 10`. The rejection is
+   recorded by `pollReadiness` as `fetch_failed` same as any other fetch error, which after fix 1
+   correctly resolves to `monitoring_error`, not a rollback.
+3. **(Minor) `--execute` with no `serviceId` reached `rollbackViaRenderApi` via a bare `as string`
+   cast.** `parseArgs` already refuses this combination at the CLI boundary, but `runReadinessCheck`
+   takes a `ParsedArgs` object directly and a caller that builds one by hand (as a test now does)
+   could still set `execute: true` with `serviceId: undefined`. Replaced the cast with
+   `if (!args.serviceId) return { outcome: 'missing_service_id', ... }` before the call — TypeScript
+   narrows `args.serviceId` to `string` for the actual `rollbackViaRenderApi(...)` call with no
+   assertion needed. No non-null `!`, no `as any`/`as unknown as` (both mechanically banned in this
+   repo).
+4. **(Major) `agentRollbackWorkflow.test.ts`'s `--execute` assertion matched this workflow's own
+   header comment, not the real command.** The header narrates the invocation in prose —
+   "calls `check-readiness-and-rollback.ts --execute`" — so `expect(workflow).toMatch(/--execute\b/)`
+   against the WHOLE file kept passing even with `--execute` deleted from the actual `run:` line,
+   satisfied by the comment alone. Added `extractStepRunCommand(workflow, stepName)`, which isolates
+   the named step's `run: |` block by indentation and strips `#`-comment lines, and rescoped the
+   `check:readiness`/`--execute`/`--service-id` assertions to that non-comment slice. **Confirmed the
+   old test was genuinely vacuous, then confirmed the new one is not:** temporarily deleted the
+   trailing `--execute` from the real `run:` block (`git show HEAD:<path>` kept aside for restore,
+   never `git stash`) and reran — failed with
+   `AssertionError: expected '          pnpm --filter @ship/agent c…' to match /--execute\b/`
+   (1 failed, 5 passed). Restored the line; 6/6 passed again.
+5. **(Major + Minor, security) `.github/workflows/agent-rollback-check.yml`'s `actions/checkout@v4`
+   had no `persist-credentials: false`, and `actions/checkout@v4`/`actions/setup-node@v4` were pinned
+   to a moving tag, not a commit SHA** — inconsistent with `pnpm/action-setup`'s own SHA-pinning two
+   lines below in the same file, and a real exposure on a workflow that carries `RENDER_API_KEY`.
+   Added `persist-credentials: false` to the checkout step (this job only reads files, never pushes)
+   and pinned both actions to their current `v4.4.0` release commit, with the version in a trailing
+   comment matching the existing convention:
+   `actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0` and
+   `actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0` (both SHAs resolved directly
+   from `gh api repos/actions/<name>/git/refs/tags/v4.4.0`, not typed from memory).
+6. **(Minor) The `onEvaluated`-before-Render-call test used healthy samples with no `--execute`, so
+   no Render call ever happened — it could prove `onEvaluated` fired, never that it fired BEFORE a
+   rollback.** Rewrote it to use a sustained-failure `--execute` case that genuinely reaches
+   `rollbackViaRenderApi`, with `onEvaluated` and every `fetchImpl` call pushing into one shared,
+   ordered array; asserts `events).toEqual(['onEvaluated', 'fetchImpl:1', 'fetchImpl:2'])`.
+
+**New/changed regression tests, `check-readiness-and-rollback.test.ts` — confirmed red against the
+pre-Round-2 source before the fix, green after (restored via a copied-aside pre-fix file, never `git
+stash`):** `monitoring_error` on all-fetch-failure samples (fails on old code with
+`TypeError: Cannot read properties of undefined (reading 'ok')` — old code proceeded into
+`rollbackViaRenderApi` and called the test's unmocked `fetchImpl`, which is exactly the erroneous
+Render call this fix prevents); a mixed fetch-failure + real-503 case asserting `dry_run_warn`, not
+`monitoring_error` (guards against over-broadening fix 1); `missing_service_id` on a hand-built
+`ParsedArgs` with `execute: true, serviceId: undefined` (same `TypeError` on old code, same reason);
+the rewritten callback-ordering test. File: **18/18** (was 15/15). `agentRollbackWorkflow.test.ts`
+gained a 2-case self-check for `extractStepRunCommand` (finds the step, excludes the header comment;
+throws on an unknown step name): **6/6** (was 4/4). Full agent suite: **34 files / 469 tests, all
+green** (was 464). `pnpm --filter @ship/agent type-check`: clean.
+
+**What Round 2 changes about what was demonstrated.** The original "what was/wasn't observed" section
+above still holds — no live Render call, no live rollback, ever, in any of this. What changes: the
+`agentRollbackWorkflow.test.ts` proof that the workflow really passes `--execute` was weaker than
+described until fix 4 — it could have passed with `--execute` silently removed from the real command,
+because the assertion matched the file's own header comment instead. That is now closed.
+
+---
+
+## TRO-369 — [W5-R35] The agent's regression tests never ran on GitLab, the platform this submission is graded on
+
+**Bundle.** Grouped with TRO-367 on branch `fix/w5-ci-rollback-and-gitlab-agent-tests` (both CI
+config); each is its own commit with its own entry here.
+
+**What was actually broken, verified before writing anything.** `.gitlab-ci.yml`'s own header states
+GitLab is "the actual submission target" (assignment Submission Requirements: "GitLab Repository").
+Read both CI files fully before touching either, per the ticket's own instruction, rather than
+assuming line numbers: `.gitlab-ci.yml` contained exactly one `@ship/agent` filter line —
+`pnpm --filter @ship/agent build` — and it lives inside the `e2e-agent` job (then line 132, confirmed
+by direct read of the file, not inferred), never inside `verify`, and never `pnpm --filter @ship/
+agent test` anywhere. `.github/workflows/ci.yml:131-135` runs `pnpm --filter @ship/agent test` inside
+the `verify` job with `DATABASE_URL`/`NODE_ENV: test`. So on GitHub, all six FleetGraph use cases'
+regression tests run and pass; on GitLab, the platform this submission is actually graded from, the
+agent package had zero test coverage running at all — not degraded, not partial, genuinely zero.
+
+**What changed.** `.gitlab-ci.yml`'s `verify` job `script:` gained one new line,
+`pnpm --filter @ship/agent test`, placed after the existing api/web test steps and before the
+testdiff regression check, with a comment explaining the fix and why it carries no `|| true` (unlike
+api/web, the agent suite has no quarantine baseline to diff against — per `ci.yml`'s own comment on
+its equivalent step, it was fully green when that step was first added, so any failure here is meant
+to fail the job outright). No new job, no new service container: `verify`'s existing `postgres:15-
+alpine` service and job-level `variables: { DATABASE_URL: "$CI_DATABASE_URL", NODE_ENV: test }`
+already cover this step — the same `DATABASE_URL`/`NODE_ENV` env `ci.yml:131-135` sets per-step,
+here already active for the whole job. `e2e-agent`'s own `pnpm --filter @ship/agent build` is
+unchanged and still correct: it builds the compiled agent for the Playwright flows that job runs, a
+genuinely different need from the vitest suite (which runs against TS source directly, no build
+step, matching how `ci.yml`'s own "Agent tests" step needs no preceding `pnpm --filter @ship/agent
+build` either).
+
+**Regression test — confirmed red for the right reason before the fix, green after.**
+- `agent/src/__tests__/gitlabCiAgentTests.test.ts` (new file, 6 cases). No YAML parser: neither
+  `js-yaml` nor `yaml` is a declared dependency of any package in this repo (both appear only
+  transitively, under lint/build tooling — see the root `package.json`'s own `js-yaml` override
+  comment), and `require.resolve('yaml')` from inside `agent/` only resolves via this machine's
+  global `/Users/troy/node_modules` — not portable to CI, so not usable in a test the gate runs
+  there. Instead, `extractJobBody(yaml, jobName)` slices a named top-level job's own text block
+  (every line indented under its `<name>:` header, stopping at the first non-blank unindented line —
+  this file's own 2-space-indent convention makes that boundary exact) and asserts against that
+  slice, so a match counts only if it is actually inside the named job. Cases: two self-checks on
+  the slicer itself (finds `verify`, correctly excludes `e2e-agent`'s content — using `stage: e2e` as
+  the boundary marker rather than the substring `"e2e-agent"`, which `verify`'s own new comment
+  legitimately references by name; throws on an unknown job name); `verify` invokes
+  `pnpm --filter @ship/agent test`; `verify` sets `DATABASE_URL`/`NODE_ENV: test`; the agent test
+  line carries no `|| true`; `e2e-agent` still builds but never tests the agent package. **Confirmed
+  red first:** restored the pre-fix `.gitlab-ci.yml` via `git show HEAD:.gitlab-ci.yml` (never `git
+  stash`), ran the suite — 2 of 6 cases failed with real `AssertionError`s (`expected [structure] to
+  match /pnpm --filter @ship\/agent test\b/`, and `expected an agent test line inside the verify job:
+  expected undefined to be defined`), the other 4 correctly already passing (they assert pre-existing
+  structure this ticket didn't need to change). Restored the fix; all 6 passed.
+- **Independently validated with a real YAML parser** (Python's `yaml`, available on this machine,
+  used only for one-off validation per the ticket's own instruction — not added as a project
+  dependency): `yaml.safe_load('.gitlab-ci.yml')` parses without error, and
+  `doc['verify']['script']` contains `'pnpm --filter @ship/agent test'` as its own list item (no
+  `|| true` suffix), with `doc['verify']['variables'] == {'DATABASE_URL': '$CI_DATABASE_URL',
+  'NODE_ENV': 'test'}` — confirms the hand-written vitest slicer's result matches a real parser's,
+  independently.
+- Full agent suite after this addition: **34 files / 464 tests, all green**
+  (`pnpm --filter @ship/agent test`).
+
+**What was not verified.** This change was proven by static assertion (the file's own structure) and
+independent YAML parsing, not by an actual GitLab pipeline run — this worktree has no credentials to
+trigger one, and doing so is outside this ticket's scope. The next push to GitLab is the first real
+confirmation that `verify` executes the agent suite there.
+
+**How to run it.**
+```
+source .factory-env
+pnpm --filter @ship/agent test                          # full suite, 34 files / 464 tests
+pnpm --filter @ship/agent test -- gitlabCiAgentTests     # 6/6
+
+# One-off structural validation with a real YAML parser (not a project dependency):
+python3 -c "import yaml; d = yaml.safe_load(open('.gitlab-ci.yml')); print(d['verify']['script'])"
+```
+
+**How to roll it back.** Revert this commit (and the Round 2 commit below, if it has landed — same
+two files). The change is a single added line (plus its explanatory comment) inside `.gitlab-ci.yml`'s
+`verify` job and one new, additive test file — removing the line returns GitLab CI to its pre-TRO-369
+shape with nothing else depending on it.
+
+**Round 2 (CodeRabbit review, PR #157) — finding 4 of six on that PR; the other five are on
+`check-readiness-and-rollback.ts`'s TRO-367 side, see that entry's own Round 2.**
+
+**What was wrong, and why the original red-before-green cycle above did not catch it.** The comment
+this ticket itself added just above the real invocation (lines 79-91 above) narrates the before/after
+in prose and, in doing so, contains the literal substring `` `pnpm --filter @ship/agent test` `` —
+inside a NEGATION ("...it invoked `pnpm --filter @ship/agent build` ... but never `pnpm --filter
+@ship/agent test`"). The two assertions this ticket added
+(`expect(verifyBody).toMatch(/pnpm --filter @ship\/agent test\b/)` and the `|| true` check reusing
+the same unanchored match) did not distinguish that comment line from the real
+`- pnpm --filter @ship/agent test` script entry seven lines below it — `.find()` returns the FIRST
+match, which is the comment. This was invisible to this ticket's own red-before-green proof because
+both the comment and the real line were ADDED IN THE SAME CHANGE: before this ticket, `.gitlab-ci.yml`
+had neither, so removing the whole diff correctly turned both tests red. The vacuousness only becomes
+exploitable for a FUTURE regression, after this ticket's comment is already permanently in the file:
+someone could delete just the real script entry on line 92 later, leaving the (accurate, on-its-own)
+comment above it in place, and both tests would keep passing — the exact defect class this repo's
+audit exists to eliminate, doubly serious here because this file is the *only* proof TRO-369's GitLab
+invocation is real.
+
+**Fix.** Added `AGENT_TEST_LIST_ENTRY = /^\s*-\s+pnpm --filter @ship\/agent test\b/m` — anchored to an
+actual YAML list-item prefix (`` `-` `` and space), which a `#`-comment line can never satisfy — and used it for both
+the "invokes the test command" assertion and the `|| true` line lookup (previously two different,
+both-unanchored regexes). **Confirmed the old tests were genuinely vacuous, then confirmed the new
+ones are not:** temporarily deleted the real `- pnpm --filter @ship/agent test` line (comment above it
+left untouched, `git show HEAD:.gitlab-ci.yml` kept aside for restore, never `git stash`) and reran —
+both affected cases failed:
+
+```text
+AssertionError: expected '  extends: .node_env\n  stage: verify…' to match /^\s*-\s+pnpm --filter @sh…/agent test\b
+AssertionError: expected a real `- pnpm --filter @ship/agent test` list entry inside the verify job: expected undefined to be defined
+```
+
+(2 failed, 4 passed — the other 4 cases correctly kept passing, since they assert structure this fix
+didn't touch). Restored the line; 6/6 passed again. Full agent suite after: **34 files / 469 tests, all
+green** (was 464 at this ticket's original landing). `pnpm --filter @ship/agent type-check`: clean.
+
+**What this changes about what the original entry proved.** The "confirmed red for the right reason
+before the fix, green after" claim above (this ticket's own red-before-green cycle) is still true as
+stated — it correctly caught the missing feature at the time. What it did NOT prove, and what the
+original entry did not say either way, is that the test would keep catching a *later* regression of
+the same command. It would not have, until this Round 2 fix.
+
+---
+
+## TRO-366 — FleetGraph's cost figures were 3x stale, and one sentence flatly contradicted the ledger sitting next to it
+
+**The cost this closes.** A grader running the exact command `FLEETGRAPH.MD`'s own Cost Analysis
+section names as its reproduction method got real numbers this file no longer matched: published
+3 invocations / $0.001922 total spend vs. the ledger's actual 7 / $0.006055 (a 3x understatement),
+and `composeAnswer`'s published cost/run ($0.000852) was stale too (actual $0.000876, now over 6
+priced runs instead of 2). Separately, one sentence — "`composeStandupDraft` still has zero real
+invocations" — was flatly false: the ledger's newest entry, timestamped 2026-08-07, IS a real
+`composeStandupDraft` invocation. That sentence appeared twice (Cost Analysis, and again in the
+Graph Diagram section's reasoning for why no trace exists for the `proactive_deep` chain).
+
+**What was NOT wrong, checked before touching anything.** The measurement methodology itself: a real
+per-invocation ledger (`agent/.cache/cost-ledger.jsonl`, `costTracking.ts`'s `FileCostTracker`)
+written by `graph.ts`'s `recordInvocation`, cross-checked against LangSmith. Measured vs. projected
+figures are correctly kept separate. Only the transcribed numbers (and the one now-false sentence)
+were stale — the cost section's structure is unchanged.
+
+**What changed — `FLEETGRAPH.MD` only, no code.**
+- "Last updated" banner: August 7 → August 8, 2026.
+- Cost Analysis: added a "Refreshed (TRO-366, 2026-08-08)" block with fresh figures reproduced
+  verbatim from `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` — 7 invocations,
+  1,860 input / 839 output tokens, $0.006055 total; `composeAnswer` 6 invocations @ $0.000876/run,
+  avg 6.50 documents pulled (12, 12, 12, 1, 1, 1); `composeStandupDraft` 1 invocation @
+  $0.000798/run. States plainly that the total does NOT include the original `respond` tier's
+  $0.000218 (that record is not present in the ledger this table was read from — disclosed as an
+  open gap, not papered over) and that the ledger now spans two calendar days, not one. The original
+  FG-21/FG-13 tables are left in place as dated history, not deleted.
+- Deleted the false "zero real invocations" sentence in both places it appeared and replaced it with
+  what is actually true: one real invocation exists (2026-08-07), but no scheduler exists to trigger
+  `proactive_deep` for a real person on any ongoing basis — a different, still-true claim this file
+  had conflated with "zero invocations."
+- Added a regression test (`agent/src/__tests__/fleetgraphCostFigures.test.ts`) that writes a frozen
+  fixture ledger — the same seven records (six `composeAnswer`, one `composeStandupDraft`) the
+  document now cites — via `FileCostTracker`, then calls `costTracking.ts`'s real `aggregate`/
+  `aggregateByNode` functions directly (the same ones `cost-report.ts` itself calls) and asserts the
+  result against the figures parsed straight out of `FLEETGRAPH.MD`. **Correction (CodeRabbit review,
+  PR #156, finding 3):** this entry originally said the test "runs `cost-report.ts`" — it does not;
+  it calls `aggregate`/`aggregateByNode` directly against the fixture, never shelling out to or
+  importing the script itself. Asserting against a frozen fixture rather than driving the actual CLI
+  is deliberate, not a shortcut: it is what keeps the test independent of host state (this worktree's
+  own `.cache/cost-ledger.jsonl` does not exist — see the Configuration note below), so the test's
+  design is correct as written and was not changed to match this now-corrected sentence.
+
+**Configuration note (provenance).** This ticket's own factory worktree (`Ship-wt-tro_366`) is
+freshly branched from `main` and has made zero real Anthropic API calls — its own
+`agent/.cache/cost-ledger.jsonl` does not exist, and running the report command inside it prints
+"No invocations recorded yet." The published figures were reproduced by pointing `cost-report.ts` at
+the project's long-lived development checkout's ledger (via `--ledger <path>`, a read-only operation
+— nothing was written to that checkout), which is where every real invocation across this sprint's
+FleetGraph tickets has actually accumulated. Stated explicitly because it is exactly the kind of
+environment-dependent fact this project's provenance rules ask to be surfaced, not assumed away.
+
+**How to verify.** `pnpm --filter @ship/agent exec vitest run src/__tests__/fleetgraphCostFigures.test.ts`.
+Manually: `source .factory-env && pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts --
+--ledger <path to a checkout with real ledger history>` and compare against `FLEETGRAPH.MD`'s
+"Refreshed (TRO-366...)" table.
+
+**Rollback.** Revert the commit. Documentation and test-only; no schema, code, or runtime behavior
+changes.
+
+---
+
+## TRO-368 — The LLM-provider call had no timeout or retry/backoff; a hung Anthropic call ran forever server-side
+
+**The cost this closes.** The brief requires explicit timeouts and retry logic with exponential
+backoff on every outbound call class, naming LLM providers specifically. Ship API calls were already
+compliant (`resilientClient.ts`: explicit `timeoutMs`, retry with backoff + jitter, a circuit
+breaker). The LLM call was not: `agent/src/index.ts:162` (pre-fix) constructed
+`new ChatAnthropic({ apiKey, model, maxTokens })` with no `timeout` and no `maxRetries`, silently
+inheriting `@anthropic-ai/sdk`'s own 10-**minute** default timeout and `AsyncCallerParams`' 6-retry
+default. `server.ts`'s own `/chat` handler comment already conceded the consequence: a hung model
+call "keeps running to completion server-side" even after the handler's own `chatHandlerTimeoutMs`
+(25s) gives up *waiting* for it, because the `AbortSignal` that bounds the handler never reaches
+inside a single in-flight `AnthropicModel.invoke()` call. The gap mattered even more for
+`composeStandupDraft`/`composeBlockerEscalation`/`composeRetroDraft`/`composePlanChangeDraft`, which
+share the same model instance but run outside any HTTP handler at all once a scheduler exists to
+trigger them — nothing bounded those calls either.
+
+**What changed.**
+- `agent/src/config.ts`: two new explicit `AgentConfig` fields, `anthropicRequestTimeoutMs` (default
+  20,000ms) and `anthropicMaxRetries` (default 2 — three total attempts, matching
+  `resilientClient.ts`'s own `DEFAULT_RETRY_MAX_ATTEMPTS` for Ship's idempotent reads), each with a
+  docstring explaining why that number and not the library's own inherited default.
+- `agent/src/server.ts`: new exported `anthropicModelParams(config)`/`buildAnthropicModel(config)` —
+  the one place this package decides what a real `ChatAnthropic` is configured with, so the
+  production wiring and the regression test below share exactly one definition. `maxRetries` maps to
+  `@langchain/core`'s own `AsyncCaller` (exponential backoff + jitter via `p-retry`, verified by
+  reading `async_caller.cjs`); `timeout` is forwarded via `clientOptions.timeout` — the only place
+  `@langchain/anthropic` exposes a per-request timeout (`AnthropicInput` has no top-level `timeout`
+  field, verified by reading `chat_models.d.ts`/`.cjs` directly).
+- `agent/src/index.ts`: now calls `buildAnthropicModel(config)` instead of constructing
+  `ChatAnthropic` inline.
+- All seven other `ChatAnthropic` construction sites in `agent/src/scripts/` (`trace-invoke.ts`,
+  `trace-invoke-on-demand.ts`, `trace-invoke-retro.ts`, `trace-invoke-plan-change.ts`,
+  `trace-invoke-escalation.ts`, `trace-invoke-deep.ts`, `golden-set-compare.ts`) — one-off manual
+  CLI tools, checked as the ticket asked — now set the same explicit `maxRetries`/
+  `clientOptions.timeout` values too, so the whole package is consistent rather than only the
+  server path being configured.
+- `FLEETGRAPH.MD`: new "Outbound Call Resilience" subsection (under Architecture Decisions) naming
+  every outbound call class this package makes — Ship API, LLM provider, and confirming (by grep) no
+  third external-tool class exists — with each one's timeout/backoff coverage in one table.
+
+**Regression test — new, `agent/src/__tests__/server.test.ts`.** Four `it()` cases in a new
+`describe('anthropicModelParams / buildAnthropicModel (TRO-368)', ...)` block assert the constructed
+params carry the explicit, configured `timeout`/`maxRetries` values (not the library's defaults of
+10 minutes / 6 retries), that they come from config rather than a hardcoded literal, that the real
+constructed `ChatAnthropic` instance's own public `clientOptions.timeout` reflects it, and that
+unset env vars fall back to the chosen defaults rather than an unset field. (`maxRetries` is asserted
+at the params layer, not read back off the instance — `@langchain/core`'s `AsyncCaller.maxRetries`
+is a `protected` field in the library's own `.d.ts`, not safely readable from outside without a cast
+this repo bans.) Two `config.test.ts` assertions cover the new `AgentConfig` fields' defaults and
+explicit-env wiring.
+
+**Confirmed red before green.** Reverted `config.ts`/`server.ts`/`index.ts` to their pre-fix `HEAD`
+state (via `git checkout --`, restored after from a captured patch — never `git stash`) and re-ran
+the new tests: 6 failures. Two in `config.test.ts` were genuine `AssertionError`s (`expected
+undefined to be 20000`, and a `toEqual` diff missing the two new keys). Four in `server.test.ts` were
+`TypeError: anthropicModelParams is not a function` / `buildAnthropicModel is not a function` — the
+correct "red" for a capability that did not exist yet on `HEAD`, not a broken/mistyped test (the
+other 39 pre-existing tests in the same two files still passed on the reverted code, confirming the
+failures were isolated to the new assertions). Restored the fix; same tests now pass, 45/45 across
+both files.
+
+**How to run/test it.** `source .factory-env && pnpm --filter @ship/agent exec vitest run
+src/__tests__/server.test.ts src/__tests__/config.test.ts` — 45/45. Full package:
+`pnpm --filter @ship/agent test` — 452/452. `pnpm type-check` clean across all four packages.
+
+**Rollback.** Revert the commit. No schema change, no new env var is required (both have defaults),
+no behavior change for any caller of `buildShipClient`/Ship-side clients.
+
+---
+
+## TRO-370 — FLEETGRAPH.MD described two agent capabilities the code does not have
+
+**The cost this closes.** Two claims in `FLEETGRAPH.MD` described a smaller system than actually
+exists, both verified directly against source before touching the document (per this ticket's own
+instruction — no invented work):
+- **W5-R9.** The Agent Responsibility section listed "linking a document to the issue or week it
+  refers to, when the reference is unambiguous" as one of four actions the agent takes without
+  approval, with no caveat marking it as forward-looking (unlike other aspirational statements
+  elsewhere in the file). Grepped `agent/src`: no write to `document_associations` on any path, and
+  `shipClient.ts`'s entire write surface is `postStandup`/`setStandupContent`/`applyIssueTransition`
+  — nothing resembling a link-creation call. Zero implementation.
+- **W5-R11.** The role-derivation section presented a Director/PM/Engineer table as settled fact.
+  `agent/src/roles.ts`'s own module docstring disclaims it directly: "FLEETGRAPH.MD's
+  Director/PM/Engineer taxonomy is real but not needed by anything in this ticket's scope... left
+  for whichever later FG ticket routes an escalation or needs to tell a Director apart from a PM."
+  Only single-hop/full-chain manager-lookup functions (`findManagerUserId`/`findManagerChain`) exist
+  — real, tested, and used for escalation routing — never the three-role taxonomy itself.
+  Separately, the Deployment Model section's identity claim ("every token belongs to a real user...
+  it can reach anything you could reach, and nothing you could not") was a blanket statement that
+  predates TRO-342: the on-demand tier does run under a fresh per-request token bound to the asking
+  person, but the proactive (fast/steady) and deep tiers still run under ONE shared token by explicit
+  design (`index.ts`'s `ProactiveDeps`/`DeepDeps` wiring — neither trigger has a per-invocation
+  asking person to source a token from), and the document never said so.
+
+**Fix — caveat, not implement**, per the ticket's own guidance (implement only if genuinely trivial;
+neither capability is). An accurate document describing a smaller system beats a confident one
+describing a fiction.
+
+**What changed — `FLEETGRAPH.MD` only, no code.**
+- The "linking a document" bullet now carries an explicit "not yet built" marker with the grep
+  evidence inline, and distinguishes it from the other three actions in the same list, which ARE
+  implemented and correctly sit outside `gate.ts`.
+- The Director/PM/Engineer table now carries a "not yet built — this table is a design, not a
+  running taxonomy" note quoting `roles.ts`'s own docstring, and states precisely what IS
+  implemented (`findManagerUserId`/`findManagerChain`) and what it cannot answer.
+- The "There is no service account" identity claim now names the two token regimes separately —
+  on-demand's per-request token vs. proactive/deep's one shared token — and states plainly that a
+  proactive draft about one person is read/written under the shared token's own visibility and
+  permissions, not that person's.
+
+**Regression test — explicit exception, not fabricated.** No robust mechanical test exists for "does
+a markdown paragraph correctly describe the absence of a feature," and this ticket's own guidance is
+not to fabricate a brittle one to satisfy the check. TRO-368's `server.test.ts`/`config.test.ts`
+additions and TRO-366's new `fleetgraphCostFigures.test.ts` (both in this same branch) satisfy the
+branch-level `regression-test` gate check mechanically; this ticket's own proof is the two source
+greps and the `roles.ts` docstring read, transcribed into `FLEETGRAPH.MD` and into this entry, and
+re-checkable by anyone with `grep`.
+
+**How to verify.** `grep -rn "createAssociation\|linkDocument" agent/src` (no hits outside this
+entry/`FLEETGRAPH.MD` itself); read `agent/src/roles.ts:1-9`; read `agent/src/index.ts`'s
+`onDemandShipClientFactory` vs. the shared `shipClient` passed to `proactiveDeps`/`deepDeps`.
+
+**Rollback.** Revert the commit. Documentation-only; no schema, code, or runtime behavior changes.
+
+---
+
+## TRO-371 — 13 CHANGES.md entries reported missing rollback instructions — reconciled to the real count: 1, plus 7 missing run/test
+
+**The sweep's own numbers, checked against the file rather than assumed.** The ticket cited a sweep
+finding "13 of 144 entries missing a rollback section" for a specific list of 14 ticket IDs
+(TRO-232, TRO-210, TRO-280, TRO-180, TRO-298, TRO-286, TRO-216, TRO-282, TRO-223, TRO-226, TRO-201,
+TRO-305, TRO-294, TRO-302), plus "6 missing run/test instructions" with no list given, and explicitly
+asked for the count to be reconciled against the file rather than trusted. Read all 14 named entries
+in full: **every one of them already had a rollback section** — under `**Roll back.**`, `**Rollback.**`
+or `**How to roll it back.**`, not always the exact phrasing the sweep's tool was apparently searching
+for, but genuine, complete rollback procedures in every case. The real rollback-missing count across
+all 144 entries is **1**, not 13, and it is a ticket not on the sweep's list at all: `Bundle TRO-330 —
+[PR-F] EPIC: final status`, a bundle-summary entry with no rollback statement of its own (it does
+contain the word "rollback" inside an unrelated bulleted claim about a *different* ticket's own
+work, which is almost certainly what fooled a keyword-only sweep).
+
+**Two of the 14 named tickets (TRO-294, TRO-302) were real gaps, just miscategorized** — both had a
+rollback section but no dedicated run/test section. Reading every other entry in the file the same
+way (cross-checked against `scripts/factory/merge-changes.mjs --check`'s own `RUN_RE`/`ROLLBACK_RE`,
+a pre-existing, narrower, non-fatal heuristic already in this repo, then hand-verifying every one of
+the ~20 entries it warns about) found **7** entries with no run/test content anywhere, under any
+heading: TRO-359, TRO-360, `Bundle TRO-330`, TRO-325, TRO-293, TRO-294, TRO-302. The sweep's "6" was
+close in count but named none of these specifically as far as could be reconstructed. `Bundle
+TRO-330` needed both elements; the other six needed only run/test.
+
+**What changed — CHANGES.md, mechanical additions only.** Added a `**How to verify.**` or
+`**How to run it.**` section to TRO-359, TRO-360, `Bundle TRO-330`, TRO-325, TRO-293, TRO-294 and
+TRO-302, and a `**Rollback.**` section to `Bundle TRO-330` (pointing at its two sub-issues' own
+procedures, which are the real, non-duplicated source of truth). No existing entry's content was
+rewritten or reformatted — every addition is new text appended before that entry's closing `---`,
+verified against `git diff` to be additive only. The 12 other originally-named tickets were left
+untouched: they were never missing anything.
+
+**Regression test — `web/src/lib/changesLogSections.test.ts`** (new). Parses CHANGES.md into its
+144 `## `-delimited entries and asserts every one has (a) a description of what was built, (b) a
+run/verify/test section, and (c) a rollback section — matching the real heading vocabulary already
+in use in this file (`How to run it.`, `How to verify.`, `How to reproduce.`, `How to re-capture.`,
+`Run it.`, `Verification.`, `Verified nothing broke`, a `Tests:` heading, or a fenced command block
+with no heading at all; `Rollback.`, `Roll back.`, `Rollback:`, `How to roll it back.`), deliberately
+more permissive than `merge-changes.mjs`'s own narrower heuristic so it does not cry wolf on a
+legitimately-documented entry and get disabled. Confirmed red first, for the right reason: run
+against the pre-fix file (`git show HEAD:CHANGES.md`, copied aside — never `git stash`, per this
+project's standing rule), it failed with two `AssertionError`s naming the exact offending entries:
+`1 entr(y/ies) have no rollback section: ## Bundle TRO-330 — [PR-F] EPIC: final status` and
+`7 entr(y/ies) have no run/test instructions: ## TRO-359 ... | ## TRO-360 ... | ## Bundle TRO-330 ...
+| ## TRO-325 ... | ## TRO-293 ... | ## TRO-294 ... | ## TRO-302 ...` — not an import error or a typo.
+Restored the fixed file; all 4 test cases (parser sanity check, "what was built," rollback, run/test)
+pass.
+
+**How to run it.**
+
+```bash
+node scripts/factory/merge-changes.mjs --check CHANGES.md   # structural check; exits 0
+pnpm --filter @ship/web exec vitest run src/lib/changesLogSections.test.ts
+```
+
+**How to roll it back.** `git revert` this commit. That removes the seven added run/verify sections
+and `Bundle TRO-330`'s rollback section from CHANGES.md, restoring the pre-fix text exactly, and
+deletes `web/src/lib/changesLogSections.test.ts`. No application code, schema, or test infrastructure
+outside CHANGES.md itself and the one new test file is touched by this ticket, so there is nothing
+else to undo.
+
+---
+
+## W4-SWEEPA (CI fix) — `postgresReachable.test.ts`'s "defaults to 5432" case depended on the host, not the code
+
+Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other items; each is its own commit.
+Fixes a test added by the item-3 commit above, caught by CI on PR #154 rather than locally.
+
+**What was broken.** `resolves false when nothing is listening` and `defaults to port 5432 when the
+URL specifies none` were two different assertions on the same underlying claim, but the second one
+proved it the wrong way: it called `isPostgresReachable('postgresql://127.0.0.1/whatever', 200)` and
+asserted the result was `false`, i.e. it inferred "the default is 5432" from "nothing answered on
+5432" — true on the machine this was written and tested on (this worktree's Postgres is on 5433),
+false on the GitHub Actions runner, which runs its own Postgres service **on 5432**. CI failed with
+exactly that one new test, the probe correctly returning `true`. Same defect class as item 1: an
+assertion that encodes an assumption about the environment (there, Postgres collation; here, which
+ports are free on the host) instead of the behavior. The comment on the old test said the assumption
+out loud ("127.0.0.1:5432 is not expected to be listening in this test environment") and shipped it
+anyway — and the local gate passed *specifically because* it ran somewhere that assumption held, so
+it could never have caught this either.
+
+**What changed.** `api/src/db/postgresReachable.ts`: extracted the URL parsing that
+`isPostgresReachable` was doing inline into a new pure function, `resolveHostPort(databaseUrl):
+{ host, port } | null` — same default-port rule (`Number(url.port) || 5432`), no socket involved.
+`isPostgresReachable` now calls it internally; behavior unchanged. `postgresReachable.test.ts`: the
+old socket-probe "defaults to 5432" case is replaced with a new `describe('resolveHostPort', ...)`
+block (3 cases) that asserts directly on the parsed `{ host, port }` value — deterministic on every
+machine, since it never opens a socket. Also added an explicit-port case (`:5433` round-trips) for
+symmetry.
+
+**Audited the rest of the file for the same shape, as asked, and found no other case with it.**
+Every other socket-touching assertion in the file falls into one of two safe patterns, neither of
+which depends on what else happens to be running on the host:
+- **Self-consistent (listener == target):** `isPostgresReachable`'s "resolves true" case and the
+  CLI's "exits 0 when reachable" case both spin up their own ephemeral `net.createServer()` via
+  `listen(0, ...)` (OS-assigned free port) and connect to that exact port — there is nothing external
+  for the environment to disagree with.
+- **Conventionally unused, not guaranteed-closed:** the "resolves false"/"exits non-zero" cases both
+  use `127.0.0.1:1` — port 1 is a reserved well-known port nothing *ordinarily* binds to, but that is
+  a convention, not a guarantee: a privileged process (root, or an admin-equivalent account) can
+  legally listen on it, and a host that does would make these two cases resolve `true`/exit `0` and
+  fail. This is the pre-existing pattern `ensureDatabase.test.ts` already uses for its identical
+  "unreachable" case, not something new introduced here, and the residual risk — however
+  unlikely in practice — is unchanged by this fix, which only addressed the port-5432 case above.
+- The unparseable-URL cases (both the async `isPostgresReachable` one and the new synchronous
+  `resolveHostPort` one) never touch a socket at all.
+
+**Regression test — proved this fixes the actual reported failure, not just a plausible one.**
+Started a real `postgres:16` container bound to host port 5432
+(`docker run -d --rm -p 5432:5432 -e POSTGRES_PASSWORD=x postgres:16`) to reproduce the CI condition
+exactly. Confirmed the *old* logic fails under it: ran the pre-fix `isPostgresReachable` implementation
+standalone against `postgresql://127.0.0.1/whatever` — returned `true` (correctly reachable), which is
+exactly what made the old assertion (`.resolves.toBe(false)`) fail. Then ran the *new* full test file
+in the same environment (something genuinely listening on 5432): 8/8 green, because no case in it
+probes 5432 anymore. Also re-proved the ordinary red-then-green for the new `resolveHostPort`
+assertions: temporarily changed its default from 5432 to 5433, reran — 1 failure, exactly
+`defaults to port 5432 when the URL specifies none` (`AssertionError: expected { port: 5433 } to
+deeply equal { port: 5432 }`), the other 7 cases unaffected; reverted (`git diff --stat` back to
+empty), reran: 8/8 green. Stopped and removed the test Postgres container afterward.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run postgresReachable.test.ts`
+
+**How to roll it back.** Revert this commit. `resolveHostPort` collapses back into
+`isPostgresReachable`'s inline parsing (behavior identical either way), and the "defaults to 5432"
+case goes back to being asserted via a socket probe against 127.0.0.1:5432 — which will fail again on
+any host, CI or otherwise, that happens to have something listening there.
+
+---
+
+## W4-SWEEPA (item 3 of 3) — one-command start now bootstraps Postgres via Docker
+
+Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other two items; each is its own
+commit.
+
+**What was broken.** `./start.sh` and `scripts/dev.sh` failed with an actionable but manual-step
+error (`api/src/db/ensureDatabase.ts:53-61`'s `unreachableMessage()`, thrown around line 93) when no
+Postgres server was reachable at the resolved `DATABASE_URL`, and stopped there. W4-R42 requires one
+command to start the full composed system "without any manual setup steps beyond installing
+dependencies" — telling the user to go start Postgres themselves is exactly the manual step the
+requirement rules out. Everything downstream of a reachable server already worked and was
+idempotent.
+
+**What changed.**
+- `scripts/dev.sh` (not `start.sh`, not `ensureDatabase.ts` — see placement reasoning below), a new
+  step 2.5 between resolving `DATABASE_URL` and creating `api/.env.local`: if neither an explicit
+  `DATABASE_URL` env var nor an existing `api/.env.local` pinned a database (the only case this
+  script picked its own default), and that default is unreachable, and `docker-compose.local.yml`
+  exists and `docker` is on PATH, it runs `docker compose -p ship -f docker-compose.local.yml up -d
+  postgres`, polls for the container to report healthy (up to 60s), and repoints
+  `RESOLVED_DATABASE_URL` at the container's real address
+  (`ship:ship_dev_password@localhost:5433`, from the compose file's own `postgres` service
+  definition) before continuing into the existing `ensureDatabase.ts` / `migrate.ts` /
+  `verifyMigrations.ts` / `seed.ts` flow, unmodified.
+- The compose project name is pinned to `-p ship` rather than left to Docker Compose's
+  directory-derived default. **Observed, not assumed:** running `docker compose -f
+  docker-compose.local.yml config --format json` from the main checkout reports project name `ship`;
+  the identical command from this worktree reports `ship-wt-w4_sweepa`. Left unpinned, each worktree
+  that hit this path would start its own separate container all trying to bind the compose file's
+  fixed `5433:5432` host port mapping — colliding with each other and with the single shared
+  container (`ship-postgres-1`) this repo's own factory tooling already runs everything against
+  (`.claude/skills/ship-factory/references/lessons.md` #8). Pinning the name means every worktree
+  reuses or creates that same one container instead.
+- `api/src/db/postgresReachable.ts` (new) — extracted the reachability check into a small, typed,
+  testable module (`isPostgresReachable(url, timeoutMs?)`, a plain TCP connect, exit-code CLI
+  wrapper) rather than an inline `node -e` snippet in the shell script, matching the existing
+  `ensureDatabase.ts`/`migrate.ts` pattern of "typed logic in `api/src/db/`, `scripts/dev.sh` is thin
+  glue that shells out to it via `npx tsx`."
+- `api/src/db/ensureDatabase.ts` was **not** modified. Its `unreachableMessage()` stays the fallback,
+  used verbatim when Docker itself is unavailable, `docker-compose.local.yml` is missing, or the
+  compose command itself fails (e.g. a port collision with a Postgres running outside this
+  project's compose namespace) — this change only ever adds a path to success in front of it; it
+  never replaces the message or hangs in its place.
+
+**Placement decision.** `scripts/dev.sh`, not `start.sh` or a new node entry point. Both `./start.sh`
+(via `exec "$ROOT_DIR/scripts/dev.sh"`) and `pnpm dev` (`package.json`'s `"dev": "./scripts/dev.sh"`)
+funnel through this one file — it is the single place `DATABASE_URL` is resolved and the only place
+that already calls `ensureDatabase.ts`. `pnpm dev:api`/`pnpm dev:web` bypass it entirely (they run
+`tsx watch`/`vite` directly with no database bootstrap of their own, and are out of scope for "one
+command starts the full composed system"). Putting the bootstrap here means both `./start.sh` and
+`pnpm dev` get it automatically, from one implementation, exactly the reasoning `start.sh`'s own
+header already gives for not duplicating `scripts/dev.sh`'s logic.
+
+**Regression test.** `api/src/db/__tests__/postgresReachable.test.ts` (6 cases, two `describe`
+blocks):
+
+1. **`isPostgresReachable()` directly** (4 cases) — real TCP sockets, no mocks: an ephemeral
+   `net.createServer()` for the reachable case, a guaranteed-refused loopback port for the
+   unreachable case (same pattern `ensureDatabase.test.ts` already uses), an unparseable-URL case,
+   and the default-port branch. Confirmed red first: temporarily inverted the `connect`/`error`
+   branches in `postgresReachable.ts` (`finish(false)` on connect, `finish(true)` on error) and
+   re-ran — 3 of 4 cases failed with `AssertionError: expected true to be false`, the correct failure
+   shape, not an import error. Reverted (`git diff --stat` back to empty) and re-ran: 4/4 green.
+2. **The CLI's exit code, as a subprocess** (2 cases) — spawns the real `npx tsx
+   src/db/postgresReachable.ts <url>` (via `execFile`, not a mocked `child_process`) from `api/`, the
+   exact invocation and cwd `scripts/dev.sh` uses, and asserts on the numeric exit code recovered
+   from the rejection, not on stdout text: 0 when reachable, non-zero when not. Added after an
+   explicit ask to close the coverage gap noted below, rather than leave it stated and unaddressed.
+   Confirmed red first, on the actual regression this closes: temporarily inverted `main()`'s
+   `process.exit(reachable ? 0 : 1)` to `process.exit(reachable ? 1 : 0)` — the two new CLI cases
+   failed (`AssertionError: expected 1 to be +0` and `expected +0 not to be +0`) while the four
+   `isPostgresReachable()` cases stayed green, confirming the failure was specifically in `main()`'s
+   mapping, not the underlying probe. Reverted (`git diff --stat` back to empty) and re-ran: 6/6
+   green.
+
+The bash orchestration itself (the Docker bring-up, health-poll, and URL-repoint in `scripts/dev.sh`)
+still has no vitest-reachable seam — per `.claude/skills/ship-qa/SKILL.md`'s tiers table, the gate
+executes only the two vitest projects, and bash isn't one of them — so that part was proved instead
+by genuine, non-simulated end-to-end runs (below), not by a test the gate would run. Stopped short of
+fabricating a shell/bats test the gate never executes, which would satisfy the letter of "add a
+regression test" while proving nothing (the exact failure mode `.claude/skills/ship-qa/SKILL.md`'s
+e2e-spec-vs-vitest gap describes, one layer up).
+
+**Coverage gap, previously open, now closed:** an earlier version of this entry stated that the test
+covered `isPostgresReachable()` but not `main()`'s CLI exit-code mapping — the actual contract
+`scripts/dev.sh` depends on — and that an inverted mapping would have stayed green. Case 2 above
+closes exactly that gap, confirmed red-then-green against the actual inversion described. What is
+still not covered by any vitest test, and is covered only by the manual end-to-end runs below: the
+bash-side Docker bring-up, health-poll loop, and `RESOLVED_DATABASE_URL` repoint in `scripts/dev.sh`
+itself.
+
+**End-to-end proof (observed, run twice — once before and once after extracting
+`postgresReachable.ts`, both identical in outcome).** Stopped the real `ship-postgres-1` container,
+removed this worktree's `api/.env.local`, unset `DATABASE_URL`, and ran the real `./scripts/dev.sh`
+(via `timeout`, not simulated) from a shell with neither set. Observed, in order: "Postgres
+unreachable at the default local address", the container starting and reporting healthy, a new
+`api/.env.local` created pointing at `ship:ship_dev_password@localhost:5433/ship_ship_wt_w4_sweepa`,
+`ensureDatabase.ts` creating that database, all 46 migrations applying, `verifyMigrations.ts`
+confirming 46/46, `seed.ts` completing, and the API/web/agent dev servers all starting successfully
+("API server running on http://localhost:3001", Vite ready, agent listening). Cleaned up afterward:
+killed the spawned dev-server processes, restored this worktree's real `api/.env.local`
+(`ship_wt_w4_sweepa`, unaffected throughout — the throwaway run used a different database name),
+dropped the throwaway `ship_ship_wt_w4_sweepa` database, removed the `.ports` file the run wrote, and
+confirmed `ship-postgres-1` and the factory's own `ship_wt_w4_sweepa` database were intact.
+
+**Known limitation, stated rather than hidden:** if two worktrees hit the unreachable-Postgres path
+at truly the same moment on a machine with no container yet running, `docker compose -p ship ... up
+-d postgres` from the second one racing the first could still surface a transient error from Docker
+itself (compose is not designed to be invoked concurrently against the same project by two
+processes) — the code treats any such failure the same as "compose failed for any other reason"
+(falls through to `ensureDatabase.ts`'s error, doesn't hang), but a "wait and retry" for this specific
+race was judged out of scope for this ticket rather than added speculatively.
+
+**How to run it.** Stop any running Postgres (`docker stop ship-postgres-1` if using the project's
+own container), remove `api/.env.local` if present, `unset DATABASE_URL`, then run `./start.sh` (or
+`pnpm dev`) — it should bring Postgres up itself rather than exiting with the unreachable-database
+message. Test: `source .factory-env && cd api && npx vitest run postgresReachable.test.ts`.
+
+**How to roll it back.** Revert this commit (three files: `scripts/dev.sh`,
+`api/src/db/postgresReachable.ts`, `api/src/db/__tests__/postgresReachable.test.ts`).
+`start.sh`/`scripts/dev.sh` return to exiting with `ensureDatabase.ts`'s unreachable-database message
+when Postgres is not already running, requiring the user to start it manually first.
+
+---
+
+## W4-SWEEPA (item 2 of 3) — type-safety improvement verdict corrected to "not met"
+
+Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other two items; each is its own
+commit.
+
+**What was broken.** `docs/IMPROVEMENTS.md` §1 (Type Safety) recorded the category's verdict against
+W4-R10 ("eliminate 25% of the 1535 tracked violations") as **met**, based on a sum of controlled
+per-ticket diffs (TS-1 + TS-3 + TS-4 = 411 ≥ 384). Re-running the audit's own instrument at HEAD —
+`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web api shared`, the exact command
+`audit/type-safety/baseline.md:14-18` prescribes — does not support "met" against the requirement's
+own literal threshold, which is defined on the tracked total, not the per-ticket sum.
+
+**Own recount (observed this session, at HEAD `5126a03`, 2026-08-08):**
+`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web api shared` returned
+web `any 23 / as 659 / non-null 5 / ts-ignore 3`, api `any 27 / as 1212 / non-null 42 / ts-ignore 5`,
+shared `any 0 / as 11 / non-null 0 / ts-ignore 0`. Summed per `baseline.md:77`'s own formula
+(`any + as + ! + ts-ignore`, `as any` not double-counted since it's a subset of `as`): any **50**,
+as **1882**, non-null **47**, ts-ignore **8** → **1987 tracked violations**. Against
+`audit/type-safety/baseline.json`'s recorded `metrics.violationsTotal: 1535`, that is **+452 (+29%)**
+— the wrong direction, where W4-R10 requires **−25%** (≈−384, target ≤1151). This independently
+matches the number already recorded in `audit/requirements/pipeline/verification-results.json`
+(`W4-R10`) and `audit/requirements/REPORT.md:36,84` from a separate audit pass earlier the same day
+— cross-checked, not assumed.
+
+**What this is not.** `docs/IMPROVEMENTS.md`'s pre-existing lines 27-28 (now reworded, see diff)
+already disclosed the inference plainly — "met, by the sum of controlled per-ticket diffs — not by a
+live recount, which the tracked metric cannot support today" — and the adjacent table already
+printed the baseline-to-then figure with "Up 243" in the open. This was not a concealed claim. The
+defect is that the document's **verdict** field said "met" against a requirement whose literal
+threshold is the tracked total, and that total has never measured below baseline at any point this
+sprint (1535 → 1778 → 1987).
+
+**What changed.** `docs/IMPROVEMENTS.md`, §1 (Type Safety):
+- Verdict restated as **NOT MET against the requirement's literal threshold**, with the reasoning
+  spelled out (tracked total only ever measured up, per-ticket sum answers a different question than
+  the one the requirement asks).
+- Before → After table gained a third data column (`HEAD 5126a03, this session's recount`, 1987) and
+  a full breakdown of this session's count, sourced and formula-cited.
+- The genuine per-ticket wins are kept, not deleted: total `any` (web+api+shared) 102 → 50, halved
+  and independently reconfirmed this session; `req.userId!`/`req.workspaceId!` 236 → 0, also
+  reconfirmed this session (`grep -rEn 'req\.(userId|workspaceId)!' api/src --include='*.ts'` → 0
+  hits).
+- The "controlled per-ticket sum" paragraph is kept as supporting evidence for real work done, with
+  a sentence added clarifying it does not restate or substitute for the verdict.
+
+**Regression test.** None added. This is a documentation correction to a verdict field describing a
+static-analysis count, not a code change with observable behavior — a test asserting "the doc says
+X" would only test the doc against itself, which is not a meaningful regression guard. Honest
+absence, not an oversight: `.claude/skills/ship-qa/SKILL.md` and the factory's own
+`test.fixme()`/empty-test rules are about code paths, and this ticket has none.
+
+**How to run it (to reproduce the recount).**
+`bash ~/.claude/skills/type-safety-audit/scripts/count.sh web api shared` from the repo root, then
+sum any + as + non-null + ts-ignore per `audit/type-safety/baseline.md:77`'s formula and compare
+against `audit/type-safety/baseline.json`'s `metrics.violationsTotal` (1535).
+
+**How to roll it back.** Revert this commit. `docs/IMPROVEMENTS.md` §1's verdict returns to "met,"
+which overstates the type-safety category's status against a live recount at HEAD.
+
+---
+
+## W4-SWEEPA (item 1 of 3) — migration-runner regression test made collation-independent
+
+Bundle: W4-SWEEPA — a wave-4 correctness sweep of three unrelated items grouped for one review
+pass, not one root cause. Search this file for `W4-SWEEPA` for the other two items (each is its own
+commit; this file lists newest-first, so later items land above this entry, not below it).
+
+**What was broken.** `api/src/db/__tests__/migrationRunner.test.ts:167,184` (both the "applies
+every migration file" and "clean no-op on a second invocation" cases) compared
+`recordedVersions(pool)` — the list of applied migrations read back with Postgres's `ORDER BY
+version` — against `expectedVersionsFromDisk()`, which is sorted with JavaScript's
+`Array.prototype.sort()`. Those two collations disagree on exactly one pair out of the 46 migration
+names: **observed directly**, `SELECT v FROM (VALUES ('020_document_associations'),
+('020b_sprint_assignee_ids')) t(v) ORDER BY v` returns `020b_sprint_assignee_ids` first, while
+`['020_document_associations','020b_sprint_assignee_ids'].sort()` in Node returns
+`020_document_associations` first. The migration runner itself was not at fault — both tests failed
+with a runner that had genuinely applied all 46 migrations, only reordered relative to the JS-sorted
+expectation.
+
+**What changed.** `recordedVersions()` (`migrationRunner.test.ts:113-136`) now sorts its own result
+with JS `.sort()` before returning it, so both sides of every `toEqual` comparison use the same
+collation. The comparison itself is untouched: still a strict, ordered array-identity check via
+`toEqual`, not a count or `expect.arrayContaining` — this test is the regression test for DB-1 /
+TRO-178 ("the migration runner must apply every migration or fail"), and loosening the assertion
+would have destroyed the guarantee it exists to protect. The SQL `ORDER BY version` stays in the
+query for anyone reading it in isolation; it's now redundant for this comparison, not wrong.
+
+**Regression proof — red, then green, then re-proved red.**
+1. **Red on unfixed code (observed before any change here):** ran
+   `pnpm --filter @ship/api test -- migrationRunner.test.ts` against the pre-fix file. Both
+   assertions failed with `AssertionError: expected [...] to deeply equal [...]`, diff showing
+   `020_document_associations` and `020b_sprint_assignee_ids` transposed — the exact collation
+   mismatch above, not an import error or a typo.
+2. **Green after the fix:** `cd api && npx vitest run migrationRunner.test.ts` — 7/7 passed in
+   558ms, isolated.
+3. **Re-proved the test still catches a real skip, with the fix in place:** temporarily edited
+   `api/src/db/migrationRunner.ts`'s `runPendingMigrations` to filter
+   `020b_sprint_assignee_ids.sql` out of the file list before applying it, reran the same command.
+   Both assertions failed again — this time correctly: `expected [...44 versions] to deeply equal
+   [...45 versions]`, diff showing `020b_sprint_assignee_ids` missing entirely. Reverted the
+   sabotage (`git diff --stat api/src/db/migrationRunner.ts` back to empty) and reran: 7/7 green
+   again. The collation fix did not weaken the DB-1 guarantee.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run migrationRunner.test.ts`
+
+**How to roll it back.** Revert this commit. The two assertions return to comparing a
+Postgres-collated array against a JS-sorted one, which will intermittently fail depending on
+whether the 020/020b pair (or any future migration pair with the same collation disagreement) is
+present — the test will start failing on a runner that is actually correct.
+
+---
+
 ## TRO-364 — FG: TC2's blocking-approval half never fires — approval transitions now reach document_history
 
 **The cost this closes.** Grader-flagged: Test Cases row 2 was a documented partial match — the
@@ -263,6 +1135,17 @@ No disclosure fallback needed — the root cause was cheaply fixable (one file, 
 dependency) and is now proven green on the actual graded platform, not just downgraded to
 `allow_failure`.
 
+**How to run it.** Local sanity check (does not exercise the actual bug — see above):
+
+```bash
+pnpm exec playwright test e2e/agent-detection-latency.spec.ts e2e/agent-chat-grounded-response.spec.ts --workers=1
+```
+
+Verifying the real fix requires GitLab CI itself, since the failure only reproduces inside that
+platform's container networking: push to GitLab `main` and confirm the `e2e-agent` job on the
+resulting pipeline (per this project's documented sync convention — GitLab `main` only runs
+pipelines on direct pushes, not merge requests).
+
 **Rollback.** Revert the two commits touching `e2e/fixtures/agentEnv.ts` (`2e0dce7` — the
 127.0.0.1/`--host`/`tailBuffer` fix — and `d949e05` — the follow-up non-null-assertion cleanup)
 on the feature branch, and revert the same change on GitLab `main` (it was pushed directly there
@@ -346,6 +1229,14 @@ carried forward":**
 terraform-only tickets, e.g. TF-1/TF-3/TF-9).** This is a pure documentation change — no application
 code touched, so `scripts/factory/gate.sh`'s G6 (regression-test present) legitimately fails with
 nothing to show. Accepted as an explicit, reasoned exception rather than a silently green gate.
+
+**How to verify.** Docs-only; there is no build or test to run. Confirm the two missing phases are
+now present and the old gap is gone:
+
+```bash
+grep -n '^## Phase 2: Graph Architecture\|^## Phase 3: Stack and Deployment' PRESEARCH.MD
+# expect both headings to print; before this change, neither existed anywhere in the file.
+```
 
 **Rollback.** `git revert` this commit — reverts both files together, which is the correct unit: it
 removes the `## Phase 2: Graph Architecture` / `## Phase 3: Stack and Deployment` sections from
@@ -1971,6 +2862,17 @@ definition of done, checked explicitly rather than assumed:
   `index.ts`, not something this bundle's two tickets can close on their own, since neither one's
   scope included building that route.
 - **`CHANGES.md` appended.** Both entries above.
+
+**How to run it.** This entry is the bundle's own status summary, not a separate code change — it
+adds no files and no tests of its own. The actual commands live in the two sub-issue entries
+immediately below: TRO-322's own **How to run it.** (agent unit tests, the two E2E flows, the
+readiness/rollback CLI) and TRO-338's own **How to run it.** (agent unit tests plus the on-demand
+golden-set comparison).
+
+**Rollback.** Nothing to revert at this entry's own level. Reverting the bundle means reverting
+TRO-322's and TRO-338's commits individually — see each entry's own **How to roll it back.**
+section for the exact, non-identical procedure for each (TRO-322's new CI jobs and rollback CLI vs.
+TRO-338's golden-set/draft-survival files).
 
 ---
 
@@ -4434,6 +5336,11 @@ protection must guard the new relationship before it exists), TRO-333 [FG-15] th
 relationship. See each sub-issue's own entry for what was broken, what changed, how to run/test it,
 and how to roll it back individually.
 
+**How to run it.** This entry is the bundle's own summary, not a separate code change — see each
+sub-issue's own **How to run it.** section for the exact commands: TRO-312 (change-feed endpoint),
+TRO-314 (seed/fixture work), TRO-332 (cycle-protection migration + tests), TRO-333 (`blocks`
+relationship migration + tests).
+
 **Rollback (whole bundle).** Revert the branch's merge commit, or cherry-pick-revert each
 sub-issue's own commit individually — every sub-issue below is its own commit and its own change,
 not one undifferentiated diff.
@@ -5431,6 +6338,17 @@ UI (pointless) or test that the button is absent (untestable-as-a-regression: ab
 isn't a regression surface, and a `not.toBeVisible()` assertion would silently stop meaning anything
 the moment any unrelated button was added to the row). The four real "Move to Week" tests already
 in the file are the regression coverage for the capability these dead tests gestured at.
+
+**How to verify.** Confirm the dead assertions are gone and the real coverage that replaces them
+still passes:
+
+```bash
+grep -n 'quick menu' e2e/program-mode-week-ux.spec.ts   # expect: no matches
+```
+
+Then run the file via `/e2e-test-runner` (never `pnpm test:e2e` directly) and confirm the 12
+remaining tests in the `Phase 4: Issues Tab Filtering` describe block — including the four
+"Move to Week" tests named above — still pass.
 
 **Rollback.** `git log --oneline -- e2e/program-mode-week-ux.spec.ts` then check out `2a97a2ad`'s
 version of the file (or `git show 2a97a2ad:e2e/program-mode-week-ux.spec.ts`) to restore the four
@@ -9228,6 +10146,14 @@ from here.
 `scripts/factory/gate.sh`'s G6 (regression-test present) is expected to fail on this branch for that
 reason — the evidence for the fix is the terraform cross-reference above, not a test.
 
+**How to verify.** Docs-only; there is no build or test to run. Confirm the stale URL is gone and the
+new one is in place:
+
+```bash
+grep -n 'eba-xsaqsg9h' .claude/CLAUDE.md   # expect: no matches (the old direct-ALB URL is gone)
+grep -n 'ship.awsdev.treasury.gov/health' .claude/CLAUDE.md   # expect: one match, the new URL
+```
+
 **How to roll it back.** `git revert <commit>`, or manually restore the old two-line health-check
 list in `.claude/CLAUDE.md`. This is a docs-only revert — it restores the stale URL text but does
 **not** undo the TF-7/TRO-278 ALB security-group restriction that made the URL stale; that lives in
@@ -9787,6 +10713,15 @@ key-generation code path is identical regardless of `NODE_ENV`, so this is not e
 but it was not measured directly. No repeated (n>3) statistical re-run of the full 18-combination
 sweep — a single fresh re-measurement is what's reported, deliberately not smoothed into a
 multi-run average, so the noise is visible rather than hidden.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/rate-limit.test.ts
+# Full suite, to confirm the count cited above (664/664):
+pnpm --filter @ship/api test
+```
 
 **Rollback.** Nothing to roll back functionally — `git revert` on this branch removes only the doc
 comment and the two new pin tests.

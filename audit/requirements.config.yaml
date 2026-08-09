@@ -8,6 +8,22 @@ docs:
   - id: W4
     path: "project guideliens/GFA_Week_4_ShipShape_Updated.pdf"
     sha256: d385bcc4af6341956c532b6ae558c9405de77f46bb14301fd4bda3e35e3af311
+  # Never swept yet — sha256 null so the next `extract`/`baseline` run performs a
+  # first extraction (and stops at the user-skim gate per inventory-format.md).
+  #
+  # NOT scoped by the `tickets:` block below. That block's `project:
+  # "ShipShape Audit Remediation"` is W4's Linear project; W5 work lives in a
+  # different one, "FleetGraph — Week 5 Project Intelligence Agent". The config
+  # schema has one `tickets.project` for the whole file — it has no field to map
+  # a specific `docs[]` entry to its own project, so a W5 sweep (baseline or
+  # compare) must first re-scope `tickets.project` to the FleetGraph project, run,
+  # then re-scope back to "ShipShape Audit Remediation" before a W4 sweep runs
+  # again. Do not run W4 and W5 in the same sweep without doing this — whichever
+  # project isn't current will get the other's ~80-orphan false-signal problem
+  # this file's tickets comment already describes.
+  - id: W5
+    path: "project guideliens/GFA_Week_5_FleetGraph_Updated (1).pdf"
+    sha256: 2e9d2409d392232a4acf2bff8d8d614e891c980dbc4f043edc972fa2c37d861d
 
 tickets:
   provider: linear
@@ -19,7 +35,12 @@ tickets:
   # which roughly 80 were simply other products' work. Scoped to this project it is 9,
   # and those 9 are a real signal. Orphan detection is only meaningful against a
   # deliberately chosen population.
-  project: "ShipShape Audit Remediation"
+  # CURRENTLY SCOPED TO W5. Week 5 is the live work; W4 is a frozen baseline whose
+  # matrix is already published, so its ticket dimension does not need re-running.
+  # If a W4 sweep is ever re-run, set this back to "ShipShape Audit Remediation"
+  # first — leaving it on FleetGraph would report W4's 123 tickets as orphans and
+  # FleetGraph's as W4 coverage. One scalar, two document sets: mutually exclusive.
+  project: "FleetGraph — Week 5 Project Intelligence Agent"
 
 # Roots searched during the trace phase. Application source alone is not enough for
 # this document set: the W4 brief's acceptance evidence lives largely in audit
@@ -50,6 +71,13 @@ code_roots:
   # Repo-root files the W4 requirements actually cite. Enumerated, not globbed.
   - CHANGES.md
   - README.md
+  # W5's two graded deliverable files. Uppercase .MD on disk — a case-sensitive
+  # match on ".md" misses them. 37 of W5's 57 requirements cite FLEETGRAPH.MD, so
+  # omitting these traces most of the Week 5 brief as MISSING against evidence
+  # that is sitting in the repo — the same false-gap failure the code_roots
+  # comment above describes for the audit tree.
+  - FLEETGRAPH.MD
+  - PRESEARCH.MD
   - start.sh
   - package.json
   - pnpm-lock.yaml

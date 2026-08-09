@@ -79,7 +79,8 @@ pdf_tool: null                       # optional: command emitting markdown text 
 verify:                              # commands available for behavioral checks
   test: "npm test --workspace api"
   e2e: "npm run test:e2e"
-  app_url: "http://localhost:5173"   # requires seeded app running
+verify_urls:
+  app: "http://localhost:5173"       # requires seeded app running
 ```
 
 `init` mode writes this by auto-detection (finds PDFs in folders whose names
