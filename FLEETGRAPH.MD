@@ -1277,7 +1277,13 @@ with margin. Full reasoning and the exact arithmetic live in `config.ts`'s
 `agent/src/graph.ts` (the `respond`, `composeAnswer`, and `composeStandupDraft` nodes — the only
 three that ever call the model) now records its real input/output tokens, model, and which node
 served it, to `agent/.cache/cost-ledger.jsonl`. The table below is that recorded data, reproduced
-verbatim by running `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` from the worktree — not an estimate.
+verbatim by running `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` from the worktree
+on 2026-08-05 — not an estimate. **This is a dated snapshot, not a live reproduction target:** the
+ledger is append-only and kept growing after this date (see the 2026-08-08 and 2026-08-09 updates
+below), so no artifact anywhere still holds it in this one-invocation state — running this same
+command today reproduces whatever the ledger holds *now*, not this table. For the currently
+reproducible figures, and the command that actually gets them from a fresh clone (TRO-373), see
+"Refreshed (TRO-366, 2026-08-08)" below.
 
 | Item | Amount |
 |---|---|
@@ -1333,19 +1339,49 @@ those two runs:
 average of exactly one near-zero-context run (a mistaken invalid seed id, 0 documents) and one real
 12-document, cap-reached run, close to the opposite ends of what `composeAnswer` can cost. It
 replaced "no measurement yet" with a real floor and ceiling from 2 genuine data points — a snapshot
-the ledger has since moved past. See the refresh immediately below.
+the ledger has since moved past, and, like the FG-21 table above, dated history now: the same command
+run today reproduces the ledger's current contents, not these two invocations. See the refresh
+immediately below, and TRO-373's fix (further below) for how "today" became reproducible at all from
+a fresh clone.
 
 **Refreshed (TRO-366, 2026-08-08) — the ledger kept growing after that 2026-08-05 snapshot, and this
 file had not caught up.** A grader running the exact command this document names as its own
 reproduction method got real numbers this file no longer matched: 7 invocations against the 3
-published above, $0.006055 against $0.001922. Reproduced verbatim by running
-`pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` on 2026-08-08. **Configuration note:**
-this ticket's own factory worktree (`Ship-wt-tro_366`) has made zero real Anthropic API calls, so its
-own `agent/.cache/cost-ledger.jsonl` does not exist; the command was run against the project's
-long-lived development checkout instead, whose ledger is where every real invocation across this
-sprint's FleetGraph tickets has actually accumulated (gitignored, per-checkout, never committed — the
-same property that let this drift in the first place, since no committed artifact ever forced the two
-to reconcile).
+published above, $0.006055 against $0.001922. The table below is those 7 records — real, not
+estimated — as recorded in `agent/.cache/cost-ledger.jsonl` on 2026-08-08.
+
+**Configuration note (originally 2026-08-08, superseded by TRO-373, 2026-08-09).** At the time of the
+TRO-366 refresh, this ticket's own factory worktree (`Ship-wt-tro_366`) had made zero real Anthropic
+API calls, so its own `agent/.cache/cost-ledger.jsonl` did not exist — the command that produced the
+table below was instead run against the project's long-lived development checkout, whose ledger is
+where every real invocation across this sprint's FleetGraph tickets actually accumulated. That
+ledger is gitignored (`.gitignore:42`) and per-checkout by design, and was never committed — the same
+property that let the 2026-08-05 numbers above go stale unnoticed in the first place, and that made
+the cited command **genuinely unreproducible on a fresh clone**: running it against an empty `.cache`
+prints `No invocations recorded yet`, not the figures below — the numbers were real and unfalsifiable
+at the same time.
+
+TRO-373 closed that reproduction gap (the live `.cache/cost-ledger.jsonl` itself stays gitignored and
+per-checkout, by design — that does not change) by committing a byte-identical, read-only copy of the
+long-lived checkout's 7 records as a tracked snapshot, `agent/cost-ledger-snapshot.jsonl`. The
+reproducible command is now:
+
+```bash
+pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- --ledger cost-ledger-snapshot.jsonl
+```
+
+(`--ledger` is `cost-report.ts`'s own pre-existing override — see the script's docstring;
+`AGENT_COST_LEDGER_PATH` works identically. The path resolves relative to `pnpm --filter @ship/agent
+exec`'s working directory, which is always `agent/` regardless of where the command itself is
+invoked from — confirmed with `pnpm --filter @ship/agent exec pwd` from the worktree root.) Run
+against this ticket's own worktree — which, like `Ship-wt-tro_366` before it, has made zero real
+Anthropic API calls of its own — on 2026-08-09, this reproduces the table below exactly: 7
+invocations, 1,860 input tokens, 839 output tokens, $0.006055 total; `composeAnswer` 6 invocations at
+$0.000876/run; `composeStandupDraft` 1 invocation at $0.000798/run. The snapshot is a point-in-time
+copy, not a live tap on the ledger — it will not pick up future real invocations without a follow-up
+commit — and `agent/src/__tests__/fleetgraphCostFigures.test.ts` pins this document's figures against
+that same committed snapshot file directly, so the document and the snapshot cannot drift apart
+silently again.
 
 | Item | Amount |
 |---|---|

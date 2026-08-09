@@ -21,6 +21,98 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-373 — FLEETGRAPH.MD's cited cost-report command could not reproduce the published figures on a fresh clone
+
+**The cost this closes.** `FLEETGRAPH.MD`'s Cost Analysis section publishes measured figures (7
+invocations, 1,860 input / 839 output tokens, $0.006055 total; `composeAnswer` 6 @ $0.000876/run;
+`composeStandupDraft` 1 @ $0.000798/run) and names
+`pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` as the way to reproduce them. But
+`agent/.cache/cost-ledger.jsonl` is gitignored (`.gitignore:42` — confirmed with
+`git check-ignore -v`) and was never committed (`git ls-files agent/.cache/` → 0 files). A grader
+running the cited command against a fresh clone gets `No invocations recorded yet.` — the figures
+were real and, at the same time, unfalsifiable. TRO-366 (previous ticket) had already disclosed this
+gap in a "Configuration note" rather than fixing it; the maintainer chose to fix it now instead of
+leaving it disclosed or downgrading the audit verdict.
+
+**What changed.**
+- **Committed a tracked snapshot of the ledger.** `agent/cost-ledger-snapshot.jsonl` (new file, not
+  gitignored) is a byte-identical, read-only copy of the project's long-lived development
+  checkout's `agent/.cache/cost-ledger.jsonl` (verified via `diff`/`md5` before and after copying —
+  the source file was only ever read, never modified). Named `cost-ledger-snapshot.jsonl` rather
+  than reusing `cost-ledger.jsonl` so its name itself states what it is: a committed point-in-time
+  snapshot, not a live, growing ledger — a stranger should not mistake it for the thing
+  `FileCostTracker.record()` appends to at runtime, which stays gitignored and per-checkout by
+  design.
+- **`FLEETGRAPH.MD`**: rewrote the "Configuration note" in the "Refreshed (TRO-366, 2026-08-08)"
+  block (around the section's original lines 1338-1348) to describe the new reality — the
+  reproducible command is now
+  `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- --ledger cost-ledger-snapshot.jsonl`
+  (`--ledger` and `AGENT_COST_LEDGER_PATH` are `cost-report.ts`'s own pre-existing overrides; the
+  path resolves relative to `pnpm --filter @ship/agent exec`'s working directory, which is always
+  `agent/`, confirmed with `pnpm --filter @ship/agent exec pwd`). The disclosure is rewritten, not
+  deleted: the note still states that the live `.cache/cost-ledger.jsonl` stays gitignored and
+  per-checkout by design, and now additionally states what closed the gap. Also added short
+  "dated history, not a live reproduction target" caveats to the two earlier, superseded cost
+  snapshots (the FG-21 1-invocation table and the TRO-324 3-invocation table) so a reader does not
+  try the plain (no `--ledger`) command against those and expect old figures back — the ledger is
+  append-only, so no artifact anywhere still holds those two intermediate states; only the current
+  7-invocation figures are backed by a committed, reproducible artifact.
+- **`agent/src/__tests__/fleetgraphCostFigures.test.ts`**: previously pinned FLEETGRAPH.MD's figures
+  against `REFERENCE_LEDGER_RECORDS`, an inline array hand-transcribed from the real ledger — a
+  second copy of the same seven records, itself never checked against anything. Rewrote the test to
+  read the committed snapshot directly (`new FileCostTracker({ ledgerPath: SNAPSHOT_PATH }).readAll()`,
+  read-only — `record()` is never called, so the test cannot write to the tracked file) instead of
+  carrying its own duplicate fixture, removing the inline array and the `mkdtemp`/`rmSync` scaffolding
+  that existed only to give `FileCostTracker` somewhere to write the fixture. There is now exactly one
+  committed copy of these seven records; the document, the test, and the reproduction command all read
+  the same file. Added one new assertion (`toHaveLength(7)` plus a per-node breakdown) that fails
+  loudly if the snapshot's shape ever changes silently, rather than the file going missing and
+  `readAll()` quietly returning `[]`.
+
+**How to run it.** `source .factory-env && pnpm --filter @ship/agent test -- src/__tests__/fleetgraphCostFigures.test.ts`
+(6 tests, all passing). Manually reproduce the published figures from a fresh clone:
+```bash
+pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- --ledger cost-ledger-snapshot.jsonl
+```
+Run from this worktree (whose own `.cache` does not exist — confirmed via `ls agent/.cache/`
+returning nothing before this command) on 2026-08-09; verbatim output:
+```
+--- FleetGraph cost report (TRO-339 / FG-21) ---
+Ledger: cost-ledger-snapshot.jsonl
+
+Development spend to date (recorded, not estimated):
+  Invocations:        7
+  Input tokens:       1860
+  Output tokens:      839
+  Total spend:        $0.006055
+
+Measured cost per graph run, per tier:
+  composeAnswer:
+    invocations: 6
+    cost/run:    $0.000876
+    avg documents pulled: 6.50
+  composeStandupDraft:
+    invocations: 1
+    cost/run:    $0.000798
+
+Runs per day, observed:
+  2026-08-07: 1
+  2026-08-05: 6
+```
+Matches every figure FLEETGRAPH.MD's "Refreshed (TRO-366, 2026-08-08)" table publishes, exactly, from
+a checkout that made zero real Anthropic API calls of its own — proving the reproduction gap this
+ticket exists to close is actually closed, not just documented as closed.
+
+**Roll back.** Revert the commit. `git rm agent/cost-ledger-snapshot.jsonl` removes the tracked
+snapshot (the live, gitignored `agent/.cache/cost-ledger.jsonl` this repo's own checkouts write to
+is untouched either way — it was never part of this change). Reverting also restores
+`FLEETGRAPH.MD`'s prior Configuration note text and `fleetgraphCostFigures.test.ts`'s inline
+`REFERENCE_LEDGER_RECORDS` fixture. Documentation, one new data file, and a test-only change; no
+schema, application code, or runtime behavior changes — `cost-report.ts` and `costTracking.ts`
+themselves are unmodified.
+
+---
+
 ## TRO-350 — Proactive/steady-tier poll still uses the agent's shared `SHIP_API_TOKEN` — investigated, closed as accepted-risk-documented, no code change
 
 **Filed alongside TRO-342, 2026-08-05, explicitly as an investigate-and-recommend ticket, not a

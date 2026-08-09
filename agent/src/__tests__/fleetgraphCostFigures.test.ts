@@ -6,29 +6,29 @@
  * $0.006055) before anyone noticed, and the ledger sits right next to the
  * text that quotes it. This test closes that gap mechanically: it feeds the
  * REAL `aggregate`/`aggregateByNode` functions (`costTracking.ts` — the exact
- * ones `cost-report.ts` calls) a frozen snapshot of the seven real records
- * currently on the project's long-lived development ledger (transcribed
- * verbatim from that ledger's own JSONL, 2026-08-08 — see this ticket's
- * CHANGES.md entry for the configuration note on why THIS worktree's own
- * `.cache` is empty and the reference lives here as a fixture instead), then
- * parses FLEETGRAPH.MD's own "Refreshed (TRO-366, 2026-08-08)" table out of
- * the file and asserts the two agree.
+ * ones `cost-report.ts` calls) the seven real records currently on the
+ * project's long-lived development ledger, then parses FLEETGRAPH.MD's own
+ * "Refreshed (TRO-366, 2026-08-08)" table out of the file and asserts the two
+ * agree.
  *
- * Deliberately NOT reading the real `agent/.cache/cost-ledger.jsonl` at its
- * default path (lessons.md #25 / ship-qa's "the host is not under test"):
- * that file is gitignored, per-checkout, and empty in every fresh worktree —
- * a test that depended on it would pass or fail based on which machine ran
- * it, not on whether the code or the document is correct. Freezing the
- * records as a fixture makes this a test of the RELATIONSHIP between the doc
- * and the aggregation code, which is what actually matters and is what
- * FLEETGRAPH.MD's numbers should stay pinned to going forward — if either the
- * document's numbers or costTracking.ts's aggregation logic changes without
- * the other, this fails.
+ * TRO-373 (2026-08-09) — the seven records used to live ONLY as an inline
+ * fixture here (`REFERENCE_LEDGER_RECORDS`, hand-transcribed from the real
+ * ledger and never itself checked against anything). That was a second copy
+ * of the same data FLEETGRAPH.MD's reproduction command was supposed to
+ * produce — and the command couldn't, because `agent/.cache/cost-ledger.jsonl`
+ * is gitignored (`.gitignore:42`) and per-checkout, so it doesn't exist on a
+ * fresh clone. TRO-373 committed a byte-identical, read-only copy of that
+ * ledger's 7 records as a tracked snapshot, `agent/cost-ledger-snapshot.jsonl`
+ * (see FLEETGRAPH.MD's rewritten "Configuration note" in the Cost Analysis
+ * section for the reproduction command that now reads it). This file now
+ * reads that SAME committed snapshot directly via `FileCostTracker` — never
+ * writes to it — instead of carrying its own hand-copied fixture, so there is
+ * one source of truth: if the snapshot and the document ever disagree, this
+ * test fails against the snapshot, the same artifact a grader's reproduction
+ * command reads.
  */
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { describe, expect, it, beforeAll } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   FileCostTracker,
@@ -38,19 +38,11 @@ import {
   type ModelInvocationRecord,
 } from '../costTracking.js';
 
-// Transcribed verbatim from the real development ledger, 2026-08-08 — six
-// `composeAnswer` invocations (2026-08-05) and one `composeStandupDraft`
-// invocation (2026-08-07), the same seven records `cost-report.ts` reported
-// when this ticket re-ran it against that ledger.
-const REFERENCE_LEDGER_RECORDS: readonly ModelInvocationRecord[] = [
-  { timestamp: '2026-08-05T14:32:41.562Z', node: 'composeAnswer', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 435, outputTokens: 211, documentsPulled: 12 },
-  { timestamp: '2026-08-05T15:01:21.929Z', node: 'composeAnswer', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 405, outputTokens: 122, documentsPulled: 12 },
-  { timestamp: '2026-08-05T15:08:40.306Z', node: 'composeAnswer', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 373, outputTokens: 44, documentsPulled: 12 },
-  { timestamp: '2026-08-05T15:19:42.278Z', node: 'composeAnswer', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 95, outputTokens: 159, documentsPulled: 1 },
-  { timestamp: '2026-08-05T15:20:10.868Z', node: 'composeAnswer', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 95, outputTokens: 97, documentsPulled: 1 },
-  { timestamp: '2026-08-05T15:20:53.019Z', node: 'composeAnswer', trigger: 'on_demand', model: 'claude-haiku-4-5-20251001', inputTokens: 109, outputTokens: 116, documentsPulled: 1 },
-  { timestamp: '2026-08-07T14:36:16.889Z', node: 'composeStandupDraft', trigger: 'proactive_deep', model: 'claude-haiku-4-5-20251001', inputTokens: 348, outputTokens: 90 },
-];
+// `agent/cost-ledger-snapshot.jsonl` — committed, tracked, read-only from
+// this test (only `readAll()` is ever called on it, never `record()`). Two
+// levels up from `agent/src/__tests__/` is `agent/`, matching FLEETGRAPH_PATH
+// below going three levels up to the repo root.
+const SNAPSHOT_PATH = fileURLToPath(new URL('../../cost-ledger-snapshot.jsonl', import.meta.url));
 
 const FLEETGRAPH_PATH = fileURLToPath(new URL('../../../FLEETGRAPH.MD', import.meta.url));
 
@@ -79,31 +71,30 @@ function parseIntWithCommas(raw: string): number {
   return Number(raw.replace(/,/g, ''));
 }
 
-describe('FLEETGRAPH.MD cost figures vs. the real ledger (TRO-366)', () => {
-  let ledgerDir: string;
-  let ledgerPath: string;
+describe('FLEETGRAPH.MD cost figures vs. the committed ledger snapshot (TRO-366 / TRO-373)', () => {
+  let records: ModelInvocationRecord[];
 
-  beforeEach(async () => {
-    ledgerDir = mkdtempSync(join(tmpdir(), 'fleetgraph-cost-ledger-'));
-    ledgerPath = join(ledgerDir, 'cost-ledger.jsonl');
-    const tracker = new FileCostTracker({ ledgerPath });
-    // Sequential, not Promise.all: FileCostTracker.record's own docstring
-    // notes O_APPEND gives no cross-process ORDER guarantee, only atomicity —
-    // irrelevant to aggregation (which only sums/group-bys), but sequential
-    // writes here keep the on-disk line order matching REFERENCE_LEDGER_RECORDS'
-    // own declared order, which is easier to eyeball against the real ledger.
-    for (const record of REFERENCE_LEDGER_RECORDS) {
-      await tracker.record(record);
-    }
+  beforeAll(() => {
+    // Read-only: this constructs a tracker pointed at the committed snapshot
+    // purely to reuse `readAll`'s parsing, and only `readAll()` is called —
+    // `record()` never is, so the tracked file is never written to by this
+    // test.
+    const tracker = new FileCostTracker({ ledgerPath: SNAPSHOT_PATH });
+    records = tracker.readAll();
   });
 
-  afterEach(() => {
-    rmSync(ledgerDir, { recursive: true, force: true });
+  it('the committed snapshot still holds exactly the seven real records this test pins against', () => {
+    // Guards against the snapshot file silently changing shape (e.g. a
+    // future ticket appending more real invocations without updating this
+    // test's expectations, or the file going missing/empty and `readAll`
+    // quietly returning `[]`).
+    expect(records).toHaveLength(7);
+    expect(records.filter((r) => r.node === 'composeAnswer')).toHaveLength(6);
+    expect(records.filter((r) => r.node === 'composeStandupDraft')).toHaveLength(1);
   });
 
   it('reproduces the exact "Development spend to date" total FLEETGRAPH.MD publishes', () => {
-    const tracker = new FileCostTracker({ ledgerPath });
-    const overall = aggregate(tracker.readAll());
+    const overall = aggregate(records);
 
     const docText = readFileSync(FLEETGRAPH_PATH, 'utf8');
     const totalMatch = lastMatch(
@@ -128,15 +119,14 @@ describe('FLEETGRAPH.MD cost figures vs. the real ledger (TRO-366)', () => {
   });
 
   it('reproduces the exact composeAnswer and composeStandupDraft per-tier figures FLEETGRAPH.MD publishes', () => {
-    const tracker = new FileCostTracker({ ledgerPath });
-    const byNode = aggregateByNode(tracker.readAll());
+    const byNode = aggregateByNode(records);
     const composeAnswerStats = byNode.find((tier) => tier.node === 'composeAnswer');
     const standupStats = byNode.find((tier) => tier.node === 'composeStandupDraft');
     if (!composeAnswerStats || !standupStats) {
-      throw new Error('unreachable — the fixture ledger always contains both composeAnswer and composeStandupDraft records');
+      throw new Error('unreachable — the snapshot always contains both composeAnswer and composeStandupDraft records');
     }
     if (composeAnswerStats.costPerRunUsd === undefined || standupStats.costPerRunUsd === undefined) {
-      throw new Error('unreachable — every fixture record uses a priced model');
+      throw new Error('unreachable — every snapshot record uses a priced model');
     }
 
     const docText = readFileSync(FLEETGRAPH_PATH, 'utf8');
@@ -149,7 +139,7 @@ describe('FLEETGRAPH.MD cost figures vs. the real ledger (TRO-366)', () => {
     const standupInvocations = lastMatch(docText, /`composeStandupDraft` — invocations\s*\|\s*(\d+)\s*\|/g);
     const standupCostPerRun = lastMatch(docText, /`composeStandupDraft` — cost\/run\s*\|\s*\$([\d.]+)\s*\|/g);
 
-    // Real, measured values — not just re-asserting the fixture's own shape.
+    // Real, measured values — not just re-asserting the snapshot's own shape.
     expect(composeAnswerStats.invocationCount).toBe(6);
     expect(standupStats.invocationCount).toBe(1);
 
@@ -165,14 +155,13 @@ describe('FLEETGRAPH.MD cost figures vs. the real ledger (TRO-366)', () => {
   // have passed silently, which is precisely the rot this test exists to
   // prevent.
   it('reproduces the exact composeAnswer avg-documents-pulled figure FLEETGRAPH.MD publishes', () => {
-    const tracker = new FileCostTracker({ ledgerPath });
-    const byNode = aggregateByNode(tracker.readAll());
+    const byNode = aggregateByNode(records);
     const composeAnswerStats = byNode.find((tier) => tier.node === 'composeAnswer');
     if (!composeAnswerStats) {
-      throw new Error('unreachable — the fixture ledger always contains composeAnswer records');
+      throw new Error('unreachable — the snapshot always contains composeAnswer records');
     }
     if (composeAnswerStats.avgDocumentsPulled === undefined) {
-      throw new Error('unreachable — every composeAnswer fixture record sets documentsPulled');
+      throw new Error('unreachable — every composeAnswer snapshot record sets documentsPulled');
     }
 
     const docText = readFileSync(FLEETGRAPH_PATH, 'utf8');
@@ -181,18 +170,18 @@ describe('FLEETGRAPH.MD cost figures vs. the real ledger (TRO-366)', () => {
       /`composeAnswer` — avg documents pulled\s*\|\s*([\d.]+)\s*\(/g
     );
 
-    // Real, measured value — not just re-asserting the fixture's own shape.
+    // Real, measured value — not just re-asserting the snapshot's own shape.
     expect(composeAnswerStats.avgDocumentsPulled).toBe(6.5);
     expect(Number(avgDocsPulledMatch[1])).toBe(composeAnswerStats.avgDocumentsPulled);
   });
 
   it('reproduces the exact 2026-08-05 / 2026-08-07 daily invocation distribution FLEETGRAPH.MD publishes', () => {
-    // Derived from REFERENCE_LEDGER_RECORDS via the real invocationsByDay
+    // Derived from the committed snapshot via the real invocationsByDay
     // aggregation rather than hardcoded here — so this test tracks the
-    // fixture's own dates/counts, not a second, independently-maintained
-    // copy of "6" and "1" that could drift from the fixture the same way
-    // the document itself drifted from the ledger.
-    const byDay = invocationsByDay(REFERENCE_LEDGER_RECORDS);
+    // snapshot's own dates/counts, not a second, independently-maintained
+    // copy of "6" and "1" that could drift from the snapshot the same way
+    // the document itself once drifted from the ledger.
+    const byDay = invocationsByDay(records);
     expect(byDay).toEqual([
       { day: '2026-08-07', count: 1 },
       { day: '2026-08-05', count: 6 },
