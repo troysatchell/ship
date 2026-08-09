@@ -1,0 +1,1617 @@
+{
+  "mode": "compare",
+  "baselineRef": "matrix.baseline-W5.json",
+  "commit": "3e4a76dfbd7b3cf8f2e7a7a394c1502cdcf31e21",
+  "dirty": true,
+  "dirty_paths": [
+    "udit/factory/scorecard.jsonl",
+    "audit/requirements/REPORT-W5.md",
+    "audit/requirements/gaps-W5.md",
+    "audit/requirements/interpretations.md",
+    "memory-bank/activeContext.md",
+    "memory-bank/progress.md",
+    "audit/requirements/matrix.after-w5-wave.json",
+    "project guideliens/Gatsby_Analysis_Troy_Satchell_ES.docx"
+  ],
+  "date": "2026-08-09T14:00:00Z",
+  "config_hash": "4fce400a4db5ab68cd272f23993c9f31f72cd6f758f7d1076b4e9dfd511f9825",
+  "ticket_mapping": {
+    "status": "OK",
+    "provider": "linear",
+    "team": "TRO",
+    "scope": "66 issues in Linear project 'FleetGraph \u2014 Week 5 Project Intelligence Agent' (team Troysatchell). Scoped to the project, not the team: the TRO team spans six unrelated projects with interleaved issue numbers, and an unscoped sweep previously reported 88 orphans where the true figure was 9."
+  },
+  "requirements": [
+    {
+      "id": "W5-R1",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "web/src/pages/App.tsx",
+          "line": 679,
+          "note": "AgentPill rendered inside AppLayout main, present on every doc/issue/sprint view"
+        },
+        {
+          "file": "web/src/components/AgentChatPanel.tsx",
+          "line": 332,
+          "note": "seedDocumentId sent on every question"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Files byte-identical to baseline (git diff 8559804..HEAD --stat: zero diff)."
+    },
+    {
+      "id": "W5-R2",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "agent/src/graph.ts",
+          "line": 1387,
+          "note": "resolveSeed node visitDocument(seedDocumentId); moved from 1298, content identical"
+        },
+        {
+          "file": "e2e/agent-chat-grounded-response.spec.ts",
+          "line": 82,
+          "note": "asserts Sources visible"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "graph.ts grew +91 lines (TRO-368); cited nodes present, only relocated."
+    },
+    {
+      "id": "W5-R3",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "web/src/main.tsx",
+          "line": 153,
+          "note": "full route table through 276 \u2014 no chat path"
+        },
+        {
+          "file": "web/src/pages/App.tsx",
+          "line": 679,
+          "note": "chat only as AgentPill, not a routed page"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Absence re-verified by grep; main.tsx zero diff vs baseline."
+    },
+    {
+      "id": "W5-R4",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "agent/src/graph.ts",
+          "line": 1939,
+          "note": "addConditionalEdges(START, routeTrigger, {...}) \u2014 same 8-branch map"
+        },
+        {
+          "file": "agent/src/proactivePoll.ts",
+          "line": 48,
+          "note": "proactive_steady invoke; file zero diff"
+        },
+        {
+          "file": "agent/src/server.ts",
+          "line": 363,
+          "note": "POST /chat graph.invoke, now wrapped in chatHandlerTimeoutMs abort logic"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Both paths present; server.ts +47 lines from TRO-368."
+    },
+    {
+      "id": "W5-R5",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "agent/src/index.ts",
+          "line": 230,
+          "note": "createProactivePoller started unconditionally"
+        },
+        {
+          "file": "api/src/routes/agent.ts",
+          "line": 358,
+          "note": "GET /inbox proxies itemStore.list"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 548,
+          "note": "timed live detection test, 42.6s observed"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Live probe 2026-08-09: /ready and /health both HTTP 200. Confirms liveness, not a fresh proactive delivery \u2014 hence not VERIFIED."
+    },
+    {
+      "id": "W5-R6",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "agent/src/graph.ts",
+          "line": 1327,
+          "note": "exactly one StateGraph constructed"
+        },
+        {
+          "file": "agent/src/index.ts",
+          "line": 222,
+          "note": "buildGraph called once; same reference to poller and server"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "One-graph-two-callers structure unchanged."
+    },
+    {
+      "id": "W5-R12",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "agent/src/proactivePoll.ts",
+          "line": 41,
+          "note": "plain setInterval, no session/browser; file zero diff"
+        },
+        {
+          "file": "agent/src/index.ts",
+          "line": 238,
+          "note": "poller.start() at process startup"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R21",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "terraform/render/agent_service.tf",
+          "line": 64,
+          "note": "SHIP_API_BASE_URL from render_web_service.ship.url, not a literal"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 548,
+          "note": "timed live run against real API, 2026-08-07, commit af573d3"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Live probe 2026-08-09: agent /ready 200, ship / 200."
+    },
+    {
+      "id": "W5-R22",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "web/src/pages/App.tsx",
+          "line": 679,
+          "note": "chat surface on every screen"
+        },
+        {
+          "file": "web/src/components/InboxSidebar.tsx",
+          "line": 92,
+          "note": "ranked inbox surface"
+        },
+        {
+          "file": "e2e/agent-detection-latency.spec.ts",
+          "line": 88,
+          "note": "same /api/agent/inbox endpoint"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "All cited files zero diff vs baseline."
+    },
+    {
+      "id": "W5-R57",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "web/src/main.tsx",
+          "line": 153,
+          "note": "route table \u2014 no chat path anywhere"
+        },
+        {
+          "file": "web/src/components/AgentChatPanel.tsx",
+          "line": 13,
+          "note": "docstring states the embedded-only constraint"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Same absence check as W5-R3."
+    },
+    {
+      "id": "W5-R7",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 23,
+          "note": "## Agent Responsibility"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 44,
+          "note": "scope commitment: saves time, does not audit compliance"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Precedes the R9/R11 insertions; identical to baseline."
+    },
+    {
+      "id": "W5-R8",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 46,
+          "note": "### What it monitors proactively"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 52,
+          "note": "7-row event table with mechanism + effect"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Unchanged."
+    },
+    {
+      "id": "W5-R9",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "PARTIAL",
+      "changed": true,
+      "tickets": [
+        "TRO-370"
+      ],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 90,
+          "note": "linking bullet now carries 'not yet built (verified TRO-370, 2026-08-08)'"
+        },
+        {
+          "file": "agent/src/shipClient.ts",
+          "line": 511,
+          "note": "GateShipClientLike write surface is exactly postStandup/setStandupContent/applyIssueTransition \u2014 caveat is accurate"
+        },
+        {
+          "file": "agent/src/graph.ts",
+          "line": 1347,
+          "note": "resolveMentions implements bullet 1"
+        },
+        {
+          "file": "agent/src/itemStore.ts",
+          "line": 289,
+          "note": "ItemStore.clear implements bullet 4"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Baseline gap closed via the caveat path the brief explicitly permits. Independently re-verified: no document_associations write path exists anywhere in agent/src."
+    },
+    {
+      "id": "W5-R10",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 103,
+          "note": "'never does these at all' list"
+        },
+        {
+          "file": "agent/src/gate.ts",
+          "line": 105,
+          "note": "acceptDraft \u2014 only standup-posting path, under the human's own token"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Content and code backing identical; line numbers shifted by the R9 insertion."
+    },
+    {
+      "id": "W5-R11",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "PARTIAL",
+      "changed": true,
+      "tickets": [
+        "TRO-370",
+        "TRO-342"
+      ],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 179,
+          "note": "'Not yet built (verified TRO-370)': role table is a design, not a running taxonomy"
+        },
+        {
+          "file": "agent/src/roles.ts",
+          "line": 1,
+          "note": "docstring disclaims the taxonomy \u2014 caveat quotes it accurately"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 837,
+          "note": "token claim now distinguishes on-demand from proactive/deep tiers"
+        },
+        {
+          "file": "agent/src/index.ts",
+          "line": 182,
+          "note": "proactive/deep share one token by explicit design"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Both baseline gaps addressed with code-verified caveats."
+    },
+    {
+      "id": "W5-R13",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 440,
+          "note": "## Trigger Model \u2014 hybrid decision with 3-tier latency table"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 486,
+          "note": "webhooks-only rejected with named mechanisms"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Section untouched; +20 line shift only."
+    },
+    {
+      "id": "W5-R18",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 402,
+          "note": "## Use Cases \u2014 6 rows, all columns filled"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 431,
+          "note": "note claims use case 5's agent side is unbuilt \u2014 FACTUALLY WRONG, see notes"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "NEW DEFECT (pre-existing, not introduced by this wave): the Use Case 5 note says no graph node implements the escalation chain, but detectBlockerFanout/composeBlockerEscalation/commitBlockerEscalation have existed since 2026-08-05 (a600a12) and the Graph Diagram section of the SAME file documents them as implemented. An under-claim, not an over-claim, so it does not fail R18's narrow count bar \u2014 but it is wrong and should be corrected."
+    },
+    {
+      "id": "W5-R19",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 191,
+          "note": "## Graph Diagram \u2014 mermaid flowchart + node-by-node analysis"
+        },
+        {
+          "file": "agent/src/graph.ts",
+          "line": 1239,
+          "note": "22 addNode calls match the diagram's 22 nodes name-for-name, 0 differences"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Diagram still 100% structurally accurate. Stale prose citations flagged at baseline have grown WORSE (routeTrigger cited as graph.ts:617-628, actually 1277 \u2014 ~650 lines off) because an unrelated docstring commit added 91 lines and nobody refreshed them."
+    },
+    {
+      "id": "W5-R26",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 440,
+          "note": "Trigger Model present and argued"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 486,
+          "note": "argued rejection of alternatives"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Same basis as R13."
+    },
+    {
+      "id": "W5-R37",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [
+        "TRO-367"
+      ],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 972,
+          "note": "Rollback trigger and procedure \u2014 rewritten"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1060,
+          "note": "names .github/workflows/agent-rollback-check.yml and its 15-min cron"
+        },
+        {
+          "file": ".github/workflows/agent-rollback-check.yml",
+          "line": 1,
+          "note": "file exists and matches the doc's description"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1073,
+          "note": "honestly caveats that no real Render call has ever been made"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Label unchanged but content materially stronger: what baseline saw as real-but-unwired tooling is now a real scheduled trigger, honestly qualified."
+    },
+    {
+      "id": "W5-R52",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 23,
+          "note": "Agent Responsibility"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 191,
+          "note": "Graph Diagram"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 402,
+          "note": "Use Cases"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 440,
+          "note": "Trigger Model"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 783,
+          "note": "Architecture Decisions"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1272,
+          "note": "Cost Analysis"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "All seven present and filled. Baseline's caveat (stale Cost Analysis) is fixed."
+    },
+    {
+      "id": "W5-R53",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 225,
+          "note": "mermaid flowchart covers both modes and all 6 proactive chains"
+        },
+        {
+          "file": "agent/src/graph.ts",
+          "line": 1939,
+          "note": "branch conditions match the diagram's 8 labeled branches"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Diagram matches the built graph exactly, 0 differences."
+    },
+    {
+      "id": "W5-R54",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 783,
+          "note": "## Architecture Decisions \u2014 framework, node design, state, deployment"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 796,
+          "note": "'four paths' claim STILL STALE \u2014 7 distinct chains exist"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 837,
+          "note": "Deployment model token claim corrected via TRO-370"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Net neutral: one pre-existing staleness persists ('four paths'), one accuracy improvement landed in the same section."
+    },
+    {
+      "id": "W5-R14",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Execution Traces table untouched by this wave."
+    },
+    {
+      "id": "W5-R15",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Two materially different node paths still recorded."
+    },
+    {
+      "id": "W5-R16",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Proactive detection trace unchanged."
+    },
+    {
+      "id": "W5-R17",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Tracing configured; two differing links submitted."
+    },
+    {
+      "id": "W5-R20",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Both baseline gaps still hold: 3 of 4 gate functions unreachable via HTTP, no UI call site for acceptDraft in web/src (re-confirmed by fresh grep)."
+    },
+    {
+      "id": "W5-R31",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Every use case has a test-case entry."
+    },
+    {
+      "id": "W5-R32",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Each test case names concrete triggering Ship state."
+    },
+    {
+      "id": "W5-R33",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Trace links present per test case."
+    },
+    {
+      "id": "W5-R34",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Table lives in FLEETGRAPH.MD."
+    },
+    {
+      "id": "W5-R55",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "LangGraph in use; dependency pinned ^0.2.44 -> 0.2.74 by the W4-R38 fix, no functional effect."
+    },
+    {
+      "id": "W5-R56",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 569,
+          "note": "Test Cases / Execution Traces section \u2014 re-opened and confirmed at current line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Tracing wired into the runtime path; day-one commit still an ancestor of HEAD."
+    },
+    {
+      "id": "W5-R23",
+      "verdict": "VERIFIED",
+      "baseline_verdict": "VERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "terraform/render/agent_service.tf",
+          "line": 13,
+          "note": "render_web_service.agent; terraform/render/*.tf zero diff since baseline"
+        },
+        {
+          "file": "terraform/render/variables.tf",
+          "line": 236,
+          "note": "agent_internal_secret sensitive, no default, no committed literal"
+        },
+        {
+          "file": "agent/src/server.ts",
+          "line": 282,
+          "note": "/ready checks Ship reachability + config completeness"
+        }
+      ],
+      "verification": {
+        "command": "curl -s -o /dev/null -w '%{http_code}' https://ship-agent-t0zy.onrender.com/health ; .../ready",
+        "result_excerpt": "2026-08-09T13:48:12Z \u2014 /health -> HTTP 200 in 0.151s {\"status\":\"ok\"}; /ready -> HTTP 200 in 0.344s {\"status\":\"ready\"}"
+      },
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Re-probed live rather than carrying baseline forward."
+    },
+    {
+      "id": "W5-R24",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "terraform/render/plan/tro-316-agent-plan-annotated.md",
+          "line": 262,
+          "note": "## Reading this plan"
+        },
+        {
+          "file": "terraform/render/plan/tro-316-agent-plan-annotated.md",
+          "line": 277,
+          "note": "NEW: per-resource blast-radius annotation table (commit 6d3bba4, the recovered W4-R27 branch)"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Artifact strengthened since baseline by the recovered stranded branch; no new terraform plan was run."
+    },
+    {
+      "id": "W5-R25",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md",
+          "line": 1,
+          "note": "destroy-and-redeploy proof, 2026-08-04"
+        },
+        {
+          "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md",
+          "line": 108,
+          "note": "step 3 re-apply from config alone, both endpoints 200"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": "Re-run the destroy + re-apply cycle against the current agent_service.tf/web_service.tf (which now carry two more env vars) and save the output alongside the existing proof. Small in effort, but it is a live infrastructure operation and needs human sign-off before running.",
+      "notes": "Baseline caveat UNCHANGED and still open: the proof (8e06e76, 2026-08-04) predates 857186b (2026-08-05) which added AGENT_INTERNAL_SECRET/AGENT_API_BASE_URL. The cycle has not been re-demonstrated against the current config."
+    },
+    {
+      "id": "W5-R27",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 554,
+          "note": "T0 = 2026-08-07T14:50:13.130Z"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 559,
+          "note": "observed 42.6s against the 300s bar"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Section untouched by any of this wave's PRs. No fresh timed run performed."
+    },
+    {
+      "id": "W5-R28",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 527,
+          "note": "## Grader Access \u2014 manual reproduction procedure"
+        },
+        {
+          "file": "e2e/agent-detection-latency.spec.ts",
+          "line": 128,
+          "note": "automated path asserts < 5 min"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Two independent reproduction paths; e2e/ zero diff."
+    },
+    {
+      "id": "W5-R35",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "PARTIAL",
+      "changed": true,
+      "tickets": [
+        "TRO-369"
+      ],
+      "evidence": [
+        {
+          "file": ".gitlab-ci.yml",
+          "line": 92,
+          "note": "pnpm --filter @ship/agent test \u2014 NEW (e1c6867/TRO-369), confirmed INSIDE the verify job (spans 41-114), not the e2e-agent job"
+        },
+        {
+          "file": "agent/src/__tests__/gitlabCiAgentTests.test.ts",
+          "line": 1,
+          "note": "regression test asserts YAML placement, not mere string presence"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Baseline's narrow gap is closed. Not VERIFIED: no GitLab pipeline run has confirmed it \u2014 only a local agent-suite run under matching env."
+    },
+    {
+      "id": "W5-R36",
+      "verdict": "PARTIAL",
+      "baseline_verdict": "MISSING",
+      "changed": true,
+      "tickets": [
+        "TRO-367"
+      ],
+      "evidence": [
+        {
+          "file": ".github/workflows/agent-rollback-check.yml",
+          "line": 1,
+          "note": "NEW (aeff8e9/TRO-367): cron */15 plus workflow_dispatch"
+        },
+        {
+          "file": ".github/workflows/agent-rollback-check.yml",
+          "line": 18,
+          "note": "header states it triggers on sustained /ready unreadiness \u2014 NOT on a CI run failing"
+        },
+        {
+          "file": "agent/src/__tests__/check-readiness-and-rollback.test.ts",
+          "line": 1,
+          "note": "poll->evaluate->decide->call-Render proven against fakes only"
+        }
+      ],
+      "verification": {
+        "command": "gh secret list --repo troysatchell/ship ; gh run list --workflow=agent-rollback-check.yml",
+        "result_excerpt": "Both secrets set 2026-08-09T13:38Z. Latest scheduled run 31314520420 created 12:56:01Z (BEFORE secrets) logged 'configured=false' / '::warning:: Skipping the readiness check'. Zero real executions to date."
+      },
+      "interpretation": "I-03",
+      "assumption": null,
+      "suggested_scope": "Two independent gaps. (1) SEMANTIC: nothing rolls back because a CI job failed \u2014 CI failure only blocks merge. A literal fix adds a workflow_run/post-deploy step that fires rollback on a failed CI run against a deployed commit. (2) EVIDENTIARY: as of 2026-08-09 13:48 UTC the workflow has never executed its real step \u2014 its last scheduled run (12:56) predates the secrets (13:38) and logged configured=false. Gap 2 closes on the next tick; gap 1 needs new work.",
+      "notes": "Ruling I-03 applies: readiness polling does not satisfy the literal 'CI failure triggers rollback' wording. Substantial real progress from MISSING, but two gaps keep it PARTIAL."
+    },
+    {
+      "id": "W5-R38",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "e2e/agent-detection-latency.spec.ts",
+          "line": 31,
+          "note": "proactive mode spec"
+        },
+        {
+          "file": "e2e/agent-chat-grounded-response.spec.ts",
+          "line": 27,
+          "note": "on-demand mode spec"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "e2e/ zero diff since baseline."
+    },
+    {
+      "id": "W5-R39",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "e2e/agent-detection-latency.spec.ts",
+          "line": 46,
+          "note": "real comment via real API"
+        },
+        {
+          "file": "e2e/agent-detection-latency.spec.ts",
+          "line": 128,
+          "note": "asserts < 5 min"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Unchanged."
+    },
+    {
+      "id": "W5-R40",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "e2e/agent-chat-grounded-response.spec.ts",
+          "line": 82,
+          "note": "asserts Sources visible"
+        },
+        {
+          "file": "e2e/agent-chat-grounded-response.spec.ts",
+          "line": 96,
+          "note": "asserts sources contain the seed document title"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Unchanged."
+    },
+    {
+      "id": "W5-R41",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 293,
+          "note": "e2e-agent job runs both specs; ci.yml zero diff"
+        },
+        {
+          "file": ".gitlab-ci.yml",
+          "line": 148,
+          "note": "identical playwright invocation; shifted by the new verify line"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Both CI jobs functionally unchanged. GitLab pipelines not re-polled (no GitLab API access in the trace toolset)."
+    },
+    {
+      "id": "W5-R42",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "agent/src/scripts/e2e-server.ts",
+          "line": 61,
+          "note": "deterministic fakeModel"
+        },
+        {
+          "file": "e2e/fixtures/agentEnv.ts",
+          "line": 418,
+          "note": "placeholder API key"
+        },
+        {
+          "file": "agent/src/__tests__/server.test.ts",
+          "line": 694,
+          "note": "NEW resilience test pins anthropicApiUrl to a local hanging server, never api.anthropic.com"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "The one new test touching a real ChatAnthropic constructor was checked specifically for live-call risk and is clean."
+    },
+    {
+      "id": "W5-R43",
+      "verdict": "PARTIAL",
+      "baseline_verdict": "PARTIAL",
+      "changed": false,
+      "tickets": [
+        "TRO-368",
+        "TRO-379"
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/config.ts",
+          "line": 137,
+          "note": "NEW anthropicRequestTimeoutMs, documented default 8000ms"
+        },
+        {
+          "file": "agent/src/config.ts",
+          "line": 189,
+          "note": "NEW anthropicWorstCaseCallMs \u2014 18s worst case vs 25s handler deadline"
+        },
+        {
+          "file": "agent/src/server.ts",
+          "line": 150,
+          "note": "NEW buildAnthropicModel \u2014 single production construction site"
+        },
+        {
+          "file": "agent/src/server.ts",
+          "line": 345,
+          "note": "handler comment: the abort signal genuinely does not reach the model call"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": "Tracked as TRO-379: derive each attempt's timeout from the deadline remaining at call time; propagate the handler's AbortSignal into the ChatAnthropic call; validate at startup that worst-case model time plus a stated pre-model-work allowance fits inside chatHandlerTimeoutMs. Done when an integration test delays pre-model work and asserts no Anthropic request survives the handler timeout.",
+      "notes": "Label unchanged but the REASON is entirely different \u2014 do not read as 'nothing happened'. Baseline's PARTIAL was 'the LLM call has no timeout/retry at all'; that is fully closed. It stays PARTIAL only because of a narrower, independently filed follow-up (TRO-379): the timeout exists per-call but is not composable with the handler's deadline or its cancellation signal."
+    },
+    {
+      "id": "W5-R44",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "agent/src/health.ts",
+          "line": 33,
+          "note": "Ship-unreachable returns normalized {ready:false, reason}"
+        },
+        {
+          "file": "agent/src/resilientClient.ts",
+          "line": 77,
+          "note": "ShipUnreachableError"
+        },
+        {
+          "file": "agent/src/server.ts",
+          "line": 268,
+          "note": "POST /chat returns 503 agent_not_configured"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "health.ts and resilientClient.ts untouched by this wave; degradation behaviour identical to baseline."
+    },
+    {
+      "id": "W5-R29",
+      "verdict": "VERIFIED",
+      "baseline_verdict": "PARTIAL",
+      "changed": true,
+      "tickets": [
+        "TRO-366",
+        "TRO-373"
+      ],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1338,
+          "note": "Refreshed (TRO-366, 2026-08-08) cost block"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1350,
+          "note": "per-tier table: composeAnswer 6 @ $0.000876, composeStandupDraft 1 @ $0.000798, total $0.006055"
+        },
+        {
+          "file": "agent/src/graph.ts",
+          "line": 1486,
+          "note": "recordInvocation call site \u2014 real instrumentation"
+        }
+      ],
+      "verification": {
+        "command": "pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- --ledger cost-ledger-snapshot.jsonl",
+        "result_excerpt": "Ledger: cost-ledger-snapshot.jsonl | Invocations: 7 | Input tokens: 1860 | Output tokens: 839 | Total spend: $0.006055 | composeAnswer 6 @ $0.000876 (avg 6.50 docs) | composeStandupDraft 1 @ $0.000798 \u2014 run against the TRACKED snapshot on main @ 3e4a76d, reproducing without the gitignored .cache ledger"
+      },
+      "interpretation": "I-02",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Figures are now ACCURATE and reproduce exactly in a populated checkout (live cost-report.ts run matched digit for digit). Ruling I-02's condition is now MET: TRO-373 (merged, PR #162) commits agent/cost-ledger-snapshot.jsonl as a tracked file, FLEETGRAPH.MD:1370 cites the reproducing command, and fleetgraphCostFigures.test.ts reads that same snapshot as its single source of truth. Verified on main @ 3e4a76d."
+    },
+    {
+      "id": "W5-R30",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1449,
+          "note": "### Production Cost Projections"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1470,
+          "note": "runs/day per 1,000 users, tied to stated assumptions"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "A defended estimate, not a measurement \u2014 IU is the correct steady state, not a gap."
+    },
+    {
+      "id": "W5-R45",
+      "verdict": "PARTIAL",
+      "baseline_verdict": "PARTIAL",
+      "changed": false,
+      "tickets": [
+        "TRO-368"
+      ],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1210,
+          "note": "NEW ### Outbound Call Resilience (TRO-368)"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1220,
+          "note": "LLM provider row with explicit timeout + maxRetries \u2014 closes baseline's documented gap"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1223,
+          "note": "manual CLI scripts explicitly placed OUTSIDE the resilience story"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": "Add one dated note (FLEETGRAPH.MD or memory-bank) recording when the Architecture Defense was held and that the degradation demo was shown, or attach a transcript/recording artifact. This is the only element still missing.",
+      "notes": "Half of baseline's two-part gap is closed. The other half is unchanged: no record anywhere that the Architecture Defense's graceful-degradation demonstration occurred (grep for defense/defend across FLEETGRAPH.MD returns zero; memory-bank has no entry past 2026-08-07)."
+    },
+    {
+      "id": "W5-R46",
+      "verdict": "VERIFIED",
+      "baseline_verdict": "PARTIAL",
+      "changed": true,
+      "tickets": [
+        "TRO-371"
+      ],
+      "evidence": [
+        {
+          "file": "CHANGES.md",
+          "line": 794,
+          "note": "TRO-371 entry reconciling the sweep's wrong count (claimed 13 missing rollback; real count 1)"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 3025,
+          "note": "Bundle TRO-330 now carries a Rollback section \u2014 the one real gap"
+        },
+        {
+          "file": "web/src/lib/changesLogSections.test.ts",
+          "line": 146,
+          "note": "mechanical check: description / rollback / run-test per entry"
+        }
+      ],
+      "verification": {
+        "command": "standalone replica of web/src/lib/changesLogSections.test.ts regex logic run against CHANGES.md (vitest not run \u2014 shared-DB constraint)",
+        "result_excerpt": "153 top-level entries parsed; missing rollback = 0; missing run/test = 0; missing description = 0"
+      },
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Independently verified by replicating the shipped test's exact regex logic against the real CHANGES.md: 153 entries, 0 missing rollback, 0 missing run/test, 0 missing description."
+    },
+    {
+      "id": "W5-R47",
+      "verdict": "VERIFIED",
+      "baseline_verdict": "PARTIAL",
+      "changed": true,
+      "tickets": [
+        "TRO-366",
+        "TRO-373"
+      ],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1357,
+          "note": "$0.006055 (7 invocations, 1,860 input tokens, 839 output tokens)"
+        },
+        {
+          "file": "agent/src/__tests__/fleetgraphCostFigures.test.ts",
+          "line": 118,
+          "note": "regression test pins inputTokens 1860 / outputTokens 839"
+        }
+      ],
+      "verification": {
+        "command": "pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- --ledger cost-ledger-snapshot.jsonl",
+        "result_excerpt": "Ledger: cost-ledger-snapshot.jsonl | Invocations: 7 | Input tokens: 1860 | Output tokens: 839 | Total spend: $0.006055 | composeAnswer 6 @ $0.000876 (avg 6.50 docs) | composeStandupDraft 1 @ $0.000798 \u2014 run against the TRACKED snapshot on main @ 3e4a76d, reproducing without the gitignored .cache ledger"
+      },
+      "interpretation": "I-02",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Breakdown now matches a live re-run exactly (was ~3x stale). Ruling I-02's condition is now MET: TRO-373 (merged, PR #162) commits agent/cost-ledger-snapshot.jsonl as a tracked file, FLEETGRAPH.MD:1370 cites the reproducing command, and fleetgraphCostFigures.test.ts reads that same snapshot as its single source of truth. Verified on main @ 3e4a76d."
+    },
+    {
+      "id": "W5-R48",
+      "verdict": "VERIFIED",
+      "baseline_verdict": "PARTIAL",
+      "changed": true,
+      "tickets": [
+        "TRO-366",
+        "TRO-373"
+      ],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1357,
+          "note": "7 invocations"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1372,
+          "note": "the false 'composeStandupDraft has zero real invocations' claim is corrected"
+        }
+      ],
+      "verification": {
+        "command": "pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- --ledger cost-ledger-snapshot.jsonl",
+        "result_excerpt": "Ledger: cost-ledger-snapshot.jsonl | Invocations: 7 | Input tokens: 1860 | Output tokens: 839 | Total spend: $0.006055 | composeAnswer 6 @ $0.000876 (avg 6.50 docs) | composeStandupDraft 1 @ $0.000798 \u2014 run against the TRACKED snapshot on main @ 3e4a76d, reproducing without the gitignored .cache ledger"
+      },
+      "interpretation": "I-02",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Confirmed two independent ways: live cost-report.ts run, and by reading agent/.cache/cost-ledger.jsonl directly and hand-summing its 7 records (435+405+373+95+95+109+348=1860 in; 211+122+44+159+97+116+90=839 out). Ruling I-02's condition is now MET: TRO-373 (merged, PR #162) commits agent/cost-ledger-snapshot.jsonl as a tracked file, FLEETGRAPH.MD:1370 cites the reproducing command, and fleetgraphCostFigures.test.ts reads that same snapshot as its single source of truth. Verified on main @ 3e4a76d."
+    },
+    {
+      "id": "W5-R49",
+      "verdict": "VERIFIED",
+      "baseline_verdict": "PARTIAL",
+      "changed": true,
+      "tickets": [
+        "TRO-366",
+        "TRO-373"
+      ],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1357,
+          "note": "Total development spend $0.006055"
+        }
+      ],
+      "verification": {
+        "command": "pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- --ledger cost-ledger-snapshot.jsonl",
+        "result_excerpt": "Ledger: cost-ledger-snapshot.jsonl | Invocations: 7 | Input tokens: 1860 | Output tokens: 839 | Total spend: $0.006055 | composeAnswer 6 @ $0.000876 (avg 6.50 docs) | composeStandupDraft 1 @ $0.000798 \u2014 run against the TRACKED snapshot on main @ 3e4a76d, reproducing without the gitignored .cache ledger"
+      },
+      "interpretation": "I-02",
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Matches live re-run exactly (was ~3x under). Ruling I-02's condition is now MET: TRO-373 (merged, PR #162) commits agent/cost-ledger-snapshot.jsonl as a tracked file, FLEETGRAPH.MD:1370 cites the reproducing command, and fleetgraphCostFigures.test.ts reads that same snapshot as its single source of truth. Verified on main @ 3e4a76d."
+    },
+    {
+      "id": "W5-R50",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1452,
+          "note": "all three cells filled: ~$450 / ~$4,470 / ~$44,700 per month"
+        },
+        {
+          "file": "FLEETGRAPH.MD",
+          "line": 1457,
+          "note": "assumptions from live DB ratios"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Explicitly a projection, correctly labelled \u2014 the R47-R49 staleness finding does not apply."
+    },
+    {
+      "id": "W5-R51",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "baseline_verdict": "IMPLEMENTED-UNVERIFIED",
+      "changed": false,
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "PRESEARCH.MD",
+          "line": 73,
+          "note": "## Phase 1"
+        },
+        {
+          "file": "PRESEARCH.MD",
+          "line": 516,
+          "note": "## Phase 2"
+        },
+        {
+          "file": "PRESEARCH.MD",
+          "line": 852,
+          "note": "## Phase 3"
+        }
+      ],
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "File untouched by this wave (last commit acaa12f); all nine headings at their baseline line numbers."
+    }
+  ],
+  "orphan_tickets": [
+    {
+      "ticket": "TRO-372",
+      "title": "W5 sweep's section detector miscounts CHANGES.md",
+      "note": "audit-tooling defect; maps to no W5 requirement"
+    },
+    {
+      "ticket": "TRO-375",
+      "title": "W5 sweep artifacts carry W4 labels and stale verdicts",
+      "note": "audit-tooling defect; maps to no W5 requirement"
+    },
+    {
+      "ticket": "TRO-376",
+      "title": "Preflight/role skills still claim 13 expected web failures",
+      "note": "factory tooling; maps to no W5 requirement"
+    },
+    {
+      "ticket": "TRO-377",
+      "title": "gate.sh needs a vacuous-assertion check",
+      "note": "factory tooling; maps to no W5 requirement"
+    },
+    {
+      "ticket": "TRO-378",
+      "title": "Block git stash in factory worktrees",
+      "note": "factory tooling; maps to no W5 requirement"
+    },
+    {
+      "ticket": "TRO-380",
+      "title": "programWeeksNav flake fails CI on unrelated PRs",
+      "note": "test-infrastructure defect; bears on CI reliability generally, no specific W5 requirement"
+    },
+    {
+      "ticket": "TRO-374",
+      "title": "resilientClient.ts docstring claims model-provider coverage it lacks",
+      "note": "code-comment accuracy; adjacent to W5-R43/R45 but not itself a requirement"
+    }
+  ],
+  "needs_ruling": [],
+  "commands_run": [
+    {
+      "command": "pnpm type-check",
+      "result": "exit 0 \u2014 all packages clean",
+      "bears_on": [
+        "W5-R43",
+        "W5-R55"
+      ],
+      "note": "Run from repo root with DATABASE_URL pointed at the throwaway database ship_wt_tro_371, NOT the dev database."
+    },
+    {
+      "command": "pnpm test  (api + web + agent)",
+      "result": "exit 0 \u2014 193 test files, 0 failures (api 79, web 79, agent 35)",
+      "bears_on": [
+        "W5-R35",
+        "W5-R38",
+        "W5-R42",
+        "W5-R46"
+      ],
+      "note": "SIDE EFFECT DISCLOSED: this suite TRUNCATEs 16 tables in whatever DATABASE_URL resolves to. It was deliberately pointed at the throwaway factory database ship_wt_tro_371 so the dev database was never touched. web passed all 79 including UnifiedDocumentPage.programWeeksNav.test.tsx, the flake tracked as TRO-380."
+    },
+    {
+      "command": "curl -s https://ship-agent-t0zy.onrender.com/health and /ready",
+      "result": "HTTP 200 / HTTP 200 at 2026-08-09T13:48:12Z",
+      "bears_on": [
+        "W5-R5",
+        "W5-R21",
+        "W5-R23"
+      ],
+      "note": "Read-only GET probes. Establish current liveness only \u2014 not that a fresh proactive delivery occurred."
+    },
+    {
+      "command": "pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts",
+      "result": "7 invocations, 1,860 in / 839 out, $0.006055 \u2014 matches FLEETGRAPH.MD exactly",
+      "bears_on": [
+        "W5-R29",
+        "W5-R47",
+        "W5-R48",
+        "W5-R49"
+      ],
+      "note": "Read-only over a local ledger file, no database. Reproduces ONLY in a checkout with a populated agent/.cache ledger \u2014 which is precisely the limitation ruling I-02 addresses."
+    },
+    {
+      "command": "standalone replica of web/src/lib/changesLogSections.test.ts regex logic vs CHANGES.md",
+      "result": "153 entries \u2014 0 missing rollback, 0 missing run/test, 0 missing description",
+      "bears_on": [
+        "W5-R46"
+      ],
+      "note": "Static text analysis. The shipped vitest file itself was NOT executed during the trace (shared-DB constraint); it did run in the central pnpm test above."
+    },
+    {
+      "command": "terraform plan / terraform apply / terraform destroy",
+      "result": "NOT RUN",
+      "bears_on": [
+        "W5-R24",
+        "W5-R25"
+      ],
+      "note": "Deliberately not run. W5-R25's proof predates two env vars added to the config, so re-demonstrating it would require a live destroy+apply against production infrastructure \u2014 a human-sign-off action, not an audit action."
+    },
+    {
+      "command": "GitLab pipeline verification for the agent suite",
+      "result": "NOT RUN",
+      "bears_on": [
+        "W5-R35",
+        "W5-R41"
+      ],
+      "note": "No GitLab API access in the sweep's toolset. W5-R35 is therefore IMPLEMENTED-UNVERIFIED rather than VERIFIED: the .gitlab-ci.yml placement is confirmed by reading the file and by a regression test, but no actual GitLab pipeline run has been observed."
+    }
+  ]
+}

@@ -78,3 +78,5 @@
 {"ticket":"TRO-367","branch":"fix/w5-ci-rollback-and-gitlab-agent-tests","attempt":3,"verdict":"fail","failedGates":["stash-guard"],"note":"FALSE POSITIVE: sibling worktree's write; log cwd= attributes to Ship-wt-tro_366; G7c fixed on main","ts":"2026-08-09T00:48:32Z"}
 {"ticket":"TRO-369","branch":"fix/w5-ci-rollback-and-gitlab-agent-tests","attempt":3,"verdict":"fail","failedGates":["stash-guard"],"note":"FALSE POSITIVE: sibling worktree's write; log cwd= attributes to Ship-wt-tro_366; G7c fixed on main","ts":"2026-08-09T00:48:32Z"}
 {"ticket":"TRO-371","branch":"docs/w5-changes-rollback-sections","attempt":2,"verdict":"fail","failedGates":["stash-guard"],"note":"FALSE POSITIVE: sibling worktree's write; G7c fixed on main","ts":"2026-08-09T00:48:32Z"}
+{"ticket":"TRO-373","branch":"fix/tro-373-committed-cost-ledger-snapshot","attempt":1,"verdict":"fail","failedGates":["tests:api"],"note":"auth.test.ts extend-session; branch touches no api/ files; passed standalone; NEW flake identity","ts":"2026-08-09T14:14:22Z"}
+{"ticket":"TRO-373","branch":"fix/tro-373-committed-cost-ledger-snapshot","attempt":2,"verdict":"pass","failedGates":[],"ts":"2026-08-09T14:16:54Z"}
