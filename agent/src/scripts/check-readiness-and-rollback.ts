@@ -199,7 +199,14 @@ export interface RunCheckDeps {
   onEvaluated?: (samples: readonly ReadinessSample[], evaluation: ReadinessEvaluation) => void;
 }
 
-export type RunCheckOutcome = 'healthy' | 'transient' | 'dry_run_warn' | 'missing_api_key' | 'rolled_back';
+export type RunCheckOutcome =
+  | 'healthy'
+  | 'transient'
+  | 'monitoring_error'
+  | 'dry_run_warn'
+  | 'missing_service_id'
+  | 'missing_api_key'
+  | 'rolled_back';
 
 export interface RunCheckResult {
   outcome: RunCheckOutcome;
@@ -235,6 +242,22 @@ export async function runReadinessCheck(args: ParsedArgs, deps: RunCheckDeps): P
     return { outcome: evaluation.failureCount === 0 ? 'healthy' : 'transient', evaluation, samples };
   }
 
+  // Every sample failed, but did the SERVICE tell us it isn't ready, or did
+  // WE simply fail to reach it? `pollReadiness` records a thrown fetch (a
+  // DNS failure, a network partition between the CI runner and Render, a
+  // connect timeout) as `ready: false` with a `fetch_failed: ...` reason —
+  // identical in shape to a real `ready: false` from a 503 response. Treating
+  // that as "sustained application failure" would mean a GitHub-to-Render
+  // network blip rolls back a perfectly healthy service: the automation
+  // causing an outage in response to its own blindness, which is the worst
+  // failure mode this feature could have. Only when the SERVICE actually
+  // responded (at least one non-fetch-failure reason, even a failing one)
+  // do we treat this as a real signal worth acting on below.
+  const everySampleIsAMonitoringFailure = samples.every((s) => s.reason.startsWith('fetch_failed'));
+  if (everySampleIsAMonitoringFailure) {
+    return { outcome: 'monitoring_error', evaluation, samples };
+  }
+
   if (!args.execute) {
     return { outcome: 'dry_run_warn', evaluation, samples };
   }
@@ -243,17 +266,34 @@ export async function runReadinessCheck(args: ParsedArgs, deps: RunCheckDeps): P
     return { outcome: 'missing_api_key', evaluation, samples };
   }
 
-  // args.serviceId is guaranteed by parseArgs when args.execute is true.
-  const rolledBackTo = await rollbackViaRenderApi(args.serviceId as string, deps.apiKey, deps.fetchImpl);
+  if (!args.serviceId) {
+    return { outcome: 'missing_service_id', evaluation, samples };
+  }
+
+  const rolledBackTo = await rollbackViaRenderApi(args.serviceId, deps.apiKey, deps.fetchImpl);
   return { outcome: 'rolled_back', evaluation, samples, rolledBackTo };
 }
+
+/**
+ * Request timeout for each `/ready` poll (PR #156, this same wave, exists
+ * precisely because an outbound call had no explicit timeout — a stalled
+ * readiness request must terminate, not hang for the workflow's whole
+ * `timeout-minutes: 10`). 10s is generous relative to a healthy `/ready`
+ * response (a local dependency check, no outbound calls of its own per
+ * `health.ts`) and short enough that a stall still resolves in time for the
+ * 3-attempt/30s-apart default poll to finish comfortably inside the
+ * workflow's overall budget. A timed-out request rejects, which
+ * `pollReadiness` already catches and records as `fetch_failed` — after the
+ * fix above, that correctly does NOT trigger a rollback on its own.
+ */
+const READINESS_POLL_TIMEOUT_MS = 10_000;
 
 async function main() {
   const args = parseArgs(process.argv.slice(2));
 
   console.log(`Polling ${args.url} — ${args.attempts} attempt(s), ${args.intervalMs}ms apart...`);
   const result = await runReadinessCheck(args, {
-    fetcher: { get: (url) => fetch(url) },
+    fetcher: { get: (url) => fetch(url, { signal: AbortSignal.timeout(READINESS_POLL_TIMEOUT_MS) }) },
     fetchImpl: fetch,
     apiKey: process.env.RENDER_API_KEY,
     onEvaluated: (samples, evaluation) => {
@@ -269,6 +309,14 @@ async function main() {
     case 'transient':
       console.log('No sustained readiness failure detected. No action taken.');
       return;
+    case 'monitoring_error':
+      console.error(
+        `MONITORING ERROR: every sample failed to reach ${args.url} at all (${result.evaluation.reason}). ` +
+          'This means the CHECKER could not reach the service, not that the service reported itself unready — ' +
+          'a DNS or network problem between here and Render, not evidence of a broken deploy. No rollback action taken.'
+      );
+      process.exitCode = 1;
+      return;
     case 'dry_run_warn':
       console.error(`SUSTAINED READINESS FAILURE: ${result.evaluation.reason}`);
       console.error(
@@ -276,6 +324,11 @@ async function main() {
           'Exiting 2 to signal "rollback warranted" to a caller that wants to alert on this.'
       );
       process.exitCode = 2;
+      return;
+    case 'missing_service_id':
+      console.error(`SUSTAINED READINESS FAILURE: ${result.evaluation.reason}`);
+      console.error('--execute was passed but no --service-id was resolved. Refusing to call Render with an unknown id.');
+      process.exitCode = 1;
       return;
     case 'missing_api_key':
       console.error(`SUSTAINED READINESS FAILURE: ${result.evaluation.reason}`);
