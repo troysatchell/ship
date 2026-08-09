@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isConfigComplete, loadConfig } from '../config.js';
+import { anthropicWorstCaseCallMs, isConfigComplete, loadConfig } from '../config.js';
 
 describe('loadConfig', () => {
   it('applies documented defaults when env vars are absent', () => {
@@ -25,9 +25,11 @@ describe('loadConfig', () => {
     expect(config.chatHandlerTimeoutMs).toBe(25_000);
     // TRO-368 — explicit, chosen values for the LLM-provider call, never
     // silently left to @anthropic-ai/sdk's own 10-minute timeout /
-    // AsyncCallerParams' own 6-retry default.
-    expect(config.anthropicRequestTimeoutMs).toBe(20_000);
-    expect(config.anthropicMaxRetries).toBe(2);
+    // AsyncCallerParams' own 6-retry default. Lowered from the original 20s/2
+    // by CodeRabbit review, PR #156 (finding 1) — see the
+    // `anthropicWorstCaseCallMs` describe block below for why.
+    expect(config.anthropicRequestTimeoutMs).toBe(8_000);
+    expect(config.anthropicMaxRetries).toBe(1);
   });
 
   it('reads every value from the provided env map, not process.env', () => {
@@ -84,6 +86,72 @@ describe('loadConfig', () => {
     expect(loadConfig({ ON_DEMAND_DOCUMENT_CAP: '0' }).onDemandDocumentCap).toBe(12);
     expect(loadConfig({ ON_DEMAND_DOCUMENT_CAP: '-5' }).onDemandDocumentCap).toBe(12);
     expect(loadConfig({ ON_DEMAND_DOCUMENT_CAP: 'not-a-number' }).onDemandDocumentCap).toBe(12);
+  });
+
+  // CodeRabbit review, PR #156 (finding 2): ANTHROPIC_MAX_RETRIES=0 is the
+  // documented way to disable @langchain/core's AsyncCaller retries — it
+  // must survive, not be treated as "unset" the way `positiveInt` would.
+  describe('ANTHROPIC_MAX_RETRIES (nonNegativeInt parser)', () => {
+    it('accepts 0 — the documented way to disable retries entirely', () => {
+      expect(loadConfig({ ANTHROPIC_MAX_RETRIES: '0' }).anthropicMaxRetries).toBe(0);
+    });
+
+    it('accepts a genuine positive value', () => {
+      expect(loadConfig({ ANTHROPIC_MAX_RETRIES: '3' }).anthropicMaxRetries).toBe(3);
+    });
+
+    it('falls back to the default (1) on a negative value', () => {
+      expect(loadConfig({ ANTHROPIC_MAX_RETRIES: '-1' }).anthropicMaxRetries).toBe(1);
+    });
+
+    it('falls back to the default (1) on malformed input, unlike positiveInt which would parse "2abc" as 2', () => {
+      expect(loadConfig({ ANTHROPIC_MAX_RETRIES: '2abc' }).anthropicMaxRetries).toBe(1);
+      expect(loadConfig({ ANTHROPIC_MAX_RETRIES: 'not-a-number' }).anthropicMaxRetries).toBe(1);
+      expect(loadConfig({ ANTHROPIC_MAX_RETRIES: '3.5' }).anthropicMaxRetries).toBe(1);
+      expect(loadConfig({ ANTHROPIC_MAX_RETRIES: '' }).anthropicMaxRetries).toBe(1);
+    });
+  });
+});
+
+// CodeRabbit review, PR #156 (finding 1): the timeout+retry budget for the
+// Anthropic call must fit inside chatHandlerTimeoutMs, or a hung call can
+// outlive the handler that started it — the exact hole TRO-368 exists to
+// close, reopened in a narrower form by picking a per-attempt timeout that
+// looked safe in isolation but wasn't once multiplied by the retry count.
+describe('anthropicWorstCaseCallMs (CodeRabbit review, PR #156, finding 1)', () => {
+  it('computes attempts * timeout plus worst-case backoff for a simple case', () => {
+    // 1 retry (2 attempts): worst-case backoff before the only retry is
+    // round(rand[1,2) * 1_000 * 2**0) -> worst case 2_000ms.
+    expect(anthropicWorstCaseCallMs(5_000, 1)).toBe(2 * 5_000 + 2_000);
+  });
+
+  it('accounts for compounding backoff across multiple retries', () => {
+    // 2 retries (3 attempts): backoff before retry 1 is up to 2_000ms,
+    // before retry 2 is up to 4_000ms (factor 2 per the `retry` package's
+    // own default) — worst case total backoff 6_000ms.
+    expect(anthropicWorstCaseCallMs(1_000, 2)).toBe(3 * 1_000 + 2_000 + 4_000);
+  });
+
+  it('returns exactly the timeout with 0 retries — no backoff, one attempt', () => {
+    expect(anthropicWorstCaseCallMs(9_000, 0)).toBe(9_000);
+  });
+
+  it('the production defaults fit inside the production chatHandlerTimeoutMs default, with margin', () => {
+    const config = loadConfig({});
+    const worstCase = anthropicWorstCaseCallMs(config.anthropicRequestTimeoutMs, config.anthropicMaxRetries);
+
+    expect(worstCase).toBe(18_000);
+    expect(worstCase).toBeLessThan(config.chatHandlerTimeoutMs);
+    // Leaves real margin for the rest of /chat's own work (Ship reads before
+    // the model is ever called), not just barely squeaking under the wire.
+    expect(config.chatHandlerTimeoutMs - worstCase).toBeGreaterThanOrEqual(5_000);
+  });
+
+  it("TRO-368's ORIGINAL defaults (20s timeout, 2 retries) would NOT have fit — documents the regression this finding fixed", () => {
+    const originalWorstCase = anthropicWorstCaseCallMs(20_000, 2);
+    const chatHandlerTimeoutMsDefault = loadConfig({}).chatHandlerTimeoutMs;
+
+    expect(originalWorstCase).toBeGreaterThan(chatHandlerTimeoutMsDefault);
   });
 });
 

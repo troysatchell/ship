@@ -1,5 +1,7 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
+import { ChatAnthropic } from '@langchain/anthropic';
 import { loadConfig } from '../config.js';
 import { createServer, anthropicModelParams, buildAnthropicModel } from '../server.js';
 import type { ShipReadClient } from '../health.js';
@@ -642,7 +644,88 @@ describe('anthropicModelParams / buildAnthropicModel (TRO-368)', () => {
     const config = loadConfig({ ANTHROPIC_API_KEY: 'sk-test' });
     const params = anthropicModelParams(config);
 
-    expect(params.clientOptions.timeout).toBe(20_000);
-    expect(params.maxRetries).toBe(2);
+    // CodeRabbit review, PR #156 (finding 1): lowered from TRO-368's
+    // original 20_000/2 — see config.ts's anthropicWorstCaseCallMs and
+    // config.test.ts's own describe block for why.
+    expect(params.clientOptions.timeout).toBe(8_000);
+    expect(params.maxRetries).toBe(1);
   });
+});
+
+describe('anthropicModelParams / buildAnthropicModel — retry+timeout budget actually stops before the handler deadline (CodeRabbit review, PR #156, finding 1)', () => {
+  // This is the "observed", not just "derived", half of the finding-1 proof:
+  // config.test.ts's anthropicWorstCaseCallMs tests check the ARITHMETIC;
+  // this exercises the REAL @langchain/anthropic + @langchain/core retry
+  // stack against a real (but local, hanging) HTTP server, using the exact
+  // production defaults, and asserts wall-clock time settles comfortably
+  // inside chatHandlerTimeoutMs — proving the formula matches what the
+  // library actually does, not just what its docs claim.
+  let hangingServer: HttpServer;
+  let hangingServerUrl: string;
+  let attemptCount: number;
+
+  beforeEach(async () => {
+    attemptCount = 0;
+    hangingServer = createHttpServer((_req) => {
+      attemptCount += 1;
+      // Deliberately never call res.end()/res.write() — every attempt hangs
+      // until the client's own clientOptions.timeout aborts it. This is what
+      // makes the test deterministic: it does not depend on real network
+      // conditions or a real Anthropic outage, only on the timeout/retry
+      // configuration under test.
+    });
+    await new Promise<void>((resolve) => hangingServer.listen(0, '127.0.0.1', resolve));
+    const address = hangingServer.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('unreachable — listen(0, "127.0.0.1") always yields an AddressInfo');
+    }
+    hangingServerUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => hangingServer.close(() => resolve()));
+  });
+
+  it('with the production defaults (8s timeout, 1 retry), a fully-hung call settles well within chatHandlerTimeoutMs (25s default)', async () => {
+    const config = loadConfig({ ANTHROPIC_API_KEY: 'sk-test' });
+    expect(config.anthropicRequestTimeoutMs).toBe(8_000);
+    expect(config.anthropicMaxRetries).toBe(1);
+
+    const model = new ChatAnthropic({
+      ...anthropicModelParams(config),
+      anthropicApiUrl: hangingServerUrl,
+    });
+
+    const start = Date.now();
+    await expect(model.invoke('hello')).rejects.toThrow();
+    const elapsed = Date.now() - start;
+
+    // 2 attempts * 8_000ms + up to ~2_000ms worst-case backoff = ~18_000ms
+    // worst case (anthropicWorstCaseCallMs(8_000, 1) in config.test.ts).
+    // Asserted well under chatHandlerTimeoutMs's 25_000ms default, and well
+    // under api/'s own 30s AGENT_REQUEST_TIMEOUT_MS bound too.
+    expect(elapsed).toBeLessThan(20_000);
+    // Both attempts actually happened — this genuinely exercised the retry,
+    // not just the first timeout.
+    expect(attemptCount).toBe(2);
+  }, 25_000);
+
+  it('a request that never retries (maxRetries: 0) makes exactly one attempt and settles near its own single timeout', async () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: 'sk-test',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '500',
+      ANTHROPIC_MAX_RETRIES: '0',
+    });
+    const model = new ChatAnthropic({
+      ...anthropicModelParams(config),
+      anthropicApiUrl: hangingServerUrl,
+    });
+
+    const start = Date.now();
+    await expect(model.invoke('hello')).rejects.toThrow();
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(3_000);
+    expect(attemptCount).toBe(1);
+  }, 10_000);
 });

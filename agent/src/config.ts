@@ -80,17 +80,29 @@ export interface AgentConfig {
    * signal that (per that handler's own comment) does NOT reach this
    * call once it is in flight, so an unbounded model call keeps running to
    * completion server-side even after the handler has already responded.
-   * Chosen well under `chatHandlerTimeoutMs` (25s default) so a single slow
-   * call fails fast enough to leave room for a retry (see
-   * `anthropicMaxRetries` below) inside that same handler budget, while
-   * comfortably covering a real haiku completion under normal network
-   * conditions (low single-digit seconds observed in this sprint's own
-   * traced runs — see FLEETGRAPH.MD's Execution Traces section). Matters
-   * even more for `composeStandupDraft`/`composeBlockerEscalation`/
-   * `composeRetroDraft`/`composePlanChangeDraft`, which share this same
-   * `ChatAnthropic` instance (`index.ts`) but run outside any HTTP handler
-   * at all once a scheduler exists to trigger them — nothing bounds those
-   * today except this value. */
+   *
+   * CodeRabbit review, PR #156 (finding 1): TRO-368's first cut left this at
+   * 20s with `anthropicMaxRetries` at 2 (three total attempts) — individually
+   * "under chatHandlerTimeoutMs (25s)", but the WORST CASE is all three
+   * attempts running their full timeout plus backoff between them
+   * (`3 * 20_000 = 60_000ms`, before backoff), which is nowhere near 25s. A
+   * per-attempt timeout under the handler deadline does not bound the
+   * *retried* call; only the sum of every attempt plus every backoff delay
+   * does. See `anthropicWorstCaseCallMs` below for the exact arithmetic this
+   * value and `anthropicMaxRetries` are chosen to satisfy, checked against
+   * `chatHandlerTimeoutMs` by `config.test.ts` (`anthropicWorstCaseCallMs`
+   * describe block) so a future edit to any of the three values can't
+   * silently reopen this gap. Comfortably covers a real haiku completion
+   * under normal network conditions (low single-digit seconds observed in
+   * this sprint's own traced runs — see FLEETGRAPH.MD's Execution Traces
+   * section). Matters even more for `composeStandupDraft`/
+   * `composeBlockerEscalation`/`composeRetroDraft`/`composePlanChangeDraft`,
+   * which share this same `ChatAnthropic` instance (`index.ts`) but run
+   * outside any HTTP handler at all once a scheduler exists to trigger
+   * them — nothing bounds those today except this value (and unlike the
+   * `/chat` path, there is no handler deadline they need to fit inside, so
+   * the budget arithmetic below is a `/chat`-specific constraint, not a
+   * universal one). */
   anthropicRequestTimeoutMs: number;
   /** Max retry attempts (`ChatAnthropic`'s own `maxRetries` field, which
    * `@langchain/core`'s `AsyncCaller` applies with exponential backoff and
@@ -101,11 +113,20 @@ export interface AgentConfig {
    * `chat_models.cjs`) specifically so this is the one number in effect —
    * an unset value here would silently fall back to `AsyncCallerParams`'
    * documented default of 6, which is unexamined library behavior, not a
-   * chosen one. 2 (three total attempts) matches
-   * `resilientClient.ts`'s own `DEFAULT_RETRY_MAX_ATTEMPTS` for Ship's
-   * idempotent reads — enough to absorb a transient network blip or a 429
-   * without compounding cost and latency for a call that, unlike a Ship
-   * GET, is not free to repeat. */
+   * chosen one.
+   *
+   * CodeRabbit review, PR #156 (finding 1): originally 2 (three total
+   * attempts), chosen to MATCH `resilientClient.ts`'s own
+   * `DEFAULT_RETRY_MAX_ATTEMPTS` for Ship's idempotent reads — a reasonable
+   * instinct that ignored a real constraint Ship's own retries don't have:
+   * this call sits inside `/chat`'s `chatHandlerTimeoutMs` budget, and three
+   * attempts at any timeout large enough to cover a real completion don't
+   * fit inside it (see `anthropicRequestTimeoutMs` above). Lowered to 1 (two
+   * total attempts) — still enough to absorb a single transient network blip
+   * or 429 without paying for a third attempt the handler deadline has no
+   * room for. `0` is a legitimate, intentional value (disables retries
+   * entirely — see `loadConfig`'s `nonNegativeInt` parser below) and must
+   * not be confused with "not configured". */
   anthropicMaxRetries: number;
 }
 
@@ -122,16 +143,83 @@ const DEFAULT_ON_DEMAND_DOCUMENT_CAP = 12;
 // Shorter than api/'s own AGENT_REQUEST_TIMEOUT_MS (30_000ms,
 // api/src/routes/agent.ts) — see chatHandlerTimeoutMs's own docstring.
 const DEFAULT_CHAT_HANDLER_TIMEOUT_MS = 25_000;
-// See anthropicRequestTimeoutMs's own docstring for why 20s and not the
-// SDK's 10-minute default.
-const DEFAULT_ANTHROPIC_REQUEST_TIMEOUT_MS = 20_000;
-// See anthropicMaxRetries's own docstring for why 2 and not AsyncCallerParams'
-// default of 6.
-const DEFAULT_ANTHROPIC_MAX_RETRIES = 2;
+// See anthropicRequestTimeoutMs's own docstring for why 8s and not the
+// SDK's 10-minute default (CodeRabbit review, PR #156, finding 1: lowered
+// from TRO-368's original 20s, which combined with 3 total attempts could
+// take nearly a minute — see anthropicWorstCaseCallMs below).
+const DEFAULT_ANTHROPIC_REQUEST_TIMEOUT_MS = 8_000;
+// See anthropicMaxRetries's own docstring for why 1 and not AsyncCallerParams'
+// default of 6 (CodeRabbit review, PR #156, finding 1: lowered from TRO-368's
+// original 2, for the same reason as the timeout above).
+const DEFAULT_ANTHROPIC_MAX_RETRIES = 1;
+
+/** Worst-case backoff (ms) `@langchain/core`'s `AsyncCaller` inserts before
+ * the Nth retry attempt (1-indexed), when it is constructed the way this
+ * package constructs it. Verified by reading the actual library source, not
+ * assumed from the option's name: `async_caller.cjs`'s `AsyncCaller.call`
+ * passes `{ retries: maxRetries, randomize: true }` to `p-retry` and
+ * overrides nothing else, so the backoff shape falls through to the
+ * `retry` package's own defaults (`retry.js`'s `exports.timeouts`:
+ * `factor: 2, minTimeout: 1_000, maxTimeout: Infinity`). Its
+ * `createTimeout(attempt, opts)` (0-indexed `attempt`) computes
+ * `round(rand[1,2) * minTimeout * factor**attempt)` — worst case (rand -> 2)
+ * for the Nth retry (`attempt = N - 1`) is `2 * 1_000 * 2**(N-1)`. */
+function anthropicWorstCaseBackoffBeforeRetryMs(retryIndex: number): number {
+  return 2 * 1_000 * 2 ** (retryIndex - 1);
+}
+
+/** Worst-case total wall time (ms) a single `ChatAnthropic` call can occupy
+ * before `@langchain/core`'s `AsyncCaller` gives up and the call finally
+ * rejects: every attempt running its full `anthropicRequestTimeoutMs`, plus
+ * the worst-case backoff (`anthropicWorstCaseBackoffBeforeRetryMs`) between
+ * each pair of attempts. This is the number `chatHandlerTimeoutMs` actually
+ * has to be bigger than — a per-attempt timeout smaller than the handler
+ * deadline does NOT imply the retried call is (CodeRabbit review, PR #156,
+ * finding 1). Exported so `config.test.ts` can check the production
+ * defaults against `chatHandlerTimeoutMs` without re-deriving this
+ * arithmetic, and so anyone tuning these values by hand has something to
+ * run instead of doing the multiplication themselves.
+ *
+ * With the DEFAULT_* values below: `anthropicWorstCaseCallMs(8_000, 1)` =
+ * `2 attempts * 8_000ms + 2_000ms worst-case backoff` = `18_000ms`,
+ * comfortably inside `DEFAULT_CHAT_HANDLER_TIMEOUT_MS`'s `25_000ms` — about
+ * 7s of margin for the rest of `/chat`'s own work (the Ship reads
+ * `resolveSeed`/`expandFrontier`/`ingest` do before the model is ever
+ * called). */
+export function anthropicWorstCaseCallMs(requestTimeoutMs: number, maxRetries: number): number {
+  const attempts = maxRetries + 1;
+  let worstCaseBackoffMs = 0;
+  for (let retryIndex = 1; retryIndex <= maxRetries; retryIndex++) {
+    worstCaseBackoffMs += anthropicWorstCaseBackoffBeforeRetryMs(retryIndex);
+  }
+  return attempts * requestTimeoutMs + worstCaseBackoffMs;
+}
 
 function positiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value ?? '', 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+/** Same contract as `positiveInt`, except `0` is a valid, meaningful result
+ * rather than a rejected one (CodeRabbit review, PR #156, finding 2):
+ * `ANTHROPIC_MAX_RETRIES=0` is the documented way to disable
+ * `@langchain/core`'s `AsyncCaller` retries entirely (its own `maxRetries`
+ * field genuinely accepts 0 — verified by reading `async_caller.cjs`: it is
+ * passed straight through to `p-retry`'s `retries` option with no
+ * special-casing), and `positiveInt`'s `parsed > 0` check would silently
+ * discard that choice and fall back to the default instead. Also stricter
+ * than `positiveInt` about malformed input: `Number.parseInt` alone accepts
+ * a leading-numeric string like `"2abc"` (`parseInt("2abc", 10) === 2`), so
+ * this validates the WHOLE trimmed string is digits before parsing it,
+ * rejecting negatives (a leading `-` fails the digits-only test) and
+ * anything non-numeric back to the fallback rather than a partially-parsed
+ * value. */
+function nonNegativeInt(value: string | undefined, fallback: number): number {
+  if (value === undefined) return fallback;
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return fallback;
+  const parsed = Number.parseInt(trimmed, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
 }
 
 /** Load config from an env map. Defaults to `process.env`; tests inject a fake map. */
@@ -169,7 +257,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
       env.ANTHROPIC_REQUEST_TIMEOUT_MS,
       DEFAULT_ANTHROPIC_REQUEST_TIMEOUT_MS
     ),
-    anthropicMaxRetries: positiveInt(env.ANTHROPIC_MAX_RETRIES, DEFAULT_ANTHROPIC_MAX_RETRIES),
+    // `nonNegativeInt`, not `positiveInt` (CodeRabbit review, PR #156,
+    // finding 2) — `0` is the documented way to disable retries and must
+    // survive, not fall back to the default.
+    anthropicMaxRetries: nonNegativeInt(env.ANTHROPIC_MAX_RETRIES, DEFAULT_ANTHROPIC_MAX_RETRIES),
   };
 }
 
