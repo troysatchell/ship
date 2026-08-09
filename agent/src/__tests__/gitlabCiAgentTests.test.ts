@@ -72,12 +72,28 @@ describe('extractJobBody (test-helper self-check)', () => {
   });
 });
 
+/**
+ * Matches only an actual GitLab CI `script:` list entry invoking the agent
+ * test command — `^\s*-\s+` anchors to a real YAML list item, never a `#`
+ * comment. This matters because `verify`'s own script block carries a
+ * comment (just above the real invocation) that narrates the ticket's
+ * before/after in prose and literally contains the substring
+ * "`pnpm --filter @ship/agent test`" inside a NEGATION ("...it invoked
+ * `pnpm --filter @ship/agent build` ... but never `pnpm --filter @ship/agent
+ * test`"). The previous unanchored regex matched that comment line first —
+ * so this test (and the `|| true` test below, which reused its match) passed
+ * even with the real `- pnpm --filter @ship/agent test` list entry deleted
+ * entirely, because the comment's own negated mention satisfied the regex on
+ * its own.
+ */
+const AGENT_TEST_LIST_ENTRY = /^\s*-\s+pnpm --filter @ship\/agent test\b/m;
+
 describe('.gitlab-ci.yml — verify job runs the agent regression suite (TRO-369)', () => {
-  it('invokes `pnpm --filter @ship/agent test` inside the verify job', () => {
+  it('invokes `pnpm --filter @ship/agent test` as a real script list entry inside the verify job, not merely in a comment', () => {
     const yaml = readGitlabCi();
     const verifyBody = extractJobBody(yaml, 'verify');
 
-    expect(verifyBody).toMatch(/pnpm --filter @ship\/agent test\b/);
+    expect(verifyBody).toMatch(AGENT_TEST_LIST_ENTRY);
   });
 
   it("sets DATABASE_URL and NODE_ENV=test on the verify job, mirroring ci.yml:131-135's env for the same command", () => {
@@ -93,9 +109,9 @@ describe('.gitlab-ci.yml — verify job runs the agent regression suite (TRO-369
     const verifyBody = extractJobBody(yaml, 'verify');
     const agentTestLine = verifyBody
       .split('\n')
-      .find((line) => /pnpm --filter @ship\/agent test\b/.test(line));
+      .find((line) => AGENT_TEST_LIST_ENTRY.test(line));
 
-    expect(agentTestLine, 'expected an agent test line inside the verify job').toBeDefined();
+    expect(agentTestLine, 'expected a real `- pnpm --filter @ship/agent test` list entry inside the verify job').toBeDefined();
     expect(agentTestLine).not.toMatch(/\|\|\s*true/);
   });
 
