@@ -21,6 +21,79 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-384 — every inbox item linked to a 404
+
+**The cost this closes.** Clicking through Alice's mentions in the ranked inbox landed on "no page
+available" every single time. **Root cause, confirmed by reading the code, not re-derived.** Four
+sites built an `action.href` for an inbox item by interpolating `document_type` straight into the
+path, or by hardcoding a singular segment:
+- `agent/src/proactive.ts:90` — `` `/${parentDoc.document_type}/${parentDoc.id}` `` (comment mention)
+- `agent/src/proactive.ts:113` — `` `/${fullDoc.document_type}/${fullDoc.id}` `` (document-body mention)
+- `agent/src/proactive.ts:221` — `` `/${sprint.document_type}/${sprint.id}` `` (blocked approval)
+- `agent/src/graph.ts:1714` — `` `/issue/${impact.blockingIssueId}` `` (blocker-escalation draft,
+  singular and hardcoded)
+
+`web/src/main.tsx` routes everything plural (`issues/:id`, `sprints/:id`, `programs/:id/*`, …) or
+through the catch-all `documents/:id/*`; every `document_type` value in the live dev database
+(`wiki`, `issue`, `project`, `sprint`, `program`, `person`, `standup`, `weekly_plan`, `weekly_retro`,
+`weekly_review` — all ten checked) has **no** matching singular route, so all four sites always fell
+through to `<Route path="*" element={<NotFoundPage />} />`.
+
+**What changed.** All four sites now emit `` `/documents/${id}` `` — the one route
+(`web/src/main.tsx:239`, `documents/:id/*` → `UnifiedDocumentPage`) that renders every document type,
+because in this repo everything is a document. Deliberately **not** a singular→plural mapping table:
+that would reintroduce the exact coupling that broke (a map that has to be updated whenever a route
+or a document type changes). One canonical route has no drift surface.
+
+Grepped `agent/src` for every `href:` site to confirm completeness — found the four above plus three
+more in `graph.ts` (`/standup-draft/:id`, `/retro-draft/:id`, `/plan-change-draft/:id`, lines 1580,
+1810, 1933) that route to pages which genuinely do not exist yet. Those are **out of scope** here
+(tracked separately as TRO-353) and were left untouched — confirmed by re-grepping after this change
+that all three still read exactly as before.
+
+**Regression test — structural, not a string check.**
+`agent/src/__tests__/inboxHrefRoutes.test.ts` parses the actual `<Route path="...">` table out of
+`web/src/main.tsx` (excluding the two pure catch-alls, `"*"` and `"/*"`, which exist to render "no
+page available" — including them would make every href trivially "resolve") and compiles each pattern
+into a matcher (`:param` → `[^/]+`, trailing `/*` → optional splat tail). It then calls the real
+`buildMentionItems`/`buildBlockingApprovalItems` (`proactive.ts`) and runs the compiled LangGraph
+through the blocker-escalation path (`graph.ts`'s `commitBlockerEscalation`) with fixtures mirroring
+`proactive.test.ts`/`graph.test.ts`'s own conventions, captures the **actual runtime href** each
+produces, and asserts it resolves against a real route. One case uses `document_type: 'weekly_plan'`
+specifically (not `'issue'`) to prove this isn't accidentally passing only for the one type whose
+name happens to look route-shaped. A `describe('route parser sanity...')` block also asserts the
+matcher itself is discriminating — it accepts `/documents/abc-123` and rejects `/issue/abc-123`,
+`/sprint/abc-123`, `/weekly_plan/abc-123` — so a future rename or removal of the `documents/:id/*`
+route fails this test by breaking real route resolution, not by string mismatch; a hardcoded
+`'/documents/'` check would keep passing even after the app started 404ing again.
+
+**Confirmed failing for the right reason before the fix.** Copied the fixed `agent/src/{proactive,
+graph}.ts` aside to the scratchpad (never `git stash`, per this repo's ban), overwrote each with
+`git show HEAD:<path>`, and re-ran only the new file:
+`pnpm --filter @ship/agent test -- inboxHrefRoutes` — all 4 site-coverage cases failed, naming the
+exact bad pre-fix paths:
+```
+expected '/weekly_plan/plan-1' to be '/documents/plan-1'
+expected '/wiki/wiki-1' to be '/documents/wiki-1'
+expected '/sprint/sprint-1' to be '/documents/sprint-1'
+expected '/issue/blocker-issue-1' to be '/documents/blocker-issue-1'
+```
+The 4 route-parser sanity cases passed throughout (they test the matcher itself, not the fix). All
+495 other tests in the suite were unaffected. Restored the fixed files and re-ran: all 499/499 pass
+(36 files).
+
+**How to run it.** `source .factory-env` first. `pnpm --filter @ship/agent test -- inboxHrefRoutes`
+for just this file, or `pnpm --filter @ship/agent test` for the full suite (499/499). `pnpm
+type-check` passes clean across all four workspace packages.
+
+**Roll back.** Revert this commit. No schema change, no migration, no new dependency. Reverting
+restores the four `href:` sites to their pre-fix singular/type-interpolated form (every inbox item
+404s again, as before) and removes `agent/src/__tests__/inboxHrefRoutes.test.ts`. The three
+out-of-scope `graph.ts` draft hrefs (`/standup-draft/:id`, `/retro-draft/:id`,
+`/plan-change-draft/:id`) are untouched either way.
+
+---
+
 ## TRO-383 — a literal CI-failure rollback trigger, distinct from the sustained-readiness poll
 
 **The requirement, verbatim.** W5-R36: "If a CI run fails, the deployment must be rolled back

@@ -87,7 +87,7 @@ export async function buildMentionItems(
           documentType: parentDoc.document_type,
           commentId: comment.comment_id,
         },
-        action: { label: 'View comment', href: `/${parentDoc.document_type}/${parentDoc.id}` },
+        action: { label: 'View comment', href: `/documents/${parentDoc.id}` },
       });
     }
   }
@@ -110,7 +110,7 @@ export async function buildMentionItems(
         type: 'mention',
         summary: `Mentioned in "${fullDoc.title}"`,
         evidence: { documentId: fullDoc.id, documentType: fullDoc.document_type },
-        action: { label: 'View document', href: `/${fullDoc.document_type}/${fullDoc.id}` },
+        action: { label: 'View document', href: `/documents/${fullDoc.id}` },
       });
     }
   }
@@ -218,7 +218,7 @@ export async function buildBlockingApprovalItems(
           ? `Changes requested on "${sprint.title}" — revise and resubmit`
           : `"${sprint.title}" is waiting on your plan approval`,
       evidence: { documentId: sprint.id, documentType: sprint.document_type },
-      action: { label: 'Review plan', href: `/${sprint.document_type}/${sprint.id}` },
+      action: { label: 'Review plan', href: `/documents/${sprint.id}` },
       blockedSince: entry.created_at,
     });
   }
