@@ -1711,7 +1711,7 @@ export function buildGraph(
         type: 'blocker_escalation',
         summary: `"${impact.blockingIssueTitle}" is blocking work across ${impact.distinctProjectIds.length} projects`,
         evidence: { documentId: impact.blockingIssueId, documentType: 'issue' },
-        action: { label: 'Review drafted message', href: `/issue/${impact.blockingIssueId}` },
+        action: { label: 'Review drafted message', href: `/documents/${impact.blockingIssueId}` },
         draftId: draft.id,
       });
 
