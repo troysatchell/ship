@@ -21,6 +21,194 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-366 — FleetGraph's cost figures were 3x stale, and one sentence flatly contradicted the ledger sitting next to it
+
+**The cost this closes.** A grader running the exact command `FLEETGRAPH.MD`'s own Cost Analysis
+section names as its reproduction method got real numbers this file no longer matched: published
+3 invocations / $0.001922 total spend vs. the ledger's actual 7 / $0.006055 (a 3x understatement),
+and `composeAnswer`'s published cost/run ($0.000852) was stale too (actual $0.000876, now over 6
+priced runs instead of 2). Separately, one sentence — "`composeStandupDraft` still has zero real
+invocations" — was flatly false: the ledger's newest entry, timestamped 2026-08-07, IS a real
+`composeStandupDraft` invocation. That sentence appeared twice (Cost Analysis, and again in the
+Graph Diagram section's reasoning for why no trace exists for the `proactive_deep` chain).
+
+**What was NOT wrong, checked before touching anything.** The measurement methodology itself: a real
+per-invocation ledger (`agent/.cache/cost-ledger.jsonl`, `costTracking.ts`'s `FileCostTracker`)
+written by `graph.ts`'s `recordInvocation`, cross-checked against LangSmith. Measured vs. projected
+figures are correctly kept separate. Only the transcribed numbers (and the one now-false sentence)
+were stale — the cost section's structure is unchanged.
+
+**What changed — `FLEETGRAPH.MD` only, no code.**
+- "Last updated" banner: August 7 → August 8, 2026.
+- Cost Analysis: added a "Refreshed (TRO-366, 2026-08-08)" block with fresh figures reproduced
+  verbatim from `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` — 7 invocations,
+  1,860 input / 839 output tokens, $0.006055 total; `composeAnswer` 6 invocations @ $0.000876/run,
+  avg 6.50 documents pulled (12, 12, 12, 1, 1, 1); `composeStandupDraft` 1 invocation @
+  $0.000798/run. States plainly that the total does NOT include the original `respond` tier's
+  $0.000218 (that record is not present in the ledger this table was read from — disclosed as an
+  open gap, not papered over) and that the ledger now spans two calendar days, not one. The original
+  FG-21/FG-13 tables are left in place as dated history, not deleted.
+- Deleted the false "zero real invocations" sentence in both places it appeared and replaced it with
+  what is actually true: one real invocation exists (2026-08-07), but no scheduler exists to trigger
+  `proactive_deep` for a real person on any ongoing basis — a different, still-true claim this file
+  had conflated with "zero invocations."
+- Added a regression test (`agent/src/__tests__/fleetgraphCostFigures.test.ts`) that writes a frozen
+  fixture ledger — the same seven records (six `composeAnswer`, one `composeStandupDraft`) the
+  document now cites — via `FileCostTracker`, then calls `costTracking.ts`'s real `aggregate`/
+  `aggregateByNode` functions directly (the same ones `cost-report.ts` itself calls) and asserts the
+  result against the figures parsed straight out of `FLEETGRAPH.MD`. **Correction (CodeRabbit review,
+  PR #156, finding 3):** this entry originally said the test "runs `cost-report.ts`" — it does not;
+  it calls `aggregate`/`aggregateByNode` directly against the fixture, never shelling out to or
+  importing the script itself. Asserting against a frozen fixture rather than driving the actual CLI
+  is deliberate, not a shortcut: it is what keeps the test independent of host state (this worktree's
+  own `.cache/cost-ledger.jsonl` does not exist — see the Configuration note below), so the test's
+  design is correct as written and was not changed to match this now-corrected sentence.
+
+**Configuration note (provenance).** This ticket's own factory worktree (`Ship-wt-tro_366`) is
+freshly branched from `main` and has made zero real Anthropic API calls — its own
+`agent/.cache/cost-ledger.jsonl` does not exist, and running the report command inside it prints
+"No invocations recorded yet." The published figures were reproduced by pointing `cost-report.ts` at
+the project's long-lived development checkout's ledger (via `--ledger <path>`, a read-only operation
+— nothing was written to that checkout), which is where every real invocation across this sprint's
+FleetGraph tickets has actually accumulated. Stated explicitly because it is exactly the kind of
+environment-dependent fact this project's provenance rules ask to be surfaced, not assumed away.
+
+**How to verify.** `pnpm --filter @ship/agent exec vitest run src/__tests__/fleetgraphCostFigures.test.ts`.
+Manually: `source .factory-env && pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts --
+--ledger <path to a checkout with real ledger history>` and compare against `FLEETGRAPH.MD`'s
+"Refreshed (TRO-366...)" table.
+
+**Rollback.** Revert the commit. Documentation and test-only; no schema, code, or runtime behavior
+changes.
+
+---
+
+## TRO-368 — The LLM-provider call had no timeout or retry/backoff; a hung Anthropic call ran forever server-side
+
+**The cost this closes.** The brief requires explicit timeouts and retry logic with exponential
+backoff on every outbound call class, naming LLM providers specifically. Ship API calls were already
+compliant (`resilientClient.ts`: explicit `timeoutMs`, retry with backoff + jitter, a circuit
+breaker). The LLM call was not: `agent/src/index.ts:162` (pre-fix) constructed
+`new ChatAnthropic({ apiKey, model, maxTokens })` with no `timeout` and no `maxRetries`, silently
+inheriting `@anthropic-ai/sdk`'s own 10-**minute** default timeout and `AsyncCallerParams`' 6-retry
+default. `server.ts`'s own `/chat` handler comment already conceded the consequence: a hung model
+call "keeps running to completion server-side" even after the handler's own `chatHandlerTimeoutMs`
+(25s) gives up *waiting* for it, because the `AbortSignal` that bounds the handler never reaches
+inside a single in-flight `AnthropicModel.invoke()` call. The gap mattered even more for
+`composeStandupDraft`/`composeBlockerEscalation`/`composeRetroDraft`/`composePlanChangeDraft`, which
+share the same model instance but run outside any HTTP handler at all once a scheduler exists to
+trigger them — nothing bounded those calls either.
+
+**What changed.**
+- `agent/src/config.ts`: two new explicit `AgentConfig` fields, `anthropicRequestTimeoutMs` (default
+  20,000ms) and `anthropicMaxRetries` (default 2 — three total attempts, matching
+  `resilientClient.ts`'s own `DEFAULT_RETRY_MAX_ATTEMPTS` for Ship's idempotent reads), each with a
+  docstring explaining why that number and not the library's own inherited default.
+- `agent/src/server.ts`: new exported `anthropicModelParams(config)`/`buildAnthropicModel(config)` —
+  the one place this package decides what a real `ChatAnthropic` is configured with, so the
+  production wiring and the regression test below share exactly one definition. `maxRetries` maps to
+  `@langchain/core`'s own `AsyncCaller` (exponential backoff + jitter via `p-retry`, verified by
+  reading `async_caller.cjs`); `timeout` is forwarded via `clientOptions.timeout` — the only place
+  `@langchain/anthropic` exposes a per-request timeout (`AnthropicInput` has no top-level `timeout`
+  field, verified by reading `chat_models.d.ts`/`.cjs` directly).
+- `agent/src/index.ts`: now calls `buildAnthropicModel(config)` instead of constructing
+  `ChatAnthropic` inline.
+- All seven other `ChatAnthropic` construction sites in `agent/src/scripts/` (`trace-invoke.ts`,
+  `trace-invoke-on-demand.ts`, `trace-invoke-retro.ts`, `trace-invoke-plan-change.ts`,
+  `trace-invoke-escalation.ts`, `trace-invoke-deep.ts`, `golden-set-compare.ts`) — one-off manual
+  CLI tools, checked as the ticket asked — now set the same explicit `maxRetries`/
+  `clientOptions.timeout` values too, so the whole package is consistent rather than only the
+  server path being configured.
+- `FLEETGRAPH.MD`: new "Outbound Call Resilience" subsection (under Architecture Decisions) naming
+  every outbound call class this package makes — Ship API, LLM provider, and confirming (by grep) no
+  third external-tool class exists — with each one's timeout/backoff coverage in one table.
+
+**Regression test — new, `agent/src/__tests__/server.test.ts`.** Four `it()` cases in a new
+`describe('anthropicModelParams / buildAnthropicModel (TRO-368)', ...)` block assert the constructed
+params carry the explicit, configured `timeout`/`maxRetries` values (not the library's defaults of
+10 minutes / 6 retries), that they come from config rather than a hardcoded literal, that the real
+constructed `ChatAnthropic` instance's own public `clientOptions.timeout` reflects it, and that
+unset env vars fall back to the chosen defaults rather than an unset field. (`maxRetries` is asserted
+at the params layer, not read back off the instance — `@langchain/core`'s `AsyncCaller.maxRetries`
+is a `protected` field in the library's own `.d.ts`, not safely readable from outside without a cast
+this repo bans.) Two `config.test.ts` assertions cover the new `AgentConfig` fields' defaults and
+explicit-env wiring.
+
+**Confirmed red before green.** Reverted `config.ts`/`server.ts`/`index.ts` to their pre-fix `HEAD`
+state (via `git checkout --`, restored after from a captured patch — never `git stash`) and re-ran
+the new tests: 6 failures. Two in `config.test.ts` were genuine `AssertionError`s (`expected
+undefined to be 20000`, and a `toEqual` diff missing the two new keys). Four in `server.test.ts` were
+`TypeError: anthropicModelParams is not a function` / `buildAnthropicModel is not a function` — the
+correct "red" for a capability that did not exist yet on `HEAD`, not a broken/mistyped test (the
+other 39 pre-existing tests in the same two files still passed on the reverted code, confirming the
+failures were isolated to the new assertions). Restored the fix; same tests now pass, 45/45 across
+both files.
+
+**How to run/test it.** `source .factory-env && pnpm --filter @ship/agent exec vitest run
+src/__tests__/server.test.ts src/__tests__/config.test.ts` — 45/45. Full package:
+`pnpm --filter @ship/agent test` — 452/452. `pnpm type-check` clean across all four packages.
+
+**Rollback.** Revert the commit. No schema change, no new env var is required (both have defaults),
+no behavior change for any caller of `buildShipClient`/Ship-side clients.
+
+---
+
+## TRO-370 — FLEETGRAPH.MD described two agent capabilities the code does not have
+
+**The cost this closes.** Two claims in `FLEETGRAPH.MD` described a smaller system than actually
+exists, both verified directly against source before touching the document (per this ticket's own
+instruction — no invented work):
+- **W5-R9.** The Agent Responsibility section listed "linking a document to the issue or week it
+  refers to, when the reference is unambiguous" as one of four actions the agent takes without
+  approval, with no caveat marking it as forward-looking (unlike other aspirational statements
+  elsewhere in the file). Grepped `agent/src`: no write to `document_associations` on any path, and
+  `shipClient.ts`'s entire write surface is `postStandup`/`setStandupContent`/`applyIssueTransition`
+  — nothing resembling a link-creation call. Zero implementation.
+- **W5-R11.** The role-derivation section presented a Director/PM/Engineer table as settled fact.
+  `agent/src/roles.ts`'s own module docstring disclaims it directly: "FLEETGRAPH.MD's
+  Director/PM/Engineer taxonomy is real but not needed by anything in this ticket's scope... left
+  for whichever later FG ticket routes an escalation or needs to tell a Director apart from a PM."
+  Only single-hop/full-chain manager-lookup functions (`findManagerUserId`/`findManagerChain`) exist
+  — real, tested, and used for escalation routing — never the three-role taxonomy itself.
+  Separately, the Deployment Model section's identity claim ("every token belongs to a real user...
+  it can reach anything you could reach, and nothing you could not") was a blanket statement that
+  predates TRO-342: the on-demand tier does run under a fresh per-request token bound to the asking
+  person, but the proactive (fast/steady) and deep tiers still run under ONE shared token by explicit
+  design (`index.ts`'s `ProactiveDeps`/`DeepDeps` wiring — neither trigger has a per-invocation
+  asking person to source a token from), and the document never said so.
+
+**Fix — caveat, not implement**, per the ticket's own guidance (implement only if genuinely trivial;
+neither capability is). An accurate document describing a smaller system beats a confident one
+describing a fiction.
+
+**What changed — `FLEETGRAPH.MD` only, no code.**
+- The "linking a document" bullet now carries an explicit "not yet built" marker with the grep
+  evidence inline, and distinguishes it from the other three actions in the same list, which ARE
+  implemented and correctly sit outside `gate.ts`.
+- The Director/PM/Engineer table now carries a "not yet built — this table is a design, not a
+  running taxonomy" note quoting `roles.ts`'s own docstring, and states precisely what IS
+  implemented (`findManagerUserId`/`findManagerChain`) and what it cannot answer.
+- The "There is no service account" identity claim now names the two token regimes separately —
+  on-demand's per-request token vs. proactive/deep's one shared token — and states plainly that a
+  proactive draft about one person is read/written under the shared token's own visibility and
+  permissions, not that person's.
+
+**Regression test — explicit exception, not fabricated.** No robust mechanical test exists for "does
+a markdown paragraph correctly describe the absence of a feature," and this ticket's own guidance is
+not to fabricate a brittle one to satisfy the check. TRO-368's `server.test.ts`/`config.test.ts`
+additions and TRO-366's new `fleetgraphCostFigures.test.ts` (both in this same branch) satisfy the
+branch-level `regression-test` gate check mechanically; this ticket's own proof is the two source
+greps and the `roles.ts` docstring read, transcribed into `FLEETGRAPH.MD` and into this entry, and
+re-checkable by anyone with `grep`.
+
+**How to verify.** `grep -rn "createAssociation\|linkDocument" agent/src` (no hits outside this
+entry/`FLEETGRAPH.MD` itself); read `agent/src/roles.ts:1-9`; read `agent/src/index.ts`'s
+`onDemandShipClientFactory` vs. the shared `shipClient` passed to `proactiveDeps`/`deepDeps`.
+
+**Rollback.** Revert the commit. Documentation-only; no schema, code, or runtime behavior changes.
+
+---
+
 ## TRO-371 — 13 CHANGES.md entries reported missing rollback instructions — reconciled to the real count: 1, plus 7 missing run/test
 
 **The sweep's own numbers, checked against the file rather than assumed.** The ticket cited a sweep
