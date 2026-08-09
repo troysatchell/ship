@@ -14,9 +14,20 @@ for four days — its blocking-approval half could not fire because Ship's own a
 logged the transition to `document_history` — fixed at the routes, re-fixtured, and re-traced; the
 resolved finding (original kept as history) is in the Test Cases section. A timed live detection
 test against the deployed site observed **42.6 seconds** event-to-inbox (bar: 5 minutes) — see
-Grader Access.
+Grader Access. **Accuracy and trim pass (TRO-381 / TRO-351, 2026-08-09):** the Use Cases section's
+own note wrongly said Use Case 5's agent side was unbuilt when the same document's Graph Diagram
+section already documented it as implemented — corrected. The "four paths" claim in Architecture
+Decisions and six stale `graph.ts` line citations around the Graph Diagram were re-verified against
+current source and fixed; `graph.ts` citations in this document now name symbols instead of line
+numbers, which drift. The Trigger Model table gained a note on why `proactive_escalation`/
+`proactive_plan_change` don't fit its three cadence tiers. The Cost Analysis section's
+Development-and-Testing-Costs subsection now leads with a clean, current four-row table instead of
+a superseded 2026-08-05 snapshot. Architecture Decisions' Deployment-model subsection was
+condensed — process narration and content duplicated with the Test Cases section's own
+graded-database narrative were cut; no cited claim, required section, or defended design decision
+was removed. See CHANGES.md for the full list.
 
-Last updated: August 8, 2026
+Last updated: August 9, 2026
 
 ---
 
@@ -283,12 +294,15 @@ flowchart TD
 
 - **Both modes run through the same graph; only the entry trigger differs.** True, and it is exactly
   `routeTrigger` above — one `addConditionalEdges(START, routeTrigger, {...})` call in `graph.ts`,
-  reading `state.trigger` (and, for `on_demand`, whether `seedDocumentId` is set) to pick one of five
-  route keys. Confirmed against `routeTrigger`'s own source (`graph.ts:617-628`), not inferred.
+  reading `state.trigger` (and, for `on_demand`, whether `seedDocumentId` is set) to pick one of
+  eight `RouteKey` values (seven distinct destination chains — `proactive_fast`/`proactive_steady`
+  share one; see "Node design rationale" below). Confirmed against `routeTrigger`'s own source in
+  `graph.ts` (the function of that name — this document cites symbols, not line numbers, for
+  `graph.ts`; see the note under "Node design rationale" for why), not inferred.
 - **The on-demand path expands outward with a hard cap, and that loop is the main source of
   genuinely different execution paths between runs.** True, and it is `expandFrontier`'s real
-  self-edge (`addConditionalEdges('expandFrontier', routeExpansionLoop, {...})`,
-  `graph.ts:922-925`) — a document-rich seed loops many times before the cap or an empty frontier
+  self-edge (the `addConditionalEdges('expandFrontier', routeExpansionLoop, {...})` call in
+  `graph.ts`) — a document-rich seed loops many times before the cap or an empty frontier
   exits it; a sparse one exits after one or two hops. The "Execution Traces" section below shows this
   concretely: a real run against a seed with project/sprint/program/assignee associations produced 47
   child spans (many `expandFrontier` visits, cap reached at 12 documents) against 9 for the bare
@@ -312,13 +326,13 @@ scheduler's job.** The old text in this section (now replaced) said the graph "b
 window open for this person'." Read against `graph.ts` directly, that branch does not exist anywhere
 in the compiled graph: there is no node or conditional edge anywhere in `buildGraph` that asks
 "has this person's standup window opened yet." The `proactive_deep` trigger requires a
-`targetPersonUserId` to already be known and passed in (`requireTargetPersonUserId`,
-`graph.ts:586-595`) — WHO gets a draft composed, and WHEN, is entirely the responsibility of a
+`targetPersonUserId` to already be known and passed in (`requireTargetPersonUserId` in `graph.ts`)
+— WHO gets a draft composed, and WHEN, is entirely the responsibility of a
 caller this graph does not contain. The module's own docstring says so directly:
 *"There is deliberately no scheduler in this file (or anywhere in this package) that decides WHOSE
 window is open and invokes the graph for them."* The thing that DOES live inside the graph and is
 easy to mistake for the same idea is `shouldGenerateDraftFor` (checked first thing inside
-`gatherStandupActivity`, `graph.ts:830`) — but that is a different question: "has this person been
+`gatherStandupActivity`'s own node body in `graph.ts`) — but that is a different question: "has this person been
 ignoring their last several drafts long enough that composing another one is waste" (cost cliff #3),
 evaluated only AFTER the graph has already been invoked for them. It is not "is it currently their
 window." Both are real, correct design commitments; only one of them is implemented as graph
@@ -328,10 +342,10 @@ exist to catch — recorded here rather than quietly reworded away.
 **Note 2 — the deep-tier "skip if ignored" behavior is an in-node data branch, not a StateGraph
 conditional edge.** Contrast this directly with `expandFrontier`'s self-loop, which IS a real
 `addConditionalEdges` call. `gatherStandupActivity -> composeStandupDraft -> commitStandupDraft` is
-three plain `.addEdge` calls (`graph.ts:928-929`) — `composeStandupDraft` always runs as a graph
+three plain `.addEdge` calls in `graph.ts`'s `buildGraph` — `composeStandupDraft` always runs as a graph
 node, every single time, regardless of `standupSkipReason`. The skip is a plain `if
-(state.standupSkipReason) { return {}; }` inside that node's own function body
-(`graph.ts:844-848`), never calling `model.invoke` on that path. A LangSmith trace of a skipped run
+(state.standupSkipReason) { return {}; }` inside that node's own function body in `graph.ts`,
+never calling `model.invoke` on that path. A LangSmith trace of a skipped run
 would show `composeStandupDraft` as a real, present, near-instant span with no model child run
 underneath it — structurally different from `expandFrontier`'s self-loop, where the NUMBER of
 `expandFrontier` spans in a trace varies run to run. The diagram marks this with a footnoted 🤖\* on
@@ -428,12 +442,20 @@ ranked — an inbox, not a stream.
 approval-blocking are structured lookups. The model composes prose and ranks; the floor underneath
 it is deterministic.
 
-**Use case 5's Ship-side dependency has shipped; its agent side has not.** When this was first
-written, Ship could not express "issue A blocks issue B" at all. It now can: migration
-`041_add_blocks_relationship.sql` (FG-15 / TRO-333) added `blocks` to `relationship_type`,
-migration 040 rejects circular association chains, and PR #120 added the blocks/blocked-by sidebar
-(TRO-334). What remains is the agent's half of the use case — the impact fan-out,
-lowest-common-manager resolution, and drafted message — which no graph node implements yet.
+**Use case 5 has shipped on both sides (corrected TRO-381, 2026-08-09 — this note previously said
+the agent side was unbuilt; that was false and had been since 2026-08-05).** When this was first
+written, Ship could not express "issue A blocks issue B" at all, and no agent code touched the
+case. Ship-side: migration `041_add_blocks_relationship.sql` (FG-15 / TRO-333) added `blocks` to
+`relationship_type`, migration 040 rejects circular association chains, and PR #120 added the
+blocks/blocked-by sidebar (TRO-334). Agent-side: the `proactive_escalation` chain —
+`detectBlockerFanout → composeBlockerEscalation → commitBlockerEscalation` — implements the impact
+fan-out, lowest-common-manager resolution, and drafted message (TRO-346/TRO-337 / FG-19, commit
+`a600a12`, 2026-08-05); the Graph Diagram section above already documents this same chain as
+implemented, which is what made the old claim here self-contradictory within one document. Test
+Cases row 5 below exercises it against a real trace. What genuinely remains open: no scheduler
+invokes `proactive_escalation` automatically for a real fan-out as it occurs — the same
+not-yet-built gap the Trigger Model section documents for `proactive_deep`/`proactive_retro`/
+`proactive_plan_change`.
 
 ---
 
@@ -446,6 +468,21 @@ lowest-common-manager resolution, and drafted message — which no graph node im
 | **Fast** | The moment a document is saved | Mentions and assignment changes land in the affected person's list. No model. | ~3 seconds |
 | **Steady** | Every 60 seconds | Collect what changed; hold the material each person's next draft will be built from | ~80 seconds |
 | **Deep** | Per person, before their window opens | Compose the drafts — standups in the morning, retros at week end | Scheduled |
+
+**`proactive_escalation` and `proactive_plan_change` don't get a fourth row here, and that is a
+scoping decision, not an omission (TRO-351).** This table's tiers are organised by CADENCE — how
+often something runs, whether a fixed poll interval or a per-person window. `proactive_retro`
+already fits the Deep row as written ("retros at week end" names it, even though — like
+`proactive_deep` — nothing schedules it yet). `proactive_escalation` (fires when an issue's blocker
+fan-out crosses two-or-more-projects-and-different-reporting-lines) and `proactive_plan_change`
+(fires when an already-approved plan is edited) are a different shape: event-CONDITION triggers,
+not cadence triggers. Neither has a "window" to schedule against the way Deep's per-person morning
+window does, and neither runs on any interval today — both are reachable only by invoking the graph
+directly with the matching trigger (see `agent/src/scripts/trace-invoke-escalation.ts`/
+`trace-invoke-plan-change.ts`, and `graph.ts`'s own module docstring, which states the "no scheduler
+in this file" fact for all four non-poll triggers, not just `proactive_deep`). Forcing either into a
+fourth cadence row would misstate what actually decides when they run today: nothing does, on any
+schedule.
 
 The steady tier used to be where the model ran, once per suspicious change. Under drafting it
 mostly **accumulates material**, and the model runs once per person per window instead. That is
@@ -793,17 +830,45 @@ recommended it.
 ### Node design rationale
 
 **Settled — implemented in `agent/src/graph.ts`.** One compiled graph serves every mode.
-`routeTrigger` branches from START on the trigger (plus `seedDocumentId` presence) into four
-paths: bare chat (`ingest → respond`); seeded expansion (`resolveSeed → expandFrontier`, a
-conditional self-loop that runs until the frontier empties or `documentCap` is hit, then
-`finalizeExpansion → composeAnswer`); the deterministic proactive chain
-(`pollChangeFeed → resolveMentions → detectBlockingApprovals → commitInboxItems`, no model call on
-the whole path); and the deep tier (`gatherStandupActivity → composeStandupDraft →
-commitStandupDraft`). Both principles this section fixed in advance survived implementation:
-accumulation and composition run on different clocks (the proactive chain commits material to the
-item store; the deep tier composes per person), and the expansion loop is the main source of
-run-to-run path difference — observed directly as 9 vs 47 vs 14 child spans across the three
-traces above.
+`routeTrigger` reads `state.trigger` (plus `seedDocumentId` presence, for `on_demand`) into eight
+`RouteKey` values that resolve to **seven distinct chains** — `proactive_fast` and
+`proactive_steady` share one destination chain, the other six each have their own:
+
+1. Bare chat (`ingest → respond`)
+2. Seeded expansion (`resolveSeed → expandFrontier`, a conditional self-loop that runs until the
+   frontier empties or `documentCap` is hit, then `finalizeExpansion → composeAnswer`)
+3. The deterministic proactive chain, both cadences
+   (`pollChangeFeed → resolveMentions → detectBlockingApprovals → commitInboxItems`, no model call
+   on the whole path)
+4. The deep tier (`gatherStandupActivity → composeStandupDraft → commitStandupDraft`)
+5. Blocker escalation (`detectBlockerFanout → composeBlockerEscalation → commitBlockerEscalation`,
+   TRO-346/TRO-337 / FG-19)
+6. Retro drafting (`gatherRetroActivity → composeRetroDraft → commitRetroDraft`, TRO-335 / FG-17)
+7. Plan-change detection (`detectPlanChange → composePlanChangeDraft → commitPlanChangeDraft`,
+   TRO-336 / FG-18)
+
+**Corrected TRO-351, 2026-08-09** — this section previously said "four paths," which was the count
+before the three drafting chains above (5–7) were added; the surrounding sentence was never
+rewritten when they landed, only the diagram was (TRO-349). Both principles this section fixed in
+advance survived implementation regardless of the count: accumulation and composition run on
+different clocks (the proactive chain commits material to the item store; each drafting chain
+composes per person or per week), and the expansion loop is the main source of run-to-run path
+difference — observed directly as 9 vs 47 vs 14 child spans across the three traces above.
+
+**On citing `graph.ts` by line number, and why this document mostly stopped doing it (TRO-351).**
+Every specific line citation into `graph.ts` in this document went stale at least once, and the
+drift compounds fast: `routeTrigger` alone was cited at `graph.ts:617-628` when this section was
+first written (2026-08-04, confirmed via `git log -S`), had already drifted to ~`1188-1205` by the
+time TRO-351 was filed the very next day (2026-08-05 — three drafting chains, FG-17/18/19, landed
+in between), and sits at a third number, 1277, as of this fix (2026-08-09) — roughly 660
+line-numbers of total drift in five days, with no mechanism forcing every citing sentence to move in
+lockstep. A file that grows this fast makes a bare line number a claim with a short shelf life.
+Citations into `graph.ts`
+in this document now name the function/node **symbol** instead (`routeTrigger`, `expandFrontier`,
+`requireTargetPersonUserId`, `shouldGenerateDraftFor`) — grep-able, and true regardless of how many
+lines get inserted above it. Citations into smaller, slower-moving files (`api/src/app.ts`,
+migration files) keep their line numbers, since those are cheap to re-verify and were found accurate
+when checked for this pass.
 
 ### State management
 
@@ -875,55 +940,35 @@ the live agent — see the "Done, 2026-08-04" paragraph under "Login and the 403
 API directly).
 
 **Confirmed (not assumed): which branch Render deploys, and whether merged code actually reaches
-it.** `git_branch` defaults to `"main"` in `variables.tf` for both services, and the live
-`terraform.tfstate` (main checkout, refreshed 2026-08-04) matches: both `render_web_service.ship`
-and `render_web_service.agent` show `runtime_source.docker.branch = "main"`,
-`auto_deploy = true`. Cross-checked directly against the Render API
-(`GET /v1/services/srv-d9kf2t942hec73aofrt0`): `autoDeploy: yes`, `branch: main` — config is
-correct. **But the live `ship` service has not actually redeployed since 2026-07-30**, observed
-three independent ways: (1) `GET /v1/services/.../deploys` and `.../events` list the last
-`deploy_ended`/`succeeded` at `2026-07-30T22:00:22Z`, commit `09a6895a` ("...ALB SG locked to
-CloudFront..."), triggered by an API call (this repo's own TF-10 verification session) — zero
-deploy events of any kind since, despite `main` receiving PR-A (`2f198f6`, 2026-08-03 20:07 EDT)
-and PR-B (`0db1fd0`, 2026-08-03 21:54 EDT) in the interim; (2) `GET /` on the live service returns
-`last-modified: Thu, 30 Jul 2026 21:59:21 GMT` on its static asset, consistent with the same stale
-build; (3) `GET /api/change-feed` (a PR-A route, `api/src/app.ts:401`) returns a bare `404 Cannot
-GET`, not an auth error — the route itself is absent from what's running. **So PR-A's change feed
-and `blocks` endpoints, and PR-D's UI surfaces, are not yet live on the graded Ship**, despite both
-being on `main` and despite `auto_deploy` being correctly configured — auto-deploy is not firing.
-Root cause not fully diagnosed: `gh api repos/troysatchell/ship/hooks` returns `[]` (no classic
-webhooks), which is suggestive but not conclusive, since Render's GitHub integration commonly runs
-through a GitHub App installation rather than a classic repo webhook, and this session's `gh` token
-cannot list App installations to check that directly.
-
-**Done, 2026-08-04, with explicit human sign-off.** The remediation call below was run by the
-orchestrator against `srv-d9kf2t942hec73aofrt0`. Result: deploy `dep-d9ouj9jl550s73feh900` reached
-`live`, commit `ef9d9c7` (current `main` at the time). Verified after, not just trusted: `GET
-/api/change-feed` unauthenticated now returns `401` (auth required — the route exists) instead of
-the prior bare `404`, and `GET /`'s `last-modified` header moved from `2026-07-30` to
-`2026-08-04T13:31:47Z`. **PR-A's routes are now live on the graded Ship.** Root cause of why
-`auto_deploy` itself never fired is still not diagnosed — this was a manual workaround, not a fix to
-the underlying trigger, so the same gap will recur on the next push unless someone with Render
-dashboard access checks the GitHub App installation.
+it — and it does not, reliably.** `git_branch` defaults to `"main"` in `variables.tf` for both
+services, and both `terraform.tfstate` and the Render API confirm `auto_deploy = true`,
+`branch: main` on each — configuration is correct. But observed **three separate times this
+sprint** (2026-08-04, 2026-08-05, and a third recurrence), a real merge to `main` did not reach the
+live service: a stale `last-modified` header, a `404` on a route the merge had just added, and the
+deploys API showing no new event, all independently confirming the same thing each time. Root cause
+never fully diagnosed — `gh api repos/troysatchell/ship/hooks` returns `[]` (no classic webhook),
+suggestive of Render's GitHub App integration silently failing to fire, but this session's `gh`
+token cannot list App installations to confirm it.
 
 **Standing operational procedure until that root cause is fixed:** after merging anything to `main`
-that the graded demo depends on (PR-D, PR-E, PR-F, PR-G), do not assume `auto_deploy` fired.
-Manually verify — `GET https://ship-rr6m.onrender.com/` and check its `last-modified` header against
-the merge time, or probe a route the merge actually added (the same pattern used above,
-`/api/change-feed`). If it's stale, trigger the same remediation call this ticket used:
+that the graded demo depends on, do not assume `auto_deploy` fired. Manually verify —
+`GET https://ship-rr6m.onrender.com/` and check its `last-modified` header against the merge time,
+or probe a route the merge actually added. If stale, trigger a manual redeploy:
 ```bash
-curl -X POST https://api.render.com/v1/services/srv-d9kf2t942hec73aofrt0/deploys \
+curl -X POST https://api.render.com/v1/services/<service-id>/deploys \
   -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
 ```
-The identical procedure applies to the agent service (`srv-d9otunmgekts73eqs0h0` as of this ticket
-— re-check the current id via `terraform output agent_service_url`/state, since it changes on every
-clean-machine `apply`) whenever `agent/` code changes land on `main`.
-```bash
-curl -X POST https://api.render.com/v1/services/srv-d9otunmgekts73eqs0h0/deploys \
-  -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{}'
-```
-(An earlier revision of this section repeated the *ship* service id in the agent command above — a
-copy-paste error, corrected 2026-08-05.)
+Current service ids: `srv-d9kf2t942hec73aofrt0` for `ship`, `srv-d9otunmgekts73eqs0h0` for `agent`
+as of this ticket — re-check via `terraform output agent_service_url`/state, since the agent's
+changes on every clean-machine `apply`. Exercised for real at least three times this sprint,
+each time verified end-to-end afterward, not just at the health check — a real session (CSRF token
+→ login → `POST /api/agent/chat` against a real fixture document) returning a grounded, cited
+answer, the full session → api-proxy → internal-secret → graph → model chain, live on the graded
+deployment. The second exercise surfaced a compounding gap worth recording: Terraform cannot update
+the free-tier agent service at all (see "Done, 2026-08-04" below), so a new env var a merge
+introduced (`AGENT_INTERNAL_SECRET`) existed nowhere until it was set directly via the Render
+REST API's env-vars endpoint — the same workaround, applied to configuration instead of to a
+missing deploy.
 
 **Limitation, noted 2026-08-06 (TRO-358, CodeRabbit review):** triggering a deploy via the Render
 REST API — unlike a dashboard-initiated action — does **not** disable `autoDeploy`. If this
@@ -931,43 +976,6 @@ procedure is ever used to roll back to an earlier commit rather than to catch up
 subsequent push to GitHub `main` will silently replace that rollback. Either `PATCH` the service
 with `autoDeploy: false` before a rollback and restore it after, or treat the rollback as
 point-in-time only and re-verify the deployed commit after any later push.
-
-**The gap recurred exactly as predicted, 2026-08-05 (pre-MVP-submission check).** Verified stale,
-observed directly, not inferred: `GET /` on the graded Ship still returned
-`last-modified: 2026-08-04T13:31:47Z` (the previous manual redeploy), `GET /api/agent/inbox`
-(a PR-D route) returned a bare `404`, and the agent service's own `/chat` and `/inbox` (also PR-D)
-returned `404` while `/health`/`/ready` returned `200` — both services were running pre-PR-C/PR-D
-builds. Auto-deploy had again not fired for any of the four merges since (#117, #120, #122, #123).
-Remediation: the standing procedure above, run against both services — deploys
-`dep-d9pajpnavr4c73b7l300` (ship) and `dep-d9pajpm7bikc73ap8c30` (agent), both building
-`main`@`d124a50`, triggered `2026-08-05T03:11Z`.
-
-**Post-deploy verification (2026-08-05T03:12–03:35Z), all observed, and it caught a second gap.**
-`GET /`'s `last-modified` moved to `2026-08-05T03:12:15Z`, and `GET /api/agent/inbox`
-unauthenticated flipped from bare `404` to `401` (route live, session-gated). But the agent's own
-`/chat` and `/inbox` then returned `500 internal_secret_not_configured` — the server's own
-explicit branch, not a crash. Cause: PR-D introduced `AGENT_INTERNAL_SECRET`, but Terraform cannot
-update the free-tier agent service (the render-oss/render provider bug above), and
-`terraform/render/*.tf` never gained the new variables at all (checked: zero references) — so the
-secret existed nowhere: not on the agent, and not on the ship service either, which was also
-missing `AGENT_API_BASE_URL` (the code default, `http://localhost:3100`, is meaningless on
-Render). Getting these into Terraform config is real follow-up work, tracked as `TRO-347`.
-Remediated via the Render REST API — the documented workaround for this exact provider bug: one
-minted secret set on both services, `AGENT_API_BASE_URL=https://ship-agent-t0zy.onrender.com` on
-ship, then one more deploy each (`dep-d9pal98ae00c73ek3t0g`, `dep-d9pal9lbedkc73bl7pf0`).
-Verified end-to-end as a grader would hit it, not just at the health check: agent `/chat`/`/inbox`
-without the secret now return `401` (was `500`); with it, `400` invalid-body — which proves the
-request passed both the secret gate *and* the graph-configured gate. Then a real browser-style
-session (CSRF token → login as the seeded dev user → `POST /api/agent/chat` against Test Case 2's
-fixture document `65f499b2-…`) returned a grounded answer naming the document, its week, and its
-project, with `citedSources` and the expansion-cap notice — the full
-session → api-proxy → internal-secret → graph → model chain, live on the graded deployment. The
-secret itself lives only in Render env config and the operator's local machine, not in the repo.
-This triggers a deploy of the service's configured branch (`main`) HEAD — equivalent to what
-`auto_deploy` should already be doing on every push. Confirm after with `GET .../deploys?limit=1`
-(expect `status: "live"`, a `createdAt` after this call, `commit.id` matching current `main`) and
-`GET /api/change-feed` (expect no longer a bare 404 once the new code is live and reachable with
-auth).
 
 **Rollback trigger and procedure.** Two layers, neither of which is a bespoke script:
 1. **CI gates merge, not just deploy.** `.github/workflows/ci.yml`'s own header states it is "the
@@ -1082,26 +1090,24 @@ CHANGES.md's TRO-322 entry for exact commands/output, and its TRO-367 entry for 
    trigger — this section's own transient-blip caveat means Render's platform check would then
    demote a healthy instance during any brief Ship outage, trading one failure mode for a worse one.
 
-**Login and the 403 (TRO-341 / FG-23) — root-caused, not a WAF.** Two prior curl attempts against
-`POST https://ship-rr6m.onrender.com/api/auth/login` returned a platform-looking `403 Forbidden` —
-generic HTML body, `ratelimit-*` headers, `server: cloudflare`. Reproduced directly and traced to
-source, not guessed: the `ratelimit-*` headers are `loginLimiter`'s own (`api/src/app.ts:88-101`,
-`5;w=900` matches exactly), and `app.use('/api/auth', conditionalCsrf, authRoutes)`
-(`api/src/app.ts:371`) applies CSRF protection to **every** `/api/auth/*` route, login included, for
-any request that isn't already carrying a `Bearer` token (`conditionalCsrf`, `app.ts:64-71`). A bare
-POST with no prior `GET /api/csrf-token` (which sets the session cookie the sync check needs) fails
-that check; `csrf-sync` throws with no route-local handler to catch it, so the error falls through
-to Express's default `finalhandler`, which is exactly where the generic `<pre>Forbidden</pre>` HTML
-comes from — not a Cloudflare/Render edge rule. `cloudflare`/`cf-ray` headers appear on **every**
-response from this host, 200 or 403 alike (verified) — present, but not the actor. Proven by fixing
-it: `GET /api/csrf-token` with a cookie jar → `POST /api/auth/login` with that cookie plus
-`x-csrf-token: <token>` → `200`, real session, `dev@ship.local` (`isSuperAdmin: true`). A real
-per-user API token was then minted through that session (`POST /api/api-tokens`,
-`api/src/routes/api-tokens.ts`), name `fleetgraph-agent-tro-341`, no expiry, and verified working via
-`Authorization: Bearer` against both a plain route (`/api/auth/me`) and a `conditionalCsrf`-guarded
-one (`/api/documents` — Bearer correctly bypasses CSRF, `app.ts:66-68`). The raw value is not in this
-file or in git: it was folded into the main checkout's gitignored `terraform/render/terraform.tfvars`
-and wired into the live agent — see the "Done, 2026-08-04" paragraph immediately below.
+**Login and the 403 (TRO-341 / FG-23) — root-caused, not a WAF.** A bare
+`POST https://ship-rr6m.onrender.com/api/auth/login` returns a platform-looking `403 Forbidden` —
+generic HTML body, `ratelimit-*` headers, `server: cloudflare`. Traced to source, not guessed: the
+`ratelimit-*` headers are `loginLimiter`'s own (`api/src/app.ts`), and `conditionalCsrf`
+(`api/src/app.ts`) applies CSRF protection to **every** `/api/auth/*` route, login included, for any
+request that isn't already carrying a `Bearer` token. A bare POST with no prior
+`GET /api/csrf-token` (which sets the session cookie the sync check needs) fails that check;
+`csrf-sync` throws with no route-local handler to catch it, so the error falls through to Express's
+default `finalhandler` — that generic `<pre>Forbidden</pre>` HTML, not a Cloudflare/Render edge
+rule (`cloudflare`/`cf-ray` headers appear on **every** response from this host, 200 or 403 alike —
+present, but not the actor). Proven by fixing it: `GET /api/csrf-token` with a cookie jar →
+`POST /api/auth/login` with that cookie plus `x-csrf-token: <token>` → `200`, real session,
+`dev@ship.local` (`isSuperAdmin: true`). A real per-user API token was then minted through that
+session (`POST /api/api-tokens`), name `fleetgraph-agent-tro-341`, no expiry, and verified working
+via `Authorization: Bearer` against both a plain route and a `conditionalCsrf`-guarded one (Bearer
+correctly bypasses CSRF). The raw value is not in this file or in git: it was folded into the main
+checkout's gitignored `terraform/render/terraform.tfvars` and wired into the live agent — see the
+"Done, 2026-08-04" paragraph immediately below.
 
 **On the choice of identity, deliberately not changed here.** `dev@ship.local` is this repo's
 established seed-fixture super-admin, already the login this entire sprint's manual verification
@@ -1115,97 +1121,64 @@ which is worth a follow-up ticket for graded/demo-lifetime credential hygiene (r
 expiration, and secret-manager storage instead of a gitignored `.tfvars` file) rather than blocking
 this one.
 
-**Done, 2026-08-04, with explicit human sign-off — but not via `terraform apply` as planned.** The
-real token was folded into the main checkout's `terraform.tfvars` and `terraform plan` confirmed
-exactly one change (`SHIP_API_TOKEN` on `render_web_service.agent`, 0 changes elsewhere). `terraform
-apply` itself failed both before and after adding `maintenance_mode` to `agent_service.tf`'s
-`lifecycle.ignore_changes` (matching `web_service.tf`'s existing `pull_request_previews_enabled`
-precedent for the identical reason): `Could not update service, unexpected error: could not update
-service: maintenance mode can only be configured for non-free tier services`. This is a
-render-oss/render provider bug — `ignore_changes` only changes what Terraform's *plan diff* shows,
-not what the provider's `Update` call sends in its API request body, and this provider appears to
-unconditionally include `maintenance_mode` on every update to this resource type regardless of
-whether it changed. **Worked around by calling Render's REST API directly for this one field**
-(`PUT /v1/services/{id}/env-vars/SHIP_API_TOKEN`, confirmed `200` with the new value's real length),
-then a manual redeploy (`POST .../deploys`, since an env-var PUT alone doesn't restart the running
-process — confirmed by checking `GET .../deploys?limit=1` still showed the prior deploy after the
-PUT). New deploy `dep-d9ouuar7uimc73a8vrkg` reached `live`; `GET /health` → `200`, `GET /ready` →
-`200`, both against the live agent with a real, working per-user token. **Terraform's own state
-now agrees with reality** (the `.tfvars` value matches what's live), but this is a standing landmine,
-not a one-off: **`terraform apply` cannot currently update `render_web_service.agent` at all, for
-any field, on the free tier.** `ignore_changes` only suppresses what shows in the plan *diff* — it
-does not stop the provider's `Update` call from unconditionally including `maintenance_mode` in its
-request body, so the failure reproduces identically for any change (a new env var, a plan tier
-change, anything). The `pull_request_previews_enabled`/`maintenance_mode` `ignore_changes` entries
-added here are harmless and worth keeping (they do suppress real diff noise from *other* drift), but
-they are not the fix. Until the provider is patched or the service moves off the free tier, **any
-future change to this resource's config must go through the Render REST API directly** — a
-`PUT`/`PATCH` to `/v1/services/{id}` or its `/env-vars` sub-resource, following the pattern used
-above — not `terraform apply`. Filed as a follow-up rather than solved here: adding automated
-integration coverage for this specific provider failure mode isn't practical (it requires a live
-Render API call against a free-tier resource, not something a unit/vitest suite can exercise), but
-someone should re-check `terraform apply` against this resource each time the provider version pins
-forward, since that's the actual fix path.
+**Done, 2026-08-04, with explicit human sign-off — but not via `terraform apply` as planned.**
+`terraform plan` confirmed exactly one intended change (`SHIP_API_TOKEN` on
+`render_web_service.agent`); `terraform apply` itself failed — `Could not update service...
+maintenance mode can only be configured for non-free tier services` — a render-oss/render provider
+bug: `ignore_changes` only suppresses what shows in the plan *diff*, but the provider's `Update`
+call unconditionally includes `maintenance_mode` in its request body regardless of whether it
+changed, so the failure reproduces for **any** change to this resource on the free tier (a new env
+var, a plan-tier change, anything) — adding `maintenance_mode` to `lifecycle.ignore_changes` (tried,
+matching `web_service.tf`'s existing `pull_request_previews_enabled` precedent) does not fix it.
+**Worked around via the Render REST API directly** (`PUT /v1/services/{id}/env-vars/...`, then a
+manual redeploy — an env-var PUT alone doesn't restart the running process). Verified:
+`GET /health`/`GET /ready` both `200` against the live agent with the real, working per-user token;
+Terraform's own state now agrees with reality. **Standing landmine, not a one-off:** until the
+provider is patched or the service moves off the free tier, any future config change to
+`render_web_service.agent` must go through the Render REST API — a `PUT`/`PATCH` to
+`/v1/services/{id}` or its `/env-vars` sub-resource — not `terraform apply`. Filed as a follow-up
+rather than solved here: exercising this failure mode in automated coverage isn't practical (it
+needs a live Render API call against a free-tier resource), but someone should re-check
+`terraform apply` against this resource each time the provider version pins forward, since that's
+the actual fix path.
 
-**Seeding the graded database with FG-3's fixture states (TRO-341 / FG-23) — plan, not executed.**
-`api/src/db/seed.ts`'s FG-3 block (`TRO-314`, merged to `main` 2026-08-03) is additive and
-self-gating: it checks `COUNT(*) FROM document_history` for the workspace first and no-ops if
-non-zero (`seed.ts:1262-1271`), same as every other block in the file ("already exists" checks
-before every insert) — this is what makes re-running the full `pnpm db:seed` against an
-already-seeded database safe rather than a duplicate-everything risk, *provided* the target
-database's existing rows were themselves produced by this same seed script, which `ship-db` is
-(`memory-bank/techContext.md`: seeded 2026-07-28, 257 documents, 11 users, 1 workspace — the same
-shapes `seed.ts` checks for). Two things stand between "safe in principle" and "runnable today":
+**Seeding the graded database with FG-3's fixture states (TRO-341 / FG-23) — procedure.**
+`api/src/db/seed.ts`'s FG-3 block (`TRO-314`) is additive and self-gating: it checks
+`COUNT(*) FROM document_history` for the workspace first and no-ops if non-zero, same as every
+other block in the file — this is what makes re-running `pnpm db:seed` against an already-seeded
+database safe, *provided* the target database's existing rows were themselves produced by this same
+seed script (confirmed for `ship-db` each time this ran, by checking document/user counts matched
+before proceeding). Two things stand between "safe in principle" and "runnable against the graded
+database":
 
-1. **`ship-db` has no public network path.** `ipAllowList` is unset (verified in
-   `terraform/render/plan/tro-316-agent-plan-annotated.md`'s import notes and re-confirmed by the
-   provider default) — "no IP addresses provided ⇒ private-network connections only." Reaching it
-   from outside Render requires the documented temporary-allowlist pattern
-   (`memory-bank/techContext.md:139-146`):
+1. **`ship-db` has no public network path** — `ipAllowList` is unset (private-network connections
+   only). Reaching it requires a temporary allowlist:
    ```bash
    curl -X PATCH https://api.render.com/v1/postgres/dpg-d9kgth6417fc7386hhh0-a \
      -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
      -d '{"ipAllowList":[{"cidrBlock":"<your-ip>/32","description":"temporary-fg23-seed"}]}'
-   # ...seed run below...  then immediately reset:
+   # ...seed run...  then immediately reset:
    curl -X PATCH https://api.render.com/v1/postgres/dpg-d9kgth6417fc7386hhh0-a \
      -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" \
      -d '{"ipAllowList":[]}'
    ```
-2. **Migrating/seeding against Render needs `NODE_ENV=production`** — that's the branch that turns
-   on SSL in `migrate.ts`/`seed.ts`, and requires `SESSION_SECRET` set or `app.ts` throws on boot
-   (`memory-bank/techContext.md:148`). The SSM fallback (`TRO-243`) is what lets that path work off
-   AWS.
+2. **Migrating/seeding against Render needs `NODE_ENV=production`** — the branch that turns on SSL
+   in `migrate.ts`/`seed.ts`, and requires `SESSION_SECRET` set or `app.ts` throws on boot (the SSM
+   fallback, TRO-243, is what lets that path work off AWS).
 
-Full sequence, run 2026-08-04 (writes to the live graded database, so it required explicit human
-sign-off — see the "Done" paragraph below):
+Full sequence:
 ```bash
-# 1. Get the external connection string (dashboard, or GET /v1/postgres/{id}/connection-info)
-#    after the temporary ipAllowList PATCH above has taken effect.
 export DATABASE_URL="<ship-db external connection string>"
 export NODE_ENV=production
-export SESSION_SECRET="<same value already in terraform.tfvars — required for app.ts's boot check
-                         even though seed.ts itself is the only thing actually running>"
-pnpm db:migrate   # idempotent, schema_migrations-tracked — confirms PR-A's schema is present;
-                   # likely a no-op today since the live `ship` service's own boot command already
-                   # runs `node dist/db/migrate.js` on every deploy (Dockerfile:75), but the pending
-                   # deploy above hasn't happened yet, so this is the one path that's certain either way.
-pnpm db:seed       # additive; prints "📋 FG-3 test case document ids (FLEETGRAPH.MD Test Cases 1-4)"
-                   # with the real ids for THIS database on success.
+export SESSION_SECRET="<same value already in terraform.tfvars>"
+pnpm db:migrate   # idempotent — confirms the schema is present
+pnpm db:seed       # additive; prints the real fixture ids for THIS database on success
 ```
-**Done, 2026-08-04, with explicit human sign-off.** Pre-seed sanity check (257 documents / 11 users
-/ 0 `document_history` rows) confirmed this database's rows really were produced by this same seed
-script before running anything against it. `pnpm db:migrate` reported "All migrations already
-applied" (the `ship` redeploy above had already run it on boot). `pnpm db:seed` ran additively — see
-the Test Cases section above for exactly which fixtures resolved, which didn't, and why. The
-temporary `ipAllowList` PATCH was applied, the seed ran over the external connection string, and the
-allowlist was reset to `[]` immediately after — confirmed via a second `GET` on the postgres
-resource showing `ipAllowList: null` again.
-
-**Update, 2026-08-06 (TRO-357).** This run's Test Case 1/3 gap (previous paragraph) was root-caused
-and fixed in `seed.ts` (TRO-345, PR #130, merged 2026-08-05), then the fix was run against this same
-graded database following this identical allowlist-open/close procedure — see the "Test Cases"
-section above ("Re-seed (TRO-357, 2026-08-06)") for the full before/after evidence. Both fixtures
-now fire; TC2/TC4 confirmed unchanged.
+Run for real twice against the graded database (2026-08-04, then again 2026-08-06 after a fixture
+fix), both with explicit human sign-off and the allowlist opened and reset immediately after each
+time — see the Test Cases section above ("Graded-database fixture status") for the complete
+before/after evidence, what fired, what did not, and the fix in between; that is the authoritative
+account and is not repeated here.
 
 ### Outbound Call Resilience
 
@@ -1273,6 +1246,27 @@ with margin. Full reasoning and the exact arithmetic live in `config.ts`'s
 
 ### Development and Testing Costs
 
+**Current figures.** Reproduce with `pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts
+-- --ledger cost-ledger-snapshot.jsonl` from the worktree — this reads the tracked, committed
+snapshot (`agent/cost-ledger-snapshot.jsonl`, TRO-373), the same one
+`agent/src/__tests__/fleetgraphCostFigures.test.ts` pins these numbers against, so this table and
+the code cannot drift apart silently again.
+
+| Item | Amount |
+|---|---|
+| Claude API — input tokens | 1,860 |
+| Claude API — output tokens | 839 |
+| Total invocations during development | 7 |
+| Total development spend | $0.006055 |
+
+**History below, chronological, kept in full rather than deleted.** This ledger has been refreshed
+three times as real spend accumulated and as the reproduction command itself was fixed; each
+snapshot below disclosed a real gap when it was current (an under-instrumented ledger, a
+non-reproducible command, a stale document) rather than smoothing it over, which is why the record
+stays rather than getting overwritten. The table immediately above is current; everything from here
+to "Refreshed (TRO-366, 2026-08-08)" below is superseded and kept for that provenance, not as a
+second source of truth.
+
 **Instrumented as of TRO-339 (FG-21), 2026-08-05.** Every real `model.invoke()` call in
 `agent/src/graph.ts` (the `respond`, `composeAnswer`, and `composeStandupDraft` nodes — the only
 three that ever call the model) now records its real input/output tokens, model, and which node
@@ -1292,40 +1286,28 @@ reproducible figures, and the command that actually gets them from a fresh clone
 | Total invocations during development | 1 |
 | Total development spend | $0.000218 |
 
-**Reconciliation.** The one recorded invocation was cross-checked directly against LangSmith's own
-usage reporting for the same trace (`fleetgraph-agent` project, queried via the LangSmith API,
-2026-08-05): LangSmith independently reports `prompt_tokens: 33`, `completion_tokens: 37`,
-`total_cost: 0.000218` for that exact call — an exact match, not a coincidence of rounding.
-
-**Why the total is this small.** Querying LangSmith's full history for this project (not just this
-ticket's own invocation) turned up only two prior real model calls, ever, in this sprint: one
-`trace-invoke.ts` smoke-test call from TRO-313/FG-2 (33 in / 38 out, $0.000223) and one failed call
-against a stale model id (0 tokens, $0). Both predate this ticket and were never captured anywhere.
-FG-5's proactive chain, FG-6's standup-draft composition, and FG-7's on-demand expansion have never
-once been invoked against the real Anthropic API this sprint — every test for all three uses a
-stable fake model, by design (`graph.test.ts`'s own docstring). So "no agent invocations yet" (this
-section's prior text) was accurate, not merely honest-but-stale: real spend really has been
-near-zero, and this ticket's instrumentation was landed before that changes, per its own premise —
-"instrumentation added after the fact cannot recover spend that was never recorded."
+**Reconciliation and why the total was this small.** The one recorded invocation was cross-checked
+directly against LangSmith's own usage reporting for the same trace: an exact match
+(`prompt_tokens: 33`, `completion_tokens: 37`, `total_cost: 0.000218`), not a coincidence of
+rounding. Querying LangSmith's full project history (not just this invocation) turned up only two
+other real model calls, ever, this sprint — both predating this ticket and never captured anywhere.
+FG-5's proactive chain, FG-6's standup-draft composition, and FG-7's on-demand expansion had never
+once been invoked against the real Anthropic API — every test for all three uses a stable fake
+model, by design. Real spend really had been near-zero; this instrumentation was landed before that
+changed.
 
 **Per-tier measured cost**, to replace the projected $0.021 standup / $0.015 inbox / $0.052 retro /
 $0.065 on-demand figures below with observed ones once real traffic exists: only the bare on-demand
-chat path (`respond`, no seed document) has a real measurement yet — $0.000218/run. `composeAnswer`
-(the on-demand-with-expansion tier the $0.065 projection actually describes) and
-`composeStandupDraft` (the standup-draft tier) are fully wired to record the moment either one is
-invoked for real — `composeAnswer` additionally records documents-pulled-per-run (cost cliff #2) —
-but neither has ever run against the real API, so neither has a measured number to report yet. This
-is a real gap, not a placeholder: producing one requires a live Ship API and seeded database
-(`composeAnswer`) or a scheduled trigger nobody has built yet (`composeStandupDraft`, `graph.ts`'s
-own module docstring — "there is no scheduler in this file... that decides whose window is open").
+chat path had a real measurement yet at this point — $0.000218/run. `composeAnswer` (the
+on-demand-with-expansion tier the $0.065 projection describes, which also records
+documents-pulled-per-run for cost cliff #2) and `composeStandupDraft` were fully wired to record the
+moment either ran for real, but neither had yet — a real gap, not a placeholder, since producing one
+needed a live Ship API and seeded database, or a scheduler nobody has built yet.
 
-**Update (TRO-324 / FG-13, 2026-08-05) — `composeAnswer` now has a real measurement too, and here is
-what "estimated runs per day" honestly is at this sample size.** Producing this ticket's own required
-trace-link proof (see "Execution Traces" above) meant running `composeAnswer` for real, twice — the
-`documentsPulled: 0` mistaken invocation and the real 12-document expansion run, both real API calls,
-both recorded to the same ledger FG-21 built. Reproduced verbatim by re-running FG-21's own
-`pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` from this worktree, 2026-08-05, after
-those two runs:
+**Update (TRO-324 / FG-13, 2026-08-05) — `composeAnswer` gets its first real measurement.** Producing
+this ticket's own required trace-link proof (see "Execution Traces" above) meant running
+`composeAnswer` for real, twice — the `documentsPulled: 0` mistaken invocation and the real
+12-document expansion run, both recorded to the same ledger:
 
 | Item | Amount |
 |---|---|
@@ -1335,53 +1317,30 @@ those two runs:
 | `respond` — cost/run (unchanged from FG-21 — not re-run by this ticket) | $0.000218 |
 | Total development spend as of 2026-08-05 | $0.001922 (3 invocations, 567 input tokens, 271 output tokens) |
 
-`composeAnswer`'s $0.000852 mean, at the time, was not yet a stable per-tier estimate — it was the
-average of exactly one near-zero-context run (a mistaken invalid seed id, 0 documents) and one real
-12-document, cap-reached run, close to the opposite ends of what `composeAnswer` can cost. It
-replaced "no measurement yet" with a real floor and ceiling from 2 genuine data points — a snapshot
-the ledger has since moved past, and, like the FG-21 table above, dated history now: the same command
-run today reproduces the ledger's current contents, not these two invocations. See the refresh
-immediately below, and TRO-373's fix (further below) for how "today" became reproducible at all from
-a fresh clone.
+`composeAnswer`'s $0.000852 mean, at the time, was the average of one near-zero-context run (a
+mistaken invalid seed id, 0 documents) and one real 12-document, cap-reached run — close to the
+opposite ends of what `composeAnswer` can cost, and, like the FG-21 table above, dated history now.
 
-**Refreshed (TRO-366, 2026-08-08) — the ledger kept growing after that 2026-08-05 snapshot, and this
-file had not caught up.** A grader running the exact command this document names as its own
-reproduction method got real numbers this file no longer matched: 7 invocations against the 3
-published above, $0.006055 against $0.001922. The table below is those 7 records — real, not
-estimated — as recorded in `agent/.cache/cost-ledger.jsonl` on 2026-08-08.
-
-**Configuration note (originally 2026-08-08, superseded by TRO-373, 2026-08-09).** At the time of the
-TRO-366 refresh, this ticket's own factory worktree (`Ship-wt-tro_366`) had made zero real Anthropic
-API calls, so its own `agent/.cache/cost-ledger.jsonl` did not exist — the command that produced the
-table below was instead run against the project's long-lived development checkout, whose ledger is
-where every real invocation across this sprint's FleetGraph tickets actually accumulated. That
-ledger is gitignored (`.gitignore:42`) and per-checkout by design, and was never committed — the same
-property that let the 2026-08-05 numbers above go stale unnoticed in the first place, and that made
-the cited command **genuinely unreproducible on a fresh clone**: running it against an empty `.cache`
-prints `No invocations recorded yet`, not the figures below — the numbers were real and unfalsifiable
-at the same time.
-
-TRO-373 closed that reproduction gap (the live `.cache/cost-ledger.jsonl` itself stays gitignored and
-per-checkout, by design — that does not change) by committing a byte-identical, read-only copy of the
-long-lived checkout's 7 records as a tracked snapshot, `agent/cost-ledger-snapshot.jsonl`. The
-reproducible command is now:
+**Refreshed (TRO-366, 2026-08-08), then made reproducible (TRO-373, 2026-08-09).** The ledger kept
+growing past the 2026-08-05 snapshot, and a grader running the command this document names got real
+numbers this file no longer matched (7 invocations / $0.006055 against the 3 / $0.001922 published
+above) — the table below is those 7 real records. Producing it exposed a second, structural problem:
+the command that produced it had to be run against the project's long-lived development checkout,
+because `agent/.cache/cost-ledger.jsonl` is gitignored and per-checkout by design — a fresh clone's
+own empty ledger prints `No invocations recorded yet`, not these figures. Real numbers, genuinely
+unreproducible. TRO-373 closed that gap by committing a byte-identical, read-only copy of those 7
+records as a tracked snapshot (`agent/cost-ledger-snapshot.jsonl`) and adding `--ledger`/
+`AGENT_COST_LEDGER_PATH` overrides to `cost-report.ts`, so the reproducible command is now:
 
 ```bash
 pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- --ledger cost-ledger-snapshot.jsonl
 ```
 
-(`--ledger` is `cost-report.ts`'s own pre-existing override — see the script's docstring;
-`AGENT_COST_LEDGER_PATH` works identically. The path resolves relative to `pnpm --filter @ship/agent
-exec`'s working directory, which is always `agent/` regardless of where the command itself is
-invoked from — confirmed with `pnpm --filter @ship/agent exec pwd` from the worktree root.) Run
-against this ticket's own worktree — which, like `Ship-wt-tro_366` before it, has made zero real
-Anthropic API calls of its own — on 2026-08-09, this reproduces the table below exactly: 7
-invocations, 1,860 input tokens, 839 output tokens, $0.006055 total; `composeAnswer` 6 invocations at
-$0.000876/run; `composeStandupDraft` 1 invocation at $0.000798/run. The snapshot is a point-in-time
-copy, not a live tap on the ledger — it will not pick up future real invocations without a follow-up
-commit — and `agent/src/__tests__/fleetgraphCostFigures.test.ts` pins this document's figures against
-that same committed snapshot file directly, so the document and the snapshot cannot drift apart
-silently again.
+Run from any fresh checkout — including this one, which has made zero real Anthropic API calls of
+its own — this reproduces the table below exactly. The snapshot is a point-in-time copy, not a live
+tap on the ledger (it will not pick up future real invocations without a follow-up commit), and
+`agent/src/__tests__/fleetgraphCostFigures.test.ts` pins this document's figures against that same
+committed snapshot directly, so the document and the snapshot cannot drift apart silently again.
 
 | Item | Amount |
 |---|---|
@@ -1425,7 +1384,7 @@ clustered to support a rate on its own.
 **Detection latency — one real, timed measurement, plus the structural bound it does not replace.**
 FLEETGRAPH.MD's own bar is "< 5 minutes from event appearing in Ship to the agent surfacing it,"
 and the ticket wants the achieved number, not just the 60-second poll-interval design target
-(`DEFAULT_PROACTIVE_POLL_INTERVAL_MS`, `agent/src/config.ts:80`). `agent/src/scripts/trace-invoke-proactive.ts`
+(`DEFAULT_PROACTIVE_POLL_INTERVAL_MS` in `agent/src/config.ts`). `agent/src/scripts/trace-invoke-proactive.ts`
 (new, this ticket) does the real thing: writes one real comment mentioning a real person
 (`@Bob Martinez`, literal-text convention, `mentions.ts`) on a real seeded issue in this worktree's
 local Ship API, records the wall-clock write instant, and polls with real, independently-traced
