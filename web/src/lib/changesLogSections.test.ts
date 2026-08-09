@@ -7,9 +7,10 @@
  * run/test instructions. Reconciling that sweep against the actual file (not
  * assumed from its list — see the CHANGES.md entry for this ticket) found the
  * real numbers were different: only one entry ("Bundle TRO-330") had no rollback
- * content anywhere, and six had no run/test content anywhere — TRO-360, "Bundle
- * TRO-330", TRO-325, TRO-293, TRO-294 and TRO-302. All seven gaps (one entry,
- * Bundle TRO-330, was missing both) are fixed as part of this ticket.
+ * content anywhere, and seven had no run/test content anywhere — TRO-359,
+ * TRO-360, "Bundle TRO-330", TRO-325, TRO-293, TRO-294 and TRO-302. All eight
+ * gaps (one entry, Bundle TRO-330, was missing both) are fixed as part of this
+ * ticket.
  *
  * This test is the mechanical check that keeps that fix from decaying: every
  * entry must carry (a) a description of what was built, (b) how to run/verify it
@@ -91,6 +92,57 @@ function hasRunInstructions(entry: ChangesEntry): boolean {
   );
 }
 
+function isProceduralBlock(block: string): boolean {
+  return ROLLBACK_RE.test(block) || RUN_HEADING_RE.test(block) || RUN_TESTS_HEADING_RE.test(block);
+}
+
+// A bolded heading LINE starting a labeled sub-section, e.g. "**What changed.**"
+// or "**How to run it.**" — the same convention ROLLBACK_RE/RUN_HEADING_RE key
+// off of, just not restricted to those two vocabularies. Used to chop an
+// entry's body into blocks so the rollback/run blocks can be excluded wholesale
+// rather than only their heading line.
+const BLOCK_HEADING_RE = /^\*\*[^*\n]+\*\*/gm;
+
+/**
+ * The entry's body with (a) its `## ` heading line, (b) every fenced code
+ * block (commands/output — never "what was built"), and (c) every labeled
+ * sub-section whose heading is a rollback or run/test heading, removed —
+ * leaving only the descriptive prose that actually names what changed.
+ *
+ * This exists because a naive "is the body long enough" check can be
+ * satisfied entirely by a long rollback paragraph or a chunky command block,
+ * with zero words spent on what was built. Isolating the descriptive portion
+ * is the only way to check requirement (a) independently of (b) and (c) —
+ * see the negative fixture below, which is satisfied on length alone by the
+ * old check and correctly rejected by this one.
+ */
+function descriptiveText(entry: ChangesEntry): string {
+  const withoutHeading = entry.body.slice(entry.heading.length);
+  const withoutCodeBlocks = withoutHeading.replace(/```[\s\S]*?```/g, '');
+
+  const headings = [...withoutCodeBlocks.matchAll(BLOCK_HEADING_RE)];
+  const firstHeading = headings[0];
+  if (firstHeading === undefined) return withoutCodeBlocks;
+
+  // Prose before the first labeled block (rare, but some entries open with an
+  // unlabeled sentence) is unlabeled and therefore always descriptive.
+  let description = withoutCodeBlocks.slice(0, firstHeading.index ?? 0);
+
+  headings.forEach((heading, i) => {
+    const start = heading.index ?? 0;
+    const nextHeading = headings[i + 1];
+    const end = nextHeading !== undefined ? (nextHeading.index ?? withoutCodeBlocks.length) : withoutCodeBlocks.length;
+    const block = withoutCodeBlocks.slice(start, end);
+    if (!isProceduralBlock(block)) description += block;
+  });
+
+  return description;
+}
+
+function hasDescription(entry: ChangesEntry): boolean {
+  return descriptiveText(entry).trim().length >= 80;
+}
+
 describe('CHANGES.md — every entry documents all three required elements (TRO-371)', () => {
   const entries = parseEntries(changesLog);
 
@@ -102,15 +154,52 @@ describe('CHANGES.md — every entry documents all three required elements (TRO-
 
   it('every entry describes what was built', () => {
     // Low bar deliberately: this element is the entry's main content and is not
-    // the part that has ever gone missing in practice (13/6 CHANGES.md entries
-    // were missing rollback/run instructions per the sweep; none lacked a
-    // description of the change itself). This exists so the "three elements"
-    // requirement is checked as three, not silently narrowed to two.
-    const missing = entries.filter((e) => e.body.replace(e.heading, '').trim().length < 80);
+    // the part that has ever gone missing in practice (1/7 CHANGES.md entries
+    // were missing rollback/run instructions per the reconciled sweep; none
+    // lacked a description of the change itself). This exists so the "three
+    // elements" requirement is checked as three, not silently narrowed to two.
+    //
+    // Checks the ISOLATED descriptive portion (descriptiveText), not the raw
+    // body length: a body that is 80+ characters purely of rollback/run
+    // procedure and fenced commands, with no prose about what was built, must
+    // still fail here. See the negative fixture below for the proof.
+    const missing = entries.filter((e) => !hasDescription(e));
     expect(
       missing.map((e) => e.heading),
       `${missing.length} entr(y/ies) have little or no body content describing what was built`
     ).toEqual([]);
+  });
+
+  it('rejects an entry with procedure sections but no description (negative fixture)', () => {
+    // Proves the check above actually enforces content, not just length: this
+    // fixture clears the 80-character bar easily on raw body length (it has a
+    // rollback paragraph and a run/test command block well past that), but
+    // says nothing about what was built. The old body-length check passed
+    // this shape; hasDescription must reject it.
+    const fixture = [
+      '## TRO-000 — fixture: procedure-only entry with no description',
+      '',
+      '**How to run it.**',
+      '',
+      '```bash',
+      'pnpm --filter @ship/web exec vitest run src/lib/someFile.test.ts',
+      '```',
+      '',
+      '**Rollback.** Revert this commit. That removes the change entirely and',
+      'restores prior behavior exactly, with nothing else to undo.',
+      '',
+      '---',
+      '',
+    ].join('\n');
+    const fixtureEntry = parseEntries(fixture)[0];
+    if (fixtureEntry === undefined) {
+      throw new Error('parseEntries produced no entries for the negative fixture');
+    }
+    // Sanity: this fixture DOES satisfy the other two elements, isolating the
+    // description check as the one that must catch it.
+    expect(hasRollbackSection(fixtureEntry)).toBe(true);
+    expect(hasRunInstructions(fixtureEntry)).toBe(true);
+    expect(hasDescription(fixtureEntry)).toBe(false);
   });
 
   it('every entry has rollback instructions', () => {
