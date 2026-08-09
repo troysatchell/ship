@@ -12,6 +12,16 @@ the destroy-and-redeploy proof, both scoped to the new agent service only — no
 `ship`/`ship-db` resources, which stay on their Week-4 import (unchanged, deliberately, per the
 same human sign-off).
 
+## Annotation — one sentence per resource
+
+Every action below actually ran (this file is a proof, not a static plan capture) — the blast
+radius here is **observed**, not inferred from plan text, which makes it the strongest evidence
+in this directory for the one resource it covers.
+
+| Resource | Action(s) observed | What it is | Blast radius | Safe or risky |
+|---|---|---|---|---|
+| `render_web_service.agent` | create → destroy → re-create, all executed (not just planned) | The FleetGraph agent's Render web service — same resource `tro-316-agent-plan-annotated.md` plans, here actually taken through its full lifecycle (`srv-d9otu2pt0dsc73brot60` destroyed, `srv-d9otunmgekts73eqs0h0` created in its place, new URL `ship-agent-t0zy.onrender.com`). | **Confirmed by direct observation, not assumption:** destroying it removes exactly that one service (its own `/health` went `404`) and does **not** touch `render_web_service.ship`/`render_postgres.ship` (`ship-rr6m.onrender.com/health` stayed `200` throughout). Recreating it from config alone (no `import`) produces a **brand-new instance at a brand-new URL** — the agent holds no persistent data of its own (stateless, per FG-2/FG-4), so the only real cost of this churn is that anything hard-coding the old agent URL (a dashboard bookmark, a doc, a caller's config) breaks silently until updated to the new one. | **Verified safe in practice** — the one entry in this whole inventory where "what breaks if destroyed" was actually tested end-to-end rather than derived from reading plan output. |
+
 ## Sequence, exactly as run
 
 ```bash
