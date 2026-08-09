@@ -21,6 +21,94 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-383 — a literal CI-failure rollback trigger, distinct from the sustained-readiness poll
+
+**The requirement, verbatim.** W5-R36: "If a CI run fails, the deployment must be rolled back
+automatically — do not allow a failing build to remain deployed." TRO-367 already built
+`.github/workflows/agent-rollback-check.yml`, which rolls back on a *sustained* `/ready` failure
+discovered by a 15-minute poll. Real, tested, and it closes the "boots but broken" gap FLEETGRAPH.MD
+documents — but nothing about it is CAUSED BY a CI run failing; a build that merges green and whose
+CI later fails against `main` sat uncovered by a trigger that only notices once the deployed service
+itself stops responding. A requirements-audit ruling on this ticket's ambiguity held that
+readiness-polling does not satisfy the requirement's literal wording, which names the CI run itself
+as the trigger.
+
+**What changed.**
+1. **`.github/workflows/ci-failure-rollback.yml` (new file).** Fires on `workflow_run` for `ci.yml`'s
+   `CI` workflow completing, filtered to `conclusion == 'failure'` on `main`
+   (`workflows: ['CI']`, `types: [completed]`, `branches: [main]`). The job itself is additionally
+   gated `if: github.event.workflow_run.conclusion == 'failure'`.
+2. **Anti-flake guard (the judgment call this ticket turns on).** This workflow does NOT call Render
+   just because CI failed. `lessons.md` records three distinct load-flake identities
+   (`session-revocation.test.ts`, `programWeeksNav`, `auth.test.ts::extend-session`) that failed CI in
+   one day (TRO-380) on branches touching no file they could reach — a trigger that acted on a bare
+   failing conclusion would have rolled back production for every one of those. Instead, a CI failure
+   only prompts an immediate run of the exact same sustained-readiness check the cron already uses
+   (`check-readiness-and-rollback.ts`'s `evaluateReadinessSamples`): every sample in a real polling
+   window against the live `/ready` endpoint must report not-ready before Render is ever called. A
+   flaky unrelated unit test cannot make the deployed agent's `/ready` endpoint report unready, so it
+   cannot, by itself, cause a rollback.
+3. **Concurrency, verified rather than assumed.** Reuses `agent-rollback-check.yml`'s own
+   `concurrency: group: agent-rollback-check` instead of inventing a new one. Checked GitHub's own
+   documentation directly (Actions > Using jobs > Using concurrency): "If you have multiple workflows
+   in the same repository, concurrency group names must be unique across workflows to avoid canceling
+   in-progress jobs or runs from other workflows" — concurrency groups are scoped repository-wide, not
+   per workflow file, so two files sharing a group genuinely serialize against each other. A distinct
+   group name would have let both triggers call Render at once.
+4. **Same secret gating as the cron trigger.** `RENDER_API_KEY` / `RENDER_AGENT_SERVICE_ID` gate every
+   real step identically; unset, a `::warning::` annotation fires and every other step is skipped.
+5. **`FLEETGRAPH.MD`'s "Rollback trigger and procedure" section** updated with a new numbered item
+   describing this trigger's condition, anti-flake reasoning, and concurrency sharing, keeping the
+   section's existing honesty about what has and has not been exercised live.
+
+**Regression test — `agent/src/__tests__/ciFailureRollbackWorkflow.test.ts` (new file, 10 cases).**
+Asserts the trigger condition (`workflow_run`/`types: [completed]`/`branches: [main]`, the job's
+`conclusion == 'failure'` condition, `--execute` behind the secrets gate, and the shared concurrency
+group — read from both workflow files rather than hardcoded, so a future drift in either file's group
+fails this test too) against the actual, comment-stripped YAML, following
+`agentRollbackWorkflow.test.ts`'s existing pattern (a `run:`/job-body isolator that strips comments)
+and `gitlabCiAgentTests.test.ts`'s anchored near-miss rejection (a bare `/failure/` substring match
+would also accept `conclusion == 'failure_ignored'`; the actual regex requires the literal closing
+quote immediately after `failure`). **Confirmed red first, twice:** changed the job's `if:` condition
+to `conclusion == 'success'` — 2 cases failed (`AssertionError: expected '    if:
+github.event.workflow_run.conclusion == ...success'... to match /github\.event\.workflow_run\.conclus
+ion\s*==\s*'failure'/`); separately changed `branches: [main]` to `branches: [staging]` — the
+`workflow_run` trigger-condition case failed (`AssertionError: expected '...branches: [staging]' to
+match /branches:\s*\[\s*main\s*\]/`). Both reverted; full suite green again (500/500,
+`pnpm --filter @ship/agent test`).
+
+**Inner-loop results (per this ticket's brief, not the full `gate.sh`).**
+- `pnpm type-check` — pass (no source changes outside a new YAML file and a new test file).
+- `pnpm --filter @ship/agent test` — 500/500, 36 files.
+- `node scripts/factory/review-patterns.mjs main` — pass.
+- `node scripts/factory/merge-changes.mjs --check CHANGES.md` — pass.
+
+**What was demonstrated, and what was not — stated precisely.**
+- **Observed:** the trigger fires on the correct GitHub event/condition (proven structurally against
+  the real, executable YAML, not a comment); it shares the polling trigger's concurrency group
+  (verified against both files' actual content and against GitHub's documented semantics for that
+  field); its readiness-check step invokes the exact same, already-tested pipeline the polling
+  trigger uses.
+- **Not observed, per this ticket's hard constraint:** no CI run has failed against `main` since this
+  workflow was added, so it has never fired for real. No call — successful or not — was made to
+  Render's real API from this change. No `terraform apply` was run.
+
+**How to run it.**
+```
+source .factory-env
+pnpm --filter @ship/agent test -- ciFailureRollbackWorkflow    # 10/10
+pnpm --filter @ship/agent test                                 # full suite, 36 files / 500 tests
+```
+
+**Roll back.** Delete `.github/workflows/ci-failure-rollback.yml` and
+`agent/src/__tests__/ciFailureRollbackWorkflow.test.ts` — both new, additive files with no other code
+depending on them. Revert the `FLEETGRAPH.MD` edit (confined to the new numbered item under "Rollback
+trigger and procedure"). `agent-rollback-check.yml` (TRO-367) and its own tests are untouched by this
+change and continue to function identically without it — removing this trigger returns the project
+to exactly the sustained-poll-only coverage TRO-367 shipped.
+
+---
+
 ## TRO-373 — FLEETGRAPH.MD's cited cost-report command could not reproduce the published figures on a fresh clone
 
 **The cost this closes.** `FLEETGRAPH.MD`'s Cost Analysis section publishes measured figures (7
