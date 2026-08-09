@@ -30,7 +30,13 @@ import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FileCostTracker, aggregate, aggregateByNode, type ModelInvocationRecord } from '../costTracking.js';
+import {
+  FileCostTracker,
+  aggregate,
+  aggregateByNode,
+  invocationsByDay,
+  type ModelInvocationRecord,
+} from '../costTracking.js';
 
 // Transcribed verbatim from the real development ledger, 2026-08-08 — six
 // `composeAnswer` invocations (2026-08-05) and one `composeStandupDraft`
@@ -151,6 +157,51 @@ describe('FLEETGRAPH.MD cost figures vs. the real ledger (TRO-366)', () => {
     expect(Number(answerCostPerRun[1])).toBe(Number(composeAnswerStats.costPerRunUsd.toFixed(6)));
     expect(Number(standupInvocations[1])).toBe(standupStats.invocationCount);
     expect(Number(standupCostPerRun[1])).toBe(Number(standupStats.costPerRunUsd.toFixed(6)));
+  });
+
+  // CodeRabbit review, PR #156 (finding 4): the two figures below were
+  // published in FLEETGRAPH.MD's "Refreshed (TRO-366...)" section but never
+  // parsed or asserted by this file — an incorrect value in either would
+  // have passed silently, which is precisely the rot this test exists to
+  // prevent.
+  it('reproduces the exact composeAnswer avg-documents-pulled figure FLEETGRAPH.MD publishes', () => {
+    const tracker = new FileCostTracker({ ledgerPath });
+    const byNode = aggregateByNode(tracker.readAll());
+    const composeAnswerStats = byNode.find((tier) => tier.node === 'composeAnswer');
+    if (!composeAnswerStats) {
+      throw new Error('unreachable — the fixture ledger always contains composeAnswer records');
+    }
+    if (composeAnswerStats.avgDocumentsPulled === undefined) {
+      throw new Error('unreachable — every composeAnswer fixture record sets documentsPulled');
+    }
+
+    const docText = readFileSync(FLEETGRAPH_PATH, 'utf8');
+    const avgDocsPulledMatch = lastMatch(
+      docText,
+      /`composeAnswer` — avg documents pulled\s*\|\s*([\d.]+)\s*\(/g
+    );
+
+    // Real, measured value — not just re-asserting the fixture's own shape.
+    expect(composeAnswerStats.avgDocumentsPulled).toBe(6.5);
+    expect(Number(avgDocsPulledMatch[1])).toBe(composeAnswerStats.avgDocumentsPulled);
+  });
+
+  it('reproduces the exact 2026-08-05 / 2026-08-07 daily invocation distribution FLEETGRAPH.MD publishes', () => {
+    // Derived from REFERENCE_LEDGER_RECORDS via the real invocationsByDay
+    // aggregation rather than hardcoded here — so this test tracks the
+    // fixture's own dates/counts, not a second, independently-maintained
+    // copy of "6" and "1" that could drift from the fixture the same way
+    // the document itself drifted from the ledger.
+    const byDay = invocationsByDay(REFERENCE_LEDGER_RECORDS);
+    expect(byDay).toEqual([
+      { day: '2026-08-07', count: 1 },
+      { day: '2026-08-05', count: 6 },
+    ]);
+
+    const docText = readFileSync(FLEETGRAPH_PATH, 'utf8');
+    for (const { day, count } of byDay) {
+      expect(docText).toMatch(new RegExp('`' + day + '`\\s*\\(' + count + '\\)'));
+    }
   });
 
   it('does not still assert composeStandupDraft has zero real invocations anywhere in the file', () => {
