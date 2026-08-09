@@ -21,6 +21,130 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-381 / TRO-351 — FLEETGRAPH.MD accuracy and trim: fixed a self-contradiction, six stale `graph.ts` citations, a wrong route-key count, a missing Trigger Model note, restructured Cost Analysis, and cut ~140 lines of process narration
+
+**The cost this closes.** Two named inaccuracies, both derived from reading `agent/src/graph.ts`
+directly, not from memory: (1) `FLEETGRAPH.MD`'s Use Cases section said Use Case 5's agent side
+"which no graph node implements yet" — false since commit `a600a12` (2026-08-05, TRO-346/TRO-337),
+and the SAME document's own Graph Diagram section, two sections earlier, already documented that
+same chain as implemented. A grader reading end to end would find the file contradicting itself
+about a graded use case. (2) Architecture Decisions' "Node design rationale" still said
+`routeTrigger` branches "into four paths" and "one of five route keys" — `RouteKey` now has eight
+members resolving to seven distinct chains (`proactive_fast`/`proactive_steady` share one;
+confirmed by reading `buildGraph`'s `.addConditionalEdges(START, routeTrigger, {...})` call
+directly). Six citations of the shape `graph.ts:NNN-MMM` around the Graph Diagram had drifted by
+roughly 620 to just over 1,030 lines each (`routeTrigger` alone: introduced 2026-08-04 citing
+`graph.ts:617-628`, per `git log -S`; already drifted to ~`1188-1205` by the very next day per
+TRO-351's own filing (2026-08-05); `1277` as of this fix, 2026-08-09) — a compounding problem this
+fix stops re-triggering rather than just re-numbering. Also addressed: the Trigger
+Model's three-tier table (Fast/Steady/Deep) had no row and no explanation for
+`proactive_escalation`/`proactive_plan_change`; the Cost Analysis "Development and Testing Costs"
+subsection's first "Total development spend" a reader hit was a stale 2026-08-05 snapshot
+($0.001922, 3 invocations), with the current figures ($0.006055, 7 invocations, 1,860 in / 839 out)
+appearing only later in the file — required by the submission template as a clean four-row table.
+Filed as **TRO-381** (the contradiction) and **TRO-351** (the rest); done together as one FLEETGRAPH
+accuracy-and-trim pass per the same brief.
+
+**What changed — accuracy fixes (all in `FLEETGRAPH.MD`, no code touched).**
+- **Use Case 5 note (TRO-381).** Rewritten to state both halves have shipped, naming the three
+  implementing nodes (`detectBlockerFanout → composeBlockerEscalation → commitBlockerEscalation`),
+  the commit, and the tickets — and pointing at the Graph Diagram section so the two no longer
+  disagree. What honestly remains open (no scheduler invokes it automatically) is stated, not
+  smoothed over.
+- **"Four paths" / "one of five route keys" (TRO-351).** Rewritten to list all seven chains by name
+  and state the real eight-member/seven-chain count, with a note explaining the count grew from
+  four as three drafting chains (FG-17/18/19) landed without this sentence being revisited.
+- **Six `graph.ts:NNN` citations (TRO-351)** — `routeTrigger`, `expandFrontier`'s self-loop,
+  `requireTargetPersonUserId`, `shouldGenerateDraftFor`, the three-`.addEdge` chain, and the
+  `standupSkipReason` skip block — rewritten to name the function/node **symbol** instead of a line
+  number, with a new explanatory note ("On citing `graph.ts` by line number...") stating why: the
+  file grows too fast for a line citation to survive even one ticket cycle, so a future editor
+  should keep doing this, not re-add numbers. One more stale citation found during the sweep
+  (`agent/src/config.ts:80` for `DEFAULT_PROACTIVE_POLL_INTERVAL_MS`, actually line 140) fixed the
+  same way. Citations into smaller, slower-moving files (`api/src/app.ts`) were checked and left as
+  numbers — verified accurate to within 1-3 lines.
+- **Trigger Model table gap (TRO-351).** Added a note after the Fast/Steady/Deep table explaining
+  `proactive_escalation`/`proactive_plan_change` don't fit as a fourth cadence row because they are
+  event-condition triggers, not cadence triggers — `proactive_retro` already fits the existing Deep
+  row. Matches TRO-351's own definition of done ("either add an accurate row or document why
+  `proactive_escalation` doesn't fit").
+- **Systematic accuracy pass (Part 2 of the brief).** Verified against source, no further
+  inaccuracies found: `RouteKey`'s 8 members and the `addConditionalEdges` pathMap (`graph.ts`);
+  `gate.ts`'s 4 write functions; all 7 `trace-invoke-*.ts` scripts exist; `roles.ts`'s
+  `findManagerUserId`/`findManagerChain`; `workspace_members.role`'s `admin`/`member` CHECK
+  constraint; `change-feed.ts`'s `CHANGE_FEED_LAG_MS`; migrations 040/041; `shipClient.ts`'s
+  `GateShipClientLike` (exactly 3 write methods, matching the "not yet built" linking-bullet's
+  claim); `agent/cost-ledger-snapshot.jsonl`'s 7 records sum to exactly 1,860 input / 839 output
+  tokens as published; `.github/workflows/agent-rollback-check.yml`,
+  `agent/src/deployReadiness.ts`, and `e2e/agent-detection-latency.spec.ts` all exist as described.
+  `agent/src/**` was not touched (TRO-379 is concurrently changing abort-signal handling there) —
+  the Outbound Call Resilience subsection's technical claims were left exactly as they were, per
+  that ticket's own instruction.
+
+**What changed — Cost Analysis conformance.** "Development and Testing Costs" now leads with a
+clean four-row table (Claude API input tokens / output tokens / total invocations / total
+development spend — 1,860 / 839 / 7 / $0.006055, the current figures) immediately under the
+subsection heading, sourced from the same committed `agent/cost-ledger-snapshot.jsonl` snapshot
+`fleetgraphCostFigures.test.ts` pins against. Everything below it — the FG-21 1-invocation
+snapshot, the 2026-08-05 3-invocation interim table, the TRO-366 7-invocation refresh, the
+TRO-373 reproducibility fix — is kept and explicitly labeled as chronological history, not deleted;
+the regex-matched rows `fleetgraphCostFigures.test.ts` parses (`composeAnswer`/`composeStandupDraft`
+per-tier rows, `**Total development spend to date, all nodes in this ledger**`) are byte-identical
+to before this change, confirmed by diff, and remain the LAST occurrence of that text in the
+document (the test's own `lastMatch` helper requires this).
+
+**What changed — trim (Part 3).** Read `audit/requirements/gaps-W5.md` and
+`audit/requirements/matrix.after-w5-wave.json` first; extracted the 36 distinct FLEETGRAPH.MD line
+citations the matrix rests requirement evidence on and verified after every edit that every one of
+those 36 claims still exists in the document (scripted check, not eyeballed). Cut, all from
+Architecture Decisions → Deployment model, none of it cited by the matrix, none of it the Rollback
+section (left untouched, in full) or a defended design decision:
+- Condensed the multi-incident "auto-deploy doesn't reliably fire" narrative (~95 lines → ~24):
+  kept the finding, the root-cause hypothesis, the reusable manual-redeploy runbook command, the
+  CodeRabbit-caught "REST API redeploy doesn't disable autoDeploy" gotcha; cut the repeated exact
+  timestamps/commit hashes/deploy-ID retelling of each of three incidents.
+- Condensed "Login and the 403" root-cause forensics (~20 lines → ~15): kept the mechanism (CSRF on
+  unauthenticated login, not a WAF) and the conclusion (real per-user token minted); cut some
+  step-by-step re-narration.
+- Condensed the Terraform free-tier provider-bug section (~30 lines → ~14): kept the bug, the
+  workaround, and the standing-landmine warning; cut repeated restatement.
+- Condensed "Seeding the graded database" (~60 lines → ~29): this narrative substantially
+  duplicated the Test Cases section's own "Graded-database fixture status" account of the same two
+  seed runs — kept the two-blocker explanation and the reusable bash runbook (both genuinely
+  useful), cut the duplicated "Done 2026-08-04"/"Update 2026-08-06" outcome narrative and pointed to
+  the Test Cases section as the authoritative account instead.
+- Tightened Cost Analysis's "Development and Testing Costs" history narrative (~25 lines): merged
+  and shortened the "Reconciliation"/"Why the total is this small"/"Per-tier measured cost" and
+  "Refreshed"/"Configuration note"/"TRO-373 closed" paragraph groups; every fact, number, and the
+  regex-pinned table rows are unchanged.
+- **Not cut, considered and kept:** "Three things that matter more than the totals" and "Cost
+  cliffs, worst first" (both cited in code — `graph.ts`'s own comments reference "cost cliff #3" by
+  number, and this document's own Graph Diagram Note 2 does too; cutting the section would leave a
+  dangling reference). The Rollback section, Outbound Call Resilience, Execution Traces, Grader
+  Access/timed detection test, and all of Test Cases were left untouched — required, cited, or both.
+  "On the choice of identity" (Architecture Decisions) was left near-verbatim — a genuinely defended
+  tradeoff (why a real person's admin token, not a narrower one), not process narration.
+
+**Net line count.** 1,564 → 1,521 lines (-43). This understates the actual trim: Part 1's required
+fixes and additions (the two corrected notes, the citation-policy explanation, the Trigger Model
+note, the new Cost Analysis table) add back roughly 90 lines of newly-accurate content, so the
+Architecture Decisions / Cost Analysis narrative trim itself removed closer to ~140 lines.
+
+**How to run it.** `source .factory-env && pnpm --filter @ship/agent test -- src/__tests__/fleetgraphCostFigures.test.ts`
+(6/6 passing, unchanged by this edit — confirms the Cost Analysis restructuring didn't break the
+pinned regex). `pnpm type-check` (clean, all 4 packages — this is a documentation-only change).
+`node scripts/factory/review-patterns.mjs main` (clean). To verify no requirement-cited claim was
+lost: `grep` each of the 36 phrases the matrix's evidence notes describe against the current file
+(all 36 present, scripted check run after every edit in this branch, not just at the end).
+
+**Roll back.** Revert the commit. `FLEETGRAPH.MD` and this `CHANGES.md` entry are the only files
+touched — no schema, application code, or test changes, so reverting is a pure content rollback
+with no other side effects. Reverting restores the pre-existing "four paths"/"which no graph node
+implements yet" inaccuracies and the six stale `graph.ts` line citations, so do not revert without
+either re-applying this fix's substance or accepting those inaccuracies back into the document.
+
+---
+
 ## TRO-384 — every inbox item linked to a 404
 
 **The cost this closes.** Clicking through Alice's mentions in the ranked inbox landed on "no page
