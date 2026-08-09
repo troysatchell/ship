@@ -315,16 +315,18 @@ audit exists to eliminate, doubly serious here because this file is the *only* p
 invocation is real.
 
 **Fix.** Added `AGENT_TEST_LIST_ENTRY = /^\s*-\s+pnpm --filter @ship\/agent test\b/m` — anchored to an
-actual YAML list-item prefix (`- `), which a `#`-comment line can never satisfy — and used it for both
+actual YAML list-item prefix (`` `-` `` and space), which a `#`-comment line can never satisfy — and used it for both
 the "invokes the test command" assertion and the `|| true` line lookup (previously two different,
 both-unanchored regexes). **Confirmed the old tests were genuinely vacuous, then confirmed the new
 ones are not:** temporarily deleted the real `- pnpm --filter @ship/agent test` line (comment above it
 left untouched, `git show HEAD:.gitlab-ci.yml` kept aside for restore, never `git stash`) and reran —
 both affected cases failed:
-```
+
+```text
 AssertionError: expected '  extends: .node_env\n  stage: verify…' to match /^\s*-\s+pnpm --filter @sh…/agent test\b
 AssertionError: expected a real `- pnpm --filter @ship/agent test` list entry inside the verify job: expected undefined to be defined
 ```
+
 (2 failed, 4 passed — the other 4 cases correctly kept passing, since they assert structure this fix
 didn't touch). Restored the line; 6/6 passed again. Full agent suite after: **34 files / 469 tests, all
 green** (was 464 at this ticket's original landing). `pnpm --filter @ship/agent type-check`: clean.

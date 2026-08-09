@@ -86,7 +86,7 @@ describe('extractJobBody (test-helper self-check)', () => {
  * entirely, because the comment's own negated mention satisfied the regex on
  * its own.
  */
-const AGENT_TEST_LIST_ENTRY = /^\s*-\s+pnpm --filter @ship\/agent test\b/m;
+const AGENT_TEST_LIST_ENTRY = /^\s*-\s+pnpm --filter @ship\/agent test(?:\s|$)/m;
 
 describe('.gitlab-ci.yml — verify job runs the agent regression suite (TRO-369)', () => {
   it('invokes `pnpm --filter @ship/agent test` as a real script list entry inside the verify job, not merely in a comment', () => {
@@ -121,5 +121,16 @@ describe('.gitlab-ci.yml — verify job runs the agent regression suite (TRO-369
 
     expect(e2eAgentBody).toMatch(/pnpm --filter @ship\/agent build\b/);
     expect(e2eAgentBody).not.toMatch(/pnpm --filter @ship\/agent test\b/);
+  });
+
+  it('matcher correctly rejects `test:unit` variant to prevent false positives', () => {
+    const testUnitVariant = '  - pnpm --filter @ship/agent test:unit';
+    expect(testUnitVariant).not.toMatch(AGENT_TEST_LIST_ENTRY);
+
+    const actualCommand = '  - pnpm --filter @ship/agent test';
+    expect(actualCommand).toMatch(AGENT_TEST_LIST_ENTRY);
+
+    const actualCommandWithWhitespace = '  - pnpm --filter @ship/agent test ';
+    expect(actualCommandWithWhitespace).toMatch(AGENT_TEST_LIST_ENTRY);
   });
 });
