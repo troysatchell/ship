@@ -49,7 +49,8 @@ TRO-322 and TRO-330 (both `Done`) built and tested the capability; neither wired
    `runReadinessCheck(args, deps)` now owns the full `poll -> evaluate -> decide -> call Render`
    pipeline as one exported, injectable function (`RunCheckDeps`: `fetcher`, `fetchImpl`, `apiKey`,
    optional `now`/`sleep`/`onEvaluated`), returning a `RunCheckResult` with one of five outcomes
-   (`healthy`, `transient`, `dry_run_warn`, `missing_api_key`, `rolled_back`). `rollbackViaRenderApi`
+   (`healthy`, `transient`, `dry_run_warn`, `missing_api_key`, `rolled_back`) — **now seven; Round 2
+   below adds `monitoring_error` and `missing_service_id`.** `rollbackViaRenderApi`
    now returns the `RenderDeploy` it redeployed instead of `void`, so a caller (or a test) can assert
    on exactly what got rolled back to. `main()` is now a thin wrapper: real `fetch`/
    `process.env.RENDER_API_KEY` in, console output + exit codes out — behavior-identical for the real
@@ -126,12 +127,90 @@ pnpm --filter @ship/agent check:readiness --url https://ship-agent-t0zy.onrender
   --attempts 3 --interval-ms 30000
 ```
 
-**How to roll it back.** Revert this commit. `.github/workflows/agent-rollback-check.yml` is a new,
-additive file — deleting it removes the trigger entirely with no other workflow depending on it.
-`runReadinessCheck`/the `rollbackViaRenderApi` return-type change are internal to
+**How to roll it back.** Revert this commit (and, if Round 2 below has already landed, the Round 2
+commits too — `git log --oneline -- agent/src/scripts/check-readiness-and-rollback.ts
+.github/workflows/agent-rollback-check.yml` finds all of them). `.github/workflows/agent-rollback-
+check.yml` is a new, additive file — deleting it removes the trigger entirely with no other workflow
+depending on it. `runReadinessCheck`/the `rollbackViaRenderApi` return-type change are internal to
 `check-readiness-and-rollback.ts`, which is not imported by any production code path (`index.ts`
 never imports it) — reverting is safe and affects only this script and its own tests. The
 `FLEETGRAPH.MD` edit is confined to the "Rollback trigger and procedure" section.
+
+**Round 2 (CodeRabbit review, PR #157) — six findings, all on the automatic-rollback path, the code
+with autonomous authority to redeploy production. One theme: the trigger could fire wrongly, or
+hang, or be proven by a test that could not actually tell.**
+
+1. **(Major) `pollReadiness` recording a thrown fetch as `ready: false` let a network outage roll
+   back a healthy service.** `evaluateReadinessSamples` cannot tell "the service said 503" from "we
+   never reached the service" — both are `ready: false` to it. A GitHub-to-Render DNS blip during the
+   scheduled poll would therefore look identical to a sustained application failure and trigger a
+   real redeploy of a service that was never actually broken — the automation causing an outage in
+   response to its own blindness. Fixed in `runReadinessCheck`: when every sample's `reason` starts
+   with `fetch_failed` (i.e., not even one sample got a real response from the service), a new
+   `monitoring_error` outcome is returned before any of the `--execute`/`apiKey`/`serviceId` branches
+   run — `rollbackViaRenderApi` is never reached. A sample set that mixes a fetch failure with a real
+   503 is deliberately NOT treated as `monitoring_error` (the service did respond at least once, which
+   is a real signal) — covered by its own test.
+2. **(Major) The production `/ready` fetcher had no timeout.** Ironic given this same wave's PR #156
+   exists because a different outbound call had none. `main()`'s fetcher now passes
+   `{ signal: AbortSignal.timeout(READINESS_POLL_TIMEOUT_MS) }` (10s, documented inline) so a stalled
+   request rejects instead of hanging for the workflow's `timeout-minutes: 10`. The rejection is
+   recorded by `pollReadiness` as `fetch_failed` same as any other fetch error, which after fix 1
+   correctly resolves to `monitoring_error`, not a rollback.
+3. **(Minor) `--execute` with no `serviceId` reached `rollbackViaRenderApi` via a bare `as string`
+   cast.** `parseArgs` already refuses this combination at the CLI boundary, but `runReadinessCheck`
+   takes a `ParsedArgs` object directly and a caller that builds one by hand (as a test now does)
+   could still set `execute: true` with `serviceId: undefined`. Replaced the cast with
+   `if (!args.serviceId) return { outcome: 'missing_service_id', ... }` before the call — TypeScript
+   narrows `args.serviceId` to `string` for the actual `rollbackViaRenderApi(...)` call with no
+   assertion needed. No non-null `!`, no `as any`/`as unknown as` (both mechanically banned in this
+   repo).
+4. **(Major) `agentRollbackWorkflow.test.ts`'s `--execute` assertion matched this workflow's own
+   header comment, not the real command.** The header narrates the invocation in prose —
+   "calls `check-readiness-and-rollback.ts --execute`" — so `expect(workflow).toMatch(/--execute\b/)`
+   against the WHOLE file kept passing even with `--execute` deleted from the actual `run:` line,
+   satisfied by the comment alone. Added `extractStepRunCommand(workflow, stepName)`, which isolates
+   the named step's `run: |` block by indentation and strips `#`-comment lines, and rescoped the
+   `check:readiness`/`--execute`/`--service-id` assertions to that non-comment slice. **Confirmed the
+   old test was genuinely vacuous, then confirmed the new one is not:** temporarily deleted the
+   trailing `--execute` from the real `run:` block (`git show HEAD:<path>` kept aside for restore,
+   never `git stash`) and reran — failed with
+   `AssertionError: expected '          pnpm --filter @ship/agent c…' to match /--execute\b/`
+   (1 failed, 5 passed). Restored the line; 6/6 passed again.
+5. **(Major + Minor, security) `.github/workflows/agent-rollback-check.yml`'s `actions/checkout@v4`
+   had no `persist-credentials: false`, and `actions/checkout@v4`/`actions/setup-node@v4` were pinned
+   to a moving tag, not a commit SHA** — inconsistent with `pnpm/action-setup`'s own SHA-pinning two
+   lines below in the same file, and a real exposure on a workflow that carries `RENDER_API_KEY`.
+   Added `persist-credentials: false` to the checkout step (this job only reads files, never pushes)
+   and pinned both actions to their current `v4.4.0` release commit, with the version in a trailing
+   comment matching the existing convention:
+   `actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0` and
+   `actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0` (both SHAs resolved directly
+   from `gh api repos/actions/<name>/git/refs/tags/v4.4.0`, not typed from memory).
+6. **(Minor) The `onEvaluated`-before-Render-call test used healthy samples with no `--execute`, so
+   no Render call ever happened — it could prove `onEvaluated` fired, never that it fired BEFORE a
+   rollback.** Rewrote it to use a sustained-failure `--execute` case that genuinely reaches
+   `rollbackViaRenderApi`, with `onEvaluated` and every `fetchImpl` call pushing into one shared,
+   ordered array; asserts `events).toEqual(['onEvaluated', 'fetchImpl:1', 'fetchImpl:2'])`.
+
+**New/changed regression tests, `check-readiness-and-rollback.test.ts` — confirmed red against the
+pre-Round-2 source before the fix, green after (restored via a copied-aside pre-fix file, never `git
+stash`):** `monitoring_error` on all-fetch-failure samples (fails on old code with
+`TypeError: Cannot read properties of undefined (reading 'ok')` — old code proceeded into
+`rollbackViaRenderApi` and called the test's unmocked `fetchImpl`, which is exactly the erroneous
+Render call this fix prevents); a mixed fetch-failure + real-503 case asserting `dry_run_warn`, not
+`monitoring_error` (guards against over-broadening fix 1); `missing_service_id` on a hand-built
+`ParsedArgs` with `execute: true, serviceId: undefined` (same `TypeError` on old code, same reason);
+the rewritten callback-ordering test. File: **18/18** (was 15/15). `agentRollbackWorkflow.test.ts`
+gained a 2-case self-check for `extractStepRunCommand` (finds the step, excludes the header comment;
+throws on an unknown step name): **6/6** (was 4/4). Full agent suite: **34 files / 469 tests, all
+green** (was 464). `pnpm --filter @ship/agent type-check`: clean.
+
+**What Round 2 changes about what was demonstrated.** The original "what was/wasn't observed" section
+above still holds — no live Render call, no live rollback, ever, in any of this. What changes: the
+`agentRollbackWorkflow.test.ts` proof that the workflow really passes `--execute` was weaker than
+described until fix 4 — it could have passed with `--execute` silently removed from the real command,
+because the assertion matched the file's own header comment instead. That is now closed.
 
 ---
 
@@ -210,9 +289,51 @@ pnpm --filter @ship/agent test -- gitlabCiAgentTests     # 6/6
 python3 -c "import yaml; d = yaml.safe_load(open('.gitlab-ci.yml')); print(d['verify']['script'])"
 ```
 
-**How to roll it back.** Revert this commit. The change is a single added line (plus its explanatory
-comment) inside `.gitlab-ci.yml`'s `verify` job and one new, additive test file — removing the line
-returns GitLab CI to its pre-TRO-369 shape with nothing else depending on it.
+**How to roll it back.** Revert this commit (and the Round 2 commit below, if it has landed — same
+two files). The change is a single added line (plus its explanatory comment) inside `.gitlab-ci.yml`'s
+`verify` job and one new, additive test file — removing the line returns GitLab CI to its pre-TRO-369
+shape with nothing else depending on it.
+
+**Round 2 (CodeRabbit review, PR #157) — finding 4 of six on that PR; the other five are on
+`check-readiness-and-rollback.ts`'s TRO-367 side, see that entry's own Round 2.**
+
+**What was wrong, and why the original red-before-green cycle above did not catch it.** The comment
+this ticket itself added just above the real invocation (lines 79-91 above) narrates the before/after
+in prose and, in doing so, contains the literal substring `` `pnpm --filter @ship/agent test` `` —
+inside a NEGATION ("...it invoked `pnpm --filter @ship/agent build` ... but never `pnpm --filter
+@ship/agent test`"). The two assertions this ticket added
+(`expect(verifyBody).toMatch(/pnpm --filter @ship\/agent test\b/)` and the `|| true` check reusing
+the same unanchored match) did not distinguish that comment line from the real
+`- pnpm --filter @ship/agent test` script entry seven lines below it — `.find()` returns the FIRST
+match, which is the comment. This was invisible to this ticket's own red-before-green proof because
+both the comment and the real line were ADDED IN THE SAME CHANGE: before this ticket, `.gitlab-ci.yml`
+had neither, so removing the whole diff correctly turned both tests red. The vacuousness only becomes
+exploitable for a FUTURE regression, after this ticket's comment is already permanently in the file:
+someone could delete just the real script entry on line 92 later, leaving the (accurate, on-its-own)
+comment above it in place, and both tests would keep passing — the exact defect class this repo's
+audit exists to eliminate, doubly serious here because this file is the *only* proof TRO-369's GitLab
+invocation is real.
+
+**Fix.** Added `AGENT_TEST_LIST_ENTRY = /^\s*-\s+pnpm --filter @ship\/agent test\b/m` — anchored to an
+actual YAML list-item prefix (`- `), which a `#`-comment line can never satisfy — and used it for both
+the "invokes the test command" assertion and the `|| true` line lookup (previously two different,
+both-unanchored regexes). **Confirmed the old tests were genuinely vacuous, then confirmed the new
+ones are not:** temporarily deleted the real `- pnpm --filter @ship/agent test` line (comment above it
+left untouched, `git show HEAD:.gitlab-ci.yml` kept aside for restore, never `git stash`) and reran —
+both affected cases failed:
+```
+AssertionError: expected '  extends: .node_env\n  stage: verify…' to match /^\s*-\s+pnpm --filter @sh…/agent test\b
+AssertionError: expected a real `- pnpm --filter @ship/agent test` list entry inside the verify job: expected undefined to be defined
+```
+(2 failed, 4 passed — the other 4 cases correctly kept passing, since they assert structure this fix
+didn't touch). Restored the line; 6/6 passed again. Full agent suite after: **34 files / 469 tests, all
+green** (was 464 at this ticket's original landing). `pnpm --filter @ship/agent type-check`: clean.
+
+**What this changes about what the original entry proved.** The "confirmed red for the right reason
+before the fix, green after" claim above (this ticket's own red-before-green cycle) is still true as
+stated — it correctly caught the missing feature at the time. What it did NOT prove, and what the
+original entry did not say either way, is that the test would keep catching a *later* regression of
+the same command. It would not have, until this Round 2 fix.
 
 ---
 
