@@ -995,9 +995,11 @@ auth).
    failed."
 
 **TRO-322 / FG-12 — both layers demonstrated, not just described, plus the "boots but broken" gap
-closed with real tooling; TRO-367 then wired that tooling to an automatic trigger.** Three separate
-pieces of real, generated evidence — none of this is re-derived from the reasoning above; see
-CHANGES.md's TRO-322 entry for exact commands/output, and its TRO-367 entry for the trigger itself.
+closed with real tooling; TRO-367 then wired that tooling to an automatic trigger, and TRO-383 added
+a second trigger, driven by CI failure itself rather than by polling.** Three separate pieces of real,
+generated evidence — none of this is re-derived from the reasoning above; see CHANGES.md's TRO-322
+entry for exact commands/output, its TRO-367 entry for the polling trigger, and its TRO-383 entry for
+the CI-failure trigger.
 
 1. **Layer 1, proven on both platforms with a throwaway, never-merged branch.** A branch
    (`chore/tro-322-ci-rollback-proof-do-not-merge`) with one deliberate `pnpm type-check` failure
@@ -1081,6 +1083,40 @@ CHANGES.md's TRO-322 entry for exact commands/output, and its TRO-367 entry for 
    time. Do NOT simply repoint `agent_health_check_path` at `/ready` instead of using this
    trigger — this section's own transient-blip caveat means Render's platform check would then
    demote a healthy instance during any brief Ship outage, trading one failure mode for a worse one.
+3. **TRO-383 — a second trigger, driven by CI failure itself, not by polling.** W5-R36's requirement
+   text is literal: "If a CI run fails, the deployment must be rolled back automatically." The
+   polling trigger above satisfies the *spirit* — it eventually notices a bad deploy — but nothing
+   about it is CAUSED BY a CI run failing; a build that merges green and whose CI later fails against
+   `main` (a post-merge rerun, a dependency regression only caught after merge) sits uncovered until
+   the next scheduled tick, if at all. `.github/workflows/ci-failure-rollback.yml` closes that literal
+   gap: it fires on the `workflow_run` event for `ci.yml`'s own `CI` workflow completing, filtered to
+   `conclusion == 'failure'` on `main` (a PR's own run never matches — its `head_branch` is the PR's
+   branch, not `main`).
+   **It does not call Render just because CI failed.** A single red CI run is not evidence the
+   deployed service is broken — this repo's own `lessons.md` records three distinct load-flake
+   identities (`session-revocation.test.ts`, `programWeeksNav`, `auth.test.ts::extend-session`) that
+   failed CI in one day on branches touching no file they could reach. So this trigger reuses the
+   identical sustained-readiness decision the polling trigger already uses
+   (`check-readiness-and-rollback.ts`'s `evaluateReadinessSamples`): a CI failure only earns an
+   immediate readiness check, sooner than the next 15-minute tick — the check itself still requires
+   EVERY sample in the window to report the live `/ready` endpoint unready before it will call Render.
+   A flaky unrelated test cannot make `/ready` report unready, so it cannot cause a rollback by itself.
+   **It shares the polling trigger's own concurrency group** (`agent-rollback-check`) rather than a
+   new one — verified against GitHub's own documentation (Actions > Using jobs > Using concurrency),
+   which states concurrency group names are scoped repository-wide, not per workflow file: two
+   workflow files declaring the same group genuinely serialize against each other. A distinct group
+   name would have let both triggers call Render at once; sharing this one means a CI-failure-prompted
+   check and a scheduled tick queue behind each other instead.
+   **Same secret gating, same honesty caveat as the polling trigger.** `RENDER_API_KEY` /
+   `RENDER_AGENT_SERVICE_ID` gate every real step identically; unset, the workflow reports a
+   `::warning::` annotation and does nothing else. Structurally asserted by
+   `ciFailureRollbackWorkflow.test.ts` (the `on:` block's `workflow_run`/`types`/`branches`, the job's
+   `conclusion == 'failure'` condition, the shared concurrency group read from both files rather than
+   hardcoded, `--execute` behind the secrets gate). **Observed: the trigger exists, its condition and
+   guard structure are proven against the real YAML, and its readiness-check step is the same,
+   already-proven pipeline the polling trigger uses. Not observed: this trigger has never fired for
+   real — no CI run has failed against `main` since it was added — and, exactly as with the polling
+   trigger, no live call to Render's API has ever been made from either trigger.**
 
 **Login and the 403 (TRO-341 / FG-23) — root-caused, not a WAF.** Two prior curl attempts against
 `POST https://ship-rr6m.onrender.com/api/auth/login` returned a platform-looking `403 Forbidden` —

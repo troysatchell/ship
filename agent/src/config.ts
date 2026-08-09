@@ -128,6 +128,25 @@ export interface AgentConfig {
    * entirely — see `loadConfig`'s `nonNegativeInt` parser below) and must
    * not be confused with "not configured". */
   anthropicMaxRetries: number;
+  /** Assumed upper bound, in ms, on how long the on-demand path's PRE-model
+   * work (`graph.ts`'s `resolveSeed`/`expandFrontier` Ship reads, run
+   * BEFORE `composeAnswer` ever calls the model) takes — the number
+   * `assertAnthropicBudgetFitsHandlerDeadline` below checks against, so
+   * `chatHandlerTimeoutMs`'s margin over `anthropicWorstCaseCallMs` is a
+   * named, checked constant rather than prose (TRO-379; previously this was
+   * an UNSTATED assumption — `anthropicWorstCaseCallMs`'s own docstring
+   * said "about 7s of margin" without that number being anything code
+   * looked at). Naming it does not, by itself, bound pre-model work at
+   * runtime — nothing stops `resolveSeed`/`expandFrontier` from taking
+   * longer than this on any given request. What actually protects a run
+   * that exceeds it is `graph.ts`'s `composeAnswer` receiving the SAME
+   * `AbortSignal` the `/chat` handler races `graph.invoke()` against
+   * (`server.ts`) and forwarding it into `model.invoke()` — so the model
+   * call is cut off at whatever time is genuinely left when it starts,
+   * regardless of whether pre-model work respected this allowance. This
+   * field is the STARTUP check that the configured numbers are plausible
+   * in the first place. */
+  anthropicPreModelWorkAllowanceMs: number;
 }
 
 const DEFAULT_PORT = 3100;
@@ -152,6 +171,14 @@ const DEFAULT_ANTHROPIC_REQUEST_TIMEOUT_MS = 8_000;
 // default of 6 (CodeRabbit review, PR #156, finding 1: lowered from TRO-368's
 // original 2, for the same reason as the timeout above).
 const DEFAULT_ANTHROPIC_MAX_RETRIES = 1;
+// TRO-379: names the margin anthropicWorstCaseCallMs's own docstring already
+// described ("about 7s of margin") as an explicit, checked number instead of
+// prose. 7_000 is that same figure, chosen to match what PR #156's own
+// arithmetic already assumed — not a new, independently-derived estimate of
+// how long resolveSeed/expandFrontier actually take (there is no production
+// traffic yet to measure that against, same caveat onDemandDocumentCap's own
+// docstring states for its figure).
+const DEFAULT_ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS = 7_000;
 
 /** Worst-case backoff (ms) `@langchain/core`'s `AsyncCaller` inserts before
  * the Nth retry attempt (1-indexed), when it is constructed the way this
@@ -185,7 +212,24 @@ function anthropicWorstCaseBackoffBeforeRetryMs(retryIndex: number): number {
  * comfortably inside `DEFAULT_CHAT_HANDLER_TIMEOUT_MS`'s `25_000ms` — about
  * 7s of margin for the rest of `/chat`'s own work (the Ship reads
  * `resolveSeed`/`expandFrontier`/`ingest` do before the model is ever
- * called). */
+ * called).
+ *
+ * TRO-379: that 7s WAS just this comment's own estimate — nothing checked
+ * it, and nothing stopped a slow `resolveSeed`/`expandFrontier` run from
+ * eating past it, at which point `composeAnswer`'s `model.invoke()` call
+ * (which never received the handler's own `AbortSignal`) kept running to
+ * completion server-side after `chatHandlerTimeoutMs` had already given up
+ * on it — the exact TRO-368 symptom, reopened in a narrower form. Two
+ * changes close that gap: `anthropicPreModelWorkAllowanceMs` (this file)
+ * names the assumed margin as a real, checked number —
+ * `assertAnthropicBudgetFitsHandlerDeadline` below rejects a configuration
+ * where it plus this function's own worst case doesn't fit inside
+ * `chatHandlerTimeoutMs`, at startup, before the process serves a request.
+ * And `graph.ts`'s `composeAnswer` node now receives that SAME
+ * `AbortSignal` and forwards it into `model.invoke()`, so an individual run
+ * that exceeds the allowance in practice still gets cut off at the real
+ * remaining deadline, not a fresh `anthropicWorstCaseCallMs` window counted
+ * from whenever the model call happened to start. */
 export function anthropicWorstCaseCallMs(requestTimeoutMs: number, maxRetries: number): number {
   const attempts = maxRetries + 1;
   let worstCaseBackoffMs = 0;
@@ -193,6 +237,46 @@ export function anthropicWorstCaseCallMs(requestTimeoutMs: number, maxRetries: n
     worstCaseBackoffMs += anthropicWorstCaseBackoffBeforeRetryMs(retryIndex);
   }
   return attempts * requestTimeoutMs + worstCaseBackoffMs;
+}
+
+/**
+ * Startup guard (TRO-379): rejects a configuration where the Anthropic
+ * call's own worst case (`anthropicWorstCaseCallMs`) plus the stated
+ * pre-model-work allowance (`anthropicPreModelWorkAllowanceMs`) cannot fit
+ * inside `chatHandlerTimeoutMs` — i.e. a configuration where even a
+ * PERFECTLY on-time pre-model phase would leave no room for the model call
+ * at all. This is a static check on four numbers, deliberately independent
+ * of the runtime fix (`graph.ts`'s `composeAnswer` now receives the
+ * handler's own `AbortSignal`, so an individual slow run is cut off at the
+ * real deadline regardless of what this function assumes) — the two are
+ * complementary: this catches an impossible configuration before the
+ * process ever serves a request; the signal handles a run that goes long
+ * despite a plausible one.
+ *
+ * Called once, at startup (`index.ts`), independent of `isConfigComplete` —
+ * all four fields here (`chatHandlerTimeoutMs`, `anthropicRequestTimeoutMs`,
+ * `anthropicMaxRetries`, `anthropicPreModelWorkAllowanceMs`) carry real
+ * defaults whether or not `ANTHROPIC_API_KEY`/`SHIP_API_TOKEN` are set, so
+ * the arithmetic is checkable — and worth checking — regardless of whether
+ * `/chat` will otherwise be reachable. Throws rather than warns: this
+ * file's existing fail-closed posture for `agentInternalSecret` ("No
+ * default: `undefined` means `/chat` fails closed, never open") extends
+ * naturally to "a budget that cannot hold should never start serving,"
+ * rather than silently degrading until a real request exposes it as a 5xx.
+ */
+export function assertAnthropicBudgetFitsHandlerDeadline(config: AgentConfig): void {
+  const worstCaseModelMs = anthropicWorstCaseCallMs(config.anthropicRequestTimeoutMs, config.anthropicMaxRetries);
+  const requiredMs = worstCaseModelMs + config.anthropicPreModelWorkAllowanceMs;
+  if (requiredMs > config.chatHandlerTimeoutMs) {
+    throw new Error(
+      `[agent] chatHandlerTimeoutMs (${config.chatHandlerTimeoutMs}ms) cannot hold the configured Anthropic ` +
+        `budget: anthropicWorstCaseCallMs(anthropicRequestTimeoutMs=${config.anthropicRequestTimeoutMs}ms, ` +
+        `anthropicMaxRetries=${config.anthropicMaxRetries}) = ${worstCaseModelMs}ms + ` +
+        `anthropicPreModelWorkAllowanceMs (${config.anthropicPreModelWorkAllowanceMs}ms) = ${requiredMs}ms, ` +
+        'which exceeds chatHandlerTimeoutMs. Raise CHAT_HANDLER_TIMEOUT_MS, lower ' +
+        'ANTHROPIC_REQUEST_TIMEOUT_MS/ANTHROPIC_MAX_RETRIES, or lower ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS.'
+    );
+  }
 }
 
 function positiveInt(value: string | undefined, fallback: number): number {
@@ -261,6 +345,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     // finding 2) — `0` is the documented way to disable retries and must
     // survive, not fall back to the default.
     anthropicMaxRetries: nonNegativeInt(env.ANTHROPIC_MAX_RETRIES, DEFAULT_ANTHROPIC_MAX_RETRIES),
+    // TRO-379 — see AgentConfig.anthropicPreModelWorkAllowanceMs's own
+    // docstring for what this is checked against and why.
+    anthropicPreModelWorkAllowanceMs: positiveInt(
+      env.ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS,
+      DEFAULT_ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS
+    ),
   };
 }
 

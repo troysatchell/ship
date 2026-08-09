@@ -1,0 +1,164 @@
+name: CI-failure rollback trigger
+
+# TRO-383 (Week 5 sweep, W5-R36) — the literal requirement, verbatim: "If a
+# CI run fails, the deployment must be rolled back automatically — do not
+# allow a failing build to remain deployed."
+#
+# `.github/workflows/agent-rollback-check.yml` (TRO-367) already rolls back
+# on a SUSTAINED /ready failure, polled every 15 minutes — real, tested, and
+# it closes the "boots but broken" gap FLEETGRAPH.MD documents. But nothing
+# in that workflow is caused BY a CI failure: a build that merges green and
+# whose CI later fails against `main` (a post-merge rerun, a dependency
+# regression only caught after merge, etc.) sits uncovered by a trigger that
+# only notices once the *deployed service itself* stops responding. This
+# ticket's own scope holds that readiness-polling does not satisfy this
+# requirement's literal wording (audit/requirements/gaps-W5.md's W5-R36 entry
+# quotes it verbatim), which names the CI run itself as the trigger — not
+# just the eventual state of what it deployed. THIS workflow is that trigger.
+# (Note: audit/requirements/interpretations.md, this repo's file of record
+# for such rulings, holds only I-01 as of this change — no I-03 entry exists
+# there yet, despite this ticket's brief referring to one. Recorded here
+# rather than silently assumed; a future pass should add one.)
+#
+# Three design decisions, stated here because they are judgment calls, not
+# mechanical translations of the requirement:
+#
+# 1. A single red CI run must not be sufficient to roll back production.
+#    Three distinct load-flake test identities hit this repo's CI in one day
+#    (TRO-380: session-revocation.test.ts, programWeeksNav, and
+#    auth.test.ts::extend-session), each failing on a branch that touched no
+#    file it could reach — see lessons.md's load-flake entries. A trigger
+#    that called Render on a bare failing conclusion would have fired a
+#    production rollback for every one of those, for reasons that have
+#    nothing to do with whether the deployed agent is actually broken. So
+#    this workflow does NOT call Render just because CI failed. It uses the
+#    CI failure only as a prompt to run — sooner than the next scheduled
+#    tick — the exact same sustained-readiness check the cron already uses
+#    (check-readiness-and-rollback.ts's evaluateReadinessSamples), which
+#    requires EVERY sample in a real polling window against the live
+#    /ready endpoint to report not-ready before it will call Render at all.
+#    A CI failure caused by an unrelated flaky unit test has no way to make
+#    the live agent's /ready endpoint actually report unready, so it cannot,
+#    by itself, cause a rollback — only a genuinely unhealthy deployment can.
+#    This is a stronger guard than "require N consecutive CI failures" would
+#    have been: consecutive CI failures still only trust CI's pass/fail
+#    signal, which was never designed to measure the runtime health of what
+#    is already deployed, whereas this asks the deployed service directly.
+#    It also costs nothing new to prove: check-readiness-and-rollback.test.ts
+#    already exercises the sustained-vs-transient decision end to end.
+#
+# 2. Must not double-fire with the cron. Both this workflow and
+#    agent-rollback-check.yml can independently decide to call Render.
+#    GitHub's own documentation (Actions > Using jobs > Using concurrency)
+#    states concurrency group names are NOT scoped per workflow file: "If
+#    you have multiple workflows in the same repository, concurrency group
+#    names must be unique across workflows to avoid canceling in-progress
+#    jobs or runs from other workflows" — i.e. two different workflow files
+#    that declare the SAME group name genuinely serialize against each
+#    other, repository-wide, not merely within one workflow file. (Verified
+#    by reading that page directly — not assumed from the field's name.)
+#    This workflow therefore reuses agent-rollback-check.yml's own group
+#    (agent-rollback-check) rather than inventing a new one; a distinct name
+#    would satisfy nothing, since the two workflows would then simply run
+#    concurrently against the same production service and could both decide
+#    to redeploy at once.
+#
+# 3. Stay inert without credentials. Same RENDER_API_KEY /
+#    RENDER_AGENT_SERVICE_ID gating as agent-rollback-check.yml, reusing its
+#    exact pattern: every real step is skipped with a ::warning:: annotation
+#    when either secret is unset, rather than failing loudly or silently
+#    doing nothing.
+on:
+  workflow_run:
+    workflows: ['CI']
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  # Deliberately the SAME group agent-rollback-check.yml declares — see
+  # design decision 2 above. This is what makes the two workflows serialize
+  # against each other instead of both being able to call Render at once.
+  group: agent-rollback-check
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  AGENT_READY_URL: https://ship-agent-t0zy.onrender.com/ready
+
+jobs:
+  check-and-rollback:
+    name: confirm real unreadiness after a failing CI run, roll back on sustained failure
+    # Only a CONCLUDED, FAILING run of the CI workflow against `main` reaches
+    # this job — see design decisions 1 and the `on:` block above. A CI run
+    # that merely started, or one that passed, or one that failed on a
+    # feature branch's own pull_request run (excluded by the `branches:
+    # [main]` filter above, which matches the triggering run's head branch)
+    # never gets here.
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check required secrets are configured
+        id: secrets_check
+        # Read secrets only via env: (never interpolated directly into the
+        # script body) — the conventional-safe pattern; GitHub Actions masks
+        # secret values in logs either way, but this also sidesteps any
+        # shell-metacharacter surprise if a secret value ever contained one.
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_AGENT_SERVICE_ID: ${{ secrets.RENDER_AGENT_SERVICE_ID }}
+        run: |
+          if [ -z "$RENDER_API_KEY" ] || [ -z "$RENDER_AGENT_SERVICE_ID" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::RENDER_API_KEY and/or RENDER_AGENT_SERVICE_ID repository secrets are not set. The CI-failure rollback trigger (TRO-383) is wired but inert until a human provisions both — see this workflow file's own header comment and FLEETGRAPH.MD's 'Rollback trigger and procedure' section. Skipping the readiness check for this run."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: steps.secrets_check.outputs.configured == 'true'
+        with:
+          # This workflow carries production credentials (RENDER_API_KEY) once
+          # provisioned; a persisted git credential in the runner's local
+          # config is an unnecessary exposure this job never needs — it only
+          # reads files, never pushes.
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        if: steps.secrets_check.outputs.configured == 'true'
+        with:
+          version: 10.27.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: steps.secrets_check.outputs.configured == 'true'
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        if: steps.secrets_check.outputs.configured == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Build shared (agent depends on its dist)
+        if: steps.secrets_check.outputs.configured == 'true'
+        run: pnpm build:shared
+
+      # Same sustained-failure requirement as the cron: EVERY sample in this
+      # window must report not-ready (evaluateReadinessSamples) before
+      # rollbackViaRenderApi is ever reached — see design decision 1 above.
+      # A failing CI run only earns an earlier readiness check than the next
+      # 15-minute cron tick would have given it; it does not skip the check.
+      - name: Check agent readiness, roll back on sustained failure
+        if: steps.secrets_check.outputs.configured == 'true'
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          RENDER_AGENT_SERVICE_ID: ${{ secrets.RENDER_AGENT_SERVICE_ID }}
+        run: |
+          pnpm --filter @ship/agent check:readiness \
+            --url "$AGENT_READY_URL" \
+            --attempts 3 \
+            --interval-ms 30000 \
+            --service-id "$RENDER_AGENT_SERVICE_ID" \
+            --execute
