@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { anthropicWorstCaseCallMs, isConfigComplete, loadConfig } from '../config.js';
+import { anthropicWorstCaseCallMs, assertAnthropicBudgetFitsHandlerDeadline, isConfigComplete, loadConfig } from '../config.js';
 
 describe('loadConfig', () => {
   it('applies documented defaults when env vars are absent', () => {
@@ -30,6 +30,9 @@ describe('loadConfig', () => {
     // `anthropicWorstCaseCallMs` describe block below for why.
     expect(config.anthropicRequestTimeoutMs).toBe(8_000);
     expect(config.anthropicMaxRetries).toBe(1);
+    // TRO-379 — names anthropicWorstCaseCallMs's own docstring's "about 7s
+    // of margin" as a real, checked number.
+    expect(config.anthropicPreModelWorkAllowanceMs).toBe(7_000);
   });
 
   it('reads every value from the provided env map, not process.env', () => {
@@ -52,6 +55,7 @@ describe('loadConfig', () => {
       CHAT_HANDLER_TIMEOUT_MS: '12000',
       ANTHROPIC_REQUEST_TIMEOUT_MS: '15000',
       ANTHROPIC_MAX_RETRIES: '4',
+      ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS: '9000',
     });
 
     expect(config).toEqual({
@@ -73,6 +77,7 @@ describe('loadConfig', () => {
       chatHandlerTimeoutMs: 12000,
       anthropicRequestTimeoutMs: 15000,
       anthropicMaxRetries: 4,
+      anthropicPreModelWorkAllowanceMs: 9000,
     });
   });
 
@@ -152,6 +157,57 @@ describe('anthropicWorstCaseCallMs (CodeRabbit review, PR #156, finding 1)', () 
     const chatHandlerTimeoutMsDefault = loadConfig({}).chatHandlerTimeoutMs;
 
     expect(originalWorstCase).toBeGreaterThan(chatHandlerTimeoutMsDefault);
+  });
+});
+
+// TRO-379: the startup guard that turns anthropicWorstCaseCallMs's own
+// "about 7s of margin" comment into a real, checked number
+// (anthropicPreModelWorkAllowanceMs) — rejecting a configuration that
+// cannot hold, before the process ever serves a request.
+describe('assertAnthropicBudgetFitsHandlerDeadline', () => {
+  it('does not throw for the production defaults — 18_000ms worst case + 7_000ms allowance = 25_000ms, exactly chatHandlerTimeoutMs', () => {
+    const config = loadConfig({});
+    expect(() => assertAnthropicBudgetFitsHandlerDeadline(config)).not.toThrow();
+  });
+
+  it('throws when the worst case plus allowance exceeds chatHandlerTimeoutMs', () => {
+    const config = loadConfig({
+      CHAT_HANDLER_TIMEOUT_MS: '12000',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '15000',
+      ANTHROPIC_MAX_RETRIES: '4',
+    });
+    // anthropicWorstCaseCallMs(15_000, 4) = 5 * 15_000 + (2_000 + 4_000 +
+    // 8_000 + 16_000) = 75_000 + 30_000 = 105_000, plus the 7_000ms default
+    // allowance — nowhere close to fitting inside a 12_000ms handler budget.
+    expect(() => assertAnthropicBudgetFitsHandlerDeadline(config)).toThrow(
+      /chatHandlerTimeoutMs \(12000ms\) cannot hold/
+    );
+  });
+
+  it('the thrown message names every number that went into the decision, not just "misconfigured"', () => {
+    const config = loadConfig({
+      CHAT_HANDLER_TIMEOUT_MS: '1000',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '5000',
+      ANTHROPIC_MAX_RETRIES: '0',
+      ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS: '2000',
+    });
+    // anthropicWorstCaseCallMs(5_000, 0) = 5_000 (one attempt, no backoff).
+    // 5_000 + 2_000 = 7_000, which exceeds the 1_000ms handler budget.
+    expect(() => assertAnthropicBudgetFitsHandlerDeadline(config)).toThrow(
+      /anthropicRequestTimeoutMs=5000ms.*anthropicMaxRetries=0.*= 5000ms.*anthropicPreModelWorkAllowanceMs \(2000ms\).*= 7000ms/s
+    );
+  });
+
+  it('does not throw once chatHandlerTimeoutMs is raised enough to cover the same worst case plus allowance', () => {
+    const config = loadConfig({
+      CHAT_HANDLER_TIMEOUT_MS: '12000',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '4000',
+      ANTHROPIC_MAX_RETRIES: '1',
+      ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS: '2000',
+    });
+    // anthropicWorstCaseCallMs(4_000, 1) = 2 * 4_000 + 2_000 = 10_000.
+    // 10_000 + 2_000 = 12_000 — exactly fits, must not throw.
+    expect(() => assertAnthropicBudgetFitsHandlerDeadline(config)).not.toThrow();
   });
 });
 
