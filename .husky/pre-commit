@@ -8,6 +8,14 @@ if [ -f "./scripts/check-api-coverage.sh" ]; then
   ./scripts/check-api-coverage.sh --staged
 fi
 
+# W4-R38: dependency versions must stay pinned (no ^/~ ranges) once a
+# workspace manifest is staged for commit.
+if git diff --cached --name-only | grep -qE '^(package\.json|api/package\.json|web/package\.json|shared/package\.json|agent/package\.json)$'; then
+  if [ -f "./scripts/check-pinned-deps.sh" ]; then
+    ./scripts/check-pinned-deps.sh
+  fi
+fi
+
 # Open source compliance checks (secrets scan + AI analysis)
 if command -v comply &> /dev/null; then
   # NOTE: --skip-trivy is temporary workaround for compliance-toolkit bug
