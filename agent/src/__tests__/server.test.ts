@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import request from 'supertest';
+import { createServer as createHttpServer, type Server as HttpServer } from 'node:http';
+import { ChatAnthropic } from '@langchain/anthropic';
 import { loadConfig } from '../config.js';
-import { createServer } from '../server.js';
+import { createServer, anthropicModelParams, buildAnthropicModel } from '../server.js';
 import type { ShipReadClient } from '../health.js';
 import { InMemoryItemStore, type InboxItem, type NewInboxItem } from '../itemStore.js';
 import { InMemoryDraftStore, type NewStandupDraft } from '../draftStore.js';
@@ -576,4 +578,154 @@ describe('POST /accept-draft', () => {
     expect(res.status).toBe(502);
     expect(res.body.error).toBe('accept_draft_failed');
   });
+});
+
+describe('anthropicModelParams / buildAnthropicModel (TRO-368)', () => {
+  // Requirement: "All outbound calls from the agent (to Ship APIs, LLM
+  // providers, and any external tools) must implement explicit timeouts and
+  // retry logic with exponential backoff." Ship API calls already had this
+  // (resilientClient.ts); the LLM-provider call did not — `index.ts`
+  // constructed `ChatAnthropic` with no `timeout`/`maxRetries`, silently
+  // inheriting the SDK's own 10-minute timeout and AsyncCaller's 6-retry
+  // default. This asserts the values actually reaching the constructor are
+  // explicit and configured, not the library's own unexamined defaults.
+
+  it('carries an explicit request timeout and retry count, not the library defaults', () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: 'sk-test',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '20000',
+      ANTHROPIC_MAX_RETRIES: '2',
+    });
+    const params = anthropicModelParams(config);
+
+    expect(params.clientOptions.timeout).toBe(20000);
+    expect(params.maxRetries).toBe(2);
+    // Neither is the library's own inherited default — the whole point of
+    // this ticket is that those defaults (10 minutes; 6 retries) are wrong
+    // for a call sitting inside a request handler.
+    expect(params.clientOptions.timeout).not.toBe(600_000);
+    expect(params.maxRetries).not.toBe(6);
+  });
+
+  it('reads the timeout and retry count from config, not a hardcoded literal', () => {
+    // Different from the default-value test above: proves the params
+    // function actually forwards whatever config carries, rather than
+    // happening to match a hardcoded number that looks configurable.
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: 'sk-test',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '9000',
+      ANTHROPIC_MAX_RETRIES: '5',
+    });
+    const params = anthropicModelParams(config);
+
+    expect(params.clientOptions.timeout).toBe(9000);
+    expect(params.maxRetries).toBe(5);
+  });
+
+  it('builds a real ChatAnthropic instance whose own public clientOptions carries the explicit timeout', () => {
+    // clientOptions is a public field on the constructed instance itself
+    // (verified by reading @langchain/anthropic's chat_models.cjs — it is
+    // assigned directly from the constructor's fields.clientOptions, never
+    // defaulted away) — this is the one piece of the fix checkable on the
+    // real object, not just on the plain params passed in. maxRetries is
+    // consumed by @langchain/core's AsyncCaller into a `protected` field on
+    // that instance, so it is asserted at the params layer above instead of
+    // read back off the model here.
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: 'sk-test',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '20000',
+    });
+    const model = buildAnthropicModel(config);
+
+    expect(model.clientOptions.timeout).toBe(20000);
+  });
+
+  it('defaults to explicit, chosen values when neither env var is set — never an unset field left to the library', () => {
+    const config = loadConfig({ ANTHROPIC_API_KEY: 'sk-test' });
+    const params = anthropicModelParams(config);
+
+    // CodeRabbit review, PR #156 (finding 1): lowered from TRO-368's
+    // original 20_000/2 — see config.ts's anthropicWorstCaseCallMs and
+    // config.test.ts's own describe block for why.
+    expect(params.clientOptions.timeout).toBe(8_000);
+    expect(params.maxRetries).toBe(1);
+  });
+});
+
+describe('anthropicModelParams / buildAnthropicModel — retry+timeout budget actually stops before the handler deadline (CodeRabbit review, PR #156, finding 1)', () => {
+  // This is the "observed", not just "derived", half of the finding-1 proof:
+  // config.test.ts's anthropicWorstCaseCallMs tests check the ARITHMETIC;
+  // this exercises the REAL @langchain/anthropic + @langchain/core retry
+  // stack against a real (but local, hanging) HTTP server, using the exact
+  // production defaults, and asserts wall-clock time settles comfortably
+  // inside chatHandlerTimeoutMs — proving the formula matches what the
+  // library actually does, not just what its docs claim.
+  let hangingServer: HttpServer;
+  let hangingServerUrl: string;
+  let attemptCount: number;
+
+  beforeEach(async () => {
+    attemptCount = 0;
+    hangingServer = createHttpServer((_req) => {
+      attemptCount += 1;
+      // Deliberately never call res.end()/res.write() — every attempt hangs
+      // until the client's own clientOptions.timeout aborts it. This is what
+      // makes the test deterministic: it does not depend on real network
+      // conditions or a real Anthropic outage, only on the timeout/retry
+      // configuration under test.
+    });
+    await new Promise<void>((resolve) => hangingServer.listen(0, '127.0.0.1', resolve));
+    const address = hangingServer.address();
+    if (address === null || typeof address === 'string') {
+      throw new Error('unreachable — listen(0, "127.0.0.1") always yields an AddressInfo');
+    }
+    hangingServerUrl = `http://127.0.0.1:${address.port}`;
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => hangingServer.close(() => resolve()));
+  });
+
+  it('with the production defaults (8s timeout, 1 retry), a fully-hung call settles well within chatHandlerTimeoutMs (25s default)', async () => {
+    const config = loadConfig({ ANTHROPIC_API_KEY: 'sk-test' });
+    expect(config.anthropicRequestTimeoutMs).toBe(8_000);
+    expect(config.anthropicMaxRetries).toBe(1);
+
+    const model = new ChatAnthropic({
+      ...anthropicModelParams(config),
+      anthropicApiUrl: hangingServerUrl,
+    });
+
+    const start = Date.now();
+    await expect(model.invoke('hello')).rejects.toThrow();
+    const elapsed = Date.now() - start;
+
+    // 2 attempts * 8_000ms + up to ~2_000ms worst-case backoff = ~18_000ms
+    // worst case (anthropicWorstCaseCallMs(8_000, 1) in config.test.ts).
+    // Asserted well under chatHandlerTimeoutMs's 25_000ms default, and well
+    // under api/'s own 30s AGENT_REQUEST_TIMEOUT_MS bound too.
+    expect(elapsed).toBeLessThan(20_000);
+    // Both attempts actually happened — this genuinely exercised the retry,
+    // not just the first timeout.
+    expect(attemptCount).toBe(2);
+  }, 25_000);
+
+  it('a request that never retries (maxRetries: 0) makes exactly one attempt and settles near its own single timeout', async () => {
+    const config = loadConfig({
+      ANTHROPIC_API_KEY: 'sk-test',
+      ANTHROPIC_REQUEST_TIMEOUT_MS: '500',
+      ANTHROPIC_MAX_RETRIES: '0',
+    });
+    const model = new ChatAnthropic({
+      ...anthropicModelParams(config),
+      anthropicApiUrl: hangingServerUrl,
+    });
+
+    const start = Date.now();
+    await expect(model.invoke('hello')).rejects.toThrow();
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(3_000);
+    expect(attemptCount).toBe(1);
+  }, 10_000);
 });

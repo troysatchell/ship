@@ -60,6 +60,7 @@
 
 import { timingSafeEqual } from 'node:crypto';
 import express, { type Express } from 'express';
+import { ChatAnthropic } from '@langchain/anthropic';
 import type { AgentConfig } from './config.js';
 import { isConfigComplete } from './config.js';
 import { checkReady, type ShipReadClient } from './health.js';
@@ -102,6 +103,52 @@ export function buildShipClient(config: AgentConfig, fetchImpl?: typeof fetch): 
     retry: { maxAttempts: config.shipRetryMaxAttempts, baseDelayMs: 200 },
     fetchImpl,
   });
+}
+
+/** The exact shape of constructor options this package's one production
+ * `ChatAnthropic` (TRO-368) is built with — pulled out as its own typed,
+ * exported function so `index.ts`'s real wiring and this file's own tests
+ * share ONE definition. Without this seam, a future edit could drop
+ * `maxRetries`/`clientOptions.timeout` from the call site a test doesn't
+ * cover while leaving a stale copy elsewhere looking fine — the same
+ * "convergent copies drift" shape `buildShipClient` above already avoids
+ * for the Ship-side resilient client. */
+export interface AnthropicModelParams {
+  apiKey: string | undefined;
+  model: string;
+  maxTokens: number;
+  /** `ChatAnthropic`'s own `maxRetries` — `@langchain/core`'s `AsyncCaller`
+   * retry-with-exponential-backoff wrapper (verified by reading
+   * `async_caller.cjs`: `p-retry` under the hood, not assumed from the
+   * option's name). Unset, this defaults to `AsyncCallerParams`'
+   * documented 6 — an inherited default, not a chosen one. See
+   * `AgentConfig.anthropicMaxRetries` for the value and why. */
+  maxRetries: number;
+  clientOptions: {
+    /** Forwarded straight to the raw `@anthropic-ai/sdk` client (the only
+     * place `@langchain/anthropic` exposes a per-request timeout —
+     * `AnthropicInput` has no top-level `timeout` field, verified by
+     * reading `chat_models.d.ts`). Unset, the SDK defaults to 10 MINUTES.
+     * See `AgentConfig.anthropicRequestTimeoutMs` for the value and why. */
+    timeout: number;
+  };
+}
+
+export function anthropicModelParams(config: AgentConfig): AnthropicModelParams {
+  return {
+    apiKey: config.anthropicApiKey,
+    model: 'claude-haiku-4-5-20251001',
+    maxTokens: 1024,
+    maxRetries: config.anthropicMaxRetries,
+    clientOptions: { timeout: config.anthropicRequestTimeoutMs },
+  };
+}
+
+/** The production `ChatAnthropic` instance, built from `anthropicModelParams`
+ * above so there is exactly one place that decides what this package's real
+ * model call is configured with (TRO-368). */
+export function buildAnthropicModel(config: AgentConfig): ChatAnthropic {
+  return new ChatAnthropic(anthropicModelParams(config));
 }
 
 export interface CreateServerDeps {

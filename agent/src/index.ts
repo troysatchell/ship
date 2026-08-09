@@ -81,9 +81,8 @@
  */
 
 import 'dotenv/config';
-import { ChatAnthropic } from '@langchain/anthropic';
 import { loadConfig, isConfigComplete } from './config.js';
-import { createServer, buildShipClient } from './server.js';
+import { createServer, buildShipClient, buildAnthropicModel } from './server.js';
 import { buildGraph, type CompiledGraph } from './graph.js';
 import { ShipClient, GateShipClient, type GateShipClientLike } from './shipClient.js';
 import { InMemoryItemStore, type ItemStore } from './itemStore.js';
@@ -159,11 +158,21 @@ if (!isConfigComplete(config)) {
   // Config complete: wire the real graph (real model, real Ship client, the
   // in-memory item store — see itemStore.ts for why in-memory is the right
   // call for this ticket) and start the steady-tier poller.
-  const model = new ChatAnthropic({
-    apiKey: config.anthropicApiKey,
-    model: 'claude-haiku-4-5-20251001',
-    maxTokens: 1024,
-  });
+  // TRO-368: explicit timeout + retry/backoff for the LLM-provider call —
+  // the one outbound call class the resilientClient.ts layer never covered
+  // (that file's own docstring claims "Ship API and the model provider
+  // both", but grepping it turns up no Anthropic-specific code at all).
+  // Unconfigured, `@anthropic-ai/sdk` defaults to a 10-MINUTE timeout and
+  // `AsyncCallerParams` defaults `maxRetries` to 6 — both inherited library
+  // defaults, not chosen ones, and exactly what let `server.ts`'s own
+  // comment on this handler concede that a hung call here "keeps running to
+  // completion server-side" after `chatHandlerTimeoutMs` gives up on
+  // *waiting* for it. Built via `buildAnthropicModel` (server.ts) rather
+  // than inline, so the exact params this real construction uses are the
+  // same ones `server.test.ts` asserts on — see
+  // `anthropicRequestTimeoutMs`/`anthropicMaxRetries` in config.ts for the
+  // chosen values and the full reasoning.
+  const model = buildAnthropicModel(config);
   // Built once, shared by the bound-token `shipClient` below AND the
   // on-demand `shipClientFactory` (TRO-342) — the circuit breaker/
   // self-throttle it carries are about Ship's own reachability, not caller

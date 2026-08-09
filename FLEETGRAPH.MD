@@ -16,7 +16,7 @@ resolved finding (original kept as history) is in the Test Cases section. A time
 test against the deployed site observed **42.6 seconds** event-to-inbox (bar: 5 minutes) — see
 Grader Access.
 
-Last updated: August 7, 2026
+Last updated: August 8, 2026
 
 ---
 
@@ -87,7 +87,13 @@ the agent produces when it is not certain.
 **It acts, when a query proves it** — each of these is a structured lookup with no interpretation:
 
 - Resolving mentions to people to user accounts, and assembling those into someone's list
-- Linking a document to the issue or week it refers to, when the reference is unambiguous
+- Linking a document to the issue or week it refers to, when the reference is unambiguous —
+  **not yet built (verified TRO-370, 2026-08-08).** No implementation exists anywhere in
+  `agent/src`: no write to `document_associations` on any code path, no such method on
+  `ShipClient` (`shipClient.ts`'s write surface is exactly `postStandup`, `setStandupContent`,
+  `applyIssueTransition`). The other three actions in this list are real and implemented outside
+  `gate.ts` (`agent/src/graph.ts`'s write boundary, `graphWriteBoundary.test.ts`'s proof); this one
+  is a described capability with no code behind it.
 - Writing its own drafts and items, attributed to the agent
 - Clearing its own item when the condition ends
 
@@ -162,13 +168,23 @@ not one of the twenty people has it filled in.
 
 Project membership lives in a separate associations table, alongside owner and assignee fields.
 
-Roles are derived from structure, never read from a field:
+Roles are derived from structure, never read from a field — as a **design**:
 
 | Role | How it is derived |
 |---|---|
 | Director | People reporting to them two or more levels deep; owns programs |
 | Project manager | Owns projects or weeks; appears as approver on plans |
 | Engineer | Has issues assigned; nobody reports to them |
+
+**Not yet built (verified TRO-370, 2026-08-08): this table is a design, not a running taxonomy.**
+`agent/src/roles.ts`'s own module docstring says so directly — "FLEETGRAPH.MD's Director/PM/Engineer
+taxonomy is real but not needed by anything in this ticket's scope... left for whichever later FG
+ticket routes an escalation or needs to tell a Director apart from a PM." What IS implemented and
+real is narrower: `findManagerUserId`/`findManagerChain` (`roles.ts`) walk `reports_to` one hop or
+to the root — enough to answer "who has authority to unblock this plan approval" and "who is the
+lowest manager over everyone currently blocked" (TRO-337's escalation routing), never enough to
+answer "is this person a Director." No code anywhere in `agent/src` computes "reports to them two or
+more levels deep" or "owns projects or weeks" to label someone with one of these three roles.
 
 ---
 
@@ -182,12 +198,16 @@ on-demand chat, on-demand expansion, and proactive fast/steady chains are additi
 against the real LangSmith traces in the "Execution Traces" section immediately below, which show the
 same node sequences actually executing for those three paths. The `proactive_deep` chain
 (`gatherStandupActivity -> composeStandupDraft -> commitStandupDraft`) is verified against source
-only, the same as the rest of the diagram — no real trace exists for it, because (per FG-21's own
-finding, restated in this file's Cost Analysis section) `composeStandupDraft` still has zero real
-invocations: no scheduler exists yet to trigger `proactive_deep` for a real person at all. Where the
-diagram disagrees with the summary bullets that used to stand in this section's place, that
-disagreement is called out explicitly rather than smoothed over — see the two notes after the
-diagram.
+only, the same as the rest of the diagram — no real, publicly-linked trace for it appears in the
+"Execution Traces" section below. That is no longer because the node has never really run: the cost
+ledger (this file's Cost Analysis section) records one real `composeStandupDraft` invocation,
+timestamped 2026-08-07 — this section's own prior "still has zero real invocations" claim was stale
+and is corrected as of TRO-366 (2026-08-08); see the Cost Analysis section for the fix. That
+invocation's trace was never captured into this document, which is the actual reason no trace
+appears below. Separately, and still true: no scheduler exists to trigger `proactive_deep` for a
+real person on any ongoing basis — one recorded invocation is not a scheduler. Where the diagram
+disagrees with the summary bullets that used to stand in this section's place, that disagreement is
+called out explicitly rather than smoothed over — see the two notes after the diagram.
 
 **Updated (TRO-349, 2026-08-05).** Three chains were missing from the diagram above:
 `proactive_escalation` (`detectBlockerFanout -> composeBlockerEscalation ->
@@ -814,11 +834,21 @@ absolute — apply only to browser sessions. API tokens are handled first and by
 they are bounded only by their own expiry, which can be unset, and by explicit revocation. A
 headless agent needs no re-authentication schedule.
 
-**There is no service account.** Every API token belongs to a real user, so the agent runs under
-each person's own token. This matters more under the current design than it did before — following
-the graph outward from the open document means reaching documents the person did not open, and
-running as them is what makes that safe by construction. **It can reach anything you could reach,
-and nothing you could not.**
+**There is no service account, but which token backs a call depends on the tier** (corrected TRO-370,
+2026-08-08 — the claim below held unqualified until TRO-342 split the tiers, and this section never
+caught up). **On-demand** (`respond`/`composeAnswer`) uses a fresh, per-request token bound to the
+ASKING person specifically (TRO-342, `index.ts`'s `onDemandShipClientFactory`) — following the graph
+outward from the open document means reaching documents the person did not open, and running as them
+is what makes THIS tier safe by construction: **it can reach anything they could reach, and nothing
+they could not.** **Proactive (fast/steady) and deep** — mention resolution, blocking-approval
+detection, and every draft-composing trigger (standup, retro, plan-change, escalation) — run under
+ONE shared token instead, by explicit design: none of those triggers has a single per-invocation
+asking person to source a per-call token from (`ProactiveDeps`/`DeepDeps`'s own docstrings in
+`graph.ts`; `index.ts:182-189` builds this one shared `shipClient` and passes it to both). That
+token currently belongs to a real seeded super-admin account, not a synthetic identity
+(`dev@ship.local` — see "On the choice of identity" below), so "no service account" still holds in
+that narrower sense — but a proactive draft about Alice's own standup is read and written under the
+admin token's own visibility and permissions, not Alice's.
 
 **Private documents are currently hypothetical.** All 523 documents are workspace-visible and none
 are private. The risk is real in the schema and absent from the data. That count is the local
@@ -965,9 +995,9 @@ auth).
    failed."
 
 **TRO-322 / FG-12 — both layers demonstrated, not just described, plus the "boots but broken" gap
-closed with real (not yet wired-live) tooling.** Three separate pieces of real, generated evidence
-— none of this is re-derived from the reasoning above; see CHANGES.md's TRO-322 entry for exact
-commands/output.
+closed with real tooling; TRO-367 then wired that tooling to an automatic trigger.** Three separate
+pieces of real, generated evidence — none of this is re-derived from the reasoning above; see
+CHANGES.md's TRO-322 entry for exact commands/output, and its TRO-367 entry for the trigger itself.
 
 1. **Layer 1, proven on both platforms with a throwaway, never-merged branch.** A branch
    (`chore/tro-322-ci-rollback-proof-do-not-merge`) with one deliberate `pnpm type-check` failure
@@ -997,7 +1027,8 @@ commands/output.
      this project (owned by whoever registered runner 71), not something `.gitlab-ci.yml` or this
      repo controls. Worth a follow-up ticket: either get the runner's access level changed, or stop
      describing GitLab MR pipelines as a merge gate until it is.
-2. **Layer 2's gap, reproduced live, then closed with real (not yet auto-triggered) tooling.**
+2. **Layer 2's gap, reproduced live, closed with real tooling, and — as of TRO-367 (W5-R36, the only
+   `MISSING` requirement in the Week 5 sweep) — actually WIRED to an automatic trigger.**
    `agent/src/deployReadiness.ts` (`evaluateReadinessSamples`/`pollReadiness`) is the decision
    function: a sustained run of not-ready samples (every sample in the window fails) warrants
    correction; a single failure that recovers — the transient-Ship-blip case this section already
@@ -1008,7 +1039,16 @@ commands/output.
    is warranted (exit 2) without calling Render; `--execute --service-id <id>` (needs
    `RENDER_API_KEY`) additionally looks up the most recent other `live` deploy via `GET .../deploys`
    and re-triggers it via `POST .../deploys` with that deploy's `commitId`, Render's documented
-   mechanism for redeploying a specific prior commit.
+   mechanism for redeploying a specific prior commit. Its own `poll -> evaluate -> decide -> call
+   Render` pipeline is factored out as `runReadinessCheck` specifically so a test can exercise the
+   FULL chain end to end against injected fakes (a fake `/ready` poller and a fake Render `fetch`,
+   never a real network call) — see `check-readiness-and-rollback.test.ts`'s `runReadinessCheck`
+   suite (6 cases: healthy → no action, transient → no action, dry-run → reports without calling
+   Render, missing API key → reports without calling Render, sustained failure with `--execute` →
+   actually calls Render's documented rollback endpoint with the correct previous commit id, plus
+   one case proving the sample/evaluation logging point). Confirmed red first: every new case failed
+   with `TypeError: runReadinessCheck is not a function` against the pre-TRO-367 script, then passed
+   once `runReadinessCheck` was added.
    **Proven by local simulation, real processes, real output** (not mocked): two real
    `agent/src/index.ts` processes were started locally — one with `SHIP_API_BASE_URL` pointed at an
    unreachable port (config complete, Ship unreachable — exactly this section's named gap) and one
@@ -1017,16 +1057,30 @@ commands/output.
    `check-readiness-and-rollback.ts --url .../ready --attempts 3 --interval-ms 1500` against each:
    the broken instance reported `sustained_not_ready: all 3 sample(s) reported not-ready` and
    exited 2; the healthy instance reported `healthy: every sample reported ready` and exited 0.
-   **Not wired to fire automatically against the live `ship`/`ship-agent` services in this change**
-   — doing so needs `RENDER_API_KEY` in a real scheduled trigger and a decision about cadence, which
-   is exactly the kind of outward-facing, credential-bearing infrastructure change this factory
-   reserves for explicit human sign-off (matching every prior live Render action in this document).
-   **Recommendation for that sign-off:** do NOT simply repoint `agent_health_check_path` at
-   `/ready` — this section's own transient-blip caveat means Render's platform check would then
+   **The trigger itself: `.github/workflows/agent-rollback-check.yml`.** Runs on a 15-minute
+   `schedule:` (cron) plus `workflow_dispatch`, structurally asserted by
+   `agentRollbackWorkflow.test.ts` (the `on:` block declares `schedule:`/`cron:`, not only manual
+   dispatch; the readiness step passes `--execute`; `cancel-in-progress: false` so a scheduled tick
+   never interrupts a rollback already in flight). It calls
+   `check-readiness-and-rollback.ts --execute` against the real agent `/ready` URL, gated on two
+   repository secrets — `RENDER_API_KEY` and `RENDER_AGENT_SERVICE_ID` — that this change does NOT
+   and cannot set: provisioning real credentials against a live production service is exactly the
+   outward-facing, credential-bearing infrastructure step this factory's escalation policy reserves
+   for explicit human sign-off, matching every other live Render/Terraform action in this document.
+   Until a human sets both, a "check secrets are configured" step reports a `::warning::` annotation
+   on every scheduled run and every other step (including the readiness check itself) is skipped —
+   neither failing loudly nor silently doing nothing.
+   **What this closes, and what remains open, stated precisely.** Observed: the trigger is wired
+   (the workflow file exists, fires unattended on a schedule, and its full decision-to-action
+   pipeline is proven correct against fakes). Derived, not observed: that it will correctly redeploy
+   the previous commit *against the actually-deployed production service* — no version of this
+   trigger, in this change, has ever made a real call to Render's API, and no live rollback has ever
+   been exercised against `ship-agent`. The remaining step is exactly the credential provisioning
+   above, which is a human action, not a code change; the next scheduled run after both secrets are
+   set is this trigger's first real, unattended exercise, and that run should be watched the first
+   time. Do NOT simply repoint `agent_health_check_path` at `/ready` instead of using this
+   trigger — this section's own transient-blip caveat means Render's platform check would then
    demote a healthy instance during any brief Ship outage, trading one failure mode for a worse one.
-   Instead, schedule `check-readiness-and-rollback.ts --execute` (e.g. a few minutes after each
-   deploy, or on a short recurring interval) as the corrective layer described above, leaving
-   `/health` as Render's own promotion gate unchanged.
 
 **Login and the 403 (TRO-341 / FG-23) — root-caused, not a WAF.** Two prior curl attempts against
 `POST https://ship-rr6m.onrender.com/api/auth/login` returned a platform-looking `403 Forbidden` —
@@ -1153,6 +1207,66 @@ graded database following this identical allowlist-open/close procedure — see 
 section above ("Re-seed (TRO-357, 2026-08-06)") for the full before/after evidence. Both fixtures
 now fire; TC2/TC4 confirmed unchanged.
 
+### Outbound Call Resilience
+
+**Added TRO-368, 2026-08-08.** The brief's requirement is explicit: "All outbound calls from the
+agent (to Ship APIs, LLM providers, and any external tools) must implement explicit timeouts and
+retry logic with exponential backoff." Every outbound call class this package actually makes,
+checked directly against source rather than assumed:
+
+| Class | Timeout / backoff coverage | Where |
+|---|---|---|
+| Ship API (reads + writes) | Explicit `timeoutMs`; retry with exponential backoff + jitter (idempotent GET reads only); a circuit breaker with a half-open probe; self-throttling under Ship's own per-IP ceiling, since both of Ship's own rate limiters fail open (see "Reliability" above) | `resilientClient.ts`'s `ResilientClient`, built once via `buildShipClient` (`server.ts`) and shared by every `ShipClient`/`GateShipClient` in the process |
+| LLM provider (Anthropic, `ChatAnthropic`) | Explicit `timeout` (`clientOptions.timeout`, forwarded to the raw `@anthropic-ai/sdk` client) and `maxRetries` (`@langchain/core`'s own `AsyncCaller`, exponential backoff + jitter via `p-retry` — verified by reading `async_caller.cjs`, not assumed from the option's name) | `server.ts`'s `anthropicModelParams`/`buildAnthropicModel` — the one place this package constructs the real `ChatAnthropic` used in production (`index.ts`) |
+| Any other external tool (production paths) | None exist today. Every production request path (`/chat`, `/inbox`, `/accept-draft`, the proactive poller) makes outbound calls through exactly the two resilient classes above — no third service. | — |
+
+**Manual CLI scripts are OUTSIDE this resilience story — stated explicitly, not left implicit
+(CodeRabbit review, PR #156, finding 5).** The table above covers *production* request paths only.
+Grepping `agent/src/scripts` turns up two scripts that make real outbound calls with **no timeout or
+retry policy of their own**, and neither goes through `resilientClient.ts`:
+- `trace-invoke-proactive.ts` — its two direct `fetch()` calls (`GET /api/team/people`,
+  `POST .../comments`) are bare, unbounded fetches; they bypass even the `ShipClient`/
+  `ResilientClient` this same script constructs for the rest of its work (its own `shipClient`
+  variable, built via `buildShipClient(config)`, is never used for either call).
+- `check-readiness-and-rollback.ts` — its readiness-polling loop (`fetcher.get: (url) => fetch(url)`)
+  and its Render API calls (`rollbackViaRenderApi`: `GET`/`POST https://api.render.com/v1/services/
+  {id}/deploys`) are both bare `fetch()`. The Render API is a genuinely different external service
+  from Ship API or Anthropic — this document previously (and incorrectly) implied no third service
+  existed; it does, it is just not on a production path.
+
+Neither script runs on a request a real user's browser can trigger — both are human-invoked CLI
+tools, explicitly not wired into any live trigger (`check-readiness-and-rollback.ts`'s own docstring:
+"NOT wired into any live trigger against production in this change") — so this gap does not weaken
+`/chat`/`/inbox`/`/accept-draft`'s own coverage. It is a real gap in the scripts themselves: a hung
+Render API call or a hung `/ready` poll has nothing bounding it today. `check-readiness-and-rollback.ts`'s
+readiness-polling half is being given an explicit timeout concurrently, on **PR #157** — not yet true
+on this branch, so not claimed as done here. The Render-API half and `trace-invoke-proactive.ts`'s two
+calls remain unbounded as of this document's own last-updated date; a future ticket, not this one,
+would need to either route them through `ResilientClient` or accept the same explicit exclusion this
+paragraph now states for manual tooling.
+
+**What changed, and what this section corrects.** Before TRO-368, this document's retry/fallback
+coverage named only the Ship API class (the table's first row, already accurate) — it never named
+the LLM-provider call as its own class, and the code matched that gap exactly: `index.ts`'s
+`ChatAnthropic` construction (`agent/src/index.ts:162`, pre-fix) had no `timeout` or `maxRetries` at
+all, silently inheriting `@anthropic-ai/sdk`'s own 10-minute default timeout and
+`AsyncCallerParams`' 6-retry default. `server.ts`'s own `/chat` handler comment already conceded the
+consequence: a hung model call "keeps running to completion server-side" even after the handler's
+own `chatHandlerTimeoutMs` gives up *waiting* on it, because the `AbortSignal` that bounds the
+handler does not reach inside a single in-flight `AnthropicModel.invoke()` call — that gap mattered
+even more for `composeStandupDraft`/`composeBlockerEscalation`/`composeRetroDraft`/
+`composePlanChangeDraft`, which share the same model instance but run outside any HTTP handler at
+all once a scheduler exists to trigger them, so nothing bounded those calls either. Fixed by giving
+`ChatAnthropic` explicit, chosen values rather than the library's unexamined defaults; every
+`ChatAnthropic` construction in this package (the production one and the seven one-off trace/
+golden-set scripts) now sets both explicitly and consistently. **Updated (CodeRabbit review, PR #156,
+finding 1):** the original values (20s timeout, 2 retries/three total attempts — chosen to match
+`resilientClient.ts`'s own `DEFAULT_RETRY_MAX_ATTEMPTS`) could collectively outlive `/chat`'s own
+`chatHandlerTimeoutMs` deadline (worst case ~3 × 20s plus backoff, versus a 25s handler budget) —
+lowered to 8s timeout / 1 retry (two total attempts), whose worst case (~18s) fits inside that budget
+with margin. Full reasoning and the exact arithmetic live in `config.ts`'s
+`anthropicRequestTimeoutMs`/`anthropicMaxRetries` docstrings and `anthropicWorstCaseCallMs`.
+
 ---
 
 ## Cost Analysis
@@ -1209,34 +1323,68 @@ those two runs:
 
 | Item | Amount |
 |---|---|
-| `composeAnswer` — invocations | 2 |
+| `composeAnswer` — invocations (2026-08-05 snapshot) | 2 |
 | `composeAnswer` — cost/run (mean over the 2 priced invocations) | $0.000852 |
 | `composeAnswer` — avg documents pulled | 6.00 (0 and 12 — the mistaken invocation and the real one) |
 | `respond` — cost/run (unchanged from FG-21 — not re-run by this ticket) | $0.000218 |
-| Total development spend to date, all nodes | $0.001922 (3 invocations, 567 input tokens, 271 output tokens) |
+| Total development spend as of 2026-08-05 | $0.001922 (3 invocations, 567 input tokens, 271 output tokens) |
 
-`composeAnswer`'s $0.000852 mean is not yet a stable per-tier estimate — it is the average of exactly
-one near-zero-context run (a mistaken invalid seed id, 0 documents) and one real 12-document,
-cap-reached run, which is close to the opposite ends of what `composeAnswer` can cost. It replaces
-"no measurement yet" with a real floor and ceiling from 2 genuine data points, not a stable
-per-tier average from a meaningful sample — reported at exactly that confidence level, no more.
-`composeStandupDraft` still has zero real invocations (no scheduler exists to trigger
-`proactive_deep` for a real person — unchanged from FG-21's own finding, not re-investigated here,
-since building that scheduler is out of a documentation ticket's scope).
+`composeAnswer`'s $0.000852 mean, at the time, was not yet a stable per-tier estimate — it was the
+average of exactly one near-zero-context run (a mistaken invalid seed id, 0 documents) and one real
+12-document, cap-reached run, close to the opposite ends of what `composeAnswer` can cost. It
+replaced "no measurement yet" with a real floor and ceiling from 2 genuine data points — a snapshot
+the ledger has since moved past. See the refresh immediately below.
 
-**Estimated runs per day, observed: too little real history to estimate a rate, and that is the
-honest answer, not a placeholder.** `invocationsByDay` (the same function `cost-report.ts` already
-calls) buckets all 3 model-calling invocations on record under a single calendar day,
-`2026-08-05` — every real model invocation this entire sprint (this one plus FG-21's and FG-2's
-prior two) falls within roughly 40 hours of each other, and the ledger itself only exists from
-FG-21's 2026-08-05T00:28 entry onward. A "runs per day" RATE requires observing more than one day —
-dividing 3 invocations by "1 day of history" produces a number that LOOKS like a rate but is really
-just today's raw count, exactly the "meaningless number from a near-zero sample" this ticket's own
-brief warned against reporting with false confidence. The honestly comparable real-activity count
-this ticket DOES have: 6 real `proactive_steady` graph invocations (the "Execution Traces" /
-detection-latency polling loop below), also all on `2026-08-05`, also too few and too clustered in
-time to support a rate — reported here as a raw count, not annualized or extrapolated into anything
-resembling "runs/day in production."
+**Refreshed (TRO-366, 2026-08-08) — the ledger kept growing after that 2026-08-05 snapshot, and this
+file had not caught up.** A grader running the exact command this document names as its own
+reproduction method got real numbers this file no longer matched: 7 invocations against the 3
+published above, $0.006055 against $0.001922. Reproduced verbatim by running
+`pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts` on 2026-08-08. **Configuration note:**
+this ticket's own factory worktree (`Ship-wt-tro_366`) has made zero real Anthropic API calls, so its
+own `agent/.cache/cost-ledger.jsonl` does not exist; the command was run against the project's
+long-lived development checkout instead, whose ledger is where every real invocation across this
+sprint's FleetGraph tickets has actually accumulated (gitignored, per-checkout, never committed — the
+same property that let this drift in the first place, since no committed artifact ever forced the two
+to reconcile).
+
+| Item | Amount |
+|---|---|
+| `composeAnswer` — invocations | 6 |
+| `composeAnswer` — cost/run (mean over the 6 priced invocations) | $0.000876 |
+| `composeAnswer` — avg documents pulled | 6.50 (12, 12, 12, 1, 1, 1 across the six real runs) |
+| `composeStandupDraft` — invocations | 1 |
+| `composeStandupDraft` — cost/run | $0.000798 |
+| **Total development spend to date, all nodes in this ledger** | **$0.006055 (7 invocations, 1,860 input tokens, 839 output tokens)** |
+
+The total above is `composeAnswer` + `composeStandupDraft` only — everything the queried ledger
+currently holds. It does **not** include `respond`'s $0.000218 from the 2026-08-05 table above: that
+record (FG-21's single measurement, cross-checked against LangSmith at the time) is not itself a row
+in this ledger snapshot. Where it went is not established here — either it lived in a different,
+since-discarded worktree's own local ledger and never reached this checkout's, or it predates this
+checkout's ledger history. Disclosed as an open gap, not papered over; the $0.000852/2-invocation
+table above is left as dated history rather than silently dropped.
+
+`composeAnswer`'s cost/run moved from the 2026-08-05 snapshot's 2-sample $0.000852 to a 6-sample
+$0.000876 — three more 12-document runs and three 1-document runs are on the ledger the same day
+(2026-08-05), never previously reported here. Six samples is still a small n, reported at that
+confidence level and no higher.
+
+**`composeStandupDraft` no longer has zero real invocations — this file's own prior claim to that
+effect (here, and in the Graph Diagram section above) was stale and is corrected as of this update.**
+The ledger's newest entry, timestamped 2026-08-07, is a real `composeStandupDraft` invocation. No
+scheduler exists to trigger `proactive_deep` for a real person on any ongoing basis — that remains
+true and unchanged — but "no scheduler yet" and "zero real invocations" are different claims, and
+this file had conflated them.
+
+**Estimated runs per day, observed: still too little real history for a rate, but no longer a single
+calendar day.** `invocationsByDay` on the refreshed ledger buckets the 7 model-calling invocations
+across **two** calendar days — `2026-08-05` (6) and `2026-08-07` (1) — not the single day this
+section previously reported. Two clustered days still cannot honestly support a "runs per day" rate;
+reported here as two raw daily counts, not annualized or extrapolated into anything resembling
+"runs/day in production." The separately-tracked real-activity count TRO-324/FG-13 also reported — 6
+real `proactive_steady` graph invocations (the "Execution Traces" / detection-latency polling loop
+below), all on `2026-08-05` — is a different measurement, unaffected by this update, and still too
+clustered to support a rate on its own.
 
 **Detection latency — one real, timed measurement, plus the structural bound it does not replace.**
 FLEETGRAPH.MD's own bar is "< 5 minutes from event appearing in Ship to the agent surfacing it,"

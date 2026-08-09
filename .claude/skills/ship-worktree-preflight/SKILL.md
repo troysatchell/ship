@@ -85,7 +85,7 @@ database and wrote `.factory-env`. `source .factory-env` instead of `api/.env.lo
 | `Cannot find module @ship/shared` | Run `pnpm build:shared` first |
 | `database "X" does not exist` | Run the step 4 `createdb` command above |
 | `docker: Error response … No such container` | `docker start ship-audit-pg`, or create it: `docker run -d --name ship-audit-pg -e POSTGRES_USER=ship -e POSTGRES_PASSWORD=ship_dev_password -e POSTGRES_DB=ship_dev -p 5433:5432 postgres:15-alpine` |
-| 13 web tests failing | Expected (TEST-1 / TRO-223). Compare identities against the quarantine, not counts. |
+| web tests failing | **Not** expected any more — the quarantine has been empty (`knownFailing: 0`) since TEST-1 / TRO-223 was fixed on 2026-07-29. A failure here is real. Compare identities against `audit/factory/quarantine.json`, never counts. |
 | vendor/@fpki missing | Create symlink: `mkdir -p vendor/@fpki && ln -sf /path/to/main/repo/vendor/@fpki/auth-client vendor/@fpki/auth-client` |
 
 ## Usage

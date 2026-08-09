@@ -124,8 +124,10 @@ it or delete it.
   conditional `test.skip()` for missing data is how a suite silently stops covering anything.
 - **Fixed sleeps are the flake mechanism** here. Never specify `waitForTimeout`; specify the
   condition being waited for.
-- **13 web tests are quarantined** in `audit/factory/quarantine.json`. If a criterion overlaps one,
-  say so — fixing it is legitimate, widening the quarantine never is.
+- **The quarantine is empty** — `audit/factory/quarantine.json` has listed `knownFailing: 0` for
+  both suites since 2026-07-29. Both are green on arrival, so any acceptance test you design starts
+  from a clean baseline and any failure it produces is real. Fixing a quarantined test is
+  legitimate; widening the quarantine never is.
 
 ## Handing off
 

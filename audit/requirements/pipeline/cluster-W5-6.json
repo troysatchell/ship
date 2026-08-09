@@ -1,0 +1,152 @@
+{
+  "cluster": "testcases-cost-deliverables",
+  "requirements": [
+    {
+      "id": "W5-R31",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 386, "note": "Use Cases table header; 6 use-case rows follow at lines 388-393" },
+        { "file": "FLEETGRAPH.MD", "line": 707, "note": "Test Cases table header; 6 test-case rows follow at lines 709-714, one per use case" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Use-case count and test-case count both equal 6, checked row by row: use case 1 (standup) <-> test case 1, 2 (ranked list) <-> 2, 3 (retro) <-> 3, 4 (plan-change) <-> 4, 5 (blocker escalation) <-> 5, 6 (chat/grounded answer) <-> 6. No use case lacks a test case and no test case is orphaned."
+    },
+    {
+      "id": "W5-R32",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 709, "note": "Row 1 Ship State: 'An engineer with 3 assigned issues; since their last standup, one moved to in review...'" },
+        { "file": "FLEETGRAPH.MD", "line": 710, "note": "Row 2 Ship State: 'A person mentioned in two documents they do not own, blocking one approval...'" },
+        { "file": "FLEETGRAPH.MD", "line": 711, "note": "Row 3 Ship State: 'A week whose plan lists 4 success criteria; 3 issues closed...'" },
+        { "file": "FLEETGRAPH.MD", "line": 712, "note": "Row 4 Ship State: 'A weekly plan approved at version N, then edited to remove one success criterion'" },
+        { "file": "FLEETGRAPH.MD", "line": 713, "note": "Row 5 Ship State: 'An issue in Project A blocking two issues in Project B...'" },
+        { "file": "FLEETGRAPH.MD", "line": 714, "note": "Row 6 Ship State: 'A user opens the chat on an issue and asks why it is stalled...'" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Checked column-by-column, not just row presence: all 6 of 6 rows have a concrete, non-empty Ship State cell naming specific triggering conditions."
+    },
+    {
+      "id": "W5-R33",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 709, "note": "Row 1 Trace Link: public LangSmith link 8acb9a96, with a match note" },
+        { "file": "FLEETGRAPH.MD", "line": 710, "note": "Row 2 Trace Link: public LangSmith link 37526a99 (plus a superseded 75c74a0b kept for history)" },
+        { "file": "FLEETGRAPH.MD", "line": 711, "note": "Row 3 Trace Link: public LangSmith link 6910e85c" },
+        { "file": "FLEETGRAPH.MD", "line": 712, "note": "Row 4 Trace Link: public LangSmith link c6d75795" },
+        { "file": "FLEETGRAPH.MD", "line": 713, "note": "Row 5 Trace Link: public LangSmith link 8ab81ab8" },
+        { "file": "FLEETGRAPH.MD", "line": 714, "note": "Row 6 Trace Link: public LangSmith link 2d251e49" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Column-by-column check: 6 of 6 rows have a Trace Link cell filled with a smith.langchain.com/public/... URL. Per instructions, link presence is what was verified -- the URLs were not followed off-machine, so trace content/validity was not checked by this audit pass."
+    },
+    {
+      "id": "W5-R34",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 549, "note": "'## Test Cases' section heading" },
+        { "file": "FLEETGRAPH.MD", "line": 707, "note": "Test case table (Ship State / Expected Output / Trace Link) lives inside this section, not in a separate file" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": null
+    },
+    {
+      "id": "W5-R47",
+      "verdict": "PARTIAL",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 1162, "note": "Section states this is instrumented, real per-call recording, 'not an estimate'" },
+        { "file": "FLEETGRAPH.MD", "line": 1168, "note": "First reported table: input 33 tokens, output 37 tokens" },
+        { "file": "FLEETGRAPH.MD", "line": 1210, "note": "Updated table with composeAnswer stats" },
+        { "file": "FLEETGRAPH.MD", "line": 1216, "note": "'Total development spend to date, all nodes | $0.001922 (3 invocations, 567 input tokens, 271 output tokens)' -- the document's most current reported figure" },
+        { "file": "agent/.cache/cost-ledger.jsonl", "line": 1, "note": "Real ledger file on disk, 7 JSONL records (not 3), summed input=1,860 / output=839 tokens" }
+      ],
+      "suggested_verification": "pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts (the exact command FLEETGRAPH.MD:1166 cites as its own methodology; read-only, touches no DB/network)",
+      "assumption": null,
+      "suggested_scope": "Re-run the cited cost-report.ts against the current agent/.cache/cost-ledger.jsonl and update FLEETGRAPH.MD's Development and Testing Costs table (and the composeStandupDraft claim at line 1223) to the reconciled totals.",
+      "notes": "The breakdown IS measured, not projected -- real methodology (cost-ledger.jsonl instrumentation, cross-reconciled against LangSmith's own usage API at FLEETGRAPH.MD:1175-1178). But it is stale, verified by actually running the script the document itself cites as its own reproduction method: current ledger totals are input=1,860 / output=839 tokens across 7 invocations / $0.006055 total, not the 567/271/3/$0.001922 the document's most current table reports. This is not an old-snapshot problem -- the ledger's newest entry (a real composeStandupDraft invocation, 2026-08-07T14:36:16.889Z) postdates the document's own 'Last updated: August 7, 2026' banner (FLEETGRAPH.MD:19), so the correct figures were available before the document's final state and were not folded in."
+    },
+    {
+      "id": "W5-R48",
+      "verdict": "PARTIAL",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 1172, "note": "'Total invocations during development | 1'" },
+        { "file": "FLEETGRAPH.MD", "line": 1216, "note": "Updated total: '3 invocations'" },
+        { "file": "FLEETGRAPH.MD", "line": 1223, "note": "'composeStandupDraft still has zero real invocations' -- an explicit, currently false claim" },
+        { "file": "agent/.cache/cost-ledger.jsonl", "line": 7, "note": "composeStandupDraft record, trigger proactive_deep, timestamp 2026-08-07T14:36:16.889Z -- a real invocation the document denies" }
+      ],
+      "suggested_verification": "pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- reproduced live during this audit: reports Invocations: 7 (composeAnswer: 6, composeStandupDraft: 1), not the document's 3.",
+      "assumption": null,
+      "suggested_scope": "Same fix as W5-R47: reconcile the reported invocation count to the current ledger and correct the composeStandupDraft claim.",
+      "notes": "A measured invocation count IS reported (methodology is real, not fabricated), but it under-counts by more than half: the ledger holds 7 records, not 3, and one of the missing 4 is the composeStandupDraft invocation the document explicitly and currently claims does not exist (line 1223). Verified live by re-running the exact script FLEETGRAPH.MD cites for this figure (see suggested_verification) -- this is not an inference from the file alone, the command was actually run and printed 'Invocations: 7'."
+    },
+    {
+      "id": "W5-R49",
+      "verdict": "PARTIAL",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 1173, "note": "'Total development spend | $0.000218'" },
+        { "file": "FLEETGRAPH.MD", "line": 1216, "note": "Updated: 'Total development spend to date, all nodes | $0.001922'" },
+        { "file": "agent/.cache/cost-ledger.jsonl", "line": 1, "note": "Ledger's 7 records sum to $0.006055 when priced via cost-report.ts, not $0.001922" }
+      ],
+      "suggested_verification": "pnpm --filter @ship/agent exec tsx src/scripts/cost-report.ts -- run live during this audit, printed 'Total spend: $0.006055'.",
+      "assumption": null,
+      "suggested_scope": "Same fix as W5-R47/R48: re-run cost-report.ts and update the reported total to match the current ledger.",
+      "notes": "Total development spend is reported and the reporting method is genuinely measured (not a projection), but the figure is stale by more than 3x: the document's own most current number is $0.001922, while re-running the document's own cited reproduction command against the current ledger returns $0.006055. This was directly verified, not inferred -- the command was executed as part of this audit."
+    },
+    {
+      "id": "W5-R50",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 1301, "note": "'### Production Cost Projections' subsection heading" },
+        { "file": "FLEETGRAPH.MD", "line": 1303, "note": "Table header: '100 Users | 1,000 Users | 10,000 Users'" },
+        { "file": "FLEETGRAPH.MD", "line": 1305, "note": "All three cells filled: ~$450/month, ~$4,470/month, ~$44,700/month" },
+        { "file": "FLEETGRAPH.MD", "line": 1307, "note": "'Assumptions' heading opening a stated-assumptions list" },
+        { "file": "FLEETGRAPH.MD", "line": 1309, "note": "Unit ratios stated (documents/issues/people per project) and their source (the live database)" },
+        { "file": "FLEETGRAPH.MD", "line": 1313, "note": "Per-tier run-rate, token-count, and cost-per-run assumptions enumerated as bullets" },
+        { "file": "FLEETGRAPH.MD", "line": 1328, "note": "Per-tier $/user/month breakdown table feeding the three headline totals" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "All three cells filled plus an explicit, itemized assumptions list (unit ratios, runs/day, tokens/invocation, cost/run, model tiering). This section is explicitly and correctly labeled a projection, not a measurement -- unlike the Development and Testing Costs figures in R47-R49, it does not claim to be measured, so the staleness finding there does not apply here."
+    },
+    {
+      "id": "W5-R51",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "PRESEARCH.MD", "line": 6, "note": "Header states Phase 1 (sections 1-3) is dated Aug 3, and Phase 2/3 (sections 4-9) were added 2026-08-06 against the merged implementation" },
+        { "file": "PRESEARCH.MD", "line": 73, "note": "'## Phase 1: Define Your Agent' -- sections 1 (line 75), 2 (line 253), 3 (line 370), each with multi-paragraph answers, tables, and code citations, not placeholder text" },
+        { "file": "PRESEARCH.MD", "line": 516, "note": "'## Phase 2: Graph Architecture' -- sections 4 (line 530), 5 (line 628), 6 (line 697), 7 (line 764), each substantively answered against agent/src/graph.ts source" },
+        { "file": "PRESEARCH.MD", "line": 852, "note": "'## Phase 3: Stack and Deployment' -- sections 8 (line 854) and 9 (line 925), each substantively answered with cited figures and file references" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "Read the file in full (1,021 lines). All nine numbered sections across the three phases are present and are genuinely answered -- multi-paragraph reasoning, tables, and file/line citations into agent/src, not headings with a single throwaway sentence. An earlier-flagged concern (PRESEARCH.MD missing Phases 2-3 entirely) does NOT hold in the file's current state: both phases exist and are substantive, added 2026-08-06 per the file's own dated header. That earlier finding was correct for an earlier version of this file and is now stale itself -- reported here as the current, verified state rather than assumed from the earlier flag."
+    },
+    {
+      "id": "W5-R52",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "evidence": [
+        { "file": "FLEETGRAPH.MD", "line": 23, "note": "Agent Responsibility: present, non-empty -- 7 subsections (lines 25-172) covering scope, proactive monitoring, on-demand reasoning, autonomy boundary, notification model, precision rationale, role derivation" },
+        { "file": "FLEETGRAPH.MD", "line": 175, "note": "Graph Diagram: present, non-empty -- full mermaid flowchart (lines 205-260) plus 4 verified constraints and 2 explicit notes on where prose and code diverge" },
+        { "file": "FLEETGRAPH.MD", "line": 382, "note": "Use Cases: present, non-empty -- 6-row table (lines 386-393) plus 4 explanatory notes" },
+        { "file": "FLEETGRAPH.MD", "line": 420, "note": "Trigger Model: present, non-empty -- decision + tradeoff table (lines 422-464), reliability section, and a resolved-dependency writeup" },
+        { "file": "FLEETGRAPH.MD", "line": 549, "note": "Test Cases: present, non-empty -- 6/6 rows fully filled per W5-R31/32/33 above, plus provenance writeups for how each trace was produced" },
+        { "file": "FLEETGRAPH.MD", "line": 763, "note": "Architecture Decisions: present, non-empty -- Framework, Node design rationale, State management, and Deployment model subsections (lines 765-1156, ~395 lines)" },
+        { "file": "FLEETGRAPH.MD", "line": 1158, "note": "Cost Analysis: present, non-empty -- Development and Testing Costs plus Production Cost Projections subsections (lines 1160-1364)" }
+      ],
+      "suggested_verification": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "notes": "All seven named sections are present and non-empty -- none is a bare heading or a heading with a single placeholder sentence. One caveat that does not change this verdict because it is a content-accuracy issue rather than a presence/emptiness one: the Cost Analysis section's development-spend figures are stale relative to their own underlying ledger (see W5-R47/R48/R49's PARTIAL findings) -- the section itself is unambiguously present and substantively filled, it just under-reports its own numbers."
+    }
+  ],
+  "needs_ruling": []
+}

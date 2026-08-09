@@ -1,0 +1,257 @@
+[
+ {
+  "id": "TRO-312",
+  "title": "[FG-1] Ship cannot answer \"what changed\" \u2014 the agent's proactive mode has no input at all",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-313",
+  "title": "[FG-2] There is no agent service \u2014 nothing to run the graph, trace it, or health-check it",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-314",
+  "title": "[FG-3] Four of six use cases have no reachable trigger state \u2014 the seed database records none of the activity drafts are built from",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-315",
+  "title": "[FG-4] An agent that hangs or crashes when Ship is unreachable fails the engineering bar outright",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-316",
+  "title": "[FG-11] The agent has no deployment \u2014 MVP requires it publicly reachable and reproducible from Terraform alone",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-317",
+  "title": "[FG-5] Nothing surfaces a mention or a blocking approval to the person on the hook \u2014 the proactive detection the MVP is graded on",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-318",
+  "title": "[FG-7] Answering \"what's going on with this?\" costs eight tabs \u2014 the on-demand graph that starts from the open document",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-319",
+  "title": "[FG-6] People write \"stuff\" in their standup because writing it properly is tedious \u2014 draft it from what actually moved",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-320",
+  "title": "[FG-9] The agent is unreachable from Ship \u2014 an in-context chat panel, not a standalone chatbot page",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-321",
+  "title": "[FG-8] Nothing structurally stops the agent posting as a human \u2014 the human-in-the-loop gate",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-322",
+  "title": "[FG-12] Every agent behaviour needs a regression test and CI must roll back a bad deploy \u2014 the engineering bar, graded alongside the agent",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-323",
+  "title": "[FG-10] Ship has no notification surface at all \u2014 one ranked \"what needs you\" list, not a stream of pings",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-324",
+  "title": "[FG-13] FLEETGRAPH.md is missing the graph outline, the trace links and the measured cost \u2014 three MVP checkboxes that are pure documentation",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-325",
+  "title": "[PR-A] EPIC: Ship-side API foundations \u2014 change feed, blocks relationship, fixtures",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-326",
+  "title": "[PR-B] EPIC: Agent service foundation \u2014 LangGraph, LangSmith, resilience, deploy",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-327",
+  "title": "[PR-C] EPIC: The graph \u2014 both modes through one graph, plus the human gate",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-328",
+  "title": "[PR-D] EPIC: Ship UI surfaces \u2014 in-context chat, the ranked inbox, blocks/blocked-by",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-329",
+  "title": "[PR-E] EPIC: The remaining three use cases \u2014 retro drafts, scope drift, blocker routing",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-330",
+  "title": "[PR-F] EPIC: Test suite, CI rollback, and the draft-quality golden set",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-331",
+  "title": "[PR-G] EPIC: Measured cost, and the FLEETGRAPH.md sections that are graded on their own",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-332",
+  "title": "[FG-14] A-blocks-B-blocks-A is insertable today \u2014 any graph traversal will loop forever",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-333",
+  "title": "[FG-15] Ship cannot express \"issue A blocks issue B\" \u2014 it has a containment tree and an org chart but no dependency graph",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-334",
+  "title": "[FG-16] A blocking relationship nobody can see or set is not a feature \u2014 blocks/blocked-by in the issue sidebar",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-335",
+  "title": "[FG-17] At week's end someone reconstructs from memory what they delivered \u2014 Ship already holds the answer",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-336",
+  "title": "[FG-18] The \"plan changed after approval\" flag trips on typo fixes, so managers ignore it \u2014 and a quiet scope cut looks identical",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-337",
+  "title": "[FG-19] When one issue holds up work across reporting lines, no page in Ship joins the two \u2014 the use case only a graph can serve",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-338",
+  "title": "[FG-20] Recorded model responses pin the output, so a prompt rewrite can break production while every test stays green",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-339",
+  "title": "[FG-21] Cost per run is currently a projection with nothing measuring it \u2014 instrument tokens before the numbers are due",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-340",
+  "title": "[FG-22] Test Cases and Architecture Decisions are due Thursday and both are currently marked Pending",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-341",
+  "title": "[FG-23] The graded demo has no environment \u2014 nothing names which Ship the deployed agent points at, or how the fixture states reach its database",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-342",
+  "title": "Agent uses one shared SHIP_API_TOKEN env var for every request, not per-requesting-user tokens",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-343",
+  "title": "React Query cache is never cleared on login/logout/impersonation \u2014 cross-user data leakage on shared browsers",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-344",
+  "title": "Circular-blocks error message is inferred from a bare 500, not a dedicated error code",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-345",
+  "title": "FG: Test Cases trace links blocked \u2014 TC1/TC3 seed fixtures silently no-op against the graded DB; make fixtures create their trigger rows",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-346",
+  "title": "FG: Test Case 5's agent side does not exist \u2014 build the blocker fan-out walk or rescope the row (PM decision before Early Sub)",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-347",
+  "title": "FG: AGENT_INTERNAL_SECRET / AGENT_API_BASE_URL live only in Render console \u2014 a clean terraform apply kills the chat/inbox demo path",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-348",
+  "title": "FG-8's accept flow has no HTTP route \u2014 acceptDraft() is never called in production, so nothing (including TRO-338's draft-survival metric) ever fires live",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-349",
+  "title": "FLEETGRAPH.MD's Graph Diagram is 3 chains stale: proactive_escalation, proactive_retro, proactive_plan_change never added",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-350",
+  "title": "Proactive/steady-tier poll still uses the agent's shared SHIP_API_TOKEN \u2014 no per-recipient token source exists",
+  "status": "In Review"
+ },
+ {
+  "id": "TRO-351",
+  "title": "FLEETGRAPH.MD prose is stale: \"four paths\" claim, use-case-5 status, stale graph.ts line citations, missing Trigger Model row",
+  "status": "Backlog"
+ },
+ {
+  "id": "TRO-352",
+  "title": "gate.ts's discardItem, acceptProposedTransition, rejectProposedTransition have no HTTP callers either \u2014 same defect TRO-348 fixed for acceptDraft",
+  "status": "Backlog"
+ },
+ {
+  "id": "TRO-353",
+  "title": "No UI page exists to accept/discard a standup draft \u2014 InboxSidebar links to a route that 404s",
+  "status": "Backlog"
+ },
+ {
+  "id": "TRO-355",
+  "title": "No UI exists to add/delete table rows or columns \u2014 4 e2e tests were silently vacuous, converted to test.fixme()",
+  "status": "Backlog"
+ },
+ {
+  "id": "TRO-356",
+  "title": "FG: Run all six Test Cases and fill the Trace Link column \u2014 the Early Submission graded table is still 6/6 Pending",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-357",
+  "title": "FG: Re-seed the graded ship-db with the repaired TC1/TC3 fixtures \u2014 TRO-345 item 2, never executed; needs human sign-off",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-358",
+  "title": "FG: Graded ship + agent are both running stale builds \u2014 auto_deploy silently failed a third time; redeploy to current main",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-359",
+  "title": "FG: e2e-agent has never passed on GitLab \u2014 main pipeline red on the graded platform since PR-F landed; fix or disclose",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-360",
+  "title": "FG: PRESEARCH.MD is missing Phases 2\u20133 \u2014 template sections 4\u20139 absent from a required deliverable file",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-361",
+  "title": "FG: auto_deploy on the graded Render services has silently failed 3 times \u2014 root-cause it or replace it with an explicit post-merge deploy step",
+  "status": "Backlog"
+ },
+ {
+  "id": "TRO-362",
+  "title": "Action Items modal re-ambushes on every full page load \u2014 Radix backdrop blocks the whole app (incl. the FleetGraph pill) until dismissed",
+  "status": "Done"
+ },
+ {
+  "id": "TRO-363",
+  "title": "Agent chat's no-document state is invisible \u2014 disabled input reads as broken; surface why and what to do",
+  "status": "Done"
+ }
+]

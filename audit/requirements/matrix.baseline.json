@@ -1,24 +1,16 @@
 {
   "mode": "baseline",
-  "commit": "a830cf77cb6816b87d71fe4d171adc00e1a17ac9",
+  "commit": "85598041c438e604d5a22b0664b239a73ee90fcd",
   "dirty": true,
   "dirty_paths": [
-    "audit/requirements.config.yaml",
-    "audit/requirements/REPORT.md",
-    "audit/requirements/gaps.md",
-    "audit/requirements/matrix.baseline.json",
-    "audit/requirements/pipeline/README.md",
     "audit/requirements/pipeline/merge-matrix.py",
-    "audit/requirements/pipeline/tickets-map-1.json",
-    "audit/requirements/pipeline/tickets-map-2.json",
-    "audit/requirements/pipeline/tickets-ship.json",
     "audit/requirements/pipeline/write-report.py",
     "memory-bank/activeContext.md",
     "memory-bank/progress.md",
     "project guideliens/Gatsby_Analysis_Troy_Satchell_ES.docx"
   ],
-  "date": "2026-08-08T19:21:10Z",
-  "config_hash": "f43a33daf961131ad0add294e69fb02e1b59af6ca9f43797048ddcc1471cc906",
+  "date": "2026-08-08T22:11:12Z",
+  "config_hash": "4fce400a4db5ab68cd272f23993c9f31f72cd6f758f7d1076b4e9dfd511f9825",
   "ticket_mapping": {
     "status": "OK",
     "provider": "linear",
