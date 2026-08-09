@@ -209,6 +209,69 @@ entry/`FLEETGRAPH.MD` itself); read `agent/src/roles.ts:1-9`; read `agent/src/in
 
 ---
 
+## TRO-371 — 13 CHANGES.md entries reported missing rollback instructions — reconciled to the real count: 1, plus 7 missing run/test
+
+**The sweep's own numbers, checked against the file rather than assumed.** The ticket cited a sweep
+finding "13 of 144 entries missing a rollback section" for a specific list of 14 ticket IDs
+(TRO-232, TRO-210, TRO-280, TRO-180, TRO-298, TRO-286, TRO-216, TRO-282, TRO-223, TRO-226, TRO-201,
+TRO-305, TRO-294, TRO-302), plus "6 missing run/test instructions" with no list given, and explicitly
+asked for the count to be reconciled against the file rather than trusted. Read all 14 named entries
+in full: **every one of them already had a rollback section** — under `**Roll back.**`, `**Rollback.**`
+or `**How to roll it back.**`, not always the exact phrasing the sweep's tool was apparently searching
+for, but genuine, complete rollback procedures in every case. The real rollback-missing count across
+all 144 entries is **1**, not 13, and it is a ticket not on the sweep's list at all: `Bundle TRO-330 —
+[PR-F] EPIC: final status`, a bundle-summary entry with no rollback statement of its own (it does
+contain the word "rollback" inside an unrelated bulleted claim about a *different* ticket's own
+work, which is almost certainly what fooled a keyword-only sweep).
+
+**Two of the 14 named tickets (TRO-294, TRO-302) were real gaps, just miscategorized** — both had a
+rollback section but no dedicated run/test section. Reading every other entry in the file the same
+way (cross-checked against `scripts/factory/merge-changes.mjs --check`'s own `RUN_RE`/`ROLLBACK_RE`,
+a pre-existing, narrower, non-fatal heuristic already in this repo, then hand-verifying every one of
+the ~20 entries it warns about) found **7** entries with no run/test content anywhere, under any
+heading: TRO-359, TRO-360, `Bundle TRO-330`, TRO-325, TRO-293, TRO-294, TRO-302. The sweep's "6" was
+close in count but named none of these specifically as far as could be reconstructed. `Bundle
+TRO-330` needed both elements; the other six needed only run/test.
+
+**What changed — CHANGES.md, mechanical additions only.** Added a `**How to verify.**` or
+`**How to run it.**` section to TRO-359, TRO-360, `Bundle TRO-330`, TRO-325, TRO-293, TRO-294 and
+TRO-302, and a `**Rollback.**` section to `Bundle TRO-330` (pointing at its two sub-issues' own
+procedures, which are the real, non-duplicated source of truth). No existing entry's content was
+rewritten or reformatted — every addition is new text appended before that entry's closing `---`,
+verified against `git diff` to be additive only. The 12 other originally-named tickets were left
+untouched: they were never missing anything.
+
+**Regression test — `web/src/lib/changesLogSections.test.ts`** (new). Parses CHANGES.md into its
+144 `## `-delimited entries and asserts every one has (a) a description of what was built, (b) a
+run/verify/test section, and (c) a rollback section — matching the real heading vocabulary already
+in use in this file (`How to run it.`, `How to verify.`, `How to reproduce.`, `How to re-capture.`,
+`Run it.`, `Verification.`, `Verified nothing broke`, a `Tests:` heading, or a fenced command block
+with no heading at all; `Rollback.`, `Roll back.`, `Rollback:`, `How to roll it back.`), deliberately
+more permissive than `merge-changes.mjs`'s own narrower heuristic so it does not cry wolf on a
+legitimately-documented entry and get disabled. Confirmed red first, for the right reason: run
+against the pre-fix file (`git show HEAD:CHANGES.md`, copied aside — never `git stash`, per this
+project's standing rule), it failed with two `AssertionError`s naming the exact offending entries:
+`1 entr(y/ies) have no rollback section: ## Bundle TRO-330 — [PR-F] EPIC: final status` and
+`7 entr(y/ies) have no run/test instructions: ## TRO-359 ... | ## TRO-360 ... | ## Bundle TRO-330 ...
+| ## TRO-325 ... | ## TRO-293 ... | ## TRO-294 ... | ## TRO-302 ...` — not an import error or a typo.
+Restored the fixed file; all 4 test cases (parser sanity check, "what was built," rollback, run/test)
+pass.
+
+**How to run it.**
+
+```bash
+node scripts/factory/merge-changes.mjs --check CHANGES.md   # structural check; exits 0
+pnpm --filter @ship/web exec vitest run src/lib/changesLogSections.test.ts
+```
+
+**How to roll it back.** `git revert` this commit. That removes the seven added run/verify sections
+and `Bundle TRO-330`'s rollback section from CHANGES.md, restoring the pre-fix text exactly, and
+deletes `web/src/lib/changesLogSections.test.ts`. No application code, schema, or test infrastructure
+outside CHANGES.md itself and the one new test file is touched by this ticket, so there is nothing
+else to undo.
+
+---
+
 ## W4-SWEEPA (CI fix) — `postgresReachable.test.ts`'s "defaults to 5432" case depended on the host, not the code
 
 Bundle: W4-SWEEPA — search this file for `W4-SWEEPA` for the other items; each is its own commit.
@@ -645,6 +708,17 @@ No disclosure fallback needed — the root cause was cheaply fixable (one file, 
 dependency) and is now proven green on the actual graded platform, not just downgraded to
 `allow_failure`.
 
+**How to run it.** Local sanity check (does not exercise the actual bug — see above):
+
+```bash
+pnpm exec playwright test e2e/agent-detection-latency.spec.ts e2e/agent-chat-grounded-response.spec.ts --workers=1
+```
+
+Verifying the real fix requires GitLab CI itself, since the failure only reproduces inside that
+platform's container networking: push to GitLab `main` and confirm the `e2e-agent` job on the
+resulting pipeline (per this project's documented sync convention — GitLab `main` only runs
+pipelines on direct pushes, not merge requests).
+
 **Rollback.** Revert the two commits touching `e2e/fixtures/agentEnv.ts` (`2e0dce7` — the
 127.0.0.1/`--host`/`tailBuffer` fix — and `d949e05` — the follow-up non-null-assertion cleanup)
 on the feature branch, and revert the same change on GitLab `main` (it was pushed directly there
@@ -728,6 +802,14 @@ carried forward":**
 terraform-only tickets, e.g. TF-1/TF-3/TF-9).** This is a pure documentation change — no application
 code touched, so `scripts/factory/gate.sh`'s G6 (regression-test present) legitimately fails with
 nothing to show. Accepted as an explicit, reasoned exception rather than a silently green gate.
+
+**How to verify.** Docs-only; there is no build or test to run. Confirm the two missing phases are
+now present and the old gap is gone:
+
+```bash
+grep -n '^## Phase 2: Graph Architecture\|^## Phase 3: Stack and Deployment' PRESEARCH.MD
+# expect both headings to print; before this change, neither existed anywhere in the file.
+```
 
 **Rollback.** `git revert` this commit — reverts both files together, which is the correct unit: it
 removes the `## Phase 2: Graph Architecture` / `## Phase 3: Stack and Deployment` sections from
@@ -2353,6 +2435,17 @@ definition of done, checked explicitly rather than assumed:
   `index.ts`, not something this bundle's two tickets can close on their own, since neither one's
   scope included building that route.
 - **`CHANGES.md` appended.** Both entries above.
+
+**How to run it.** This entry is the bundle's own status summary, not a separate code change — it
+adds no files and no tests of its own. The actual commands live in the two sub-issue entries
+immediately below: TRO-322's own **How to run it.** (agent unit tests, the two E2E flows, the
+readiness/rollback CLI) and TRO-338's own **How to run it.** (agent unit tests plus the on-demand
+golden-set comparison).
+
+**Rollback.** Nothing to revert at this entry's own level. Reverting the bundle means reverting
+TRO-322's and TRO-338's commits individually — see each entry's own **How to roll it back.**
+section for the exact, non-identical procedure for each (TRO-322's new CI jobs and rollback CLI vs.
+TRO-338's golden-set/draft-survival files).
 
 ---
 
@@ -4816,6 +4909,11 @@ protection must guard the new relationship before it exists), TRO-333 [FG-15] th
 relationship. See each sub-issue's own entry for what was broken, what changed, how to run/test it,
 and how to roll it back individually.
 
+**How to run it.** This entry is the bundle's own summary, not a separate code change — see each
+sub-issue's own **How to run it.** section for the exact commands: TRO-312 (change-feed endpoint),
+TRO-314 (seed/fixture work), TRO-332 (cycle-protection migration + tests), TRO-333 (`blocks`
+relationship migration + tests).
+
 **Rollback (whole bundle).** Revert the branch's merge commit, or cherry-pick-revert each
 sub-issue's own commit individually — every sub-issue below is its own commit and its own change,
 not one undifferentiated diff.
@@ -5813,6 +5911,17 @@ UI (pointless) or test that the button is absent (untestable-as-a-regression: ab
 isn't a regression surface, and a `not.toBeVisible()` assertion would silently stop meaning anything
 the moment any unrelated button was added to the row). The four real "Move to Week" tests already
 in the file are the regression coverage for the capability these dead tests gestured at.
+
+**How to verify.** Confirm the dead assertions are gone and the real coverage that replaces them
+still passes:
+
+```bash
+grep -n 'quick menu' e2e/program-mode-week-ux.spec.ts   # expect: no matches
+```
+
+Then run the file via `/e2e-test-runner` (never `pnpm test:e2e` directly) and confirm the 12
+remaining tests in the `Phase 4: Issues Tab Filtering` describe block — including the four
+"Move to Week" tests named above — still pass.
 
 **Rollback.** `git log --oneline -- e2e/program-mode-week-ux.spec.ts` then check out `2a97a2ad`'s
 version of the file (or `git show 2a97a2ad:e2e/program-mode-week-ux.spec.ts`) to restore the four
@@ -9610,6 +9719,14 @@ from here.
 `scripts/factory/gate.sh`'s G6 (regression-test present) is expected to fail on this branch for that
 reason — the evidence for the fix is the terraform cross-reference above, not a test.
 
+**How to verify.** Docs-only; there is no build or test to run. Confirm the stale URL is gone and the
+new one is in place:
+
+```bash
+grep -n 'eba-xsaqsg9h' .claude/CLAUDE.md   # expect: no matches (the old direct-ALB URL is gone)
+grep -n 'ship.awsdev.treasury.gov/health' .claude/CLAUDE.md   # expect: one match, the new URL
+```
+
 **How to roll it back.** `git revert <commit>`, or manually restore the old two-line health-check
 list in `.claude/CLAUDE.md`. This is a docs-only revert — it restores the stale URL text but does
 **not** undo the TF-7/TRO-278 ALB security-group restriction that made the URL stale; that lives in
@@ -10169,6 +10286,15 @@ key-generation code path is identical regardless of `NODE_ENV`, so this is not e
 but it was not measured directly. No repeated (n>3) statistical re-run of the full 18-combination
 sweep — a single fresh re-measurement is what's reported, deliberately not smoothed into a
 multi-run average, so the noise is visible rather than hidden.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/rate-limit.test.ts
+# Full suite, to confirm the count cited above (664/664):
+pnpm --filter @ship/api test
+```
 
 **Rollback.** Nothing to roll back functionally — `git revert` on this branch removes only the doc
 comment and the two new pin tests.
