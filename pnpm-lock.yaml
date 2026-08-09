@@ -21,89 +21,89 @@ importers:
   .:
     devDependencies:
       '@axe-core/playwright':
-        specifier: ^4.11.0
+        specifier: 4.11.0
         version: 4.11.0(playwright-core@1.57.0)
       '@playwright/test':
-        specifier: ^1.57.0
+        specifier: 1.57.0
         version: 1.57.0
       '@testcontainers/postgresql':
-        specifier: ^11.11.0
+        specifier: 11.11.0
         version: 11.11.0
       '@types/supertest':
-        specifier: ^6.0.3
+        specifier: 6.0.3
         version: 6.0.3
       '@vitest/ui':
-        specifier: ^4.0.16
+        specifier: 4.0.17
         version: 4.0.17(vitest@4.0.17)
       eslint:
         specifier: 9.39.5
         version: 9.39.5(jiti@1.21.7)
       get-port:
-        specifier: ^7.1.0
+        specifier: 7.1.0
         version: 7.1.0
       husky:
-        specifier: ^9.1.7
+        specifier: 9.1.7
         version: 9.1.7
       prettier:
-        specifier: ^3.4.2
+        specifier: 3.7.4
         version: 3.7.4
       supertest:
-        specifier: ^7.1.4
+        specifier: 7.2.2
         version: 7.2.2
       testcontainers:
-        specifier: ^11.11.0
+        specifier: 11.11.0
         version: 11.11.0
       typescript:
-        specifier: ^5.7.2
+        specifier: 5.9.3
         version: 5.9.3
       typescript-eslint:
         specifier: 8.65.0
         version: 8.65.0(eslint@9.39.5(jiti@1.21.7))(typescript@5.9.3)
       vitest:
-        specifier: ^4.0.16
+        specifier: 4.0.17
         version: 4.0.17(@types/node@22.19.5)(@vitest/ui@4.0.17)(jiti@1.21.7)(jsdom@27.4.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
   agent:
     dependencies:
       '@langchain/anthropic':
-        specifier: ^0.3.16
+        specifier: 0.3.34
         version: 0.3.34(@langchain/core@0.3.80(ws@8.19.0))(zod@3.25.76)
       '@langchain/core':
-        specifier: ^0.3.40
+        specifier: 0.3.80
         version: 0.3.80(ws@8.19.0)
       '@langchain/langgraph':
-        specifier: ^0.2.44
+        specifier: 0.2.74
         version: 0.2.74(@langchain/core@0.3.80(ws@8.19.0))(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(zod-to-json-schema@3.25.1(zod@3.25.76))
       dotenv:
-        specifier: ^16.4.7
+        specifier: 16.6.1
         version: 16.6.1
       express:
-        specifier: ^4.21.2
+        specifier: 4.22.1
         version: 4.22.1
     devDependencies:
       '@types/express':
-        specifier: ^5.0.0
+        specifier: 5.0.6
         version: 5.0.6
       '@types/node':
-        specifier: ^22.19.3
+        specifier: 22.19.5
         version: 22.19.5
       '@types/supertest':
-        specifier: ^6.0.3
+        specifier: 6.0.3
         version: 6.0.3
       '@vitest/coverage-v8':
         specifier: 4.0.17
         version: 4.0.17(vitest@4.0.17)
       supertest:
-        specifier: ^7.1.4
+        specifier: 7.2.2
         version: 7.2.2
       tsx:
-        specifier: ^4.19.2
+        specifier: 4.21.0
         version: 4.21.0
       typescript:
-        specifier: ^5.7.2
+        specifier: 5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.0.16
+        specifier: 4.0.17
         version: 4.0.17(@types/node@22.19.5)(@vitest/ui@4.0.17)(jiti@1.21.7)(jsdom@27.4.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
   api:
@@ -112,387 +112,387 @@ importers:
         specifier: '7'
         version: 7.3.4(zod@3.25.76)
       '@aws-sdk/client-bedrock-runtime':
-        specifier: ^3.987.0
+        specifier: 3.987.0
         version: 3.987.0
       '@aws-sdk/client-s3':
-        specifier: ^3.985.0
+        specifier: 3.985.0
         version: 3.985.0
       '@aws-sdk/client-secrets-manager':
-        specifier: ^3.985.0
+        specifier: 3.985.0
         version: 3.985.0
       '@aws-sdk/client-ssm':
-        specifier: ^3.985.0
+        specifier: 3.985.0
         version: 3.985.0
       '@aws-sdk/s3-request-presigner':
-        specifier: ^3.985.0
+        specifier: 3.985.0
         version: 3.985.0
       '@modelcontextprotocol/sdk':
-        specifier: ^1.26.0
+        specifier: 1.26.0
         version: 1.26.0(@cfworker/json-schema@4.1.1)(zod@3.25.76)
       '@ship/shared':
         specifier: workspace:*
         version: link:../shared
       bcryptjs:
-        specifier: ^3.0.3
+        specifier: 3.0.3
         version: 3.0.3
       compression:
-        specifier: ^1.8.1
+        specifier: 1.8.1
         version: 1.8.1
       cookie:
-        specifier: ^1.1.1
+        specifier: 1.1.1
         version: 1.1.1
       cookie-parser:
-        specifier: ^1.4.7
+        specifier: 1.4.7
         version: 1.4.7
       cors:
-        specifier: ^2.8.5
+        specifier: 2.8.5
         version: 2.8.5
       csrf-sync:
-        specifier: ^4.2.1
+        specifier: 4.2.1
         version: 4.2.1
       dotenv:
-        specifier: ^16.4.7
+        specifier: 16.6.1
         version: 16.6.1
       express:
-        specifier: ^4.21.2
+        specifier: 4.22.1
         version: 4.22.1
       express-rate-limit:
-        specifier: ^8.2.1
+        specifier: 8.2.1
         version: 8.2.1(express@4.22.1)
       express-session:
-        specifier: ^1.18.2
+        specifier: 1.18.2
         version: 1.18.2
       helmet:
-        specifier: ^8.0.0
+        specifier: 8.1.0
         version: 8.1.0
       ioredis:
         specifier: 5.11.1
         version: 5.11.1
       lib0:
-        specifier: ^0.2.99
+        specifier: 0.2.117
         version: 0.2.117
       openid-client:
-        specifier: ^6.8.1
+        specifier: 6.8.1
         version: 6.8.1
       pg:
-        specifier: ^8.13.1
+        specifier: 8.16.3
         version: 8.16.3
       rate-limit-redis:
         specifier: 4.3.1
         version: 4.3.1(express-rate-limit@8.2.1(express@4.22.1))
       swagger-ui-express:
-        specifier: ^5.0.1
+        specifier: 5.0.1
         version: 5.0.1(express@4.22.1)
       uuid:
-        specifier: ^11.0.3
+        specifier: 11.1.0
         version: 11.1.0
       ws:
-        specifier: ^8.18.0
+        specifier: 8.19.0
         version: 8.19.0
       y-protocols:
-        specifier: ^1.0.7
+        specifier: 1.0.7
         version: 1.0.7(yjs@13.6.29)
       y-websocket:
-        specifier: ^2.0.4
+        specifier: 2.1.0
         version: 2.1.0(yjs@13.6.29)
       yjs:
-        specifier: ^13.6.20
+        specifier: 13.6.29
         version: 13.6.29
       zod:
-        specifier: ^3.24.1
+        specifier: 3.25.76
         version: 3.25.76
     devDependencies:
       '@types/bcryptjs':
-        specifier: ^3.0.0
+        specifier: 3.0.0
         version: 3.0.0
       '@types/compression':
-        specifier: ^1.8.1
+        specifier: 1.8.1
         version: 1.8.1
       '@types/cookie':
-        specifier: ^1.0.0
+        specifier: 1.0.0
         version: 1.0.0
       '@types/cookie-parser':
-        specifier: ^1.4.8
+        specifier: 1.4.10
         version: 1.4.10(@types/express@5.0.6)
       '@types/cookiejar':
-        specifier: ^2.1.5
+        specifier: 2.1.5
         version: 2.1.5
       '@types/cors':
-        specifier: ^2.8.17
+        specifier: 2.8.19
         version: 2.8.19
       '@types/docker-modem':
-        specifier: ^3.0.6
+        specifier: 3.0.6
         version: 3.0.6
       '@types/dockerode':
-        specifier: ^3.3.47
+        specifier: 3.3.47
         version: 3.3.47
       '@types/express':
-        specifier: ^5.0.0
+        specifier: 5.0.6
         version: 5.0.6
       '@types/express-session':
-        specifier: ^1.18.2
+        specifier: 1.18.2
         version: 1.18.2
       '@types/methods':
-        specifier: ^1.1.4
+        specifier: 1.1.4
         version: 1.1.4
       '@types/node':
-        specifier: ^22.19.3
+        specifier: 22.19.5
         version: 22.19.5
       '@types/pg':
-        specifier: ^8.11.10
+        specifier: 8.16.0
         version: 8.16.0
       '@types/ssh2':
-        specifier: ^1.15.5
+        specifier: 1.15.5
         version: 1.15.5
       '@types/superagent':
-        specifier: ^8.1.9
+        specifier: 8.1.9
         version: 8.1.9
       '@types/supertest':
-        specifier: ^6.0.3
+        specifier: 6.0.3
         version: 6.0.3
       '@types/swagger-ui-express':
-        specifier: ^4.1.8
+        specifier: 4.1.8
         version: 4.1.8
       '@types/ws':
-        specifier: ^8.5.13
+        specifier: 8.18.1
         version: 8.18.1
       '@vitest/coverage-v8':
         specifier: 4.0.17
         version: 4.0.17(vitest@4.0.17)
       '@vitest/ui':
-        specifier: ^4.0.16
+        specifier: 4.0.17
         version: 4.0.17(vitest@4.0.17)
       openapi3-ts:
-        specifier: ^4.5.0
+        specifier: 4.5.0
         version: 4.5.0
       supertest:
-        specifier: ^7.1.4
+        specifier: 7.2.2
         version: 7.2.2
       tsx:
-        specifier: ^4.19.2
+        specifier: 4.21.0
         version: 4.21.0
       typescript:
-        specifier: ^5.7.2
+        specifier: 5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.0.16
+        specifier: 4.0.17
         version: 4.0.17(@types/node@22.19.5)(@vitest/ui@4.0.17)(jiti@1.21.7)(jsdom@27.4.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
   shared:
     devDependencies:
       '@types/node':
-        specifier: ^22.19.3
+        specifier: 22.19.5
         version: 22.19.5
       '@vitest/coverage-v8':
         specifier: 4.0.17
         version: 4.0.17(vitest@4.0.17)
       typescript:
-        specifier: ^5.7.2
+        specifier: 5.9.3
         version: 5.9.3
       vitest:
-        specifier: ^4.0.16
+        specifier: 4.0.17
         version: 4.0.17(@types/node@22.19.5)(@vitest/ui@4.0.17)(jiti@1.21.7)(jsdom@27.4.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
   web:
     dependencies:
       '@dnd-kit/core':
-        specifier: ^6.3.1
+        specifier: 6.3.1
         version: 6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@dnd-kit/sortable':
-        specifier: ^10.0.0
+        specifier: 10.0.0
         version: 10.0.0(@dnd-kit/core@6.3.1(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)
       '@dnd-kit/utilities':
-        specifier: ^3.2.2
+        specifier: 3.2.2
         version: 3.2.2(react@18.3.1)
       '@fontsource/inter':
-        specifier: ^5.3.0
+        specifier: 5.3.0
         version: 5.3.0
       '@radix-ui/react-dialog':
-        specifier: ^1.1.15
+        specifier: 1.1.15
         version: 1.1.15(@types/react-dom@18.3.7(@types/react@18.3.27))(@types/react@18.3.27)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@radix-ui/react-popover':
-        specifier: ^1.1.15
+        specifier: 1.1.15
         version: 1.1.15(@types/react-dom@18.3.7(@types/react@18.3.27))(@types/react@18.3.27)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@radix-ui/react-tooltip':
-        specifier: ^1.2.8
+        specifier: 1.2.8
         version: 1.2.8(@types/react-dom@18.3.7(@types/react@18.3.27))(@types/react@18.3.27)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@ship/shared':
         specifier: workspace:*
         version: link:../shared
       '@tanstack/react-query':
-        specifier: ^5.90.16
+        specifier: 5.90.16
         version: 5.90.16(react@18.3.1)
       '@tanstack/react-query-devtools':
-        specifier: ^5.91.2
+        specifier: 5.91.2
         version: 5.91.2(@tanstack/react-query@5.90.16(react@18.3.1))(react@18.3.1)
       '@tanstack/react-query-persist-client':
-        specifier: ^5.90.18
+        specifier: 5.90.18
         version: 5.90.18(@tanstack/react-query@5.90.16(react@18.3.1))(react@18.3.1)
       '@tiptap/core':
-        specifier: ^2.27.1
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/pm@2.27.2)
       '@tiptap/extension-code-block-lowlight':
-        specifier: ^2.10.4
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/extension-code-block@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)(highlight.js@11.11.1)(lowlight@3.3.0)
       '@tiptap/extension-collaboration':
-        specifier: ^2.10.4
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)(y-prosemirror@1.3.7(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.4)(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29))
       '@tiptap/extension-collaboration-cursor':
-        specifier: ^2.10.4
+        specifier: 2.26.2
         version: 2.26.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(y-prosemirror@1.3.7(prosemirror-model@1.25.4)(prosemirror-state@1.4.4)(prosemirror-view@1.41.4)(y-protocols@1.0.7(yjs@13.6.29))(yjs@13.6.29))
       '@tiptap/extension-dropcursor':
-        specifier: ^2.27.1
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-link':
-        specifier: ^2.27.1
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-mention':
-        specifier: ^2.27.1
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)(@tiptap/suggestion@2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2))
       '@tiptap/extension-placeholder':
-        specifier: ^2.10.4
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-table':
-        specifier: ^2.10.4
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-table-cell':
-        specifier: ^2.10.4
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-table-header':
-        specifier: ^2.10.4
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-table-row':
-        specifier: ^2.10.4
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/extension-task-item':
-        specifier: ^2.27.1
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@tiptap/extension-task-list':
-        specifier: ^2.27.1
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))
       '@tiptap/pm':
-        specifier: ^2.10.4
+        specifier: 2.27.2
         version: 2.27.2
       '@tiptap/react':
-        specifier: ^2.10.4
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@tiptap/starter-kit':
-        specifier: ^2.10.4
+        specifier: 2.27.2
         version: 2.27.2
       '@tiptap/suggestion':
-        specifier: ^2.27.1
+        specifier: 2.27.2
         version: 2.27.2(@tiptap/core@2.27.2(@tiptap/pm@2.27.2))(@tiptap/pm@2.27.2)
       '@uswds/uswds':
-        specifier: ^3.13.0
+        specifier: 3.13.0
         version: 3.13.0
       clsx:
-        specifier: ^2.1.1
+        specifier: 2.1.1
         version: 2.1.1
       cmdk:
-        specifier: ^1.1.1
+        specifier: 1.1.1
         version: 1.1.1(@types/react-dom@18.3.7(@types/react@18.3.27))(@types/react@18.3.27)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       diff-match-patch:
-        specifier: ^1.0.5
+        specifier: 1.0.5
         version: 1.0.5
       emoji-picker-react:
-        specifier: ^4.16.1
+        specifier: 4.16.1
         version: 4.16.1(react@18.3.1)
       highlight.js:
-        specifier: ^11.11.1
+        specifier: 11.11.1
         version: 11.11.1
       idb-keyval:
-        specifier: ^6.2.2
+        specifier: 6.2.2
         version: 6.2.2
       lowlight:
-        specifier: ^3.3.0
+        specifier: 3.3.0
         version: 3.3.0
       react:
-        specifier: ^18.3.1
+        specifier: 18.3.1
         version: 18.3.1
       react-dom:
-        specifier: ^18.3.1
+        specifier: 18.3.1
         version: 18.3.1(react@18.3.1)
       react-router-dom:
-        specifier: ^7.1.1
+        specifier: 7.12.0
         version: 7.12.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       tailwind-merge:
-        specifier: ^2.6.0
+        specifier: 2.6.0
         version: 2.6.0
       thinking-orbs:
-        specifier: ^0.2.0
+        specifier: 0.2.0
         version: 0.2.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       tippy.js:
-        specifier: ^6.3.7
+        specifier: 6.3.7
         version: 6.3.7
       y-indexeddb:
-        specifier: ^9.0.12
+        specifier: 9.0.12
         version: 9.0.12(yjs@13.6.29)
       y-websocket:
-        specifier: ^2.0.4
+        specifier: 2.1.0
         version: 2.1.0(yjs@13.6.29)
       yjs:
-        specifier: ^13.6.20
+        specifier: 13.6.29
         version: 13.6.29
     devDependencies:
       '@svgr/plugin-jsx':
-        specifier: ^8.1.0
+        specifier: 8.1.0
         version: 8.1.0(@svgr/core@8.1.0(typescript@5.9.3))
       '@svgr/plugin-svgo':
-        specifier: ^8.1.0
+        specifier: 8.1.0
         version: 8.1.0(@svgr/core@8.1.0(typescript@5.9.3))(typescript@5.9.3)
       '@testing-library/dom':
-        specifier: ^10.4.1
+        specifier: 10.4.1
         version: 10.4.1
       '@testing-library/jest-dom':
-        specifier: ^6.9.1
+        specifier: 6.9.1
         version: 6.9.1
       '@testing-library/react':
-        specifier: ^16.3.1
+        specifier: 16.3.1
         version: 16.3.1(@testing-library/dom@10.4.1)(@types/react-dom@18.3.7(@types/react@18.3.27))(@types/react@18.3.27)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@types/diff-match-patch':
-        specifier: ^1.0.36
+        specifier: 1.0.36
         version: 1.0.36
       '@types/node':
-        specifier: ^22.19.3
+        specifier: 22.19.5
         version: 22.19.5
       '@types/react':
-        specifier: ^18.3.18
+        specifier: 18.3.27
         version: 18.3.27
       '@types/react-dom':
-        specifier: ^18.3.5
+        specifier: 18.3.7
         version: 18.3.7(@types/react@18.3.27)
       '@vitejs/plugin-react':
-        specifier: ^4.3.4
+        specifier: 4.7.0
         version: 4.7.0(vite@6.4.1(@types/node@22.19.5)(jiti@1.21.7)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
       '@vitest/coverage-v8':
         specifier: 4.0.17
         version: 4.0.17(vitest@4.0.17)
       autoprefixer:
-        specifier: ^10.4.20
+        specifier: 10.4.23
         version: 10.4.23(postcss@8.5.25)
       jsdom:
-        specifier: ^27.4.0
+        specifier: 27.4.0
         version: 27.4.0
       postcss:
         specifier: '>=8.5.12'
         version: 8.5.25
       tailwindcss:
-        specifier: ^3.4.17
+        specifier: 3.4.19
         version: 3.4.19(tsx@4.21.0)(yaml@2.8.2)
       tsx:
-        specifier: ^4.21.0
+        specifier: 4.21.0
         version: 4.21.0
       typescript:
-        specifier: ^5.7.2
+        specifier: 5.9.3
         version: 5.9.3
       vite:
-        specifier: ^6.0.5
+        specifier: 6.4.1
         version: 6.4.1(@types/node@22.19.5)(jiti@1.21.7)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
       vite-plugin-svgr:
-        specifier: ^4.5.0
+        specifier: 4.5.0
         version: 4.5.0(rollup@4.55.1)(typescript@5.9.3)(vite@6.4.1(@types/node@22.19.5)(jiti@1.21.7)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2))
       vitest:
-        specifier: ^4.0.16
+        specifier: 4.0.17
         version: 4.0.17(@types/node@22.19.5)(@vitest/ui@4.0.17)(jiti@1.21.7)(jsdom@27.4.0)(terser@5.44.1)(tsx@4.21.0)(yaml@2.8.2)
 
 packages:

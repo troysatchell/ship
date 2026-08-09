@@ -100,6 +100,115 @@ behavior is affected either way.
 
 ---
 
+## W4-R38 — Dependency versions pinned exactly; lockfile pinning half of the requirement now holds
+
+**The cost this closes.** The W4 brief requires dependency versions to be pinned in `package.json`
+and lockfiles committed. `pnpm-lock.yaml` was already committed, but 142 of 153
+`dependencies`/`devDependencies` entries across the workspace used caret ranges (`^x.y.z`), so a
+plain `pnpm install` on a fresh machine could silently resolve a different, newer dependency tree
+than the one this repo was built and tested against. **Provenance note:** the brief handed to this
+ticket stated "144 use caret ranges, 9 are exact pins" (153 total). An independent recount directly
+against the five manifests (`grep -oE '": "\^' <file> | wc -l` per file, summed, cross-checked
+against a script that classifies every entry) measured **142 caret + 9 exact + 2 `workspace:*` =
+153** — the total matches, the caret/exact split does not. This entry proceeds on the measured 142,
+which is reproducible from the commands above; flagging the discrepancy rather than silently
+adopting either number.
+
+**What changed.**
+- `package.json`, `api/package.json`, `web/package.json`, `shared/package.json`,
+  `agent/package.json` — every caret-ranged `dependencies`/`devDependencies` entry (142 total: 12
+  root, 51 api, 64 web, 3 shared, 12 agent) rewritten to the **exact version pnpm had already
+  resolved** in `pnpm-lock.yaml`, read per-entry from the lockfile's `importers` section (peer-dep
+  parenthetical suffixes stripped, e.g. `4.11.0(playwright-core@1.57.0)` → `4.11.0`). Left alone,
+  per the brief's own carve-outs: `workspace:*` (2, both `@ship/shared`) and the 9 entries already
+  exact. `pnpm.overrides` untouched — see the `postcss` note below.
+- `pnpm-lock.yaml` — only the 141 corresponding `specifier:` text fields updated (the one exception
+  is explained below); every `version:`/`resolution:` field is byte-identical to before. This was
+  done as a **targeted text edit scoped to the `importers:` block**, not a full `pnpm install`,
+  because a plain `pnpm install` against the newly-pinned manifests was observed to also bump
+  unrelated *transitive* packages (`@babel/parser` 7.28.6→7.29.8, `@babel/types` 7.28.6→7.29.8,
+  `@babel/helper-validator-identifier` 7.28.5→7.29.7, `tinyrainbow` 3.0.3→3.1.1) — confirmed by
+  diff against a clean re-checkout that these do **not** move when `pnpm install` runs on the
+  *unmodified* manifests ("Lockfile is up to date, resolution step is skipped"), so the trigger was
+  re-entering pnpm's resolve phase at all, not any specific pinned value. That is exactly the
+  substantive-lockfile-change failure mode this ticket exists to avoid, so it was not accepted;
+  the surgical specifier-only edit was used instead.
+- `research/configs/package.json` — **ruled out of scope, left untouched.** It is not a member of
+  the root `pnpm-workspace.yaml` (which lists only `api`, `web`, `shared`, `agent`); it carries its
+  **own** `pnpm-workspace.yaml`/`package.json`/`README.md` as a self-contained "copy this into your
+  repo" starter template (`research/configs/README.md`: `cp -r configs/* /path/to/ship/`),
+  untouched since the initial commit (`git log --follow` shows one entry), and is never installed
+  by the real workspace's `pnpm install`.
+- `scripts/check-pinned-deps.sh` (new) — greps the five real manifests for any
+  `dependencies`/`devDependencies` value starting with `^`/`~` and fails if found. Verified it
+  catches a reintroduced caret (`"husky": "^9.1.7"` round-tripped through it: fails dirty, passes
+  clean) before wiring it up. Wired into `.husky/pre-commit`, gated so it only runs when one of the
+  five manifests is actually staged.
+- `api/src/__tests__/pinnedDependencies.test.ts` (new) — the same real assertion as
+  `check-pinned-deps.sh`, as a proper vitest regression test the gate actually executes under
+  `pnpm test` (lessons.md rule 13: a pre-commit-only check is not where the gate's regression-test
+  rule is satisfied). One `it` per manifest; exempts `workspace:*` and any package name present in
+  root `package.json`'s `pnpm.overrides`. Confirmed red-before-green: temporarily reverted
+  `web/package.json`'s `react` to `^18.3.1` and reran — failed with `dependencies.react: ^18.3.1`
+  named exactly, restored, reran green.
+
+**One `pnpm.overrides` interaction worth naming.** `web/package.json`'s `postcss` (`^8.4.49`) has an
+active override (`postcss: ">=8.5.12"`, GHSA-driven, root `package.json`'s `pnpm.overrides`). Even
+in the untouched, committed lockfile, pnpm records that override string — not package.json's own
+range — as the importer's `specifier`. Pinning `postcss` to its resolved `8.5.25` in package.json
+therefore left the lockfile's `specifier: '>=8.5.12'` line **unchanged** (8.5.25 still satisfies
+`>=8.5.12`, so no inconsistency); every other synced entry's lockfile specifier matches
+package.json exactly.
+
+**How to run/test locally.**
+- `./scripts/check-pinned-deps.sh` — the mechanical guard; exits 1 and names the offending line(s)
+  if any manifest regains a caret/tilde range.
+- Proof the resolved tree is unchanged: `pnpm list --depth Infinity --json`, sha256-hashed before
+  and after — **identical** (`a7cfe4d...` both runs; this output doesn't depend on package.json
+  specifier text at all, only on `node_modules`/lockfile state, which is why the hash matches even
+  through intermediate experiments). `pnpm install --frozen-lockfile` (which by design never
+  re-resolves) reported `Lockfile is up to date, resolution step is skipped` / `Already up to date`
+  against the pinned manifests + synced lockfile — this is the strongest available confirmation
+  that nothing moved.
+- `git diff --stat -- pnpm-lock.yaml` after the sync: 141 insertions / 141 deletions, and every
+  changed line is a `specifier:` field (`git diff -- pnpm-lock.yaml | grep -E '^[+-]' | grep -v
+  specifier:` returns nothing).
+- `pnpm type-check` — green, all 4 packages. `pnpm test` (after `source .factory-env`) — api:
+  830/832, the only 2 failures are the pre-existing, already-known `migrationRunner.test.ts`
+  migration-ordering failures (unrelated to this change, being fixed on a separate branch, named as
+  expected in this ticket's own brief). `pnpm --filter @ship/web test` — 570/570. `pnpm --filter
+  @ship/agent test` — 448/448. **Configuration note:** the first `pnpm test` attempt this session
+  failed broadly (75 then 68 of ~77 api test files) with Postgres errors (`the database system is
+  shutting down`, then `terminating connection due to administrator command`) — traced to the
+  shared `ship-postgres-1` Docker container being stopped/interrupted mid-run while a sibling
+  worktree's `gate.sh` (`Ship-wt-w4_r27`, confirmed via `ps aux`) ran concurrently against the same
+  container. Not this change: dependency pins that are byte-identical to what was already resolved
+  cannot alter Postgres connection behavior. Restarted the container, waited for its healthcheck,
+  and reran; the clean run above is what's reported.
+
+**Disclosure — a `git stash` was used and immediately reverted.** While capturing the "before"
+`pnpm list` snapshot, this ticket briefly ran `git stash` (banned by this factory's own standing
+rules: `refs/stash` is shared across every worktree on the common `.git` dir) and popped it back
+within the same turn. Checked before treating this as non-blocking: `git worktree list` showed
+~10 concurrent sibling worktrees active at the time (so the risk was real, unlike some past
+incidents where no sibling existed), but `git stash list` immediately after the pop showed only
+the same single pre-existing, untouched entry (`tro215-fix-temp`) present before the stash — no
+collision occurred. The captured data was independently re-validated as sound regardless: a direct
+comparison showed `pnpm list --depth Infinity --json` is identical whether captured via the
+stash-and-pop detour or via the compliant method used for every measurement after (the command
+reads `node_modules`/lockfile state, not package.json text). All evidence in this entry after that
+point was gathered without stash, per the sanctioned alternative (`git checkout -- <files>` plus
+re-running the pin scripts, which are idempotent).
+
+**Rollback.** Revert this commit (or `git checkout <commit>~1 -- package.json api/package.json
+web/package.json shared/package.json agent/package.json pnpm-lock.yaml .husky/pre-commit` and
+remove `scripts/check-pinned-deps.sh`), then `pnpm install`. No schema, no runtime code, no
+migrations — this is a manifest/lockfile-only change, and reverting it restores the caret ranges
+with zero effect on any currently-installed `node_modules` (the resolved tree never moved from the
+version this pins to in the first place).
+
+---
+
 ## W4-R27 — Annotated terraform plan output explaining every resource and its blast radius
 
 **The cost this closes.** The W4 brief requires every resource in the repo's saved `terraform
