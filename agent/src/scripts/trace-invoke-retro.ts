@@ -82,6 +82,12 @@ async function main() {
     apiKey,
     model: 'claude-haiku-4-5-20251001',
     maxTokens: 512,
+    // TRO-368: same explicit values as the production construction
+    // (index.ts) — see anthropicRequestTimeoutMs/anthropicMaxRetries in
+    // config.ts for why, so every ChatAnthropic in this package is
+    // consistent rather than only the server path being configured.
+    maxRetries: config.anthropicMaxRetries,
+    clientOptions: { timeout: config.anthropicRequestTimeoutMs },
   });
 
   const shipClient = new ShipClient({

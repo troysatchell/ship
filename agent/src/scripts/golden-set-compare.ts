@@ -27,6 +27,7 @@ import { ChatAnthropic } from '@langchain/anthropic';
 import { GOLDEN_FIXTURES, scoreGoldenFixture, summarizeGoldenScores } from '../goldenSet.js';
 import { buildStandupPrompt } from '../standupDraft.js';
 import type { AnthropicModel } from '../graph.js';
+import { loadConfig } from '../config.js';
 
 export function parseThreshold(argv: readonly string[]): number {
   const idx = argv.indexOf('--threshold');
@@ -58,10 +59,16 @@ async function main() {
   }
 
   const threshold = parseThreshold(process.argv.slice(2));
+  // TRO-368: explicit timeout/retries, same values and reasoning as the
+  // production construction (index.ts) — see anthropicRequestTimeoutMs/
+  // anthropicMaxRetries in config.ts.
+  const config = loadConfig();
   const model: AnthropicModel = new ChatAnthropic({
     apiKey,
     model: 'claude-haiku-4-5-20251001',
     maxTokens: 512,
+    maxRetries: config.anthropicMaxRetries,
+    clientOptions: { timeout: config.anthropicRequestTimeoutMs },
   });
 
   console.log(`Golden-set comparison — ${GOLDEN_FIXTURES.length} fixture(s), threshold ${threshold}`);
