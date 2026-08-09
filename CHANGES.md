@@ -29,9 +29,12 @@ automatically — do not allow a failing build to remain deployed." TRO-367 alre
 discovered by a 15-minute poll. Real, tested, and it closes the "boots but broken" gap FLEETGRAPH.MD
 documents — but nothing about it is CAUSED BY a CI run failing; a build that merges green and whose
 CI later fails against `main` sat uncovered by a trigger that only notices once the deployed service
-itself stops responding. A requirements-audit ruling on this ticket's ambiguity held that
-readiness-polling does not satisfy the requirement's literal wording, which names the CI run itself
-as the trigger.
+itself stops responding. This ticket's own scope holds that readiness-polling does not satisfy the
+requirement's literal wording (`audit/requirements/gaps-W5.md`'s W5-R36 entry quotes it verbatim),
+which names the CI run itself as the trigger, not just the eventual state of what it deployed.
+**Provenance note, checked rather than assumed:** the ticket brief cited this as ruling "I-03" in
+`audit/requirements/interpretations.md`; that file holds only I-01 as of this change — no I-03 entry
+exists there. Recorded here rather than silently relied on; a future pass should add one.
 
 **What changed.**
 1. **`.github/workflows/ci-failure-rollback.yml` (new file).** Fires on `workflow_run` for `ci.yml`'s

@@ -10,11 +10,15 @@ name: CI-failure rollback trigger
 # in that workflow is caused BY a CI failure: a build that merges green and
 # whose CI later fails against `main` (a post-merge rerun, a dependency
 # regression only caught after merge, etc.) sits uncovered by a trigger that
-# only notices once the *deployed service itself* stops responding. A
-# requirements-audit ruling on this ticket's ambiguity (see
-# audit/requirements/interpretations.md) held that readiness-polling does
-# not satisfy this requirement's literal wording, which names the CI run
-# itself as the trigger. THIS workflow is that trigger.
+# only notices once the *deployed service itself* stops responding. This
+# ticket's own scope holds that readiness-polling does not satisfy this
+# requirement's literal wording (audit/requirements/gaps-W5.md's W5-R36 entry
+# quotes it verbatim), which names the CI run itself as the trigger — not
+# just the eventual state of what it deployed. THIS workflow is that trigger.
+# (Note: audit/requirements/interpretations.md, this repo's file of record
+# for such rulings, holds only I-01 as of this change — no I-03 entry exists
+# there yet, despite this ticket's brief referring to one. Recorded here
+# rather than silently assumed; a future pass should add one.)
 #
 # Three design decisions, stated here because they are judgment calls, not
 # mechanical translations of the requirement:
