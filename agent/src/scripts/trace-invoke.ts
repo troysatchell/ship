@@ -16,6 +16,7 @@ import 'dotenv/config';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { buildGraph } from '../graph.js';
 import { FileCostTracker } from '../costTracking.js';
+import { loadConfig } from '../config.js';
 
 async function main() {
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -44,12 +45,18 @@ async function main() {
     return;
   }
 
+  // TRO-368: explicit timeout/retries, same values and reasoning as the
+  // production construction (index.ts) — see anthropicRequestTimeoutMs/
+  // anthropicMaxRetries in config.ts.
+  const config = loadConfig();
   const model = new ChatAnthropic({
     apiKey,
     // Cheapest/fastest model available to this API key (verified via
     // GET /v1/models) — this is a smoke-test invocation, not a quality one.
     model: 'claude-haiku-4-5-20251001',
     maxTokens: 128,
+    maxRetries: config.anthropicMaxRetries,
+    clientOptions: { timeout: config.anthropicRequestTimeoutMs },
   });
 
   // TRO-339 / FG-21: record this real invocation's real token usage —
