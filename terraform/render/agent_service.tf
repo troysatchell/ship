@@ -87,5 +87,24 @@ resource "render_web_service" "agent" {
     # this service without it. Sensitive input, never a literal — see
     # variables.tf.
     AGENT_INTERNAL_SECRET = { value = var.agent_internal_secret }
+
+    # --- Week 6 platform env vars (PF-900 / TRO-411) ------------------------
+    # No application code reads these yet — see variables.tf's "Platform env
+    # vars" section header. Names fixed by the PM triage comment on TRO-411.
+
+    # PF-702's read-path flag. `internal` (default) is current behavior;
+    # `sdk` switches agent/src/shipClient.ts's 10 reads onto @ship/sdk as
+    # the app-identity OAuth principal. Not secret.
+    AGENT_PLATFORM_MODE = { value = var.agent_platform_mode }
+    # This agent's OWN OAuth client secret for the first-party
+    # `ship_app_fleetgraph` app's Client Credentials grant (PF-702) — must
+    # match web_service.tf's copy exactly, the same shared-secret shape as
+    # AGENT_INTERNAL_SECRET above. Sensitive input, never a literal — see
+    # variables.tf. Applying this to the LIVE agent service hits the same
+    # free-tier provider bug documented at the top of this file (any field
+    # update via `terraform apply` fails for `render_web_service.agent`) —
+    # use the Render REST API env-var PUT + redeploy workaround instead,
+    # same as AGENT_INTERNAL_SECRET and every other env var on this resource.
+    FLEETGRAPH_OAUTH_CLIENT_SECRET = { value = var.fleetgraph_oauth_client_secret }
   }
 }
