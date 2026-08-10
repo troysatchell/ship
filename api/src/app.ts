@@ -350,10 +350,15 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   // paths, rather than relying on the public router terminating every
   // request first — see the path-prefix check on `appGlobalCors` below.
   //
-  // The legacy per-source-IP/per-identity limiters just above still match
-  // `/api/v1` by prefix (`/api/` matches `/api/v1/...`) — exempting `/api/v1`
-  // from them is PF-004's job, not this ticket's (documented landmine,
-  // PLUGFORGE.MD §0.2).
+  // The legacy per-source-IP/per-identity limiters just above still MOUNT on
+  // `/api/v1` by prefix (`/api/` matches `/api/v1/...`), but as of PF-004 /
+  // TRO-401 both `skip` it: `isLegacyLimiterExemptPath` in `rate-limit.ts`
+  // checks the mount-relative `/v1` shape those limiters actually see
+  // (verified empirically — inside `app.use('/api/', <limiter>)`, `req.path`
+  // for `/api/v1/health` is `/v1/health`, not the full `/api/v1/health`).
+  // PF-500's per-app/per-token buckets are meant to govern `/api/v1` instead
+  // (PLUGFORGE.MD §2.7); until that lands, the public router is unmetered by
+  // this file. Every other `/api/*` route remains capped exactly as before.
   //
   // `/oauth` has no router yet (added by E1); listing it here now means that
   // ticket only has to mount its router, not also touch this CORS wiring.
