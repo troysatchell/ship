@@ -115,10 +115,11 @@ describe('PF-004 / TRO-401: /api/v1 exemption from the legacy /api/ limiters', (
     // The existing legacy limiter shape (rate-limit.ts's perIdentityLimiter
     // `message` option) — NOT the new v1 ApiError §2.5 shape
     // ({ code, message, details?, request_id }) — proving the exemption did
-    // not leak into internal routes.
-    const throttledBody = responses[throttledIndex]?.body as Record<string, unknown> | undefined
-    expect(throttledBody).toEqual({ error: 'Too many requests. Please slow down.' })
-    expect(throttledBody).not.toHaveProperty('code')
-    expect(throttledBody).not.toHaveProperty('request_id')
+    // not leak into internal routes. `toEqual` on an exact object already
+    // rejects any extra key (so it subsumes a separate `not.toHaveProperty`
+    // check on `code`/`request_id`), and needs no cast off `unknown` — no
+    // `as` conversion, per this repo's ban on decoupling a test from the
+    // response shape it claims to verify (lessons.md rule 16 / TS-8).
+    expect(responses[throttledIndex]?.body).toEqual({ error: 'Too many requests. Please slow down.' })
   }, 30_000)
 })
