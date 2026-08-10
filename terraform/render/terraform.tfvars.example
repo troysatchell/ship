@@ -30,6 +30,24 @@ ship_api_token    = "REPLACE_WITH_A_REAL_SHIP_API_TOKEN"   # a real user's Ship 
 # new environment (e.g. `openssl rand -hex 32`) — never reuse that one.
 agent_internal_secret = "REPLACE_WITH_A_REAL_SHARED_SECRET"
 
+# --- Week 6 platform secrets (PF-900 / TRO-411) — no defaults, must be set --
+# Names fixed by the PM triage comment on TRO-411 — PF-701/PF-907's seeds
+# read these exact names via a shared config module, never a re-declared
+# literal. No application code reads any of these yet (Day-1 infra ticket);
+# see variables.tf's "Platform env vars" section for what each becomes.
+
+# AES-256-GCM key encrypting webhook signing secrets at rest (PF-302).
+secret_encryption_key = "REPLACE_WITH_A_REAL_ENCRYPTION_KEY"   # e.g. output of: openssl rand -hex 32
+
+# First-party FleetGraph app's OAuth client secret (PF-701). Consumed by
+# BOTH services (web_service.tf AND agent_service.tf) — the two copies must
+# hold the identical value, generated fresh per environment.
+fleetgraph_oauth_client_secret = "REPLACE_WITH_A_REAL_FLEETGRAPH_CLIENT_SECRET"   # e.g. output of: openssl rand -hex 32
+
+# Grader app's OAuth client secret (PF-907). `ship` only — generate a
+# DIFFERENT value than fleetgraph_oauth_client_secret above.
+grader_oauth_client_secret = "REPLACE_WITH_A_REAL_GRADER_CLIENT_SECRET"   # e.g. output of: openssl rand -hex 32
+
 # Everything else below has a working default in variables.tf that
 # reproduces the existing live service; override only what you need to
 # change.
@@ -68,3 +86,12 @@ agent_internal_secret = "REPLACE_WITH_A_REAL_SHARED_SECRET"
 # variables.tf for why this can't be derived automatically (would create a
 # dependency cycle with agent_service.tf's own SHIP_API_BASE_URL).
 # agent_api_base_url      = "https://ship-agent-t0zy.onrender.com"
+
+# --- Week 6 platform, non-secret overrides (PF-900 / TRO-411) --------------
+# Defaults below already match PLUGFORGE.MD §2.2/§2.7 exactly; override only
+# for a non-standard environment.
+# oauth_access_token_ttl_seconds  = 3600      # 1 hour
+# oauth_refresh_token_ttl_seconds = 2592000   # 30 days
+# rate_limit_app_rpm              = 120
+# rate_limit_token_rpm            = 60
+# agent_platform_mode             = "internal"   # or "sdk" — PF-702
