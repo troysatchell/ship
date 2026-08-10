@@ -1,0 +1,93 @@
+{
+  "_comment": [
+    "Shared HMAC webhook signature test vectors — dependency-free, no imports.",
+    "Contract (PLUGFORGE.MD section 2.6 / TRO-433): header value is `t=<unix-seconds>,v1=<hex-hmac-sha256>`;",
+    "the signed payload is `${signTimestamp}.${rawBody}` (a literal dot joining the two);",
+    "algorithm is HMAC-SHA256, hex-encoded; default tolerance is 300 seconds, inclusive at the boundary.",
+    "Produced by TRO-433 (the signer). TRO-413/PF-403 (the SDK verifyWebhook) consumes this same file",
+    "so both implementations are checked for byte-parity against one source of truth.",
+    "Regenerate with node scratch/gen script only if the contract itself changes — do not hand-edit the header/v1 hex values."
+  ],
+  "contract": {
+    "headerName": "Ship-Signature",
+    "headerFormat": "t=<unix-seconds>,v1=<hex-hmac-sha256>",
+    "signedPayloadFormat": "${signTimestamp}.${rawBody}",
+    "algorithm": "HMAC-SHA256",
+    "encoding": "hex",
+    "defaultToleranceSeconds": 300
+  },
+  "cases": [
+    {
+      "name": "valid",
+      "description": "freshly signed payload verified at the same instant it was signed",
+      "secret": "test-fixture-secret-not-a-real-credential-000111",
+      "rawBody": "{\"event\":\"document.created\",\"id\":\"doc_1\",\"workspace_id\":\"ws_1\"}",
+      "verifyRawBody": "{\"event\":\"document.created\",\"id\":\"doc_1\",\"workspace_id\":\"ws_1\"}",
+      "signTimestamp": 1700000000,
+      "verifyTimestamp": 1700000000,
+      "toleranceSeconds": 300,
+      "header": "t=1700000000,v1=7954c1c424bfe8393d4e9cb591e8dbf75867f375a3d978f09ed79e8cec7d64cc",
+      "expectedValid": true
+    },
+    {
+      "name": "tampered",
+      "description": "header computed for one body, verification attempted against a different body",
+      "secret": "test-fixture-secret-not-a-real-credential-000111",
+      "rawBody": "{\"event\":\"document.updated\",\"id\":\"doc_2\",\"workspace_id\":\"ws_1\"}",
+      "verifyRawBody": "{\"event\":\"document.updated\",\"id\":\"doc_2\",\"workspace_id\":\"ws_9\"}",
+      "signTimestamp": 1700000000,
+      "verifyTimestamp": 1700000000,
+      "toleranceSeconds": 300,
+      "header": "t=1700000000,v1=915970180c139715467e10c6ce58cb801c06a6de067a4a328d027463ecdc1049",
+      "expectedValid": false
+    },
+    {
+      "name": "expired",
+      "description": "signed 400s before verification time; exceeds the default 300s tolerance",
+      "secret": "test-fixture-secret-not-a-real-credential-000111",
+      "rawBody": "{\"event\":\"issue.status_changed\",\"id\":\"iss_3\"}",
+      "verifyRawBody": "{\"event\":\"issue.status_changed\",\"id\":\"iss_3\"}",
+      "signTimestamp": 1699999600,
+      "verifyTimestamp": 1700000000,
+      "toleranceSeconds": 300,
+      "header": "t=1699999600,v1=65077268622b1a80cdd3a27a728c040b67546d67e877f9295fc5015d87731cc3",
+      "expectedValid": false
+    },
+    {
+      "name": "missing_v1",
+      "description": "header carries t= but no v1= component; verify must return false, not throw",
+      "secret": "test-fixture-secret-not-a-real-credential-000111",
+      "rawBody": "{\"event\":\"sprint.started\",\"id\":\"spr_4\"}",
+      "verifyRawBody": "{\"event\":\"sprint.started\",\"id\":\"spr_4\"}",
+      "signTimestamp": 1700000000,
+      "verifyTimestamp": 1700000000,
+      "toleranceSeconds": 300,
+      "header": "t=1700000000",
+      "expectedValid": false
+    },
+    {
+      "name": "boundary_within_tolerance",
+      "description": "signed exactly 300s before verification; the tolerance boundary is inclusive",
+      "secret": "test-fixture-secret-not-a-real-credential-000111",
+      "rawBody": "{\"event\":\"issue.assigned\",\"id\":\"iss_5\"}",
+      "verifyRawBody": "{\"event\":\"issue.assigned\",\"id\":\"iss_5\"}",
+      "signTimestamp": 1699999700,
+      "verifyTimestamp": 1700000000,
+      "toleranceSeconds": 300,
+      "header": "t=1699999700,v1=a69a0b1f6e098af9f94940d58e5937654a519f250d8aac658ee0b05e9fd33a03",
+      "expectedValid": true
+    },
+    {
+      "name": "boundary_outside_tolerance",
+      "description": "signed 301s before verification; one second past the inclusive boundary",
+      "secret": "test-fixture-secret-not-a-real-credential-000111",
+      "rawBody": "{\"event\":\"issue.assigned\",\"id\":\"iss_6\"}",
+      "verifyRawBody": "{\"event\":\"issue.assigned\",\"id\":\"iss_6\"}",
+      "signTimestamp": 1699999699,
+      "verifyTimestamp": 1700000000,
+      "toleranceSeconds": 300,
+      "header": "t=1699999699,v1=42bb4ad42226ed22b63d6ad66b50d468d178bd19f20639dd46946be5ee0a078f",
+      "expectedValid": false
+    }
+  ]
+}
