@@ -126,6 +126,56 @@ value stays `NULL`, matching the column's pre-migration-043 default). Revert
 field, then regenerate `api/openapi.{yaml,json}`. No other file imports from
 `api/src/platform/oauth/` or `api/src/platform/scopes/` yet, so nothing else needs to change.
 
+**Post-merge correction — e2e regression, GitHub Actions "e2e · agent detection latency + grounded
+chat" (observed, deterministic across 3 attempts on this branch).** `POST /api/api-tokens` 500'd
+`{"success":false,"error":{"code":"INTERNAL_ERROR","message":"Failed to create API token"}}`,
+thrown at `e2e/fixtures/agentEnv.ts:215` inside `mintApiToken()`. Root cause was **not** this
+ticket's route code — it was `e2e/fixtures/isolated-env.ts`'s `runMigrations`, which applied
+`schema.sql` and then wrote every migration file's NAME into `schema_migrations` marking it
+"applied" without ever executing the file's SQL (its own prior comment: "schema.sql includes all
+table definitions from all migrations, so running migrations again would fail"). True for every
+migration through 042 (each only `CREATE TABLE`s a new table, already mirrored by schema.sql for a
+fresh database); false for `043_oauth_tokens_and_codes.sql:132`'s `ALTER TABLE api_tokens ADD
+COLUMN scopes TEXT[]` — an ALTER on an *existing* table, which per this file's own project rule
+("never modify schema.sql directly for existing tables") is deliberately never mirrored back into
+schema.sql. Every e2e-fixture-built database was therefore silently missing `api_tokens.scopes` —
+DB-1's exact failure mode ("applied nothing, reported success"), reintroduced in a second
+migration-runner implementation never updated when `api/src/db/migrationRunner.ts` was hardened
+against exactly this (TRO-279). This ticket's own `INSERT INTO api_tokens (..., scopes)` was the
+first statement to depend on that column, so it was the first to notice: the route's sanitized 500
+comes from a caught Postgres error, confirmed server-side via `console.error('Create API token
+error:', error)` (`api-tokens.ts:117`) — `column "scopes" of relation "api_tokens" does not exist`
+(SQLSTATE `42703`).
+
+**The fix — `e2e/fixtures/isolated-env.ts` only, no application code changed.** `runMigrations` now
+delegates to `api/src/db/migrationRunner.ts`'s real, file-executing `runMigrations` (the same
+function `pnpm db:migrate` itself uses) instead of the schema.sql-plus-fake-bookkeeping shortcut.
+
+**Regression test — `api/src/db/__tests__/e2eAgentFixtureMigrationGap.test.ts` (new file, 4
+cases).** Builds two throwaway databases and drives `POST /api/api-tokens` through the real Express
+app with the identical CSRF -> login -> CSRF -> POST sequence `agentEnv.ts`'s `mintApiToken` uses.
+One database is bootstrapped the OLD way (schema.sql + migrations marked applied without running
+them — reproduced inline rather than by importing `e2e/fixtures/isolated-env.ts` directly, which
+would put a file outside `api/tsconfig.json`'s `rootDir` and break `pnpm --filter api
+type-check`): confirmed `api_tokens.scopes` absent and the request 500s with the exact underlying
+error above, captured via a `console.error` spy. The other is bootstrapped by the real
+`migrationRunner.ts`: confirmed the column exists and the identical request returns `201` with
+`scopes: null`. Independently, before this fix, pointing this same scenario at the real
+(then-unfixed) `e2e/fixtures/isolated-env.ts` `runMigrations` export directly reproduced the
+identical 500 and underlying error; the same call after the fix passed — both runs captured
+verbatim in this ticket's investigation record.
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/db/__tests__/e2eAgentFixtureMigrationGap.test.ts
+```
+
+**Rollback (this correction only).** Revert `e2e/fixtures/isolated-env.ts`'s `runMigrations` to the
+schema.sql-plus-bookkeeping-only version and delete
+`api/src/db/__tests__/e2eAgentFixtureMigrationGap.test.ts` — reintroduces the e2e regression this
+correction closes. No database migration or application route code is touched by this correction,
+so no other rollback step is needed.
+
 ---
 
 ## TRO-408 — PF-102: OAuth app registration — admin endpoint, once-only secret, rotation, revocation
