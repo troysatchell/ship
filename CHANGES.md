@@ -24,29 +24,40 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 ## TRO-420 — PF-902: IAM adaptation memo, AWS least-privilege ⇄ Render's permission model
 
 **What changed.** Added `docs/IAM-ADAPTATION-RENDER.md`, a one-page defense memo mapping this
-repo's actual AWS least-privilege exercise (`aws_iam_role.eb_instance`/`eb_service` and the three
-resource-scoped custom policies in `terraform/ssm.tf:164-262`) to Render's permission model
-(`terraform/render/*.tf`): API-key scoping, service isolation via disjoint `env_vars` blocks, and
-env-var secret handling. States plainly what Render cannot express (no role/policy resource type,
-no resource-level ARN scoping, no control-plane/data-plane role split, no condition-key mechanism)
-and why the trade is acceptable for this specific deployment (single-operator/free-tier threat
-model; the running `api`/`agent` server processes never hold `RENDER_API_KEY` — verified by grep
-across `api/src`/`agent/src` — so the escalation path AWS's scoped policies exist to contain is
-closed by omission rather than by a grant). Every claim is marked observed (cites file:line in this
-repo's own `terraform/`/`terraform/render/`) or derived (Render's general key-scoping behavior,
-not independently verified against this account), per `.claude/CLAUDE.md`'s provenance rule. This
-is a docs-only ticket (Artifact DoD per the ship-test-designer comment on TRO-420) — no application
-code, schema, or route changed, so there is no regression test; `scripts/factory/gate.sh` was run
-for evidence per the standard ticket workflow and its `regression-test` check is expected to flag
-this branch (see PR body for the verbatim verdict).
+repo's actual AWS least-privilege exercise (`aws_iam_role.eb_instance`'s custom policies in
+`terraform/ssm.tf:164-262`, layered on the AWS-managed EB platform policies the same role also
+holds — corrected mid-review from an earlier draft that wrongly described a clean task/execution
+role split; `eb_service` is the genuinely separate role) to Render's permission model
+(`terraform/render/*.tf`): API-key scoping (user/workspace-scoped, not resource/action-scoped),
+service isolation via disjoint `env_vars` blocks, and env-var secret handling (including that
+`terraform.tfstate`/`.tfvars` are gitignored and untracked here — verified via `git ls-files`).
+States plainly what this deployment's configuration cannot express (no resource-level ARN scoping,
+no control-plane/data-plane split on the key actually used, no condition-key mechanism), and notes
+Render's own workspace-role/protected-environment features exist but are not configured here
+(**derived from provider docs, not verified against this account**). Explains why the trade is
+acceptable for this specific deployment (single-operator/free-tier threat model; the running
+`api`/`agent` server processes never hold `RENDER_API_KEY` — verified by grep across
+`api/src`/`agent/src` — so the escalation path AWS's scoped policies exist to contain is closed by
+omission rather than by a grant). Every claim is marked observed (file:line citations in this
+repo's own `terraform/`/`terraform/render/`) or derived, per `.claude/CLAUDE.md`'s provenance rule.
+This is a docs-only ticket (Artifact DoD per the ship-test-designer comment on TRO-420) — no
+application code, schema, or route changed, so there is no regression test; `scripts/factory/gate.sh`
+was run for evidence and its `regression-test` check is expected to flag this branch (see PR body
+for the verbatim verdict). CodeRabbit caught two Major findings (the task/execution-role conflation
+above, and an overclaim that Render has no permission concept at all rather than one this config
+simply doesn't use) plus two Minor/Trivial (provenance completeness, state-file handling) — all
+five addressed in this same commit's revision.
 
 **How to run it.** Read `docs/IAM-ADAPTATION-RENDER.md` directly — no command needed. It will be
 referenced from `docs/architecture.md` once PF-903 (TRO-424) lands; that ticket's docs-lint test
 checks for a reference to this exact filename.
 
-**Rollback.** `git rm docs/IAM-ADAPTATION-RENDER.md` and revert this entry. No other files depend
-on the memo existing except PF-903's future reference (not yet built as of this commit — verified
-`docs/architecture.md` does not exist in this worktree).
+**Rollback.** `git rm docs/IAM-ADAPTATION-RENDER.md` and revert this entry. Safe only **before**
+PF-903 (TRO-424) lands and adds a reference to this filename in `docs/architecture.md` (not yet
+built as of this commit — verified `docs/architecture.md` does not exist in this worktree). If
+PF-903 has already landed, its docs-lint test asserts a reference to `IAM-ADAPTATION-RENDER.md`
+exists — removing this file without also updating that test's expected-filename constant (or
+reverting PF-903 first) breaks that test.
 
 ---
 
