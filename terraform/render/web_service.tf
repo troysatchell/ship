@@ -76,5 +76,45 @@ resource "render_web_service" "ship" {
     AGENT_INTERNAL_SECRET = {
       value = var.agent_internal_secret
     }
+
+    # --- Week 6 platform env vars (PF-900 / TRO-411) ------------------------
+    # No application code reads these yet — see variables.tf's "Platform env
+    # vars" section header for why they are declared ahead of the code
+    # (Day-1 infra, "zero console-only config" AC). Names fixed by the PM
+    # triage comment on TRO-411.
+
+    # Webhook signing-secret encryption at rest (PF-302). Sensitive input,
+    # never a literal — see variables.tf.
+    SECRET_ENCRYPTION_KEY = {
+      value = var.secret_encryption_key
+    }
+    # First-party FleetGraph app's OAuth client secret (PF-701 seed reads
+    # this exact name). Also consumed by agent_service.tf — the two copies
+    # must match. Sensitive input, never a literal — see variables.tf.
+    FLEETGRAPH_OAUTH_CLIENT_SECRET = {
+      value = var.fleetgraph_oauth_client_secret
+    }
+    # Grader app's OAuth client secret (PF-907 seed reads this exact name).
+    # `ship` only — the agent never needs the grader's identity. Sensitive
+    # input, never a literal — see variables.tf.
+    GRADER_OAUTH_CLIENT_SECRET = {
+      value = var.grader_oauth_client_secret
+    }
+    # OAuth token TTLs (PF-104/PF-105). Not secret; `tostring()` because
+    # Render's env_vars map is string-valued.
+    OAUTH_ACCESS_TOKEN_TTL_SECONDS = {
+      value = tostring(var.oauth_access_token_ttl_seconds)
+    }
+    OAUTH_REFRESH_TOKEN_TTL_SECONDS = {
+      value = tostring(var.oauth_refresh_token_ttl_seconds)
+    }
+    # `/api/v1` per-app / per-token rate-limit buckets (PF-500, §2.7). Not
+    # secret.
+    RATE_LIMIT_APP_RPM = {
+      value = tostring(var.rate_limit_app_rpm)
+    }
+    RATE_LIMIT_TOKEN_RPM = {
+      value = tostring(var.rate_limit_token_rpm)
+    }
   }
 }
