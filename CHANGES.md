@@ -106,6 +106,69 @@ names yet, so the revert is a clean, self-contained no-op against live infrastru
 
 ---
 
+## TRO-411 follow-up — live `terraform plan` captured, under explicit scoped orchestrator authorization
+
+**Supersedes only the "NOT captured live" claim in the entry above** — everything else in that
+entry (the 8 new variables, their wiring, the structural verification, the naming rationale) is
+unchanged. This entry exists rather than editing the one above, per this file's own append-only
+convention.
+
+**What changed.** The orchestrator authorized exactly three things, no more: (1) read
+`RENDER_API_KEY` from the main checkout's gitignored `.env`, never copy the file, never echo the
+value; (2) generate throwaway placeholder values (`openssl rand -hex 32`) for the required-no-default
+variables into a gitignored `terraform.tfvars` in this worktree; (3) run `terraform plan` only —
+never apply, never destroy. All three limits were honored exactly:
+- `RENDER_API_KEY` was extracted as a single grepped line from
+  `/Users/troy/repos/GAUNTLET/Ship/.env` (never the whole file sourced), exported for one command,
+  then `unset`; the command that loaded it printed only its length and a 4-char prefix as its own
+  proof, never the value.
+- `terraform/render/terraform.tfvars` (verified gitignored via `git check-ignore -v` **before**
+  writing it — `terraform/.gitignore:5:*.tfvars`) holds 8 throwaway `openssl rand -hex 32` values:
+  the 5 pre-existing required secrets this ticket didn't add, plus this ticket's own 3. No real
+  value was read for any of the 5 — the orchestrator's credential authorization covered
+  `RENDER_API_KEY` only, so nothing else was pulled from the main checkout's `.env` even though it
+  holds real-looking values for some of them.
+- `terraform plan -var-file=terraform.tfvars -no-color -input=false` — exit `0`, "3 to add, 0 to
+  change, 0 to destroy," zero new warnings.
+
+**Redaction check** (same method `plan-annotated.md`/`tro-316-agent-plan-annotated.md` already
+established): grepped both the raw capture and the final committed markdown for `postgresql://`,
+`rnd_`, `bearer`/`authorization` (case-insensitive), and all 8 throwaway secrets as literal
+64-character hex strings. Zero matches on every check in both files; every sensitive attribute
+renders as `(sensitive value)` via Terraform's own schema, confirmed by counting that marker (25 in
+the raw capture, 29 in the final doc once the earlier synthetic-fixture example is included).
+
+`terraform/render/plan/tro-411-pf900-w6-env-vars.md` rewritten in place (same file, this ticket's
+own artifact) with the real annotated capture: full output, a per-resource table naming exactly
+which of the 8 PF-900 env vars land on which resource, the local-state create-everything limitation
+stated up front (this worktree's Terraform state was empty, so `ship`/`ship-db` plan as `create`
+alongside the genuinely new `agent` resource — a pre-existing, already-documented condition per
+`README.md`'s adoption memo, not something this run caused), and an established-vs-not-established
+section. `scripts/factory/verify-terraform-artifact.sh` run a third time, now against this real
+capture: all 12 checks `PASS`, exit `0`.
+
+**Still not established, stated plainly.** No `terraform apply` was run (plan-only, per the
+orchestrator's limit) — so whether these values would actually apply successfully against live
+Render infrastructure remains unverified. No real (non-throwaway) secret values were provisioned or
+even viewed for any of the 8 sensitive variables. The plan still shows `render_postgres.ship`/
+`render_web_service.ship` as `create` rather than `0 changes`, because this worktree's local
+Terraform state has no record of the already-imported live resources (a different checkout's state
+file, never committed) — not a regression, and not this ticket's gap to close.
+
+**How to run it.** `cd terraform/render`, then read `RENDER_API_KEY` from wherever the real `.env`
+lives and export it for one command only (never write it to a file in the worktree); write a
+gitignored `terraform.tfvars` (verify with `git check-ignore -v terraform.tfvars` first) with real
+or throwaway values per your purpose; `terraform plan -var-file=terraform.tfvars -no-color
+-input=false`. Never pipe the raw output anywhere without running the redaction check first.
+
+**How to roll it back.** Still plan-only — nothing live was ever touched, so there is nothing to
+tear down. `git revert` this commit restores the earlier "credential-blocked" version of
+`plan/tro-411-pf900-w6-env-vars.md`. The local `terraform.tfvars` this session wrote is gitignored
+and was never committed in the first place — delete it directly (`rm terraform/render/terraform.tfvars`)
+if you want the worktree clean; it contains no real secret material regardless.
+
+---
+
 ## TRO-381 / TRO-351 — FLEETGRAPH.MD accuracy and trim: fixed a self-contradiction, six stale `graph.ts` citations, a wrong route-key count, a missing Trigger Model note, restructured Cost Analysis, and cut ~140 lines of process narration
 
 **The cost this closes.** Two named inaccuracies, both derived from reading `agent/src/graph.ts`
