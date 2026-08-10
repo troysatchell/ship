@@ -21,6 +21,91 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-411 — PF-900: Terraform extension — every new Week-6 env var/service in `terraform/render/`
+
+**PF-900 · Epic E9 · non-code / artifact-based ticket, "Start Day 1 — defense material" per
+PLUGFORGE.MD §4/§2.10.**
+
+**What was missing.** `terraform/render/` (TF-10/TRO-299, extended by TRO-316/FG-11 for the agent
+service) had zero declarations for any of Week 6's new platform env vars — `SECRET_ENCRYPTION_KEY`,
+the OAuth TTL config, the `/api/v1` rate-limit config, `AGENT_PLATFORM_MODE`, and the FleetGraph and
+grader OAuth app secrets. Left undeclared, any future ticket that needs one of these would either
+set it by hand in the Render dashboard (this ticket's own AC forbids exactly that — "zero
+console-only config") or invent its own literal name, risking the drift the PM triage comment on
+this ticket explicitly warns about across PF-900/701/907.
+
+**What changed.**
+- `terraform/render/variables.tf` — 8 new variables in a new "Platform env vars (PF-900 / TRO-411)"
+  section: `secret_encryption_key`, `fleetgraph_oauth_client_secret`, `grader_oauth_client_secret`
+  (all sensitive, no default — required); `oauth_access_token_ttl_seconds` (default `3600`, 1h),
+  `oauth_refresh_token_ttl_seconds` (default `2592000`, 30d), `rate_limit_app_rpm` (default `120`),
+  `rate_limit_token_rpm` (default `60`), `agent_platform_mode` (default `"internal"`, validated to
+  `internal`/`sdk` only). Defaults match PLUGFORGE.MD §2.2/§2.7 exactly. The 10-minute OAuth
+  auth-code TTL is deliberately NOT exposed as a variable — §2.2 pins it as a fixed security
+  invariant, not an operational knob.
+- `terraform/render/web_service.tf` — wires `SECRET_ENCRYPTION_KEY`, `FLEETGRAPH_OAUTH_CLIENT_SECRET`,
+  `GRADER_OAUTH_CLIENT_SECRET`, `OAUTH_ACCESS_TOKEN_TTL_SECONDS`, `OAUTH_REFRESH_TOKEN_TTL_SECONDS`,
+  `RATE_LIMIT_APP_RPM`, `RATE_LIMIT_TOKEN_RPM` into `render_web_service.ship`'s `env_vars`.
+- `terraform/render/agent_service.tf` — wires `AGENT_PLATFORM_MODE` and a second copy of
+  `FLEETGRAPH_OAUTH_CLIENT_SECRET` into `render_web_service.agent`'s `env_vars` (the agent needs its
+  own copy to authenticate via Client Credentials once PF-702 lands — same shared-secret shape as
+  the existing `AGENT_INTERNAL_SECRET` pair; the two copies must match exactly).
+- `terraform/render/terraform.tfvars.example` — placeholders + generation commands for the three new
+  secrets, commented overrides for the five non-secret vars.
+- `terraform/render/README.md` — new "Week 6 platform env vars" section pointing at the two items
+  below.
+- `terraform/render/plan/tro-411-pf900-w6-env-vars.md` (new) — full structural verification
+  (`fmt`/`init`/`validate`, all clean, zero new warnings vs. the two pre-existing ones) and an
+  honest record of why a **live, credentialed** `terraform plan` capture could not run in this
+  worktree (see below).
+- `scripts/factory/verify-terraform-artifact.sh` (new) — the optional grep-based mechanical assist
+  the ship-test-designer comment on this ticket proposed: checks a **committed, already-captured**
+  plan text for every new env var inside a real `render_*` env_vars block, both service + Postgres
+  resource addresses, and the provider's exact-pin. Not a gate check (nothing under
+  `api/src/**`/`web/src/**` can run `terraform`). Proven red (against this directory's own
+  pre-existing `tro-316-agent-plan-annotated.md`, which predates these env vars — correctly fails
+  only the 8 new-var checks, correctly passes the pre-existing resource/pin checks) then green
+  (against a clearly-labeled, non-committed synthetic fixture built only to exercise the checker's
+  own detection logic — never a claim about live infrastructure).
+
+**`terraform plan` — NOT captured live, and said so plainly rather than faked.** `terraform fmt
+-check -recursive .` clean; `terraform init` reused the committed lock file, no version drift;
+`terraform validate`: Success, identical two pre-existing deprecation warnings, zero new ones. A
+live `terraform plan` needs `RENDER_API_KEY`, which lives in the main checkout's gitignored `.env`
+(`/Users/troy/repos/GAUNTLET/Ship/.env`) — not in this worktree (`Ship-wt-tro_411`), and this
+ticket's credential rules forbid fabricating, copying in, or working around that (including the
+"non-empty placeholder key" trick a prior session used under different rules — not repeated here).
+Ran `terraform plan -input=false` anyway with no var-file, purely to observe: it errors on every
+required-no-default variable before ever reaching the `RENDER_API_KEY` check, which at least proves
+all three new secrets are wired as required inputs the same way every pre-existing one is — real,
+observed evidence, not a fabricated credential. The actual annotated live-plan artifact is now an
+**orchestrator follow-up** — exact remaining steps (credential, tfvars, redaction, annotation) are
+in `plan/tro-411-pf900-w6-env-vars.md`'s "What a human/orchestrator needs to finish this."
+
+**Provider pin re-verified, unchanged.** `render-oss/render` `1.9.1` is still the latest stable
+release on the public registry as of 2026-08-10 (checked live against
+`registry.terraform.io/v1/providers/render-oss/render/versions`) — no bump needed.
+
+**Deliberately NOT done (out of this ticket's scope, per its own AC and the "never touch files
+outside the finding's scope" rule):** no application code was touched — nothing in `api/src/` or
+`agent/src/` reads any of these env vars yet; that is PF-101/PF-104/PF-105/PF-302/PF-500/PF-701/
+PF-702/PF-907's job. No `terraform apply`. No live-plan capture (see above).
+
+**How to run it.** `cd terraform/render && terraform init && terraform validate && terraform fmt
+-check -recursive .` — all runnable with no credentials. `scripts/factory/verify-terraform-artifact.sh
+<plan-file>` against any committed plan capture. A live plan needs
+`cp terraform.tfvars.example terraform.tfvars` (fill in real values) and
+`set -a; source ../../.env; set +a` for `RENDER_API_KEY`, run from wherever that `.env` actually
+exists.
+
+**How to roll it back.** No resource here has ever been applied — this PR is plan-only, so there is
+nothing live to tear down. `git revert` this commit (or the merge commit once merged) removes the 8
+new variables, the two services' new `env_vars` entries, the tfvars-example placeholders, the new
+plan doc, and the new verify script; nothing else in this repo references any of these env var
+names yet, so the revert is a clean, self-contained no-op against live infrastructure.
+
+---
+
 ## TRO-381 / TRO-351 — FLEETGRAPH.MD accuracy and trim: fixed a self-contradiction, six stale `graph.ts` citations, a wrong route-key count, a missing Trigger Model note, restructured Cost Analysis, and cut ~140 lines of process narration
 
 **The cost this closes.** Two named inaccuracies, both derived from reading `agent/src/graph.ts`
