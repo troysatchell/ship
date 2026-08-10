@@ -15,11 +15,26 @@ described in `memory-bank/techContext.md` with a config a clean machine can repr
 | File | Purpose |
 |---|---|
 | `versions.tf` | `required_version`, pinned provider, `provider "render"` block |
-| `variables.tf` | All inputs, with descriptions; secrets are `sensitive = true` |
+| `variables.tf` | All inputs, with descriptions; secrets are `sensitive = true`. Includes the Week-6 platform env vars (PF-900 / TRO-411 — see below) |
 | `postgres.tf` | `render_postgres.ship` |
-| `web_service.tf` | `render_web_service.ship`, including the three env vars |
+| `web_service.tf` | `render_web_service.ship`, including its env vars |
+| `agent_service.tf` | `render_web_service.agent` (TRO-316/FG-11), including its env vars |
 | `outputs.tf` | Non-sensitive outputs only (IDs, URL) |
 | `terraform.tfvars.example` | Placeholder values — copy to `terraform.tfvars` (gitignored) |
+| `plan/` | Captured `terraform plan` runs, annotated resource-by-resource, committed as submission artifacts |
+
+## Week 6 platform env vars (PF-900 / TRO-411)
+
+Every new env var Week 6's platform layer needs (`SECRET_ENCRYPTION_KEY`, OAuth TTL config,
+`/api/v1` rate-limit config, `AGENT_PLATFORM_MODE`, the FleetGraph and grader OAuth app secrets) is
+now declared in `variables.tf` (see its "Platform env vars (PF-900 / TRO-411)" section) and wired
+into `web_service.tf`/`agent_service.tf`'s `env_vars` blocks — **before** any application code
+reads them, since this ticket is Day-1 infra per PLUGFORGE.MD §4/§2.10. Full rationale, structural
+verification (`fmt`/`init`/`validate`, all clean), and why a live annotated `terraform plan`
+capture is blocked on a missing `RENDER_API_KEY` in this worktree (not fabricated to force one
+through) are in `plan/tro-411-pf900-w6-env-vars.md`. The optional mechanical assist
+`scripts/factory/verify-terraform-artifact.sh <plan-file>` greps a committed plan capture for every
+one of these vars, both service + Postgres resource addresses, and the provider pin.
 
 ## Known provider bug — `render_web_service.agent` cannot be updated by `terraform apply`
 

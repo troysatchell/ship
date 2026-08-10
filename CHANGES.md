@@ -163,6 +163,366 @@ own byte-parity tests and would need its own vectors restored or regenerated fir
 
 ---
 
+## TRO-396 — PF-001: platform scaffold + `/api/v1` router (request IDs, public CORS)
+
+**The cost this closes.** Ship has no public API surface at all — every route lives at `/api/*`,
+mixed in with internal auth/CSRF/session/rate-limit middleware that a third-party developer client
+has no business going through. PlugForge (`PLUGFORGE.MD` §4, Epic E0) needs a place to build a
+versioned public API that shares none of that internal *route-specific* machinery (per-route CSRF,
+session auth, endpoint-specific limiters). This ticket is the entry point: every later platform
+ticket (OAuth, scopes, webhooks, rate limiting, audit, the v1 OpenAPI registry) builds inside the
+layout this ticket creates. Not yet true today: the legacy per-source-IP/per-identity rate limiters
+still match `/api/v1` by prefix (PF-004 removes that — see the `app.ts` bullet below).
+
+**What changed.**
+- New `api/src/platform/` directory tree, matching `PLUGFORGE.MD` §2.1 exactly: `oauth/`, `scopes/`,
+  `ratelimit/`, `webhooks/`, `audit/`, `api/v1/`, `openapi/`. Only `api/v1/` has code in this ticket
+  (PF-001's scope); the other six are placeholder `README.md`s naming which later ticket populates
+  them, so future tickets build inside the scaffold instead of inventing a new location.
+- `api/src/platform/api/v1/router.ts` — the public router. `v1Router.use(requestIdMiddleware)` then
+  `GET /health` (200, `{ status: 'ok' }`). Deliberately minimal: no bearer auth (PF-107), no
+  `ApiError` shape or 404 fallthrough (PF-002), no OpenAPI registration (PF-202 creates the v1
+  registry this route needs to register against — there is no v1 registry to target yet, and
+  registering it against the *internal* registry at `api/src/openapi/registry.ts` would be wrong,
+  since that documents `/api/*`, not `/api/v1/*`, per §2.1's boundary rule). `/health` needs none of
+  that: it is an unauthenticated liveness check, the same convention as the existing internal
+  `GET /health` in `api/src/app.ts`.
+- `api/src/platform/api/v1/requestId.ts` — `requestIdMiddleware`: `crypto.randomUUID()` per request,
+  attached to `req.requestId`, echoed as the `X-Request-Id` response header, and logged
+  (`console.log`) alongside the method/path — so a server-side log line correlates with the header a
+  caller actually sees.
+- `api/src/platform/config.ts` + `api/src/platform/publicCors.ts` — a separate, credential-less
+  (`credentials: false`) CORS policy for the public surface, distinct from the app-global
+  single-origin `credentials: true` policy in `api/src/app.ts` that backs the cookie-authenticated
+  SPA (which cannot serve a cross-origin bearer-token client — §2.1). Configurable via the new env
+  var **`PUBLIC_API_CORS_ORIGIN`**: unset/empty/`*` → any origin (the default — safe for local dev,
+  CI, and the TTFE drill's throwaway containers); a comma-separated list → only those origins,
+  reflected per-request. Documented in `api/src/platform/README.md` (per the dispatch brief — PF-802's
+  browser SDK demo is the first real consumer of a non-wildcard value) and in `config.ts`'s own
+  comments.
+- `api/src/app.ts` — two new lines mounting the platform layer: `app.use(['/api/v1', '/oauth'],
+  createPublicApiCors())` then `app.use('/api/v1', v1Router)`. Placed after the legacy per-source-IP/
+  per-identity rate limiters (`app.ts:326-327`, unchanged — those **still match `/api/v1`** by prefix;
+  exempting it is PF-004's job, explicitly out of scope here per the PRD's landmine table) and before
+  the app-global `cors()` call, so the public CORS headers apply. The app-global `cors()` itself is now
+  wrapped to skip `/api/v1` and `/oauth` entirely (see the PR #170 review-fixes note below) — see that
+  note for why the original "no header-collision to reason about" framing was wrong.
+  `/oauth` is listed now even though it has no router yet, so the ticket that adds it only has to
+  mount the router, not also touch this CORS wiring.
+
+**Deferred, on purpose, not an oversight:** OpenAPI registration for `GET /api/v1/health` (needs
+PF-202's v1 registry, which doesn't exist yet) and any scope declaration (health checks are
+conventionally unauthenticated; PF-107's scope registry doesn't exist yet either). Both are stated
+in `router.ts`'s own header comment and in `api/src/platform/openapi/README.md` so they aren't lost.
+
+**Regression test.** `api/src/platform/__tests__/v1-router.test.ts`, one case per AC clause from the
+Linear ticket's test-design comment (TRO-396):
+- AC-1: `GET /api/v1/health` → 200, `X-Request-Id` header present and matches a UUIDv4 pattern.
+- AC-2: same request with a cross-origin `Origin` header → 200, `Access-Control-Allow-Origin`
+  present, `Access-Control-Allow-Credentials` absent.
+- AC-3: an existing internal route (`GET /api/documents`, no session) still returns the
+  **pre-existing** internal auth-failure shape (`{ success: false, error: { code: 'UNAUTHORIZED',
+  message: 'No session found' } }`) — not the future v1 `ApiError` shape, and without an
+  `X-Request-Id` header — proving the new middleware is scoped to `/api/v1`/`/oauth` only.
+
+**Confirmed failing for the right reason before the fix.** Temporarily stubbed
+`api/src/platform/api/v1/router.ts` to an empty `Router()` (no `/health` route, no request-id
+middleware) — a real behavioral stub, not `git stash` (banned in this repo) or a deleted file, so
+there was never an import error to accidentally "prove red" with. Ran
+`pnpm --filter @ship/api exec vitest run src/platform/__tests__/v1-router.test.ts`:
+
+```
+ ❯ AC-1: GET /api/v1/health 200s with an X-Request-Id header (UUIDv4)
+   AssertionError: expected 404 to be 200
+ ❯ AC-2: a cross-origin fetch of /api/v1/health succeeds with credential-less CORS headers
+   AssertionError: expected 404 to be 200
+ ✓ AC-3: internal routes are untouched by the v1 request-id/CORS middleware
+```
+AC-1/AC-2 failed on the real assertion (route genuinely 404s pre-fix), not an import/module error.
+AC-3 passed both before and after by design — it is a forward-looking regression guard (the test
+design comment calls this "N/A in the traditional red-before sense"), not something this ticket's
+code is meant to make newly pass. Restored the real `router.ts` (diffed byte-identical against the
+pre-stub version) and re-ran: all 3 pass.
+
+**How to run it.** `source .factory-env` first.
+`pnpm --filter @ship/api exec vitest run src/platform/__tests__/v1-router.test.ts` for just this
+file. Full api suite: `pnpm --filter @ship/api test` — **80 files / 852 tests, 0 failures**, run
+alongside three sibling factory worktrees' concurrent gate runs against the same shared
+`ship-postgres-1` container (no load-flake symptoms observed, so no standalone re-run was needed
+per this repo's documented load-sensitive-test protocol). `pnpm type-check` (after `pnpm
+--filter @ship/shared build`) is clean.
+
+**Not verified.** No live/deployed check — this is local-only, `NODE_ENV` unset (development
+default). Browser-enforced CORS behavior (a real preflight `OPTIONS` round-trip from an actual
+browser) is not exercised by `supertest`, only the header contract a browser would honor; the test
+design comment calls this out explicitly as out of scope for this ticket's unit test.
+
+**Roll back.** Revert this commit. No schema change, no migration, no new dependency (the `cors`
+package was already a dependency, used identically by the existing app-global policy). Reverting
+removes the two `app.use(...)` lines and the `platform/` import lines from `api/src/app.ts` and
+deletes `api/src/platform/` entirely — `/api/v1/*` and `/oauth` stop being reachable, and the
+legacy internal `/api/*` surface is unaffected either way (it never depended on anything this ticket
+added).
+
+**PR #170 review fixes.** Nine findings triaged; one reproduced merge blocker plus eight smaller
+fixes:
+
+- **CodeRabbit #1 (merge blocker, reproduced).** The original framing above — "the v1 router's own
+  handler ends the response before anything mounted after it runs, so there is no header-collision to
+  reason about" — was wrong for any request that ISN'T `GET /api/v1/health`. `v1Router` has no 404
+  fallthrough yet (that's PF-002) and `/oauth` has no router mounted at all (that's E1), so an
+  unmatched `/api/v1/*` path or any `/oauth` request left the response open and fell through to the
+  app-global `cors()` below — which runs, and sets its headers, on every request that reaches it,
+  matched route or not. That overwrote `Access-Control-Allow-Origin` with the single-origin value and
+  added `Access-Control-Allow-Credentials: true` onto a response the public policy had already marked
+  credential-less. Fixed by wrapping the app-global `cors()` in a guard that skips it entirely for
+  `/api/v1` and `/oauth` (path-segment-boundary matched — exact prefix or prefix + `/`, same as
+  Express's own `app.use('/api/v1', ...)` mount above it — a bare `startsWith` would also wrongly
+  match `/api/v10` or `/oauth2`; caught by this same fix's own local `gate.sh` CodeRabbit pass and
+  covered by a fourth regression test below), rather than relying on the public router terminating
+  every request first. Confirmed red-before: the two path-fallthrough regression tests below fail
+  against the pre-fix code with `access-control-allow-credentials: 'true'` where `undefined` was
+  expected, then pass after the `app.ts` change.
+- **Finding #2.** `AC-2` in `v1-router.test.ts` now asserts `access-control-allow-origin` equals the
+  exact configured value (`'*'`, the default) instead of merely `toBeDefined()`, and sets/restores
+  `PUBLIC_API_CORS_ORIGIN` explicitly in the test instead of relying on ambient env.
+- **Finding #3.** `requestId.ts` — logs `req.baseUrl + req.path` instead of `req.originalUrl`, so a
+  caller's query string (which can carry sensitive values) no longer lands in the server log.
+- **Finding #4.** `publicCors.ts` — added `exposedHeaders: ['X-Request-Id']`. Without it the header was
+  set on the response but invisible to cross-origin browser JS: the CORS spec hides all response
+  headers from `fetch`/`XHR` except a small always-allowed set unless the server explicitly exposes
+  them.
+- **Findings #5/#7/#8/#9 (doc accuracy).** Same defect class as the CodeRabbit #1 blocker: present-tense
+  claims about behavior that doesn't exist yet. `ratelimit/README.md`'s "are exempted from `/api/v1` by
+  PF-004" → "will be exempted…" (today they still match by prefix). `platform/README.md`'s "is
+  bearer-token authenticated" → "will be bearer-token authenticated, once PF-107 lands (health is
+  unauthenticated by design)". This file's own "no header-collision to reason about" claim (above) is
+  the same error and is corrected the same way. The local `gate.sh` CodeRabbit pass on this fix caught
+  two more instances of the same class in files this pass had already touched: `platform/README.md`'s
+  Boundary Rules bullet said the `/api/v1` router "shares no internal auth/CSRF/rate-limit middleware"
+  — true for route-specific middleware, false for the legacy per-source-IP/per-identity limiters, which
+  still match `/api/v1` by prefix (now says so, mirroring `ratelimit/README.md`); this file's own "cost
+  this closes" paragraph had the identical overstatement ("shares none of that internal machinery"),
+  narrowed to "route-specific machinery" with the same caveat appended.
+- **Finding #6.** `platform/README.md`'s directory-tree fenced block now has a `text` language tag.
+
+**New regression tests** (`api/src/platform/__tests__/v1-router.test.ts`, 3 added to the existing
+suite of 3 — one existing test tightened): `GET /api/v1/nonexistent` and `GET /oauth/token`, both with
+an `Origin` header — assert `access-control-allow-credentials` is absent and `access-control-allow-
+origin` is `'*'`. Status is deliberately not asserted (404 is correct and expected pre-PF-002/pre-E1);
+what must never happen is the session CORS policy leaking onto a public-surface request. A fourth new
+test proves the path-boundary fix: `GET /api/v10/whatever` (a lookalike, NOT the public surface) still
+gets the app-global session CORS (`access-control-allow-credentials: 'true'`, single-origin). Full
+suite after all fixes: `pnpm --filter @ship/api exec vitest run
+src/platform/__tests__/v1-router.test.ts` — 6/6 pass.
+
+---
+
+## TRO-406 — PF-101: OAuth schema, migrations 042 + 043 (oauth_apps, oauth_authorization_codes, oauth_tokens, oauth_device_codes, api_tokens.scopes)
+
+**What changed.** Added `api/src/db/migrations/042_oauth_apps.sql` and
+`043_oauth_tokens_and_codes.sql` — the first PlugForge (PLUGFORGE.MD §2.2) migrations, current max
+was `041_add_blocks_relationship.sql`. 042 creates `oauth_apps` (registered OAuth clients: portal
+apps, Slack, FleetGraph, the grader app). 043 creates `oauth_authorization_codes`, `oauth_tokens`,
+`oauth_device_codes`, and `ALTER TABLE api_tokens ADD COLUMN scopes text[]` (NULL = legacy unscoped
+internal token, unchanged behavior, never valid at `/api/v1`; non-null = a scoped personal token,
+the second bearer-token class PF-107 will accept). DDL follows §2.2's table exactly, plus one
+binding PM-triage amendment recorded on the ticket (2026-08-10): `oauth_apps` also carries
+`client_type text NOT NULL CHECK (client_type IN ('confidential','public'))`, with
+`client_secret_hash` nullable for public (PKCE, secretless) clients — §2.2's table omitted this,
+but PF-104's confidential-client-auth AC is unimplementable without it. Unique indexes on
+`oauth_apps.client_id`, every OAuth `*_hash` column (`oauth_authorization_codes.code_hash`,
+`oauth_tokens.access_token_hash`, `oauth_tokens.refresh_token_hash` partial WHERE NOT NULL,
+`oauth_device_codes.device_code_hash`), and `oauth_device_codes.user_code`, per the ticket. No
+application code in this ticket — schema only; TTL enforcement (access 1h / refresh 30d / codes
+10min) is PF-104/105/106's job, this ticket only adds the `expires_at` columns those TTLs get
+written into.
+
+**Regression test.** `api/src/db/__tests__/migrations-042-043.test.ts` (6 cases) — runs the real
+migration runner (`runMigrations`, the function behind `pnpm db:migrate`) against throwaway
+databases built from real migration files copied off disk, never raw SQL, so DB-1's silent-skip
+failure mode is actually exercised: AC-1 (fresh DB) asserts `schema_migrations` records both
+versions, all four tables exist, and `api_tokens.scopes` exists as a nullable array column. AC-2
+(prod-shaped DB: migrations 001-041 pre-applied, one `api_tokens` row inserted before 042/043 run)
+asserts 042/043 still apply and get recorded on top of an already-migrated database, the
+pre-existing `api_tokens` row is untouched with `scopes IS NULL`, and every required unique index
+exists. Confirmed RED first: temporarily stubbed both migration files as `SELECT 1;` no-ops (backed
+up outside the repo, restored after — never `git stash`, per this repo's stash ban), re-ran the
+suite — the two `schema_migrations`-recording assertions passed (a no-op still applies and records
+cleanly, matching the test-design comment's prediction) while all four schema-shape assertions
+failed for real (empty table lists, missing column, missing indexes; one of the two AC-2 assertions
+errored outright with `column "scopes" does not exist` rather than the test-design comment's
+predicted false-positive "trivially passes", because the query names the column explicitly).
+Restored the real DDL and re-ran: 6/6 green. Full command and output in the ticket's report; ran
+under `DATABASE_URL` from this worktree's own `.factory-env` (`ship_wt_tro_406`), never the
+worktree's exclusive database directly — tests build their own throwaway databases.
+
+**How to run it.** `pnpm db:migrate` (or `npx tsx api/src/db/migrate.ts` with `DATABASE_URL` set).
+Verify with `\d oauth_apps`, `\d oauth_authorization_codes`, `\d oauth_tokens`,
+`\d oauth_device_codes`, `\d api_tokens` — or `SELECT version FROM schema_migrations WHERE version
+IN ('042_oauth_apps','043_oauth_tokens_and_codes')`, per DB-1: never trust exit 0 alone. Test:
+`cd api && npx vitest run src/db/__tests__/migrations-042-043.test.ts`.
+
+**Rollback.** Drop the four new tables and the added column, then delete the two migration rows:
+```sql
+DROP TABLE IF EXISTS oauth_authorization_codes, oauth_tokens, oauth_device_codes, oauth_apps CASCADE;
+ALTER TABLE api_tokens DROP COLUMN IF EXISTS scopes;
+DELETE FROM schema_migrations WHERE version IN ('042_oauth_apps', '043_oauth_tokens_and_codes');
+```
+Then remove `api/src/db/migrations/042_oauth_apps.sql`, `043_oauth_tokens_and_codes.sql`, and
+`api/src/db/__tests__/migrations-042-043.test.ts` from the branch. No application code anywhere
+else references these tables/column yet (PF-102 onward), so nothing else needs to change.
+
+---
+
+## TRO-411 — PF-900: Terraform extension — every new Week-6 env var/service in `terraform/render/`
+
+**PF-900 · Epic E9 · non-code / artifact-based ticket, "Start Day 1 — defense material" per
+PLUGFORGE.MD §4/§2.10.**
+
+**What was missing.** `terraform/render/` (TF-10/TRO-299, extended by TRO-316/FG-11 for the agent
+service) had zero declarations for any of Week 6's new platform env vars — `SECRET_ENCRYPTION_KEY`,
+the OAuth TTL config, the `/api/v1` rate-limit config, `AGENT_PLATFORM_MODE`, and the FleetGraph and
+grader OAuth app secrets. Left undeclared, any future ticket that needs one of these would either
+set it by hand in the Render dashboard (this ticket's own AC forbids exactly that — "zero
+console-only config") or invent its own literal name, risking the drift the PM triage comment on
+this ticket explicitly warns about across PF-900/701/907.
+
+**What changed.**
+- `terraform/render/variables.tf` — 8 new variables in a new "Platform env vars (PF-900 / TRO-411)"
+  section: `secret_encryption_key`, `fleetgraph_oauth_client_secret`, `grader_oauth_client_secret`
+  (all sensitive, no default — required); `oauth_access_token_ttl_seconds` (default `3600`, 1h),
+  `oauth_refresh_token_ttl_seconds` (default `2592000`, 30d), `rate_limit_app_rpm` (default `120`),
+  `rate_limit_token_rpm` (default `60`), `agent_platform_mode` (default `"internal"`, validated to
+  `internal`/`sdk` only). Defaults match PLUGFORGE.MD §2.2/§2.7 exactly. The 10-minute OAuth
+  auth-code TTL is deliberately NOT exposed as a variable — §2.2 pins it as a fixed security
+  invariant, not an operational knob.
+- `terraform/render/web_service.tf` — wires `SECRET_ENCRYPTION_KEY`, `FLEETGRAPH_OAUTH_CLIENT_SECRET`,
+  `GRADER_OAUTH_CLIENT_SECRET`, `OAUTH_ACCESS_TOKEN_TTL_SECONDS`, `OAUTH_REFRESH_TOKEN_TTL_SECONDS`,
+  `RATE_LIMIT_APP_RPM`, `RATE_LIMIT_TOKEN_RPM` into `render_web_service.ship`'s `env_vars`.
+- `terraform/render/agent_service.tf` — wires `AGENT_PLATFORM_MODE` and a second copy of
+  `FLEETGRAPH_OAUTH_CLIENT_SECRET` into `render_web_service.agent`'s `env_vars` (the agent needs its
+  own copy to authenticate via Client Credentials once PF-702 lands — same shared-secret shape as
+  the existing `AGENT_INTERNAL_SECRET` pair; the two copies must match exactly).
+- `terraform/render/terraform.tfvars.example` — placeholders + generation commands for the three new
+  secrets, commented overrides for the five non-secret vars.
+- `terraform/render/README.md` — new "Week 6 platform env vars" section pointing at the two items
+  below.
+- `terraform/render/plan/tro-411-pf900-w6-env-vars.md` (new) — full structural verification
+  (`fmt`/`init`/`validate`, all clean, zero new warnings vs. the two pre-existing ones) and an
+  honest record of why a **live, credentialed** `terraform plan` capture could not run in this
+  worktree (see below).
+- `scripts/factory/verify-terraform-artifact.sh` (new) — the optional grep-based mechanical assist
+  the ship-test-designer comment on this ticket proposed: checks a **committed, already-captured**
+  plan text for every new env var inside a real `render_*` env_vars block, both service + Postgres
+  resource addresses, and the provider's exact-pin. Not a gate check (nothing under
+  `api/src/**`/`web/src/**` can run `terraform`). Proven red (against this directory's own
+  pre-existing `tro-316-agent-plan-annotated.md`, which predates these env vars — correctly fails
+  only the 8 new-var checks, correctly passes the pre-existing resource/pin checks) then green
+  (against a clearly-labeled, non-committed synthetic fixture built only to exercise the checker's
+  own detection logic — never a claim about live infrastructure).
+
+**`terraform plan` — NOT captured live, and said so plainly rather than faked.** `terraform fmt
+-check -recursive .` clean; `terraform init` reused the committed lock file, no version drift;
+`terraform validate`: Success, identical two pre-existing deprecation warnings, zero new ones. A
+live `terraform plan` needs `RENDER_API_KEY`, which lives in the main checkout's gitignored `.env`
+(`/Users/troy/repos/GAUNTLET/Ship/.env`) — not in this worktree (`Ship-wt-tro_411`), and this
+ticket's credential rules forbid fabricating, copying in, or working around that (including the
+"non-empty placeholder key" trick a prior session used under different rules — not repeated here).
+Ran `terraform plan -input=false` anyway with no var-file, purely to observe: it errors on every
+required-no-default variable before ever reaching the `RENDER_API_KEY` check, which at least proves
+all three new secrets are wired as required inputs the same way every pre-existing one is — real,
+observed evidence, not a fabricated credential. The actual annotated live-plan artifact is now an
+**orchestrator follow-up** — exact remaining steps (credential, tfvars, redaction, annotation) are
+in `plan/tro-411-pf900-w6-env-vars.md`'s "What a human/orchestrator needs to finish this."
+
+**Provider pin re-verified, unchanged.** `render-oss/render` `1.9.1` is still the latest stable
+release on the public registry as of 2026-08-10 (checked live against
+`registry.terraform.io/v1/providers/render-oss/render/versions`) — no bump needed.
+
+**Deliberately NOT done (out of this ticket's scope, per its own AC and the "never touch files
+outside the finding's scope" rule):** no application code was touched — nothing in `api/src/` or
+`agent/src/` reads any of these env vars yet; that is PF-101/PF-104/PF-105/PF-302/PF-500/PF-701/
+PF-702/PF-907's job. No `terraform apply`. No live-plan capture (see above).
+
+**How to run it.** `cd terraform/render && terraform init && terraform validate && terraform fmt
+-check -recursive .` — all runnable with no credentials. `scripts/factory/verify-terraform-artifact.sh
+<plan-file>` against any committed plan capture. A live plan needs
+`cp terraform.tfvars.example terraform.tfvars` (fill in real values) and
+`set -a; source ../../.env; set +a` for `RENDER_API_KEY`, run from wherever that `.env` actually
+exists.
+
+**How to roll it back.** No resource here has ever been applied — this PR is plan-only, so there is
+nothing live to tear down. `git revert` this commit (or the merge commit once merged) removes the 8
+new variables, the two services' new `env_vars` entries, the tfvars-example placeholders, the new
+plan doc, and the new verify script; nothing else in this repo references any of these env var
+names yet, so the revert is a clean, self-contained no-op against live infrastructure.
+
+---
+
+## TRO-411 follow-up — live `terraform plan` captured, under explicit scoped orchestrator authorization
+
+**Supersedes only the "NOT captured live" claim in the entry above** — everything else in that
+entry (the 8 new variables, their wiring, the structural verification, the naming rationale) is
+unchanged. This entry exists rather than editing the one above, per this file's own append-only
+convention.
+
+**What changed.** The orchestrator authorized exactly three things, no more: (1) read
+`RENDER_API_KEY` from the main checkout's gitignored `.env`, never copy the file, never echo the
+value; (2) generate throwaway placeholder values (`openssl rand -hex 32`) for the required-no-default
+variables into a gitignored `terraform.tfvars` in this worktree; (3) run `terraform plan` only —
+never apply, never destroy. All three limits were honored exactly:
+- `RENDER_API_KEY` was extracted as a single grepped line from
+  `/Users/troy/repos/GAUNTLET/Ship/.env` (never the whole file sourced), exported for one command,
+  then `unset`; the command that loaded it printed only its length and a 4-char prefix as its own
+  proof, never the value.
+- `terraform/render/terraform.tfvars` (verified gitignored via `git check-ignore -v` **before**
+  writing it — `terraform/.gitignore:5:*.tfvars`) holds 8 throwaway `openssl rand -hex 32` values:
+  the 5 pre-existing required secrets this ticket didn't add, plus this ticket's own 3. No real
+  value was read for any of the 5 — the orchestrator's credential authorization covered
+  `RENDER_API_KEY` only, so nothing else was pulled from the main checkout's `.env` even though it
+  holds real-looking values for some of them.
+- `terraform plan -var-file=terraform.tfvars -no-color -input=false` — exit `0`, "3 to add, 0 to
+  change, 0 to destroy," zero new warnings.
+
+**Redaction check** (same method `plan-annotated.md`/`tro-316-agent-plan-annotated.md` already
+established): grepped both the raw capture and the final committed markdown for `postgresql://`,
+`rnd_`, `bearer`/`authorization` (case-insensitive), and all 8 throwaway secrets as literal
+64-character hex strings. Zero matches on every check in both files; every sensitive attribute
+renders as `(sensitive value)` via Terraform's own schema, confirmed by counting that marker (25 in
+the raw capture, 29 in the final doc once the earlier synthetic-fixture example is included).
+
+`terraform/render/plan/tro-411-pf900-w6-env-vars.md` rewritten in place (same file, this ticket's
+own artifact) with the real annotated capture: full output, a per-resource table naming exactly
+which of the 8 PF-900 env vars land on which resource, the local-state create-everything limitation
+stated up front (this worktree's Terraform state was empty, so `ship`/`ship-db` plan as `create`
+alongside the genuinely new `agent` resource — a pre-existing, already-documented condition per
+`README.md`'s adoption memo, not something this run caused), and an established-vs-not-established
+section. `scripts/factory/verify-terraform-artifact.sh` run a third time, now against this real
+capture: all 12 checks `PASS`, exit `0`.
+
+**Still not established, stated plainly.** No `terraform apply` was run (plan-only, per the
+orchestrator's limit) — so whether these values would actually apply successfully against live
+Render infrastructure remains unverified. No real (non-throwaway) secret values were provisioned or
+even viewed for any of the 8 sensitive variables. The plan still shows `render_postgres.ship`/
+`render_web_service.ship` as `create` rather than `0 changes`, because this worktree's local
+Terraform state has no record of the already-imported live resources (a different checkout's state
+file, never committed) — not a regression, and not this ticket's gap to close.
+
+**How to run it.** `cd terraform/render`, then read `RENDER_API_KEY` from wherever the real `.env`
+lives and export it for one command only (never write it to a file in the worktree); write a
+gitignored `terraform.tfvars` (verify with `git check-ignore -v terraform.tfvars` first) with real
+or throwaway values per your purpose; `terraform plan -var-file=terraform.tfvars -no-color
+-input=false`. Never pipe the raw output anywhere without running the redaction check first.
+
+**How to roll it back.** Still plan-only — nothing live was ever touched, so there is nothing to
+tear down. `git revert` this commit restores the earlier "credential-blocked" version of
+`plan/tro-411-pf900-w6-env-vars.md`. The local `terraform.tfvars` this session wrote is gitignored
+and was never committed in the first place — delete it directly (`rm terraform/render/terraform.tfvars`)
+if you want the worktree clean; it contains no real secret material regardless.
+
+---
+
 ## TRO-381 / TRO-351 — FLEETGRAPH.MD accuracy and trim: fixed a self-contradiction, six stale `graph.ts` citations, a wrong route-key count, a missing Trigger Model note, restructured Cost Analysis, and cut ~140 lines of process narration
 
 **The cost this closes.** Two named inaccuracies, both derived from reading `agent/src/graph.ts`
