@@ -101,6 +101,60 @@ describe('platform/webhooks/signer', () => {
     expect(verify(header, RAW_BODY, SECRET, DEFAULT_TOLERANCE_SECONDS, clock)).toBe(false)
   })
 
+  // Hardening found in CodeRabbit triage (gate.sh G9, TRO-433): `Buffer.from(str, 'hex')` does not
+  // throw on invalid hex — it silently stops decoding at the first invalid character rather than
+  // rejecting the whole string. A `v1` consisting of a genuinely valid 64-char digest with extra
+  // garbage appended still decodes to exactly 32 bytes (Node truncates at the first bad byte,
+  // which lands right after the valid digest here) — the same length as a real digest — so the
+  // OLD length-only check could not tell it apart from a real, unmodified signature. This is the
+  // precise case that discriminates "reject by length" from "reject by format": it is red without
+  // the format guard and green with it, whereas short/all-invalid v1 values happen to already fail
+  // the length check either way and don't distinguish the two.
+  it('rejects a v1 with a genuinely valid digest plus trailing garbage, without throwing', () => {
+    const clock = clockAt(T)
+    const validHeader = sign(RAW_BODY, SECRET, clock)
+    const headerParts = validHeader.split(',')
+    const tPart = headerParts[0]
+    const v1Part = headerParts[1]
+    if (tPart === undefined || v1Part === undefined) {
+      throw new Error(`test setup produced an unparseable header: "${validHeader}"`)
+    }
+    const realV1 = v1Part.slice('v1='.length)
+
+    const trailingGarbageHeader = `${tPart},v1=${realV1}zzzz`
+
+    expect(() =>
+      verify(trailingGarbageHeader, RAW_BODY, SECRET, DEFAULT_TOLERANCE_SECONDS, clock),
+    ).not.toThrow()
+    expect(verify(trailingGarbageHeader, RAW_BODY, SECRET, DEFAULT_TOLERANCE_SECONDS, clock)).toBe(
+      false,
+    )
+
+    // Sanity companions: length-mismatched malformed values were already rejected before this
+    // guard existed, and stay rejected — this guard adds coverage, it doesn't replace the old path.
+    const tooShort = `${tPart},v1=${'a'.repeat(10)}`
+    const allInvalid = `${tPart},v1=${'z'.repeat(64)}`
+    for (const malformed of [tooShort, allInvalid]) {
+      expect(verify(malformed, RAW_BODY, SECRET, DEFAULT_TOLERANCE_SECONDS, clock)).toBe(false)
+    }
+  })
+
+  // Hardening found in CodeRabbit triage (gate.sh G9, TRO-433): `Math.abs(now - t) >
+  // toleranceSeconds` fails OPEN for non-finite operands (`NaN > x` is always `false`), so a
+  // misconfigured tolerance or a broken clock must be rejected explicitly rather than silently
+  // disabling the replay-protection window.
+  it('rejects non-finite or negative toleranceSeconds, and a non-finite clock, instead of failing open', () => {
+    const clock = clockAt(T)
+    const header = sign(RAW_BODY, SECRET, clock)
+
+    expect(verify(header, RAW_BODY, SECRET, Number.NaN, clock)).toBe(false)
+    expect(verify(header, RAW_BODY, SECRET, Number.POSITIVE_INFINITY, clock)).toBe(false)
+    expect(verify(header, RAW_BODY, SECRET, -1, clock)).toBe(false)
+    expect(
+      verify(header, RAW_BODY, SECRET, DEFAULT_TOLERANCE_SECONDS, () => Number.NaN),
+    ).toBe(false)
+  })
+
   // AC-5: clock-skew tolerance boundary (inclusive at exactly 300s, false at 301s)
   describe('tolerance boundary', () => {
     it('accepts a signature exactly at the 300s boundary (inclusive)', () => {

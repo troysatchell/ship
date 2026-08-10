@@ -42,12 +42,24 @@ function computeDigest(t: number, rawBody: string, secret: string): string {
   return createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex')
 }
 
+/** SHA-256 hex digests are always exactly 64 lowercase-or-uppercase hex characters. */
+const HEX_SHA256_PATTERN = /^[0-9a-f]{64}$/i
+
 /**
- * Constant-time comparison of two hex digests. Mismatched lengths are rejected before calling
- * `timingSafeEqual` — that function throws on unequal-length buffers rather than returning false,
- * and a length mismatch here already means "not equal" with nothing secret left to compare.
+ * Constant-time comparison of two SHA-256 hex digests.
+ *
+ * Both inputs are validated as exactly 64 hex characters before any comparison. This matters
+ * beyond readability: `Buffer.from(str, 'hex')` does not throw on invalid hex — it silently stops
+ * decoding at the first invalid character, so a malformed or short `v1` (attacker-controlled, from
+ * the header being verified) could otherwise produce a shorter buffer than intended. The existing
+ * length check below already rejects any resulting mismatch, but validating the format up front is
+ * the honest fix rather than relying on that as an accidental side effect. A length mismatch (or,
+ * now, a format mismatch) means "not equal" with nothing secret left to compare, so both paths
+ * return `false` before calling `timingSafeEqual`, which throws on unequal-length buffers rather
+ * than returning `false`.
  */
 function constantTimeHexEquals(a: string, b: string): boolean {
+  if (!HEX_SHA256_PATTERN.test(a) || !HEX_SHA256_PATTERN.test(b)) return false
   const bufA = Buffer.from(a, 'hex')
   const bufB = Buffer.from(b, 'hex')
   if (bufA.length !== bufB.length || bufA.length === 0) return false
@@ -101,9 +113,14 @@ export function sign(rawBody: string, secret: string, clock: Clock = systemClock
  * Verifies a `Ship-Signature` header value against `rawBody` and `secret`.
  *
  * Returns `false` — never throws — for: a structurally malformed header (missing `v1`, missing or
- * non-numeric `t`), a timestamp outside `toleranceSeconds` of `clock()` (inclusive at the
- * boundary), or a signature mismatch. The digest comparison always goes through
- * `crypto.timingSafeEqual`.
+ * non-numeric `t`), a non-finite or negative `toleranceSeconds`, a non-finite `clock()` result, a
+ * timestamp outside `toleranceSeconds` of `clock()` (inclusive at the boundary), or a signature
+ * mismatch. The digest comparison always goes through `crypto.timingSafeEqual`.
+ *
+ * The `toleranceSeconds`/`clock()` guards exist because `Math.abs(now - t) > toleranceSeconds` is
+ * a "fails open" comparison for non-finite operands: `NaN > anything` is always `false`, so a
+ * caller-misconfigured tolerance (`NaN`, `Infinity`, a negative value) or a broken clock could
+ * otherwise disable the replay-protection window entirely rather than rejecting the request.
  */
 export function verify(
   header: string,
@@ -115,7 +132,10 @@ export function verify(
   const parsed = parseSignatureHeader(header)
   if (!parsed) return false
 
+  if (!Number.isFinite(toleranceSeconds) || toleranceSeconds < 0) return false
+
   const now = clock()
+  if (!Number.isFinite(now)) return false
   if (Math.abs(now - parsed.t) > toleranceSeconds) return false
 
   const expected = computeDigest(parsed.t, rawBody, secret)

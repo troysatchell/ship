@@ -57,12 +57,13 @@ merge order with PF-001's scaffold.
 source .factory-env   # or api/.env.local outside a factory worktree
 pnpm --filter @ship/api exec vitest run src/platform/webhooks/__tests__/signer.test.ts
 ```
-16 cases: the 6 acceptance criteria from the Linear test-design comment (positive, tampered body,
+18 cases: the 6 acceptance criteria from the Linear test-design comment (positive, tampered body,
 expired timestamp, missing `v1`, tolerance boundary — both edges — and a signing-speed
 micro-benchmark), a constant-time-compare API-usage check (`crypto.timingSafeEqual` is actually
 invoked, plus a functional check that both a one-byte-different and a completely different
-signature are rejected), and the shared-fixture round-trip (every vector in
-`webhook-signature-vectors.json` driven through `sign`/`verify`).
+signature are rejected), the shared-fixture round-trip (every vector in
+`webhook-signature-vectors.json` driven through `sign`/`verify`), and 2 hardening regressions added
+during CodeRabbit triage (trailing-garbage `v1`; non-finite/negative `toleranceSeconds` or clock).
 
 **Red before green (observed, not derived).** Ran the full suite against a deliberate stub
 (`sign` returns a hardcoded `t=0,v1=<64 zero hex chars>` header; `verify` always returns `false`)
@@ -88,8 +89,35 @@ proof for this shape) — the perf test failed: `AssertionError: expected 8.0648
 Removed the busy-wait; re-ran; passed again. Confirms the assertion actually measures execution
 time rather than always passing.
 
-**Gate.** `scripts/factory/gate.sh` — pass. See this ticket's PR/report for the verbatim verdict
-JSON.
+**CodeRabbit triage — two real hardening fixes, one misfire.** `gate.sh`'s CodeRabbit pass (G9)
+returned 3 findings against this branch:
+1. *(minor, CHANGES.md rollback wording)* — does not apply to the actual diff; its
+   `codegenInstructions` referenced "the release-note entry itself," which has no counterpart in
+   this ticket's rollback section (which already names all three files this ticket creates).
+   Treated as a misfire and left as-is.
+2. *(minor, `signer.ts` `constantTimeHexEquals`)* — real. `Buffer.from(str, 'hex')` does not throw
+   on invalid hex; it silently stops decoding at the first bad character. A `v1` consisting of a
+   genuinely valid 64-char digest with garbage appended after it still decodes to exactly 32 bytes
+   (Node truncates right after the valid part), the same length as a real digest — so the old
+   length-only check could not distinguish it from an unmodified signature. Fixed by validating
+   both operands as exactly 64 hex characters (`/^[0-9a-f]{64}$/i`) before any buffer comparison.
+3. *(major, `verify()` tolerance/clock handling)* — real, and the more serious of the two.
+   `Math.abs(now - t) > toleranceSeconds` fails **open** for non-finite operands: `NaN > anything`
+   is always `false`. A caller-misconfigured `toleranceSeconds` (`NaN`, `Infinity`, a negative
+   value) or a broken `clock()` could silently disable the replay-protection window rather than
+   being rejected. Fixed by rejecting non-finite/negative `toleranceSeconds` and a non-finite
+   `clock()` result before the comparison.
+
+Both real findings got their own regression tests (2 more, 18 total) and were proven red before the
+fix: reverted both guards, re-ran — the trailing-garbage case failed with
+`AssertionError: expected true to be false` (the real vulnerability: a doctored `v1` verified as
+valid), and the `NaN`-tolerance case failed the same way (a `NaN` tolerance made `verify()` accept
+an arbitrarily old signature). Restored both guards; 18/18 green again.
+
+**Gate.** `scripts/factory/gate.sh` — pass (both attempts documented in the ticket report: attempt
+1 failed typecheck on a `noUncheckedIndexedAccess` violation in the test file, fixed by destructuring
+`header.split(',')` explicitly instead of via array pattern; attempt 2 passed; the CodeRabbit
+hardening above was applied and re-verified after that).
 
 **Rollback.** `git rm api/src/platform/webhooks/signer.ts
 api/src/platform/webhooks/__tests__/signer.test.ts shared/fixtures/webhook-signature-vectors.json`,
