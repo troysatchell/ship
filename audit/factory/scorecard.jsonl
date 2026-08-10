@@ -80,3 +80,8 @@
 {"ticket":"TRO-371","branch":"docs/w5-changes-rollback-sections","attempt":2,"verdict":"fail","failedGates":["stash-guard"],"note":"FALSE POSITIVE: sibling worktree's write; G7c fixed on main","ts":"2026-08-09T00:48:32Z"}
 {"ticket":"TRO-373","branch":"fix/tro-373-committed-cost-ledger-snapshot","attempt":1,"verdict":"fail","failedGates":["tests:api"],"note":"auth.test.ts extend-session; branch touches no api/ files; passed standalone; NEW flake identity","ts":"2026-08-09T14:14:22Z"}
 {"ticket":"TRO-373","branch":"fix/tro-373-committed-cost-ledger-snapshot","attempt":2,"verdict":"pass","failedGates":[],"ts":"2026-08-09T14:16:54Z"}
+{"ticket":"TRO-379","branch":"fix/tro-379-deadline-aware-model-abort","attempt":1,"verdict":"pass","failedGates":[],"ts":"2026-08-09T15:51:25Z"}
+{"ticket":"TRO-383","branch":"fix/tro-383-ci-failure-rollback-trigger","attempt":1,"verdict":"pass","failedGates":[],"ts":"2026-08-09T15:51:25Z"}
+{"ticket":"TRO-384","branch":"fix/tro-384-inbox-links-404","attempt":1,"verdict":"pass","failedGates":[],"ts":"2026-08-09T15:51:25Z"}
+{"ticket":"TRO-381","branch":"docs/w5-fleetgraph-accuracy-and-trim","attempt":1,"verdict":"fail","failedGates":["regression-test"],"note":"docs-only branch; no behaviour to regression-test; documented exception","ts":"2026-08-09T15:51:25Z"}
+{"ticket":"TRO-384","branch":"fix/tro-384-inbox-links-404","attempt":2,"verdict":"pass","failedGates":[],"note":"CI attempt 1 failed on programWeeksNav flake (3rd merge blocked by it today); rerun 6/6 green, no code change","ts":"2026-08-09T16:32:56Z"}
