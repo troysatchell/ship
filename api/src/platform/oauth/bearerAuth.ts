@@ -135,7 +135,7 @@ export async function bearerAuth(req: Request, res: Response, next: NextFunction
       if (oauthRow.revoked_at) {
         reject(
           req, res, 'invalid_token', INVALID_TOKEN_MESSAGE,
-          `revoked OAuth access token rejected (app_id=${oauthRow.app_id})`,
+          'bearerAuth: rejected revoked oauth token',
         );
         return;
       }
@@ -167,7 +167,7 @@ export async function bearerAuth(req: Request, res: Response, next: NextFunction
       if (personalRow.revoked_at) {
         reject(
           req, res, 'invalid_token', INVALID_TOKEN_MESSAGE,
-          `revoked scoped personal token rejected (user_id=${personalRow.user_id})`,
+          'bearerAuth: rejected revoked personal token',
         );
         return;
       }
@@ -175,7 +175,7 @@ export async function bearerAuth(req: Request, res: Response, next: NextFunction
         // The landmine: a legacy unscoped internal token. Never valid here.
         reject(
           req, res, 'invalid_token', INVALID_TOKEN_MESSAGE,
-          `legacy unscoped personal token (scopes IS NULL) rejected at /api/v1 (user_id=${personalRow.user_id})`,
+          'bearerAuth: rejected legacy unscoped personal token (scopes IS NULL) at /api/v1',
         );
         return;
       }

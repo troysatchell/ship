@@ -107,6 +107,14 @@ resource route exists yet (PF-200 onward adds those), and `v1Router` currently o
 attach only at the public layer"). The `public_api_audit` half of the revocation-logging PM decision
 is open until PF-501 lands (see above).
 
+**Not verified.** No live HTTP round-trip beyond `supertest` against the scratch Express app built
+in `bearerAuth.test.ts` — no real server process, no real network hop. `bearerAuth`/`requireScope`
+are not yet wired to any actual `/api/v1` route (see above), so end-to-end behavior in front of a
+real resource endpoint is unproven, not just untested-in-isolation. Server-side revocation
+distinguishing (the `console.warn` lines) is asserted to fire per rejection class, but attribution
+into a `public_api_audit` row is not checkable at all — that table (migration 046, PF-501) does not
+exist yet on this branch.
+
 **Rollback.** Delete `api/src/platform/scopes/{registry.ts,requireScope.ts,__tests__/registry.test.ts}`
 and `api/src/platform/oauth/{principal.ts,bearerAuth.ts,apiError.ts,__tests__/bearerAuth.test.ts}`.
 In `api/src/routes/api-tokens.ts`, remove the `ScopeRegistry` import, the `scopeSchema` +
