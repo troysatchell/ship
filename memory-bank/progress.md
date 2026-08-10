@@ -51,8 +51,184 @@
 | **Agent pill UI + standup dev env** | ✅ built (2026-08-05 PM) — floating FleetGraph pill on every screen (branch `feat/agent-panel`, unpushed), Properties-accordion chat retired, Inbox untouched; `dev.sh` agent-port bug found+fixed; fresh `ship_standup` DB + full local agent stack verified end-to-end (inbox + cited chat). Sign-in `alice.chen@ship.local`. |
 | **Factory wave — PR-E, PR-F, TRO-343/344/342** | ✅ **PR-E, PR-F, TRO-343 merged (2026-08-05 evening)** — TRO-343/TRO-344 waiting on CI, TRO-342 waiting on CI, both mergeable. PR-E/PR-F both had real merge conflicts against `main` from 3 concurrent branches, resolved via `merge-changes.mjs`. 3 new follow-up tickets filed (TRO-348/349/350).
 | **Full-backlog wave — TRO-309/348/349/310 merged, TRO-350 held** | ✅ **done (2026-08-06 early AM)** — all 5 remaining backlog tickets built in parallel worktrees; 4 merged (PRs #139–#142), 1 (TRO-350) explicitly held for human sign-off. Real open-redirect bypass fixed (TRO-309), FG-8's accept flow wired to production (TRO-348), FLEETGRAPH.MD diagram fixed (TRO-349), 86 e2e sleep sites hardened with 2 real test-bugs found (TRO-310). 5 new follow-ups filed (TRO-351–355). Bookkeeping PR #143 still open. |
+| **Week 6 PlugForge — requirements + PRD readiness** | ✅ **done (2026-08-10)** — inventory-W6.md (79 reqs, skim gate cleared), PLUGFORGE.MD survey-corrected (5 stale claims, 3 spec gaps closed). Build not started; ticket decomposition next. |
+| **Week 6 PlugForge — Linear project + full ticket decomposition** | ✅ **done (2026-08-10 evening)** — project "PlugForge — Week 6 Platform & Public API" created (Urgent, target 2026-08-16); PM scope gate passed (6 live spot-checks); 10 grouping epics TRO-386–395 + 60 tickets TRO-396–455 (5 parallel sonnet agents, all PF blocks verbatim); ~25 cross-epic blocks relations wired; requirements config re-scoped to W6. 🔔 PF-100 (TRO-403) delivered, **awaiting Troy's ack** — blocks all E1 code. Build not started. |
+| **Early Submission push (TRO-356–360 + live-found TRO-362/363)** | ✅ **done (2026-08-06 evening)** — all six gap tickets Done and deployed; TRO-359/360 recovered through GitHub Actions major outage via break-glass merges (PRs #148/#149, protection restored+verified); js-yaml advisory pinned (PR #148); Action Items modal re-ambush fixed (TRO-362/PR #151) and no-document chat state made explicit (TRO-363/PR #152), both browser-verified on the live graded deploy at `af573d3`. GitLab `main` pipeline post-TRO-359 not yet observed. |
 
 ## Log
+
+### 2026-08-10 (evening) — W6 factory startup: Linear project created, PLUGFORGE.MD fully ticketed, PF-100 checkpoint delivered
+
+**Project.** "PlugForge — Week 6 Platform & Public API" created in Linear (Urgent, started
+2026-08-10, target 2026-08-16 = the Sunday deadline) — deliberately separate from W4/W5 projects so
+factory selection and requirements sweeps can't cross weeks. `audit/requirements.config.yaml`
+`tickets.project` re-scoped to it (W4/W5 sweep caveat comments updated to three-way).
+
+**Scope gate (PM).** PASS on all five checks. Six live spot-checks of PRD claims, all confirmed:
+max migration 041; both legacy limiters on `/api/` prefix at `app.ts:326-327`; single-origin
+credentials CORS at `app.ts:328-331`; prod limits 600/6,000 at `rate-limit.ts:130-132`;
+ShipClient/GateShipClient at `shipClient.ts:337/:569`; `api_tokens` has no scopes column. Accepted
+deviation on record: the PRD carries the *how* by §0 design, architect narrowed to file-level detail.
+
+**Decomposition (architect).** 10 grouping epics TRO-386–395 (explicitly NOT PR bundles — W6
+mandates one ticket → one branch → one PR) + 60 tickets TRO-396–455, created by 5 parallel sonnet
+agents from a per-ticket manifest (tier, priority, deps, file-level notes; scratchpad
+`plugforge-ticket-manifest.md`). All 60 PF blocks embedded verbatim (agents verified). ~25
+cross-epic `blocks` relations wired by orchestrator after creation; intra-epic edges wired at
+creation. Count verified via list_issues: exactly 70, no dupes. One architect addition (detail, not
+scope): `client_credentials` grant homed in PF-104/TRO-416 — §1.4.4 requires it, no PF block owned
+it, PF-701 consumes it. PF-901/TRO-415 flagged: human go-ahead required before `terraform destroy`
+on graded env (TRO-361 context).
+
+**Checkpoint.** PF-100/TRO-403 delivered same session: study brief written to
+`docs/submission/PF-100-OAUTH-STUDY-BRIEF.md` (uncommitted), notify.mjs fired (stdout —
+SLACK_WEBHOOK_URL unset), Linear comment with ack instructions. **E1 halted until Troy acks.**
+
+**Test design (same evening, all 60 tickets).** 5 parallel ship-test-designer agents attached
+per-AC test designs (valid-red instructions, artifact DoDs for non-code tickets) to every ticket;
+conventions pinned centrally (single injected-clock pattern; ApiError assertion contract; the
+new-package trap — `sdk/`/`integrations/*` are outside gate-executed suites, so PF-400/600 carry
+explicit wiring ACs; `agent/` verified already gate-run via FG-12). PM triage posted on 17 tickets.
+Decisions of record: `/oauth/*` speaks RFC 6749 `{error,error_description}` (ApiError is /api/v1
+only); migration 042 gains `oauth_apps.client_type` (confidential/public — DDL gap, PF-104
+unimplementable without it); migration 045 gains `webhook_deliveries.replay_of_delivery_id`;
+refresh-reuse error stays `invalid_grant` + distinct description; device-code TTL 600 s env-config;
+revoked→`invalid_token`; PF-205's 6 behavioral tests folded into its DoD; PF-201 assignee in scope
+(§2.4 governs); PF-303 owns `shared/fixtures/webhook-signature-vectors.json`, PF-403 consumes;
+PF-802's Playwright proof = dedicated CI job (gate deviation approved); canonical env-var names on
+TRO-411 (`FLEETGRAPH_OAUTH_CLIENT_SECRET`, `GRADER_OAUTH_CLIENT_SECRET`). **Biggest catch
+(designer-verified, not derived): the graded GitLab runner cannot start privileged DinD
+(`.gitlab-ci.yml` comments, 2026-08-01) — PF-603's drill is now environment-dual: testcontainers
+locally/GitHub, native GitLab `services:` + direct boot in the graded pipeline, <60 s clock covers
+drill stages only.** 3 missing dependency edges wired post-design (PF-104→PF-701, PF-501→PF-703,
+PF-302/305/306→PF-401).
+
+**Not done / blockers.** Build phase not started. Factory preflight blocked by dirty main (Troy's
+uncommitted W6 kickoff files + session artifacts) — needs his word on the kickoff commit. 🔔 PF-100
+ack still pending — blocks E1. First dispatchable wave (no E1 dep): PF-001, PF-900, PF-902, PF-903.
+
+### 2026-08-10 — Week 6 (PlugForge) kickoff: requirements extracted + verified, PLUGFORGE.MD corrected against a file:line repo survey
+
+**Extraction.** `GFA_Week_6_PlugForge.pdf` (18 pp) → `audit/requirements/inventory-W6.md`, 79
+requirements (W6-R1–R79), every quote machine-verified as a substring of the mechanical text cache
+(`source-W6.md`, 0 misses). Config registered (sha256) — **skim gate cleared by Troy same day.**
+Brief self-contradicts on the final deadline (Sunday 11:59 AM p.1 vs PM p.12); planning for AM.
+
+**Survey (two parallel agents, all claims by file:line).** PLUGFORGE.MD's repo claims mostly held:
+document_type 10-list exact in all 3 definition sites; no W6 code exists anywhere; agent boundary
+story exact (ShipClient 10 reads, GateShipClient 3 token-per-call writes, AST-walk boundary test
+with poisoned controls); terraform/render pinned 1.9.1; factory scripts + `.factory-env` verified;
+committed cost snapshot exists. Four stale/wrong claims found and fixed in PLUGFORGE.MD:
+(1) API-1's 100 req/min/IP cap no longer exists — TRO-172 replaced it (600/identity + 6,000/IP
+prod, `rate-limit.ts:130-132`) though the `/api/` prefix mount (`app.ts:326-327`) still swallows a
+future v1 router, so PF-004 survives reframed with a prod-shaped-config AC (test-env limits are so
+high the old AC passed vacuously); (2) migrations renumbered 047–051 → 042–046 (actual max 041);
+(3) coverage thresholds are in per-package vitest configs + `ci.yml:176-179`, not gate.sh;
+(4) `playwright.isolated.config.ts` is spike-only (one spec) — the reusable piece is the
+testcontainers fixture, the TTFE drill harness is new work. Also fixed: dangling §4.4 refs,
+PF-703 token semantics decided (short-lived scoped personal tokens; PF-107 bearer middleware
+accepts both token classes — the portal already required this implicitly), PF-301 scoped with the
+real write-site inventory (9+ route files write `documents` inline; exclusion list must be a
+documented decision since bypassing writes fire no webhooks), TS-strict mandate added, brief's
+PR-process mandate (per-slice branches, AC-naming descriptions) added over the bundling habit.
+
+**Second pass (same day, all seven claims code-verified before editing).** An independent review
+of the corrected PRD found two blockers + five tightenings, all folded in: (1) **PF-205 added to
+E2** — the agent's 10 reads map to only 2 specced v1 resources (`shipClient.ts:360-455`: change
+feed, people, 4 document sub-resources, 2 list filters, week-dates all had no v1 home), so
+PF-702/704 were unimplementable as written; (2) `api_tokens` has **no scopes column**
+(`schema.sql:254-267`) — migration 043 now ALTERs it with `scopes text[]`, "existing mechanism"
+reworded to "extended"; (3) the collaboration server's Yjs persist
+(`collaboration/index.ts:207`) added to PF-301 as the tenth `documents` write site, **decided
+excluded** from event publication (defense in PF-903); (4) public CORS policy specced for
+`/api/v1` + `/oauth` token endpoints (global `cors()` is single-origin, would break the PKCE
+browser demo); (5) §2.1/PF-001 "no middleware stack" reworded to "no internal
+auth/CSRF/limiter middleware" (helmet/compression/cors/session are app-global); (6) PF-904 AC
+gains the brief-mandated saved-AI-conversation artifact; (7) §0.4 names GitLab's `verify` job
+for coverage, not just the GitHub mirror.
+
+**Next.** New W6 Linear project → `/ship-pm` gate on PLUGFORGE.MD → `/ship-architect`
+decomposition. PF-100 (OAuth study 🔔) blocks E1. Check repo visibility (must be public).
+
+### 2026-08-07 (midday) — Grader punch list closed: TC2 blocking-approval root-caused at Ship's routes and fixed end-to-end (TRO-364); live detection 42.6s observed; credentials published
+
+**Trigger.** Grader feedback: fix the partial-match test case, working credentials for the deployed
+site, complete the timed live detection test.
+
+**TC2 (the partial match).** The documented finding was right and incomplete: not only did
+`request-plan-changes`/`request-retro-changes` never log the blocked state to `document_history`,
+`PATCH /:id/plan`'s `approved → changed_since_approved` transition wasn't logged either — NEITHER
+detector branch had a real producer. Fixed at all three sites (red-before-green route tests; api
+suite 832/832). Second half nobody had flagged: the fixture's `changes_requested` state routes to
+the OWNER, but the documented output requires the APPROVER (Alice) to hold the item — re-modeled
+approved-then-edited, moved outside the `fg3Baseline` gate (graded DB history non-empty skips it)
+with the transition row as idempotency marker. One-process re-run (deep for Alice + steady 6-day
+window; stores are in-memory so the invocations must share a process) produced the exact documented
+output — 4 items, blocking approval first — new public trace verified logged-out both ways.
+
+**Shipped.** PR #153 → `32e54ba`, all 7 GitHub checks green (Actions recovered from yesterday's
+outage), CodeRabbit's 6 findings triaged (2 fixed, TRO-365 filed for the atomicity point, 2
+declined with reasoning — the "remove credentials/trace" findings conflict with the grading brief
+and the already-dead token). GitLab pipeline 18266: success, e2e-agent green. Manual Render deploy
+again (TRO-361's gap, third occurrence) — `dep-d9qvdrijnfac73eaag40`, verified via last-modified.
+Graded ship-db re-seeded via the allowlist procedure (pre-check matched snapshot; week `e5adadd7…`
+now `changed_since_approved` + transition row; history 2→3; allowlist reset verified closed by
+connection probe). **Live payoff observed:** Alice's deployed inbox shows the blocking-approval
+item ranked first, surfaced by the deployed agent's own tick.
+
+**Live detection test (timed, deployed site).** T0 comment mentioning @Iris Nguyen 14:50:13Z →
+T1 in her ranked inbox (`GET /api/agent/inbox`, the endpoint the UI renders) 14:50:55Z —
+**42.6s observed** against a 300s bar. First attempt read as FAIL from a test-script bug (matched
+item id, which embeds `comments.id`, not the client-minted `comment_id` — that lives in
+`evidence.commentId`); the system had actually surfaced the item in ~16s. Also learned: the
+deployed agent process has run continuously since its 2026-08-06 deploy (no restart lines in logs),
+and Alice's empty pre-seed inbox was consistent — her seeded mentions predate the agent's 24h
+initial lookback.
+
+**Grader access.** FLEETGRAPH.MD gained a Grader Access section (URL, alice.chen@ship.local /
+admin123, deliberately-published note) — login verified live before documenting; plus the timed
+test write-up and a corrected Status header (all six rows now full matches).
+
+### 2026-08-06 (evening) — Early Submission push landed: TRO-359/360 recovered through a GitHub Actions major outage; two live-found demo blockers (TRO-362/363) fixed, deployed, verified
+
+**Trigger.** User: "think we crashed early in flight analyze linear see where we at." Reconciled
+worktrees/branches/Linear per `/ship-orchestrator` §4. Reality: no factory crash — TRO-356/357/358
+had already merged (PRs #150/#147/#146); TRO-359 (PR #149) and TRO-360 (PR #148) were open with one
+required check each dead for **infrastructure** reasons, which githubstatus.com then confirmed as a
+GitHub Actions **major_outage** (from ~15:45Z, still ongoing at 23:07Z).
+
+**PR #148 was also blocked by dependency-audit baseline drift** — js-yaml advisory
+GHSA-5p4m-2wfm-xmqj (CVSS 7.5, quadratic-CPU `!!omap` DoS) published 20:27Z, 13 min before the
+rerun. Fixed on the PR branch via the established f6b582c pattern: `pnpm.overrides` pin
+`js-yaml >=4.3.1` (both consumers are build/lint tooling — eslint, @svgr/cosmiconfig — no runtime
+exposure), baseline 75→73 (2 advisories resolved by re-dedup, removed per the script's own
+instruction). Verified: audit-diff verdict=pass, lint/type-check/build clean.
+
+**Break-glass merges (user-directed, disclosed).** With required checks unrunnable and the 23:59
+deadline real, PRs #148/#149/#151/#152 were merged via: lift `enforce_admins` → `gh pr merge
+--admin` → restore → verify protection state. Each PR's work was verified locally first. CHANGES.md
+conflicts (PR #151's entry re-conflicted both open PRs — the compounding predicted in the prior
+entry) resolved entry-aware via `merge-changes.mjs`, structural check green both times.
+
+**TRO-362 (found live, PR #151).** User couldn't click/type in the agent chat on the graded deploy.
+Reproduced headless: the Action Items modal (Radix, full-viewport backdrop) auto-opened on **every
+full page load** — its shown-once guard was component state, reset on remount; e2e never saw it
+because fixtures set `ship:disableActionItemsModal`. Fix: sessionStorage-backed guard (once per
+session). Regression test proven red-before-green; web suite 568/568. Deployed manually
+(`dep-d9qgtqs9v7es73ev4na0`, live 22:48Z), then verified in-browser: first load shows modal once,
+reload shows none, pill immediately usable.
+
+**TRO-363 (found live, PR #152).** User then hit the chat's no-document state (input disabled by
+design — the open document seeds every question, FG-9) and read it as broken: the only affordance
+was a 50%-opacity placeholder + 11px muted hint. Fix, presentational only: accent-tinted "Open a
+document to start" callout in the empty panel + `accent-text` emphasis on the hint (palette rules
+kept: accent fill-only). 2 new tests; suite 570/570. Deployed (`dep-d9qh78c9v7es73evk8pg`, live
+~23:10Z), callout verified on the live `/docs` page.
+
+**Board:** TRO-356–360, TRO-362, TRO-363 all Done. TRO-361 (due 8/9) and TRO-351/352/354/355 open
+by design. PR #138 (TRO-350) still deliberately unmerged awaiting Troy. Remotes identical at
+`af573d3`. **Not yet observed:** GitLab `main` pipeline post-TRO-359 — the ticket's own proof
+criterion — check next session.
 
 ### 2026-08-06 (early AM) — Full remaining backlog run: 4 tickets merged, 1 held for sign-off, 5 new follow-ups filed
 

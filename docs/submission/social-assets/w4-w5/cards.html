@@ -1,0 +1,282 @@
+<meta charset="utf-8">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@200;300;400;500;600;700&family=Geist+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --void:#050505; --ink:#f4f4f5; --dim:#7a7a82; --dimmer:#4a4a52;
+    --emerald:#34d399; --violet:#a78bfa; --amber:#fbbf24; --rose:#fb7185; --sky:#38bdf8;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#111;font-family:'Geist',system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .card{position:relative;width:1200px;height:675px;overflow:hidden;background:var(--void);
+    color:var(--ink);margin:24px auto;display:flex;flex-direction:column}
+  .card.auto{height:auto}
+  .card.auto .inner{padding-bottom:64px}
+  .card.auto .frame{flex:0 0 auto}
+  .card::before{
+    content:'';position:absolute;inset:-25%;pointer-events:none;
+    background:
+      radial-gradient(40% 46% at 10% 4%, color-mix(in oklab, var(--a) 52%, transparent) 0%, transparent 68%),
+      radial-gradient(36% 42% at 94% 92%, color-mix(in oklab, var(--b) 40%, transparent) 0%, transparent 70%),
+      radial-gradient(52% 32% at 62% 112%, color-mix(in oklab, var(--a) 16%, transparent) 0%, transparent 75%);
+    filter:blur(28px);opacity:.7;
+  }
+  .card::after{
+    content:'';position:absolute;inset:0;pointer-events:none;z-index:40;opacity:.035;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  .inner{position:relative;z-index:10;display:flex;flex-direction:column;height:100%;padding:72px 76px}
+  .shell{background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.09);border-radius:2rem;padding:7px}
+  .core{background:#0b0b0d;border-radius:calc(2rem - 7px);padding:34px 38px;height:100%;
+    box-shadow:inset 0 1px 1px rgba(255,255,255,.10)}
+  .eyebrow{display:inline-flex;align-items:center;gap:9px;align-self:flex-start;
+    border:1px solid rgba(255,255,255,.12);border-radius:999px;padding:7px 15px;
+    font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.22em;text-transform:uppercase;
+    color:var(--dim);font-weight:400}
+  .dot{width:5px;height:5px;border-radius:999px;background:var(--a);box-shadow:0 0 12px var(--a)}
+  h1{font-size:72px;line-height:.98;font-weight:600;letter-spacing:-.035em;margin-top:auto}
+  h1.sm{font-size:54px;letter-spacing:-.03em}
+  h1.xs{font-size:42px;line-height:1.1;letter-spacing:-.02em}
+  .lede{font-size:21px;line-height:1.5;color:var(--dim);font-weight:300;max-width:46ch;margin-top:22px}
+  .lede b{color:#dcdce2;font-weight:500}
+  .note{margin-top:22px;font-size:15px;color:#6b6b73;font-weight:300;max-width:64ch;line-height:1.6}
+  .note b{color:#a1a1aa;font-weight:500}
+  .figure{font-size:142px;line-height:.84;font-weight:600;letter-spacing:-.05em;
+    background:linear-gradient(160deg,#fff 20%, var(--a) 130%);-webkit-background-clip:text;background-clip:text;color:transparent}
+  .foot{margin-top:auto;display:flex;justify-content:space-between;align-items:flex-end;gap:20px;
+    font-family:'Geist Mono',monospace;font-size:11px;color:var(--dimmer);letter-spacing:.04em}
+  .foot .src{max-width:64%}
+  .brand{color:var(--dim);white-space:nowrap}
+  .bento{display:grid;grid-template-columns:repeat(12,1fr);grid-auto-rows:minmax(0,1fr);gap:14px;flex:1;min-height:0;margin-top:26px}
+  .tile{background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:1.4rem;padding:24px 26px;
+    display:flex;flex-direction:column;justify-content:space-between;box-shadow:inset 0 1px 1px rgba(255,255,255,.07);min-height:0}
+  .tile .k{font-size:50px;font-weight:600;letter-spacing:-.04em;line-height:1}
+  .tile .k.two{font-size:36px}
+  .tile .l{font-family:'Geist Mono',monospace;font-size:10px;letter-spacing:.18em;text-transform:uppercase;color:var(--dim)}
+  .tile .s{font-size:13px;color:var(--dimmer);margin-top:6px;font-weight:300}
+  .bars{margin-top:30px;display:flex;flex-direction:column;gap:15px}
+  .bar{display:flex;align-items:center;gap:18px}
+  .bar .tag{font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--dim);width:78px}
+  .bar .track{flex:1;height:34px;border-radius:999px;background:rgba(255,255,255,.05);overflow:hidden;border:1px solid rgba(255,255,255,.07)}
+  .bar .fill{height:100%;border-radius:999px}
+  .bar .val{font-family:'Geist Mono',monospace;font-size:15px;width:104px;text-align:right;color:#dcdce2}
+  .split{display:flex;gap:44px;flex:1;min-height:0;align-items:center}
+  .split .l{flex:1.15;min-width:0}
+  .split .r{flex:.85;min-width:0}
+  .split .r > .shell{align-self:center}
+  .split .r .core{height:auto}
+  .quote{font-size:15px;line-height:1.62;color:var(--dim);font-weight:300}
+  .quote b{color:#e6e6ea;font-weight:500}
+  .kv{display:flex;flex-direction:column;gap:11px}
+  .kv .row{display:flex;justify-content:space-between;gap:16px;padding-bottom:11px;border-bottom:1px solid rgba(255,255,255,.07);font-size:14px}
+  .kv .row:last-child{border-bottom:0;padding-bottom:0}
+  .kv .n{color:var(--dimmer);font-family:'Geist Mono',monospace;font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+  .kv .v{color:#e6e6ea;font-weight:500;text-align:right}
+  .kv .v.good{color:var(--emerald)}
+  .kv .v.bad{color:var(--rose)}
+  /* trigger tiers / flow rows */
+  .rows{display:flex;flex-direction:column;gap:12px;margin-top:30px}
+  .rw{display:flex;align-items:center;gap:20px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);
+    border-radius:1.2rem;padding:20px 26px;box-shadow:inset 0 1px 1px rgba(255,255,255,.06)}
+  .rw .tier{font-size:20px;font-weight:600;width:104px;letter-spacing:-.01em}
+  .rw .desc{flex:1;font-size:14px;color:var(--dim);font-weight:300;line-height:1.45}
+  .rw .lat{font-family:'Geist Mono',monospace;font-size:14px;color:#dcdce2;white-space:nowrap}
+  .frame{flex:1;min-height:0;display:flex;flex-direction:column}
+  .frame .core{padding:0;overflow:hidden;display:flex;align-items:flex-start;justify-content:center}
+  .frame img{width:100%;display:block}
+  .caption{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:20px;gap:24px}
+  .caption h2{font-size:33px;font-weight:600;letter-spacing:-.025em}
+  .caption p{font-size:15px;color:var(--dim);font-weight:300;text-align:right;max-width:42ch;line-height:1.45}
+</style>
+<body>
+<div id="out"></div>
+<script>
+const C = { emerald:'#34d399', violet:'#a78bfa', amber:'#fbbf24', rose:'#fb7185', sky:'#38bdf8' };
+const brand = `<div class="brand">FLEETGRAPH · SHIP</div>`;
+const foot = (src) => `<div class="foot"><div class="src">${src}</div>${brand}</div>`;
+const head = (e) => `<div class="eyebrow"><span class="dot"></span>${e}</div>`;
+
+const cards = [
+// 01 — HERO
+{ id:'01-hero', a:C.emerald, b:C.violet, html:`
+  ${head('FleetGraph &nbsp;·&nbsp; a project intelligence agent for Ship')}
+  <h1 style="margin-top:26px">An agent that reads<br>the project for you.</h1>
+  <div class="bento">
+    <div class="tile" style="grid-column:span 4"><div class="l">Modes</div>
+      <div><div class="k two">2 → 1 graph</div><div class="s">proactive push, on-demand pull</div></div></div>
+    <div class="tile" style="grid-column:span 4"><div class="l">Detection latency</div>
+      <div><div class="k">21s</div><div class="s">against a 5-minute requirement</div></div></div>
+    <div class="tile" style="grid-column:span 4"><div class="l">Use cases shipped</div>
+      <div><div class="k">6</div><div class="s">each with a test case and a trace</div></div></div>
+    <div class="tile" style="grid-column:span 3"><div class="l">Context cap</div>
+      <div><div class="k">12</div><div class="s">docs per answer, hard</div></div></div>
+    <div class="tile" style="grid-column:span 3"><div class="l">Write credentials</div>
+      <div><div class="k">0</div><div class="s">held by the agent</div></div></div>
+    <div class="tile" style="grid-column:span 3"><div class="l">Proactive path</div>
+      <div><div class="k">$0</div><div class="s">zero tokens, no model</div></div></div>
+    <div class="tile" style="grid-column:span 3"><div class="l">Real dev spend</div>
+      <div><div class="k two">$0.006</div><div class="s">7 invocations, logged</div></div></div>
+  </div>` },
+
+// 02 — THESIS
+{ id:'02-thesis', a:C.violet, b:C.emerald, html:`
+  ${head('Agent responsibility · the first decision')}
+  <h1 class="sm" style="margin-top:auto">Ship asks people to write<br>down what happened.<br>The agent already knows.</h1>
+  <div class="lede">So it writes the first draft, and it tells you what needs you.</div>
+  <div class="note">The obvious build was a compliance checker — flag the thin standup, chase the missing retro. I rejected it. An agent that tells a federal employee their standup looks thin, on a document that feeds a performance rating, is a surveillance tool pointed at the least powerful person in the room. <b>People write “stuff” because writing it properly is tedious. Enforcement doesn’t change that. Removing the tedium does.</b></div>
+  ${foot('FLEETGRAPH.MD § Agent Responsibility')}` },
+
+// 03 — EMBEDDED IN CONTEXT (product)
+{ id:'03-embedded', auto:true, a:C.sky, b:C.violet, html:`
+  ${head('On-demand mode · live deployment')}
+  <div class="caption" style="margin-top:24px">
+    <h2>Not a chatbot page.</h2>
+    <p>The chat lives on every screen and is seeded by<br>the document you already have open.</p>
+  </div>
+  <div class="frame"><div class="shell" style="height:100%"><div class="core">
+    <img src="raw/chat-in-context.png" alt="">
+  </div></div></div>` },
+
+// 04 — CITATIONS (product)
+{ id:'04-citations', auto:true, a:C.sky, b:C.emerald, html:`
+  ${head('On-demand mode · grounding')}
+  <div class="caption" style="margin-top:24px">
+    <h2>It names every document it read.</h2>
+    <p>Twelve sources, each with the reason it was<br>pulled in — then it says it hit the cap.</p>
+  </div>
+  <div class="frame"><div class="shell" style="height:100%"><div class="core">
+    <img src="raw/chat-sources-crop.png" alt="">
+  </div></div></div>` },
+
+// 05 — TWO MODES, ONE GRAPH
+{ id:'05-two-modes', a:C.emerald, b:C.sky, html:`
+  ${head('Architecture · the trigger differs, the graph does not')}
+  <h1 class="sm" style="margin-top:22px">Two modes.<br>One graph.</h1>
+  <div class="rows">
+    <div class="rw"><div class="tier" style="color:${C.sky}">On-demand</div>
+      <div class="desc">You open a document and ask. The graph seeds on what you are looking at, then expands outward along whatever the question needs.</div>
+      <div class="lat">47 spans</div></div>
+    <div class="rw"><div class="tier" style="color:${C.emerald}">Proactive</div>
+      <div class="desc">Nobody is present. The graph polls Ship's change feed, resolves mentions and blocked approvals, and commits them to the right person's list.</div>
+      <div class="lat">14 spans</div></div>
+  </div>
+  <div class="note">Same compiled graph, same nodes, same state. A router reads the trigger and picks the path — which is why the traces differ in shape instead of in label.</div>
+  ${foot('agent/src/graph.ts — one buildGraph(), seven trigger kinds')}` },
+
+// 06 — TRIGGER MODEL
+{ id:'06-trigger', a:C.amber, b:C.emerald, html:`
+  ${head('Trigger model · hybrid, polling as the backbone')}
+  <h1 class="xs" style="margin-top:20px">Ship has no event bus.<br>So “events” means observed change.</h1>
+  <div class="rows" style="margin-top:26px">
+    <div class="rw"><div class="tier">Fast</div>
+      <div class="desc">Mentions and assignment changes land in the affected person's list. No model.</div><div class="lat">~3s</div></div>
+    <div class="rw"><div class="tier">Steady</div>
+      <div class="desc">Collect what changed; hold the material each person's next draft is built from.</div><div class="lat">60s tick</div></div>
+    <div class="rw"><div class="tier">Deep</div>
+      <div class="desc">Compose the drafts — standups in the morning, retros at week end.</div><div class="lat">per window</div></div>
+  </div>
+  <div class="note">The editor saves on a two-second delay and always stamps last-updated, which makes that timestamp a <b>complete</b> signal for every content change. The history table is only partial. That is the whole argument for polling.</div>
+  ${foot('FLEETGRAPH.MD § Trigger Model — decision documented and defended')}` },
+
+// 07 — DETECTION LATENCY
+{ id:'07-detection', a:C.emerald, b:C.sky, html:`
+  ${head('Performance · detection latency')}
+  <h1 class="sm" style="margin-top:22px">Surface an event in<br>under five minutes.</h1>
+  <div class="bars">
+    <div class="bar"><div class="tag">Required</div>
+      <div class="track"><div class="fill" style="width:100%;background:linear-gradient(90deg,#3f3f46,#52525b)"></div></div>
+      <div class="val">300.0 s</div></div>
+    <div class="bar"><div class="tag">Measured</div>
+      <div class="track"><div class="fill" style="width:7%;background:linear-gradient(90deg,#34d399,#0ea5e9)"></div></div>
+      <div class="val">21.0 s</div></div>
+  </div>
+  <div class="note">Comment written at 16:27:50Z. Present in the recipient's ranked inbox at 16:28:11Z, carrying the id of that exact comment. Timed again a different day: 42.6s. Both observed, neither derived.</div>
+  ${foot('measured on the deployed service, 2026-08-09')}` },
+
+// 08 — INBOX (product)
+{ id:'08-inbox', auto:true, a:C.emerald, b:C.sky, html:`
+  ${head('Proactive mode · live deployment')}
+  <div class="split" style="margin-top:38px;align-items:stretch;gap:56px;flex:0 0 auto">
+    <div class="l" style="flex:1.4;display:flex;flex-direction:column;justify-content:flex-start;padding-top:6px">
+      <h1 class="xs">One ranked list<br>of what needs you.</h1>
+      <div class="lede">Not a notification stream. Mentions, approvals you are blocking, work waiting on you, drafts prepared for you — one list, ranked, each with a reason and a direct action.</div>
+      <div class="note">The hardest parts need no model at all. Mention resolution and approval-blocking are structured lookups; the floor underneath the agent is deterministic.</div>
+      <div style="margin-top:36px;font-family:'Geist Mono',monospace;font-size:11px;color:var(--dimmer);letter-spacing:.04em">alice.chen@ship.local · deployed service · 2026-08-09</div>
+    </div>
+    <div class="r" style="flex:.6;display:flex"><div class="shell" style="width:100%"><div class="core" style="padding:0;overflow:hidden;display:flex;justify-content:center">
+      <img src="raw/inbox-panel-crop.png" alt="" style="width:100%">
+    </div></div></div>
+  </div>` },
+
+// 09 — TRACES
+{ id:'09-traces', a:C.violet, b:C.emerald, html:`
+  ${head('Observability · a graph, not a pipeline')}
+  <h1 class="sm" style="margin-top:22px">Three runs.<br>Three real shapes.</h1>
+  <div class="bento" style="grid-auto-rows:1fr;margin-top:30px">
+    <div class="tile" style="grid-column:span 4"><div class="l">Bare chat</div>
+      <div><div class="k">9</div><div class="s">spans · ingest → respond</div></div></div>
+    <div class="tile" style="grid-column:span 4"><div class="l">On-demand expansion</div>
+      <div><div class="k">47</div><div class="s">spans · frontier walk ×9, cap reached</div></div></div>
+    <div class="tile" style="grid-column:span 4"><div class="l">Proactive</div>
+      <div><div class="k">14</div><div class="s">spans · <b style="color:${C.emerald}">0 tokens, $0</b></div></div></div>
+  </div>
+  <div class="note">Read back from the tracing API's own child-run and token fields — not eyeballed in a console. The proactive path contains no compose node anywhere, which is how “no model on this tier” is verified rather than asserted.</div>
+  ${foot('3 public traces · same project, directly comparable')}` },
+
+// 10 — HUMAN GATE
+{ id:'10-gate', a:C.rose, b:C.violet, html:`
+  ${head('Human-in-the-loop · structural, not procedural')}
+  <div class="split" style="margin-top:26px">
+    <div class="l">
+      <h1 class="xs">The agent cannot<br>write to Ship.</h1>
+      <div class="quote" style="margin-top:22px">Not “is configured not to” — <b>cannot</b>. It holds no credential that could. Every write goes through one gate that takes the acting person's own token, passed explicitly, never read from the agent's environment.<br><br>A draft is a draft until a human accepts it. Accept one proposed state change and only that one moves.</div>
+    </div>
+    <div class="r"><div class="shell"><div class="core"><div class="kv">
+      <div class="row"><span class="n">Agent write token</span><span class="v bad">none exists</span></div>
+      <div class="row"><span class="n">Gate writes as</span><span class="v good">the human</span></div>
+      <div class="row"><span class="n">Enforced by</span><span class="v">the type, not a rule</span></div>
+      <div class="row"><span class="n">Proof</span><span class="v">write-boundary test</span></div>
+    </div></div></div></div>
+  </div>
+  ${foot('agent/src/gate.ts · __tests__/graphWriteBoundary.test.ts')}` },
+
+// 11 — RESILIENCE
+{ id:'11-resilience', a:C.sky, b:C.amber, html:`
+  ${head('Engineering · every outbound call')}
+  <h1 class="xs" style="margin-top:20px">What it does when<br>Ship stops answering.</h1>
+  <div class="rows" style="margin-top:26px">
+    <div class="rw"><div class="tier" style="font-size:16px;width:150px">Timeout</div>
+      <div class="desc">Explicit connect and read bounds. No unbounded await anywhere in the package.</div></div>
+    <div class="rw"><div class="tier" style="font-size:16px;width:150px">Backoff</div>
+      <div class="desc">Exponential with jitter — and only on idempotent reads, never on a write that may have landed.</div></div>
+    <div class="rw"><div class="tier" style="font-size:16px;width:150px">Breaker</div>
+      <div class="desc">Wraps each attempt, not the whole retry loop, with a half-open probe that admits exactly one trial call.</div></div>
+    <div class="rw"><div class="tier" style="font-size:16px;width:150px">Degrade</div>
+      <div class="desc">Ship unreachable produces one clean, user-safe error — never a stack trace, never a hang.</div></div>
+  </div>
+  ${foot('agent/src/resilientClient.ts · circuitBreaker.ts — breaker carried over from a fixed half-open race')}` },
+
+// 12 — COST
+{ id:'12-cost', a:C.emerald, b:C.violet, html:`
+  ${head('Cost analysis · measured, then projected')}
+  <div class="split" style="margin-top:26px">
+    <div class="l">
+      <div class="figure">$0.006</div>
+      <div class="lede" style="margin-top:20px">Total real model spend for the entire build. <b>7 invocations</b>, every one recorded to the token as it happened.</div>
+      <div class="note">Instrumentation landed before the spend — on the premise that instrumentation added after the fact cannot recover spend that was never recorded.</div>
+    </div>
+    <div class="r"><div class="shell"><div class="core"><div class="kv">
+      <div class="row"><span class="n">100 users</span><span class="v">~$450 / mo</span></div>
+      <div class="row"><span class="n">1,000 users</span><span class="v">~$4,470 / mo</span></div>
+      <div class="row"><span class="n">10,000 users</span><span class="v">~$44,700 / mo</span></div>
+      <div class="row"><span class="n">Biggest cliff</span><span class="v">on-demand, 64%</span></div>
+    </div></div></div></div>
+  </div>
+  ${foot('agent/cost-ledger-snapshot.jsonl — committed, reproduces from a clean clone')}` },
+];
+
+document.getElementById('out').innerHTML = cards.map(c =>
+  `<div class="card${c.auto?' auto':''}" id="${c.id}" style="--a:${c.a};--b:${c.b}"><div class="inner">${c.html}</div></div>`
+).join('');
+</script>
+</body>

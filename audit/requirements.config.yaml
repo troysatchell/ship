@@ -24,6 +24,14 @@ docs:
   - id: W5
     path: "project guideliens/GFA_Week_5_FleetGraph_Updated (1).pdf"
     sha256: 2e9d2409d392232a4acf2bff8d8d614e891c980dbc4f043edc972fa2c37d861d
+  # Week 6 (PlugForge). Extracted 2026-08-10 → inventory-W6.md (79 requirements),
+  # source cache source-W6.md. Skim gate cleared 2026-08-10 (user confirmed the
+  # inventory). W6 tickets live in the Linear project
+  # "PlugForge — Week 6 Platform & Public API" (created 2026-08-10) — the
+  # tickets.project scalar below is now scoped to it.
+  - id: W6
+    path: "project guideliens/GFA_Week_6_PlugForge.pdf"
+    sha256: 81a3788dd3c2033239709fde24d48d061f9ee16ca261570256d081e667dba0eb
 
 tickets:
   provider: linear
@@ -35,12 +43,15 @@ tickets:
   # which roughly 80 were simply other products' work. Scoped to this project it is 9,
   # and those 9 are a real signal. Orphan detection is only meaningful against a
   # deliberately chosen population.
-  # CURRENTLY SCOPED TO W5. Week 5 is the live work; W4 is a frozen baseline whose
-  # matrix is already published, so its ticket dimension does not need re-running.
-  # If a W4 sweep is ever re-run, set this back to "ShipShape Audit Remediation"
-  # first — leaving it on FleetGraph would report W4's 123 tickets as orphans and
-  # FleetGraph's as W4 coverage. One scalar, two document sets: mutually exclusive.
-  project: "FleetGraph — Week 5 Project Intelligence Agent"
+  # CURRENTLY SCOPED TO W6 (re-scoped 2026-08-10, project created same day).
+  # Week 6 is the live work; W4 and W5 are frozen baselines whose matrices are
+  # already published, so their ticket dimensions do not need re-running.
+  # If a W4 or W5 sweep is ever re-run, set this back to
+  # "ShipShape Audit Remediation" or "FleetGraph — Week 5 Project Intelligence
+  # Agent" first — leaving it on PlugForge would report that week's tickets as
+  # orphans and PlugForge's as its coverage. One scalar, three document sets:
+  # mutually exclusive.
+  project: "PlugForge — Week 6 Platform & Public API"
 
 # Roots searched during the trace phase. Application source alone is not enough for
 # this document set: the W4 brief's acceptance evidence lives largely in audit
