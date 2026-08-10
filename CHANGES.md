@@ -43,13 +43,19 @@ with everything else). Before this change the file did not exist at all (confirm
   platform code exists yet in this worktree (no `api/src/platform/`, `sdk/`, or `integrations/`),
   so every file-path citation is stated as a planned location, and the doc's own header says so
   explicitly, to avoid presenting derived/planned content as observed fact (CLAUDE.md provenance).
-  The one item genuinely blocked on another ticket — a reference to PF-902's IAM adaptation memo by
-  its committed filename — is an honest placeholder in a "Cross-References" section, not invented
-  detail, and its regression test is `it.todo(...)` rather than a passing assertion.
+  The PF-902 cross-reference (IAM adaptation memo) names its real committed path,
+  `docs/IAM-ADAPTATION-RENDER.md` — relayed as a cross-ticket fact (PF-902 landed on branch
+  `docs/pf-902-iam-memo`, not yet merged to `main` as of this writing) and marked in both the doc
+  and the test as derived, not independently verified from this worktree.
 - Added `api/src/__tests__/architectureDocSections.test.ts` — the test-design comment's mechanical
   section-presence lint (pattern: `pinnedDependencies.test.ts` — read a repo file, assert required
-  content, one `it()` per requirement). 14 assertions + 1 `it.todo` for the PF-902 cross-reference.
-  Runs automatically in the existing `api` vitest project; no new CI wiring needed.
+  content, one `it()` per requirement). 15 assertions, all real (no `.skip`/`.todo`): the
+  test-design comment specced the PF-902 cross-reference as a deferred `it.todo(...)` pending its
+  filename, but `gate.sh`'s G5 check (`tests:not-weakened`) unconditionally fails any newly added
+  skip/todo test modifier in a `*.test.ts` diff by design (only a Playwright-style fixme modifier
+  is exempted, and vitest's `it` does not implement one) — so once the real filename was available
+  it became a normal passing assertion instead. Runs automatically in the existing `api` vitest
+  project; no new CI wiring needed.
 
 **How to run it.** `source .factory-env && cd api && npx vitest run src/__tests__/architectureDocSections.test.ts`
 (no database interaction beyond the suite's standard advisory-lock `beforeAll`/TRUNCATE — the test

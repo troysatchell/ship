@@ -34,6 +34,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '../../..')
 const DOC_RELATIVE_PATH = 'docs/architecture.md'
 const DOC_PATH = join(REPO_ROOT, DOC_RELATIVE_PATH)
+// PF-902's IAM adaptation memo — landed at this path on branch docs/pf-902-iam-memo
+// (not yet merged to main as of this writing). Cross-ticket fact relayed by the
+// orchestrator, not independently verified by reading that file from this
+// worktree (CLAUDE.md provenance: derived, not observed).
+const IAM_MEMO_PATH = 'docs/IAM-ADAPTATION-RENDER.md'
 
 function readDoc(): string {
   if (!existsSync(DOC_PATH)) {
@@ -197,21 +202,19 @@ describe('docs/architecture.md — mandated sections present (PF-903 / TRO-424)'
     expect(missing, `Collab-persist exclusion deviation missing: ${missing.join(', ')}`).toEqual([])
   })
 
-  // 12. Cross-ticket (PF-902) — the test-design comment specs this as `it.todo(...)`
-  // until PF-902 lands and names its committed filename. `gate.sh`'s G5 check
-  // (`scripts/factory/gate.sh:224-227`) treats `.todo(`/`.skip(` in a *.test.ts
-  // diff as an unconditional weakened-suite failure — deliberately, unlike
-  // `.fixme(`, which CLAUDE.md reserves for Playwright e2e specs and which
-  // vitest's `it` does not even implement (`it.fixme` is not a function here).
-  // Asserting on the honest placeholder itself (present today, per the doc's
-  // own "Cross-References" section) keeps this a real, currently-passing
-  // check instead of a disabled one. Tighten to the real committed filename
-  // once PF-902 lands — do not invent one now (CLAUDE.md provenance).
-  it('12. references the pending PF-902 IAM adaptation memo as an honest placeholder', () => {
+  // 12. Cross-ticket (PF-902) — tightened to the real committed filename now that
+  // PF-902 has landed at IAM_MEMO_PATH (see the constant above for provenance).
+  // The test-design comment originally specced this item as a deferred marker
+  // pending that filename. It is written as a real, always-run assertion rather
+  // than a disabled test modifier: gate.sh's G5 check unconditionally fails a
+  // newly added skip or todo test modifier in a *.test.ts diff (deliberately —
+  // unlike a fixme-style modifier, which this repo reserves for Playwright e2e
+  // specs and which vitest's `it` does not implement at all).
+  it('12. references the PF-902 IAM adaptation memo by its committed filename', () => {
     const text = readDoc()
     expect(
-      text.includes('PF-902'),
-      'Expected an honest placeholder referencing PF-902 (the IAM adaptation memo) — tighten to its real committed filename once PF-902 lands'
+      text.includes(IAM_MEMO_PATH),
+      `Expected a reference to the PF-902 IAM adaptation memo at ${IAM_MEMO_PATH}`
     ).toBe(true)
   })
 })

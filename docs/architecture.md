@@ -300,8 +300,10 @@ enumerating exactly which sites route through it versus which are excluded is PF
 
 ## Cross-References
 
-- **IAM adaptation memo** (Render vs. AWS least-privilege mapping) — populated when **PF-902**
-  lands and commits its filename under `docs/`.
+- **IAM adaptation memo** (Render vs. AWS least-privilege mapping) — **PF-902**, at
+  `docs/IAM-ADAPTATION-RENDER.md`. *(Derived, not independently verified from this worktree: as of
+  this writing PF-902 has landed on branch `docs/pf-902-iam-memo`, not yet merged to `main` — the
+  path is a cross-ticket fact, not a file read directly. Confirm the path once that branch merges.)*
 - **Per-epic before/after write-ups and the three discovery drafts** — **PF-906**.
 - `PLUGFORGE.MD` §2 is the source of record for the data model, scopes list, error contract, and
   rate-limit defaults; this document restates only what the brief's mandated sections require.
