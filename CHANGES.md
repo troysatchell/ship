@@ -21,6 +21,35 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-420 — PF-902: IAM adaptation memo, AWS least-privilege ⇄ Render's permission model
+
+**What changed.** Added `docs/IAM-ADAPTATION-RENDER.md`, a one-page defense memo mapping this
+repo's actual AWS least-privilege exercise (`aws_iam_role.eb_instance`/`eb_service` and the three
+resource-scoped custom policies in `terraform/ssm.tf:164-262`) to Render's permission model
+(`terraform/render/*.tf`): API-key scoping, service isolation via disjoint `env_vars` blocks, and
+env-var secret handling. States plainly what Render cannot express (no role/policy resource type,
+no resource-level ARN scoping, no control-plane/data-plane role split, no condition-key mechanism)
+and why the trade is acceptable for this specific deployment (single-operator/free-tier threat
+model; the running `api`/`agent` server processes never hold `RENDER_API_KEY` — verified by grep
+across `api/src`/`agent/src` — so the escalation path AWS's scoped policies exist to contain is
+closed by omission rather than by a grant). Every claim is marked observed (cites file:line in this
+repo's own `terraform/`/`terraform/render/`) or derived (Render's general key-scoping behavior,
+not independently verified against this account), per `.claude/CLAUDE.md`'s provenance rule. This
+is a docs-only ticket (Artifact DoD per the ship-test-designer comment on TRO-420) — no application
+code, schema, or route changed, so there is no regression test; `scripts/factory/gate.sh` was run
+for evidence per the standard ticket workflow and its `regression-test` check is expected to flag
+this branch (see PR body for the verbatim verdict).
+
+**How to run it.** Read `docs/IAM-ADAPTATION-RENDER.md` directly — no command needed. It will be
+referenced from `docs/architecture.md` once PF-903 (TRO-424) lands; that ticket's docs-lint test
+checks for a reference to this exact filename.
+
+**Rollback.** `git rm docs/IAM-ADAPTATION-RENDER.md` and revert this entry. No other files depend
+on the memo existing except PF-903's future reference (not yet built as of this commit — verified
+`docs/architecture.md` does not exist in this worktree).
+
+---
+
 ## TRO-381 / TRO-351 — FLEETGRAPH.MD accuracy and trim: fixed a self-contradiction, six stale `graph.ts` citations, a wrong route-key count, a missing Trigger Model note, restructured Cost Analysis, and cut ~140 lines of process narration
 
 **The cost this closes.** Two named inaccuracies, both derived from reading `agent/src/graph.ts`
