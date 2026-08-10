@@ -6,6 +6,7 @@ import { pool } from '../db/client.js';
 import { authMiddleware, authed } from '../middleware/auth.js';
 import { ERROR_CODES, HTTP_STATUS } from '@ship/shared';
 import { logAuditEvent } from '../services/audit.js';
+import { ScopeRegistry } from '../platform/scopes/registry.js';
 
 const router: RouterType = Router();
 
@@ -23,9 +24,20 @@ export function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
 
+// scopes (PF-107 / TRO-430): the "scoped personal token" second token class
+// the v1 bearer middleware accepts (`api/src/platform/oauth/bearerAuth.ts`).
+// Omitted entirely -> `scopes` persists NULL, the pre-existing legacy
+// unscoped token (unchanged behavior, never valid at /api/v1). Provided ->
+// every element must be a scope ScopeRegistry actually knows about, so a
+// typo doesn't silently mint a token nothing will ever check for that scope.
+const scopeSchema = z.string().refine((value) => ScopeRegistry.has(value), {
+  message: 'Unknown scope',
+});
+
 const createTokenSchema = z.object({
   name: z.string().min(1).max(100),
   expires_in_days: z.number().int().positive().optional(), // NULL = never expires
+  scopes: z.array(scopeSchema).min(1).optional(), // omitted = NULL = legacy unscoped token
 });
 
 // POST /api/api-tokens - Generate a new API token
@@ -44,7 +56,7 @@ router.post('/', authMiddleware, authed(async (req, res): Promise<void> => {
     return;
   }
 
-  const { name, expires_in_days } = parseResult.data;
+  const { name, expires_in_days, scopes } = parseResult.data;
 
   try {
     // Check if token with same name already exists for this user/workspace
@@ -71,10 +83,10 @@ router.post('/', authMiddleware, authed(async (req, res): Promise<void> => {
       : null;
 
     const result = await pool.query(
-      `INSERT INTO api_tokens (user_id, workspace_id, name, token_hash, token_prefix, expires_at)
-       VALUES ($1, $2, $3, $4, $5, $6)
-       RETURNING id, name, token_prefix, expires_at, created_at`,
-      [req.userId, req.workspaceId, name, hash, prefix, expiresAt]
+      `INSERT INTO api_tokens (user_id, workspace_id, name, token_hash, token_prefix, expires_at, scopes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, token_prefix, expires_at, created_at, scopes`,
+      [req.userId, req.workspaceId, name, hash, prefix, expiresAt, scopes ?? null]
     );
 
     await logAuditEvent({
@@ -97,6 +109,7 @@ router.post('/', authMiddleware, authed(async (req, res): Promise<void> => {
         token_prefix: result.rows[0].token_prefix,
         expires_at: result.rows[0].expires_at,
         created_at: result.rows[0].created_at,
+        scopes: result.rows[0].scopes, // null = legacy unscoped token
         warning: 'Save this token now. It will not be shown again.',
       },
     });
@@ -116,7 +129,7 @@ router.post('/', authMiddleware, authed(async (req, res): Promise<void> => {
 router.get('/', authMiddleware, async (req: Request, res: Response): Promise<void> => {
   try {
     const result = await pool.query(
-      `SELECT id, name, token_prefix, last_used_at, expires_at, revoked_at, created_at
+      `SELECT id, name, token_prefix, last_used_at, expires_at, revoked_at, created_at, scopes
        FROM api_tokens
        WHERE user_id = $1 AND workspace_id = $2
        ORDER BY created_at DESC`,
@@ -134,6 +147,7 @@ router.get('/', authMiddleware, async (req: Request, res: Response): Promise<voi
         is_active: !row.revoked_at && (!row.expires_at || new Date(row.expires_at) > new Date()),
         revoked_at: row.revoked_at,
         created_at: row.created_at,
+        scopes: row.scopes, // null = legacy unscoped token, never valid at /api/v1
       })),
     });
   } catch (error) {

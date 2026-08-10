@@ -21,6 +21,105 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-430 — PF-107: ScopeRegistry + v1 bearer middleware (both token classes), `require(scope)` 403s
+
+**What was added.**
+
+- `api/src/platform/scopes/registry.ts` — `ScopeRegistry`, registering PLUGFORGE.MD §2.3's seven
+  scopes (`documents:read`, `documents:write`, `issues:read`, `issues:write`, `sprints:read`,
+  `sprints:write`, `webhooks:manage`) at module load. Adding an eighth scope is one more
+  `ScopeRegistry.register(...)` call there — no other file changes (OCP).
+- `api/src/platform/oauth/principal.ts` — the `Principal = { app, user, scopes }` shape and the
+  `req.principal` Express augmentation.
+- `api/src/platform/oauth/bearerAuth.ts` — the v1 bearer-token middleware. Looks a raw `Authorization:
+  Bearer <token>` value up first in `oauth_tokens` (by `access_token_hash`) and then, if not found,
+  in `api_tokens` (by `token_hash`), and populates `req.principal` on success. 401s carry a closed
+  three-value `details.reason` (`missing_token` / `invalid_token` / `expired_token`) per this
+  ticket's binding PM triage comment. A revoked token (either table) and an `api_tokens` row with
+  `scopes IS NULL` (the pre-existing legacy unscoped internal token — never valid at `/api/v1`, per
+  §4 and CLAUDE.md's own landmine callout) both report `invalid_token`, identically to a
+  never-issued token; revocation IS distinguished server-side via `console.warn`, but not yet in a
+  `public_api_audit` row — that table (migration 046, PF-501) has not landed as of this ticket. Flagged
+  as an open gap, not silently dropped.
+- `api/src/platform/scopes/requireScope.ts` — the "`require(scope)` middleware factory" PLUGFORGE.MD
+  §4 names, exported as `requireScope` (not the literal identifier `require` — it shadows the
+  ambient `NodeRequire` global for no behavioral benefit; documented deviation, not a scope change).
+  `403` + `code: "forbidden"` + `details.missing_scope` naming the scope, never opaque. Throws at
+  route-registration time if wired to a scope `ScopeRegistry` doesn't know about (fail-fast on a
+  typo, not a per-request 500).
+- `api/src/platform/oauth/apiError.ts` — a **local, ticket-scoped** construction of the §2.5
+  `ApiError` shape (`{ code, message, details?, request_id }`). PF-002 (`ApiError` + public error
+  middleware) is on a separate, unmerged branch built in parallel with this one — importing its
+  module here would create a merge-order coupling the PRD/Linear graph doesn't otherwise have. **This
+  is a flagged consolidation point:** once PF-002 lands, replace every call site in
+  `api/src/platform/oauth/` and `api/src/platform/scopes/` with PF-002's shared helper and delete
+  `apiError.ts`.
+- `api/src/routes/api-tokens.ts` — `POST /api/api-tokens` gains an optional `scopes` body param
+  (array of `ScopeRegistry`-known scope strings, `min(1)`). Omitted → `scopes` persists `NULL`
+  (legacy unscoped token, unchanged behavior). Provided → persisted and returned on both the create
+  response and `GET /api/api-tokens`'s list. An unregistered scope string is rejected `400`.
+- `api/src/openapi/schemas/auth.ts` — `CreateAPITokenSchema` and `APITokenSchema` both gain a
+  `scopes` field matching the above (existing registered route, per the OpenAPI-registration rule —
+  regenerated `api/openapi.yaml`/`api/openapi.json` are part of this diff).
+
+**Regression tests (all red-before-green, observed on this branch, `DATABASE_URL` from
+`.factory-env`/`ship_wt_tro_430`):**
+
+- `api/src/platform/scopes/__tests__/registry.test.ts` (4 cases). Red first: committed with the
+  registry file present but **no scopes registered** — `names()` returned `[]` — 3 of 4 assertions
+  failed for real (`expected Set{7 items} to equal Set{}`, `toHaveLength(7)` got `0`), the fourth
+  ("has() rejects an unknown scope") passed trivially since nothing was registered. Green after
+  adding the seven `register(...)` calls: 4/4.
+- `api/src/platform/oauth/__tests__/bearerAuth.test.ts` (11 cases, AC-1 through AC-4 plus two
+  PM-triage revocation cases). Red first: `bearerAuth`/`requireScope` stubbed to always set no
+  principal and call `next()` unconditionally — 10 of 11 failed for real (`expected 200 to be 401`
+  ×6, `expected 200 to be 403` ×1, a principal-shape mismatch ×2, a missing `request_id` key ×1); the
+  11th (AC-3's control case — token WITH the required scope reaches the handler) passed, expectedly,
+  since the stub always calls `next()`. Green after the real implementation: 11/11, including the
+  two `console.warn` log lines proving revocation is server-side-distinguished.
+- `api/src/routes/api-tokens.test.ts` (3 new cases, added to the existing 4 `hashToken` unit tests —
+  the file's `vi.mock('../db/client.js', ...)` was **removed**, converting it to a real-DB +
+  `createApp()` + supertest integration file like `auth.test.ts`/`issues.test.ts`, because AC-6 asserts
+  a **persisted row**, which a mocked `pool.query` cannot prove). Red first against the unmodified
+  route: `scopes` param silently ignored — persisted row showed `scopes: null` instead of
+  `['documents:read']`, and an unregistered scope string got `201` instead of `400`. Green after
+  wiring the param through: 7/7 (2 pre-existing + control + 3 new — control case
+  "no scopes → NULL" already passed against the unmodified route, as expected, since that path was
+  unchanged).
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run \
+  src/platform/scopes/__tests__/registry.test.ts \
+  src/platform/oauth/__tests__/bearerAuth.test.ts \
+  src/routes/api-tokens.test.ts
+pnpm --filter @ship/api openapi:generate   # regenerates api/openapi.{yaml,json}
+```
+
+**Deliberately not done in this ticket (says so explicitly, not silently):** `bearerAuth`/
+`requireScope` are NOT wired onto the `/api/v1` router in `api/src/app.ts` — no protected v1
+resource route exists yet (PF-200 onward adds those), and `v1Router` currently only has
+`GET /health`, which PF-001's own AC requires to stay unauthenticated. Wiring blanket auth onto
+`v1Router` today would break that. Future route tickets attach
+`bearerAuth, requireScope('...')` per route, per PLUGFORGE.MD §2.1 ("bearer auth, scope checks...
+attach only at the public layer"). The `public_api_audit` half of the revocation-logging PM decision
+is open until PF-501 lands (see above).
+
+**Rollback.** Delete `api/src/platform/scopes/{registry.ts,requireScope.ts,__tests__/registry.test.ts}`
+and `api/src/platform/oauth/{principal.ts,bearerAuth.ts,apiError.ts,__tests__/bearerAuth.test.ts}`.
+In `api/src/routes/api-tokens.ts`, remove the `ScopeRegistry` import, the `scopeSchema` +
+`createTokenSchema.scopes` field, the `scopes` column from the `INSERT`/`SELECT` statements, and
+`scopes` from both response payloads — the route behaves exactly as before (every `api_tokens.scopes`
+value stays `NULL`, matching the column's pre-migration-043 default). Revert
+`api/src/routes/api-tokens.test.ts` to its pre-ticket mocked-`hashToken`-only form, and
+`api/src/openapi/schemas/auth.ts`'s `CreateAPITokenSchema`/`APITokenSchema` to drop the `scopes`
+field, then regenerate `api/openapi.{yaml,json}`. No other file imports from
+`api/src/platform/oauth/` or `api/src/platform/scopes/` yet, so nothing else needs to change.
+
+---
+
 ## TRO-433 — PF-303: HMAC webhook signer (`Ship-Signature: t=…,v1=…`) + the shared signature test-vector fixture
 
 **What was added.** `api/src/platform/webhooks/signer.ts` — a pure, dependency-free module (only
