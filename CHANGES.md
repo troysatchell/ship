@@ -21,6 +21,46 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-424 / PF-903 — `docs/architecture.md`: Day-1 skeleton with all nine mandated defense sections, gated by a new section-presence test
+
+**What this closes.** PF-903's Proof line ("Doc committed with all mandated sections present")
+required starting `docs/architecture.md` on Day 1 as defense material for the Architectural
+Defense, per `PLUGFORGE.MD`'s E9 sequencing (arch doc + terraform start immediately, in parallel
+with everything else). Before this change the file did not exist at all (confirmed absent
+2026-08-10).
+
+**What changed.**
+- Added `docs/architecture.md` — module layout tree, SOLID rationale (`ScopeRegistry`→OCP,
+  `IEventBus`→DIP, SDK resource clients→ISP) with planned file paths, composition-root pseudo-code
+  + its in-memory test-wiring sibling, a public/internal boundary sequence diagram (mermaid,
+  skeleton fidelity), OAuth flow diagrams for both grants (PKCE rotation points marked; Device
+  Authorization Grant), the webhook pipeline with signature and Idempotency-Key origins marked,
+  the SDK surface with stable-vs-pre-1.0 marks, the agent-as-citizen before/after with the
+  audit-log payoff, four failure-mode paragraphs (corrupted token store, mid-flight secret
+  rotation, deliverer crash, OpenAPI generator boot-throw), and both documented deviations
+  (signing-secret encrypted-not-hashed, §2.2 note; collab-persist event exclusion, PF-301). Content
+  is derived from `PLUGFORGE.MD` §2 and the PM triage decisions already recorded there — no
+  platform code exists yet in this worktree (no `api/src/platform/`, `sdk/`, or `integrations/`),
+  so every file-path citation is stated as a planned location, and the doc's own header says so
+  explicitly, to avoid presenting derived/planned content as observed fact (CLAUDE.md provenance).
+  The one item genuinely blocked on another ticket — a reference to PF-902's IAM adaptation memo by
+  its committed filename — is an honest placeholder in a "Cross-References" section, not invented
+  detail, and its regression test is `it.todo(...)` rather than a passing assertion.
+- Added `api/src/__tests__/architectureDocSections.test.ts` — the test-design comment's mechanical
+  section-presence lint (pattern: `pinnedDependencies.test.ts` — read a repo file, assert required
+  content, one `it()` per requirement). 14 assertions + 1 `it.todo` for the PF-902 cross-reference.
+  Runs automatically in the existing `api` vitest project; no new CI wiring needed.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run src/__tests__/architectureDocSections.test.ts`
+(no database interaction beyond the suite's standard advisory-lock `beforeAll`/TRUNCATE — the test
+itself only reads a file).
+
+**Roll back.** `git rm docs/architecture.md api/src/__tests__/architectureDocSections.test.ts`,
+revert this entry. No schema, no migration, no other file touched — the only side effect is the
+committed doc and its test.
+
+---
+
 ## TRO-381 / TRO-351 — FLEETGRAPH.MD accuracy and trim: fixed a self-contradiction, six stale `graph.ts` citations, a wrong route-key count, a missing Trigger Model note, restructured Cost Analysis, and cut ~140 lines of process narration
 
 **The cost this closes.** Two named inaccuracies, both derived from reading `agent/src/graph.ts`
