@@ -40,6 +40,13 @@
  * with a Redis-shared store when `REDIS_URL` is set — see
  * `redis-rate-limit-store.ts` for the store, the atomicity argument, and the
  * documented fail-open behavior if Redis is configured but unreachable.
+ *
+ * PF-004 / TRO-401: both limiters now `skip` `/api/v1/*` (see
+ * `isLegacyLimiterExemptPath` below) — the public router is meant to be
+ * governed by PF-500's per-app/per-token buckets instead, and inheriting
+ * these IP/identity-keyed limits at 600/6,000 per minute would strangle the
+ * public API and the Time-to-First-Event drill (PLUGFORGE.MD §2.7, §4).
+ * Every other `/api/*` route is unaffected.
  */
 import crypto from 'node:crypto';
 import type { RequestHandler } from 'express';
@@ -180,6 +187,33 @@ export function readBearerToken(authorization: string | undefined): string | nul
 }
 
 /**
+ * PF-004 / TRO-401 — exempts `/api/v1/*` from the two legacy `/api/`
+ * limiters below. PF-500's per-app/per-token buckets are meant to govern the
+ * public API instead (PLUGFORGE.MD §2.7); until that lands, `/api/v1` is
+ * simply unmetered by this file, matching the AC's "v1 requests bypass both
+ * legacy limiters" requirement.
+ *
+ * PATH SHAPE, VERIFIED EMPIRICALLY before writing this — do not assume it:
+ * both limiters mount via `app.use('/api/', <limiter>)` (`app.ts:328-329`),
+ * and Express strips the matched mount prefix from the request before a
+ * mounted middleware's `skip` callback ever runs. A probe against a
+ * throwaway app with the identical `app.use('/api/', mw)` shape confirmed
+ * `req.path` inside `mw` for a `/api/v1/health` request is `/v1/health`
+ * (`req.baseUrl` is `/api`) — NOT `/api/v1/health`. So this predicate
+ * matches the MOUNT-RELATIVE `/v1` shape.
+ *
+ * Segment-boundary match, not a bare `startsWith('/v1')` — a raw substring
+ * check would also exempt `/v10/*` or `/v1foo/*`, neither of which is the
+ * public router. Mirrors the app-global CORS guard's `isPublicSurfacePath`
+ * (PF-001, `app.ts:375-376`), which enforces the same boundary rule one
+ * layer up, where `req.path` is still the unstripped `/api/v1/...` (that
+ * middleware is mounted at the app root, not under `/api/`).
+ */
+export function isLegacyLimiterExemptPath(path: string): boolean {
+  return path === '/v1' || path.startsWith('/v1/');
+}
+
+/**
  * Hash the credential before using it as a bucket key. The rate-limit store is
  * long-lived, in-memory and surfaces in diagnostics; it should never hold a
  * live session id or API token verbatim.
@@ -274,6 +308,7 @@ export function createApiRateLimiters(
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests from this network. Please slow down.' },
+    skip: (req) => isLegacyLimiterExemptPath(req.path),
     ...(redisClient
       ? {
           store: createRedisRateLimitStore(redisClient, REDIS_KEY_PREFIX_SOURCE_IP),
@@ -291,6 +326,7 @@ export function createApiRateLimiters(
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'Too many requests. Please slow down.' },
+    skip: (req) => isLegacyLimiterExemptPath(req.path),
     ...(redisClient
       ? {
           store: createRedisRateLimitStore(redisClient, REDIS_KEY_PREFIX_IDENTITY),

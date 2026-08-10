@@ -21,6 +21,85 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-401 — PF-004: exempt `/api/v1` from the legacy `/api/` rate limiters (prod-shaped proof)
+
+**What was broken.** Both legacy `/api/` limiters (`perSourceIpLimiter`, `perIdentityLimiter` in
+`api/src/middleware/rate-limit.ts`, TRO-172/API-1) mount via `app.use('/api/', ...)` in
+`api/src/app.ts:328-329` with no skip logic, so `/api/v1/*` (PF-001's public router) inherited both
+— a per-identity ceiling of 600 req/min and a per-IP ceiling of 6,000 req/min in production. PF-500's
+per-app/per-token buckets are meant to govern the public API instead; until that lands, `/api/v1`
+needed to be unmetered by this file, or the public API and the Time-to-First-Event drill would be
+throttled by limits designed for cookie/session traffic (PLUGFORGE.MD §2.7, §4 PF-004).
+
+**What changed.** Added `isLegacyLimiterExemptPath(path: string): boolean` to `rate-limit.ts` and
+wired it into both `rateLimit({...})` calls via the `skip` option. The path shape was **verified
+empirically, not assumed**, before writing the predicate: both limiters mount at `/api/`, and Express
+strips that mount prefix before a mounted middleware's `skip` callback runs — a throwaway probe app
+with the identical `app.use('/api/', mw)` shape confirmed `req.path` inside `mw` for a request to
+`/api/v1/health` is `/v1/health` (`req.baseUrl` is `/api`), not `/api/v1/health`. The predicate
+therefore matches the **mount-relative** `/v1` shape:
+
+```ts
+export function isLegacyLimiterExemptPath(path: string): boolean {
+  return path === '/v1' || path.startsWith('/v1/');
+}
+```
+
+Segment-boundary-safe (`/v1` or `/v1/…`, never a bare `startsWith('/v1')`) so `/api/v10/*` and
+`/api/v1foo/*` are never accidentally exempted — mirrors the app-global CORS guard's
+`isPublicSurfacePath` (PF-001, `app.ts:375-376`), which enforces the identical boundary rule one
+layer up, where `req.path` is still the unstripped `/api/v1/...` (that middleware is mounted at the
+app root, not under `/api/`). Also updated the now-stale `app.ts` comment above the CORS mount that
+said exempting `/api/v1` from the legacy limiters was "PF-004's job, not this ticket's" — it is now
+this ticket's, and done.
+
+**Regression test.** `api/src/middleware/__tests__/rate-limit-v1-exemption.test.ts` — builds a
+minimal Express app mirroring `app.ts:328-330`'s exact prefix-mount order (both legacy limiters at
+`/api/`, then the real `v1Router` at `/api/v1`, plus one bare internal `/api/*` route). Limiters are
+constructed via `createApiRateLimiters({ NODE_ENV: 'production' })`, which resolves the **production**
+numbers (`identityLimit: 600`, `sourceIpLimit: 6000`, `windowMs: 60_000` — `rate-limit.ts:130-132`),
+not the test-env defaults (10,000 / 100,000) the AC explicitly warns would prove nothing against a
+601-sequential-request test.
+- **AC-1 (v1 bypass):** 601 sequential requests to `/api/v1/health` on one session identity — asserts
+  zero `429`s.
+- **AC-2 (internal routes stay capped):** 601 sequential requests to an internal `/api/*` route on one
+  session identity — asserts a `429` arrives at exactly request request 601, carrying the **unchanged legacy
+  limiter body shape** (`{ error: 'Too many requests. Please slow down.' }`), not the new `/api/v1`
+  `ApiError` shape — proving the exemption did not leak into internal routes.
+
+**Red before green (observed).** Ran AC-1 against the unfixed code: real `AssertionError` —
+`expected 0/601 throttled responses to /api/v1/health, got 1` (a genuine HTTP 429 arrived at request
+request 601; not an import error or typo). AC-2 was already green pre-fix (no exemption existed yet, so
+internal routes were never at risk) — it functions as a regression guard against an over-broad
+future implementation (e.g. one that matched all of `/api/` instead of `/api/v1`), not as red-before-
+green in the strict sense; both ACs are covered per the Linear test-design comment. After adding the
+`skip` predicate: both tests pass, full `api` suite 884/884. One earlier full-suite run (also
+post-fix) showed a single unrelated failure in `src/routes/agent.test.ts` (`fetchSpy` call-count
+assertion) with no sibling `gate.sh`/vitest process running (`ps aux` checked); an immediate re-run
+of the full suite passed 884/884 with no code change. This branch touches no `agent`-related file —
+consistent with the documented load-sensitive flake class (`lessons.md` rule 24/25), not a
+regression from this change.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api test -- rate-limit-v1-exemption
+```
+
+**Not verified.** Real wall-clock window expiry (601 synchronous in-process requests complete well
+inside the 60s window, so no clock advancement was exercised — matches the test-design comment's
+explicit scope). Production behavior against a live Redis-backed store (`REDIS_URL` unset in every
+environment this test runs in, so it exercises the default in-process `MemoryStore` path only, same
+as the rest of `rate-limit.test.ts`).
+
+**Rollback.** Revert this commit (or `git diff main -- api/src/middleware/rate-limit.ts api/src/app.ts
+api/src/middleware/__tests__/rate-limit-v1-exemption.test.ts | git apply -R`). Restores both legacy
+limiters to unconditionally capping `/api/v1/*` at the production 600/6,000 ceilings, and reverts the
+`app.ts` comment. No schema, migration, or env-var changes — safe to revert standalone.
+
+---
+
 ## TRO-399 — PF-003: boundary lint rules (Day-1 one-way door)
 
 **What was added.** Two enforcement mechanisms for PLUGFORGE.MD §2.1's platform boundary rules,
