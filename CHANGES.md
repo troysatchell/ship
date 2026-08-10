@@ -69,6 +69,12 @@ enumeration-length assertion failed (`expected [] to deeply equal [8 items]`) an
 error, but it didn't` — a real assertion mismatch against the designed behavior, not a module or
 import error. Restoring the real schemas made all 18 green with no other change.
 
+**How to run it.**
+
+```bash
+pnpm --filter @ship/api exec vitest run src/platform/webhooks/__tests__/events.test.ts
+```
+
 **Gate.** `scripts/factory/gate.sh` — verdict pasted verbatim in the PR/ticket report.
 
 **Rollback.** `git rm api/src/platform/webhooks/events.ts
