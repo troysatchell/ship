@@ -314,5 +314,27 @@ describe('oauth schema migrations 042 + 043 (PF-101 / TRO-406)', () => {
       },
       HOOK_TIMEOUT
     );
+
+    it(
+      'creates FK-lookup indexes on oauth_apps.owner_user_id, oauth_authorization_codes.user_id, ' +
+        'oauth_tokens.parent_id, and oauth_device_codes.user_id (CodeRabbit finding, PF-101)',
+      async () => {
+        const fkIndexNames = [
+          'idx_oauth_apps_owner_user_id',
+          'idx_oauth_authorization_codes_user_id',
+          'idx_oauth_tokens_parent_id',
+          'idx_oauth_device_codes_user_id',
+        ];
+
+        for (const indexName of fkIndexNames) {
+          const index = await pool.query<{ indexdef: string }>(
+            `SELECT indexdef FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1`,
+            [indexName]
+          );
+          expect(index.rows, `${indexName} should exist`).toHaveLength(1);
+        }
+      },
+      HOOK_TIMEOUT
+    );
   });
 });

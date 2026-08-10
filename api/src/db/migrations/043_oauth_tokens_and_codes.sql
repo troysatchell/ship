@@ -43,6 +43,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_authorization_codes_code_hash
   ON oauth_authorization_codes (code_hash);
 CREATE INDEX IF NOT EXISTS idx_oauth_authorization_codes_app_id
   ON oauth_authorization_codes (app_id);
+-- FK-lookup index: user_id is scanned on every referencing user's delete
+-- (ON DELETE CASCADE) (CodeRabbit finding, PF-101).
+CREATE INDEX IF NOT EXISTS idx_oauth_authorization_codes_user_id
+  ON oauth_authorization_codes (user_id);
 
 -- oauth_tokens: access + refresh token pairs for all three grants.
 -- user_id is nullable — Client Credentials grant issues an app-only token
@@ -80,6 +84,9 @@ CREATE INDEX IF NOT EXISTS idx_oauth_tokens_user_id ON oauth_tokens (user_id);
 -- (UPDATE ... WHERE family_id = $1) — needs an index or that revocation
 -- itself seq-scans the table on every reuse detection.
 CREATE INDEX IF NOT EXISTS idx_oauth_tokens_family_id ON oauth_tokens (family_id);
+-- FK-lookup index: parent_id is scanned on every rotated-parent's delete
+-- (ON DELETE SET NULL) (CodeRabbit finding, PF-101).
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_parent_id ON oauth_tokens (parent_id);
 
 -- oauth_device_codes: RFC 8628 device authorization grant. user_code is the
 -- short human-typable code (e.g. BDWJ-KXQT) shown on the device and entered
@@ -106,6 +113,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_device_codes_user_code
   ON oauth_device_codes (user_code);
 CREATE INDEX IF NOT EXISTS idx_oauth_device_codes_app_id
   ON oauth_device_codes (app_id);
+-- FK-lookup index: user_id is scanned on every referencing user's delete
+-- (ON DELETE CASCADE) (CodeRabbit finding, PF-101).
+CREATE INDEX IF NOT EXISTS idx_oauth_device_codes_user_id
+  ON oauth_device_codes (user_id);
 
 -- api_tokens.scopes (§2.2, same migration as the row above states): extends
 -- the EXISTING personal-access-token mechanism (schema.sql:254-267 — no

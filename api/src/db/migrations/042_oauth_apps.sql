@@ -56,3 +56,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_oauth_apps_client_id ON oauth_apps (client
 -- Supporting index: the portal's "list my workspace's registered apps" query
 -- (§2.9) filters by workspace_id — same convention as idx_api_tokens_workspace_id.
 CREATE INDEX IF NOT EXISTS idx_oauth_apps_workspace_id ON oauth_apps (workspace_id);
+
+-- FK-lookup index: owner_user_id backs "list apps I own" lookups and is
+-- scanned on every referencing user's delete (ON DELETE SET NULL) — same
+-- convention as the FK indexes below (CodeRabbit finding, PF-101).
+CREATE INDEX IF NOT EXISTS idx_oauth_apps_owner_user_id ON oauth_apps (owner_user_id);
