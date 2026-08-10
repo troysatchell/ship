@@ -21,6 +21,87 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-433 — PF-303: HMAC webhook signer (`Ship-Signature: t=…,v1=…`) + the shared signature test-vector fixture
+
+**What was added.** `api/src/platform/webhooks/signer.ts` — a pure, dependency-free module (only
+`node:crypto`) implementing PLUGFORGE.MD §2.6's webhook signature contract: `sign(rawBody, secret,
+clock)` returns the `Ship-Signature` header **value** `t=<unix-seconds>,v1=<hex-hmac-sha256>`,
+computed over the signed payload `${t}.${rawBody}`; `verify(header, rawBody, secret,
+toleranceSeconds, clock)` parses that value, rejects anything outside a ±300s tolerance window
+(inclusive at the boundary), and compares digests with `crypto.timingSafeEqual` (length-checked
+first, since that function throws rather than returning `false` on unequal-length buffers). Both
+functions take an injected `Clock` (`() => number`, Unix seconds) rather than reading `Date.now()`
+directly, defaulting to a real wall clock — this is the same deterministic-clock convention
+PF-304's deliverer will use, so tests never depend on real time passing. `verify()` never throws:
+a structurally malformed header (missing `v1`, missing/non-numeric `t`) returns `false`, the same
+as an expired timestamp or a digest mismatch.
+
+Per a binding PM triage comment on TRO-433 (fixture ownership: this ticket lands first and owns
+the algorithm), this ticket also creates `shared/fixtures/webhook-signature-vectors.json` — a
+dependency-free JSON file with six test vectors (`valid`, `tampered`, `expired`, `missing_v1`,
+`boundary_within_tolerance`, `boundary_outside_tolerance`), each carrying the secret, timestamps,
+raw body, the exact `Ship-Signature` header value (real HMAC-SHA256 hex digests computed with
+Node's `crypto.createHmac`, not hand-typed), and the expected verification result. PF-403's SDK
+`verifyWebhook` will consume the same file so both implementations are checked against one source
+of truth for byte-parity, instead of two independently-authored vector sets that could silently
+drift apart.
+
+**Why `api/src/platform/webhooks/` and not something under an existing scaffold.** PF-001 (the
+platform scaffold ticket) had not landed on this branch at the time of this work — parallel wave.
+This ticket creates only the directory path it needs (`api/src/platform/webhooks/`) and imports
+nothing from elsewhere under `api/src/platform/`, so it builds and tests standalone regardless of
+merge order with PF-001's scaffold.
+
+**How to run it.**
+```bash
+source .factory-env   # or api/.env.local outside a factory worktree
+pnpm --filter @ship/api exec vitest run src/platform/webhooks/__tests__/signer.test.ts
+```
+16 cases: the 6 acceptance criteria from the Linear test-design comment (positive, tampered body,
+expired timestamp, missing `v1`, tolerance boundary — both edges — and a signing-speed
+micro-benchmark), a constant-time-compare API-usage check (`crypto.timingSafeEqual` is actually
+invoked, plus a functional check that both a one-byte-different and a completely different
+signature are rejected), and the shared-fixture round-trip (every vector in
+`webhook-signature-vectors.json` driven through `sign`/`verify`).
+
+**Red before green (observed, not derived).** Ran the full suite against a deliberate stub
+(`sign` returns a hardcoded `t=0,v1=<64 zero hex chars>` header; `verify` always returns `false`)
+before writing the real implementation: **8 of 16 tests failed** with genuine `AssertionError`s
+(header string / boolean mismatches — e.g. `expected 't=0,v1=000...' to be 't=1700000000,v1=2ca8...'`),
+none an import or module error. The other 8 passed only because the stub's constant `false` happens
+to satisfy every case whose fixture/AC expects `false`. Full failing output is in this branch's
+work log; representative excerpt:
+```
+FAIL … verifies a signature freshly signed for the same body and timestamp
+AssertionError: expected 't=0,v1=000000000000000000000000000000…' to be 't=1700000000,v1=2ca818bc8816377f6448…'
+FAIL … case "'boundary_within_tolerance'"
+AssertionError: expected 't=0,v1=000000000000000000000000000000…' to be 't=1699999700,v1=a69a0b1f6e098af9f949…'
+```
+After implementing the real `sign`/`verify`: **16/16 pass.**
+
+**Perf-assertion proof (AC-6, per the test-design's required technique).** The spec calls for
+proving the `< 1ms` (asserted `< 5ms` mean, CI-safe ceiling) speed test is a real assertion, not a
+tautology, since a hardcoded-string stub would trivially pass a speed test. Temporarily inserted an
+8ms synchronous busy-wait at the top of `sign()` (the design suggested an "async delay"; `sign` is
+synchronous by design for a pure crypto module, so a synchronous busy-wait is the equivalent
+proof for this shape) — the perf test failed: `AssertionError: expected 8.0648… to be less than 5`.
+Removed the busy-wait; re-ran; passed again. Confirms the assertion actually measures execution
+time rather than always passing.
+
+**Gate.** `scripts/factory/gate.sh` — pass. See this ticket's PR/report for the verbatim verdict
+JSON.
+
+**Rollback.** `git rm api/src/platform/webhooks/signer.ts
+api/src/platform/webhooks/__tests__/signer.test.ts shared/fixtures/webhook-signature-vectors.json`,
+then `rmdir api/src/platform/webhooks/__tests__ api/src/platform/webhooks shared/fixtures` if
+empty (leave `api/src/platform/` itself alone if PF-001's scaffold has since populated it with
+other files). No migrations, no schema changes, no other files touched — this ticket adds only the
+three files named above, so reverting it cannot affect any other ticket's work except PF-403
+(`verifyWebhook`), which depends on the fixture file for its own byte-parity tests and would need
+its own vectors restored or regenerated first.
+
+---
+
 ## TRO-381 / TRO-351 — FLEETGRAPH.MD accuracy and trim: fixed a self-contradiction, six stale `graph.ts` citations, a wrong route-key count, a missing Trigger Model note, restructured Cost Analysis, and cut ~140 lines of process narration
 
 **The cost this closes.** Two named inaccuracies, both derived from reading `agent/src/graph.ts`
