@@ -3,10 +3,14 @@
 **Status:** Day-1 skeleton (PF-903 / TRO-424). Living document — updated as each Week 6 epic
 (E0–E9, see `PLUGFORGE.MD`) lands; final accuracy pass near submission. Sections below describe
 **decided design** (`PLUGFORGE.MD` §2 + the PM triage decisions recorded across the project's
-tickets), not yet-observed runtime behavior — as of this writing no platform code has landed
-(verified: no `api/src/platform/`, `sdk/`, or `integrations/` directories exist in this worktree).
-Treat file-path citations as planned locations until the owning ticket lands and this section is
-refreshed against the real code.
+tickets), not yet-observed runtime behavior for the new platform surface specifically — as of this
+writing no platform code has landed (verified: no `api/src/platform/`, `sdk/`, or `integrations/`
+directories exist in this worktree). **Scope of that caveat:** it applies to paths under
+`api/src/platform/`, `sdk/`, and `integrations/` — those are planned locations, refreshed against
+the real code once the owning ticket lands. It does **not** apply to citations of code that already
+exists and ships today — `api/src/app.ts`, `agent/src/shipClient.ts:337`,
+`api/src/collaboration/index.ts:207` — which are observed (read directly, 2026-08-10) and describe
+current behavior this platform work builds on top of, not a future state.
 
 **Scope:** PlugForge (Week 6) — Ship's public platform layer: `/api/v1`, OAuth 2.0, signed
 webhooks, `@ship/sdk`, and the FleetGraph agent rewired as a platform citizen. `PLUGFORGE.MD` is
@@ -311,5 +315,7 @@ enumerating exactly which sites route through it versus which are excluded is PF
 ---
 
 *Last updated: 2026-08-10 (PF-903 Day-1 skeleton, TRO-424). No platform code has landed as of this
-writing — every file-path citation above is a planned location, not an observed one. Refresh each
-section against the real code as its owning ticket (named inline) lands.*
+writing — citations under `api/src/platform/`, `sdk/`, and `integrations/` are planned locations,
+not observed ones; citations to existing code (`api/src/app.ts`, `agent/src/shipClient.ts`,
+`api/src/collaboration/index.ts`) were read directly and are observed. Refresh each section against
+the real code as its owning ticket (named inline) lands.*
