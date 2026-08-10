@@ -89,6 +89,20 @@ jobs:
       - name: Lint
         run: pnpm lint
 
+      # TRO-399 (PF-003): mirrors .gitlab-ci.yml's verify job (the graded
+      # pipeline) — see that file's comment for the full rationale. `pnpm
+      # lint` above already enforces the ESLint half of the boundary rule
+      # (platform/api/v1/** -> routes/**); this is the integrations/*
+      # workspace-dependency half, which is not an import-lint concern.
+      - name: Integration package dependency boundary
+        run: node scripts/check-integration-deps.mjs
+
+      # Regression test for the script's decision logic. scripts/ isn't
+      # covered by api's or web's vitest `include`, so it needs its own
+      # explicit run — see the test file's header for why it's node:test.
+      - name: check-integration-deps regression test
+        run: node --test scripts/__tests__/check-integration-deps.test.mjs
+
       - name: Build all packages
         run: pnpm build
 
