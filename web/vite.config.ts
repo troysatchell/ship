@@ -110,6 +110,43 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      // PF-103 (TRO-412): frame-ancestors 'none' on the OAuth consent page
+      // (clickjacking guard, PLUGFORGE.MD §4). The consent page is a
+      // client-rendered SPA route (`/oauth-consent`, OAuthConsent.tsx), not
+      // Express-server-rendered — see the CHANGES.md TRO-412 entry and the
+      // header comment in `api/src/routes/oauth-authorize.ts` for why. Per
+      // the ticket's PM triage comment, an SPA-served consent page sets this
+      // via "host-level header config" rather than a per-route Express/
+      // helmet override; this is that config, applied to both the dev
+      // server and the `vite preview` server the e2e suite runs against
+      // (playwright.config.ts).
+      //
+      // NOT VERIFIED for the S3+CloudFront production deployment — no
+      // `ordered_cache_behavior` currently routes `/oauth-consent*` (or, for
+      // that matter, `/oauth/*` at all — see terraform/s3-cloudfront.tf) to
+      // anywhere but the default S3 origin, and S3 cannot attach a custom
+      // response header to one path without a CloudFront Function/Lambda@Edge.
+      // Flagged as a follow-up (see this ticket's final report / CHANGES.md);
+      // out of scope here (terraform is PF-900-series work, not this ticket).
+      {
+        name: 'oauth-consent-csp',
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url && req.url.split('?')[0] === '/oauth-consent') {
+              res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+            }
+            next();
+          });
+        },
+        configurePreviewServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url && req.url.split('?')[0] === '/oauth-consent') {
+              res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+            }
+            next();
+          });
+        },
+      },
       svgr({
         // Allow importing SVGs as React components with ?react suffix
         // e.g., import CheckIcon from '@uswds/uswds/dist/img/usa-icons/check.svg?react'

@@ -33,6 +33,7 @@ import backlinksRoutes from './routes/backlinks.js';
 import { searchRouter } from './routes/search.js';
 import { filesRouter } from './routes/files.js';
 import caiaAuthRoutes from './routes/caia-auth.js';
+import oauthAuthorizeRoutes from './routes/oauth-authorize.js';
 import apiTokensRoutes from './routes/api-tokens.js';
 import adminCredentialsRoutes from './routes/admin-credentials.js';
 import claudeRoutes from './routes/claude.js';
@@ -472,6 +473,17 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   // Mount at both /caia and /piv paths - /piv/callback is registered with CAIA
   app.use('/api/auth/caia', caiaAuthRoutes);
   app.use('/api/auth/piv', caiaAuthRoutes);
+
+  // OAuth authorization endpoint + consent decision (PF-103, TRO-412) — no
+  // CSRF protection, same OAuth-flow rationale as CAIA above (see the
+  // module-level comment in oauth-authorize.ts for the full reasoning: a
+  // native browser navigation/form POST, not `fetch()`, so this needs no
+  // change to /oauth's already-mounted public CORS policy, above). Mounted
+  // at the top-level `/oauth` prefix PF-001 already carved out and CORS'd
+  // for this ticket (see the comment on `app.use(['/api/v1','/oauth'],
+  // createPublicApiCors())` above) — not under `/api`, since this is the RFC
+  // 6749 authorization endpoint, not a JSON API resource.
+  app.use('/oauth', oauthAuthorizeRoutes);
 
   // Admin credentials management (CSRF protected, super-admin only)
   app.use('/api/admin/credentials', conditionalCsrf, adminCredentialsRoutes);
