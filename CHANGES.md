@@ -87,7 +87,7 @@ in `errors.ts`/`errorMiddleware.ts` is referenced by, or designed for, anything 
   string`, `request_id: string`, `details` only when present, no extra keys); constructs the three
   401 variants specifically and asserts `details.reason` for each; asserts no fourth
   `revoked_token` reason exists.
-- `api/src/platform/api/v1/__tests__/error-middleware.test.ts` (3 cases) — AC-2: `GET
+- `api/src/platform/api/v1/__tests__/error-middleware.test.ts` (4 cases; the fourth — the `headersSent` guard — landed with the review-triage fixes) — AC-2: `GET
   /api/v1/this-route-does-not-exist` → 404, JSON body `{ code: 'not_found', message, request_id }`,
   and `request_id` in the body equals the `X-Request-Id` response header (dispatch brief: "every
   failure path carries request_id"). AC-3: a scratch route mounted on `v1Routes` that synchronously
@@ -126,7 +126,7 @@ src/platform/api/v1/__tests__/error-middleware.test.ts`:
 ```
 All three failed on the real observed response (Express's default HTML 404; the stub's raw-stack
 `text/html` 500 body, unparsed by supertest as JSON), not an import error. Restored the real
-implementations and re-ran: all 10 + all 3 pass.
+implementations and re-ran: all 10 + all 3 pass (the middleware suite's pre-triage count; the 4th case was added afterward with the headersSent fix).
 
 **How to run it.** `source .factory-env` first.
 ```
