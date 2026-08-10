@@ -76,6 +76,406 @@ expected-filename constant in the same change. Updating the test's expected file
 
 ---
 
+## TRO-424 / PF-903 — `docs/architecture.md`: Day-1 skeleton with all nine mandated defense sections, gated by a new section-presence test
+
+**What this closes.** PF-903's Proof line ("Doc committed with all mandated sections present")
+required starting `docs/architecture.md` on Day 1 as defense material for the Architectural
+Defense, per `PLUGFORGE.MD`'s E9 sequencing (arch doc + terraform start immediately, in parallel
+with everything else). Before this change the file did not exist at all (confirmed absent
+2026-08-10).
+
+**What changed.**
+- Added `docs/architecture.md` — module layout tree, SOLID rationale (`ScopeRegistry`→OCP,
+  `IEventBus`→DIP, SDK resource clients→ISP) with planned file paths, composition-root pseudo-code
+  + its in-memory test-wiring sibling, a public/internal boundary sequence diagram (mermaid,
+  skeleton fidelity), OAuth flow diagrams for both grants (PKCE rotation points marked; Device
+  Authorization Grant), the webhook pipeline with signature and Idempotency-Key origins marked,
+  the SDK surface with stable-vs-pre-1.0 marks, the agent-as-citizen before/after with the
+  audit-log payoff, four failure-mode paragraphs (corrupted token store, mid-flight secret
+  rotation, deliverer crash, OpenAPI generator boot-throw), and both documented deviations
+  (signing-secret encrypted-not-hashed, §2.2 note; collab-persist event exclusion, PF-301). Content
+  is derived from `PLUGFORGE.MD` §2 and the PM triage decisions already recorded there — no
+  platform code exists yet in this worktree (no `api/src/platform/`, `sdk/`, or `integrations/`),
+  so every file-path citation is stated as a planned location, and the doc's own header says so
+  explicitly, to avoid presenting derived/planned content as observed fact (CLAUDE.md provenance).
+  The PF-902 cross-reference (IAM adaptation memo) names its real committed path,
+  `docs/IAM-ADAPTATION-RENDER.md` — relayed as a cross-ticket fact (PF-902 landed on branch
+  `docs/pf-902-iam-memo`, not yet merged to `main` as of this writing) and marked in both the doc
+  and the test as derived, not independently verified from this worktree.
+- Added `api/src/__tests__/architectureDocSections.test.ts` — the test-design comment's mechanical
+  section-presence lint (pattern: `pinnedDependencies.test.ts` — read a repo file, assert required
+  content, one `it()` per requirement). 15 assertions, all real (no `.skip`/`.todo`): the
+  test-design comment specced the PF-902 cross-reference as a deferred `it.todo(...)` pending its
+  filename, but `gate.sh`'s G5 check (`tests:not-weakened`) unconditionally fails any newly added
+  skip/todo test modifier in a `*.test.ts` diff by design (only a Playwright-style fixme modifier
+  is exempted, and vitest's `it` does not implement one) — so once the real filename was available
+  it became a normal passing assertion instead. Runs automatically in the existing `api` vitest
+  project; no new CI wiring needed.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run src/__tests__/architectureDocSections.test.ts`
+(no database interaction beyond the suite's standard advisory-lock `beforeAll`/TRUNCATE — the test
+itself only reads a file).
+
+**Roll back.** `git rm docs/architecture.md api/src/__tests__/architectureDocSections.test.ts`,
+revert this entry. No schema, no migration, no other file touched — the only side effect is the
+committed doc and its test.
+
+---
+
+## TRO-433 — PF-303: HMAC webhook signer (`Ship-Signature: t=…,v1=…`) + the shared signature test-vector fixture
+
+**What was added.** `api/src/platform/webhooks/signer.ts` — a pure, dependency-free module (only
+`node:crypto`) implementing PLUGFORGE.MD §2.6's webhook signature contract: `sign(rawBody, secret,
+clock)` returns the `Ship-Signature` header **value** `t=<unix-seconds>,v1=<hex-hmac-sha256>`,
+computed over the signed payload `${t}.${rawBody}`; `verify(header, rawBody, secret,
+toleranceSeconds, clock)` parses that value, rejects anything outside a `toleranceSeconds` window
+(inclusive at the boundary; **defaults to ±300s** per PLUGFORGE.MD §2.6, but callers may pass a
+different value — it must be finite and non-negative), and compares digests with
+`crypto.timingSafeEqual` (length-checked first, since that function throws rather than returning
+`false` on unequal-length buffers). Both functions take an injected `Clock` (`() => number`, Unix
+seconds) rather than reading `Date.now()` directly, defaulting to a real wall clock — this is the
+same deterministic-clock convention PF-304's deliverer will use, so tests never depend on real time
+passing. `verify()` never throws for a structurally malformed header (missing `v1`,
+missing/non-numeric `t`), an expired timestamp, or a digest mismatch — all of those return `false`.
+It is **not** unconditionally throw-free, though: both `sign()` and `verify()` throw a `TypeError`
+for an empty or non-string `secret` by design (a caller misconfiguration, not a verification
+outcome — `createHmac('sha256', '')` succeeds in Node, so without this guard an unset-env-var
+secret would silently sign and verify under a key any party can guess), and an injected `clock()`
+callback that itself throws propagates that exception rather than being caught.
+
+Per a binding PM triage comment on TRO-433 (fixture ownership: this ticket lands first and owns
+the algorithm), this ticket also creates `shared/fixtures/webhook-signature-vectors.json` — a
+dependency-free JSON file with seven test vectors (`valid`, `tampered`, `expired`, `missing_v1`,
+`boundary_within_tolerance`, `boundary_outside_tolerance`, `malformed_v1_trailing_garbage`), each
+carrying the secret, timestamps, raw body, the exact `Ship-Signature` header value (real
+HMAC-SHA256 hex digests computed with Node's `crypto.createHmac`, not hand-typed), the expected
+verification result, and a `headerReproducibleBySign` flag (`false` for the two cases —
+`missing_v1` and `malformed_v1_trailing_garbage` — whose `header` is deliberately not reproducible
+by `sign()`, so the byte-parity assertion is skipped for those cases explicitly instead of by
+sniffing the header string for `"v1="`). The `malformed_v1_trailing_garbage` case (added in this
+ticket's second review pass, PR #172) pairs a genuine 64-hex digest with trailing non-hex garbage —
+decodes to the same 32 bytes as a real digest, so it is the one input that discriminates a
+length-only check from a format check — and exercises that path in the shared fixture, not just
+locally in this signer's own test file. PF-403's SDK `verifyWebhook` will consume the same file so
+both implementations are checked against one source of truth for byte-parity, instead of two
+independently-authored vector sets that could silently drift apart.
+
+**Why `api/src/platform/webhooks/` and not something under an existing scaffold.** PF-001 (the
+platform scaffold ticket) had not landed on this branch at the time of this work — parallel wave.
+This ticket creates only the directory path it needs (`api/src/platform/webhooks/`) and imports
+nothing from elsewhere under `api/src/platform/`, so it builds and tests standalone regardless of
+merge order with PF-001's scaffold.
+
+**How to run it.**
+
+```bash
+source .factory-env   # or api/.env.local outside a factory worktree
+pnpm --filter @ship/api exec vitest run src/platform/webhooks/__tests__/signer.test.ts
+```
+
+20 cases: the 6 acceptance criteria from the Linear test-design comment (positive, tampered body,
+expired timestamp, missing `v1`, tolerance boundary — both edges — and a signing-speed
+micro-benchmark), a constant-time-compare API-usage check (`crypto.timingSafeEqual` is actually
+invoked, plus a functional check that both a one-byte-different and a completely different
+signature are rejected), the shared-fixture round-trip (every one of the 7 vectors in
+`webhook-signature-vectors.json` driven through `sign`/`verify`), and 3 hardening regressions
+(trailing-garbage `v1`; non-finite/negative `toleranceSeconds` or clock; empty/non-string `secret`
+— the last added in this ticket's second review pass, PR #172).
+
+**Red before green (observed, not derived).** Ran the full suite against a deliberate stub
+(`sign` returns a hardcoded `t=0,v1=<64 zero hex chars>` header; `verify` always returns `false`)
+before writing the real implementation: **8 of 16 tests failed** with genuine `AssertionError`s
+(header string / boolean mismatches — e.g. `expected 't=0,v1=000...' to be 't=1700000000,v1=2ca8...'`),
+none an import or module error. The other 8 passed only because the stub's constant `false` happens
+to satisfy every case whose fixture/AC expects `false`. Full failing output is in this branch's
+work log; representative excerpt:
+
+```text
+FAIL … verifies a signature freshly signed for the same body and timestamp
+AssertionError: expected 't=0,v1=000000000000000000000000000000…' to be 't=1700000000,v1=2ca818bc8816377f6448…'
+FAIL … case "'boundary_within_tolerance'"
+AssertionError: expected 't=0,v1=000000000000000000000000000000…' to be 't=1699999700,v1=a69a0b1f6e098af9f949…'
+```
+
+After implementing the real `sign`/`verify`: **16/16 pass.**
+
+**Perf-assertion proof (AC-6, per the test-design's required technique).** The spec calls for
+proving the `< 1ms` (asserted `< 5ms` mean, CI-safe ceiling) speed test is a real assertion, not a
+tautology, since a hardcoded-string stub would trivially pass a speed test. Temporarily inserted an
+8ms synchronous busy-wait at the top of `sign()` (the design suggested an "async delay"; `sign` is
+synchronous by design for a pure crypto module, so a synchronous busy-wait is the equivalent
+proof for this shape) — the perf test failed: `AssertionError: expected 8.0648… to be less than 5`.
+Removed the busy-wait; re-ran; passed again. Confirms the assertion actually measures execution
+time rather than always passing.
+
+**CodeRabbit triage — first pass (gate.sh G9): two real hardening fixes, one finding dismissed as a
+misfire that a later review pass showed was actually real.** `gate.sh`'s CodeRabbit pass (G9)
+returned 3 findings against this branch:
+1. *(minor, CHANGES.md rollback wording)* — at the time, treated as a misfire: its
+   `codegenInstructions` referenced "the release-note entry itself," and the rollback section then
+   named all three files this ticket created, so the dismissal reasoned there was no gap. **That
+   reasoning was wrong** — "the release-note entry itself" *was* the gap: this ticket's
+   `CHANGES.md` entry is a fourth file the original rollback section never mentioned. A later
+   review pass (PR #172) caught the same gap independently and it is fixed above, in this entry's
+   own **Rollback** section.
+2. *(minor, `signer.ts` `constantTimeHexEquals`)* — real. `Buffer.from(str, 'hex')` does not throw
+   on invalid hex; it silently stops decoding at the first bad character. A `v1` consisting of a
+   genuinely valid 64-char digest with garbage appended after it still decodes to exactly 32 bytes
+   (Node truncates right after the valid part), the same length as a real digest — so the old
+   length-only check could not distinguish it from an unmodified signature. Fixed by validating
+   both operands as exactly 64 hex characters (`/^[0-9a-f]{64}$/i`) before any buffer comparison.
+3. *(major, `verify()` tolerance/clock handling)* — real, and the more serious of the two, though
+   the two non-finite/negative inputs it covers fail in different ways rather than one shared
+   "fails open" mode. `Math.abs(now - t) > toleranceSeconds` fails **open** specifically for
+   non-finite operands (`NaN`, `Infinity`): `NaN > anything` and `anything > Infinity`-adjacent
+   comparisons are always `false`, so a `NaN`/`Infinity` `toleranceSeconds` or a non-finite
+   `clock()` result could silently disable the replay-protection window rather than being
+   rejected. A **negative** `toleranceSeconds` is the opposite failure mode — `Math.abs(now - t)`
+   is never negative, so it is always greater than a negative tolerance, and `verify()` rejects
+   *every* timestamp, not just old ones. Neither failure mode is acceptable (one under-protects,
+   the other makes the endpoint unusable), so both are rejected explicitly: fixed by requiring
+   `toleranceSeconds` to be finite and non-negative, and `clock()`'s result to be finite, before
+   the comparison runs.
+
+Both real findings got their own regression tests (2 more, 18 total) and were proven red before the
+fix: reverted both guards, re-ran — the trailing-garbage case failed with
+`AssertionError: expected true to be false` (the real vulnerability: a doctored `v1` verified as
+valid), and the `NaN`-tolerance case failed the same way (a `NaN` tolerance made `verify()` accept
+an arbitrarily old signature). Restored both guards; 18/18 green again.
+
+**Gate.** `scripts/factory/gate.sh` — pass (both attempts documented in the ticket report: attempt
+1 failed typecheck on a `noUncheckedIndexedAccess` violation in the test file, fixed by destructuring
+`header.split(',')` explicitly instead of via array pattern; attempt 2 passed; the CodeRabbit
+hardening above was applied and re-verified after that).
+
+**Rollback.** This ticket touches four files, not three: `api/src/platform/webhooks/signer.ts`,
+`api/src/platform/webhooks/__tests__/signer.test.ts`, `shared/fixtures/webhook-signature-vectors.json`,
+and this `CHANGES.md` entry itself. The simplest correct rollback is `git revert
+<implementing-commit>` (or the small commit range for this ticket), which reverts all four
+together instead of relying on a hand-picked file list that can drift out of sync with the diff.
+If reverting by hand instead: `git rm api/src/platform/webhooks/signer.ts
+api/src/platform/webhooks/__tests__/signer.test.ts shared/fixtures/webhook-signature-vectors.json`,
+then `rmdir api/src/platform/webhooks/__tests__ api/src/platform/webhooks shared/fixtures` if
+empty (leave `api/src/platform/` itself alone if PF-001's scaffold has since populated it with
+other files) — **and also remove or restore this section of `CHANGES.md`**, so the release note
+does not outlive the code it describes. No migrations, no schema changes. Reverting cannot affect
+any other ticket's work except PF-403 (`verifyWebhook`), which depends on the fixture file for its
+own byte-parity tests and would need its own vectors restored or regenerated first.
+
+---
+
+## TRO-396 — PF-001: platform scaffold + `/api/v1` router (request IDs, public CORS)
+
+**The cost this closes.** Ship has no public API surface at all — every route lives at `/api/*`,
+mixed in with internal auth/CSRF/session/rate-limit middleware that a third-party developer client
+has no business going through. PlugForge (`PLUGFORGE.MD` §4, Epic E0) needs a place to build a
+versioned public API that shares none of that internal *route-specific* machinery (per-route CSRF,
+session auth, endpoint-specific limiters). This ticket is the entry point: every later platform
+ticket (OAuth, scopes, webhooks, rate limiting, audit, the v1 OpenAPI registry) builds inside the
+layout this ticket creates. Not yet true today: the legacy per-source-IP/per-identity rate limiters
+still match `/api/v1` by prefix (PF-004 removes that — see the `app.ts` bullet below).
+
+**What changed.**
+- New `api/src/platform/` directory tree, matching `PLUGFORGE.MD` §2.1 exactly: `oauth/`, `scopes/`,
+  `ratelimit/`, `webhooks/`, `audit/`, `api/v1/`, `openapi/`. Only `api/v1/` has code in this ticket
+  (PF-001's scope); the other six are placeholder `README.md`s naming which later ticket populates
+  them, so future tickets build inside the scaffold instead of inventing a new location.
+- `api/src/platform/api/v1/router.ts` — the public router. `v1Router.use(requestIdMiddleware)` then
+  `GET /health` (200, `{ status: 'ok' }`). Deliberately minimal: no bearer auth (PF-107), no
+  `ApiError` shape or 404 fallthrough (PF-002), no OpenAPI registration (PF-202 creates the v1
+  registry this route needs to register against — there is no v1 registry to target yet, and
+  registering it against the *internal* registry at `api/src/openapi/registry.ts` would be wrong,
+  since that documents `/api/*`, not `/api/v1/*`, per §2.1's boundary rule). `/health` needs none of
+  that: it is an unauthenticated liveness check, the same convention as the existing internal
+  `GET /health` in `api/src/app.ts`.
+- `api/src/platform/api/v1/requestId.ts` — `requestIdMiddleware`: `crypto.randomUUID()` per request,
+  attached to `req.requestId`, echoed as the `X-Request-Id` response header, and logged
+  (`console.log`) alongside the method/path — so a server-side log line correlates with the header a
+  caller actually sees.
+- `api/src/platform/config.ts` + `api/src/platform/publicCors.ts` — a separate, credential-less
+  (`credentials: false`) CORS policy for the public surface, distinct from the app-global
+  single-origin `credentials: true` policy in `api/src/app.ts` that backs the cookie-authenticated
+  SPA (which cannot serve a cross-origin bearer-token client — §2.1). Configurable via the new env
+  var **`PUBLIC_API_CORS_ORIGIN`**: unset/empty/`*` → any origin (the default — safe for local dev,
+  CI, and the TTFE drill's throwaway containers); a comma-separated list → only those origins,
+  reflected per-request. Documented in `api/src/platform/README.md` (per the dispatch brief — PF-802's
+  browser SDK demo is the first real consumer of a non-wildcard value) and in `config.ts`'s own
+  comments.
+- `api/src/app.ts` — two new lines mounting the platform layer: `app.use(['/api/v1', '/oauth'],
+  createPublicApiCors())` then `app.use('/api/v1', v1Router)`. Placed after the legacy per-source-IP/
+  per-identity rate limiters (`app.ts:326-327`, unchanged — those **still match `/api/v1`** by prefix;
+  exempting it is PF-004's job, explicitly out of scope here per the PRD's landmine table) and before
+  the app-global `cors()` call, so the public CORS headers apply. The app-global `cors()` itself is now
+  wrapped to skip `/api/v1` and `/oauth` entirely (see the PR #170 review-fixes note below) — see that
+  note for why the original "no header-collision to reason about" framing was wrong.
+  `/oauth` is listed now even though it has no router yet, so the ticket that adds it only has to
+  mount the router, not also touch this CORS wiring.
+
+**Deferred, on purpose, not an oversight:** OpenAPI registration for `GET /api/v1/health` (needs
+PF-202's v1 registry, which doesn't exist yet) and any scope declaration (health checks are
+conventionally unauthenticated; PF-107's scope registry doesn't exist yet either). Both are stated
+in `router.ts`'s own header comment and in `api/src/platform/openapi/README.md` so they aren't lost.
+
+**Regression test.** `api/src/platform/__tests__/v1-router.test.ts`, one case per AC clause from the
+Linear ticket's test-design comment (TRO-396):
+- AC-1: `GET /api/v1/health` → 200, `X-Request-Id` header present and matches a UUIDv4 pattern.
+- AC-2: same request with a cross-origin `Origin` header → 200, `Access-Control-Allow-Origin`
+  present, `Access-Control-Allow-Credentials` absent.
+- AC-3: an existing internal route (`GET /api/documents`, no session) still returns the
+  **pre-existing** internal auth-failure shape (`{ success: false, error: { code: 'UNAUTHORIZED',
+  message: 'No session found' } }`) — not the future v1 `ApiError` shape, and without an
+  `X-Request-Id` header — proving the new middleware is scoped to `/api/v1`/`/oauth` only.
+
+**Confirmed failing for the right reason before the fix.** Temporarily stubbed
+`api/src/platform/api/v1/router.ts` to an empty `Router()` (no `/health` route, no request-id
+middleware) — a real behavioral stub, not `git stash` (banned in this repo) or a deleted file, so
+there was never an import error to accidentally "prove red" with. Ran
+`pnpm --filter @ship/api exec vitest run src/platform/__tests__/v1-router.test.ts`:
+
+```
+ ❯ AC-1: GET /api/v1/health 200s with an X-Request-Id header (UUIDv4)
+   AssertionError: expected 404 to be 200
+ ❯ AC-2: a cross-origin fetch of /api/v1/health succeeds with credential-less CORS headers
+   AssertionError: expected 404 to be 200
+ ✓ AC-3: internal routes are untouched by the v1 request-id/CORS middleware
+```
+AC-1/AC-2 failed on the real assertion (route genuinely 404s pre-fix), not an import/module error.
+AC-3 passed both before and after by design — it is a forward-looking regression guard (the test
+design comment calls this "N/A in the traditional red-before sense"), not something this ticket's
+code is meant to make newly pass. Restored the real `router.ts` (diffed byte-identical against the
+pre-stub version) and re-ran: all 3 pass.
+
+**How to run it.** `source .factory-env` first.
+`pnpm --filter @ship/api exec vitest run src/platform/__tests__/v1-router.test.ts` for just this
+file. Full api suite: `pnpm --filter @ship/api test` — **80 files / 852 tests, 0 failures**, run
+alongside three sibling factory worktrees' concurrent gate runs against the same shared
+`ship-postgres-1` container (no load-flake symptoms observed, so no standalone re-run was needed
+per this repo's documented load-sensitive-test protocol). `pnpm type-check` (after `pnpm
+--filter @ship/shared build`) is clean.
+
+**Not verified.** No live/deployed check — this is local-only, `NODE_ENV` unset (development
+default). Browser-enforced CORS behavior (a real preflight `OPTIONS` round-trip from an actual
+browser) is not exercised by `supertest`, only the header contract a browser would honor; the test
+design comment calls this out explicitly as out of scope for this ticket's unit test.
+
+**Roll back.** Revert this commit. No schema change, no migration, no new dependency (the `cors`
+package was already a dependency, used identically by the existing app-global policy). Reverting
+removes the two `app.use(...)` lines and the `platform/` import lines from `api/src/app.ts` and
+deletes `api/src/platform/` entirely — `/api/v1/*` and `/oauth` stop being reachable, and the
+legacy internal `/api/*` surface is unaffected either way (it never depended on anything this ticket
+added).
+
+**PR #170 review fixes.** Nine findings triaged; one reproduced merge blocker plus eight smaller
+fixes:
+
+- **CodeRabbit #1 (merge blocker, reproduced).** The original framing above — "the v1 router's own
+  handler ends the response before anything mounted after it runs, so there is no header-collision to
+  reason about" — was wrong for any request that ISN'T `GET /api/v1/health`. `v1Router` has no 404
+  fallthrough yet (that's PF-002) and `/oauth` has no router mounted at all (that's E1), so an
+  unmatched `/api/v1/*` path or any `/oauth` request left the response open and fell through to the
+  app-global `cors()` below — which runs, and sets its headers, on every request that reaches it,
+  matched route or not. That overwrote `Access-Control-Allow-Origin` with the single-origin value and
+  added `Access-Control-Allow-Credentials: true` onto a response the public policy had already marked
+  credential-less. Fixed by wrapping the app-global `cors()` in a guard that skips it entirely for
+  `/api/v1` and `/oauth` (path-segment-boundary matched — exact prefix or prefix + `/`, same as
+  Express's own `app.use('/api/v1', ...)` mount above it — a bare `startsWith` would also wrongly
+  match `/api/v10` or `/oauth2`; caught by this same fix's own local `gate.sh` CodeRabbit pass and
+  covered by a fourth regression test below), rather than relying on the public router terminating
+  every request first. Confirmed red-before: the two path-fallthrough regression tests below fail
+  against the pre-fix code with `access-control-allow-credentials: 'true'` where `undefined` was
+  expected, then pass after the `app.ts` change.
+- **Finding #2.** `AC-2` in `v1-router.test.ts` now asserts `access-control-allow-origin` equals the
+  exact configured value (`'*'`, the default) instead of merely `toBeDefined()`, and sets/restores
+  `PUBLIC_API_CORS_ORIGIN` explicitly in the test instead of relying on ambient env.
+- **Finding #3.** `requestId.ts` — logs `req.baseUrl + req.path` instead of `req.originalUrl`, so a
+  caller's query string (which can carry sensitive values) no longer lands in the server log.
+- **Finding #4.** `publicCors.ts` — added `exposedHeaders: ['X-Request-Id']`. Without it the header was
+  set on the response but invisible to cross-origin browser JS: the CORS spec hides all response
+  headers from `fetch`/`XHR` except a small always-allowed set unless the server explicitly exposes
+  them.
+- **Findings #5/#7/#8/#9 (doc accuracy).** Same defect class as the CodeRabbit #1 blocker: present-tense
+  claims about behavior that doesn't exist yet. `ratelimit/README.md`'s "are exempted from `/api/v1` by
+  PF-004" → "will be exempted…" (today they still match by prefix). `platform/README.md`'s "is
+  bearer-token authenticated" → "will be bearer-token authenticated, once PF-107 lands (health is
+  unauthenticated by design)". This file's own "no header-collision to reason about" claim (above) is
+  the same error and is corrected the same way. The local `gate.sh` CodeRabbit pass on this fix caught
+  two more instances of the same class in files this pass had already touched: `platform/README.md`'s
+  Boundary Rules bullet said the `/api/v1` router "shares no internal auth/CSRF/rate-limit middleware"
+  — true for route-specific middleware, false for the legacy per-source-IP/per-identity limiters, which
+  still match `/api/v1` by prefix (now says so, mirroring `ratelimit/README.md`); this file's own "cost
+  this closes" paragraph had the identical overstatement ("shares none of that internal machinery"),
+  narrowed to "route-specific machinery" with the same caveat appended.
+- **Finding #6.** `platform/README.md`'s directory-tree fenced block now has a `text` language tag.
+
+**New regression tests** (`api/src/platform/__tests__/v1-router.test.ts`, 3 added to the existing
+suite of 3 — one existing test tightened): `GET /api/v1/nonexistent` and `GET /oauth/token`, both with
+an `Origin` header — assert `access-control-allow-credentials` is absent and `access-control-allow-
+origin` is `'*'`. Status is deliberately not asserted (404 is correct and expected pre-PF-002/pre-E1);
+what must never happen is the session CORS policy leaking onto a public-surface request. A fourth new
+test proves the path-boundary fix: `GET /api/v10/whatever` (a lookalike, NOT the public surface) still
+gets the app-global session CORS (`access-control-allow-credentials: 'true'`, single-origin). Full
+suite after all fixes: `pnpm --filter @ship/api exec vitest run
+src/platform/__tests__/v1-router.test.ts` — 6/6 pass.
+
+---
+
+## TRO-406 — PF-101: OAuth schema, migrations 042 + 043 (oauth_apps, oauth_authorization_codes, oauth_tokens, oauth_device_codes, api_tokens.scopes)
+
+**What changed.** Added `api/src/db/migrations/042_oauth_apps.sql` and
+`043_oauth_tokens_and_codes.sql` — the first PlugForge (PLUGFORGE.MD §2.2) migrations, current max
+was `041_add_blocks_relationship.sql`. 042 creates `oauth_apps` (registered OAuth clients: portal
+apps, Slack, FleetGraph, the grader app). 043 creates `oauth_authorization_codes`, `oauth_tokens`,
+`oauth_device_codes`, and `ALTER TABLE api_tokens ADD COLUMN scopes text[]` (NULL = legacy unscoped
+internal token, unchanged behavior, never valid at `/api/v1`; non-null = a scoped personal token,
+the second bearer-token class PF-107 will accept). DDL follows §2.2's table exactly, plus one
+binding PM-triage amendment recorded on the ticket (2026-08-10): `oauth_apps` also carries
+`client_type text NOT NULL CHECK (client_type IN ('confidential','public'))`, with
+`client_secret_hash` nullable for public (PKCE, secretless) clients — §2.2's table omitted this,
+but PF-104's confidential-client-auth AC is unimplementable without it. Unique indexes on
+`oauth_apps.client_id`, every OAuth `*_hash` column (`oauth_authorization_codes.code_hash`,
+`oauth_tokens.access_token_hash`, `oauth_tokens.refresh_token_hash` partial WHERE NOT NULL,
+`oauth_device_codes.device_code_hash`), and `oauth_device_codes.user_code`, per the ticket. No
+application code in this ticket — schema only; TTL enforcement (access 1h / refresh 30d / codes
+10min) is PF-104/105/106's job, this ticket only adds the `expires_at` columns those TTLs get
+written into.
+
+**Regression test.** `api/src/db/__tests__/migrations-042-043.test.ts` (6 cases) — runs the real
+migration runner (`runMigrations`, the function behind `pnpm db:migrate`) against throwaway
+databases built from real migration files copied off disk, never raw SQL, so DB-1's silent-skip
+failure mode is actually exercised: AC-1 (fresh DB) asserts `schema_migrations` records both
+versions, all four tables exist, and `api_tokens.scopes` exists as a nullable array column. AC-2
+(prod-shaped DB: migrations 001-041 pre-applied, one `api_tokens` row inserted before 042/043 run)
+asserts 042/043 still apply and get recorded on top of an already-migrated database, the
+pre-existing `api_tokens` row is untouched with `scopes IS NULL`, and every required unique index
+exists. Confirmed RED first: temporarily stubbed both migration files as `SELECT 1;` no-ops (backed
+up outside the repo, restored after — never `git stash`, per this repo's stash ban), re-ran the
+suite — the two `schema_migrations`-recording assertions passed (a no-op still applies and records
+cleanly, matching the test-design comment's prediction) while all four schema-shape assertions
+failed for real (empty table lists, missing column, missing indexes; one of the two AC-2 assertions
+errored outright with `column "scopes" does not exist` rather than the test-design comment's
+predicted false-positive "trivially passes", because the query names the column explicitly).
+Restored the real DDL and re-ran: 6/6 green. Full command and output in the ticket's report; ran
+under `DATABASE_URL` from this worktree's own `.factory-env` (`ship_wt_tro_406`), never the
+worktree's exclusive database directly — tests build their own throwaway databases.
+
+**How to run it.** `pnpm db:migrate` (or `npx tsx api/src/db/migrate.ts` with `DATABASE_URL` set).
+Verify with `\d oauth_apps`, `\d oauth_authorization_codes`, `\d oauth_tokens`,
+`\d oauth_device_codes`, `\d api_tokens` — or `SELECT version FROM schema_migrations WHERE version
+IN ('042_oauth_apps','043_oauth_tokens_and_codes')`, per DB-1: never trust exit 0 alone. Test:
+`cd api && npx vitest run src/db/__tests__/migrations-042-043.test.ts`.
+
+**Rollback.** Drop the four new tables and the added column, then delete the two migration rows:
+```sql
+DROP TABLE IF EXISTS oauth_authorization_codes, oauth_tokens, oauth_device_codes, oauth_apps CASCADE;
+ALTER TABLE api_tokens DROP COLUMN IF EXISTS scopes;
+DELETE FROM schema_migrations WHERE version IN ('042_oauth_apps', '043_oauth_tokens_and_codes');
+```
+Then remove `api/src/db/migrations/042_oauth_apps.sql`, `043_oauth_tokens_and_codes.sql`, and
+`api/src/db/__tests__/migrations-042-043.test.ts` from the branch. No application code anywhere
+else references these tables/column yet (PF-102 onward), so nothing else needs to change.
+
+---
+
 ## TRO-411 — PF-900: Terraform extension — every new Week-6 env var/service in `terraform/render/`
 
 **PF-900 · Epic E9 · non-code / artifact-based ticket, "Start Day 1 — defense material" per
