@@ -21,6 +21,116 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-408 — PF-102: OAuth app registration — admin endpoint, once-only secret, rotation, revocation
+
+**What was added.** `api/src/routes/oauth-apps.ts` — a thin internal admin router mounted at
+`/api/oauth-apps` (session-authed, gated by `workspaceAdminMiddleware`, same bar as
+`workspaces.ts`'s member-management routes — registering an app that can act for the workspace is
+an admin action, not the looser per-user bar `api-tokens.ts` uses for a personal token). All DB
+reads/writes live in `api/src/platform/oauth/appRegistration.ts` (the ticket's stated module home),
+with client-id/secret generation and SHA-256 hashing split into
+`api/src/platform/oauth/credentials.ts` — same hashing pattern as `api-tokens.ts`'s
+`generateApiToken`/`hashToken`. Five endpoints:
+
+- `POST /api/oauth-apps` — registers an app. Body: `{ name, client_type: 'confidential'|'public',
+  redirect_uris?, requested_scopes? }`. Confidential apps get a raw `ship_appsec_...` secret in the
+  response exactly once (SHA-256 hash stored, never the raw value); public apps get
+  `client_secret: null` — nothing is generated for them at all (PM triage amendment, TRO-408
+  comments, 2026-08-10: PKCE apps have nothing to show once).
+- `GET /api/oauth-apps`, `GET /api/oauth-apps/:id` — list/detail. The response type
+  (`OAuthAppSummary`) has no `client_secret`/`client_secret_hash` field at all, only a `has_secret`
+  boolean — the shown-once guarantee is structural (nothing to leak by accident), not just "don't
+  serialize this field this time."
+- `POST /api/oauth-apps/:id/rotate` — confidential apps only: generates and stores a new secret,
+  returns it once. Public apps get `400 validation_failed` with a clear message ("Public OAuth apps
+  have no client secret to rotate — they authenticate with PKCE, not a secret"), not a 404 or a
+  silently-minted secret. No grace period: rotation is a single-column `UPDATE
+  client_secret_hash`, so there is no second "still valid" hash to keep even if a future change
+  wanted one — the old secret stops authenticating the instant the UPDATE commits.
+- `DELETE /api/oauth-apps/:id` — revokes (`revoked_at = now()`), `WHERE revoked_at IS NULL` so a
+  second revoke is a `409 ALREADY_EXISTS` rather than silently re-stamping the timestamp.
+
+Also added `verifyAppCredentials({ clientId, clientSecret })` in `appRegistration.ts` — hashes the
+provided secret and looks it up the same way `auth.ts`'s `validateApiToken` does (`WHERE
+token_hash = $1`, adapted to look up by `client_id` first). This is not itself a PF-102 acceptance
+criterion; it exists because AC-4 (rotation invalidates immediately) and AC-5 (revocation blocks
+auth) are only provable against a real credential check, and none exists yet — `/oauth/token` is
+PF-104, not this ticket. It is the minimal, reusable primitive PF-104's confidential-client auth
+will call at the token endpoint; building it here is what the test design comment's "whatever auth
+path exists" anticipated, not scope creep into PF-104's endpoint work.
+
+Registered in the **existing internal** OpenAPI registry (`api/src/openapi/schemas/oauth-apps.ts`,
+added to `schemas/index.ts`'s barrel) — deliberately not the separate `/api/v1` platform registry
+PF-202 adds later, per this ticket's dispatch brief ("this is an INTERNAL /api route"). Mounted in
+`api/src/app.ts` with `conditionalCsrf`, same as every other internal router.
+
+**Regression test.** `api/src/platform/oauth/__tests__/app-registration.test.ts` (8 cases, supertest
+against the real app + a real Postgres workspace/user/session fixture, same pattern as
+`workspaces.test.ts`): AC-1 (client_id + raw secret returned once, hash matches
+`SHA256(rawSecret)`, raw secret absent from the persisted row) plus its PM-amendment sibling (public
+apps get `client_secret: null`, no hash stored); AC-2 (a `console.log`/`error`/`warn` spy around
+creation, asserting no captured line contains the raw secret); AC-3 (the raw secret captured at
+creation is absent from a later `GET` detail and `GET` list response); AC-4 (old secret
+authenticates via `verifyAppCredentials` before rotation, fails with `reason: 'invalid_secret'`
+immediately after, new secret authenticates) plus its PM-amendment sibling (rotating a public app
+returns 400); AC-5 (revoke sets `revoked_at`, `verifyAppCredentials` afterward fails with `reason:
+'revoked'`); and one boundary test confirming a non-admin workspace member gets 403.
+
+**Confirmed RED first, one isolated stub per AC, each reverted before the next** (per-AC rather than
+one combined stub, since combining them would have made unrelated assertions fail first and muddy
+which reason actually produced the red):
+- AC-1: `createOAuthApp`'s return temporarily forced `client_id`/`clientSecret` to `null` after a
+  real DB insert (test design's literal "stub endpoint returns `{ client_id: null, client_secret:
+  null }`") — failed with `TypeError: .toMatch() expects to receive a string, but got object` on
+  the `client_id` pattern assertion.
+- AC-2: added a temporary `console.log` of `req.body` + the raw secret before responding — failed
+  with `AssertionError: expected true to be false` (the leak-detector found the secret in a logged
+  line).
+- AC-3: cached the raw secret at creation and had `getOAuthApp` echo it back as a `client_secret`
+  field (there being no other way to simulate "GET echoes a cached raw secret" against a
+  hash-only-at-rest design) — failed with the raw secret literally present in the `GET` response
+  body: `AssertionError: expected '{"success":true,...' not to contain 'ship_appsec_b53094e4...'`.
+- AC-4: rotation generated a new secret but skipped the `UPDATE client_secret_hash` statement —
+  failed with `expected true to be false` on "old secret now fails" (it still authenticated).
+- AC-5: `verifyAppCredentials` had its `if (app.revoked_at) return { reason: 'revoked' }` check
+  temporarily removed — failed with `expected true to be false` on "auth after revoke now fails" (it
+  still succeeded).
+
+All five stubs are fully reverted in the committed diff (`git diff --stat` against `main` shows only
+the real implementation; grepped for the `TEMP-RED-STUB` marker used during this process — zero
+matches in the final tree). Full 8/8 green after every revert.
+
+**Type-check and OpenAPI.** `pnpm --filter @ship/api exec tsc --noEmit` — clean. `pnpm
+--filter @ship/api run openapi:generate` — regenerated `api/openapi.json`/`api/openapi.yaml`
+(committed, tracked files); confirmed the five new paths (`/oauth-apps` GET+POST,
+`/oauth-apps/{id}` GET+DELETE, `/oauth-apps/{id}/rotate` POST) are present in the generated JSON. The
+live `GET /api/openapi.json` route (`swagger.ts:39`) calls the identical `generateOpenAPIDocument()`
+against the same registry at server startup — same code path, not independently started and
+observed live in this ticket.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/app-registration.test.ts
+```
+
+**Rollback.** Revert the implementing commit(s), which cleanly removes: `api/src/routes/oauth-apps.ts`,
+`api/src/platform/oauth/appRegistration.ts`, `api/src/platform/oauth/credentials.ts`,
+`api/src/platform/oauth/__tests__/app-registration.test.ts`,
+`api/src/openapi/schemas/oauth-apps.ts`, the one-line addition to
+`api/src/openapi/schemas/index.ts`, the two-line mount in `api/src/app.ts`
+(`import oauthAppsRoutes ...` / `app.use('/api/oauth-apps', ...)`), and this `CHANGES.md` entry. Also
+re-run `pnpm --filter @ship/api run openapi:generate` after reverting so the committed
+`api/openapi.json`/`api/openapi.yaml` drop the five paths again — they are generated artifacts, not
+hand-edited, so a code-only revert without regenerating leaves stale paths in those two tracked
+files. No migrations, no schema changes (042/043 already existed on `main` before this ticket via
+PF-101/TRO-406) — this ticket adds route/service code only. Nothing else in this codebase yet
+references `oauth-apps.ts`/`appRegistration.ts` (PF-103/104/107 onward will), so reverting cannot
+break any other ticket's already-merged work.
+
+---
+
 ## TRO-433 — PF-303: HMAC webhook signer (`Ship-Signature: t=…,v1=…`) + the shared signature test-vector fixture
 
 **What was added.** `api/src/platform/webhooks/signer.ts` — a pure, dependency-free module (only

@@ -34,6 +34,7 @@ import { searchRouter } from './routes/search.js';
 import { filesRouter } from './routes/files.js';
 import caiaAuthRoutes from './routes/caia-auth.js';
 import apiTokensRoutes from './routes/api-tokens.js';
+import oauthAppsRoutes from './routes/oauth-apps.js';
 import adminCredentialsRoutes from './routes/admin-credentials.js';
 import claudeRoutes from './routes/claude.js';
 import activityRoutes from './routes/activity.js';
@@ -436,6 +437,7 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   app.use('/api/admin', conditionalCsrf, adminRoutes);
   app.use('/api/invites', conditionalCsrf, invitesRoutes);
   app.use('/api/api-tokens', conditionalCsrf, apiTokensRoutes);
+  app.use('/api/oauth-apps', conditionalCsrf, oauthAppsRoutes);
 
   // Claude context routes - read-only GET endpoints for Claude skills
   app.use('/api/claude', claudeRoutes);
