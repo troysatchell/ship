@@ -135,13 +135,29 @@ const REQUIRED_FIELD_TO_DROP: Record<EventType, (payload: Record<string, unknown
   'sprint.completed': (p) => delete (p.data as Record<string, unknown>).status,
 }
 
+// The 8 event types named verbatim in PLUGFORGE.MD §2.6, hardcoded independently of
+// `EVENT_TYPES` (rather than deriving the expectation from it) — comparing the registry
+// against the very constant it is built from would pass even if both drifted together
+// (e.g. a typo'd rename applied to `EVENT_TYPES` and every `EVENT_DEFINITIONS` key at once).
+// This is the fixed, independent oracle the enumeration test below checks against.
+const REQUIRED_EVENT_TYPES = [
+  'document.created',
+  'document.updated',
+  'document.deleted',
+  'issue.created',
+  'issue.assigned',
+  'issue.status_changed',
+  'sprint.started',
+  'sprint.completed',
+] as const
+
 describe('platform/webhooks/events — registry', () => {
   // AC-2: registry enumerable (portal + docs consume it)
   describe('enumeration', () => {
     it('exposes exactly the 8 named event types, no more/fewer', () => {
       const entries = eventRegistry.list()
       const types = entries.map((e) => e.type).sort()
-      expect(types).toEqual([...EVENT_TYPES].sort())
+      expect(types).toEqual([...REQUIRED_EVENT_TYPES].sort())
       expect(entries).toHaveLength(8)
     })
 

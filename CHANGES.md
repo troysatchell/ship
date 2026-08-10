@@ -79,9 +79,9 @@ pnpm --filter @ship/api exec vitest run src/platform/webhooks/__tests__/events.t
 
 **Rollback.** `git rm api/src/platform/webhooks/events.ts
 api/src/platform/webhooks/__tests__/events.test.ts`, revert the `webhooks/README.md` edit, and
-remove this section. No migrations, no schema changes, no route changes — nothing else in the repo
-imports `events.ts` yet (PF-301 will be the first consumer), so reverting cannot affect any other
-ticket's work.
+remove this section. No migrations, no schema changes, no route changes — no production module
+imports `events.ts` yet (only this ticket's own test file does; PF-301 will be the first production
+consumer), so reverting cannot affect any other ticket's work.
 
 ---
 
