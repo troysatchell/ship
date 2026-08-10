@@ -304,6 +304,140 @@ variable "agent_api_base_url" {
   default     = "https://ship-agent-t0zy.onrender.com"
 }
 
+# --- Platform env vars (PF-900 / TRO-411) -----------------------------------
+#
+# Every new env var Week 6's platform layer (api/src/platform/**, not yet
+# built as of this ticket — Day-1 infra per PLUGFORGE.MD §2.10/§4 E9) will
+# read once PF-101/PF-302/PF-500/PF-701/PF-702/PF-907 land. Names are fixed
+# HERE, once, per the PM triage comment on TRO-411 (the test-designer flagged
+# the duplicated-literal risk across PF-900/701/907) — those tickets' seed
+# code and boot checks must read these exact names from a shared config
+# module, never re-declare the literal. No application code reads any of
+# these yet; declaring them ahead of the code is deliberate IaC-first
+# sequencing — this ticket is explicitly "Start Day 1 — defense material" in
+# the PRD, and its AC is "zero console-only config," which requires every one
+# of these to exist as a `.tf`-declared env var before the code that reads it
+# ships, not after.
+
+variable "secret_encryption_key" {
+  description = <<-EOT
+    AES-256-GCM key used to encrypt webhook signing secrets at rest (PF-302,
+    PLUGFORGE.MD §2.2's signing-secret note — a one-way hash is
+    unimplementable here because the server must recompute HMAC signatures,
+    so the plaintext secret is encrypted at rest instead). Sensitive, no
+    default — supply a real generated value (e.g. `openssl rand -hex 32`)
+    via a gitignored terraform.tfvars or -var. Consumed by the `ship` web
+    service only (web_service.tf) — the agent never handles webhook secrets.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
+variable "fleetgraph_oauth_client_secret" {
+  description = <<-EOT
+    OAuth client secret for the first-party `ship_app_fleetgraph` app
+    (PF-701). Name fixed by the PM triage comment on TRO-411 (coordinates
+    with PF-701's seed, which must read this exact name via a shared config
+    module rather than a re-declared literal). Consumed by BOTH services:
+    the `ship` web service hashes and stores it when seeding the
+    `oauth_apps` row (PF-701's idempotent boot/migration seed), and the
+    agent service holds the plaintext to authenticate itself via the Client
+    Credentials grant once PF-702 switches AGENT_PLATFORM_MODE to `sdk` —
+    the two sides must hold the identical value or the agent's own token
+    requests fail closed, the same shape as `agent_internal_secret` above.
+    Sensitive, no default — generate fresh per environment
+    (`openssl rand -hex 32`), never reuse a value across environments.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
+variable "grader_oauth_client_secret" {
+  description = <<-EOT
+    OAuth client secret for the seeded read-only grader app (PF-907). Name
+    fixed by the PM triage comment on TRO-411 (coordinates with PF-907's
+    seed, which must read this exact name via the same shared config module
+    as `fleetgraph_oauth_client_secret` — never a re-declared literal).
+    Consumed by the `ship` web service only — PF-907's seed hashes and
+    stores it when creating the grader's `oauth_apps` row; the agent has no
+    reason to hold the grader's identity. Sensitive, no default — generate
+    fresh (`openssl rand -hex 32`), never reuse `fleetgraph_oauth_client_secret`'s
+    value here.
+  EOT
+  type        = string
+  sensitive   = true
+}
+
+variable "oauth_access_token_ttl_seconds" {
+  description = <<-EOT
+    OAuth access token lifetime in seconds, read by PF-104/PF-105's token
+    issuance path once built. Not secret. Default 3600 (1 hour) matches
+    PLUGFORGE.MD §2.2's "Token TTLs: access 1 hour" exactly — declaring this
+    as a Terraform variable (rather than only a hardcoded constant in
+    application code) is what makes it environment-configurable without a
+    code change, per this ticket's "zero console-only config" AC. The
+    auth-code TTL (10 minutes, single-use, §2.2) is deliberately NOT exposed
+    as a variable: it is a fixed security invariant in the PRD, not an
+    operational knob, so making it env-configurable would be scope creep
+    past what §2.10 actually asks for ("OAuth TTL config").
+  EOT
+  type        = number
+  default     = 3600
+}
+
+variable "oauth_refresh_token_ttl_seconds" {
+  description = <<-EOT
+    OAuth refresh token lifetime in seconds, read by PF-105's rotation path
+    once built. Not secret. Default 2592000 (30 days) matches
+    PLUGFORGE.MD §2.2's "refresh 30 days" exactly.
+  EOT
+  type        = number
+  default     = 2592000
+}
+
+variable "rate_limit_app_rpm" {
+  description = <<-EOT
+    Per-app token-bucket ceiling for `/api/v1`, requests per minute, read by
+    PF-500 once built. Not secret. Default 120 matches PLUGFORGE.MD §2.7
+    exactly. This is a distinct config surface from the legacy `/api/`
+    limiters (api/src/middleware/rate-limit.ts, hardcoded per-NODE_ENV
+    tiers today, no env knob) — PF-004 exempts `/api/v1` from those legacy
+    limiters before this bucket exists, so the two never stack.
+  EOT
+  type        = number
+  default     = 120
+}
+
+variable "rate_limit_token_rpm" {
+  description = <<-EOT
+    Per-token token-bucket ceiling for `/api/v1`, requests per minute, read
+    by PF-500 once built. Not secret. Default 60 matches PLUGFORGE.MD §2.7
+    exactly.
+  EOT
+  type        = number
+  default     = 60
+}
+
+variable "agent_platform_mode" {
+  description = <<-EOT
+    PF-702's flag: `internal` (default — current behavior, the agent reads
+    Ship via agent/src/shipClient.ts's direct internal-API calls) or `sdk`
+    (reads via @ship/sdk as the app-identity OAuth principal). Not secret.
+    Consumed by the agent service only (agent_service.tf) — this is exactly
+    what PF-704's flag matrix exercises in both positions. Defaulting to
+    `internal` means a `terraform apply` alone never silently flips agent
+    behavior; PF-702 switches this deliberately once the SDK read path is
+    gated green in both modes.
+  EOT
+  type        = string
+  default     = "internal"
+
+  validation {
+    condition     = contains(["internal", "sdk"], var.agent_platform_mode)
+    error_message = "agent_platform_mode must be exactly \"internal\" or \"sdk\" (PLUGFORGE.MD PF-702)."
+  }
+}
+
 # --- Postgres ----------------------------------------------------------------
 
 variable "database_service_name" {

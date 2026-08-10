@@ -1,0 +1,122 @@
+#!/usr/bin/env bash
+#
+# verify-terraform-artifact.sh — mechanical assist for PF-900 / TRO-411's
+# annotated `terraform plan` submission artifact.
+#
+# NOT a gate check (scripts/factory/gate.sh never calls this — nothing under
+# api/src/**/*.test.ts or web/src/**/*.test.tsx can run terraform or hold
+# Render credentials, so this ticket's test-design comment declared it an
+# artifact-based deliverable, not a vitest spec). This script is the
+# "optional mechanical assist" that same comment proposed: a grep-based
+# string-presence check over a COMMITTED, ALREADY-CAPTURED `terraform plan`
+# text file, catching a missing env var or resource before a human reviewer
+# has to.
+#
+# What it checks (test-design comment items #2-#4 — see TRO-411):
+#   #2 every new Week-6 platform env var appears inside an actual render_*
+#      resource's env_vars block in the plan text, not just in prose/comments
+#   #3 both service resource addresses + the Postgres resource address appear
+#   #4 the provider pin in versions.tf is still an exact "x.y.z" (no ~>/>=)
+#
+# What it CANNOT check (the same comment's items #1 and #5 — explicitly out
+# of this script's reach): whether the plan is actually clean against LIVE
+# Render state, and whether every value truly originates from committed
+# config rather than a console edit. Those need a real `terraform plan -var-
+# file=...` run against live credentials and a human/reviewer's own judgment
+# — this script passing is not the artifact being complete.
+#
+# Usage:
+#   scripts/factory/verify-terraform-artifact.sh <plan-file>
+#
+# Exit code: 0 if every check passes, 1 if any check fails (each failure is
+# printed, not just the first).
+
+set -uo pipefail
+
+PLAN_FILE="${1:-}"
+if [ -z "$PLAN_FILE" ]; then
+  echo "usage: $0 <plan-file>" >&2
+  exit 2
+fi
+if [ ! -f "$PLAN_FILE" ]; then
+  echo "ERROR: plan file not found: $PLAN_FILE" >&2
+  exit 2
+fi
+
+WT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "ERROR: not inside a git repository." >&2; exit 2; }
+VERSIONS_TF="$WT_ROOT/terraform/render/versions.tf"
+
+FAIL=0
+
+# --- #2: every new Week-6 platform env var, inside a render_* env_vars block ---
+#
+# Terraform's plan renderer prints env_vars map keys as `+ "KEY" = {` (create)
+# or `~ "KEY" = {` (update) — see terraform/render/plan/*.md for real examples
+# of this exact shape. Matching `"KEY" = {` (any leading diff marker) inside
+# the plan text is a reasonable proxy for "inside an env_vars block, not
+# prose" without a full HCL/plan-JSON parse.
+PLATFORM_ENV_VARS=(
+  SECRET_ENCRYPTION_KEY
+  FLEETGRAPH_OAUTH_CLIENT_SECRET
+  GRADER_OAUTH_CLIENT_SECRET
+  OAUTH_ACCESS_TOKEN_TTL_SECONDS
+  OAUTH_REFRESH_TOKEN_TTL_SECONDS
+  RATE_LIMIT_APP_RPM
+  RATE_LIMIT_TOKEN_RPM
+  AGENT_PLATFORM_MODE
+)
+for var in "${PLATFORM_ENV_VARS[@]}"; do
+  if grep -qE "\"${var}\"[[:space:]]*=[[:space:]]*\{" "$PLAN_FILE"; then
+    echo "PASS  env_vars block declares ${var}"
+  else
+    echo "FAIL  env_vars block missing ${var} (checked: $PLAN_FILE)"
+    FAIL=1
+  fi
+done
+
+# --- #3: both service resources + Postgres resource, present as addresses ---
+RESOURCE_ADDRESSES=(
+  "render_web_service.ship"
+  "render_web_service.agent"
+  "render_postgres.ship"
+)
+for addr in "${RESOURCE_ADDRESSES[@]}"; do
+  if grep -qF "$addr" "$PLAN_FILE"; then
+    echo "PASS  resource address present: ${addr}"
+  else
+    echo "FAIL  resource address missing: ${addr} (checked: $PLAN_FILE)"
+    FAIL=1
+  fi
+done
+
+# --- #4: provider pin is still an exact version, no range operator ---
+#
+# Anchored to line-start (after whitespace) so this matches the provider's
+# own `version = "x.y.z"` line but NOT `required_version = ">= 1.9.0"` —
+# that field is a genuine, intentional range on a different, unrelated
+# setting (the Terraform CLI version, not the provider pin) and must not be
+# misread as a violation.
+if [ -f "$VERSIONS_TF" ]; then
+  if grep -qE '^[[:space:]]*version[[:space:]]*=[[:space:]]*"[0-9]+\.[0-9]+\.[0-9]+"' "$VERSIONS_TF" \
+     && ! grep -qE '^[[:space:]]*version[[:space:]]*=[[:space:]]*"[~>=<]' "$VERSIONS_TF"; then
+    echo "PASS  render-oss/render provider is exact-pinned in versions.tf"
+  else
+    echo "FAIL  versions.tf does not show an exact x.y.z pin (checked: $VERSIONS_TF)"
+    FAIL=1
+  fi
+else
+  echo "FAIL  versions.tf not found at $VERSIONS_TF"
+  FAIL=1
+fi
+
+echo
+if [ "$FAIL" -eq 0 ]; then
+  echo "verify-terraform-artifact: PASS — all mechanical checks passed."
+  echo "Reminder: this does NOT establish #1 (plan is clean against live state)"
+  echo "or #5 (zero console-only config) — those require a real, credentialed"
+  echo "'terraform plan' run and a human/reviewer's own judgment."
+else
+  echo "verify-terraform-artifact: FAIL — see FAIL lines above."
+fi
+exit "$FAIL"
