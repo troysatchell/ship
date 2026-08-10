@@ -170,39 +170,52 @@ function validateAuthorizeRequest(query: Record<string, unknown>, app: OAuthAppL
 // OAuth client (or, per the graded scenario, the browser under test)
 // navigates the user's browser here directly.
 router.get('/authorize', async (req: Request, res: Response): Promise<void> => {
-  const clientId = asString(req.query.client_id);
+  try {
+    const clientId = asString(req.query.client_id);
 
-  if (!clientId) {
-    sendUnsafeToRedirectError(res, 400, 'client_id is required.');
-    return;
-  }
-
-  const app = await getOAuthAppByClientId(clientId);
-  const validation = validateAuthorizeRequest(req.query as Record<string, unknown>, app);
-
-  if (!validation.ok) {
-    if (validation.kind === 'unsafe') {
-      sendUnsafeToRedirectError(res, 400, validation.message);
+    if (!clientId) {
+      sendUnsafeToRedirectError(res, 400, 'client_id is required.');
       return;
     }
-    redirectWithOAuthError(res, validation.redirectUri, validation.error, validation.state);
-    return;
+
+    const app = await getOAuthAppByClientId(clientId);
+    const validation = validateAuthorizeRequest(req.query as Record<string, unknown>, app);
+
+    if (!validation.ok) {
+      if (validation.kind === 'unsafe') {
+        sendUnsafeToRedirectError(res, 400, validation.message);
+        return;
+      }
+      redirectWithOAuthError(res, validation.redirectUri, validation.error, validation.state);
+      return;
+    }
+
+    // Everything about the request itself checks out. Build the web app's
+    // consent-page path — carrying the now-validated fields forward, plus
+    // the app's display name so the consent page needs no extra round trip.
+    const consentPath = buildConsentPath(validation);
+
+    const principal = await getSessionPrincipal(req);
+    if (!principal) {
+      const loginUrl = new URL('/login', webAppOrigin());
+      loginUrl.searchParams.set('returnTo', consentPath);
+      res.redirect(loginUrl.toString());
+      return;
+    }
+
+    res.redirect(new URL(consentPath, webAppOrigin()).toString());
+  } catch (error) {
+    // Same convention as every other route in this codebase (caia-auth.ts,
+    // oauth-apps.ts, api-tokens.ts): catch here so a transient DB error
+    // becomes one failed request, not an unhandled rejection that trips
+    // `process-safety.ts`'s last-resort exit-the-process handler. Falls back
+    // to the "unsafe" (no-redirect) response unconditionally — at this point
+    // in the handler it isn't safe to assume `redirect_uri` was already
+    // verified, and a 500 that redirects to an unverified URI is exactly the
+    // open-redirect guard this route otherwise enforces.
+    console.error('GET /oauth/authorize error:', error instanceof Error ? error.message : error);
+    sendUnsafeToRedirectError(res, 500, 'Something went wrong. Please try again.');
   }
-
-  // Everything about the request itself checks out. Build the web app's
-  // consent-page path — carrying the now-validated fields forward, plus the
-  // app's display name so the consent page needs no extra round trip.
-  const consentPath = buildConsentPath(validation);
-
-  const principal = await getSessionPrincipal(req);
-  if (!principal) {
-    const loginUrl = new URL('/login', webAppOrigin());
-    loginUrl.searchParams.set('returnTo', consentPath);
-    res.redirect(loginUrl.toString());
-    return;
-  }
-
-  res.redirect(new URL(consentPath, webAppOrigin()).toString());
 });
 
 function buildConsentPath(validation: Extract<ValidationResult, { ok: true }>): string {
@@ -224,61 +237,68 @@ function buildConsentPath(validation: Extract<ValidationResult, { ok: true }>): 
 // target. `express.urlencoded()` is already mounted app-wide (app.ts), so a
 // standard HTML form POST lands in `req.body` here without further setup.
 router.post('/authorize/decision', async (req: Request, res: Response): Promise<void> => {
-  const body = req.body as Record<string, unknown>;
-  const clientId = asString(body.client_id);
-  const decision = asString(body.decision);
+  try {
+    const body = req.body as Record<string, unknown>;
+    const clientId = asString(body.client_id);
+    const decision = asString(body.decision);
 
-  if (!clientId) {
-    sendUnsafeToRedirectError(res, 400, 'client_id is required.');
-    return;
-  }
-
-  const app = await getOAuthAppByClientId(clientId);
-  const validation = validateAuthorizeRequest(body, app);
-
-  if (!validation.ok) {
-    if (validation.kind === 'unsafe') {
-      sendUnsafeToRedirectError(res, 400, validation.message);
+    if (!clientId) {
+      sendUnsafeToRedirectError(res, 400, 'client_id is required.');
       return;
     }
-    redirectWithOAuthError(res, validation.redirectUri, validation.error, validation.state);
-    return;
+
+    const app = await getOAuthAppByClientId(clientId);
+    const validation = validateAuthorizeRequest(body, app);
+
+    if (!validation.ok) {
+      if (validation.kind === 'unsafe') {
+        sendUnsafeToRedirectError(res, 400, validation.message);
+        return;
+      }
+      redirectWithOAuthError(res, validation.redirectUri, validation.error, validation.state);
+      return;
+    }
+
+    const principal = await getSessionPrincipal(req);
+    if (!principal) {
+      const loginUrl = new URL('/login', webAppOrigin());
+      loginUrl.searchParams.set('returnTo', buildConsentPath(validation));
+      res.redirect(303, loginUrl.toString());
+      return;
+    }
+
+    if (decision === 'deny') {
+      // AC-3: redirect to the registered redirect_uri with
+      // error=access_denied and no code param, and — implicitly, by never
+      // calling issueAuthorizationCode — no oauth_authorization_codes row.
+      redirectWithOAuthError(res, validation.redirectUri, 'access_denied', validation.state, 303);
+      return;
+    }
+
+    if (decision !== 'approve') {
+      sendUnsafeToRedirectError(res, 400, 'decision must be "approve" or "deny".');
+      return;
+    }
+
+    const scopes = parseScopeParam(validation.scope);
+    const code = await issueAuthorizationCode({
+      appId: validation.app.id,
+      userId: principal.userId,
+      scopes: scopes.length > 0 ? scopes : validation.app.requested_scopes,
+      codeChallenge: validation.codeChallenge,
+      redirectUri: validation.redirectUri,
+    });
+
+    const target = new URL(validation.redirectUri);
+    target.searchParams.set('code', code);
+    if (validation.state !== undefined) target.searchParams.set('state', validation.state);
+    res.redirect(303, target.toString());
+  } catch (error) {
+    // See the identical catch in GET /oauth/authorize above for why this
+    // exists and why it never redirects on failure.
+    console.error('POST /oauth/authorize/decision error:', error instanceof Error ? error.message : error);
+    sendUnsafeToRedirectError(res, 500, 'Something went wrong. Please try again.');
   }
-
-  const principal = await getSessionPrincipal(req);
-  if (!principal) {
-    const loginUrl = new URL('/login', webAppOrigin());
-    loginUrl.searchParams.set('returnTo', buildConsentPath(validation));
-    res.redirect(303, loginUrl.toString());
-    return;
-  }
-
-  if (decision === 'deny') {
-    // AC-3: redirect to the registered redirect_uri with error=access_denied
-    // and no code param, and — implicitly, by never calling
-    // issueAuthorizationCode — no oauth_authorization_codes row.
-    redirectWithOAuthError(res, validation.redirectUri, 'access_denied', validation.state, 303);
-    return;
-  }
-
-  if (decision !== 'approve') {
-    sendUnsafeToRedirectError(res, 400, 'decision must be "approve" or "deny".');
-    return;
-  }
-
-  const scopes = parseScopeParam(validation.scope);
-  const code = await issueAuthorizationCode({
-    appId: validation.app.id,
-    userId: principal.userId,
-    scopes: scopes.length > 0 ? scopes : validation.app.requested_scopes,
-    codeChallenge: validation.codeChallenge,
-    redirectUri: validation.redirectUri,
-  });
-
-  const target = new URL(validation.redirectUri);
-  target.searchParams.set('code', code);
-  if (validation.state !== undefined) target.searchParams.set('state', validation.state);
-  res.redirect(303, target.toString());
 });
 
 export default router;
