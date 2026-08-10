@@ -69,6 +69,24 @@ verify:
     - pnpm build:shared
     - pnpm type-check
     - pnpm lint
+    # TRO-399 (PF-003): `pnpm lint` above already enforces the ESLint half of
+    # the boundary rule (api/src/platform/api/v1/** may not import
+    # api/src/routes/**, eslint.config.mjs). The `integrations/*` half is a
+    # workspace-dependency rule no ESLint import-lint can see (a runtime dep
+    # in package.json, not an import statement), so it needs its own script
+    # and its own step. Deliberately its own line, not folded into `pnpm
+    # lint`, so a failure here reads unambiguously as "an integrations/*
+    # package has a disallowed runtime dependency" rather than a generic lint
+    # failure. Exits 0 on the current, expected Day-1 state (integrations/
+    # does not exist yet) and only starts failing once a real package lands
+    # there — see the script's own header.
+    - node scripts/check-integration-deps.mjs
+    # Regression test for the script's decision logic (checkPackageDeps /
+    # scanIntegrations). scripts/ is not covered by api's or web's vitest
+    # `include`, so this must be run explicitly — see
+    # scripts/__tests__/check-integration-deps.test.mjs's own header for why
+    # it is node:test + .mjs rather than a vitest .test.ts here.
+    - node --test scripts/__tests__/check-integration-deps.test.mjs
     - pnpm build
     - pnpm db:migrate
     # continue-past-failure mirrors ci.yml's continue-on-error: without it a
