@@ -23,6 +23,19 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ## TRO-412 — PF-103: `/oauth/authorize` + consent screen (S256-only PKCE, exact redirect_uri match)
 
+**Provenance timing note (added after `gate.sh`, before this branch's own commits changed):** the
+"PF-102 not available in this worktree" claim below was verified true at implementation time
+(`git merge-base --is-ancestor 2a92ae2 main` → false, checked directly). By the time `gate.sh` ran,
+local `main` had been fast-forwarded to `2a92ae2` mid-session (`git reflog show main`: `pull --ff-only
+https://github.com/troysatchell/ship.git main`, a clean fast-forward — `8e6949d` genuinely is an
+ancestor of `2a92ae2`, nothing was rewritten). This does not change anything about this ticket's
+code or design decisions — they were made for the reasons stated, and stand regardless — and it does
+not change what `gate.sh` diffed (`main...HEAD` resolves via merge-base, which stayed `8e6949d`
+throughout, per `git merge-base main HEAD`; `gate-result.json`'s `scope: 9 file(s) changed` is exactly
+this branch's own files, not PF-102's). Recorded so the claim below reads as "true when written,"
+not "true now" — and as good news for whoever dispatches PF-104 next: the GitLab re-sync this
+ticket's report recommended has already happened.
+
 **What changed.** Added the RFC 6749 authorization endpoint: `GET /oauth/authorize` (validates the
 request, checks the session, hands off to the consent page) and `POST /oauth/authorize/decision`
 (the consent form's Approve/Deny target — re-validates everything from scratch, issues a single-use
