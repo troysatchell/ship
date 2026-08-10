@@ -47,6 +47,8 @@ import weeklyPlansRoutes, { weeklyRetrosRouter } from './routes/weekly-plans.js'
 import { documentCommentsRouter, commentsRouter } from './routes/comments.js';
 import { setupSwagger } from './swagger.js';
 import { initializeCAIA } from './services/caia.js';
+import { v1Router } from './platform/api/v1/router.js';
+import { createPublicApiCors } from './platform/publicCors.js';
 
 // Validate SESSION_SECRET in production
 if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) {
@@ -325,10 +327,59 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   // IP flood ceiling still runs before the per-identity budget.
   app.use('/api/', perSourceIpLimiter);
   app.use('/api/', perIdentityLimiter);
-  app.use(cors({
+
+  // ── Platform layer: public API (PF-001, PLUGFORGE.MD §2.1/§4) ────────────
+  // `/api/v1/*` and, once added, `/oauth`'s token/device endpoints share a
+  // separate, credential-less CORS policy — NOT the app-global single-origin
+  // `credentials: true` policy below, which cannot serve a cross-origin
+  // bearer-token client (§2.1). Mounted here, before that global `cors()`
+  // call, so this scoped policy's headers apply to `/api/v1` requests.
+  //
+  // This does NOT make the app-global `cors()` below a no-op for those paths.
+  // `v1Router` only defines `GET /health` today (no 404 fallthrough — that's
+  // PF-002), and `/oauth` has no router mounted at all yet (E1) — so an
+  // unmatched `/api/v1/*` path or any `/oauth` request falls straight through
+  // `app.use('/api/v1', v1Router)` with the response still open, and would
+  // reach the app-global `cors()` next. `cors()` middleware runs — and sets
+  // its headers — on every request that reaches it, matched route or not, so
+  // it would overwrite `Access-Control-Allow-Origin` with the single-origin
+  // value and add `Access-Control-Allow-Credentials: true` onto a response
+  // already carrying the public, credential-less policy (CodeRabbit #1, PR
+  // #170). Fixed by skipping the app-global `cors()` entirely for these
+  // paths, rather than relying on the public router terminating every
+  // request first — see the path-prefix check on `appGlobalCors` below.
+  //
+  // The legacy per-source-IP/per-identity limiters just above still match
+  // `/api/v1` by prefix (`/api/` matches `/api/v1/...`) — exempting `/api/v1`
+  // from them is PF-004's job, not this ticket's (documented landmine,
+  // PLUGFORGE.MD §0.2).
+  //
+  // `/oauth` has no router yet (added by E1); listing it here now means that
+  // ticket only has to mount its router, not also touch this CORS wiring.
+  app.use(['/api/v1', '/oauth'], createPublicApiCors());
+  app.use('/api/v1', v1Router);
+
+  // Skip the app-global session CORS for the public-surface path prefixes —
+  // they already received (or will receive) the public policy above, and
+  // must never also pick up this single-origin/`credentials: true` policy
+  // (CodeRabbit #1, PR #170; see the comment block above).
+  const appGlobalCors = cors({
     origin: corsOrigin,
     credentials: true,
-  }));
+  });
+  // Path-segment-boundary match, not a bare `startsWith` — a raw substring
+  // check would also match `/api/v10`, `/api/v1foo`, or `/oauth2`, none of
+  // which are the public surface (CodeRabbit, PR #170 gate run). Mirrors how
+  // Express's own `app.use('/api/v1', ...)` mount above already matches:
+  // exactly the prefix, or the prefix followed by `/`.
+  const isPublicSurfacePath = (path: string): boolean =>
+    ['/api/v1', '/oauth'].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+  app.use((req, res, next) => {
+    if (isPublicSurfacePath(req.path)) {
+      return next();
+    }
+    return appGlobalCors(req, res, next);
+  });
   app.use(express.json({ limit: '10mb' }));  // Large wiki documents can be several MB
   app.use(express.urlencoded({ extended: true, limit: '10mb' })); // For HTML form submissions
   app.use(cookieParser(sessionSecret));
