@@ -27,7 +27,8 @@
       "verifyTimestamp": 1700000000,
       "toleranceSeconds": 300,
       "header": "t=1700000000,v1=7954c1c424bfe8393d4e9cb591e8dbf75867f375a3d978f09ed79e8cec7d64cc",
-      "expectedValid": true
+      "expectedValid": true,
+      "headerReproducibleBySign": true
     },
     {
       "name": "tampered",
@@ -39,7 +40,8 @@
       "verifyTimestamp": 1700000000,
       "toleranceSeconds": 300,
       "header": "t=1700000000,v1=915970180c139715467e10c6ce58cb801c06a6de067a4a328d027463ecdc1049",
-      "expectedValid": false
+      "expectedValid": false,
+      "headerReproducibleBySign": true
     },
     {
       "name": "expired",
@@ -51,7 +53,8 @@
       "verifyTimestamp": 1700000000,
       "toleranceSeconds": 300,
       "header": "t=1699999600,v1=65077268622b1a80cdd3a27a728c040b67546d67e877f9295fc5015d87731cc3",
-      "expectedValid": false
+      "expectedValid": false,
+      "headerReproducibleBySign": true
     },
     {
       "name": "missing_v1",
@@ -63,7 +66,8 @@
       "verifyTimestamp": 1700000000,
       "toleranceSeconds": 300,
       "header": "t=1700000000",
-      "expectedValid": false
+      "expectedValid": false,
+      "headerReproducibleBySign": false
     },
     {
       "name": "boundary_within_tolerance",
@@ -75,7 +79,8 @@
       "verifyTimestamp": 1700000000,
       "toleranceSeconds": 300,
       "header": "t=1699999700,v1=a69a0b1f6e098af9f94940d58e5937654a519f250d8aac658ee0b05e9fd33a03",
-      "expectedValid": true
+      "expectedValid": true,
+      "headerReproducibleBySign": true
     },
     {
       "name": "boundary_outside_tolerance",
@@ -87,7 +92,21 @@
       "verifyTimestamp": 1700000000,
       "toleranceSeconds": 300,
       "header": "t=1699999699,v1=42bb4ad42226ed22b63d6ad66b50d468d178bd19f20639dd46946be5ee0a078f",
-      "expectedValid": false
+      "expectedValid": false,
+      "headerReproducibleBySign": true
+    },
+    {
+      "name": "malformed_v1_trailing_garbage",
+      "description": "v1 is a genuine digest with trailing non-hex characters; must be rejected on format, not length",
+      "secret": "test-fixture-secret-not-a-real-credential-000111",
+      "rawBody": "{\"event\":\"issue.assigned\",\"id\":\"iss_7\"}",
+      "verifyRawBody": "{\"event\":\"issue.assigned\",\"id\":\"iss_7\"}",
+      "signTimestamp": 1700000000,
+      "verifyTimestamp": 1700000000,
+      "toleranceSeconds": 300,
+      "header": "t=1700000000,v1=14a7dc8689ecddae8519b300e7b122c3e27a8196e08854750f26df8085d5358azzzz",
+      "expectedValid": false,
+      "headerReproducibleBySign": false
     }
   ]
 }

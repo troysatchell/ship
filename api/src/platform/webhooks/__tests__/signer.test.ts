@@ -44,6 +44,10 @@ interface FixtureCase {
   toleranceSeconds: number
   header: string
   expectedValid: boolean
+  /** `false` when `header` is deliberately not reproducible by `sign()` (missing or malformed
+   *  `v1`) — the byte-parity assertion below is skipped for those cases rather than gated on
+   *  sniffing `header` for the substring `"v1="`. */
+  headerReproducibleBySign: boolean
 }
 
 interface Fixture {
@@ -155,6 +159,27 @@ describe('platform/webhooks/signer', () => {
     ).toBe(false)
   })
 
+  // Hardening found in CodeRabbit triage (PR #172, TRO-433): `createHmac('sha256', '')` does not
+  // throw in Node — an empty secret still produces a working digest. If a caller's `secret` resolves
+  // to `''` (e.g. an unset env var), `sign()` would silently produce a header and `verify()` would
+  // silently accept it, even though the digest proves nothing under an empty, guessable key. `sign`
+  // fails loudly (throws); `verify` must also reject rather than accept, since a caller-side throw
+  // is not always the return path a webhook receiver checks.
+  it('rejects an empty or non-string secret', () => {
+    const clock = clockAt(T)
+
+    expect(() => sign(RAW_BODY, '', clock)).toThrow(TypeError)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately passing a bad type
+    expect(() => sign(RAW_BODY, undefined as any, clock)).toThrow(TypeError)
+
+    const header = sign(RAW_BODY, SECRET, clock)
+    expect(() => verify(header, RAW_BODY, '', DEFAULT_TOLERANCE_SECONDS, clock)).toThrow(TypeError)
+    expect(() =>
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- deliberately passing a bad type
+      verify(header, RAW_BODY, undefined as any, DEFAULT_TOLERANCE_SECONDS, clock),
+    ).toThrow(TypeError)
+  })
+
   // AC-5: clock-skew tolerance boundary (inclusive at exactly 300s, false at 301s)
   describe('tolerance boundary', () => {
     it('accepts a signature exactly at the 300s boundary (inclusive)', () => {
@@ -247,14 +272,16 @@ describe('platform/webhooks/signer', () => {
       expect(names.some((n) => n.startsWith('boundary'))).toBe(true)
     })
 
-    it.each(
-      // Loaded once above; expanded here so each case reports as its own test result.
-      (() => loadFixture().cases)(),
-    )('case "$name": $description', (testCase: FixtureCase) => {
+    // Expanded from the fixture loaded above, so each case reports as its own test result.
+    it.each(fixture.cases)('case "$name": $description', (testCase: FixtureCase) => {
+      expect(typeof testCase.headerReproducibleBySign).toBe('boolean')
+
       // sign() reproduces the fixture's own header exactly, given the same inputs — this is what
       // makes the fixture usable as a byte-parity check against an independent implementation.
-      const signedHeader = sign(testCase.rawBody, testCase.secret, clockAt(testCase.signTimestamp))
-      if (testCase.header.includes('v1=')) {
+      // Cases whose header is deliberately not reproducible by sign() (missing/malformed v1) opt
+      // out via headerReproducibleBySign instead of this assertion sniffing the header string.
+      if (testCase.headerReproducibleBySign) {
+        const signedHeader = sign(testCase.rawBody, testCase.secret, clockAt(testCase.signTimestamp))
         expect(signedHeader).toBe(testCase.header)
       }
 

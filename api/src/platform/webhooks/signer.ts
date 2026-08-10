@@ -42,6 +42,21 @@ function computeDigest(t: number, rawBody: string, secret: string): string {
   return createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex')
 }
 
+/**
+ * Rejects an empty or non-string `secret`. `createHmac('sha256', '')` succeeds in Node — it does
+ * not throw on an empty key — so without this guard a caller whose `secret` resolves to `''` (an
+ * unset environment variable is the common way that happens) would get a `sign()` that silently
+ * produces a header, and a `verify()` that silently accepts it, under a key any party can guess.
+ * Both `sign` and `verify` call this and let the `TypeError` propagate — the empty-secret case is
+ * a caller misconfiguration, not a verification outcome, so it is not folded into `verify()`'s
+ * `false` return path the way a malformed header or a tolerance miss is.
+ */
+function assertNonEmptySecret(secret: string): void {
+  if (typeof secret !== 'string' || secret.length === 0) {
+    throw new TypeError('secret must be a non-empty string')
+  }
+}
+
 /** SHA-256 hex digests are always exactly 64 lowercase-or-uppercase hex characters. */
 const HEX_SHA256_PATTERN = /^[0-9a-f]{64}$/i
 
@@ -104,6 +119,7 @@ function parseSignatureHeader(header: string): ParsedSignatureHeader | null {
  * `t` comes from `clock()`, called exactly once.
  */
 export function sign(rawBody: string, secret: string, clock: Clock = systemClock): string {
+  assertNonEmptySecret(secret)
   const t = clock()
   const v1 = computeDigest(t, rawBody, secret)
   return `t=${t},v1=${v1}`
@@ -112,15 +128,18 @@ export function sign(rawBody: string, secret: string, clock: Clock = systemClock
 /**
  * Verifies a `Ship-Signature` header value against `rawBody` and `secret`.
  *
- * Returns `false` — never throws — for: a structurally malformed header (missing `v1`, missing or
+ * Throws a `TypeError` for an empty or non-string `secret` (a caller misconfiguration — see
+ * `assertNonEmptySecret`) or for a `clock()` callback that itself throws; otherwise returns
+ * `false`, never throws, for: a structurally malformed header (missing `v1`, missing or
  * non-numeric `t`), a non-finite or negative `toleranceSeconds`, a non-finite `clock()` result, a
  * timestamp outside `toleranceSeconds` of `clock()` (inclusive at the boundary), or a signature
  * mismatch. The digest comparison always goes through `crypto.timingSafeEqual`.
  *
- * The `toleranceSeconds`/`clock()` guards exist because `Math.abs(now - t) > toleranceSeconds` is
- * a "fails open" comparison for non-finite operands: `NaN > anything` is always `false`, so a
- * caller-misconfigured tolerance (`NaN`, `Infinity`, a negative value) or a broken clock could
- * otherwise disable the replay-protection window entirely rather than rejecting the request.
+ * The `toleranceSeconds`/`clock()`-result guards exist because `Math.abs(now - t) >
+ * toleranceSeconds` is a "fails open" comparison for non-finite operands: `NaN > anything` is
+ * always `false`, so a caller-misconfigured tolerance (`NaN`, `Infinity`, a negative value) or a
+ * broken clock could otherwise disable the replay-protection window entirely rather than
+ * rejecting the request.
  */
 export function verify(
   header: string,
@@ -129,6 +148,8 @@ export function verify(
   toleranceSeconds: number = DEFAULT_TOLERANCE_SECONDS,
   clock: Clock = systemClock,
 ): boolean {
+  assertNonEmptySecret(secret)
+
   const parsed = parseSignatureHeader(header)
   if (!parsed) return false
 

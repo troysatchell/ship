@@ -27,24 +27,37 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 `node:crypto`) implementing PLUGFORGE.MD §2.6's webhook signature contract: `sign(rawBody, secret,
 clock)` returns the `Ship-Signature` header **value** `t=<unix-seconds>,v1=<hex-hmac-sha256>`,
 computed over the signed payload `${t}.${rawBody}`; `verify(header, rawBody, secret,
-toleranceSeconds, clock)` parses that value, rejects anything outside a ±300s tolerance window
-(inclusive at the boundary), and compares digests with `crypto.timingSafeEqual` (length-checked
-first, since that function throws rather than returning `false` on unequal-length buffers). Both
-functions take an injected `Clock` (`() => number`, Unix seconds) rather than reading `Date.now()`
-directly, defaulting to a real wall clock — this is the same deterministic-clock convention
-PF-304's deliverer will use, so tests never depend on real time passing. `verify()` never throws:
-a structurally malformed header (missing `v1`, missing/non-numeric `t`) returns `false`, the same
-as an expired timestamp or a digest mismatch.
+toleranceSeconds, clock)` parses that value, rejects anything outside a `toleranceSeconds` window
+(inclusive at the boundary; **defaults to ±300s** per PLUGFORGE.MD §2.6, but callers may pass a
+different value — it must be finite and non-negative), and compares digests with
+`crypto.timingSafeEqual` (length-checked first, since that function throws rather than returning
+`false` on unequal-length buffers). Both functions take an injected `Clock` (`() => number`, Unix
+seconds) rather than reading `Date.now()` directly, defaulting to a real wall clock — this is the
+same deterministic-clock convention PF-304's deliverer will use, so tests never depend on real time
+passing. `verify()` never throws for a structurally malformed header (missing `v1`,
+missing/non-numeric `t`), an expired timestamp, or a digest mismatch — all of those return `false`.
+It is **not** unconditionally throw-free, though: both `sign()` and `verify()` throw a `TypeError`
+for an empty or non-string `secret` by design (a caller misconfiguration, not a verification
+outcome — `createHmac('sha256', '')` succeeds in Node, so without this guard an unset-env-var
+secret would silently sign and verify under a key any party can guess), and an injected `clock()`
+callback that itself throws propagates that exception rather than being caught.
 
 Per a binding PM triage comment on TRO-433 (fixture ownership: this ticket lands first and owns
 the algorithm), this ticket also creates `shared/fixtures/webhook-signature-vectors.json` — a
-dependency-free JSON file with six test vectors (`valid`, `tampered`, `expired`, `missing_v1`,
-`boundary_within_tolerance`, `boundary_outside_tolerance`), each carrying the secret, timestamps,
-raw body, the exact `Ship-Signature` header value (real HMAC-SHA256 hex digests computed with
-Node's `crypto.createHmac`, not hand-typed), and the expected verification result. PF-403's SDK
-`verifyWebhook` will consume the same file so both implementations are checked against one source
-of truth for byte-parity, instead of two independently-authored vector sets that could silently
-drift apart.
+dependency-free JSON file with seven test vectors (`valid`, `tampered`, `expired`, `missing_v1`,
+`boundary_within_tolerance`, `boundary_outside_tolerance`, `malformed_v1_trailing_garbage`), each
+carrying the secret, timestamps, raw body, the exact `Ship-Signature` header value (real
+HMAC-SHA256 hex digests computed with Node's `crypto.createHmac`, not hand-typed), the expected
+verification result, and a `headerReproducibleBySign` flag (`false` for the two cases —
+`missing_v1` and `malformed_v1_trailing_garbage` — whose `header` is deliberately not reproducible
+by `sign()`, so the byte-parity assertion is skipped for those cases explicitly instead of by
+sniffing the header string for `"v1="`). The `malformed_v1_trailing_garbage` case (added in this
+ticket's second review pass, PR #172) pairs a genuine 64-hex digest with trailing non-hex garbage —
+decodes to the same 32 bytes as a real digest, so it is the one input that discriminates a
+length-only check from a format check — and exercises that path in the shared fixture, not just
+locally in this signer's own test file. PF-403's SDK `verifyWebhook` will consume the same file so
+both implementations are checked against one source of truth for byte-parity, instead of two
+independently-authored vector sets that could silently drift apart.
 
 **Why `api/src/platform/webhooks/` and not something under an existing scaffold.** PF-001 (the
 platform scaffold ticket) had not landed on this branch at the time of this work — parallel wave.
@@ -53,17 +66,20 @@ nothing from elsewhere under `api/src/platform/`, so it builds and tests standal
 merge order with PF-001's scaffold.
 
 **How to run it.**
+
 ```bash
 source .factory-env   # or api/.env.local outside a factory worktree
 pnpm --filter @ship/api exec vitest run src/platform/webhooks/__tests__/signer.test.ts
 ```
-18 cases: the 6 acceptance criteria from the Linear test-design comment (positive, tampered body,
+
+20 cases: the 6 acceptance criteria from the Linear test-design comment (positive, tampered body,
 expired timestamp, missing `v1`, tolerance boundary — both edges — and a signing-speed
 micro-benchmark), a constant-time-compare API-usage check (`crypto.timingSafeEqual` is actually
 invoked, plus a functional check that both a one-byte-different and a completely different
-signature are rejected), the shared-fixture round-trip (every vector in
-`webhook-signature-vectors.json` driven through `sign`/`verify`), and 2 hardening regressions added
-during CodeRabbit triage (trailing-garbage `v1`; non-finite/negative `toleranceSeconds` or clock).
+signature are rejected), the shared-fixture round-trip (every one of the 7 vectors in
+`webhook-signature-vectors.json` driven through `sign`/`verify`), and 3 hardening regressions
+(trailing-garbage `v1`; non-finite/negative `toleranceSeconds` or clock; empty/non-string `secret`
+— the last added in this ticket's second review pass, PR #172).
 
 **Red before green (observed, not derived).** Ran the full suite against a deliberate stub
 (`sign` returns a hardcoded `t=0,v1=<64 zero hex chars>` header; `verify` always returns `false`)
@@ -72,12 +88,14 @@ before writing the real implementation: **8 of 16 tests failed** with genuine `A
 none an import or module error. The other 8 passed only because the stub's constant `false` happens
 to satisfy every case whose fixture/AC expects `false`. Full failing output is in this branch's
 work log; representative excerpt:
-```
+
+```text
 FAIL … verifies a signature freshly signed for the same body and timestamp
 AssertionError: expected 't=0,v1=000000000000000000000000000000…' to be 't=1700000000,v1=2ca818bc8816377f6448…'
 FAIL … case "'boundary_within_tolerance'"
 AssertionError: expected 't=0,v1=000000000000000000000000000000…' to be 't=1699999700,v1=a69a0b1f6e098af9f949…'
 ```
+
 After implementing the real `sign`/`verify`: **16/16 pass.**
 
 **Perf-assertion proof (AC-6, per the test-design's required technique).** The spec calls for
@@ -89,24 +107,34 @@ proof for this shape) — the perf test failed: `AssertionError: expected 8.0648
 Removed the busy-wait; re-ran; passed again. Confirms the assertion actually measures execution
 time rather than always passing.
 
-**CodeRabbit triage — two real hardening fixes, one misfire.** `gate.sh`'s CodeRabbit pass (G9)
+**CodeRabbit triage — first pass (gate.sh G9): two real hardening fixes, one finding dismissed as a
+misfire that a later review pass showed was actually real.** `gate.sh`'s CodeRabbit pass (G9)
 returned 3 findings against this branch:
-1. *(minor, CHANGES.md rollback wording)* — does not apply to the actual diff; its
-   `codegenInstructions` referenced "the release-note entry itself," which has no counterpart in
-   this ticket's rollback section (which already names all three files this ticket creates).
-   Treated as a misfire and left as-is.
+1. *(minor, CHANGES.md rollback wording)* — at the time, treated as a misfire: its
+   `codegenInstructions` referenced "the release-note entry itself," and the rollback section then
+   named all three files this ticket created, so the dismissal reasoned there was no gap. **That
+   reasoning was wrong** — "the release-note entry itself" *was* the gap: this ticket's
+   `CHANGES.md` entry is a fourth file the original rollback section never mentioned. A later
+   review pass (PR #172) caught the same gap independently and it is fixed above, in this entry's
+   own **Rollback** section.
 2. *(minor, `signer.ts` `constantTimeHexEquals`)* — real. `Buffer.from(str, 'hex')` does not throw
    on invalid hex; it silently stops decoding at the first bad character. A `v1` consisting of a
    genuinely valid 64-char digest with garbage appended after it still decodes to exactly 32 bytes
    (Node truncates right after the valid part), the same length as a real digest — so the old
    length-only check could not distinguish it from an unmodified signature. Fixed by validating
    both operands as exactly 64 hex characters (`/^[0-9a-f]{64}$/i`) before any buffer comparison.
-3. *(major, `verify()` tolerance/clock handling)* — real, and the more serious of the two.
-   `Math.abs(now - t) > toleranceSeconds` fails **open** for non-finite operands: `NaN > anything`
-   is always `false`. A caller-misconfigured `toleranceSeconds` (`NaN`, `Infinity`, a negative
-   value) or a broken `clock()` could silently disable the replay-protection window rather than
-   being rejected. Fixed by rejecting non-finite/negative `toleranceSeconds` and a non-finite
-   `clock()` result before the comparison.
+3. *(major, `verify()` tolerance/clock handling)* — real, and the more serious of the two, though
+   the two non-finite/negative inputs it covers fail in different ways rather than one shared
+   "fails open" mode. `Math.abs(now - t) > toleranceSeconds` fails **open** specifically for
+   non-finite operands (`NaN`, `Infinity`): `NaN > anything` and `anything > Infinity`-adjacent
+   comparisons are always `false`, so a `NaN`/`Infinity` `toleranceSeconds` or a non-finite
+   `clock()` result could silently disable the replay-protection window rather than being
+   rejected. A **negative** `toleranceSeconds` is the opposite failure mode — `Math.abs(now - t)`
+   is never negative, so it is always greater than a negative tolerance, and `verify()` rejects
+   *every* timestamp, not just old ones. Neither failure mode is acceptable (one under-protects,
+   the other makes the endpoint unusable), so both are rejected explicitly: fixed by requiring
+   `toleranceSeconds` to be finite and non-negative, and `clock()`'s result to be finite, before
+   the comparison runs.
 
 Both real findings got their own regression tests (2 more, 18 total) and were proven red before the
 fix: reverted both guards, re-ran — the trailing-garbage case failed with
@@ -119,14 +147,19 @@ an arbitrarily old signature). Restored both guards; 18/18 green again.
 `header.split(',')` explicitly instead of via array pattern; attempt 2 passed; the CodeRabbit
 hardening above was applied and re-verified after that).
 
-**Rollback.** `git rm api/src/platform/webhooks/signer.ts
+**Rollback.** This ticket touches four files, not three: `api/src/platform/webhooks/signer.ts`,
+`api/src/platform/webhooks/__tests__/signer.test.ts`, `shared/fixtures/webhook-signature-vectors.json`,
+and this `CHANGES.md` entry itself. The simplest correct rollback is `git revert
+<implementing-commit>` (or the small commit range for this ticket), which reverts all four
+together instead of relying on a hand-picked file list that can drift out of sync with the diff.
+If reverting by hand instead: `git rm api/src/platform/webhooks/signer.ts
 api/src/platform/webhooks/__tests__/signer.test.ts shared/fixtures/webhook-signature-vectors.json`,
 then `rmdir api/src/platform/webhooks/__tests__ api/src/platform/webhooks shared/fixtures` if
 empty (leave `api/src/platform/` itself alone if PF-001's scaffold has since populated it with
-other files). No migrations, no schema changes, no other files touched — this ticket adds only the
-three files named above, so reverting it cannot affect any other ticket's work except PF-403
-(`verifyWebhook`), which depends on the fixture file for its own byte-parity tests and would need
-its own vectors restored or regenerated first.
+other files) — **and also remove or restore this section of `CHANGES.md`**, so the release note
+does not outlive the code it describes. No migrations, no schema changes. Reverting cannot affect
+any other ticket's work except PF-403 (`verifyWebhook`), which depends on the fixture file for its
+own byte-parity tests and would need its own vectors restored or regenerated first.
 
 ---
 
