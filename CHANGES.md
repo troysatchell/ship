@@ -21,6 +21,52 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-424 / PF-903 — `docs/architecture.md`: Day-1 skeleton with all nine mandated defense sections, gated by a new section-presence test
+
+**What this closes.** PF-903's Proof line ("Doc committed with all mandated sections present")
+required starting `docs/architecture.md` on Day 1 as defense material for the Architectural
+Defense, per `PLUGFORGE.MD`'s E9 sequencing (arch doc + terraform start immediately, in parallel
+with everything else). Before this change the file did not exist at all (confirmed absent
+2026-08-10).
+
+**What changed.**
+- Added `docs/architecture.md` — module layout tree, SOLID rationale (`ScopeRegistry`→OCP,
+  `IEventBus`→DIP, SDK resource clients→ISP) with planned file paths, composition-root pseudo-code
+  + its in-memory test-wiring sibling, a public/internal boundary sequence diagram (mermaid,
+  skeleton fidelity), OAuth flow diagrams for both grants (PKCE rotation points marked; Device
+  Authorization Grant), the webhook pipeline with signature and Idempotency-Key origins marked,
+  the SDK surface with stable-vs-pre-1.0 marks, the agent-as-citizen before/after with the
+  audit-log payoff, four failure-mode paragraphs (corrupted token store, mid-flight secret
+  rotation, deliverer crash, OpenAPI generator boot-throw), and both documented deviations
+  (signing-secret encrypted-not-hashed, §2.2 note; collab-persist event exclusion, PF-301). Content
+  is derived from `PLUGFORGE.MD` §2 and the PM triage decisions already recorded there — no
+  platform code exists yet in this worktree (no `api/src/platform/`, `sdk/`, or `integrations/`),
+  so every file-path citation is stated as a planned location, and the doc's own header says so
+  explicitly, to avoid presenting derived/planned content as observed fact (CLAUDE.md provenance).
+  The PF-902 cross-reference (IAM adaptation memo) names its real committed path,
+  `docs/IAM-ADAPTATION-RENDER.md` — relayed as a cross-ticket fact (PF-902 landed on branch
+  `docs/pf-902-iam-memo`, not yet merged to `main` as of this writing) and marked in both the doc
+  and the test as derived, not independently verified from this worktree.
+- Added `api/src/__tests__/architectureDocSections.test.ts` — the test-design comment's mechanical
+  section-presence lint (pattern: `pinnedDependencies.test.ts` — read a repo file, assert required
+  content, one `it()` per requirement). 15 assertions, all real (no `.skip`/`.todo`): the
+  test-design comment specced the PF-902 cross-reference as a deferred `it.todo(...)` pending its
+  filename, but `gate.sh`'s G5 check (`tests:not-weakened`) unconditionally fails any newly added
+  skip/todo test modifier in a `*.test.ts` diff by design (only a Playwright-style fixme modifier
+  is exempted, and vitest's `it` does not implement one) — so once the real filename was available
+  it became a normal passing assertion instead. Runs automatically in the existing `api` vitest
+  project; no new CI wiring needed.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run src/__tests__/architectureDocSections.test.ts`
+(no database interaction beyond the suite's standard advisory-lock `beforeAll`/TRUNCATE — the test
+itself only reads a file).
+
+**Roll back.** `git rm docs/architecture.md api/src/__tests__/architectureDocSections.test.ts`,
+revert this entry. No schema, no migration, no other file touched — the only side effect is the
+committed doc and its test.
+
+---
+
 ## TRO-433 — PF-303: HMAC webhook signer (`Ship-Signature: t=…,v1=…`) + the shared signature test-vector fixture
 
 **What was added.** `api/src/platform/webhooks/signer.ts` — a pure, dependency-free module (only
