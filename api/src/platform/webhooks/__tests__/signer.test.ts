@@ -160,7 +160,12 @@ describe('platform/webhooks/signer', () => {
     it('rejects both a one-byte-different and a completely different signature', () => {
       const clock = clockAt(T)
       const header = sign(RAW_BODY, SECRET, clock)
-      const [tPart, v1Part] = header.split(',')
+      const headerParts = header.split(',')
+      const tPart = headerParts[0]
+      const v1Part = headerParts[1]
+      if (tPart === undefined || v1Part === undefined) {
+        throw new Error(`test setup produced an unparseable header: "${header}"`)
+      }
       const v1 = v1Part.slice('v1='.length)
 
       const flippedLastChar = v1.slice(0, -1) + (v1.at(-1) === '0' ? '1' : '0')
