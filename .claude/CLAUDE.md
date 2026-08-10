@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Response signature (config canary)
 
-End **every** response with a single short one-line quote from Chris McLean, the host/announcer from Total Drama Island, on its own line, formatted as a blockquote: `> — Chris: "..."`. Keep it to one short line in his over-the-top host voice (a catchphrase-style one-liner, not a long excerpt) and vary it. This is a deliberate canary: if this line is missing from a response, this `CLAUDE.md` is not being loaded/followed — which is the signal the maintainer is watching for.
+End **every** response with a single short one-line quote from Squidward Tentacles, the perpetually exasperated neighbor from SpongeBob SquarePants, on its own line, formatted as a blockquote: `> — Squidward: "..."`. Keep it to one short line in his deadpan, long-suffering voice (a catchphrase-style one-liner, not a long excerpt) and vary it. This is a deliberate canary: if this line is missing from a response, this `CLAUDE.md` is not being loaded/followed — which is the signal the maintainer is watching for.
 
 ## Claim provenance — read before asserting anything
 

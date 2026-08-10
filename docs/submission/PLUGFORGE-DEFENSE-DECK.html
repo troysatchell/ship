@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PlugForge — Architecture Defense</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #050505;
+    --violet: #8b7cf6;
+    --emerald: #34d399;
+    --amber: #fbbf24;
+    --rose: #fb7185;
+    --ink: rgba(255,255,255,0.92);
+    --ink-2: rgba(255,255,255,0.64);
+    --ink-3: rgba(255,255,255,0.38);
+    --hair: rgba(255,255,255,0.09);
+    --spring: cubic-bezier(0.32, 0.72, 0, 1);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: 'Geist', system-ui, sans-serif;
+    font-weight: 400;
+    overflow: hidden;
+    -webkit-font-smoothing: antialiased;
+  }
+  .mono { font-family: 'Geist Mono', ui-monospace, monospace; }
+
+  /* ---------- atmosphere ---------- */
+  .orbs { position: fixed; inset: 0; pointer-events: none; z-index: 0; }
+  .orbs::before, .orbs::after {
+    content: ''; position: absolute; border-radius: 50%; filter: blur(90px);
+  }
+  .orbs::before {
+    width: 55vw; height: 55vw; left: -12vw; top: -18vw;
+    background: radial-gradient(circle, rgba(139,124,246,0.16), transparent 65%);
+  }
+  .orbs::after {
+    width: 48vw; height: 48vw; right: -10vw; bottom: -16vw;
+    background: radial-gradient(circle, rgba(52,211,153,0.10), transparent 65%);
+  }
+  .grain {
+    position: fixed; inset: 0; z-index: 40; pointer-events: none; opacity: 0.035;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+
+  /* ---------- floating nav pill ---------- */
+  .navpill {
+    position: fixed; top: 1.4rem; left: 50%; transform: translateX(-50%);
+    z-index: 30; display: flex; align-items: center; gap: 0.9rem;
+    padding: 0.55rem 0.65rem 0.55rem 1.1rem;
+    background: rgba(12,12,14,0.55); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+    border: 1px solid var(--hair); border-radius: 999px;
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.07), 0 20px 50px -20px rgba(0,0,0,0.8);
+  }
+  .navpill .brand { font-size: 0.72rem; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-2); font-weight: 500; }
+  .navpill .counter {
+    font-size: 0.72rem; color: var(--ink-3); padding: 0.35rem 0.8rem;
+    background: rgba(255,255,255,0.05); border: 1px solid var(--hair); border-radius: 999px;
+  }
+  .navpill .counter b { color: var(--ink); font-weight: 500; }
+
+  /* ---------- slides ---------- */
+  .deck { position: fixed; inset: 0; z-index: 10; }
+  .slide {
+    position: absolute; inset: 0;
+    padding: clamp(4.5rem, 9vh, 7rem) clamp(1.2rem, 5vw, 5.5rem) clamp(3.2rem, 7vh, 5rem);
+    display: flex; flex-direction: column; justify-content: center;
+    opacity: 0; transform: translateY(44px) scale(0.985); filter: blur(10px);
+    transition: opacity 0.8s var(--spring), transform 0.8s var(--spring), filter 0.8s var(--spring);
+    pointer-events: none; overflow-y: auto;
+  }
+  .slide.active { opacity: 1; transform: translateY(0) scale(1); filter: blur(0); pointer-events: auto; }
+
+  .reveal { opacity: 0; transform: translateY(26px); filter: blur(6px); }
+  .slide.active .reveal {
+    opacity: 1; transform: translateY(0); filter: blur(0);
+    transition: opacity 0.9s var(--spring), transform 0.9s var(--spring), filter 0.9s var(--spring);
+    transition-delay: calc(var(--i, 0) * 90ms + 120ms);
+  }
+
+  .eyebrow {
+    display: inline-flex; align-items: center; gap: 0.5rem; width: max-content;
+    padding: 0.32rem 0.85rem; border-radius: 999px; margin-bottom: 1.1rem;
+    border: 1px solid var(--hair); background: rgba(255,255,255,0.04);
+    font-size: 0.64rem; letter-spacing: 0.24em; text-transform: uppercase; font-weight: 500; color: var(--ink-2);
+  }
+  .eyebrow .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--violet); box-shadow: 0 0 10px var(--violet); }
+  .eyebrow.em .dot { background: var(--emerald); box-shadow: 0 0 10px var(--emerald); }
+
+  h1 {
+    font-size: clamp(1.9rem, 4.4vw, 3.6rem); font-weight: 600; letter-spacing: -0.03em;
+    line-height: 1.04; margin-bottom: 0.9rem;
+  }
+  h1 .dim { color: var(--ink-3); }
+  .lede { font-size: clamp(0.86rem, 1.25vw, 1.02rem); color: var(--ink-2); max-width: 62ch; line-height: 1.55; font-weight: 300; }
+  .lede b, .lede strong { color: var(--ink); font-weight: 500; }
+
+  /* ---------- double-bezel cards ---------- */
+  .shell {
+    background: rgba(255,255,255,0.035);
+    border: 1px solid var(--hair);
+    border-radius: 1.6rem; padding: 0.42rem;
+    box-shadow: 0 30px 70px -40px rgba(0,0,0,0.9);
+  }
+  .core {
+    background: rgba(9,9,11,0.72);
+    border-radius: calc(1.6rem - 0.42rem);
+    padding: 1.15rem 1.3rem;
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.07);
+    height: 100%;
+  }
+  .card-k {
+    font-size: 0.62rem; letter-spacing: 0.2em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 500; margin-bottom: 0.55rem; display: flex; align-items: center; gap: 0.45rem;
+  }
+  .card-t { font-size: 0.98rem; font-weight: 600; letter-spacing: -0.01em; margin-bottom: 0.4rem; }
+  .card-b { font-size: 0.8rem; color: var(--ink-2); line-height: 1.55; font-weight: 300; }
+  .card-b b { color: var(--ink); font-weight: 500; }
+  .rej { font-size: 0.72rem; color: var(--ink-3); margin-top: 0.55rem; padding-top: 0.55rem; border-top: 1px dashed rgba(255,255,255,0.09); line-height: 1.5; }
+  .rej s { color: var(--rose); text-decoration-color: rgba(251,113,133,0.5); }
+
+  .grid { display: grid; gap: 0.8rem; margin-top: 1.6rem; }
+
+  /* ---------- pipeline (slide 1) ---------- */
+  .pipes { display: flex; flex-direction: column; gap: 0.7rem; margin-top: 1.6rem; }
+  .lane { display: flex; align-items: center; gap: 0.55rem; flex-wrap: wrap; }
+  .lane-tag {
+    min-width: 8.2rem; font-size: 0.66rem; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 500;
+  }
+  .node {
+    display: flex; flex-direction: column; gap: 0.12rem;
+    padding: 0.55rem 0.9rem; border-radius: 1rem;
+    background: rgba(255,255,255,0.045); border: 1px solid var(--hair);
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.06);
+  }
+  .node .n { font-family: 'Geist Mono', monospace; font-size: 0.72rem; font-weight: 500; }
+  .node .why { font-size: 0.6rem; color: var(--ink-3); letter-spacing: 0.02em; }
+  .node.hot { border-color: rgba(139,124,246,0.45); background: rgba(139,124,246,0.09); }
+  .node.sink { border-color: rgba(52,211,153,0.4); background: rgba(52,211,153,0.07); }
+  .arrow { color: var(--ink-3); font-size: 0.85rem; user-select: none; }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.8rem; margin-top: 1.6rem; }
+  .stat .core { padding: 0.95rem 1.2rem; }
+  .stat .v { font-size: clamp(1.3rem, 2.4vw, 2rem); font-weight: 600; letter-spacing: -0.03em; }
+  .stat .v em { font-style: normal; color: var(--emerald); }
+  .stat .k2 { font-size: 0.68rem; color: var(--ink-3); margin-top: 0.15rem; line-height: 1.45; }
+
+  /* ---------- flows (slide 3) ---------- */
+  .step { display: flex; gap: 0.6rem; align-items: baseline; font-size: 0.76rem; color: var(--ink-2); line-height: 1.5; padding: 0.28rem 0; font-weight: 300; }
+  .step .idx { font-family: 'Geist Mono', monospace; font-size: 0.62rem; color: var(--violet); min-width: 1.1rem; }
+  .step code, .card-b code, .lede code {
+    font-family: 'Geist Mono', monospace; font-size: 0.9em; color: var(--ink);
+    background: rgba(255,255,255,0.06); padding: 0.08em 0.4em; border-radius: 0.4em;
+  }
+  .mark { color: var(--emerald); font-weight: 500; }
+  .neg { color: var(--rose); }
+
+  .timeline { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; margin-top: 0.5rem; }
+  .tick {
+    font-family: 'Geist Mono', monospace; font-size: 0.7rem; padding: 0.3rem 0.7rem;
+    border-radius: 999px; border: 1px solid var(--hair); background: rgba(255,255,255,0.04); color: var(--ink-2);
+  }
+  .tick.dead { border-color: rgba(251,113,133,0.45); color: var(--rose); background: rgba(251,113,133,0.07); }
+
+  /* ---------- before/after (slide 4) ---------- */
+  .ba { display: grid; grid-template-columns: 1fr auto 1fr; gap: 1rem; align-items: stretch; margin-top: 1.6rem; }
+  .ba .mid { display: flex; align-items: center; justify-content: center; }
+  .ba-arrow {
+    width: 2.6rem; height: 2.6rem; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+    background: rgba(255,255,255,0.05); border: 1px solid var(--hair); color: var(--emerald); font-size: 1rem;
+    box-shadow: inset 0 1px 1px rgba(255,255,255,0.08), 0 0 30px -8px rgba(52,211,153,0.5);
+  }
+  .shell.before { border-color: rgba(251,113,133,0.22); }
+  .shell.after { border-color: rgba(52,211,153,0.28); }
+  .path { font-family: 'Geist Mono', monospace; font-size: 0.72rem; line-height: 1.9; color: var(--ink-2); }
+  .path .em { color: var(--emerald); }
+  .path .bad { color: var(--rose); }
+  .path .dim2 { color: var(--ink-3); }
+
+  /* ---------- terraform (slide 5) ---------- */
+  .tf { font-family: 'Geist Mono', monospace; font-size: 0.7rem; line-height: 1.85; color: var(--ink-2); white-space: pre-wrap; }
+  .tf .add { color: var(--emerald); }
+  .tf .chg { color: var(--amber); }
+  .tf .del { color: var(--rose); }
+  .tf .cm { color: var(--ink-3); }
+
+  /* ---------- dots + controls ---------- */
+  .dots {
+    position: fixed; bottom: 1.5rem; left: 50%; transform: translateX(-50%); z-index: 30;
+    display: flex; gap: 0.55rem; align-items: center;
+    padding: 0.55rem 0.85rem; border-radius: 999px;
+    background: rgba(12,12,14,0.55); backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+    border: 1px solid var(--hair);
+  }
+  .dot-btn {
+    width: 7px; height: 7px; border-radius: 50%; border: none; cursor: pointer; padding: 0;
+    background: rgba(255,255,255,0.22);
+    transition: transform 0.5s var(--spring), background 0.5s var(--spring), box-shadow 0.5s var(--spring);
+  }
+  .dot-btn.on { background: var(--violet); transform: scale(1.45); box-shadow: 0 0 12px rgba(139,124,246,0.8); }
+  .hint {
+    position: fixed; bottom: 1.75rem; right: 1.75rem; z-index: 30;
+    font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .preempts {
+    margin-top: 1.5rem; display: flex; gap: 0.5rem; align-items: baseline; flex-wrap: wrap;
+    font-size: 0.68rem; color: var(--ink-3);
+  }
+  .preempts .tag {
+    font-size: 0.58rem; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 500;
+    color: var(--emerald); border: 1px solid rgba(52,211,153,0.3); border-radius: 999px; padding: 0.2rem 0.6rem;
+  }
+  .preempts i { font-style: italic; color: var(--ink-2); font-weight: 300; }
+
+  @media (max-width: 860px) {
+    body { overflow: auto; }
+    .deck, .slide { position: relative; inset: auto; }
+    .slide { display: none; padding: 5.5rem 1.1rem 4rem; min-height: 100dvh; }
+    .slide.active { display: flex; }
+    .grid, .stats, .ba { grid-template-columns: 1fr !important; }
+    .ba .mid { transform: rotate(90deg); }
+    .lane-tag { min-width: 100%; }
+  }
+  @media print {
+    body { overflow: visible; }
+    .navpill, .dots, .hint, .grain { display: none !important; }
+    .deck { position: static; }
+    .slide {
+      position: relative; inset: auto; opacity: 1 !important; transform: none !important; filter: none !important;
+      page-break-after: always; height: 100vh; pointer-events: auto;
+    }
+    .reveal { opacity: 1 !important; transform: none !important; filter: none !important; }
+  }
+</style>
+</head>
+<body>
+<div class="orbs"></div>
+<div class="grain"></div>
+
+<nav class="navpill">
+  <span class="brand">PlugForge · Architecture Defense</span>
+  <span class="counter"><b id="cur">1</b> / 5</span>
+</nav>
+
+<main class="deck" id="deck">
+
+  <!-- ============ SLIDE 1 — OVERVIEW ============ -->
+  <section class="slide active" data-title="Overview">
+    <div class="eyebrow reveal" style="--i:0"><span class="dot"></span> 01 · Overview</div>
+    <h1 class="reveal" style="--i:1">The boundary <span class="dim">is</span> the architecture.</h1>
+    <p class="lede reveal" style="--i:2">Ship is getting a <b>front door for outside developers</b> — separate from the door our own app uses, but both open into the same core. Every check happens at that front door, one step at a time: who you are, what you're allowed to do, how fast you can go, and a record of what you did. <b>Each step stands alone</b>, so each can fail clearly and be tested on its own.</p>
+
+    <div class="pipes reveal" style="--i:3">
+      <div class="lane">
+        <span class="lane-tag">Public /api/v1</span>
+        <div class="node hot"><span class="n">Bearer AuthN</span><span class="why">who is calling</span></div>
+        <span class="arrow">→</span>
+        <div class="node hot"><span class="n">Scope AuthZ</span><span class="why">what they're allowed to do</span></div>
+        <span class="arrow">→</span>
+        <div class="node hot"><span class="n">Rate limit</span><span class="why">how fast they can go</span></div>
+        <span class="arrow">→</span>
+        <div class="node hot"><span class="n">Audit</span><span class="why">a record of every call</span></div>
+        <span class="arrow">→</span>
+        <div class="node sink"><span class="n">Domain services</span><span class="why">the shared core</span></div>
+      </div>
+      <div class="lane">
+        <span class="lane-tag">Internal /api</span>
+        <div class="node"><span class="n">Session</span><span class="why">our own app's door</span></div>
+        <span class="arrow">→</span>
+        <div class="node"><span class="n">CSRF</span><span class="why">browser safety check</span></div>
+        <span class="arrow">→</span>
+        <div class="node sink"><span class="n">Domain services</span><span class="why">same core — nothing drifts</span></div>
+      </div>
+      <div class="lane">
+        <span class="lane-tag">On every write</span>
+        <div class="node"><span class="n">IEventBus.publish</span><span class="why">every change is announced</span></div>
+        <span class="arrow">→</span>
+        <div class="node"><span class="n">HMAC signer</span><span class="why">sealed against tampering</span></div>
+        <span class="arrow">→</span>
+        <div class="node"><span class="n">Deliverer</span><span class="why">retried until it lands — or parked</span></div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="shell stat reveal" style="--i:4"><div class="core">
+        <div class="v">&lt; 30 <em>min</em></div>
+        <div class="k2">A stranger with nothing but our docs goes from install to a working, verified event feed.</div>
+      </div></div>
+      <div class="shell stat reveal" style="--i:5"><div class="core">
+        <div class="v">&lt; 60 <em>s</em></div>
+        <div class="k2">A script re-runs that entire journey automatically on every single code change.</div>
+      </div></div>
+      <div class="shell stat reveal" style="--i:6"><div class="core">
+        <div class="v">0<em>%</em> flake</div>
+        <div class="k2">Twenty runs in a row, no random failures. If it ever fails randomly, that's a bug we fix — never a retry.</div>
+      </div></div>
+    </div>
+
+    <div class="preempts reveal" style="--i:7"><span class="tag">Preempts</span> <i>“Walk me through how an authenticated request reaches a domain service — why is each a separate middleware?”</i></div>
+  </section>
+
+  <!-- ============ SLIDE 2 — DECISIONS ============ -->
+  <section class="slide" data-title="Decisions">
+    <div class="eyebrow reveal" style="--i:0"><span class="dot"></span> 02 · Decisions</div>
+    <h1 class="reveal" style="--i:1">Every decision, <span class="dim">with the alternative it beat.</span></h1>
+
+    <div class="grid" style="grid-template-columns: repeat(6, 1fr);">
+      <div class="shell reveal" style="--i:2; grid-column: span 3;"><div class="core">
+        <div class="card-k">OAuth</div>
+        <div class="card-t">Built by hand, kept minimal</div>
+        <div class="card-b">We built the sign-in-for-apps system ourselves from the official standard, keeping <b>only the parts we need</b>. It's small enough to hold in one head — and to defend line by line.</div>
+        <div class="rej"><s>Off-the-shelf server</s> — faster to working, but understanding the contract is the graded skill, and you can't defend a black box.</div>
+      </div></div>
+      <div class="shell reveal" style="--i:3; grid-column: span 3;"><div class="core">
+        <div class="card-k">Public resources</div>
+        <div class="card-t">Three clean shapes over one store</div>
+        <div class="card-b">Inside Ship, everything is one kind of record. Outside developers see three purpose-built shapes instead — <code>documents</code>, <code>issues</code>, <code>sprints</code> — <b>easier for them, unchanged for us</b>.</div>
+        <div class="rej"><s>Expose the raw storage</s> — honest to how it works, hostile to the people who'd have to use it.</div>
+      </div></div>
+      <div class="shell reveal" style="--i:4; grid-column: span 2;"><div class="core">
+        <div class="card-k">Webhook engine</div>
+        <div class="card-t">Queued in memory, written down always</div>
+        <div class="card-b">Deliveries queue in memory, but <b>every attempt is written down</b> — so the history, the failures, and the replay button all survive a restart. A heavier queue can drop in later without touching anything around it.</div>
+        <div class="rej"><s>Industrial queue on day one</s> — new infrastructure in a one-week sprint is risk without payoff.</div>
+      </div></div>
+      <div class="shell reveal" style="--i:5; grid-column: span 2;"><div class="core">
+        <div class="card-k">Signing secrets</div>
+        <div class="card-t">Locked, not scrambled — on purpose</div>
+        <div class="card-b">The brief asks for these secrets stored in a form that would make them <b>unusable</b> — a seal can only be made with the actual secret. So we store them locked, <b>show them exactly once</b>, and say so. Stripe does the same.</div>
+        <div class="rej">Written up openly in the architecture doc — a deviation defended beats a requirement faked.</div>
+      </div></div>
+      <div class="shell reveal" style="--i:6; grid-column: span 2;"><div class="core">
+        <div class="card-k">SDK</div>
+        <div class="card-t">Hand-written, drift-checked</div>
+        <div class="card-b">The developer toolkit is written by hand for quality — and on every change, a test compares it against the API's published spec. <b>If they ever drift apart, the build fails.</b></div>
+        <div class="rej"><s>Auto-generated toolkit</s> — can never drift, but reads like a machine wrote it. The drift test buys the same safety without that cost.</div>
+      </div></div>
+    </div>
+
+    <div class="preempts reveal" style="--i:7"><span class="tag">Preempts</span> <i>“What contract decision do you expect to regret — and why does it matter past Week 6?”</i></div>
+  </section>
+
+  <!-- ============ SLIDE 3 — SECURITY MECHANICS ============ -->
+  <section class="slide" data-title="Security">
+    <div class="eyebrow reveal" style="--i:0"><span class="dot"></span> 03 · Security mechanics</div>
+    <h1 class="reveal" style="--i:1">Flows that fail <span class="dim">correctly.</span></h1>
+
+    <div class="grid" style="grid-template-columns: repeat(3, 1fr);">
+      <div class="shell reveal" style="--i:2"><div class="core">
+        <div class="card-k">Sign-in · web apps</div>
+        <div class="step"><span class="idx">01</span><span>The app starts sign-in with a <b>one-time puzzle only it can answer</b>.</span></div>
+        <div class="step"><span class="idx">02</span><span>You approve on a real Ship page — one that can't be embedded or faked.</span></div>
+        <div class="step"><span class="idx">03</span><span>The approval code lives ten minutes and works exactly once.</span></div>
+        <div class="step"><span class="idx">04</span><span>To get real keys, the app must <span class="mark">answer its own puzzle</span>. <span class="neg">Wrong answer — everything it was issued is thrown away.</span></span></div>
+        <div class="rej">Terminals sign in differently: the CLI shows a short code, you approve it in a browser, and it patiently polls — slowing down when told to.</div>
+      </div></div>
+      <div class="shell reveal" style="--i:3"><div class="core">
+        <div class="card-k">Stolen keys · reveal themselves</div>
+        <div class="step"><span class="idx">01</span><span>Keys expire after an hour. Renewal keys work <b>exactly once</b>.</span></div>
+        <div class="step"><span class="idx">02</span><span>Each renewal mints the next key in the same family line.</span></div>
+        <div class="step"><span class="idx">03</span><span>If an old key is ever used again, <span class="neg">two people must be holding it</span> — the whole family dies and everyone signs in fresh.</span></div>
+        <div class="rej">This isn't a claim — the stolen-key story runs as a test in our suite, end to end, on every change.</div>
+      </div></div>
+      <div class="shell reveal" style="--i:4"><div class="core">
+        <div class="card-k">Deliveries · sealed</div>
+        <div class="step"><span class="idx">01</span><span>Every delivery carries a <b>seal</b> made from its exact contents plus the moment it was sent — <code>Ship-Signature: t=…,v1=…</code></span></div>
+        <div class="step"><span class="idx">02</span><span>Change one character in transit and the seal breaks.</span></div>
+        <div class="step"><span class="idx">03</span><span>A captured message dies in <b>five minutes</b> — replaying it later gets you nothing.</span></div>
+        <div class="step"><span class="idx">04</span><span>The receiver checks all of this with <span class="mark">one helper call</span>, in under a millisecond.</span></div>
+      </div></div>
+    </div>
+
+    <div class="shell reveal" style="--i:5; margin-top: 0.8rem;"><div class="core" style="display:flex; align-items:center; gap:1rem; flex-wrap:wrap;">
+      <div class="card-k" style="margin:0;">Delivery discipline</div>
+      <div class="timeline">
+        <span class="tick">1s</span><span class="arrow">→</span><span class="tick">4s</span><span class="arrow">→</span><span class="tick">16s</span><span class="arrow">→</span><span class="tick">1m</span><span class="arrow">→</span><span class="tick">5m</span><span class="arrow">→</span><span class="tick">30m</span><span class="arrow">→</span><span class="tick dead">DLQ</span>
+      </div>
+      <div class="card-b" style="flex:1; min-width: 16rem;">Failed deliveries retry on this schedule. Permanent failures <b>park in a holding pen</b> — visible in the portal, replayable with one click — and the receiver can always tell a replay from an accident.</div>
+    </div></div>
+
+    <div class="preempts reveal" style="--i:6"><span class="tag">Preempts</span> <i>“Why a timestamp in the header — what attack does it prevent, and what if your clock drifts?”</i></div>
+  </section>
+
+  <!-- ============ SLIDE 4 — AGENT AS CITIZEN ============ -->
+  <section class="slide" data-title="Agent">
+    <div class="eyebrow em reveal" style="--i:0"><span class="dot"></span> 04 · Agent as platform citizen</div>
+    <h1 class="reveal" style="--i:1">The agent walks in <span class="dim">the front door.</span></h1>
+    <p class="lede reveal" style="--i:2">Last week's AI assistant reads Ship through a <b>private back door</b> only our own code can use. This week the back door closes: the assistant signs in like any outside app, with <b>read-only access</b> — and when it writes, it writes <b>as the human who approved it</b>, never as itself. A switch flips between old and new, and the tests pass both ways.</p>
+
+    <div class="ba">
+      <div class="shell before reveal" style="--i:3"><div class="core">
+        <div class="card-k">Before · privileged insider</div>
+        <div class="path">
+          agent <span class="dim2">─</span> <span class="bad">X-Internal-Secret</span> <span class="dim2">─→</span> internal /api<br>
+          <span class="dim2">└─</span> minted tokens, no scopes,<br>
+          <span class="dim2">&nbsp;&nbsp;&nbsp;</span> no rate limits, <span class="bad">invisible to audit</span>
+        </div>
+        <div class="rej" style="margin-top:0.8rem;">A back door. It works — but it proves nothing about the platform.</div>
+      </div></div>
+      <div class="mid reveal" style="--i:4"><div class="ba-arrow">→</div></div>
+      <div class="shell after reveal" style="--i:5"><div class="core">
+        <div class="card-k">After · hybrid citizen</div>
+        <div class="path">
+          <span class="em">reads</span>&nbsp;&nbsp;<span class="dim2">─</span> ship_app_fleetgraph <span class="dim2">·</span> client credentials<br>
+          <span class="dim2">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span> read-only scopes <span class="dim2">─→</span> @ship/sdk <span class="dim2">─→</span> /api/v1<br>
+          <span class="em">writes</span> <span class="dim2">─</span> the accepting <b>human's</b> scoped token<br>
+          <span class="dim2">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</span> per accepted draft <span class="dim2">─→</span> @ship/sdk <span class="dim2">─→</span> /api/v1
+        </div>
+        <div class="rej" style="margin-top:0.8rem;">The old rule survives: <b>the AI can never write on its own</b> — still proven by tests — and every write belongs to a person.</div>
+      </div></div>
+    </div>
+
+    <div class="shell reveal" style="--i:6; margin-top: 0.8rem;"><div class="core">
+      <div class="card-b">The payoff is one search of the logs: everything the assistant did sits there looking <b>exactly like any outside developer's activity</b> — same permissions, same speed limits, same paper trail. What it cost: a registered app, a toolkit dependency, and a switch. What it bought: <b>the assistant is now proof the platform works, not an exception to it.</b></div>
+    </div></div>
+
+    <div class="preempts reveal" style="--i:7"><span class="tag">Preempts</span> <i>“The agent goes through the SDK and OAuth like any external app — what did this cost you, and what did it buy?”</i></div>
+  </section>
+
+  <!-- ============ SLIDE 5 — INFRA & BLAST RADIUS ============ -->
+  <section class="slide" data-title="Infra">
+    <div class="eyebrow reveal" style="--i:0"><span class="dot"></span> 05 · Infrastructure & blast radius</div>
+    <h1 class="reveal" style="--i:1">Terraform is the truth. <span class="dim">Here's how I read it.</span></h1>
+
+    <div class="grid" style="grid-template-columns: 5fr 7fr;">
+      <div style="display:flex; flex-direction:column; gap:0.8rem;">
+        <div class="shell reveal" style="--i:2"><div class="core">
+          <div class="card-k">Topology · terraform/render</div>
+          <div class="tf">provider <span class="add">render-oss/render</span>  <span class="cm"># version pinned</span>
+render_web_service.<span class="add">ship</span>       <span class="cm"># API + web</span>
+render_web_service.<span class="add">agent</span>      <span class="cm"># FleetGraph</span>
+render_postgres.<span class="add">ship_db</span>       <span class="cm"># single Postgres</span>
+env: SECRET_ENCRYPTION_KEY, OAuth TTLs,
+     rate-limit config, agent app secret
+<span class="cm"># zero console-only configuration</span></div>
+        </div></div>
+        <div class="shell reveal" style="--i:3"><div class="core">
+          <div class="card-k">Proof sequence</div>
+          <div class="step"><span class="idx">01</span><span>The full plan is printed, annotated by hand, and committed <b>before</b> anything deploys.</span></div>
+          <div class="step"><span class="idx">02</span><span>We change one thing by hand in the dashboard — <b>the plan catches us</b>.</span></div>
+          <div class="step"><span class="idx">03</span><span>Then we destroy everything and rebuild from the config alone. It comes back <b>identical</b>, seeded apps and all.</span></div>
+          <div class="rej"><b>Said honestly:</b> our host has no AWS-style roles. The same idea — least privilege — maps onto what it does have: scoped keys, isolated services, sealed secrets. What it can't express is written down. A trade we defend, not a gap we hide.</div>
+        </div></div>
+      </div>
+      <div class="shell reveal" style="--i:4"><div class="core">
+        <div class="card-k">Worked example · reading blast radius</div>
+        <div class="tf"><span class="chg">~</span> render_web_service.ship
+    env_var <span class="chg">"SECRET_ENCRYPTION_KEY"</span> <span class="cm">(sensitive)</span>
+  <span class="chg">~ update in-place</span> <span class="cm">→ restart only.</span>
+  <span class="cm">Blast radius: new webhook secrets unreadable</span>
+  <span class="cm">under old key — rotate BEFORE flipping. Risky.</span>
+
+<span class="del">-/+</span> render_postgres.ship_db
+    plan <span class="del">"starter"</span> → <span class="add">"standard"</span>
+  <span class="del">-/+ destroy and then create replacement</span>
+  <span class="cm">Blast radius: EVERYTHING. Both services'</span>
+  <span class="cm">DATABASE_URL, all documents, OAuth grants,</span>
+  <span class="cm">delivery logs. Demands: backup, migration-count</span>
+  <span class="cm">check (DB-1), reseed, manual deploy (TRO-361).</span>
+
+<span class="add">+</span> render_web_service.agent env <span class="add">"AGENT_PLATFORM_MODE"</span>
+  <span class="add">+ add</span> <span class="cm">→ additive, restart of agent only;</span>
+  <span class="cm">flag defaults internal — zero behavior change.</span></div>
+      </div></div>
+    </div>
+
+    <div class="preempts reveal" style="--i:5"><span class="tag">Preempts</span> <i>The live exercise: graders hand me a changed plan and I name what moves and what it endangers. This slide is me doing it first.</i></div>
+  </section>
+
+</main>
+
+<div class="dots" id="dots"></div>
+<div class="hint">← → · Space</div>
+
+<script>
+  const slides = [...document.querySelectorAll('.slide')];
+  const dotsEl = document.getElementById('dots');
+  const cur = document.getElementById('cur');
+  let idx = 0;
+
+  slides.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.className = 'dot-btn' + (i === 0 ? ' on' : '');
+    b.setAttribute('aria-label', 'Slide ' + (i + 1) + ' — ' + s.dataset.title);
+    b.addEventListener('click', () => go(i));
+    dotsEl.appendChild(b);
+  });
+  const dots = [...dotsEl.children];
+
+  function go(n) {
+    if (n < 0 || n >= slides.length || n === idx) return;
+    slides[idx].classList.remove('active');
+    dots[idx].classList.remove('on');
+    idx = n;
+    // force reflow so staggered reveals re-run on every entry
+    void slides[idx].offsetWidth;
+    slides[idx].classList.add('active');
+    dots[idx].classList.add('on');
+    cur.textContent = idx + 1;
+  }
+
+  addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowRight' || e.key === 'Right' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); go(idx + 1); }
+    if (e.key === 'ArrowLeft' || e.key === 'Left' || e.key === 'PageUp') { e.preventDefault(); go(idx - 1); }
+    if (e.key === 'Home') go(0);
+    if (e.key === 'End') go(slides.length - 1);
+  });
+
+  let tx = null;
+  addEventListener('touchstart', (e) => { tx = e.touches[0].clientX; }, { passive: true });
+  addEventListener('touchend', (e) => {
+    if (tx === null) return;
+    const dx = e.changedTouches[0].clientX - tx;
+    if (Math.abs(dx) > 60) go(idx + (dx < 0 ? 1 : -1));
+    tx = null;
+  }, { passive: true });
+</script>
+</body>
+</html>

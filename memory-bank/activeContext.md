@@ -2,86 +2,46 @@
 
 *The most-updated file in the bank. Read this first every session; rewrite it whenever focus shifts. Keep it under a screen — move finished work to progress.md.*
 
-**Last updated:** 2026-08-06 (midday). Focus is **Week 5 — FleetGraph, Early Submission (Thu
-2026-08-06 23:59, TONIGHT)**. A pre-deadline gap review (PM pass, all findings live-verified)
-found the Early Submission deliverable itself unfinished and cut **TRO-356–361**; the earlier
-"backlog near-empty" state no longer holds.
+**Last updated:** 2026-08-10 (evening). **Week 6 (PlugForge) — plan phase DONE, build phase pending.**
+The W6 Linear project exists and is fully ticketed: **"PlugForge — Week 6 Platform & Public API"**,
+10 grouping epics (TRO-386–395) + 60 tickets (TRO-396–455), tiered + dependency-wired, one ticket →
+one branch → one PR (no bundling — brief mandate). `audit/requirements.config.yaml`
+`tickets.project` re-scoped to it. PM scope gate passed with 6 live spot-checks.
 
-## Where we are
+## Current focus
 
-**Full-backlog factory wave (2026-08-05 night → 2026-08-06 early AM) — all 5 remaining backlog
-tickets built; 4 merged, 1 held for human sign-off.** User asked to survey the backlog, then said
-"run factory on all 5." TRO-309 (7 CodeQL alerts — fixed a real open-redirect bypass + YAML
-sanitization bug, dismissed 5 with evidence), TRO-349 (FLEETGRAPH.MD diagram, 3 missing chains),
-TRO-348 (wired FG-8's `acceptDraft` to a real HTTP route + production tracker wiring), and TRO-310
-(TEST-11 batch 2 — hardened `tables.spec.ts`/`backlinks.spec.ts`, found 2 real test-simulation bugs)
-all merged (PRs #139–#142). **TRO-350 (proactive-poll per-recipient token investigation) is open as
-PR #138, gate/CI green, deliberately NOT merged** — it touches agent auth/token semantics
-(escalation.md #6), concluded accepted-risk-documented with no new infrastructure built; needs Troy's
-explicit read before merge.
-
-**5 new follow-up tickets filed from this wave, all low/medium, none blocking:** TRO-351 (stale
-FLEETGRAPH.MD prose CodeRabbit + TRO-349 both flagged), TRO-352 (3 more `gate.ts` functions —
-`discardItem`/`acceptProposedTransition`/`rejectProposedTransition` — with the same
-no-HTTP-caller defect TRO-348 fixed for `acceptDraft`), TRO-353 (no UI page exists at all to reach a
-standup draft — the frontend half of TRO-348/352 is still missing), TRO-354 (TEST-11 batch 3, ~428
-sleep sites remain across 40 files), TRO-355 (a real product gap: no table row/column mutation UI
-exists anywhere in `web/src` — 4 e2e tests were silently vacuous, converted to `test.fixme()`,
-needs a human product decision to build or delete).
-
-**Small bookkeeping PR #143 (review-ledger rows for TRO-349's dismissed findings) still open**,
-pending its own CI — non-code, mergeable on gate+CI green alone per the factory's own exception.
-
-## Immediate — tonight's gap tickets (2026-08-06 review, all due today unless noted)
-
-- **TRO-356 (Urgent): Test Cases table is 6/6 `Pending`** — the graded section itself. TRO-340 and
-  TRO-345 are marked Done but the trace runs (TRO-345 item 3) never happened; all blockers merged.
-- **TRO-357: re-seed graded ship-db** with PR #130's fixed TC1/TC3 fixtures — **needs Troy's
-  sign-off** (live graded infra).
-- **TRO-358: redeploy graded ship + agent** — both stale (3rd silent `auto_deploy` failure; ship
-  `last-modified` Aug 5 03:31, agent `/accept-draft` 404s). TRO-361 (Medium, by Sun) owns root cause.
-- **TRO-359: `e2e-agent` has NEVER passed on GitLab** — main red since PR-F added the job; fixture
-  server-boot dies on the GitLab runner, same specs green on GitHub Actions. Fix or disclose.
-- **TRO-360: PRESEARCH.MD Phases 2–3 missing** (template sections 4–9) — pure writing, now confirmed
-  (not just suspected).
-- **Troy decisions: PR #138 (TRO-350)** merge-or-build; **TRO-353** — inbox draft link 404s on the
-  live graded instance (comment on ticket: hide the link vs. build minimal accept page, tonight).
-- PR #143 merged (done). Suggested order: TRO-356 → TRO-360 → TRO-357+358 (one sign-off session) →
-  TRO-359.
+1. **🔔 PF-100 (TRO-403) AWAITING TROY'S ACK — blocks all E1/OAuth code, the critical path.**
+   Study brief at `docs/submission/PF-100-OAUTH-STUDY-BRIEF.md` (uncommitted). Ack = session reply
+   or "ack" comment on TRO-403.
+2. **Test designs DONE (2026-08-10 evening):** all 60 tickets carry pre-implementation test-design
+   comments (5 parallel designers); PM triage posted on 17 tickets — key decisions: /oauth speaks
+   RFC 6749 errors not ApiError; `oauth_apps.client_type` added to 042; `replay_of_delivery_id`
+   added to 045; **PF-603 drill is environment-dual (graded GitLab runner cannot run DinD —
+   testcontainers locally, GitLab `services:` in graded CI)**; PF-802 Playwright proof = dedicated
+   CI job; env-var names canonical on TRO-411. Next: `/ship-factory` build wave 1. Dispatchable now
+   (no E1 dependency): PF-001/TRO-396 (scaffold, first), PF-900/TRO-411, PF-902/TRO-420,
+   PF-903/TRO-424 — Day-1 defense material.
+3. **Factory preflight blocker:** working tree on `main` is dirty with Troy's uncommitted W6 kickoff
+   files (PLUGFORGE.MD, inventory-W6, deck, this bank, + session additions: study brief, ticket
+   manifest in scratchpad). Needs Troy's word on the kickoff commit before worktree dispatch.
+4. **Ticket map anchors:** PF-### ↔ TRO-### is 1:1; every ticket title starts with its PF ID, so
+   Linear search "PF-" resolves. Epics: E0=386 E1=387 E2=388 E3=389 E4=390 E5=391 E6=392 E7=393
+   E8=394 E9=395. Checkpoints: PF-100=TRO-403, PF-700=TRO-417, PF-904=TRO-429 (never agent-closed).
+   PF-901/TRO-415 needs human go-ahead before `terraform destroy` on graded env.
 
 ## Open questions
 
-- TRO-351/352/353/354/355 — not urgent, worth a look before final grading rather than before
-  Thursday.
-- Week 4 final submission outcome — still not recorded in the bank.
+- GitHub repo **public**? Brief mandates; still unchecked — PF-907/TRO-441 carries it as its first,
+  one-command step.
+- W6 deadline contradiction (Sun 11:59 AM vs PM CT) — planning for **AM 2026-08-16**, all work lands Saturday.
+- Carry-over for Troy: PR #138 (TRO-350) merge-or-hold; TRO-353 inbox draft 404s on live.
 
 ## Standing watch-outs
 
-- **Two more sub-agents this wave hit the "started a background gate/monitor, then stopped saying
-  'waiting for its notification'" anti-pattern** (lessons.md rule 22) — TRO-350's and TRO-349's
-  investigators both did this despite the rule being well-established; both recovered cleanly after
-  one nudge to check synchronously. Restating the rule in the brief has not been a reliable
-  deterrent for this failure class either (same conclusion this file already recorded for the
-  `git stash` ban) — worth a mechanical check if it recurs a third time.
-- **The CHANGES.md insertion-point conflict now compounds sequentially across a whole wave**, not
-  just pairwise: merging TRO-309 forced TRO-348/349/310 to each re-resolve via `merge-changes.mjs`,
-  and merging each of those forced the *next* one to re-resolve again — 3 rounds deep for TRO-310,
-  the last PR to land. Expect this scaling with wave size, not just PR count.
-- **A native (non-required) GitHub "CodeQL" check can fail on a PR for alerts that are pre-existing
-  and unrelated to that PR's diff** — confirmed again this wave on PR #141 (one alert identical to
-  one TRO-309 already dismissed, one outside the PR's actual diff hunk). Check `mergeStateStatus`
-  (`UNSTABLE` + `mergeable: MERGEABLE` means it's not actually blocking) before treating this as real.
-- `documents.test.ts` and `UnifiedDocumentPage.programWeeksNav.test.tsx` load-flakes now confirmed
-  to reproduce **in GitHub Actions CI itself**, not just locally under concurrent-worktree load —
-  both cleared on a plain re-run this wave (PR #142).
-- **`auto_deploy` on graded `ship`/`ship-agent` has silently failed twice** — after ANY merge,
-  probe a route the merge added or `last-modified`; runbook in FLEETGRAPH.MD "Deployment model".
-- **PR-D env vars live ONLY in Render env config** (`AGENT_INTERNAL_SECRET`, `AGENT_API_BASE_URL`;
-  secret also at `~/.ship-agent-internal-secret`) — a clean `terraform apply` drops them and kills
-  chat/inbox. Untracked: add to terraform.
-- **`terraform apply` cannot update `render_web_service.agent`** (free-tier provider bug) — use the
-  Render REST API.
-- Local dev is on the **`ship_standup`** DB (`api/.env.local`); the audit-augmented `ship_dev`
-  (638 docs) is intact.
-- All three remotes (local/GitHub/GitLab) verified at identical HEAD `ba7f55c` as of this wave's
-  last merge (PR #142). Check GitLab CI too (`glab ci status --branch main -R troysatchell/ship`).
+- **TRO-361: Render `auto_deploy` broken** — manual Render API deploys + SHA verification, every time.
+- **W6 PR discipline:** per-slice branches preserved; PR names its acceptance criterion + confirms
+  fitness test. Overrides W4/W5 bundling habit.
+- **Graded CI is GitLab** (`.gitlab-ci.yml`) — GH Actions is the mirror; check the right one (W4's
+  invisible GitLab outage precedent). Coverage thresholds live in vitest configs + CI, not gate.sh.
+- Dependency-audit baseline drift recurs on GitHub's schedule (pnpm.overrides pin + refresh pattern).
+- Local dev on `ship_standup` DB; `ship_dev` (638 docs) intact.
