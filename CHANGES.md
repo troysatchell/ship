@@ -176,6 +176,63 @@ src/platform/__tests__/v1-router.test.ts` — 6/6 pass.
 
 ---
 
+## TRO-406 — PF-101: OAuth schema, migrations 042 + 043 (oauth_apps, oauth_authorization_codes, oauth_tokens, oauth_device_codes, api_tokens.scopes)
+
+**What changed.** Added `api/src/db/migrations/042_oauth_apps.sql` and
+`043_oauth_tokens_and_codes.sql` — the first PlugForge (PLUGFORGE.MD §2.2) migrations, current max
+was `041_add_blocks_relationship.sql`. 042 creates `oauth_apps` (registered OAuth clients: portal
+apps, Slack, FleetGraph, the grader app). 043 creates `oauth_authorization_codes`, `oauth_tokens`,
+`oauth_device_codes`, and `ALTER TABLE api_tokens ADD COLUMN scopes text[]` (NULL = legacy unscoped
+internal token, unchanged behavior, never valid at `/api/v1`; non-null = a scoped personal token,
+the second bearer-token class PF-107 will accept). DDL follows §2.2's table exactly, plus one
+binding PM-triage amendment recorded on the ticket (2026-08-10): `oauth_apps` also carries
+`client_type text NOT NULL CHECK (client_type IN ('confidential','public'))`, with
+`client_secret_hash` nullable for public (PKCE, secretless) clients — §2.2's table omitted this,
+but PF-104's confidential-client-auth AC is unimplementable without it. Unique indexes on
+`oauth_apps.client_id`, every OAuth `*_hash` column (`oauth_authorization_codes.code_hash`,
+`oauth_tokens.access_token_hash`, `oauth_tokens.refresh_token_hash` partial WHERE NOT NULL,
+`oauth_device_codes.device_code_hash`), and `oauth_device_codes.user_code`, per the ticket. No
+application code in this ticket — schema only; TTL enforcement (access 1h / refresh 30d / codes
+10min) is PF-104/105/106's job, this ticket only adds the `expires_at` columns those TTLs get
+written into.
+
+**Regression test.** `api/src/db/__tests__/migrations-042-043.test.ts` (6 cases) — runs the real
+migration runner (`runMigrations`, the function behind `pnpm db:migrate`) against throwaway
+databases built from real migration files copied off disk, never raw SQL, so DB-1's silent-skip
+failure mode is actually exercised: AC-1 (fresh DB) asserts `schema_migrations` records both
+versions, all four tables exist, and `api_tokens.scopes` exists as a nullable array column. AC-2
+(prod-shaped DB: migrations 001-041 pre-applied, one `api_tokens` row inserted before 042/043 run)
+asserts 042/043 still apply and get recorded on top of an already-migrated database, the
+pre-existing `api_tokens` row is untouched with `scopes IS NULL`, and every required unique index
+exists. Confirmed RED first: temporarily stubbed both migration files as `SELECT 1;` no-ops (backed
+up outside the repo, restored after — never `git stash`, per this repo's stash ban), re-ran the
+suite — the two `schema_migrations`-recording assertions passed (a no-op still applies and records
+cleanly, matching the test-design comment's prediction) while all four schema-shape assertions
+failed for real (empty table lists, missing column, missing indexes; one of the two AC-2 assertions
+errored outright with `column "scopes" does not exist` rather than the test-design comment's
+predicted false-positive "trivially passes", because the query names the column explicitly).
+Restored the real DDL and re-ran: 6/6 green. Full command and output in the ticket's report; ran
+under `DATABASE_URL` from this worktree's own `.factory-env` (`ship_wt_tro_406`), never the
+worktree's exclusive database directly — tests build their own throwaway databases.
+
+**How to run it.** `pnpm db:migrate` (or `npx tsx api/src/db/migrate.ts` with `DATABASE_URL` set).
+Verify with `\d oauth_apps`, `\d oauth_authorization_codes`, `\d oauth_tokens`,
+`\d oauth_device_codes`, `\d api_tokens` — or `SELECT version FROM schema_migrations WHERE version
+IN ('042_oauth_apps','043_oauth_tokens_and_codes')`, per DB-1: never trust exit 0 alone. Test:
+`cd api && npx vitest run src/db/__tests__/migrations-042-043.test.ts`.
+
+**Rollback.** Drop the four new tables and the added column, then delete the two migration rows:
+```sql
+DROP TABLE IF EXISTS oauth_authorization_codes, oauth_tokens, oauth_device_codes, oauth_apps CASCADE;
+ALTER TABLE api_tokens DROP COLUMN IF EXISTS scopes;
+DELETE FROM schema_migrations WHERE version IN ('042_oauth_apps', '043_oauth_tokens_and_codes');
+```
+Then remove `api/src/db/migrations/042_oauth_apps.sql`, `043_oauth_tokens_and_codes.sql`, and
+`api/src/db/__tests__/migrations-042-043.test.ts` from the branch. No application code anywhere
+else references these tables/column yet (PF-102 onward), so nothing else needs to change.
+
+---
+
 ## TRO-411 — PF-900: Terraform extension — every new Week-6 env var/service in `terraform/render/`
 
 **PF-900 · Epic E9 · non-code / artifact-based ticket, "Start Day 1 — defense material" per
