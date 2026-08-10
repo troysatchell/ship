@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeAll, vi } from 'vitest'
 import request from 'supertest'
 import { createServer } from 'http'
-import type { Express } from 'express'
+import express, { type Express } from 'express'
 import {
   apiRateLimitKey,
   createApiRateLimiters,
@@ -176,6 +176,69 @@ describe('API-1: /api rate limiter', () => {
 
     it('mounts both limiters', () => {
       expect(createApiRateLimiters({ NODE_ENV: 'production' })).toHaveLength(2)
+    })
+  })
+
+  /**
+   * TRO-494 — `createApiRateLimiters` gained a fourth, test-only
+   * `limitOverrides` parameter so a test can drive the per-source-IP
+   * limiter's own cap without sending 6,001 sequential requests
+   * (`rate-limit-v1-exemption.test.ts`'s AC-3 uses it directly). These
+   * assertions guard the two things that would make that seam dangerous:
+   * that it does nothing when unused (production's real call site,
+   * `app.ts:130`, never passes it), and that when used, it changes only the
+   * field it names.
+   */
+  describe('createApiRateLimiters overrides (TRO-494)', () => {
+    it('resolves the exact production numbers with no overrides — pinned, not bounds-checked', () => {
+      // The tests above assert `identityLimit` and `sourceIpLimit` against
+      // bounds (>= burst, <= sane ceiling, sourceIpLimit > identityLimit).
+      // A bug in the override-merge (`{ ...resolveApiRateLimits(env),
+      // ...limitOverrides }`) — e.g. `limitOverrides` accidentally
+      // defaulting to something non-empty, or a field getting swapped —
+      // could still satisfy every bound above while silently moving the
+      // real production ceiling. This pins the literal values so that class
+      // of regression fails here specifically.
+      expect(resolveApiRateLimits({ NODE_ENV: 'production' })).toEqual({
+        windowMs: 60_000,
+        identityLimit: 600,
+        sourceIpLimit: 6000,
+      })
+    })
+
+    it('leaves the 2-argument production call site unaffected — no accidental default override', () => {
+      // Mirrors `app.ts:130`'s exact call shape (`createApiRateLimiters(process.env,
+      // rateLimitRedisClient)`, 2 arguments, `limitOverrides` never passed).
+      // Would fail if `limitOverrides` ever got a non-empty default.
+      expect(createApiRateLimiters({ NODE_ENV: 'production' })).toHaveLength(2)
+    })
+
+    it('applies an explicit sourceIpLimit override at a small, driveable cap without needing the production 6,000 ceiling', async () => {
+      const [perSourceIpLimiter] = createApiRateLimiters(
+        { NODE_ENV: 'production' },
+        undefined,
+        { sourceIpLimit: 3 }
+      )
+      const app = express()
+      app.use('/api/', perSourceIpLimiter)
+      app.get('/api/probe', (_req, res) => res.status(200).json({ ok: true }))
+
+      const server = createServer(app)
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+      try {
+        const statuses: number[] = []
+        for (let i = 0; i < 5; i++) {
+          const res = await request(server).get('/api/probe')
+          statuses.push(res.status)
+        }
+        // Cap overridden to 3: the 4th and 5th requests must be throttled.
+        // If the override were ignored (falling back to the production
+        // 6,000 default), none of these 5 requests would ever trip it —
+        // this is the specific regression this test catches.
+        expect(statuses).toEqual([200, 200, 200, 429, 429])
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
     })
   })
 
