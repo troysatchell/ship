@@ -63,13 +63,13 @@ not the test-env defaults (10,000 / 100,000) the AC explicitly warns would prove
 - **AC-1 (v1 bypass):** 601 sequential requests to `/api/v1/health` on one session identity — asserts
   zero `429`s.
 - **AC-2 (internal routes stay capped):** 601 sequential requests to an internal `/api/*` route on one
-  session identity — asserts a `429` arrives at exactly request #601, carrying the **unchanged legacy
+  session identity — asserts a `429` arrives at exactly request request 601, carrying the **unchanged legacy
   limiter body shape** (`{ error: 'Too many requests. Please slow down.' }`), not the new `/api/v1`
   `ApiError` shape — proving the exemption did not leak into internal routes.
 
 **Red before green (observed).** Ran AC-1 against the unfixed code: real `AssertionError` —
 `expected 0/601 throttled responses to /api/v1/health, got 1` (a genuine HTTP 429 arrived at request
-#601; not an import error or typo). AC-2 was already green pre-fix (no exemption existed yet, so
+request 601; not an import error or typo). AC-2 was already green pre-fix (no exemption existed yet, so
 internal routes were never at risk) — it functions as a regression guard against an over-broad
 future implementation (e.g. one that matched all of `/api/` instead of `/api/v1`), not as red-before-
 green in the strict sense; both ACs are covered per the Linear test-design comment. After adding the
@@ -7700,7 +7700,7 @@ applied `createApiRateLimiters()`'s two limiters (`perSourceIpLimiter`, `perIden
 every `/api/*` request since TRO-172 (commit `9aa2d1c`) — before any of these alerts existed.
 OBSERVED, not inferred: forcing `NODE_ENV=production` and hammering `GET /api/weekly-plans` (one of
 the exact CodeQL-flagged lines, `weekly-plans.ts:329`) 601 times on one session returns HTTP 429 at
-request #601, exactly matching the documented production `identityLimit` of 600
+request request 601, exactly matching the documented production `identityLimit` of 600
 (`rate-limit.ts:118`) — with **zero code changes**. Repeated for one representative route in each of
 the other three named files (`weeks.ts:587`, `admin.ts:14`, `search.ts:17`) with the identical
 result. So "these routes previously had no rate limiting" does not hold as a runtime claim; the
