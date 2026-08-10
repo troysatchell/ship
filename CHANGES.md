@@ -31,15 +31,16 @@ wrong entry in `API_ERROR_HTTP_STATUS` (e.g. `forbidden: 401` instead of 403) wo
 suite silently — the assertions ensure the mapping is correct before PF-200 wires these constructors
 to live routes.
 
-**How to run it.** From the worktree root:
+**How to run it.** From any checkout's repo root (set `DATABASE_URL` first — in a factory worktree,
+`source .factory-env`):
 ```bash
-cd /Users/troy/repos/GAUNTLET/Ship-wt-tro_495
-source .factory-env
 pnpm --filter @ship/api exec vitest run src/platform/api/v1/__tests__/errors.test.ts
 ```
 
-**Rollback.** Revert the test-file hunk (`git checkout api/src/platform/api/v1/__tests__/errors.test.ts`)
-and remove this entry.
+**Rollback.** Find this ticket's test commit with
+`git log --oneline -- api/src/platform/api/v1/__tests__/errors.test.ts` (the `TRO-495` commit touches
+only that file plus this entry) and `git revert <that sha>`. No production code changed, so nothing
+else moves.
 
 ---
 
