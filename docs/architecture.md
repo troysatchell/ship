@@ -24,7 +24,7 @@ than trusting this file over it.
 
 New code lands under three roots (`PLUGFORGE.MD` §2.1), one sentence per module:
 
-```
+```text
 api/src/platform/           # NEW — the platform layer
   oauth/                    #   OAuth 2.0 flows, endpoints, PKCE, token issuance/rotation
   scopes/                   #   ScopeRegistry — scopes registered as data, not switch statements
@@ -75,9 +75,11 @@ doubles, so unit tests never touch Postgres or a real timer:
 
 ```ts
 // api/src/platform/**/__tests__ wiring — in-memory sibling of the composition root above
-const eventBus   = new InProcessEventBus()             // already in-memory — no double needed
-const deliverer  = new InMemoryWebhookDeliverer(new FakeClock()) // deterministic clock injected (§2.6)
-const oauthStore = new InMemoryOAuthStore()             // test double
+const scopeRegistry = new ScopeRegistry()                          // same as composition root — no I/O, no double needed
+const rateLimiter    = new TokenBucketRateLimiter({ perApp: 120, perToken: 60 }) // same as composition root — no I/O, no double needed
+const eventBus       = new InProcessEventBus()                     // already in-memory — no double needed
+const deliverer      = new InMemoryWebhookDeliverer(new FakePool(), new FakeClock()) // in-memory pool double + deterministic clock (§2.6)
+const oauthStore     = new InMemoryOAuthStore()                    // test double
 const router = createApiV1Router({ scopeRegistry, rateLimiter, eventBus, oauthStore, deliverer })
 ```
 
@@ -144,7 +146,7 @@ sequenceDiagram
 
 ### Device Authorization Grant
 
-```
+```text
 ship login  --->  POST /oauth/device/code
                      <--- { device_code, user_code: "BDWJ-KXQT", verify_url, interval }
 CLI prints user_code + verify_url, polls POST /oauth/token { device_code }
@@ -158,7 +160,7 @@ CLI poll  <---  authorization_pending  -->  (slow_down: interval++)  -->  access
 
 ## Webhook Pipeline
 
-```
+```text
 domain write (documentService) -> IEventBus.publish -> subscription matcher
   -> HMAC signer -> IWebhookDeliverer (retry scheduler) -> delivery log -> DLQ -> replay
 ```
