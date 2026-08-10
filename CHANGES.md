@@ -21,6 +21,147 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-397 — PF-002: `ApiError` contract + `/api/v1` error middleware (404 fallthrough, 500 sanitization)
+
+**The cost this closes.** Before this ticket, `/api/v1` had no error contract at all: an unmatched
+route fell through to Express's own default 404 (a plain-text/HTML page, not the public API's JSON
+shape), and any thrown error inside a v1 route would reach Express's own default error handler,
+which sends the raw error message and stack trace in the response body — exactly the internals leak
+PLUGFORGE.MD §2.5 exists to prevent, and the first thing a real public API integrator would hit
+(and could screenshot) the moment a resource route (PF-200 etc.) throws on bad input.
+
+**What changed.**
+- `api/src/platform/api/v1/errors.ts` (new) — the §2.5 `ApiError` contract: the `code` enum
+  (`unauthorized | forbidden | not_found | validation_failed | rate_limited | server_error`), the
+  `ApiErrorBody` wire shape (`code`, `message`, optional `details`, `request_id`), and the `ApiError`
+  class (extends `Error`, adds `httpStatus` + `.toJSON()` returning the exact wire shape — no extra
+  keys). Six typed constructors, one per code (`unauthorizedError`, `forbiddenError`,
+  `notFoundError`, `validationFailedError`, `rateLimitedError`, `serverError`), each taking the
+  caller's `request_id` explicitly so the constructed object already carries it (no separate
+  "attach it later" step). `unauthorizedError(requestId, reason, ...)` sets `details.reason` to one
+  of the three distinct 401 reasons named in the dispatch brief: `missing_token | invalid_token |
+  expired_token`. Per a binding PM decision (TRO-430), a **revoked** token maps to `invalid_token`
+  — there is deliberately no fourth `revoked_token` value; a test (`errors.test.ts`) asserts exactly
+  three reason values exist. HTTP status per code (`API_ERROR_HTTP_STATUS`) is **derived**, not
+  specified verbatim by §2.5: `validation_failed` → 400 matches this repo's existing internal-API
+  convention for a zod/validation failure (e.g. `api/src/routes/documents.ts`'s `res.status(400)`
+  beside a parse failure); the other five are standard HTTP semantics for their names
+  (401/403/404/429/500).
+- `api/src/platform/api/v1/errorMiddleware.ts` (new) — `notFoundHandler` (catch-all: forwards a
+  `not_found` `ApiError` into `errorMiddleware` below rather than responding directly, so the
+  response body is built in exactly one place) and `errorMiddleware` (terminal, 4-arg Express error
+  handler): an `ApiError` instance serializes as-is via `.toJSON()`; anything else — an unexpected
+  `Error`, a rejected promise's reason, or any other thrown value — is sanitized into a generic
+  `server_error` body before it reaches the client (AC: "500 sanitization ... no stack leaks"). The
+  real error (message + stack) is logged server-side via `console.error`, correlated by
+  `request_id`, never included in the response. Also exports `asyncHandler` — Express 4 (this repo's
+  version) only auto-forwards a *synchronous* throw inside a route handler to `next(err)`, not a
+  rejected promise from an `async` function; every real `/api/v1` route that does a DB call (most of
+  what PF-200 etc. will add) will be async, so this ticket provides the wrapper those routes need for
+  the 500-sanitization contract to actually hold once they exist. Not required by this ticket's own
+  two specified test cases (both use a synchronous throw, per the test-design comment) — proven by an
+  additional, non-required test case (see below) — and no route in this ticket uses it yet, since
+  this ticket adds no real resource route.
+- `api/src/platform/api/v1/router.ts` (changed) — split the router into `v1Router` (the export
+  mounted in `app.ts`, unchanged) and a new nested `v1Routes` (exported). Every actual `/api/v1`
+  endpoint now attaches to `v1Routes`, not `v1Router` directly, and `v1Router`'s own stack ends with
+  `notFoundHandler` then `errorMiddleware`. This split exists because Express resolves a mounted
+  router's own stack at request time, not at mount time: anything added to `v1Routes` — a later
+  ticket's resource router, or a test's scratch route — is still tried before the terminal handlers
+  regardless of when it's registered relative to `router.ts`'s own top-level code. Attaching routes
+  directly to `v1Router` below its own `.use(notFoundHandler)` call would NOT have that property:
+  that call runs once at module-load time, so anything appended to `v1Router` afterwards (from a
+  test file, or a future ticket that guessed wrong) would land after the catch-all and be
+  permanently unreachable. A prominent comment marks where new resource routes must attach.
+  `GET /api/v1/health` (PF-001) is unchanged in behavior — it now lives on `v1Routes` instead of
+  `v1Router`, which is invisible to callers and to PF-001's own test suite (verified: 6/6 still
+  pass, see below).
+
+**Binding boundary decision honored (PM, TRO-416):** this contract governs `/api/v1` ONLY. Nothing
+in `errors.ts`/`errorMiddleware.ts` is referenced by, or designed for, anything `/oauth`-shaped —
+`/oauth` will speak RFC 6749's own error shape (`error`/`error_description`) once E1 lands.
+
+**Regression tests.** Test design: ship-test-designer, Linear TRO-397 comment, 2026-08-10.
+- `api/src/platform/api/v1/__tests__/errors.test.ts` (10 cases) — AC-1: constructs each of the six
+  `ApiError` variants via its typed constructor and asserts the exact §2.5 shape (`code`, `message:
+  string`, `request_id: string`, `details` only when present, no extra keys); constructs the three
+  401 variants specifically and asserts `details.reason` for each; asserts no fourth
+  `revoked_token` reason exists.
+- `api/src/platform/api/v1/__tests__/error-middleware.test.ts` (3 cases) — AC-2: `GET
+  /api/v1/this-route-does-not-exist` → 404, JSON body `{ code: 'not_found', message, request_id }`,
+  and `request_id` in the body equals the `X-Request-Id` response header (dispatch brief: "every
+  failure path carries request_id"). AC-3: a scratch route mounted on `v1Routes` that synchronously
+  throws `new Error('leaked stack: SELECT * FROM users')` → 500, `{ code: 'server_error', message,
+  request_id }`, and the stringified body contains neither `SELECT`, the literal message, a
+  `.ts:` file marker, nor a `" at "` stack-frame marker. A third, additional case (not one of the
+  test-design comment's two specified cases — additive coverage) proves the same sanitization holds
+  for a **rejected promise** from an `asyncHandler`-wrapped route.
+
+**Confirmed failing for the right reason before the fix.**
+`errors.ts` was temporarily stubbed exactly as the test-design comment specifies ("constructors all
+return `{ code: 'not_implemented' }`"). `pnpm --filter @ship/api exec vitest run
+src/platform/api/v1/__tests__/errors.test.ts`:
+
+```
+ Test Files  1 failed (1)
+      Tests  9 failed | 1 passed (10)
+ AssertionError: expected { code: 'not_implemented' } to be an instance of ApiError
+```
+9/10 failed on the real `toBeInstanceOf(ApiError)` / shape assertion, not an import error (only the
+one case whose assertion happened to accept the stub's incidental shape passed).
+
+`errorMiddleware.ts` was temporarily stubbed to the shape the test-design comment names as the
+pre-fix state — `notFoundHandler` a no-op `next()` (so an unmatched route genuinely falls through
+to Express's own default 404) and `errorMiddleware` doing `res.status(500).send(err.stack)`
+(`asyncHandler` was real from the start — it is plumbing, not the thing under test, and the async
+test needs it to reach the error middleware at all). `pnpm --filter @ship/api exec vitest run
+src/platform/api/v1/__tests__/error-middleware.test.ts`:
+
+```
+ Test Files  1 failed (1)
+      Tests  3 failed (3)
+ AC-2: AssertionError: expected 'text/html; charset=utf-8' to match /application\/json/
+ AC-3: AssertionError: expected 'text/html; charset=utf-8' to match /application\/json/
+ additional coverage: AssertionError: expected undefined to be 'server_error'
+```
+All three failed on the real observed response (Express's default HTML 404; the stub's raw-stack
+`text/html` 500 body, unparsed by supertest as JSON), not an import error. Restored the real
+implementations and re-ran: all 10 + all 3 pass.
+
+**How to run it.** `source .factory-env` first.
+```
+pnpm --filter @ship/api exec vitest run src/platform/api/v1/__tests__/errors.test.ts src/platform/api/v1/__tests__/error-middleware.test.ts src/platform/__tests__/v1-router.test.ts
+```
+4 files / 39 tests, 0 failures (includes PF-001's own `v1-router.test.ts`, confirming this ticket's
+router restructure didn't change PF-001's observable behavior). `pnpm --filter @ship/shared build &&
+pnpm type-check` is clean across all four workspace packages.
+
+**Full api suite.** `pnpm --filter @ship/api test` — **83 files / 894 tests pass, 1 fails**:
+`src/routes/weeks.test.ts > ... > should approve plan with optional comment`, `expected 401 to be
+200`. **Not this ticket's regression** — this branch touches only `api/src/platform/api/v1/**`, no
+file `weeks.test.ts` or its route/CSRF path depends on. Observed three sibling factory worktrees
+(`Ship-wt-tro_399`, `Ship-wt-tro_401`, `Ship-wt-tro_430`) running `vitest`/`gate.sh` concurrently
+against the same shared `ship-postgres-1` container at the moment this ran (`ps aux`), matching this
+repo's documented load-sensitive-flake class (`lessons.md` rules 24/28 — `weeks.test.ts` is already
+a named identity in that set from a prior session). Re-ran `pnpm --filter @ship/api exec vitest run
+src/routes/weeks.test.ts` standalone: **49/49 pass**. Treated as a pre-existing, load-sensitive flake
+per this repo's documented protocol, not a defect introduced here — not added to
+`audit/factory/quarantine.json`.
+
+**Not verified.** Live/deployed behavior (local-only, `NODE_ENV` unset). PF-203's fitness test
+(asserts the shape across every v1 route) does not exist yet — this ticket proves the shape via unit
+tests on the two failure paths that exist today (unknown route, thrown error); it does not yet prove
+every *future* v1 route uses these constructors, since no other v1 route exists yet.
+
+**Roll back.** Revert this commit. No schema change, no migration, no new dependency. Reverting
+restores `router.ts` to PF-001's original single-`v1Router` form and removes `errors.ts` +
+`errorMiddleware.ts` — `/api/v1/health` keeps working (PF-001's behavior is unaffected either way);
+an unmatched `/api/v1` path and a thrown error in a v1 route return to Express's own default
+404/500 (no `ApiError` shape) exactly as they did before this ticket, since no other ticket depends
+on `errors.ts`/`errorMiddleware.ts` yet.
+
+---
+
 ## TRO-433 — PF-303: HMAC webhook signer (`Ship-Signature: t=…,v1=…`) + the shared signature test-vector fixture
 
 **What was added.** `api/src/platform/webhooks/signer.ts` — a pure, dependency-free module (only
