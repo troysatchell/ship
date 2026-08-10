@@ -26,9 +26,11 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 **The cost this closes.** Ship has no public API surface at all — every route lives at `/api/*`,
 mixed in with internal auth/CSRF/session/rate-limit middleware that a third-party developer client
 has no business going through. PlugForge (`PLUGFORGE.MD` §4, Epic E0) needs a place to build a
-versioned public API that shares none of that internal machinery. This ticket is the entry point:
-every later platform ticket (OAuth, scopes, webhooks, rate limiting, audit, the v1 OpenAPI registry)
-builds inside the layout this ticket creates.
+versioned public API that shares none of that internal *route-specific* machinery (per-route CSRF,
+session auth, endpoint-specific limiters). This ticket is the entry point: every later platform
+ticket (OAuth, scopes, webhooks, rate limiting, audit, the v1 OpenAPI registry) builds inside the
+layout this ticket creates. Not yet true today: the legacy per-source-IP/per-identity rate limiters
+still match `/api/v1` by prefix (PF-004 removes that — see the `app.ts` bullet below).
 
 **What changed.**
 - New `api/src/platform/` directory tree, matching `PLUGFORGE.MD` §2.1 exactly: `oauth/`, `scopes/`,
@@ -60,8 +62,9 @@ builds inside the layout this ticket creates.
   createPublicApiCors())` then `app.use('/api/v1', v1Router)`. Placed after the legacy per-source-IP/
   per-identity rate limiters (`app.ts:326-327`, unchanged — those **still match `/api/v1`** by prefix;
   exempting it is PF-004's job, explicitly out of scope here per the PRD's landmine table) and before
-  the app-global `cors()` call, so the public CORS headers apply cleanly (the v1 router's own handler
-  ends the response before anything mounted after it runs — no header-collision to reason about).
+  the app-global `cors()` call, so the public CORS headers apply. The app-global `cors()` itself is now
+  wrapped to skip `/api/v1` and `/oauth` entirely (see the PR #170 review-fixes note below) — see that
+  note for why the original "no header-collision to reason about" framing was wrong.
   `/oauth` is listed now even though it has no router yet, so the ticket that adds it only has to
   mount the router, not also touch this CORS wiring.
 
@@ -118,6 +121,58 @@ removes the two `app.use(...)` lines and the `platform/` import lines from `api/
 deletes `api/src/platform/` entirely — `/api/v1/*` and `/oauth` stop being reachable, and the
 legacy internal `/api/*` surface is unaffected either way (it never depended on anything this ticket
 added).
+
+**PR #170 review fixes.** Nine findings triaged; one reproduced merge blocker plus eight smaller
+fixes:
+
+- **CodeRabbit #1 (merge blocker, reproduced).** The original framing above — "the v1 router's own
+  handler ends the response before anything mounted after it runs, so there is no header-collision to
+  reason about" — was wrong for any request that ISN'T `GET /api/v1/health`. `v1Router` has no 404
+  fallthrough yet (that's PF-002) and `/oauth` has no router mounted at all (that's E1), so an
+  unmatched `/api/v1/*` path or any `/oauth` request left the response open and fell through to the
+  app-global `cors()` below — which runs, and sets its headers, on every request that reaches it,
+  matched route or not. That overwrote `Access-Control-Allow-Origin` with the single-origin value and
+  added `Access-Control-Allow-Credentials: true` onto a response the public policy had already marked
+  credential-less. Fixed by wrapping the app-global `cors()` in a guard that skips it entirely for
+  `/api/v1` and `/oauth` (path-segment-boundary matched — exact prefix or prefix + `/`, same as
+  Express's own `app.use('/api/v1', ...)` mount above it — a bare `startsWith` would also wrongly
+  match `/api/v10` or `/oauth2`; caught by this same fix's own local `gate.sh` CodeRabbit pass and
+  covered by a fourth regression test below), rather than relying on the public router terminating
+  every request first. Confirmed red-before: the two path-fallthrough regression tests below fail
+  against the pre-fix code with `access-control-allow-credentials: 'true'` where `undefined` was
+  expected, then pass after the `app.ts` change.
+- **Finding #2.** `AC-2` in `v1-router.test.ts` now asserts `access-control-allow-origin` equals the
+  exact configured value (`'*'`, the default) instead of merely `toBeDefined()`, and sets/restores
+  `PUBLIC_API_CORS_ORIGIN` explicitly in the test instead of relying on ambient env.
+- **Finding #3.** `requestId.ts` — logs `req.baseUrl + req.path` instead of `req.originalUrl`, so a
+  caller's query string (which can carry sensitive values) no longer lands in the server log.
+- **Finding #4.** `publicCors.ts` — added `exposedHeaders: ['X-Request-Id']`. Without it the header was
+  set on the response but invisible to cross-origin browser JS: the CORS spec hides all response
+  headers from `fetch`/`XHR` except a small always-allowed set unless the server explicitly exposes
+  them.
+- **Findings #5/#7/#8/#9 (doc accuracy).** Same defect class as the CodeRabbit #1 blocker: present-tense
+  claims about behavior that doesn't exist yet. `ratelimit/README.md`'s "are exempted from `/api/v1` by
+  PF-004" → "will be exempted…" (today they still match by prefix). `platform/README.md`'s "is
+  bearer-token authenticated" → "will be bearer-token authenticated, once PF-107 lands (health is
+  unauthenticated by design)". This file's own "no header-collision to reason about" claim (above) is
+  the same error and is corrected the same way. The local `gate.sh` CodeRabbit pass on this fix caught
+  two more instances of the same class in files this pass had already touched: `platform/README.md`'s
+  Boundary Rules bullet said the `/api/v1` router "shares no internal auth/CSRF/rate-limit middleware"
+  — true for route-specific middleware, false for the legacy per-source-IP/per-identity limiters, which
+  still match `/api/v1` by prefix (now says so, mirroring `ratelimit/README.md`); this file's own "cost
+  this closes" paragraph had the identical overstatement ("shares none of that internal machinery"),
+  narrowed to "route-specific machinery" with the same caveat appended.
+- **Finding #6.** `platform/README.md`'s directory-tree fenced block now has a `text` language tag.
+
+**New regression tests** (`api/src/platform/__tests__/v1-router.test.ts`, 3 added to the existing
+suite of 3 — one existing test tightened): `GET /api/v1/nonexistent` and `GET /oauth/token`, both with
+an `Origin` header — assert `access-control-allow-credentials` is absent and `access-control-allow-
+origin` is `'*'`. Status is deliberately not asserted (404 is correct and expected pre-PF-002/pre-E1);
+what must never happen is the session CORS policy leaking onto a public-surface request. A fourth new
+test proves the path-boundary fix: `GET /api/v10/whatever` (a lookalike, NOT the public surface) still
+gets the app-global session CORS (`access-control-allow-credentials: 'true'`, single-origin). Full
+suite after all fixes: `pnpm --filter @ship/api exec vitest run
+src/platform/__tests__/v1-router.test.ts` — 6/6 pass.
 
 ---
 

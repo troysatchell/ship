@@ -28,6 +28,11 @@ export function requestIdMiddleware(req: Request, res: Response, next: NextFunct
   const requestId = randomUUID();
   req.requestId = requestId;
   res.setHeader(REQUEST_ID_HEADER, requestId);
-  console.log(`[api/v1] request_id=${requestId} ${req.method} ${req.originalUrl}`);
+  // `req.baseUrl + req.path`, not `req.originalUrl` — `originalUrl` includes
+  // the raw query string, so a caller's query params (which can carry
+  // sensitive values, e.g. a token passed as `?access_token=...`) would leak
+  // into this log line (finding #3, PR #170 review). `baseUrl + path` is the
+  // matched mount prefix plus the path within it, no query string.
+  console.log(`[api/v1] request_id=${requestId} ${req.method} ${req.baseUrl}${req.path}`);
   next();
 }

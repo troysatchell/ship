@@ -1,6 +1,7 @@
 import cors from 'cors';
 import type { RequestHandler } from 'express';
 import { resolvePublicApiCorsOrigin, PUBLIC_API_CORS_ORIGIN_ENV } from './config.js';
+import { REQUEST_ID_HEADER } from './api/v1/requestId.js';
 
 /**
  * Permissive, credential-less CORS policy for the public API surface
@@ -21,5 +22,12 @@ export function createPublicApiCors(): RequestHandler {
   return cors({
     origin: resolvePublicApiCorsOrigin(process.env[PUBLIC_API_CORS_ORIGIN_ENV]),
     credentials: false,
+    // Without this, `X-Request-Id` is set on the response but invisible to
+    // cross-origin JS: the CORS spec hides all response headers from
+    // `fetch`/`XHR` except the small always-allowed set unless the server
+    // lists them in `Access-Control-Expose-Headers` (finding #4, PR #170
+    // review). A same-origin caller (curl, server-to-server) was never
+    // affected — this only unblocks the browser case.
+    exposedHeaders: [REQUEST_ID_HEADER],
   });
 }

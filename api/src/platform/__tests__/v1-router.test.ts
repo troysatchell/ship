@@ -26,16 +26,80 @@ describe('PF-001: /api/v1 platform router', () => {
   });
 
   it('AC-2: a cross-origin fetch of /api/v1/health succeeds with credential-less CORS headers', async () => {
-    const res = await request(app).get('/api/v1/health').set('Origin', 'http://example.com');
+    // Set/restore explicitly rather than relying on whatever happens to be in
+    // the ambient environment when this suite runs (finding #2, PR #170
+    // review) — the assertion below checks an EXACT value, so an inherited
+    // env var would make this test pass for the wrong reason.
+    const previous = process.env.PUBLIC_API_CORS_ORIGIN;
+    delete process.env.PUBLIC_API_CORS_ORIGIN;
+    try {
+      const res = await request(app).get('/api/v1/health').set('Origin', 'http://example.com');
 
-    expect(res.status).toBe(200);
-    // Default PUBLIC_API_CORS_ORIGIN (unset in this test run) resolves to
-    // '*' — any origin is allowed.
-    expect(res.headers['access-control-allow-origin']).toBeDefined();
-    // Public CORS is deliberately credentials: false (§2.1) — there is no
-    // cookie for this header to protect, and setting it would misstate what
-    // the public API authenticates with.
+      expect(res.status).toBe(200);
+      // Default PUBLIC_API_CORS_ORIGIN (unset here) resolves to '*' — any
+      // origin is allowed. Assert the exact configured value, not merely
+      // that the header is present (finding #2, PR #170 review) — a
+      // present-but-wrong value (e.g. the app-global single-origin policy's
+      // value) would have passed the old `toBeDefined()` assertion.
+      expect(res.headers['access-control-allow-origin']).toBe('*');
+      // Public CORS is deliberately credentials: false (§2.1) — there is no
+      // cookie for this header to protect, and setting it would misstate what
+      // the public API authenticates with.
+      expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.PUBLIC_API_CORS_ORIGIN;
+      } else {
+        process.env.PUBLIC_API_CORS_ORIGIN = previous;
+      }
+    }
+  });
+
+  it('CodeRabbit #1: an unmatched /api/v1/* path does not fall through to the app-global session CORS', async () => {
+    // v1Router only defines GET /health today (PF-002's 404 fallthrough
+    // hasn't landed yet), so an unmatched path like this one falls through
+    // past `app.use('/api/v1', v1Router)` to whatever is mounted after it —
+    // which, before this fix, was the app-global single-origin
+    // `credentials: true` cors(). That overwrote Access-Control-Allow-Origin
+    // with the single-origin value and added
+    // Access-Control-Allow-Credentials: true onto a response that had
+    // already been served the public, credential-less CORS policy.
+    // Asserting on headers, not status: the route 404ing is fine and
+    // expected pre-PF-002 — what must never happen is the session CORS
+    // policy leaking onto a public-surface request.
+    const res = await request(app)
+      .get('/api/v1/nonexistent')
+      .set('Origin', 'http://example.com');
+
     expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+  });
+
+  it('CodeRabbit #1: an /oauth path does not fall through to the app-global session CORS', async () => {
+    // /oauth has no router mounted yet (added by a later ticket, E1) — every
+    // /oauth request 404s today. Same hazard as the unmatched /api/v1/* case
+    // above: nothing terminates the request inside the public-CORS-covered
+    // section, so it used to fall through to the app-global session cors().
+    const res = await request(app)
+      .get('/oauth/token')
+      .set('Origin', 'http://example.com');
+
+    expect(res.headers['access-control-allow-credentials']).toBeUndefined();
+    expect(res.headers['access-control-allow-origin']).toBe('*');
+  });
+
+  it('CodeRabbit follow-up: a lookalike path (/api/v10) is NOT treated as public surface and still gets the app-global session CORS', async () => {
+    // `req.path.startsWith('/api/v1')` would wrongly match `/api/v10...` too —
+    // caught in gate.sh's local CodeRabbit pass on the fix above. The guard
+    // must match on a path-segment boundary (exact prefix, or prefix + `/`),
+    // the same way Express's own `app.use('/api/v1', ...)` mount already
+    // does. `createApp()`'s default `corsOrigin` is `http://localhost:5173`.
+    const res = await request(app)
+      .get('/api/v10/whatever')
+      .set('Origin', 'http://localhost:5173');
+
+    expect(res.headers['access-control-allow-origin']).toBe('http://localhost:5173');
+    expect(res.headers['access-control-allow-credentials']).toBe('true');
   });
 
   it('AC-3: internal routes are untouched by the v1 request-id/CORS middleware', async () => {
