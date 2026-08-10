@@ -117,8 +117,14 @@ sequenceDiagram
 
 ## OAuth Flow Diagrams
 
-Skeleton fidelity — refine as E1 (PF-100–PF-107) lands. Two grants ship, hand-rolled and
-IETF-minimal (RFC 6749 + 7636 + 8628 — no implicit grant, no plain-method PKCE, S256 only).
+Skeleton fidelity — refine as E1 (PF-100–PF-107) lands. Three grants ship, hand-rolled and
+IETF-minimal (RFC 6749 + 7636 + 8628 — no implicit grant, no plain-method PKCE, S256 only): two
+user-facing grants + `client_credentials` for first-party apps. `PLUGFORGE.MD`'s "two grants"
+phrasing refers to the two user-facing ones diagrammed below (Authorization Code + PKCE, Device
+Authorization); `client_credentials` is a third, architect-added grant (PF-104) for first-party
+apps only — its sole consumer is the FleetGraph agent (`ship_app_fleetgraph`, see Agent as Platform
+Citizen, below), so no separate flow diagram: RFC 6749 §4.4 is a single token-endpoint POST with no
+redirect or polling steps to sequence.
 
 ### Authorization Code + PKCE (rotation points marked)
 

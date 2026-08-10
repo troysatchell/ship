@@ -135,11 +135,12 @@ describe('docs/architecture.md — mandated sections present (PF-903 / TRO-424)'
     ).toBe(true)
   })
 
-  it('5. OAuth flow diagrams — mentions PKCE and rotation', () => {
+  it('5. OAuth flow diagrams — mentions PKCE, rotation, and Device Authorization Grant', () => {
     const text = readDoc()
     const missing: string[] = []
     if (!/PKCE/i.test(text)) missing.push('PKCE')
     if (!/rotation/i.test(text)) missing.push('rotation')
+    if (!/Device Authorization Grant/i.test(text)) missing.push('Device Authorization Grant')
     expect(missing, `OAuth flow section missing: ${missing.join(', ')}`).toEqual([])
   })
 
