@@ -47,6 +47,8 @@ import weeklyPlansRoutes, { weeklyRetrosRouter } from './routes/weekly-plans.js'
 import { documentCommentsRouter, commentsRouter } from './routes/comments.js';
 import { setupSwagger } from './swagger.js';
 import { initializeCAIA } from './services/caia.js';
+import { v1Router } from './platform/api/v1/router.js';
+import { createPublicApiCors } from './platform/publicCors.js';
 
 // Validate SESSION_SECRET in production
 if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) {
@@ -325,6 +327,26 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   // IP flood ceiling still runs before the per-identity budget.
   app.use('/api/', perSourceIpLimiter);
   app.use('/api/', perIdentityLimiter);
+
+  // ── Platform layer: public API (PF-001, PLUGFORGE.MD §2.1/§4) ────────────
+  // `/api/v1/*` and, once added, `/oauth`'s token/device endpoints share a
+  // separate, credential-less CORS policy — NOT the app-global single-origin
+  // `credentials: true` policy below, which cannot serve a cross-origin
+  // bearer-token client (§2.1). Mounted here, before that global `cors()`
+  // call, so this scoped policy's headers apply to `/api/v1` requests: the v1
+  // router's own handlers end the response before reaching anything mounted
+  // below, so there is no double-CORS-header collision to reason about.
+  //
+  // The legacy per-source-IP/per-identity limiters just above still match
+  // `/api/v1` by prefix (`/api/` matches `/api/v1/...`) — exempting `/api/v1`
+  // from them is PF-004's job, not this ticket's (documented landmine,
+  // PLUGFORGE.MD §0.2).
+  //
+  // `/oauth` has no router yet (added by E1); listing it here now means that
+  // ticket only has to mount its router, not also touch this CORS wiring.
+  app.use(['/api/v1', '/oauth'], createPublicApiCors());
+  app.use('/api/v1', v1Router);
+
   app.use(cors({
     origin: corsOrigin,
     credentials: true,

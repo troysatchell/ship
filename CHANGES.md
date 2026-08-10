@@ -21,6 +21,106 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-396 — PF-001: platform scaffold + `/api/v1` router (request IDs, public CORS)
+
+**The cost this closes.** Ship has no public API surface at all — every route lives at `/api/*`,
+mixed in with internal auth/CSRF/session/rate-limit middleware that a third-party developer client
+has no business going through. PlugForge (`PLUGFORGE.MD` §4, Epic E0) needs a place to build a
+versioned public API that shares none of that internal machinery. This ticket is the entry point:
+every later platform ticket (OAuth, scopes, webhooks, rate limiting, audit, the v1 OpenAPI registry)
+builds inside the layout this ticket creates.
+
+**What changed.**
+- New `api/src/platform/` directory tree, matching `PLUGFORGE.MD` §2.1 exactly: `oauth/`, `scopes/`,
+  `ratelimit/`, `webhooks/`, `audit/`, `api/v1/`, `openapi/`. Only `api/v1/` has code in this ticket
+  (PF-001's scope); the other six are placeholder `README.md`s naming which later ticket populates
+  them, so future tickets build inside the scaffold instead of inventing a new location.
+- `api/src/platform/api/v1/router.ts` — the public router. `v1Router.use(requestIdMiddleware)` then
+  `GET /health` (200, `{ status: 'ok' }`). Deliberately minimal: no bearer auth (PF-107), no
+  `ApiError` shape or 404 fallthrough (PF-002), no OpenAPI registration (PF-202 creates the v1
+  registry this route needs to register against — there is no v1 registry to target yet, and
+  registering it against the *internal* registry at `api/src/openapi/registry.ts` would be wrong,
+  since that documents `/api/*`, not `/api/v1/*`, per §2.1's boundary rule). `/health` needs none of
+  that: it is an unauthenticated liveness check, the same convention as the existing internal
+  `GET /health` in `api/src/app.ts`.
+- `api/src/platform/api/v1/requestId.ts` — `requestIdMiddleware`: `crypto.randomUUID()` per request,
+  attached to `req.requestId`, echoed as the `X-Request-Id` response header, and logged
+  (`console.log`) alongside the method/path — so a server-side log line correlates with the header a
+  caller actually sees.
+- `api/src/platform/config.ts` + `api/src/platform/publicCors.ts` — a separate, credential-less
+  (`credentials: false`) CORS policy for the public surface, distinct from the app-global
+  single-origin `credentials: true` policy in `api/src/app.ts` that backs the cookie-authenticated
+  SPA (which cannot serve a cross-origin bearer-token client — §2.1). Configurable via the new env
+  var **`PUBLIC_API_CORS_ORIGIN`**: unset/empty/`*` → any origin (the default — safe for local dev,
+  CI, and the TTFE drill's throwaway containers); a comma-separated list → only those origins,
+  reflected per-request. Documented in `api/src/platform/README.md` (per the dispatch brief — PF-802's
+  browser SDK demo is the first real consumer of a non-wildcard value) and in `config.ts`'s own
+  comments.
+- `api/src/app.ts` — two new lines mounting the platform layer: `app.use(['/api/v1', '/oauth'],
+  createPublicApiCors())` then `app.use('/api/v1', v1Router)`. Placed after the legacy per-source-IP/
+  per-identity rate limiters (`app.ts:326-327`, unchanged — those **still match `/api/v1`** by prefix;
+  exempting it is PF-004's job, explicitly out of scope here per the PRD's landmine table) and before
+  the app-global `cors()` call, so the public CORS headers apply cleanly (the v1 router's own handler
+  ends the response before anything mounted after it runs — no header-collision to reason about).
+  `/oauth` is listed now even though it has no router yet, so the ticket that adds it only has to
+  mount the router, not also touch this CORS wiring.
+
+**Deferred, on purpose, not an oversight:** OpenAPI registration for `GET /api/v1/health` (needs
+PF-202's v1 registry, which doesn't exist yet) and any scope declaration (health checks are
+conventionally unauthenticated; PF-107's scope registry doesn't exist yet either). Both are stated
+in `router.ts`'s own header comment and in `api/src/platform/openapi/README.md` so they aren't lost.
+
+**Regression test.** `api/src/platform/__tests__/v1-router.test.ts`, one case per AC clause from the
+Linear ticket's test-design comment (TRO-396):
+- AC-1: `GET /api/v1/health` → 200, `X-Request-Id` header present and matches a UUIDv4 pattern.
+- AC-2: same request with a cross-origin `Origin` header → 200, `Access-Control-Allow-Origin`
+  present, `Access-Control-Allow-Credentials` absent.
+- AC-3: an existing internal route (`GET /api/documents`, no session) still returns the
+  **pre-existing** internal auth-failure shape (`{ success: false, error: { code: 'UNAUTHORIZED',
+  message: 'No session found' } }`) — not the future v1 `ApiError` shape, and without an
+  `X-Request-Id` header — proving the new middleware is scoped to `/api/v1`/`/oauth` only.
+
+**Confirmed failing for the right reason before the fix.** Temporarily stubbed
+`api/src/platform/api/v1/router.ts` to an empty `Router()` (no `/health` route, no request-id
+middleware) — a real behavioral stub, not `git stash` (banned in this repo) or a deleted file, so
+there was never an import error to accidentally "prove red" with. Ran
+`pnpm --filter @ship/api exec vitest run src/platform/__tests__/v1-router.test.ts`:
+
+```
+ ❯ AC-1: GET /api/v1/health 200s with an X-Request-Id header (UUIDv4)
+   AssertionError: expected 404 to be 200
+ ❯ AC-2: a cross-origin fetch of /api/v1/health succeeds with credential-less CORS headers
+   AssertionError: expected 404 to be 200
+ ✓ AC-3: internal routes are untouched by the v1 request-id/CORS middleware
+```
+AC-1/AC-2 failed on the real assertion (route genuinely 404s pre-fix), not an import/module error.
+AC-3 passed both before and after by design — it is a forward-looking regression guard (the test
+design comment calls this "N/A in the traditional red-before sense"), not something this ticket's
+code is meant to make newly pass. Restored the real `router.ts` (diffed byte-identical against the
+pre-stub version) and re-ran: all 3 pass.
+
+**How to run it.** `source .factory-env` first.
+`pnpm --filter @ship/api exec vitest run src/platform/__tests__/v1-router.test.ts` for just this
+file. Full api suite: `pnpm --filter @ship/api test` — **80 files / 852 tests, 0 failures**, run
+alongside three sibling factory worktrees' concurrent gate runs against the same shared
+`ship-postgres-1` container (no load-flake symptoms observed, so no standalone re-run was needed
+per this repo's documented load-sensitive-test protocol). `pnpm type-check` (after `pnpm
+--filter @ship/shared build`) is clean.
+
+**Not verified.** No live/deployed check — this is local-only, `NODE_ENV` unset (development
+default). Browser-enforced CORS behavior (a real preflight `OPTIONS` round-trip from an actual
+browser) is not exercised by `supertest`, only the header contract a browser would honor; the test
+design comment calls this out explicitly as out of scope for this ticket's unit test.
+
+**Roll back.** Revert this commit. No schema change, no migration, no new dependency (the `cors`
+package was already a dependency, used identically by the existing app-global policy). Reverting
+removes the two `app.use(...)` lines and the `platform/` import lines from `api/src/app.ts` and
+deletes `api/src/platform/` entirely — `/api/v1/*` and `/oauth` stop being reachable, and the
+legacy internal `/api/*` surface is unaffected either way (it never depended on anything this ticket
+added).
+
+---
+
 ## TRO-381 / TRO-351 — FLEETGRAPH.MD accuracy and trim: fixed a self-contradiction, six stale `graph.ts` citations, a wrong route-key count, a missing Trigger Model note, restructured Cost Analysis, and cut ~140 lines of process narration
 
 **The cost this closes.** Two named inaccuracies, both derived from reading `agent/src/graph.ts`
