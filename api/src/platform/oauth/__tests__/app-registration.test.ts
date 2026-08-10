@@ -148,9 +148,25 @@ describe('OAuth app registration (PF-102)', () => {
       const rawSecret: string = res.body.data.client_secret
       expect(typeof rawSecret).toBe('string')
 
+      // CodeRabbit (TRO-408 review): the original check only inspected
+      // string args, so a leak inside a logged Error/object (e.g.
+      // `console.error('failed', { body })`) would slip past undetected.
+      // Serialize every arg — strings as-is, Errors via message + stack,
+      // everything else via JSON.stringify (falling back to String() for
+      // anything that isn't serializable, e.g. a circular reference).
+      const serializeArg = (arg: unknown): string => {
+        if (typeof arg === 'string') return arg
+        if (arg instanceof Error) return `${arg.message}\n${arg.stack ?? ''}`
+        try {
+          return JSON.stringify(arg)
+        } catch {
+          return String(arg)
+        }
+      }
+
       const allCalls = [...logSpy.mock.calls, ...errorSpy.mock.calls, ...warnSpy.mock.calls]
       const leaked = allCalls.some((callArgs) =>
-        callArgs.some((arg) => typeof arg === 'string' && arg.includes(rawSecret))
+        callArgs.some((arg) => serializeArg(arg).includes(rawSecret))
       )
       expect(leaked).toBe(false)
     } finally {
@@ -266,6 +282,58 @@ describe('OAuth app registration (PF-102)', () => {
     }
   })
 
+  it('AC-5: revoking an already-revoked app returns 409 and does not clobber the timestamp', async () => {
+    const createRes = await createAppRequest({
+      name: `AC-5 Double-Revoke App ${testRunId}`,
+      client_type: 'confidential',
+    })
+    expect(createRes.status).toBe(201)
+    const appId: string = createRes.body.data.id
+
+    const firstRevoke = await request(app)
+      .delete(`/api/oauth-apps/${appId}`)
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+    expect(firstRevoke.status).toBe(200)
+
+    const firstRow = await pool.query(`SELECT revoked_at FROM oauth_apps WHERE id = $1`, [appId])
+    const firstRevokedAt: string = firstRow.rows[0].revoked_at
+
+    const secondRevoke = await request(app)
+      .delete(`/api/oauth-apps/${appId}`)
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+    expect(secondRevoke.status).toBe(409)
+    expect(secondRevoke.body.success).toBe(false)
+
+    const secondRow = await pool.query(`SELECT revoked_at FROM oauth_apps WHERE id = $1`, [appId])
+    expect(secondRow.rows[0].revoked_at).toEqual(firstRevokedAt)
+  })
+
+  // CodeRabbit (TRO-408 review): :id previously reached `WHERE id = $1` against a UUID column
+  // unvalidated, so a malformed ID produced a Postgres cast error caught as a 500 rather than a
+  // clean 4xx. Covers all three :id routes.
+  it('rejects a malformed app ID with 400, not a 500', async () => {
+    const malformedId = 'not-a-uuid'
+
+    const getRes = await request(app)
+      .get(`/api/oauth-apps/${malformedId}`)
+      .set('Cookie', sessionCookie)
+    expect(getRes.status).toBe(400)
+
+    const rotateRes = await request(app)
+      .post(`/api/oauth-apps/${malformedId}/rotate`)
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+    expect(rotateRes.status).toBe(400)
+
+    const revokeRes = await request(app)
+      .delete(`/api/oauth-apps/${malformedId}`)
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+    expect(revokeRes.status).toBe(400)
+  })
+
   // ============== Auth boundary (not a numbered AC, but is what makes this an "admin endpoint") ==============
   it('rejects registration from a non-admin workspace member', async () => {
     const memberEmail = `oauth-apps-member-${testRunId}@ship.local`
@@ -290,16 +358,21 @@ describe('OAuth app registration (PF-102)', () => {
     const connectSidCookie = csrfRes.headers['set-cookie']?.[0]?.split(';')[0] || ''
     if (connectSidCookie) memberCookie = `${memberCookie}; ${connectSidCookie}`
 
-    const res = await request(app)
-      .post('/api/oauth-apps')
-      .set('Cookie', memberCookie)
-      .set('x-csrf-token', memberCsrfToken)
-      .send({ name: 'Should be rejected', client_type: 'confidential' })
+    // try/finally (CodeRabbit, TRO-408 review): if the assertion below throws, the member
+    // fixture rows must still be cleaned up rather than leaking into every later test in this
+    // file (or the next run against this worktree's database).
+    try {
+      const res = await request(app)
+        .post('/api/oauth-apps')
+        .set('Cookie', memberCookie)
+        .set('x-csrf-token', memberCsrfToken)
+        .send({ name: 'Should be rejected', client_type: 'confidential' })
 
-    expect(res.status).toBe(403)
-
-    await pool.query('DELETE FROM sessions WHERE user_id = $1', [memberUserId])
-    await pool.query('DELETE FROM workspace_memberships WHERE user_id = $1', [memberUserId])
-    await pool.query('DELETE FROM users WHERE id = $1', [memberUserId])
+      expect(res.status).toBe(403)
+    } finally {
+      await pool.query('DELETE FROM sessions WHERE user_id = $1', [memberUserId])
+      await pool.query('DELETE FROM workspace_memberships WHERE user_id = $1', [memberUserId])
+      await pool.query('DELETE FROM users WHERE id = $1', [memberUserId])
+    }
   })
 })

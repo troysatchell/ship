@@ -1,8 +1,9 @@
 import { Router } from 'express';
 import type { Router as RouterType } from 'express';
-import { z } from 'zod';
 import { authMiddleware, authed, workspaceAdminMiddleware } from '../middleware/auth.js';
 import { ERROR_CODES, HTTP_STATUS } from '@ship/shared';
+import { logAuditEvent } from '../services/audit.js';
+import { CreateOAuthAppSchema } from '../openapi/schemas/oauth-apps.js';
 import {
   createOAuthApp,
   listOAuthApps,
@@ -23,7 +24,10 @@ import {
  * Deliberately thin: every DB read/write lives in
  * `api/src/platform/oauth/appRegistration.ts` (the ticket's stated module
  * home) — this file only validates the request and maps a result to a
- * response.
+ * response. Request-body validation reuses `CreateOAuthAppSchema` from the
+ * OpenAPI schema file rather than a second, route-local zod schema — two
+ * sources of truth for one shape is how the docs drift from the behaviour
+ * (`/ship-openapi-endpoints`).
  *
  * Gated by `workspaceAdminMiddleware`, mirroring `workspaces.ts`'s
  * member-management routes: registering an app that can act on behalf of the
@@ -34,16 +38,27 @@ const router: RouterType = Router();
 
 router.use(authMiddleware, workspaceAdminMiddleware);
 
-const createAppSchema = z.object({
-  name: z.string().min(1).max(200),
-  client_type: z.enum(['confidential', 'public']),
-  redirect_uris: z.array(z.string().url()).max(20).optional(),
-  requested_scopes: z.array(z.string().min(1)).max(50).optional(),
-});
+// CodeRabbit (TRO-408 review): `:id` reaches `WHERE id = $1` against a UUID
+// column unvalidated. A malformed value doesn't 404 — Postgres rejects the
+// cast ("invalid input syntax for type uuid"), which the route's own
+// try/catch turns into a 500. Same convention as `files.ts`'s
+// `isValidUUID`/`UUID_REGEX`: reject the shape before it reaches the query.
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isValidAppId(id: string): boolean {
+  return UUID_REGEX.test(id);
+}
+
+function invalidAppIdResponse(res: import('express').Response): void {
+  res.status(HTTP_STATUS.BAD_REQUEST).json({
+    success: false,
+    error: { code: ERROR_CODES.VALIDATION_ERROR, message: 'Invalid OAuth app ID format' },
+  });
+}
 
 // POST /api/oauth-apps - Register a new OAuth app (AC-1, AC-2)
 router.post('/', authed(async (req, res): Promise<void> => {
-  const parseResult = createAppSchema.safeParse(req.body);
+  const parseResult = CreateOAuthAppSchema.safeParse(req.body);
 
   if (!parseResult.success) {
     res.status(HTTP_STATUS.BAD_REQUEST).json({
@@ -69,9 +84,23 @@ router.post('/', authed(async (req, res): Promise<void> => {
       requestedScopes: requested_scopes,
     });
 
-    // No log line anywhere in this handler's success path. `clientSecret`
-    // exists only in this local variable and in the one response body below
-    // — AC-2 (raw secret absent from logs).
+    // Audit trail, same convention as api-tokens.ts's create/revoke —
+    // `details` names the app, never the secret (AC-2 applies here too: this
+    // call happens after the response is built below, never given
+    // `clientSecret`).
+    await logAuditEvent({
+      workspaceId: req.workspaceId,
+      actorUserId: req.userId,
+      action: 'oauth_app.created',
+      resourceType: 'oauth_app',
+      resourceId: app.id,
+      details: { name: app.name, client_id: app.client_id, client_type: app.client_type },
+      req,
+    });
+
+    // No log line anywhere in this handler's success path touches
+    // `clientSecret`. It exists only in this local variable and in the one
+    // response body below — AC-2 (raw secret absent from logs).
     res.status(HTTP_STATUS.CREATED).json({
       success: true,
       data: {
@@ -82,7 +111,10 @@ router.post('/', authed(async (req, res): Promise<void> => {
         client_type: app.client_type,
         redirect_uris: app.redirect_uris,
         requested_scopes: app.requested_scopes,
+        is_first_party: app.is_first_party,
         created_at: app.created_at,
+        revoked_at: app.revoked_at,
+        has_secret: app.has_secret,
         warning: clientSecret
           ? 'Save this secret now. It will not be shown again.'
           : undefined,
@@ -116,6 +148,10 @@ router.get('/', authed(async (req, res): Promise<void> => {
 // GET /api/oauth-apps/:id - App detail (never includes a secret) (AC-3)
 router.get('/:id', authed(async (req, res): Promise<void> => {
   const id = String(req.params.id);
+  if (!isValidAppId(id)) {
+    invalidAppIdResponse(res);
+    return;
+  }
 
   try {
     const app = await getOAuthApp(id, req.workspaceId);
@@ -141,6 +177,10 @@ router.get('/:id', authed(async (req, res): Promise<void> => {
 // POST /api/oauth-apps/:id/rotate - Rotate the client secret (confidential apps only) (AC-4)
 router.post('/:id/rotate', authed(async (req, res): Promise<void> => {
   const id = String(req.params.id);
+  if (!isValidAppId(id)) {
+    invalidAppIdResponse(res);
+    return;
+  }
 
   try {
     const result = await rotateOAuthAppSecret({ appId: id, workspaceId: req.workspaceId });
@@ -178,6 +218,16 @@ router.post('/:id/rotate', authed(async (req, res): Promise<void> => {
       return;
     }
 
+    await logAuditEvent({
+      workspaceId: req.workspaceId,
+      actorUserId: req.userId,
+      action: 'oauth_app.secret_rotated',
+      resourceType: 'oauth_app',
+      resourceId: id,
+      details: {},
+      req,
+    });
+
     // Same AC-2 reasoning as creation: no log line on this path.
     res.json({
       success: true,
@@ -199,6 +249,10 @@ router.post('/:id/rotate', authed(async (req, res): Promise<void> => {
 // DELETE /api/oauth-apps/:id - Revoke an OAuth app (AC-5)
 router.delete('/:id', authed(async (req, res): Promise<void> => {
   const id = String(req.params.id);
+  if (!isValidAppId(id)) {
+    invalidAppIdResponse(res);
+    return;
+  }
 
   try {
     const result = await revokeOAuthApp({ appId: id, workspaceId: req.workspaceId });
@@ -218,6 +272,16 @@ router.delete('/:id', authed(async (req, res): Promise<void> => {
       });
       return;
     }
+
+    await logAuditEvent({
+      workspaceId: req.workspaceId,
+      actorUserId: req.userId,
+      action: 'oauth_app.revoked',
+      resourceType: 'oauth_app',
+      resourceId: id,
+      details: {},
+      req,
+    });
 
     res.json({ success: true, data: { message: 'OAuth app revoked' } });
   } catch (error) {

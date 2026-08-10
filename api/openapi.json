@@ -6169,80 +6169,27 @@
             ]
           },
           "data": {
-            "type": "object",
-            "properties": {
-              "id": {
-                "type": "string",
-                "format": "uuid",
-                "description": "UUID identifier",
-                "example": "550e8400-e29b-41d4-a716-446655440000"
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/OAuthApp"
               },
-              "name": {
-                "type": "string"
-              },
-              "client_id": {
-                "type": "string",
-                "description": "Public client identifier, e.g. ship_app_...",
-                "example": "ship_app_3f9c2b1a7e6d4508"
-              },
-              "client_type": {
-                "type": "string",
-                "enum": [
-                  "confidential",
-                  "public"
-                ],
-                "description": "confidential apps hold a client secret and authenticate with it at the token endpoint; public apps (browser SPAs) cannot keep a secret safe and use PKCE instead — they never receive a secret."
-              },
-              "redirect_uris": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "format": "uri"
-                }
-              },
-              "requested_scopes": {
-                "type": "array",
-                "items": {
-                  "type": "string"
-                }
-              },
-              "is_first_party": {
-                "type": "boolean"
-              },
-              "created_at": {
-                "type": "string",
-                "format": "date-time",
-                "description": "ISO 8601 datetime string",
-                "example": "2025-01-30T14:30:00.000Z"
-              },
-              "revoked_at": {
-                "type": "string",
-                "nullable": true,
-                "format": "date-time",
-                "description": "ISO 8601 datetime string",
-                "example": "2025-01-30T14:30:00.000Z"
-              },
-              "client_secret": {
-                "type": "string",
-                "nullable": true,
-                "description": "Raw client secret, returned exactly once on creation. null for public clients (they have no secret at all). Never returned by any other endpoint.",
-                "example": "ship_appsec_9a1c...redacted...4f"
-              },
-              "warning": {
-                "type": "string"
+              {
+                "type": "object",
+                "properties": {
+                  "client_secret": {
+                    "type": "string",
+                    "nullable": true,
+                    "description": "Raw client secret, returned exactly once on creation. null for public clients (they have no secret at all). Never returned by any other endpoint.",
+                    "example": "ship_appsec_9a1c...redacted...4f"
+                  },
+                  "warning": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "client_secret"
+                ]
               }
-            },
-            "required": [
-              "id",
-              "name",
-              "client_id",
-              "client_type",
-              "redirect_uris",
-              "requested_scopes",
-              "is_first_party",
-              "created_at",
-              "revoked_at",
-              "client_secret"
             ]
           }
         },
@@ -6313,6 +6260,32 @@
             "required": [
               "client_secret",
               "warning"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "data"
+        ]
+      },
+      "OAuthAppRevokedResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
             ]
           }
         },
@@ -12579,7 +12552,7 @@
           "OAuth Apps"
         ],
         "summary": "Revoke an OAuth app",
-        "description": "Sets revoked_at on the app. Idempotent-safe: revoking an already-revoked app returns 409.",
+        "description": "Sets revoked_at on the app. Repeated revocation does not change the original revocation timestamp — it returns 409 instead.",
         "parameters": [
           {
             "schema": {
@@ -12595,7 +12568,14 @@
         ],
         "responses": {
           "200": {
-            "description": "OAuth app revoked"
+            "description": "OAuth app revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAppRevokedResponse"
+                }
+              }
+            }
           },
           "403": {
             "description": "Workspace admin access required",

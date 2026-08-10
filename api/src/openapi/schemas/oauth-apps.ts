@@ -28,6 +28,15 @@ export const OAuthAppSchema = z.object({
     example: 'ship_app_3f9c2b1a7e6d4508',
   }),
   client_type: OAuthClientTypeSchema,
+  // CodeRabbit (TRO-408 review) suggested restricting registration to
+  // HTTPS-only redirect URIs (with a loopback exception). Deliberately
+  // deferred: PLUGFORGE.MD §2.1's own PKCE demo example allows
+  // `http://localhost:5174`, and the actual security-relevant check —
+  // validating a presented `redirect_uri` against this exact registered set
+  // — is PF-103's job (`/oauth/authorize`), not registration's. Scheme
+  // restriction at registration time is a reasonable future hardening step
+  // but belongs with PF-103, where the redirect_uri matching logic already
+  // lives, not bolted onto this ticket's create endpoint.
   redirect_uris: z.array(z.string().url()),
   requested_scopes: z.array(z.string()),
   is_first_party: z.boolean(),
@@ -51,9 +60,14 @@ export const CreateOAuthAppSchema = z.object({
 
 registry.register('CreateOAuthApp', CreateOAuthAppSchema);
 
+// Extends the full `OAuthApp` shape (not `.omit(...)`) so the create
+// response carries the same fields as the detail/list shapes plus the
+// once-only secret — CodeRabbit (TRO-408 review) caught this drifting from
+// the handler, which originally omitted `is_first_party`/`revoked_at` here;
+// the handler now returns the full shape to match.
 export const OAuthAppCreatedResponseSchema = z.object({
   success: z.literal(true),
-  data: OAuthAppSchema.omit({ has_secret: true }).extend({
+  data: OAuthAppSchema.extend({
     client_secret: z.string().nullable().openapi({
       description:
         'Raw client secret, returned exactly once on creation. null for public clients ' +
@@ -93,6 +107,15 @@ export const OAuthAppSecretRotatedResponseSchema = z.object({
 }).openapi('OAuthAppSecretRotatedResponse');
 
 registry.register('OAuthAppSecretRotatedResponse', OAuthAppSecretRotatedResponseSchema);
+
+export const OAuthAppRevokedResponseSchema = z.object({
+  success: z.literal(true),
+  data: z.object({
+    message: z.string(),
+  }),
+}).openapi('OAuthAppRevokedResponse');
+
+registry.register('OAuthAppRevokedResponse', OAuthAppRevokedResponseSchema);
 
 // ============== Register OAuth App Endpoints ==============
 
@@ -226,13 +249,20 @@ registry.registerPath({
   path: '/oauth-apps/{id}',
   tags: ['OAuth Apps'],
   summary: 'Revoke an OAuth app',
-  description: 'Sets revoked_at on the app. Idempotent-safe: revoking an already-revoked app returns 409.',
+  description:
+    'Sets revoked_at on the app. Repeated revocation does not change the original revocation ' +
+    'timestamp — it returns 409 instead.',
   request: {
     params: z.object({ id: UuidSchema }),
   },
   responses: {
     200: {
       description: 'OAuth app revoked',
+      content: {
+        'application/json': {
+          schema: OAuthAppRevokedResponseSchema,
+        },
+      },
     },
     403: {
       description: 'Workspace admin access required',

@@ -23,6 +23,7 @@
  * acceptance tests need it now, not scope creep into PF-104's endpoint work.
  */
 
+import crypto from 'crypto';
 import { pool } from '../../db/client.js';
 import { generateClientId, generateClientSecret, hashClientSecret } from './credentials.js';
 
@@ -189,7 +190,21 @@ export async function rotateOAuthAppSecret(params: {
   const rawSecret = generateClientSecret();
   const secretHash = hashClientSecret(rawSecret);
 
-  await pool.query(`UPDATE oauth_apps SET client_secret_hash = $1 WHERE id = $2`, [secretHash, app.id]);
+  // CodeRabbit (TRO-408 review): the `revoked_at`/`client_type` checks above
+  // are read-then-act — a concurrent revoke between that SELECT and this
+  // UPDATE would otherwise still "succeed" and hand out a working secret for
+  // an app that's supposed to be dead. Pushing `revoked_at IS NULL` into the
+  // WHERE clause makes the database the one deciding, not application code
+  // (lessons.md rule 18: "push the predicate into the WHERE clause"). If a
+  // revoke won the race, 0 rows match and this reports `revoked` instead of
+  // fabricating a secret nobody should be able to use.
+  const updateResult = await pool.query(
+    `UPDATE oauth_apps SET client_secret_hash = $1 WHERE id = $2 AND revoked_at IS NULL RETURNING id`,
+    [secretHash, app.id]
+  );
+  if (updateResult.rows.length === 0) {
+    return { ok: false, error: 'revoked' };
+  }
 
   return { ok: true, clientSecret: rawSecret };
 }
@@ -254,8 +269,17 @@ export async function verifyAppCredentials(params: {
   if (app.revoked_at) return { ok: false, reason: 'revoked' };
   if (!app.client_secret_hash) return { ok: false, reason: 'no_secret_configured' };
 
+  // Constant-time compare (same defensive pattern as PF-303's
+  // `webhooks/signer.ts`): length-check first, since `timingSafeEqual`
+  // throws rather than returning `false` on unequal-length buffers, then
+  // compare. Both operands are hex-encoded SHA-256 digests (64 chars) here,
+  // so length mismatch alone is already conclusive.
   const providedHash = hashClientSecret(params.clientSecret);
-  if (providedHash !== app.client_secret_hash) return { ok: false, reason: 'invalid_secret' };
+  const providedBuf = Buffer.from(providedHash, 'hex');
+  const storedBuf = Buffer.from(app.client_secret_hash, 'hex');
+  const matches =
+    providedBuf.length === storedBuf.length && crypto.timingSafeEqual(providedBuf, storedBuf);
+  if (!matches) return { ok: false, reason: 'invalid_secret' };
 
   return { ok: true, app: toSummary(app) };
 }

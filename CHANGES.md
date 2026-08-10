@@ -64,7 +64,8 @@ added to `schemas/index.ts`'s barrel) — deliberately not the separate `/api/v1
 PF-202 adds later, per this ticket's dispatch brief ("this is an INTERNAL /api route"). Mounted in
 `api/src/app.ts` with `conditionalCsrf`, same as every other internal router.
 
-**Regression test.** `api/src/platform/oauth/__tests__/app-registration.test.ts` (8 cases, supertest
+**Regression test.** `api/src/platform/oauth/__tests__/app-registration.test.ts` (10 cases —
+8 from the original test-design pass plus 2 added during CodeRabbit triage below —, supertest
 against the real app + a real Postgres workspace/user/session fixture, same pattern as
 `workspaces.test.ts`): AC-1 (client_id + raw secret returned once, hash matches
 `SHA256(rawSecret)`, raw secret absent from the persisted row) plus its PM-amendment sibling (public
@@ -98,7 +99,71 @@ which reason actually produced the red):
 
 All five stubs are fully reverted in the committed diff (`git diff --stat` against `main` shows only
 the real implementation; grepped for the `TEMP-RED-STUB` marker used during this process — zero
-matches in the final tree). Full 8/8 green after every revert.
+matches in the final tree). Full 8/8 green after every revert (10/10 after the CodeRabbit-triage
+additions below).
+
+**CodeRabbit triage (gate.sh G9, 14 findings) — fixed, deferred, or skipped, each with a reason:**
+
+Fixed (all covered by 2 more test cases, now 10/10):
+- *(major)* Create-response OpenAPI schema required `is_first_party`/`revoked_at` that the handler
+  didn't return — real drift between spec and code. Fixed by having the handler return the full
+  `OAuthAppSummary` shape (plus `client_secret`/`warning`) on creation, and changing
+  `OAuthAppCreatedResponseSchema` from `.omit({ has_secret: true })` to `.extend(...)` on the full
+  `OAuthAppSchema`, so response and spec are generated from the same shape instead of two hand-kept
+  ones.
+- *(major)* `:id` reached `WHERE id = $1` against a UUID column with no format check — a malformed
+  ID threw a Postgres cast error, caught by the route's own try/catch as a 500 instead of a clean
+  4xx. Fixed with the same `UUID_REGEX`/guard convention `files.ts` already uses elsewhere in this
+  codebase, returning 400 before any query runs, on all three `:id` routes.
+- *(minor — matches lessons.md rule 18, "push the predicate into the WHERE clause")* Rotation did
+  read-then-act: checked `revoked_at` in a SELECT, then did an unconditional UPDATE — a concurrent
+  revoke landing in between would still hand out a working new secret for a dead app. Fixed by
+  moving the guard into the UPDATE itself (`WHERE id = $1 AND revoked_at IS NULL`) and checking
+  `rowCount`; 0 rows now reports `revoked` instead of fabricating a secret.
+- *(major)* `verifyAppCredentials` compared hashes with plain `!==`, not constant-time. Fixed with
+  `crypto.timingSafeEqual` (length-checked first, since it throws on unequal-length buffers) — same
+  defensive pattern this repo already established in PF-303's `webhooks/signer.ts`.
+- *(major)* The route defined its own `createAppSchema`, duplicating `CreateOAuthAppSchema` in the
+  OpenAPI schema file — exactly the "two sources of truth for one shape" trap
+  `/ship-openapi-endpoints` warns about. Fixed by importing the OpenAPI schema into the route and
+  deleting the duplicate.
+- *(trivial)* No audit-log entry on create/rotate/revoke, unlike the analogous `api-tokens.ts`
+  routes this ticket was told to pattern-match. Fixed: `logAuditEvent` calls on all three mutations,
+  `details` naming only `name`/`client_id`/`client_type` — never the secret, and always called after
+  the response body is already built (so it can't accidentally receive `clientSecret`).
+- *(minor)* The AC-2 leak-detector only checked string log args, missing a leak inside a logged
+  Error/object. Fixed: serializes every arg (string as-is, `Error` via message+stack, else
+  `JSON.stringify` with a `String()` fallback) before searching for the secret substring.
+- *(trivial)* The non-admin-403 test's cleanup queries ran unconditionally after the assertion, so a
+  failing assertion would leak the fixture user/session/membership rows. Fixed: wrapped in
+  try/finally.
+- *(trivial, extra coverage)* Added a second-revoke-returns-409-without-clobbering-the-timestamp
+  case and a malformed-ID-returns-400-not-500 case — both exercise code paths the UUID-guard and
+  race-condition fixes above added.
+- *(minor)* Schema description said revoke was "Idempotent-safe," which reads as "same 200 result
+  twice" when the real behavior is 200-then-409. Reworded to state the 409 explicitly.
+
+Deferred (documented in-line rather than fixed, with the reason in the code):
+- *(trivial)* Restricting `redirect_uris` to HTTPS-only (with a loopback exception) at
+  **registration** time. PLUGFORGE.MD §2.1's own PKCE demo example allows
+  `http://localhost:5174`, and the security-relevant check — validating a *presented* `redirect_uri`
+  against this exact registered set — is PF-103's job (`/oauth/authorize`), not this ticket's.
+  Documented as a deferred hardening step in `openapi/schemas/oauth-apps.ts`, next to
+  `redirect_uris`, per the finding's own suggested escape hatch.
+
+Skipped (verified as pre-existing/out of this ticket's scope, not touched):
+- *(critical, `api/openapi.yaml`)* Malformed YAML indentation on the new `/oauth-apps/{id}`
+  path-parameter block. **Verified this is a pre-existing bug in `api/src/swagger.ts`'s hand-rolled
+  `jsonToYaml()` converter, not something this ticket introduced**: `grep -n "/issues/{id}:" -A12
+  api/openapi.yaml` shows the identical malformed indentation shape already present on `main`, for a
+  route this diff never touches. Every path-param route in the whole spec has this generator bug;
+  fixing the generator is out of this ticket's scope ("never touch files outside the finding's
+  scope") and belongs in its own ticket against `swagger.ts`.
+- *(trivial)* Blanket `401` response documented on all five endpoints. Checked the existing
+  convention first (`grep -c '401:' schemas/issues.ts schemas/documents.ts schemas/workspaces.ts` →
+  0, 1, 0) — declaring 401 per-operation is not how the rest of this codebase's OpenAPI schemas
+  work, so adding it only to this file would be a new, inconsistent convention. Skipped for
+  consistency with the dominant existing pattern.
 
 **Type-check and OpenAPI.** `pnpm --filter @ship/api exec tsc --noEmit` — clean. `pnpm
 --filter @ship/api run openapi:generate` — regenerated `api/openapi.json`/`api/openapi.yaml`
