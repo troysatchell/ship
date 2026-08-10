@@ -60,14 +60,30 @@ export const CreateOAuthAppSchema = z.object({
 
 registry.register('CreateOAuthApp', CreateOAuthAppSchema);
 
-// Extends the full `OAuthApp` shape (not `.omit(...)`) so the create
+// Carries the full `OAuthApp` shape (not `.omit(...)`) so the create
 // response carries the same fields as the detail/list shapes plus the
 // once-only secret — CodeRabbit (TRO-408 review) caught this drifting from
 // the handler, which originally omitted `is_first_party`/`revoked_at` here;
 // the handler now returns the full shape to match.
+//
+// Deliberately `z.object({ ...OAuthAppSchema.shape, ... })` rather than
+// `OAuthAppSchema.extend({...})`: extending an already-`.openapi()`-tagged
+// schema makes @asteasolutions/zod-to-openapi emit an `allOf: [$ref, {...}]`
+// pair whose second member unconditionally carries a literal
+// `default: undefined` own-property (ObjectTransformer's `extendedFrom`
+// branch always does `{ ...,  default: defaultValue }`, regardless of
+// whether a `.default()` was ever set). `JSON.stringify` drops that
+// undefined-valued key silently, which is why openapi.json looks fine, but
+// the repo's hand-rolled `jsonToYaml()` (api/src/swagger.ts) walks the raw
+// object with `Object.entries` and does not — it emits a bare `default:`
+// line at the wrong indentation, which is invalid YAML. Building the merged
+// shape as a plain `z.object()` avoids the `extendedFrom` bookkeeping
+// entirely, so no such stray key is ever produced. (The generator-level bug
+// itself is tracked separately as TRO-490 — this only avoids triggering it.)
 export const OAuthAppCreatedResponseSchema = z.object({
   success: z.literal(true),
-  data: OAuthAppSchema.extend({
+  data: z.object({
+    ...OAuthAppSchema.shape,
     client_secret: z.string().nullable().openapi({
       description:
         'Raw client secret, returned exactly once on creation. null for public clients ' +
