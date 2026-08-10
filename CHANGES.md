@@ -181,6 +181,295 @@ on `errors.ts`/`errorMiddleware.ts` yet.
 
 ---
 
+## TRO-401 — PF-004: exempt `/api/v1` from the legacy `/api/` rate limiters (prod-shaped proof)
+
+**What was broken.** Both legacy `/api/` limiters (`perSourceIpLimiter`, `perIdentityLimiter` in
+`api/src/middleware/rate-limit.ts`, TRO-172/API-1) mount via `app.use('/api/', ...)` in
+`api/src/app.ts:328-329` with no skip logic, so `/api/v1/*` (PF-001's public router) inherited both
+— a per-identity ceiling of 600 req/min and a per-IP ceiling of 6,000 req/min in production. PF-500's
+per-app/per-token buckets are meant to govern the public API instead; until that lands, `/api/v1`
+needed to be unmetered by this file, or the public API and the Time-to-First-Event drill would be
+throttled by limits designed for cookie/session traffic (PLUGFORGE.MD §2.7, §4 PF-004).
+
+**What changed.** Added `isLegacyLimiterExemptPath(path: string): boolean` to `rate-limit.ts` and
+wired it into both `rateLimit({...})` calls via the `skip` option. The path shape was **verified
+empirically, not assumed**, before writing the predicate: both limiters mount at `/api/`, and Express
+strips that mount prefix before a mounted middleware's `skip` callback runs — a throwaway probe app
+with the identical `app.use('/api/', mw)` shape confirmed `req.path` inside `mw` for a request to
+`/api/v1/health` is `/v1/health` (`req.baseUrl` is `/api`), not `/api/v1/health`. The predicate
+therefore matches the **mount-relative** `/v1` shape:
+
+```ts
+export function isLegacyLimiterExemptPath(path: string): boolean {
+  return path === '/v1' || path.startsWith('/v1/');
+}
+```
+
+Segment-boundary-safe (`/v1` or `/v1/…`, never a bare `startsWith('/v1')`) so `/api/v10/*` and
+`/api/v1foo/*` are never accidentally exempted — mirrors the app-global CORS guard's
+`isPublicSurfacePath` (PF-001, `app.ts:375-376`), which enforces the identical boundary rule one
+layer up, where `req.path` is still the unstripped `/api/v1/...` (that middleware is mounted at the
+app root, not under `/api/`). Also updated the now-stale `app.ts` comment above the CORS mount that
+said exempting `/api/v1` from the legacy limiters was "PF-004's job, not this ticket's" — it is now
+this ticket's, and done.
+
+**Regression test.** `api/src/middleware/__tests__/rate-limit-v1-exemption.test.ts` — builds a
+minimal Express app mirroring `app.ts:328-330`'s exact prefix-mount order (both legacy limiters at
+`/api/`, then the real `v1Router` at `/api/v1`, plus one bare internal `/api/*` route). Limiters are
+constructed via `createApiRateLimiters({ NODE_ENV: 'production' })`, which resolves the **production**
+numbers (`identityLimit: 600`, `sourceIpLimit: 6000`, `windowMs: 60_000` — `rate-limit.ts:130-132`),
+not the test-env defaults (10,000 / 100,000) the AC explicitly warns would prove nothing against a
+601-sequential-request test.
+- **AC-1 (v1 bypass):** 601 sequential requests to `/api/v1/health` on one session identity — asserts
+  zero `429`s.
+- **AC-2 (internal routes stay capped):** 601 sequential requests to an internal `/api/*` route on one
+  session identity — asserts a `429` arrives at exactly request request 601, carrying the **unchanged legacy
+  limiter body shape** (`{ error: 'Too many requests. Please slow down.' }`), not the new `/api/v1`
+  `ApiError` shape — proving the exemption did not leak into internal routes.
+
+**Red before green (observed).** Ran AC-1 against the unfixed code: real `AssertionError` —
+`expected 0/601 throttled responses to /api/v1/health, got 1` (a genuine HTTP 429 arrived at request
+request 601; not an import error or typo). AC-2 was already green pre-fix (no exemption existed yet, so
+internal routes were never at risk) — it functions as a regression guard against an over-broad
+future implementation (e.g. one that matched all of `/api/` instead of `/api/v1`), not as red-before-
+green in the strict sense; both ACs are covered per the Linear test-design comment. After adding the
+`skip` predicate: both tests pass, full `api` suite 884/884. One earlier full-suite run (also
+post-fix) showed a single unrelated failure in `src/routes/agent.test.ts` (`fetchSpy` call-count
+assertion) with no sibling `gate.sh`/vitest process running (`ps aux` checked); an immediate re-run
+of the full suite passed 884/884 with no code change. This branch touches no `agent`-related file —
+consistent with the documented load-sensitive flake class (`lessons.md` rule 24/25), not a
+regression from this change.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api test -- rate-limit-v1-exemption
+```
+
+**Not verified.** Real wall-clock window expiry (601 synchronous in-process requests complete well
+inside the 60s window, so no clock advancement was exercised — matches the test-design comment's
+explicit scope). Production behavior against a live Redis-backed store (`REDIS_URL` unset in every
+environment this test runs in, so it exercises the default in-process `MemoryStore` path only, same
+as the rest of `rate-limit.test.ts`).
+
+**Rollback.** Revert this commit (or `git diff main -- api/src/middleware/rate-limit.ts api/src/app.ts
+api/src/middleware/__tests__/rate-limit-v1-exemption.test.ts | git apply -R`). Restores both legacy
+limiters to unconditionally capping `/api/v1/*` at the production 600/6,000 ceilings, and reverts the
+`app.ts` comment. No schema, migration, or env-var changes — safe to revert standalone.
+
+---
+
+## TRO-399 — PF-003: boundary lint rules (Day-1 one-way door)
+
+**What was added.** Two enforcement mechanisms for PLUGFORGE.MD §2.1's platform boundary rules,
+both wired into the graded CI pipeline, before either `api/src/platform/api/v1/**` or
+`integrations/*` has any real code beyond the PF-001 scaffold:
+
+1. **ESLint rule** (`eslint.config.mjs`) — a new flat-config block scoped to
+   `files: ['api/src/platform/api/v1/**/*.ts']`, layered after the general `api/src/**/*.ts`
+   block (same "later block wins for the same rule key" technique the existing
+   `web/src/pages/**` override already uses), adding `no-restricted-imports` with a
+   `group: ['**/routes/**', '**/routes']` pattern. This forbids any import of
+   `api/src/routes/**` (the internal route handlers) from the public v1 router layer, in any
+   relative-path form (`no-restricted-imports`'s `patterns` matches the import string as written,
+   not the resolved file path, so it is depth-agnostic — verified directly against the real
+   config). It does **not** ban imports generally: an import from a sibling directory (e.g.
+   `services/`) produces zero errors from this rule. `pnpm lint` already runs in both CI
+   pipelines' `verify` job (`.gitlab-ci.yml`, `.github/workflows/ci.yml`), so no new CI wiring was
+   needed for this half — it rides the existing lint step.
+2. **`scripts/check-integration-deps.mjs`** — a new, dependency-free CLI script (modeled directly
+   on the existing `scripts/factory/lib/dependency-audit-diff.mjs` pattern: pure functions
+   exported, CLI entry point guarded by `import.meta.url === file://process.argv[1]` so a test can
+   import the logic without triggering `process.exit`) that walks `integrations/*/package.json`
+   (one level deep) and fails if any package declares a **runtime** dependency (`dependencies`,
+   never `devDependencies`/`peerDependencies`) other than `@ship/sdk`. `integrations/*` packages
+   don't exist yet (the first one, `integrations/cli`, is PF-600 in E6), so the script is a clean,
+   silent pass (exit 0) when `integrations/` is absent or contains no packages — this was the
+   AC's own explicit requirement, not an incidental default. Wired into both CI pipelines' `verify`
+   job as new steps, right after `pnpm lint` (`.gitlab-ci.yml`, `.github/workflows/ci.yml`).
+   **`agent/` is deliberately out of scope for this script** — PF-702 makes `agent/` a permitted
+   `@ship/sdk` consumer later with its own, already-larger dependency graph; this ticket's own spec
+   says explicitly not to write a rule that would forbid it, and the script only ever globs
+   `integrations/*`, never `agent/`.
+
+**Regression tests.**
+- `api/src/platform/__tests__/boundary-lint.test.ts` (vitest, runs under `pnpm --filter @ship/api
+  test` — part of both CI pipelines' existing test step) — loads the REAL `eslint.config.mjs` via
+  the `ESLint` class (not a hand-rolled duplicate rule) and lints two temporary fixture files
+  written to `api/src/platform/api/v1/__pf003_test_fixtures__/` at test time (removed in
+  `finally`, including on assertion failure, so a deliberately-violating fixture never sits
+  committed for a normal `pnpm lint` run to trip over): one importing from `routes/`, one from
+  `services/`. Confirms the rule fires on the first and produces zero `no-restricted-imports`
+  errors on the second.
+- `scripts/__tests__/check-integration-deps.test.mjs` (Node's built-in `node:test`, run via `node
+  --test scripts/__tests__/check-integration-deps.test.mjs` — a new explicit step in both CI
+  pipelines) — tests `checkPackageDeps()` (pure function; `@ship/sdk`-only reports zero
+  violations, `@ship/sdk` + `express` reports one naming `express`, `devDependencies` are never
+  flagged) and `scanIntegrations()` against scratch fixture directories under the OS tmpdir
+  (absent dir, empty dir, compliant package, violating package).
+  **Deviation from the ticket's test-design comment**, which named this file
+  `scripts/__tests__/check-integration-deps.test.ts`: this repo's one existing precedent for
+  testing a script outside any package's vitest project
+  (`scripts/factory/lib/dependency-audit-diff.mjs` / `.test.mjs`) uses `.mjs` + `node:test`
+  specifically because nothing under `scripts/` is covered by a tsconfig or a vitest `include` —
+  and that precedent's own header admits gate.sh's regression-test grep (`*.test.ts`) would count
+  a `.test.ts` file here without any runner ever executing it (the same "added but never run" trap
+  `ship-qa` documents for e2e specs, one directory over). Checked history for both CI configs: that
+  precedent file's claim of being "wired into CI as its own step" was never actually true (zero
+  matches in `.github/workflows/ci.yml` or `.gitlab-ci.yml`, in the full git history of either
+  file) — this ticket's `.mjs` file does NOT repeat that gap; it is genuinely wired in (see above).
+  AC-1's vitest test independently satisfies gate.sh's G6 regression-test check regardless of this
+  file's extension.
+
+**Red before green.**
+- AC-2 (`check-integration-deps`): wrote the test first against a **stub** `check-integration-deps.mjs`
+  whose `checkPackageDeps`/`scanIntegrations` unconditionally returned empty results. `node --test
+  scripts/__tests__/check-integration-deps.test.mjs` on the stub: 5 of 10 cases failed with real
+  `AssertionError`s (e.g. `Expected values to be strictly equal: 0 !== 1`), never an import/module
+  error. Replaced the stub with the real implementation: 10/10 pass.
+- AC-1 (ESLint rule): wrote the test against the already-implemented rule, confirmed green, then
+  temporarily swapped the rule's `files` glob to a deliberately non-matching one
+  (`api/src/platform/api/v2/**/*.ts`, copied the correct config aside first — never `git stash`,
+  per the repo's standing ban) and re-ran: fixture (a)'s assertion failed for real (`expected 0 to
+  be greater than 0`), fixture (b) still passed. Restored the correct glob from the copy: both
+  green again.
+
+**AC top-line evidence** (PLUGFORGE.MD §4 PF-003: "a deliberate violation in a scratch branch
+fails the build … then revert"). Agents on this ticket may not push branches or open PRs (factory
+hard rule), so this was reproduced locally with the exact commands both CI pipelines run, then
+reverted — **observed** locally; **not observed**: an actual GitLab/GitHub Actions pipeline run
+against a pushed scratch branch.
+- Added `api/src/platform/api/v1/scratch-violation.ts` importing from `../../../routes/documents`.
+  `pnpm lint` (the exact CI step): `1 error` — `'../../../routes/documents' import is restricted
+  from being used by a pattern. api/src/platform/api/v1/** must not import api/src/routes/**
+  (internal route handlers) — PLUGFORGE.MD §2.1 …`, exit code 1 (`ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL`).
+  Deleted the file; `pnpm lint` back to exit 0.
+- Created `integrations/scratch-bad-pkg/package.json` with `dependencies: { "@ship/sdk": …,
+  "express": "^4.22.1" }`. `node scripts/check-integration-deps.mjs` (the exact new CI step): `FAIL
+  — 1 runtime-dependency violation(s) found … @ship/scratch-bad-pkg: "express": "^4.22.1"`, exit
+  code 1. Deleted `integrations/`; script back to `OK — 'integrations/' does not exist yet`, exit 0.
+
+**How to run it.**
+```
+pnpm lint                                                          # ESLint half (both CI pipelines)
+node scripts/check-integration-deps.mjs                            # dependency-rule half
+node --test scripts/__tests__/check-integration-deps.test.mjs      # its regression test
+pnpm --filter @ship/api test -- boundary-lint                      # ESLint rule's regression test
+```
+
+**Rollback.** Revert this commit. `eslint.config.mjs`'s new `api/src/platform/api/v1/**` block and
+the `apiV1BoundaryRules` constant are additive (a new config object plus one new `const`) — no
+existing rule severities or globs were changed, so reverting drops only the new
+`no-restricted-imports` enforcement and its two test files. The `check-integration-deps.mjs` CI
+steps in `.gitlab-ci.yml`/`.github/workflows/ci.yml` are two added lines each (script step vs.
+`--test` step), inserted immediately after the existing `pnpm lint` step — removing them (or the
+whole commit) does not touch any other step. No schema, no migration, no runtime behavior change
+for any existing route or package: this ticket only adds static checks that run at lint/CI time.
+
+---
+
+## TRO-420 — PF-902: IAM adaptation memo, AWS least-privilege ⇄ Render's permission model
+
+**What changed.** Added `docs/IAM-ADAPTATION-RENDER.md`, a one-page defense memo mapping this
+repo's actual AWS least-privilege exercise (`aws_iam_role.eb_instance`'s custom policies in
+`terraform/ssm.tf:164-262`, layered on the AWS-managed EB platform policies the same role also
+holds — corrected mid-review from an earlier draft that wrongly described a clean task/execution
+role split; `eb_service` is the genuinely separate role) to Render's permission model
+(`terraform/render/*.tf`): API-key scoping (scoped to the key's owning user across every workspace
+they belong to — **derived from Render's API docs**, corrected from an earlier draft that described
+it as scoped to `render_owner_id`'s single workspace — not resource/action-scoped), service
+isolation via disjoint `env_vars` blocks, and env-var secret handling (including that
+`terraform.tfstate`/`.tfvars` are gitignored and untracked here — verified via `git ls-files` —
+which reduces accidental exposure via git; local plaintext state remains a separate, unmitigated
+risk). States plainly what this deployment's configuration cannot express (no resource-level ARN
+scoping, no control-plane/data-plane split on the key actually used, no condition-key mechanism),
+and notes Render's own named workspace roles (Admin/Developer/Contributor/Viewer/Billing) and
+protected-environment features exist but are not configured here (**derived from provider docs, not
+verified against this account**). Explains why the trade is acceptable for this specific deployment
+(single-operator/free-tier threat model; the running `api`/`agent` server processes never hold
+`RENDER_API_KEY` — verified by grep across `api/src`/`agent/src` — so the escalation path AWS's
+scoped policies exist to contain is closed by omission rather than by a grant, for that credential
+specifically. Scoped: `ship` and `ship-agent` still share `AGENT_INTERNAL_SECRET`, so a compromised
+`ship` process can still pass the agent's internal gate and reach `/chat`/`/inbox`/`/accept-draft`
+— the env-var isolation claim holds only for the provider keys, `ANTHROPIC_API_KEY`/
+`LANGSMITH_API_KEY`). Every claim is marked observed (file:line citations in this repo's own
+`terraform/`/`terraform/render/`) or derived, per `.claude/CLAUDE.md`'s provenance rule — including,
+after a second review round, every remaining claim in §§3-4 that the first pass had left unmarked.
+This is a docs-only ticket (Artifact DoD per the ship-test-designer comment on TRO-420) — no
+application code, schema, or route changed, so there is no regression test; `scripts/factory/gate.sh`
+was run for evidence and its `regression-test` check is expected to flag this branch (see PR body
+for the verbatim verdict). CodeRabbit's first review caught two Major findings (the task/execution-
+role conflation above, and an overclaim that Render has no permission concept at all rather than one
+this config simply doesn't use) plus two Minor/Trivial (provenance completeness, state-file
+handling) — all four addressed in commit `170b27e`. A second review round found two more blockers
+(the Render API key's real blast radius, above; unmarked §3-4 claims despite this memo's own
+provenance-lede guarantee) plus six should-fix items (this finding count, the rollback wording
+below, EB-role phrasing, the gitignore overclaim above, Render's actual role names, and the
+`AGENT_INTERNAL_SECRET` scoping above) — all addressed in this revision.
+
+**How to run it.** Read `docs/IAM-ADAPTATION-RENDER.md` directly — no command needed. It will be
+referenced from `docs/architecture.md` once PF-903 (TRO-424) lands; that ticket's docs-lint test
+checks for a reference to this exact filename.
+
+**Rollback.** `git rm docs/IAM-ADAPTATION-RENDER.md` and revert this entry. Safe only **before**
+PF-903 (TRO-424) lands and adds a reference to this filename in `docs/architecture.md` (not yet
+built as of this commit — verified `docs/architecture.md` does not exist in this worktree). If
+PF-903 has already landed, its docs-lint test asserts a reference to `IAM-ADAPTATION-RENDER.md`
+exists in `docs/architecture.md`. Removing this file after that point requires either (a) reverting
+PF-903 as a unit — the doc reference and its test constant landed together and must leave together
+— or (b) updating both the `docs/architecture.md` reference and the docs-lint test's
+expected-filename constant in the same change. Updating the test's expected filename alone, leaving
+`docs/architecture.md` pointing at a file that no longer exists, is not a valid rollback.
+
+---
+
+## TRO-424 / PF-903 — `docs/architecture.md`: Day-1 skeleton with all nine mandated defense sections, gated by a new section-presence test
+
+**What this closes.** PF-903's Proof line ("Doc committed with all mandated sections present")
+required starting `docs/architecture.md` on Day 1 as defense material for the Architectural
+Defense, per `PLUGFORGE.MD`'s E9 sequencing (arch doc + terraform start immediately, in parallel
+with everything else). Before this change the file did not exist at all (confirmed absent
+2026-08-10).
+
+**What changed.**
+- Added `docs/architecture.md` — module layout tree, SOLID rationale (`ScopeRegistry`→OCP,
+  `IEventBus`→DIP, SDK resource clients→ISP) with planned file paths, composition-root pseudo-code
+  + its in-memory test-wiring sibling, a public/internal boundary sequence diagram (mermaid,
+  skeleton fidelity), OAuth flow diagrams for both grants (PKCE rotation points marked; Device
+  Authorization Grant), the webhook pipeline with signature and Idempotency-Key origins marked,
+  the SDK surface with stable-vs-pre-1.0 marks, the agent-as-citizen before/after with the
+  audit-log payoff, four failure-mode paragraphs (corrupted token store, mid-flight secret
+  rotation, deliverer crash, OpenAPI generator boot-throw), and both documented deviations
+  (signing-secret encrypted-not-hashed, §2.2 note; collab-persist event exclusion, PF-301). Content
+  is derived from `PLUGFORGE.MD` §2 and the PM triage decisions already recorded there — no
+  platform code exists yet in this worktree (no `api/src/platform/`, `sdk/`, or `integrations/`),
+  so every file-path citation is stated as a planned location, and the doc's own header says so
+  explicitly, to avoid presenting derived/planned content as observed fact (CLAUDE.md provenance).
+  The PF-902 cross-reference (IAM adaptation memo) names its real committed path,
+  `docs/IAM-ADAPTATION-RENDER.md` — relayed as a cross-ticket fact (PF-902 landed on branch
+  `docs/pf-902-iam-memo`, not yet merged to `main` as of this writing) and marked in both the doc
+  and the test as derived, not independently verified from this worktree.
+- Added `api/src/__tests__/architectureDocSections.test.ts` — the test-design comment's mechanical
+  section-presence lint (pattern: `pinnedDependencies.test.ts` — read a repo file, assert required
+  content, one `it()` per requirement). 15 assertions, all real (no `.skip`/`.todo`): the
+  test-design comment specced the PF-902 cross-reference as a deferred `it.todo(...)` pending its
+  filename, but `gate.sh`'s G5 check (`tests:not-weakened`) unconditionally fails any newly added
+  skip/todo test modifier in a `*.test.ts` diff by design (only a Playwright-style fixme modifier
+  is exempted, and vitest's `it` does not implement one) — so once the real filename was available
+  it became a normal passing assertion instead. Runs automatically in the existing `api` vitest
+  project; no new CI wiring needed.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run src/__tests__/architectureDocSections.test.ts`
+(no database interaction beyond the suite's standard advisory-lock `beforeAll`/TRUNCATE — the test
+itself only reads a file).
+
+**Roll back.** `git rm docs/architecture.md api/src/__tests__/architectureDocSections.test.ts`,
+revert this entry. No schema, no migration, no other file touched — the only side effect is the
+committed doc and its test.
+
+---
+
 ## TRO-433 — PF-303: HMAC webhook signer (`Ship-Signature: t=…,v1=…`) + the shared signature test-vector fixture
 
 **What was added.** `api/src/platform/webhooks/signer.ts` — a pure, dependency-free module (only
