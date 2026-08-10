@@ -132,9 +132,10 @@ implementations and re-ran: all 10 + all 3 pass.
 ```
 pnpm --filter @ship/api exec vitest run src/platform/api/v1/__tests__/errors.test.ts src/platform/api/v1/__tests__/error-middleware.test.ts src/platform/__tests__/v1-router.test.ts
 ```
-4 files / 39 tests, 0 failures (includes PF-001's own `v1-router.test.ts`, confirming this ticket's
-router restructure didn't change PF-001's observable behavior). `pnpm --filter @ship/shared build &&
-pnpm type-check` is clean across all four workspace packages.
+3 files / 20 tests, 0 failures (the third is PF-001's own `v1-router.test.ts`, confirming this
+ticket's router restructure didn't change PF-001's observable behavior). Running the whole
+`src/platform` directory (adds PF-303's `signer.test.ts`) is 4 files / 40 tests, 0 failures.
+`pnpm --filter @ship/shared build && pnpm type-check` is clean across all four workspace packages.
 
 **Full api suite.** `pnpm --filter @ship/api test` — **83 files / 894 tests pass, 1 fails**:
 `src/routes/weeks.test.ts > ... > should approve plan with optional comment`, `expected 401 to be
@@ -147,6 +148,24 @@ a named identity in that set from a prior session). Re-ran `pnpm --filter @ship/
 src/routes/weeks.test.ts` standalone: **49/49 pass**. Treated as a pre-existing, load-sensitive flake
 per this repo's documented protocol, not a defect introduced here — not added to
 `audit/factory/quarantine.json`.
+
+**Gate-run CodeRabbit triage.** 2 findings, both fixed:
+- **Minor, `errorMiddleware.ts`.** `errorMiddleware` attempted `res.status(...).json(...)`
+  unconditionally, even when `res.headersSent` was already `true` (e.g. a route that started a
+  streamed response before throwing) — that second write throws `Error: Cannot set headers after
+  they are sent to the client`, masking the original error. Fixed: check `res.headersSent` first and
+  `next(err)` instead (Express's own documented pattern for this case — delegates to its built-in
+  default handler, which closes the connection without attempting another header write). Confirmed
+  red-before: reverted the guard, called `errorMiddleware` directly (real `req`/`res` from a
+  completed request, a spy `next` — no route/socket round-trip, since Express's own finalhandler
+  socket-teardown timing after this point is nondeterministic and not this module's logic to prove)
+  and observed the exact `Cannot set headers after they are sent` error. New test:
+  `error-middleware.test.ts`'s 4th case (20/20 now, was 19/19 — see the corrected count above, which
+  is itself the *other* finding, immediately below).
+- **Minor, this file.** The "How to run it" section originally claimed **4 files / 39 tests** for a
+  command that names only 3 explicit paths — the real count for that command is **3 files / 19
+  tests** (the 4-file/39-test number was from a *different*, broader command run earlier). Both
+  numbers above are now the actually-reproduced counts for their respective commands.
 
 **Not verified.** Live/deployed behavior (local-only, `NODE_ENV` unset). PF-203's fitness test
 (asserts the shape across every v1 route) does not exist yet — this ticket proves the shape via unit

@@ -72,7 +72,19 @@ export const notFoundHandler: RequestHandler = (req, _res, next) => {
  *    request_id") — a logging side effect this ticket's tests do not assert
  *    on (test design: "NOT ASSERTED").
  */
-export const errorMiddleware: ErrorRequestHandler = (err, req, res, _next) => {
+export const errorMiddleware: ErrorRequestHandler = (err, req, res, next) => {
+  // A response that has already started (e.g. a streamed body) cannot have
+  // its status/headers rewritten — calling res.json() here would throw
+  // "Cannot set headers after they are sent" and mask the original error.
+  // Express's own guidance for this exact case is to delegate to its
+  // built-in default error handler via next(err), which closes the
+  // connection without attempting another header write (CodeRabbit,
+  // TRO-397 gate review).
+  if (res.headersSent) {
+    next(err);
+    return;
+  }
+
   const requestId = requestIdOf(req);
 
   if (err instanceof ApiError) {

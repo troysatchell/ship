@@ -1,8 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import request from 'supertest';
+import type { NextFunction } from 'express';
 import { createApp } from '../../../../app.js';
 import { v1Routes } from '../router.js';
-import { asyncHandler } from '../errorMiddleware.js';
+import { asyncHandler, errorMiddleware } from '../errorMiddleware.js';
 
 /**
  * PF-002 — `/api/v1` error middleware (PLUGFORGE.MD §2.5, §4). Test design:
@@ -80,5 +81,42 @@ describe('PF-002: /api/v1 error middleware', () => {
     expect(res.body.code).toBe('server_error');
     expect(typeof res.body.request_id).toBe('string');
     expect(JSON.stringify(res.body)).not.toContain('SELECT');
+  });
+
+  it('additional coverage: does not attempt a second response when headers were already sent (CodeRabbit, TRO-397 gate review)', async () => {
+    // Calls `errorMiddleware` directly with the REAL `req`/`res` Express
+    // handed this route (never a mock/cast — rule: "return real
+    // Response/object instances, or define a small test-local type"), after
+    // that same `res` has already completed a normal response. A fake `next`
+    // spy stands in for Express's real `next` so this direct call never
+    // re-enters Express's own dispatch/finalhandler — the point of this test
+    // is `errorMiddleware`'s own guard logic, not Node's socket teardown
+    // timing, which is nondeterministic and not this module's code.
+    let nextCalledWith: unknown;
+    let jsonCallsAfterHeadersSent = 0;
+
+    v1Routes.get('/__pf002_test_headers_already_sent', (req, res) => {
+      res.status(200).json({ ok: true, marker: 'original-response' });
+
+      const jsonSpy = vi.spyOn(res, 'json');
+      const spyNext: NextFunction = (err) => {
+        nextCalledWith = err;
+      };
+      try {
+        errorMiddleware(new Error('leaked stack: SELECT * FROM users (post-response)'), req, res, spyNext);
+        jsonCallsAfterHeadersSent = jsonSpy.mock.calls.length;
+      } finally {
+        jsonSpy.mockRestore();
+      }
+    });
+
+    const res = await request(app).get('/api/v1/__pf002_test_headers_already_sent');
+
+    // The ORIGINAL response survives untouched — proves errorMiddleware
+    // didn't attempt to overwrite it.
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true, marker: 'original-response' });
+    expect(jsonCallsAfterHeadersSent).toBe(0);
+    expect(nextCalledWith).toBeInstanceOf(Error);
   });
 });
