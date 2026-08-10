@@ -21,6 +21,28 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-495 — PF-002: HttpStatus assertions in ApiError constructor test suite
+
+**What was added.** Extended `api/src/platform/api/v1/__tests__/errors.test.ts`'s `assertShape` helper
+to assert `err.httpStatus` against the expected per-code status mapping. All six error constructors now
+have explicit httpStatus assertions: `unauthorizedError`→401, `forbiddenError`→403, `notFoundError`→404,
+`validationFailedError`→400, `rateLimitedError`→429, `serverError`→500. This closes a gap where a
+wrong entry in `API_ERROR_HTTP_STATUS` (e.g. `forbidden: 401` instead of 403) would have passed the
+suite silently — the assertions ensure the mapping is correct before PF-200 wires these constructors
+to live routes.
+
+**How to run it.** From the worktree root:
+```bash
+cd /Users/troy/repos/GAUNTLET/Ship-wt-tro_495
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/api/v1/__tests__/errors.test.ts
+```
+
+**Rollback.** Revert the test-file hunk (`git checkout api/src/platform/api/v1/__tests__/errors.test.ts`)
+and remove this entry.
+
+---
+
 ## TRO-408 — PF-102: OAuth app registration — admin endpoint, once-only secret, rotation, revocation
 
 **What was added.** `api/src/routes/oauth-apps.ts` — a thin internal admin router mounted at
