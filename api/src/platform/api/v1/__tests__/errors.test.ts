@@ -17,12 +17,13 @@ import type { ApiErrorCode, Unauthorized401Reason } from '../errors.js';
 
 const REQUEST_ID = 'test-request-id-0001';
 
-function assertShape(err: ApiError, expectedCode: ApiErrorCode): void {
+function assertShape(err: ApiError, expectedCode: ApiErrorCode, expectedHttpStatus: number): void {
   expect(err).toBeInstanceOf(ApiError);
   expect(err.code).toBe(expectedCode);
   expect(typeof err.message).toBe('string');
   expect(err.message.length).toBeGreaterThan(0);
   expect(err.request_id).toBe(REQUEST_ID);
+  expect(err.httpStatus).toBe(expectedHttpStatus);
 
   // toJSON() is the actual wire body — assert it has exactly the §2.5 keys,
   // no more (e.g. no leaked `httpStatus`, `name`, or `stack`), no less.
@@ -38,27 +39,65 @@ function assertShape(err: ApiError, expectedCode: ApiErrorCode): void {
 
 describe('PF-002: ApiError typed constructors (§2.5 shape)', () => {
   it('unauthorized', () => {
-    assertShape(unauthorizedError(REQUEST_ID, 'missing_token'), 'unauthorized');
+    assertShape(unauthorizedError(REQUEST_ID, 'missing_token'), 'unauthorized', 401);
   });
 
   it('forbidden', () => {
-    assertShape(forbiddenError(REQUEST_ID), 'forbidden');
+    assertShape(forbiddenError(REQUEST_ID), 'forbidden', 403);
   });
 
   it('not_found', () => {
-    assertShape(notFoundError(REQUEST_ID), 'not_found');
+    assertShape(notFoundError(REQUEST_ID), 'not_found', 404);
   });
 
   it('validation_failed', () => {
-    assertShape(validationFailedError(REQUEST_ID), 'validation_failed');
+    assertShape(validationFailedError(REQUEST_ID), 'validation_failed', 400);
   });
 
   it('rate_limited', () => {
-    assertShape(rateLimitedError(REQUEST_ID), 'rate_limited');
+    assertShape(rateLimitedError(REQUEST_ID), 'rate_limited', 429);
   });
 
   it('server_error', () => {
-    assertShape(serverError(REQUEST_ID), 'server_error');
+    assertShape(serverError(REQUEST_ID), 'server_error', 500);
+  });
+
+  describe('httpStatus per error code', () => {
+    const cases: Array<[string, number]> = [
+      ['unauthorized', 401],
+      ['forbidden', 403],
+      ['not_found', 404],
+      ['validation_failed', 400],
+      ['rate_limited', 429],
+      ['server_error', 500],
+    ];
+
+    it.each(cases)('%s maps to HTTP %i', (code, expectedStatus) => {
+      let err: ApiError;
+      switch (code) {
+        case 'unauthorized':
+          err = unauthorizedError(REQUEST_ID, 'missing_token');
+          break;
+        case 'forbidden':
+          err = forbiddenError(REQUEST_ID);
+          break;
+        case 'not_found':
+          err = notFoundError(REQUEST_ID);
+          break;
+        case 'validation_failed':
+          err = validationFailedError(REQUEST_ID);
+          break;
+        case 'rate_limited':
+          err = rateLimitedError(REQUEST_ID);
+          break;
+        case 'server_error':
+          err = serverError(REQUEST_ID);
+          break;
+        default:
+          throw new Error(`Unhandled code: ${code}`);
+      }
+      expect(err.httpStatus).toBe(expectedStatus);
+    });
   });
 
   describe('the three distinct 401 reasons (dispatch brief; PM decision TRO-430: revoked -> invalid_token)', () => {
@@ -66,7 +105,7 @@ describe('PF-002: ApiError typed constructors (§2.5 shape)', () => {
 
     it.each(cases)('details.reason is %s', (reason) => {
       const err = unauthorizedError(REQUEST_ID, reason);
-      assertShape(err, 'unauthorized');
+      assertShape(err, 'unauthorized', 401);
       expect(err.details?.reason).toBe(reason);
     });
 

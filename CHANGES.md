@@ -21,6 +21,29 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-495 — PF-002: HttpStatus assertions in ApiError constructor test suite
+
+**What was added.** Extended `api/src/platform/api/v1/__tests__/errors.test.ts`'s `assertShape` helper
+to assert `err.httpStatus` against the expected per-code status mapping. All six error constructors now
+have explicit httpStatus assertions: `unauthorizedError`→401, `forbiddenError`→403, `notFoundError`→404,
+`validationFailedError`→400, `rateLimitedError`→429, `serverError`→500. This closes a gap where a
+wrong entry in `API_ERROR_HTTP_STATUS` (e.g. `forbidden: 401` instead of 403) would have passed the
+suite silently — the assertions ensure the mapping is correct before PF-200 wires these constructors
+to live routes.
+
+**How to run it.** From any checkout's repo root (set `DATABASE_URL` first — in a factory worktree,
+`source .factory-env`):
+```bash
+pnpm --filter @ship/api exec vitest run src/platform/api/v1/__tests__/errors.test.ts
+```
+
+**Rollback.** Find this ticket's test commit with
+`git log --oneline -- api/src/platform/api/v1/__tests__/errors.test.ts` (the `TRO-495` commit touches
+only that file plus this entry) and `git revert <that sha>`. No production code changed, so nothing
+else moves.
+
+---
+
 ## TRO-419 — PF-300: event registry (8 event types, Zod payload schemas, events as data)
 
 **What changed.** Added `api/src/platform/webhooks/events.ts` — the webhook event registry
