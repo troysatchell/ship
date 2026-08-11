@@ -308,6 +308,56 @@ Run both — they're paired; deploying only one leaves the API and frontend out 
   the name still resolves, but traffic from outside CloudFront's IP ranges is silently dropped.
 - **Prod Web:** `https://ship.awsdev.treasury.gov`
 
+### Grader Access — Public API (OAuth)
+
+Ship's Week 6 platform work (PLUGFORGE.MD) adds a versioned public API (`/api/v1`) authenticated via
+OAuth 2.0. Per the same repo convention as the web app's grader login
+(`alice.chen@ship.local` / `admin123` — see `FLEETGRAPH.MD`'s "Grader Access" section for that
+account), the public API gets its own seeded, read-only grader credential — a first-party OAuth app
+scoped to `documents:read`, `issues:read`, `sprints:read` only, so a grader account can read every
+graded resource and mutate nothing.
+
+**One-command setup**, from a clean checkout, alongside the normal `./start.sh` / `pnpm dev` flow:
+
+```bash
+GRADER_OAUTH_CLIENT_SECRET=<choose-a-secret-value> ./start.sh
+# or, against an already-running dev environment:
+GRADER_OAUTH_CLIENT_SECRET=<choose-a-secret-value> pnpm --filter @ship/api db:seed
+```
+
+`db:seed` is idempotent (safe to re-run, including with the variable unset — see below) and prints
+the app's `client_id` on success:
+
+```
+✅ Created grader OAuth app (client_id: ship_app_...)
+```
+
+or, on a re-run against an already-seeded database:
+
+```
+ℹ️  Grader OAuth app already exists (client_id: ship_app_...)
+```
+
+- **`GRADER_OAUTH_CLIENT_SECRET`** is the raw client secret for the app — chosen by whoever runs the
+  seed, never generated or printed by it, and never committed anywhere in this repo. Ship stores
+  only its SHA-256 hash (`oauth_apps.client_secret_hash`, the same at-rest pattern as every other
+  OAuth app and personal API token). Keep the value you chose; it is not recoverable from the
+  database or re-printed on a later seed run.
+- **Not set?** `db:seed` skips the grader app step entirely (no error, no row created) — this is the
+  normal, unaffected path for every ordinary local `pnpm db:seed` / `./start.sh` run. The variable
+  only needs to be set in an environment meant to actually host the grader's credential (a deployed
+  grading instance's boot environment, provisioned via Terraform — PF-900).
+- **Obtaining a working bearer token** for the grader's `client_id` + secret via the OAuth 2.0 Client
+  Credentials grant will use `POST /oauth/token`, once PF-104 (`/oauth/token`) lands on this branch —
+  it has not yet as of this section being written (2026-08-10/11); today, the seed proves the
+  credential exists and is read-only-scoped (`api/src/platform/oauth/__tests__/seedGraderApp.test.ts`),
+  but no token-issuing endpoint exists yet to exercise end-to-end. Do not read this section as
+  claiming a live token round-trip works today — it does not.
+- **Portal reachability** and **`/api/v1/openapi.json` being publicly resolvable** are DoD items for
+  a deployed instance and depend on E5 (developer portal) and PF-202 (OpenAPI generator), neither of
+  which exists on this branch yet — deliberately out of scope for the grader-app seed itself. See
+  `PLUGFORGE.MD` §4 (PF-907) and §6 (MVP cut line) for the full epic breakdown.
+
 ### Environment Variables
 
 | Variable | Description | Default |
@@ -315,6 +365,7 @@ Run both — they're paired; deploying only one leaves the API and frontend out 
 | `DATABASE_URL` | PostgreSQL connection string | Required |
 | `SESSION_SECRET` | Cookie signing secret | Required |
 | `PORT` | API server port | `3000` |
+| `GRADER_OAUTH_CLIENT_SECRET` | Raw secret for the seeded read-only grader OAuth app (see "Grader Access — Public API" above) | Unset — seed step no-ops without it |
 
 ---
 
