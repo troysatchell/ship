@@ -63,7 +63,8 @@ with file:line citations and reproduced in the TRO-419 ticket comment:
   input; `issue.assigned`'s schema carries no `priority` field at all (it transitions
   `assignee_id`, not priority).
 
-**Regression test.** `api/src/platform/webhooks/__tests__/events.test.ts`, 18 cases. Red before
+**Regression test.** `api/src/platform/webhooks/__tests__/events.test.ts`, 22 cases (18 original +
+4 no-op-transition rejections added in review triage). Red before
 the fix: with a stub registry (every schema `z.any()`, `list()` returning `[]`), the 8
 "parses a minimal valid payload" assertions passed trivially (z.any() never throws) but the
 enumeration-length assertion failed (`expected [] to deeply equal [8 items]`) and all 8
