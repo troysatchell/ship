@@ -44,6 +44,72 @@ else moves.
 
 ---
 
+## TRO-419 — PF-300: event registry (8 event types, Zod payload schemas, events as data)
+
+**What changed.** Added `api/src/platform/webhooks/events.ts` — the webhook event registry
+required by PLUGFORGE.MD §2.6: a plain object mapping each of the 8 event types
+(`document.created`/`document.updated`/`document.deleted`,
+`issue.created`/`issue.assigned`/`issue.status_changed`, `sprint.started`/`sprint.completed`) to a
+Zod payload schema, exposed as `eventRegistry.get(type)` and `eventRegistry.list()` — enumerable
+by construction (a `[K in EventType]: EventDefinition` object), not a switch statement, so the
+portal/docs generator PF-300's AC names can walk `list()` without special-casing any type.
+Dependency-free (only `zod`, already an `api` dependency) and does not import from anywhere else
+under `api/src/platform/`, matching `signer.ts`'s (TRO-433) isolation rationale so this file
+builds and tests regardless of sibling E2/E3 branch merge order. No route, schema, or migration
+changed — this ticket is the registry only; publishing (`IEventBus`, the domain write-path
+consolidation) is PF-301, delivery/retry/DLQ is PF-304.
+
+**Discovery task (this ticket's own AC).** Pinned the exact `properties` field names for issue
+state/assignee and sprint start/complete transitions, recorded in `events.ts`'s header comment
+with file:line citations and reproduced in the TRO-419 ticket comment:
+- Issue state → `properties.state` (`IssueState`, `shared/src/types/document.ts:56,83`), mutated
+  at `api/src/routes/issues.ts:1035`.
+- Issue assignee → `properties.assignee_id` (`string | null`, `shared/src/types/document.ts:85`),
+  mutated at `api/src/routes/issues.ts:1049-1051`.
+- Sprint start → `properties.status` (`WeekProperties.status`, `shared/src/types/document.ts:166`)
+  transitioning `'planning' → 'active'`, guarded/read at `api/src/routes/weeks.ts:1701-1711`,
+  written at `weeks.ts:1719`, inside `POST /:id/start` (`weeks.ts:1674`).
+- Sprint complete → the same `properties.status` field, `→ 'completed'`. No dedicated `/complete`
+  route exists — completion happens generically via `PATCH /api/weeks/:id` (`weeks.ts:1467`),
+  applied at `weeks.ts:1587-1588`, validated by the `z.enum(['planning','active','completed'])`
+  schema at `weeks.ts:480` (the same enum also backs the generic `PATCH /api/documents/:id` path,
+  `documents.ts:156`).
+- Confirmed `sprint_iterations.status` (`api/src/db/schema.sql:268-278`, `CHECK (status IN
+  ('pass','fail','in_progress'))`) is a *different column on a different table* — a per-iteration
+  work-progress log, not the sprint document's own lifecycle status these two events encode. Same
+  class of trap `.claude/CLAUDE.md` already documents for `sprint_iterations.sprint_id`.
+- Noted, not fixed here: `api/src/routes/issues.ts`'s inline `createIssueSchema` additionally
+  accepts `'none'` as a priority value, which is absent from both `shared/src/types/document.ts`'s
+  `IssuePriority` union and the OpenAPI `IssuePrioritySchema`
+  (`api/src/openapi/schemas/issues.ts:26-34`). Only `issue.created`'s schema carries a `priority`
+  field, and it follows the canonical (shared-types/OpenAPI) union, not the wider route-level
+  input; `issue.assigned`'s schema carries no `priority` field at all (it transitions
+  `assignee_id`, not priority).
+
+**Regression test.** `api/src/platform/webhooks/__tests__/events.test.ts`, 22 cases (18 original +
+4 no-op-transition rejections added in review triage). Red before
+the fix: with a stub registry (every schema `z.any()`, `list()` returning `[]`), the 8
+"parses a minimal valid payload" assertions passed trivially (z.any() never throws) but the
+enumeration-length assertion failed (`expected [] to deeply equal [8 items]`) and all 8
+"missing-required-field throws ZodError" assertions failed with `expected function to throw an
+error, but it didn't` — a real assertion mismatch against the designed behavior, not a module or
+import error. Restoring the real schemas made all 18 green with no other change.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/api exec vitest run src/platform/webhooks/__tests__/events.test.ts
+```
+
+**Gate.** `scripts/factory/gate.sh` — verdict pasted verbatim in the PR/ticket report.
+
+**Rollback.** `git rm api/src/platform/webhooks/events.ts api/src/platform/webhooks/__tests__/events.test.ts`,
+revert the `webhooks/README.md` edit, and remove this section. No migrations, no schema changes, no route changes — no production module
+imports `events.ts` yet (only this ticket's own test file does; PF-301 will be the first production
+consumer), so reverting cannot affect any other ticket's work.
+
+---
+
 ## TRO-430 — PF-107: ScopeRegistry + v1 bearer middleware (both token classes), `require(scope)` 403s
 
 **What was added.**
