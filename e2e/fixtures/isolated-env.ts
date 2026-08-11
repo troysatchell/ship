@@ -18,10 +18,14 @@ import { test as base } from '@playwright/test';
 import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { spawn, ChildProcess } from 'child_process';
 import { Pool } from 'pg';
-import { readdirSync, readFileSync, existsSync } from 'fs';
+import { existsSync } from 'fs';
 import path from 'path';
 import getPort, { portNumbers } from 'get-port';
 import bcrypt from 'bcryptjs';
+// The REAL migration runner behind `pnpm db:migrate` (api/src/db/migrate.ts)
+// — see this file's own `runMigrations` below (TRO-430) for why this fixture
+// now delegates to it instead of its own, unsound shortcut.
+import { runMigrations as applyRealMigrations } from '../../api/src/db/migrationRunner.js';
 import os from 'os';
 
 /**
@@ -280,42 +284,39 @@ export async function runMigrations(dbUrl: string): Promise<void> {
   const pool = new Pool({ connectionString: dbUrl });
 
   try {
-    // Step 1: Run schema.sql for initial setup
-    const schemaPath = path.join(PROJECT_ROOT, 'api/src/db/schema.sql');
-    const schema = readFileSync(schemaPath, 'utf-8');
-    await pool.query(schema);
+    // Schema + every migration file's REAL SQL, via the same runner
+    // `pnpm db:migrate` uses (api/src/db/migrationRunner.ts) — schema.sql
+    // first, then each pending migration actually executed and recorded in
+    // schema_migrations, not just marked "applied" without running it.
+    //
+    // TRO-430 (root cause of the "e2e · agent detection latency + grounded
+    // chat" job's deterministic POST /api/api-tokens 500): this function
+    // used to run schema.sql and then write every migration FILENAME into
+    // schema_migrations without ever executing the file's SQL, reasoning
+    // "schema.sql includes all table definitions from all migrations, so
+    // running migrations again would fail." True for every migration that
+    // only CREATEs a new table (schema.sql already mirrors those for a fresh
+    // database) — false the moment a migration ALTERs an EXISTING table's
+    // columns, which per CLAUDE.md ("never modify schema.sql directly for
+    // existing tables") is deliberately never mirrored into schema.sql.
+    // 043_oauth_tokens_and_codes.sql:132's `ALTER TABLE api_tokens ADD
+    // COLUMN scopes TEXT[]` was the first such migration, so every database
+    // this fixture built was silently missing api_tokens.scopes — DB-1's
+    // exact failure mode ("applied nothing, reported success"), reintroduced
+    // here after migrationRunner.ts was hardened against it (see that file's
+    // DUPLICATE_OBJECT_SQLSTATES / TRO-279 comments, which is what makes
+    // delegating to it directly — rather than re-deriving "is this safe to
+    // run twice" here — the fix). `INSERT INTO api_tokens (..., scopes)`
+    // (api/src/routes/api-tokens.ts, this branch's PF-107 change) was the
+    // first statement to depend on that column actually existing, so it was
+    // the first to notice.
+    await applyRealMigrations(pool, {
+      schemaPath: path.join(PROJECT_ROOT, 'api/src/db/schema.sql'),
+      migrationsDir: path.join(PROJECT_ROOT, 'api/src/db/migrations'),
+      log: () => {}, // keep e2e output quiet; callers already log around this call under DEBUG=1
+    });
 
-    // Step 2: Create migrations tracking table
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS schema_migrations (
-        version TEXT PRIMARY KEY,
-        applied_at TIMESTAMPTZ DEFAULT now()
-      )
-    `);
-
-    // Step 3: Mark all migrations as applied since schema.sql represents the full current state.
-    // schema.sql includes all table definitions from all migrations, so running migrations
-    // again would fail on CREATE TABLE statements that don't use IF NOT EXISTS.
-    const migrationsDir = path.join(PROJECT_ROOT, 'api/src/db/migrations');
-    let migrationFiles: string[] = [];
-
-    try {
-      migrationFiles = readdirSync(migrationsDir)
-        .filter((f) => f.endsWith('.sql'))
-        .sort();
-    } catch {
-      // No migrations directory
-    }
-
-    for (const file of migrationFiles) {
-      const version = file.replace('.sql', '');
-      await pool.query(
-        'INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT DO NOTHING',
-        [version]
-      );
-    }
-
-    // Step 5: Seed minimal test data
+    // Seed minimal test data
     await seedMinimalTestData(pool);
   } finally {
     await pool.end();
