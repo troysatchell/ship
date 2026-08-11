@@ -27,6 +27,17 @@ import {
   GRADER_APP_NAME,
 } from '../seedGraderApp.js';
 
+/** Destructure-and-assert instead of a non-null assertion (lessons.md rule 16 /
+ * G7b): under `noUncheckedIndexedAccess`, `rows[0]` is `T | undefined` — this
+ * throws a clear, test-specific message rather than silencing the check with `!`. */
+function firstRowOrThrow<T>(rows: T[], context: string): T {
+  const row = rows[0];
+  if (row === undefined) {
+    throw new Error(`${context}: expected at least one row, got none`);
+  }
+  return row;
+}
+
 describe('seedGraderApp (PF-907 / TRO-441)', () => {
   const testRunId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   const testWorkspaceName = `Grader Seed Test ${testRunId}`;
@@ -40,7 +51,7 @@ describe('seedGraderApp (PF-907 / TRO-441)', () => {
       `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
       [testWorkspaceName]
     );
-    workspaceId = workspaceResult.rows[0]!.id;
+    workspaceId = firstRowOrThrow(workspaceResult.rows, 'insert workspace').id;
 
     originalEnvValue = process.env[GRADER_OAUTH_CLIENT_SECRET_ENV_VAR];
     process.env[GRADER_OAUTH_CLIENT_SECRET_ENV_VAR] = testSecret;
@@ -86,11 +97,10 @@ describe('seedGraderApp (PF-907 / TRO-441)', () => {
        FROM oauth_apps WHERE workspace_id = $1 AND name = $2`,
       [workspaceId, GRADER_APP_NAME]
     );
-    const row = result.rows[0];
-    expect(row).toBeDefined();
-    expect(row!.is_first_party).toBe(true);
+    const row = firstRowOrThrow(result.rows, 'select grader oauth_apps row');
+    expect(row.is_first_party).toBe(true);
 
-    const scopes = row!.requested_scopes;
+    const scopes = row.requested_scopes;
     expect(scopes).toEqual(
       expect.arrayContaining(['documents:read', 'issues:read', 'sprints:read'])
     );
@@ -132,7 +142,7 @@ describe('seedGraderApp (PF-907 / TRO-441)', () => {
         `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
         [`${testWorkspaceName} distinct-secret`]
       );
-      const freshWorkspaceId = freshWorkspace.rows[0]!.id;
+      const freshWorkspaceId = firstRowOrThrow(freshWorkspace.rows, 'insert fresh workspace').id;
       try {
         const seedResult = await seedGraderApp(pool, freshWorkspaceId);
         expect(seedResult.status).toBe('created');
@@ -142,7 +152,9 @@ describe('seedGraderApp (PF-907 / TRO-441)', () => {
           [freshWorkspaceId, GRADER_APP_NAME]
         );
         const expectedHash = crypto.createHash('sha256').update(distinctSecret).digest('hex');
-        expect(row.rows[0]!.client_secret_hash).toBe(expectedHash);
+        expect(firstRowOrThrow(row.rows, 'select grader client_secret_hash').client_secret_hash).toBe(
+          expectedHash
+        );
       } finally {
         await pool.query(`DELETE FROM oauth_apps WHERE workspace_id = $1`, [freshWorkspaceId]);
         await pool.query(`DELETE FROM workspaces WHERE id = $1`, [freshWorkspaceId]);
@@ -158,7 +170,7 @@ describe('seedGraderApp (PF-907 / TRO-441)', () => {
       `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
       [`${testWorkspaceName} no-secret`]
     );
-    const freshWorkspaceId = freshWorkspace.rows[0]!.id;
+    const freshWorkspaceId = firstRowOrThrow(freshWorkspace.rows, 'insert fresh workspace').id;
     const previous = process.env[GRADER_OAUTH_CLIENT_SECRET_ENV_VAR];
     delete process.env[GRADER_OAUTH_CLIENT_SECRET_ENV_VAR];
     try {
