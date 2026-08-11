@@ -151,6 +151,59 @@ table from migration 042 onward (this one, PF-104's, the portal's) until fixed. 
 `runMigrations()` to actually execute pending migration files, or fold 042/043 into `schema.sql` the
 way 040/041 were) deserves its own ticket with its own review. Flagged for a follow-up ticket.
 
+**Self-triage of `gate.sh`'s CodeRabbit CLI review (14 findings) before reporting done.** Fixed the
+ones that were genuinely valid and cheap to fix correctly, red-before-green (temporarily disabled
+each new check, confirmed the corresponding new test failed for the right reason, restored, confirmed
+green — same discipline as the original three ACs):
+- **[critical]** `scope` reached `issueAuthorizationCode` completely unvalidated — a client could
+  request `admin:write` on an app registered with only `documents:read`, and it would be persisted
+  onto the code as-is. Added `scopesAreRegistered()` (`authorize.ts`); unregistered scope now redirects
+  with `error=invalid_scope`, no code, no row.
+- **[major]** No workspace check at all: any authenticated user in ANY workspace could consent to an
+  app registered by a different tenant. Added `principalOwnsAppWorkspace()`; a mismatch is a `403`,
+  never a redirect (same open-redirect-guard reasoning as an unknown `client_id`). Enforced
+  independently in both `GET /oauth/authorize` and `POST .../decision`. Genuine residual uncertainty,
+  stated plainly: this assumes `oauth_apps` are tenant-scoped integrations (matching `api_tokens`'
+  existing workspace-scoping convention), not a cross-tenant "app directory" model (à la GitHub
+  OAuth Apps) — PLUGFORGE.MD doesn't say which explicitly. Chose the conservative (fail-closed)
+  reading; flagged for a human to confirm against the intended model.
+- **[major]** `response_type` was never checked. Added: missing or non-`code` now redirects with
+  `error=unsupported_response_type` once `redirect_uri` is trusted (RFC 6749 §3.1.1/§4.1.2.1).
+- **[major]** `webAppOrigin()` re-read `process.env.CORS_ORIGIN` independently instead of using the
+  `corsOrigin` value already threaded into `createApp()` — could silently diverge for a caller that
+  constructs the app with an explicit, different origin. `oauth-authorize.ts` is now a factory
+  (`createOAuthAuthorizeRouter(webOrigin)`) `app.ts` calls with its own `corsOrigin` parameter.
+- **[minor]** `OAuthConsent.tsx`'s hidden `scope`/`state` inputs submitted `""` when absent rather
+  than omitting the field. Now conditionally rendered.
+- **[trivial]** The e2e spec's CSP check silently skipped if `page.goto()` returned no `Response`.
+  Now a hard `expect(...).not.toBeNull()` first.
+
+7 new/updated test cases prove the four functional fixes (11 total in `authorize.test.ts` now, up
+from 6) — see the file itself for each case; row-count and redirect-target assertions follow the same
+pattern as the original three ACs.
+
+**Findings read, judged not to fix here (stated, not silently dropped):**
+- **[major]** Rate limiting: neither endpoint sits behind any limiter (`/oauth` is outside the
+  `/api/` prefix the legacy limiters match). PLUGFORGE.MD §2.7 assigns the public surface's rate
+  limiting to PF-004 explicitly ("before anything else ships") — a one-off limiter here would risk
+  conflicting with that design rather than complementing it.
+- **[major]** OpenAPI registration for `/oauth/authorize`/`.../decision`. Deliberately not registered,
+  matching PF-102's own precedent (its admin CRUD used the *internal* registry, not the `/api/v1`
+  one) and the PM's ruling that `/oauth` follows RFC 6749 conventions rather than Ship's `ApiError`
+  contract — registering an RFC 6749 redirect-based endpoint in a JSON-request/response OpenAPI
+  schema is an unusual fit. A genuine judgment call; flagged for PM confirmation rather than decided
+  unilaterally.
+- **[major]** SameSite=Strict cookie survival across a genuinely cross-site (not just cross-port)
+  top-level navigation — not verified in a real browser (see the header comment in
+  `oauth-authorize.ts` for the full reasoning and why the isolated e2e fixture can't currently answer
+  it either).
+- **[minor]** RFC 7636 `code_challenge` format validation (43-128 chars, unreserved charset) — real
+  hardening, but out of this ticket's stated AC and would require rewriting every test fixture's
+  intentionally-short challenge strings; deferred rather than done under time pressure.
+- **[trivial]** DRY-ing the e2e spec's repeated login steps into a helper, and the two
+  `vite.config.ts` CSP middleware blocks into one — both genuine, both skipped: the e2e spec doesn't
+  execute in this environment yet (see below) and the vite duplication is four lines.
+
 **How to run it.**
 `api && npx vitest run src/platform/oauth/__tests__/authorize.test.ts` (needs `DATABASE_URL` —
 `source .factory-env` in a worktree). Manual: `pnpm dev`, register an app (once PF-102 lands on this

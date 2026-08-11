@@ -38,6 +38,11 @@ export function OAuthConsentPage() {
   const redirectUri = searchParams.get('redirect_uri');
   const codeChallenge = searchParams.get('code_challenge');
   const codeChallengeMethod = searchParams.get('code_challenge_method') || 'S256';
+  // GET /oauth/authorize only ever redirects here with response_type=code
+  // (anything else is rejected before this page is reached) — carried
+  // through anyway so the decision POST's re-validation has it, rather than
+  // hardcoding 'code' in two places that could drift apart.
+  const responseType = searchParams.get('response_type') || 'code';
   const scope = searchParams.get('scope') || '';
   const state = searchParams.get('state') || '';
   const appName = searchParams.get('app_name') || 'This application';
@@ -93,10 +98,17 @@ export function OAuthConsentPage() {
         >
           <input type="hidden" name="client_id" value={clientId} />
           <input type="hidden" name="redirect_uri" value={redirectUri} />
+          <input type="hidden" name="response_type" value={responseType} />
           <input type="hidden" name="code_challenge" value={codeChallenge} />
           <input type="hidden" name="code_challenge_method" value={codeChallengeMethod} />
-          <input type="hidden" name="scope" value={scope} />
-          <input type="hidden" name="state" value={state} />
+          {/* Omitted when empty, not submitted as "" — an absent scope/state
+            * is meaningfully different from an explicit empty string on the
+            * server (asString() there treats both as "not provided" today,
+            * but only one of those is actually true; no reason to submit a
+            * value that was never in the URL). CodeRabbit review finding,
+            * TRO-412. */}
+          {scope && <input type="hidden" name="scope" value={scope} />}
+          {state && <input type="hidden" name="state" value={state} />}
 
           <button
             type="submit"

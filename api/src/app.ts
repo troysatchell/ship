@@ -33,7 +33,7 @@ import backlinksRoutes from './routes/backlinks.js';
 import { searchRouter } from './routes/search.js';
 import { filesRouter } from './routes/files.js';
 import caiaAuthRoutes from './routes/caia-auth.js';
-import oauthAuthorizeRoutes from './routes/oauth-authorize.js';
+import { createOAuthAuthorizeRouter } from './routes/oauth-authorize.js';
 import apiTokensRoutes from './routes/api-tokens.js';
 import adminCredentialsRoutes from './routes/admin-credentials.js';
 import claudeRoutes from './routes/claude.js';
@@ -483,7 +483,7 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   // for this ticket (see the comment on `app.use(['/api/v1','/oauth'],
   // createPublicApiCors())` above) — not under `/api`, since this is the RFC
   // 6749 authorization endpoint, not a JSON API resource.
-  app.use('/oauth', oauthAuthorizeRoutes);
+  app.use('/oauth', createOAuthAuthorizeRouter(corsOrigin));
 
   // Admin credentials management (CSRF protected, super-admin only)
   app.use('/api/admin/credentials', conditionalCsrf, adminCredentialsRoutes);

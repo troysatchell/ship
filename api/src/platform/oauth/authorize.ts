@@ -30,6 +30,7 @@ import { ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
  * (`pool.query` rows are `any` unless given an explicit interface). */
 export interface OAuthAppLookupRow {
   id: string;
+  workspace_id: string;
   client_id: string;
   name: string;
   redirect_uris: string[];
@@ -46,7 +47,7 @@ export const AUTHORIZATION_CODE_TTL_MS = 10 * 60 * 1000;
  * case applied). */
 export async function getOAuthAppByClientId(clientId: string): Promise<OAuthAppLookupRow | null> {
   const result = await pool.query<OAuthAppLookupRow>(
-    `SELECT id, client_id, name, redirect_uris, requested_scopes, revoked_at
+    `SELECT id, workspace_id, client_id, name, redirect_uris, requested_scopes, revoked_at
      FROM oauth_apps
      WHERE client_id = $1`,
     [clientId]
@@ -66,6 +67,31 @@ export async function getOAuthAppByClientId(clientId: string): Promise<OAuthAppL
  */
 export function redirectUriIsRegistered(app: OAuthAppLookupRow, redirectUri: string): boolean {
   return app.redirect_uris.some((registered) => registered === redirectUri);
+}
+
+/**
+ * Every requested scope must be one the app itself registered
+ * (`oauth_apps.requested_scopes`) — otherwise a client (or a forged
+ * request) could ask for `admin:write` on an app that only ever declared
+ * `documents:read`, and the consent screen the user actually saw would say
+ * something narrower than what got persisted onto the issued code (and, via
+ * PF-104, the token). CodeRabbit review finding, TRO-412 — the scope
+ * parameter reached `issueAuthorizationCode` completely unvalidated before
+ * this existed.
+ */
+export function scopesAreRegistered(app: OAuthAppLookupRow, scopes: string[]): boolean {
+  return scopes.every((scope) => app.requested_scopes.includes(scope));
+}
+
+/**
+ * The consenting user's own workspace must be the one that registered the
+ * app. Without this, any authenticated user in ANY workspace could consent
+ * to an app registered by a different tenant and hand it access to their
+ * own account/data — a cross-tenant boundary violation. CodeRabbit review
+ * finding, TRO-412.
+ */
+export function principalOwnsAppWorkspace(app: OAuthAppLookupRow, workspaceId: string): boolean {
+  return app.workspace_id === workspaceId;
 }
 
 /** SHA-256 hex digest — same hashing pattern as `api-tokens.ts`'s

@@ -42,6 +42,13 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
   let testAppId: string;
   let testClientId: string;
 
+  // Second, unrelated workspace + session — exclusively for the
+  // cross-workspace rejection test below. Never touches testAppId/
+  // REGISTERED_REDIRECT_URI's fixtures.
+  let otherWorkspaceId: string;
+  let otherUserId: string;
+  let otherSessionCookie: string;
+
   beforeAll(async () => {
     const workspaceResult = await pool.query(
       `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
@@ -80,15 +87,42 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
       [testWorkspaceId, testClientId, [REGISTERED_REDIRECT_URI], ['documents:read'], testUserId]
     );
     testAppId = appResult.rows[0].id;
+
+    // Second workspace/user/session, deliberately not a member of
+    // testWorkspaceId and with no relation to testAppId.
+    const otherWorkspaceResult = await pool.query(
+      `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
+      [`OAuth Authorize Test (other) ${testRunId}`]
+    );
+    otherWorkspaceId = otherWorkspaceResult.rows[0].id;
+
+    const otherUserResult = await pool.query(
+      `INSERT INTO users (email, password_hash, name) VALUES ($1, 'test-hash', 'OAuth Authz Other-Workspace User') RETURNING id`,
+      [`oauth-authz-other-${testRunId}@ship.local`]
+    );
+    otherUserId = otherUserResult.rows[0].id;
+
+    await pool.query(
+      `INSERT INTO workspace_memberships (workspace_id, user_id, role) VALUES ($1, $2, 'member')`,
+      [otherWorkspaceId, otherUserId]
+    );
+
+    const otherSessionId = crypto.randomBytes(32).toString('hex');
+    await pool.query(
+      `INSERT INTO sessions (id, user_id, workspace_id, expires_at, last_activity, created_at)
+       VALUES ($1, $2, $3, now() + interval '1 hour', now(), now())`,
+      [otherSessionId, otherUserId, otherWorkspaceId]
+    );
+    otherSessionCookie = `session_id=${otherSessionId}`;
   });
 
   afterAll(async () => {
     await pool.query('DELETE FROM oauth_authorization_codes WHERE app_id = $1', [testAppId]);
     await pool.query('DELETE FROM oauth_apps WHERE id = $1', [testAppId]);
-    await pool.query('DELETE FROM sessions WHERE user_id = $1', [testUserId]);
-    await pool.query('DELETE FROM workspace_memberships WHERE user_id = $1', [testUserId]);
-    await pool.query('DELETE FROM users WHERE id = $1', [testUserId]);
-    await pool.query('DELETE FROM workspaces WHERE id = $1', [testWorkspaceId]);
+    await pool.query('DELETE FROM sessions WHERE user_id = ANY($1)', [[testUserId, otherUserId]]);
+    await pool.query('DELETE FROM workspace_memberships WHERE user_id = ANY($1)', [[testUserId, otherUserId]]);
+    await pool.query('DELETE FROM users WHERE id = ANY($1)', [[testUserId, otherUserId]]);
+    await pool.query('DELETE FROM workspaces WHERE id = ANY($1)', [[testWorkspaceId, otherWorkspaceId]]);
   });
 
   beforeEach(async () => {
@@ -130,6 +164,7 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
         .query({
           client_id: testClientId,
           redirect_uri: REGISTERED_REDIRECT_URI,
+          response_type: 'code',
           code_challenge: codeChallenge,
           code_challenge_method: 'S256',
           scope: 'documents:read',
@@ -154,6 +189,7 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
         .send({
           client_id: testClientId,
           redirect_uri: REGISTERED_REDIRECT_URI,
+          response_type: 'code',
           code_challenge: codeChallenge,
           code_challenge_method: 'S256',
           scope: 'documents:read',
@@ -203,6 +239,7 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
         .query({
           client_id: testClientId,
           redirect_uri: REGISTERED_REDIRECT_URI,
+          response_type: 'code',
           code_challenge: 'irrelevant-challenge',
           code_challenge_method: 'plain',
         })
@@ -230,6 +267,7 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
         .query({
           client_id: testClientId,
           redirect_uri: mismatched,
+          response_type: 'code',
           code_challenge: 'irrelevant-challenge',
           code_challenge_method: 'S256',
         })
@@ -249,6 +287,7 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
         .query({
           client_id: 'ship_app_does_not_exist',
           redirect_uri: REGISTERED_REDIRECT_URI,
+          response_type: 'code',
           code_challenge: 'irrelevant-challenge',
           code_challenge_method: 'S256',
         })
@@ -269,6 +308,7 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
         .send({
           client_id: testClientId,
           redirect_uri: REGISTERED_REDIRECT_URI,
+          response_type: 'code',
           code_challenge: 'irrelevant-challenge',
           code_challenge_method: 'S256',
           state,
@@ -287,6 +327,134 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
     });
   });
 
+  describe('response_type must be "code" (CodeRabbit review finding, TRO-412)', () => {
+    it('missing response_type is rejected via redirect once redirect_uri is trusted', async () => {
+      const res = await request(app)
+        .get('/oauth/authorize')
+        .query({
+          client_id: testClientId,
+          redirect_uri: REGISTERED_REDIRECT_URI,
+          // response_type omitted entirely.
+          code_challenge: 'irrelevant-challenge',
+          code_challenge_method: 'S256',
+        })
+        .set('Cookie', sessionCookie);
+
+      expect(res.status).toBeGreaterThanOrEqual(300);
+      expect(res.status).toBeLessThan(400);
+      const location = new URL(requireLocation(res));
+      expect(`${location.origin}${location.pathname}`).toBe(REGISTERED_REDIRECT_URI);
+      expect(location.searchParams.get('error')).toBe('unsupported_response_type');
+      expect(location.searchParams.has('code')).toBe(false);
+
+      expect(await authCodeRowCount()).toBe(0);
+    });
+  });
+
+  describe('scope must be a subset of the app\'s registered scopes (CodeRabbit review finding, TRO-412, critical)', () => {
+    it('requesting a scope the app never registered is rejected — no code, no row created', async () => {
+      // testAppId is registered with only ['documents:read'] (beforeAll).
+      const res = await request(app)
+        .post('/oauth/authorize/decision')
+        .set('Cookie', sessionCookie)
+        .type('form')
+        .send({
+          client_id: testClientId,
+          redirect_uri: REGISTERED_REDIRECT_URI,
+          response_type: 'code',
+          code_challenge: 'irrelevant-challenge',
+          code_challenge_method: 'S256',
+          scope: 'admin:write',
+          decision: 'approve',
+        });
+
+      expect(res.status).toBeGreaterThanOrEqual(300);
+      expect(res.status).toBeLessThan(400);
+      const location = new URL(requireLocation(res));
+      expect(`${location.origin}${location.pathname}`).toBe(REGISTERED_REDIRECT_URI);
+      expect(location.searchParams.get('error')).toBe('invalid_scope');
+      expect(location.searchParams.has('code')).toBe(false);
+
+      expect(await authCodeRowCount()).toBe(0);
+    });
+
+    it('a subset of the registered scopes is accepted and recorded exactly as requested', async () => {
+      // testAppId's requested_scopes is ['documents:read'] — request exactly
+      // that (a real subset check, not just "anything goes because it's the
+      // app's only scope").
+      const res = await request(app)
+        .post('/oauth/authorize/decision')
+        .set('Cookie', sessionCookie)
+        .type('form')
+        .send({
+          client_id: testClientId,
+          redirect_uri: REGISTERED_REDIRECT_URI,
+          response_type: 'code',
+          code_challenge: 'irrelevant-challenge',
+          code_challenge_method: 'S256',
+          scope: 'documents:read',
+          decision: 'approve',
+        });
+
+      expect(res.status).toBeGreaterThanOrEqual(300);
+      expect(res.status).toBeLessThan(400);
+      const location = new URL(requireLocation(res));
+      expect(location.searchParams.get('code')).toBeTruthy();
+
+      const rowResult = await pool.query<{ scopes: string[] }>(
+        'SELECT scopes FROM oauth_authorization_codes WHERE app_id = $1',
+        [testAppId]
+      );
+      expect(rowResult.rows).toHaveLength(1);
+      const [row] = rowResult.rows;
+      if (!row) throw new Error('expected exactly one oauth_authorization_codes row');
+      expect(row.scopes).toEqual(['documents:read']);
+    });
+  });
+
+  describe('the consenting user must belong to the app\'s own workspace (CodeRabbit review finding, TRO-412)', () => {
+    it('rejects consent from a user in a different workspace — no redirect anywhere, no row created', async () => {
+      const res = await request(app)
+        .get('/oauth/authorize')
+        .query({
+          client_id: testClientId, // registered under testWorkspaceId
+          redirect_uri: REGISTERED_REDIRECT_URI,
+          response_type: 'code',
+          code_challenge: 'irrelevant-challenge',
+          code_challenge_method: 'S256',
+        })
+        .set('Cookie', otherSessionCookie); // session in otherWorkspaceId
+
+      // Cross-tenant boundary violation: never redirect, even to the
+      // registered redirect_uri — this user simply isn't entitled to act on
+      // this app at all.
+      expect(res.status).toBe(403);
+      expect(res.headers.location).toBeUndefined();
+
+      expect(await authCodeRowCount()).toBe(0);
+    });
+
+    it('the POST decision endpoint enforces the same boundary independently', async () => {
+      const res = await request(app)
+        .post('/oauth/authorize/decision')
+        .set('Cookie', otherSessionCookie)
+        .type('form')
+        .send({
+          client_id: testClientId,
+          redirect_uri: REGISTERED_REDIRECT_URI,
+          response_type: 'code',
+          code_challenge: 'irrelevant-challenge',
+          code_challenge_method: 'S256',
+          decision: 'approve',
+        });
+
+      expect(res.status).toBe(403);
+      expect(res.headers.location).toBeUndefined();
+
+      expect(await authCodeRowCount()).toBe(0);
+    });
+  });
+
   describe('unauthenticated request', () => {
     it('GET /oauth/authorize with no session redirects to /login with a returnTo back into the flow', async () => {
       const res = await request(app)
@@ -294,6 +462,7 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
         .query({
           client_id: testClientId,
           redirect_uri: REGISTERED_REDIRECT_URI,
+          response_type: 'code',
           code_challenge: 'irrelevant-challenge',
           code_challenge_method: 'S256',
         });

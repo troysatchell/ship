@@ -105,11 +105,12 @@ test.describe('OAuth authorize + consent (PF-103)', () => {
     // AC-4: frame-ancestors 'none' on whatever response carries the consent
     // UI. Best-effort here — see this repo's vite.config.ts (PF-103 /
     // oauth-consent-csp plugin) for the mechanism and its own "not verified
-    // for production" caveat.
-    if (consentResponse) {
-      const csp = consentResponse.headers()['content-security-policy'];
-      expect(csp).toContain("frame-ancestors 'none'");
-    }
+    // for production" caveat. Hard assert that navigation produced a
+    // response at all (rather than silently skipping the check when it
+    // didn't) — CodeRabbit review finding, TRO-412.
+    expect(consentResponse, 'page.goto should return a Response for a same-tab navigation').not.toBeNull();
+    const csp = consentResponse?.headers()['content-security-policy'];
+    expect(csp).toContain("frame-ancestors 'none'");
 
     await expect(page.getByRole('heading', { name: /Authorize PF-103 E2E Demo Client/i })).toBeVisible();
 
