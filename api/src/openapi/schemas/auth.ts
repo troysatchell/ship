@@ -59,6 +59,20 @@ registry.register('SessionResponse', SessionResponseSchema);
 
 // ============== API Token ==============
 
+// scopes (PF-107 / TRO-430): non-null on a "scoped personal token" — the
+// second token class the v1 bearer middleware accepts
+// (`api/src/platform/oauth/bearerAuth.ts`). Null/absent = the pre-existing
+// legacy unscoped internal token, unchanged behavior, never valid at
+// `/api/v1`. Each element must be one of `ScopeRegistry`'s registered scope
+// strings (`api/src/platform/scopes/registry.ts`) — enforced by the route
+// handler's zod schema (`createTokenSchema`), not re-derived here to avoid
+// a second source of truth for the scope list drifting from the registry.
+const APITokenScopesSchema = z.array(z.string()).nullable().openapi({
+  description:
+    'Scopes granted to this token (e.g. "documents:read"). Null = legacy unscoped token, never valid at /api/v1.',
+  example: ['documents:read'],
+});
+
 export const APITokenSchema = z.object({
   id: UuidSchema,
   name: z.string(),
@@ -69,6 +83,7 @@ export const APITokenSchema = z.object({
   last_used_at: DateTimeSchema.nullable(),
   created_at: DateTimeSchema,
   expires_at: DateTimeSchema.nullable(),
+  scopes: APITokenScopesSchema.optional(),
 }).openapi('APIToken');
 
 registry.register('APIToken', APITokenSchema);
@@ -80,6 +95,11 @@ export const CreateAPITokenSchema = z.object({
   }),
   expires_in_days: z.number().int().min(1).max(365).optional().openapi({
     description: 'Days until token expires (default: never)',
+  }),
+  scopes: z.array(z.string()).min(1).optional().openapi({
+    description:
+      'Scopes to grant this token, from ScopeRegistry (e.g. "documents:read"). Omit for a legacy unscoped token — never valid at /api/v1.',
+    example: ['documents:read'],
   }),
 }).openapi('CreateAPIToken');
 
