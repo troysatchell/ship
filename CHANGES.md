@@ -58,8 +58,10 @@ with file:line citations and reproduced in the TRO-419 ticket comment:
 - Noted, not fixed here: `api/src/routes/issues.ts`'s inline `createIssueSchema` additionally
   accepts `'none'` as a priority value, which is absent from both `shared/src/types/document.ts`'s
   `IssuePriority` union and the OpenAPI `IssuePrioritySchema`
-  (`api/src/openapi/schemas/issues.ts:26-34`). This registry's `issue.created`/`issue.assigned`
-  schemas follow the canonical (shared-types/OpenAPI) union, not the wider route-level input.
+  (`api/src/openapi/schemas/issues.ts:26-34`). Only `issue.created`'s schema carries a `priority`
+  field, and it follows the canonical (shared-types/OpenAPI) union, not the wider route-level
+  input; `issue.assigned`'s schema carries no `priority` field at all (it transitions
+  `assignee_id`, not priority).
 
 **Regression test.** `api/src/platform/webhooks/__tests__/events.test.ts`, 18 cases. Red before
 the fix: with a stub registry (every schema `z.any()`, `list()` returning `[]`), the 8

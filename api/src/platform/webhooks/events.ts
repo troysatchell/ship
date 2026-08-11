@@ -155,21 +155,46 @@ const issueCreatedData = z.object({
   assignee_id: UuidSchema.nullable(),
 })
 
-/** `assignee_id` / `previous_assignee_id` per the discovery finding: `properties.assignee_id`. */
-const issueAssignedData = z.object({
-  id: UuidSchema,
-  assignee_id: UuidSchema.nullable(),
-  previous_assignee_id: UuidSchema.nullable(),
-})
+/**
+ * `assignee_id` / `previous_assignee_id` per the discovery finding: `properties.assignee_id`.
+ * `.refine()` rejects no-op payloads (CodeRabbit PR #180 MAJOR finding) where
+ * `assignee_id === previous_assignee_id` — including both `null` — since that is not an
+ * assignment transition at all.
+ */
+const issueAssignedData = z
+  .object({
+    id: UuidSchema,
+    assignee_id: UuidSchema.nullable(),
+    previous_assignee_id: UuidSchema.nullable(),
+  })
+  .refine((data) => data.assignee_id !== data.previous_assignee_id, {
+    message: 'issue.assigned payload is a no-op: assignee_id equals previous_assignee_id',
+    path: ['assignee_id'],
+  })
 
-/** `state` / `previous_state` per the discovery finding: `properties.state`. */
-const issueStatusChangedData = z.object({
-  id: UuidSchema,
-  state: IssueStateSchema,
-  previous_state: IssueStateSchema,
-})
+/**
+ * `state` / `previous_state` per the discovery finding: `properties.state`. `.refine()` rejects
+ * no-op payloads (CodeRabbit PR #180 MAJOR finding) where `state === previous_state`, since that
+ * is not a status transition at all.
+ */
+const issueStatusChangedData = z
+  .object({
+    id: UuidSchema,
+    state: IssueStateSchema,
+    previous_state: IssueStateSchema,
+  })
+  .refine((data) => data.state !== data.previous_state, {
+    message: 'issue.status_changed payload is a no-op: state equals previous_state',
+    path: ['state'],
+  })
 
-/** `status` fixed to `'active'` per the discovery finding: the `planning -> active` transition. */
+/**
+ * `status` fixed to `'active'` per the discovery finding: the `planning -> active` transition.
+ * No no-op `.refine()` here (unlike `sprintCompletedData` below): `status`/`previous_status` are
+ * both fixed zod literals (`'active'` / `'planning'`) that can never be equal, so a no-op payload
+ * is already structurally unrepresentable — field-level validation rejects it before any
+ * object-level refinement would run.
+ */
 const sprintStartedData = z.object({
   id: UuidSchema,
   sprint_number: z.number().int(),
@@ -177,13 +202,24 @@ const sprintStartedData = z.object({
   previous_status: z.literal('planning'),
 })
 
-/** `status` fixed to `'completed'` per the discovery finding: `properties.status -> 'completed'`. */
-const sprintCompletedData = z.object({
-  id: UuidSchema,
-  sprint_number: z.number().int(),
-  status: z.literal('completed'),
-  previous_status: SprintStatusSchema,
-})
+/**
+ * `status` fixed to `'completed'` per the discovery finding: `properties.status -> 'completed'`.
+ * `.refine()` rejects no-op payloads (CodeRabbit PR #180 MAJOR finding) where `previous_status`
+ * is already `'completed'` — unlike `sprintStartedData`, `previous_status` here is the open
+ * `SprintStatusSchema` enum (not a fixed literal), so `previous_status === status` is otherwise
+ * representable and must be rejected explicitly.
+ */
+const sprintCompletedData = z
+  .object({
+    id: UuidSchema,
+    sprint_number: z.number().int(),
+    status: z.literal('completed'),
+    previous_status: SprintStatusSchema,
+  })
+  .refine((data) => data.previous_status !== data.status, {
+    message: 'sprint.completed payload is a no-op: previous_status is already completed',
+    path: ['previous_status'],
+  })
 
 // ============== The registry itself ==============
 

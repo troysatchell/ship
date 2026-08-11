@@ -20,8 +20,21 @@ const USER_ID = 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb'
 const DOC_ID = 'cccccccc-cccc-cccc-cccc-cccccccccccc'
 const CREATED_AT = '2026-08-10T18:00:00.000Z'
 
+/**
+ * Envelope shape of a fixture payload, with `data` kept as `Record<string, unknown>` (rather
+ * than `unknown`) so `structuredClone()` retains a type that mutation helpers below can index
+ * into directly — no `as`/cast at the call sites (house rule G7b).
+ */
+interface EventPayloadFixture {
+  id: string
+  type: EventType
+  created_at: string
+  workspace_id: string
+  data: Record<string, unknown>
+}
+
 /** One minimal, valid payload per event type — envelope + type-specific `data`. */
-const VALID_PAYLOADS: Record<EventType, unknown> = {
+const VALID_PAYLOADS: Record<EventType, EventPayloadFixture> = {
   'document.created': {
     id: DOC_ID,
     type: 'document.created',
@@ -124,15 +137,15 @@ const VALID_PAYLOADS: Record<EventType, unknown> = {
 }
 
 /** One field to delete per type in order to produce a payload missing a required field. */
-const REQUIRED_FIELD_TO_DROP: Record<EventType, (payload: Record<string, unknown>) => void> = {
-  'document.created': (p) => delete (p.data as Record<string, unknown>).document_type,
-  'document.updated': (p) => delete (p.data as Record<string, unknown>).changed_fields,
-  'document.deleted': (p) => delete (p.data as Record<string, unknown>).id,
-  'issue.created': (p) => delete (p.data as Record<string, unknown>).state,
-  'issue.assigned': (p) => delete (p.data as Record<string, unknown>).assignee_id,
-  'issue.status_changed': (p) => delete (p.data as Record<string, unknown>).state,
-  'sprint.started': (p) => delete (p.data as Record<string, unknown>).status,
-  'sprint.completed': (p) => delete (p.data as Record<string, unknown>).status,
+const REQUIRED_FIELD_TO_DROP: Record<EventType, (payload: EventPayloadFixture) => void> = {
+  'document.created': (p) => delete p.data.document_type,
+  'document.updated': (p) => delete p.data.changed_fields,
+  'document.deleted': (p) => delete p.data.id,
+  'issue.created': (p) => delete p.data.state,
+  'issue.assigned': (p) => delete p.data.assignee_id,
+  'issue.status_changed': (p) => delete p.data.state,
+  'sprint.started': (p) => delete p.data.status,
+  'sprint.completed': (p) => delete p.data.status,
 }
 
 // The 8 event types named verbatim in PLUGFORGE.MD §2.6, hardcoded independently of
@@ -179,10 +192,69 @@ describe('platform/webhooks/events — registry', () => {
     })
 
     it.each(EVENT_TYPES)('throws a ZodError for a %s payload missing a required field', (type) => {
-      const payload = structuredClone(VALID_PAYLOADS[type]) as Record<string, unknown>
+      const payload = structuredClone(VALID_PAYLOADS[type])
       REQUIRED_FIELD_TO_DROP[type](payload)
 
       expect(() => eventRegistry.get(type).schema.parse(payload)).toThrow(ZodError)
+    })
+  })
+
+  // CodeRabbit PR #180 MAJOR finding: transition-event schemas accepted no-op payloads
+  // (current value === previous value — no actual transition occurred). One red case per
+  // affected transition type: issue.status_changed (state === previous_state), issue.assigned
+  // (assignee_id === previous_assignee_id), sprint.completed (previous_status already
+  // 'completed'). `sprint.started` is deliberately not included here: its `status`/
+  // `previous_status` fields are fixed zod literals (`'active'` / `'planning'`), so a no-op
+  // payload is already structurally unrepresentable — there is no accept-then-reject case to
+  // prove for it.
+  describe('no-op transition rejection', () => {
+    it('rejects an issue.status_changed payload where state equals previous_state', () => {
+      const payload = structuredClone(VALID_PAYLOADS['issue.status_changed'])
+      payload.data.previous_state = payload.data.state
+
+      const result = eventRegistry.get('issue.status_changed').schema.safeParse(payload)
+
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.issues.some((issue) => /no-op/i.test(issue.message))).toBe(true)
+      }
+    })
+
+    it('rejects an issue.assigned payload where assignee_id equals previous_assignee_id', () => {
+      const payload = structuredClone(VALID_PAYLOADS['issue.assigned'])
+      payload.data.previous_assignee_id = payload.data.assignee_id
+
+      const result = eventRegistry.get('issue.assigned').schema.safeParse(payload)
+
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.issues.some((issue) => /no-op/i.test(issue.message))).toBe(true)
+      }
+    })
+
+    it('rejects an issue.assigned payload where both assignee_id and previous_assignee_id are null', () => {
+      const payload = structuredClone(VALID_PAYLOADS['issue.assigned'])
+      payload.data.assignee_id = null
+      payload.data.previous_assignee_id = null
+
+      const result = eventRegistry.get('issue.assigned').schema.safeParse(payload)
+
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.issues.some((issue) => /no-op/i.test(issue.message))).toBe(true)
+      }
+    })
+
+    it('rejects a sprint.completed payload where previous_status is already completed', () => {
+      const payload = structuredClone(VALID_PAYLOADS['sprint.completed'])
+      payload.data.previous_status = 'completed'
+
+      const result = eventRegistry.get('sprint.completed').schema.safeParse(payload)
+
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.issues.some((issue) => /no-op/i.test(issue.message))).toBe(true)
+      }
     })
   })
 })
