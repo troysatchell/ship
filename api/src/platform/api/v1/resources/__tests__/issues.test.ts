@@ -1,0 +1,221 @@
+/**
+ * PF-201 (Linear TRO-400) — `/api/v1/issues`: cursor-paginated list, typed
+ * `state`/`priority`/`assignee_id` fields lifted to the top level.
+ *
+ * Fixture pattern copied from `resources/documents.test.ts` (real
+ * `createApp()`, direct SQL fixtures, personal tokens via `api_tokens`) —
+ * see that file's header for the full rationale (real `/api/v1` mount, real
+ * `bearerAuth`/`requireScope`, real database).
+ */
+
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import request from 'supertest';
+import type { Express } from 'express';
+import crypto from 'crypto';
+import { createApp } from '../../../../../app.js';
+import { pool } from '../../../../../db/client.js';
+
+function sha256Hex(raw: string): string {
+  return crypto.createHash('sha256').update(raw).digest('hex');
+}
+
+interface IssueBody {
+  id: string;
+  title: string;
+  document_type: string;
+  state: string;
+  priority: string;
+  assignee_id: string | null;
+  properties?: Record<string, unknown>;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface ListResponseBody {
+  data: IssueBody[];
+  next_cursor: string | null;
+}
+
+describe('PF-201: /api/v1/issues (Linear TRO-400)', () => {
+  const app: Express = createApp();
+  const testRunId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+  const BASE_MS = Date.parse('2026-02-01T00:00:00.000Z');
+
+  let workspaceId: string;
+  let userId: string;
+  let assigneeUserId: string;
+  /** scopes = ['issues:read'] only. */
+  let readOnlyToken: string;
+  /** scopes = ['documents:read'] only — the AC-3 "lacks issues:read" case. */
+  let wrongScopeToken: string;
+
+  async function insertPersonalToken(scopes: string[]): Promise<string> {
+    const raw = `ship_${crypto.randomBytes(24).toString('hex')}`;
+    await pool.query(
+      `INSERT INTO api_tokens (user_id, workspace_id, name, token_hash, token_prefix, scopes)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        userId,
+        workspaceId,
+        `PF-201 issues token ${crypto.randomBytes(4).toString('hex')}`,
+        sha256Hex(raw),
+        raw.slice(0, 12),
+        scopes,
+      ]
+    );
+    return raw;
+  }
+
+  async function insertIssue(
+    title: string,
+    createdAt: Date,
+    properties: Record<string, unknown>
+  ): Promise<string> {
+    const result = await pool.query<{ id: string }>(
+      `INSERT INTO documents (workspace_id, title, document_type, properties, created_at, updated_at)
+       VALUES ($1, $2, 'issue', $3, $4, $4) RETURNING id`,
+      [workspaceId, title, JSON.stringify(properties), createdAt]
+    );
+    const row = result.rows[0];
+    if (!row) throw new Error('seed insertIssue produced no row');
+    return row.id;
+  }
+
+  beforeAll(async () => {
+    const workspaceResult = await pool.query<{ id: string }>(
+      `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
+      [`PF-201 Issues Test ${testRunId}`]
+    );
+    workspaceId = workspaceResult.rows[0]?.id ?? '';
+
+    const userResult = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, password_hash, name, last_workspace_id)
+       VALUES ($1, 'test-hash', 'PF-201 Test User', $2) RETURNING id`,
+      [`pf201-issues-${testRunId}@ship.local`, workspaceId]
+    );
+    userId = userResult.rows[0]?.id ?? '';
+
+    const assigneeResult = await pool.query<{ id: string }>(
+      `INSERT INTO users (email, password_hash, name, last_workspace_id)
+       VALUES ($1, 'test-hash', 'PF-201 Assignee', $2) RETURNING id`,
+      [`pf201-assignee-${testRunId}@ship.local`, workspaceId]
+    );
+    assigneeUserId = assigneeResult.rows[0]?.id ?? '';
+
+    readOnlyToken = await insertPersonalToken(['issues:read']);
+    wrongScopeToken = await insertPersonalToken(['documents:read']);
+
+    // A non-issue document, to confirm the resource filters by document_type.
+    await pool.query(
+      `INSERT INTO documents (workspace_id, title, document_type, created_at, updated_at)
+       VALUES ($1, 'Not an issue', 'wiki', $2, $2)`,
+      [workspaceId, new Date(BASE_MS + 500)]
+    );
+  });
+
+  afterAll(async () => {
+    await pool.query('DELETE FROM documents WHERE workspace_id = $1', [workspaceId]);
+    await pool.query('DELETE FROM api_tokens WHERE workspace_id = $1', [workspaceId]);
+    await pool.query('DELETE FROM users WHERE id = ANY($1)', [[userId, assigneeUserId]]);
+    await pool.query('DELETE FROM workspaces WHERE id = $1', [workspaceId]);
+  });
+
+  describe('typed fields: state/priority/assignee_id are top-level, not nested in properties', () => {
+    it('a seeded issue with full properties returns state/priority/assignee_id at the top level', async () => {
+      const issueId = await insertIssue('Typed field issue', new Date(BASE_MS + 1000), {
+        state: 'in_progress',
+        priority: 'urgent',
+        assignee_id: assigneeUserId,
+        source: 'internal',
+      });
+
+      const res = await request(app)
+        .get('/api/v1/issues')
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as ListResponseBody;
+      const found = body.data.find((i) => i.id === issueId);
+      expect(found).toBeDefined();
+      // The regression this proves: a naive port of documents.ts's
+      // serializeDocument would return `properties: {...}` with state/
+      // priority/assignee_id buried inside it and NO top-level fields at
+      // all — this assertion fails against that shape.
+      expect(found?.state).toBe('in_progress');
+      expect(found?.priority).toBe('urgent');
+      expect(found?.assignee_id).toBe(assigneeUserId);
+      expect(found?.document_type).toBe('issue');
+      // Not left ALSO buried in a nested properties blob — this resource is
+      // a typed view, not a raw JSONB passthrough (see issues.ts's header).
+      expect(found?.properties).toBeUndefined();
+    });
+
+    it('an issue with no properties set falls back to state=backlog, priority=medium, assignee_id=null', async () => {
+      const issueId = await insertIssue('Bare issue', new Date(BASE_MS + 2000), {});
+
+      const res = await request(app)
+        .get('/api/v1/issues')
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as ListResponseBody;
+      const found = body.data.find((i) => i.id === issueId);
+      expect(found).toBeDefined();
+      expect(found?.state).toBe('backlog');
+      expect(found?.priority).toBe('medium');
+      expect(found?.assignee_id).toBeNull();
+    });
+  });
+
+  describe('list only returns document_type = issue', () => {
+    it('a wiki document seeded in the same workspace never appears', async () => {
+      const res = await request(app)
+        .get('/api/v1/issues')
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as ListResponseBody;
+      for (const item of body.data) {
+        expect(item.document_type).toBe('issue');
+      }
+    });
+  });
+
+  describe('cursor pagination', () => {
+    it('paginates with limit and returns a next_cursor when more rows remain', async () => {
+      // At least 3 issues already exist from the tests above; add 2 more
+      // with distinct, later timestamps for a deterministic page-1 walk.
+      await insertIssue('Pagination A', new Date(BASE_MS + 10000), { state: 'todo' });
+      await insertIssue('Pagination B', new Date(BASE_MS + 11000), { state: 'todo' });
+
+      const res = await request(app)
+        .get('/api/v1/issues?limit=1')
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as ListResponseBody;
+      expect(body.data).toHaveLength(1);
+      expect(typeof body.next_cursor).toBe('string');
+    });
+  });
+
+  describe('scope enforcement', () => {
+    it('a token without issues:read gets 403, details.missing_scope = issues:read', async () => {
+      const res = await request(app)
+        .get('/api/v1/issues')
+        .set('Authorization', `Bearer ${wrongScopeToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('forbidden');
+      expect(res.body.details).toEqual({ missing_scope: 'issues:read' });
+    });
+
+    it('no Authorization header gets 401 in ApiError shape', async () => {
+      const res = await request(app).get('/api/v1/issues');
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe('unauthorized');
+      expect(typeof res.body.request_id).toBe('string');
+    });
+  });
+});
