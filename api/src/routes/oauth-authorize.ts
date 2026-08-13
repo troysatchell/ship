@@ -226,7 +226,6 @@ export function createOAuthAuthorizeRouter(webOrigin: string): RouterType {
     params.set('response_type', 'code');
     params.set('code_challenge', validation.codeChallenge);
     params.set('code_challenge_method', 'S256');
-    params.set('app_name', validation.app.name);
     if (validation.scopes.length > 0) params.set('scope', validation.scopes.join(' '));
     if (validation.state) params.set('state', validation.state);
     return `/oauth-consent?${params.toString()}`;

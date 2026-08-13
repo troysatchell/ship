@@ -45,7 +45,15 @@ export function OAuthConsentPage() {
   const responseType = searchParams.get('response_type') || 'code';
   const scope = searchParams.get('scope') || '';
   const state = searchParams.get('state') || '';
-  const appName = searchParams.get('app_name') || 'This application';
+  // Deliberately NOT read from the URL (`app_name` used to be a query param
+  // GET /oauth/authorize forwarded here): a display name sourced from the
+  // query string is not bound to the validated `client_id` at all — a
+  // malicious link could set `app_name` to anything, spoofing a trusted
+  // app's name on this consent screen. Generic copy plus the visible
+  // `Client`/`Redirect` values below (both real, validated fields) let the
+  // user verify what they're actually authorizing instead. Security interim
+  // fix, PM-triaged review finding on TRO-412.
+  const appName = 'This application';
 
   const requestedScopes = scope.split(' ').filter(Boolean);
 
@@ -75,6 +83,23 @@ export function OAuthConsentPage() {
           <h1 className="mt-4 text-xl font-semibold text-foreground">Authorize {appName}</h1>
           <p className="mt-2 text-sm text-muted">
             {appName} would like to access your Ship account.
+          </p>
+        </div>
+
+        {/* The display name above is deliberately generic (not taken from
+          * the URL — see the `appName` comment). These two fields ARE the
+          * validated, server-checked values (client_id resolved to a real
+          * registered app, redirect_uri matched exactly against that app's
+          * registered list) — showing them lets the user verify what
+          * they're authorizing even though the friendly name can't be
+          * trusted. Security interim fix, PM-triaged review finding on
+          * TRO-412. */}
+        <div className="mb-6 space-y-1 rounded-md border border-border bg-background px-4 py-3 text-xs text-muted">
+          <p className="break-all">
+            <span className="font-medium uppercase tracking-wider">Client:</span> {clientId}
+          </p>
+          <p className="break-all">
+            <span className="font-medium uppercase tracking-wider">Redirect:</span> {redirectUri}
           </p>
         </div>
 

@@ -114,7 +114,15 @@ test.describe('OAuth authorize + consent (PF-103)', () => {
     const csp = consentResponse?.headers()['content-security-policy'];
     expect(csp).toContain("frame-ancestors 'none'");
 
-    await expect(page.getByRole('heading', { name: /Authorize PF-103 E2E Demo Client/i })).toBeVisible();
+    // PM-triaged review finding (TRO-412, security interim fix): the
+    // consent screen no longer renders the caller-supplied `app_name` query
+    // param (never bound to the validated `client_id`, so it was
+    // spoofable) — the heading is now always generic, and the validated
+    // `client_id`/`redirect_uri` are shown instead so the user can verify
+    // what they're actually authorizing.
+    await expect(page.getByRole('heading', { name: /Authorize This application/i })).toBeVisible();
+    await expect(page.getByText(clientId)).toBeVisible();
+    await expect(page.getByText(REDIRECT_URI)).toBeVisible();
 
     // Step 3: approve.
     await page.getByRole('button', { name: 'Authorize' }).click();
