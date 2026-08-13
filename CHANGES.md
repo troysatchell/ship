@@ -129,6 +129,252 @@ seeded into a database can be removed with
 
 ---
 
+## TRO-412 — PF-103: `/oauth/authorize` + consent screen (S256-only PKCE, exact redirect_uri match)
+
+**Provenance timing note (added after `gate.sh`, before this branch's own commits changed):** the
+"PF-102 not available in this worktree" claim below was verified true at implementation time
+(`git merge-base --is-ancestor 2a92ae2 main` → false, checked directly). By the time `gate.sh` ran,
+local `main` had been fast-forwarded to `2a92ae2` mid-session (`git reflog show main`: `pull --ff-only
+https://github.com/troysatchell/ship.git main`, a clean fast-forward — `8e6949d` genuinely is an
+ancestor of `2a92ae2`, nothing was rewritten). This does not change anything about this ticket's
+code or design decisions — they were made for the reasons stated, and stand regardless — and it does
+not change what `gate.sh` diffed (`main...HEAD` resolves via merge-base, which stayed `8e6949d`
+throughout, per `git merge-base main HEAD`; `gate-result.json`'s `scope: 9 file(s) changed` is exactly
+this branch's own files, not PF-102's). Recorded so the claim below reads as "true when written,"
+not "true now" — and as good news for whoever dispatches PF-104 next: the GitLab re-sync this
+ticket's report recommended has already happened.
+
+**What changed.** Added the RFC 6749 authorization endpoint: `GET /oauth/authorize` (validates the
+request, checks the session, hands off to the consent page) and `POST /oauth/authorize/decision`
+(the consent form's Approve/Deny target — re-validates everything from scratch, issues a single-use
+code or reports `error=access_denied`). New files: `api/src/platform/oauth/authorize.ts` (service
+logic: app lookup by `client_id`, exact `redirect_uri` match, S256-only enforcement, code
+issuance/hashing, a read-only session-validity check), `api/src/routes/oauth-authorize.ts` (the thin
+route layer — same PF-102 `routes/`↔`platform/oauth/` split), `web/src/pages/OAuthConsent.tsx` (the
+consent page, a dedicated minimal web-app route per the PRD text, registered in `main.tsx` alongside
+`/setup`/`/invite/:token` — NOT nested in `AppLayout`/the 4-panel layout, which does not apply to a
+non-document page). Mounted `/oauth` in `api/src/app.ts` (the prefix PF-001 already CORS'd for this
+ticket). `web/vite.config.ts` gained a small plugin that sets `Content-Security-Policy:
+frame-ancestors 'none'` on the dev and preview servers' response for `/oauth-consent` (AC-4;
+mechanism + prod caveat below).
+
+**Design decisions, and why (read before reviewing the diff):**
+
+1. **PF-102's registration code was not available in this worktree.** PF-102 (app registration, PR
+   #177) merged to GitHub `main` at `2026-08-10T23:07:08Z`; this worktree branched from GitLab-mirrored
+   `main` (this repo's dual-remote topology — GitHub is PR-only, GitLab needs a separate re-sync
+   after each merge), which had not yet been re-synced. Verified, not assumed:
+   `git merge-base --is-ancestor 2a92ae2 main` (both the GitLab-fetched and a direct GitHub-fetched
+   `main`) returns false; the commit is reachable only from a sibling ticket's branch
+   (`feat/pf-107-scopes-bearer`). The dispatch brief's claim that "registration code... [is]
+   available" does not hold for what this worktree actually checked out. What genuinely *is*
+   available: `oauth_apps`/`oauth_authorization_codes` (migrations 042/043, PF-101/TRO-406,
+   already on `main` before this branched) — this ticket's code reads/writes those tables directly
+   and duplicates the small SHA-256 hashing convention (`api/src/platform/oauth/authorize.ts`'s
+   header comment has the full account) rather than importing code that doesn't exist on this
+   branch. Test fixtures insert an `oauth_apps` row directly via SQL, the same strategy every other
+   route test in this repo already uses for its own dependencies. **Recommendation for the
+   orchestrator:** re-sync GitLab `main` from GitHub before dispatching PF-104 — it has the identical
+   dependency on PF-102 and would hit the same gap.
+2. **The consent page is a web-app (Vite/React) SPA route, not Express-server-rendered.** The
+   ticket's own test-design comment flagged this as ambiguous ("needs implementer confirmation"),
+   and the PM triage comment explicitly left the mechanism to the implementer. The dispatch prompt's
+   role-skill annotation ("consent page is a web route") is the deciding signal taken here.
+   Consequence: AC-4's CSP header is set via Vite server config (`frame-ancestors` cannot be
+   delivered by a `<meta>` tag — the CSP spec disallows that directive there — so it must be a real
+   HTTP header from whatever serves the HTML), not a `supertest` assertion in
+   `authorize.test.ts` — that test file's header explains why the "if Express-server-rendered" case
+   in the test-design comment does not apply. **Not verified for the production S3+CloudFront
+   deployment**: no `ordered_cache_behavior` in `terraform/s3-cloudfront.tf` currently routes
+   `/oauth/*` (or `/oauth-consent`) anywhere but the default S3 origin, so this ticket's whole flow —
+   not just the CSP header — is unreachable in a real deploy until a follow-up terraform ticket adds
+   that path pattern (out of scope here; terraform is PF-900-series work). Flagged, not fixed.
+3. **Both endpoints are reached by a real browser navigation / plain HTML `<form>` POST, never
+   `fetch()`.** `/oauth` carries the public, credential-less CORS policy (`createPublicApiCors()`,
+   for the bearer-token surface) — a cookie-bearing cross-origin `fetch()` from the web app would be
+   silently blocked by it, and widening that shared CORS wiring for one new route was judged not
+   worth touching infrastructure PF-001 deliberately scoped for a different token model. A native
+   navigation/form isn't subject to CORS at all, and it is also what makes both endpoints return a
+   literal `Location` header — exactly what the test-design comment's "response redirects to X"
+   language describes, and what `supertest` observes directly.
+4. **`POST /oauth/authorize/decision` carries no `x-csrf-token`.** A plain HTML form cannot set a
+   custom header, and extending `csrfSync`'s `getTokenFromRequest` (`app.ts`) to also read a form
+   field would be a change to shared CSRF wiring — `/ship-backend` flags CSRF changes as a
+   stop-for-human zone, so this avoids touching it rather than editing it under time pressure. Mirrors
+   this codebase's own existing precedent for an OAuth-shaped route: `caia-auth.ts`'s callback is
+   "no CSRF protection (OAuth flow with external callback)". The session cookie is
+   `sameSite: 'strict'`, which already blocks a cross-site form POST from carrying it at all — a
+   forged submission from another site arrives with no session and is rejected the same way an
+   anonymous request is. Documented here for review, not decided unilaterally as final.
+5. **No server-side "pending authorization request" storage.** The consent page resubmits the exact
+   fields `GET /oauth/authorize` already validated once, as hidden form inputs; `POST
+   .../decision` re-validates all of them from scratch rather than trusting the resubmission. Simpler
+   than adding a new short-lived-request table for an MVP-gate ticket, at the cost of one behavior a
+   reviewer should know about: nothing cryptographically ties the GET's validation to the POST's — a
+   user could, in principle, hand-craft a POST with the same field values, which is the DESIGN (the
+   POST is authoritative and self-sufficient), not a gap.
+
+**Regression tests (the factory-gate proof).**
+`api/src/platform/oauth/__tests__/authorize.test.ts` — 13 cases (6 original + 5 added during
+self-triage below, plus 2 session-validity cases — one session past `ABSOLUTE_SESSION_TIMEOUT_MS`,
+one past `SESSION_INACTIVITY_LIMIT_MS`, both asserting `getSessionPrincipal`'s redirect to `/login`
+— added during a later PM-triaged review pass), fixture pattern (workspace/user/session/oauth-app
+via direct SQL, session cookie via supertest) copied from `api/src/routes/documents.test.ts`:
+- AC-1 (S256, challenge recorded, single-use setup): a valid authorize→consent-approve round trip
+  asserts the redirect to the registered `redirect_uri` carries a `code`, and that the created row
+  has the right `code_challenge`/`code_challenge_method`, `consumed_at IS NULL`, and — the raw-code
+  check — `code_hash` is neither equal to the issued code nor discoverable any other way, only equal
+  to its own SHA-256 digest. A second case sends `code_challenge_method=plain`.
+- AC-2 (exact `redirect_uri` match / open-redirect guard): a trailing-slash variant, and separately
+  an unknown `client_id`, must both get a direct `400` with **no** `Location` header at all — never a
+  redirect to the caller-supplied URI, registered or not.
+- AC-3 (deny): asserts `error=access_denied`, no `code` param, no row created.
+- Plus one case for the unauthenticated path (redirects to `/login?returnTo=/oauth-consent?...`).
+
+**Red-before-green (seen, not claimed).** Ran the suite with three specific bugs injected — exactly
+the ones the test-design comment predicts — confirmed via `npx vitest run
+src/platform/oauth/__tests__/authorize.test.ts`: (1) `redirectUriIsRegistered` using
+`.startsWith()` instead of exact `===` (AC-2's trailing-slash case failed:
+`expected 302 to be 400`), (2) the S256-only check disabled (AC-1's `plain` case failed: consent
+redirect happened instead of `error=invalid_request`), (3) the deny branch omitting the `error` query
+param (AC-3 failed: `expected null to be 'access_denied'`). All three failed for the asserted
+behavior, not an import/type error — the other 3 cases in the same run (happy path, unknown
+client_id, unauthenticated) passed throughout, confirming the bugs were isolated and DB/import
+wiring was sound. Reverted the three bugs; re-ran: 6/6 green. Full transcripts in this ticket's
+final report.
+
+**Additive e2e — now runs, and passes (not the factory-gate proof, still).**
+`e2e/oauth-authorize.spec.ts` — login → authorize → consent → redirect with code (the graded PKCE
+scenario's first half) plus the deny path and a best-effort AC-4 CSP header check. TRO-430 (see its
+own CHANGES.md entry) fixed the migration gap that previously blocked this spec at the seed step
+(`relation "oauth_apps" does not exist` — `runMigrations()` used to mark migrations "applied" without
+executing their SQL). With that unblocked, this spec ran for real for the first time this session and
+surfaced four defects, each trace-verified via Playwright's network log before being fixed — not
+re-diagnosed by inspection:
+1. Neither test set `response_type=code`, so the API correctly rejected both with
+   `error=unsupported_response_type` before consent was ever reached. Fixed: both tests set it.
+2. `REDIRECT_URI` pointed at a non-existent external domain and relied on `page.route()` to intercept
+   the callback — but a server-issued 302 is a real browser navigation, which `page.route()` cannot
+   fulfill; Chromium died with `ERR_NAME_NOT_RESOLVED`. Fixed: the redirect_uri is now a path on the
+   test's own web origin (`${baseURL}/e2e-oauth-callback`) that no app route matches, so the
+   navigation actually commits and `page.url()` is asserted directly — no interception needed.
+3. The fixture spawned the api with `CORS_ORIGIN: '*'`, which `api/src/app.ts` threads into
+   `createOAuthAuthorizeRouter(corsOrigin)` as `webOrigin`; building `/login`/`/oauth-consent`
+   redirects via `new URL(path, webOrigin)` then throws (`'*'` is not a valid URL base), 500ing every
+   consent/login redirect. Fixed in `e2e/fixtures/isolated-env.ts`: the api now gets a real
+   `http://localhost:<webPort>` origin, reserved by the `apiServer` fixture (before the api process
+   spawns) and passed through to `webServer` instead of being independently recomputed later — see
+   that file's comments for why an independent second `getWorkerPort()` call there could race.
+4. Undiagnosed until this run: with 1-3 fixed, "Authorize" hung to the 60s test timeout. The trace
+   showed `POST /oauth/authorize/decision` returning `404` — `OAuthConsentPage`'s form posts to a
+   relative path (`VITE_API_URL` is deliberately baked to `''` at build time), which resolves against
+   the WEB origin, but `web/vite.config.ts`'s dev/preview proxy only forwarded `/api`, `/collaboration`,
+   `/events` to the api, never `/oauth`. Fixed by adding an `/oauth/` proxy entry (trailing slash
+   load-bearing — a bare `/oauth` also prefix-matches `/oauth-consent`, the web app's OWN consent-page
+   route, and was confirmed via a second trace to hijack it to the api's global CSP header instead of
+   the `oauth-consent-csp` plugin's `frame-ancestors 'none'`, before being narrowed). This is the local
+   dev-server/e2e-preview-server analog of the CloudFront gap flagged just above (design decision #2)
+   — still open in terraform, out of scope here; fixed only where it was silently breaking the local
+   and e2e consent flow.
+
+Run: `pnpm exec playwright test e2e/oauth-authorize.spec.ts --workers=1 --reporter=list` — 2 passed in
+~22s, both on the first attempt after defect 4's fix (two prior attempts each surfaced one new defect
+via its own failure, per the discipline above — not simply retried until green).
+
+**Self-triage of `gate.sh`'s CodeRabbit CLI review (14 findings) before reporting done.** Fixed the
+ones that were genuinely valid and cheap to fix correctly, red-before-green (temporarily disabled
+each new check, confirmed the corresponding new test failed for the right reason, restored, confirmed
+green — same discipline as the original three ACs):
+- **[critical]** `scope` reached `issueAuthorizationCode` completely unvalidated — a client could
+  request `admin:write` on an app registered with only `documents:read`, and it would be persisted
+  onto the code as-is. Added `scopesAreRegistered()` (`authorize.ts`); unregistered scope now redirects
+  with `error=invalid_scope`, no code, no row.
+- **[major]** No workspace check at all: any authenticated user in ANY workspace could consent to an
+  app registered by a different tenant. Added `principalOwnsAppWorkspace()`; a mismatch is a `403`,
+  never a redirect (same open-redirect-guard reasoning as an unknown `client_id`). Enforced
+  independently in both `GET /oauth/authorize` and `POST .../decision`. Genuine residual uncertainty,
+  stated plainly: this assumes `oauth_apps` are tenant-scoped integrations (matching `api_tokens`'
+  existing workspace-scoping convention), not a cross-tenant "app directory" model (à la GitHub
+  OAuth Apps) — PLUGFORGE.MD doesn't say which explicitly. Chose the conservative (fail-closed)
+  reading; flagged for a human to confirm against the intended model.
+- **[major]** `response_type` was never checked. Added: missing or non-`code` now redirects with
+  `error=unsupported_response_type` once `redirect_uri` is trusted (RFC 6749 §3.1.1/§4.1.2.1).
+- **[major]** `webAppOrigin()` re-read `process.env.CORS_ORIGIN` independently instead of using the
+  `corsOrigin` value already threaded into `createApp()` — could silently diverge for a caller that
+  constructs the app with an explicit, different origin. `oauth-authorize.ts` is now a factory
+  (`createOAuthAuthorizeRouter(webOrigin)`) `app.ts` calls with its own `corsOrigin` parameter.
+- **[minor]** `OAuthConsent.tsx`'s hidden `scope`/`state` inputs submitted `""` when absent rather
+  than omitting the field. Now conditionally rendered.
+- **[trivial]** The e2e spec's CSP check silently skipped if `page.goto()` returned no `Response`.
+  Now a hard `expect(...).not.toBeNull()` first.
+
+7 new/updated test cases prove the four functional fixes (11 total in `authorize.test.ts` now, up
+from 6) — see the file itself for each case; row-count and redirect-target assertions follow the same
+pattern as the original three ACs.
+
+**Findings read, judged not to fix here (stated, not silently dropped):**
+- **[major]** Rate limiting: neither endpoint sits behind any limiter (`/oauth` is outside the
+  `/api/` prefix the legacy limiters match). PLUGFORGE.MD §2.7 assigns the public surface's rate
+  limiting to PF-004 explicitly ("before anything else ships") — a one-off limiter here would risk
+  conflicting with that design rather than complementing it.
+- **[major]** OpenAPI registration for `GET /oauth/authorize`/`POST /oauth/authorize/decision`.
+  Investigated (not just deferred as a style judgment call) at a later PM-triaged review pass — the
+  RFC-6749-vs-`ApiError` framing below turned out not to be the real blocker. The actual blocker:
+  this repo's single OpenAPI registry (`api/src/openapi/registry.ts`) sets one global
+  `servers: [{ url: '/api' }]`, and the MCP tool executor (`api/src/mcp/server.ts:375`) hardcodes
+  `` `${CONFIG.url}/api${path}` `` with no support for a per-operation `servers` override.
+  `/oauth/authorize` is mounted entirely outside `/api` (`app.ts`), so registering it in this
+  registry would either misdocument its real path in Swagger, or — if given a per-operation
+  `servers` override so Swagger documents it correctly — ship an auto-generated MCP tool that calls
+  the wrong URL and 404s on every invocation, silently. No existing endpoint in this codebase is
+  registered outside `/api` (checked: every `path:` value across `api/src/openapi/schemas/*.ts` is
+  `/api`-relative), so there is no working precedent to copy either. Still not registered; this
+  genuinely needs either a second, `/oauth`-scoped registry (with its own generator/server wiring)
+  or an MCP-executor fix that reads per-operation `servers`, neither of which fits inside a
+  single-endpoint registration task. Flagged for the orchestrator with the concrete blocker, not
+  decided unilaterally.
+- **[major]** SameSite=Strict cookie survival across a genuinely cross-site (not just cross-port)
+  top-level navigation — not verified in a real browser (see the header comment in
+  `oauth-authorize.ts` for the full reasoning and why the isolated e2e fixture can't currently answer
+  it either).
+- **[minor]** RFC 7636 `code_challenge` format validation (43-128 chars, unreserved charset) — real
+  hardening, but out of this ticket's stated AC and would require rewriting every test fixture's
+  intentionally-short challenge strings; deferred rather than done under time pressure.
+- **[trivial]** DRY-ing the e2e spec's repeated login steps into a helper, and the two
+  `vite.config.ts` CSP middleware blocks into one — both genuine, both skipped: the e2e spec doesn't
+  execute in this environment yet (see above) and the vite duplication is four lines.
+
+**PM-triaged review pass (post `gate.sh`, after the self-triage round above).** Consent screen shows
+only validated client info now: `OAuthConsent.tsx` no longer renders the caller-supplied `app_name`
+query param (never bound to the validated `client_id`, so it was spoofable) — the heading now reads
+a generic "This application", and the page shows the actual validated `Client:`/`Redirect:` values
+instead so the user can verify what they're authorizing; `oauth-authorize.ts` no longer sets
+`app_name` on the consent redirect since nothing reads it anymore. Added the two session-validity
+test cases noted above. Added `test.describe.configure({ mode: 'serial' })` to the e2e spec. Two
+now-stale `app.ts` comments (written when `/oauth` had no router mounted at all) were corrected to
+describe the router this ticket actually added.
+
+**How to run it.**
+`api && npx vitest run src/platform/oauth/__tests__/authorize.test.ts` (needs `DATABASE_URL` —
+`source .factory-env` in a worktree). Manual: `pnpm dev`, register an app (once PF-102 lands on this
+branch) or insert an `oauth_apps` row directly, then `GET /oauth/authorize?client_id=...&
+redirect_uri=...&code_challenge=...&code_challenge_method=S256` while logged in.
+
+**Rollback.**
+
+```sql
+-- No schema change in this ticket — nothing to roll back at the DB level.
+```
+
+Remove `api/src/platform/oauth/authorize.ts`, `api/src/routes/oauth-authorize.ts`,
+`api/src/platform/oauth/__tests__/authorize.test.ts`, `web/src/pages/OAuthConsent.tsx`,
+`e2e/oauth-authorize.spec.ts`. Revert the `oauth-authorize` import/mount in `api/src/app.ts`, the
+`OAuthConsentPage` lazy import/route in `web/src/main.tsx`, and the `oauth-consent-csp` plugin block
+in `web/vite.config.ts`. Nothing else in the codebase references `/oauth/authorize` yet (PF-104
+onward), so nothing else needs to change.
+
+---
+
 ## TRO-494 — PF-004 follow-up: source-IP limiter exemption made independently provable
 
 **What was broken.** TRO-401/PF-004's `rate-limit-v1-exemption.test.ts` (CodeRabbit Major finding on
