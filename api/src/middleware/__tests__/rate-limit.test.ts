@@ -180,7 +180,7 @@ describe('API-1: /api rate limiter', () => {
   })
 
   /**
-   * TRO-494 — `createApiRateLimiters` gained a fourth, test-only
+   * TRO-494 — `createApiRateLimiters` gained a third, test-only
    * `limitOverrides` parameter so a test can drive the per-source-IP
    * limiter's own cap without sending 6,001 sequential requests
    * (`rate-limit-v1-exemption.test.ts`'s AC-3 uses it directly). These
@@ -206,11 +206,34 @@ describe('API-1: /api rate limiter', () => {
       })
     })
 
-    it('leaves the 2-argument production call site unaffected — no accidental default override', () => {
+    it('leaves the 2-argument production call site unaffected — no accidental default override', async () => {
       // Mirrors `app.ts:130`'s exact call shape (`createApiRateLimiters(process.env,
       // rateLimitRedisClient)`, 2 arguments, `limitOverrides` never passed).
       // Would fail if `limitOverrides` ever got a non-empty default.
-      expect(createApiRateLimiters({ NODE_ENV: 'production' })).toHaveLength(2)
+      const handlers = createApiRateLimiters({ NODE_ENV: 'production' })
+      expect(handlers).toHaveLength(2)
+
+      // Mount the handlers into an app and issue 2-3 requests to verify
+      // production limits apply and are not throttled at this low volume.
+      const app = express()
+      app.use('/api/', handlers[0])
+      app.use('/api/', handlers[1])
+      app.get('/api/test', (_req, res) => res.status(200).json({ ok: true }))
+
+      const server = createServer(app)
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', () => resolve()))
+      try {
+        const statuses: number[] = []
+        for (let i = 0; i < 3; i++) {
+          const res = await request(server).get('/api/test')
+          statuses.push(res.status)
+        }
+        // At 600 req/min identity limit and 6,000 req/min per-IP limit,
+        // 3 requests should all succeed.
+        expect(statuses).toEqual([200, 200, 200])
+      } finally {
+        await new Promise<void>((resolve) => server.close(() => resolve()))
+      }
     })
 
     it('applies an explicit sourceIpLimit override at a small, driveable cap without needing the production 6,000 ceiling', async () => {

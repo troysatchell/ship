@@ -29,7 +29,7 @@ PR #176, triaged 2026-08-10) sends 601 sequential requests — past the producti
 `isLegacyLimiterExemptPath` predicate (mitigating: divergence would require editing a call site, not
 the shared logic), but the test still could not detect a regression that removed the exemption from
 only the source-IP limiter's `skip:` call site — 601 requests never approach a 6,000 cap whether or not
-it is exempted. See the **Correction** paragraph added to TRO-401's own entry above for the full
+it is exempted. See the **Correction** paragraph added to TRO-401's own entry below for the full
 disclosure repair.
 
 **What changed.**
@@ -43,7 +43,7 @@ disclosure repair.
    (mounts **only** `perSourceIpLimiter`, no `perIdentityLimiter` at all) and two new cases, AC-3a/AC-3b,
    that drive the source-IP limiter alone at `limitOverrides: { sourceIpLimit: 5 }` instead of the real
    6,000 ceiling. Also fixed the file's own top-of-file comment in place (see TRO-401's Correction
-   paragraph above) — it no longer claims "every hammer below runs against those exact production
+   paragraph below) — it no longer claims "every hammer below runs against those exact production
    numbers."
 3. `api/src/middleware/__tests__/rate-limit.test.ts` — added a `createApiRateLimiters overrides
    (TRO-494)` block: a pinned (not bounds-checked) assertion that `resolveApiRateLimits({NODE_ENV:
@@ -82,7 +82,7 @@ standing rule), then removed only the `skip: (req) => isLegacyLimiterExemptPath(
 `perSourceIpLimiter`'s config (leaving `perIdentityLimiter`'s `skip` untouched) and ran
 `npx vitest run src/middleware/__tests__/rate-limit-v1-exemption.test.ts`:
 
-```
+```text
 ❯ src/middleware/__tests__/rate-limit-v1-exemption.test.ts (4 tests | 1 failed) 435ms
     ✓ AC-1: v1 requests bypass both legacy limiters past the prod identity cap 175ms
     ✓ AC-2: internal /api/ routes remain capped at the prod identity limit, with the unchanged legacy 429 shape 96ms
@@ -102,7 +102,7 @@ depend on the exemption) and AC-1/AC-2 (which never approach the source-IP cap r
 green, confirming AC-1/AC-2's blindness to this exact regression. Restored the file from the pre-edit
 copy (byte-identical, verified via `diff`), then re-ran the same command:
 
-```
+```text
 ✓ src/middleware/__tests__/rate-limit-v1-exemption.test.ts (4 tests) 432ms
  Test Files  1 passed (1)
       Tests  4 passed (4)
@@ -131,7 +131,7 @@ regardless of store backend, so no Redis-specific interaction is expected, but n
 api/src/middleware/__tests__/rate-limit-v1-exemption.test.ts
 api/src/middleware/__tests__/rate-limit.test.ts CHANGES.md | git apply -R`). Removes the
 `limitOverrides` parameter (production behavior reverts to identical — it was always the default
-no-op path), the four new tests, and this correction's prose. No schema, migration, or env-var
+no-op path), the five new tests, and this correction's prose. No schema, migration, or env-var
 changes — safe to revert standalone. Reverting does **not** reintroduce TRO-401/PF-004's original
 gap on its own (the `skip` call sites are unchanged by this ticket) — it only removes this ticket's
 proof that the source-IP one is independently exercised.

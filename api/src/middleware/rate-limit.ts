@@ -296,10 +296,10 @@ export function apiRateLimitKey(req: RateLimitKeyRequest): string {
  * default `MemoryStore` — unchanged from before this ticket, and still what
  * local dev and every other test in this suite runs against.
  *
- * TRO-494: `limitOverrides` is a fourth, test-only seam. Production's own
+ * TRO-494: `limitOverrides` is a third, test-only seam. Production's own
  * ceilings (600/6,000, prod `windowMs`) are entirely a function of
  * `resolveApiRateLimits(env)`, gated on `NODE_ENV`/`E2E_TEST` — nothing in
- * `app.ts` (or anywhere else outside tests) passes a fourth argument, so the
+ * `app.ts` (or anywhere else outside tests) passes a third argument, so the
  * production call site (`app.ts:130`, `createApiRateLimiters(process.env,
  * rateLimitRedisClient)`, still 2 args) resolves exactly what it always did.
  * The reason this exists: TRO-401's `rate-limit-v1-exemption.test.ts` could
