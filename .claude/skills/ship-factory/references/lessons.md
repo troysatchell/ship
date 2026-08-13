@@ -497,6 +497,32 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   Credentials, port, and `DATABASE_URL` shape are unchanged, so `gate.sh` and the test suites are
   unaffected once the worktree exists; only provisioning breaks.
 
+- 2026-08-11 (TRO-430/PR #179, orchestrator) — **A duplicate implementation of a hardened rule
+  escapes the hardening.** `e2e/fixtures/isolated-env.ts` carried its own fake migration runner
+  (marked migrations applied, never executed them) — DB-1's exact failure mode, reintroduced in a
+  copy after the original was fixed. Every fixture DB silently lacked `api_tokens.scopes` until CI
+  caught it. When fixing any rule-class bug, `grep` for other implementations of the same mechanism
+  before declaring it fixed — the second copy is where the bug survives.
+- 2026-08-12 (TRO-412/PR #183, orchestrator) — **An e2e spec that has never actually run proves
+  nothing, and its first real run finds the environment as often as the code.** The oauth-authorize
+  spec's first-ever execution surfaced 4 stacked defects, none in the API: missing
+  `response_type=code` in the spec's own URLs; a callback assertion built on `page.route`
+  interception that never fires for server-redirect navigations (use a same-site redirect_uri and
+  assert on `page.url()` instead); the fixture spawning the API with `CORS_ORIGIN='*'`, which the
+  oauth router uses as a URL base (`new URL(path,'*')` throws); and the vite preview proxy missing
+  `/oauth` — where the fix had to be `/oauth/` with a trailing slash, because Vite proxy keys are
+  bare `startsWith` prefixes and `/oauth` would hijack the SPA's own `/oauth-consent` route. When a
+  PR ships a spec that CI does not execute, run it once locally before merge — "compiles and is
+  well-shaped" is not evidence.
+- 2026-08-12 (TRO-495 verification, orchestrator) — **`pnpm --filter @ship/api test -- <path>` does
+  NOT scope to the path — it runs the FULL api suite.** pnpm forwards the script as
+  `vitest run -- <path>` and the literal `--` defeats vitest's path-filter parsing. A verifier
+  following a brief that suggested this exact form ran 92 files / 975 tests when it meant to run
+  one file — contained only because the worktree DB was exclusive; against a shared DATABASE_URL
+  this is the TRUNCATE hazard with extra steps. Targeted runs: `cd api && npx vitest run <path>`
+  or `pnpm --filter @ship/api exec vitest run <path>`. Never put the `test -- <path>` form in a
+  brief.
+
 ## Concurrency
 
 24. **Never run two `gate.sh` invocations concurrently against the same Postgres container.**
@@ -520,3 +546,34 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     state an environmental assumption to justify the assertion, that is the signal — assert on the
     pure logic (the resolved port, the parsed value) or use a resource you can guarantee (loopback
     port 1), never on what happens to be listening or on how a server happens to collate.
+
+26. **Write docs and comments in the tense of what your tests exercised — never state a future
+    ticket's behavior as present fact.** The single largest finding class of W6 wave 1: 17 findings
+    across four tickets in one review round (TRO-396 ×4, TRO-420 ×6, TRO-433 ×5, TRO-424 ×2), every
+    one the same shape — confident prose the code or facts contradicted. "The legacy limiters are
+    exempted" (PF-004 hadn't landed); "the public API is bearer-authenticated" (PF-107 didn't
+    exist); a code comment asserting "no double-CORS collision to reason about" while unmatched
+    paths reproducibly collided; "verify() never throws" (a throwing injected clock propagates); a
+    memo lede guaranteeing every claim was provenance-marked while §3-4 weren't. This is
+    CLAUDE.md's A11Y-1 unmarked-inference failure wearing prose clothes, and it recurred on both
+    docs tickets AND code tickets' READMEs/CHANGES.md. Rules: (a) future behavior is written as
+    "will X, once PF-### lands"; (b) absolutes ("never", "every", "all") require either a test that
+    proves them or an explicit derived-mark; (c) after any fix pass, re-read the surrounding prose
+    you did NOT edit — three of four locally-fixed findings on TRO-420 left or introduced a
+    neighboring overclaim the second review caught. NOTE: this class crossed the 3-ticket
+    mechanical-check threshold, but a grep for overclaiming prose is not reliably mechanizable —
+    recorded here at maximum strength instead, and reviewers/triage agents are told to hunt for it
+    specifically.
+
+27. **A test proves exactly what would fail if the code regressed — check the negative space
+    before claiming an AC.** Three tickets in W6 wave 2 shipped tests that proved less than their
+    AC sentence claimed: a 601-request run "proving both limiters exempt /v1" that structurally
+    cannot trip the 6,000-cap source-IP limiter (TRO-401); a boundary-lint test covering
+    `**/routes/**` but not the bare `**/routes` import form (TRO-399); a constructor suite
+    asserting the error body shape but never `httpStatus`, so four wrong status mappings would
+    pass silently (TRO-397). None were dishonest — each was the obvious test written forward from
+    the happy path. The check that catches this class: for each AC clause, name the specific
+    regression that would make THIS test fail; a clause with no such regression is unproven, and
+    either the test grows or the PR's "Not verified" line says so explicitly. Builders: run this
+    check before writing the CHANGES entry. Reviewers/triage agents: hunt for it specifically —
+    it was CodeRabbit's highest-value finding class this wave.
