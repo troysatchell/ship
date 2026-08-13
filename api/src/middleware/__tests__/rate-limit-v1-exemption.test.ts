@@ -24,7 +24,25 @@
  * 'production'})` resolves `identityLimit: 600`, `sourceIpLimit: 6000`,
  * `windowMs: 60_000` (`rate-limit.ts:130-132`). The AC is explicit that a
  * sequential-request test under test-env defaults (10,000 / 100,000) proves
- * nothing — every hammer below runs against those exact production numbers.
+ * nothing.
+ *
+ * CORRECTION (TRO-494, CodeRabbit Major finding on PR #176 / this file's
+ * original version): this comment used to read "every hammer below runs
+ * against those exact production numbers." That overstated what AC-1/AC-2
+ * prove. Both limiters were *configured* with the production numbers, but
+ * AC-1/AC-2 send only 601 sequential requests — enough to exercise the
+ * production `identityLimit` (600), never remotely close to the production
+ * `sourceIpLimit` (6,000). So AC-1's red-before-green transition (see
+ * CHANGES.md's TRO-401 entry) is fully explained by the per-identity
+ * limiter's `skip`; the per-source-IP limiter's own `skip` call site could
+ * be deleted entirely and AC-1/AC-2 would still pass unchanged, because 601
+ * requests can never trip a 6,000 cap either way. AC-3a/AC-3b below close
+ * that gap: they isolate the source-IP limiter (no per-identity limiter
+ * mounted) and drive it at a small, explicit `limitOverrides.sourceIpLimit`
+ * (TRO-494, `rate-limit.ts`'s `createApiRateLimiters` third argument)
+ * instead of the real 6,000 ceiling, so a regression that deletes or
+ * mis-scopes *that* limiter's `skip` call site now has a test that actually
+ * depends on it.
  */
 import { describe, it, expect } from 'vitest'
 import request from 'supertest'
@@ -40,6 +58,19 @@ const sessionIdLike = (fill: string) => fill.repeat(64).slice(0, 64)
 const REQUESTS_PAST_IDENTITY_LIMIT = 601
 
 /**
+ * TRO-494: a small, driveable cap for the per-source-IP limiter, applied via
+ * `createApiRateLimiters`'s `limitOverrides` third argument (`rate-limit.ts`)
+ * instead of the real production `sourceIpLimit` (6,000) — sequentially
+ * driving 6,001 requests to prove this limiter's own `skip` call site is
+ * exercised is not practical in a unit test. 5 is arbitrary but must be
+ * small (fast test) and distinguishable from `REQUESTS_PAST_IDENTITY_LIMIT`
+ * so a reader can't confuse the two caps.
+ */
+const SOURCE_IP_TEST_CAP = 5
+/** One past `SOURCE_IP_TEST_CAP`. */
+const REQUESTS_PAST_SOURCE_IP_LIMIT = SOURCE_IP_TEST_CAP + 1
+
+/**
  * Mirrors `app.ts:328-330`'s exact prefix-mount shape: both legacy limiters
  * mounted at `/api/`, then the real `v1Router` mounted at `/api/v1` — plus
  * one bare internal `/api/*` route standing in for the ~30 routers app.ts
@@ -50,6 +81,30 @@ function buildProdShapedApp(): Express {
   const [perSourceIpLimiter, perIdentityLimiter] = createApiRateLimiters({ NODE_ENV: 'production' })
   app.use('/api/', perSourceIpLimiter)
   app.use('/api/', perIdentityLimiter)
+  app.use('/api/v1', v1Router)
+  app.get('/api/internal-example', (_req, res) => res.status(200).json({ ok: true }))
+  return app
+}
+
+/**
+ * AC-3 (TRO-494): mounts ONLY `perSourceIpLimiter` — no `perIdentityLimiter`
+ * at all — so a 429 observed against this app can only ever have come from
+ * the source-IP limiter's own `skip` call site, with zero ambiguity from the
+ * identity limiter (which AC-1/AC-2 above already cover, and whose 600 cap
+ * this app doesn't even mount). `sourceIpLimit` is overridden to
+ * `SOURCE_IP_TEST_CAP` via TRO-494's `limitOverrides` argument; `windowMs`
+ * is left at its resolved production value (`resolveApiRateLimits`'s
+ * `60_000`, unaffected by the override) since these tests complete in
+ * milliseconds, well inside that window.
+ */
+function buildSourceIpOnlyApp(): Express {
+  const app = express()
+  const [perSourceIpLimiter] = createApiRateLimiters(
+    { NODE_ENV: 'production' },
+    undefined,
+    { sourceIpLimit: SOURCE_IP_TEST_CAP }
+  )
+  app.use('/api/', perSourceIpLimiter)
   app.use('/api/v1', v1Router)
   app.get('/api/internal-example', (_req, res) => res.status(200).json({ ok: true }))
   return app
@@ -121,5 +176,42 @@ describe('PF-004 / TRO-401: /api/v1 exemption from the legacy /api/ limiters', (
     // `as` conversion, per this repo's ban on decoupling a test from the
     // response shape it claims to verify (lessons.md rule 16 / TS-8).
     expect(responses[throttledIndex]?.body).toEqual({ error: 'Too many requests. Please slow down.' })
+  }, 30_000)
+
+  it('AC-3a (TRO-494): the source-IP limiter ALONE exempts /api/v1, driven at a small configured cap instead of the 6,000 production ceiling', async () => {
+    const app = buildSourceIpOnlyApp()
+    const sessionId = sessionIdLike('3')
+
+    const responses = await hammer(app, '/api/v1/health', sessionId, REQUESTS_PAST_SOURCE_IP_LIMIT)
+
+    const throttled = responses.filter((r) => r.status === 429)
+    expect(
+      throttled.length,
+      `expected 0/${responses.length} throttled responses to /api/v1/health from the source-IP limiter alone (cap ${SOURCE_IP_TEST_CAP}), got ${throttled.length}`
+    ).toBe(0)
+    expect(responses.every((r) => r.status === 200)).toBe(true)
+  }, 30_000)
+
+  it('AC-3b (TRO-494): the source-IP limiter ALONE still caps internal /api/ routes, at its own overridden ceiling', async () => {
+    const app = buildSourceIpOnlyApp()
+    const sessionId = sessionIdLike('4')
+
+    const responses = await hammer(app, '/api/internal-example', sessionId, REQUESTS_PAST_SOURCE_IP_LIMIT)
+
+    const throttledIndex = responses.findIndex((r) => r.status === 429)
+    expect(
+      throttledIndex,
+      `never saw a 429 in ${responses.length} requests to /api/internal-example against a source-IP cap of ${SOURCE_IP_TEST_CAP} — an over-wide /api/v1 exemption on the source-IP limiter's own skip predicate would produce exactly this symptom`
+    ).not.toBe(-1)
+    expect(throttledIndex + 1).toBe(REQUESTS_PAST_SOURCE_IP_LIMIT)
+
+    // The source-IP limiter's own message text (rate-limit.ts's
+    // `perSourceIpLimiter` `message` option) — deliberately different from
+    // `perIdentityLimiter`'s ("...from this network..." vs "Too many
+    // requests. Please slow down."), so this also confirms the 429 came
+    // from the limiter this test claims to be isolating.
+    expect(responses[throttledIndex]?.body).toEqual({
+      error: 'Too many requests from this network. Please slow down.',
+    })
   }, 30_000)
 })
