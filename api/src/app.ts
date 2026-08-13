@@ -35,6 +35,7 @@ import { filesRouter } from './routes/files.js';
 import caiaAuthRoutes from './routes/caia-auth.js';
 import { createOAuthAuthorizeRouter } from './routes/oauth-authorize.js';
 import { createOAuthTokenRouter } from './routes/oauth-token.js';
+import { createOAuthDeviceRouter } from './routes/oauth-device.js';
 import apiTokensRoutes from './routes/api-tokens.js';
 import oauthAppsRoutes from './routes/oauth-apps.js';
 import adminCredentialsRoutes from './routes/admin-credentials.js';
@@ -531,6 +532,17 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   // above (`app.use(['/api/v1', '/oauth'], createPublicApiCors())`) — no
   // additional CORS wiring needed for this route.
   app.use('/oauth', createOAuthTokenRouter());
+
+  // OAuth Device Authorization Grant (PF-106, TRO-425, RFC 8628) — a third
+  // `/oauth`-mounted router: `POST /device/code` (public, needs no
+  // `webOrigin`... except it DOES, to build `verification_uri`/
+  // `verification_uri_complete` — same `webOrigin` PF-103's router already
+  // takes) and `POST /device/verify` (the verification page's session-authed
+  // Approve/Deny form target, same `webOrigin`-for-redirects need as
+  // `/oauth/authorize/decision`). Already covered by the public,
+  // credential-less CORS policy mounted above (`app.use(['/api/v1',
+  // '/oauth'], createPublicApiCors())`) — no additional CORS wiring needed.
+  app.use('/oauth', createOAuthDeviceRouter(corsOrigin));
 
   // Admin credentials management (CSRF protected, super-admin only)
   app.use('/api/admin/credentials', conditionalCsrf, adminCredentialsRoutes);

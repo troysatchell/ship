@@ -16,6 +16,15 @@
  * enforcement, client authentication, and both grants' token issuance live
  * in `../platform/oauth/token.js` (same split as `oauth-authorize.ts`).
  *
+ * A third grant branch, `grant_type=urn:ietf:params:oauth:grant-type:
+ * device_code` (RFC 8628 §3.4, PF-106 / TRO-425), dispatches to
+ * `../platform/oauth/device.js`'s `pollDeviceCode` — same thin-router, same
+ * `TokenGrantResult`/`sendTokenResult` shape as the two grants above, so a
+ * device-flow response is indistinguishable in shape from an
+ * authorization_code response (`authorization_pending`/`slow_down`/
+ * `expired_token`/`access_denied` just widen this file's existing
+ * `TokenErrorCode` handling — see `token.ts`'s updated union).
+ *
  * Response shape on error is RFC 6749 §5.2's `{ error, error_description }`
  * JSON body — NOT the `/api/v1` `ApiError` shape (`platform/oauth/apiError.ts`).
  * `/oauth/token` is a token endpoint per RFC 6749, not an `/api/v1` resource;
@@ -42,6 +51,12 @@ import {
   type TokenErrorCode,
   type TokenGrantResult,
 } from '../platform/oauth/token.js';
+import { pollDeviceCode } from '../platform/oauth/device.js';
+
+/** RFC 8628 §3.4's grant_type URN for the device polling branch (PF-106,
+ * TRO-425). Not a bare `'device_code'` — the URN is what RFC 8628 actually
+ * specifies and what a real device-flow client sends. */
+const DEVICE_CODE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code';
 
 function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
@@ -124,6 +139,19 @@ export function createOAuthTokenRouter(): RouterType {
         }
 
         const result = await issueClientCredentialsToken({ clientId, clientSecret, scope });
+        sendTokenResult(res, result);
+        return;
+      }
+
+      if (grantType === DEVICE_CODE_GRANT_TYPE) {
+        const deviceCode = asString(body.device_code);
+
+        if (!deviceCode) {
+          sendTokenError(res, 400, 'invalid_request', 'device_code is required.');
+          return;
+        }
+
+        const result = await pollDeviceCode({ deviceCode });
         sendTokenResult(res, result);
         return;
       }

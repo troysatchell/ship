@@ -1,0 +1,34 @@
+-- Migration 045: oauth_device_codes polling bookkeeping (PF-106 / TRO-425)
+--
+-- Migration 043 already created `oauth_device_codes` (PF-101) with the
+-- columns PLUGFORGE.MD §2.2 lists: device_code_hash, user_code, app_id,
+-- scopes, interval_seconds, expires_at, user_id, status. Checked before
+-- writing this file (per this ticket's own instructions) — neither of the
+-- two columns below exists on that table today.
+--
+-- `last_polled_at`: RFC 8628 §3.5's `slow_down` is a rate limit on
+-- CONSECUTIVE polls, not on time-since-creation — the very first poll must
+-- be allowed immediately (the AC's own test flow: "poll immediately ->
+-- authorization_pending"). NULL until the first poll; every subsequent poll
+-- compares `now - last_polled_at` against `interval_seconds` to decide
+-- `slow_down` vs. proceeding, then overwrites it with `now`.
+--
+-- `token_issued_at`: RFC 8628 doesn't mandate device_code single-use the way
+-- RFC 6749 §4.1.2 mandates it for authorization codes, but this codebase's
+-- own authorization_code path (token.ts's `consumed_at`) already establishes
+-- "a code that minted a token cannot mint a second one" as the house style,
+-- and an un-tracked device_code would let a client poll past a successful
+-- exchange and silently mint an unbounded number of token pairs from one
+-- approval. NULL until the token-issuing poll claims it (atomically, same
+-- `UPDATE ... WHERE token_issued_at IS NULL RETURNING id` shape as
+-- token.ts's `consumed_at` claim) — a later poll finding it non-NULL is
+-- treated as `invalid_grant` (see platform/oauth/device.ts).
+--
+-- Not adding a `status = 'expired'` transition column separately: expiry is
+-- computed from `expires_at` at read time (poll or verify-decision) and
+-- lazily written back (`UPDATE ... SET status = 'expired' WHERE status =
+-- 'pending' AND expires_at < now()`) — same lazy-transition shape the table's
+-- own migration-043 header comment already describes for 'pending' ->
+-- 'expired'.
+ALTER TABLE oauth_device_codes ADD COLUMN IF NOT EXISTS last_polled_at TIMESTAMPTZ;
+ALTER TABLE oauth_device_codes ADD COLUMN IF NOT EXISTS token_issued_at TIMESTAMPTZ;

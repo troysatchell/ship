@@ -101,18 +101,24 @@ export const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
 const ACCESS_TOKEN_PREFIX = 'ship_at_';
 const REFRESH_TOKEN_PREFIX = 'ship_rt_';
 
-function generateAccessToken(): string {
+// Exported (PF-106 / TRO-425): the device authorization grant
+// (`platform/oauth/device.ts`) mints the exact same token shape once a
+// device_code is approved — "a new 'how did the client get authorized'
+// path feeding the same token-minting logic, not a wholesale
+// reimplementation" (ticket instruction). Reusing these three rather than
+// re-deriving the prefix/hash convention a third time.
+export function generateAccessToken(): string {
   return `${ACCESS_TOKEN_PREFIX}${crypto.randomBytes(32).toString('hex')}`;
 }
 
-function generateRefreshToken(): string {
+export function generateRefreshToken(): string {
   return `${REFRESH_TOKEN_PREFIX}${crypto.randomBytes(32).toString('hex')}`;
 }
 
 /** Same SHA-256-at-rest pattern as every other credential in this codebase
  * (`api-tokens.ts`'s `hashToken`, `credentials.ts`'s `hashClientSecret`,
  * `authorize.ts`'s `hashAuthorizationCode`). */
-function hashToken(raw: string): string {
+export function hashToken(raw: string): string {
   return crypto.createHash('sha256').update(raw).digest('hex');
 }
 
@@ -135,14 +141,23 @@ function verifyPkce(codeVerifier: string, codeChallenge: string): boolean {
  * values this module actually produces (plus `server_error`, which the RFC
  * doesn't formally define but which every real-world implementation —
  * including this codebase's own `apiError.ts` — adds for the unexpected
- * case; see that file's identical reasoning). */
+ * case; see that file's identical reasoning), PLUS RFC 8628 §3.5's four
+ * device-flow polling codes (`authorization_pending`, `slow_down`,
+ * `access_denied`, `expired_token`) — added here rather than as a second,
+ * device-only union so `sendTokenResult`/`sendTokenError`
+ * (`routes/oauth-token.ts`) stay the single, ungrown dispatch for every
+ * grant type's error shape (PF-106 / TRO-425). */
 export type TokenErrorCode =
   | 'invalid_request'
   | 'invalid_client'
   | 'invalid_grant'
   | 'unsupported_grant_type'
   | 'invalid_scope'
-  | 'server_error';
+  | 'server_error'
+  | 'authorization_pending'
+  | 'slow_down'
+  | 'access_denied'
+  | 'expired_token';
 
 export type TokenGrantResult =
   | {
