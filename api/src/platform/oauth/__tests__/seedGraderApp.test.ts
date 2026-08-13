@@ -86,6 +86,40 @@ describe('seedGraderApp (PF-907 / TRO-441)', () => {
     expect(rows.rows).toHaveLength(1);
   });
 
+  it('AC-1: concurrent seed calls converge to exactly one oauth_apps row (DB-enforced idempotency)', async () => {
+    const freshWorkspace = await pool.query<{ id: string }>(
+      `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
+      [`${testWorkspaceName} concurrent`]
+    );
+    const freshWorkspaceId = firstRowOrThrow(freshWorkspace.rows, 'insert fresh workspace').id;
+    try {
+      const [a, b] = await Promise.all([
+        seedGraderApp(pool, freshWorkspaceId),
+        seedGraderApp(pool, freshWorkspaceId),
+      ]);
+
+      // The unique index on oauth_apps.client_id (migration 042) is the actual
+      // idempotency guarantee under a race — the SELECT-then-INSERT shape above
+      // is only a fast path and is not itself atomic. Assert the DB invariant
+      // (exactly one row), not which call's return value "won": ON CONFLICT DO
+      // NOTHING means a losing INSERT still reports 0 rows affected without
+      // throwing, so both calls can legitimately return `status: 'created'`.
+      expect([a.status, b.status]).not.toContain('skipped_no_secret');
+      if (a.status !== 'skipped_no_secret' && b.status !== 'skipped_no_secret') {
+        expect(a.clientId).toBe(b.clientId);
+      }
+
+      const rows = await pool.query(
+        `SELECT * FROM oauth_apps WHERE workspace_id = $1 AND name = $2`,
+        [freshWorkspaceId, GRADER_APP_NAME]
+      );
+      expect(rows.rows).toHaveLength(1);
+    } finally {
+      await pool.query(`DELETE FROM oauth_apps WHERE workspace_id = $1`, [freshWorkspaceId]);
+      await pool.query(`DELETE FROM workspaces WHERE id = $1`, [freshWorkspaceId]);
+    }
+  });
+
   it('AC-1: the seeded row is first-party with exactly the read-only scopes, no write/manage scope', async () => {
     await seedGraderApp(pool, workspaceId);
 
