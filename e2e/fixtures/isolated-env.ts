@@ -87,14 +87,18 @@ if (availableMem < 4) {
 // Types for our worker-scoped fixtures
 type WorkerFixtures = {
   dbContainer: StartedPostgreSqlContainer;
-  apiServer: { url: string; process: ChildProcess };
+  // `webPort` (TRO-412): the port the webServer fixture below WILL bind to,
+  // reserved here (not there) so the api process can be spawned with a real
+  // `CORS_ORIGIN` — see that fixture's own comment for why this can't be
+  // computed independently by both fixtures.
+  apiServer: { url: string; process: ChildProcess; webPort: number };
   webServer: { url: string; process: ChildProcess };
 };
 
 // Extend the base test with our isolated environment
 // Worker fixtures are accessible in tests but live at worker scope
 export const test = base.extend<
-  { apiServer: { url: string; process: ChildProcess } },
+  { apiServer: { url: string; process: ChildProcess; webPort: number } },
   WorkerFixtures
 >({
   // Override context to disable action items modal for ALL pages (including multi-page tests)
@@ -160,6 +164,24 @@ export const test = base.extend<
       const debug = process.env.DEBUG === '1';
       // Use worker-specific port range to avoid collisions between parallel workers
       const port = await getWorkerPort(workerInfo.workerIndex);
+
+      // TRO-412 (defect #3): the webServer fixture below binds its own port
+      // via this exact same `getWorkerPort(workerInfo.workerIndex)` helper.
+      // Reserved a SECOND time here, before the api process is spawned,
+      // rather than letting webServer compute it independently later —
+      // get-port (7.1.0) keeps an in-process lock on a port it just handed
+      // out (`lockedPorts.young`/`old`, ~15-30s TTL — see
+      // node_modules/get-port/index.js), which is what guarantees this call
+      // returns something OTHER than `port` above (called back-to-back, well
+      // inside the TTL). But dbContainer startup + migrations + this api
+      // process becoming healthy can easily exceed that TTL before
+      // webServer's own fixture would run, so a second, independent
+      // `getWorkerPort()` call there could legitimately race and collide.
+      // Passing the SAME reserved value through (`use()` below, then
+      // `webServer` reads `apiServer.webPort` instead of recomputing) is the
+      // "restructure, don't guess" fix — see webServer's fixture for the
+      // consuming half.
+      const webPort = await getWorkerPort(workerInfo.workerIndex);
       const dbUrl = dbContainer.getConnectionUri();
 
       if (debug) console.log(`${workerTag} Starting API server on port ${port}...`);
@@ -171,7 +193,16 @@ export const test = base.extend<
           ...process.env,
           PORT: String(port),
           DATABASE_URL: dbUrl,
-          CORS_ORIGIN: '*', // Allow any origin during tests
+          // TRO-412 (defect #3): a REAL origin, not '*'. `api/src/app.ts`
+          // passes this straight through to
+          // `createOAuthAuthorizeRouter(corsOrigin)` as `webOrigin`
+          // (`api/src/routes/oauth-authorize.ts`), which builds absolute
+          // `/login` and `/oauth-consent` redirect URLs via
+          // `new URL(path, webOrigin)`. `'*'` is not a valid URL base and
+          // that constructor throws — every consent/login redirect 500'd.
+          // `webPort` above is the port the webServer fixture will actually
+          // bind to.
+          CORS_ORIGIN: `http://localhost:${webPort}`,
           NODE_ENV: 'test',
           // Prevent dotenv from overriding our DATABASE_URL
           DOTENV_CONFIG_PATH: '/dev/null',
@@ -195,7 +226,7 @@ export const test = base.extend<
         await waitForServer(`${apiUrl}/health`, 30000);
         if (debug) console.log(`${workerTag} API server ready at ${apiUrl}`);
 
-        await use({ url: apiUrl, process: proc });
+        await use({ url: apiUrl, process: proc, webPort });
       } finally {
         if (debug) console.log(`${workerTag} Stopping API server...`);
         proc.kill('SIGTERM');
@@ -213,8 +244,12 @@ export const test = base.extend<
     async ({ apiServer }, use, workerInfo) => {
       const workerTag = `[Worker ${workerInfo.workerIndex}]`;
       const debug = process.env.DEBUG === '1';
-      // Use worker-specific port range (separate from API port)
-      const port = await getWorkerPort(workerInfo.workerIndex);
+      // TRO-412: reuse the port the apiServer fixture already reserved for
+      // us (see its own comment) instead of calling getWorkerPort() again
+      // here — that fixture had to know this port BEFORE spawning the api
+      // process (to set a real `CORS_ORIGIN`), and an independent second
+      // call here, this much later, is not guaranteed to agree with it.
+      const port = apiServer.webPort;
 
       // Extract API port from URL
       const apiPort = new URL(apiServer.url).port;

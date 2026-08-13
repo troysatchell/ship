@@ -25,6 +25,26 @@ The audit report format already guards against this — every finding separates 
 
 When one of these turns out wrong, correct it plainly and say what it changes downstream. Cheap to catch, expensive to inherit.
 
+## Session hygiene — rollover after an hour, never ask to continue
+
+Two rules, set by the maintainer 2026-08-10 after wave 1 of the W6 factory:
+
+1. **The factory loop never asks permission to continue.** Merge-queue triage, GitLab sync after
+   GitHub merges, and next-wave dispatch proceed automatically the moment their preconditions hold
+   (ship-factory's "done" and escalation rules govern). Asking "want me to run the merge queue?"
+   is a defect — the only things that reach the human are the escalation triggers and the
+   🔔 checkpoints.
+
+2. **Sessions over ~1 hour roll over at the next natural boundary** (a wave's PRs opened, gates
+   settled, a merge batch done — never mid-ticket). A long session resends its whole transcript on
+   every tool call, so continuing indefinitely burns tokens on re-read context, not on work. At the
+   boundary: run the `/memory-bank` update ritual — `activeContext.md` IS the handoff (in-flight
+   state, exact next actions, blockers, open PR list) — then **end the reply with a single line
+   telling the user to start a fresh session and the exact resume prompt** (usually "run the
+   factory"). Claude cannot spawn its own successor session; the handoff is what makes the fresh
+   one cheap. This is safe by design: the board rebuilds from Linear, worktrees, `gh pr list`, and
+   `audit/factory/scorecard.jsonl` — never from anything held only in session memory.
+
 ## Memory Bank (ShipShape sprint)
 
 `memory-bank/` holds the sprint's working memory — separate from this file (codebase conventions) and `docs/` (architecture docs).

@@ -95,6 +95,39 @@ export default defineConfig(({ mode }) => {
       target: `http://localhost:${apiPort}`,
       changeOrigin: true,
     },
+    // PF-103 (TRO-412), added while getting e2e/oauth-authorize.spec.ts to
+    // actually run: `OAuthConsentPage`'s form posts to
+    // `${API_URL}/oauth/authorize/decision`, and `API_URL` (`VITE_API_URL`)
+    // is deliberately baked to `''` at build time (`web/package.json`'s
+    // `build` script: `VITE_API_URL= vite build`) so the same static bundle
+    // works behind any origin via relative paths + a runtime proxy — exactly
+    // like every `/api/*` call in this app. `/oauth` is mounted on the API
+    // at its own top-level prefix (`api/src/app.ts`, NOT under `/api` — see
+    // `oauth-authorize.ts`'s header for why), so without an entry here that
+    // relative POST resolves against the WEB origin instead and 404s from
+    // vite's static preview server — trace-verified
+    // (`POST 404 http://localhost:.../oauth/authorize/decision`) while
+    // debugging this ticket's e2e spec. Same gap the ticket's own CHANGES.md
+    // entry already flags for production CloudFront (no `/oauth/*`
+    // `ordered_cache_behavior` in `terraform/s3-cloudfront.tf` either) — this
+    // is the local dev-server/e2e-preview-server analog of that same
+    // still-open follow-up, fixed here because it silently broke every local
+    // and e2e exercise of the consent flow, not just a production deploy.
+    //
+    // Trailing slash is load-bearing: Vite matches proxy keys via plain
+    // `url.startsWith(context)` (`vite/dist/node/chunks/*.js`, no path-
+    // segment awareness), so a bare `/oauth` key also prefix-matches
+    // `/oauth-consent` — the WEB APP'S OWN SPA route for the consent screen
+    // — and hijacks it to the API, which has no such route and (trace-
+    // verified, second run) answers with its own global CSP header instead
+    // of the `frame-ancestors 'none'` the `oauth-consent-csp` plugin below
+    // sets for that exact path. `/oauth/` matches only paths with a `/`
+    // after `oauth` (`/oauth/authorize`, `/oauth/authorize/decision`), never
+    // `/oauth-consent`.
+    '/oauth/': {
+      target: `http://localhost:${apiPort}`,
+      changeOrigin: true,
+    },
     '/collaboration': {
       target: `http://localhost:${apiPort}`,
       changeOrigin: true,
@@ -110,6 +143,43 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       react(),
+      // PF-103 (TRO-412): frame-ancestors 'none' on the OAuth consent page
+      // (clickjacking guard, PLUGFORGE.MD §4). The consent page is a
+      // client-rendered SPA route (`/oauth-consent`, OAuthConsent.tsx), not
+      // Express-server-rendered — see the CHANGES.md TRO-412 entry and the
+      // header comment in `api/src/routes/oauth-authorize.ts` for why. Per
+      // the ticket's PM triage comment, an SPA-served consent page sets this
+      // via "host-level header config" rather than a per-route Express/
+      // helmet override; this is that config, applied to both the dev
+      // server and the `vite preview` server the e2e suite runs against
+      // (playwright.config.ts).
+      //
+      // NOT VERIFIED for the S3+CloudFront production deployment — no
+      // `ordered_cache_behavior` currently routes `/oauth-consent*` (or, for
+      // that matter, `/oauth/*` at all — see terraform/s3-cloudfront.tf) to
+      // anywhere but the default S3 origin, and S3 cannot attach a custom
+      // response header to one path without a CloudFront Function/Lambda@Edge.
+      // Flagged as a follow-up (see this ticket's final report / CHANGES.md);
+      // out of scope here (terraform is PF-900-series work, not this ticket).
+      {
+        name: 'oauth-consent-csp',
+        configureServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url && req.url.split('?')[0] === '/oauth-consent') {
+              res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+            }
+            next();
+          });
+        },
+        configurePreviewServer(server) {
+          server.middlewares.use((req, res, next) => {
+            if (req.url && req.url.split('?')[0] === '/oauth-consent') {
+              res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+            }
+            next();
+          });
+        },
+      },
       svgr({
         // Allow importing SVGs as React components with ?react suffix
         // e.g., import CheckIcon from '@uswds/uswds/dist/img/usa-icons/check.svg?react'

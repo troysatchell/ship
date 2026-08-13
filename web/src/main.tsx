@@ -56,6 +56,7 @@ const StatusOverviewPage = React.lazy(() => import('@/pages/StatusOverviewPage')
 const ReviewsPage = React.lazy(() => import('@/pages/ReviewsPage').then((m) => ({ default: m.ReviewsPage })));
 const OrgChartPage = React.lazy(() => import('@/pages/OrgChartPage').then((m) => ({ default: m.OrgChartPage })));
 const InviteAcceptPage = React.lazy(() => import('@/pages/InviteAccept').then((m) => ({ default: m.InviteAcceptPage })));
+const OAuthConsentPage = React.lazy(() => import('@/pages/OAuthConsent').then((m) => ({ default: m.OAuthConsentPage })));
 const SetupPage = React.lazy(() => import('@/pages/Setup').then((m) => ({ default: m.SetupPage })));
 const NotFoundPage = React.lazy(() => import('@/pages/NotFound').then((m) => ({ default: m.NotFoundPage })));
 
@@ -192,6 +193,19 @@ function AppRoutes() {
       <Route
         path="/invite/:token"
         element={<InviteAcceptPage />}
+      />
+      {/* PF-103 (TRO-412): dedicated minimal route, not nested in AppLayout
+        * — see OAuthConsent.tsx's header comment for why the 4-panel layout
+        * does not apply here. `ProtectedRoute` gives the "redirect to login
+        * and back" behavior the ticket asks for, unchanged from every other
+        * protected page. */}
+      <Route
+        path="/oauth-consent"
+        element={
+          <ProtectedRoute>
+            <OAuthConsentPage />
+          </ProtectedRoute>
+        }
       />
       <Route
         path="/admin"
