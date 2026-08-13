@@ -1,11 +1,13 @@
 /**
- * `POST /oauth/token` service logic — `authorization_code` (+ PKCE) and
- * `client_credentials` grants (PF-104, TRO-416, PLUGFORGE.MD §4).
+ * `POST /oauth/token` service logic — `authorization_code` (+ PKCE),
+ * `client_credentials`, and `refresh_token` grants (PF-104/PF-105, TRO-416/
+ * TRO-421, PLUGFORGE.MD §4).
  *
  * Owns reads against `oauth_apps` (migration 042) and `oauth_authorization_codes`
  * (migration 043), and reads/writes against `oauth_tokens` (migration 043,
- * `authorization_code_id` added by migration 044 — this ticket). The route
- * file (`api/src/routes/oauth-token.ts`) is deliberately thin, same split as
+ * `authorization_code_id` added by migration 044, `refresh_token_expires_at`
+ * added by migration 045 — this ticket, PF-105). The route file
+ * (`api/src/routes/oauth-token.ts`) is deliberately thin, same split as
  * PF-102's `oauth-apps.ts`/`appRegistration.ts` and PF-103's
  * `oauth-authorize.ts`/`authorize.ts`.
  *
@@ -84,6 +86,90 @@
  * redeem the same code twice concurrently) — accepted here because it is
  * strictly safer than the alternative (a request that raced a genuine
  * attacker keeping its token alive because it happened to win).
+ *
+ * ── PF-105 addition: refresh rotation + family invalidation ──────────────
+ *
+ * `rotateRefreshToken` (below) implements `grant_type=refresh_token`
+ * (PLUGFORGE.MD §4, PF-105, TRO-421). One-time-use refresh tokens: rotation
+ * issues a child row in the same `family_id` with `parent_id` pointing at
+ * the row being rotated; reuse of an already-rotated refresh token revokes
+ * every un-revoked row sharing that `family_id` (RFC 6749 §10.4's
+ * refresh-token-family stolen-token detection).
+ *
+ * ── Schema decision: no new "rotated"/"consumed" column ──
+ *
+ * `oauth_authorization_codes` has a dedicated `consumed_at` for its
+ * single-use gate, separate from any "this code turned out to be stolen"
+ * signal (it has none — a code is never reused legitimately, so consumed vs.
+ * revoked was never a real distinction there). A refresh token is
+ * different: normal, legitimate rotation ALSO needs a "this exact refresh
+ * token is now spent" signal, distinct from "an attacker replayed it."
+ * Migration 043's documented schema (PLUGFORGE.MD §2.2) and migration 044
+ * both checked in full before adding anything — neither carries a
+ * `rotated_at` column or equivalent. Rather than add one, this module reuses
+ * the existing `revoked_at` for both purposes: rotation sets it on the
+ * parent row being rotated (the "invalidates parent" AC), and a presented
+ * refresh token whose row already has `revoked_at` set — for ANY reason,
+ * including ordinary prior rotation — is treated as reuse and triggers
+ * family-wide revocation, exactly mirroring how `redeemAuthorizationCode`
+ * above cannot (and deliberately does not try to) distinguish "a live race"
+ * from "a sequential replay" for authorization codes. Collapsing "rotated"
+ * and "revoked" into one column is a deliberate simplification: it means a
+ * row's access token also becomes unusable (`bearerAuth.ts` already rejects
+ * on `revoked_at IS NOT NULL`) the moment ITS OWN refresh token is rotated
+ * out, not just when the whole family is later killed. That is a real
+ * behavioral choice — some OAuth implementations let the old access token
+ * keep working until its own natural 1-hour expiry after a rotation — but
+ * it is the schema-minimal, self-consistent one: one row is one token PAIR
+ * minted together, and this module invalidates that pair as a unit, exactly
+ * once, at the one moment (rotation) it is retired.
+ *
+ * `refresh_token_expires_at` (migration 045) is a genuinely new column: the
+ * refresh token's own 30-day TTL (PLUGFORGE.MD §2.2/migration 043 header)
+ * cannot reuse the row's existing `expires_at`, which `bearerAuth.ts` and
+ * `redeemAuthorizationCode` above already read as the ACCESS token's 1-hour
+ * expiry — reusing it for the refresh token's 30-day window would either
+ * shorten the access token's own life or require every access-token expiry
+ * check in the codebase to learn a second meaning for the same column. This
+ * gap was flagged explicitly in PF-104's own CHANGES.md entry (TRO-416) for
+ * whoever built this ticket to resolve; migration 045's header records the
+ * same reasoning next to the column itself.
+ *
+ * ── Concurrency argument: two concurrent rotations of the same refresh
+ *    token — same rigor, same pattern, as PF-104's above ──
+ *
+ * Single-use enforcement is the identical shape of atomic statement,
+ * substituting `revoked_at` for `consumed_at` and `oauth_tokens` for
+ * `oauth_authorization_codes`:
+ *
+ *   UPDATE oauth_tokens SET revoked_at = now()
+ *   WHERE id = $1 AND revoked_at IS NULL RETURNING id
+ *
+ * run inside a transaction that also INSERTs the child token row and
+ * COMMITs before releasing the row lock. Everything checked before this
+ * statement (client authentication, the client_id-matches-app_id check,
+ * scope narrowing) reads columns that never change after the row is
+ * inserted — only `revoked_at` does, and this UPDATE is the only statement
+ * in this function that ever changes it — so those earlier reads are safe
+ * outside a transaction for the same reason `redeemAuthorizationCode`'s
+ * pre-UPDATE reads are.
+ *
+ * Two concurrent transactions racing this UPDATE serialize at Postgres's row
+ * lock exactly as described above for authorization codes: the winner
+ * locks the row, flips `revoked_at`, INSERTs the child, and COMMITs; only
+ * then is the lock released, and the loser's UPDATE — now unblocked —
+ * re-evaluates `revoked_at IS NULL` against the committed row and matches
+ * zero rows. The loser always gets `invalid_grant`, and per the same
+ * reasoning as the authorization-code path above (this module cannot
+ * reliably tell "a live race" apart from "a sequential replay" — the branch
+ * a request lands in is not a trustworthy signal of real-world timing), the
+ * loser's response ALSO revokes the entire family, including the row the
+ * winner's own transaction just committed. A racing legitimate caller can
+ * still receive a real, valid-shaped 200 (its transaction genuinely
+ * committed) — but that new token is dead on arrival once the race is
+ * detected, same fail-safe-under-ambiguity trade-off as PF-104, and the same
+ * accepted cost (a well-behaved client does not rotate the same refresh
+ * token twice concurrently).
  */
 
 import crypto from 'crypto';
@@ -93,6 +179,14 @@ import { verifyAppCredentials, type OAuthClientType } from './appRegistration.js
 
 /** Access tokens: 1 hour (migration 043 header comment, PLUGFORGE.MD §2.2). */
 export const ACCESS_TOKEN_TTL_MS = 60 * 60 * 1000;
+
+/** Refresh tokens: 30 days (migration 043 header comment, PLUGFORGE.MD §2.2),
+ * tracked independently via `refresh_token_expires_at` (migration 045 —
+ * PF-105). A rotated child gets a fresh 30-day window from the moment of
+ * rotation, not the remainder of its parent's — simplest, most common
+ * implementation choice, and stated here explicitly as a decision rather
+ * than left implicit. */
+export const REFRESH_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 /** Distinguishing prefixes, same reasoning as `credentials.ts`'s
  * `ship_app_`/`ship_appsec_` split and `api-tokens.ts`'s `ship_` prefix — a
@@ -359,11 +453,16 @@ export async function redeemAuthorizationCode(
     const accessToken = generateAccessToken();
     const refreshToken = generateRefreshToken();
     const expiresAt = new Date(Date.now() + ACCESS_TOKEN_TTL_MS);
+    // PF-105 (migration 045): the refresh token minted here gets its own
+    // 30-day window, tracked independently of `expiresAt` above (which is
+    // the access token's 1-hour expiry) — see this module's PF-105 header
+    // section for why the two cannot share a column.
+    const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
 
     await client.query(
       `INSERT INTO oauth_tokens
-         (app_id, user_id, scopes, access_token_hash, refresh_token_hash, expires_at, authorization_code_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         (app_id, user_id, scopes, access_token_hash, refresh_token_hash, expires_at, refresh_token_expires_at, authorization_code_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [
         codeRow.app_id,
         codeRow.user_id,
@@ -371,6 +470,7 @@ export async function redeemAuthorizationCode(
         hashToken(accessToken),
         hashToken(refreshToken),
         expiresAt,
+        refreshExpiresAt,
         codeRow.id,
       ]
     );
@@ -459,4 +559,180 @@ export async function issueClientCredentialsToken(
     scopes,
     expiresIn: Math.floor(ACCESS_TOKEN_TTL_MS / 1000),
   };
+}
+
+// ── grant_type=refresh_token (PF-105, TRO-421) ──────────────────────────
+
+/** Revokes every un-revoked token sharing `familyId` — the family-wide
+ * stolen-refresh-token response (RFC 6749 §10.4). Idempotent by
+ * construction (`WHERE revoked_at IS NULL`): calling this more than once for
+ * the same family (e.g. two concurrent reuse attempts, or a sequential
+ * replay following a lost race) is safe — later calls simply revoke zero
+ * additional rows. Deliberately simpler than
+ * `revokeTokensForAuthorizationCode` above (no subquery indirection) because
+ * every caller here already has the `family_id` in hand from an earlier read
+ * of the row being rotated. */
+async function revokeTokenFamily(familyId: string): Promise<void> {
+  await pool.query(`UPDATE oauth_tokens SET revoked_at = now() WHERE revoked_at IS NULL AND family_id = $1`, [
+    familyId,
+  ]);
+}
+
+/** Row shape for the refresh-token lookup below — RULE-21 (lessons.md §21):
+ * `pool.query` rows are `any` unless given an explicit interface. */
+interface OAuthRefreshTokenRow {
+  id: string;
+  app_id: string;
+  user_id: string | null;
+  scopes: string[];
+  family_id: string;
+  refresh_token_expires_at: Date | null;
+  revoked_at: Date | null;
+}
+
+async function lookupTokenByRefreshHash(refreshTokenHash: string): Promise<OAuthRefreshTokenRow | null> {
+  const result = await pool.query<OAuthRefreshTokenRow>(
+    `SELECT id, app_id, user_id, scopes, family_id, refresh_token_expires_at, revoked_at
+     FROM oauth_tokens WHERE refresh_token_hash = $1`,
+    [refreshTokenHash]
+  );
+  return result.rows[0] ?? null;
+}
+
+export interface RotateRefreshTokenParams {
+  refreshToken: string;
+  clientId: string;
+  clientSecret: string | undefined;
+  scope: string | undefined;
+}
+
+/**
+ * `grant_type=refresh_token` (RFC 6749 §6). Negative cases, in the order
+ * checked — same ordering discipline as `redeemAuthorizationCode` above:
+ *   1. Unknown refresh token -> `invalid_grant`, nothing to revoke.
+ *   2. Already revoked, observed on the FIRST read (this row was already
+ *      rotated out by an earlier, sequential rotation, or an earlier reuse
+ *      already killed the family) -> `invalid_grant`, revokes the family
+ *      (idempotent — see `revokeTokenFamily`).
+ *   3. `refresh_token_expires_at` is NULL or in the past -> `invalid_grant`.
+ *      NULL covers both a genuinely-expired token AND a pre-migration-045
+ *      row that never had this column populated (module header explains
+ *      why treating both as "not refreshable" is the safe choice). Not a
+ *      revocation trigger — an expired token is not evidence of theft, same
+ *      reasoning as the authorization-code path's expiry check above.
+ *   4. Client authentication failed -> `invalid_client`.
+ *   5. Token belongs to a different app than the authenticated client ->
+ *      `invalid_grant` (RFC 6749 §4.1.3's "issued to another client",
+ *      applied here to the refresh grant).
+ *   6. Requested `scope` exceeds the scope originally granted -> RFC 6749
+ *      §6's own constraint ("MUST NOT include any scope not originally
+ *      granted") -> `invalid_scope`.
+ *   7. Lost the single-use race at the atomic UPDATE -> `invalid_grant`,
+ *      revokes the family — same outward behavior as step 2, deliberately
+ *      (see this module's PF-105 header section for why a live race and a
+ *      sequential replay get the same fail-safe treatment).
+ */
+export async function rotateRefreshToken(params: RotateRefreshTokenParams): Promise<TokenGrantResult> {
+  const refreshTokenHash = hashToken(params.refreshToken);
+  const tokenRow = await lookupTokenByRefreshHash(refreshTokenHash);
+
+  if (!tokenRow) {
+    return invalidGrant('Refresh token is unknown or invalid.');
+  }
+
+  if (tokenRow.revoked_at) {
+    await revokeTokenFamily(tokenRow.family_id);
+    return invalidGrant('Refresh token has already been used.');
+  }
+
+  if (!tokenRow.refresh_token_expires_at || tokenRow.refresh_token_expires_at.getTime() < Date.now()) {
+    return invalidGrant('Refresh token has expired.');
+  }
+
+  const authResult = await authenticateClient({
+    clientId: params.clientId,
+    clientSecret: params.clientSecret,
+  });
+  if (!authResult.ok) {
+    return invalidClient('Client authentication failed.');
+  }
+  const app = authResult.app;
+
+  if (tokenRow.app_id !== app.id) {
+    return invalidGrant('Refresh token was not issued to this client.');
+  }
+
+  const requestedScopes = parseScopeParam(params.scope);
+  const scopes = requestedScopes.length > 0 ? requestedScopes : tokenRow.scopes;
+  if (!scopes.every((scope) => tokenRow.scopes.includes(scope))) {
+    return {
+      ok: false,
+      status: 400,
+      error: 'invalid_scope',
+      errorDescription: 'Requested scope exceeds the scope originally granted.',
+    };
+  }
+
+  // Every check above read a snapshot that could, in principle, already be
+  // stale by the time we reach here (a concurrent rotator racing us). The
+  // UPDATE below is the actual decision point — see this module's PF-105
+  // header section.
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const consumeResult = await client.query<{ id: string }>(
+      `UPDATE oauth_tokens SET revoked_at = now()
+       WHERE id = $1 AND revoked_at IS NULL
+       RETURNING id`,
+      [tokenRow.id]
+    );
+
+    if (consumeResult.rows.length === 0) {
+      // Lost the race: nothing was written by this transaction. Revoke the
+      // family anyway — see the module header for why this branch
+      // deliberately does not try to special-case "this was just a live
+      // race" as safer than a sequential replay.
+      await client.query('ROLLBACK');
+      await revokeTokenFamily(tokenRow.family_id);
+      return invalidGrant('Refresh token has already been used.');
+    }
+
+    const accessToken = generateAccessToken();
+    const refreshToken = generateRefreshToken();
+    const accessExpiresAt = new Date(Date.now() + ACCESS_TOKEN_TTL_MS);
+    const refreshExpiresAt = new Date(Date.now() + REFRESH_TOKEN_TTL_MS);
+
+    await client.query(
+      `INSERT INTO oauth_tokens
+         (app_id, user_id, scopes, access_token_hash, refresh_token_hash, expires_at, refresh_token_expires_at, family_id, parent_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [
+        tokenRow.app_id,
+        tokenRow.user_id,
+        scopes,
+        hashToken(accessToken),
+        hashToken(refreshToken),
+        accessExpiresAt,
+        refreshExpiresAt,
+        tokenRow.family_id,
+        tokenRow.id,
+      ]
+    );
+
+    await client.query('COMMIT');
+
+    return {
+      ok: true,
+      accessToken,
+      refreshToken,
+      scopes,
+      expiresIn: Math.floor(ACCESS_TOKEN_TTL_MS / 1000),
+    };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
