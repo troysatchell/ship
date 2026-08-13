@@ -1027,8 +1027,15 @@ describe('/oauth/token (PF-104)', () => {
       };
 
       const lockClient = await pool.connect();
+      // Tracked explicitly (CodeRabbit finding on this test) so a throw
+      // between BEGIN and COMMIT — e.g. waitForBlockedRotations timing
+      // out — rolls back and releases the lock instead of returning a
+      // connection to the pool while still holding an open transaction
+      // and row lock.
+      let transactionOpen = false;
       try {
         await lockClient.query('BEGIN');
+        transactionOpen = true;
         await lockClient.query('SELECT id FROM oauth_tokens WHERE id = $1 FOR UPDATE', [parentRow.id]);
 
         const racePromise = Promise.all([rotateRefreshToken(params), rotateRefreshToken(params)]);
@@ -1038,10 +1045,14 @@ describe('/oauth/token (PF-104)', () => {
         // Releasing here is what lets the race actually happen — both
         // blocked UPDATEs are now free to contend for the row lock.
         await lockClient.query('COMMIT');
+        transactionOpen = false;
 
         const [resultA, resultB] = await racePromise;
         expect([resultA.ok, resultB.ok].sort()).toEqual([false, true]);
       } finally {
+        if (transactionOpen) {
+          await lockClient.query('ROLLBACK').catch(() => {});
+        }
         lockClient.release();
       }
 

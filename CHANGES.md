@@ -163,6 +163,38 @@ branch to an ALREADY-unregistered route; it changes nothing about that route's r
 When TRO-551 lands, `/oauth/authorize` and `/oauth/token` (all three grants) need registering
 together.
 
+**CodeRabbit triage (4 findings, all Major).**
+- *Test cleanup: the forced-race test's lock transaction wasn't rolled back if something threw
+  between `BEGIN` and `COMMIT`.* Valid, applied — added a `transactionOpen` flag and a `ROLLBACK` in
+  `finally` when the commit never happened, before releasing the connection back to the pool. Note:
+  PF-104's own equivalent test (`token.test.ts`'s authorization_code forced-race case) has the
+  identical pre-existing gap — noticed, not fixed, since it's PF-104's file and out of this ticket's
+  scope; flagged here for whoever next touches that test.
+- *`waitForBlockedRotations`'s fixed 20ms poll interval.* Considered, not applied — this is the exact
+  same pattern as PF-104's own already-merged `waitForBlockedRedemptions` (same interval, same
+  bounded-deadline structure), which lessons.md rule 17 already treats as the *correct* shape (it
+  polls a real, observable database fact — blocked backends in `pg_stat_activity` — with a bounded
+  deadline, not a fixed sleep asserting an outcome). Changing only this ticket's copy would make the
+  two nearly-identical helpers diverge in style for no behavioral gain.
+- *Move the "already revoked" early-return in `rotateRefreshToken` to after client authentication, so
+  an unauthenticated/mismatched client can't trigger family revocation.* Considered carefully, not
+  applied. Reaching this branch requires possessing the actual raw refresh-token string (a SHA-256
+  lookup against 256 bits of entropy — not guessable, not enumerable), so anyone who can trigger it
+  already holds a genuinely stolen/leaked credential regardless of whether they can also produce that
+  app's `client_secret`. Requiring client auth to succeed FIRST would mean a confidential app's stolen,
+  already-rotated refresh token could no longer trigger fail-safe revocation without the attacker also
+  having the app's secret — weakening exactly the "any sign of reuse revokes the family" posture RFC
+  6749 §10.4 calls for, for no real reduction in attack surface. Also the exact ordering PF-104's own
+  reused-authorization-code check already uses (revoke-before-client-auth, see that function's own
+  numbered negative-case list) — reordering here would make the two grants inconsistent with each
+  other for a change that doesn't close a real gap. This is genuinely a security-adjacent judgment
+  call on revocation ordering (`ship-backend` SKILL's "stop-for-human zone"), not a mechanical fix —
+  flagged explicitly for the PR reviewer/PM to confirm or override, not silently dismissed.
+- *Register `POST /oauth/token`'s `refresh_token` grant with OpenAPI.* Not applied, per this ticket's
+  own explicit instructions — the route is deferred behind TRO-551 (see above), and the instructions
+  are explicit not to register anything unilaterally. Same call PF-104 already made for this same
+  route's other two grants.
+
 **Not verified in this session:** PF-800's own "stolen-token story" e2e drill (a separate, later
 ticket per PLUGFORGE.MD — this ticket is explicitly "the E8 drill's engine," not the drill itself).
 The unit-level reuse/family-revocation proof above exercises the identical code path PF-800 will drive
