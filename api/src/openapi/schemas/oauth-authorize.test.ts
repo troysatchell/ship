@@ -48,7 +48,7 @@ describe('TRO-551: non-/api route registration (PF-103 oauth authorize)', () => 
     const op = doc.paths?.['/oauth/authorize']?.get;
     expect(op).toBeDefined();
     expect(op?.servers).toEqual([
-      { url: '', description: expect.stringContaining('outside the /api prefix') },
+      { url: '/', description: expect.stringContaining('outside the /api prefix') },
     ]);
   });
 
@@ -56,7 +56,7 @@ describe('TRO-551: non-/api route registration (PF-103 oauth authorize)', () => 
     const op = doc.paths?.['/oauth/authorize/decision']?.post;
     expect(op).toBeDefined();
     expect(op?.servers).toEqual([
-      { url: '', description: expect.stringContaining('outside the /api prefix') },
+      { url: '/', description: expect.stringContaining('outside the /api prefix') },
     ]);
   });
 

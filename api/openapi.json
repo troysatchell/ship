@@ -12764,7 +12764,7 @@
         "security": [],
         "servers": [
           {
-            "url": "",
+            "url": "/",
             "description": "Mounted at the application root — outside the /api prefix."
           }
         ],
@@ -12882,7 +12882,7 @@
         "security": [],
         "servers": [
           {
-            "url": "",
+            "url": "/",
             "description": "Mounted at the application root — outside the /api prefix."
           }
         ],

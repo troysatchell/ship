@@ -43,9 +43,9 @@ describe('TRO-551: resolveServerPrefix', () => {
     expect(resolveServerPrefix(operation)).toBe('/api');
   });
 
-  it('uses the operation-level servers override when present (ROOT_SERVER convention: url "")', () => {
+  it('uses the operation-level servers override when present (ROOT_SERVER convention: url "/")', () => {
     const operation: OperationObject = {
-      servers: [{ url: '', description: 'Mounted at the application root — outside the /api prefix.' }],
+      servers: [{ url: '/', description: 'Mounted at the application root — outside the /api prefix.' }],
     };
     expect(resolveServerPrefix(operation)).toBe('');
   });
@@ -53,6 +53,11 @@ describe('TRO-551: resolveServerPrefix', () => {
   it('strips exactly one trailing slash from a custom override so prefix+path never double-slashes', () => {
     const operation: OperationObject = { servers: [{ url: '/v1/' }] };
     expect(resolveServerPrefix(operation)).toBe('/v1');
+  });
+
+  it('throws on an absolute server URL rather than silently concatenating it onto baseUrl (CodeRabbit, TRO-551)', () => {
+    const operation: OperationObject = { servers: [{ url: 'https://other-host.example' }] };
+    expect(() => resolveServerPrefix(operation)).toThrow(/Unsupported absolute server URL/);
   });
 });
 
@@ -76,7 +81,7 @@ describe('TRO-551: buildRequestUrl', () => {
       method: 'get',
       path: '/oauth/authorize',
       operation: {
-        servers: [{ url: '', description: 'Mounted at the application root — outside the /api prefix.' }],
+        servers: [{ url: '/', description: 'Mounted at the application root — outside the /api prefix.' }],
         parameters: [
           { name: 'client_id', in: 'query', required: true },
         ],
@@ -95,7 +100,7 @@ describe('TRO-551: buildRequestUrl', () => {
       method: 'post',
       path: '/oauth/authorize/decision',
       operation: {
-        servers: [{ url: '', description: 'Mounted at the application root — outside the /api prefix.' }],
+        servers: [{ url: '/', description: 'Mounted at the application root — outside the /api prefix.' }],
       },
     };
 

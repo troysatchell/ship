@@ -56,8 +56,10 @@ new moving parts to reinvent something the underlying library already does corre
 
 **What changed.**
 - `api/src/openapi/registry.ts` — added `export const ROOT_SERVER: ServerObject[]`, an operation-level
-  `servers` override (`[{ url: '', description: '...' }]`) for routes mounted outside `/api`. `url:
-  ''` reads as "no prefix, `path` is already the complete mount path."
+  `servers` override (`[{ url: '/', description: '...' }]`) for routes mounted outside `/api`. `url:
+  '/'` reads as "root path, `path` is already the complete mount path" — `resolveServerPrefix`
+  (below) strips the trailing slash, so it resolves to the same empty prefix a bare `''` would have
+  (self-triage below explains why `'/'` and not `''`).
 - `api/src/openapi/schemas/oauth-authorize.ts` (new) — registers `GET /oauth/authorize` and
   `POST /oauth/authorize/decision` with `path: '/oauth/authorize'` / `'/oauth/authorize/decision'`
   (the FULL mount path, not `/api`-relative like every other schema file) and `servers: ROOT_SERVER`.
@@ -90,7 +92,7 @@ registered here — whoever lands them should reuse `ROOT_SERVER` rather than re
    own database.
 2. `curl http://localhost:3060/api/openapi.json` — `paths['/oauth/authorize']` and
    `paths['/oauth/authorize/decision']` both present; `paths['/api/oauth/authorize']` absent;
-   `paths['/oauth/authorize'].get.servers` is `[{"url":"","description":"Mounted at the application
+   `paths['/oauth/authorize'].get.servers` is `[{"url":"/","description":"Mounted at the application
    root — outside the /api prefix."}]`; the document-level `servers` and the control case
    `paths['/issues'].get.servers` (`undefined`, unaffected) both unchanged.
 3. Ran the REAL `generateTools()` and `buildRequestUrl()` from `api/src/mcp/server.ts` (not a
@@ -107,10 +109,11 @@ registered here — whoever lands them should reuse `ROOT_SERVER` rather than re
 - `api/src/openapi/schemas/oauth-authorize.test.ts` (6 cases) — asserts `generateOpenAPIDocument()`
   carries both new paths, each with the `ROOT_SERVER` override, that neither is folded under
   `/api/oauth/...`, and that an ordinary `/api`-relative route (`/issues`, control) is unaffected.
-- `api/src/mcp/server.test.ts` (6 cases) — unit-tests `resolveServerPrefix` and `buildRequestUrl`
-  directly: default `/api` prefix with no override, the `ROOT_SERVER` (`url: ''`) override producing
+- `api/src/mcp/server.test.ts` (7 cases) — unit-tests `resolveServerPrefix` and `buildRequestUrl`
+  directly: default `/api` prefix with no override, the `ROOT_SERVER` (`url: '/'`) override producing
   an un-prefixed URL for both the GET (query params) and POST (body params) shapes, a trailing-slash
-  custom-override edge case, and the `/issues` control case.
+  custom-override edge case, the `/issues` control case, and (added during self-triage below) the
+  absolute-URL guard throwing instead of building a malformed URL.
 
 **Red-before-green (seen, not claimed).** Two separate reverts, each restored immediately after:
 - Reverted `buildRequestUrl` to the pre-fix `` let url = \`${baseUrl}/api${path}\`; `` (no
@@ -123,7 +126,64 @@ registered here — whoever lands them should reuse `ROOT_SERVER` rather than re
   the paths/servers exist failed (`expected {...} to have property "/oauth/authorize"`,
   `expected undefined to be defined`), while the 2 control-case assertions about unrelated routes
   still passed (2/6 passed, 4/6 failed for the asserted reason).
-Both reverts restored; full suite re-run green (12/12) before finishing.
+Both reverts restored; full suite re-run green (12/12, before the self-triage section below added
+one more case) before finishing.
+
+**Self-triage of `gate.sh`'s CodeRabbit CLI review (5 findings) before reporting done.** Same
+discipline PF-103's own entry above used — verify each against the actual current code, fix what's
+genuinely valid and cheap, state a reason for what isn't fixed here:
+- **[minor, fixed]** `ROOT_SERVER`'s `url: ''` — an empty string is an unconventional way to express
+  "server root" and some OpenAPI tooling besides this repo's own generator/executor might not treat
+  it as a real entry. Changed to `url: '/'`. Verified this is a presentation-only change, not a
+  behavior change: `resolveServerPrefix` already stripped a single trailing slash from any override
+  (added for exactly this reason before the finding was filed), so `'/'` resolves to the identical
+  empty prefix `''` did — confirmed via `server.test.ts`'s existing trailing-slash case and by
+  regenerating `openapi.json`/`.yaml` and re-running the full suite, all green.
+- **[trivial, fixed]** `resolveServerPrefix` had no guard against a future absolute-URL server
+  override (`https://other-host/...`) — `buildRequestUrl` always concatenates the resolved prefix
+  onto `baseUrl`, so an absolute override would silently build a malformed URL
+  (`http://ship-host/https://other-host/...`) instead of requesting the other host. No operation in
+  this codebase registers one today (only `ROOT_SERVER`'s `'/'` is ever used), but the guard is
+  cheap, harmless to existing behavior, and closes a real gap in the exact mechanism this ticket
+  built — added a regex check that throws a clear error instead, plus a test case
+  (`server.test.ts`, "throws on an absolute server URL").
+- **[major, judged not to fix here]** "Exclude browser-navigated OAuth operations (no JSON response)
+  from `generateTools` so they never become MCP tools at all." A real, well-reasoned observation —
+  calling `ship_get_oauth_authorize` today would follow a redirect to the web app's login/consent
+  HTML and then fail parsing it as JSON (an ugly `isError: true` tool result, not a crash, but not
+  useful either) rather than the clean `400` from an unregistered `client_id`. Judged out of scope
+  for THIS ticket rather than fixed unilaterally: (1) the ticket's own stated done-criterion is "the
+  generated MCP tool calling the correct non-`/api` URL (not 404ing)" — satisfied, and verified
+  live — not "produces a useful result for every possible input"; (2) removing tools from the
+  generated list is a user-visible behavior change for MCP clients, one of this brief's explicit
+  stop-and-report triggers; (3) it needs a new, unspecified heuristic for "is this operation
+  JSON-API-shaped" that risks over/under-filtering existing tools if invented hastily. Flagged for
+  the orchestrator as a good candidate follow-up ticket, not decided unilaterally here.
+- **[major, judged not to fix here]** The `import.meta.url === \`file://${process.argv[1]}\`` guard
+  should use `pathToFileURL(process.argv[1]).href` for correctness with spaces/Windows paths.
+  Genuinely valid in the abstract, but this is NOT a defect introduced by this ticket — it is the
+  exact, already-established convention copied verbatim from `api/src/db/postgresReachable.ts` and
+  `verifyMigrations.ts` (both predate this ticket). Fixing it correctly means editing those two
+  files too, which is outside `api/src/openapi/`/`api/src/mcp/` — this ticket's declared scope — and
+  this deployment target is Linux/Docker (Elastic Beanstalk, per `.claude/CLAUDE.md`) with no
+  spaces anywhere in its worktree paths, so the practical risk here is nil. Left as-is; worth a
+  small follow-up ticket that fixes all three files together for consistency, not a one-off change
+  to only the file this ticket happens to touch.
+- **[critical, judged not to fix here — and the severity does not hold up]** `jsonToYaml()` renders
+  the new `servers` block with `description` at a much deeper indent than its sibling `url` key,
+  which is invalid/misleading YAML nesting. Checked against `api/openapi.yaml` BEFORE this ticket's
+  diff: the exact same malformed shape already exists for the pre-existing document-level `servers:`
+  block (`- url: /api` / `description: API base path`, present on `main`) and, more broadly, for
+  EVERY multi-key object inside EVERY array `jsonToYaml` renders — confirmed on `/issues`'s untouched
+  `parameters` array in the same file. This is a systemic, pre-existing defect in the shared
+  hand-rolled YAML generator (`api/src/swagger.ts`), not something this ticket introduced or
+  meaningfully worsened — it's already the tracked subject of **TRO-490** (cited by
+  `oauth-apps.ts`'s own header comment as "the generator-level bug itself"). It also does not affect
+  what this ticket's own definition of done depends on: the MCP server fetches `/api/openapi.json`
+  (a separate, correct `JSON.stringify`-based code path, verified live above), and `/api/docs`
+  (Swagger UI) renders from the in-memory JS object directly, not from the YAML text — only the
+  supplementary `/api/openapi.yaml` raw-text endpoint is affected. Fixing the shared generator is
+  TRO-490's job, not a single-endpoint registration ticket's; not touched here.
 
 **How to run it.**
 `api && npx vitest run src/mcp/server.test.ts src/openapi/schemas/oauth-authorize.test.ts` (no

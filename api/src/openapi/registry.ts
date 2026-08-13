@@ -50,18 +50,26 @@ registry.registerComponent('securitySchemes', 'cookieAuth', {
  * Per OpenAPI 3.0 §4.8.10.1, an operation-level `servers` array REPLACES the
  * document-level one for that operation — it does not add to it — so
  * Swagger UI resolves a "Try it out" call against exactly this array, not
- * `/api` + path. `url: ''` reads as "no prefix; `path` is already complete."
+ * `/api` + path. `url: '/'` (not `''` — a real, if minimal, URL per the
+ * Server Object's own `format: uri-reference` rather than an empty string
+ * some OpenAPI tooling other than this repo's own generator/executor may
+ * not render as a real "root" server entry — CodeRabbit review, TRO-551)
+ * reads as "root path; `path` is already the complete mount path."
  *
  * Pass this on any `registerPath({ ..., servers: ROOT_SERVER })` call for a
  * non-`/api` route. The MCP tool executor (`api/src/mcp/server.ts`,
  * `resolveServerPrefix`) reads the SAME generated `servers` field from
  * `/api/openapi.json` at runtime and builds its request URL from it instead
  * of assuming `/api` — keep that reader in sync with this writer's
- * convention if either changes.
+ * convention if either changes. `resolveServerPrefix` already strips a
+ * single trailing slash from any override, so `'/'` resolves to the same
+ * empty-prefix behavior `''` did — this is a presentation fix, not a
+ * behavior change (`api/src/mcp/server.test.ts` covers the slash-stripping
+ * case directly).
  */
 export const ROOT_SERVER: ServerObject[] = [
   {
-    url: '',
+    url: '/',
     description: 'Mounted at the application root — outside the /api prefix.',
   },
 ];

@@ -388,15 +388,31 @@ const DEFAULT_SERVER_PREFIX = "/api";
  * Exported for the regression test — this is the fix's actual mechanism,
  * kept a pure function precisely so it can be asserted on directly rather
  * than only through a live HTTP call.
+ *
+ * Only a relative override (registry.ts's `ROOT_SERVER` — the only
+ * convention any operation in this codebase actually uses today) is
+ * supported: `buildRequestUrl` always concatenates the result onto
+ * `baseUrl`, so an absolute override (`https://other-host/...`) would
+ * silently produce a malformed URL like
+ * `http://ship-host/https://other-host/...` rather than requesting the
+ * other host, which is a worse failure than the one this ticket fixes —
+ * fail loudly instead (CodeRabbit review, TRO-551).
  */
 export function resolveServerPrefix(operation: OperationObject): string {
   const override = operation.servers?.[0]?.url;
   if (override === undefined) {
     return DEFAULT_SERVER_PREFIX;
   }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(override)) {
+    throw new Error(
+      `Unsupported absolute server URL on an operation: "${override}". ` +
+        "buildRequestUrl only supports a relative prefix (e.g. registry.ts's ROOT_SERVER) " +
+        "concatenated onto the configured Ship instance's own baseUrl."
+    );
+  }
   // Strip exactly one trailing slash so `prefix + path` (path always starts
-  // with "/") never produces a double slash. A root-mount override of ""
-  // (registry.ts's ROOT_SERVER) is untouched by this — nothing to strip.
+  // with "/") never produces a double slash. A root-mount override of "/"
+  // (registry.ts's ROOT_SERVER) resolves to "" — nothing left to prefix.
   return override.endsWith("/") ? override.slice(0, -1) : override;
 }
 
