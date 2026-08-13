@@ -3675,6 +3675,17 @@
             "format": "date-time",
             "description": "ISO 8601 datetime string",
             "example": "2025-01-30T14:30:00.000Z"
+          },
+          "scopes": {
+            "type": "array",
+            "nullable": true,
+            "items": {
+              "type": "string"
+            },
+            "description": "Scopes granted to this token (e.g. \"documents:read\"). Null = legacy unscoped token, never valid at /api/v1.",
+            "example": [
+              "documents:read"
+            ]
           }
         },
         "required": [
@@ -3701,6 +3712,17 @@
             "minimum": 1,
             "maximum": 365,
             "description": "Days until token expires (default: never)"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "description": "Scopes to grant this token, from ScopeRegistry (e.g. \"documents:read\"). Omit for a legacy unscoped token — never valid at /api/v1.",
+            "example": [
+              "documents:read"
+            ]
           }
         },
         "required": [
@@ -6047,6 +6069,309 @@
         },
         "required": [
           "standupId"
+        ]
+      },
+      "OAuthApp": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "UUID identifier",
+            "example": "550e8400-e29b-41d4-a716-446655440000"
+          },
+          "name": {
+            "type": "string"
+          },
+          "client_id": {
+            "type": "string",
+            "description": "Public client identifier, e.g. ship_app_...",
+            "example": "ship_app_3f9c2b1a7e6d4508"
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "confidential",
+              "public"
+            ],
+            "description": "confidential apps hold a client secret and authenticate with it at the token endpoint; public apps (browser SPAs) cannot keep a secret safe and use PKCE instead — they never receive a secret."
+          },
+          "redirect_uris": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          },
+          "requested_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "is_first_party": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          },
+          "revoked_at": {
+            "type": "string",
+            "nullable": true,
+            "format": "date-time",
+            "description": "ISO 8601 datetime string",
+            "example": "2025-01-30T14:30:00.000Z"
+          },
+          "has_secret": {
+            "type": "boolean",
+            "description": "Whether a confidential-client secret is configured. Never the secret itself."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "client_id",
+          "client_type",
+          "redirect_uris",
+          "requested_scopes",
+          "is_first_party",
+          "created_at",
+          "revoked_at",
+          "has_secret"
+        ]
+      },
+      "CreateOAuthApp": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "client_type": {
+            "type": "string",
+            "enum": [
+              "confidential",
+              "public"
+            ],
+            "description": "confidential apps hold a client secret and authenticate with it at the token endpoint; public apps (browser SPAs) cannot keep a secret safe and use PKCE instead — they never receive a secret."
+          },
+          "redirect_uris": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            },
+            "maxItems": 20
+          },
+          "requested_scopes": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "maxItems": 50
+          }
+        },
+        "required": [
+          "name",
+          "client_type"
+        ]
+      },
+      "OAuthAppCreatedResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid",
+                "description": "UUID identifier",
+                "example": "550e8400-e29b-41d4-a716-446655440000"
+              },
+              "name": {
+                "type": "string"
+              },
+              "client_id": {
+                "type": "string",
+                "description": "Public client identifier, e.g. ship_app_...",
+                "example": "ship_app_3f9c2b1a7e6d4508"
+              },
+              "client_type": {
+                "type": "string",
+                "enum": [
+                  "confidential",
+                  "public"
+                ],
+                "description": "confidential apps hold a client secret and authenticate with it at the token endpoint; public apps (browser SPAs) cannot keep a secret safe and use PKCE instead — they never receive a secret."
+              },
+              "redirect_uris": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "requested_scopes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "is_first_party": {
+                "type": "boolean"
+              },
+              "created_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "ISO 8601 datetime string",
+                "example": "2025-01-30T14:30:00.000Z"
+              },
+              "revoked_at": {
+                "type": "string",
+                "nullable": true,
+                "format": "date-time",
+                "description": "ISO 8601 datetime string",
+                "example": "2025-01-30T14:30:00.000Z"
+              },
+              "has_secret": {
+                "type": "boolean",
+                "description": "Whether a confidential-client secret is configured. Never the secret itself."
+              },
+              "client_secret": {
+                "type": "string",
+                "nullable": true,
+                "description": "Raw client secret, returned exactly once on creation. null for public clients (they have no secret at all). Never returned by any other endpoint.",
+                "example": "ship_appsec_9a1c...redacted...4f"
+              },
+              "warning": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "client_id",
+              "client_type",
+              "redirect_uris",
+              "requested_scopes",
+              "is_first_party",
+              "created_at",
+              "revoked_at",
+              "has_secret",
+              "client_secret"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "data"
+        ]
+      },
+      "OAuthAppListResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OAuthApp"
+            }
+          }
+        },
+        "required": [
+          "success",
+          "data"
+        ]
+      },
+      "OAuthAppDetailResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "$ref": "#/components/schemas/OAuthApp"
+          }
+        },
+        "required": [
+          "success",
+          "data"
+        ]
+      },
+      "OAuthAppSecretRotatedResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "client_secret": {
+                "type": "string",
+                "description": "New raw client secret, returned exactly once. The previous secret is invalid immediately — there is no grace period."
+              },
+              "warning": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "client_secret",
+              "warning"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "data"
+        ]
+      },
+      "OAuthAppRevokedResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              true
+            ]
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "data"
         ]
       }
     },
@@ -12166,6 +12491,265 @@
           },
           "503": {
             "description": "The agent is not configured — AGENT_INTERNAL_SECRET is unset on this side, so no request was sent"
+          }
+        }
+      }
+    },
+    "/oauth-apps": {
+      "post": {
+        "tags": [
+          "OAuth Apps"
+        ],
+        "summary": "Register a new OAuth app",
+        "description": "Admin endpoint (workspace-admin only) to register an OAuth app. Confidential apps receive a raw client secret exactly once in this response — it is SHA-256 hashed at rest and never shown or returned again. Public apps receive no secret at all; they authenticate with PKCE.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOAuthApp"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "OAuth app created, with the raw secret if confidential",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAppCreatedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace admin access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "OAuth Apps"
+        ],
+        "summary": "List OAuth apps",
+        "description": "List the current workspace's registered OAuth apps. Never includes a secret.",
+        "responses": {
+          "200": {
+            "description": "List of OAuth apps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAppListResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace admin access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/oauth-apps/{id}": {
+      "get": {
+        "tags": [
+          "OAuth Apps"
+        ],
+        "summary": "Get OAuth app details",
+        "description": "Get a single OAuth app by ID. Never includes a secret.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID identifier",
+              "example": "550e8400-e29b-41d4-a716-446655440000"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OAuth app details",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAppDetailResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace admin access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth app not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "OAuth Apps"
+        ],
+        "summary": "Revoke an OAuth app",
+        "description": "Sets revoked_at on the app. Repeated revocation does not change the original revocation timestamp — it returns 409 instead.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID identifier",
+              "example": "550e8400-e29b-41d4-a716-446655440000"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OAuth app revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAppRevokedResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace admin access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth app not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "OAuth app already revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/oauth-apps/{id}/rotate": {
+      "post": {
+        "tags": [
+          "OAuth Apps"
+        ],
+        "summary": "Rotate an OAuth app client secret",
+        "description": "Generates a new client secret for a confidential app, returned exactly once. The previous secret is invalid immediately — there is no grace period. Public apps have no secret to rotate and this returns 400.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "UUID identifier",
+              "example": "550e8400-e29b-41d4-a716-446655440000"
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New secret generated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OAuthAppSecretRotatedResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "App is public (no secret to rotate) or already revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Workspace admin access required",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "OAuth app not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
           }
         }
       }

@@ -98,6 +98,32 @@ const webPagesCorrectnessRules = {
   '@typescript-eslint/no-misused-promises': 'error',
 };
 
+// api/src/platform/api/v1/** only (TRO-399 / PF-003): the public v1 router
+// layer may not import the internal route handlers under api/src/routes/**
+// — PLUGFORGE.MD §2.1's Day-1 one-way boundary door ("Both layers call the
+// same domain services"). There is no path alias to api/src/routes today, so
+// every legal import of it is a relative path (e.g. '../../../routes/documents');
+// `no-restricted-imports`'s `patterns` matches against that string as written
+// (not the resolved file path), so '**/routes/**' catches any relative depth
+// and would equally catch a future absolute/aliased form. Deliberately NOT
+// '**/routes*' or a bare 'routes' — this must not false-positive on an
+// unrelated 'services/foo' import or a same-named local file.
+const apiV1BoundaryRules = {
+  ...apiCorrectnessRules,
+  'no-restricted-imports': [
+    'error',
+    {
+      patterns: [
+        {
+          group: ['**/routes/**', '**/routes'],
+          message:
+            'api/src/platform/api/v1/** must not import api/src/routes/** (internal route handlers) — PLUGFORGE.MD §2.1. Both layers call the same domain services; import the service, not the route.',
+        },
+      ],
+    },
+  ],
+};
+
 export default tseslint.config(
   {
     ignores: [
@@ -129,6 +155,24 @@ export default tseslint.config(
       '@typescript-eslint': tseslint.plugin,
     },
     rules: apiCorrectnessRules,
+  },
+  {
+    // Placed after the general api/src/**/*.ts block above so this rule's
+    // 'error' severity applies specifically to the public v1 router layer
+    // (flat config merges same-key rules from later-matching configs over
+    // earlier ones — same technique web/src/pages/** uses below).
+    files: ['api/src/platform/api/v1/**/*.ts'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+    },
+    rules: apiV1BoundaryRules,
   },
   {
     files: ['shared/src/**/*.ts'],
