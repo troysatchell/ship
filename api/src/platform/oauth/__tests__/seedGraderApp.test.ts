@@ -25,6 +25,7 @@ import {
   seedGraderApp,
   GRADER_OAUTH_CLIENT_SECRET_ENV_VAR,
   GRADER_APP_NAME,
+  GRADER_CLIENT_ID_PREFIX,
 } from '../seedGraderApp.js';
 
 /** Destructure-and-assert instead of a non-null assertion (lessons.md rule 16 /
@@ -99,6 +100,7 @@ describe('seedGraderApp (PF-907 / TRO-441)', () => {
     );
     const row = firstRowOrThrow(result.rows, 'select grader oauth_apps row');
     expect(row.is_first_party).toBe(true);
+    expect(row.client_type).toBe('confidential');
 
     const scopes = row.requested_scopes;
     expect(scopes).toEqual(

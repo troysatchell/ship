@@ -49,15 +49,17 @@ further action needed for this AC.
   directly, because that function always mints a fresh random secret on every call — the grader
   app's secret must be the one operator-provisioned value read from
   `GRADER_OAUTH_CLIENT_SECRET` (PM triage, TRO-441 comments, 2026-08-10 — "same shared-config rule
-  as PF-900/TRO-411"), not a new one generated per seed run. Idempotency check is by `name` +
-  `workspace_id` + `is_first_party` (no unique DB constraint backs this — the same
-  check-then-insert shape every other fixture in `db/seed.ts` already uses). Three outcomes, none
-  an error: `created`, `exists` (no-op, same `client_id` returned), or `skipped_no_secret` (the
-  variable is unset — a normal `pnpm db:seed`/`./start.sh` run without it is unaffected by design,
-  since the grader app should only exist where the secret has actually been provisioned).
-  `requested_scopes` is exactly `['documents:read', 'issues:read', 'sprints:read']` (PLUGFORGE.MD
-  §2.3) — never `webhooks:manage` or any `:write` scope, so the grader account cannot mutate graded
-  state. `client_type: 'confidential'`, `is_first_party: true`.
+  as PF-900/TRO-411"), not a new one generated per seed run. Idempotency is enforced by the unique
+  index on `oauth_apps.client_id` — the seed generates a workspace-scoped but deterministic
+  `client_id` (format: `ship_app_grader_{first 8 chars of workspace_id}`) and uses
+  `ON CONFLICT (client_id) DO NOTHING` to handle concurrent seed calls (the initial SELECT check
+  remains as a fast path, but is not the guarantee). Three outcomes, none an error: `created`,
+  `exists` (no-op, same `client_id` returned), or `skipped_no_secret` (the variable is unset — a
+  normal `pnpm db:seed`/`./start.sh` run without it is unaffected by design, since the grader app
+  should only exist where the secret has actually been provisioned). `requested_scopes` is exactly
+  `['documents:read', 'issues:read', 'sprints:read']` (PLUGFORGE.MD §2.3) — never `webhooks:manage`
+  or any `:write` scope, so the grader account cannot mutate graded state. `client_type:
+  'confidential'`, `is_first_party: true`.
 - `api/src/db/seed.ts` — calls `seedGraderApp(pool, workspaceId)` right after workspace
   creation/lookup (before the rest of the file's fixtures, which don't depend on it), logs the
   outcome with the same `✅`/`ℹ️` convention every other seed step already uses, and prints the

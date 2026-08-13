@@ -36,10 +36,19 @@ import { generateClientId, hashClientSecret } from './credentials.js';
  * PF-900's Terraform artifact actually commits to. */
 export const GRADER_OAUTH_CLIENT_SECRET_ENV_VAR = 'GRADER_OAUTH_CLIENT_SECRET';
 
-/** Stable display name used to find "the" grader app on re-seed (no unique
- * DB constraint backs this — same check-then-insert idempotency shape every
- * other fixture in `db/seed.ts` already uses, scoped by workspace). */
+/** Stable display name used to find "the" grader app on re-seed. */
 export const GRADER_APP_NAME = 'Grader (read-only)';
+
+/** Prefix for the deterministic grader app client_id (follows `ship_app_`
+ * convention, matching PF-701's `ship_app_fleetgraph` pattern). The actual
+ * client_id includes the workspace_id to ensure uniqueness within the global
+ * unique constraint. The unique index on oauth_apps.client_id makes this
+ * column the authoritative guard against concurrent seed calls on the same
+ * workspace — two races will attempt INSERT with the same workspace-scoped
+ * client_id; the second silently succeeds via ON CONFLICT DO NOTHING. The
+ * initial SELECT check is retained as a fast path, but the unique index is
+ * the idempotency guarantee. */
+export const GRADER_CLIENT_ID_PREFIX = 'ship_app_grader';
 
 /** §2.3 read-only scopes only — never `webhooks:manage` or any `:write`
  * scope. A grader account must not be able to mutate graded state (PF-700's
@@ -83,13 +92,20 @@ export async function seedGraderApp(pool: Pool, workspaceId: string): Promise<Se
     return { status: 'skipped_no_secret' };
   }
 
-  const clientId = generateClientId();
   const secretHash = hashClientSecret(rawSecret);
+  // Deterministic client_id: workspace-scoped but stable (same workspace always
+  // generates the same id). The unique index on client_id makes this column the
+  // authoritative guard against concurrent seed calls to the same workspace —
+  // two races will attempt INSERT with the same client_id; the second silently
+  // succeeds via ON CONFLICT DO NOTHING. The initial SELECT check is retained
+  // as a fast path, but the unique index is the idempotency guarantee.
+  const clientId = `ship_app_grader_${workspaceId.substring(0, 8)}`;
 
   await pool.query(
     `INSERT INTO oauth_apps
        (workspace_id, name, client_id, client_type, client_secret_hash, requested_scopes, is_first_party)
-     VALUES ($1, $2, $3, 'confidential', $4, $5, true)`,
+     VALUES ($1, $2, $3, 'confidential', $4, $5, true)
+     ON CONFLICT (client_id) DO NOTHING`,
     [workspaceId, GRADER_APP_NAME, clientId, secretHash, [...GRADER_APP_SCOPES]]
   );
 
