@@ -11,41 +11,71 @@
  *
  * ── Execution status (read before trusting this file) ──
  *
- * NOT run to completion in this worktree. Confirmed, not assumed: attempted
- * once via a scoped single-spec run (`playwright test oauth-authorize.spec.ts`,
- * output to a file, never `pnpm test:e2e` per this repo's binding rule) and
- * it failed at the seed step with `relation "oauth_apps" does not exist`.
- * Root-caused to a PRE-EXISTING gap unrelated to this ticket's code:
- * `e2e/fixtures/isolated-env.ts`'s `runMigrations()` does not execute
- * migration files' SQL at all — it applies `api/src/db/schema.sql` and then
- * marks every file in `api/src/db/migrations/` as already-applied in
- * `schema_migrations` (comment: "schema.sql includes all table definitions
- * from all migrations"). That was true through migration 041
- * (`grep -c blocks_relationship api/src/db/schema.sql` finds 4 matches,
- * confirming 040/041 WERE folded back into schema.sql) but migrations 042
- * `oauth_apps` and 043 `oauth_authorization_codes` (PF-101/TRO-406,
- * 2026-08-10) never were (`grep oauth_apps api/src/db/schema.sql` — no
- * match). The isolated-env testcontainers database therefore has no
- * `oauth_apps`/`oauth_authorization_codes` tables at all, while
- * `schema_migrations` falsely claims both versions are applied — every
- * future e2e spec touching ANY table from PF-101 onward (this one, PF-104's,
- * the portal's) will hit the identical failure until schema.sql is synced.
- * Reported as a new problem in this ticket's final report (out of scope to
- * fix here — schema.sql is shared infrastructure, not owned by PF-103).
+ * RUNS, and both tests pass — first real, completed execution this session
+ * (`pnpm exec playwright test e2e/oauth-authorize.spec.ts --workers=1`, 2
+ * passed in ~22s). The migration gap that previously blocked every spec
+ * touching `oauth_apps` (TRO-430: `runMigrations()` marked migrations
+ * "applied" without executing their SQL) was fixed on this branch's history
+ * before this spec was re-attempted — `pnpm db:migrate`'s real runner is now
+ * what this fixture delegates to (see `e2e/fixtures/isolated-env.ts`'s
+ * `runMigrations`).
  *
- * The assertions below are real (no `test.fixme()`), written to prove the
- * same three ACs the vitest suite proves plus the CSP header (AC-4, which
- * has no vitest case — see that test file's header for why), through an
- * actual browser session. CI, or a worktree with the schema.sql gap fixed,
- * is what will actually execute them.
+ * Getting from "runs" to "passes" took four defects, each trace-verified
+ * (Playwright trace / `page.goto` network log), not re-diagnosed by
+ * inspection alone:
+ *  1. Neither test set `response_type=code` on the authorize URL, so the API
+ *     correctly 302'd with `error=unsupported_response_type` before either
+ *     test ever legitimately reached consent. Fixed: both tests set it.
+ *  2. `REDIRECT_URI` was a non-existent external domain
+ *     (`https://oauth-demo-client.example.test/callback`), and the spec
+ *     tried to intercept it with `page.route()`. A server-issued 302 is a
+ *     real browser navigation, which `page.route()` cannot fulfill —
+ *     Chromium died with `ERR_NAME_NOT_RESOLVED`. Fixed: `redirectUri` is
+ *     now `${baseURL}/e2e-oauth-callback`, a path on this worker's OWN web
+ *     origin that no app route matches (the SPA's catch-all,
+ *     `web/src/main.tsx`'s `path="*"` -> `NotFoundPage`, renders in place
+ *     without changing the URL), so the final navigation actually commits
+ *     and `page.url()` can be asserted on directly. `seedOAuthApp` now takes
+ *     this as a parameter instead of a hardcoded constant — it must stay
+ *     EXACTLY equal to what's passed as `redirect_uri` on the authorize URL,
+ *     since the API enforces an exact match (AC-2, the open-redirect guard).
+ *  3. `e2e/fixtures/isolated-env.ts` spawned the api with `CORS_ORIGIN: '*'`.
+ *     `api/src/app.ts` threads that into
+ *     `createOAuthAuthorizeRouter(corsOrigin)` as `webOrigin`
+ *     (`api/src/routes/oauth-authorize.ts`), which builds absolute
+ *     `/login`/`/oauth-consent` redirects via `new URL(path, webOrigin)` —
+ *     `'*'` is not a valid URL base and that throws, 500ing every
+ *     consent/login redirect. Fixed: the api now gets a real
+ *     `http://localhost:<webPort>` origin, reserved before the api process
+ *     spawns (see that fixture's `apiServer`/`webServer` comments for how
+ *     the port is shared instead of independently recomputed).
+ *  4. Undiagnosed until this session's first real run: with defects 1-3
+ *     fixed, clicking "Authorize" hung until the 60s test timeout. Trace
+ *     showed why: `POST /oauth/authorize/decision` came back `404`.
+ *     `OAuthConsentPage`'s form posts to a relative path (`API_URL` is
+ *     deliberately baked to `''` at build time, `web/package.json`'s
+ *     `build` script), which resolves against the WEB origin — but
+ *     `web/vite.config.ts`'s dev/preview proxy only forwarded `/api`,
+ *     `/collaboration`, `/events` to the api, not `/oauth`. Fixed by adding
+ *     an `/oauth/` (trailing slash load-bearing — see that file's comment)
+ *     proxy entry. This is the local analog of a gap this ticket's own
+ *     CHANGES.md entry already flags for production CloudFront (no
+ *     `/oauth/*` `ordered_cache_behavior`) — still open there, terraform is
+ *     out of scope for this spec fix.
+ *
+ * The assertions below are real (no `test.fixme()`), and prove the same
+ * three ACs the vitest suite proves plus the CSP header (AC-4, which has no
+ * vitest case — see that test file's header for why), through an actual
+ * browser session — this file's own header no longer just claims that, it
+ * now runs and is green.
  */
 import { test, expect } from './fixtures/isolated-env';
 import { Pool } from 'pg';
 import crypto from 'crypto';
 
-const REDIRECT_URI = 'https://oauth-demo-client.example.test/callback';
-
-async function seedOAuthApp(dbUrl: string): Promise<{ clientId: string }> {
+// `redirectUri` is derived per-test from the worker's `baseURL` (see each
+// test body) rather than a module constant — see this file's header for why.
+async function seedOAuthApp(dbUrl: string, redirectUri: string): Promise<{ clientId: string }> {
   const pool = new Pool({ connectionString: dbUrl });
   try {
     const workspaceResult = await pool.query<{ id: string }>(
@@ -58,7 +88,7 @@ async function seedOAuthApp(dbUrl: string): Promise<{ clientId: string }> {
     await pool.query(
       `INSERT INTO oauth_apps (workspace_id, name, client_id, client_type, redirect_uris, requested_scopes)
        VALUES ($1, 'PF-103 E2E Demo Client', $2, 'public', $3, $4)`,
-      [workspace.id, clientId, [REDIRECT_URI], ['documents:read']]
+      [workspace.id, clientId, [redirectUri], ['documents:read']]
     );
     return { clientId };
   } finally {
@@ -73,15 +103,16 @@ test.describe('OAuth authorize + consent (PF-103)', () => {
     page,
     apiServer,
     dbContainer,
+    baseURL,
   }) => {
-    const { clientId } = await seedOAuthApp(dbContainer.getConnectionUri());
-
-    // Intercept the demo client's callback — no real third-party server
-    // exists in this environment; Playwright fulfills the navigation
-    // directly so the final `code=` param is observable without one.
-    await page.route(`${REDIRECT_URI}*`, (route) =>
-      route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' })
-    );
+    // A path on this worker's OWN web origin that no route matches — the
+    // SPA's catch-all (`web/src/main.tsx`'s `path="*"` -> `NotFoundPage`)
+    // renders in place without changing the URL, so the navigation commits
+    // and `page.url()` carries the real `code=`/`state=` query params. Must
+    // stay EXACTLY equal to what `seedOAuthApp` registers below — the API
+    // enforces an exact `redirect_uri` match (AC-2, the open-redirect guard).
+    const redirectUri = `${baseURL}/e2e-oauth-callback`;
+    const { clientId } = await seedOAuthApp(dbContainer.getConnectionUri(), redirectUri);
 
     // Step 1: log in (dev seed user, matching e2e/auth.spec.ts's pattern).
     await page.goto('/login');
@@ -95,7 +126,8 @@ test.describe('OAuth authorize + consent (PF-103)', () => {
     // to. Already authenticated, so this should land on the consent page.
     const authorizeUrl = new URL('/oauth/authorize', apiServer.url);
     authorizeUrl.searchParams.set('client_id', clientId);
-    authorizeUrl.searchParams.set('redirect_uri', REDIRECT_URI);
+    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+    authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('code_challenge', 'e2e-test-challenge-value');
     authorizeUrl.searchParams.set('code_challenge_method', 'S256');
     authorizeUrl.searchParams.set('scope', 'documents:read');
@@ -122,23 +154,22 @@ test.describe('OAuth authorize + consent (PF-103)', () => {
     // what they're actually authorizing.
     await expect(page.getByRole('heading', { name: /Authorize This application/i })).toBeVisible();
     await expect(page.getByText(clientId)).toBeVisible();
-    await expect(page.getByText(REDIRECT_URI)).toBeVisible();
+    await expect(page.getByText(redirectUri)).toBeVisible();
 
     // Step 3: approve.
     await page.getByRole('button', { name: 'Authorize' }).click();
-    await page.waitForURL(`${REDIRECT_URI}*`);
+    await page.waitForURL(`${redirectUri}*`);
     const finalUrl = new URL(page.url());
-    expect(finalUrl.origin + finalUrl.pathname).toBe(new URL(REDIRECT_URI).origin + new URL(REDIRECT_URI).pathname);
+    expect(finalUrl.origin + finalUrl.pathname).toBe(new URL(redirectUri).origin + new URL(redirectUri).pathname);
     expect(finalUrl.searchParams.get('code')).toBeTruthy();
     expect(finalUrl.searchParams.get('state')).toBe('e2e-state-1');
   });
 
-  test('deny path redirects with error=access_denied', async ({ page, apiServer, dbContainer }) => {
-    const { clientId } = await seedOAuthApp(dbContainer.getConnectionUri());
-
-    await page.route(`${REDIRECT_URI}*`, (route) =>
-      route.fulfill({ status: 200, contentType: 'text/plain', body: 'ok' })
-    );
+  test('deny path redirects with error=access_denied', async ({ page, apiServer, dbContainer, baseURL }) => {
+    // See the first test's comment on `redirectUri` — must exactly match
+    // what's registered below (AC-2, the open-redirect guard).
+    const redirectUri = `${baseURL}/e2e-oauth-callback`;
+    const { clientId } = await seedOAuthApp(dbContainer.getConnectionUri(), redirectUri);
 
     await page.goto('/login');
     await page.locator('#email').fill('dev@ship.local');
@@ -148,7 +179,8 @@ test.describe('OAuth authorize + consent (PF-103)', () => {
 
     const authorizeUrl = new URL('/oauth/authorize', apiServer.url);
     authorizeUrl.searchParams.set('client_id', clientId);
-    authorizeUrl.searchParams.set('redirect_uri', REDIRECT_URI);
+    authorizeUrl.searchParams.set('redirect_uri', redirectUri);
+    authorizeUrl.searchParams.set('response_type', 'code');
     authorizeUrl.searchParams.set('code_challenge', 'e2e-test-challenge-value-2');
     authorizeUrl.searchParams.set('code_challenge_method', 'S256');
 
@@ -156,7 +188,7 @@ test.describe('OAuth authorize + consent (PF-103)', () => {
     await expect(page).toHaveURL(/\/oauth-consent/);
 
     await page.getByRole('button', { name: 'Cancel' }).click();
-    await page.waitForURL(`${REDIRECT_URI}*`);
+    await page.waitForURL(`${redirectUri}*`);
     const finalUrl = new URL(page.url());
     expect(finalUrl.searchParams.get('error')).toBe('access_denied');
     expect(finalUrl.searchParams.has('code')).toBe(false);

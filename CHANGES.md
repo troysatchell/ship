@@ -135,23 +135,43 @@ client_id, unauthenticated) passed throughout, confirming the bugs were isolated
 wiring was sound. Reverted the three bugs; re-ran: 6/6 green. Full transcripts in this ticket's
 final report.
 
-**Additive e2e (not the proof, and not executed to completion here).**
+**Additive e2e — now runs, and passes (not the factory-gate proof, still).**
 `e2e/oauth-authorize.spec.ts` — login → authorize → consent → redirect with code (the graded PKCE
-scenario's first half) plus the deny path and a best-effort AC-4 CSP header check. Attempted once via
-a scoped single-spec run (`playwright test e2e/oauth-authorize.spec.ts`, output to a file — never
-`pnpm test:e2e` per this repo's binding rule) and it failed at the seed step with `relation
-"oauth_apps" does not exist`. Root cause, confirmed by reading the fixture: `e2e/fixtures/isolated-env.ts`'s
-`runMigrations()` never executes migration files' SQL — it applies `api/src/db/schema.sql` and then
-marks every file under `api/src/db/migrations/` as already-applied in `schema_migrations`, on the
-comment "schema.sql includes all table definitions from all migrations". That held through migration
-041 (`grep -c blocks_relationship api/src/db/schema.sql` → 4 matches — 040/041 genuinely were folded
-back in) but not for 042/043 (`grep oauth_apps api/src/db/schema.sql` → no match) — PF-101/TRO-406
-added the tables without also updating `schema.sql`. This is a pre-existing gap in shared e2e test
-infrastructure, not a defect in this ticket's code, and it blocks every future e2e spec touching any
-table from migration 042 onward (this one, PF-104's, the portal's) until fixed. **Not fixed here** —
-`schema.sql` is shared infrastructure outside this ticket's scope, and the fix (either teach
-`runMigrations()` to actually execute pending migration files, or fold 042/043 into `schema.sql` the
-way 040/041 were) deserves its own ticket with its own review. Flagged for a follow-up ticket.
+scenario's first half) plus the deny path and a best-effort AC-4 CSP header check. TRO-430 (see its
+own CHANGES.md entry) fixed the migration gap that previously blocked this spec at the seed step
+(`relation "oauth_apps" does not exist` — `runMigrations()` used to mark migrations "applied" without
+executing their SQL). With that unblocked, this spec ran for real for the first time this session and
+surfaced four defects, each trace-verified via Playwright's network log before being fixed — not
+re-diagnosed by inspection:
+1. Neither test set `response_type=code`, so the API correctly rejected both with
+   `error=unsupported_response_type` before consent was ever reached. Fixed: both tests set it.
+2. `REDIRECT_URI` pointed at a non-existent external domain and relied on `page.route()` to intercept
+   the callback — but a server-issued 302 is a real browser navigation, which `page.route()` cannot
+   fulfill; Chromium died with `ERR_NAME_NOT_RESOLVED`. Fixed: the redirect_uri is now a path on the
+   test's own web origin (`${baseURL}/e2e-oauth-callback`) that no app route matches, so the
+   navigation actually commits and `page.url()` is asserted directly — no interception needed.
+3. The fixture spawned the api with `CORS_ORIGIN: '*'`, which `api/src/app.ts` threads into
+   `createOAuthAuthorizeRouter(corsOrigin)` as `webOrigin`; building `/login`/`/oauth-consent`
+   redirects via `new URL(path, webOrigin)` then throws (`'*'` is not a valid URL base), 500ing every
+   consent/login redirect. Fixed in `e2e/fixtures/isolated-env.ts`: the api now gets a real
+   `http://localhost:<webPort>` origin, reserved by the `apiServer` fixture (before the api process
+   spawns) and passed through to `webServer` instead of being independently recomputed later — see
+   that file's comments for why an independent second `getWorkerPort()` call there could race.
+4. Undiagnosed until this run: with 1-3 fixed, "Authorize" hung to the 60s test timeout. The trace
+   showed `POST /oauth/authorize/decision` returning `404` — `OAuthConsentPage`'s form posts to a
+   relative path (`VITE_API_URL` is deliberately baked to `''` at build time), which resolves against
+   the WEB origin, but `web/vite.config.ts`'s dev/preview proxy only forwarded `/api`, `/collaboration`,
+   `/events` to the api, never `/oauth`. Fixed by adding an `/oauth/` proxy entry (trailing slash
+   load-bearing — a bare `/oauth` also prefix-matches `/oauth-consent`, the web app's OWN consent-page
+   route, and was confirmed via a second trace to hijack it to the api's global CSP header instead of
+   the `oauth-consent-csp` plugin's `frame-ancestors 'none'`, before being narrowed). This is the local
+   dev-server/e2e-preview-server analog of the CloudFront gap flagged just above (design decision #2)
+   — still open in terraform, out of scope here; fixed only where it was silently breaking the local
+   and e2e consent flow.
+
+Run: `pnpm exec playwright test e2e/oauth-authorize.spec.ts --workers=1 --reporter=list` — 2 passed in
+~22s, both on the first attempt after defect 4's fix (two prior attempts each surfaced one new defect
+via its own failure, per the discipline above — not simply retried until green).
 
 **Self-triage of `gate.sh`'s CodeRabbit CLI review (14 findings) before reporting done.** Fixed the
 ones that were genuinely valid and cheap to fix correctly, red-before-green (temporarily disabled

@@ -95,6 +95,39 @@ export default defineConfig(({ mode }) => {
       target: `http://localhost:${apiPort}`,
       changeOrigin: true,
     },
+    // PF-103 (TRO-412), added while getting e2e/oauth-authorize.spec.ts to
+    // actually run: `OAuthConsentPage`'s form posts to
+    // `${API_URL}/oauth/authorize/decision`, and `API_URL` (`VITE_API_URL`)
+    // is deliberately baked to `''` at build time (`web/package.json`'s
+    // `build` script: `VITE_API_URL= vite build`) so the same static bundle
+    // works behind any origin via relative paths + a runtime proxy — exactly
+    // like every `/api/*` call in this app. `/oauth` is mounted on the API
+    // at its own top-level prefix (`api/src/app.ts`, NOT under `/api` — see
+    // `oauth-authorize.ts`'s header for why), so without an entry here that
+    // relative POST resolves against the WEB origin instead and 404s from
+    // vite's static preview server — trace-verified
+    // (`POST 404 http://localhost:.../oauth/authorize/decision`) while
+    // debugging this ticket's e2e spec. Same gap the ticket's own CHANGES.md
+    // entry already flags for production CloudFront (no `/oauth/*`
+    // `ordered_cache_behavior` in `terraform/s3-cloudfront.tf` either) — this
+    // is the local dev-server/e2e-preview-server analog of that same
+    // still-open follow-up, fixed here because it silently broke every local
+    // and e2e exercise of the consent flow, not just a production deploy.
+    //
+    // Trailing slash is load-bearing: Vite matches proxy keys via plain
+    // `url.startsWith(context)` (`vite/dist/node/chunks/*.js`, no path-
+    // segment awareness), so a bare `/oauth` key also prefix-matches
+    // `/oauth-consent` — the WEB APP'S OWN SPA route for the consent screen
+    // — and hijacks it to the API, which has no such route and (trace-
+    // verified, second run) answers with its own global CSP header instead
+    // of the `frame-ancestors 'none'` the `oauth-consent-csp` plugin below
+    // sets for that exact path. `/oauth/` matches only paths with a `/`
+    // after `oauth` (`/oauth/authorize`, `/oauth/authorize/decision`), never
+    // `/oauth-consent`.
+    '/oauth/': {
+      target: `http://localhost:${apiPort}`,
+      changeOrigin: true,
+    },
     '/collaboration': {
       target: `http://localhost:${apiPort}`,
       changeOrigin: true,
