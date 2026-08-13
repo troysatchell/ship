@@ -20,7 +20,7 @@
 
 import type { NextFunction, Request, Response } from 'express';
 import { ScopeRegistry } from './registry.js';
-import { sendApiError } from '../oauth/apiError.js';
+import { forbiddenError } from '../api/v1/errors.js';
 import '../oauth/principal.js';
 
 export function requireScope(scope: string) {
@@ -37,9 +37,12 @@ export function requireScope(scope: string) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const principal = req.principal;
     if (!principal || !principal.scopes.includes(scope)) {
-      sendApiError(res, 403, 'forbidden', `Missing required scope: ${scope}`, req.requestId, {
-        missing_scope: scope,
-      });
+      const err = forbiddenError(
+        req.requestId ?? '',
+        `Missing required scope: ${scope}`,
+        { missing_scope: scope }
+      );
+      res.status(err.httpStatus).json(err.toJSON());
       return;
     }
     next();
