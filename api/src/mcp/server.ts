@@ -58,7 +58,7 @@ function loadConfig(): Config {
 
 // ============== OpenAPI Types (inline to avoid dependencies) ==============
 
-interface OpenAPIObject {
+export interface OpenAPIObject {
   paths?: Record<string, PathItemObject>;
   components?: {
     schemas?: Record<string, SchemaObject>;
@@ -73,7 +73,12 @@ interface PathItemObject {
   delete?: OperationObject;
 }
 
-interface OperationObject {
+export interface ServerObject {
+  url: string;
+  description?: string;
+}
+
+export interface OperationObject {
   operationId?: string;
   summary?: string;
   description?: string;
@@ -85,6 +90,13 @@ interface OperationObject {
       };
     };
   };
+  // TRO-551: an operation-level `servers` override (OpenAPI 3.0 §4.8.10.1)
+  // for routes registered outside the global `/api` prefix — see
+  // `api/src/openapi/registry.ts`'s `ROOT_SERVER` export, which is the
+  // writer half of this contract. When present, this REPLACES the `/api`
+  // default for this operation (`resolveServerPrefix` below), it does not
+  // add to it.
+  servers?: ServerObject[];
 }
 
 interface ParameterObject {
@@ -110,7 +122,7 @@ interface ReferenceObject {
 
 // ============== Tool Generation ==============
 
-interface ToolOperation {
+export interface ToolOperation {
   method: string;
   path: string;
   operation: OperationObject;
@@ -321,7 +333,7 @@ function buildInputSchema(
 /**
  * Generate MCP tools from OpenAPI spec
  */
-function generateTools(openApiSpec: OpenAPIObject): Tool[] {
+export function generateTools(openApiSpec: OpenAPIObject): Tool[] {
   const tools: Tool[] = [];
 
   for (const [path, pathItem] of Object.entries(openApiSpec.paths || {})) {
@@ -357,22 +369,68 @@ function generateTools(openApiSpec: OpenAPIObject): Tool[] {
   return tools;
 }
 
-/**
- * Execute an API call based on tool name and arguments
- */
-async function executeToolCall(
-  toolName: string,
-  args: Record<string, unknown>
-): Promise<unknown> {
-  const toolOp = toolOperations.get(toolName);
-  if (!toolOp) {
-    throw new Error(`Unknown tool: ${toolName}`);
-  }
+// TRO-551: every operation used to be assumed `/api`-relative — this was
+// hardcoded directly into the URL template below. That broke the moment a
+// route was registered outside `/api` (e.g. `/oauth/authorize`, mounted at
+// the application root in `app.ts`): the generated MCP tool still called
+// `${url}/api/oauth/authorize`, which 404s, silently, on every invocation.
+const DEFAULT_SERVER_PREFIX = "/api";
 
-  const { method, path, operation } = toolOp;
+/**
+ * Resolve the URL prefix for a given operation. Most operations have no
+ * `servers` override and use the registry's global `/api` base
+ * (`api/src/openapi/registry.ts`). An operation registered with a `servers`
+ * override — the `ROOT_SERVER` convention that export documents — uses that
+ * server's `url` instead, exactly matching OpenAPI 3.0's own semantics: an
+ * operation-level `servers` array REPLACES the document-level one for that
+ * operation, it does not add to it.
+ *
+ * Exported for the regression test — this is the fix's actual mechanism,
+ * kept a pure function precisely so it can be asserted on directly rather
+ * than only through a live HTTP call.
+ *
+ * Only a relative override (registry.ts's `ROOT_SERVER` — the only
+ * convention any operation in this codebase actually uses today) is
+ * supported: `buildRequestUrl` always concatenates the result onto
+ * `baseUrl`, so an absolute override (`https://other-host/...`) would
+ * silently produce a malformed URL like
+ * `http://ship-host/https://other-host/...` rather than requesting the
+ * other host, which is a worse failure than the one this ticket fixes —
+ * fail loudly instead (CodeRabbit review, TRO-551).
+ */
+export function resolveServerPrefix(operation: OperationObject): string {
+  const override = operation.servers?.[0]?.url;
+  if (override === undefined) {
+    return DEFAULT_SERVER_PREFIX;
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(override)) {
+    throw new Error(
+      `Unsupported absolute server URL on an operation: "${override}". ` +
+        "buildRequestUrl only supports a relative prefix (e.g. registry.ts's ROOT_SERVER) " +
+        "concatenated onto the configured Ship instance's own baseUrl."
+    );
+  }
+  // Strip exactly one trailing slash so `prefix + path` (path always starts
+  // with "/") never produces a double slash. A root-mount override of "/"
+  // (registry.ts's ROOT_SERVER) resolves to "" — nothing left to prefix.
+  return override.endsWith("/") ? override.slice(0, -1) : override;
+}
+
+/**
+ * Build the request URL and body params for a tool call, without making the
+ * HTTP request itself. Split out from `executeToolCall` so the URL-building
+ * logic — including the `/api` vs. per-operation `servers` override — is
+ * directly testable without a live server or the module-level `CONFIG`.
+ */
+export function buildRequestUrl(
+  baseUrl: string,
+  toolOp: ToolOperation,
+  args: Record<string, unknown>
+): { url: string; bodyParams: Record<string, unknown> } {
+  const { path, operation } = toolOp;
 
   // Build URL with path parameters replaced
-  let url = `${CONFIG.url}/api${path}`;
+  let url = `${baseUrl}${resolveServerPrefix(operation)}${path}`;
   const queryParams: Record<string, string> = {};
   const bodyParams: Record<string, unknown> = {};
 
@@ -405,6 +463,24 @@ async function executeToolCall(
   if (queryString) {
     url += `?${queryString}`;
   }
+
+  return { url, bodyParams };
+}
+
+/**
+ * Execute an API call based on tool name and arguments
+ */
+async function executeToolCall(
+  toolName: string,
+  args: Record<string, unknown>
+): Promise<unknown> {
+  const toolOp = toolOperations.get(toolName);
+  if (!toolOp) {
+    throw new Error(`Unknown tool: ${toolName}`);
+  }
+
+  const { method } = toolOp;
+  const { url, bodyParams } = buildRequestUrl(CONFIG.url, toolOp, args);
 
   // Make the request
   const fetchOptions: RequestInit = {
@@ -518,7 +594,15 @@ async function main() {
   console.error(`Ship MCP server running on ${CONFIG.url}`);
 }
 
-main().catch((error) => {
-  console.error("Failed to start Ship MCP server:", error);
-  process.exit(1);
-});
+// Only run when executed directly (`tsx src/mcp/server.ts` / the `mcp` pnpm
+// script), not when imported by the regression test — same guard
+// `api/src/db/postgresReachable.ts` and `verifyMigrations.ts` use, for the
+// identical reason: `main()` calls `loadConfig()`, which throws (and would
+// otherwise `process.exit(1)` the whole test runner) unless
+// `~/.claude/.env` happens to exist on the machine running the suite.
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().catch((error) => {
+    console.error("Failed to start Ship MCP server:", error);
+    process.exit(1);
+  });
+}

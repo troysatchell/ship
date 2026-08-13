@@ -232,6 +232,301 @@ dependent migration added later.
 
 ---
 
+## TRO-551 — OpenAPI registry + MCP executor learn a non-`/api` server override; PF-103's two routes registered
+
+**Source.** PM-triaged CodeRabbit Major on PR #183 (TRO-412), investigated by the PF-103 applier
+2026-08-12 and left as an honest, blocked deferral (see that ticket's entry above, updated in place
+to point here) — this ticket does the structural fix that deferral called for.
+
+**What was actually broken.** `api/src/openapi/registry.ts:73-78` set one global
+`servers: [{ url: '/api' }]` on the OpenAPI document, and `api/src/mcp/server.ts:375` built every
+generated MCP tool's request URL as `` `${CONFIG.url}/api${path}` `` unconditionally — no code path
+anywhere read a per-operation override. `GET /oauth/authorize` and `POST /oauth/authorize/decision`
+(PF-103, TRO-412) are mounted at the application root (`app.use('/oauth', ...)`, `api/src/app.ts`),
+not under `/api`, so there was no way to register them that didn't either misdocument their real
+path in Swagger or ship an MCP tool that called the wrong URL and silently 404s on every invocation.
+Confirmed live, both ways: before this fix, `GET http://localhost:3060/api/oauth/authorize` (what
+the old hardcoded executor would have called) returns `404`; the real route only ever answered at
+`GET /oauth/authorize` (no `/api`), which returns `400` for the same request (unregistered
+`client_id` — a real response from the route handler, not a routing miss).
+
+**Fix shape chosen, and why.** Two options were on the table: (a) teach the existing registry a
+per-route server override, or (b) stand up a second, `/oauth`-scoped `OpenAPIRegistry` instance the
+MCP generator deliberately skips. Chose **(a)**, and it turned out smaller than expected —
+`@asteasolutions/zod-to-openapi`'s `RouteConfig` type (`registerPath`'s parameter) is
+`Omit<OperationObject, 'responses'> & {...}`, and `openapi3-ts`'s `OperationObject` already declares
+an optional `servers?: ServerObject[]` field per OpenAPI 3.0 §4.8.10.1 (an operation-level `servers`
+array REPLACES the document-level one for that operation — never merges). So `registerPath({ ...,
+servers: [...] })` was already accepted by the type system and by the generator's own
+`generatePath()`, which spreads every non-(`method`/`path`/`request`/`responses`) field straight
+onto the emitted operation object — confirmed by generating the doc and inspecting the JSON output.
+Nothing about the registry's own machinery needed to change; only a convention for what to pass and
+a reader on the MCP side that had never existed. Option (b) would have needed its own generator,
+its own `servers` wiring, and a second thing for the MCP `main()` to decide whether to fetch — three
+new moving parts to reinvent something the underlying library already does correctly for free.
+
+**What changed.**
+- `api/src/openapi/registry.ts` — added `export const ROOT_SERVER: ServerObject[]`, an operation-level
+  `servers` override (`[{ url: '/', description: '...' }]`) for routes mounted outside `/api`. `url:
+  '/'` reads as "root path, `path` is already the complete mount path" — `resolveServerPrefix`
+  (below) strips the trailing slash, so it resolves to the same empty prefix a bare `''` would have
+  (self-triage below explains why `'/'` and not `''`).
+- `api/src/openapi/schemas/oauth-authorize.ts` (new) — registers `GET /oauth/authorize` and
+  `POST /oauth/authorize/decision` with `path: '/oauth/authorize'` / `'/oauth/authorize/decision'`
+  (the FULL mount path, not `/api`-relative like every other schema file) and `servers: ROOT_SERVER`.
+  `security: []` on both, following the exact precedent already in this registry for
+  `POST /auth/login` (`auth.ts`) — neither OAuth route requires auth to reach; each does its own
+  session check internally. Response shapes document reality: redirects (`302`/`303` with a
+  `Location` header) on success, static `text/html` error pages on the open-redirect-guard failure
+  paths — no JSON body exists for either endpoint, so none is invented here.
+- `api/src/openapi/schemas/index.ts` — barrel-imports the new file (registration is an import side
+  effect, same as every other schema module).
+- `api/src/mcp/server.ts` — added `resolveServerPrefix(operation)`: returns the operation's
+  `servers[0].url` when present, else the previous default `/api`. Extracted the URL-building
+  block out of `executeToolCall` into a new pure, exported `buildRequestUrl(baseUrl, toolOp, args)`
+  so the fix is directly unit-testable without a live server, `CONFIG`, or `~/.claude/.env`.
+  `executeToolCall` now calls `buildRequestUrl` and does only the fetch. Also guarded the
+  module-level `main()` call with `if (import.meta.url === \`file://${process.argv[1]}\`)` — the
+  same pattern `api/src/db/postgresReachable.ts`/`verifyMigrations.ts` already use — because
+  importing the file for the new test would otherwise run `main()` (which throws / calls
+  `process.exit(1)` without `~/.claude/.env`) as a side effect of the `import`.
+- `api/openapi.json` / `api/openapi.yaml` — regenerated (`pnpm --filter @ship/api openapi:generate`),
+  same convention as every prior endpoint-adding ticket (e.g. TRO-408/PF-102).
+
+**Scope, stated explicitly.** This ticket is the mechanism plus PF-103's two already-landed routes
+ONLY. PF-104's `GET /oauth/token` and PF-106's `/oauth/device/*` are not on `main` as of this
+ticket's dispatch (building concurrently on sibling branches per the orchestrator) and are NOT
+registered here — whoever lands them should reuse `ROOT_SERVER` rather than re-deriving this.
+
+**Verified for real, not eyeballed (observed, this exact repo, not the general OpenAPI/MCP pattern):**
+1. Started the api (`npx tsx watch src/index.ts`, port from `.factory-env`) against this worktree's
+   own database.
+2. `curl http://localhost:3060/api/openapi.json` — `paths['/oauth/authorize']` and
+   `paths['/oauth/authorize/decision']` both present; `paths['/api/oauth/authorize']` absent;
+   `paths['/oauth/authorize'].get.servers` is `[{"url":"/","description":"Mounted at the application
+   root — outside the /api prefix."}]`; the document-level `servers` and the control case
+   `paths['/issues'].get.servers` (`undefined`, unaffected) both unchanged.
+3. Ran the REAL `generateTools()` and `buildRequestUrl()` from `api/src/mcp/server.ts` (not a
+   reimplementation) against that live spec: generated tool `ship_get_oauth_authorize`; the URL it
+   builds is `http://localhost:3060/oauth/authorize?client_id=...` (no `/api`); fetching that exact
+   URL returns `400` (reaches the real route handler — unregistered `client_id` — not a routing
+   404). The equivalent old-shape URL, `http://localhost:3060/api/oauth/authorize`, returns `404` —
+   this is the silent-failure bug the ticket describes, confirmed to still exist at that URL and
+   confirmed the fix's URL does not hit it.
+4. Control case in the same run: `buildRequestUrl` for `GET /issues` (an ordinary, unaffected
+   operation with no `servers` override) still produces `http://localhost:3060/api/issues`.
+
+**Regression tests (the factory-gate proof).**
+- `api/src/openapi/schemas/oauth-authorize.test.ts` (6 cases) — asserts `generateOpenAPIDocument()`
+  carries both new paths, each with the `ROOT_SERVER` override, that neither is folded under
+  `/api/oauth/...`, and that an ordinary `/api`-relative route (`/issues`, control) is unaffected.
+- `api/src/mcp/server.test.ts` (7 cases) — unit-tests `resolveServerPrefix` and `buildRequestUrl`
+  directly: default `/api` prefix with no override, the `ROOT_SERVER` (`url: '/'`) override producing
+  an un-prefixed URL for both the GET (query params) and POST (body params) shapes, a trailing-slash
+  custom-override edge case, the `/issues` control case, and (added during self-triage below) the
+  absolute-URL guard throwing instead of building a malformed URL.
+
+**Red-before-green (seen, not claimed).** Two separate reverts, each restored immediately after:
+- Reverted `buildRequestUrl` to the pre-fix `` let url = \`${baseUrl}/api${path}\`; `` (no
+  `resolveServerPrefix` call) and ran `server.test.ts`: the two `ROOT_SERVER`-override cases failed
+  with `expected 'http://ship.example/api/oauth/authorize...' to be
+  'http://ship.example/oauth/authorize...'` — the exact bug — while the `/api`-default and `/issues`
+  control cases still passed (4/6 passed, 2/6 failed for the asserted reason, not an import error).
+- Commented out `oauth-authorize.ts`'s barrel export in `schemas/index.ts` (simulating "route never
+  registered," the actual pre-TRO-551 state) and ran `oauth-authorize.test.ts`: the 4 cases asserting
+  the paths/servers exist failed (`expected {...} to have property "/oauth/authorize"`,
+  `expected undefined to be defined`), while the 2 control-case assertions about unrelated routes
+  still passed (2/6 passed, 4/6 failed for the asserted reason).
+Both reverts restored; full suite re-run green (12/12, before the self-triage section below added
+one more case) before finishing.
+
+**Self-triage of `gate.sh`'s CodeRabbit CLI review (5 findings) before reporting done.** Same
+discipline PF-103's own entry above used — verify each against the actual current code, fix what's
+genuinely valid and cheap, state a reason for what isn't fixed here:
+- **[minor, fixed]** `ROOT_SERVER`'s `url: ''` — an empty string is an unconventional way to express
+  "server root" and some OpenAPI tooling besides this repo's own generator/executor might not treat
+  it as a real entry. Changed to `url: '/'`. Verified this is a presentation-only change, not a
+  behavior change: `resolveServerPrefix` already stripped a single trailing slash from any override
+  (added for exactly this reason before the finding was filed), so `'/'` resolves to the identical
+  empty prefix `''` did — confirmed via `server.test.ts`'s existing trailing-slash case and by
+  regenerating `openapi.json`/`.yaml` and re-running the full suite, all green.
+- **[trivial, fixed]** `resolveServerPrefix` had no guard against a future absolute-URL server
+  override (`https://other-host/...`) — `buildRequestUrl` always concatenates the resolved prefix
+  onto `baseUrl`, so an absolute override would silently build a malformed URL
+  (`http://ship-host/https://other-host/...`) instead of requesting the other host. No operation in
+  this codebase registers one today (only `ROOT_SERVER`'s `'/'` is ever used), but the guard is
+  cheap, harmless to existing behavior, and closes a real gap in the exact mechanism this ticket
+  built — added a regex check that throws a clear error instead, plus a test case
+  (`server.test.ts`, "throws on an absolute server URL").
+- **[major, judged not to fix here]** "Exclude browser-navigated OAuth operations (no JSON response)
+  from `generateTools` so they never become MCP tools at all." A real, well-reasoned observation —
+  calling `ship_get_oauth_authorize` today would follow a redirect to the web app's login/consent
+  HTML and then fail parsing it as JSON (an ugly `isError: true` tool result, not a crash, but not
+  useful either) rather than the clean `400` from an unregistered `client_id`. Judged out of scope
+  for THIS ticket rather than fixed unilaterally: (1) the ticket's own stated done-criterion is "the
+  generated MCP tool calling the correct non-`/api` URL (not 404ing)" — satisfied, and verified
+  live — not "produces a useful result for every possible input"; (2) removing tools from the
+  generated list is a user-visible behavior change for MCP clients, one of this brief's explicit
+  stop-and-report triggers; (3) it needs a new, unspecified heuristic for "is this operation
+  JSON-API-shaped" that risks over/under-filtering existing tools if invented hastily. Flagged for
+  the orchestrator as a good candidate follow-up ticket, not decided unilaterally here.
+- **[major, judged not to fix here]** The `import.meta.url === \`file://${process.argv[1]}\`` guard
+  should use `pathToFileURL(process.argv[1]).href` for correctness with spaces/Windows paths.
+  Genuinely valid in the abstract, but this is NOT a defect introduced by this ticket — it is the
+  exact, already-established convention copied verbatim from `api/src/db/postgresReachable.ts` and
+  `verifyMigrations.ts` (both predate this ticket). Fixing it correctly means editing those two
+  files too, which is outside `api/src/openapi/`/`api/src/mcp/` — this ticket's declared scope — and
+  this deployment target is Linux/Docker (Elastic Beanstalk, per `.claude/CLAUDE.md`) with no
+  spaces anywhere in its worktree paths, so the practical risk here is nil. Left as-is; worth a
+  small follow-up ticket that fixes all three files together for consistency, not a one-off change
+  to only the file this ticket happens to touch.
+- **[critical, judged not to fix here — and the severity does not hold up]** `jsonToYaml()` renders
+  the new `servers` block with `description` at a much deeper indent than its sibling `url` key,
+  which is invalid/misleading YAML nesting. Checked against `api/openapi.yaml` BEFORE this ticket's
+  diff: the exact same malformed shape already exists for the pre-existing document-level `servers:`
+  block (`- url: /api` / `description: API base path`, present on `main`) and, more broadly, for
+  EVERY multi-key object inside EVERY array `jsonToYaml` renders — confirmed on `/issues`'s untouched
+  `parameters` array in the same file. This is a systemic, pre-existing defect in the shared
+  hand-rolled YAML generator (`api/src/swagger.ts`), not something this ticket introduced or
+  meaningfully worsened — it's already the tracked subject of **TRO-490** (cited by
+  `oauth-apps.ts`'s own header comment as "the generator-level bug itself"). It also does not affect
+  what this ticket's own definition of done depends on: the MCP server fetches `/api/openapi.json`
+  (a separate, correct `JSON.stringify`-based code path, verified live above), and `/api/docs`
+  (Swagger UI) renders from the in-memory JS object directly, not from the YAML text — only the
+  supplementary `/api/openapi.yaml` raw-text endpoint is affected. Fixing the shared generator is
+  TRO-490's job, not a single-endpoint registration ticket's; not touched here.
+
+**How to run it.**
+`api && npx vitest run src/mcp/server.test.ts src/openapi/schemas/oauth-authorize.test.ts` (no
+`DATABASE_URL` dependency — both files are pure-function/registry tests, no DB access). Manual:
+`pnpm dev`, then `curl http://localhost:<api-port>/api/openapi.json | jq '.paths["/oauth/authorize"]'`.
+
+**Rollback.**
+No schema/migration change — nothing at the DB level.
+Remove `api/src/openapi/schemas/oauth-authorize.ts`, `api/src/openapi/schemas/oauth-authorize.test.ts`,
+`api/src/mcp/server.test.ts`; drop the `export * from './oauth-authorize.js';` line from
+`api/src/openapi/schemas/index.ts`; remove the `ROOT_SERVER` export from `api/src/openapi/registry.ts`;
+in `api/src/mcp/server.ts`, revert `executeToolCall`/`buildRequestUrl`/`resolveServerPrefix` to the
+single inline `` let url = \`${CONFIG.url}/api${path}\`; `` block and remove the `servers` field from
+the hand-rolled `OperationObject` interface (also fine to leave — it's additive and unused once
+`resolveServerPrefix` is gone) and the `main()`-guard `if` (optional; harmless to keep, it only
+changes behavior when the file is imported rather than executed directly). Regenerate
+`api/openapi.json`/`api/openapi.yaml` afterward so they stop advertising the two `/oauth/*` paths.
+This reopens the exact deferral PF-103's own CHANGES.md entry described — `/oauth/authorize` and
+`/oauth/authorize/decision` go back to being unregistered, undocumented in Swagger, and absent as
+MCP tools (silently, as before — not present in `/api/openapi.json`, not present as a tool, no
+error either way).
+
+---
+
+## TRO-441 — PF-907: Grader access — seeded read-only OAuth app, README one-command, PUBLIC repo check
+
+**Scope note (binding on this entry):** this ticket was dispatched with a deliberate scope split.
+**In scope for this branch:** the idempotent seeded grader OAuth app + its regression test, and the
+README credentials/one-command-setup section. **Explicitly deferred, not attempted here:**
+live deployed-instance verification (portal reachable, `/api/v1/openapi.json` publicly resolvable)
+— neither the developer portal (Epic E5) nor the OpenAPI spec route (PF-202) exists on this branch
+yet, and deploys are orchestrator/human-gated in this factory. Every claim below is written in the
+tense of what was actually run (this branch, local `ship_wt_tro_441` database), never as a claim
+about a deployed instance.
+
+**GitHub repo visibility (PLUGFORGE.MD §4's brief mandate) — observed, not derived:**
+```
+$ gh repo view troysatchell/ship --json visibility,isPrivate
+{"isPrivate":false,"visibility":"PUBLIC"}
+```
+Run twice: once by the orchestrator (2026-08-11T00:06Z) and independently re-confirmed on this
+branch before this entry was written. Both runs agree — the mandate is **already satisfied**, no
+further action needed for this AC.
+
+**What was added.**
+
+- `api/src/platform/oauth/seedGraderApp.ts` — `seedGraderApp(pool, workspaceId)`, an idempotent
+  seed for a first-party, read-only grader OAuth app. Reuses PF-102's `credentials.ts`
+  (`generateClientId`, `hashClientSecret`) rather than `appRegistration.ts`'s `createOAuthApp`
+  directly, because that function always mints a fresh random secret on every call — the grader
+  app's secret must be the one operator-provisioned value read from
+  `GRADER_OAUTH_CLIENT_SECRET` (PM triage, TRO-441 comments, 2026-08-10 — "same shared-config rule
+  as PF-900/TRO-411"), not a new one generated per seed run. Idempotency is enforced by the unique
+  index on `oauth_apps.client_id` — the seed generates a workspace-scoped but deterministic
+  `client_id` (format: `ship_app_grader_{first 8 chars of workspace_id}`) and uses
+  `ON CONFLICT (client_id) DO NOTHING` to handle concurrent seed calls (the initial SELECT check
+  remains as a fast path, but is not the guarantee). Three outcomes, none an error: `created`,
+  `exists` (no-op, same `client_id` returned), or `skipped_no_secret` (the variable is unset — a
+  normal `pnpm db:seed`/`./start.sh` run without it is unaffected by design, since the grader app
+  should only exist where the secret has actually been provisioned). `requested_scopes` is exactly
+  `['documents:read', 'issues:read', 'sprints:read']` (PLUGFORGE.MD §2.3) — never `webhooks:manage`
+  or any `:write` scope, so the grader account cannot mutate graded state. `client_type:
+  'confidential'`, `is_first_party: true`.
+- `api/src/db/seed.ts` — calls `seedGraderApp(pool, workspaceId)` right after workspace
+  creation/lookup (before the rest of the file's fixtures, which don't depend on it), logs the
+  outcome with the same `✅`/`ℹ️` convention every other seed step already uses, and prints the
+  `client_id` (never the secret — that value is whatever the caller set
+  `GRADER_OAUTH_CLIENT_SECRET` to, and is deliberately not re-echoed) in the final summary block
+  alongside the existing `dev@ship.local` login credentials.
+- `README.md` — new "Grader Access — Public API (OAuth)" subsection under "## Deployment" (after
+  "Post-deploy verification", before "Environment Variables"): one-command setup
+  (`GRADER_OAUTH_CLIENT_SECRET=<value> ./start.sh` or `... pnpm --filter @ship/api db:seed`),
+  states the printed output convention, explains the skip-when-unset behavior, and points to the
+  existing `FLEETGRAPH.MD` "Grader Access" section for the web app's own grader login
+  (`alice.chen@ship.local` / `admin123`) — the "alongside existing alice.chen grader creds"
+  convention PLUGFORGE.MD's PF-907 block names. Also states plainly, in future tense, that minting
+  an actual bearer token via Client Credentials needs `POST /oauth/token` (PF-104), which is not
+  merged onto this branch — this section does not claim a live token round-trip works today.
+  `GRADER_OAUTH_CLIENT_SECRET` added to the Environment Variables table.
+
+**Regression tests (red-before-green, observed on this branch, `DATABASE_URL` from
+`.factory-env`/`ship_wt_tro_441`).**
+
+- `api/src/platform/oauth/__tests__/seedGraderApp.test.ts` (5 cases). Test-design source: TRO-441's
+  "Test design (pre-implementation)" Linear comment, AC-1 — its suggested path
+  (`api/src/db/__tests__/seedGraderApp.test.ts`) assumed the module would live beside `db/seed.ts`;
+  placed instead at `api/src/platform/oauth/__tests__/` next to the module itself and PF-102's own
+  `app-registration.test.ts`, which the test-design comment explicitly allows ("adjust to wherever
+  the implementer places the boot/migration seed"). Red first: `seedGraderApp` stubbed to
+  `throw new Error('seedGraderApp: not implemented')` — all 5 cases failed for that real reason
+  (the thrown error propagating out of each `await seedGraderApp(...)` call), not an import error.
+  Green after the real implementation: 5/5. Covers: two-calls-in-sequence produces exactly one row
+  (idempotency); `is_first_party = true` and exactly the three read-only scopes, no `:write`/
+  `webhooks:manage`; `client_secret_hash` present and is not the raw secret (SHA-256 of the env
+  value, verified against a hash computed independently in the test); the raw secret is read via
+  the module's own exported `GRADER_OAUTH_CLIENT_SECRET_ENV_VAR` constant, never a hardcoded string
+  literal in the test; and the unset-secret path creates no row and does not throw.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/seedGraderApp.test.ts
+
+# Manual end-to-end sanity check (not the graded proof — a local integration smoke check run
+# during this ticket, against this worktree's own database):
+GRADER_OAUTH_CLIENT_SECRET=<any-value> pnpm --filter @ship/api exec tsx src/db/seed.ts
+# → "✅ Created grader OAuth app (client_id: ship_app_...)"
+# re-run the same command → "ℹ️  Grader OAuth app already exists (client_id: ship_app_...)" (idempotent)
+```
+
+**Not verified / explicitly deferred (see scope note above).** Portal reachability and
+`/api/v1/openapi.json` public resolvability — no deployed instance exists to check, and the code
+those checks would exercise (E5, PF-202) isn't built yet. A genuinely clean-machine run of the
+README's grader steps by someone other than the author of this entry — not performed as part of
+this dispatch; the manual run above was on this same worktree, so it does not by itself satisfy the
+ticket's "clean-machine run" AC. Obtaining a real bearer token for the grader app — blocked on
+PF-104 (`/oauth/token`), not on this branch.
+
+**Rollback.** Delete `api/src/platform/oauth/seedGraderApp.ts` and
+`api/src/platform/oauth/__tests__/seedGraderApp.test.ts`. In `api/src/db/seed.ts`, remove the
+`seedGraderApp`/`GRADER_OAUTH_CLIENT_SECRET_ENV_VAR` import, the seed-call block right after
+workspace creation, and the "Grader OAuth app" lines from the final summary — the rest of the seed
+file is unaffected (nothing else in it reads `graderAppSeedResult`). In `README.md`, remove the
+"Grader Access — Public API (OAuth)" subsection and the `GRADER_OAUTH_CLIENT_SECRET` row from the
+Environment Variables table. No schema change was made (this ticket writes rows into `oauth_apps`,
+migration 042, already merged via PF-101) — no migration to revert. Any grader app rows already
+seeded into a database can be removed with
+`DELETE FROM oauth_apps WHERE name = 'Grader (read-only)' AND is_first_party = true;`.
+
+---
+
 ## TRO-398 — PF-200: Documents resource — cursor-paginated list/get/create with scopes
 
 **What was added.**
