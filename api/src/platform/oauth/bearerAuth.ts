@@ -36,7 +36,7 @@
 import type { NextFunction, Request, Response } from 'express';
 import crypto from 'crypto';
 import { pool } from '../../db/client.js';
-import { sendApiError } from './apiError.js';
+import { unauthorizedError, serverError, type Unauthorized401Reason } from '../api/v1/errors.js';
 import type { Principal } from './principal.js';
 import './principal.js';
 
@@ -93,14 +93,12 @@ async function lookupPersonalToken(tokenHash: string): Promise<PersonalTokenLook
   return result.rows[0] ?? null;
 }
 
-type BearerAuthReason = 'missing_token' | 'invalid_token' | 'expired_token';
-
 /** Every rejection path funnels through here, so the response shape and the
  *  (optional) server-side log line are written in exactly one place. */
 function reject(
   req: Request,
   res: Response,
-  reason: BearerAuthReason,
+  reason: Unauthorized401Reason,
   message: string,
   logNote?: string,
 ): void {
@@ -109,7 +107,8 @@ function reject(
     // binding PM decision — the response body/reason never varies by cause.
     console.warn(`[bearerAuth] ${logNote}`);
   }
-  sendApiError(res, 401, 'unauthorized', message, req.requestId, { reason });
+  const err = unauthorizedError(req.requestId ?? '', reason, message);
+  res.status(err.httpStatus).json(err.toJSON());
 }
 
 const INVALID_TOKEN_MESSAGE = 'Invalid or unknown access token.';
@@ -196,6 +195,7 @@ export async function bearerAuth(req: Request, res: Response, next: NextFunction
     reject(req, res, 'invalid_token', INVALID_TOKEN_MESSAGE);
   } catch (error) {
     console.error('[bearerAuth] token lookup failed', error);
-    sendApiError(res, 500, 'server_error', 'Authentication failed.', req.requestId);
+    const err = serverError(req.requestId ?? '', 'Authentication failed.');
+    res.status(err.httpStatus).json(err.toJSON());
   }
 }

@@ -232,6 +232,55 @@ dependent migration added later.
 
 ---
 
+## TRO-489 — Consolidate PF-107's local `apiError.ts` into PF-002's canonical `errors.ts`
+
+**What was changed.**
+
+PF-107 (`bearerAuth` + `requireScope` middleware, TRO-430) and PF-002 (`ApiError` contract + error
+middleware, TRO-397) were built on parallel, unmerged branches to avoid a merge-order dependency.
+PF-107 created a local `api/src/platform/oauth/apiError.ts` that reproduced the §2.5 error shape
+to keep the ticket self-contained; its final report flagged this as a consolidation point to be done
+once PF-002 landed. Both tickets have now merged. Two implementations of the same error contract
+will drift; the canonical version lives in PF-002.
+
+**The consolidation.**
+- Deleted `api/src/platform/oauth/apiError.ts` (the local, ticket-scoped duplicate).
+- `api/src/platform/oauth/bearerAuth.ts`: replaced `import { sendApiError } from './apiError.js'`
+  with `import { unauthorizedError, serverError, type Unauthorized401Reason } from
+  '../api/v1/errors.js'`. The `reject()` helper now calls `unauthorizedError(req.requestId ?? '',
+  reason, message)` and sends the response via `.httpStatus` + `.toJSON()` instead of the local
+  `sendApiError()` function. Identical behavior — same wire shape, same status codes, same details
+  structure — verified by all 11 existing test cases passing without modification.
+- `api/src/platform/scopes/requireScope.ts`: replaced `import { sendApiError } from
+  '../oauth/apiError.js'` with `import { forbiddenError } from '../api/v1/errors.js'`. The
+  403 rejection now calls `forbiddenError(req.requestId ?? '', message, { missing_scope: scope })` and
+  sends the response the same way. Verified by all 4 existing registry + 11 bearerAuth test cases
+  passing (the scope-check is integrated into bearerAuth's test setup).
+
+The `req.requestId ?? ''` fallback is identical to the original `sendApiError`'s behavior — the
+middleware can run in test apps without a request-ID middleware, so undefined is tolerable (falls
+back to empty string in the response, matching the original contract).
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth src/platform/scopes
+pnpm type-check
+```
+
+**Rollback.**
+
+```bash
+git revert <this-ticket's-commit>
+```
+
+No database changes, no other files impacted, no migrations involved. The revert cleanly restores
+`api/src/platform/oauth/apiError.ts` and reverts the import/usage changes in the two affected
+middleware files.
+
+---
+
 ## TRO-551 — OpenAPI registry + MCP executor learn a non-`/api` server override; PF-103's two routes registered
 
 **Source.** PM-triaged CodeRabbit Major on PR #183 (TRO-412), investigated by the PF-103 applier
