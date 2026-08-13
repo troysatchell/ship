@@ -21,6 +21,123 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-494 — PF-004 follow-up: source-IP limiter exemption made independently provable
+
+**What was broken.** TRO-401/PF-004's `rate-limit-v1-exemption.test.ts` (CodeRabbit Major finding on
+PR #176, triaged 2026-08-10) sends 601 sequential requests — past the production **identity** cap
+(600) but nowhere near the production **source-IP** cap (6,000). Both legacy limiters share the same
+`isLegacyLimiterExemptPath` predicate (mitigating: divergence would require editing a call site, not
+the shared logic), but the test still could not detect a regression that removed the exemption from
+only the source-IP limiter's `skip:` call site — 601 requests never approach a 6,000 cap whether or not
+it is exempted. See the **Correction** paragraph added to TRO-401's own entry below for the full
+disclosure repair.
+
+**What changed.**
+1. `api/src/middleware/rate-limit.ts` — `createApiRateLimiters` gained a third, optional
+   `limitOverrides: Partial<ResolvedApiRateLimits>` parameter (default `{}`), merged as
+   `{ ...resolveApiRateLimits(env), ...limitOverrides }`. The production call site
+   (`app.ts:130`, `createApiRateLimiters(process.env, rateLimitRedisClient)`) passes only 2 arguments,
+   so `limitOverrides` is always `{}` there and production still resolves exactly what
+   `resolveApiRateLimits` returns — unchanged.
+2. `api/src/middleware/__tests__/rate-limit-v1-exemption.test.ts` — added `buildSourceIpOnlyApp()`
+   (mounts **only** `perSourceIpLimiter`, no `perIdentityLimiter` at all) and two new cases, AC-3a/AC-3b,
+   that drive the source-IP limiter alone at `limitOverrides: { sourceIpLimit: 5 }` instead of the real
+   6,000 ceiling. Also fixed the file's own top-of-file comment in place (see TRO-401's Correction
+   paragraph below) — it no longer claims "every hammer below runs against those exact production
+   numbers."
+3. `api/src/middleware/__tests__/rate-limit.test.ts` — added a `createApiRateLimiters overrides
+   (TRO-494)` block: a pinned (not bounds-checked) assertion that `resolveApiRateLimits({NODE_ENV:
+   'production'})` still resolves exactly `{ windowMs: 60000, identityLimit: 600, sourceIpLimit: 6000 }`
+   with no overrides supplied; an assertion that the 2-argument production call shape is unaffected;
+   and a small end-to-end check that an explicit `sourceIpLimit` override (3) actually throttles at
+   that cap, not at 6,000.
+
+**Regression test.**
+- **AC-3a (source-IP exemption, isolated):** `buildSourceIpOnlyApp()`, 6 sequential requests
+  (`SOURCE_IP_TEST_CAP + 1`, cap = 5) to `/api/v1/health` — asserts zero `429`s. Only
+  `perSourceIpLimiter` is mounted, so a `429` here can only come from that limiter's own `skip`
+  predicate — no ambiguity from `perIdentityLimiter`, unlike AC-1.
+- **AC-3b (source-IP cap, isolated):** same app, 6 requests to `/api/internal-example` — asserts a
+  `429` at exactly request 6, carrying the source-IP limiter's own message body (`{ error: 'Too many
+  requests from this network. Please slow down.' }`, distinct from the identity limiter's message —
+  confirms the 429 came from the limiter under test, not a different one).
+- **`rate-limit.test.ts`'s 3 new cases** (see "What changed" #3) guard the override mechanism itself:
+  that it's a no-op unused, and that it works at all when used.
+
+**What each new assertion catches, specifically:**
+- AC-3a catches: the source-IP limiter's `skip: (req) => isLegacyLimiterExemptPath(req.path)` call
+  site being removed, emptied, or narrowed so it no longer matches `/v1` — exactly TRO-401/PF-004's
+  original gap, and exactly what the red-proof below reproduces.
+- AC-3b catches: an over-wide exemption on the source-IP limiter leaking into internal `/api/*` routes
+  (e.g. a predicate that matched all of `/api/` instead of `/v1`).
+- `rate-limit.test.ts`'s pinned-value test catches: a future edit to the override-merge
+  (`{ ...resolveApiRateLimits(env), ...limitOverrides }`) that changes the override-free resolution —
+  e.g. `limitOverrides` acquiring a non-empty default, or a field being swapped in the merge — passing
+  the *existing* bounds-style assertions (which only check `>= 320` / `<= 5000` / `sourceIpLimit >
+  identityLimit`) while silently moving the real production ceiling.
+
+**Red before green (observed).** Copied `api/src/middleware/rate-limit.ts` aside first
+(`cp rate-limit.ts /scratchpad/TRO-494-rate-limit.ts.good` — never `git stash`, per this project's
+standing rule), then removed only the `skip: (req) => isLegacyLimiterExemptPath(req.path),` line from
+`perSourceIpLimiter`'s config (leaving `perIdentityLimiter`'s `skip` untouched) and ran
+`npx vitest run src/middleware/__tests__/rate-limit-v1-exemption.test.ts`:
+
+```text
+❯ src/middleware/__tests__/rate-limit-v1-exemption.test.ts (4 tests | 1 failed) 435ms
+    ✓ AC-1: v1 requests bypass both legacy limiters past the prod identity cap 175ms
+    ✓ AC-2: internal /api/ routes remain capped at the prod identity limit, with the unchanged legacy 429 shape 96ms
+    × AC-3a (TRO-494): the source-IP limiter ALONE exempts /api/v1, driven at a small configured cap instead of the 6,000 production ceiling 3ms
+    ✓ AC-3b (TRO-494): the source-IP limiter ALONE still caps internal /api/ routes, at its own overridden ceiling 1ms
+
+ FAIL src/middleware/__tests__/rate-limit-v1-exemption.test.ts > PF-004 / TRO-401: /api/v1 exemption from the legacy /api/ limiters > AC-3a (TRO-494): the source-IP limiter ALONE exempts /api/v1, driven at a small configured cap instead of the 6,000 production ceiling
+AssertionError: expected 0/6 throttled responses to /api/v1/health from the source-IP limiter alone (cap 5), got 1: expected 1 to be +0 // Object.is equality
+
+ Test Files  1 failed (1)
+      Tests  1 failed | 3 passed (4)
+```
+
+A genuine `AssertionError` — a real HTTP `429` arrived — not an import error or typo, and for exactly
+the claimed reason: only AC-3a (the exemption check) failed; AC-3b (the capping check, which does not
+depend on the exemption) and AC-1/AC-2 (which never approach the source-IP cap regardless) all stayed
+green, confirming AC-1/AC-2's blindness to this exact regression. Restored the file from the pre-edit
+copy (byte-identical, verified via `diff`), then re-ran the same command:
+
+```text
+✓ src/middleware/__tests__/rate-limit-v1-exemption.test.ts (4 tests) 432ms
+ Test Files  1 passed (1)
+      Tests  4 passed (4)
+```
+
+Full `api` suite after restoring: `pnpm --filter @ship/api test` — 904/904 passed (85 files).
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api test -- rate-limit-v1-exemption
+pnpm --filter @ship/api test -- rate-limit.test.ts
+```
+
+**Not verified.** Real wall-clock window expiry (same scope limitation as TRO-401 — all requests
+complete well inside the 60s window). Production behavior against a live Redis-backed store
+(`REDIS_URL` unset in this suite; `limitOverrides` is applied before the `rateLimit({...})` call
+regardless of store backend, so no Redis-specific interaction is expected, but none was exercised).
+`windowMs` overrides specifically (only `sourceIpLimit` is exercised by AC-3a/AC-3b and the
+`rate-limit.test.ts` override test; the `limitOverrides` type permits overriding `windowMs` and
+`identityLimit` too, but nothing in this branch drives those fields — they are covered only by the
+"no overrides" pinned-value case).
+
+**Rollback.** Revert this commit (or `git diff main -- api/src/middleware/rate-limit.ts
+api/src/middleware/__tests__/rate-limit-v1-exemption.test.ts
+api/src/middleware/__tests__/rate-limit.test.ts CHANGES.md | git apply -R`). Removes the
+`limitOverrides` parameter (production behavior reverts to identical — it was always the default
+no-op path), the five new tests, and this correction's prose. No schema, migration, or env-var
+changes — safe to revert standalone. Reverting does **not** reintroduce TRO-401/PF-004's original
+gap on its own (the `skip` call sites are unchanged by this ticket) — it only removes this ticket's
+proof that the source-IP one is independently exercised.
+
+---
+
 ## TRO-495 — PF-002: HttpStatus assertions in ApiError constructor test suite
 
 **What was added.** Extended `api/src/platform/api/v1/__tests__/errors.test.ts`'s `assertShape` helper
