@@ -55,7 +55,75 @@
 | **Week 6 PlugForge — Linear project + full ticket decomposition** | ✅ **done (2026-08-10 evening)** — project "PlugForge — Week 6 Platform & Public API" created (Urgent, target 2026-08-16); PM scope gate passed (6 live spot-checks); 10 grouping epics TRO-386–395 + 60 tickets TRO-396–455 (5 parallel sonnet agents, all PF blocks verbatim); ~25 cross-epic blocks relations wired; requirements config re-scoped to W6. 🔔 PF-100 (TRO-403) delivered, **awaiting Troy's ack** — blocks all E1 code. Build not started. |
 | **Early Submission push (TRO-356–360 + live-found TRO-362/363)** | ✅ **done (2026-08-06 evening)** — all six gap tickets Done and deployed; TRO-359/360 recovered through GitHub Actions major outage via break-glass merges (PRs #148/#149, protection restored+verified); js-yaml advisory pinned (PR #148); Action Items modal re-ambush fixed (TRO-362/PR #151) and no-document chat state made explicit (TRO-363/PR #152), both browser-verified on the live graded deploy at `af573d3`. GitLab `main` pipeline post-TRO-359 not yet observed. |
 
+| **W6 wave 2 merged + verified; wave 3 MVP-first mid-flight** | ✅/🟡 **2026-08-11 (~01:20Z)** — PRs #175–#179 all merged (incl. #179 under recorded stash-guard exception + real e2e-fixture root-cause fix); 7 blind verifications adjudicated (6 confirmed, TRO-401 rejected → remediation #181 open); 4 wave-3 PRs open (#180 CLEAN-ready, #181, #182, #183); TRO-398/TRO-441 builders parked mid-flight; stopped on Troy's "stop on next gate". |
+
 ## Log
+
+### 2026-08-12/13 — Wave-3 tail cleared: #181 merged+verified, TRO-401 CONFIRMED on final attempt, 3 parked builders recovered, 4 PRs staged; oauth e2e ran for the first time ever and found 4 environment defects
+
+- **State recovery:** #180/#182 found merged externally (2026-08-11 evening, outside any session); GitLab was 2 merges behind — synced via copy-aside union merge of the dirty ledger (66 local rows preserved), both remotes verified. TRO-419 + TRO-495 blind-verified **CONFIRMED** post-hoc (mutation checks bit correctly in both; verdicts on tickets).
+- **#181 (TRO-494) merged:** convoy re-resolve, 5 CR findings fixed (incl. tuple-length→behavioral limiter test), gate pass on quiet re-run after one sibling-load flake. **TRO-401 re-verification attempt 2: CONFIRMED** — dual mutation proof (each limiter's skip removal failed exactly its own AC test); TRO-401 + TRO-494 Done. Residual negative-space gap → TRO-552.
+- **Parked builders recovered:** TRO-441 attempt-2 "real" agent failure root-caused as host-suspend artifact (26.9 min recorded vs 25s budget); attempt 3 passed 12/12; TOCTOU seed race fixed DB-enforced (deterministic client_id + ON CONFLICT) → **PR #184**. TRO-489 structural regression-test fail documented as pure-refactor exception → **PR #185**. TRO-398 builder resumed, full implementation gated 12/12 first attempt → **PR #186** (MVP bottleneck through its gate).
+- **#183 (TRO-412/PF-103):** 11-finding CodeRabbit review PM-triaged (7 fixed incl. consent app_name spoof interim fix + session-validity tests; 3 dismissed with verified reasons — one CR claim mooted by bef137e, checked against the file not the finding text; OpenAPI registration stopped on a REAL structural blocker → TRO-551 High). 3 CodeQL Highs dismissed with written reasons (sameSite=strict kills the CSRF vector; rate-limit gap = ticketed TRO-503/PF-500 window). **First-ever run of the oauth e2e spec found 4 stacked defects** (missing response_type, un-interceptable external redirect_uri, CORS_ORIGIN='*' as URL base, missing /oauth/ preview proxy with trailing-slash subtlety) — all fixed, spec passes 2/2 twice; lessons entry added. Final head pushed, merge pending CI.
+- **Ops:** 2 stalled sub-agents resumed in-place via SendMessage (context preserved — new technique, works well). Scorecard +8 rows (incl. 3 honest fails: 2 load-flakes, 1 structural). Ledger +19 rows. New tickets TRO-549–552. Lessons +3 entries (pnpm scoping footgun, duplicate-implementation grep, first-e2e-run class).
+- **Next actions in activeContext.md** — merge queue for #183/#184/#185/#186 (CodeRabbit reviews pending on the latter three), blind verifiers per merge, then PF-104 + PF-201/PF-202 dispatches.
+
+### 2026-08-11 (early AM) — Wave-2 convoy merged 5/5; verification round adjudicated; wave 3 MVP-realigned; stop order honored
+
+- **Convoy:** #175 (PF-003) → #176 (PF-004) → #178 (PF-002) → #177 (PF-102) → #179 (PF-107) all merged sequentially via merge-changes.mjs resolutions; both remotes verified at `cddab61`.
+- **#179 saga:** merged under the recorded stash-guard exception (decision comment on the PR, Troy delegated the call). Pre-merge, CI's agent-e2e check exposed a REAL bug: `e2e/fixtures/isolated-env.ts` had its own fake migration runner (marked migrations applied, never executed them — DB-1's failure mode in a duplicate implementation); every fixture DB silently lacked `api_tokens.scopes`. Fixed by delegating to the real `migrationRunner.ts` (`bef137e`), 4-case regression test, CI went CLEAN. Two high CodeQL alerts on the same PR were test-fixture false positives — dismissed with written reasons, ledger'd.
+- **Blind verification (ticket + diff + gate JSON only, never builder reports):** CONFIRMED TRO-424, TRO-420 (wave-1 leftovers), TRO-399, TRO-397, TRO-408, TRO-430. **REJECTED TRO-401** — the 601-request test structurally cannot exercise the 6,000-cap source-IP limiter and the gap was undisclosed; ticket returned to In Review, remediation TRO-494 built same session (red-proof of the exact regression) → PR #181. Re-verification attempt 2 armed on its merge. Verifier caveats spawned TRO-500, TRO-501; convergence with pre-ticketed TRO-493/494/495 throughout — triage and verification finding the same gaps independently.
+- **Wave 3 (MVP-first per Troy's mid-session directive, checked against PLUGFORGE §6 + inventory-W6):** PF-500/501 deferred as post-MVP. Built + PR'd: TRO-419/PF-300 (#180, review triaged, CLEAN-ready), TRO-494 (#181), TRO-495 (#182, haiku applier, first-attempt gate pass), TRO-412/PF-103 (#183 — builder self-triaged a critical unvalidated-scope hole; CloudFront `/oauth/*` gap filed as TRO-503 High; fail-closed workspace boundary PM-confirmed). TRO-489 consolidation done, 947/947 standalone, formal re-gate pending. TRO-398/PF-200 + TRO-441/PF-907 parked mid-flight (600s watchdog stalls; park notes with exact state on the tickets). **Repo visibility confirmed PUBLIC** (brief mandate, observed).
+- **Ops:** scorecard rows appended for every gate attempt (incl. fails); ledger current (~20 records); dispatch brief carried to this session's scratchpad `dispatch-brief.md`; lesson queued: duplicate implementations of a hardened rule (fixture migration runner) escape the hardening — grep for copies when fixing a rule-class bug.
+- **Next actions are in activeContext.md** — merge tail #180→#183, re-verify TRO-401, resume TRO-398/TRO-441, then PF-202/203/400 + E1 chain.
+
+### 2026-08-10 (late night) — Wave 1 CLOSED 6/6 blind-confirmed; wave 2 built + triaged; session rolled over pre-convoy
+
+**Wave 1 fully closed:** #169–#174 all merged (`main=8e6949d`→ later moved by wave-2 prose fixes'
+convoy — verify ls-remote), all 6 tickets Done with blind-CONFIRMED verdicts (TRO-411/406/396/433/
+420/424). Verifiers independently re-ran suites, recomputed HMAC vectors, re-ran migrations on
+throwaway DBs, spot-checked 6 file:line citations; 1 verifier finding PM-overruled with evidence
+(client_credentials→PF-104 is the recorded architect decision on TRO-416). Review round: 38
+findings — 29 fixed re-gated, 6 dismissed w/ reasons, 3 ticketed (TRO-488). Real catches: CORS
+credential fall-through (reproduced), hex-truncation forgery, fail-open NaN tolerance, Render
+API-key blast-radius error, empty-secret HMAC acceptance.
+
+**Wave 2 built (PRs #175–#179) + consolidated triage (22 findings: 6 fixed, 11 ticketed
+TRO-491–496, 5 dismissed).** PF-107's gate flaked on 5 distinct standalone-passing files under
+sibling load and passed on a verified-quiet run — lessons-24 proven both directions. PF-003's
+builder caught the test-design decoy-path trap (script test outside all runners) and wired
+node:test into both CIs. Lessons 26 (prose overclaims, 4-ticket recurrence) and 27 (negative-space
+coverage, 3-ticket recurrence) added. **#179 HELD for Troy: applier git-stash violation (6th
+recurrence), disclosed + verified harmless per TRO-323 precedent — needs his merge word.**
+Session ended at the pre-convoy boundary per the new CLAUDE.md session-hygiene rule; next session
+runs the convoy (procedure in activeContext), blind verifiers, then wave 3.
+
+### 2026-08-10 (night) — Wave 1 built: 6 tickets → 6 PRs, kickoff merged, PF-100 acked
+
+Troy acked PF-100 in session (TRO-403 Done — E1 unblocked) and approved the kickoff commit
+(#168 merged; main=`8f9930c` verified identical on GitHub + GitLab by ls-remote). Preflight found
+the factory Postgres drifted: `ship-audit-pg` exited 2 days ago, live container is
+`ship-postgres-1` (postgres:16, same port, holds ship_dev/ship_standup + prior wt DBs) — used via
+`FACTORY_PG_CONTAINER` override. Six worktrees provisioned; six sonnet builders dispatched with
+ticket + test-design + PM comments as the brief.
+
+**Results (all branches pushed, PRs open, tickets In Review):** #169 TRO-406/PF-101 schema — gate
+pass, exemplary red (DDL stubbed to no-ops), DB-1 landmine addressed by migration-count 46→48 +
+`\d`. #170 TRO-396/PF-001 scaffold — gate pass attempt 2 (attempt 1 caught uncommitted work);
+852-test api suite green. #171 TRO-420/PF-902 memo — CodeRabbit triaged locally, 2 real Majors
+fixed (false EB role-split claim; Render overclaim); gate fail=regression-test only (accepted
+docs-only class). #172 TRO-433/PF-303 signer — 2 real security fixes red-first (hex-truncation in
+constant-time compare; fail-OPEN tolerance on NaN); shared/fixtures/webhook-signature-vectors.json
+created for PF-403 parity. #173 TRO-424/PF-903 arch doc — 15/15 section test with diagnostic red;
+1 CR Major dismissed by PM (section-isolation = scope creep vs NOT-ASSERTED ruling). #174
+TRO-411/PF-900 terraform — real credentialed plan captured (read-only, secret hygiene grep-verified
+raw+committed), verify script 12/12 vs real capture; env-var names ratified canonical
+(OAUTH_*_TTL_SECONDS, RATE_LIMIT_*_RPM, AGENT_PLATFORM_MODE); gate fail=regression-test only.
+
+Scorecard: 9 rows appended (incl. honest fails). Wave-1 process lessons recorded in activeContext
+(agents parking on backgrounded gates; commit-before-gate; it.todo trips G5; prose `.skip(`
+false-positive; Linear PR automation resets ticket state). **Next: CodeRabbit triage + merge queue
+for #169–#174, then wave 2 (PF-002/003/004 after #170; PF-102/107 after #169+#170).**
 
 ### 2026-08-10 (evening) — W6 factory startup: Linear project created, PLUGFORGE.MD fully ticketed, PF-100 checkpoint delivered
 
