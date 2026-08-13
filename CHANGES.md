@@ -129,6 +129,75 @@ seeded into a database can be removed with
 
 ---
 
+## TRO-398 — PF-200: Documents resource — cursor-paginated list/get/create with scopes
+
+**What was added.**
+- `GET /api/v1/documents` (keyset cursor pagination, optional `?type=` filter), `GET
+  /api/v1/documents/:id`, and `POST /api/v1/documents` — `api/src/platform/api/v1/resources/documents.ts`,
+  mounted on `v1Routes` in `router.ts`. Both reads are behind `require('documents:read')`, create is
+  behind `require('documents:write')` — 403s name the missing scope in `details.missing_scope` (PF-107's
+  `requireScope`). Every failure path ships the §2.5 `ApiError` shape.
+- `api/src/platform/api/v1/pagination.ts` — `encodeCursor`/`decodeCursor`, the opaque
+  `base64url({ id, created_at })` keyset cursor (§2.5). Shared module, not folded into the documents
+  resource file, because PF-201/PF-205's later list endpoints reuse the identical cursor shape over the
+  same `documents` table.
+- `api/src/platform/api/v1/resources/workspaceContext.ts` — `resolvePrincipalWorkspaceId(principal)`,
+  resolving which workspace a bearer-token principal is scoped to (`oauth_apps.workspace_id` for an
+  app-token principal, `users.last_workspace_id` for a personal-token principal — every `documents` row
+  is `workspace_id NOT NULL`, so a v1 resource route cannot scope or write without this). **Documented
+  gap, not fixed here:** `Principal` (PF-107, `platform/oauth/principal.ts`) carries no `workspaceId`
+  field, even though both underlying credential rows have exactly one; the structurally clean fix is to
+  add it there, but `bearerAuth.test.ts`'s AC-1 cases assert `req.principal` with a strict `toEqual`,
+  which is an auth-semantics change outside this ticket's scope (`ship-backend`'s escalation rule).
+  The personal-token path (`users.last_workspace_id`) is a DERIVED approximation — wrong for a user in
+  more than one workspace whose token was minted while active in a different one than their current
+  `last_workspace_id`. Flagged for whoever picks up PF-201/PF-205, which need the same resolution.
+- `api/src/services/documentService.ts` — `createDocument(params)`, the domain-service function
+  `POST /api/v1/documents` calls through rather than inlining SQL in the route. Deliberately thin (no
+  associations, no event publication — the event bus doesn't exist yet) so PF-301's later consolidation
+  of every `documents` write path into one service is a MOVE (redirect other call sites here), not a
+  REWRITE of this logic.
+- **Real bug fixed in `api/src/app.ts`:** `express.json()`/`express.urlencoded()` were mounted AFTER
+  the `/api/v1` and `/oauth` router mounts (and after the internal `/api/*` routers further down).
+  Express dispatches `app.use()` in registration order and a matched route handler never falls through
+  to a later middleware, so **no `/api/v1` route has ever had a parsed `req.body`** — invisible until
+  now because the only `/api/v1` route before this ticket was `GET /health`, which has no body. `POST
+  /api/v1/documents` surfaced it directly: every field arrived `undefined`, so a fully valid request body
+  failed Zod's required-`title` check. Fixed by moving both body-parser `app.use()` calls before every
+  router mount. Internal `/api/*` routes are unaffected — they only need `req.body` populated by the
+  time *their* handler runs, and nothing between the old and new position reads `req.body`.
+- Not registered with the v1 OpenAPI generator — **by design, not omission.** `PF-202` (the v1 OpenAPI
+  3.1 registry instance) is the next ticket in epic E2's own sequencing and has not landed; every prior
+  merged `/api/v1` route, including `GET /health` (PF-001), is in the same state (see
+  `api/src/platform/openapi/README.md`, written by an earlier ticket: "Empty until PF-202 lands").
+  Request/response Zod schemas live adjacent to the handlers in `documents.ts` in the shape PF-202's
+  registry will consume once it exists.
+
+**Regression tests.** `api/src/platform/api/v1/resources/__tests__/documents.test.ts` (8 tests, AC-1
+through AC-4 of the pre-implementation test design plus one additional `?type=` filter case). AC-1
+seeds 5 documents, pages at `limit=2`, inserts a document whose `created_at` falls exactly on the
+page-1/page-2 boundary mid-walk, then walks every remaining page using only the server-returned
+`next_cursor` (never decoded by the test) and asserts no duplicate/skipped ids against the
+pre-insertion snapshot.
+
+**How to run it.**
+```bash
+source .factory-env  # or api/.env.local outside a factory worktree
+pnpm --filter @ship/api exec vitest run src/platform/api/v1/resources/__tests__/documents.test.ts
+```
+
+**Not verified.** `resolvePrincipalWorkspaceId`'s app-token path (`oauth_apps.workspace_id`) is
+exercised only indirectly — this ticket's tests use personal (`api_tokens`) tokens exclusively,
+matching the test design's fixtures; an OAuth-app-token POST/GET was not separately tested here.
+
+**Rollback.** Find this ticket's commit(s) with `git log --oneline -- api/src/platform/api/v1/resources/
+api/src/platform/api/v1/pagination.ts api/src/services/documentService.ts` and `git revert <sha(s)>`.
+The revert must include `router.ts`'s `documentsRouter` mount and `app.ts`'s body-parser move (part of
+the same change) — reverting only the resource files while leaving `router.ts`'s import in place breaks
+the build.
+
+---
+
 ## TRO-412 — PF-103: `/oauth/authorize` + consent screen (S256-only PKCE, exact redirect_uri match)
 
 **Provenance timing note (added after `gate.sh`, before this branch's own commits changed):** the
