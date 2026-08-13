@@ -34,6 +34,7 @@ import { searchRouter } from './routes/search.js';
 import { filesRouter } from './routes/files.js';
 import caiaAuthRoutes from './routes/caia-auth.js';
 import { createOAuthAuthorizeRouter } from './routes/oauth-authorize.js';
+import { createOAuthTokenRouter } from './routes/oauth-token.js';
 import apiTokensRoutes from './routes/api-tokens.js';
 import oauthAppsRoutes from './routes/oauth-apps.js';
 import adminCredentialsRoutes from './routes/admin-credentials.js';
@@ -339,10 +340,11 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   //
   // This does NOT make the app-global `cors()` below a no-op for those paths.
   // `v1Router` only defines `GET /health` today (no 404 fallthrough — that's
-  // PF-002), and `/oauth` now has a router mounted below (PF-103/TRO-412),
-  // covering only `GET /authorize` and `POST /authorize/decision` — an
-  // unmatched `/api/v1/*` path, or an `/oauth/*` path that router doesn't
-  // handle, still falls straight through with the response open, and would
+  // PF-002), and `/oauth` now has two routers mounted below: PF-103/TRO-412's
+  // (`GET /authorize`, `POST /authorize/decision`) and PF-104/TRO-416's
+  // (`POST /token`) — an unmatched `/api/v1/*` path, or an `/oauth/*` path
+  // neither router handles, still falls straight through with the response
+  // open, and would
   // reach the app-global `cors()` next. `cors()` middleware runs — and sets
   // its headers — on every request that reaches it, matched route or not, so
   // it would overwrite `Access-Control-Allow-Origin` with the single-origin
@@ -364,7 +366,8 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   //
   // `/oauth`'s router was added by PF-103/TRO-412 (mounted below); listing
   // this prefix here meant that ticket only had to mount its router, not
-  // also touch this CORS wiring.
+  // also touch this CORS wiring. PF-104/TRO-416's token router (also mounted
+  // below) gets the same benefit for free, for the identical reason.
   app.use(['/api/v1', '/oauth'], createPublicApiCors());
   app.use('/api/v1', v1Router);
 
@@ -493,6 +496,17 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   // createPublicApiCors())` above) — not under `/api`, since this is the RFC
   // 6749 authorization endpoint, not a JSON API resource.
   app.use('/oauth', createOAuthAuthorizeRouter(corsOrigin));
+
+  // OAuth token endpoint (PF-104, TRO-416) — a second `/oauth`-mounted
+  // router, not folded into the one above: this endpoint needs no
+  // `webOrigin` (JSON responses only, never a redirect) and is a distinct
+  // ticket's own module (`routes/oauth-token.ts` -> `platform/oauth/token.ts`).
+  // Falls through cleanly if unmatched — Express only calls `next()` past an
+  // unmatched router, same as every other `/oauth`-prefixed mount here.
+  // Already covered by the public, credential-less CORS policy mounted
+  // above (`app.use(['/api/v1', '/oauth'], createPublicApiCors())`) — no
+  // additional CORS wiring needed for this route.
+  app.use('/oauth', createOAuthTokenRouter());
 
   // Admin credentials management (CSRF protected, super-admin only)
   app.use('/api/admin/credentials', conditionalCsrf, adminCredentialsRoutes);
