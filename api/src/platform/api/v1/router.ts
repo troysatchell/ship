@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requestIdMiddleware } from './requestId.js';
 import { errorMiddleware, notFoundHandler } from './errorMiddleware.js';
+import { documentsRouter } from './resources/documents.js';
 
 /**
  * The public API router — `/api/v1/*` (PLUGFORGE.MD §2.1, §4 PF-001/PF-002).
@@ -37,6 +38,9 @@ v1Router.use(v1Routes);
 v1Routes.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok' });
 });
+
+// PF-200 (Linear TRO-398) — the documents resource.
+v1Routes.use('/documents', documentsRouter);
 
 // Add new /api/v1 resource routes to `v1Routes` above this line — never
 // below it, and never directly to `v1Router` (see the stack-order comment

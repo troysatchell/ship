@@ -322,6 +322,29 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
     },
   }));
 
+  // Body parsing (PF-200 / TRO-398 fix). MUST run before `/api/v1` mounts
+  // below — Express dispatches app-level `app.use()` calls in registration
+  // order, and a route handler that matches and responds never falls
+  // through to a LATER middleware, so a body-parser registered after a
+  // router's mount never runs for any request that router actually
+  // handles. These two calls used to sit after the `/api/v1`/`/oauth`
+  // mounts (and after the app-global CORS skip below), which meant no
+  // `/api/v1` route has ever had a parsed `req.body` — invisible until now
+  // because the only route that existed before this ticket was `GET
+  // /api/v1/health`, which has no body to parse. PF-200's `POST
+  // /api/v1/documents` is the first `/api/v1` route that reads `req.body`,
+  // and it surfaced the gap directly: every field arrived as `undefined`,
+  // so Zod's required `title` failed validation on a fully valid request
+  // body. Moved here, before every router mount (including the pre-existing
+  // internal `/api/*` ones further down this file) — internal routes are
+  // unaffected because they only require `req.body` to be populated by the
+  // time THEIR handler runs, not that parsing happen at any particular
+  // point before it; nothing between the old position and this one reads
+  // `req.body` (`perSourceIpLimiter`/`perIdentityLimiter` key on IP/session/
+  // token, not body).
+  app.use(express.json({ limit: '10mb' }));  // Large wiki documents can be several MB
+  app.use(express.urlencoded({ extended: true, limit: '10mb' })); // For HTML form submissions
+
   // Apply rate limiting to all API routes. Two explicit calls, not a spread of
   // the array `createApiRateLimiters` returns — see the TRO-307 comment above
   // `perSourceIpLimiter`/`perIdentityLimiter` for why. Order is unchanged: the
@@ -386,8 +409,9 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
     }
     return appGlobalCors(req, res, next);
   });
-  app.use(express.json({ limit: '10mb' }));  // Large wiki documents can be several MB
-  app.use(express.urlencoded({ extended: true, limit: '10mb' })); // For HTML form submissions
+  // Body parsing moved above (before the `/api/v1`/`/oauth` mounts) — see
+  // the comment there. Left here would mean it never runs for a matched
+  // `/api/v1` route handler.
   app.use(cookieParser(sessionSecret));
 
   // Session middleware for CSRF token storage
