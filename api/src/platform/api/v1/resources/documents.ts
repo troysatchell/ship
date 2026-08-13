@@ -3,10 +3,18 @@
  *
  * `GET /` (cursor-paginated, keyset), `GET /:id`, `POST /`. Zod
  * request/response schemas live here, adjacent to the handlers, in the
- * shape PF-202's v1 OpenAPI registry will consume once it lands — no
- * `.openapi()` annotations or `registerPath` call yet, because that registry
- * doesn't exist until PF-202 (see `platform/openapi/README.md`).
+ * shape PF-202's v1 OpenAPI registry consumes: `DocumentTypeSchema`,
+ * `ListDocumentsQuerySchema` and `CreateDocumentRequestSchema` are `export`ed
+ * (PF-202, Linear TRO-402) purely so `platform/openapi/schemas/documents.ts`
+ * can import and `registerPath` them — no `.openapi()` annotations live in
+ * this file, and no route-handling logic changed to add the exports.
  *
+ * PF-202 also adds a Zod response schema, but that lives in
+ * `platform/openapi/schemas/documents.ts`, not here — this file's response
+ * shape stays a plain `serializeDocument()` object, matching the rest of
+ * this route's already-established (and unmodified-by-PF-202) behavior.
+ *
+
  * `require('documents:read'/'documents:write')` is `requireScope(...)` here
  * — see that module's header for why the exported name differs from the
  * PRD's literal `require(...)` prose (a global-shadowing avoidance, not a
@@ -63,10 +71,10 @@ const DOCUMENT_TYPES = [
   'weekly_review',
 ] as const;
 
-const DocumentTypeSchema = z.enum(DOCUMENT_TYPES);
+export const DocumentTypeSchema = z.enum(DOCUMENT_TYPES);
 
 /** `GET /api/v1/documents` query params. */
-const ListDocumentsQuerySchema = z.object({
+export const ListDocumentsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(20),
   cursor: z.string().min(1).optional(),
   type: DocumentTypeSchema.optional(),
@@ -77,7 +85,7 @@ const ListDocumentsQuerySchema = z.object({
  * `routes/documents.ts` create schema defaults `title` to `'Untitled'`; the
  * PF-200 test design comment's AC-4 requires a missing `title` to be a
  * `validation_failed` error here). */
-const CreateDocumentRequestSchema = z.object({
+export const CreateDocumentRequestSchema = z.object({
   title: z.string().min(1, 'title is required'),
   document_type: DocumentTypeSchema.optional().default('wiki'),
   properties: z.record(z.unknown()).optional(),

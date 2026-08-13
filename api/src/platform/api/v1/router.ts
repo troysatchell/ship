@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requestIdMiddleware } from './requestId.js';
 import { errorMiddleware, notFoundHandler } from './errorMiddleware.js';
 import { documentsRouter } from './resources/documents.js';
+import { v1OpenApiDocument } from '../../openapi/index.js';
 
 /**
  * The public API router — `/api/v1/*` (PLUGFORGE.MD §2.1, §4 PF-001/PF-002).
@@ -41,6 +42,14 @@ v1Routes.get('/health', (_req, res) => {
 
 // PF-200 (Linear TRO-398) — the documents resource.
 v1Routes.use('/documents', documentsRouter);
+
+// PF-202 (Linear TRO-402) — the generated /api/v1 OpenAPI 3.1 document.
+// Public, no auth (same as /health above) — served from a module-load-time
+// cache (`platform/openapi/index.ts`'s `v1OpenApiDocument`), not regenerated
+// per request, since the registry only changes at deploy time.
+v1Routes.get('/openapi.json', (_req, res) => {
+  res.status(200).json(v1OpenApiDocument);
+});
 
 // Add new /api/v1 resource routes to `v1Routes` above this line — never
 // below it, and never directly to `v1Router` (see the stack-order comment
