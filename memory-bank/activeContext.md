@@ -6,8 +6,9 @@
 
 ## Current focus
 
-1. **Merge queue — 4 open PRs, all gate-passed, all triaged, required CI green at last check:**
-   - **#183** (TRO-412/PF-103): final head `ac1b55c` (e2e repair) pushed, CI re-running. 11 CR findings + 3 CodeQL Highs all triaged/dismissed-with-reasons (ledger'd). OAuth e2e spec now genuinely passes 2/2 (first-ever real runs). Merge when CI green; **its merge unblocks PF-104/TRO-416 dispatch**.
+1. **Merge queue — state at rollover (2026-08-13 ~03:00Z):**
+   - **#183 (TRO-412/PF-103): MERGED** at `e841ba8`, both remotes verified. Evidence comment on ticket. **Blind verification pending — dispatch first thing** (ticket + diff + gate JSON only). **PF-104/TRO-416 is now UNBLOCKED — dispatch its builder.**
+   - **#187 (docs bookkeeping): branch updated after #183's merge, CI re-running at rollover** — merge on CI green alone (non-ticket exception), then sync GitLab. If it went red, read the failure — its content is docs/JSONL only, so a red here means CI infra, not the content.
    - **#184** (TRO-441/PF-907): gate pass 12/12 at `40cc5d8` (+ convoy `36d9b26`). Awaiting CodeRabbit PR review → triage → merge. Deploy-verification half of AC explicitly deferred (portal/PF-202 don't exist).
    - **#185** (TRO-489): gate 11/12, `regression-test` fail = **documented pure-refactor exception in PR body** (TRO-420 precedent). Awaiting CodeRabbit → merge. Post-convoy errors.test.ts 16/16.
    - **#186** (TRO-398/PF-200): gate pass 12/12 at `bdff0d1` (+ convoy `e229e95`). Awaiting CodeRabbit → merge. **Its merge unblocks PF-201/TRO-400 and PF-202/TRO-402** (worktree Ship-wt-tro_402 pre-provisioned, stale base — re-provision or merge main).
