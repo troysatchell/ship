@@ -21,6 +21,114 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-441 — PF-907: Grader access — seeded read-only OAuth app, README one-command, PUBLIC repo check
+
+**Scope note (binding on this entry):** this ticket was dispatched with a deliberate scope split.
+**In scope for this branch:** the idempotent seeded grader OAuth app + its regression test, and the
+README credentials/one-command-setup section. **Explicitly deferred, not attempted here:**
+live deployed-instance verification (portal reachable, `/api/v1/openapi.json` publicly resolvable)
+— neither the developer portal (Epic E5) nor the OpenAPI spec route (PF-202) exists on this branch
+yet, and deploys are orchestrator/human-gated in this factory. Every claim below is written in the
+tense of what was actually run (this branch, local `ship_wt_tro_441` database), never as a claim
+about a deployed instance.
+
+**GitHub repo visibility (PLUGFORGE.MD §4's brief mandate) — observed, not derived:**
+```
+$ gh repo view troysatchell/ship --json visibility,isPrivate
+{"isPrivate":false,"visibility":"PUBLIC"}
+```
+Run twice: once by the orchestrator (2026-08-11T00:06Z) and independently re-confirmed on this
+branch before this entry was written. Both runs agree — the mandate is **already satisfied**, no
+further action needed for this AC.
+
+**What was added.**
+
+- `api/src/platform/oauth/seedGraderApp.ts` — `seedGraderApp(pool, workspaceId)`, an idempotent
+  seed for a first-party, read-only grader OAuth app. Reuses PF-102's `credentials.ts`
+  (`generateClientId`, `hashClientSecret`) rather than `appRegistration.ts`'s `createOAuthApp`
+  directly, because that function always mints a fresh random secret on every call — the grader
+  app's secret must be the one operator-provisioned value read from
+  `GRADER_OAUTH_CLIENT_SECRET` (PM triage, TRO-441 comments, 2026-08-10 — "same shared-config rule
+  as PF-900/TRO-411"), not a new one generated per seed run. Idempotency is enforced by the unique
+  index on `oauth_apps.client_id` — the seed generates a workspace-scoped but deterministic
+  `client_id` (format: `ship_app_grader_{first 8 chars of workspace_id}`) and uses
+  `ON CONFLICT (client_id) DO NOTHING` to handle concurrent seed calls (the initial SELECT check
+  remains as a fast path, but is not the guarantee). Three outcomes, none an error: `created`,
+  `exists` (no-op, same `client_id` returned), or `skipped_no_secret` (the variable is unset — a
+  normal `pnpm db:seed`/`./start.sh` run without it is unaffected by design, since the grader app
+  should only exist where the secret has actually been provisioned). `requested_scopes` is exactly
+  `['documents:read', 'issues:read', 'sprints:read']` (PLUGFORGE.MD §2.3) — never `webhooks:manage`
+  or any `:write` scope, so the grader account cannot mutate graded state. `client_type:
+  'confidential'`, `is_first_party: true`.
+- `api/src/db/seed.ts` — calls `seedGraderApp(pool, workspaceId)` right after workspace
+  creation/lookup (before the rest of the file's fixtures, which don't depend on it), logs the
+  outcome with the same `✅`/`ℹ️` convention every other seed step already uses, and prints the
+  `client_id` (never the secret — that value is whatever the caller set
+  `GRADER_OAUTH_CLIENT_SECRET` to, and is deliberately not re-echoed) in the final summary block
+  alongside the existing `dev@ship.local` login credentials.
+- `README.md` — new "Grader Access — Public API (OAuth)" subsection under "## Deployment" (after
+  "Post-deploy verification", before "Environment Variables"): one-command setup
+  (`GRADER_OAUTH_CLIENT_SECRET=<value> ./start.sh` or `... pnpm --filter @ship/api db:seed`),
+  states the printed output convention, explains the skip-when-unset behavior, and points to the
+  existing `FLEETGRAPH.MD` "Grader Access" section for the web app's own grader login
+  (`alice.chen@ship.local` / `admin123`) — the "alongside existing alice.chen grader creds"
+  convention PLUGFORGE.MD's PF-907 block names. Also states plainly, in future tense, that minting
+  an actual bearer token via Client Credentials needs `POST /oauth/token` (PF-104), which is not
+  merged onto this branch — this section does not claim a live token round-trip works today.
+  `GRADER_OAUTH_CLIENT_SECRET` added to the Environment Variables table.
+
+**Regression tests (red-before-green, observed on this branch, `DATABASE_URL` from
+`.factory-env`/`ship_wt_tro_441`).**
+
+- `api/src/platform/oauth/__tests__/seedGraderApp.test.ts` (5 cases). Test-design source: TRO-441's
+  "Test design (pre-implementation)" Linear comment, AC-1 — its suggested path
+  (`api/src/db/__tests__/seedGraderApp.test.ts`) assumed the module would live beside `db/seed.ts`;
+  placed instead at `api/src/platform/oauth/__tests__/` next to the module itself and PF-102's own
+  `app-registration.test.ts`, which the test-design comment explicitly allows ("adjust to wherever
+  the implementer places the boot/migration seed"). Red first: `seedGraderApp` stubbed to
+  `throw new Error('seedGraderApp: not implemented')` — all 5 cases failed for that real reason
+  (the thrown error propagating out of each `await seedGraderApp(...)` call), not an import error.
+  Green after the real implementation: 5/5. Covers: two-calls-in-sequence produces exactly one row
+  (idempotency); `is_first_party = true` and exactly the three read-only scopes, no `:write`/
+  `webhooks:manage`; `client_secret_hash` present and is not the raw secret (SHA-256 of the env
+  value, verified against a hash computed independently in the test); the raw secret is read via
+  the module's own exported `GRADER_OAUTH_CLIENT_SECRET_ENV_VAR` constant, never a hardcoded string
+  literal in the test; and the unset-secret path creates no row and does not throw.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/seedGraderApp.test.ts
+
+# Manual end-to-end sanity check (not the graded proof — a local integration smoke check run
+# during this ticket, against this worktree's own database):
+GRADER_OAUTH_CLIENT_SECRET=<any-value> pnpm --filter @ship/api exec tsx src/db/seed.ts
+# → "✅ Created grader OAuth app (client_id: ship_app_...)"
+# re-run the same command → "ℹ️  Grader OAuth app already exists (client_id: ship_app_...)" (idempotent)
+```
+
+**Not verified / explicitly deferred (see scope note above).** Portal reachability and
+`/api/v1/openapi.json` public resolvability — no deployed instance exists to check, and the code
+those checks would exercise (E5, PF-202) isn't built yet. A genuinely clean-machine run of the
+README's grader steps by someone other than the author of this entry — not performed as part of
+this dispatch; the manual run above was on this same worktree, so it does not by itself satisfy the
+ticket's "clean-machine run" AC. Obtaining a real bearer token for the grader app — blocked on
+PF-104 (`/oauth/token`), not on this branch.
+
+**Rollback.** Delete `api/src/platform/oauth/seedGraderApp.ts` and
+`api/src/platform/oauth/__tests__/seedGraderApp.test.ts`. In `api/src/db/seed.ts`, remove the
+`seedGraderApp`/`GRADER_OAUTH_CLIENT_SECRET_ENV_VAR` import, the seed-call block right after
+workspace creation, and the "Grader OAuth app" lines from the final summary — the rest of the seed
+file is unaffected (nothing else in it reads `graderAppSeedResult`). In `README.md`, remove the
+"Grader Access — Public API (OAuth)" subsection and the `GRADER_OAUTH_CLIENT_SECRET` row from the
+Environment Variables table. No schema change was made (this ticket writes rows into `oauth_apps`,
+migration 042, already merged via PF-101) — no migration to revert. Any grader app rows already
+seeded into a database can be removed with
+`DELETE FROM oauth_apps WHERE name = 'Grader (read-only)' AND is_first_party = true;`.
+
+---
+
 ## TRO-398 — PF-200: Documents resource — cursor-paginated list/get/create with scopes
 
 **What was added.**
