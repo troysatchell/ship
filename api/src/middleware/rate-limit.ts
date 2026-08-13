@@ -295,12 +295,34 @@ export function apiRateLimitKey(req: RateLimitKeyRequest): string {
  * When neither is set, both limiters fall back to `express-rate-limit`'s
  * default `MemoryStore` — unchanged from before this ticket, and still what
  * local dev and every other test in this suite runs against.
+ *
+ * TRO-494: `limitOverrides` is a third, test-only seam. Production's own
+ * ceilings (600/6,000, prod `windowMs`) are entirely a function of
+ * `resolveApiRateLimits(env)`, gated on `NODE_ENV`/`E2E_TEST` — nothing in
+ * `app.ts` (or anywhere else outside tests) passes a third argument, so the
+ * production call site (`app.ts:130`, `createApiRateLimiters(process.env,
+ * rateLimitRedisClient)`, still 2 args) resolves exactly what it always did.
+ * The reason this exists: TRO-401's `rate-limit-v1-exemption.test.ts` could
+ * only prove the exemption by hammering the *production* `identityLimit`
+ * (600) — the production `sourceIpLimit` (6,000) was never independently
+ * driven, because a test cannot afford 6,001 sequential requests. Overriding
+ * `sourceIpLimit` alone (leaving `identityLimit`/`windowMs` at their resolved
+ * values unless also overridden) lets a test isolate the source-IP limiter
+ * at a small, driveable cap — see the `rate-limit-v1-exemption.test.ts`
+ * "AC-3" cases below this file's sibling test file for the proof, and the
+ * `rate-limit.test.ts` "prod resolution is unchanged" case for the assertion
+ * that this parameter existing does not alter what an override-free call
+ * resolves to.
  */
 export function createApiRateLimiters(
   env: RateLimitEnv = process.env,
-  redisClient: Redis | undefined = createRedisClientFromEnv(env)
+  redisClient: Redis | undefined = createRedisClientFromEnv(env),
+  limitOverrides: Partial<ResolvedApiRateLimits> = {}
 ): [RequestHandler, RequestHandler] {
-  const { windowMs, identityLimit, sourceIpLimit } = resolveApiRateLimits(env);
+  const { windowMs, identityLimit, sourceIpLimit } = {
+    ...resolveApiRateLimits(env),
+    ...limitOverrides,
+  };
 
   const perSourceIpLimiter = rateLimit({
     windowMs,
