@@ -21,6 +21,217 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-416 — PF-104: `/oauth/token` (authorization_code + PKCE + client_credentials, negative cases mandatory)
+
+**What changed.** Added `POST /oauth/token`, form-encoded per RFC 6749 §4.1.3/§4.4.2, mounted at
+`/oauth` alongside PF-103's authorize router. New files: `api/src/platform/oauth/token.ts` (service
+logic — PKCE verification, single-use enforcement, client authentication, both grants' token
+issuance), `api/src/routes/oauth-token.ts` (thin route layer, same split as PF-102/PF-103),
+`api/src/db/migrations/044_oauth_tokens_authorization_code_id.sql` (adds
+`oauth_tokens.authorization_code_id`, needed for the reused-code revocation AC — see below).
+Reuses PF-102's `verifyAppCredentials` (`appRegistration.ts`) for confidential-client secret checks
+and PF-103's `hashAuthorizationCode`/`parseScopeParam` (`authorize.ts`) — both genuinely importable
+from this branch, unlike PF-103's own situation with PF-102.
+
+**Grants implemented:**
+- `authorization_code`: verifies `S256(code_verifier)` against the stored `code_challenge`
+  (`crypto.timingSafeEqual`), enforces single-use, client authentication for confidential clients
+  (secret required and verified; public clients authenticate via PKCE alone), exact `redirect_uri`
+  match, and that the code was issued to the presenting client. Issues an access token (1 hour TTL,
+  `ship_at_…`) and a refresh token (`ship_rt_…`) — see the refresh-token caveat below.
+- `client_credentials` (architect addition, §1.4.4 — app-identity reads, PF-701 consumes it):
+  requires a confidential client (a public app has no secret to authenticate with, and this grant
+  has no PKCE step to substitute for one — `issueClientCredentialsToken` rejects a public client
+  explicitly rather than silently trusting an unauthenticated one). `user_id` is `NULL`, scopes must
+  be a subset of the app's `requested_scopes`, no refresh token (`refresh_token` field omitted from
+  the response entirely, not sent as `null`).
+
+**Negative cases (all named in the ticket, plus the ones it asked to think through):**
+- Wrong `code_verifier` → `400 invalid_grant`, code NOT consumed (a verifier mismatch is not
+  "reuse" — the legitimate client can still redeem the code correctly afterward).
+- Reused code → `400 invalid_grant` + revokes every un-revoked token whose `family_id` traces back
+  to that code (the same family-wide revocation shape migration 043 documents for stolen-
+  refresh-token detection, reused here for stolen/replayed-code detection).
+- Wrong `redirect_uri` → `400 invalid_grant`, code not consumed.
+- Expired code → `400 invalid_grant`.
+- Unknown `client_id` → `401 invalid_client`.
+- Missing `client_id`/`code`/`redirect_uri`/`code_verifier` → `400 invalid_request`.
+- Confidential client with no `client_secret`, or the wrong one → `401 invalid_client`.
+- `client_id` mismatch between the authorize and token requests (code issued to one client,
+  presented by a different, validly-registered one) → `400 invalid_grant` (RFC 6749 §4.1.3: "was
+  issued to another client").
+- `client_credentials` requested by a public client → `401 invalid_client`.
+- `client_credentials` scope exceeding the app's `requested_scopes` → `400 invalid_scope`.
+- Unsupported/missing `grant_type` → `400 unsupported_grant_type` / `400 invalid_request`.
+
+**Concurrency argument (two concurrent redemptions of the same code) — the required, DB-enforced
+invariant, not an application-level check-then-act:**
+
+Single-use enforcement is one atomic statement, run inside a transaction that also `INSERT`s the
+token row and `COMMIT`s before releasing the row lock:
+
+```sql
+UPDATE oauth_authorization_codes SET consumed_at = now()
+WHERE id = $1 AND consumed_at IS NULL RETURNING id
+```
+
+Two concurrent transactions racing this UPDATE serialize at Postgres's own row lock — the winner
+locks the row, flips `consumed_at`, inserts the token, and commits; the loser's UPDATE blocks on
+that lock and, once unblocked, re-evaluates the WHERE clause against the now-committed row
+(`consumed_at IS NULL` no longer holds) and matches zero rows. There is never a window where both
+concurrent requests can walk away with a live token from one code — this is the database deciding,
+not a SELECT-then-UPDATE race (lessons.md rule 18).
+
+What was NOT obvious until a forced, deterministic concurrency test proved it wrong: an earlier
+version of this module tried to special-case "a live race" as safer than "a sequential replay" and
+only revoked on the latter — on the theory that only the legitimate client (or an attacker with the
+verifier) could ever race a redemption. A genuine concurrent-redemption test (see below) falsified
+the premise that distinction depended on: which code branch a request lands in (an early read
+already seeing `consumed_at` set, vs. losing the atomic UPDATE) is **not a reliable signal of real
+concurrency** — one request's entire transaction can fully commit before the other's very first read
+even resolves, even when both are dispatched together. There is no signal available to this module
+that distinguishes "the legitimate client double-sent" from "someone else who also had the correct
+`code_verifier` got here first." So the module does the simpler, uniformly safe thing: **any**
+redemption attempt that finds the code already consumed — via either code path — revokes every
+un-revoked token traceable to that code, including a token this exact concurrent pair just minted. A
+racing legitimate client's request can still receive a real, valid-shaped `200` (its transaction
+genuinely committed), but that token is dead on arrival: fail-safe under ambiguity, at the cost of
+forcing a legitimate double-submitting client to restart the flow — accepted because a well-behaved
+client does not redeem the same code twice concurrently, and this is strictly safer than the
+alternative (a request that raced a genuine attacker keeping its token alive because it happened to
+win). Full reasoning is in `token.ts`'s module-header comment.
+
+**Schema.** `oauth_tokens` (migration 043) had no column linking a token back to the code that
+minted it, so a reuse attempt had nothing to revoke by. Migration 044 adds
+`oauth_tokens.authorization_code_id` (nullable FK to `oauth_authorization_codes`, `ON DELETE SET
+NULL`, NULL for Client Credentials and any future Device grant token) plus a partial index. Checked
+migration 043 in full before adding this — it does not have the needed linkage. **Migration-number
+note:** PLUGFORGE.MD §2.2 earmarks 044 for `webhook_subscriptions` (a PF-3xx-series ticket); no
+sibling worktree had claimed 044 as of this branch (checked: `feat/pf-300-event-registry`,
+`feat/pf-303-hmac-signer`, `feat/pf-107-scopes-bearer`, `feat/pf-900-terraform-w6`,
+`feat/pf-907-grader-access` — none past 043), so this ticket took it. If a webhook-series branch also
+lands a 044, one of the two needs renumbering at integration time (same reconciliation class already
+documented for CHANGES.md convoy conflicts).
+
+**Refresh-token caveat, stated plainly.** The architect notes contrast "CC tokens: … no refresh
+token" against `authorization_code`'s own grant, implying the latter should issue one — this ticket
+does. But `oauth_tokens` (migration 043) has a single `expires_at` column, and `bearerAuth.ts` reads
+it as the ACCESS token's expiry (1 hour) — there is no independently-tracked 30-day TTL column for
+the refresh token, so the refresh token issued here inherits no independent expiry enforcement.
+Functionally inert today: PF-104's own scope is `authorization_code` + `client_credentials` only —
+`grant_type=refresh_token` is not implemented by this ticket (PLUGFORGE.MD §4 assigns rotation +
+family invalidation to **PF-105** explicitly), so nothing currently reads or validates the issued
+refresh token at all. Flagged for whoever builds PF-105: either add a dedicated expiry column or
+otherwise decide how the refresh token's 30-day TTL gets enforced before wiring up redemption.
+
+**OpenAPI registration: NOT registered, explicitly deferred — same blocker as PF-103.** Checked
+fresh for this ticket (not assumed carried over): `git log origin/main --oneline -5` shows PF-103's
+merge (`e841ba8`) at the tip, no TRO-551 fix commit. `fix/tro-551-openapi-non-api-prefix` exists as a
+local branch (provisioned worktree `Ship-wt-tro_551`) but `git merge-base --is-ancestor
+fix/tro-551-openapi-non-api-prefix origin/main` — checked directly, not inferred — currently
+resolves true only because that branch has made **zero commits past `origin/main`** yet (its own tip
+`e841ba8` is identical to `origin/main`'s), i.e. the sibling ticket has not started its fix, not that
+it landed. Per the dispatch brief's own instruction: not blocking on it, following PF-103's
+precedent exactly. `/oauth/token` is mounted outside `/api`, same structural gap PF-103's entry
+documents in full (the OpenAPI registry's global `servers: [{ url: '/api' }]` and the MCP executor's
+hardcoded `${CONFIG.url}/api${path}`, neither of which support a route mounted outside `/api`) — not
+re-litigated here. When TRO-551 lands, both `/oauth/authorize` and `/oauth/token` need registering
+together.
+
+**Regression tests (the factory-gate proof).** `api/src/platform/oauth/__tests__/token.test.ts` — 18
+cases:
+- Happy path for both grants (public + confidential client for `authorization_code`; confidential
+  client for `client_credentials`), each verified past the HTTP response: the returned access token
+  is run through the REAL production `bearerAuth` middleware (`../bearerAuth.js`) mounted on a tiny
+  scratch Express app and asserted to authenticate correctly (`principal.app`/`principal.user`/
+  `principal.scopes`) — the strongest "token works" proof available without PF-201's `/api/v1/me`
+  (see below), and a stronger check than a raw DB row read since it exercises the exact code path
+  `/api/v1/*` will use once that route exists.
+- Every negative case listed above, one `it` each.
+- **Two** concurrency tests, deliberately different in what they prove:
+  - "genuine concurrent redemption of the same code" — two real HTTP requests fired via
+    `Promise.all`. Documented, not silently trusted: debug-traced while writing this suite and
+    confirmed that at this timing scale, one request's entire DB round trip routinely finishes
+    before the other's first read even resolves — dispatching together is not the same guarantee as
+    forcing interleaving (lessons.md: "a barrier that gates DISPATCH is not the same guarantee as one
+    that gates EXECUTION"). Kept as an end-to-end smoke test of the observable outcome across the
+    full route.
+  - "genuine concurrent redemption of the same code (forced, deterministic race)" — the real proof.
+    Calls `redeemAuthorizationCode` directly (not through HTTP), with a third connection holding an
+    exclusive row lock on the code until BOTH real redemption calls are observed genuinely queued
+    behind it (polled via `pg_stat_activity.wait_event_type = 'Lock'` — a real, observable database
+    fact, not a fixed sleep; `ship` is a superuser in this local dev container, confirmed via
+    `SELECT rolsuper FROM pg_roles`, so it can see other backends' query text). Releasing the lock
+    then forces a genuine, deterministic race at the exact atomic UPDATE the concurrency argument
+    depends on.
+
+**Red-before-green (seen, not claimed).** Confirmed each of the following fails for the right
+reason, isolated to exactly the expected test(s), before reverting:
+- Disabling the PKCE check → the "mismatched verifier" case fails (`expected 200 to be 400`); all 17
+  others stay green.
+- Disabling the `redirect_uri` check → the "wrong redirect_uri" case fails the same way; all others
+  green.
+- Dropping `AND consumed_at IS NULL` from the atomic UPDATE (simulating the exact SELECT-then-UPDATE
+  bug lessons.md rule 18 warns about) → the HTTP-level concurrency test still passed (it doesn't
+  reliably force the race — see above), but the **forced, deterministic** race test failed
+  immediately and correctly: `expected [true, true] to deeply equal [false, true]`, i.e. a genuine
+  double-issue. This is the finding that drove building the deterministic test in the first place —
+  the HTTP-level test alone would have shipped this exact regression silently.
+- Removing the revocation call from the "already consumed" branch → both the sequential reuse test
+  and the concurrency test's revocation assertion failed correctly (`expected null not to be null`,
+  `expected 200 to be 401`); every other test stayed green.
+- Also hit and fixed a genuine test-design deadlock while building the deterministic race test:
+  awaiting both racing UPDATEs together via a single `Promise.all` before committing either
+  self-deadlocks (the loser's UPDATE cannot return until the winner commits, and the winner's commit
+  was gated on the same `Promise.all`) — fixed by having each side commit/rollback based on only its
+  own result, mirroring exactly what the production code already does per-request.
+
+**Pre-existing test fixed as a necessary side effect (disclosed, not silently touched).**
+`api/src/db/__tests__/migrations-042-043.test.ts`'s "AC-2: prod-shaped database" fixture builds a
+"migrations 001-041 applied, nothing from oauth yet" baseline by copying every migration file except
+042/043. Migration 044 (this ticket) ALTERs `oauth_tokens`, which 043 creates — since 044 wasn't in
+that exclusion list, it got swept into the "prior" fixture and failed
+(`relation "oauth_tokens" does not exist`) before 043 ever ran. Fixed by adding a second,
+separately-named exclusion list (`LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS`) for later migrations that
+depend on `oauth_tokens`, and relaxing that test's "applies 042/043" assertion from an exact-equals
+on `result.applied` to a `toContain` for 042/043 specifically (the exact-equals was already fragile
+against any future oauth-dependent migration, mine or not — this just surfaced it). PF-101/TRO-406's
+own assertions (042/043 applied, not silently skipped; the `schema_migrations` row check) are
+unchanged in substance.
+
+**How to run it.** `api && npx vitest run src/platform/oauth/__tests__/token.test.ts` (needs
+`DATABASE_URL` — `source .factory-env` in a worktree; run `pnpm exec tsx src/db/migrate.ts` first if
+this worktree's database predates migration 044). Manual: `pnpm dev`, register or insert an
+`oauth_apps` row, drive `/oauth/authorize` → approve → `POST /oauth/token` with
+`grant_type=authorization_code&code=…&redirect_uri=…&client_id=…&code_verifier=…` (form-encoded), or
+`grant_type=client_credentials&client_id=…&client_secret=…` for a confidential app.
+
+**Not verified in this session:** the full graded Playwright e2e (authorize → consent → token →
+token works on `/api/v1/me`) — PF-201's `/api/v1/me` does not exist on this branch yet, so the last
+hop of that scenario cannot run against a real route (same gap PF-103's entry already noted for its
+own half of this flow). The `bearerAuth`-middleware introspection tests above are the closest
+available substitute and are gate-executed; the real end-to-end e2e should be added once PF-201
+lands.
+
+**Rollback.**
+
+```sql
+ALTER TABLE oauth_tokens DROP COLUMN IF EXISTS authorization_code_id;
+DELETE FROM schema_migrations WHERE version = '044_oauth_tokens_authorization_code_id';
+```
+
+Remove `api/src/platform/oauth/token.ts`, `api/src/routes/oauth-token.ts`,
+`api/src/platform/oauth/__tests__/token.test.ts`,
+`api/src/db/migrations/044_oauth_tokens_authorization_code_id.sql`. Revert the `oauth-token`
+import/mount in `api/src/app.ts` (two spots: the import line and the `app.use('/oauth',
+createOAuthTokenRouter())` block plus its two nearby comment edits). Revert the
+`LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS` addition and the `toContain` assertion change in
+`api/src/db/__tests__/migrations-042-043.test.ts` only if migration 044 is also removed — otherwise
+leave that fix in place, since it protects against the same collision for any other oauth_tokens-
+dependent migration added later.
+
+---
+
 ## TRO-412 — PF-103: `/oauth/authorize` + consent screen (S256-only PKCE, exact redirect_uri match)
 
 **Provenance timing note (added after `gate.sh`, before this branch's own commits changed):** the
