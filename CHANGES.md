@@ -21,6 +21,133 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-551 — OpenAPI registry + MCP executor learn a non-`/api` server override; PF-103's two routes registered
+
+**Source.** PM-triaged CodeRabbit Major on PR #183 (TRO-412), investigated by the PF-103 applier
+2026-08-12 and left as an honest, blocked deferral (see that ticket's entry above, updated in place
+to point here) — this ticket does the structural fix that deferral called for.
+
+**What was actually broken.** `api/src/openapi/registry.ts:73-78` set one global
+`servers: [{ url: '/api' }]` on the OpenAPI document, and `api/src/mcp/server.ts:375` built every
+generated MCP tool's request URL as `` `${CONFIG.url}/api${path}` `` unconditionally — no code path
+anywhere read a per-operation override. `GET /oauth/authorize` and `POST /oauth/authorize/decision`
+(PF-103, TRO-412) are mounted at the application root (`app.use('/oauth', ...)`, `api/src/app.ts`),
+not under `/api`, so there was no way to register them that didn't either misdocument their real
+path in Swagger or ship an MCP tool that called the wrong URL and silently 404s on every invocation.
+Confirmed live, both ways: before this fix, `GET http://localhost:3060/api/oauth/authorize` (what
+the old hardcoded executor would have called) returns `404`; the real route only ever answered at
+`GET /oauth/authorize` (no `/api`), which returns `400` for the same request (unregistered
+`client_id` — a real response from the route handler, not a routing miss).
+
+**Fix shape chosen, and why.** Two options were on the table: (a) teach the existing registry a
+per-route server override, or (b) stand up a second, `/oauth`-scoped `OpenAPIRegistry` instance the
+MCP generator deliberately skips. Chose **(a)**, and it turned out smaller than expected —
+`@asteasolutions/zod-to-openapi`'s `RouteConfig` type (`registerPath`'s parameter) is
+`Omit<OperationObject, 'responses'> & {...}`, and `openapi3-ts`'s `OperationObject` already declares
+an optional `servers?: ServerObject[]` field per OpenAPI 3.0 §4.8.10.1 (an operation-level `servers`
+array REPLACES the document-level one for that operation — never merges). So `registerPath({ ...,
+servers: [...] })` was already accepted by the type system and by the generator's own
+`generatePath()`, which spreads every non-(`method`/`path`/`request`/`responses`) field straight
+onto the emitted operation object — confirmed by generating the doc and inspecting the JSON output.
+Nothing about the registry's own machinery needed to change; only a convention for what to pass and
+a reader on the MCP side that had never existed. Option (b) would have needed its own generator,
+its own `servers` wiring, and a second thing for the MCP `main()` to decide whether to fetch — three
+new moving parts to reinvent something the underlying library already does correctly for free.
+
+**What changed.**
+- `api/src/openapi/registry.ts` — added `export const ROOT_SERVER: ServerObject[]`, an operation-level
+  `servers` override (`[{ url: '', description: '...' }]`) for routes mounted outside `/api`. `url:
+  ''` reads as "no prefix, `path` is already the complete mount path."
+- `api/src/openapi/schemas/oauth-authorize.ts` (new) — registers `GET /oauth/authorize` and
+  `POST /oauth/authorize/decision` with `path: '/oauth/authorize'` / `'/oauth/authorize/decision'`
+  (the FULL mount path, not `/api`-relative like every other schema file) and `servers: ROOT_SERVER`.
+  `security: []` on both, following the exact precedent already in this registry for
+  `POST /auth/login` (`auth.ts`) — neither OAuth route requires auth to reach; each does its own
+  session check internally. Response shapes document reality: redirects (`302`/`303` with a
+  `Location` header) on success, static `text/html` error pages on the open-redirect-guard failure
+  paths — no JSON body exists for either endpoint, so none is invented here.
+- `api/src/openapi/schemas/index.ts` — barrel-imports the new file (registration is an import side
+  effect, same as every other schema module).
+- `api/src/mcp/server.ts` — added `resolveServerPrefix(operation)`: returns the operation's
+  `servers[0].url` when present, else the previous default `/api`. Extracted the URL-building
+  block out of `executeToolCall` into a new pure, exported `buildRequestUrl(baseUrl, toolOp, args)`
+  so the fix is directly unit-testable without a live server, `CONFIG`, or `~/.claude/.env`.
+  `executeToolCall` now calls `buildRequestUrl` and does only the fetch. Also guarded the
+  module-level `main()` call with `if (import.meta.url === \`file://${process.argv[1]}\`)` — the
+  same pattern `api/src/db/postgresReachable.ts`/`verifyMigrations.ts` already use — because
+  importing the file for the new test would otherwise run `main()` (which throws / calls
+  `process.exit(1)` without `~/.claude/.env`) as a side effect of the `import`.
+- `api/openapi.json` / `api/openapi.yaml` — regenerated (`pnpm --filter @ship/api openapi:generate`),
+  same convention as every prior endpoint-adding ticket (e.g. TRO-408/PF-102).
+
+**Scope, stated explicitly.** This ticket is the mechanism plus PF-103's two already-landed routes
+ONLY. PF-104's `GET /oauth/token` and PF-106's `/oauth/device/*` are not on `main` as of this
+ticket's dispatch (building concurrently on sibling branches per the orchestrator) and are NOT
+registered here — whoever lands them should reuse `ROOT_SERVER` rather than re-deriving this.
+
+**Verified for real, not eyeballed (observed, this exact repo, not the general OpenAPI/MCP pattern):**
+1. Started the api (`npx tsx watch src/index.ts`, port from `.factory-env`) against this worktree's
+   own database.
+2. `curl http://localhost:3060/api/openapi.json` — `paths['/oauth/authorize']` and
+   `paths['/oauth/authorize/decision']` both present; `paths['/api/oauth/authorize']` absent;
+   `paths['/oauth/authorize'].get.servers` is `[{"url":"","description":"Mounted at the application
+   root — outside the /api prefix."}]`; the document-level `servers` and the control case
+   `paths['/issues'].get.servers` (`undefined`, unaffected) both unchanged.
+3. Ran the REAL `generateTools()` and `buildRequestUrl()` from `api/src/mcp/server.ts` (not a
+   reimplementation) against that live spec: generated tool `ship_get_oauth_authorize`; the URL it
+   builds is `http://localhost:3060/oauth/authorize?client_id=...` (no `/api`); fetching that exact
+   URL returns `400` (reaches the real route handler — unregistered `client_id` — not a routing
+   404). The equivalent old-shape URL, `http://localhost:3060/api/oauth/authorize`, returns `404` —
+   this is the silent-failure bug the ticket describes, confirmed to still exist at that URL and
+   confirmed the fix's URL does not hit it.
+4. Control case in the same run: `buildRequestUrl` for `GET /issues` (an ordinary, unaffected
+   operation with no `servers` override) still produces `http://localhost:3060/api/issues`.
+
+**Regression tests (the factory-gate proof).**
+- `api/src/openapi/schemas/oauth-authorize.test.ts` (6 cases) — asserts `generateOpenAPIDocument()`
+  carries both new paths, each with the `ROOT_SERVER` override, that neither is folded under
+  `/api/oauth/...`, and that an ordinary `/api`-relative route (`/issues`, control) is unaffected.
+- `api/src/mcp/server.test.ts` (6 cases) — unit-tests `resolveServerPrefix` and `buildRequestUrl`
+  directly: default `/api` prefix with no override, the `ROOT_SERVER` (`url: ''`) override producing
+  an un-prefixed URL for both the GET (query params) and POST (body params) shapes, a trailing-slash
+  custom-override edge case, and the `/issues` control case.
+
+**Red-before-green (seen, not claimed).** Two separate reverts, each restored immediately after:
+- Reverted `buildRequestUrl` to the pre-fix `` let url = \`${baseUrl}/api${path}\`; `` (no
+  `resolveServerPrefix` call) and ran `server.test.ts`: the two `ROOT_SERVER`-override cases failed
+  with `expected 'http://ship.example/api/oauth/authorize...' to be
+  'http://ship.example/oauth/authorize...'` — the exact bug — while the `/api`-default and `/issues`
+  control cases still passed (4/6 passed, 2/6 failed for the asserted reason, not an import error).
+- Commented out `oauth-authorize.ts`'s barrel export in `schemas/index.ts` (simulating "route never
+  registered," the actual pre-TRO-551 state) and ran `oauth-authorize.test.ts`: the 4 cases asserting
+  the paths/servers exist failed (`expected {...} to have property "/oauth/authorize"`,
+  `expected undefined to be defined`), while the 2 control-case assertions about unrelated routes
+  still passed (2/6 passed, 4/6 failed for the asserted reason).
+Both reverts restored; full suite re-run green (12/12) before finishing.
+
+**How to run it.**
+`api && npx vitest run src/mcp/server.test.ts src/openapi/schemas/oauth-authorize.test.ts` (no
+`DATABASE_URL` dependency — both files are pure-function/registry tests, no DB access). Manual:
+`pnpm dev`, then `curl http://localhost:<api-port>/api/openapi.json | jq '.paths["/oauth/authorize"]'`.
+
+**Rollback.**
+No schema/migration change — nothing at the DB level.
+Remove `api/src/openapi/schemas/oauth-authorize.ts`, `api/src/openapi/schemas/oauth-authorize.test.ts`,
+`api/src/mcp/server.test.ts`; drop the `export * from './oauth-authorize.js';` line from
+`api/src/openapi/schemas/index.ts`; remove the `ROOT_SERVER` export from `api/src/openapi/registry.ts`;
+in `api/src/mcp/server.ts`, revert `executeToolCall`/`buildRequestUrl`/`resolveServerPrefix` to the
+single inline `` let url = \`${CONFIG.url}/api${path}\`; `` block and remove the `servers` field from
+the hand-rolled `OperationObject` interface (also fine to leave — it's additive and unused once
+`resolveServerPrefix` is gone) and the `main()`-guard `if` (optional; harmless to keep, it only
+changes behavior when the file is imported rather than executed directly). Regenerate
+`api/openapi.json`/`api/openapi.yaml` afterward so they stop advertising the two `/oauth/*` paths.
+This reopens the exact deferral PF-103's own CHANGES.md entry described — `/oauth/authorize` and
+`/oauth/authorize/decision` go back to being unregistered, undocumented in Swagger, and absent as
+MCP tools (silently, as before — not present in `/api/openapi.json`, not present as a tool, no
+error either way).
+
+---
+
 ## TRO-412 — PF-103: `/oauth/authorize` + consent screen (S256-only PKCE, exact redirect_uri match)
 
 **Provenance timing note (added after `gate.sh`, before this branch's own commits changed):** the
@@ -209,22 +336,26 @@ pattern as the original three ACs.
   `/api/` prefix the legacy limiters match). PLUGFORGE.MD §2.7 assigns the public surface's rate
   limiting to PF-004 explicitly ("before anything else ships") — a one-off limiter here would risk
   conflicting with that design rather than complementing it.
-- **[major]** OpenAPI registration for `GET /oauth/authorize`/`POST /oauth/authorize/decision`.
-  Investigated (not just deferred as a style judgment call) at a later PM-triaged review pass — the
-  RFC-6749-vs-`ApiError` framing below turned out not to be the real blocker. The actual blocker:
-  this repo's single OpenAPI registry (`api/src/openapi/registry.ts`) sets one global
-  `servers: [{ url: '/api' }]`, and the MCP tool executor (`api/src/mcp/server.ts:375`) hardcodes
-  `` `${CONFIG.url}/api${path}` `` with no support for a per-operation `servers` override.
+- **[major]** ~~OpenAPI registration for `GET /oauth/authorize`/`POST /oauth/authorize/decision`.~~
+  **RESOLVED by TRO-551 (see that entry, below the top of this file) — for these two routes
+  specifically.** Investigated (not just deferred as a style judgment call) at a later PM-triaged
+  review pass — the RFC-6749-vs-`ApiError` framing below turned out not to be the real blocker. The
+  actual blocker: this repo's single OpenAPI registry (`api/src/openapi/registry.ts`) sets one
+  global `servers: [{ url: '/api' }]`, and the MCP tool executor (`api/src/mcp/server.ts:375`)
+  hardcoded `` `${CONFIG.url}/api${path}` `` with no support for a per-operation `servers` override.
   `/oauth/authorize` is mounted entirely outside `/api` (`app.ts`), so registering it in this
   registry would either misdocument its real path in Swagger, or — if given a per-operation
   `servers` override so Swagger documents it correctly — ship an auto-generated MCP tool that calls
-  the wrong URL and 404s on every invocation, silently. No existing endpoint in this codebase is
-  registered outside `/api` (checked: every `path:` value across `api/src/openapi/schemas/*.ts` is
-  `/api`-relative), so there is no working precedent to copy either. Still not registered; this
-  genuinely needs either a second, `/oauth`-scoped registry (with its own generator/server wiring)
-  or an MCP-executor fix that reads per-operation `servers`, neither of which fits inside a
-  single-endpoint registration task. Flagged for the orchestrator with the concrete blocker, not
-  decided unilaterally.
+  the wrong URL and 404s on every invocation, silently. No existing endpoint in this codebase was
+  registered outside `/api` at the time (checked: every `path:` value across
+  `api/src/openapi/schemas/*.ts` was `/api`-relative), so there was no working precedent to copy
+  either. TRO-551 added exactly the missing piece — a `ROOT_SERVER` per-operation `servers` override
+  (`registry.ts`) plus an MCP-executor read of that same field (`resolveServerPrefix`,
+  `mcp/server.ts`) — and used it to register both of THIS ticket's routes; both now appear correctly
+  in `/api/openapi.json` under their real paths, and the generated MCP tools call the un-prefixed
+  URL, verified against a live server. **Not yet extended to PF-104's `/oauth/token` or PF-106's
+  `/oauth/device/*`** — those routes are not on `main` as of TRO-551's dispatch; whoever lands them
+  should register them with the same `ROOT_SERVER` convention rather than re-deriving the mechanism.
 - **[major]** SameSite=Strict cookie survival across a genuinely cross-site (not just cross-port)
   top-level navigation — not verified in a real browser (see the header comment in
   `oauth-authorize.ts` for the full reasoning and why the isolated e2e fixture can't currently answer

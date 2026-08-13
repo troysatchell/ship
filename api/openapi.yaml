@@ -9072,3 +9072,153 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
+  /oauth/authorize:
+    get:
+      tags:
+        - OAuth
+      summary: RFC 6749 authorization endpoint
+      description: Browser-navigated entry point for the authorization_code + PKCE (S256-only) grant. Validates the request against the registered OAuth app, then redirects to /login (no session) or /oauth-consent (session present). Never returns JSON. Mounted outside /api — see the servers override on this operation.
+      security:
+[]
+      servers:
+        - url: 
+                    description: Mounted at the application root — outside the /api prefix.
+      parameters:
+        - schema:
+                      type: string
+                      description: Public client identifier of a registered OAuth app.
+                      example: ship_app_3f9c2b1a7e6d4508
+                    required: true
+                    name: client_id
+                    in: query
+        - schema:
+                      type: string
+                      description: Must exactly match one of the app's registered redirect URIs (no prefix/substring match).
+                    required: true
+                    name: redirect_uri
+                    in: query
+        - schema:
+                      type: string
+                      description: Must be exactly "code" — this endpoint only supports the authorization_code grant.
+                      example: code
+                    required: false
+                    name: response_type
+                    in: query
+        - schema:
+                      type: string
+                      description: PKCE code challenge (required in practice — its absence redirects with error=invalid_request).
+                    required: false
+                    name: code_challenge
+                    in: query
+        - schema:
+                      type: string
+                      description: Must be exactly "S256" — this endpoint is S256-only, "plain" is rejected.
+                      example: S256
+                    required: false
+                    name: code_challenge_method
+                    in: query
+        - schema:
+                      type: string
+                      description: Space-delimited scopes. Each must already be registered on the app, or the request is rejected with error=invalid_scope.
+                    required: false
+                    name: scope
+                    in: query
+        - schema:
+                      type: string
+                      description: Opaque value round-tripped unchanged onto the redirect (success or error).
+                    required: false
+                    name: state
+                    in: query
+      responses:
+        302:
+          description: Redirects to /oauth-consent (session present) or /login?returnTo=... (no session), or — once redirect_uri is verified safe — reports a validation failure via redirect to that redirect_uri with an error= query param (unsupported_response_type, invalid_request, or invalid_scope).
+          headers:
+            Location:
+              schema:
+                type: string
+                description: Target of the redirect.
+              required: true
+        400:
+          description: "client_id/redirect_uri missing, or redirect_uri is not registered for this app, or the app/client_id is unknown — the open-redirect guard: never a redirect, a static HTML error page (there is no redirect_uri safe to send the caller to)."
+          content:
+            text/html:
+              schema:
+                type: string
+        403:
+          description: The authenticated user's workspace does not own this OAuth app — static HTML error page, not a redirect (same open-redirect-guard reasoning as 400).
+          content:
+            text/html:
+              schema:
+                type: string
+  /oauth/authorize/decision:
+    post:
+      tags:
+        - OAuth
+      summary: Consent page Approve/Deny form target
+      description: Target of the /oauth-consent page's plain HTML <form> POST (never fetch() — see the module header on oauth-authorize.ts for why, including why this endpoint carries no CSRF token). Re-validates every field from scratch rather than trusting the GET's prior validation. On decision=approve, issues a single-use authorization code and redirects with ?code=...; on decision=deny, redirects with ?error=access_denied. Mounted outside /api — see the servers override on this operation.
+      security:
+[]
+      servers:
+        - url: 
+                    description: Mounted at the application root — outside the /api prefix.
+      requestBody:
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                client_id:
+                  type: string
+                  description: Public client identifier of a registered OAuth app.
+                  example: ship_app_3f9c2b1a7e6d4508
+                redirect_uri:
+                  type: string
+                  description: Must exactly match one of the app's registered redirect URIs (no prefix/substring match).
+                response_type:
+                  type: string
+                  description: Must be exactly "code" — this endpoint only supports the authorization_code grant.
+                  example: code
+                code_challenge:
+                  type: string
+                  description: PKCE code challenge (required in practice — its absence redirects with error=invalid_request).
+                code_challenge_method:
+                  type: string
+                  description: Must be exactly "S256" — this endpoint is S256-only, "plain" is rejected.
+                  example: S256
+                scope:
+                  type: string
+                  description: Space-delimited scopes. Each must already be registered on the app, or the request is rejected with error=invalid_scope.
+                state:
+                  type: string
+                  description: Opaque value round-tripped unchanged onto the redirect (success or error).
+                decision:
+                  type: string
+                  enum:
+                    - approve
+                    - deny
+                  description: The consent page Approve/Deny form field.
+              required:
+                - client_id
+                - redirect_uri
+                - decision
+      responses:
+        303:
+          description: Redirects to the registered redirect_uri, either with ?code=... (approve) or ?error=access_denied (deny) — or to /login?returnTo=... if the session is missing/expired.
+          headers:
+            Location:
+              schema:
+                type: string
+                description: Target of the redirect.
+              required: true
+        400:
+          description: client_id/redirect_uri missing or unregistered, unknown client_id, or an invalid "decision" value — open-redirect guard, static HTML error page, never a redirect.
+          content:
+            text/html:
+              schema:
+                type: string
+        403:
+          description: The authenticated user's workspace does not own this OAuth app.
+          content:
+            text/html:
+              schema:
+                type: string
