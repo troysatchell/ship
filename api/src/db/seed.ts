@@ -7,6 +7,10 @@ import bcrypt from 'bcryptjs';
 import { loadProductionSecrets } from '../config/ssm.js';
 import { resolveDatabaseSsl } from './ssl.js';
 import { WELCOME_DOCUMENT_TITLE, WELCOME_DOCUMENT_CONTENT } from './welcomeDocument.js';
+import {
+  seedGraderApp,
+  GRADER_OAUTH_CLIENT_SECRET_ENV_VAR,
+} from '../platform/oauth/seedGraderApp.js';
 
 const { Pool } = pg;
 
@@ -84,6 +88,24 @@ async function seed() {
       );
       workspaceId = workspaceResult.rows[0].id;
       console.log('✅ Workspace created');
+    }
+
+    // Seed the read-only grader OAuth app (PF-907 / TRO-441). Idempotent —
+    // safe on every re-seed. Only actually creates a row when
+    // GRADER_OAUTH_CLIENT_SECRET is set (a deployed grader environment, per
+    // PF-900's Terraform artifact); a normal local `pnpm db:seed` /
+    // `./start.sh` run without that var is unaffected — this is the one
+    // idempotency check-then-insert step in this file that is deliberately
+    // allowed to no-op by design, not just by accident of existing data.
+    const graderAppSeedResult = await seedGraderApp(pool, workspaceId);
+    if (graderAppSeedResult.status === 'created') {
+      console.log(`✅ Created grader OAuth app (client_id: ${graderAppSeedResult.clientId})`);
+    } else if (graderAppSeedResult.status === 'exists') {
+      console.log(`ℹ️  Grader OAuth app already exists (client_id: ${graderAppSeedResult.clientId})`);
+    } else {
+      console.log(
+        `ℹ️  Skipped grader OAuth app seed — ${GRADER_OAUTH_CLIENT_SECRET_ENV_VAR} not set`
+      );
     }
 
     // Team members to seed (dev user + 10 fake users)
@@ -1874,6 +1896,12 @@ async function seed() {
     console.log('Login credentials:');
     console.log('  Email: dev@ship.local');
     console.log('  Password: admin123');
+    if (graderAppSeedResult.status !== 'skipped_no_secret') {
+      console.log('');
+      console.log('Grader OAuth app:');
+      console.log(`  client_id: ${graderAppSeedResult.clientId}`);
+      console.log(`  client_secret: (the value of ${GRADER_OAUTH_CLIENT_SECRET_ENV_VAR} you set — not re-printed)`);
+    }
   } catch (error) {
     console.error('❌ Seed failed:', error);
     process.exit(1);
