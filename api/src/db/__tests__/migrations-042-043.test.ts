@@ -38,8 +38,22 @@ const MIGRATIONS_DIR = join(DB_DIR, 'migrations');
 
 const HOOK_TIMEOUT = 120_000;
 
-// The two migrations under test.
+// The two migrations under test (PF-101 / TRO-406's own).
 const OAUTH_VERSIONS = ['042_oauth_apps', '043_oauth_tokens_and_codes'];
+
+// Later migrations that ALTER a table 043 creates (oauth_tokens) and
+// therefore cannot apply before it — must be excluded from the "prior,
+// nothing from oauth yet" AC-2 fixture below for the same reason 042/043
+// themselves are excluded there, or that fixture's own setup step fails
+// trying to alter a table that doesn't exist yet. Added by PF-104/TRO-416
+// (`044_oauth_tokens_authorization_code_id`, which adds
+// `oauth_tokens.authorization_code_id`) after its migration broke this
+// pre-existing test — `044`'s own migration-number-collision comment records
+// why 044 was available to take. Kept separate from `OAUTH_VERSIONS` above
+// (which names PF-101's own two migrations specifically, and is used below
+// in assertions scoped to just those two) — extend THIS list, not that one,
+// whenever a later ticket adds another oauth_tokens-dependent migration.
+const LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS = ['044_oauth_tokens_authorization_code_id'];
 
 /** Same helper shape as migrationRunner.test.ts — see that file for the full rationale. */
 function databaseNames(): { adminUrl: string; urlFor: (name: string) => string; base: string } {
@@ -215,7 +229,10 @@ describe('oauth schema migrations 042 + 043 (PF-101 / TRO-406)', () => {
       // from this ticket yet — the real state of an existing Ship database
       // the moment before this migration deploys. Real files copied off disk
       // (never hand-written SQL), same discipline as db-6-7-8-10-indexes.test.ts.
-      priorMigrationsFixtureRoot = migrationsDirExcluding(OAUTH_VERSIONS);
+      priorMigrationsFixtureRoot = migrationsDirExcluding([
+        ...OAUTH_VERSIONS,
+        ...LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS,
+      ]);
       await runMigrations(pool, {
         schemaPath: SCHEMA_PATH,
         migrationsDir: join(priorMigrationsFixtureRoot, 'migrations'),
@@ -259,7 +276,16 @@ describe('oauth schema migrations 042 + 043 (PF-101 / TRO-406)', () => {
           log: silent,
         });
 
-        expect(result.applied.sort()).toEqual([...OAUTH_VERSIONS].sort());
+        // `toContain`, not an exact-equals on `result.applied`: this run
+        // uses the REAL, full `MIGRATIONS_DIR` (not a filtered copy), so any
+        // later oauth_tokens-dependent migration excluded from the prior
+        // fixture above (044, today) legitimately applies in this same run
+        // too — that migration's own AC is proven separately
+        // (`migrations-044-*.test.ts` if/when PF-104 adds one), not here.
+        // This test's job is specifically "042/043 applied, not silently
+        // skipped" (DB-1's failure mode), which `toContain` still proves.
+        expect(result.applied, 'runner should apply 042').toContain('042_oauth_apps');
+        expect(result.applied, 'runner should apply 043').toContain('043_oauth_tokens_and_codes');
         expect(result.alreadyApplied).not.toContain('042_oauth_apps');
         expect(result.alreadyApplied).not.toContain('043_oauth_tokens_and_codes');
 
