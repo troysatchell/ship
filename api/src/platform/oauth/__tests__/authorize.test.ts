@@ -27,6 +27,8 @@ import request from 'supertest';
 import crypto from 'crypto';
 import { createApp } from '../../../app.js';
 import { pool } from '../../../db/client.js';
+import { ABSOLUTE_SESSION_TIMEOUT_MS } from '@ship/shared';
+import { SESSION_INACTIVITY_LIMIT_MS } from '../../../middleware/auth.js';
 
 describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
   const app = createApp(); // default corsOrigin: http://localhost:5173
@@ -476,6 +478,71 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
       const returnTo = location.searchParams.get('returnTo');
       expect(returnTo).toBeTruthy();
       expect(returnTo).toContain('/oauth-consent');
+    });
+
+    // Exercises getSessionPrincipal's two READ checks (authorize.ts:196-215)
+    // directly — this function re-implements authMiddleware's inactivity and
+    // absolute-age checks inline rather than calling it (see that function's
+    // own header comment for why), so nothing else in this file's fixtures
+    // proves those two checks actually work.
+    it('a session past ABSOLUTE_SESSION_TIMEOUT_MS redirects to /login, same as no session at all', async () => {
+      const staleSessionId = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO sessions (id, user_id, workspace_id, expires_at, last_activity, created_at)
+         VALUES ($1, $2, $3, now() + interval '1 hour', now(), now() - ($4 * interval '1 millisecond'))`,
+        [staleSessionId, testUserId, testWorkspaceId, ABSOLUTE_SESSION_TIMEOUT_MS + 60_000]
+      );
+
+      try {
+        const res = await request(app)
+          .get('/oauth/authorize')
+          .query({
+            client_id: testClientId,
+            redirect_uri: REGISTERED_REDIRECT_URI,
+            response_type: 'code',
+            code_challenge: 'irrelevant-challenge',
+            code_challenge_method: 'S256',
+          })
+          .set('Cookie', `session_id=${staleSessionId}`);
+
+        expect(res.status).toBeGreaterThanOrEqual(300);
+        expect(res.status).toBeLessThan(400);
+        const location = new URL(requireLocation(res));
+        expect(location.origin).toBe(WEB_ORIGIN);
+        expect(location.pathname).toBe('/login');
+      } finally {
+        await pool.query('DELETE FROM sessions WHERE id = $1', [staleSessionId]);
+      }
+    });
+
+    it('a session past SESSION_INACTIVITY_LIMIT_MS redirects to /login, same as no session at all', async () => {
+      const idleSessionId = crypto.randomBytes(32).toString('hex');
+      await pool.query(
+        `INSERT INTO sessions (id, user_id, workspace_id, expires_at, last_activity, created_at)
+         VALUES ($1, $2, $3, now() + interval '1 hour', now() - ($4 * interval '1 millisecond'), now())`,
+        [idleSessionId, testUserId, testWorkspaceId, SESSION_INACTIVITY_LIMIT_MS + 60_000]
+      );
+
+      try {
+        const res = await request(app)
+          .get('/oauth/authorize')
+          .query({
+            client_id: testClientId,
+            redirect_uri: REGISTERED_REDIRECT_URI,
+            response_type: 'code',
+            code_challenge: 'irrelevant-challenge',
+            code_challenge_method: 'S256',
+          })
+          .set('Cookie', `session_id=${idleSessionId}`);
+
+        expect(res.status).toBeGreaterThanOrEqual(300);
+        expect(res.status).toBeLessThan(400);
+        const location = new URL(requireLocation(res));
+        expect(location.origin).toBe(WEB_ORIGIN);
+        expect(location.pathname).toBe('/login');
+      } finally {
+        await pool.query('DELETE FROM sessions WHERE id = $1', [idleSessionId]);
+      }
     });
   });
 });

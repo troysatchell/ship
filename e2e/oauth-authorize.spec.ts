@@ -6,7 +6,7 @@
  * (`api/vitest.config.ts` pins `include: ['src/**\/*.test.ts']`; `web`'s
  * config resolves from `web/`), so `gate.sh` never executes this file even
  * though it counts toward the gate's "regression test added" grep. The real
- * proof is `api/src/platform/oauth/__tests__/authorize.test.ts` (6 cases,
+ * proof is `api/src/platform/oauth/__tests__/authorize.test.ts` (13 cases,
  * seen red-before-green — see CHANGES.md TRO-412).
  *
  * ── Execution status (read before trusting this file) ──
@@ -67,6 +67,8 @@ async function seedOAuthApp(dbUrl: string): Promise<{ clientId: string }> {
 }
 
 test.describe('OAuth authorize + consent (PF-103)', () => {
+  test.describe.configure({ mode: 'serial' });
+
   test('login -> authorize -> consent -> redirect with code (graded PKCE scenario, first half)', async ({
     page,
     apiServer,

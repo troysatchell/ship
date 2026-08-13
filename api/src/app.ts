@@ -339,9 +339,10 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   //
   // This does NOT make the app-global `cors()` below a no-op for those paths.
   // `v1Router` only defines `GET /health` today (no 404 fallthrough — that's
-  // PF-002), and `/oauth` has no router mounted at all yet (E1) — so an
-  // unmatched `/api/v1/*` path or any `/oauth` request falls straight through
-  // `app.use('/api/v1', v1Router)` with the response still open, and would
+  // PF-002), and `/oauth` now has a router mounted below (PF-103/TRO-412),
+  // covering only `GET /authorize` and `POST /authorize/decision` — an
+  // unmatched `/api/v1/*` path, or an `/oauth/*` path that router doesn't
+  // handle, still falls straight through with the response open, and would
   // reach the app-global `cors()` next. `cors()` middleware runs — and sets
   // its headers — on every request that reaches it, matched route or not, so
   // it would overwrite `Access-Control-Allow-Origin` with the single-origin
@@ -361,8 +362,9 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   // (PLUGFORGE.MD §2.7); until that lands, the public router is unmetered by
   // this file. Every other `/api/*` route remains capped exactly as before.
   //
-  // `/oauth` has no router yet (added by E1); listing it here now means that
-  // ticket only has to mount its router, not also touch this CORS wiring.
+  // `/oauth`'s router was added by PF-103/TRO-412 (mounted below); listing
+  // this prefix here meant that ticket only had to mount its router, not
+  // also touch this CORS wiring.
   app.use(['/api/v1', '/oauth'], createPublicApiCors());
   app.use('/api/v1', v1Router);
 

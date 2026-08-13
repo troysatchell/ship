@@ -107,9 +107,11 @@ mechanism + prod caveat below).
    POST is authoritative and self-sufficient), not a gap.
 
 **Regression tests (the factory-gate proof).**
-`api/src/platform/oauth/__tests__/authorize.test.ts` — 6 cases, fixture pattern (workspace/user/
-session/oauth-app via direct SQL, session cookie via supertest) copied from
-`api/src/routes/documents.test.ts`:
+`api/src/platform/oauth/__tests__/authorize.test.ts` — 13 cases (6 original + 5 added during
+self-triage below, plus 2 session-validity cases — one session past `ABSOLUTE_SESSION_TIMEOUT_MS`,
+one past `SESSION_INACTIVITY_LIMIT_MS`, both asserting `getSessionPrincipal`'s redirect to `/login`
+— added during a later PM-triaged review pass), fixture pattern (workspace/user/session/oauth-app
+via direct SQL, session cookie via supertest) copied from `api/src/routes/documents.test.ts`:
 - AC-1 (S256, challenge recorded, single-use setup): a valid authorize→consent-approve round trip
   asserts the redirect to the registered `redirect_uri` carries a `code`, and that the created row
   has the right `code_challenge`/`code_challenge_method`, `consumed_at IS NULL`, and — the raw-code
@@ -187,12 +189,22 @@ pattern as the original three ACs.
   `/api/` prefix the legacy limiters match). PLUGFORGE.MD §2.7 assigns the public surface's rate
   limiting to PF-004 explicitly ("before anything else ships") — a one-off limiter here would risk
   conflicting with that design rather than complementing it.
-- **[major]** OpenAPI registration for `/oauth/authorize`/`.../decision`. Deliberately not registered,
-  matching PF-102's own precedent (its admin CRUD used the *internal* registry, not the `/api/v1`
-  one) and the PM's ruling that `/oauth` follows RFC 6749 conventions rather than Ship's `ApiError`
-  contract — registering an RFC 6749 redirect-based endpoint in a JSON-request/response OpenAPI
-  schema is an unusual fit. A genuine judgment call; flagged for PM confirmation rather than decided
-  unilaterally.
+- **[major]** OpenAPI registration for `GET /oauth/authorize`/`POST /oauth/authorize/decision`.
+  Investigated (not just deferred as a style judgment call) at a later PM-triaged review pass — the
+  RFC-6749-vs-`ApiError` framing below turned out not to be the real blocker. The actual blocker:
+  this repo's single OpenAPI registry (`api/src/openapi/registry.ts`) sets one global
+  `servers: [{ url: '/api' }]`, and the MCP tool executor (`api/src/mcp/server.ts:375`) hardcodes
+  `` `${CONFIG.url}/api${path}` `` with no support for a per-operation `servers` override.
+  `/oauth/authorize` is mounted entirely outside `/api` (`app.ts`), so registering it in this
+  registry would either misdocument its real path in Swagger, or — if given a per-operation
+  `servers` override so Swagger documents it correctly — ship an auto-generated MCP tool that calls
+  the wrong URL and 404s on every invocation, silently. No existing endpoint in this codebase is
+  registered outside `/api` (checked: every `path:` value across `api/src/openapi/schemas/*.ts` is
+  `/api`-relative), so there is no working precedent to copy either. Still not registered; this
+  genuinely needs either a second, `/oauth`-scoped registry (with its own generator/server wiring)
+  or an MCP-executor fix that reads per-operation `servers`, neither of which fits inside a
+  single-endpoint registration task. Flagged for the orchestrator with the concrete blocker, not
+  decided unilaterally.
 - **[major]** SameSite=Strict cookie survival across a genuinely cross-site (not just cross-port)
   top-level navigation — not verified in a real browser (see the header comment in
   `oauth-authorize.ts` for the full reasoning and why the isolated e2e fixture can't currently answer
@@ -202,7 +214,17 @@ pattern as the original three ACs.
   intentionally-short challenge strings; deferred rather than done under time pressure.
 - **[trivial]** DRY-ing the e2e spec's repeated login steps into a helper, and the two
   `vite.config.ts` CSP middleware blocks into one — both genuine, both skipped: the e2e spec doesn't
-  execute in this environment yet (see below) and the vite duplication is four lines.
+  execute in this environment yet (see above) and the vite duplication is four lines.
+
+**PM-triaged review pass (post `gate.sh`, after the self-triage round above).** Consent screen shows
+only validated client info now: `OAuthConsent.tsx` no longer renders the caller-supplied `app_name`
+query param (never bound to the validated `client_id`, so it was spoofable) — the heading now reads
+a generic "This application", and the page shows the actual validated `Client:`/`Redirect:` values
+instead so the user can verify what they're authorizing; `oauth-authorize.ts` no longer sets
+`app_name` on the consent redirect since nothing reads it anymore. Added the two session-validity
+test cases noted above. Added `test.describe.configure({ mode: 'serial' })` to the e2e spec. Two
+now-stale `app.ts` comments (written when `/oauth` had no router mounted at all) were corrected to
+describe the router this ticket actually added.
 
 **How to run it.**
 `api && npx vitest run src/platform/oauth/__tests__/authorize.test.ts` (needs `DATABASE_URL` —
@@ -211,9 +233,11 @@ branch) or insert an `oauth_apps` row directly, then `GET /oauth/authorize?clien
 redirect_uri=...&code_challenge=...&code_challenge_method=S256` while logged in.
 
 **Rollback.**
+
 ```sql
 -- No schema change in this ticket — nothing to roll back at the DB level.
 ```
+
 Remove `api/src/platform/oauth/authorize.ts`, `api/src/routes/oauth-authorize.ts`,
 `api/src/platform/oauth/__tests__/authorize.test.ts`, `web/src/pages/OAuthConsent.tsx`,
 `e2e/oauth-authorize.spec.ts`. Revert the `oauth-authorize` import/mount in `api/src/app.ts`, the
