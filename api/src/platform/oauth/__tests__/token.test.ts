@@ -1,10 +1,17 @@
 /**
  * Regression tests for PF-104 / TRO-416 — `POST /oauth/token`
- * (authorization_code + PKCE, client_credentials). Per `ship-qa`/lessons.md
- * §13, this file (`api/src/platform/oauth/__tests__/`) is what `gate.sh`
- * actually executes; there is no additive Playwright e2e spec for this
- * ticket (see CHANGES.md for why — PF-201's `/api/v1/me` does not exist
- * yet, so the graded scenario's last hop cannot run against a real route).
+ * (authorization_code + PKCE, client_credentials) — AND PF-105 / TRO-421
+ * (refresh rotation + family invalidation), added in the same file rather
+ * than a new one: both tickets exercise the identical route and share the
+ * exact same workspace/user/apps fixtures and `postToken`/`introspect`
+ * helpers below, and PF-105's own tests build directly on a real
+ * `authorization_code` redemption (below) to obtain the refresh token they
+ * rotate. Per `ship-qa`/lessons.md §13, this file
+ * (`api/src/platform/oauth/__tests__/`) is what `gate.sh` actually executes;
+ * there is no additive Playwright e2e spec for either ticket (see
+ * CHANGES.md for why — PF-201's `/api/v1/me` does not exist yet, so the
+ * graded scenario's last hop cannot run against a real route; PF-105's own
+ * "stolen-token story" e2e drill is PF-800's job, not this ticket's).
  *
  * "Token works" is proven here by running the request through the REAL
  * production `bearerAuth` middleware (`../bearerAuth.js`) mounted on a tiny
@@ -28,7 +35,7 @@ import { pool } from '../../../db/client.js';
 import { issueAuthorizationCode, hashAuthorizationCode } from '../authorize.js';
 import { createOAuthApp, type OAuthAppSummary } from '../appRegistration.js';
 import { bearerAuth } from '../bearerAuth.js';
-import { redeemAuthorizationCode } from '../token.js';
+import { redeemAuthorizationCode, rotateRefreshToken } from '../token.js';
 
 describe('/oauth/token (PF-104)', () => {
   const app = createApp();
@@ -249,6 +256,75 @@ describe('/oauth/token (PF-104)', () => {
       [hashAuthorizationCode(rawCode)]
     );
     return requireRow(result.rows[0], 'oauth_authorization_codes lookup');
+  }
+
+  // ── PF-105 refresh-rotation helpers ──────────────────────────────────
+
+  interface OauthTokenRow {
+    id: string;
+    family_id: string;
+    parent_id: string | null;
+    revoked_at: Date | null;
+  }
+
+  async function tokenRowByAccessToken(accessToken: string): Promise<OauthTokenRow | null> {
+    const result = await pool.query<OauthTokenRow>(
+      `SELECT id, family_id, parent_id, revoked_at FROM oauth_tokens WHERE access_token_hash = $1`,
+      [crypto.createHash('sha256').update(accessToken).digest('hex')]
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async function familyRevocationStates(familyId: string): Promise<OauthTokenRow[]> {
+    const result = await pool.query<OauthTokenRow>(
+      `SELECT id, family_id, parent_id, revoked_at FROM oauth_tokens WHERE family_id = $1 ORDER BY created_at`,
+      [familyId]
+    );
+    return result.rows;
+  }
+
+  function refreshTokenBody(params: {
+    refreshToken: string;
+    clientId: string;
+    clientSecret?: string;
+    scope?: string;
+  }): Record<string, string | undefined> {
+    return {
+      grant_type: 'refresh_token',
+      refresh_token: params.refreshToken,
+      client_id: params.clientId,
+      client_secret: params.clientSecret,
+      scope: params.scope,
+    };
+  }
+
+  /** Same shape as `TokenSuccessBody`, but with `refresh_token` narrowed to
+   * a definite `string` — every PF-105 test below needs one to rotate, and
+   * this avoids repeating the same null-check in each test body. */
+  interface MintedTokenPair extends Omit<TokenSuccessBody, 'refresh_token'> {
+    refresh_token: string;
+  }
+
+  /** Runs a real `authorization_code` redemption end-to-end and hands back
+   * the resulting access+refresh pair — the starting fixture every PF-105
+   * test below needs, since a refresh token can only be minted by first
+   * running the grant PF-104 already covers. */
+  async function mintInitialTokenPair(
+    forApp: OAuthAppSummary,
+    redirectUri: string,
+    scopes: string[],
+    clientSecret?: string
+  ): Promise<MintedTokenPair> {
+    const { code, codeVerifier } = await issueCodeFor(forApp, redirectUri, scopes);
+    const res = await postToken(
+      authCodeBody({ code, redirectUri, clientId: forApp.client_id, clientSecret, codeVerifier })
+    );
+    expect(res.status).toBe(200);
+    const body = requireTokenSuccessBody(res.body);
+    if (!body.refresh_token) {
+      throw new Error('expected authorization_code grant to return a refresh_token');
+    }
+    return { ...body, refresh_token: body.refresh_token };
   }
 
   // ── authorization_code grant ─────────────────────────────────────────
@@ -733,6 +809,337 @@ describe('/oauth/token (PF-104)', () => {
 
       expect(res.status).toBe(401);
       expect(requireTokenErrorBody(res.body).error).toBe('invalid_client');
+    });
+  });
+
+  // ── refresh_token grant (PF-105 / TRO-421) ───────────────────────────
+
+  describe('refresh_token grant — happy path', () => {
+    it('rotation issues a new access+refresh pair in the same family, and invalidates the parent', async () => {
+      const initial = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
+      const parentRow = await tokenRowByAccessToken(initial.access_token);
+      if (parentRow === null) throw new Error('expected a token row for the initial access token');
+      expect(parentRow.revoked_at).toBeNull();
+
+      const rotateRes = await postToken(
+        refreshTokenBody({ refreshToken: initial.refresh_token, clientId: publicApp.client_id })
+      );
+      expect(rotateRes.status).toBe(200);
+      const rotated = requireTokenSuccessBody(rotateRes.body);
+      expect(rotated.scope).toBe('documents:read');
+      expect(rotated.access_token).not.toBe(initial.access_token);
+      expect(rotated.refresh_token).toBeTruthy();
+      expect(rotated.refresh_token).not.toBe(initial.refresh_token);
+
+      // The parent row is invalidated (single-use gate tripped).
+      const parentAfter = await tokenRowByAccessToken(initial.access_token);
+      expect(parentAfter?.revoked_at ?? null).not.toBeNull();
+
+      // The child exists, in the same family, pointing back at the parent,
+      // and is itself NOT revoked.
+      const childRow = await tokenRowByAccessToken(rotated.access_token);
+      expect(childRow).not.toBeNull();
+      expect(childRow?.family_id).toBe(parentRow.family_id);
+      expect(childRow?.parent_id).toBe(parentRow.id);
+      expect(childRow?.revoked_at ?? null).toBeNull();
+
+      // The new access token is real and works.
+      expect((await introspect(rotated.access_token)).status).toBe(200);
+    });
+
+    it('confidential client: rotates with the correct client_secret', async () => {
+      const initial = await mintInitialTokenPair(
+        confidentialApp,
+        CONFIDENTIAL_REDIRECT_URI,
+        ['issues:write'],
+        confidentialAppSecret
+      );
+
+      const res = await postToken(
+        refreshTokenBody({
+          refreshToken: initial.refresh_token,
+          clientId: confidentialApp.client_id,
+          clientSecret: confidentialAppSecret,
+        })
+      );
+
+      expect(res.status).toBe(200);
+      const rotated = requireTokenSuccessBody(res.body);
+      expect(rotated.scope).toBe('issues:write');
+      expect((await introspect(rotated.access_token)).status).toBe(200);
+    });
+
+    it('requesting a narrower scope than originally granted is honored', async () => {
+      const initial = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, [
+        'documents:read',
+        'issues:read',
+      ]);
+
+      const res = await postToken(
+        refreshTokenBody({
+          refreshToken: initial.refresh_token,
+          clientId: publicApp.client_id,
+          scope: 'documents:read',
+        })
+      );
+
+      expect(res.status).toBe(200);
+      expect(requireTokenSuccessBody(res.body).scope).toBe('documents:read');
+    });
+  });
+
+  describe('negative: reuse of a rotated refresh token -> revokes the whole family', () => {
+    it('presenting an already-rotated refresh token again fails and kills the active child access token', async () => {
+      const initial = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
+      const parentRow = await tokenRowByAccessToken(initial.access_token);
+      if (parentRow === null) throw new Error('expected a token row for the initial access token');
+
+      const rotateRes = await postToken(
+        refreshTokenBody({ refreshToken: initial.refresh_token, clientId: publicApp.client_id })
+      );
+      expect(rotateRes.status).toBe(200);
+      const rotated = requireTokenSuccessBody(rotateRes.body);
+
+      // Sanity: the child access token works before the reuse attempt.
+      expect((await introspect(rotated.access_token)).status).toBe(200);
+
+      // Reuse: present the OLD (already-rotated) refresh token again.
+      const reuseRes = await postToken(
+        refreshTokenBody({ refreshToken: initial.refresh_token, clientId: publicApp.client_id })
+      );
+      expect(reuseRes.status).toBe(400);
+      expect(requireTokenErrorBody(reuseRes.body).error).toBe('invalid_grant');
+
+      // Family revocation has a real, observable effect: the active child's
+      // access token no longer authenticates anything (the specific AC this
+      // test is named for: "family revocation kills active access tokens").
+      expect((await introspect(rotated.access_token)).status).toBe(401);
+
+      // Every row sharing this family_id is now revoked — not just the one
+      // that was directly reused.
+      const familyRows = await familyRevocationStates(parentRow.family_id);
+      expect(familyRows.length).toBeGreaterThanOrEqual(2);
+      for (const row of familyRows) {
+        expect(row.revoked_at, `row ${row.id} in family ${parentRow.family_id} should be revoked`).not.toBeNull();
+      }
+    });
+
+    it('a third rotation attempt against the now-fully-revoked family also fails (idempotent)', async () => {
+      const initial = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
+      await postToken(refreshTokenBody({ refreshToken: initial.refresh_token, clientId: publicApp.client_id }));
+      // First reuse attempt (already proven above to revoke the family).
+      await postToken(refreshTokenBody({ refreshToken: initial.refresh_token, clientId: publicApp.client_id }));
+
+      // Trying the SAME already-revoked refresh token a third time must
+      // still fail cleanly, not throw or double-revoke incorrectly.
+      const thirdRes = await postToken(
+        refreshTokenBody({ refreshToken: initial.refresh_token, clientId: publicApp.client_id })
+      );
+      expect(thirdRes.status).toBe(400);
+      expect(requireTokenErrorBody(thirdRes.body).error).toBe('invalid_grant');
+    });
+  });
+
+  describe('genuine concurrent rotation of the same refresh token', () => {
+    it('exactly one rotation succeeds; the detected race revokes the whole family, including the winner\'s own new token', async () => {
+      const initial = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
+      const parentRow = await tokenRowByAccessToken(initial.access_token);
+      if (parentRow === null) throw new Error('expected a token row for the initial access token');
+      const body = refreshTokenBody({ refreshToken: initial.refresh_token, clientId: publicApp.client_id });
+
+      // Fired via Promise.all — an end-to-end smoke test of the observable
+      // outcome across the full route, same caveat as token.ts's own
+      // authorization_code concurrency test: dispatching together does not
+      // guarantee the two requests actually interleave inside the critical
+      // section. The forced, deterministic test below is what actually
+      // proves the atomic-UPDATE race.
+      const [resA, resB] = await Promise.all([postToken(body), postToken(body)]);
+
+      const statuses = [resA.status, resB.status].sort();
+      expect(statuses).toEqual([200, 400]);
+
+      const [winner, loser] = resA.status === 200 ? [resA, resB] : [resB, resA];
+      const winnerBody = requireTokenSuccessBody(winner.body);
+      expect(requireTokenErrorBody(loser.body).error).toBe('invalid_grant');
+
+      // No double-issue: exactly one child row was ever created for this parent.
+      const childCountResult = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM oauth_tokens WHERE parent_id = $1`,
+        [parentRow.id]
+      );
+      expect(Number(requireRow(childCountResult.rows[0], 'child count').count)).toBe(1);
+
+      // Fail-safe under ambiguity: even the winner's brand-new access token
+      // is already dead, because the loser's detected-reuse response
+      // revoked the whole family (same trade-off as PF-104's own
+      // concurrent-redemption test — see token.ts's module header).
+      expect((await introspect(winnerBody.access_token)).status).toBe(401);
+
+      const familyRows = await familyRevocationStates(parentRow.family_id);
+      for (const row of familyRows) {
+        expect(row.revoked_at, `row ${row.id} should be revoked after the race`).not.toBeNull();
+      }
+    });
+  });
+
+  describe('genuine concurrent rotation of the same refresh token (forced, deterministic race)', () => {
+    /** Same polling pattern as token.ts's authorization_code equivalent —
+     * a real, observable database fact (blocked backends), not a fixed
+     * sleep (lessons.md rule 17). */
+    async function waitForBlockedRotations(target: number, timeoutMs = 5000): Promise<void> {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        const result = await pool.query<{ blocked: string }>(
+          `SELECT count(*)::text AS blocked FROM pg_stat_activity
+           WHERE wait_event_type = 'Lock' AND query ILIKE '%oauth_tokens%revoked_at%'`
+        );
+        const blocked = Number(requireRow(result.rows[0], 'pg_stat_activity poll').blocked);
+        if (blocked >= target) return;
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `timed out waiting for ${target} blocked rotation(s) on pg_stat_activity; last saw ${blocked}`
+          );
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+
+    it('calls the REAL rotateRefreshToken twice, forced to genuinely race: exactly one wins, no double-issue', async () => {
+      // Same rationale as token.ts's forced authorization_code race test:
+      // dispatching two HTTP requests together does not reliably force them
+      // to interleave inside the atomic UPDATE — this test forces it
+      // instead, without any test-only hook in production code. A third
+      // connection takes an exclusive row lock on the parent token row
+      // before either real rotation call starts; each call's own plain
+      // SELECT (the validation read) succeeds immediately, but each call's
+      // atomic UPDATE — the actual single-use gate — blocks on this lock.
+      // Once BOTH are observed genuinely queued for it, the lock is
+      // released and the two blocked UPDATEs contend for the row for real.
+      const initial = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
+      const parentRow = await tokenRowByAccessToken(initial.access_token);
+      if (parentRow === null) throw new Error('expected a token row for the initial access token');
+
+      const params = {
+        refreshToken: initial.refresh_token,
+        clientId: publicApp.client_id,
+        clientSecret: undefined,
+        scope: undefined,
+      };
+
+      const lockClient = await pool.connect();
+      try {
+        await lockClient.query('BEGIN');
+        await lockClient.query('SELECT id FROM oauth_tokens WHERE id = $1 FOR UPDATE', [parentRow.id]);
+
+        const racePromise = Promise.all([rotateRefreshToken(params), rotateRefreshToken(params)]);
+
+        await waitForBlockedRotations(2);
+
+        // Releasing here is what lets the race actually happen — both
+        // blocked UPDATEs are now free to contend for the row lock.
+        await lockClient.query('COMMIT');
+
+        const [resultA, resultB] = await racePromise;
+        expect([resultA.ok, resultB.ok].sort()).toEqual([false, true]);
+      } finally {
+        lockClient.release();
+      }
+
+      // No double-issue: exactly one child row was ever created, no matter
+      // which call actually won the forced race.
+      const childCountResult = await pool.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count FROM oauth_tokens WHERE parent_id = $1`,
+        [parentRow.id]
+      );
+      expect(Number(requireRow(childCountResult.rows[0], 'child count').count)).toBe(1);
+
+      // Exactly one active (non-revoked) token in the family after the
+      // race resolves — the AC this test exists to prove at the DB level.
+      const familyRows = await familyRevocationStates(parentRow.family_id);
+      const activeRows = familyRows.filter((row) => row.revoked_at === null);
+      expect(activeRows).toHaveLength(0);
+    });
+  });
+
+  describe('refresh_token grant — other negative cases', () => {
+    it('unknown refresh_token -> 400 invalid_grant', async () => {
+      const res = await postToken(
+        refreshTokenBody({ refreshToken: 'ship_rt_does-not-exist', clientId: publicApp.client_id })
+      );
+      expect(res.status).toBe(400);
+      expect(requireTokenErrorBody(res.body).error).toBe('invalid_grant');
+    });
+
+    it('expired refresh_token -> 400 invalid_grant, and is NOT treated as reuse', async () => {
+      const initial = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
+
+      await pool.query(
+        `UPDATE oauth_tokens SET refresh_token_expires_at = now() - interval '1 minute'
+         WHERE refresh_token_hash = $1`,
+        [crypto.createHash('sha256').update(initial.refresh_token).digest('hex')]
+      );
+
+      const res = await postToken(
+        refreshTokenBody({ refreshToken: initial.refresh_token, clientId: publicApp.client_id })
+      );
+      expect(res.status).toBe(400);
+      expect(requireTokenErrorBody(res.body).error).toBe('invalid_grant');
+
+      // Expiry is not evidence of theft: the row itself must not have been
+      // revoked by this rejection (distinct from the reuse-detection path).
+      const row = await tokenRowByAccessToken(initial.access_token);
+      expect(row?.revoked_at ?? null).toBeNull();
+    });
+
+    it('client_id mismatch (a different, validly-registered client) -> 400 invalid_grant', async () => {
+      const initial = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
+
+      const res = await postToken(
+        refreshTokenBody({ refreshToken: initial.refresh_token, clientId: otherPublicApp.client_id })
+      );
+      expect(res.status).toBe(400);
+      expect(requireTokenErrorBody(res.body).error).toBe('invalid_grant');
+    });
+
+    it('confidential client, no client_secret -> 401 invalid_client', async () => {
+      const initial = await mintInitialTokenPair(
+        confidentialApp,
+        CONFIDENTIAL_REDIRECT_URI,
+        ['issues:write'],
+        confidentialAppSecret
+      );
+
+      const res = await postToken(
+        refreshTokenBody({ refreshToken: initial.refresh_token, clientId: confidentialApp.client_id })
+      );
+      expect(res.status).toBe(401);
+      expect(requireTokenErrorBody(res.body).error).toBe('invalid_client');
+    });
+
+    it('scope exceeding originally granted -> 400 invalid_scope', async () => {
+      const initial = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
+
+      const res = await postToken(
+        refreshTokenBody({
+          refreshToken: initial.refresh_token,
+          clientId: publicApp.client_id,
+          scope: 'issues:write',
+        })
+      );
+      expect(res.status).toBe(400);
+      expect(requireTokenErrorBody(res.body).error).toBe('invalid_scope');
+    });
+
+    it('missing refresh_token -> 400 invalid_request', async () => {
+      const res = await postToken({ grant_type: 'refresh_token', client_id: publicApp.client_id });
+      expect(res.status).toBe(400);
+      expect(requireTokenErrorBody(res.body).error).toBe('invalid_request');
+    });
+
+    it('missing client_id -> 400 invalid_request', async () => {
+      const res = await postToken({ grant_type: 'refresh_token', refresh_token: 'ship_rt_whatever' });
+      expect(res.status).toBe(400);
+      expect(requireTokenErrorBody(res.body).error).toBe('invalid_request');
     });
   });
 
