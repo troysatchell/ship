@@ -226,6 +226,29 @@ export default tseslint.config(
     rules: correctnessRules,
   },
   {
+    // TRO-448 (PF-600): new integrations/cli workspace package — the first
+    // real package under integrations/. Scoped the same way sdk/src and
+    // agent/src were when each was added (same default correctness rules,
+    // not promoted to 'error'). Without this block, `eslint src` run from
+    // integrations/cli (this package's own `lint` script, and what root
+    // `pnpm lint`'s recursive fan-out invokes) fails outright with "you are
+    // linting 'src', but all files matching are ignored" — verified: this
+    // exact failure reproduced before this block was added, since no `files`
+    // pattern anywhere in this config matched `integrations/cli/src/**`.
+    files: ['integrations/cli/src/**/*.ts'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+    },
+    rules: correctnessRules,
+  },
+  {
     files: ['web/src/**/*.ts', 'web/src/**/*.tsx'],
     languageOptions: {
       parser: tseslint.parser,

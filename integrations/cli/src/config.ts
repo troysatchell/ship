@@ -33,7 +33,13 @@ export const CLIENT_ID_ENV_VAR = 'SHIP_CLI_CLIENT_ID';
 
 export function resolveClientId(argClientId: string | undefined, env: NodeJS.ProcessEnv): string {
   const fromArg = argClientId && argClientId.length > 0 ? argClientId : undefined;
-  const fromEnv = env[CLIENT_ID_ENV_VAR] && env[CLIENT_ID_ENV_VAR]!.length > 0 ? env[CLIENT_ID_ENV_VAR] : undefined;
+  // Destructured into its own binding rather than repeating the indexed
+  // access (`env[CLIENT_ID_ENV_VAR]`) a third time with a `!` to satisfy
+  // strict null checks — this repo's own convention (lessons.md rule 16: no
+  // non-null assertions) for narrowing an indexed-access read under
+  // `noUncheckedIndexedAccess`.
+  const envValue = env[CLIENT_ID_ENV_VAR];
+  const fromEnv = envValue && envValue.length > 0 ? envValue : undefined;
   const clientId = fromArg ?? fromEnv;
   if (!clientId) {
     throw new CliConfigError(

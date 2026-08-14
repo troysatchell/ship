@@ -13,13 +13,16 @@ export interface Io {
   stderr: (line: string) => void;
 }
 
+// A CLI's whole job is printing to the terminal, so `console.*` here is the
+// intended output mechanism, not a stray debug statement — this repo's
+// shared `eslint.config.mjs` ruleset (`correctnessRules`) does not enable
+// `no-console` at all, so no disable comment is needed (one was here
+// briefly; ESLint reported it as an unused directive, correctly).
 export const realIo: Io = {
   stdout: (line) => {
-    // eslint-disable-next-line no-console
     console.log(line);
   },
   stderr: (line) => {
-    // eslint-disable-next-line no-console
     console.error(line);
   },
 };
