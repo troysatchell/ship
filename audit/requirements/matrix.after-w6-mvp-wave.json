@@ -1,0 +1,2678 @@
+{
+  "mode": "compare",
+  "commit": "24183537bb03388f58ef3831d1981aee13da1b27",
+  "dirty": false,
+  "date": "2026-08-14T09:51:08Z",
+  "config_hash": "75aa721a6e9bc922c425737ef8e3446d10d276f8a67f13b2848e7227a88d05a2",
+  "ticket_mapping": {
+    "status": "OK",
+    "provider": "linear",
+    "team": "TRO",
+    "scope": "All 95 tickets in the Linear project \"PlugForge \u2014 Week 6 Platform & Public API\" (team TRO) as of this compare sweep, pulled fresh via mcp__linear__list_issues scoped to that project \u2014 up from 86 at the 2026-08-13T19:53:43Z baseline. The 9-ticket growth is entirely CodeRabbit/review-triage follow-up churn from tonight's 6 landed tickets (TRO-587..592, all Backlog hardening findings against the newly-merged OAuth/device-grant code) plus 4 e2e-regression remediation tickets filed from this sweep's own W6-R10 bisection (TRO-593..596, now mapped to W6-R10 below). Excludes TRO-250..275 (Clavira Pilot Readiness) and TRO-312..365 (mostly FleetGraph/Week 5), unrelated assignments on the same TRO team \u2014 unchanged scoping rationale from baseline."
+  },
+  "requirements": [
+    {
+      "id": "W6-R1",
+      "verdict": "N/A",
+      "tickets": [],
+      "evidence": [],
+      "notes": "Carried forward unchanged. Pure process/calendar item; confirmed via git diff --name-only that no schedule/deadline file is among the 99 changed files.",
+      "suggested_scope": null,
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R2",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-408",
+        "TRO-492",
+        "TRO-493"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/oauth/appRegistration.ts",
+          "line": 109,
+          "note": "createOAuthApp: generates client_id, raw secret shown once (clientType==='confidential'), stores only SHA-256 hash (secretHash). Unchanged since baseline (file absent from 06a15f1..2418353 diff)."
+        },
+        {
+          "file": "api/src/routes/oauth-apps.ts",
+          "line": 60,
+          "note": "POST /api/oauth-apps admin route (workspaceAdminMiddleware-gated), returns client_secret exactly once in the response body. Unchanged."
+        },
+        {
+          "file": "api/src/db/migrations/042_oauth_apps.sql",
+          "line": 31,
+          "note": "oauth_apps table: client_secret_hash column, never the raw value. Unchanged."
+        }
+      ],
+      "notes": "Unchanged from baseline: appRegistration.ts, oauth-apps.ts, migrations/042 all absent from the 06a15f1..2418353 diff (git diff --stat confirmed). Re-ran the targeted suite fresh against a dedicated scratch database (ship_audit_w6mvp_scratch, created and migrated for this sweep, not the shared worktree dev DB) rather than trusting baseline's captured output verbatim: 10/10 still pass. TRO-492 (rotation lost-update race) and TRO-493 (error-shape mismatch) remain Backlog follow-ups, noted for completeness, do not affect this requirement's core AC.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/oauth/__tests__/app-registration.test.ts (api/, scratch DB migrated fresh for this sweep)",
+        "result_excerpt": "src/platform/oauth/__tests__/app-registration.test.ts (10 tests) 203ms\nTest Files 1 passed (1)\nTests 10 passed (10)"
+      }
+    },
+    {
+      "id": "W6-R3",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-412",
+        "TRO-416",
+        "TRO-503",
+        "TRO-550",
+        "TRO-549"
+      ],
+      "evidence": [
+        {
+          "file": "e2e/oauth-authorize.spec.ts",
+          "line": 9,
+          "note": "File's own header still labels this the 'first half' of the graded PKCE scenario \u2014 token exchange still explicitly out of scope for this spec. File is byte-identical to baseline (git diff --stat 06a15f1..2418353 -- e2e/ returns empty \u2014 zero e2e specs changed in this range)."
+        },
+        {
+          "file": "api/src/platform/api/v1/router.ts",
+          "line": 61,
+          "note": "v1Routes now mounts /health, /openapi.json, /documents, /issues, /sprints, /me \u2014 /api/v1/me EXISTS as of this sweep (PF-201/TRO-400, landed since baseline). This closes the specific blocker baseline named ('no /api/v1/me to call with the resulting token') at the code level."
+        },
+        {
+          "file": "api/src/platform/oauth/__tests__/token.test.ts",
+          "line": 1,
+          "note": "32 tests now (up from baseline's 18 \u2014 grew via TRO-421/PF-105's refresh-rotation additions to the same file). Re-ran fresh against the scratch DB: 32/32 pass. Token-exchange correctness, including the mandatory wrong-verifier negative case, remains proven only at the vitest/supertest level, never chained into a Playwright e2e."
+        }
+      ],
+      "notes": "PARTIAL, but the substance of the gap changed: at baseline, TWO things blocked the literal scenario \u2014 no e2e called /oauth/token, AND /api/v1/me didn't exist to call afterward. As of this sweep, /api/v1/me exists (confirmed live in router.ts) and the token exchange is far more thoroughly tested (32 vs 18 cases, now covering PF-105's rotation/reuse-detection too) \u2014 but e2e/ has literally zero changes since baseline (confirmed via git diff --stat), so no Playwright spec was ever written to chain the three legs together. The requirement's literal ask \u2014 'completes end-to-end via A Playwright test' \u2014 is still not met by any single test file, even though every piece it would need to call now exists and works. This is a real, surprising finding for this sweep: six MVP-gate tickets landed and the literal PKCE e2e scenario STILL isn't assembled, purely because no one wrote the connecting test.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": "Unchanged in kind from baseline, narrower in scope now: every piece the literal graded scenario needs now exists in the running system (authorize+consent proven by e2e, token exchange proven by 32/32 vitest, /api/v1/me now a real route) \u2014 the only remaining gap is that nobody has written the ONE Playwright spec chaining authorize -> consent -> /oauth/token -> GET /api/v1/me with the returned bearer token. This is now a pure test-authoring task with zero remaining backend blockers, unlike baseline where /api/v1/me didn't exist yet.",
+      "verification": null
+    },
+    {
+      "id": "W6-R4",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-430"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/oauth/bearerAuth.ts",
+          "line": 116,
+          "note": "bearerAuth middleware: three-way 401 (missing_token/invalid_token/expired_token) in details.reason. File unchanged since baseline."
+        },
+        {
+          "file": "api/src/platform/api/v1/resources/documents.ts",
+          "line": 123,
+          "note": "bearerAuth wired ahead of requireScope on every documents route. Line drifted from baseline's 117 (file grew +20/-0 lines from an unrelated ?type= filter addition, TRO-398 follow-up work) \u2014 content and requirement unaffected."
+        },
+        {
+          "file": "api/src/platform/oauth/__tests__/bearerAuth.test.ts",
+          "line": 246,
+          "note": "AC-4 'missing / invalid / expired' block asserts all three distinct reason codes. Unchanged."
+        }
+      ],
+      "notes": "Unchanged from baseline in substance. Re-ran fresh against the scratch DB (not baseline's captured output): 11/11 pass, including the three distinct 401 cases. /api/v1/health and /api/v1/openapi.json remain the only unauthenticated /api/v1 routes (both intentional, per PF-001/PF-202's own AC), confirmed by route-fitness.test.ts's own exemption table.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/oauth/__tests__/bearerAuth.test.ts",
+        "result_excerpt": "src/platform/oauth/__tests__/bearerAuth.test.ts (11 tests) 147ms\nTest Files 1 passed (1)\nTests 11 passed (11)"
+      }
+    },
+    {
+      "id": "W6-R5",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-398",
+        "TRO-430"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/api/v1/resources/documents.ts",
+          "line": 123,
+          "note": "GET / (list) wired with bearerAuth + requireScope('documents:read'). Line drifted from baseline's 115 (unrelated ?type= filter addition)."
+        },
+        {
+          "file": "api/src/platform/api/v1/resources/documents.ts",
+          "line": 209,
+          "note": "GET /:id wired with bearerAuth + requireScope('documents:read'). Drifted from baseline's 201."
+        },
+        {
+          "file": "api/src/platform/api/v1/resources/documents.ts",
+          "line": 262,
+          "note": "POST / wired with bearerAuth + requireScope('documents:write'). Drifted from baseline's 254."
+        },
+        {
+          "file": "api/src/platform/scopes/requireScope.ts",
+          "line": 34,
+          "note": "requireScope(scope) middleware factory. File changed (+12/-0) this range for PF-203's introspection tagging (Object.defineProperty on .name) \u2014 behavior unaffected, confirmed by reading the diff directly."
+        },
+        {
+          "file": "api/src/platform/api/v1/router.ts",
+          "line": 46,
+          "note": "documentsRouter mounted at /api/v1/documents \u2014 now one of FOUR mounted v1 resources (documents, issues, sprints, me), up from baseline's one-of-one. documents is no longer the ONLY resource, but it still independently satisfies 'at least one resource' with list/get/post + require(scope)."
+        },
+        {
+          "file": "api/src/platform/api/v1/resources/__tests__/documents.test.ts",
+          "line": 43,
+          "note": "AC-1..AC-4 CRUD test suite, now 8 tests (gained a ?type= filter coverage case since baseline)."
+        }
+      ],
+      "notes": "Still VERIFIED, and materially strengthened: PF-201/TRO-400 (landed since baseline) added issues.ts, sprints.ts, and me.ts as THREE MORE /api/v1 resources beyond documents, each independently CRUD/scope/pagination-tested (issues.test.ts 8/8, sprints.test.ts 4/4, me.test.ts 4/4, all re-run fresh against the scratch DB this sweep). The requirement only asks for 'at least one' \u2014 documents alone still satisfies it, and the repo now has four.",
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/api/v1/resources/__tests__/documents.test.ts",
+        "result_excerpt": "src/platform/api/v1/resources/__tests__/documents.test.ts (8 tests) 173ms\nTest Files 1 passed (1)\nTests 8 passed (8)"
+      },
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R6",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-397",
+        "TRO-489",
+        "TRO-495",
+        "TRO-404"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/api/v1/errors.ts",
+          "line": 31,
+          "note": "ApiErrorBody = {code, message, details?, request_id} \u2014 exact \u00a72.5 shape. Unchanged since baseline."
+        },
+        {
+          "file": "api/src/platform/api/v1/errorMiddleware.ts",
+          "line": 1,
+          "note": "Terminal middleware serializes ApiError.toJSON() on every thrown/forwarded v1 failure. Unchanged."
+        },
+        {
+          "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts",
+          "line": 335,
+          "note": "PF-203/TRO-404 (LANDED since baseline \u2014 was the last unmerged MVP-gate item baseline flagged): check (c) walks the REAL live v1Routes router stack and asserts the \u00a72.5 ApiError shape on every route's generic failure path \u2014 not a hand-maintained list, a structural walk (staticMountPrefix/walkRouter helpers recurse into every mounted sub-router)."
+        },
+        {
+          "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts",
+          "line": 275,
+          "note": "Sanity check floors the walk at >=8 discovered routes so a broken-recursion regression can't silently report '0 checked, 0 failed' as green."
+        }
+      ],
+      "notes": "Moved PARTIAL -> VERIFIED. Baseline's single named gap \u2014 'no file walks v1Routes.stack or asserts shape-coverage across every registered route' (PF-203/TRO-404, then Backlog) \u2014 is now closed: TRO-404 landed (PR #197, merged) and route-fitness.test.ts is exactly that fitness test, re-run fresh here (not trusted from a stale capture) against a scratch database: 33/33 pass, covering all 8 currently-registered v1 routes x 4 checks each (minus documented exemptions). The file's own docstring records a real deliberate-scratch-route-fails-then-reverts AC proof.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/api/v1/__tests__/route-fitness.test.ts",
+        "result_excerpt": "src/platform/api/v1/__tests__/route-fitness.test.ts (33 tests) 144ms\nTest Files 1 passed (1)\nTests 33 passed (33)"
+      }
+    },
+    {
+      "id": "W6-R7",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-430"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/scopes/requireScope.ts",
+          "line": 47,
+          "note": "insufficient scope -> forbiddenError with details:{missing_scope: scope}, never opaque. Line drifted from baseline's 37 (file gained PF-203's Object.defineProperty(.name) tagging, +12 lines, above this point) \u2014 logic itself unchanged, confirmed by reading the diff."
+        },
+        {
+          "file": "api/src/platform/scopes/registry.ts",
+          "line": 23,
+          "note": "ScopeRegistryImpl \u2014 scopes-as-data Map. Unchanged (git diff --stat confirms scopes/registry.ts absent from the 06a15f1..2418353 diff)."
+        },
+        {
+          "file": "api/src/platform/oauth/__tests__/bearerAuth.test.ts",
+          "line": 219,
+          "note": "AC-3: 'a token with only issues:read gets 403, code forbidden, details.missing_scope=documents:read'. Unchanged."
+        }
+      ],
+      "notes": "Unchanged from baseline in substance; requireScope.ts's cited line drifted by +10 due to PF-203's unrelated introspection-tagging addition (Object.defineProperty for route-fitness.test.ts's middleware-name walk) \u2014 verified the logic itself (the 403+missing_scope branch) is byte-identical to baseline by reading the diff directly.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/oauth/__tests__/bearerAuth.test.ts src/platform/scopes/__tests__/registry.test.ts",
+        "result_excerpt": "src/platform/oauth/__tests__/bearerAuth.test.ts (11 tests) 147ms\nsrc/platform/scopes/__tests__/registry.test.ts (4 tests) 94ms\nTest Files 2 passed (2)\nTests 15 passed (15)"
+      }
+    },
+    {
+      "id": "W6-R8",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-402"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/openapi/index.ts",
+          "line": 23,
+          "note": "v1OpenApiDocument generated once at module load via generateV1OpenAPIDocument() \u2014 landed by PF-202/TRO-402 (was 'In Progress', now merged PR #192)."
+        },
+        {
+          "file": "api/src/platform/api/v1/router.ts",
+          "line": 50,
+          "note": "v1Routes.get('/openapi.json', (_req, res) => res.status(200).json(v1OpenApiDocument)) \u2014 public, no auth, matching /health's pattern."
+        },
+        {
+          "file": "api/src/platform/openapi/__tests__/document.test.ts",
+          "line": 99,
+          "note": "'validates against the real, official OpenAPI 3.1 JSON Schema (draft 2020-12)' \u2014 uses @seriousme/openapi-schema-validator's Ajv2020 against spec.openapis.org's real schema (not a hand-rolled/loosened check; the file's own docstring documents why a hand-rolled ajv setup was rejected as producing false negatives even on the official petstore fixture). Includes a negative control (line 114) proving the check is non-vacuous."
+        },
+        {
+          "file": "api/src/platform/openapi/__tests__/endpoint.test.ts",
+          "line": 1,
+          "note": "Separate suite proves the route actually serves it over HTTP: 200, JSON, X-Request-Id header, public CORS."
+        }
+      ],
+      "notes": "Moved MISSING -> VERIFIED. Baseline found PF-202/TRO-402 as unmerged in-progress work; it has since landed (PR #192, merged into the 06a15f1..2418353 range) and does exactly what the requirement asks: in-process generation from route metadata (never hand-written \u2014 schemas/*.ts registers each route via v1Registry.registerPath), served at /api/v1/openapi.json, validated against the real official OpenAPI 3.1 JSON Schema in a unit test with a working negative control. Re-ran both suites fresh against the scratch DB: 9/9 pass.",
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/openapi/__tests__/document.test.ts src/platform/openapi/__tests__/endpoint.test.ts",
+        "result_excerpt": "src/platform/openapi/__tests__/document.test.ts (5 tests) 189ms\nsrc/platform/openapi/__tests__/endpoint.test.ts (4 tests) 128ms\nTest Files 2 passed (2)\nTests 9 passed (9)"
+      },
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R9",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-405",
+        "TRO-390"
+      ],
+      "evidence": [
+        {
+          "file": "sdk/src/client.ts",
+          "line": 90,
+          "note": "ShipClient.me(): Promise<Me> \u2014 GET /api/v1/me via native fetch, Authorization: Bearer header when a token is set. Landed by PF-400/TRO-405 (was Backlog/not dispatched at baseline)."
+        },
+        {
+          "file": "sdk/src/types.ts",
+          "line": 38,
+          "note": "Me interface \u2014 verified field-for-field against api/src/platform/api/v1/resources/me.ts's actual handler, per the file's own docstring, not guessed from prose."
+        },
+        {
+          "file": "sdk/src/__tests__/client.liveServer.test.ts",
+          "line": 163,
+          "note": "'new ShipClient({ token, baseUrl }).me() returns the typed user for a real bearer token, over a real TCP round trip' \u2014 a REAL http.Server wrapping the REAL createApp(), driven by the REAL ShipClient.me() over an actual TCP socket (not an in-process/mocked fetch) \u2014 this is the literal requirement text ('against a running server')."
+        },
+        {
+          "file": "pnpm-workspace.yaml",
+          "line": 6,
+          "note": "'sdk' is now a workspace package (added this range) \u2014 closes baseline's 'no sdk/ directory exists anywhere in the repo' finding at the root."
+        }
+      ],
+      "notes": "Moved MISSING -> VERIFIED \u2014 the strongest single delta in this sweep. Baseline found sdk/ entirely absent and PF-400/TRO-405 not even dispatched to a builder. It has since landed (PR #198, merged) with exactly the requirement's own literal acceptance test: a real TCP round trip against a real running server backed by the real seeded database, re-run fresh here against a dedicated scratch DB rather than trusted from a stale capture. Only me() exists on ShipClient by design (PF-400's own docstring: 'this ticket builds ONLY the scaffold + me()') \u2014 resource clients (documents/issues/sprints/webhooks, PF-401/TRO-407) and auth helpers (PF-404/TRO-418) remain Backlog and are tracked separately by W6-R30/R31, not double-counted here.",
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/__tests__/client.liveServer.test.ts (run from sdk/, scratch DB \u2014 this test creates and cleans up its own isolated workspace/user/token rows in beforeAll/afterAll, confirmed safe by reading the file before running it)",
+        "result_excerpt": "src/__tests__/client.liveServer.test.ts (3 tests) 60ms\n  \u2713 new ShipClient(...).me() returns the typed user ... over a real TCP round trip\n  \u2713 an invalid token maps to a ShipSdkError with kind \"auth\" ...\n  \u2713 a request to a baseUrl nothing is listening on throws kind \"network\"\nTest Files 1 passed (1)\nTests 3 passed (3)"
+      },
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R10",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-593",
+        "TRO-594",
+        "TRO-595",
+        "TRO-596"
+      ],
+      "evidence": [
+        {
+          "file": "audit/api-perf/compare-w6-r10-aug14/after-w6-r10-aug14.md",
+          "line": 90,
+          "note": "\"Yes, for every existing /api/* route this repo has a real baseline to compare against\" \u2014 17/18 measured rows at or below the 2026-07-27 baseline P95, the 18th (+3.2%) not a violation; documents-wiki's apparent +306%..+749% regression traced to concurrent-agent host load (44 load avg) and disproven by a same-methodology quiet-load recheck (+0.9%/+17.7%/-26.0%, within noise)."
+        },
+        {
+          "file": "audit/db-query/compare-w6-r10-aug14/after-w6-r10-aug14.md",
+          "line": 66,
+          "note": "\"Yes, for every existing /api/* route this repo has a baseline to compare against\" \u2014 all 6 measured endpoints at or below baseline query count (-16.7% to -25.0%); the decrease traced to a pre-existing session-write throttle fix, not tonight's tickets, whose three named middleware pieces are confirmed by source read to perform zero DB I/O."
+        },
+        {
+          "file": "audit/bundle/compare-w6-aug14/after-w6-aug14.md",
+          "line": 43,
+          "note": "\"Gate verdict: PASS.\" Every measured bundle metric is a reduction vs the 07-27 baseline. Isolated to tonight specifically (git diff c1caa61..HEAD -- web/): net footprint +3.31 KB raw / +1.22 KB gzip (0.15%/0.19% of total), +0 KB to the initial-load bundle \u2014 OAuth core/v1 router/OpenAPI generator/rate-limit exemption are all api/-only with no web/ footprint."
+        },
+        {
+          "file": "memory-bank/activeContext.md",
+          "line": 23,
+          "note": "\"e2e suite: 32 tests fail, but proven pre-existing via bisection, not caused by tonight.\" Three-pass investigation ending in bisection against commit 6000c94 (verified last commit before any of the 6 W6 PRs merged) reproduced the identical 32 failures with identical signatures on a checkout with zero code overlap with tonight's work (only e2e-irrelevant frontend diff in the whole range: main.tsx +13 lines, new OAuthDeviceVerify.tsx). Filed as 4 remediation tickets (TRO-593/594/595/596), none blocking MVP."
+        }
+      ],
+      "notes": "Moved MISSING -> PARTIAL, not VERIFIED, per this project's own claim-provenance discipline (do not round a nuanced result to a flat pass). I independently opened and read all three compare-mode reports plus the memory-bank bisection narrative rather than trusting the delegating brief's summary: the three numeric budgets (P95 latency, bundle size, per-route query counts, all vs the 2026-07-27 Part-1 baseline) are genuinely met with real, well-caveated compare-mode runs (api-perf/db-query/bundle all report PASS, each disclosing its own confounds \u2014 Postgres 15->16 version skew, gzip compression landing independently, concurrent host load during one measurement window and a quiet-load recheck disproving the resulting artifact). The fourth clause, 'existing Playwright regression suite passes on main', is literally false today: 32 tests fail. A rigorous three-pass bisection (not merely asserted) traces every one of those 32 to pre-existing causes wholly outside the 06 commits this run swept, with zero code overlap against a verified pre-wave commit \u2014 so none of them are a regression FROM W6 work \u2014 but the suite does not pass in the unqualified sense the requirement's words state. PARTIAL is the honest tier: the requirement's harder, more specific numeric budgets are met and proven; its broader qualitative clause is not, for reasons proven unrelated to the six tickets this sweep is about. None of the four commands (api-perf/db-query/bundle compares, the e2e bisection) were run by me in this sweep \u2014 I verified their artifacts directly (opened and read the three compare .md reports and the memory-bank narrative in full) rather than re-running them, since the task briefed them as already completed by a separate, parallel verification effort and re-running a Docker-testcontainer-heavy e2e suite plus two audit categories was out of this sweep's own scope.",
+      "suggested_scope": "The three quantitative budgets (P95 latency, bundle size, per-route query count) are done and need no further work. What remains to make the literal quote ('existing Playwright regression suite passes on main') true is fixing or quarantining the 4 pre-existing failure clusters now ticketed as TRO-593 (High, session-timeout.spec.ts browser-context crashes), TRO-594/TRO-596 (Low), TRO-595 (Medium) \u2014 none caused by W6 work, but the suite does not pass in an unqualified sense today.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R11",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "tickets": [
+        "TRO-441",
+        "TRO-411",
+        "TRO-402"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/oauth/seedGraderApp.ts",
+          "line": 80,
+          "note": "seedGraderApp() creates the read-only grader OAuth app (documents:read, issues:read, sprints:read), idempotent, secret from GRADER_OAUTH_CLIENT_SECRET env var. Unchanged since baseline."
+        },
+        {
+          "file": "api/src/db/seed.ts",
+          "line": 100,
+          "note": "seedGraderApp(pool, workspaceId) wired into the normal db:seed boot path. Unchanged."
+        },
+        {
+          "file": "terraform/render/plan/tro-411-pf900-w6-env-vars.md",
+          "line": 299,
+          "note": "Live credentialed terraform plan capture shows GRADER_OAUTH_CLIENT_SECRET reaching render_web_service.ship's env_vars. Unchanged (terraform/ has zero diff in this range)."
+        },
+        {
+          "file": "api/src/platform/api/v1/router.ts",
+          "line": 50,
+          "note": "CHANGED SINCE BASELINE: v1Routes.get('/openapi.json', ...) now registered \u2014 baseline cited this exact file to show the route did NOT exist ('no /openapi.json route exists yet, so the published OpenAPI spec URL half of this requirement is not yet buildable'). That blocker is now closed at the code level (PF-202/TRO-402 landed)."
+        }
+      ],
+      "notes": "Moved PARTIAL -> IMPLEMENTED-UNVERIFIED. Two of three pieces were already real code at baseline (grader seed, Terraform wiring); the third \u2014 'published OpenAPI spec URL' could not exist because /api/v1/openapi.json wasn't registered anywhere. PF-202/TRO-402 landing this range closes that gap at the code level: the route is registered, publicly served (no auth, confirmed by endpoint.test.ts), and validated. What remains is purely a live-deployment check ('deployed and publicly accessible'), which is a process/deployment fact this sweep cannot observe from a static tree \u2014 hence IMPLEMENTED-UNVERIFIED (code complete, behavioral/live check not run) rather than PARTIAL (a named piece missing) or VERIFIED (would need an actual live probe).",
+      "suggested_scope": "Narrowed from baseline: all three named pieces now have real code (grader app seed, its Terraform env-var wiring, and now the OpenAPI spec route itself). The only remaining gap is a live-deployment probe \u2014 GET the deployed instance's /api/v1/openapi.json and confirm a 200 \u2014 which this sweep could not perform (no network egress attempted, consistent with baseline's own coverage limitation, not a new gap).",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R12",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-411",
+        "TRO-415",
+        "TRO-488",
+        "TRO-420"
+      ],
+      "evidence": [
+        {
+          "file": "terraform/render/versions.tf",
+          "line": 9,
+          "note": "Exact provider pin: render-oss/render = \"1.9.1\". Unchanged since baseline \u2014 terraform/ has zero diff in the 06a15f1..2418353 range (confirmed via git diff --stat)."
+        },
+        {
+          "file": "terraform/render/postgres.tf",
+          "line": 9,
+          "note": "render_postgres.ship \u2014 the database resource. Unchanged."
+        },
+        {
+          "file": "terraform/render/web_service.tf",
+          "line": 9,
+          "note": "render_web_service.ship \u2014 the app container resource. Unchanged."
+        },
+        {
+          "file": "terraform/render/plan/tro-411-pf900-w6-env-vars.md",
+          "line": 359,
+          "note": "\"Plan: 3 to add, 0 to change, 0 to destroy\" \u2014 real credentialed plan capture, committed. Unchanged."
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 1,
+          "note": "PF-902 memo. Unchanged."
+        },
+        {
+          "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md",
+          "line": 1,
+          "note": "Only destroy-and-redeploy proof on file \u2014 scoped to render_web_service.agent (W5/FleetGraph), not the current full render/ topology including this week's 8 new env vars/services. Unchanged."
+        },
+        {
+          "file": "memory-bank/progress.md",
+          "line": 163,
+          "note": "\"PF-901/TRO-415 flagged: human go-ahead required before terraform destroy on graded env\" \u2014 TRO-415 still Backlog (confirmed via fresh Linear pull this sweep, not just carried forward)."
+        }
+      ],
+      "notes": "No code changed in scope since baseline: git diff --stat 06a15f1..2418353 -- terraform/ returns empty (zero diff). None of the six landed tickets (TRO-400/402/404/405/421/425) touch terraform/ or docs/IAM-ADAPTATION-RENDER.md. Verdict carried forward unchanged: config completeness, exact provider pin, and a committed annotated plan are real; destroy-redeploy evidence for the deployment as it stands today (including this week's platform additions) is still absent. TRO-415/PF-901 remains Backlog, re-confirmed via a fresh Linear pull this sweep.",
+      "suggested_scope": "Unchanged from baseline: TRO-415/PF-901 needs to actually run a destroy-redeploy cycle against the full current topology (ship + postgres + this week's 8 new PF-900 env vars), scoped wider than the existing agent-only proof. Blocked on the human go-ahead memory-bank/progress.md:163 already flags \u2014 none of tonight's 6 tickets touch this.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R13",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-406",
+        "TRO-408",
+        "TRO-492",
+        "TRO-493"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/db/migrations/042_oauth_apps.sql",
+          "line": 31,
+          "note": "oauth_apps: id, client_id, client_secret_hash, redirect_uris, owner_user_id, requested_scopes. Unchanged since baseline."
+        },
+        {
+          "file": "api/src/platform/oauth/appRegistration.ts",
+          "line": 177,
+          "note": "rotateOAuthAppSecret returns clientSecret raw exactly once on rotation; old hash overwritten immediately. Unchanged."
+        },
+        {
+          "file": "api/src/routes/oauth-apps.ts",
+          "line": 235,
+          "note": "rotate route returns client_secret in the response exactly once. Unchanged."
+        }
+      ],
+      "notes": "No code changed in scope: appRegistration.ts, oauth-apps.ts, and migrations/042 are all absent from the 06a15f1..2418353 diff. Verdict carried forward unchanged; re-ran the same suite fresh against the scratch DB rather than leaving baseline's verification uncorroborated.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/oauth/__tests__/app-registration.test.ts (re-run fresh against the scratch DB this sweep)",
+        "result_excerpt": "src/platform/oauth/__tests__/app-registration.test.ts (10 tests) 203ms\nTest Files 1 passed (1)\nTests 10 passed (10)"
+      }
+    },
+    {
+      "id": "W6-R14",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-412",
+        "TRO-416"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/oauth/authorize.ts",
+          "line": 139,
+          "note": "issueAuthorizationCode persists code_challenge (code_challenge_method hardcoded 'S256'). File unchanged since baseline (git diff --stat confirms authorize.ts absent from the diff)."
+        },
+        {
+          "file": "api/src/db/migrations/043_oauth_tokens_and_codes.sql",
+          "line": 35,
+          "note": "code_challenge_method TEXT NOT NULL DEFAULT 'S256' CHECK (...). Unchanged."
+        },
+        {
+          "file": "api/src/platform/oauth/token.ts",
+          "line": 227,
+          "note": "verifyPkce: constant-time compare of SHA256(code_verifier) vs stored code_challenge. LINE DRIFTED from baseline's 127 \u2014 token.ts grew +313/-11 lines this range (PF-105's refresh-rotation grant inserted earlier in the file, before this function) \u2014 content/logic unchanged, confirmed by direct read."
+        },
+        {
+          "file": "api/src/platform/oauth/token.ts",
+          "line": 271,
+          "note": "invalidGrant() returns {status: 400, error: 'invalid_grant'}. Drifted from baseline's 162 for the same reason."
+        },
+        {
+          "file": "api/src/platform/oauth/token.ts",
+          "line": 439,
+          "note": "mismatched verifier or non-S256 method -> invalidGrant('code_verifier does not match...'). Drifted from baseline's 329."
+        }
+      ],
+      "notes": "Unchanged from baseline in substance; three of the five citations into token.ts drifted by exactly +100 lines because PF-105's refresh-rotation grant code was inserted earlier in the same file, before the PKCE-verification functions \u2014 verified the actual PKCE logic (verifyPkce, the wrong-verifier negative case) is byte-identical to baseline by reading the diff directly. Re-ran token.test.ts fresh against the scratch DB: now 32/32 (up from baseline's 18/18 \u2014 the file grew to also cover PF-105's rotation/reuse-detection cases), including the mandatory wrong-verifier -> invalid_grant negative case.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/oauth/__tests__/token.test.ts",
+        "result_excerpt": "src/platform/oauth/__tests__/token.test.ts (32 tests) 353ms\nTest Files 1 passed (1)\nTests 32 passed (32)"
+      }
+    },
+    {
+      "id": "W6-R15",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-425"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/oauth/device.ts",
+          "line": 1,
+          "note": "NEW since baseline (PF-106/TRO-425 landed, PR #193 merged \u2014 was Backlog at baseline). RFC 8628 device authorization grant: /oauth/device/code, /oauth/device/verify, and grant_type=urn:ietf:params:oauth:grant-type:device_code on /oauth/token."
+        },
+        {
+          "file": "api/src/platform/oauth/__tests__/device.test.ts",
+          "line": 256,
+          "note": "'pending -> slow_down (interval increases, twice) -> approve -> real token -> reused device_code is invalid_grant' \u2014 a real deterministic-clock integration test (vi.useFakeTimers on Date only, real HTTP/DB round trips) proving the slow_down interval genuinely compounds server-side (5s -> 10s -> 15s) across three early polls, not merely that the error code is returned."
+        },
+        {
+          "file": "api/src/platform/oauth/__tests__/device.test.ts",
+          "line": 330,
+          "note": "The minted access token is introspected through the REAL production bearerAuth middleware (a scratch Express app mounting the real bearerAuth import) and asserted to resolve the correct principal.user.id \u2014 proves the resulting token is genuinely usable, the same proof shape token.test.ts uses for the authorization_code grant."
+        },
+        {
+          "file": "web/src/pages/OAuthDeviceVerify.tsx",
+          "line": 1,
+          "note": "NEW since baseline \u2014 the browser-side verify page (/oauth-device-verify) a human uses to approve/deny a device code, exercised indirectly by device.test.ts's submitVerifyDecision() calls against the real backend endpoint it posts to."
+        }
+      ],
+      "notes": "Moved MISSING -> VERIFIED. Baseline found no device-grant code at all (PF-106/TRO-425 Backlog). It has since landed with exactly the requirement's own named acceptance evidence: an integration test polling to approval with slow_down genuinely honored (interval compounds server-side across repeated early polls, not just error-code-only), re-run fresh here against the scratch DB: 9/9 pass.",
+      "suggested_scope": null,
+      "interpretation": null,
+      "assumption": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/oauth/__tests__/device.test.ts",
+        "result_excerpt": "src/platform/oauth/__tests__/device.test.ts (9 tests) 173ms\nTest Files 1 passed (1)\nTests 9 passed (9)"
+      }
+    },
+    {
+      "id": "W6-R16",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-430",
+        "TRO-491"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/scopes/registry.ts",
+          "line": 57,
+          "note": "all seven scopes registered at module load: documents:read/write, issues:read/write, sprints:read/write, webhooks:manage. Unchanged since baseline."
+        },
+        {
+          "file": "api/src/platform/scopes/__tests__/registry.test.ts",
+          "line": 21,
+          "note": "'registers exactly the seven \u00a72.3 scopes at module load'. Unchanged."
+        }
+      ],
+      "notes": "No code changed in scope: scopes/registry.ts absent from the 06a15f1..2418353 diff. Verdict carried forward unchanged; re-ran fresh against the scratch DB rather than trusting the stale capture.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/scopes/__tests__/registry.test.ts",
+        "result_excerpt": "src/platform/scopes/__tests__/registry.test.ts (4 tests) 94ms\nTest Files 1 passed (1)\nTests 4 passed (4)"
+      }
+    },
+    {
+      "id": "W6-R17",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-430"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/oauth/bearerAuth.ts",
+          "line": 146,
+          "note": "req.principal = {app, user, scopes} set on every successful auth. Unchanged since baseline."
+        },
+        {
+          "file": "api/src/platform/oauth/__tests__/bearerAuth.test.ts",
+          "line": 177,
+          "note": "AC-1: both token classes populate req.principal correctly. Unchanged."
+        }
+      ],
+      "notes": "No code changed in scope: bearerAuth.ts absent from the diff. Verdict carried forward unchanged.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/oauth/__tests__/bearerAuth.test.ts",
+        "result_excerpt": "src/platform/oauth/__tests__/bearerAuth.test.ts (11 tests) 147ms\nTest Files 1 passed (1)\nTests 11 passed (11)"
+      }
+    },
+    {
+      "id": "W6-R18",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-421"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/oauth/token.ts",
+          "line": 650,
+          "note": "rotateRefreshToken() \u2014 NEW since baseline (PF-105/TRO-421 landed, PR #194 merged \u2014 was Backlog at baseline). One-time-use rotation: the atomic UPDATE at the single-use race point loses -> invalid_grant + family revoked (same outward behavior as a sequential-reuse replay, deliberately)."
+        },
+        {
+          "file": "api/src/platform/oauth/token.ts",
+          "line": 590,
+          "note": "revokeTokenFamily(familyId) \u2014 idempotent (WHERE revoked_at IS NULL), family-wide revocation on any detected reuse."
+        },
+        {
+          "file": "api/src/db/migrations/045_oauth_tokens_refresh_expiry.sql",
+          "line": 1,
+          "note": "NEW migration this range \u2014 adds refresh_token_expires_at to oauth_tokens."
+        },
+        {
+          "file": "api/src/platform/oauth/__tests__/token.test.ts",
+          "line": 1,
+          "note": "Grew from 18 to 32 tests this range specifically to cover reuse-detection and family-invalidation, including a forced, deterministic concurrency test (two simultaneous rotation attempts on the same refresh token) \u2014 not just a sequential-replay case."
+        }
+      ],
+      "notes": "Moved MISSING -> VERIFIED. Baseline found no refresh-rotation code (PF-105/TRO-421 Backlog). It has since landed with a genuinely tested stolen-refresh-token story: one-time-use rotation, family-wide revocation on any detected reuse (both a sequential replay AND a real forced concurrency race \u2014 the harder case to test correctly), re-run fresh here against the scratch DB.",
+      "suggested_scope": null,
+      "interpretation": null,
+      "assumption": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/oauth/__tests__/token.test.ts",
+        "result_excerpt": "src/platform/oauth/__tests__/token.test.ts (32 tests) 353ms \u2014 includes 'negative: reuse of a rotated refresh token -> revokes the whole family' and 'genuine concurrent rotation of the same refresh token: exactly one rotation succeeds; the detected race revokes the whole family, including the winner's own new token'\nTest Files 1 passed (1)\nTests 32 passed (32)"
+      }
+    },
+    {
+      "id": "W6-R19",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-399",
+        "TRO-500",
+        "TRO-496"
+      ],
+      "evidence": [
+        {
+          "file": "eslint.config.mjs",
+          "line": 111,
+          "note": "apiV1BoundaryRules: no-restricted-imports pattern '**/routes/**' scoped to api/src/platform/api/v1/*. Unchanged position \u2014 the file's only change this range is a new, separate sdk/src/**/*.ts lint block appended AFTER this existing block (line ~209+), for PF-400's own new package; the boundary rule itself is untouched."
+        },
+        {
+          "file": "eslint.config.mjs",
+          "line": 164,
+          "note": "files: ['api/src/platform/api/v1/**/*.ts'] block applies the rule. Unchanged."
+        },
+        {
+          "file": "api/src/platform/__tests__/boundary-lint.test.ts",
+          "line": 77,
+          "note": "loads the REAL eslint.config.mjs and proves a deliberate cross-boundary import produces a no-restricted-imports violation. Unchanged."
+        }
+      ],
+      "notes": "No relevant change: eslint.config.mjs's only diff this range is a new, additive sdk/src lint block (scoped correctness rules for the new SDK package, PF-400) \u2014 confirmed by reading the full diff directly; the existing api/v1 boundary rule is untouched. Verdict carried forward unchanged; re-ran fresh against the scratch DB.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/__tests__/boundary-lint.test.ts",
+        "result_excerpt": "src/platform/__tests__/boundary-lint.test.ts (2 tests) 1960ms\n  \u2713 fixture (a): importing from api/src/routes/** fails no-restricted-imports\nTest Files 1 passed (1)\nTests 2 passed (2)"
+      }
+    },
+    {
+      "id": "W6-R20",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-398",
+        "TRO-400",
+        "TRO-404"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/api/v1/pagination.ts",
+          "line": 33,
+          "note": "encodeCursor: base64url(JSON.stringify({id, created_at})) \u2014 opaque cursor over exactly {id, timestamp}. Unchanged (pagination.ts absent from the diff)."
+        },
+        {
+          "file": "api/src/platform/api/v1/pagination.ts",
+          "line": 44,
+          "note": "decodeCursor returns null (not throw) on any malformed cursor. Unchanged."
+        },
+        {
+          "file": "api/src/platform/api/v1/resources/documents.ts",
+          "line": 200,
+          "note": "GET / response is always {data, next_cursor} shape. Line drifted from baseline's 192 (unrelated ?type= filter addition above this point)."
+        },
+        {
+          "file": "api/src/platform/api/v1/resources/__tests__/documents.test.ts",
+          "line": 122,
+          "note": "AC-1 test: inserts a document exactly at a captured page-boundary mid-walk and asserts no duplicate/skip. Unchanged."
+        }
+      ],
+      "notes": "No code changed in scope for pagination.ts itself; documents.ts's citation drifted 8 lines from an unrelated filter addition. Strengthened: PF-201's new issues/sprints resources reuse the identical pagination module and now have their own pagination-stability tests (issues.test.ts's cursor-pagination describe block: paginates with limit, walks to page 2 with no repeat, rejects malformed cursor), re-run fresh and green. Verdict carried forward, evidence broadened.",
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/api/v1/resources/__tests__/documents.test.ts src/platform/api/v1/resources/__tests__/issues.test.ts src/platform/api/v1/resources/__tests__/sprints.test.ts",
+        "result_excerpt": "documents.test.ts (8 tests), issues.test.ts (8 tests), sprints.test.ts (4 tests) \u2014 all passed, 20/20"
+      },
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R21",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-402",
+        "TRO-404"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/openapi/index.ts",
+          "line": 11,
+          "note": "Imports ./schemas/index.js first (registration side effect) THEN computes v1OpenApiDocument \u2014 in-process generation from route metadata, per PF-202/TRO-402 (landed this range)."
+        },
+        {
+          "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts",
+          "line": 284,
+          "note": "check (a) \u2014 'has an OpenAPI entry, with security matching real bearerAuth presence' \u2014 walks the LIVE router stack and asserts a 1:1 OpenAPI registration for every discovered route; check (a) 'has NO exemptions: every route must be registered, no matter what' (file's own docstring). This is the spec<->route parity fitness test the requirement names."
+        }
+      ],
+      "notes": "Moved MISSING -> VERIFIED, same underlying landing as W6-R6/R8/R44: PF-202 (generator) + PF-203 (parity fitness test) both landed this range. route-fitness.test.ts's check (a) is exactly the spec<->route parity walk this requirement names, re-run fresh: 33/33 pass.",
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/api/v1/__tests__/route-fitness.test.ts",
+        "result_excerpt": "src/platform/api/v1/__tests__/route-fitness.test.ts (33 tests) 144ms\nTest Files 1 passed (1)\nTests 33 passed (33)"
+      },
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R22",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-419"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/events.ts",
+          "line": 99,
+          "note": "EVENT_TYPES: exactly the 8 named event types as a const tuple. File unchanged since baseline (git diff --stat 06a15f1..2418353 -- api/src/platform/webhooks/ returns empty)."
+        },
+        {
+          "file": "api/src/platform/webhooks/events.ts",
+          "line": 237,
+          "note": "EVENT_DEFINITIONS mapping each of the 8 types to {type, schema} \u2014 unchanged."
+        },
+        {
+          "file": "api/src/platform/webhooks/events.ts",
+          "line": 255,
+          "note": "eventRegistry.get()/.list() enumerable registry surface \u2014 unchanged."
+        },
+        {
+          "file": "api/src/platform/webhooks/__tests__/events.test.ts",
+          "line": 1,
+          "note": "22-test suite, file unchanged since baseline."
+        }
+      ],
+      "notes": "No code changed in scope since baseline: git diff --stat 06a15f1..2418353 -- api/src/platform/webhooks/ is empty. None of the 6 landed tickets touch webhooks/. Verdict carried forward unchanged.",
+      "verification": {
+        "command": "cd api && npx vitest run src/platform/webhooks/__tests__/events.test.ts",
+        "result_excerpt": "Re-cited from baseline (file byte-identical). Baseline captured: 22 tests passed (22)"
+      },
+      "suggested_scope": null,
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R23",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-426"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: 'IEventBus, deliverer, DLQ, replay \u2014 not yet built (PF-301/PF-304/PF-306).'"
+        },
+        {
+          "file": "api/src/services/documentService.ts",
+          "line": 16,
+          "note": "Unchanged scaffold comment: 'no event publication (the event bus does not exist yet)' \u2014 only createDocument() exists."
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 300,
+          "note": "Unchanged \u2014 describes PF-301's write-path consolidation as design, not yet implemented."
+        },
+        {
+          "file": "api/src/platform/api/v1/router.ts",
+          "line": 61,
+          "note": "Router gained TRO-400/402's issues/sprints/me/openapi.json mounts, still zero publish()/eventBus references anywhere in the mounted resource routers."
+        }
+      ],
+      "notes": "No code changed in scope: api/src/platform/webhooks/ and documentService.ts have empty git diff --stat 06a15f1..2418353. router.ts gained new resource mounts (TRO-400/402) but none touch event publication. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: ships when PF-301 (TRO-426, Backlog) ships. Smallest step: add IEventBus + in-process impl under api/src/platform/webhooks/, then redirect route-layer document writes through documentService.ts's write path with publish() calls added there.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R24",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-431"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: subscriptions/CRUD not yet built."
+        },
+        {
+          "file": "api/src/platform/scopes/registry.ts",
+          "line": 82,
+          "note": "Unchanged: webhooks:manage scope still registered as data only; file has zero diff."
+        },
+        {
+          "file": "api/src/db/migrations/044_oauth_tokens_authorization_code_id.sql",
+          "line": 25,
+          "note": "Unchanged content. Migrations now go up to 046 (045_oauth_tokens_refresh_expiry.sql, 046_oauth_device_codes_polling.sql \u2014 both OAuth/TRO-421/425, not webhooks); still no webhook_subscriptions migration exists anywhere."
+        },
+        {
+          "file": "api/src/platform/api/v1/router.ts",
+          "line": 61,
+          "note": "Router now mounts documents, openapi.json, issues, sprints, me \u2014 no webhooksRouter import or .use('/webhooks', ...) call exists anywhere in the file."
+        }
+      ],
+      "notes": "Router.ts's mount list changed (4 resource routers now vs 1 at baseline) but this is TRO-400/402 work (issues/sprints/me/openapi), not webhooks. Verdict unchanged.",
+      "suggested_scope": "Unchanged from baseline: ships when PF-302 (TRO-431, Backlog) ships. Smallest step: a migration creating webhook_subscriptions plus an /api/v1/webhooks CRUD route mounted in router.ts, gated with the already-registered requireScope('webhooks:manage') factory.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R25",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-433",
+        "TRO-413"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/signer.ts",
+          "line": 121,
+          "note": "sign() produces 't=<unix>,v1=<hex-hmac-sha256>' \u2014 unchanged since baseline."
+        },
+        {
+          "file": "api/src/platform/webhooks/signer.ts",
+          "line": 144,
+          "note": "verify() with 300s default tolerance, constant-time compare \u2014 unchanged."
+        },
+        {
+          "file": "api/src/platform/webhooks/__tests__/signer.test.ts",
+          "line": 1,
+          "note": "20-test suite \u2014 unchanged, file untouched in range."
+        }
+      ],
+      "notes": "Per I-04 (applied silently, not re-asked): signer suite alone satisfies R25 independent of SDK-side verifyWebhook. git diff --stat empty for api/src/platform/webhooks/. sdk/ scaffold landed this range but its barrel explicitly excludes webhooks/verifyWebhook from what it exports \u2014 does not affect this verdict per I-04. Verdict carried forward unchanged.",
+      "verification": {
+        "command": "cd api && npx vitest run src/platform/webhooks/__tests__/signer.test.ts",
+        "result_excerpt": "Re-cited from baseline (file byte-identical). Baseline captured: 20 tests passed (20)"
+      },
+      "interpretation": "I-04",
+      "assumption": null,
+      "suggested_scope": null
+    },
+    {
+      "id": "W6-R26",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-438"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: deliverer not yet built."
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 274,
+          "note": "Unchanged: retry/backoff described as design intent for PF-304, not implemented."
+        }
+      ],
+      "notes": "No code changed in scope: both cited files empty diff. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: ships when PF-304 (TRO-438, Backlog) ships \u2014 full feature build.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R27",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-438",
+        "TRO-439"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: DLQ/replay not yet built."
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 267,
+          "note": "Unchanged: DLQ behavior described prospectively."
+        }
+      ],
+      "notes": "No code changed in scope. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: ships when PF-304 (TRO-438) and PF-503 (TRO-439) both ship \u2014 both still Backlog.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R28",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-438",
+        "TRO-442"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/db/migrations/044_oauth_tokens_authorization_code_id.sql",
+          "line": 25,
+          "note": "Unchanged content. Migrations directory now extends to 046 (both OAuth-only); still zero webhook_deliveries migration."
+        },
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: no delivery-log table/API exists."
+        }
+      ],
+      "notes": "Highest migration is now 046_oauth_device_codes_polling.sql, both new migrations OAuth-scoped. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: ships when PF-304 (migration for webhook_deliveries, TRO-438) and PF-305 (delivery-log query API, TRO-442) ship.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R29",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-446"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: replay not yet built."
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 181,
+          "note": "Unchanged: replay endpoint described as design intent (PF-306)."
+        }
+      ],
+      "notes": "No code changed in scope. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: no ticket currently covers this scope; smallest fix is (1) file a PF-306 ticket, (2) once PF-304/PF-305's delivery log exists, implement POST /api/v1/webhooks/deliveries/:id/replay.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R30",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-407",
+        "TRO-422",
+        "TRO-390"
+      ],
+      "evidence": [
+        {
+          "file": "sdk/src/index.ts",
+          "line": 1,
+          "note": "Barrel comment, verbatim: 'Resource clients (documents/issues/sprints/webhooks \u2014 PF-401)... are later tickets and are not exported here yet.' sdk/ now exists (closing baseline's 'no sdk/ directory' finding) but ships only ShipClient.me()."
+        }
+      ],
+      "notes": "PARTIAL PROGRESS NOTED, VERDICT UNCHANGED: sdk/ now exists (PF-400/TRO-405 landed), closing baseline's total-absence finding, but the requirement's own text (client.documents/issues/sprints/webhooks + a drift-fails-CI parity test) needs PF-401/TRO-422, both still Backlog. Confirmed via sdk/src/index.ts's own barrel \u2014 only ShipClient, errors, and types are exported.",
+      "suggested_scope": "Ships when PF-401 (TRO-407, Backlog) lands: client.documents/issues/sprints/webhooks resource clients plus a spec<->SDK parity fitness test wired into CI. The scaffold (PF-400/TRO-405) landed this range and gives PF-401 a real package to extend, shortening the remaining dependency chain, but resource clients themselves do not exist.",
+      "verification": null,
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R31",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-418",
+        "TRO-449",
+        "TRO-390"
+      ],
+      "evidence": [
+        {
+          "file": "sdk/src/client.ts",
+          "line": 65,
+          "note": "ShipClientOptions.tokenStore?: unknown \u2014 accepted in the type (room reserved per the file's own comment) but never read or used by this ticket's implementation."
+        },
+        {
+          "file": "sdk/src/index.ts",
+          "line": 1,
+          "note": "Barrel: 'auth helpers (tokenStore, authorizationCodeFlow, deviceLogin \u2014 PF-404) are later tickets and are not exported here yet.'"
+        }
+      ],
+      "notes": "PARTIAL PROGRESS NOTED, VERDICT UNCHANGED: the constructor's option shape already reserves room for tokenStore (deliberate, per PF-400's own docstring, so PF-404 is additive not breaking) and the device-grant backend it would call now exists and works (W6-R15, verified this sweep) \u2014 but no SDK-side auth-flow helper or token-store implementation exists yet. TRO-418/PF-404 remains Backlog.",
+      "suggested_scope": "Ships when PF-404 (TRO-418, Backlog) lands: authorizationCodeFlow()/deviceLogin() helpers plus the three ITokenStore implementations (in-memory, file, browser localStorage). The device-grant backend itself (PF-106/TRO-425) landed this range, so PF-404's SDK-side wiring now has a real, tested backend to call.",
+      "verification": null,
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R32",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-410",
+        "TRO-449",
+        "TRO-390"
+      ],
+      "evidence": [
+        {
+          "file": "sdk/src/client.ts",
+          "line": 1,
+          "note": "No async-iterator/pagination method exists on ShipClient \u2014 only me(). No resource-client list methods exist yet for an iterate() to walk."
+        }
+      ],
+      "notes": "No code changed in scope since baseline. TRO-410/PF-402 remains Backlog; blocked on PF-401 (W6-R30) landing first.",
+      "suggested_scope": "Ships when PF-402 (TRO-410, Backlog) lands, and depends on PF-401's resource clients existing first (a documents.iterate() needs a documents resource client to attach to).",
+      "verification": null,
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R33",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-413",
+        "TRO-433",
+        "TRO-390"
+      ],
+      "evidence": [
+        {
+          "file": "sdk/src/index.ts",
+          "line": 1,
+          "note": "No verifyWebhook export anywhere in sdk/src/ \u2014 grepped the full package, zero hits."
+        },
+        {
+          "file": "api/src/platform/webhooks/signer.ts",
+          "line": 1,
+          "note": "The server-side signer this SDK function would mirror exists and is fully tested (I-04 governs W6-R25's independent VERIFIED verdict on the signer alone) \u2014 but nothing in sdk/ consumes or re-implements its verify() logic yet."
+        }
+      ],
+      "notes": "No code changed in scope. Per I-04 (applied silently, not re-asked): W6-R25 is satisfied by the server-side signer suite alone and does not double-count this SDK-side gap \u2014 W6-R33 is where the SDK-side verifyWebhook absence is tracked, and it remains MISSING. TRO-413/PF-403 still Backlog.",
+      "suggested_scope": "Ships when PF-403 (TRO-413, Backlog) lands: a one-call verifyWebhook(headers, rawBody, secret) in sdk/src/, mirroring the server-side signer's verify() logic (tamper/expired/missing-v1 negative cases already proven server-side by signer.test.ts's 20/20 \u2014 the SDK port has a correct reference implementation to match against).",
+      "verification": null,
+      "interpretation": "I-04",
+      "assumption": null
+    },
+    {
+      "id": "W6-R34",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-405",
+        "TRO-390"
+      ],
+      "evidence": [
+        {
+          "file": "sdk/src/errors.ts",
+          "line": 39,
+          "note": "SdkErrorKind = 'auth' | 'forbidden' | 'not_found' | 'validation' | 'rate_limit' | 'server' | 'network' \u2014 a superset of the requirement's quoted 5 kinds (adds 'forbidden' and 'network', both real server/network cases), landed by PF-400/TRO-405."
+        },
+        {
+          "file": "sdk/src/errors.ts",
+          "line": 76,
+          "note": "mapApiErrorCodeToKind(code) \u2014 pure mapping function, unknown codes fall back to 'server' (forward-compat, not a crash) rather than losing the original message/details."
+        },
+        {
+          "file": "sdk/src/errors.ts",
+          "line": 115,
+          "note": "ShipSdkError implements SdkErrorShape ({kind, message, httpStatus?, requestId?, details?}) \u2014 the literal discriminated-union shape the requirement quotes, as a class instances of which consumers can `instanceof`-narrow then switch exhaustively on .kind."
+        },
+        {
+          "file": "sdk/src/errors.test.ts",
+          "line": 12,
+          "note": "it.each over all 6 documented ApiErrorCode -> SdkErrorKind mappings, plus a 7th case for the unrecognized-code fallback."
+        }
+      ],
+      "notes": "Moved MISSING -> VERIFIED. sdk/ (and this error-mapping module specifically) did not exist at baseline. It has since landed with exactly the requirement's shape: a discriminated union over .kind, exhaustively mapped and tested for all 6 server-side codes plus a documented forward-compat fallback. Re-ran fresh: 16/16 pass.",
+      "suggested_scope": null,
+      "verification": {
+        "command": "cd sdk && npx vitest run src/errors.test.ts",
+        "result_excerpt": "src/errors.test.ts (16 tests) 3ms\nTest Files 1 passed (1)\nTests 16 passed (16)"
+      },
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R35",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-427",
+        "TRO-401",
+        "TRO-494",
+        "TRO-552",
+        "TRO-391"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/ratelimit/README.md",
+          "line": 8,
+          "note": "Unchanged since baseline: \"Empty until PF-500 lands.\" No implementation files, only the README."
+        },
+        {
+          "file": "api/src/middleware/rate-limit.ts",
+          "line": 212,
+          "note": "isLegacyLimiterExemptPath \u2014 the PF-004/TRO-401 prerequisite. Unchanged content. Removes the old limiter from v1 but adds no per-app/per-token buckets or headers."
+        },
+        {
+          "file": "api/src/middleware/rate-limit.ts",
+          "line": 333,
+          "note": "skip: (req) => isLegacyLimiterExemptPath(req.path) on perSourceIpLimiter; same pattern at line 351 for perIdentityLimiter. Unchanged."
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 2454,
+          "note": "Line drifted from baseline's 1597 (CHANGES.md grew +857 lines from unrelated entries). Same TRO-401 quote, content unchanged."
+        },
+        {
+          "file": "memory-bank/progress.md",
+          "line": 106,
+          "note": "Line drifted from baseline's 91. Same Wave 3 entry, unchanged: \"PF-500/501 deferred as post-MVP.\""
+        }
+      ],
+      "notes": "No code changed in scope since baseline; confirmed via git diff --stat 06a15f1..2418353 against every cited file. None of the six landed tickets touch rate-limiting.",
+      "suggested_scope": "Unchanged from baseline: build TRO-427 (PF-500) \u2014 per-app/per-token token-bucket limiters in api/src/platform/ratelimit/ (still an empty stub), wired onto /api/v1, emitting X-RateLimit-Limit/Remaining/Reset plus Retry-After on 429s.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R36",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-432",
+        "TRO-391"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/audit/README.md",
+          "line": 4,
+          "note": "Unchanged: \"Public API audit trail... Empty until PF-501 lands.\" Directory still contains only this README."
+        },
+        {
+          "file": "api/src/platform/oauth/bearerAuth.ts",
+          "line": 30,
+          "note": "Unchanged comment: revocation distinguished via console.warn, not yet in a public_api_audit row (migration 046, PF-501, hasn't landed). NOTE: migration slot 046 is now occupied by 046_oauth_device_codes_polling.sql (TRO-425/PF-106, unrelated) \u2014 the specific number '046' in this comment is now stale; PF-501's eventual migration will land as 047+. Substantive claim (table doesn't exist) remains true."
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 1975,
+          "note": "Line drifted from baseline's 1118. Same TRO-430 quote, unchanged."
+        },
+        {
+          "file": "memory-bank/progress.md",
+          "line": 106,
+          "note": "Line drifted from baseline's 91. Same content: \"PF-500/501 deferred as post-MVP.\""
+        }
+      ],
+      "notes": "No functional code changed in scope. One documentation-staleness detail found (migration slot 046 now taken by unrelated PF-106 work) \u2014 flagged, does not affect verdict.",
+      "suggested_scope": "Unchanged from baseline: build TRO-432 (PF-501) \u2014 migration creating public_api_audit (will land at 047+ since 046 is now taken), recording middleware, and a query surface for the portal.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R37",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-436",
+        "TRO-439",
+        "TRO-443",
+        "TRO-391"
+      ],
+      "evidence": [
+        {
+          "file": "web/src/pages",
+          "line": 1,
+          "note": "Still no app-registration/list/rotate page, no webhook-subscriptions page, no delivery-log/DLQ page, no replay UI. Only new file since baseline is OAuthDeviceVerify.tsx (147 lines, TRO-425/PF-106) \u2014 the device-grant verification page, unrelated to portal/app-management (maps to W6-R15, not this requirement)."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 266,
+          "note": "Unchanged: PF-502 AC (registration + detail + rotate, portal calls via /api/v1)."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 267,
+          "note": "Unchanged: PF-503 AC (subscription CRUD + delivery log + DLQ + replay)."
+        }
+      ],
+      "notes": "No code changed in scope. web/src/main.tsx diff confirmed the only new route added is /oauth-device-verify (PF-106), not portal-related.",
+      "suggested_scope": "Unchanged from baseline: build TRO-436 (PF-502) and TRO-439 (PF-503) as new web/src pages/components, still dependent on the still-missing W6-R35/R36 backend groundwork and webhook domain work.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R38",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-411",
+        "TRO-488",
+        "TRO-420"
+      ],
+      "evidence": [
+        {
+          "file": "terraform/render/versions.tf",
+          "line": 9,
+          "note": "Provider exact-pinned (1.9.1); no terraform modules used, so 'module versions pinned' is vacuously satisfied. Unchanged since baseline \u2014 terraform/ has zero diff."
+        },
+        {
+          "file": "terraform/render/postgres.tf",
+          "line": 9,
+          "note": "Database resource present. Unchanged."
+        },
+        {
+          "file": "terraform/render/web_service.tf",
+          "line": 9,
+          "note": "App container present. Unchanged."
+        },
+        {
+          "file": "terraform/render/plan/tro-411-pf900-w6-env-vars.md",
+          "line": 359,
+          "note": "Real, credentialed terraform plan run, clean. Unchanged."
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 50,
+          "note": "\"This Terraform configuration declares no IAM-shaped resource\" \u2014 memo's own scope is IAM/task-role, not network topology; still no single consolidated defense of the VPC/subnet/SG absence. Unchanged."
+        }
+      ],
+      "notes": "No code changed in scope: terraform/ and docs/IAM-ADAPTATION-RENDER.md both absent from the 06a15f1..2418353 diff. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: add a short paragraph to docs/IAM-ADAPTATION-RENDER.md or docs/architecture.md explicitly naming that Render has no VPC/subnet/security-group resource type and defending what this repo's config does instead.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R39",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "tickets": [
+        "TRO-420"
+      ],
+      "evidence": [
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 10,
+          "note": "\u00a71 \u2014 AWS side observed. Unchanged since baseline (file absent from diff)."
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 48,
+          "note": "\u00a72 \u2014 Render's equivalent. Unchanged."
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 100,
+          "note": "\u00a73 \u2014 what this deployment's permission model cannot express. Unchanged."
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 131,
+          "note": "\u00a74 \u2014 why the trade is acceptable, specifically. Unchanged."
+        }
+      ],
+      "notes": "No code changed in scope: docs/IAM-ADAPTATION-RENDER.md and docs/architecture.md are both absent from the diff. Verdict carried forward unchanged (downgraded from VERIFIED to IMPLEMENTED-UNVERIFIED at baseline's own independent-verification pass, 2026-08-13, per the tier vocabulary requiring a run with captured output \u2014 a document-verification alone doesn't clear that bar; that reasoning still applies).",
+      "suggested_scope": null,
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R40",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-415"
+      ],
+      "evidence": [
+        {
+          "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md",
+          "line": 23,
+          "note": "Real create -> destroy -> recreate cycle executed against render_web_service.agent; /health and /ready verified 200. Unchanged since baseline \u2014 terraform/ has zero diff."
+        },
+        {
+          "file": "memory-bank/progress.md",
+          "line": 163,
+          "note": "\"PF-901/TRO-415 flagged: human go-ahead required before terraform destroy on graded env\" \u2014 TRO-415 still Backlog, re-confirmed via fresh Linear pull this sweep."
+        }
+      ],
+      "notes": "No code changed in scope since baseline: terraform/ has zero diff in this range. Verdict carried forward unchanged; TRO-415/PF-901 still Backlog.",
+      "suggested_scope": "Same remediation as W6-R12: TRO-415/PF-901 needs to actually run, producing (1) a live dashboard-edit-then-plan-diff drift demo, and (2) a destroy/apply cycle against the full current topology. Blocked on human go-ahead.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R41",
+      "verdict": "N/A",
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "docs/submission/PLUGFORGE-DEFENSE-DECK.html",
+          "line": 428,
+          "note": "Slide 5, 'Infrastructure & blast radius' prep slide. Unchanged since baseline."
+        }
+      ],
+      "notes": "Live human-competency gate, assessed in a real-time interview \u2014 no code-level verdict beyond N/A is possible. No relevant file changed since baseline. Carried forward unchanged.",
+      "suggested_scope": null,
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R42",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-412",
+        "TRO-416",
+        "TRO-503",
+        "TRO-550",
+        "TRO-549"
+      ],
+      "evidence": [
+        {
+          "file": "e2e/oauth-authorize.spec.ts",
+          "line": 9,
+          "note": "Same file as W6-R3, byte-identical since baseline (e2e/ has zero diff in this range) \u2014 still only covers authorize->consent->redirect-with-code, not the chained token exchange."
+        },
+        {
+          "file": "api/src/platform/oauth/__tests__/token.test.ts",
+          "line": 1,
+          "note": "The mandatory wrong-code_verifier -> invalid_grant negative case is proven, now at the vitest/supertest level with 32/32 passing (up from 18/18), but never inside a Playwright spec."
+        }
+      ],
+      "notes": "Duplicate graded-scenario framing of W6-R3 \u2014 same underlying gap, same verdict, same reasoning: every piece exists and is independently proven, but no single e2e chains them. Carried forward as PARTIAL with the same evidence refresh as W6-R3.",
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": "Same as W6-R3: write the single Playwright spec chaining authorize -> consent -> /oauth/token (incl. the mandatory wrong-verifier negative case) -> a call against the now-real /api/v1/me. No backend blocker remains.",
+      "verification": null
+    },
+    {
+      "id": "W6-R43",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-425",
+        "TRO-448"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/oauth/__tests__/device.test.ts",
+          "line": 256,
+          "note": "NEW since baseline (PF-106/TRO-425 landed). The full poll-to-approval flow with slow_down genuinely honored (interval compounds across three early polls: 5s -> 10s -> 15s) is proven end-to-end at the vitest/supertest level, deterministic-clock, real DB."
+        },
+        {
+          "file": "api/src/platform/oauth/__tests__/device.test.ts",
+          "line": 330,
+          "note": "The resulting token IS confirmed usable \u2014 introspected through the REAL production bearerAuth middleware and asserted to resolve the correct principal \u2014 but against a scratch Express app mounting bearerAuth directly, not literally a request to GET /api/v1/me (which now exists but this test doesn't call it)."
+        },
+        {
+          "file": "pnpm-workspace.yaml",
+          "line": 6,
+          "note": "No CLI package exists as a workspace member \u2014 'from a test CLI' is not literally satisfiable; only api/, web/, shared/, agent/, sdk/ are workspace packages."
+        }
+      ],
+      "notes": "Moved MISSING -> PARTIAL. Baseline found no device-grant code at all. The underlying grant mechanics (including the specific 'slow-down responses honored' clause) are now rigorously proven by device.test.ts, and the token is proven usable via the real bearerAuth middleware \u2014 but the requirement's literal framing ('from a test CLI', 'against /api/v1/me' specifically) isn't met: no CLI exists (confirmed via Cluster G's cross-check: no integrations/ directory, no CLI workspace package), and the introspection test calls a scratch app rather than the literal /api/v1/me route (which does now exist, per W6-R9, but isn't exercised by this specific test). This is a smaller, more honest gap than baseline's blanket MISSING.",
+      "suggested_scope": "The mechanics (poll-to-approval, slow_down honored, resulting token usable) are now fully proven \u2014 what remains is packaging: a CLI (PF-600/TRO-448, Backlog) that literally drives this flow, and swapping the test's scratch-app introspection for a literal call to the now-real GET /api/v1/me.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R44",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-404"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts",
+          "line": 271,
+          "note": "PF-203/TRO-404 (landed this range, was the last unmerged MVP-gate item at baseline). describe.each(routes) over the LIVE discovered route list runs all four named assertions per route: (a) OpenAPI entry + security match, (b) declared scope or documented exemption, (c) ApiError shape on the generic failure path, (d) {data, next_cursor} pagination envelope on list routes."
+        },
+        {
+          "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts",
+          "line": 41,
+          "note": "File's own docstring: 'The \"AC proof\" section at the bottom of this file's PR description captures a deliberately unregistered scratch route failing this suite, then reverted' \u2014 a real drift-detection proof, not merely a passing-by-construction test."
+        }
+      ],
+      "notes": "Moved MISSING -> VERIFIED, same landing as W6-R6 (this is the graded-scenario framing of the same fitness test). Re-ran fresh against the scratch DB: 33/33 pass across all 4 checks x every currently-registered v1 route.",
+      "suggested_scope": null,
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/api/v1/__tests__/route-fitness.test.ts",
+        "result_excerpt": "src/platform/api/v1/__tests__/route-fitness.test.ts (33 tests) 144ms\nTest Files 1 passed (1)\nTests 33 passed (33)"
+      },
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R45",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-402",
+        "TRO-422"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/openapi/__tests__/document.test.ts",
+          "line": 99,
+          "note": "'validates against the real, official OpenAPI 3.1 JSON Schema (draft 2020-12)' with a working negative control (line 114) \u2014 the spec-validity half of this graded scenario is fully done, landed by PF-202/TRO-402."
+        },
+        {
+          "file": "sdk/src/index.ts",
+          "line": 1,
+          "note": "sdk/ exports only ShipClient.me() \u2014 no per-spec-method walk exists (and couldn't yet meaningfully assert much even if written, since only one of the spec's 7 operations has an SDK counterpart)."
+        },
+        {
+          "file": "sdk/",
+          "line": 0,
+          "note": "Grepped sdk/ and api/src/platform/ for 'parity' \u2014 the only hit (api/src/platform/webhooks/__tests__/signer.test.ts) is unrelated wording, not a spec<->SDK walk of any kind."
+        }
+      ],
+      "notes": "Moved MISSING -> PARTIAL. Baseline found neither half implemented. The spec-validity half now has a real, rigorous test (official schema + negative control), landed this range \u2014 but the 'walk every spec method and assert the SDK exposes a typed call for it' half cannot exist yet: the SDK has only one method (me()) against a 7-operation spec, and no such walk exists anywhere in the repo. Honest PARTIAL rather than carrying MISSING forward, since real progress happened on one of the two named clauses.",
+      "suggested_scope": "Ships when PF-401 (SDK resource clients, W6-R30) and PF-405 (parity fitness test, W6-R30/TRO-422) land: walk every v1OpenApiDocument path/method and assert the SDK exposes a typed call for it. The spec-validity half is already done and needs no further work.",
+      "verification": {
+        "command": "DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx vitest run src/platform/openapi/__tests__/document.test.ts",
+        "result_excerpt": "src/platform/openapi/__tests__/document.test.ts (5 tests) 189ms \u2014 includes the negative-control test\nTest Files 1 passed (1)\nTests 5 passed (5)"
+      },
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R46",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-455",
+        "TRO-413"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Deliverer and subscriptions CRUD still not built."
+        },
+        {
+          "file": "sdk/src/index.ts",
+          "line": 2,
+          "note": "sdk/ package now exists (PF-400/TRO-405) but its own barrel comment states resource clients (documents/issues/sprints/webhooks \u2014 PF-401) are later tickets and are not exported here yet \u2014 confirms no webhooks SDK client."
+        },
+        {
+          "file": "sdk/src/client.ts",
+          "line": 90,
+          "note": "ShipClient only implements me(); no createWebhookSubscription or equivalent method exists."
+        }
+      ],
+      "notes": "PARTIAL PROGRESS NOTED, VERDICT UNCHANGED: sdk/ scaffold landed this range, closing baseline's 'no sdk/ directory exists anywhere' gap \u2014 but it ships only ShipClient.me() and error mapping; no webhooks resource client, no subscription creation, no verifyWebhook. Deliverer (PF-304) and subscriptions API (PF-302) remain wholly unbuilt. Requirement remains MISSING.",
+      "suggested_scope": "Ships only once the full chain lands: PF-302 (subscriptions API), PF-304 (deliverer), PF-401 (webhooks resource client in @ship/sdk), and PF-403 (verifyWebhook, TRO-413, still Backlog).",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R47",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-438"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: deliverer not built."
+        }
+      ],
+      "notes": "No code changed in scope: git diff --stat empty. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: ships when PF-304 (TRO-438, Backlog) ships with its deterministic-clock retry test suite.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R48",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-438",
+        "TRO-439"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: DLQ, portal, replay all absent."
+        }
+      ],
+      "notes": "No code changed in scope. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: ships when PF-304 (TRO-438) and PF-503 (TRO-439) ship, plus a PF-306-equivalent replay implementation.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R49",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-455",
+        "TRO-448"
+      ],
+      "evidence": [
+        {
+          "file": "pnpm-workspace.yaml",
+          "line": 6,
+          "note": "sdk is now a workspace member (TRO-405/PF-400 merged), but sdk/src exposes only ShipClient.me() + typed error mapping \u2014 no resource clients, no CLI. No integrations/cli or any CLI package is a workspace member, so 'ship login' (the drill's step 2) has nothing to run."
+        },
+        {
+          "file": "api/src/platform/oauth/device.ts",
+          "line": 1,
+          "note": "PF-106/TRO-425 device authorization grant is now merged (was 'In Progress' at baseline). A CLI login command would now have a real backend to call, but no CLI consumes it."
+        },
+        {
+          "file": "package.json",
+          "line": 11,
+          "note": "root scripts block still has no 'drill' entry; grep for 'drill'/'ttfe' across all package.json files returns zero matches."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 275,
+          "note": "PF-603 (unchanged since baseline) still describes the exact TTFE drill this requirement quotes; ticket remains Backlog/unbuilt."
+        }
+      ],
+      "notes": "git diff --stat confirms no CLI/drill code landed. Verdict unchanged: MISSING.",
+      "suggested_scope": "Still needs the CLI with device-flow login (PF-600/TRO-448, Backlog) and the drill harness (PF-603/TRO-455, Backlog). Two baseline blockers are now satisfied (PF-106 device grant, sdk/ scaffold), shortening the remaining chain to PF-600 -> PF-603.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R50",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-455"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/middleware/rate-limit.ts",
+          "line": 48,
+          "note": "Content unchanged since baseline \u2014 still only a code comment justifying a rate-limit exemption for the drill's future throwaway containers; no timing measurement exists."
+        },
+        {
+          "file": ".gitlab-ci.yml",
+          "line": 41,
+          "note": "Line content unchanged (the diff's only hunk is a later insertion adding a pnpm --filter @ship/sdk test step for TRO-405); no drill job or <60s threshold assertion exists."
+        }
+      ],
+      "notes": "No code in scope changed. Verdict carried forward: MISSING.",
+      "suggested_scope": "Unchanged from baseline: ships as part of PF-603 (TRO-455, Backlog).",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R51",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-412",
+        "TRO-416",
+        "TRO-449"
+      ],
+      "evidence": [
+        {
+          "file": "e2e/oauth-authorize.spec.ts",
+          "line": 1,
+          "note": "The only real PKCE-flow Playwright spec on main still carries no timing/duration assertion anywhere \u2014 file is byte-identical to baseline (e2e/ has zero diff this range)."
+        }
+      ],
+      "notes": "No code changed in scope: e2e/ has zero diff in this range, and PF-802/TRO-449 remains Backlog (re-confirmed via fresh Linear pull). Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: add a timing assertion to whichever spec ends up covering the full authorize->consent->token round trip once W6-R3/W6-R42's gap closes (measure wall-clock, assert <3s). Formally still blocked on PF-802/TRO-449 (Backlog), the ticket the requirement's own acceptance evidence names.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R52",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-438"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: no deliverer exists to measure latency against."
+        }
+      ],
+      "notes": "No code changed in scope. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: assessable only once PF-304's deliverer (TRO-438, Backlog) is built and instrumented with latency_ms per delivery.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R53",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-438"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: no deliverer/retry mechanism exists to have a success rate."
+        }
+      ],
+      "notes": "No code changed in scope. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: ships when PF-304 (TRO-438, Backlog) ships with retry tests + delivery-log evidence.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R54",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-427",
+        "TRO-552",
+        "TRO-391"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/ratelimit/README.md",
+          "line": 8,
+          "note": "Unchanged: \"Empty until PF-500 lands.\" Header-emitting middleware still doesn't exist \u2014 0% coverage, not partial."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 264,
+          "note": "Unchanged PF-500 AC: header-presence fitness assertion added to PF-203's walk."
+        },
+        {
+          "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts",
+          "line": 17,
+          "note": "CORRECTION to baseline: this file is NEW since baseline (398 lines, landed as TRO-404/PF-203) \u2014 baseline's claim 'no such fitness-test file exists' is now false. It implements PF-203's four assertions but contains zero references to RateLimit or Retry-After. The fitness test exists; it does not yet assert header presence."
+        },
+        {
+          "file": "api/src/middleware/rate-limit.ts",
+          "line": 333,
+          "note": "Unchanged: confirms /api/v1 is exempted from the only rate-limit middleware currently running \u2014 zero rate-limit-related headers attached to v1 responses today by any code path."
+        }
+      ],
+      "notes": "Verdict unchanged (still MISSING, 0% header coverage), but one baseline evidence item was stale and is corrected above: the route-enumeration fitness test (PF-203/TRO-404) landed since baseline and now exists, just without a rate-limit header assertion.",
+      "suggested_scope": "Same fix as W6-R35 (TRO-427/PF-500), plus now that PF-203's fitness test file exists, wiring the header-presence assertion into it is a more concrete, smaller add-on than baseline's description implied.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R55",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-455"
+      ],
+      "evidence": [
+        {
+          "file": "package.json",
+          "line": 12,
+          "note": "Root scripts block still has no 'drill' script of any kind \u2014 confirmed via grep across all package.json files, zero matches for 'drill'."
+        },
+        {
+          "file": "scripts",
+          "line": 1,
+          "note": "Directory listing unchanged; no drill-related script added."
+        }
+      ],
+      "notes": "No code in scope changed since baseline. Verdict carried forward: MISSING.",
+      "suggested_scope": "Unchanged from baseline: ships with PF-603 (TRO-455, Backlog).",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R56",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-455"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/config.ts",
+          "line": 30,
+          "note": "Content unchanged since baseline \u2014 still only a CORS-defaults comment mentioning the drill's throwaway containers; no per-stage timing instrumentation exists anywhere."
+        }
+      ],
+      "notes": "Repo-wide grep for 'drill'/'ttfe' re-run at HEAD \u2014 only same rate-limit/CORS comments plus one new CHANGES.md line. Verdict carried forward: MISSING.",
+      "suggested_scope": "Unchanged from baseline: ships with PF-603 (TRO-455, Backlog).",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R57",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-455"
+      ],
+      "evidence": [
+        {
+          "file": ".gitlab-ci.yml",
+          "line": 9,
+          "note": "Stages list (verify, e2e, image) unchanged \u2014 still no drill/ttfe stage. File DID change since baseline (contrary to task's file list) but only to add a pnpm --filter @ship/sdk test step (TRO-405) \u2014 no drill job."
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 1,
+          "note": "Workflow directory still contains only ci.yml, ci-failure-rollback.yml, agent-rollback-check.yml. ci.yml changed (adds SDK unit tests step, TRO-405) but has no drill/TTFE job."
+        }
+      ],
+      "notes": "IMPORTANT PROCESS NOTE: .gitlab-ci.yml and .github/workflows/ci.yml did change between the two commits (verified directly), but only to wire in sdk/'s vitest suite as a CI step \u2014 no drill job, no CLI job. Verdict carried forward: MISSING.",
+      "suggested_scope": "Unchanged from baseline: ships with PF-603 (TRO-455, Backlog) \u2014 add a CI job to both .gitlab-ci.yml and the GitHub Actions mirror running 'pnpm drill ttfe' on every PR.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R58",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-413",
+        "TRO-433",
+        "TRO-390"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/__tests__/signer.test.ts",
+          "line": 203,
+          "note": "Unchanged: perf test times sign(), not verify(); lives in api/, not sdk/."
+        },
+        {
+          "file": "api/src/platform/webhooks/__tests__/signer.test.ts",
+          "line": 221,
+          "note": "Unchanged: asserts sign()-side <5ms, not a verify()-side <1ms SDK target."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 258,
+          "note": "Unchanged: PF-403 AC '< 1 ms per call'; source ticket TRO-413 still Backlog."
+        },
+        {
+          "file": "sdk/src/index.ts",
+          "line": 2,
+          "note": "sdk/ now exists (PF-400/TRO-405) but exports only ShipClient/errors/types \u2014 no verifyWebhook function anywhere."
+        }
+      ],
+      "notes": "PARTIAL PROGRESS NOTED, VERDICT UNCHANGED: sdk/ scaffold landed, so the destination package for verifyWebhook is no longer hypothetical \u2014 but no verifyWebhook function exists, and TRO-413/PF-403 remains Backlog. Requirement remains MISSING.",
+      "suggested_scope": "Ships when PF-403/TRO-413 lands with its own <1ms perf test for the SDK's verifyWebhook, now inside the real sdk/ package scaffold that exists as of this range.",
+      "verification": null,
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R59",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-455"
+      ],
+      "evidence": [
+        {
+          "file": ".gitlab-ci.yml",
+          "line": 9,
+          "note": "No drill job exists in CI, so there is no run history to have a flake rate at all."
+        }
+      ],
+      "notes": "Dependent entirely on W6-R55/56/57, all still MISSING. Verdict carried forward: MISSING.",
+      "suggested_scope": "Unchanged from baseline: not closable by a single code change \u2014 requires PF-603 (TRO-455) live in graded CI, then 20 consecutive observed runs.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R60",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-422",
+        "TRO-390"
+      ],
+      "evidence": [
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 260,
+          "note": "PF-405 AC: CI size check < 250 KB min+gz, gate fails on simulated bloat. Unchanged since baseline."
+        },
+        {
+          "file": ".gitlab-ci.yml",
+          "line": 1,
+          "note": "Grepped the full CI config (both .gitlab-ci.yml and .github/workflows/*) for '250KB'/'250 ?KB'/'size-limit'/'bundlesize'/'min+gz' this sweep \u2014 still zero matches. The only new CI content this range is an unconditional pnpm --filter @ship/sdk test step (TRO-405), not a size-check job."
+        }
+      ],
+      "notes": "sdk/ now exists (closing baseline's 'cannot be measured at all until sdk/ exists' blocker), but no CI size-check job of any kind was added this range \u2014 confirmed by re-grepping both .gitlab-ci.yml and .github/workflows/ci.yml (both of which DID change this range, but only to add sdk/'s unit-test step, not a size gate). TRO-422/PF-405 remains Backlog. Verdict carried forward as MISSING, blocker narrowed.",
+      "suggested_scope": "Ships when PF-405/TRO-422 lands: add a CI job (e.g. size-limit) gating sdk/'s production-dependency bundle at 250KB min+gz. sdk/ (PF-400) now exists to measure, which was baseline's blocker \u2014 the size-check job itself simply hasn't been written yet.",
+      "verification": null,
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R61",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-394",
+        "TRO-448",
+        "TRO-445",
+        "TRO-447",
+        "TRO-449",
+        "TRO-451",
+        "TRO-453",
+        "TRO-454"
+      ],
+      "evidence": [
+        {
+          "file": "pnpm-workspace.yaml",
+          "line": 6,
+          "note": "Workspace packages are now api/web/shared/agent/sdk (sdk added by TRO-405/PF-400) \u2014 still no integrations/* member of any kind."
+        },
+        {
+          "file": "scripts/check-integration-deps.mjs",
+          "line": 12,
+          "note": "Unchanged since baseline \u2014 header still states integrations/* packages don't exist yet; confirmed via ls integrations/ (No such file or directory)."
+        },
+        {
+          "file": "api/src/platform/oauth/token.ts",
+          "line": 579,
+          "note": "CORRECTION to baseline citation: the refresh_token grant IS now implemented (TRO-421/PF-105) \u2014 baseline's claim that no refresh_token case existed is now stale. This gives the OAuth engine a refresh-rotation capability, but the 'refresh-rotation drill' as one of W6-R61's 5 integration flows still doesn't exist as a standalone deliverable under integrations/."
+        },
+        {
+          "file": "package.json",
+          "line": 11,
+          "note": "root scripts block still has no 'drill' entry."
+        }
+      ],
+      "notes": "Verdict carried forward: MISSING (0 of 5 required integration flows exist). One baseline citation (refresh_token grant absence) corrected above \u2014 the grant exists in api/'s OAuth engine now, but that is not the same as the integration-flow deliverable.",
+      "suggested_scope": "Sequence unchanged: E4 (sdk/, partially landed but without resource clients) -> E6 (PF-600 CLI) -> E8 (PF-800/801/802/803, the 5 committed flows). Zero of the 5 flows exist under integrations/ yet.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R62",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-448",
+        "TRO-450",
+        "TRO-452"
+      ],
+      "evidence": [
+        {
+          "file": "pnpm-workspace.yaml",
+          "line": 6,
+          "note": "No CLI package (e.g. integrations/cli) is a workspace member \u2014 now api/web/shared/agent/sdk, still no CLI."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 272,
+          "note": "PF-600 spec unchanged \u2014 'CLI scaffold + ship login' via integrations/cli, device flow via SDK deviceLogin \u2014 none of this exists in the repo."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 273,
+          "note": "PF-601 spec unchanged \u2014 'ship docs ls | get <id> | create --title'; grep for 'ship docs' returns zero hits outside PLUGFORGE.MD/docs."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 274,
+          "note": "PF-602 spec unchanged \u2014 'ship webhooks tail'; grep for 'ship webhooks' returns zero hits outside PLUGFORGE.MD/docs."
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 412,
+          "note": "New entry since baseline: 'TRO-425 \u2014 PF-106: Device Authorization Grant (RFC 8628) \u2014 ship login's engine'. Confirms PF-106 is understood as the CLI's future backend dependency, not the CLI itself."
+        }
+      ],
+      "notes": "Verdict carried forward: MISSING. 'ship login'/'ship docs'/'ship webhooks' strings still appear only in PLUGFORGE.MD, docs/architecture.md, and now one CHANGES.md write-up \u2014 never in actual source.",
+      "suggested_scope": "Unchanged: ships when PF-600 (TRO-448), PF-601 (TRO-450), PF-602 (TRO-452) are implemented. PF-600's prerequisite (PF-106 device grant) is now merged, removing one blocker.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R63",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-434"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform",
+          "line": 0,
+          "note": "grep -rniE 'anthropic|claude-|langgraph|langchain' across api/src/platform (26 files changed under this tree since baseline: oauth/device.ts, oauth/token.ts, api/v1/resources/{issues,sprints,me}.ts, openapi/*) \u2014 still zero matches."
+        },
+        {
+          "file": "api/package.json",
+          "line": 26,
+          "note": "dependencies block has no anthropic/langchain SDK; @aws-sdk/client-bedrock-runtime at line 26 (baseline cited 27 \u2014 off-by-one already present at baseline, not caused by this diff)."
+        },
+        {
+          "file": "agent/package.json",
+          "line": 30,
+          "note": "@langchain/anthropic/core/langgraph still declared only in agent/ \u2014 file has zero diff since baseline."
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 220,
+          "note": "'Agent as Platform Citizen \u2014 Before/After' section still states the Epic-7 rewire as design intent only; file has zero diff since baseline."
+        }
+      ],
+      "notes": "No code changed in scope for either clause since baseline. Part (a) \u2014 platform emits zero LLM calls \u2014 remains TRUE, re-confirmed directly. Part (b) \u2014 agent's LLM cost shape unchanged by the rewire \u2014 remains UNVERIFIABLE (Epic 7 has not started, agent/ has zero diff). Carrying PARTIAL forward unchanged.",
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": "No code change needed for the negative claim itself. Once Epic 7 lands, capture a cost-ledger before/after comparison proving token volume is unchanged \u2014 still the only outstanding half."
+    },
+    {
+      "id": "W6-R64",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-434",
+        "TRO-440"
+      ],
+      "evidence": [
+        {
+          "file": "docs/submission/AI-COST-ANALYSIS.md",
+          "line": 1,
+          "note": "Still the W5 audit-sprint spend report only; zero mention of Epic 7/rewire/per-day spend tracking. Zero diff since baseline."
+        },
+        {
+          "file": "agent/src/costTracking.ts",
+          "line": 1,
+          "note": "Per-invocation cost ledger still exists, unchanged; no post-rewire snapshot to compare against."
+        },
+        {
+          "file": "agent/cost-ledger-snapshot.jsonl",
+          "line": 1,
+          "note": "Still a single pre-rewire baseline snapshot, not a before/after pair; unchanged."
+        }
+      ],
+      "notes": "No code changed in scope. The rewire (PF-701-704) still has not started. Carrying MISSING forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: ships when Epic 7 ships. PF-905 (TRO-434) needs a dedicated doc pulling a pre/post pair once PF-701-704 land.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R65",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-434",
+        "TRO-395"
+      ],
+      "evidence": [
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 301,
+          "note": "PF-905 spec (100/1k/10k/100k user cost projections) still present verbatim; zero diff since baseline."
+        },
+        {
+          "file": "docs/submission/AI-COST-ANALYSIS.md",
+          "line": 1,
+          "note": "Still only the W5 audit-sprint spend report; no user-tier table, no assumptions. Zero diff since baseline."
+        }
+      ],
+      "notes": "No code changed in scope. Carrying MISSING forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: PF-905 ships when TRO-434 lands \u2014 a new committed doc with the 100/1k/10k/100k-user cost tier table and stated assumptions.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R66",
+      "verdict": "VERIFIED",
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "tsconfig.json",
+          "line": 13,
+          "note": "Root tsconfig sets \"strict\": true \u2014 inherited by every workspace package. Unchanged since baseline."
+        },
+        {
+          "file": "sdk/tsconfig.json",
+          "line": 2,
+          "note": "NEW since baseline: \"extends\": \"../tsconfig.json\" \u2014 sdk/ (which didn't exist at baseline) inherits root strict mode, closing baseline's one named gap ('the acceptance evidence explicitly names sdk/... no sdk/ workspace package exists yet')."
+        },
+        {
+          "file": "api/src/platform/webhooks/events.ts",
+          "line": 9,
+          "note": "Platform code uses Zod for schema definition feeding OpenAPI generation. Unchanged."
+        },
+        {
+          "file": "api/src/platform/api/v1/resources/documents.ts",
+          "line": 24,
+          "note": "import { z } from 'zod' \u2014 Zod used for request/response schemas. Unchanged."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 89,
+          "note": "Brief mandate: sdk/ and every integrations/* package ship with strict: true tsconfigs. Unchanged."
+        }
+      ],
+      "notes": "Moved PARTIAL -> VERIFIED. Baseline's own suggested_scope predicted this exact resolution: 'Closes automatically once the sdk/ workspace package is created with its own strict:true tsconfig.' That happened this range (PF-400/TRO-405): sdk/tsconfig.json extends the root strict config, and `tsc --noEmit` against it exits 0 with zero errors \u2014 re-run fresh in this sweep, not assumed from the file's mere existence. Every named piece of this cross-cutting requirement (strict mode across all workspace packages including the now-real sdk/, Zod-driven schemas in platform code) is confirmed.",
+      "suggested_scope": null,
+      "interpretation": null,
+      "assumption": null,
+      "verification": {
+        "command": "cd sdk && npx tsc --noEmit -p tsconfig.json",
+        "result_excerpt": "(exit 0, no output \u2014 clean typecheck under sdk/tsconfig.json's inherited strict:true)"
+      }
+    },
+    {
+      "id": "W6-R67",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-393",
+        "TRO-417",
+        "TRO-423",
+        "TRO-428",
+        "TRO-435",
+        "TRO-440",
+        "TRO-414"
+      ],
+      "evidence": [
+        {
+          "file": "agent/src/shipClient.ts",
+          "line": 1,
+          "note": "Module docstring still: every outbound call goes through ResilientClient against Ship's internal REST API, no @ship/sdk usage. File and entire agent/ tree have zero diff since baseline."
+        },
+        {
+          "file": "agent/package.json",
+          "line": 1,
+          "note": "Still no @ship/sdk dependency declared, even though sdk/ (PF-400) has now landed elsewhere in the repo \u2014 agent/ simply hasn't been wired to consume it."
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 228,
+          "note": "'After (Epic 7, PF-700-PF-704):' paragraph still entirely future-tense design intent. Zero diff since baseline."
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 232,
+          "note": "AGENT_PLATFORM_MODE=sdk|internal still not-yet-implemented in agent code \u2014 exists only as a declared-but-unconsumed Terraform env var (terraform/render/agent_service.tf:98, variables.tf:421, both pre-existing/unchanged) and in planning docs; no application code reads or branches on this flag."
+        }
+      ],
+      "notes": "No code changed in scope: agent/ is byte-for-byte unchanged. Confirmed nothing in api/src/platform issues the agent an OAuth app identity \u2014 no ship_app_fleetgraph row seeded anywhere. Carrying MISSING forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: epic-sized. Dependency chain: PF-205 -> sdk/ (now scaffolded) -> PF-700 (human checkpoint) -> PF-701 -> PF-702 -> PF-703 -> PF-704. None have landed.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R68",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-438"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/webhooks/README.md",
+          "line": 16,
+          "note": "Unchanged: no deliverer test suite exists."
+        },
+        {
+          "file": "api/src/platform/webhooks/__tests__/signer.test.ts",
+          "line": 61,
+          "note": "Unchanged: injected-Clock pattern remains precedent-only, not evidence of deliverer compliance (deliverer still doesn't exist)."
+        }
+      ],
+      "notes": "No code changed in scope: git diff --stat empty. Verdict carried forward unchanged.",
+      "suggested_scope": "Unchanged from baseline: ships when PF-304's deliverer is actually built and tested (TRO-438, Backlog) using deterministic clock injection.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R69",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-399",
+        "TRO-500",
+        "TRO-496"
+      ],
+      "evidence": [
+        {
+          "file": "scripts/check-integration-deps.mjs",
+          "line": 1,
+          "note": "Unchanged since baseline \u2014 enforcement logic intact: flags any integrations/* runtime dep other than @ship/sdk, clean pass when integrations/ is absent."
+        },
+        {
+          "file": "scripts/__tests__/check-integration-deps.test.mjs",
+          "line": 128,
+          "note": "Unchanged since baseline; re-ran directly at HEAD via node --test \u2014 10/10 pass, 0 fail, including the violation-detection case."
+        },
+        {
+          "file": ".gitlab-ci.yml",
+          "line": 83,
+          "note": "check-integration-deps.mjs + its regression test still wired into the graded verify job; line position unaffected by the file's only change (unrelated pnpm --filter @ship/sdk test step inserted later)."
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 98,
+          "note": "Same check mirrored into GitHub CI, unaffected by the file's only change (SDK unit tests step inserted later)."
+        },
+        {
+          "file": "pnpm-workspace.yaml",
+          "line": 6,
+          "note": "integrations/* still not a workspace package (now api/web/shared/agent/sdk) \u2014 no actual integration exists yet for the rule to govern."
+        },
+        {
+          "file": "eslint.config.mjs",
+          "line": 101,
+          "note": "Content unchanged \u2014 still the api/src/platform/api/v1/** vs routes/** ESLint boundary rule (a different requirement's territory); confirms the integrations/@ship/sdk-only half is enforced by the separate script, not ESLint."
+        }
+      ],
+      "notes": "Verdict carried forward: PARTIAL. Re-ran the regression test directly at current HEAD and confirmed 10/10 still passes. No integrations/ directory or package exists yet. None of the 6 merged tickets touch this requirement's territory.",
+      "verification": null,
+      "interpretation": null,
+      "assumption": null,
+      "suggested_scope": "Unchanged: ships automatically once any package lands under integrations/* (E6/E8 work). Enforcement script already built, tested, CI-wired in both pipelines."
+    },
+    {
+      "id": "W6-R70",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-424",
+        "TRO-395"
+      ],
+      "evidence": [
+        {
+          "file": "docs/architecture.md",
+          "line": 23,
+          "note": "## Module Layout"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 46,
+          "note": "## SOLID Rationale"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 56,
+          "note": "## Composition Root"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 91,
+          "note": "## Public/Internal Boundary \u2014 Sequence Diagram"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 118,
+          "note": "## OAuth Flow Diagrams"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 167,
+          "note": "## Webhook Pipeline"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 190,
+          "note": "## SDK Surface"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 220,
+          "note": "## Agent as Platform Citizen \u2014 Before/After"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 247,
+          "note": "## Failure Modes"
+        },
+        {
+          "file": "api/src/__tests__/architectureDocSections.test.ts",
+          "line": 1,
+          "note": "15-assertion section-presence lint test; file byte-for-byte unchanged since baseline."
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 2692,
+          "note": "Line drifted from baseline's 1835 (CHANGES.md grew +857 lines). Same TRO-424/PF-903 entry, unchanged content."
+        }
+      ],
+      "notes": "No relevant change since baseline: docs/architecture.md and its gating test are byte-identical (absent from the 99-file diff). Only CHANGES.md's citation line moved due to unrelated growth elsewhere in that file.",
+      "suggested_scope": null,
+      "verification": {
+        "command": "git diff --name-only 06a15f147d443fbe405b51d4ea77ea2141f21e6e..2418353 | grep -E 'architecture.md|architectureDocSections'",
+        "result_excerpt": "(no output \u2014 neither file appears in the diff; confirms unchanged). Baseline verification (15/15 vitest pass) carried forward as still valid since target files are identical."
+      },
+      "interpretation": null,
+      "assumption": null
+    },
+    {
+      "id": "W6-R71",
+      "verdict": "VERIFIED",
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 20,
+          "note": "Unchanged since baseline. Operative mandate: per-slice branches preserved, PR descriptions name the acceptance criterion + confirm fitness test passed."
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 1341,
+          "note": "Line drifted from baseline's 482. TRO-441/PF-907 entry's gh repo view output (isPrivate:false, visibility:PUBLIC) re-confirmed live via gh repo view troysatchell/ship, unchanged."
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 24,
+          "note": "New since baseline: six new per-ticket CHANGES.md entries (TRO-404, TRO-421, TRO-405, TRO-425, TRO-402, TRO-400), one per landed ticket, consistent with mandated discipline."
+        }
+      ],
+      "notes": "Strengthened, not merely carried forward: all 6 newly-landed tickets each shipped as their own branch+PR, all 6 branches remain un-deleted on origin, PR #192's body shows the mandated discipline pattern (ticket-close reference, acceptance-criterion narrative, gate-pass evidence table). Sampled, not exhaustive (only #192 read in full).",
+      "suggested_scope": null,
+      "interpretation": null,
+      "assumption": null,
+      "verification": {
+        "command": "gh repo view troysatchell/ship --json isPrivate,visibility,deleteBranchOnMerge; git log --oneline --merges 06a15f1..2418353; git branch -r | grep -E 'pf-201|pf-202|pf-203|pf-400|pf-105|pf-106'; gh pr view 192 --repo troysatchell/ship --json body",
+        "result_excerpt": "{\"deleteBranchOnMerge\":false,\"isPrivate\":false,\"visibility\":\"PUBLIC\"}; 6 distinct per-ticket merge PRs (#192/193/194/195/197/198); all 6 feat/pf-* branches still present on origin; PR #192 body confirms full discipline pattern"
+      }
+    },
+    {
+      "id": "W6-R72",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-444",
+        "TRO-395"
+      ],
+      "evidence": [
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 304,
+          "note": "Unchanged since baseline. PF-908 spec: final demo script."
+        },
+        {
+          "file": "docs/submission/DEMO-SCRIPT.md",
+          "line": 1,
+          "note": "Unchanged since baseline \u2014 still the prior week's script content, not the W6 five-line-story."
+        }
+      ],
+      "notes": "No relevant change. TRO-444/PF-908 not among the six landed tickets. Carrying forward MISSING.",
+      "suggested_scope": "Unchanged from baseline: ships when TRO-444/PF-908 lands a new script with the five-line-story timecoded walkthrough.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R73",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-429",
+        "TRO-395"
+      ],
+      "evidence": [
+        {
+          "file": "PRESEARCH.MD",
+          "line": 1,
+          "note": "Unchanged since baseline \u2014 still the W5/FleetGraph pre-search doc, not a PlugForge one."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 300,
+          "note": "Unchanged. PF-904 spec (HUMAN CHECKPOINT)."
+        }
+      ],
+      "notes": "No relevant change. TRO-429/PF-904 not among the six landed tickets. Carrying forward MISSING.",
+      "suggested_scope": "Unchanged from baseline: HUMAN CHECKPOINT ticket, gated on Troy's actual input in addition to code.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R74",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-409",
+        "TRO-388"
+      ],
+      "evidence": [
+        {
+          "file": "api/src/platform/api/v1/router.ts",
+          "line": 50,
+          "note": "CHANGED SINCE BASELINE: /api/v1/openapi.json IS now registered and live (PF-202/TRO-402 landed) \u2014 baseline's blocking reason ('PF-202 hasn't landed either') no longer applies."
+        },
+        {
+          "file": "docs/openapi.json",
+          "line": 0,
+          "note": "Repo-wide find confirms no docs/openapi.json file exists anywhere \u2014 docs/ has zero diff in the 06a15f1..2418353 range."
+        },
+        {
+          "file": ".gitlab-ci.yml",
+          "line": 1,
+          "note": "No CI job in .gitlab-ci.yml or .github/workflows/ mentions openapi drift/parity \u2014 grepped fresh this sweep, same result as baseline."
+        }
+      ],
+      "notes": "Verdict unchanged (MISSING) but the reasoning materially changed: baseline called this 'fully blocked upstream by PF-202... hasn't landed either' \u2014 PF-202 has since landed (confirmed live at api/src/platform/api/v1/router.ts:50, and independently by W6-R8/R11/R21 this sweep), so PF-204/TRO-409 no longer has an upstream blocker, only its own Backlog status. No docs/openapi.json file or CI parity job exists yet either way.",
+      "suggested_scope": "No longer blocked upstream: PF-202 (the v1 generator + live serving route) landed this range, so the one remaining dependency baseline named is resolved. PF-204/TRO-409 (still Backlog) is now a self-contained task: commit a docs/openapi.json snapshot and add a CI job that regenerates + diffs it against the live-generated spec, failing the build on drift.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R75",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-437",
+        "TRO-395"
+      ],
+      "evidence": [
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 302,
+          "note": "Unchanged. PF-906 spec: before->fix->after->proof per epic."
+        },
+        {
+          "file": "docs/submission/DISCOVERY.md",
+          "line": 4,
+          "note": "Unchanged \u2014 still W4/W5 audit-sprint discoveries."
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 319,
+          "note": "New citation: architecture doc's own Cross-References section lists per-epic write-ups as still-outstanding, corroborating it has not landed."
+        }
+      ],
+      "notes": "No relevant change. E6 (TTFE drill) and E7 (agent rewire) did not land this range, so proof artifacts still don't exist. Carrying forward MISSING.",
+      "suggested_scope": "Unchanged from baseline: blocked on E6/E7 landing first.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R76",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-437",
+        "TRO-395"
+      ],
+      "evidence": [
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 302,
+          "note": "Unchanged. PF-906 spec names the four candidates."
+        },
+        {
+          "file": "docs/submission/DISCOVERY.md",
+          "line": 6,
+          "note": "Unchanged \u2014 same file as W6-R75, still W4/W5 content."
+        }
+      ],
+      "notes": "Two of four candidate discovery topics (Device Grant, zod->OpenAPI fitness parity) are now actually implemented, strengthening material available for the eventual write-up, but does not itself constitute it. Carrying forward MISSING.",
+      "suggested_scope": "Unchanged from baseline.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R77",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-441",
+        "TRO-411",
+        "TRO-402",
+        "TRO-436"
+      ],
+      "evidence": [
+        {
+          "file": "README.md",
+          "line": 311,
+          "note": "Unchanged since baseline. Grader Access section: one-command setup, secret handling, read-only scopes."
+        },
+        {
+          "file": "README.md",
+          "line": 356,
+          "note": "Unchanged text, now STALE: README's own caveat says portal/openapi.json resolvability depend on E5/PF-202, 'neither of which exists on this branch yet' \u2014 PF-202/TRO-402 has since landed."
+        },
+        {
+          "file": "api/src/platform/oauth/seedGraderApp.ts",
+          "line": 80,
+          "note": "Unchanged. Seeded grader app, read-only scoped."
+        },
+        {
+          "file": "api/src/platform/api/v1/router.ts",
+          "line": 51,
+          "note": "CHANGED SINCE BASELINE: baseline cited this file (then line 38) to show NO /openapi.json route existed. It now does (TRO-402/PF-202, merged PR #192)."
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 602,
+          "note": "New citation: TRO-402/PF-202 entry; PR #192's own recorded evidence includes a live curl against a running instance (GET /api/v1/openapi.json -> 200) independently re-validated against the real OpenAPI 3.1 JSON Schema."
+        },
+        {
+          "file": "web/src",
+          "line": 0,
+          "note": "find web/src -iname '*portal*' -o -iname '*developer*' returns no results \u2014 the developer portal (TRO-436) still does not exist."
+        }
+      ],
+      "notes": "Verdict label unchanged (PARTIAL) but evidence composition materially changed: of the two DoD sub-items MISSING at baseline, one is now closed at the code level (openapi.json registered + PR's own recorded live evidence). 'Dev portal reachable' remains genuinely missing. README's caveat is now half-stale \u2014 a real, minor documentation-drift finding.",
+      "suggested_scope": "Narrowed from baseline: only TRO-436/PF-502 (developer portal) remains to close this requirement's code-level gap; the OpenAPI-resolvable half is done pending live-deploy reprobe. Also: refresh README.md:356's caveat text.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R78",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-444",
+        "TRO-395"
+      ],
+      "evidence": [
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 304,
+          "note": "Unchanged. PF-908 spec: social post draft."
+        },
+        {
+          "file": "docs/submission/SOCIAL-POST.md",
+          "line": 1,
+          "note": "Unchanged \u2014 still about the W4/W5 Treasury Ship-fork audit."
+        },
+        {
+          "file": "docs/submission/SOCIAL-THREAD-W4-W5.md",
+          "line": 1,
+          "note": "Unchanged \u2014 filename confirms W4-W5 scope."
+        }
+      ],
+      "notes": "No relevant change. Same TRO-444/PF-908 ticket as W6-R72, not among the six landed tickets. The CLI (PF-600/TRO-448) this screenshot depends on also did not land. Carrying forward MISSING.",
+      "suggested_scope": "Unchanged from baseline.",
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    },
+    {
+      "id": "W6-R79",
+      "verdict": "N/A",
+      "tickets": [
+        "TRO-403",
+        "TRO-417",
+        "TRO-429",
+        "TRO-395"
+      ],
+      "evidence": [
+        {
+          "file": "docs/submission/PF-100-OAUTH-STUDY-BRIEF.md",
+          "line": 1,
+          "note": "Unchanged since baseline. One of three HUMAN CHECKPOINT prep artifacts."
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 32,
+          "note": "Unchanged. Names the three checkpoint artifacts (PF-100, PF-700, PF-904)."
+        }
+      ],
+      "notes": "No relevant change \u2014 interview-gate/human-competency requirement, N/A for a static repo sweep. Neither TRO-417/PF-700 nor TRO-429/PF-904 among the six landed tickets. Carrying forward N/A.",
+      "suggested_scope": null,
+      "interpretation": null,
+      "assumption": null,
+      "verification": null
+    }
+  ],
+  "orphan_tickets": [
+    {
+      "ticket": "TRO-396",
+      "title": "PF-001: Ship has no public API surface \u2014 platform scaffold + /api/v1 router (request IDs, public CORS)",
+      "note": "Foundational scaffolding ticket (Done). Its code (router.ts, requestIdMiddleware, public CORS setup) is cited as supporting EVIDENCE across many other requirements (W6-R4, R5, R6, R8, R11, R15, R43, etc.), but no PDF-graded requirement's own quote is specifically about the scaffold itself \u2014 the brief's requirement lines start from OAuth features (W6-R2 onward). Not a tracer oversight: there is no requirement line for PF-001 to attach to."
+    },
+    {
+      "ticket": "TRO-490",
+      "title": "Pre-existing: swagger.ts YAML converter emits mis-indented YAML (openapi.yaml) \u2014 JSON spec unaffected",
+      "note": "Internal tooling bug found incidentally during W6 work on a pre-existing (pre-W6) script; not a PF-numbered requirement ticket and no PlugForge brief requirement covers YAML-output formatting of the internal Swagger converter."
+    },
+    {
+      "ticket": "TRO-501",
+      "title": "Route-level createIssueSchema accepts 'none' priority \u2014 absent from IssuePriority union and OpenAPI schema",
+      "note": "A bug found in the internal (non-v1) issues route's schema, incidental to W6 work; not a PF-numbered ticket and no PlugForge brief requirement covers internal issue-priority validation."
+    },
+    {
+      "ticket": "TRO-551",
+      "title": "OpenAPI registry + MCP executor hardcode the /api prefix \u2014 non-/api routes (/oauth/*) cannot be registered without shipping 404ing MCP tools",
+      "note": "Ship-internal MCP/OpenAPI tooling fix (Done), thematically adjacent to PF-202 (already covered by W6-R8/R11/R21/R45 via TRO-402) but not itself the subject of any graded requirement quote \u2014 no PF number, and none of the 79 requirements name it."
+    },
+    {
+      "ticket": "TRO-587",
+      "title": "CodeQL js/insufficient-password-hash false-positive on oauth/credentials.ts \u2014 needs formal dismissal",
+      "note": "CodeRabbit/CodeQL review-triage follow-up from tonight's OAuth work; a security-scanner finding, not a requirement in the guideline PDF."
+    },
+    {
+      "ticket": "TRO-588",
+      "title": "/oauth/* routes have no route-scoped rate limiting",
+      "note": "Review-triage follow-up; overlaps W6-R35's territory (rate limiting) but is scoped to /oauth/* specifically, not named by any inventory requirement's text."
+    },
+    {
+      "ticket": "TRO-589",
+      "title": "Device-grant user_code stored plaintext, not hashed",
+      "note": "Review-triage follow-up from PF-106/TRO-425 (landed tonight); a hardening finding against device.ts, not itself a brief requirement."
+    },
+    {
+      "ticket": "TRO-590",
+      "title": "CodeQL js/missing-rate-limiting has a blind spot: flags test-only Express apps as production routes",
+      "note": "CodeQL tooling-accuracy finding, unrelated to any inventory requirement's text."
+    },
+    {
+      "ticket": "TRO-591",
+      "title": "Composite DB index opportunity flagged by PF-201's pagination work",
+      "note": "Performance-hardening follow-up from PF-201/TRO-400 (landed tonight); no inventory requirement names a specific index."
+    },
+    {
+      "ticket": "TRO-592",
+      "title": "Shared pagination-router factory opportunity across v1 resources",
+      "note": "Code-reuse/refactor follow-up from PF-201's four new v1 resources; not itself a brief requirement."
+    }
+  ],
+  "needs_ruling": [],
+  "commands_run": [
+    {
+      "command": "cd api && DATABASE_URL=postgresql://ship:ship_dev_password@localhost:5433/ship_audit_w6mvp_scratch npx tsx src/db/migrate.ts",
+      "result": "51 migration(s) applied successfully",
+      "bears_on": [],
+      "note": "Scratch database created and migrated fresh for this sweep (ship_audit_w6mvp_scratch), never the shared worktree dev DB \u2014 per this skill's hard rule that a mutating verify command runs against a throwaway database."
+    },
+    {
+      "command": "cd api && DATABASE_URL=...ship_audit_w6mvp_scratch npx vitest run src/platform/api/v1/__tests__/route-fitness.test.ts src/platform/api/v1/__tests__/error-middleware.test.ts src/platform/api/v1/__tests__/errors.test.ts src/platform/api/v1/resources/__tests__/{documents,issues,sprints,me}.test.ts",
+      "result": "7 test files, 77 tests passed (77)",
+      "bears_on": [
+        "W6-R5",
+        "W6-R6",
+        "W6-R20",
+        "W6-R21",
+        "W6-R44"
+      ],
+      "note": null
+    },
+    {
+      "command": "cd api && DATABASE_URL=...ship_audit_w6mvp_scratch npx vitest run src/platform/oauth/__tests__/bearerAuth.test.ts src/platform/oauth/__tests__/app-registration.test.ts src/platform/oauth/__tests__/token.test.ts src/platform/oauth/__tests__/device.test.ts src/platform/oauth/__tests__/authorize.test.ts src/platform/oauth/__tests__/seedGraderApp.test.ts src/platform/scopes/__tests__/registry.test.ts src/platform/__tests__/boundary-lint.test.ts src/platform/__tests__/v1-router.test.ts src/platform/openapi/__tests__/document.test.ts src/platform/openapi/__tests__/endpoint.test.ts",
+      "result": "11 test files, 102 tests passed (102)",
+      "bears_on": [
+        "W6-R2",
+        "W6-R4",
+        "W6-R7",
+        "W6-R8",
+        "W6-R13",
+        "W6-R14",
+        "W6-R16",
+        "W6-R17",
+        "W6-R19"
+      ],
+      "note": null
+    },
+    {
+      "command": "cd api && DATABASE_URL=...ship_audit_w6mvp_scratch npx vitest run src/platform/oauth/__tests__/token.test.ts src/platform/oauth/__tests__/device.test.ts",
+      "result": "2 test files, 41 tests passed (41)",
+      "bears_on": [
+        "W6-R14",
+        "W6-R15",
+        "W6-R18",
+        "W6-R43"
+      ],
+      "note": "Isolated re-run to capture individual per-file counts (32 token.test.ts, 9 device.test.ts) after the earlier batch run's tail output truncated their detail."
+    },
+    {
+      "command": "cd api && DATABASE_URL=...ship_audit_w6mvp_scratch npx vitest run src/platform/webhooks/__tests__/signer.test.ts src/platform/webhooks/__tests__/events.test.ts",
+      "result": "2 test files, 42 tests passed (42)",
+      "bears_on": [
+        "W6-R22",
+        "W6-R25"
+      ],
+      "note": "Confirmed byte-identical to baseline before re-running; re-run performed rather than trusting the stale capture."
+    },
+    {
+      "command": "cd sdk && npx vitest run src/client.test.ts src/errors.test.ts",
+      "result": "2 test files, 26 tests passed (26)",
+      "bears_on": [
+        "W6-R9",
+        "W6-R34"
+      ],
+      "note": null
+    },
+    {
+      "command": "cd sdk && DATABASE_URL=...ship_audit_w6mvp_scratch npx vitest run src/__tests__/client.liveServer.test.ts",
+      "result": "1 test file, 3 tests passed (3)",
+      "bears_on": [
+        "W6-R9"
+      ],
+      "note": "Real TCP round trip against a real http.Server wrapping createApp(); the test creates and cleans up its own isolated workspace/user/token rows in beforeAll/afterAll (verified by reading the file before running it) \u2014 safe against the scratch DB."
+    },
+    {
+      "command": "cd sdk && npx tsc --noEmit -p tsconfig.json",
+      "result": "exit 0, no output",
+      "bears_on": [
+        "W6-R66"
+      ],
+      "note": null
+    },
+    {
+      "command": "gh repo view troysatchell/ship --json isPrivate,visibility,deleteBranchOnMerge; git log --oneline --merges 06a15f1..2418353; gh pr view 192 --repo troysatchell/ship --json body",
+      "result": "PUBLIC, deleteBranchOnMerge:false; 6 distinct per-ticket merge PRs (#192/193/194/195/197/198); PR #192 body confirms mandated discipline pattern",
+      "bears_on": [
+        "W6-R71"
+      ],
+      "note": null
+    },
+    {
+      "command": "audit/api-perf/compare-w6-r10-aug14/after-w6-r10-aug14.md, audit/db-query/compare-w6-r10-aug14/after-w6-r10-aug14.md, audit/bundle/compare-w6-aug14/after-w6-aug14.md \u2014 read directly, not re-run",
+      "result": "All three report PASS vs the 2026-07-27 Part-1 baseline, each with disclosed confounds (Postgres version skew, gzip landing independently, one load-contaminated measurement window with a quiet-load recheck disproving the artifact)",
+      "bears_on": [
+        "W6-R10"
+      ],
+      "note": "Pre-existing artifacts from a separate, parallel verification effort completed earlier the same session; opened and read in full rather than re-run (re-running would require Docker testcontainers + a full seeded-DB benchmark pass, out of this sweep's scope per the task brief)."
+    },
+    {
+      "command": "pnpm test (full root suite: api+web+agent+sdk) / pnpm test:e2e (full Playwright suite)",
+      "result": "NOT RUN",
+      "bears_on": [
+        "W6-R10"
+      ],
+      "note": "Full-suite runs were not performed in this compare sweep; only targeted vitest files scoped to each requirement's own test (see rows above) plus the independently-captured W6-R10 audit artifacts (previous row) bear on regression status. The e2e suite's 32 known failures and their bisection against commit 6000c94 are documented in memory-bank/activeContext.md:23, not re-run here."
+    },
+    {
+      "command": "terraform plan / apply / destroy against terraform/render/",
+      "result": "NOT RUN",
+      "bears_on": [
+        "W6-R12",
+        "W6-R38",
+        "W6-R39",
+        "W6-R40"
+      ],
+      "note": "No terraform binary available in this sandbox (consistent with baseline); terraform/ has zero diff since baseline so this NOT RUN carries the same meaning as baseline's."
+    },
+    {
+      "command": "Live network probe of the deployed instance (verify_urls.app / a deployed OpenAPI spec URL)",
+      "result": "NOT RUN",
+      "bears_on": [
+        "W6-R11",
+        "W6-R77"
+      ],
+      "note": "No network egress attempted against any deployed URL this sweep, consistent with baseline's own coverage limitation."
+    }
+  ],
+  "dirty_paths": [],
+  "baselineRef": "matrix.baseline-W6.json"
+}
