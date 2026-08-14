@@ -69,6 +69,239 @@ and the two updated `platform/openapi/__tests__/*.test.ts` files back to asserti
 
 ---
 
+## TRO-421 — PF-105: Refresh rotation + family invalidation (stolen-token detection)
+
+**What changed.** Added `grant_type=refresh_token` to the EXISTING `POST /oauth/token` endpoint
+(RFC 6749 §6 defines refresh as a token-endpoint grant type, not a new endpoint) — a third branch
+in `api/src/routes/oauth-token.ts` alongside PF-104's `authorization_code` and `client_credentials`,
+dispatching to a new `rotateRefreshToken` function in the SAME service module PF-104 already owns,
+`api/src/platform/oauth/token.ts` (not a new `tokens.ts` — the architect notes offered either name;
+this module already holds every other grant's logic, the two new helpers are ~15 lines each, and
+splitting would duplicate `authenticateClient`/`hashToken`/the error-constructor helpers or force an
+awkward re-export). New migration: `api/src/db/migrations/045_oauth_tokens_refresh_expiry.sql` (see
+Schema below).
+
+**Grant implemented: `refresh_token` (RFC 6749 §6).** Takes a raw refresh token + `client_id` (+
+`client_secret` for confidential clients, + optional `scope` to narrow), hashes and looks it up in
+`oauth_tokens`, verifies it is not already revoked/rotated and not past its own expiry, authenticates
+the client, confirms the token was issued to that client, atomically marks it rotated, and issues a
+NEW access+refresh pair in the SAME `family_id` with `parent_id` pointing at the row just rotated.
+Response shape is identical to the other two grants (`access_token`, `token_type`, `expires_in`,
+`scope`, `refresh_token`).
+
+**Reuse (stolen-token) detection.** A refresh token whose row is already revoked when presented —
+for ANY reason, whether ordinary prior rotation or an earlier reuse attempt — revokes every
+un-revoked token sharing that `family_id`, including a currently-active child's access token
+(RFC 6749 §10.4). This is deliberately the SAME error (`invalid_grant`, distinguished only by
+`error_description` text) as every other `invalid_grant` case, not a new out-of-spec error code —
+consistent with PF-104's own precedent for the analogous reused-authorization-code case. PLUGFORGE.MD
+§4's PF-800 (E8 drill, a later ticket) AC line mentions "a distinct error code"; that requirement
+belongs to PF-800's own e2e assertions, not this ticket's — flagged here in case PF-800 needs a
+machine-distinguishable signal beyond `error_description` text, rather than silently assumed settled.
+
+**Schema decision: no new "rotated"/"consumed" column — `revoked_at` does double duty.**
+`oauth_authorization_codes` has a dedicated `consumed_at` separate from any theft signal (a code is
+never legitimately reused, so the distinction never existed there). A refresh token needs BOTH "this
+exact token is now spent" (normal rotation) AND "the whole family is compromised" (reuse). Checked
+migrations 043 and 044 in full before adding anything (per this ticket's own instructions): neither
+carries a `rotated_at` column or equivalent. Rather than add one, `rotateRefreshToken` reuses the
+existing `revoked_at` — already read by `bearerAuth.ts` — for both: rotation sets it on the parent row
+(the "invalidates parent" AC), and ANY presented refresh token whose row already has it set is treated
+as reuse. This is a deliberate simplification with a real behavioral consequence, stated plainly: a
+row's access token ALSO stops working the moment its own refresh token is rotated out, not just when
+the whole family is later killed by a detected reuse — some OAuth implementations instead let the old
+access token keep working until its natural 1-hour expiry after rotation. Accepted here as the
+schema-minimal, self-consistent choice: one row is one token pair minted together, invalidated as a
+unit exactly once, at the one moment (rotation) it is retired. Full reasoning is in `token.ts`'s
+module header (the "PF-105 addition" section).
+
+**Schema: migration 045 (`refresh_token_expires_at`), a genuinely new column.** The refresh token's
+own 30-day TTL (PLUGFORGE.MD §2.2 / migration 043's header) cannot reuse the row's existing
+`expires_at`, which `bearerAuth.ts` and PF-104's `redeemAuthorizationCode` already read as the ACCESS
+token's 1-hour expiry — reusing it for the refresh token's 30-day window would either shorten the
+access token's life or require every access-token expiry check in the codebase to learn a second
+meaning for the same column. PF-104's own CHANGES.md entry (TRO-416) flagged this gap explicitly for
+whoever built this ticket to resolve; this migration is that resolution. Nullable — NULL for Client
+Credentials rows (no refresh token at all) and for any pre-migration row, both treated by
+`rotateRefreshToken` as "not eligible for refresh" (same outcome as an actually-expired token, and
+safe: refusing forces re-authorization rather than trusting an unverifiable window). Also updated
+PF-104's `redeemAuthorizationCode` INSERT to populate this column (30 days out) — without this, every
+refresh token issued by the `authorization_code` grant would read as permanently NULL/expired here and
+never be rotatable at all, silently defeating this entire ticket for the one grant that actually mints
+refresh tokens today. **Test-fixture side effect (disclosed, not silently touched):** migration 045
+ALTERs `oauth_tokens` (which 043 creates), so — same class of collision PF-104's own 044 hit —
+`api/src/db/__tests__/migrations-042-043.test.ts`'s `LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS` exclusion
+list needed `045_oauth_tokens_refresh_expiry` added alongside 044, or its AC-2 "prod-shaped, nothing
+from oauth yet" fixture would try to ALTER a table that doesn't exist yet. Grepped for this exact
+mechanism before claiming it fixed (lessons.md: a duplicate implementation of a hardened rule/fixture
+is where the bug survives) — this is the only place that list is defined.
+
+**Concurrency argument (two concurrent rotations of the same refresh token) — required, DB-enforced,
+same pattern as PF-104's:**
+
+```sql
+UPDATE oauth_tokens SET revoked_at = now()
+WHERE id = $1 AND revoked_at IS NULL RETURNING id
+```
+
+run inside a transaction that also `INSERT`s the child row and `COMMIT`s before releasing the row
+lock — the identical shape as PF-104's `consumed_at` gate, substituting `revoked_at`/`oauth_tokens`.
+Two concurrent transactions racing this UPDATE serialize at Postgres's row lock: the winner locks the
+row, flips `revoked_at`, inserts the child, and commits; only then is the lock released, and the
+loser's UPDATE — now unblocked — re-evaluates `revoked_at IS NULL` against the committed row and
+matches zero rows. The loser always gets `invalid_grant`, and — same reasoning as PF-104's own
+concurrent-redemption case, since this module cannot reliably tell "a live race" apart from "a
+sequential replay" — the loser's response revokes the ENTIRE family, including the child row the
+winner's own transaction just committed. A racing legitimate caller can still receive a real,
+valid-shaped `200` (its transaction genuinely committed), but that token is dead on arrival once the
+race is detected: fail-safe under ambiguity, same accepted UX cost as PF-104 (a well-behaved client
+does not rotate the same refresh token twice concurrently).
+
+**Regression tests (the factory-gate proof).** Added to the EXISTING
+`api/src/platform/oauth/__tests__/token.test.ts` rather than a new file — both tickets exercise the
+identical route and share the exact same workspace/user/apps fixtures and `postToken`/`introspect`
+helpers, and every PF-105 test needs a real `authorization_code` redemption first to obtain a refresh
+token to rotate. File went from 18 to 32 cases:
+- Happy path (public client, confidential client, and narrower-scope-on-refresh), each verified past
+  the HTTP response — new access token run through the REAL `bearerAuth` middleware, same
+  "strongest available proof" pattern PF-104 established.
+- **"Rotation issues child + invalidates parent"** — explicit DB-state assertions: parent row
+  `revoked_at` set, child row exists with the SAME `family_id` and `parent_id` pointing at the parent,
+  child NOT revoked.
+- **"Reuse of a rotated token revokes the whole family"** — sequential reuse of the already-rotated
+  parent refresh token: `invalid_grant`, every row sharing `family_id` ends up revoked, and — the
+  specific AC line — **the previously-active child's access token is run back through `bearerAuth`
+  and asserted `401`**, the same behavioral-proof pattern PF-104's own reused-code test used. Plus an
+  idempotency case: a third attempt against an already-fully-revoked family still fails cleanly.
+- **Two** concurrency tests, same "HTTP smoke test vs. forced deterministic proof" split as PF-104:
+  a `Promise.all` HTTP-level test (documented as not reliably forcing the interleaving), and a forced,
+  deterministic race — a third connection holds `SELECT ... FOR UPDATE` on the parent row until BOTH
+  real `rotateRefreshToken` calls are observed genuinely blocked on it (polled via
+  `pg_stat_activity.wait_event_type = 'Lock'`, no fixed sleep), then releases — proving exactly one
+  child is ever created and the family ends with zero active (non-revoked) rows.
+- Other negative cases: unknown refresh token; expired refresh token (asserted NOT to trigger
+  revocation — expiry isn't theft); `client_id` mismatch; confidential client missing its secret;
+  scope exceeding the original grant; missing `refresh_token`/`client_id`.
+
+**Red-before-green (seen, not claimed).** Three deliberate breaks, each run against the real suite,
+each reverted immediately after:
+- Dropping `AND revoked_at IS NULL` from the atomic UPDATE (simulating the exact SELECT-then-UPDATE
+  bug lessons.md rule 18 warns about) → the forced, deterministic race test failed correctly:
+  `expected [true, true] to deeply equal [false, true]` — a genuine double-issue, all 31 other cases
+  stayed green.
+- Removing the `revokeTokenFamily` call from the early "already revoked" branch → the sequential reuse
+  test failed correctly at exactly the assertion it exists to prove: `expected 200 to be 401` (the
+  child's access token kept working after the "revoked" family should have killed it).
+- Setting the child's `family_id`/`parent_id` to a fresh random UUID / `null` instead of the parent's
+  → the happy-path test failed correctly on the family_id assertion: `expected '<random-uuid>' to be
+  '<parent's family_id>'`.
+
+**How to run it.** `cd api && npx vitest run src/platform/oauth/__tests__/token.test.ts` (needs
+`DATABASE_URL` — `source .factory-env` in a worktree; run `pnpm exec tsx src/db/migrate.ts` first if
+this worktree's database predates migration 045). Manual: `pnpm dev`, run PF-104's
+`authorization_code` flow to get a `refresh_token`, then `grant_type=refresh_token&refresh_token=
+…&client_id=…` (form-encoded, `+client_secret=…` for a confidential app) against `/oauth/token`.
+
+**OpenAPI registration: still NOT registered, deferred — unchanged from PF-104's own state, re-checked
+fresh for this ticket.** `git log origin/main --oneline -5` shows PF-104's merge (`608ff1f`) at the
+tip; `fix/tro-551-openapi-non-api-prefix` exists as a local branch but its tip is still identical to
+`origin/main`'s (`git merge-base --is-ancestor` resolves true only because it has made zero commits
+past `main`, not because it landed) — same as PF-104's entry documented. This ticket adds a new grant
+branch to an ALREADY-unregistered route; it changes nothing about that route's registration status.
+When TRO-551 lands, `/oauth/authorize` and `/oauth/token` (all three grants) need registering
+together.
+
+**CodeRabbit triage (4 findings, all Major).**
+- *Test cleanup: the forced-race test's lock transaction wasn't rolled back if something threw
+  between `BEGIN` and `COMMIT`.* Valid, applied — added a `transactionOpen` flag and a `ROLLBACK` in
+  `finally` when the commit never happened, before releasing the connection back to the pool. Note:
+  PF-104's own equivalent test (`token.test.ts`'s authorization_code forced-race case) has the
+  identical pre-existing gap — noticed, not fixed, since it's PF-104's file and out of this ticket's
+  scope; flagged here for whoever next touches that test.
+- *`waitForBlockedRotations`'s fixed 20ms poll interval.* Considered, not applied — this is the exact
+  same pattern as PF-104's own already-merged `waitForBlockedRedemptions` (same interval, same
+  bounded-deadline structure), which lessons.md rule 17 already treats as the *correct* shape (it
+  polls a real, observable database fact — blocked backends in `pg_stat_activity` — with a bounded
+  deadline, not a fixed sleep asserting an outcome). Changing only this ticket's copy would make the
+  two nearly-identical helpers diverge in style for no behavioral gain.
+- *Move the "already revoked" early-return in `rotateRefreshToken` to after client authentication, so
+  an unauthenticated/mismatched client can't trigger family revocation.* Considered carefully, not
+  applied. Reaching this branch requires possessing the actual raw refresh-token string (a SHA-256
+  lookup against 256 bits of entropy — not guessable, not enumerable), so anyone who can trigger it
+  already holds a genuinely stolen/leaked credential regardless of whether they can also produce that
+  app's `client_secret`. Requiring client auth to succeed FIRST would mean a confidential app's stolen,
+  already-rotated refresh token could no longer trigger fail-safe revocation without the attacker also
+  having the app's secret — weakening exactly the "any sign of reuse revokes the family" posture RFC
+  6749 §10.4 calls for, for no real reduction in attack surface. Also the exact ordering PF-104's own
+  reused-authorization-code check already uses (revoke-before-client-auth, see that function's own
+  numbered negative-case list) — reordering here would make the two grants inconsistent with each
+  other for a change that doesn't close a real gap. This is genuinely a security-adjacent judgment
+  call on revocation ordering (`ship-backend` SKILL's "stop-for-human zone"), not a mechanical fix —
+  flagged explicitly for the PR reviewer/PM to confirm or override, not silently dismissed.
+- *Register `POST /oauth/token`'s `refresh_token` grant with OpenAPI.* Not applied, per this ticket's
+  own explicit instructions — the route is deferred behind TRO-551 (see above), and the instructions
+  are explicit not to register anything unilaterally. Same call PF-104 already made for this same
+  route's other two grants.
+
+**CodeRabbit triage, round 2 (post-merge-forward past PF-106/TRO-425, 4 findings — 1 trivial, 3
+minor).** The first triage above ran against a pre-merge CLI snapshot that never completed live; this
+round is a real completed review (`review_completed`, 4 findings) against the head after merging PF-106
+(device-code grant) forward, which landed its own new route branch alongside this ticket's in the same
+`oauth-token.ts` router.
+- *Refresh-token family lifetime is a sliding window (each rotation resets the 30-day clock from that
+  moment), not an absolute cap from the original grant.* CodeRabbit's own finding text says explicitly
+  not to change this — it identifies an absolute-lifetime cap as a separate, later follow-up requiring
+  its own schema work, not a defect in this diff. Matches this module's own documented decision (see
+  `REFRESH_TOKEN_TTL_MS`'s doc comment above): not applied, correctly.
+- *`waitForBlockedRotations` should scope its `pg_stat_activity` poll to `current_database()` and
+  exclude the poller's own backend PID.* Valid, applied. Different in kind from the poll-interval
+  finding dismissed in round 1 above (that one was a style question with an already-correct pattern);
+  this one is a genuine correctness gap specific to this factory's environment — many ticket worktrees
+  run against the SAME Postgres cluster with SEPARATE databases, and `pg_stat_activity` is
+  cluster-wide, so an unscoped `query ILIKE` match could count a sibling worktree's own concurrent run
+  of this identical test as one of this run's two expected blocked backends, corrupting the exact
+  proof this test exists to make. PF-104's own `waitForBlockedRedemptions` (same file) has the
+  identical gap — left unchanged, out of this ticket's scope; flagged for whoever next touches it.
+- *A comment on the family-revocation assertion said "exactly one active token" while the assertion
+  itself is `toHaveLength(0)`.* Valid, applied — the comment was flatly wrong, not just imprecise (the
+  exact class of error `.claude/CLAUDE.md`'s claim-provenance section warns about); corrected to match
+  what the assertion actually proves (zero active tokens remain — the loser's response revokes the
+  family including the winner's own committed child).
+- *The forced-race test's `racePromise` should be observed immediately so a later throw (e.g.
+  `waitForBlockedRotations` timing out) can't leave an eventual rejection unhandled.* Valid, applied —
+  with one correction to CodeRabbit's own suggested diff: it declared `settled` with `const` INSIDE the
+  `try` block while referencing it from `finally`, which throws a TDZ `ReferenceError` if the code
+  fails before that line runs (e.g. during `BEGIN` or the `FOR UPDATE`) instead of the intended
+  rollback. Hoisted `settled` to a `let` above the `try`, same pattern as `transactionOpen` beside it,
+  so it is safely `undefined` rather than uninitialized in that failure path. Re-ran the full test file
+  after: 32/32 pass, including the forced race itself.
+
+**Not verified in this session:** PF-800's own "stolen-token story" e2e drill (a separate, later
+ticket per PLUGFORGE.MD — this ticket is explicitly "the E8 drill's engine," not the drill itself).
+The unit-level reuse/family-revocation proof above exercises the identical code path PF-800 will drive
+through a real HTTP flow, but no Playwright spec for it exists yet on this branch.
+
+**Rollback.**
+
+```sql
+ALTER TABLE oauth_tokens DROP COLUMN IF EXISTS refresh_token_expires_at;
+DELETE FROM schema_migrations WHERE version = '045_oauth_tokens_refresh_expiry';
+```
+
+Revert `rotateRefreshToken`, `revokeTokenFamily`, `lookupTokenByRefreshHash`, `REFRESH_TOKEN_TTL_MS`,
+and the PF-105 module-header section in `api/src/platform/oauth/token.ts`; revert the
+`refresh_token_expires_at`/`refreshExpiresAt` addition to `redeemAuthorizationCode`'s INSERT in that
+same file (its `expires_at`-only INSERT is otherwise unchanged from PF-104). Revert the
+`grant_type === 'refresh_token'` branch and its import in `api/src/routes/oauth-token.ts`. Remove
+`api/src/db/migrations/045_oauth_tokens_refresh_expiry.sql`. Revert the PF-105 test additions in
+`api/src/platform/oauth/__tests__/token.test.ts` (file reverts to PF-104's original 18 cases) and the
+`045_oauth_tokens_refresh_expiry` entry in `LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS`
+(`api/src/db/__tests__/migrations-042-043.test.ts`) only if migration 045 is also removed — otherwise
+leave that fixture fix in place, since it protects against the same collision for any later
+oauth_tokens-dependent migration.
+
+---
+
 ## TRO-405 — PF-400: `@ship/sdk` scaffold + core client
 
 **What changed.** New `sdk/` workspace package (`@ship/sdk`) — the last MVP-gate ticket

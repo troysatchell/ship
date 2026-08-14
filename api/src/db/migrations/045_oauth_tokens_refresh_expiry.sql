@@ -1,0 +1,34 @@
+-- Migration 045: oauth_tokens.refresh_token_expires_at (PF-105 / TRO-421)
+--
+-- Refresh-token rotation (PLUGFORGE.MD §4, PF-105) needs an independent TTL
+-- for the refresh token, separate from the row's existing `expires_at` —
+-- migration 043 documents that column and `bearerAuth.ts`/`token.ts` both
+-- already read it as the ACCESS token's own expiry (1 hour). PF-104's
+-- CHANGES.md entry (TRO-416) flagged this gap explicitly: "there is no
+-- independently-tracked 30-day TTL column for the refresh token... Flagged
+-- for whoever builds PF-105: either add a dedicated expiry column or
+-- otherwise decide how the refresh token's 30-day TTL gets enforced before
+-- wiring up redemption." This migration is that decision: add the column
+-- rather than overload `expires_at` (which would either shorten the access
+-- token's own 1-hour life to 30 days, or require every access-token check
+-- across the codebase — bearerAuth.ts included — to learn a second meaning
+-- for the same column depending on which "kind" of expiry it's reading).
+--
+-- Nullable: NULL for every token row with no refresh token at all (Client
+-- Credentials grant, where `refresh_token_hash IS NULL` already) — same
+-- nullability reasoning migration 043 already uses for `refresh_token_hash`
+-- itself. Existing rows minted before this migration runs (any
+-- authorization_code pair from PF-104's own window) also get NULL from the
+-- column default; `token.ts`'s `rotateRefreshToken` treats a NULL here as
+-- "not eligible for refresh" (same outcome as an actually-expired one) —
+-- correct, since a pre-migration row never had its 30-day window tracked and
+-- cannot be verified fresh; refusing it is safe (the client just
+-- re-authorizes) versus treating an unverifiable window as infinitely valid.
+--
+-- Checked before adding this column (per this ticket's own instructions):
+-- migration 043 in full (`family_id`, `parent_id`, `revoked_at` already
+-- exist and are reused as-is for rotation's single-use gate and family-wide
+-- revocation — see token.ts's module header for how) and migration 044 in
+-- full (`authorization_code_id`) — neither carries a refresh-specific
+-- expiry, and no `rotated_at` (or equivalent) column exists either.
+ALTER TABLE oauth_tokens ADD COLUMN IF NOT EXISTS refresh_token_expires_at TIMESTAMPTZ;
