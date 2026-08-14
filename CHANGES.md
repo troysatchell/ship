@@ -77,6 +77,20 @@ gzip; `grep` on the built bundle confirms zero `node:crypto`/`fs`/`path` referen
 4 `*.liveServer.test.ts` files, run against this worktree's real factory Postgres via
 `.factory-env`, not skipped).
 
+**A second real gap, found by CI itself:** `integrations/browser-demo` is the first workspace
+package to depend on `@ship/sdk` via its own `package.json` (`"workspace:*"`), which pnpm resolves
+through `sdk/package.json`'s `types`/`main` fields (`./dist/index.d.ts`/`./dist/index.js`) — those
+paths don't exist until `sdk` is actually built. `.github/workflows/ci.yml` built `shared` before
+`pnpm type-check` (api/web depend on its dist) but never built `sdk`, because no prior consumer
+needed its compiled output at type-check time. CI's real run caught this (`Cannot find module
+'@ship/sdk' or its corresponding type declarations`, TS2307) — reproduced locally by deleting
+`sdk/dist` and re-running `pnpm type-check`, confirmed fixed by building `sdk` first. Added a
+`build:sdk` root script and a `Build sdk` step to `ci.yml`, mirroring the existing `build:shared`
+step exactly.
+
+**Also found and fixed:** a self-review bug (below, separate commit) where a failed PKCE leg-2
+exchange left a stale `?code=` in the URL, blocking retry.
+
 **How to verify.**
 
 ```bash
