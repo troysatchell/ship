@@ -1,17 +1,56 @@
 // @ship/sdk — public barrel. PF-400 (PLUGFORGE.MD §2.8): scaffold + core
-// client. PF-403 adds the one-call webhook verifier: `verifyWebhook` +
+// client. PF-401 adds the documents/issues/sprints/webhooks resource
+// clients below (webhooks is type-shape-only — its server routes don't
+// exist yet, see resources/webhooks.ts's header). PF-403 adds the one-call
+// webhook signature verifier: `verifyWebhook` +
 // `DEFAULT_WEBHOOK_TOLERANCE_SECONDS`/`SHIP_SIGNATURE_HEADER_NAME`/
-// `PlainHeaders`. PF-404 adds the auth helpers: `ITokenStore` +
-// `MemoryTokenStore`/`FileTokenStore`, `generatePkcePair`, and
-// `ShipClient.deviceLogin`/`ShipClient.authorizationCodeFlow` (the static
-// methods themselves are exported via the `ShipClient` class, not
-// separately). Resource clients (documents/issues/sprints/webhooks — PF-401)
-// are still a later ticket.
+// `PlainHeaders` (unrelated to PF-401's `WebhooksClient` resource client
+// above — that manages subscriptions/deliveries over HTTP; this verifies an
+// inbound delivery's signature locally, no network call). PF-404 adds the
+// auth helpers: `ITokenStore` + `MemoryTokenStore`/`FileTokenStore`,
+// `generatePkcePair`, and `ShipClient.deviceLogin`/
+// `ShipClient.authorizationCodeFlow` (the static methods themselves are
+// exported via the `ShipClient` class, not separately). `iterate()`
+// (PF-402) remains a later ticket and is not exported here yet.
 
 export { ShipClient } from './client.js';
 export type { ShipClientOptions } from './client.js';
 
-export type { Me, MeUser, MeApp } from './types.js';
+export type {
+  Me,
+  MeUser,
+  MeApp,
+  ListPage,
+  DocumentType,
+  Document,
+  DocumentList,
+  ListDocumentsParams,
+  CreateDocumentBody,
+  IssueState,
+  IssuePriority,
+  Issue,
+  IssueList,
+  ListIssuesParams,
+  Sprint,
+  SprintList,
+  ListSprintsParams,
+} from './types.js';
+
+export { DocumentsClient } from './resources/documents.js';
+export { IssuesClient } from './resources/issues.js';
+export { SprintsClient } from './resources/sprints.js';
+export { WebhooksClient } from './resources/webhooks.js';
+export type {
+  WebhookEventType,
+  WebhookSubscription,
+  CreatedWebhookSubscription,
+  CreateWebhookSubscriptionBody,
+  ListWebhookSubscriptionsParams,
+  WebhookSubscriptionList,
+  WebhookDelivery,
+  ListWebhookDeliveriesParams,
+  WebhookDeliveryList,
+} from './resources/webhooks.js';
 
 export {
   ShipSdkError,
