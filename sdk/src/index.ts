@@ -1,7 +1,12 @@
 // @ship/sdk — public barrel. PF-400 (PLUGFORGE.MD §2.8): scaffold + core
-// client. Resource clients (documents/issues/sprints/webhooks — PF-401) and
-// auth helpers (tokenStore, authorizationCodeFlow, deviceLogin — PF-404) are
-// later tickets and are not exported here yet.
+// client. PF-403 adds the one-call webhook verifier: `verifyWebhook` +
+// `DEFAULT_WEBHOOK_TOLERANCE_SECONDS`/`SHIP_SIGNATURE_HEADER_NAME`/
+// `PlainHeaders`. PF-404 adds the auth helpers: `ITokenStore` +
+// `MemoryTokenStore`/`FileTokenStore`, `generatePkcePair`, and
+// `ShipClient.deviceLogin`/`ShipClient.authorizationCodeFlow` (the static
+// methods themselves are exported via the `ShipClient` class, not
+// separately). Resource clients (documents/issues/sprints/webhooks — PF-401)
+// are still a later ticket.
 
 export { ShipClient } from './client.js';
 export type { ShipClientOptions } from './client.js';
@@ -20,3 +25,18 @@ export {
   SHIP_SIGNATURE_HEADER_NAME,
 } from './verifyWebhook.js';
 export type { PlainHeaders } from './verifyWebhook.js';
+
+export { MemoryTokenStore, FileTokenStore } from './tokenStore.js';
+export type { ITokenStore, TokenSet } from './tokenStore.js';
+
+export { generatePkcePair } from './pkce.js';
+export type { PkcePair } from './pkce.js';
+
+export type { DeviceLoginFlowOptions } from './deviceLogin.js';
+
+export type {
+  AuthorizationCodeFlowOptions,
+  AuthorizationCodeFlowResult,
+  PkceLocation,
+  PkceStorage,
+} from './authorizationCodeFlow.js';
