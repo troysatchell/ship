@@ -1,0 +1,26 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "composite": true
+  },
+  "include": ["src/**/*"],
+  "exclude": [
+    "node_modules",
+    "dist",
+    // src/__tests__/**/* holds the ONE deliberate cross-package import in this
+    // package (client.liveServer.test.ts imports api/src/app.js + api/src/db/client.js
+    // directly, same exception agent/tsconfig.json makes for
+    // agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts — see that file's own
+    // header for why). Those files live outside this package's rootDir, so tsc's
+    // program would fail with TS6059 ("File is not under 'rootDir'") if they were
+    // included. Excluding the directory from `tsc`/`tsc --noEmit` means this
+    // package's own `pnpm type-check` and `pnpm build` never see them; vitest still
+    // runs them (vitest.config.ts's `include` is a separate glob that does cover
+    // src/__tests__/**), via esbuild's type-stripping transform, not tsc — so the
+    // test still executes and asserts real behavior, it just isn't tsc-type-checked.
+    // Same trade-off agent/tsconfig.json already made, not a new one.
+    "src/__tests__/**/*"
+  ]
+}
