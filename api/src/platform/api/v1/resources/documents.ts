@@ -33,6 +33,7 @@ import { z } from 'zod';
 import { pool } from '../../../../db/client.js';
 import { bearerAuth } from '../../../oauth/bearerAuth.js';
 import { requireScope } from '../../../scopes/requireScope.js';
+import { rateLimitBuckets } from '../../../ratelimit/middleware.js';
 import { asyncHandler } from '../errorMiddleware.js';
 import {
   notFoundError,
@@ -123,6 +124,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 documentsRouter.get(
   '/',
   bearerAuth,
+  rateLimitBuckets,
   requireScope('documents:read'),
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);
@@ -209,6 +211,7 @@ documentsRouter.get(
 documentsRouter.get(
   '/:id',
   bearerAuth,
+  rateLimitBuckets,
   requireScope('documents:read'),
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);
@@ -262,6 +265,7 @@ documentsRouter.get(
 documentsRouter.post(
   '/',
   bearerAuth,
+  rateLimitBuckets,
   requireScope('documents:write'),
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);

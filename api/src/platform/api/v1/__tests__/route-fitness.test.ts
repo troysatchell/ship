@@ -32,7 +32,11 @@ import { v1OpenApiDocument } from '../../../openapi/index.js';
  *       auth, or an unsupported method) produces the §2.5 ApiError shape;
  *   (d) if it is a GET "collection" route (no `{param}` segment) it
  *       registers a `{ data: [...], next_cursor }` response shape — unless
- *       exempted as a known singleton GET.
+ *       exempted as a known singleton GET;
+ *   (e) (PF-500, TRO-427) its generic-failure-path response carries
+ *       `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`
+ *       — PLUGFORGE.MD §2.7's "100% of /api/v1 responses", including error
+ *       paths.
  *
  * This is a STRUCTURAL walk, not a hand-maintained list of route names —
  * that was the exact failure mode PF-203 exists to prevent (a route added
@@ -47,11 +51,11 @@ import { v1OpenApiDocument } from '../../../openapi/index.js';
  * method/path is rejected by `notFoundHandler` before any route handler
  * runs). This test can run standalone, with no seed data.
  *
- * Extensibility (architect note): a later ticket (PF-500) is expected to add
- * header assertions to this same walk. The per-route checks below are
+ * Extensibility (architect note): the per-route checks below are
  * intentionally separate `it(...)` blocks over one discovered route list —
- * add a fifth `it(...)` body under the same `describe.each` for a new
- * check-class rather than a parallel walk.
+ * (e) above is exactly that pattern applied by PF-500; a future check-class
+ * should add a sixth `it(...)` body the same way, rather than a parallel
+ * walk.
  */
 
 // ─── Route discovery — walks the live router, not a hand-maintained list ──
@@ -393,6 +397,47 @@ describe('PF-203: /api/v1 route-enumeration fitness test (Linear TRO-404)', () =
         `DRIFT: ${route.method.toUpperCase()} ${route.openApiPath} is a list route with a 'data' array ` +
           "but its registered 200 response schema has no 'next_cursor' field."
       ).toBeDefined();
+    });
+
+    it('(e) carries X-RateLimit-* headers on its generic failure path (PF-500, TRO-427)', async () => {
+      // Same probe shape as check (c) above, re-issued independently rather
+      // than sharing that check's response — cheap (no DB access either
+      // way, see this file's top-of-file doc) and keeps each check
+      // self-contained per the architect note that this is a fifth it(...)
+      // body added to the existing per-route walk, not a rewrite of it.
+      //
+      // These are exactly the two response shapes that never reach
+      // `rateLimitBuckets` (mounted per-route, after each route's own
+      // `bearerAuth`): a bearerAuth-route's 401 for a missing token, and a
+      // public route's 404 for an unmatched method. PLUGFORGE.MD §2.7 is
+      // "100% of /api/v1 responses" — including these — so this is exactly
+      // the case that would go unnoticed if `rateLimitDefaults` (the global
+      // fallback middleware, `platform/ratelimit/middleware.ts`) were ever
+      // un-mounted from `router.ts` or reordered after routing.
+      const probePath = '/api/v1' + route.expressPath.replace(/:[A-Za-z0-9_]+/g, 'route-fitness-probe');
+
+      const res = route.hasBearerAuth
+        ? await supertestFor(app, route.method, probePath)
+        : await supertestFor(
+            app,
+            (['delete', 'put', 'patch'] as const).find((m) => m !== route.method) ?? 'delete',
+            probePath
+          );
+
+      for (const header of ['x-ratelimit-limit', 'x-ratelimit-remaining', 'x-ratelimit-reset'] as const) {
+        const value = res.headers[header];
+        expect(
+          value,
+          `DRIFT: ${route.method.toUpperCase()} ${route.openApiPath} response (status ${res.status}) is ` +
+            `missing the ${header} header. PLUGFORGE.MD §2.7 requires X-RateLimit-* on 100% of ` +
+            '/api/v1 responses, including error paths — see platform/ratelimit/middleware.ts.'
+        ).toBeDefined();
+        expect(
+          Number.isFinite(Number(value)) && Number(value) >= 0,
+          `${header} value "${value}" on ${route.method.toUpperCase()} ${route.openApiPath} is not a ` +
+            'non-negative number.'
+        ).toBe(true);
+      }
     });
   });
 });

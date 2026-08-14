@@ -64,6 +64,7 @@ import { z } from 'zod';
 import { pool } from '../../../../db/client.js';
 import { bearerAuth } from '../../../oauth/bearerAuth.js';
 import { requireScope } from '../../../scopes/requireScope.js';
+import { rateLimitBuckets } from '../../../ratelimit/middleware.js';
 import { asyncHandler } from '../errorMiddleware.js';
 import {
   notFoundError,
@@ -211,6 +212,7 @@ async function resolveWorkspaceOrThrow(req: Request, requestId: string): Promise
 webhooksRouter.post(
   '/',
   bearerAuth,
+  rateLimitBuckets,
   requireScope('webhooks:manage'),
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);
@@ -281,6 +283,7 @@ webhooksRouter.post(
 webhooksRouter.get(
   '/',
   bearerAuth,
+  rateLimitBuckets,
   requireScope('webhooks:manage'),
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);
@@ -352,6 +355,7 @@ webhooksRouter.get(
 webhooksRouter.get(
   '/:id',
   bearerAuth,
+  rateLimitBuckets,
   requireScope('webhooks:manage'),
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);
@@ -385,6 +389,7 @@ webhooksRouter.get(
 webhooksRouter.delete(
   '/:id',
   bearerAuth,
+  rateLimitBuckets,
   requireScope('webhooks:manage'),
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);
@@ -422,6 +427,7 @@ webhooksRouter.delete(
 webhooksRouter.post(
   '/:id/rotate',
   bearerAuth,
+  rateLimitBuckets,
   requireScope('webhooks:manage'),
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);
