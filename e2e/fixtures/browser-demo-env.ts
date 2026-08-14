@@ -16,7 +16,7 @@
 import { test as base } from './isolated-env.js';
 import { spawn, execSync, ChildProcess } from 'child_process';
 import path from 'path';
-import { existsSync } from 'fs';
+import { rmSync } from 'fs';
 import getPort from 'get-port';
 import { Pool } from 'pg';
 
@@ -26,18 +26,26 @@ const DEMO_ROOT = path.join(PROJECT_ROOT, 'integrations/browser-demo');
 let builtOnce = false;
 
 /** Builds @ship/sdk (this demo's only runtime dependency) and the demo
- * bundle itself, if either dist/ is missing. Guarded module-level, not
- * per-worker — every worker in one Playwright run shares the same built
- * output, matching `global-setup.ts`'s "build once, many lightweight
- * preview servers" convention for `web/`. */
+ * bundle itself. Guarded module-level, not per-worker — every worker in one
+ * Playwright run shares the same built output, matching `global-setup.ts`'s
+ * "build once, many lightweight preview servers" convention for `web/`.
+ *
+ * ALWAYS rebuilds (does not skip when dist/ already exists) — an existing
+ * `sdk/dist` on disk could be stale relative to the checked-out `sdk/src`
+ * (e.g. left over from a prior branch, or from before a merge-forward
+ * changed sdk/src), and this fixture has no way to tell "present" from
+ * "current" without just rebuilding. Also clears `sdk/tsconfig.tsbuildinfo`
+ * before rebuilding — a real bug hit once already while developing this
+ * ticket: TS's incremental build cache left `dist/resources/issues.js` and
+ * `dist/resources/webhooks.js` unemitted after an `rm -rf dist` without
+ * also clearing it, and the resulting build looked successful (no error)
+ * while silently missing files a later `import` would fail to resolve.
+ * CodeRabbit review finding (TRO-449), fixed. */
 function ensureBuilt(): void {
   if (builtOnce) return;
-  if (!existsSync(path.join(PROJECT_ROOT, 'sdk/dist'))) {
-    execSync('pnpm --filter @ship/sdk build', { cwd: PROJECT_ROOT, stdio: 'inherit' });
-  }
-  if (!existsSync(path.join(DEMO_ROOT, 'dist'))) {
-    execSync('pnpm --filter @ship/browser-demo build', { cwd: PROJECT_ROOT, stdio: 'inherit' });
-  }
+  rmSync(path.join(PROJECT_ROOT, 'sdk/tsconfig.tsbuildinfo'), { force: true });
+  execSync('pnpm --filter @ship/sdk build', { cwd: PROJECT_ROOT, stdio: 'inherit' });
+  execSync('pnpm --filter @ship/browser-demo build', { cwd: PROJECT_ROOT, stdio: 'inherit' });
   builtOnce = true;
 }
 

@@ -66,6 +66,18 @@ unregistered `redirect_uri` never silently succeeds).
 
 ## Rollback
 
-Delete `integrations/browser-demo/`, remove `'integrations/*'` from the root
-`pnpm-workspace.yaml`, and delete `e2e/browser-demo-pkce.spec.ts`. Nothing outside this package
-and that one spec file changes.
+`git revert` the ticket's commits (TRO-449, `CHANGES.md` names the exact SHAs) is the complete,
+correct rollback — this section exists to explain what that reverts, not as a substitute for it,
+since the change touches more than just this package:
+
+- `integrations/browser-demo/` (this package) and `e2e/browser-demo-pkce.spec.ts` +
+  `e2e/fixtures/browser-demo-env.ts` (its e2e proof) — delete both.
+- `pnpm-workspace.yaml`'s `'integrations/*'` entry — remove.
+- `sdk/src/index.ts`/`tokenStore.ts`/`fileTokenStore.ts`/`node.ts` and `sdk/package.json`'s
+  `"./node"` export — the Node/browser split this ticket made to `@ship/sdk` (see this repo's
+  `CHANGES.md`, TRO-449, for why). Reverting these restores the pre-split barrel; only revert them
+  if nothing else has since started depending on the `@ship/sdk/node` subpath.
+- Root `package.json`'s `build:sdk` script and `.github/workflows/ci.yml`'s `Build sdk` step —
+  added because this package is the first to need `@ship/sdk`'s compiled `dist/` at type-check
+  time. Revert only alongside this package; another future consumer would hit the identical CI
+  failure this ticket found and fixed.

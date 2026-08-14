@@ -63,15 +63,19 @@ function renderConnect(): void {
   button.textContent = 'Connect to Ship';
   button.addEventListener('click', () => {
     // Leg 1 of authorizationCodeFlow(): navigates the browser away, so this
-    // promise deliberately never resolves in a real browser (see
-    // @ship/sdk's authorizationCodeFlow.ts header).
-    void ShipClient.authorizationCodeFlow({
+    // promise deliberately never resolves once location.assign() fires (see
+    // @ship/sdk's authorizationCodeFlow.ts header). It CAN still reject
+    // before that — e.g. no WebCrypto, or window.location/sessionStorage
+    // unavailable — and without a .catch() here that would be a silent
+    // unhandled rejection with no visible error and a dead button
+    // (CodeRabbit review finding, TRO-449).
+    ShipClient.authorizationCodeFlow({
       baseUrl: API_BASE_URL,
       clientId: CLIENT_ID,
       redirectUri: REDIRECT_URI,
       scope: SCOPE,
       tokenStore,
-    });
+    }).catch(renderError);
   });
   root.appendChild(button);
 }
