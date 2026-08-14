@@ -123,4 +123,47 @@ test.describe('Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-44
     await expect(page.locator('h1')).toHaveText('Authorization error');
     expect(page.url()).not.toContain(browserDemoServer.url + '/?');
   });
+
+  test('a failed leg-2 exchange clears the stale ?code= so retrying starts a fresh login', async ({
+    page,
+    apiServer,
+    dbContainer,
+    browserDemoServer,
+  }) => {
+    const redirectUri = `${browserDemoServer.url}/`;
+    const { clientId } = await seedBrowserDemoOAuthApp(dbContainer.getConnectionUri(), redirectUri);
+
+    // Logged in first, same as the other two tests — a real user retrying
+    // "Connect to Ship" after a failed exchange already has a Ship session;
+    // without one, the retry's redirect to /oauth/authorize itself bounces
+    // to /login first, which would be true but not what this test is about.
+    await login(page);
+
+    await page.addInitScript(
+      (config) => {
+        window.__SHIP_DEMO_CONFIG__ = config;
+      },
+      { clientId, apiBaseUrl: apiServer.url, redirectUri, scope: 'documents:read' }
+    );
+
+    // No real authorize round trip: a fabricated ?code=&state= with no
+    // matching PKCE verifier ever stored deterministically reproduces
+    // authorizationCodeFlow()'s leg-2 failure ("no matching PKCE state found
+    // in storage") without needing a real but-expired server-issued code.
+    await page.goto(`${redirectUri}?code=fake-stale-code&state=fake-stale-state`);
+
+    // Regression proof for main.ts's catch block: without clearing the URL
+    // on a leg-2 failure, this second click would silently re-attempt the
+    // exchange with the SAME stale params still in location.href instead of
+    // starting a real redirect to /oauth/authorize.
+    await expect(page.getByRole('button', { name: 'Connect to Ship' })).toBeVisible({ timeout: 5000 });
+    expect(page.url()).toBe(redirectUri);
+
+    await page.getByRole('button', { name: 'Connect to Ship' }).click();
+    // A genuine fresh leg-1 redirect: /oauth/authorize validates a NEW
+    // code_challenge/state (not the stale fake ones) and forwards to
+    // consent — landing here (rather than stuck replaying the dead code)
+    // is the actual proof the retry started clean.
+    await expect(page).toHaveURL(/\/oauth-consent/, { timeout: 5000 });
+  });
 });

@@ -166,6 +166,16 @@ async function boot(): Promise<void> {
 
     renderConnect();
   } catch (error) {
+    // A failed leg-2 exchange (expired/already-used code, state mismatch)
+    // leaves ?code=&state= sitting in the URL. Without clearing it here,
+    // clicking "Connect to Ship" again would re-enter authorizationCodeFlow()
+    // with those SAME stale params still in location.href, re-attempting a
+    // doomed exchange instead of starting a fresh redirect — the user would
+    // be stuck. Only reachable on this failure path; the success path above
+    // already clears it after a real redemption.
+    if (hasAuthorizationResponse) {
+      window.history.replaceState({}, '', REDIRECT_URI);
+    }
     renderError(error);
   }
 }
