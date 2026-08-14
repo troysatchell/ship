@@ -2,11 +2,21 @@
 
 *The most-updated file in the bank. Read this first every session; rewrite it whenever focus shifts. Keep it under a screen — move finished work to progress.md.*
 
-**Last updated:** 2026-08-14 (~12:23Z). **Week 6 (PlugForge) — MVP hard gate CODE-COMPLETE (see below); W6-R10 now RESOLVED (zero regressions). Post-MVP wave 1: 3 of 4 tickets confirmed merged (TRO-413/PF-403, TRO-407/PF-401, TRO-418/PF-404); TRO-426/PF-301 status not directly observed this session — check before assuming.**
+**Last updated:** 2026-08-14 (~13:25Z). **Week 6 (PlugForge) — MVP hard gate CODE-COMPLETE + W6-R10 RESOLVED. Post-MVP wave 1 (E3/E4 prerequisites for the TTFE drill) — ALL 4 TICKETS MERGED AND VERIFIED: TRO-426/PF-301, TRO-407/PF-401, TRO-413/PF-403, TRO-418/PF-404. `main` @ `d03e6110b7d55d96b1f60669e8a073814a2bd659`, GitHub+GitLab confirmed in sync.**
 
-## TRO-413/PF-403 (verifyWebhook) — DONE (2026-08-14 ~12:23Z)
+## Wave 1 complete (2026-08-14, ~11:00Z–13:20Z)
 
-Built, gated (5 scorecard attempts — 1 operator error + 4 real passes with 3 CodeRabbit findings fixed), merged as PR #207 (`2e95639`), GitHub+GitLab confirmed in sync, Linear auto-Done + evidence comment posted. `sdk/src/verifyWebhook.ts`/`.test.ts` (30 tests) exported from `sdk/src/index.ts`. Measured perf: mean 0.00175ms/call (~500x under the 1ms AC). Byte-identical port of `signer.ts`'s `verify()`, cross-validated against all 7 cases in `shared/fixtures/webhook-signature-vectors.json`. **Confirmed by direct observation during this ticket's landing (three merge-forward rounds):** TRO-407/PF-401 (SDK resource clients — documents/issues/sprints/webhooks, PR #205) and TRO-418/PF-404 (SDK auth helpers — deviceLogin/PKCE/tokenStore, PR #206) are ALSO merged to `main` as of this session — `sdk/` now has the full `ShipClient` (resource clients + auth helpers + verifyWebhook) in one package, 111 sdk tests green post-merge. TRO-426/PF-301 (domain write consolidation, the wave's named top structural risk) was NOT seen landing in any of these three merge-forward diffs — its status is unverified from this session, check Linear/`gh pr list` fresh before assuming it's done or still blocking PF-302+.
+All four independently verified merged (PR mergedAt + `git ls-remote` on both GitHub and GitLab, not trusted from agent self-report):
+- **TRO-426/PF-301** (PR #208, highest risk in the PRD's own table) — consolidated the four resource routers' primary CRUD into `documentService`, added `IEventBus`/`InProcessEventBus`. **Caught and fixed a real correctness bug via CodeRabbit mid-review**: events were firing before `COMMIT`, so a later failed write could publish a webhook for a change that then rolled back — fixed with a deferred-publish (`pendingEvents`/`flushPendingEvents`) contract. Write-site accounting (routed vs. excluded, each with a reason) is in `CHANGES.md` — read it before touching `documentService.ts` again, since not all write sites are covered by design (e.g. `feedback.ts`'s public issue-creation endpoint is explicitly excluded, flagged as "the most consequential gap").
+- **TRO-407/PF-401** (PR #205) — SDK resource clients. `documents` full CRUD+list; `issues`/`sprints` are **list-only by design** (server has no get/create routes for them — verified, not assumed). `webhooks` client is shape-only (no server routes exist yet — PF-302/304/305).
+- **TRO-413/PF-403** (PR #207) — `verifyWebhook`, byte-identical port of the server signer, ~500x under the 1ms perf target.
+- **TRO-418/PF-404** (PR #206) — `deviceLogin`/`authorizationCodeFlow`/`ITokenStore`/single-flight refresh.
+
+**Real merge-conflict reconciliation happened between PF-401/PF-404** (both touched `sdk/src/client.ts` concurrently) — resolved by extracting a shared `sdk/src/internal/requestClient.ts` that owns the hydrate/refresh-on-401/single-flight pipeline for every request path. `sdk/` now has 111+ tests green with the full `ShipClient` surface (resource clients + auth helpers + verifyWebhook) in one coherent package.
+
+**Now unblocked:** PF-302 (webhook subscriptions API, from PF-301) and PF-402 (SDK async-iterator pagination, from PF-401). PF-405 (parity+size gates) still waits on PF-402.
+
+## Next wave — dispatching PF-302 + PF-402 now
 
 ## Overnight session note
 
