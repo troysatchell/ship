@@ -119,6 +119,53 @@ step (needed by any future `@ship/sdk`-in-a-browser-bundle consumer, not just th
 
 ---
 
+## TRO-503 (PF-103 follow-up) — CloudFront had no `ordered_cache_behavior` for `/oauth/*`, so the OAuth authorize flow was unreachable on the AWS/CloudFront deploy path
+
+**What changed.** Added an `ordered_cache_behavior` block to `terraform/s3-cloudfront.tf` for
+`path_pattern = "/oauth/*"`, forwarding to the `EB-API` origin — an exact mirror of the existing
+`/api/*` block (same cache policy `aws_cloudfront_cache_policy.api_no_cache`, same origin request
+policy `aws_cloudfront_origin_request_policy.api`, same allowed methods), placed immediately after
+it. Verified the mount point first: `api/src/app.ts` mounts the new PF-103 routes at `/oauth`, not
+`/api/oauth` (`app.use(['/api/v1', '/oauth'], createPublicApiCors())`), so without this block every
+`/oauth/*` request fell through to the default behavior (S3 frontend origin) and never reached the
+API — confirmed via reading the terraform + the route mount, not yet observed against a live
+CloudFront deploy since PF-103 only merged 2026-08-11.
+
+**Not blocking W6 grading.** `PLUGFORGE.MD:5` states the deploy target for this sprint is
+**Render** (`terraform/render/`), which runs the API + frontend as one Docker service
+(`terraform/render/web_service.tf`) with no CDN/path-based routing in front of it — the class of
+bug this ticket fixes does not exist on that path. This fix is real and worth having (the AWS path
+is still README-documented as "Prod"), but it is not on the critical path for PF-907's grader flow.
+
+**Proof — and an honest gap.** `terraform validate` passes (run via a scratch copy outside git,
+dockerized `hashicorp/terraform:1.9`, `init -backend=false` — no backend config needed since
+validate only checks HCL syntax/schema, not live state): `Success! The configuration is valid.`
+**A real `terraform plan` could not be produced.** This worktree/sandbox has no `terraform` binary,
+no AWS credentials (`~/.aws` does not exist, no `AWS_*` env vars set), and the repo's S3 backend
+(`terraform/versions.tf`) requires a bucket name resolved from an AWS SSM parameter just to `init`
+with the real backend — none of that is reachable from here, deliberately (deploy credentials are
+human-gated, per this file's own TRO-411-follow-up precedent which needed "explicit scoped
+orchestrator authorization"). A human with real AWS access should run `terraform plan` from
+`terraform/` before ever applying this.
+
+**Regression test:** none — terraform-only change, no application code touched. Same class as
+TF-8/TRO-283 and RULE-3/TRO-245 above: `gate.sh`'s regression-test check (G6) is expected to fail
+here and that failure is not a defect in this work.
+
+**How to verify.** Structural check only (no live AWS access from this sandbox — see above):
+
+```bash
+cp -R terraform /tmp/tf-check && rm -rf /tmp/tf-check/.terraform
+docker run --rm -v /tmp/tf-check:/workspace -w /workspace hashicorp/terraform:1.9 init -backend=false
+docker run --rm -v /tmp/tf-check:/workspace -w /workspace hashicorp/terraform:1.9 validate
+# => Success! The configuration is valid.
+```
+
+**Rollback.** `git revert` this commit — the added block is additive and self-contained (one new
+`dynamic "ordered_cache_behavior"`), nothing else in the file changes.
+
+---
+
 ## TRO-442 — PF-305: Webhook delivery log API
 
 **No new migration.** Migration 048 (`webhook_deliveries`, PF-304/TRO-438) already has every column
