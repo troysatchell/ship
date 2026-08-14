@@ -259,6 +259,15 @@ describe('Issues History API', () => {
       };
       const updatedRow = {
         ...existingIssue,
+        // TRO-426 / PF-301: this row now backs updateDocument()'s
+        // `RETURNING *`, whose result documentService publishes as
+        // document.updated (+ derived issue.status_changed, since state
+        // changed 'todo' -> 'done' below) — id/workspace_id/document_type
+        // must satisfy those events' Zod schemas (`UuidSchema`), unlike the
+        // non-UUID `existingIssue.id` placeholder this file otherwise uses.
+        id: '99999999-9999-9999-9999-999999999999',
+        workspace_id: '11111111-1111-1111-1111-111111111111',
+        document_type: 'issue',
         properties: {
           ...existingIssue.properties,
           state: 'done',
@@ -282,9 +291,10 @@ describe('Issues History API', () => {
         .mockResolvedValueOnce(pgResult([]))
         // Log state change (document_history insert)
         .mockResolvedValueOnce(pgResult([]))
-        // Update issue
-        .mockResolvedValueOnce(pgResult([updatedRow]))
-        // Fetch updated issue after UPDATE
+        // TRO-426 / PF-301: the UPDATE now runs through documentService's
+        // updateDocument(), which does `UPDATE ... RETURNING *` in one call —
+        // the route no longer issues a separate "fetch updated issue after
+        // UPDATE" SELECT when updateDocument() already returned the row.
         .mockResolvedValueOnce(pgResult([updatedRow]))
         // COMMIT
         .mockResolvedValueOnce(pgResult([]));

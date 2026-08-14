@@ -16,6 +16,7 @@ import { broadcastToUser } from '../collaboration/index.js';
 // The registered OpenAPI schema is the single source of truth for the list
 // endpoint's pagination bounds — see the comment on the pagination block below.
 import { IssueListPaginationSchema } from '../openapi/schemas/issues.js';
+import { createDocument, updateDocument, deleteDocument, flushPendingEvents } from '../services/documentService.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -156,6 +157,19 @@ type IssueListRow = {
 /** A detail projection: an issue row plus the TipTap document body. */
 type IssueDetailRow = IssueListRow & {
   content: Record<string, unknown> | null;
+};
+
+/**
+ * `IssueDetailRow` plus `workspace_id`/`document_type` (TRO-426 / PF-301). Both
+ * columns are genuinely present on every row this type backs — the create/update
+ * write paths below are `RETURNING *` — this file just never had to read them
+ * before now. `documentService.createDocument<T>()`/`updateDocument<T>()` need
+ * both fields (to publish `document.*`/`issue.*` events against the right
+ * workspace) without this file losing its own typed view of the row.
+ */
+type IssueWriteRow = IssueDetailRow & {
+  workspace_id: string;
+  document_type: string;
 };
 
 // --- Additional per-query row shapes (TS-2 / TRO-207) -----------------------
@@ -854,19 +868,22 @@ router.post('/', authMiddleware, authed(async (req, res) => {
       accountability_type: accountability_type || null,
     };
 
-    const result = await client.query<IssueDetailRow>(
-      `INSERT INTO documents (workspace_id, document_type, title, properties, ticket_number, created_by)
-       VALUES ($1, 'issue', $2, $3, $4, $5)
-       RETURNING *`,
-      [req.workspaceId, title, JSON.stringify(properties), ticketNumber, req.userId]
-    );
-
-    const createdRow = result.rows[0];
-    if (!createdRow) {
-      await client.query('ROLLBACK');
-      res.status(500).json({ error: 'Internal server error' });
-      return;
-    }
+    // TRO-426 / PF-301: write + document.created + derived issue.created
+    // publication now live in documentService. pendingEvents defers the
+    // publish until after COMMIT below (CodeRabbit, this PR): the belongs_to
+    // association inserts that follow can still fail and roll this whole
+    // transaction back.
+    const pendingEvents: Array<() => void> = [];
+    const createdRow = await createDocument<IssueWriteRow>({
+      workspaceId: req.workspaceId,
+      documentType: 'issue',
+      title,
+      properties,
+      ticketNumber,
+      createdByUserId: req.userId,
+      client,
+      pendingEvents,
+    });
     const newIssueId = createdRow.id;
 
     // Create associations from belongs_to array
@@ -880,6 +897,7 @@ router.post('/', authMiddleware, authed(async (req, res) => {
     }
 
     await client.query('COMMIT');
+    flushPendingEvents(pendingEvents);
 
     // Auto-complete sprint_issues accountability when first issue is created in a sprint
     const sprintAssociations = belongs_to.filter(bt => bt.type === 'sprint');
@@ -1176,14 +1194,27 @@ router.patch('/:id', authMiddleware, authed(async (req, res) => {
       await logDocumentChange(id!, change.field, change.oldValue, change.newValue, req.userId, automatedBy, client);
     }
 
-    // If we have document updates, do the UPDATE
+    // If we have document updates, do the UPDATE. TRO-426 / PF-301: write +
+    // document.updated (+ derived issue.status_changed / issue.assigned)
+    // publication now live in documentService — see its header comment for why
+    // the setClauses/values assembly above stays in this route. pendingEvents
+    // defers the publish until after COMMIT below (CodeRabbit, this PR): the
+    // belongs_to association writes that follow can still fail and roll this
+    // whole transaction back.
+    const pendingEvents: Array<() => void> = [];
+    let updatedRow: IssueWriteRow | undefined;
     if (updates.length > 0) {
       updates.push(`updated_at = now()`);
 
-      await client.query(
-        `UPDATE documents SET ${updates.join(', ')} WHERE id = $${paramIndex} AND workspace_id = $${paramIndex + 1}`,
-        [...values, id, req.workspaceId]
-      );
+      updatedRow = await updateDocument<IssueWriteRow>({
+        id,
+        workspaceId: req.workspaceId,
+        setClauses: updates,
+        values,
+        previousProperties: currentProps,
+        client,
+        pendingEvents,
+      });
     }
 
     // Handle belongs_to association updates in junction table
@@ -1205,13 +1236,19 @@ router.patch('/:id', authMiddleware, authed(async (req, res) => {
       }
     }
 
-    // Fetch the updated issue
-    const result = await client.query<IssueDetailRow>(
-      `SELECT * FROM documents WHERE id = $1 AND workspace_id = $2`,
-      [id, req.workspaceId]
-    );
+    // Fetch the updated issue — only needed when belongs_to changed without any
+    // documents-table column changing; updateDocument() above already returned
+    // the fresh row (via RETURNING *) in every other case.
+    if (!updatedRow) {
+      const result = await client.query<IssueWriteRow>(
+        `SELECT * FROM documents WHERE id = $1 AND workspace_id = $2`,
+        [id, req.workspaceId]
+      );
+      updatedRow = result.rows[0];
+    }
 
     await client.query('COMMIT');
+    flushPendingEvents(pendingEvents);
 
     // Post-commit operations (non-transactional)
 
@@ -1239,7 +1276,7 @@ router.patch('/:id', authMiddleware, authed(async (req, res) => {
     // just verified exists and updated within the transaction above. Guarded
     // rather than `!`-asserted per noUncheckedIndexedAccess, and to keep this a
     // 500 (an invariant violation) instead of a silent crash.
-    const row = result.rows[0];
+    const row = updatedRow;
     if (!row) {
       res.status(500).json({ error: 'Internal server error' });
       return;
@@ -1630,11 +1667,9 @@ router.delete('/:id', authMiddleware, authed(async (req, res) => {
       return;
     }
 
-    // Now delete it
-    await pool.query(
-      'DELETE FROM documents WHERE id = $1 AND workspace_id = $2 AND document_type = \'issue\'',
-      [id, workspaceId]
-    );
+    // Now delete it. TRO-426 / PF-301: write + document.deleted publication now
+    // live in documentService.
+    await deleteDocument({ id: String(id), workspaceId, documentTypeFilter: 'issue' });
 
     res.status(204).send();
   } catch (err) {

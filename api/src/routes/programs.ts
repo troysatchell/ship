@@ -5,6 +5,7 @@ import { getVisibilityContext, VISIBILITY_FILTER_SQL } from '../middleware/visib
 import { authMiddleware, authed } from '../middleware/auth.js';
 import { logAuditEvent } from '../services/audit.js';
 import type { ProgramDocumentRow, ProjectDocumentRow, IssueDocumentRow, SprintDocumentRow } from './rowTypes.js';
+import { createDocument, updateDocument, deleteDocument } from '../services/documentService.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -30,6 +31,17 @@ export interface ProgramRow {
   issue_count?: string;
   sprint_count?: string;
 }
+
+/**
+ * `ProgramRow` plus the fields `documentService`'s event derivation needs
+ * (TRO-426 / PF-301) — genuinely present on the row (createDocument/
+ * updateDocument are always `RETURNING *`), just not previously declared here.
+ */
+type ProgramWriteRow = ProgramRow & {
+  workspace_id: string;
+  document_type: string;
+  created_by: string | null;
+};
 
 // Helper to extract program from row
 // Exported for TRO-207's regression test (rowTypes.test.ts), which pins this
@@ -246,18 +258,15 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
       properties.emoji = emoji;
     }
 
-    const result = await pool.query<ProgramRow>(
-      `INSERT INTO documents (workspace_id, document_type, title, properties, created_by)
-       VALUES ($1, 'program', $2, $3, $4)
-       RETURNING id, title, properties, archived_at, created_at, updated_at`,
-      [req.workspaceId, title, JSON.stringify(properties), req.userId]
-    );
-
-    const createdRow = result.rows[0];
-    if (!createdRow) {
-      res.status(500).json({ error: 'Internal server error' });
-      return;
-    }
+    // TRO-426 / PF-301: write + document.created publication now live in
+    // documentService.
+    const createdRow = await createDocument<ProgramWriteRow>({
+      workspaceId: req.workspaceId as string,
+      documentType: 'program',
+      title,
+      properties,
+      createdByUserId: req.userId,
+    });
 
     // Get user info for owner response
     const userResult = await pool.query<{ id: string; name: string; email: string }>(
@@ -377,11 +386,17 @@ router.patch('/:id', authMiddleware, authed(async (req, res) => {
 
     updates.push(`updated_at = now()`);
 
-    await pool.query(
-      `UPDATE documents SET ${updates.join(', ')}
-       WHERE id = $${paramIndex} AND workspace_id = $${paramIndex + 1} AND document_type = 'program'`,
-      [...values, id, req.workspaceId]
-    );
+    // TRO-426 / PF-301: write + document.updated publication now live in
+    // documentService. The response below always re-queries with its own
+    // owner-join projection, so the returned row is unused here.
+    await updateDocument({
+      id: id as string,
+      workspaceId: req.workspaceId,
+      setClauses: updates,
+      values,
+      documentTypeFilter: 'program',
+      previousProperties: currentProps,
+    });
 
     // Re-query to get full program with owner info
     const result = await pool.query<ProgramRow>(
@@ -436,11 +451,9 @@ router.delete('/:id', authMiddleware, authed(async (req, res) => {
       [id]
     );
 
-    // Now delete it
-    await pool.query(
-      `DELETE FROM documents WHERE id = $1 AND workspace_id = $2 AND document_type = 'program'`,
-      [id, workspaceId]
-    );
+    // Now delete it. TRO-426 / PF-301: write + document.deleted publication
+    // now live in documentService.
+    await deleteDocument({ id: id as string, workspaceId, documentTypeFilter: 'program' });
 
     res.status(204).send();
   } catch (err) {

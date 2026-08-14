@@ -7,6 +7,7 @@ import { validateUuidParam, limitQuerySchema } from '../middleware/paramValidati
 import { handleVisibilityChange, handleDocumentConversion, invalidateDocumentCache, broadcastToUser } from '../collaboration/index.js';
 import { extractHypothesisFromContent, extractSuccessCriteriaFromContent, extractVisionFromContent, extractGoalsFromContent, checkDocumentCompleteness } from '../utils/extractHypothesis.js';
 import { loadContentFromYjsState } from '../utils/yjsConverter.js';
+import { createDocument, updateDocument, deleteDocument, flushPendingEvents } from '../services/documentService.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -620,14 +621,26 @@ router.post('/', authMiddleware, authed(async (req, res) => {
 
     await client.query('BEGIN');
 
-    const result = await client.query(
-      `INSERT INTO documents (workspace_id, document_type, title, parent_id, properties, created_by, visibility, content)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [req.workspaceId, document_type, title, parent_id || null, JSON.stringify(properties || {}), req.userId, visibility, content ? JSON.stringify(content) : null]
-    );
-
-    const newDoc = result.rows[0];
+    // TRO-426 / PF-301: the write + document.created (+ derived issue.created)
+    // publication now live in documentService — see that file's header comment
+    // for why the route keeps every other line of this handler unchanged.
+    // pendingEvents defers the publish until after COMMIT below (CodeRabbit,
+    // this PR): the association inserts that follow can still fail and roll
+    // this whole transaction back, and a subscriber must never see an event for
+    // a document that didn't actually end up persisted.
+    const pendingEvents: Array<() => void> = [];
+    const newDoc = await createDocument({
+      workspaceId: req.workspaceId,
+      documentType: document_type,
+      title,
+      parentId: parent_id || null,
+      properties: properties || {},
+      createdByUserId: req.userId,
+      visibility,
+      content: content || null,
+      client,
+      pendingEvents,
+    });
 
     // Handle belongs_to associations (creates document_associations records)
     if (belongs_to && belongs_to.length > 0) {
@@ -662,6 +675,7 @@ router.post('/', authMiddleware, authed(async (req, res) => {
     }
 
     await client.query('COMMIT');
+    flushPendingEvents(pendingEvents);
 
     // Broadcast accountability update for document types that affect action items
     // Sprint plans clear the "write sprint plan" action item
@@ -1021,10 +1035,23 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
       updates.push(`updated_at = now()`);
     }
 
-    const result = await client.query(
-      `UPDATE documents SET ${updates.join(', ')} WHERE id = $${paramIndex} AND workspace_id = $${paramIndex + 1} RETURNING *`,
-      [...values, id, workspaceId]
-    );
+    // TRO-426 / PF-301: write + document.updated (+ derived issue/sprint events)
+    // publication now live in documentService; setClauses/values here are
+    // exactly what this handler already built above — see documentService.ts's
+    // header comment for why that assembly logic stays in the route.
+    // pendingEvents defers the publish until after COMMIT below (CodeRabbit,
+    // this PR): resubmission and visibility-cascade writes below can still fail
+    // and roll this whole transaction back before the update is truly durable.
+    const pendingEvents: Array<() => void> = [];
+    const updatedRow = await updateDocument({
+      id,
+      workspaceId,
+      setClauses: updates,
+      values,
+      previousProperties: existing.properties ?? null,
+      client,
+      pendingEvents,
+    });
 
     // When a weekly plan/retro is edited after changes were requested, move it back to re-review.
     if (contentUpdated && (existing.document_type === 'weekly_plan' || existing.document_type === 'weekly_retro')) {
@@ -1106,6 +1133,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     }
 
     await client.query('COMMIT');
+    flushPendingEvents(pendingEvents);
 
     // Post-commit operations (non-transactional)
 
@@ -1136,7 +1164,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     }
 
     // Flatten properties for backwards compatibility (match GET endpoint format)
-    const updatedDoc = result.rows[0];
+    const updatedDoc = updatedRow;
     const props = updatedDoc.properties || {};
 
     // Get owner details for projects (owner_id is a user_id, lookup person document by user_id)
@@ -1208,12 +1236,11 @@ router.delete('/:id', authMiddleware, async (req: Request, res: Response) => {
       return;
     }
 
-    const result = await pool.query(
-      'DELETE FROM documents WHERE id = $1 AND workspace_id = $2 RETURNING id',
-      [id, workspaceId]
-    );
+    // TRO-426 / PF-301: write + document.deleted publication now live in
+    // documentService.
+    const deletedRow = await deleteDocument({ id, workspaceId });
 
-    if (result.rows.length === 0) {
+    if (!deletedRow) {
       res.status(404).json({ error: 'Document not found' });
       return;
     }

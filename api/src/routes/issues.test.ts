@@ -3,6 +3,7 @@ import request from 'supertest'
 import crypto from 'crypto'
 import { createApp } from '../app.js'
 import { pool } from '../db/client.js'
+import { getEventBus, type EventEnvelope } from '../platform/webhooks/eventBus.js'
 
 describe('Issues API', () => {
   const app = createApp()
@@ -457,6 +458,49 @@ describe('Issues API', () => {
 
       expect(res.status).toBe(201)
       expect(res.body.belongs_to).toEqual([])
+    })
+
+    // TRO-426 / PF-301 AC, verbatim: "creating an issue-type document publishes
+    // document.created + issue.created". This hits the real route (not
+    // documentService in isolation) to prove the route actually delegates to
+    // the consolidated write path, through the real process-wide IEventBus
+    // singleton — not a substituted test double.
+    it('publishes document.created and issue.created via IEventBus', async () => {
+      const bus = getEventBus()
+      const documentCreatedEvents: EventEnvelope[] = []
+      const issueCreatedEvents: EventEnvelope[] = []
+      const unsubscribeDocumentCreated = bus.subscribe('document.created', (event) => {
+        documentCreatedEvents.push(event)
+      })
+      const unsubscribeIssueCreated = bus.subscribe('issue.created', (event) => {
+        issueCreatedEvents.push(event)
+      })
+
+      try {
+        const res = await request(app)
+          .post('/api/issues')
+          .set('Cookie', sessionCookie)
+          .set('x-csrf-token', csrfToken)
+          .send({ title: 'Event Bus Proof Issue' })
+
+        expect(res.status).toBe(201)
+        const issueId = res.body.id
+
+        const documentCreatedEvent = documentCreatedEvents.find(
+          (event) => (event.data as { id: string }).id === issueId
+        )
+        expect(documentCreatedEvent).toBeDefined()
+        expect((documentCreatedEvent?.data as { document_type: string }).document_type).toBe('issue')
+        expect(documentCreatedEvent?.workspace_id).toBe(testWorkspaceId)
+
+        const issueCreatedEvent = issueCreatedEvents.find((event) => (event.data as { id: string }).id === issueId)
+        expect(issueCreatedEvent).toBeDefined()
+        expect((issueCreatedEvent?.data as { title: string }).title).toBe('Event Bus Proof Issue')
+        expect((issueCreatedEvent?.data as { state: string }).state).toBe('backlog')
+      } finally {
+        unsubscribeDocumentCreated()
+        unsubscribeIssueCreated()
+      }
     })
   })
 
