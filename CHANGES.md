@@ -21,6 +21,86 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-427 — PF-500: Token buckets + rate-limit headers on `/api/v1`
+
+**What changed.** `api/src/platform/ratelimit/` (new): `tokenBucket.ts`'s `TokenBucket` — a
+continuous-refill token bucket keyed by an arbitrary string, injected `Clock` (real clock in
+production, fake clock in tests, no `setTimeout` waits); `config.ts`'s `resolveRateLimits(env)`,
+reading `RATE_LIMIT_APP_RPM` / `RATE_LIMIT_TOKEN_RPM` — names already ratified by
+`terraform/render/variables.tf` (`rate_limit_app_rpm` / `rate_limit_token_rpm`, both defaulting to
+120/60 there, matching PLUGFORGE.MD §2.7 verbatim), not invented by this ticket; `middleware.ts`'s
+two Express middlewares:
+
+- `rateLimitDefaults` — mounted globally on `v1Router` (`platform/api/v1/router.ts`), right after
+  `requestIdMiddleware` and before `v1Routes`. Sets baseline `X-RateLimit-*` headers on every
+  request before any routing happens — the mechanism that makes "100% of /api/v1 responses"
+  (PLUGFORGE.MD §2.7) true even for the responses `rateLimitBuckets` below never reaches: an
+  unauthenticated 401 from `bearerAuth` itself, a 404 from an unmatched route/method, and genuinely
+  public routes (`GET /health`, `GET /openapi.json`). Deliberately stateless (not a real bucket) —
+  an unauthenticated request has no stable identity to key a Map entry on yet, so keying anything
+  here would let an attacker mint unlimited distinct entries for free before `bearerAuth` ever gets
+  a chance to reject them.
+- `rateLimitBuckets` — mounted per-route, immediately after each route's own `bearerAuth` (before
+  `requireScope` and the handler) in all 11 protected route arrays across `resources/documents.ts`
+  (3), `issues.ts` (1), `sprints.ts` (1), `me.ts` (1), `webhooks.ts` (5). Reads `req.principal`;
+  checks (via `TokenBucket.peek`, never partially debiting) the per-app bucket (keyed by
+  `principal.app.clientId`, default 120/min, SKIPPED when `principal.app` is null — a scoped
+  personal token) and the per-token bucket (keyed by a SHA-256 hash of the raw bearer credential,
+  default 60/min); on success, consumes both and sets headers from whichever bucket is closer to
+  exhaustion; on denial, forwards a `rate_limited` `ApiError` (the existing `errors.ts` constructor,
+  unmodified) with `Retry-After` plus the same three headers already set. Running before
+  `requireScope` means a scope-forbidden (403) response still carries real headers and still spends
+  real budget — a caller hammering with an under-scoped token doesn't get a free unlimited probe.
+
+`api/src/platform/api/v1/__tests__/route-fitness.test.ts` (PF-203) gained a 5th per-route check,
+`(e)`, added as a new `it(...)` body inside the existing `describe.each(routes)` walk per that
+ticket's own architect note — re-issues the SAME generic-failure-path probe check (c) already makes
+(no Authorization header for a `bearerAuth` route -> 401; unsupported method for a public route ->
+404) and asserts all three `X-RateLimit-*` headers are present and numeric on that response.
+
+**Not `api/src/middleware/rate-limit.ts`.** That file is the legacy `express-rate-limit` chain
+(IP/identity-keyed, `/api/` prefix) and was not touched — PF-004/TRO-401 already exempts `/api/v1`
+from it (`isLegacyLimiterExemptPath`), which is exactly what makes room for this ticket's buckets to
+be the ones that actually apply there.
+
+**Scoping decision — no NODE_ENV tiering in `resolveRateLimits`, unlike the legacy limiter's
+`resolveApiRateLimits`.** Checked before deciding: the heaviest reuse of one bearer token across one
+`/api/v1` resource test file is `webhooks.test.ts`'s `manageToken`, used 24 times; every bucket here
+starts at full capacity, so a flat 60/min (or 120/min) default absorbs that regardless of how fast
+the test machine runs, with no hidden per-environment branch to keep in sync. Documented in
+`config.ts`'s own header comment as a deliberate choice, not an oversight.
+
+**How to run it.**
+```bash
+cd api && npx vitest run src/platform/ratelimit/ src/platform/api/v1/__tests__/route-fitness.test.ts
+```
+
+**Proof (AC, verbatim: "header-presence fitness assertion added to PF-203's walk; bucket
+exhaustion/refill unit-tested with injected clock").**
+- `platform/ratelimit/__tests__/tokenBucket.test.ts` — exhaustion (denies at 0, never goes
+  negative), linear refill at a known rate advanced via a fake clock (no real `setTimeout`),
+  `resetAfterMs`/`retryAfterMs` math, per-key independence, constructor validation.
+- `platform/ratelimit/__tests__/config.test.ts` — env resolution (defaults, overrides, empty-string
+  treated as unset, invalid values throw).
+- `platform/ratelimit/__tests__/middleware.test.ts` — real HTTP (supertest) against a standalone
+  Express app with a stub `bearerAuth`: headers on a no-auth route, headers on a 401, 429 +
+  `Retry-After` on exhaustion, recovery after a fake-clock advance, personal tokens never touching
+  the app bucket, two tokens on the same app sharing one app bucket while keeping independent token
+  buckets, and no partial app-bucket debit when the token bucket is the one that denies.
+- `route-fitness.test.ts`'s new check (e): run BEFORE `rateLimitDefaults`/`rateLimitBuckets` were
+  wired into `router.ts`/the resource files, it failed on every discovered route with "missing the
+  x-ratelimit-limit header" — captured as the non-vacuous red state — then passed once the wiring
+  landed. Confirms the extension actually catches a missing-header regression, not just a route that
+  happens to already comply.
+
+**Rollback.** Revert this ticket's merge commit. Deletes `api/src/platform/ratelimit/` entirely,
+reverts `router.ts`'s extra `rateLimitDefaults` mount, reverts the `rateLimitBuckets` insertion in
+all 11 route arrays across the five `resources/*.ts` files, reverts route-fitness.test.ts's check
+(e) and its updated top-of-file doc comment, and removes the two new `RATE_LIMIT_*` lines from
+`api/.env.example`. No migration, no schema change — nothing to roll back at the database layer.
+
+---
+
 ## TRO-422 — PF-405: Parity + size gates (spec<->SDK fitness, <250 KB min+gz in CI)
 
 Last ticket in Epic E4 (`@ship/sdk`) — PF-400/401/402/403/404 all merged already. Two gates:

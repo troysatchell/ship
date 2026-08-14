@@ -43,6 +43,7 @@
 import { Router } from 'express';
 import type { Request, Router as RouterType } from 'express';
 import { bearerAuth } from '../../../oauth/bearerAuth.js';
+import { rateLimitBuckets } from '../../../ratelimit/middleware.js';
 import { asyncHandler } from '../errorMiddleware.js';
 import { serverError } from '../errors.js';
 
@@ -57,6 +58,7 @@ function requestIdOf(req: Request): string {
 meRouter.get(
   '/',
   bearerAuth,
+  rateLimitBuckets,
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);
 
