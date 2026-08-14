@@ -1,14 +1,22 @@
 /**
- * `ShipClient` — the core `@ship/sdk` client (PF-400, PLUGFORGE.MD §2.8).
+ * `ShipClient` — the core `@ship/sdk` client (PF-400/PF-401, PLUGFORGE.MD
+ * §2.8).
  *
- * This ticket builds ONLY the scaffold + `me()`. `documents`/`issues`/
- * `sprints`/`webhooks` resource clients (PF-401), `tokenStore`-backed auth
- * and `authorizationCodeFlow`/`deviceLogin` (PF-404) are later tickets — the
- * constructor's option shape below already has room for `tokenStore` so
- * adding it later is additive, not a breaking change to this one.
+ * PF-400 built the scaffold + `me()`. This ticket (PF-401) adds the
+ * `.documents`/`.issues`/`.sprints`/`.webhooks` resource-client properties —
+ * each one a thin class over the shared `RequestClient` (see that module's
+ * header for why the HTTP mechanics moved out of this file). `tokenStore`-
+ * backed auth and `authorizationCodeFlow`/`deviceLogin` (PF-404) remain a
+ * later ticket — the constructor's option shape below already has room for
+ * `tokenStore` so adding it later is additive, not a breaking change to
+ * this one.
  */
-import { ShipSdkError, type ApiErrorBody } from './errors.js';
+import { RequestClient } from './internal/requestClient.js';
 import type { Me } from './types.js';
+import { DocumentsClient } from './resources/documents.js';
+import { IssuesClient } from './resources/issues.js';
+import { SprintsClient } from './resources/sprints.js';
+import { WebhooksClient } from './resources/webhooks.js';
 
 /**
  * Established in `agent/src/config.ts` (`SHIP_API_BASE_URL`,
@@ -69,8 +77,22 @@ export interface ShipClientOptions {
 }
 
 export class ShipClient {
-  private readonly token: string | undefined;
-  private readonly baseUrl: string;
+  private readonly request: RequestClient;
+
+  /** `documents/get/list/create` — `/api/v1/documents` (PF-200). */
+  readonly documents: DocumentsClient;
+  /** `issues.list` — `/api/v1/issues` (PF-201). No `get`/`create`: the
+   *  server registers no such routes today — see `resources/issues.ts`'s
+   *  header for the verification. */
+  readonly issues: IssuesClient;
+  /** `sprints.list` — `/api/v1/sprints` (PF-201). No `get`/`create`, same
+   *  reason as `issues` above — see `resources/sprints.ts`'s header. */
+  readonly sprints: SprintsClient;
+  /** Typed against PLUGFORGE.MD §2.8 / the PF-302/304/305/306 ticket specs.
+   *  The server routes it calls (`/api/v1/webhooks*`) do not exist in this
+   *  repo yet — see `resources/webhooks.ts`'s header for the verification
+   *  and what that means for this ticket's test coverage. */
+  readonly webhooks: WebhooksClient;
 
   /**
    * Cheap construction — no I/O. Required by PF-703 (the agent gate builds a
@@ -78,8 +100,13 @@ export class ShipClient {
    * network call would make that prohibitively expensive there.
    */
   constructor(opts: ShipClientOptions = {}) {
-    this.token = opts.token;
-    this.baseUrl = stripTrailingSlashes(opts.baseUrl ?? resolveDefaultBaseUrl());
+    const baseUrl = stripTrailingSlashes(opts.baseUrl ?? resolveDefaultBaseUrl());
+    this.request = new RequestClient({ baseUrl, token: opts.token });
+
+    this.documents = new DocumentsClient(this.request);
+    this.issues = new IssuesClient(this.request);
+    this.sprints = new SprintsClient(this.request);
+    this.webhooks = new WebhooksClient(this.request);
   }
 
   /**
@@ -88,61 +115,6 @@ export class ShipClient {
    * rationale) on any non-2xx response or network failure.
    */
   async me(): Promise<Me> {
-    return this.getJson<Me>('/api/v1/me');
+    return this.request.get<Me>('/api/v1/me');
   }
-
-  private authHeaders(): Record<string, string> {
-    return this.token !== undefined ? { Authorization: `Bearer ${this.token}` } : {};
-  }
-
-  private async getJson<T>(path: string): Promise<T> {
-    let res: Response;
-    try {
-      res = await fetch(`${this.baseUrl}${path}`, {
-        method: 'GET',
-        headers: this.authHeaders(),
-      });
-    } catch (cause) {
-      throw ShipSdkError.fromNetworkError(cause);
-    }
-
-    if (!res.ok) {
-      throw ShipSdkError.fromApiErrorBody(await parseErrorBody(res), res.status);
-    }
-
-    return (await res.json()) as T;
-  }
-}
-
-/**
- * A non-2xx `/api/v1` response is contractually `ApiErrorBody`
- * (`api/src/platform/api/v1/errors.ts`'s `errorMiddleware`), but this is the
- * network boundary — a proxy, load balancer, or an outage can put something
- * else on the wire. Falls back to a synthesized `server_error`-coded body
- * (carrying the real HTTP status through `ShipSdkError.fromApiErrorBody`'s
- * `httpStatus` parameter) rather than letting a `res.json()` parse failure
- * propagate as an unrelated, unhandled exception.
- */
-async function parseErrorBody(res: Response): Promise<ApiErrorBody> {
-  let data: unknown;
-  try {
-    data = await res.json();
-  } catch {
-    return fallbackErrorBody(res);
-  }
-  return isApiErrorBody(data) ? data : fallbackErrorBody(res);
-}
-
-function fallbackErrorBody(res: Response): ApiErrorBody {
-  return {
-    code: 'server_error',
-    message: `Unexpected error response (HTTP ${res.status} ${res.statusText}).`,
-    request_id: '',
-  };
-}
-
-function isApiErrorBody(data: unknown): data is ApiErrorBody {
-  if (typeof data !== 'object' || data === null) return false;
-  const record = data as Record<string, unknown>;
-  return typeof record.code === 'string' && typeof record.message === 'string' && typeof record.request_id === 'string';
 }

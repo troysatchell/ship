@@ -21,6 +21,78 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-407 — PF-401: SDK resource clients — documents/issues/sprints/webhooks
+
+**What changed.** Added `.documents`/`.issues`/`.sprints`/`.webhooks` resource-client properties
+to `ShipClient` (`sdk/src/client.ts`), PF-400's scaffold-plus-`me()` client:
+
+- `sdk/src/internal/requestClient.ts` — a new `RequestClient` class, extracted from `client.ts`'s
+  previously-private `getJson`/`authHeaders`/`parseErrorBody` methods (behavior unchanged, verified
+  by the existing `client.test.ts` suite passing unmodified) so `ShipClient.me()` and all four
+  resource clients share exactly one fetch wrapper, auth-header builder, query-string builder, and
+  `ApiErrorBody` -> `ShipSdkError` mapping path, instead of four independent copies.
+- `sdk/src/resources/documents.ts` — `DocumentsClient` with `list()`/`get(id)`/`create(body)` over
+  `/api/v1/documents` (PF-200: `GET /`, `GET /:id`, `POST /` — all three routes exist and are used).
+- `sdk/src/resources/issues.ts` — `IssuesClient` with `list()` ONLY over `/api/v1/issues` (PF-201).
+  Verified before writing (read `resources/issues.ts` and `platform/openapi/schemas/issues.ts` in
+  full): the server registers exactly one route, `GET /`. No `get(id)`/`create(body)` — those routes
+  don't exist server-side today, so this client doesn't pretend they do.
+- `sdk/src/resources/sprints.ts` — `SprintsClient`, same shape and same reasoning as `issues.ts`:
+  `list()` only, over `/api/v1/sprints` (PF-201) — the server registers exactly one route there too.
+- `sdk/src/resources/webhooks.ts` — `WebhooksClient` with `listSubscriptions()`/`createSubscription()`/
+  `deleteSubscription()`/`listDeliveries()`/`replayDelivery()`, typed against PLUGFORGE.MD §2.8 and
+  the PF-302/304/305/306 ticket prose. **Scope check done before writing this file** (per this
+  ticket's own brief): confirmed two ways that `/api/v1/webhooks*` has no server route yet —
+  (1) `api/src/platform/api/v1/router.ts` mounts exactly four resource routers (documents, issues,
+  sprints, me), no webhooks; (2) `grep -rl "webhook_subscriptions\|webhook_deliveries" api/src/db/`
+  returns nothing — migrations 044-046 went to OAuth work instead. `api/src/platform/webhooks/events.ts`
+  (PF-300's 8-event-type registry) and `signer.ts` (PF-303's HMAC signer) DO already exist and are
+  real, merged code — `WebhooksClient`'s `WebhookEventType` union is typed against that real registry
+  (values duplicated, not imported — see below) even though nothing can subscribe over HTTP yet.
+- `sdk/src/types.ts` — added `Document`/`Issue`/`Sprint` wire types (each verified field-for-field
+  against the real `serializeDocument()`/`serializeIssue()`/`serializeSprint()` server functions, not
+  guessed from PLUGFORGE.MD's prose), their `List*Params`/`ListPage<T>` shapes, and `CreateDocumentBody`.
+  `DocumentType`/`IssueState`/`IssuePriority` are duplicated (not imported from `@ship/shared` or
+  `api/`) to preserve `sdk/package.json`'s zero-runtime/zero-workspace-dependency design (PLUGFORGE.MD
+  §2.8: "Zero runtime dependencies" — the <250 KB min+gz budget PF-405 will check depends on this).
+- `sdk/src/index.ts` — exports every new class and type from the public barrel.
+
+**What did NOT change.** No server-side route, migration, or schema file touched — this ticket is
+client-only. `ShipClient.me()`'s behavior, URL, and headers are byte-identical to before (proven by
+`client.test.ts` passing with zero edits to that file).
+
+**Evidence — which clients got REAL integration tests vs. shape-only:**
+
+| Client | Test | Ran under |
+|---|---|---|
+| `documents` | `sdk/src/__tests__/resources.liveServer.test.ts` — `create()`→`get()`→`list()` round trip, plus a `validation` (empty title) and a `not_found` (nonexistent id) error-path case | real `createApp()` + real Postgres, real TCP round trip |
+| `issues` | same file — `list()` against a directly-seeded issue row, asserts `state`/`priority`/`assignee_id` lifted correctly | real `createApp()` + real Postgres |
+| `sprints` | same file — `list()` against a directly-seeded sprint row | real `createApp()` + real Postgres |
+| `webhooks` | `sdk/src/resources/__tests__/webhooks.test.ts` — mocked `fetch`, asserts URL/method/query/body construction and response parsing only | no server exists to integration-test against (PF-302/304/305/306 not yet built) — explicitly NOT claimed as integration coverage in that file's own header |
+
+`cd sdk && npx vitest run` — 5 files, 41 tests, all green (10 pre-existing `client.test.ts`, 16
+pre-existing `errors.test.ts`, 3 pre-existing `client.liveServer.test.ts`, 5 new
+`resources.liveServer.test.ts`, 7 new `resources/__tests__/webhooks.test.ts`).
+`cd sdk && npx tsc --noEmit` — clean.
+
+**Not verified in this ticket.** `webhooks` integration (blocked on PF-302/304/305/306 landing);
+PF-402's `iterate()` async-iterator pagination (a separate ticket — `list()`'s raw `{data,
+next_cursor}` return shape is deliberately left unwrapped so PF-402 can add it without a signature
+change); PF-405's SDK-vs-OpenAPI-spec parity fitness check (not yet built, so not run against this
+ticket's methods).
+
+**How to run it.** `source .factory-env && cd sdk && npx vitest run` (needs the worktree's Postgres
+reachable — same precondition `client.liveServer.test.ts` already documents). `npx tsc --noEmit`
+for the type-check alone (no DB needed).
+
+**Rollback.** Revert this ticket's merge commit. `client.ts` reverts to its PF-400 shape (`me()`
+only, no resource-client properties); `internal/requestClient.ts`, `resources/*.ts`,
+`resources/__tests__/webhooks.test.ts`, and `__tests__/resources.liveServer.test.ts` are deleted;
+`index.ts`/`types.ts` revert to their PF-400 exports. No server-side, migration, or schema changes
+to unwind — nothing else is affected.
+
+---
+
 ## TRO-404 — PF-203: route-enumeration fitness test — the drift gate for every v1 route
 
 **What changed.** `api/src/platform/api/v1/__tests__/route-fitness.test.ts` walks the REAL, live
