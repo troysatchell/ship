@@ -15,10 +15,16 @@
 import { iteratePages } from '../internal/pagination.js';
 import type { RequestClient } from '../internal/requestClient.js';
 import type {
+  AssociationEdgeList,
+  BacklinkList,
   CreateDocumentBody,
   Document,
+  DocumentCommentList,
   DocumentList,
   IterateDocumentsParams,
+  ListAssociationsParams,
+  ListBacklinksParams,
+  ListDocumentCommentsParams,
   ListDocumentsParams,
 } from '../types.js';
 
@@ -75,5 +81,51 @@ export class DocumentsClient {
    */
   iterate(params: IterateDocumentsParams = {}): AsyncGenerator<Document, void, undefined> {
     return iteratePages<Document>((cursor) => this.list({ ...params, cursor }));
+  }
+
+  /**
+   * `GET /api/v1/documents/:id/associations` (PF-205, Linear TRO-414) —
+   * edges FROM this document. Never includes a joined related-document
+   * title/type — see `AssociationEdge`'s own doc comment for why (a
+   * visibility leak the server deliberately avoids on this new public
+   * route; call `get(edge.related_id)` if the title/type is needed and the
+   * caller's token can see it).
+   */
+  async getAssociations(id: string, params: ListAssociationsParams = {}): Promise<AssociationEdgeList> {
+    return this.request.get<AssociationEdgeList>(`${BASE_PATH}/${encodeURIComponent(id)}/associations`, {
+      limit: params.limit,
+      cursor: params.cursor,
+    });
+  }
+
+  /**
+   * `GET /api/v1/documents/:id/reverse-associations` (PF-205) — edges
+   * pointing AT this document (e.g. every issue in a sprint). Same
+   * leak-avoidance as `getAssociations()` above.
+   */
+  async getReverseAssociations(id: string, params: ListAssociationsParams = {}): Promise<AssociationEdgeList> {
+    return this.request.get<AssociationEdgeList>(`${BASE_PATH}/${encodeURIComponent(id)}/reverse-associations`, {
+      limit: params.limit,
+      cursor: params.cursor,
+    });
+  }
+
+  /**
+   * `GET /api/v1/documents/:id/backlinks` (PF-205) — documents whose
+   * content links to this one.
+   */
+  async getBacklinks(id: string, params: ListBacklinksParams = {}): Promise<BacklinkList> {
+    return this.request.get<BacklinkList>(`${BASE_PATH}/${encodeURIComponent(id)}/backlinks`, {
+      limit: params.limit,
+      cursor: params.cursor,
+    });
+  }
+
+  /** `GET /api/v1/documents/:id/comments` (PF-205). */
+  async getComments(id: string, params: ListDocumentCommentsParams = {}): Promise<DocumentCommentList> {
+    return this.request.get<DocumentCommentList>(`${BASE_PATH}/${encodeURIComponent(id)}/comments`, {
+      limit: params.limit,
+      cursor: params.cursor,
+    });
   }
 }

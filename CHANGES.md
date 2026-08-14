@@ -68,6 +68,176 @@ docker run --rm -v /tmp/tf-check:/workspace -w /workspace hashicorp/terraform:1.
 
 ---
 
+## TRO-414 — PF-205: v1 agent read surface (unblocks E7)
+
+**What changed.** The agent's 10 reads (`agent/src/shipClient.ts:360-455`) mapped onto only 2 of
+the `/api/v1` resources PF-200/PF-201 had specced (`documents`, `issues`) — everything else still
+went through internal, unversioned routes. Added six new read-only endpoints under `/api/v1`, all
+scoped, OpenAPI-registered, `ApiError`-shaped, and cursor-paginated where they list:
+
+- `GET /api/v1/changes` (new file `platform/api/v1/resources/changes.ts`) — the public change-feed
+  contract, mirroring `api/src/routes/change-feed.ts`'s cursor-lag semantics (never advances past
+  `now - 5s`, so a slower in-flight transaction can't be permanently missed) without importing from
+  it — `platform/api/v1/**` may never import `api/src/routes/**`. Merges the internal route's three
+  parallel arrays into one `data` array tagged by a `resource` discriminator
+  (`document`/`document_history`/`comment`), so PF-203's fitness check (d) is genuinely satisfied.
+- `GET /api/v1/people` (new file `platform/api/v1/resources/people.ts`) — typed view over
+  `documents WHERE document_type = 'person'`, same pattern `issues.ts` already uses.
+- `GET /api/v1/documents/:id/{associations,reverse-associations,backlinks,comments}` (added to
+  `platform/api/v1/resources/documents.ts`) — the two association routes deliberately omit the
+  joined related document's title/type (a visibility leak on the internal route, per
+  `shipClient.ts`'s own `AssociationForwardEdge` docstring) since this is a new *public* endpoint.
+- `?assignee_id=` filter on `GET /api/v1/issues` (`resources/issues.ts`).
+- `GET /api/v1/sprints/:id` (`resources/sprints.ts`) — did NOT already exist (the PRD block's
+  "already exists, extend the response" phrasing was checked against the code and found inaccurate
+  — see the checklist doc below); built fresh, with `sprint_number`/`owner_id`/`status` lifted from
+  `properties` and `workspace_sprint_start_date`/`start_date`/`end_date` computed from the
+  workspace's sprint-cadence anchor (day-math duplicated from `routes/weeks.ts`/`routes/team.ts`,
+  same boundary reason as `/changes`).
+
+Also confirmed, not changed: the `?type=` filter on `GET /api/v1/documents` the PRD block asked for
+was already present in PF-200's original commit — no code change was needed there.
+
+**SDK consequence (PF-405's already-merged parity gate).** `sdk/src/__tests__/parity.test.ts` walks
+the real generated OpenAPI document and fails on any `/api/v1` operation with no corresponding typed
+`@ship/sdk` method — all 7 new operations above tripped it, exactly as the PRD block predicts. Closed
+in the same PR: `DocumentsClient.getAssociations/getReverseAssociations/getBacklinks/getComments`,
+`SprintsClient.get`, new `PeopleClient` (`list`/`iterate`) and `ChangesClient` (`list` only — no
+`iterate()`, see that file's header), both wired onto `ShipClient` as `.people`/`.changes`. New wire
+types in `sdk/src/types.ts`. `parity.test.ts` is 49/49 after this ticket (was 41/41).
+
+Committed checklist mapping all 10 agent reads to their `/api/v1` call:
+`docs/pf-205-agent-read-surface-checklist.md`.
+
+**How to run it.**
+
+```bash
+curl -H "Authorization: Bearer <token with documents:read>" \
+  "http://localhost:3000/api/v1/changes?since=2026-01-01T00:00:00.000Z"
+curl -H "Authorization: Bearer <token with documents:read>" http://localhost:3000/api/v1/people
+curl -H "Authorization: Bearer <token with documents:read>" \
+  http://localhost:3000/api/v1/documents/<id>/comments
+curl -H "Authorization: Bearer <token with issues:read>" \
+  "http://localhost:3000/api/v1/issues?assignee_id=<uuid>"
+curl -H "Authorization: Bearer <token with sprints:read>" http://localhost:3000/api/v1/sprints/<id>
+```
+
+Regression tests: `api/src/platform/api/v1/resources/__tests__/{people,changes}.test.ts` (new),
+plus new `describe` blocks in `documents.test.ts` (4 sub-resources), `issues.test.ts`
+(`?assignee_id=`), and `sprints.test.ts` (`GET /:id`). Run with
+`pnpm --filter @ship/api exec vitest run src/platform/api/v1/resources/__tests__/`. The fitness
+walk (`src/platform/api/v1/__tests__/route-fitness.test.ts`) now discovers 101 checks (was 77) and
+passes all of them for the 6 new routes.
+
+**Rollback.** Revert this branch's commits (`git log --oneline main..fix/pf-205-agent-read-surface`
+lists them). Removes, on the `api/` side: `platform/api/v1/resources/{people,changes}.ts`,
+`platform/openapi/schemas/{people,changes}.ts`, the four new routes in
+`resources/documents.ts` + their OpenAPI registrations, the `?assignee_id=` branch in
+`resources/issues.ts`, the `GET /:id` route in `resources/sprints.ts` + its OpenAPI registration,
+the two `/people` and `/changes` mounts in `platform/api/v1/router.ts`, the two new exports in
+`platform/openapi/schemas/index.ts`, and `docs/pf-205-agent-read-surface-checklist.md`. Also revert
+the hand-maintained path-list assertions in `platform/openapi/__tests__/{document,endpoint}.test.ts`
+back to their pre-PF-205 list (10 paths, not 16) — those two tests will otherwise fail against a
+document that no longer registers the reverted routes. On the `sdk/` side: revert
+`sdk/src/resources/{people,changes}.ts`, `sdk/src/resources/__tests__/pf205.test.ts`, and the
+`.people`/`.changes` wiring in `sdk/src/client.ts`; revert the added methods in
+`sdk/src/resources/{documents,sprints}.ts` and the added types in `sdk/src/types.ts`; revert
+`SDK_TO_OPERATION`/`SDK_EXEMPTIONS`/`groups` additions in `sdk/src/__tests__/parity.test.ts` — if the
+api-side routes are reverted first and this side is not, `parity.test.ts` fails immediately (orphan
+methods) rather than silently, which is the intended fail-safe.
+
+---
+
+## TRO-445 — PF-800: Refresh-rotation drill ("the stolen-token story")
+
+**What was broken.** Nothing. This ticket's job was to PROVE PF-105's (TRO-421) refresh-rotation +
+family-invalidation engine, not to build it — and the drill confirms the engine was already
+correct: `api/src/platform/oauth/token.ts`'s `rotateRefreshToken` already revokes the whole
+`family_id` and kills the currently-active child's access token the moment an already-rotated
+refresh token is replayed. `token.test.ts` (PF-105's own file) already had a test covering almost
+exactly this scenario. This ticket adds its OWN narrated, gate-executed regression test (rather
+than relying on a sibling ticket's test staying in place unchanged forever) and the additive e2e
+"stolen-token story" that PF-105's own CHANGES.md entry explicitly deferred to this ticket
+("PF-800's own 'stolen-token story' e2e drill... a separate, later ticket").
+
+**What changed.** No production code. Two new test files:
+
+- `api/src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts` — the gate-executed
+  vitest proof. Obtains a real token pair via `authorization_code`, rotates it once (the legitimate
+  client refreshing, as normal), then replays the now-retired OLD refresh token (the stolen-token
+  shape) and asserts, in one narrated test: (1) the reuse response is `400 invalid_grant` with the
+  reuse-specific `error_description` ("Refresh token has already been used.", asserted distinct
+  from the "unknown"/"expired" strings the other two `invalid_grant` causes produce); (2) the
+  child access token that was live one HTTP call earlier no longer authenticates
+  (`GET /api/v1/me` -> `401`) — "active sessions killed"; (3) every row sharing the token's
+  `family_id` (both the already-once-rotated parent and the reuse-detected child) carries a
+  `revoked_at` — "entire family invalidated"; and, closing the loop, that the legitimate client's
+  own still-in-hand, never-leaked newest refresh token is also now dead, so recovery requires a
+  fresh authorization rather than any member of the family staying usable.
+- `e2e/oauth-refresh-rotation-stolen-token.spec.ts` — the same story end-to-end through real
+  endpoints: a real browser drives login -> `/oauth/authorize` -> consent (same pattern as
+  `e2e/oauth-pkce-chain.spec.ts`, TRO-597) to obtain a genuine authorization code, then
+  Playwright's `request` context (a real HTTP client, matching how the actual OAuth protocol talks
+  to `/oauth/token` — never a browser UI action) drives token exchange, rotation, and the stolen
+  replay against the real API. Deterministic: no real sleeps, no timing races — the "theft" is an
+  ordinary second HTTP call, not something that depends on wall-clock expiry (expiry itself is
+  PF-105's own, separately-covered, deliberately-NOT-reuse negative case).
+
+**"Distinct error code" — investigated, not changed, and left as an explicit open question.**
+PF-105's own CHANGES.md entry already flagged this: RFC 6749's `/oauth/token` `error` enum is
+closed, and this codebase deliberately does not extend it for reuse detection — every
+`invalid_grant` cause (unknown token, expired token, reused/stolen token, a lost single-use race)
+returns the identical top-level `error: 'invalid_grant'`, distinguished only by `error_description`
+text. That text IS reliably distinct today (verified: the reuse case's exact string never collides
+with the unknown- or expired-token strings), and both new tests assert on it. **Not resolved by
+this ticket:** RFC 6749 §5.2 documents `error_description` as an OPTIONAL, human-readable string
+"not meant to be parsed by the client" — so today's distinguishing signal is textually reliable but
+not a spec-sanctioned machine contract. Adding a genuinely machine-readable discriminator (e.g. an
+additive `error_details.reason` field alongside the existing RFC-shaped fields) would be an
+externally-visible token-response contract change, which this ticket's own rules say to stop and
+report on rather than improvise. Flagged here as a candidate follow-up ticket rather than resolved
+unilaterally.
+
+**Verification (red-before-green, this ticket's own claim-provenance evidence).** The new vitest
+file's assertions were confirmed load-bearing, not just passing: with
+`rotateRefreshToken`'s `await revokeTokenFamily(tokenRow.family_id)` call temporarily commented out
+on the "already revoked" (reuse) branch, the test failed with a real `AssertionError: expected 200
+to be 401` on the active-session-killed assertion (`cd api && npx vitest run
+src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts`) — an assertion failure on the
+exact behavior claimed, not an import error or a typo. `token.ts` was then restored and confirmed
+byte-identical via `git diff` (empty) before re-running green. Both the new file alone and
+alongside PF-105's own `token.test.ts` pass together: 33/33.
+
+**e2e (observed, not assumed).** `pnpm exec playwright test
+e2e/oauth-refresh-rotation-stolen-token.spec.ts --workers=1`, run twice independently (not via
+Playwright's own retry — each run started clean and went straight to `passed`): 1/1 both times,
+~7s. Unlike `e2e/oauth-authorize.spec.ts`'s and `e2e/oauth-pkce-chain.spec.ts`'s own first-run
+histories (each needed several environment defects fixed before passing), this spec passed on its
+first-ever run — it inherits every fixture/proxy/CORS fix those two tickets already made (real
+`redirect_uri` on this worker's own origin, real PKCE pair, `request` context for the
+backend-to-backend hops, `/oauth/` proxied).
+
+**How to run it.**
+
+```bash
+source .factory-env   # or api/.env.local outside a worktree
+cd api && npx vitest run src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts
+pnpm exec playwright test e2e/oauth-refresh-rotation-stolen-token.spec.ts --workers=1
+```
+
+**Not verified.** Whether the "distinct error code" AC clause was meant to require a
+machine-readable field beyond `error_description` — see above; left as an explicit open question
+rather than guessed at. No load/adversarial testing of the reuse-detection path beyond what
+PF-105's own concurrency tests already cover (out of this ticket's scope — this ticket is the
+narrated proof, not new engine hardening).
+
+**Rollback.** Delete
+`api/src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts` and
+`e2e/oauth-refresh-rotation-stolen-token.spec.ts`. No schema, route, or production-code changes to
+revert — this ticket is test-only.
+
+---
+
 ## Factory defect-gate engine — AST-based static-analysis rule framework (no ticket: tooling)
 
 **What changed.** Ported LabelHunter's AST-based defect-gate framework into Ship's factory:

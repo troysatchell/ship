@@ -67,7 +67,7 @@ v1Registry.registerPath({
   path: '/issues',
   tags: ['Issues'],
   summary: 'List issues',
-  description: 'Cursor-paginated list of issue-typed documents in the caller\'s workspace (PF-201), with state/priority/assignee_id lifted to top-level typed fields. Requires the issues:read scope.',
+  description: 'Cursor-paginated list of issue-typed documents in the caller\'s workspace (PF-201), with state/priority/assignee_id lifted to top-level typed fields. Optionally filtered by ?assignee_id= (PF-205, TRO-414). Requires the issues:read scope.',
   security: BEARER_SECURITY,
   request: {
     query: ListIssuesQuerySchema,

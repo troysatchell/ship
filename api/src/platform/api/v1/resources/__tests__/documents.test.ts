@@ -287,4 +287,151 @@ describe('PF-200: /api/v1/documents (Linear TRO-398)', () => {
       }
     });
   });
+
+  // PF-205 (Linear TRO-414) — the four new sub-resources: forward/reverse
+  // associations, backlinks, comments. Claim-provenance note: these routes
+  // did not exist before this ticket (confirmed by reading this router file
+  // before the diff), so every assertion below would previously 404 via
+  // notFoundHandler rather than the shapes asserted here.
+  describe('PF-205: GET /:id/associations', () => {
+    it('returns forward edges FROM the anchor document, without a joined title/type (leak avoidance)', async () => {
+      const anchorId = await insertDocument('Association anchor', new Date(BASE_MS + 40000));
+      const relatedId = await insertDocument('Related doc', new Date(BASE_MS + 40001));
+      await pool.query(
+        `INSERT INTO document_associations (document_id, related_id, relationship_type) VALUES ($1, $2, 'blocks')`,
+        [anchorId, relatedId]
+      );
+
+      const res = await request(app)
+        .get(`/api/v1/documents/${anchorId}/associations`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as { data: Array<Record<string, unknown>>; next_cursor: string | null };
+      expect(body.data).toHaveLength(1);
+      const edge = body.data[0];
+      expect(edge?.document_id).toBe(anchorId);
+      expect(edge?.related_id).toBe(relatedId);
+      expect(edge?.relationship_type).toBe('blocks');
+      expect(edge).not.toHaveProperty('related_title');
+      expect(edge).not.toHaveProperty('related_document_type');
+    });
+
+    it('a non-existent anchor id -> 404 not_found', async () => {
+      const res = await request(app)
+        .get(`/api/v1/documents/${crypto.randomUUID()}/associations`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+  });
+
+  describe('PF-205: GET /:id/reverse-associations', () => {
+    it('returns edges pointing AT the anchor document', async () => {
+      const anchorId = await insertDocument('Reverse anchor', new Date(BASE_MS + 41000));
+      const pointerId = await insertDocument('Pointer doc', new Date(BASE_MS + 41001));
+      await pool.query(
+        `INSERT INTO document_associations (document_id, related_id, relationship_type) VALUES ($1, $2, 'sprint')`,
+        [pointerId, anchorId]
+      );
+
+      const res = await request(app)
+        .get(`/api/v1/documents/${anchorId}/reverse-associations`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as { data: Array<Record<string, unknown>>; next_cursor: string | null };
+      expect(body.data).toHaveLength(1);
+      expect(body.data[0]?.document_id).toBe(pointerId);
+      expect(body.data[0]?.related_id).toBe(anchorId);
+      expect(body.data[0]?.relationship_type).toBe('sprint');
+    });
+  });
+
+  describe('PF-205: GET /:id/backlinks', () => {
+    it('returns documents that link to the anchor, with display_id for an issue source', async () => {
+      const anchorId = await insertDocument('Backlink target', new Date(BASE_MS + 42000));
+      const sourceResult = await pool.query<{ id: string }>(
+        `INSERT INTO documents (workspace_id, title, document_type, ticket_number, created_at, updated_at)
+         VALUES ($1, 'Linking issue', 'issue', 777, $2, $2) RETURNING id`,
+        [workspaceId, new Date(BASE_MS + 42001)]
+      );
+      const sourceId = sourceResult.rows[0]?.id;
+      if (!sourceId) throw new Error('seed source document insert produced no row');
+      await pool.query(
+        `INSERT INTO document_links (source_id, target_id) VALUES ($1, $2)`,
+        [sourceId, anchorId]
+      );
+
+      const res = await request(app)
+        .get(`/api/v1/documents/${anchorId}/backlinks`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as { data: Array<Record<string, unknown>>; next_cursor: string | null };
+      expect(body.data).toHaveLength(1);
+      expect(body.data[0]?.id).toBe(sourceId);
+      expect(body.data[0]?.document_type).toBe('issue');
+      expect(body.data[0]?.title).toBe('Linking issue');
+      expect(body.data[0]?.display_id).toBe('#777');
+    });
+
+    it('a non-issue source has display_id: null', async () => {
+      const anchorId = await insertDocument('Backlink target 2', new Date(BASE_MS + 43000));
+      const sourceId = await insertDocument('Linking wiki page', new Date(BASE_MS + 43001), 'wiki');
+      await pool.query(
+        `INSERT INTO document_links (source_id, target_id) VALUES ($1, $2)`,
+        [sourceId, anchorId]
+      );
+
+      const res = await request(app)
+        .get(`/api/v1/documents/${anchorId}/backlinks`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as { data: Array<Record<string, unknown>>; next_cursor: string | null };
+      const found = body.data.find((b) => b.id === sourceId);
+      expect(found).toBeDefined();
+      expect(found?.display_id).toBeNull();
+    });
+  });
+
+  describe('PF-205: GET /:id/comments', () => {
+    it('returns comments on the anchor document, with author info', async () => {
+      const anchorId = await insertDocument('Commented doc', new Date(BASE_MS + 44000));
+      const commentResult = await pool.query<{ id: string }>(
+        `INSERT INTO comments (document_id, comment_id, author_id, workspace_id, content)
+         VALUES ($1, $2, $3, $4, 'a v1 comment') RETURNING id`,
+        [anchorId, crypto.randomUUID(), userId, workspaceId]
+      );
+      const commentId = commentResult.rows[0]?.id;
+      if (!commentId) throw new Error('seed comment insert produced no row');
+
+      const res = await request(app)
+        .get(`/api/v1/documents/${anchorId}/comments`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as {
+        data: Array<{ id: string; content: string; author: { id: string; name: string | null } | null }>;
+        next_cursor: string | null;
+      };
+      expect(body.data).toHaveLength(1);
+      expect(body.data[0]?.id).toBe(commentId);
+      expect(body.data[0]?.content).toBe('a v1 comment');
+      expect(body.data[0]?.author?.id).toBe(userId);
+
+      await pool.query('DELETE FROM comments WHERE id = $1', [commentId]);
+    });
+
+    it('a non-existent anchor id -> 404 not_found', async () => {
+      const res = await request(app)
+        .get(`/api/v1/documents/${crypto.randomUUID()}/comments`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+  });
 });
