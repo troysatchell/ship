@@ -148,6 +148,18 @@ jobs:
           NODE_ENV: test
         run: pnpm --filter @ship/agent test
 
+      # TRO-405 (PF-400): sdk/'s own vitest suite — unit tests for the
+      # ApiError->kind mapping plus a live-running-server integration test
+      # (PLUGFORGE.MD's own words: PF-400's AC "is the MVP gate check"). Same
+      # treatment as the Agent tests step above: sdk/ is brand new, so like
+      # agent/ there is no quarantine baseline — any failure here fails the
+      # job outright, no continue-on-error.
+      - name: SDK unit tests
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+          NODE_ENV: test
+        run: pnpm --filter @ship/sdk test
+
       - name: Check for test regressions vs quarantine baseline
         run: |
           node scripts/factory/lib/testdiff.mjs \

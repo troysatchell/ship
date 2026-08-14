@@ -254,6 +254,113 @@ oauth_tokens-dependent migration.
 
 ---
 
+## TRO-405 — PF-400: `@ship/sdk` scaffold + core client
+
+**What changed.** New `sdk/` workspace package (`@ship/sdk`) — the last MVP-gate ticket
+(PLUGFORGE.MD §6 names "PF-400 (`me()` via SDK)" explicitly in the MVP cut line).
+
+- `sdk/package.json` — zero runtime `dependencies` (native `fetch`, no `node-fetch`/axios);
+  `devDependencies` only for `typescript`/`vitest`. `"build": "tsc"`, mirroring `shared/package.json`'s
+  build script exactly (ESM `dist/*.js` + `dist/*.d.ts` + sourcemaps, same as `shared/`).
+- `sdk/tsconfig.json` — extends the root `tsconfig.json` (`strict: true`, `noUncheckedIndexedAccess`,
+  etc. — every new platform/SDK surface uses it per the architect brief), `rootDir: ./src`, same shape
+  as `shared/tsconfig.json`/`agent/tsconfig.json`. Excludes `src/__tests__/**/*` — see that directory's
+  rationale below.
+- `sdk/src/client.ts` — `ShipClient`: constructor takes `{ token?, baseUrl?, tokenStore? }` (the full
+  §2.8 shape; `tokenStore` is accepted but unused — PF-404 wires it up, this ticket only needed the
+  shape to stay forward-compatible). **Cheap construction, no I/O** — reads `opts.baseUrl` or the
+  `SHIP_API_BASE_URL` env var (falls back to `http://localhost:3000`) synchronously; PF-703 depends on
+  this staying true (builds a fresh `ShipClient` per human-token write). `baseUrl` default reuses the
+  existing repo convention rather than inventing a new one: `agent/src/config.ts`'s
+  `DEFAULT_SHIP_API_BASE_URL = 'http://localhost:3000'` / `SHIP_API_BASE_URL` env var, which is also
+  where `api/src/index.ts`'s own default listen port (`process.env.PORT || 3000`) actually answers
+  locally. `me(): Promise<Me>` does `fetch(`${baseUrl}/api/v1/me`, { headers: { Authorization: `Bearer
+  ${token}` } })` and either returns the typed `Me` or throws — see `sdk/src/errors.ts`'s
+  `ShipSdkError` doc comment for why throw was chosen over a return-based `Result` (PLUGFORGE.MD §2.8
+  declares `me(): Promise<Me>`, a bare non-union return type, not `Promise<Me | SdkError>`).
+- `sdk/src/errors.ts` — `ApiErrorCode`/`ApiErrorBody` mirrored from the actual source of truth
+  (`api/src/platform/api/v1/errors.ts`, read before writing this file, not inferred from PLUGFORGE.MD's
+  prose). `mapApiErrorCodeToKind` — the PM-specified mapping, pure and independently unit-tested:
+  `unauthorized`→`auth`, `forbidden`→`forbidden`, `not_found`→`not_found`, `validation_failed`→
+  `validation`, `rate_limited`→`rate_limit`, `server_error`→`server`; an unrecognized future code falls
+  back to `server` rather than throwing out of the mapper. `ShipSdkError` (extends `Error`, implements
+  the §2.8 `{ kind, ... }` discriminated-union shape) wraps both a parsed server `ApiErrorBody`
+  (`.fromApiErrorBody`) and a `fetch()`-level failure that never reached the server at all
+  (`.fromNetworkError`, `kind: 'network'` — has no server-issued code, so it sits outside
+  `mapApiErrorCodeToKind`'s domain by construction).
+- `sdk/src/types.ts` — `Me`/`MeUser`/`MeApp`, matching `GET /api/v1/me`'s actual response body
+  field-for-field, verified against `api/src/platform/api/v1/resources/me.ts`'s handler (not guessed):
+  `{ user: { id, email, name } | null, app: { id, client_id, name, is_first_party } | null, scopes:
+  string[] }`.
+- `sdk/src/index.ts` — barrel exporting `ShipClient`, `Me`/`MeUser`/`MeApp`, `ShipSdkError`,
+  `mapApiErrorCodeToKind`, `ApiErrorCode`/`ApiErrorBody`/`SdkErrorKind`/`SdkErrorShape`. Resource
+  clients (`documents`/`issues`/`sprints`/`webhooks` — PF-401) and auth helpers (`authorizationCodeFlow`/
+  `deviceLogin`/`ITokenStore` — PF-404) are NOT exported yet; later tickets.
+- `sdk/src/errors.test.ts` — unit tests for the ApiError→kind mapping: all 6 documented codes (both the
+  pure `mapApiErrorCodeToKind` function and the full `ShipSdkError.fromApiErrorBody` wiring), an
+  unrecognized-code fallback case, and the network-failure case (`ShipSdkError.fromNetworkError`, both
+  an `Error` cause and a non-`Error` thrown value). 16 test cases, zero I/O.
+- `sdk/src/__tests__/client.liveServer.test.ts` — **the MVP gate check itself, PLUGFORGE.MD's own words
+  for this ticket's AC.** Binds a REAL `http` listener wrapping the REAL `createApp()` on an OS-assigned
+  ephemeral port (`app.listen(0)`, `server.address()`), seeds a real scoped personal token via direct
+  `pool` SQL (same fixture pattern as `api/src/platform/api/v1/resources/__tests__/me.test.ts`), then
+  drives it with a REAL `new ShipClient({ token, baseUrl }).me()` — an actual TCP round trip, not
+  supertest's in-memory binding and not a mocked `fetch`. Asserts the typed user comes back correctly,
+  that an invalid token throws `ShipSdkError` with `kind: 'auth'`/`httpStatus: 401`, and that a
+  nothing's-listening `baseUrl` throws `kind: 'network'`. This is the one deliberate cross-package
+  import in this bundle (`sdk/src/__tests__/**` importing `api/src/app.js`/`api/src/db/client.js`
+  directly by relative path) — same narrow exception `agent/src/__tests__/gateWriteBoundary.dbRoundTrip
+  .test.ts` already makes, for the same reason (see that file's own header): a fake has no real server
+  or database behind it to prove "a real client, talking to a real server, backed by the real seeded
+  DB" against. `sdk/tsconfig.json` excludes `src/__tests__/**/*` from `tsc`/`tsc --noEmit` — not because
+  those test files themselves sit outside `rootDir` (they don't; `src/__tests__` is inside `sdk/src`),
+  but because what they IMPORT does: `api/src/app.ts`/`api/src/db/client.ts` live outside this package
+  entirely, so tsc's program fails with TS6059 ("File is not under 'rootDir'") on those imported files
+  once it follows the import graph — same trade-off `agent/tsconfig.json` already made for its own
+  equivalent directory; `sdk/vitest.config.ts`'s `include` still covers it, so it runs
+  and asserts real behavior via vitest's esbuild transform, just isn't `tsc`-type-checked. **Observed,
+  not assumed:** ran `cd sdk && npx vitest run` against this worktree's live database — 2 files, 19
+  tests, all passing, with the real server's own request-id log lines
+  (`[api/v1] request_id=... GET /api/v1/me`) visible in the test output, confirming the round trip
+  actually went over the network stack.
+- `pnpm-workspace.yaml` — registered `sdk` as a workspace package.
+- `eslint.config.mjs` — added an `sdk/src/**/*.ts` block (same default `correctnessRules` as
+  `shared/src`/`agent/src` got when each was added; not yet promoted to the api/src-only `'error'`
+  overrides).
+- `scripts/factory/gate.sh`, `.gitlab-ci.yml`, `.github/workflows/ci.yml`, root `package.json`
+  (`test:sdk`) — wired `pnpm --filter @ship/sdk test` into the gate and both CI pipelines, mirroring
+  TRO-322's `run_tests agent` addition exactly (same rationale: `testdiff.mjs` tolerates a package
+  absent from `quarantine.json`'s `packages` key, defaulting to an empty known-failing set, so this is
+  zero-tolerance by construction — no quarantine baseline update needed). Without this, `sdk`'s own
+  test suite — including the AC's own "MVP gate check" integration test — would never actually run
+  under the gate that is supposed to enforce it.
+
+**Not built in this ticket (documented gaps, later tickets per PLUGFORGE.MD's own epic split):**
+`documents`/`issues`/`sprints`/`webhooks` resource clients (PF-401), `ITokenStore` +
+`authorizationCodeFlow`/`deviceLogin` (PF-404), pagination async iterators, `verifyWebhook`.
+
+**How to run it.** A local PostgreSQL matching this worktree's `DATABASE_URL` (`.factory-env`) must be
+running and migrated first (`pnpm db:migrate`).
+
+```bash
+cd sdk && npx tsc --noEmit          # type-check (strict)
+cd sdk && npx tsc                   # build: dist/*.js + dist/*.d.ts (ESM)
+cd sdk && npx vitest run            # errors.test.ts (16 cases, pure) +
+                                     # __tests__/client.liveServer.test.ts (3 cases,
+                                     # real http.Server + real seeded DB — the MVP gate check)
+pnpm --filter @ship/sdk test        # same, via the workspace filter
+scripts/factory/gate.sh             # full factory gate, includes run_tests sdk
+```
+
+**Rollback.** Revert this ticket's commit(s) on `feat/pf-400-sdk-scaffold`. Nothing outside `sdk/`
+depends on `@ship/sdk` yet (no `integrations/*` package exists, and `agent/`'s own `PF-702`/`PF-703`
+SDK-mode rewire is a separate, not-yet-built ticket) — deleting `sdk/` and removing it from
+`pnpm-workspace.yaml`/`eslint.config.mjs`/`scripts/factory/gate.sh`/`.gitlab-ci.yml`/
+`.github/workflows/ci.yml`/root `package.json`'s `test`/`test:sdk` entries is a clean, self-contained
+revert with no other package's runtime behavior affected.
+
+---
+
 ## TRO-425 — PF-106: Device Authorization Grant (RFC 8628) — `ship login`'s engine
 
 **What changed.** Three new endpoints, all mounted at `/oauth` alongside PF-103/PF-104's routers:
