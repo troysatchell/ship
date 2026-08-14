@@ -801,6 +801,14 @@
             "format": "date-time",
             "description": "When the next retry is due (only meaningful on a failed row with a pending sibling), or null if this attempt is terminal (success/dead) or itself still pending execution."
           },
+          "replayed_from_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The id of the delivery row this attempt replayed, if it was created by POST /deliveries/{id}/replay (PF-306). Null for every row created by the normal delivery pipeline (a fresh delivery or one of its own automatic retries)."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -819,6 +827,7 @@
           "response_excerpt",
           "latency_ms",
           "next_attempt_at",
+          "replayed_from_id",
           "created_at"
         ]
       },
@@ -2395,6 +2404,73 @@
           },
           "403": {
             "description": "The bearer token lacks the webhooks:manage scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/deliveries/{id}/replay": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Replay a logged delivery",
+        "description": "Re-runs a logged delivery through the deliverer, carrying the ORIGINAL Idempotency-Key — never a freshly generated one, so a correctly-implemented subscriber recognizes it as the same logical delivery. Works regardless of the original delivery's status, including dead (DLQ) rows. Creates a NEW delivery row (never mutates the original), linked back to it via replayed_from_id. Requires the webhooks:manage scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Delivery attempt id (a row from GET /webhooks/deliveries). A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The new delivery row created by this replay.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDelivery"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the webhooks:manage scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No delivery with this id exists in the caller's workspace, or the id is malformed.",
             "content": {
               "application/json": {
                 "schema": {
