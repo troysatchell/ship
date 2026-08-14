@@ -12,7 +12,7 @@
 # number, referencing config.yaml only in a comment).
 
 meta:
-  activeProject: "FleetGraph — Week 5 Project Intelligence Agent"
+  activeProject: "PlugForge — Week 6 Platform & Public API"
   team: Troysatchell
   updatedAt: 2026-08-14
   scopeGuard: >
