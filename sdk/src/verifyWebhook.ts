@@ -102,21 +102,26 @@ function parseSignatureHeader(header: string): ParsedSignatureHeader | null {
 }
 
 /**
- * Normalizes `rawBody` to the exact string `signer.ts`'s `computeDigest` would have signed —
- * `createHmac(...).update(string)` UTF-8-encodes a string argument by default, so a `Buffer` is
- * decoded as UTF-8 here first rather than handed to `update()` directly, keeping one code path
- * (and one encoding assumption) regardless of which type the caller passed.
+ * Computes the HMAC-SHA256 hex digest of `${t}.${rawBody}` under `secret` — the same signed
+ * payload as `signer.ts`'s (not exported) `computeDigest`, built over raw bytes rather than
+ * through a string round-trip.
+ *
+ * CodeRabbit review (this ticket, minor): an earlier version normalized a `Buffer` `rawBody` by
+ * calling `.toString('utf8')` and handing the RESULT to `createHmac(...).update(string)` — a real
+ * bug, not just a style nit. `update(string)` re-encodes that string as UTF-8 before hashing, and
+ * `decode-then-reencode` is only lossless when the original bytes were already valid UTF-8.
+ * `signer.ts` signs whatever bytes the delivery actually sent; a `rawBody` Buffer containing a
+ * byte sequence that ISN'T valid UTF-8 would silently get its invalid bytes replaced (U+FFFD) on
+ * decode, producing a digest over different bytes than the ones that were signed — a legitimate
+ * webhook body could then fail verification. Building the HMAC input as a `Buffer` directly (this
+ * version) hashes the exact bytes handed in, matching `signer.ts`'s guarantee regardless of
+ * whether `rawBody` happens to be valid UTF-8. `t` itself is always ASCII digits, so
+ * `Buffer.from(`${t}.`, 'utf8')` never loses information.
  */
-function toRawBodyString(rawBody: string | Buffer): string {
-  return typeof rawBody === 'string' ? rawBody : rawBody.toString('utf8');
-}
-
-/**
- * Computes the HMAC-SHA256 hex digest of `${t}.${rawBody}` under `secret` — byte-identical to
- * `signer.ts`'s (not exported) `computeDigest`.
- */
-function computeDigest(t: number, rawBody: string, secret: string): string {
-  return createHmac('sha256', secret).update(`${t}.${rawBody}`).digest('hex');
+function computeDigest(t: number, rawBody: string | Buffer, secret: string): string {
+  const bodyBytes = typeof rawBody === 'string' ? Buffer.from(rawBody, 'utf8') : rawBody;
+  const payload = Buffer.concat([Buffer.from(`${t}.`, 'utf8'), bodyBytes]);
+  return createHmac('sha256', secret).update(payload).digest('hex');
 }
 
 /**
@@ -170,6 +175,6 @@ export function verifyWebhook(
 
   if (Math.abs(now - parsed.t) > toleranceSec) return false;
 
-  const expected = computeDigest(parsed.t, toRawBodyString(rawBody), secret);
+  const expected = computeDigest(parsed.t, rawBody, secret);
   return constantTimeHexEquals(expected, parsed.v1);
 }

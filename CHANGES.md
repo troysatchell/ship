@@ -36,8 +36,10 @@ helpers, copied verbatim rather than re-derived.
 
 `headers` accepts either a plain `Record<string,string>` (Node's `req.headers`) or a standard
 `Headers` object (fetch API), read case-insensitively either way; `rawBody` accepts `string |
-Buffer`, normalized to the exact UTF-8 string `signer.ts` would have signed before hashing. Two
-deliberate divergences from `signer.ts`'s `verify()`, both documented in `verifyWebhook.ts`'s own
+Buffer`, hashed as raw bytes (`Buffer.concat([Buffer.from(`${t}.`), bodyBytes])` fed directly to
+`createHmac(...).update(buffer)`) rather than through a string round-trip — see the CodeRabbit fix
+note below. Two deliberate divergences from `signer.ts`'s `verify()`, both documented in
+`verifyWebhook.ts`'s own
 header comment: (1) never throws — an empty/non-string `secret` returns `false` instead of a
 `TypeError`, since this is the public, one-call, boolean-returning contract PLUGFORGE.MD §2.8
 documents and third-party webhook receivers call directly in a route handler, not internal code
@@ -59,29 +61,43 @@ strongest available proof the port is byte-identical to the server-side signer's
 implementations are checked against one independently-generated source of truth instead of two
 hand-authored vector sets that could silently drift apart.
 
-**Test suite.** 26 cases in `sdk/src/verifyWebhook.test.ts`: the AC list verbatim (valid passes;
+**Test suite.** 27 cases in `sdk/src/verifyWebhook.test.ts`: the AC list verbatim (valid passes;
 tampered body fails; >5-min-old fails; missing `v1` fails; perf), the tolerance boundary (inclusive
 at 300s, false at 301s, plus a caller-supplied non-default tolerance), both accepted `headers`
 shapes (`Record<string,string>` — both lower- and upper-cased keys — and `Headers`, case-insensitive
-either way) and a `Buffer` `rawBody`, the fail-closed non-finite/negative-tolerance guard, the
-never-throws-on-empty-secret divergence, the malformed-hex-with-trailing-garbage hardening ported
-from `signer.test.ts`, a `crypto.timingSafeEqual`-invocation proof (not measured timing uniformity,
-which is flake-prone), and the 7-case shared-fixture cross-validation above.
+either way), a `Buffer` `rawBody` (both a valid-UTF-8 one and a deliberately-invalid-UTF-8 one — see
+below), the fail-closed non-finite/negative-tolerance guard, the never-throws-on-empty-secret
+divergence, the malformed-hex-with-trailing-garbage hardening ported from `signer.test.ts`, a
+`crypto.timingSafeEqual`-invocation proof (not measured timing uniformity, which is flake-prone),
+and the 7-case shared-fixture cross-validation above.
 
-**Perf, measured.** The in-suite perf test (1000 iterations after a 100-call warmup, mirroring
-`signer.test.ts`'s own convention) asserts mean < 5ms as a generous CI-safe ceiling against the <1ms
-target — a tight 1ms assertion in CI is flake-prone under runner load, not because the target isn't
-met. A separate, out-of-vitest measurement (50,000 iterations after a 5,000-call warmup, against the
-built `dist/verifyWebhook.js`, no test-framework overhead) gives the honest number: **mean
-0.00148ms, P50 0.00137ms, P95 0.00179ms, P99 0.00200ms** — roughly 500-700x under the 1ms target.
+**CodeRabbit finding, fixed pre-merge (minor).** The PR's first `verifyWebhook.ts` normalized a
+`Buffer` `rawBody` via `.toString('utf8')` before hashing the resulting string — lossy for bytes
+that are not valid UTF-8 (`decode` replaces invalid sequences with U+FFFD; re-encoding that string
+for `createHmac`'s `update()` then hashes different bytes than the ones actually signed), so a
+legitimate webhook body could fail verification. Fixed by hashing raw bytes directly
+(`Buffer.concat([Buffer.from(`${t}.`), bodyBytes])` handed straight to `update()`), matching
+`signer.ts`'s guarantee regardless of the body's byte content. Regression test added
+(`verifies a Buffer rawBody containing bytes that are not valid UTF-8, hashed as raw bytes`):
+signs a body with an embedded invalid UTF-8 sequence two ways (raw-bytes vs. decode-first), asserts
+the two digests provably differ, then asserts `verifyWebhook` accepts only the raw-bytes one —
+proving the fix isn't a coincidental pass.
+
+**Perf, measured (post-fix).** The in-suite perf test (1000 iterations after a 100-call warmup,
+mirroring `signer.test.ts`'s own convention) asserts mean < 5ms as a generous CI-safe ceiling
+against the <1ms target — a tight 1ms assertion in CI is flake-prone under runner load, not because
+the target isn't met. A separate, out-of-vitest measurement (50,000 iterations after a 5,000-call
+warmup, against the built `dist/verifyWebhook.js`, no test-framework overhead) gives the honest
+number: **mean 0.00166ms, P50 0.00154ms, P95 0.00187ms, P99 0.00213ms** — roughly 470-650x under the
+1ms target, including the `Buffer.concat` fix above.
 
 **How to run it.**
 
 ```bash
 cd sdk && npx tsc --noEmit          # type-check (strict) — passes clean
 cd sdk && npx eslint src/verifyWebhook.ts src/verifyWebhook.test.ts src/index.ts   # passes clean
-cd sdk && npx vitest run            # 55 tests total (4 files): errors (16) + client (10) +
-                                     # verifyWebhook (26, new) + client.liveServer (3, needs DB)
+cd sdk && npx vitest run            # 56 tests total (4 files): errors (16) + client (10) +
+                                     # verifyWebhook (27, new) + client.liveServer (3, needs DB)
 scripts/factory/gate.sh             # full factory gate
 ```
 

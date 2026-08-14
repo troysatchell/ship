@@ -141,6 +141,35 @@ describe('verifyWebhook', () => {
 
       expect(verifyWebhook(headers, bufferBody, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
     });
+
+    // Regression test for a CodeRabbit finding on this ticket: an earlier version normalized a
+    // Buffer rawBody via `.toString('utf8')` before hashing, which is lossy for bytes that are
+    // NOT valid UTF-8 (decode replaces invalid sequences with U+FFFD; re-encoding that string
+    // then hashes different bytes than the ones actually signed). The fix hashes the raw bytes
+    // directly. This body deliberately contains an invalid UTF-8 byte sequence (a lone 0xFF 0xFE)
+    // so the two approaches provably diverge — the digest computed the OLD (decode-first) way is
+    // asserted different from the correct one, proving this isn't a coincidental pass.
+    it('verifies a Buffer rawBody containing bytes that are not valid UTF-8, hashed as raw bytes', () => {
+      const invalidUtf8Body = Buffer.from([
+        0x7b, 0x22, 0x69, 0x64, 0x22, 0x3a, 0x22, 0xff, 0xfe, 0x22, 0x7d, // {"id":"<invalid>"}
+      ]);
+
+      const correctDigest = createHmac('sha256', SECRET)
+        .update(Buffer.concat([Buffer.from(`${T}.`, 'utf8'), invalidUtf8Body]))
+        .digest('hex');
+      const lossyDigest = createHmac('sha256', SECRET)
+        .update(`${T}.${invalidUtf8Body.toString('utf8')}`)
+        .digest('hex');
+      expect(correctDigest).not.toBe(lossyDigest); // sanity: the two approaches really do diverge
+
+      const headers = { 'Ship-Signature': `t=${T},v1=${correctDigest}` };
+      expect(verifyWebhook(headers, invalidUtf8Body, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
+
+      const lossyHeaders = { 'Ship-Signature': `t=${T},v1=${lossyDigest}` };
+      expect(verifyWebhook(lossyHeaders, invalidUtf8Body, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(
+        false,
+      );
+    });
   });
 
   // Hardening ported from signer.test.ts (TRO-433 / gate.sh G9): `Buffer.from(str, 'hex')` does
