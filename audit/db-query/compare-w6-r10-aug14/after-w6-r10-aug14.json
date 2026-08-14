@@ -1,0 +1,50 @@
+{
+  "category": "db-query",
+  "mode": "compare",
+  "commit": "397e3b75a0f62111bc38e25de0378186fd1fde14",
+  "dirty": true,
+  "date": "2026-08-14T08:12:00Z",
+  "environment": {
+    "hardware": "Apple M4 Pro (Mac16,7-class) — 14 cores, 24 GB RAM (arm64)",
+    "os": "Darwin 25.5.0 arm64",
+    "node": "v23.2.0",
+    "postgres": "16.14 (shared local container ship-postgres-1, :5433) — VERSION SKEW vs baseline's 15.13-alpine (dedicated container, no longer exists). Carried forward from baseline's own version-skew caveat.",
+    "dataVolume": "500 documents (256 issue / 88 wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project / 7 standup / 5 program), 20 users, 818 document_associations — close to baseline (813)",
+    "scaffolding": [
+      "Statement logging scoped per-database via `ALTER DATABASE ship_standup SET log_statement='all'` + `log_min_duration_statement=0`, NOT baseline's system-wide `ALTER SYSTEM` — this Postgres instance is a shared container hosting ~40 other worktree databases used by concurrent sibling agents; per-database scoping avoids logging their unrelated traffic and avoids degrading their performance. Reverted with `ALTER DATABASE ... RESET` immediately after capture; confirmed reverted (pg_db_role_setting empty for ship_standup).",
+      "API server (tsx src/index.ts, :3001) was restarted after the ALTER DATABASE call so its connection pool picked up the new per-database logging config (existing pooled connections predate the setting and would not see it), and restarted again afterward to drop back to unlogged connections.",
+      "Endpoint-isolation capture used a purpose-written curl+marker script (audit/db-query/compare-w6-r10-aug14 methodology), not a Playwright browser-flow walk — reused the existing parse-log.mjs marker-slicing logic unmodified in logic (only its two output file paths were repointed to this compare directory). Full user-flow captures (Load main page, View a document, etc.) were NOT reproduced in this pass — see 'What was not measured' in the .md report."
+    ]
+  },
+  "metrics": {
+    "queryCountByEndpoint": {
+      "documents-wiki": 3, "issues": 4, "documents-all": 3,
+      "documents-byid": 3, "team-assignments": 5, "weeks": 4
+    },
+    "queryCountByEndpointBaseline": {
+      "documents-wiki": 4, "issues": 5, "documents-all": 4,
+      "documents-byid": 4, "team-assignments": 6, "weeks": 5
+    },
+    "dataQueryCountByEndpoint_authExcluded": {
+      "documents-wiki": 1, "issues": 2, "documents-all": 1,
+      "documents-byid": 1, "team-assignments": 3, "weeks": 2
+    },
+    "dataQueryCountByEndpointBaseline_authExcluded": {
+      "documents-wiki": 1, "issues": 2, "documents-all": 1,
+      "documents-byid": 1, "team-assignments": 3, "weeks": 2
+    },
+    "apiV1HealthQueryCount_noBaseline": 0
+  },
+  "findings": [
+    {
+      "id": "DB-COMPARE-1",
+      "severity": "Low",
+      "title": "Every keyEndpoint's query count dropped by exactly 1 vs baseline — traced to a pre-existing, unrelated session-write throttle, not to tonight's 6 W6 tickets",
+      "location": "api/src/middleware/auth.ts:325-358 (throttled `UPDATE sessions SET last_activity` write, guarded by `AND last_activity < $3`)",
+      "evidence": "Baseline's own #1 finding was this exact statement running unthrottled 'on every read request' (baseline.md Top-5 slowest statements, #1, 4.764ms, flagged for row-lock+WAL contention). `grep -c 'UPDATE sessions' compare-w6-r10-aug14/raw/pg-statements.log` = 0 across all 18 captured requests (6 endpoints x 3 iterations, one authenticated session, all within the same ~1s throttle window after login). Reading `auth.ts` confirms the write is now conditional on `last_activity` being stale, which a single rapid-fire authenticated session never triggers past the first request. With that query excluded, every endpoint's DATA query count (the queries the route handler itself issues, excluding the shared 2-query auth toll of session-lookup + workspace_admin_role_lookup) is IDENTICAL to baseline: documents-wiki=1, issues=2, documents-all=1, documents-byid=1, team-assignments=3, weeks=2 — matching baseline's own auth-excluded counts exactly.",
+      "hypothesis": "The session-write throttle is a separate fix that landed between 2026-07-27 and tonight, unrelated to the 6 W6 platform tickets (which are OAuth/API-v1 scoped, PF-1xx/2xx/4xx). It stacks with tonight's changes rather than being caused by them.",
+      "estimatedImpact": "Positive for the W6-R10 gate (query counts came in under baseline, not over), but the improvement should not be attributed to tonight's middleware work. None of the three middleware pieces this task was scoped to (request_id generation, public CORS, rate-limiter exemption predicate) perform any database I/O — request_id is `crypto.randomUUID()`, CORS is header-only, and the exemption predicate is an in-memory string comparison — so a priori they could not change query counts, and the measurement confirms zero change to the data-query counts once the unrelated auth-throttle confound is factored out."
+    }
+  ],
+  "baselineRef": "../baseline.json"
+}

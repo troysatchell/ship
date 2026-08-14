@@ -1,0 +1,42 @@
+{
+  "category": "api-perf",
+  "mode": "compare",
+  "commit": "397e3b75a0f62111bc38e25de0378186fd1fde14",
+  "dirty": true,
+  "date": "2026-08-14T08:07:08Z",
+  "environment": {
+    "hardware": "Apple M4 Pro (Mac16,7-class) — 14 cores, 24 GB RAM (arm64)",
+    "os": "Darwin 25.5.0 arm64",
+    "node": "v23.2.0",
+    "dataVolume": "500 documents (256 issue / 88 wiki / 35 sprint / 32 weekly_plan / 27 weekly_retro / 20 person / 15 weekly_review / 15 project / 7 standup / 5 program), 20 users — close to baseline's 500/20 target, minor distribution drift (256 vs 254 issue, 88 vs 91 wiki) from seed.ts/seed-augment.ts changes since 2026-07-27, not from tonight's 6 tickets",
+    "concurrency": "10 / 25 / 50 (autocannon 8.0.0 connections)",
+    "scaffolding": [
+      "Ran against the machine's existing shared local PostgreSQL 16.14 (Docker container ship-postgres-1 on :5433), NOT the baseline's dedicated postgres:15-alpine ship-audit-pg container (that container no longer exists). MAJOR VERSION DIFFERS FROM BASELINE (15.13 -> 16.14) — a real, unavoidable environment change, orthogonal to tonight's 6 tickets.",
+      "Ran pnpm db:migrate + pnpm db:seed + audit/seed-augment.ts against the primary worktree's own dev database (ship_standup) to reach the required 500-doc/20-user volume; it was empty at the start of this run.",
+      "Patched audit/seed-augment.ts's workspace lookup from 'oldest workspace by created_at' to 'workspace named Ship Workspace' (matching api/src/db/seed.ts's own lookup) — the shared dev DB carried a leftover 'PF-107 Test' workspace from an unrelated OAuth-ticket test run that was older by created_at but had zero program/project/sprint documents, crashing the original query. Scaffolding-only change, no application source touched.",
+      "Installed autocannon@8.0.0 into the session scratchpad (not the repo).",
+      "Ran API server via `tsx src/index.ts` on :3001, NODE_ENV unset (dev mode) — matches baseline's server mode exactly.",
+      "gzip compression (TRO-174) is active in this run and was NOT active in the 2026-07-27 baseline (baseline explicitly recorded 'No response carries Content-Encoding'). This is a real, pre-existing fix that landed between the baseline and tonight, independent of the 6 W6 platform tickets — it materially lowers wire bytes and likely improves P95 on the large-payload endpoints (documents-all, issues) versus baseline. Flagged as a confound distinct from tonight's changes.",
+      "HEAVY CONCURRENT BACKGROUND LOAD during the first ~9 minutes of the 18-combination run: two sibling agents (an e2e Playwright regression suite using per-worker Postgres testcontainers, and a bundle-audit build) were active in this same repo/machine. Host load average peaked at 44 (14-core machine) during documents-wiki and issues measurements, confirmed via `docker stats` showing a testcontainers-ryuk reaper plus a dozen+ short-lived e2e worker containers. Load fell to ~4 (matching baseline's own reported 2.2-6.2 range) by the time team-assignments/weeks were measured.",
+      "Spot re-check performed: documents-wiki re-measured alone at all 3 concurrency levels once load had returned to ~4.1 (raw-recheck-documents-wiki/). Recheck P95 values (8.52 / 20.40 / 33.27 ms) closely match baseline (8.45 / 17.33 / 44.93 ms) — confirming the +306%..+749% deltas seen in the main run's documents-wiki rows were a background-load artifact, not a regression from tonight's middleware. The main run's documents-wiki rows are retained in the deliverable table for transparency but the recheck values are what should be trusted."
+    ]
+  },
+  "metrics": {
+    "note": "Full per-endpoint/concurrency P50/P95/P99/rps/errors table is in after-w6-r10-aug14.md. All 21 combinations (18 main run + 3 recheck) returned 0 errors / 0 non-2xx / 100% of the 900-request burst.",
+    "documentsWikiP95RecheckMs": {"c10": 8.524, "c25": 20.399, "c50": 33.267},
+    "documentsWikiP95BaselineMs": {"c10": 8.45, "c25": 17.33, "c50": 44.93},
+    "apiV1HealthP95Ms_noBaseline": {"c10": 1, "c25": 3, "c50": 4}
+  },
+  "findings": [
+    {
+      "id": "API-COMPARE-1",
+      "severity": "Low",
+      "title": "documents-wiki P95 spiked +306% to +749% during the loaded portion of the main benchmark run — confirmed to be background contention from a concurrent e2e test suite, not a regression",
+      "location": "GET /api/documents?type=wiki (api/src/routes/documents.ts); no application code implicated",
+      "evidence": "Main run (load avg 25-44): c10 P95=71.7ms, c25 P95=70.3ms, c50 P95=314.9ms vs baseline 8.45/17.33/44.93ms. Quiet-load recheck (load avg ~4.1, same endpoint, same methodology, ~20 min later): c10 P95=8.52ms, c25 P95=20.40ms, c50 P95=33.27ms — within noise of baseline. `docker stats` during the loaded window showed a testcontainers-ryuk reaper plus a dozen+ short-lived containers, consistent with the sibling e2e-test-runner agent's known per-worker-Postgres-testcontainer footprint (documented in audit/shipshape.config.yaml's testE2e entry).",
+      "hypothesis": "documents-wiki was the first endpoint measured in the run, landing during the sibling agents' peak Docker/CPU activity; by the time later endpoints (documents-all, team-assignments, weeks) were measured the load had subsided, which is also why those show P95 improvements over baseline rather than regressions.",
+      "estimatedImpact": "None on the W6-R10 gate once the confound is controlled for. No code or config change indicated."
+    }
+  ],
+  "baselineRef": "../baseline.json"
+}
