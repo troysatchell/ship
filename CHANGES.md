@@ -195,6 +195,39 @@ together.
   are explicit not to register anything unilaterally. Same call PF-104 already made for this same
   route's other two grants.
 
+**CodeRabbit triage, round 2 (post-merge-forward past PF-106/TRO-425, 4 findings — 1 trivial, 3
+minor).** The first triage above ran against a pre-merge CLI snapshot that never completed live; this
+round is a real completed review (`review_completed`, 4 findings) against the head after merging PF-106
+(device-code grant) forward, which landed its own new route branch alongside this ticket's in the same
+`oauth-token.ts` router.
+- *Refresh-token family lifetime is a sliding window (each rotation resets the 30-day clock from that
+  moment), not an absolute cap from the original grant.* CodeRabbit's own finding text says explicitly
+  not to change this — it identifies an absolute-lifetime cap as a separate, later follow-up requiring
+  its own schema work, not a defect in this diff. Matches this module's own documented decision (see
+  `REFRESH_TOKEN_TTL_MS`'s doc comment above): not applied, correctly.
+- *`waitForBlockedRotations` should scope its `pg_stat_activity` poll to `current_database()` and
+  exclude the poller's own backend PID.* Valid, applied. Different in kind from the poll-interval
+  finding dismissed in round 1 above (that one was a style question with an already-correct pattern);
+  this one is a genuine correctness gap specific to this factory's environment — many ticket worktrees
+  run against the SAME Postgres cluster with SEPARATE databases, and `pg_stat_activity` is
+  cluster-wide, so an unscoped `query ILIKE` match could count a sibling worktree's own concurrent run
+  of this identical test as one of this run's two expected blocked backends, corrupting the exact
+  proof this test exists to make. PF-104's own `waitForBlockedRedemptions` (same file) has the
+  identical gap — left unchanged, out of this ticket's scope; flagged for whoever next touches it.
+- *A comment on the family-revocation assertion said "exactly one active token" while the assertion
+  itself is `toHaveLength(0)`.* Valid, applied — the comment was flatly wrong, not just imprecise (the
+  exact class of error `.claude/CLAUDE.md`'s claim-provenance section warns about); corrected to match
+  what the assertion actually proves (zero active tokens remain — the loser's response revokes the
+  family including the winner's own committed child).
+- *The forced-race test's `racePromise` should be observed immediately so a later throw (e.g.
+  `waitForBlockedRotations` timing out) can't leave an eventual rejection unhandled.* Valid, applied —
+  with one correction to CodeRabbit's own suggested diff: it declared `settled` with `const` INSIDE the
+  `try` block while referencing it from `finally`, which throws a TDZ `ReferenceError` if the code
+  fails before that line runs (e.g. during `BEGIN` or the `FOR UPDATE`) instead of the intended
+  rollback. Hoisted `settled` to a `let` above the `try`, same pattern as `transactionOpen` beside it,
+  so it is safely `undefined` rather than uninitialized in that failure path. Re-ran the full test file
+  after: 32/32 pass, including the forced race itself.
+
 **Not verified in this session:** PF-800's own "stolen-token story" e2e drill (a separate, later
 ticket per PLUGFORGE.MD — this ticket is explicitly "the E8 drill's engine," not the drill itself).
 The unit-level reuse/family-revocation proof above exercises the identical code path PF-800 will drive

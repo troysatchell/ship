@@ -985,13 +985,26 @@ describe('/oauth/token (PF-104)', () => {
   describe('genuine concurrent rotation of the same refresh token (forced, deterministic race)', () => {
     /** Same polling pattern as token.ts's authorization_code equivalent —
      * a real, observable database fact (blocked backends), not a fixed
-     * sleep (lessons.md rule 17). */
+     * sleep (lessons.md rule 17). Scoped to `current_database()` and
+     * excludes this poller's own backend (CodeRabbit finding, applied): the
+     * factory runs many ticket worktrees against the SAME Postgres cluster,
+     * each with its own database but a SHARED, cluster-wide
+     * `pg_stat_activity` — an unscoped `query ILIKE` match could count a
+     * sibling worktree's own concurrent run of this identical test as one of
+     * THIS run's two expected blocked backends, corrupting the proof this
+     * test exists to make. PF-104's own equivalent helper
+     * (`waitForBlockedRedemptions` above) has the identical gap; left
+     * unchanged as out of this ticket's scope — flagged here for whoever
+     * next touches it. */
     async function waitForBlockedRotations(target: number, timeoutMs = 5000): Promise<void> {
       const deadline = Date.now() + timeoutMs;
       for (;;) {
         const result = await pool.query<{ blocked: string }>(
           `SELECT count(*)::text AS blocked FROM pg_stat_activity
-           WHERE wait_event_type = 'Lock' AND query ILIKE '%oauth_tokens%revoked_at%'`
+           WHERE wait_event_type = 'Lock'
+             AND datname = current_database()
+             AND pid <> pg_backend_pid()
+             AND query ILIKE '%oauth_tokens%revoked_at%'`
         );
         const blocked = Number(requireRow(result.rows[0], 'pg_stat_activity poll').blocked);
         if (blocked >= target) return;
@@ -1033,12 +1046,23 @@ describe('/oauth/token (PF-104)', () => {
       // connection to the pool while still holding an open transaction
       // and row lock.
       let transactionOpen = false;
+      // Declared here, not inside the try block (CodeRabbit finding,
+      // applied): `racePromise` is created and observed immediately once it
+      // exists, so that if something throws later in the try block (e.g.
+      // `waitForBlockedRotations` timing out) before the success path's own
+      // `await racePromise`, the finally block below can still observe its
+      // eventual settlement instead of leaving it an unhandled rejection.
+      // Hoisted outside the try so it's safely `undefined` — not a TDZ
+      // ReferenceError — if the try block throws before `racePromise` is
+      // even created.
+      let settled: Promise<unknown> | undefined;
       try {
         await lockClient.query('BEGIN');
         transactionOpen = true;
         await lockClient.query('SELECT id FROM oauth_tokens WHERE id = $1 FOR UPDATE', [parentRow.id]);
 
         const racePromise = Promise.all([rotateRefreshToken(params), rotateRefreshToken(params)]);
+        settled = racePromise.catch(() => undefined);
 
         await waitForBlockedRotations(2);
 
@@ -1053,6 +1077,9 @@ describe('/oauth/token (PF-104)', () => {
         if (transactionOpen) {
           await lockClient.query('ROLLBACK').catch(() => {});
         }
+        if (settled) {
+          await settled;
+        }
         lockClient.release();
       }
 
@@ -1064,8 +1091,12 @@ describe('/oauth/token (PF-104)', () => {
       );
       expect(Number(requireRow(childCountResult.rows[0], 'child count').count)).toBe(1);
 
-      // Exactly one active (non-revoked) token in the family after the
-      // race resolves — the AC this test exists to prove at the DB level.
+      // Zero active (non-revoked) tokens remain in the family after the
+      // race resolves — the loser's detected-reuse response revokes the
+      // WHOLE family, including the winner's own newly-committed child, per
+      // this module's documented fail-safe-under-ambiguity design (comment
+      // was previously misstated as "exactly one active"; corrected to
+      // match this assertion — CodeRabbit finding).
       const familyRows = await familyRevocationStates(parentRow.family_id);
       const activeRows = familyRows.filter((row) => row.revoked_at === null);
       expect(activeRows).toHaveLength(0);
