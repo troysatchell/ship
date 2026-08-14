@@ -77,7 +77,17 @@ function would have been a rewrite of business logic this ticket did not audit l
   their own bespoke write patterns (`jsonb_set` property patches, soft-delete `archived_at` toggles)
   was judged out of scope for "smallest possible."
 
-**Proof, exactly as the AC states.**
+**How to verify — proof, exactly as the AC states.**
+
+```bash
+pnpm test                                                    # api + web + agent + sdk, root script
+cd api && npx vitest run src/services/documentService.test.ts
+cd api && npx vitest run src/platform/webhooks/eventBus.test.ts
+cd api && npx vitest run src/platform/webhooks/__tests__/publish-boundary.test.ts
+cd api && npx vitest run src/routes/issues.test.ts            # includes the document.created + issue.created proof
+cd api && npx vitest run src/routes/programs.test.ts           # new — closes a pre-existing zero-coverage gap
+```
+
 - Full internal regression suite: `pnpm test` (api + web + agent + sdk, root script) — 229 files /
   2261 tests, green, run three times for confidence after two transient unrelated failures (see PR
   body).

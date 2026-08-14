@@ -32,13 +32,21 @@ describe('documentService (TRO-426 / PF-301)', () => {
       `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
       [`DocumentService Test ${testRunId}`]
     )
-    testWorkspaceId = workspaceResult.rows[0]!.id
+    const workspaceRow = workspaceResult.rows[0]
+    if (!workspaceRow) {
+      throw new Error('documentService.test.ts setup: workspace INSERT ... RETURNING produced no row')
+    }
+    testWorkspaceId = workspaceRow.id
 
     const userResult = await pool.query<{ id: string }>(
       `INSERT INTO users (email, password_hash, name) VALUES ($1, 'test-hash', 'DocumentService Test User') RETURNING id`,
       [`documentservice-test-${testRunId}@ship.local`]
     )
-    testUserId = userResult.rows[0]!.id
+    const userRow = userResult.rows[0]
+    if (!userRow) {
+      throw new Error('documentService.test.ts setup: user INSERT ... RETURNING produced no row')
+    }
+    testUserId = userRow.id
   })
 
   afterAll(async () => {
