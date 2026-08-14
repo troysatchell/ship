@@ -1,19 +1,26 @@
-// @ship/sdk — public barrel. PF-400 (PLUGFORGE.MD §2.8): scaffold + core
-// client. PF-401 adds the documents/issues/sprints/webhooks resource
-// clients below (webhooks is type-shape-only — its server routes don't
-// exist yet, see resources/webhooks.ts's header). PF-403 adds the one-call
-// webhook signature verifier: `verifyWebhook` +
-// `DEFAULT_WEBHOOK_TOLERANCE_SECONDS`/`SHIP_SIGNATURE_HEADER_NAME`/
-// `PlainHeaders` (unrelated to PF-401's `WebhooksClient` resource client
-// above — that manages subscriptions/deliveries over HTTP; this verifies an
-// inbound delivery's signature locally, no network call). PF-404 adds the
-// auth helpers: `ITokenStore` + `MemoryTokenStore`/`FileTokenStore`,
-// `generatePkcePair`, and `ShipClient.deviceLogin`/
+// @ship/sdk — public barrel, browser-safe (TRO-449/PF-802: every module
+// reachable from here is safe to bundle for a browser target — no Node
+// built-ins anywhere in this file's transitive `export ... from` graph,
+// verified by integrations/browser-demo actually building on it). PF-400
+// (PLUGFORGE.MD §2.8): scaffold + core client. PF-401 adds the
+// documents/issues/sprints/webhooks resource clients below (webhooks is
+// type-shape-only — its server routes don't exist yet, see
+// resources/webhooks.ts's header). PF-404 adds the auth helpers: `ITokenStore`
+// + `MemoryTokenStore`, `generatePkcePair`, and `ShipClient.deviceLogin`/
 // `ShipClient.authorizationCodeFlow` (the static methods themselves are
 // exported via the `ShipClient` class, not separately). PF-402 adds
 // `iterate()` on `documents`/`issues`/`sprints` (methods on the already-
 // exported resource-client classes, so no new class export) plus the three
 // `Iterate*Params` types below.
+//
+// Node-only exports — PF-403's `verifyWebhook` (`node:crypto`) and PF-404's
+// `FileTokenStore` (`fs`/`path`) — live at `@ship/sdk/node`, not here. A
+// bundler resolving THIS barrel has to bind every top-level import of every
+// re-exported file reachable from it, regardless of tree-shaking; keeping
+// those two Node-only pieces out entirely is what makes this file safe for
+// a browser build, not just theoretically tree-shakeable. See
+// `sdk/src/node.ts` and this repo's `CHANGES.md` (TRO-449) for the full
+// investigation.
 
 export { ShipClient } from './client.js';
 export type { ShipClientOptions } from './client.js';
@@ -63,14 +70,7 @@ export {
 } from './errors.js';
 export type { ApiErrorCode, ApiErrorBody, SdkErrorKind, SdkErrorShape } from './errors.js';
 
-export {
-  verifyWebhook,
-  DEFAULT_WEBHOOK_TOLERANCE_SECONDS,
-  SHIP_SIGNATURE_HEADER_NAME,
-} from './verifyWebhook.js';
-export type { PlainHeaders } from './verifyWebhook.js';
-
-export { MemoryTokenStore, FileTokenStore } from './tokenStore.js';
+export { MemoryTokenStore } from './tokenStore.js';
 export type { ITokenStore, TokenSet } from './tokenStore.js';
 
 export { generatePkcePair } from './pkce.js';

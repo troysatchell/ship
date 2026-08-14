@@ -21,6 +21,78 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-449 (PF-802) — Browser SDK demo (PKCE SPA), and a real @ship/sdk packaging defect it uncovered
+
+**What was added.** `integrations/browser-demo/` — a Vite vanilla-TypeScript SPA, `@ship/sdk` its
+only runtime dependency (PLUGFORGE.MD §4's own AC). Signs in via `ShipClient.authorizationCodeFlow()`
+PKCE (no client secret ever ships to the browser), persists tokens in `localStorage` via a small
+`LocalStorageTokenStore` (`ITokenStore` implementation — the SDK deliberately ships no browser
+token store of its own, see `sdk/src/tokenStore.ts`'s header), and lists the signed-in user's
+documents via `client.documents.iterate()` (PF-402's async-iterator pagination). Config
+(`clientId`/`apiBaseUrl`/`redirectUri`/`scope`) resolves from `window.__SHIP_DEMO_CONFIG__` when
+present, else `VITE_SHIP_*` build-time env vars — see `src/main.ts`'s header for why (lets one
+built `dist/` be pointed at any environment without a rebuild; used by the e2e proof below).
+`scripts/seed-oauth-app.mjs` registers a local-dev public OAuth app (idempotent). Full run
+instructions in `integrations/browser-demo/README.md`.
+
+**A real, previously-latent `@ship/sdk` defect, found by being the first browser bundler consumer
+of the package.** `sdk`'s single barrel (`index.ts`) re-exported PF-403's `verifyWebhook`
+(`node:crypto`) and PF-404's `FileTokenStore` (`fs`/`path`) alongside the browser-safe
+`ShipClient`/PKCE/`ITokenStore` exports this demo needs. Building the demo against that barrel
+failed outright: Rollup/Vite has to bind every top-level import of every module reachable via an
+`export ... from` chain — **regardless of tree-shaking, and unaffected by adding `"sideEffects":
+false` to `sdk/package.json`** (tried first; verified it made no difference to the error, not
+assumed) — because binding happens before the tree-shake pass decides what to keep. An earlier fix
+attempt marked `node:crypto`/`fs`/`path` `external` in Rollup config: the BUILD then succeeded, but
+the resulting bundle contained literal `import"node:crypto";import"fs";import"path";` statements —
+invalid in a browser (bare specifiers a browser's native module loader cannot resolve), which threw
+and killed the entire script before any of `main.ts`'s code ran, including the parts with no SDK
+dependency at all (confirmed live: the "Connect to Ship" button never rendered, caught by the first
+e2e run against that build).
+
+**Real fix:** split the Node-only code out of the modules that mix it with browser-safe exports.
+`sdk/src/tokenStore.ts` now holds only `TokenSet`/`ITokenStore`/`MemoryTokenStore` (zero Node
+imports); `FileTokenStore` moved to a new `sdk/src/fileTokenStore.ts`. A new `sdk/src/node.ts`
+re-exports `verifyWebhook`/`DEFAULT_WEBHOOK_TOLERANCE_SECONDS`/`SHIP_SIGNATURE_HEADER_NAME`/
+`PlainHeaders`/`FileTokenStore`, published as a second `sdk/package.json` `exports` subpath,
+`@ship/sdk/node`. The main barrel (`index.ts`) no longer references either Node-only module at all,
+so a browser bundler resolving it never needs to bind `node:crypto`/`fs`/`path`. Verified **zero**
+existing consumers (`api/`, `agent/`, `web/`, and `sdk`'s own test suite) imported `verifyWebhook`
+or `FileTokenStore` via the main `@ship/sdk` barrel before this change (`grep`, both direct
+consumers and the parity/size-gate tooling) — this is a pure reorganization, not a breaking change
+for anything that exists today. `sdk/package.json` keeps `"sideEffects": false` anyway (harmless,
+correct metadata even though it didn't fix this specific class of failure).
+
+**Proof.** `e2e/browser-demo-pkce.spec.ts` (new fixture `e2e/fixtures/browser-demo-env.ts`, a
+sibling of `isolated-env.ts` — not an edit to that shared file, lower collision risk with concurrent
+factory lanes touching e2e infra this same week) drives a REAL browser through the demo SPA: click
+"Connect to Ship" → Ship login → `/oauth-consent` → "Authorize" → redirected back → documents
+rendered → page reload resumes from `localStorage` with no re-prompt. Plus the mandatory negative
+case: an unregistered `redirect_uri` never silently succeeds (Ship's own open-redirect guard,
+`oauth-authorize.ts`'s `sendUnsafeToRedirectError`, renders a static error and never redirects
+anywhere). Both tests pass, no retries (`test-results/progress.jsonl`: each test appears once,
+`running` → `passed`, no `failed` entry — not a flake). The demo build itself is 16.54 kB / 5.24 kB
+gzip; `grep` on the built bundle confirms zero `node:crypto`/`fs`/`path` references remain.
+`pnpm --filter @ship/sdk test`: 16/16 files, 161/161 tests green after the split (incl. the
+4 `*.liveServer.test.ts` files, run against this worktree's real factory Postgres via
+`.factory-env`, not skipped).
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/sdk build
+pnpm --filter @ship/sdk test
+pnpm --filter @ship/browser-demo build
+```
+
+Then `/e2e-test-runner e2e/browser-demo-pkce.spec.ts` for the full browser-driven proof.
+
+**Rollback.** `git revert` this commit. The `sdk/src/tokenStore.ts` / `fileTokenStore.ts` / `node.ts`
+split and `package.json` `exports` addition revert cleanly together — nothing outside `sdk/`,
+`integrations/browser-demo/`, and the two new `e2e/` files changes.
+
+---
+
 ## Factory defect-gate engine — AST-based static-analysis rule framework (no ticket: tooling)
 
 **What changed.** Ported LabelHunter's AST-based defect-gate framework into Ship's factory:
