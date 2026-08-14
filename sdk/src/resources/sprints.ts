@@ -7,9 +7,14 @@
  * in full) and `platform/openapi/schemas/sprints.ts` (read in full) both
  * confirm the server registers exactly one route, `GET /api/v1/sprints`. No
  * `GET /api/v1/sprints/:id`, no `POST /api/v1/sprints` today.
+ *
+ * `iterate()` (PF-402) — async-iterator pagination over `list()`'s cursor,
+ * same shared `iteratePages` helper `DocumentsClient`/`IssuesClient` use
+ * (`resources/documents.ts`'s own header has the fuller mechanics writeup).
  */
+import { iteratePages } from '../internal/pagination.js';
 import type { RequestClient } from '../internal/requestClient.js';
-import type { ListSprintsParams, SprintList } from '../types.js';
+import type { IterateSprintsParams, ListSprintsParams, Sprint, SprintList } from '../types.js';
 
 const BASE_PATH = '/api/v1/sprints';
 
@@ -28,5 +33,12 @@ export class SprintsClient {
       limit: params.limit,
       cursor: params.cursor,
     });
+  }
+
+  /** `iterate()` (PF-402) — `for await (const sprint of client.sprints.iterate())`.
+   *  Same params as `list()` minus `cursor`; see `DocumentsClient.iterate()`'s
+   *  doc comment for the shared mechanics. */
+  iterate(params: IterateSprintsParams = {}): AsyncGenerator<Sprint, void, undefined> {
+    return iteratePages<Sprint>((cursor) => this.list({ ...params, cursor }));
   }
 }
