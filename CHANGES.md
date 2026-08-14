@@ -151,14 +151,19 @@ production other than the deliverer, so this is the same test-double boundary PF
 already accepted). `POST /:id/replay` (PF-306) is out of scope and not touched. The SDK's
 `WebhookDelivery` interface (`sdk/src/resources/webhooks.ts`) has a stale `status` enum value
 (`'dead_letter'` vs the real `'dead'`) and is missing four real fields (`event_id`,
-`idempotency_key`, `response_excerpt`, `next_attempt_at`) — flagged in that file's own header, not
-fixed here (out of this ticket's scope: the API route, not the SDK's response types).
+`idempotency_key`, `response_excerpt`, `next_attempt_at`) — flagged in that file's own header and
+in CodeRabbit's review, not fixed here (out of this ticket's scope: the API route, not the SDK's
+response types). This is the second recurrence of the same class of finding as PF-405's
+`WebhookSubscription` note in the same file — filed together as **TRO-599** and added to
+`lessons.md` rule 28 as a recurring pattern, rather than dismissed a second time with no record.
 
-**Rollback.** Revert the merge of `feat/pf-305-delivery-log-api`. The route lives entirely inside
-`api/src/platform/api/v1/resources/webhooks.ts` (one added `webhooksRouter.get('/deliveries', ...)`
-block) and `api/src/platform/openapi/schemas/webhooks.ts` (two added schemas + one
-`registerPath` call) — no migration, no `app.ts` change, no other file touched. No database or
-migration involved; nothing to run backwards.
+**Rollback.** Revert the merge of `feat/pf-305-delivery-log-api`. The runtime implementation is
+confined to two files: `api/src/platform/api/v1/resources/webhooks.ts` (one added
+`webhooksRouter.get('/deliveries', ...)` block) and `api/src/platform/openapi/schemas/webhooks.ts`
+(two added schemas + one `registerPath` call) — no migration, no `app.ts` change. Reverting the
+merge also restores the supporting files it touched: the regression tests, the SDK parity mapping
+(`sdk/src/__tests__/parity.test.ts`), the hand-maintained OpenAPI path-list tests, the SDK client's
+`listDeliveries()` method, and this `CHANGES.md` entry. No database or migration rollback required.
 
 ---
 
