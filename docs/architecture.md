@@ -267,12 +267,24 @@ dual-secret verification window ships in Week 6.
 **Deliverer crash.** The webhook deliverer is an in-memory queue on a single Render instance
 (§2.6 — same justified precedent as FleetGraph's `ItemStore`), so a process crash loses whatever
 existed only in memory. What survives: every attempt already made is persisted to
-`webhook_deliveries` before the deliverer moves on, so the delivery log, DLQ, and replay are
-durable. What's lost on crash: an attempt that was scheduled (`next_attempt_at` computed) but not
-yet persisted, and any in-flight HTTP call whose response never got recorded. Intended recovery: a
-boot-time scan for `pending` / `failed` rows whose `next_attempt_at` has passed, re-enqueued into
-the fresh in-memory queue — this is design intent for PF-304, not yet implemented; state plainly
-whether it shipped once PF-304 lands.
+`webhook_deliveries` (migration 048 — PLUGFORGE.MD's own §2.6 table says "045", but that number was
+long consumed by PF-104's OAuth work; same renumbering situation 046/047 already document) before
+the deliverer moves on, so the delivery log, DLQ, and replay are durable. What's lost on crash: an
+attempt that was scheduled (`next_attempt_at` computed) but not yet persisted, and any in-flight
+HTTP call whose response never got recorded. **Recovery: shipped (PF-304, TRO-438).**
+`InMemoryWebhookDeliverer.rehydrate()` (`api/src/platform/webhooks/deliverer.ts`) scans every
+`webhook_deliveries` row with `status = 'pending'` — a row-per-attempt lifecycle means only
+`'pending'` ever means "scheduled but not yet executed"; a `'failed'` row is itself a completed,
+terminal record of one past attempt, and the still-outstanding retry it scheduled is always a
+separate `'pending'` sibling row (see migration 048's header for the full state machine) — and
+re-enqueues each one into the fresh in-memory queue, due at its persisted `next_attempt_at`. Wired
+from `api/src/index.ts` (the real process entrypoint), called once at boot before the deliverer
+starts polling — never from `app.ts`/`createApp()`, which every test file imports, so no background
+recovery scan or polling timer runs during `pnpm test`. Proven by
+`platform/webhooks/__tests__/deliverer.test.ts`'s "rehydrate() restores a pending attempt into a
+FRESH deliverer instance after a simulated crash" case: one deliverer instance schedules a retry,
+its in-memory queue is discarded (simulating the crash), and a brand-new instance restores and
+completes that same delivery via `rehydrate()` alone.
 
 **OpenAPI generator boot-throw.** The v1 spec (`/api/v1/openapi.json`) is generated in-process
 from route metadata at boot (PF-202), not committed-then-served — if a route's Zod schema fails to

@@ -21,6 +21,83 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-438 — PF-304: Webhook deliverer + retries + DLQ
+
+**Migration number correction.** PLUGFORGE.MD §2.6 lists `webhook_deliveries` under "migration
+045", but that number was already consumed by PF-104's OAuth work
+(`045_oauth_tokens_refresh_expiry.sql`) by the time this ticket started. Verified fresh via
+`ls api/src/db/migrations/ | sort -V | tail -3` before writing anything (045/046/047 all taken) —
+used `048_webhook_deliveries.sql`. Same renumbering situation `046_oauth_device_codes_polling.sql`
+and `047_webhook_subscriptions.sql` already document in their own headers for PF-105/106/302.
+
+**What changed.** `webhook_deliveries` (migration 048): one row **per delivery attempt** (not one
+row per delivery updated in place) — `id`, `subscription_id` (FK `webhook_subscriptions`, `ON
+DELETE CASCADE`), `event_id`, `event_type`, `payload` (jsonb), `idempotency_key`, `attempt_number`,
+`status` (`pending`/`success`/`failed`/`dead`), `response_status`, `response_excerpt`, `latency_ms`,
+`next_attempt_at`, `created_at` — columns match PLUGFORGE.MD §2.6's table row. Row lifecycle and the
+full rationale for the row-per-attempt shape are in the migration's own header.
+
+`IWebhookDeliverer` + `InMemoryWebhookDeliverer` (`api/src/platform/webhooks/deliverer.ts`) — the
+single must-ship implementation, same justified "in-memory queue on one Render instance" precedent
+`docs/architecture.md` already draws for FleetGraph's `ItemStore`:
+
+- **Subscription matcher.** `enqueueEvent(event)` matches active `webhook_subscriptions` by
+  `event_type` **and** the subscribing app's `workspace_id` matching the event's own
+  `workspace_id` (a join through `oauth_apps` — `webhook_subscriptions` carries no `workspace_id`
+  of its own). The workspace filter is a derived addition, not spelled out verbatim in the ticket
+  text: without it, a subscription in workspace A would receive every OTHER workspace's events of
+  the same type too, which contradicts every other workspace-scoped query in this codebase.
+- **Retry schedule, exact (PLUGFORGE.MD §2.6):** 1s, 4s, 16s, 1m, 5m, 30m + full jitter (`delay =
+  base + random() * base`, so a wait is never LESS than the schedule value). 5xx or a request
+  timeout retries per schedule; 4xx dead-letters immediately (`status = 'dead'`), no retry ever
+  scheduled; 6 failed attempts total → DLQ (`status = 'dead'`). The schedule's 6th entry (30m) is
+  defined for fidelity to the exact PRD numbers but is unreachable at `MAX_ATTEMPTS = 6` — only 5
+  waits are ever computed between 6 attempts — documented in `deliverer.ts`'s header rather than
+  silently dropped.
+- **Deterministic clock (this ticket's hard AC).** `clock.ts`'s injectable `Clock`
+  (`now(): number`, milliseconds) + `ManualClock` for tests — distinct from `signer.ts`'s own
+  unix-seconds `Clock` type, converted at the one call site that needs it. `processDue()` never
+  schedules anything; it asks "what's due right now, per the clock" and a test drives the whole
+  1s→4s→16s→1m→5m→30m schedule by calling `clock.advance(ms)` + `processDue()` directly. Zero real
+  `setTimeout`/sleep waits anywhere in the retry-schedule tests.
+- **Crash recovery (shipped, closing a gap `docs/architecture.md`'s "Deliverer crash" section
+  named as PF-304's own design intent, not yet implemented, before this ticket).**
+  `rehydrate()` restores every `'pending'` `webhook_deliveries` row — an attempt scheduled but
+  never executed, including because the process crashed — into a fresh in-memory queue at boot.
+  Wired from `api/src/index.ts` (the real process entrypoint) only, never from `app.ts`/
+  `createApp()`, so no recovery scan or background polling timer runs during `pnpm test`.
+- **`wireDelivererToEventBus(deliverer, bus)`** subscribes the deliverer to all 8 `IEventBus` event
+  types. `IEventBus` handlers are deliberately synchronous (`eventBus.ts`'s own header), so the
+  handler fires `enqueueEvent()` without awaiting it — a rejection is caught and reported via an
+  injectable `onEnqueueError` rather than becoming an unhandled rejection or interrupting
+  `publish()`'s dispatch loop.
+
+**Evidence (both PLUGFORGE.MD §5 graded scenarios, `platform/webhooks/__tests__/deliverer.test.ts`,
+all 10 tests in the file passing in ~250ms real time):**
+- 500×3 then 200 → succeeds on attempt 4, with waits proven correctly ≥1s/4s/16s by asserting BOTH
+  directions at each boundary: advancing the clock by one millisecond less than the schedule value
+  never fires the retry (`processDue()` returns 0), advancing to/past it always does (`processDue()`
+  returns 1) — a stronger proof than asserting a single successful run.
+- 6 consecutive failures → `webhook_deliveries.status = 'dead'`.
+- Bonus coverage: jitter is actually added on top of the base schedule (not merely present in code
+  and unused), a 4xx dead-letters on attempt 1 with no retry ever scheduled, the subscription
+  matcher's workspace/event_type/active filtering, a stable `idempotency_key` across every attempt
+  of one delivery, and `rehydrate()` recovering a scheduled retry into a brand-new deliverer
+  instance after its predecessor's in-memory queue is discarded (simulating a crash).
+
+**Not verified / explicit gaps.** No live HTTP delivery against a real external endpoint — every
+test injects `fetchImpl`. `POST /:id/deliveries` (a delivery-log listing endpoint) and
+`POST /:id/replay` are PF-305/PF-306, not this ticket. No graceful shutdown for the production
+polling loop (`stop()` exists but nothing calls it from `index.ts` — the process just exits).
+
+**Rollback.** Revert the merge of `feat/pf-304-deliverer-retries-dlq`. Drop `webhook_deliveries`
+(`DROP TABLE webhook_deliveries;` — nothing else references it) or run a down-migration if one
+exists by then. Remove the `api/src/index.ts` wiring block (bounded by its own `// PF-304
+(TRO-438)` comment) to stop the production polling loop and event-bus subscription; `app.ts`/
+`createApp()` were never touched, so no test-path changes to revert.
+
+---
+
 ## TRO-431 — PF-302: Webhook subscriptions API
 
 **Migration number correction.** PLUGFORGE.MD §2.2 lists this table under "migration 044", but that

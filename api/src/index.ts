@@ -28,6 +28,30 @@ async function main() {
   const app = createApp(CORS_ORIGIN);
   const server = createServer(app);
 
+  // PF-304 (TRO-438) — webhook deliverer: subscribe to the domain event bus
+  // and start the retry-schedule polling loop. Deliberately wired HERE, in
+  // the real process entrypoint, and NOT inside `createApp()`/`app.ts` —
+  // every test file in this repo calls `createApp()` directly, and a
+  // background `setInterval` (or an eager DB query per test-file's
+  // `documentService` writes) started from there would run during every
+  // `pnpm test` invocation across the whole api suite, not just this
+  // feature's own tests. `getEventBus()` is a process-wide module singleton
+  // (`platform/webhooks/eventBus.ts`) shared with `documentService.ts`
+  // regardless of where the subscription happens, so wiring it here reaches
+  // the exact same bus `documentService.publish()` calls in production.
+  const { getEventBus } = await import('./platform/webhooks/eventBus.js');
+  const { InMemoryWebhookDeliverer, wireDelivererToEventBus } = await import('./platform/webhooks/deliverer.js');
+  const { systemClock } = await import('./platform/webhooks/clock.js');
+  const { pool } = await import('./db/client.js');
+
+  const webhookDeliverer = new InMemoryWebhookDeliverer(pool, systemClock);
+  // Boot-time crash recovery (docs/architecture.md's "Deliverer crash"
+  // section) — restore any attempt that was scheduled but never executed
+  // before a prior process exit, before this instance starts serving.
+  await webhookDeliverer.rehydrate();
+  wireDelivererToEventBus(webhookDeliverer, getEventBus());
+  webhookDeliverer.start();
+
   // TRO-276 / ERR-10: last resort for anything that escapes every guard. Installed
   // in the entrypoint, not in a library module, so importing the app (tests, the
   // MCP server) never hijacks the host process's error handling. See
