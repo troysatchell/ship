@@ -21,6 +21,54 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-404 — PF-203: route-enumeration fitness test — the drift gate for every v1 route
+
+**What changed.** `api/src/platform/api/v1/__tests__/route-fitness.test.ts` walks the REAL, live
+`v1Routes` Express router stack — recursing into every mounted sub-router — and, for every route it
+finds, asserts: (a) it has a `v1Registry.registerPath` OpenAPI entry whose `security` requirement
+matches whether `bearerAuth` is actually wired; (b) it declares a scope via `requireScope(...)`, or
+is one of three explicitly documented exemptions (`GET /health`, `GET /openapi.json` — public, no
+auth at all; `GET /me` — authenticated but deliberately no scope, per PF-201's own design decision);
+(c) an HTTP round-trip against its generic failure path (missing auth, or an unsupported method)
+returns the §2.5 `ApiError` shape; (d) a GET "collection" route (no `{param}` segment) registers a
+`{ data, next_cursor }` response shape, unless exempted as a known singleton GET. This is a
+structural walk, not a hand-maintained route-name list — the exact failure mode this ticket exists
+to prevent.
+
+`api/src/platform/scopes/requireScope.ts`'s returned middleware now carries an explicit
+`.name = "requireScope(<scope>)"` (via `Object.defineProperty`, no behavior change) so the walk can
+read "this route declares scope X" straight off Express's own `Layer.name`, with no parallel record
+of which route needs which scope.
+
+**The known gap, closed as part of this ticket.** `/api/v1/issues`, `/api/v1/sprints`, and
+`/api/v1/me` (PF-201, TRO-400) predated PF-202's OpenAPI registry landing and were never
+retrofitted — confirmed by the fitness test failing against the real routes before the fix (see the
+PR's captured "DRIFT" evidence). Closed with three new files following `schemas/documents.ts`'s
+existing pattern: `api/src/platform/openapi/schemas/issues.ts`, `schemas/sprints.ts`,
+`schemas/me.ts`, wired into `schemas/index.ts`. `ListIssuesQuerySchema` / `ListSprintsQuerySchema`
+gained `export` in their resource files (`resources/issues.ts` / `resources/sprints.ts`) so the new
+schema files can import them rather than redefining them — no route-handling logic changed in
+either file. `platform/openapi/__tests__/document.test.ts`, `__tests__/endpoint.test.ts`, and
+`README.md` updated to reflect the now-complete path set (previously asserted issues/sprints/me were
+deliberately absent — that assertion is now stale and was corrected, not weakened; every path is
+still individually asserted present).
+
+**How to run it.** `cd api && npx vitest run src/platform/api/v1/__tests__/route-fitness.test.ts`
+(no database fixtures needed — every check either inspects the live router/registry objects or
+issues an HTTP request that fails before any DB access). AC proof: a deliberate unregistered scratch
+route was added to `v1Routes` in `router.ts`, the suite was run and captured failing on checks (a)
+and (b) with a clear DRIFT message naming the exact route, then the scratch route was reverted
+before the final commit (`router.ts` has a clean diff against its pre-ticket state) — see the PR
+body for the captured output.
+
+**Rollback.** Revert this ticket's merge commit. This removes the fitness test itself (so the drift
+gate stops running — no CI dependency on it beyond `gate.sh`'s general `pnpm --filter @ship/api
+test`) and reverts the `issues`/`sprints`/`me` OpenAPI registration, `requireScope`'s name-tagging,
+and the two updated `platform/openapi/__tests__/*.test.ts` files back to asserting the pre-PF-203
+(incomplete) path set. No schema or migration changes — nothing else to unwind.
+
+---
+
 ## TRO-402 — PF-202: OpenAPI 3.1 generator + `/api/v1/openapi.json`
 
 **What changed.** A new, separate `OpenAPIRegistry` instance for `/api/v1` —

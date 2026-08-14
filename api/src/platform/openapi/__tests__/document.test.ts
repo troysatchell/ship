@@ -54,10 +54,19 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(document.openapi).toMatch(/^3\.1\.\d+$/);
   });
 
-  it('registers every route that exists on /api/v1 as of this ticket: health, openapi.json, and the three documents routes', () => {
+  it('registers every route on /api/v1 as of PF-203: health, openapi.json, documents, issues, sprints, me', () => {
+    // Updated by PF-203 (Linear TRO-404): issues/sprints/me (PF-201)
+    // predated this registry landing and were never retrofitted — this
+    // ticket's route-fitness test (route-fitness.test.ts) exists precisely
+    // to catch that class of drift, and closing the gap it found is part of
+    // this ticket, not a separate one. The two assertions this replaces
+    // (one asserting the old, incomplete path set; one asserting issues/
+    // sprints/me were deliberately absent) are corrections of now-stale
+    // facts, not a weakened check — every path below is still individually
+    // asserted present.
     const paths = document.paths ?? {};
     expect(Object.keys(paths).sort()).toEqual(
-      ['/documents', '/documents/{id}', '/health', '/openapi.json'].sort()
+      ['/documents', '/documents/{id}', '/health', '/issues', '/me', '/openapi.json', '/sprints'].sort()
     );
 
     expect(paths['/health']?.get).toBeDefined();
@@ -65,20 +74,24 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(paths['/documents']?.get).toBeDefined();
     expect(paths['/documents']?.post).toBeDefined();
     expect(paths['/documents/{id}']?.get).toBeDefined();
+    expect(paths['/issues']?.get).toBeDefined();
+    expect(paths['/sprints']?.get).toBeDefined();
+    expect(paths['/me']?.get).toBeDefined();
   });
 
-  it('deliberately does NOT register PF-201 routes (issues/sprints/me) — that ticket had not merged to main as of this dispatch (see this ticket\'s CHANGES.md scope note)', () => {
-    const paths = document.paths ?? {};
-    expect(paths['/issues']).toBeUndefined();
-    expect(paths['/sprints']).toBeUndefined();
-    expect(paths['/me']).toBeUndefined();
-  });
-
-  it('every /api/v1/documents operation requires bearerAuth; health and openapi.json require none', () => {
+  it('every authenticated /api/v1 operation requires bearerAuth; health and openapi.json require none', () => {
     const paths = document.paths ?? {};
     expect(paths['/documents']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/documents']?.post?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/documents/{id}']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/issues']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/sprints']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    // /me requires bearerAuth like every other authenticated route — it just
+    // requires no specific SCOPE (resources/me.ts's design decision; OpenAPI
+    // security requirements for an http-bearer scheme don't carry a scope
+    // list the way an oauth2 scheme's would, so this looks identical to
+    // /documents' security entry despite that difference).
+    expect(paths['/me']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/health']?.get?.security).toEqual([]);
     expect(paths['/openapi.json']?.get?.security).toEqual([]);
   });

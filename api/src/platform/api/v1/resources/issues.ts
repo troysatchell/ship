@@ -58,8 +58,14 @@ function requestIdOf(req: Request): string {
 }
 
 /** `GET /api/v1/issues` query params — identical shape to `documents.ts`'s
- * list query, minus `type` (fixed to `'issue'` by this resource). */
-const ListIssuesQuerySchema = z.object({
+ * list query, minus `type` (fixed to `'issue'` by this resource).
+ *
+ * `export`ed (PF-203, Linear TRO-404 — closing the registration gap this
+ * ticket's brief flagged: this resource predates PF-202 and was never
+ * retrofitted) purely so `platform/openapi/schemas/issues.ts` can import and
+ * `registerPath` it, matching `resources/documents.ts`'s existing
+ * export-for-schema-file convention. No route-handling logic changed. */
+export const ListIssuesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(20),
   cursor: z.string().min(1).optional(),
 });

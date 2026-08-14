@@ -16,6 +16,14 @@
  *
  * Insufficient scope -> `403`, `code: "forbidden"`, `details.missing_scope`
  * naming the scope the caller lacked — never an opaque "forbidden" (§2.3).
+ *
+ * The returned middleware is given an explicit `.name` — `requireScope(<scope>)`
+ * — via `Object.defineProperty` below (PF-203, Linear TRO-404). Purely for
+ * structural introspection: Express's own `Layer.name` mirrors `fn.name`, so
+ * `route-fitness.test.ts`'s router-stack walk can discover "this route
+ * declares scope X" from the live middleware stack itself, with no parallel
+ * hand-maintained record of which route needs which scope. No behavioral
+ * change — the function body and closure are unaffected.
  */
 
 import type { NextFunction, Request, Response } from 'express';
@@ -34,7 +42,7 @@ export function requireScope(scope: string) {
     );
   }
 
-  return (req: Request, res: Response, next: NextFunction): void => {
+  const middleware = (req: Request, res: Response, next: NextFunction): void => {
     const principal = req.principal;
     if (!principal || !principal.scopes.includes(scope)) {
       const err = forbiddenError(
@@ -47,4 +55,6 @@ export function requireScope(scope: string) {
     }
     next();
   };
+  Object.defineProperty(middleware, 'name', { value: `requireScope(${scope})`, configurable: true });
+  return middleware;
 }
