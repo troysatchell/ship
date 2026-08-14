@@ -21,7 +21,7 @@ const meta: RuleMeta = {
   // see Task 9's activation-pinning step, which pins this to that commit's
   // real sha so branches cut before it run report-only instead of failing
   // retroactively.
-  activatedAt: null,
+  activatedAt: "63d54e49b1eab2becab923eb823129eb4b829e8a",
   pinExpiresAfterMainCommits: 25,
   replayCorpus: [
     { ticket: "TRO-230", file: "web/src/pages/OrgChartPage.test.tsx", summaryIncludes: "non-null assertion on resolveFetch" },
