@@ -123,3 +123,5 @@
 {"ticket":"TRO-441","attempt":5,"verdict":"pass","failedGates":[],"ts":"2026-08-13T01:58:36Z","crFindings":2,"crFixed":2,"crDismissed":0,"note":"quiet re-run; attempt-4 fail was load flake (issues.test.ts passed standalone)"}
 {"ticket":"TRO-412","attempt":2,"verdict":"pass","failedGates":[],"ts":"2026-08-13T02:01:25Z","crFindings":11,"crFixNow":7,"crNewTickets":3,"crDismissed":3,"note":"post-fix full gate at 116a0b3; PM triage: TRO-549/550/551 filed; security interim fix on-branch"}
 {"ticket":"TRO-398","attempt":1,"verdict":"pass","failedGates":[],"ts":"2026-08-13T02:10:39Z","note":"first formal gate after parked-builder resume; 8 regression cases; coderabbit CLI rc=1, PR review to cover"}
+{"ticket":"TRO-402","attempt":1,"verdict":"pass","failedGates":[],"ts":"2026-08-14T05:24:47Z"}
+{"ticket":"TRO-402","attempt":2,"verdict":"pass","failedGates":[],"ts":"2026-08-14T05:41:29Z","note":"re-gate after forward-merging PR #191 (docs-only, no conflicts) to satisfy GitHub's up-to-date-branch merge requirement; coderabbit gate check rate-limited (rc=1, warn not fail) — same rate limit seen at PR level, manual self-review substituted"}
