@@ -145,6 +145,223 @@
           "next_cursor"
         ]
       },
+      "AssociationEdge": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The document_associations row id."
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "related_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "relationship_type": {
+            "type": "string",
+            "description": "e.g. 'parent', 'project', 'sprint', 'program', 'blocks'."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "document_id",
+          "related_id",
+          "relationship_type",
+          "metadata",
+          "created_at"
+        ]
+      },
+      "AssociationEdgeList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssociationEdge"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "BacklinkEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The id of the document that links to this one."
+          },
+          "document_type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "display_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "e.g. '#42' for an issue; null for other document types."
+          }
+        },
+        "required": [
+          "id",
+          "document_type",
+          "title",
+          "display_id"
+        ]
+      },
+      "BacklinkList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BacklinkEntry"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "Comment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "comment_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Thread identifier (matches the TipTap comment mark)."
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "content": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "author": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "email": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "email"
+            ],
+            "description": "null if the author's user row no longer exists."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "document_id",
+          "comment_id",
+          "parent_id",
+          "content",
+          "resolved_at",
+          "author",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CommentList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Comment"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
       "Issue": {
         "type": "object",
         "properties": {
@@ -295,6 +512,54 @@
         "required": [
           "data",
           "next_cursor"
+        ]
+      },
+      "SprintDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Sprint"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "sprint_number": {
+                "type": "integer"
+              },
+              "owner_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "workspace_sprint_start_date": {
+                "type": "string",
+                "description": "YYYY-MM-DD — the workspace's sprint-cadence anchor date."
+              },
+              "start_date": {
+                "type": "string",
+                "description": "YYYY-MM-DD — this sprint's own computed calendar start date."
+              },
+              "end_date": {
+                "type": "string",
+                "description": "YYYY-MM-DD — this sprint's own computed calendar end date (inclusive)."
+              }
+            },
+            "required": [
+              "sprint_number",
+              "owner_id",
+              "status",
+              "workspace_sprint_start_date",
+              "start_date",
+              "end_date"
+            ]
+          }
         ]
       },
       "Me": {
@@ -455,6 +720,337 @@
         "required": [
           "data",
           "next_cursor"
+        ]
+      },
+      "Person": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Person document id."
+          },
+          "name": {
+            "type": "string"
+          },
+          "document_type": {
+            "type": "string",
+            "enum": [
+              "person"
+            ]
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Linked users.id, or null for a pending/unlinked person."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_archived": {
+            "type": "boolean"
+          },
+          "is_pending": {
+            "type": "boolean"
+          },
+          "reports_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The manager's USER id, or null if none is recorded."
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "document_type",
+          "user_id",
+          "email",
+          "is_archived",
+          "is_pending",
+          "reports_to",
+          "role",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "PersonList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Person"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "ChangedDocumentEntry": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "document"
+            ]
+          },
+          "dedupe_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "resource",
+          "dedupe_key",
+          "id",
+          "document_type",
+          "title",
+          "updated_at",
+          "created_by"
+        ]
+      },
+      "ChangedHistoryEntry": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "document_history"
+            ]
+          },
+          "dedupe_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "number",
+            "description": "document_history.id (a SERIAL, not a UUID)."
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "field": {
+            "type": "string"
+          },
+          "old_value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "new_value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "automated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "resource",
+          "dedupe_key",
+          "id",
+          "document_id",
+          "field",
+          "old_value",
+          "new_value",
+          "changed_by",
+          "automated_by",
+          "created_at"
+        ]
+      },
+      "ChangedCommentEntry": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "comment"
+            ]
+          },
+          "dedupe_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "comment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "author_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "content": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "resource",
+          "dedupe_key",
+          "id",
+          "document_id",
+          "comment_id",
+          "parent_id",
+          "author_id",
+          "content",
+          "resolved_at",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "ChangeEntry": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ChangedDocumentEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ChangedHistoryEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ChangedCommentEntry"
+          }
+        ]
+      },
+      "ChangesPage": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeEntry"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp — pass back as ?since= on the next poll. Cursor-lagged: never advanced past (now - 5s), so a slower in-flight transaction cannot be permanently missed. See resources/changes.ts for the full mechanism."
+          },
+          "truncated": {
+            "type": "object",
+            "properties": {
+              "documents": {
+                "type": "boolean"
+              },
+              "document_history": {
+                "type": "boolean"
+              },
+              "comments": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "documents",
+              "document_history",
+              "comments"
+            ],
+            "description": "True per category if that category hit the limit and rows remain for a later poll."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor",
+          "truncated"
         ]
       }
     },
@@ -762,13 +1358,401 @@
         }
       }
     },
+    "/documents/{id}/associations": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "List a document's forward associations",
+        "description": "Cursor-paginated associations FROM this document (document_id = {id}). Deliberately excludes the joined related document's title/type — re-fetch each related_id via GET /documents/{id} to check access before trusting it. Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of association edges.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssociationEdgeList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}/reverse-associations": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "List a document's reverse associations",
+        "description": "Cursor-paginated associations pointing AT this document (related_id = {id}) — e.g. every issue in a sprint. Same title/type-leak avoidance as /associations. Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of association edges.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssociationEdgeList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}/backlinks": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "List documents that link to this document",
+        "description": "Cursor-paginated documents whose content links to this one (document_links, scoped to the caller's workspace). Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of backlinks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacklinkList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}/comments": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "List comments on a document",
+        "description": "Cursor-paginated comments on this document, oldest-page-first by created_at descending (same keyset order as every other v1 list). Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of comments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/issues": {
       "get": {
         "tags": [
           "Issues"
         ],
         "summary": "List issues",
-        "description": "Cursor-paginated list of issue-typed documents in the caller's workspace (PF-201), with state/priority/assignee_id lifted to top-level typed fields. Requires the issues:read scope.",
+        "description": "Cursor-paginated list of issue-typed documents in the caller's workspace (PF-201), with state/priority/assignee_id lifted to top-level typed fields. Optionally filtered by ?assignee_id= (PF-205, TRO-414). Requires the issues:read scope.",
         "security": [
           {
             "bearerAuth": []
@@ -793,6 +1777,15 @@
             },
             "required": false,
             "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "assignee_id",
             "in": "query"
           }
         ],
@@ -907,6 +1900,73 @@
           },
           "403": {
             "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sprints/{id}": {
+      "get": {
+        "tags": [
+          "Sprints"
+        ],
+        "summary": "Get a sprint by id, with cadence/week-dates",
+        "description": "Fetch a single sprint-typed document by id, extended with sprint_number/owner_id/status and the computed start_date/end_date calendar window (from the workspace's sprint_start_date anchor). A malformed or non-existent id both produce a not_found error, matching resources/documents.ts's GET /:id convention. Requires the sprints:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Sprint document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sprint, with cadence/week-dates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SprintDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No sprint with this id exists in the caller's workspace, or the id is malformed.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1304,6 +2364,161 @@
           },
           "404": {
             "description": "No subscription with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/people": {
+      "get": {
+        "tags": [
+          "People"
+        ],
+        "summary": "List people",
+        "description": "Cursor-paginated list of person-typed documents (the team directory) in the caller's workspace. Requires the documents:read scope — people are documents in Ship's unified document model (PLUGFORGE.MD §4 PF-205).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of people.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/changes": {
+      "get": {
+        "tags": [
+          "Changes"
+        ],
+        "summary": "Poll the public change feed",
+        "description": "A pull-based, cursor-lagged change feed over documents/document_history/comments in the caller's workspace — distinct from webhooks (which push deliveries). since is required; pass the previous response's next_cursor as the next since. Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "since",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of change events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or missing since, or since is in the future.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
             "content": {
               "application/json": {
                 "schema": {
