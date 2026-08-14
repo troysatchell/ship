@@ -6,6 +6,7 @@ import { v1OpenApiDocument } from '../../openapi/index.js';
 import { issuesRouter } from './resources/issues.js';
 import { sprintsRouter } from './resources/sprints.js';
 import { meRouter } from './resources/me.js';
+import { webhooksRouter } from './resources/webhooks.js';
 
 /**
  * The public API router — `/api/v1/*` (PLUGFORGE.MD §2.1, §4 PF-001/PF-002).
@@ -59,6 +60,9 @@ v1Routes.get('/openapi.json', (_req, res) => {
 v1Routes.use('/issues', issuesRouter);
 v1Routes.use('/sprints', sprintsRouter);
 v1Routes.use('/me', meRouter);
+
+// PF-302 (Linear TRO-431) — webhook subscriptions CRUD + rotation.
+v1Routes.use('/webhooks', webhooksRouter);
 
 // Add new /api/v1 resource routes to `v1Routes` above this line — never
 // below it, and never directly to `v1Router` (see the stack-order comment

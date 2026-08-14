@@ -21,6 +21,144 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-431 — PF-302: Webhook subscriptions API
+
+**Migration number correction.** PLUGFORGE.MD §2.2 lists this table under "migration 044", but that
+number was already consumed by PF-104's OAuth work (`044_oauth_tokens_authorization_code_id.sql`)
+by the time this ticket started. Verified fresh via `ls api/src/db/migrations/ | sort -V | tail -3`
+before writing anything (042/043/044/045/046 all taken) — used `047_webhook_subscriptions.sql`. Same
+renumbering situation `046_oauth_device_codes_polling.sql` documents in its own header for PF-105/106.
+
+**What changed.** `webhook_subscriptions` (migration 047): `id`, `app_id` (FK `oauth_apps`, `ON
+DELETE CASCADE`), `event_type`, `target_url`, `signing_secret_ciphertext`, `active`, `created_at` —
+columns match PLUGFORGE.MD §2.2's table row exactly. `/api/v1/webhooks` CRUD + rotation
+(`api/src/platform/api/v1/resources/webhooks.ts`), every route gated by `requireScope('webhooks:manage')`
+(PF-107 already registered that scope — `platform/scopes/registry.ts`; confirmed before assuming it,
+per this ticket's own instructions):
+
+- `POST /` — validates `app_id` belongs to the caller's workspace (a `validation_failed`, not
+  `not_found`, since it's a body field being validated rather than a path segment being looked up),
+  generates a `whsec_...` secret (`platform/webhooks/secrets.ts`), encrypts it
+  (`platform/webhooks/secretEncryption.ts`, AES-256-GCM), and returns the plaintext exactly once.
+- `GET /` — cursor-paginated (`{ data, next_cursor }`, PF-203), scoped to the caller's workspace via
+  a join back to `oauth_apps.workspace_id` (a subscription carries no `workspace_id` of its own —
+  it belongs to an `app_id`, per §2.2's table). Never selects `signing_secret_ciphertext`.
+- `GET /:id` — same workspace scoping; a cross-tenant id 404s exactly like a nonexistent one.
+- `DELETE /:id` — deactivates (`active = false`) rather than a hard `DELETE FROM`, so a future
+  `webhook_deliveries` row (migration 045 in PLUGFORGE's table, not built by this ticket) can still
+  FK-reference `subscription_id` — same revocation-over-deletion precedent as `oauth_apps.revoked_at`.
+  HTTP-level it's still idempotent `204 No Content`, no distinct "already deleted" error (DELETE's
+  own idempotency contract — deliberately looser than `rotateOAuthAppSecret`'s `already_revoked`,
+  which tracks first-vs-subsequent because *revocation* itself has audit meaning; a repeat
+  deactivate here does not).
+- `POST /:id/rotate` — mints a new secret, returns it once, and overwrites
+  `signing_secret_ciphertext` in place with **no grace period** — the same single-column-UPDATE
+  shape `platform/oauth/appRegistration.ts`'s `rotateOAuthAppSecret` (PF-102) already established
+  and documents for OAuth app secrets: there is nowhere to keep an old value even if a future change
+  wanted to, so the old secret cannot validate a signature computed after rotation.
+
+OpenAPI registration for all five routes: `api/src/platform/openapi/schemas/webhooks.ts`, wired into
+`schemas/index.ts` — PF-203's route-fitness test walks the live router and fails CI on any
+unregistered route, so this was not optional.
+
+**Deliberate deviation — encrypted, not hashed (already decided; PLUGFORGE.MD §2.2 note).** The
+brief says "hashed signing secret." A one-way hash is unimplementable here: `platform/webhooks/signer.ts`
+(PF-303) must compute an HMAC over each outgoing delivery, which means the server has to recover the
+*plaintext* secret at delivery time — a hash cannot be reversed by design. Decision (already made,
+`docs/architecture.md`'s "Documented Deviations" section, restated not re-litigated here): generate
+`whsec_...` secrets, return the plaintext exactly once (creation/rotation), store **encrypted** at
+rest — AES-256-GCM, key from env `SECRET_ENCRYPTION_KEY`, 12-byte IV, 16-byte GCM auth tag, all three
+packed into one base64 blob in the single `signing_secret_ciphertext` column (`platform/webhooks/secretEncryption.ts`
+owns the packing format). Same pattern Stripe uses for webhook signing secrets — already documented
+in `docs/architecture.md` before this ticket started; this PR adds a one-line "implemented by" pointer
+there (file paths, migration number) rather than rewriting the deviation's rationale, which was
+already correct.
+
+**`event_type` validation — deliberately application-level, not a DB CHECK constraint.** Documented
+in migration 047's own header: a CHECK constraint enumerating the 8 event-type strings would create a
+second, migration-frozen source of truth alongside `platform/webhooks/events.ts`'s `EVENT_DEFINITIONS`
+map — exactly what PF-300's "events as data" design (that file's own header) exists to avoid. Enforced
+instead by `resources/webhooks.ts`'s `WebhookEventTypeSchema = z.enum(EVENT_TYPES)`, imported directly
+from the registry — one source of truth, and a 9th event type needs no schema migration to accept.
+
+**`SECRET_ENCRYPTION_KEY`.** No existing env var name for this purpose was found anywhere in the
+codebase before this ticket (grepped `api/`, `docs/`, `PLUGFORGE.MD`) — `SECRET_ENCRYPTION_KEY` is
+the name PLUGFORGE.MD §2.2/§2.10 already specifies, so this ticket is the first to actually read it,
+not the one inventing it. Documented in `api/.env.example` (generate with `openssl rand -hex 32`).
+Missing/malformed key fails loudly (`secretEncryption.ts#loadEncryptionKey`) only on the two calls
+that need it (create, rotate) — server boot is unaffected, matching this codebase's existing
+"secrets fail at the point of use, not at startup" convention for optional integrations
+(`AGENT_INTERNAL_SECRET`, `api/.env.example`).
+
+**Proof (AC, verbatim from the ticket: "CRUD tests; secret non-recoverable via API after creation;
+rotation endpoint").**
+- CRUD: `api/src/platform/api/v1/resources/__tests__/webhooks.test.ts` — create (incl. every one of
+  PF-300's 8 registered event types, invalid app_id/event_type/target_url, missing scope, missing
+  auth), list (pagination shape, cross-workspace exclusion), get (incl. cross-tenant 404), delete
+  (idempotent deactivation, cross-tenant 404).
+- Secret non-recoverable: same file's "AC: secret non-recoverable via any API call after creation"
+  block — asserts `'secret' in body === false` and `JSON.stringify(body)` does not contain the
+  plaintext on every GET/list response reachable after the one-time create response.
+- Rotation invalidates the old secret: same file's "AC: rotation invalidates..." block. Ran under: a
+  crypto-level proxy, not a live HTTP delivery — PF-304 (the deliverer) does not exist yet, so there
+  is nothing to send a real webhook through. What was actually verified: the stored ciphertext
+  changes value on rotation and decrypts to a DIFFERENT plaintext than before; a `Ship-Signature`
+  header computed (via PF-303's real `sign()`) under the OLD secret fails PF-303's real `verify()`
+  against the NEW (post-rotation, freshly decrypted) secret, with a sanity check that the identical
+  signature DOES verify under the secret it was actually signed with. **Not verified:** an actual
+  webhook delivery attempt after rotation being rejected end-to-end — that requires PF-304, out of
+  this ticket's scope.
+- `secretEncryption.ts` also has its own unit suite (`platform/webhooks/__tests__/secretEncryption.test.ts`):
+  round-trip, per-call IV randomness, tamper detection (GCM auth tag), wrong-key rejection, and the
+  three "misconfigured env var" error paths.
+
+**CodeRabbit triage (8 findings, self-reviewed — this handles secrets).** Fixed: (1) `created_at`
+now `NOT NULL` (matches the row type every route assumes; deliberately stricter than 042/043's own
+precedent, which is safe to do for a brand-new table with no legacy rows); (2) a partial unique
+index (`app_id, event_type, target_url) WHERE active`) blocks duplicate active subscriptions, with
+`POST /` mapping the resulting `23505` into a `validation_failed` response rather than a raw 500;
+(3) `target_url` now rejects non-http(s) schemes (`javascript:`, `file:`, etc.) via a cheap
+`.refine()` — deliberately NOT extended to block private/loopback IPs at creation time, since a
+hostname's DNS answer can change before PF-304 actually dials it (DNS rebinding) and a check here
+would be theater, not protection; documented as PF-304's job, not silently dropped; (4) fixed a
+stale doc comment on `resolveWorkspaceOrThrow` and de-duplicated `GET /:id`'s workspace-resolution
+logic into it (split into `resolveWorkspaceOrThrow`/`resolveWorkspaceOrNull` — `GET /`'s
+fail-to-empty-page behavior needs the latter); (5) `GET /` cursor-pagination test now asserts the
+just-created subscription's id is actually IN the returned page, not just that the response has the
+right shape; (6) replaced `?? undefined` + `as string` ciphertext narrowing in the test file with a
+throw-on-missing `fetchCiphertext()` helper (same shape `insertOauthApp`/`onlyRow` already use); (7)
+the test file's `SECRET_ENCRYPTION_KEY` fixture now saves/restores rather than unconditionally
+deletes, and every `beforeAll` seed insert now throws via `onlyRow` instead of defaulting to `''` on
+a missing row. Dismissed, disclosed rather than silently skipped: key VERSIONING/rotation for
+`SECRET_ENCRYPTION_KEY` itself (as opposed to a subscription's own `whsec_...` secret, which
+`POST /:id/rotate` already rotates) — real gap, out of PF-302's AC, documented at length in
+`secretEncryption.ts`'s own header as a named follow-up rather than fixed here as scope creep.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api exec vitest run \
+  src/platform/api/v1/resources/__tests__/webhooks.test.ts \
+  src/platform/webhooks/__tests__/secretEncryption.test.ts \
+  src/platform/api/v1/__tests__/route-fitness.test.ts \
+  src/platform/openapi/__tests__/document.test.ts \
+  src/platform/openapi/__tests__/endpoint.test.ts \
+  src/db/__tests__/migrations-042-043.test.ts
+```
+
+**Rollback.** Revert this PR's commit(s). The migration is additive-only (`CREATE TABLE IF NOT
+EXISTS`, no altered/dropped columns on any existing table) — no down-migration exists in this
+codebase's convention (none of migrations 042–046 ship one either); dropping
+`webhook_subscriptions` by hand (`DROP TABLE IF EXISTS webhook_subscriptions;`) is safe on any
+database where nothing outside this ticket's own code references it, which is true as of this PR
+(no `webhook_deliveries` table exists yet to FK against it). Unmount `/api/v1/webhooks` by removing
+its two lines in `platform/api/v1/router.ts` and its `schemas/webhooks.js` export in
+`platform/openapi/schemas/index.ts`. No env var is newly *required* — `SECRET_ENCRYPTION_KEY` being
+unset only fails the two routes that need it, not server boot, so no rollback step is needed there
+either.
+
+---
+
 ## TRO-410 — PF-402: Async-iterator pagination — `iterate()` on list clients, cursors fully internal
 
 **What changed.** Added `iterate()` to `DocumentsClient`/`IssuesClient`/`SprintsClient` (PF-401's
