@@ -722,6 +722,97 @@
           "next_cursor"
         ]
       },
+      "PublicApiAuditRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Audit row id."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "The request_id assigned to the audited call (X-Request-Id)."
+          },
+          "app_client_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The calling oauth_apps.client_id, or null for a personal-token call or an unauthenticated request."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The calling user id, or null for a Client Credentials call or an unauthenticated request."
+          },
+          "method": {
+            "type": "string",
+            "description": "HTTP method of the audited call."
+          },
+          "route": {
+            "type": "string",
+            "description": "The literal request path (no query string) of the audited call."
+          },
+          "scope_used": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The scope requireScope(...) checked for this route, or null for a route with no scope requirement."
+          },
+          "status": {
+            "type": "integer",
+            "description": "HTTP response status of the audited call."
+          },
+          "latency_ms": {
+            "type": "integer",
+            "description": "Server-side latency of the audited call, in milliseconds."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp the audit row was written."
+          }
+        },
+        "required": [
+          "id",
+          "request_id",
+          "app_client_id",
+          "user_id",
+          "method",
+          "route",
+          "scope_used",
+          "status",
+          "latency_ms",
+          "created_at"
+        ]
+      },
+      "PublicApiAuditList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicApiAuditRow"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
       "Person": {
         "type": "object",
         "properties": {
@@ -2364,6 +2455,93 @@
           },
           "404": {
             "description": "No subscription with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit": {
+      "get": {
+        "tags": [
+          "Audit"
+        ],
+        "summary": "List the public API audit trail",
+        "description": "Cursor-paginated log of every /api/v1 call (PLUGFORGE.MD §2.7): request_id, app client_id, user_id, method, route, scope checked, status, and latency. Admin/owner-scoped: requires the audit:read scope AND the caller to be a workspace admin, a platform super-admin (\"owner\"), or a first-party app credential. A workspace admin sees only their own workspace's rows; a super-admin sees every workspace. Optional ?app_client_id= filters to one app.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "app_client_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of public API audit rows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicApiAuditList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the audit:read scope, OR it holds the scope but the caller is neither a workspace admin, a platform super-admin, nor a first-party app credential (resources/audit.ts's \"admin/owner-scoped\" design).",
             "content": {
               "application/json": {
                 "schema": {
