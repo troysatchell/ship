@@ -39,6 +39,34 @@
  * for what IS tested here (request-shape only, mocked `fetch`, explicitly
  * labeled as such) and `CHANGES.md`/the PR body for the same caveat spelled
  * out for a human reviewer.
+ *
+ * UPDATE — PF-405 (Linear TRO-422). PF-302 landed for real, concurrently
+ * with this ticket, with FIVE server routes — `POST /webhooks`,
+ * `GET /webhooks`, `GET /webhooks/{id}`, `DELETE /webhooks/{id}`,
+ * `POST /webhooks/{id}/rotate` (`platform/openapi/schemas/webhooks.ts`,
+ * verified against `platform/api/v1/resources/webhooks.ts`, both read in
+ * full before touching this file again). PF-405's own parity fitness test
+ * (`sdk/src/__tests__/parity.test.ts`) walks the real, generated
+ * `/api/v1/openapi.json` document and would fail on any operation with no
+ * SDK method — which `GET /webhooks/{id}` and `POST /webhooks/{id}/rotate`
+ * were, until `getSubscription()`/`rotateSecret()` below closed that gap.
+ * `listDeliveries()`/`replayDelivery()` still target routes PF-305/PF-306
+ * have not built (`/webhooks/deliveries*` — confirmed absent from the real,
+ * merged PF-302 registration) — parity.test.ts's `SDK_EXEMPTIONS` table
+ * carries those two forward with that exact reason, same mechanism as
+ * `iterate()`'s exemption. See parity.test.ts's own header for the full
+ * correspondence rule.
+ *
+ * KNOWN, NOT FIXED BY PF-405: the real PF-302 response shape
+ * (`app_id`, singular `event_type`, `target_url`, no `updated_at` — see
+ * `platform/api/v1/resources/webhooks.ts`'s `serializeSubscription()`) does
+ * not match this file's pre-existing `WebhookSubscription` interface
+ * (`app_id`-less, plural `events`, `url`, `updated_at`) — that mismatch
+ * predates PF-405 (PF-401 guessed the shape before PF-302 defined it for
+ * real) and PF-405's fitness test is deliberately METHOD+PATH-level
+ * (operation existence), not response-body-level, so it does not catch
+ * this. Flagged here, in the PR body, and left as a follow-up rather than
+ * silently fixed or silently ignored — see CHANGES.md's TRO-422 entry.
  */
 import type { RequestClient } from '../internal/requestClient.js';
 import type { ListPage } from '../types.js';
@@ -166,6 +194,22 @@ export class WebhooksClient {
    *  (PF-302); see this file's header. */
   async deleteSubscription(id: string): Promise<void> {
     return this.request.delete(`${SUBSCRIPTIONS_PATH}/${encodeURIComponent(id)}`);
+  }
+
+  /** `GET /api/v1/webhooks/:id` (PF-405, Linear TRO-422 — the real PF-302
+   *  route this client had no method for until now; see this file's
+   *  header). Never includes the signing secret, same as `listSubscriptions()`. */
+  async getSubscription(id: string): Promise<WebhookSubscription> {
+    return this.request.get<WebhookSubscription>(`${SUBSCRIPTIONS_PATH}/${encodeURIComponent(id)}`);
+  }
+
+  /** `POST /api/v1/webhooks/:id/rotate` (PF-405, Linear TRO-422 — same gap
+   *  as `getSubscription()` above). Mints a new `whsec_...` secret and
+   *  returns it in plaintext exactly once, no grace period — the old
+   *  secret stops validating immediately (`platform/api/v1/resources/
+   *  webhooks.ts`'s own header). */
+  async rotateSecret(id: string): Promise<CreatedWebhookSubscription> {
+    return this.request.post<CreatedWebhookSubscription>(`${SUBSCRIPTIONS_PATH}/${encodeURIComponent(id)}/rotate`, {});
   }
 
   /** `GET /api/v1/webhooks/deliveries` — paginated, filterable by
