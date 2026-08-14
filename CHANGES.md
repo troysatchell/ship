@@ -34,7 +34,8 @@ New files: `api/src/platform/oauth/device.ts` (service logic — code issuance, 
 and `pollDeviceCode`, the state machine `authorization_pending`/`slow_down`/`expired_token`/
 `access_denied`/success all live in), `api/src/routes/oauth-device.ts` (thin route layer, same split
 as every other OAuth ticket), `web/src/pages/OAuthDeviceVerify.tsx` (the verification page),
-`api/src/db/migrations/045_oauth_device_codes_polling.sql` (see Schema below).
+`api/src/db/migrations/046_oauth_device_codes_polling.sql` (see Schema below; renumbered from 045
+to 046 — TRO-421 (PF-105) independently claimed 045 for its own refresh-rotation migration first).
 
 **Reused rather than reimplemented**, per this ticket's own instruction ("a new 'how did the client
 get authorized' path feeding the same token-minting logic, not a wholesale reimplementation"):
@@ -100,10 +101,12 @@ mirroring migration 044's `authorization_code_id`) is a small, structurally simi
 future finding decides the stricter posture is worth it — not done here, to keep this ticket scoped
 to the RFC 8628 AC.
 
-**Schema (migration 045).** Migration 043 (PF-101) already created `oauth_device_codes` with every
-column PLUGFORGE.MD §2.2 lists — checked in full before writing anything, per this ticket's own
-instructions, and it does NOT need a new migration for the table itself. Two columns were missing
-for the polling state machine above and migration 045 adds them: `last_polled_at` (slow_down
+**Schema (migration 046, renumbered from 045).** Migration 043 (PF-101) already created
+`oauth_device_codes` with every column PLUGFORGE.MD §2.2 lists — checked in full before writing
+anything, per this ticket's own instructions, and it does NOT need a new migration for the table
+itself. Two columns were missing for the polling state machine above and migration 046 adds them
+(originally numbered 045; renumbered to 046 because TRO-421 (PF-105) independently created its own
+`045_oauth_tokens_refresh_expiry.sql` first — see the top of this entry): `last_polled_at` (slow_down
 bookkeeping) and `token_issued_at` (single-use bookkeeping). Both nullable, both `ALTER TABLE ADD
 COLUMN IF NOT EXISTS`, applied cleanly on this worktree's database (`\d`-equivalent evidence: a
 direct `information_schema.columns` query, since `psql` is not on PATH in this environment —
@@ -195,11 +198,11 @@ other 8 cases stayed green, confirming the test fails for the specific reason it
 (lessons.md rule 11) and isn't, e.g., an import error. Reverted immediately after; full suite
 re-confirmed green (9/9).
 
-**Rollback.** Revert this ticket's commit(s). Migration 045 only adds two nullable columns
+**Rollback.** Revert this ticket's commit(s). Migration 046 only adds two nullable columns
 (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) — safe to leave in place even if the application code is
 rolled back (no data loss, no NOT NULL constraint, nothing else references them); if a full rollback
 of the schema is wanted too, `ALTER TABLE oauth_device_codes DROP COLUMN IF EXISTS last_polled_at,
-DROP COLUMN IF EXISTS token_issued_at;` as a new numbered migration (never edit 045 in place — this
+DROP COLUMN IF EXISTS token_issued_at;` as a new numbered migration (never edit 046 in place — this
 codebase's migrations are append-only). No other table's schema changed. No existing route's
 behavior changed: `POST /oauth/token`'s two existing grant branches (`authorization_code`,
 `client_credentials`) are untouched aside from the new `if` branch above them; `token.ts`'s three

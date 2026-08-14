@@ -3,9 +3,11 @@
  * (PF-106, TRO-425, PLUGFORGE.MD §4: "this is `ship login`'s engine").
  *
  * Owns reads/writes against `oauth_device_codes` (migration 043, PF-101;
- * `last_polled_at`/`token_issued_at` added by migration 045, this ticket —
- * checked first, per this ticket's own instructions, and neither column
- * existed before). The two route files that call this
+ * `last_polled_at`/`token_issued_at` added by migration 046, this ticket
+ * (originally numbered 045; renumbered because TRO-421/PF-105 independently
+ * claimed 045 for its own refresh-rotation migration first) — checked first,
+ * per this ticket's own instructions, and neither column existed before). The
+ * two route files that call this
  * (`routes/oauth-device.ts` for code issuance + the verify decision,
  * `routes/oauth-token.ts` for the polling branch) are deliberately thin,
  * same split as every other OAuth ticket in this codebase (PF-102/103/104).
@@ -222,7 +224,7 @@ export async function createDeviceCode(params: CreateDeviceCodeParams): Promise<
   };
 }
 
-/** Row shape for `oauth_device_codes` (migration 043 + 045) — RULE-21
+/** Row shape for `oauth_device_codes` (migration 043 + 046) — RULE-21
  * (lessons.md §21): `pool.query` rows are `any` unless given an explicit
  * interface. */
 interface DeviceCodeRow {

@@ -1,4 +1,6 @@
--- Migration 045: oauth_device_codes polling bookkeeping (PF-106 / TRO-425)
+-- Migration 046: oauth_device_codes polling bookkeeping (PF-106 / TRO-425)
+-- (originally numbered 045; renumbered to 046 because TRO-421/PF-105
+-- independently created its own 045_oauth_tokens_refresh_expiry.sql first)
 --
 -- Migration 043 already created `oauth_device_codes` (PF-101) with the
 -- columns PLUGFORGE.MD §2.2 lists: device_code_hash, user_code, app_id,
