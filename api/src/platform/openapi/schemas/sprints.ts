@@ -77,3 +77,48 @@ v1Registry.registerPath({
     403: FORBIDDEN_RESPONSE,
   },
 });
+
+// ─── GET /sprints/{id} ───────────────────────────────────────────────────
+//
+// PF-205 (Linear TRO-414) — see `resources/sprints.ts`'s own route header
+// for the claim-provenance note that this route did not already exist
+// before this ticket, despite the PRD block's "already exists, extend the
+// response" phrasing. Response extends `SprintResponseSchema` with the
+// cadence/week-dates fields the PRD asks for.
+
+const SprintDetailResponseSchema = SprintResponseSchema.extend({
+  sprint_number: z.number().int(),
+  owner_id: z.string().uuid().nullable(),
+  status: z.string().nullable(),
+  workspace_sprint_start_date: z.string().openapi({ description: 'YYYY-MM-DD — the workspace\'s sprint-cadence anchor date.' }),
+  start_date: z.string().openapi({ description: 'YYYY-MM-DD — this sprint\'s own computed calendar start date.' }),
+  end_date: z.string().openapi({ description: 'YYYY-MM-DD — this sprint\'s own computed calendar end date (inclusive).' }),
+}).openapi('SprintDetail');
+
+v1Registry.register('SprintDetail', SprintDetailResponseSchema);
+
+v1Registry.registerPath({
+  method: 'get',
+  path: '/sprints/{id}',
+  tags: ['Sprints'],
+  summary: 'Get a sprint by id, with cadence/week-dates',
+  description: 'Fetch a single sprint-typed document by id, extended with sprint_number/owner_id/status and the computed start_date/end_date calendar window (from the workspace\'s sprint_start_date anchor). A malformed or non-existent id both produce a not_found error, matching resources/documents.ts\'s GET /:id convention. Requires the sprints:read scope.',
+  security: BEARER_SECURITY,
+  request: {
+    params: z.object({
+      id: z.string().openapi({ description: 'Sprint document id. A non-UUID value 404s rather than validation-failing.' }),
+    }),
+  },
+  responses: {
+    200: {
+      description: 'The sprint, with cadence/week-dates.',
+      content: { 'application/json': { schema: SprintDetailResponseSchema } },
+    },
+    401: UNAUTHORIZED_RESPONSE,
+    403: FORBIDDEN_RESPONSE,
+    404: {
+      description: 'No sprint with this id exists in the caller\'s workspace, or the id is malformed.',
+      content: { 'application/json': { schema: ApiErrorSchema } },
+    },
+  },
+});
