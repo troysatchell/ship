@@ -81,7 +81,7 @@ cd api && npx vitest run src/platform/webhooks/__tests__/deliverer.test.ts
 ```
 
 **Evidence (both PLUGFORGE.MD §5 graded scenarios, `platform/webhooks/__tests__/deliverer.test.ts`,
-all 12 tests in the file passing in ~250-300ms real time):**
+all 13 tests in the file passing in ~200-400ms real time):**
 - 500×3 then 200 → succeeds on attempt 4, with waits proven correctly ≥1s/4s/16s by asserting BOTH
   directions at each boundary: advancing the clock by one millisecond less than the schedule value
   never fires the retry (`processDue()` returns 0), advancing to/past it always does (`processDue()`
@@ -90,8 +90,39 @@ all 12 tests in the file passing in ~250-300ms real time):**
 - Bonus coverage: jitter is actually added on top of the base schedule (not merely present in code
   and unused), a 4xx dead-letters on attempt 1 with no retry ever scheduled, the subscription
   matcher's workspace/event_type/active filtering, a stable `idempotency_key` across every attempt
-  of one delivery, and `rehydrate()` recovering a scheduled retry into a brand-new deliverer
-  instance after its predecessor's in-memory queue is discarded (simulating a crash).
+  of one delivery, `rehydrate()` recovering a scheduled retry into a brand-new deliverer instance
+  after its predecessor's in-memory queue is discarded (simulating a crash), and — the sharpest
+  finding of this PR's several rounds of local CodeRabbit-CLI review (below) — that a genuinely
+  undecryptable ciphertext dead-letters immediately while a GCM auth-tag mismatch (the SAME failure
+  shape a `SECRET_ENCRYPTION_KEY` rotation would produce) is instead treated as transient and
+  retried.
+
+**Two real bugs caught after the code was written, not just style findings:**
+1. **CI's coverage job, not `gate.sh`.** `api/src/db/__tests__/migrations-042-043.test.ts`'s AC-2
+   fixture builds a "prod-shaped, nothing from oauth yet" database by excluding every later
+   migration that depends (directly or transitively) on an oauth table — 044/045/046/047 were
+   already registered there by their own tickets for exactly this reason. `048_webhook_deliveries`
+   (FK-references 047's `webhook_subscriptions`) was never added, so the fixture excluded 047 but
+   still applied 048 against it, failing with `relation "webhook_subscriptions" does not exist`.
+   `gate.sh`'s own `tests:api` step (`vitest run`, no coverage) never caught this across 8 local
+   gate runs; CI's separate `test:coverage` job did, on the first real push. Fixed by registering
+   `048_webhook_deliveries` in that fixture's own exclusion list, per the file's own documented
+   convention. Re-verified locally afterward with the CI-exact command
+   (`pnpm --filter @ship/api test:coverage`), not just `gate.sh`, specifically because this class of
+   gap had just proven `gate.sh` alone insufficient.
+2. **Local CodeRabbit-CLI review.** An earlier revision of `attempt()` treated ANY decrypt/sign
+   failure as deterministic and dead-lettered it immediately. `secretEncryption.ts`'s own header
+   already discloses a known gap: rotating the deployment's `SECRET_ENCRYPTION_KEY` makes every
+   existing `signing_secret_ciphertext` row undecryptable, with no migration path back — and a GCM
+   auth-tag mismatch is indistinguishable, at the crypto level, between "this ciphertext is
+   genuinely corrupt" and "this ciphertext was encrypted under a key that has since rotated." The
+   blanket dead-letter would have silently and permanently dropped every in-flight webhook delivery
+   the moment an operator ever rotated that key. Fixed with a new `MalformedCiphertextError`
+   (`secretEncryption.ts`), thrown only by the one check that runs before any key-dependent
+   operation (ciphertext structurally too short to contain an IV + auth tag) — genuinely
+   deterministic regardless of key. Every other decrypt/sign failure now falls through to the
+   transient execution-failure path instead (backs off, eventually gives up in-memory, but the row
+   stays `'pending'` — recoverable once the key issue is fixed, via a future `rehydrate()`).
 
 **Not verified / explicit gaps.** No live HTTP delivery against a real external endpoint — every
 test injects `fetchImpl`. `GET /:id/deliveries` (a delivery-log listing endpoint) and
