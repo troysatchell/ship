@@ -96,7 +96,7 @@
 import type { Pool, QueryResult } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { sign, type Clock as SignerClock } from './signer.js';
-import { decryptSecret } from './secretEncryption.js';
+import { decryptSecret, MalformedCiphertextError } from './secretEncryption.js';
 import { EVENT_TYPES, type EventType } from './events.js';
 import type { EventEnvelope, IEventBus, Unsubscribe } from './eventBus.js';
 import type { Clock } from './clock.js';
@@ -143,8 +143,8 @@ const REHYDRATE_BATCH_SIZE = 500;
  * `rehydrate()` (this process's own restart, or another instance's boot)
  * instead (CodeRabbit, this PR review).
  */
-const EXECUTION_FAILURE_BACKOFF_MS = 5_000;
-const MAX_EXECUTION_FAILURES = 5;
+export const EXECUTION_FAILURE_BACKOFF_MS = 5_000;
+export const MAX_EXECUTION_FAILURES = 5;
 
 /** Narrows `value` to `EventType` by checking it against the registry's own
  * `EVENT_TYPES`, rather than an unchecked `as EventType` cast — `event_type`
@@ -550,27 +550,46 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
       const signerClock: SignerClock = () => Math.floor(this.clock.now() / 1000);
       signatureHeader = sign(item.rawBody, secret, signerClock);
     } catch (error) {
-      // Deterministic, permanent failure (CodeRabbit, this PR review): a
-      // malformed/corrupted `signing_secret_ciphertext` or an empty secret
-      // will fail decrypt/sign identically on EVERY future attempt — this is
-      // not the transient "database briefly unreachable" case
-      // processDue()'s execution-failure backoff exists for. Retrying it
-      // with backoff wastes MAX_EXECUTION_FAILURES attempts on something
-      // that can never succeed, and giving up in-memory (the transient-
-      // failure path) would leave the row 'pending' forever, so every future
-      // rehydrate() — this process restarting, or another instance's boot —
-      // would pick it back up and retry it again, forever. Dead-letter it
-      // immediately instead, the same as a 4xx.
+      if (!(error instanceof MalformedCiphertextError)) {
+        // Every OTHER way decrypt/sign can throw is process/deployment-level,
+        // not row-level, and NOT safe to treat as permanent (CodeRabbit, this
+        // PR review, catching an over-broad first draft that dead-lettered
+        // ALL of these):
+        //   - `SECRET_ENCRYPTION_KEY` missing/malformed (`loadEncryptionKey`)
+        //     — an operator can fix the env var without touching this row.
+        //   - a GCM auth-tag mismatch from `decipher.final()` — genuinely
+        //     indistinguishable, at the crypto level, between "this
+        //     ciphertext is corrupt" and "this ciphertext was encrypted
+        //     under a PREVIOUS `SECRET_ENCRYPTION_KEY` that has since
+        //     rotated" — `secretEncryption.ts`'s own header already
+        //     discloses that second case as a known, unsupported gap.
+        //     Wrongly dead-lettering a rotation-affected row is a much worse
+        //     outcome (silently, permanently drops a legitimately
+        //     deliverable webhook) than wrongly treating it as transient
+        //     (it retries a few times, then still just sits 'pending' —
+        //     recoverable, not lost).
+        // Rethrow: processDue()'s catch is the transient/backoff path.
+        throw error;
+      }
+
+      // Only a `MalformedCiphertextError` — the base64-decoded blob is
+      // structurally too short to contain an IV and auth tag, a check that
+      // runs before any key-dependent operation — is genuinely deterministic
+      // regardless of key. Retrying it wastes attempts on something that can
+      // never succeed under ANY `SECRET_ENCRYPTION_KEY`, and leaving it
+      // 'pending' forever (the transient path's eventual give-up state)
+      // would mean every future rehydrate() — this process restarting, or
+      // another instance's boot — picks it back up and retries it again,
+      // forever. Dead-letter it immediately instead, the same as a 4xx.
       console.error(
-        `webhook deliverer: delivery ${item.deliveryRowId} has an undecryptable or unsignable secret — dead-lettering, not retrying`,
+        `webhook deliverer: delivery ${item.deliveryRowId} has a malformed signing_secret_ciphertext — dead-lettering, not retrying`,
         error
       );
-      const message = error instanceof Error ? error.message : String(error);
       await this.pool.query(
         `UPDATE webhook_deliveries
          SET status = 'dead', response_status = NULL, response_excerpt = $2, latency_ms = NULL, next_attempt_at = NULL
          WHERE id = $1`,
-        [item.deliveryRowId, message.slice(0, RESPONSE_EXCERPT_MAX_CHARS)]
+        [item.deliveryRowId, error.message.slice(0, RESPONSE_EXCERPT_MAX_CHARS)]
       );
       return;
     }

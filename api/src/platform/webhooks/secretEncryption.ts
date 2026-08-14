@@ -58,6 +58,31 @@ import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'
  * (PLUGFORGE.MD §2.2/§2.10). */
 export const SECRET_ENCRYPTION_KEY_ENV = 'SECRET_ENCRYPTION_KEY'
 
+/**
+ * Thrown by `decryptSecret` ONLY for a `combined.length` check that fails
+ * before any key-dependent operation runs — i.e. the base64-decoded blob is
+ * structurally too short to contain an IV and auth tag, full stop, under ANY
+ * key. A dedicated class rather than plain `Error` (PF-304/TRO-438's
+ * `platform/webhooks/deliverer.ts` needs to tell this ONE genuinely
+ * deterministic-regardless-of-key failure apart from every other way
+ * `decryptSecret` can throw — a missing/malformed `SECRET_ENCRYPTION_KEY`
+ * (this module's own `loadEncryptionKey`), or a GCM auth-tag mismatch from
+ * `decipher.final()`, which is indistinguishable at the crypto level between
+ * "this ciphertext is genuinely corrupt" and "this ciphertext was encrypted
+ * under a PREVIOUS `SECRET_ENCRYPTION_KEY` that has since rotated" — this
+ * module's own header already discloses that second case as a known,
+ * unsupported gap. Both of those are process/deployment-level conditions an
+ * operator might still fix without touching the affected row, so the
+ * deliverer treats them as transient and retries; only THIS narrow,
+ * unambiguous case is treated as permanent.
+ */
+export class MalformedCiphertextError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'MalformedCiphertextError'
+  }
+}
+
 const ALGORITHM = 'aes-256-gcm'
 const KEY_LENGTH_BYTES = 32 // AES-256
 const IV_LENGTH_BYTES = 12 // GCM's standard/default nonce size
@@ -130,7 +155,7 @@ export function decryptSecret(encoded: string): string {
   const key = loadEncryptionKey()
   const combined = Buffer.from(encoded, 'base64')
   if (combined.length < IV_LENGTH_BYTES + AUTH_TAG_LENGTH_BYTES) {
-    throw new Error('decryptSecret: encoded value is too short to contain an IV and auth tag.')
+    throw new MalformedCiphertextError('decryptSecret: encoded value is too short to contain an IV and auth tag.')
   }
   const iv = combined.subarray(0, IV_LENGTH_BYTES)
   const authTag = combined.subarray(IV_LENGTH_BYTES, IV_LENGTH_BYTES + AUTH_TAG_LENGTH_BYTES)

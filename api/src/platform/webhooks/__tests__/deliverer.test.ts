@@ -40,7 +40,13 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import crypto from 'crypto';
 import { pool } from '../../../db/client.js';
-import { InMemoryWebhookDeliverer, wireDelivererToEventBus, type IWebhookDeliverer } from '../deliverer.js';
+import {
+  InMemoryWebhookDeliverer,
+  wireDelivererToEventBus,
+  EXECUTION_FAILURE_BACKOFF_MS,
+  MAX_EXECUTION_FAILURES,
+  type IWebhookDeliverer,
+} from '../deliverer.js';
 import { ManualClock } from '../clock.js';
 import { InProcessEventBus } from '../eventBus.js';
 import type { EventEnvelope } from '../eventBus.js';
@@ -526,6 +532,76 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     clock.advance(10_000_000);
     expect(await deliverer.processDue()).toBe(0);
     expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  /** A correctly-SIZED but tampered ciphertext: passes `decryptSecret`'s
+   * length check (so it does NOT throw `MalformedCiphertextError`), but
+   * fails GCM authentication once decryption actually runs. This is the
+   * SAME failure shape a ciphertext encrypted under a rotated
+   * `SECRET_ENCRYPTION_KEY` would produce (see deliverer.ts's own comment on
+   * why that case is deliberately treated as transient, not permanent) —
+   * this helper just reaches it via tampering, since simulating an actual
+   * key rotation would need a second `SECRET_ENCRYPTION_KEY_ENV` in flight. */
+  function corruptedButCorrectlySizedCiphertext(secret: string): string {
+    const valid = Buffer.from(encryptSecret(secret), 'base64');
+    const tampered = Buffer.from(valid); // copy — do not mutate the original buffer
+    const lastIndex = tampered.length - 1;
+    tampered[lastIndex] = (tampered[lastIndex] ?? 0) ^ 0xff;
+    return tampered.toString('base64');
+  }
+
+  it('a GCM auth-tag mismatch (e.g. tampered ciphertext, or a rotated encryption key) is treated as TRANSIENT — backs off, then gives up in-memory leaving the row pending for rehydrate(), never dead-lettered', async () => {
+    const workspaceId = await createWorkspace();
+    const appId = await createOAuthApp(workspaceId);
+    const subscriptionResult = await pool.query<{ id: string }>(
+      `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
+       VALUES ($1, $2, $3, $4, true) RETURNING id`,
+      [appId, 'document.created', 'https://example.com/hook', corruptedButCorrectlySizedCiphertext('whsec_test')]
+    );
+    const subscriptionId = onlyRow(subscriptionResult.rows).id;
+    const event = buildEvent(workspaceId);
+
+    const fetchImpl = fetchMockAlways(() => okResponse()); // never reached
+    const clock = new ManualClock(0);
+    const deliverer = new InMemoryWebhookDeliverer(pool, clock, { fetchImpl });
+
+    await deliverer.enqueueEvent(event);
+    expect(deliverer.queueLength).toBe(1);
+
+    // Attempt 1: transient execution failure. processDue() still reports 1
+    // (it WAS due and WAS attempted — attempting is what failed), and the
+    // item is re-queued with a backoff delay, not retried on the very next
+    // call.
+    expect(await deliverer.processDue()).toBe(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(deliverer.queueLength).toBe(1);
+
+    clock.advance(EXECUTION_FAILURE_BACKOFF_MS - 1);
+    expect(await deliverer.processDue()).toBe(0); // not due yet — backoff, not immediate retry
+    clock.advance(1);
+
+    // Drive it through the remaining execution failures until
+    // MAX_EXECUTION_FAILURES is reached and this process gives up in-memory.
+    for (let failureCount = 2; failureCount <= MAX_EXECUTION_FAILURES; failureCount++) {
+      expect(await deliverer.processDue()).toBe(1);
+      clock.advance(EXECUTION_FAILURE_BACKOFF_MS);
+    }
+
+    // Given up: the queue is empty (nothing left to re-process in THIS
+    // process), yet the DB row is STILL 'pending' — never dead-lettered —
+    // so a future rehydrate() (this process's own restart, or another
+    // instance's boot, possibly after an operator fixes
+    // SECRET_ENCRYPTION_KEY) can still recover and eventually deliver it.
+    expect(deliverer.queueLength).toBe(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    const rows = await fetchDeliveryRows(subscriptionId, event.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe('pending');
+
+    // Cleanup: this deliberately-left-'pending' row must not leak into the
+    // "nothing pending" test below.
+    await pool.query(`DELETE FROM webhook_deliveries WHERE id = $1`, [rows[0]?.id]);
   });
 
   // ──────────────────────────────────────────────────────────────────────
