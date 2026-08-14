@@ -111,6 +111,18 @@ app").**
   reaches it the way it reaches `oauth_apps`/`api_tokens`/`webhook_subscriptions`; without this fix
   it would accumulate rows across every file in one `pnpm test` run.
 
+**`@ship/sdk` follow-through (found by `gate.sh`, not this ticket's own AC).** PF-405's parity
+fitness test (`sdk/src/__tests__/parity.test.ts`) fails any registered `/api/v1` operation with no
+typed SDK method and no documented exemption — `GET /audit` is a substantive domain resource, not an
+infra/meta endpoint, so it earns a real method rather than an `OPENAPI_EXEMPTIONS` entry (that table
+is reserved for the `/health`/`/openapi.json` case, per its own header). Added `AuditClient` (one
+method, `list()` — the server registers only `GET /audit`), wired into `ShipClient` as `.audit`, and
+added to `parity.test.ts`'s discovery groups + `SDK_TO_OPERATION` table. Tested two ways:
+`sdk/src/resources/__tests__/audit.test.ts` (mocked-`fetch` request shape, `webhooks.test.ts`'s
+established pattern) and `sdk/src/__tests__/audit.liveServer.test.ts` (a real TCP round trip against
+`createApp()` — an owner/super-admin success and a plain-member 403; the full admin/owner/first-party
+matrix is already exhaustive server-side, not re-duplicated here).
+
 **Not verified.** Production-scale row volume/retention — this ticket writes and reads correctness,
 not the storage-growth question PF-905 (AI cost analysis, retention windows) is scoped to answer.
 
@@ -124,6 +136,11 @@ pnpm --filter @ship/api exec vitest run \
   src/platform/api/v1/__tests__/route-fitness.test.ts \
   src/platform/openapi/__tests__/document.test.ts \
   src/platform/openapi/__tests__/endpoint.test.ts
+
+pnpm --filter @ship/sdk exec vitest run \
+  src/__tests__/parity.test.ts \
+  src/resources/__tests__/audit.test.ts \
+  src/__tests__/audit.liveServer.test.ts
 ```
 
 **Rollback.** Revert this PR's commit(s). The migration is additive-only (`CREATE TABLE IF NOT
@@ -133,7 +150,10 @@ foreign key by design. Unmount `/api/v1/audit` by removing its line in `platform
 (and the `auditLogMiddleware` mount immediately above it, if disabling audit logging entirely) and
 its `schemas/audit.js` export in `platform/openapi/schemas/index.ts`. Removing the
 `req.auditScopeUsed = scope;` line from `requireScope.ts` is safe independently — it only affects
-what `scope_used` records, never authorization behavior.
+what `scope_used` records, never authorization behavior. On the SDK side, removing `.audit` from
+`ShipClient` requires also removing the `audit.list` entry from `parity.test.ts`'s
+`SDK_TO_OPERATION` table and the `audit.` group from `discoverSdkMethods()` — otherwise that suite
+fails on a stale key rather than cleanly reverting.
 
 ---
 
