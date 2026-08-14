@@ -13,9 +13,14 @@
  * SDK could never complete successfully. When those routes land, adding
  * `get`/`create` here is additive — a new method, not a signature change to
  * this ticket's `list()`.
+ *
+ * `iterate()` (PF-402) — async-iterator pagination over `list()`'s cursor,
+ * same shared `iteratePages` helper `DocumentsClient`/`SprintsClient` use
+ * (`resources/documents.ts`'s own header has the fuller mechanics writeup).
  */
+import { iteratePages } from '../internal/pagination.js';
 import type { RequestClient } from '../internal/requestClient.js';
-import type { IssueList, ListIssuesParams } from '../types.js';
+import type { IssueList, IterateIssuesParams, ListIssuesParams, Issue } from '../types.js';
 
 const BASE_PATH = '/api/v1/issues';
 
@@ -32,5 +37,12 @@ export class IssuesClient {
       limit: params.limit,
       cursor: params.cursor,
     });
+  }
+
+  /** `iterate()` (PF-402) — `for await (const issue of client.issues.iterate())`.
+   *  Same params as `list()` minus `cursor`; see `DocumentsClient.iterate()`'s
+   *  doc comment for the shared mechanics. */
+  iterate(params: IterateIssuesParams = {}): AsyncGenerator<Issue, void, undefined> {
+    return iteratePages<Issue>((cursor) => this.list({ ...params, cursor }));
   }
 }

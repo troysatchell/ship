@@ -106,13 +106,14 @@ export interface ShipClientOptions {
 export class ShipClient {
   private readonly request: RequestClient;
 
-  /** `documents.list/get/create` — `/api/v1/documents` (PF-200). */
+  /** `documents.list/get/create/iterate` — `/api/v1/documents` (PF-200;
+   *  `iterate()` is PF-402's async-iterator pagination over `list()`). */
   readonly documents: DocumentsClient;
-  /** `issues.list` — `/api/v1/issues` (PF-201). No `get`/`create`: the
+  /** `issues.list/iterate` — `/api/v1/issues` (PF-201). No `get`/`create`: the
    *  server registers no such routes today — see `resources/issues.ts`'s
    *  header for the verification. */
   readonly issues: IssuesClient;
-  /** `sprints.list` — `/api/v1/sprints` (PF-201). No `get`/`create`, same
+  /** `sprints.list/iterate` — `/api/v1/sprints` (PF-201). No `get`/`create`, same
    *  reason as `issues` above — see `resources/sprints.ts`'s header. */
   readonly sprints: SprintsClient;
   /** Typed against PLUGFORGE.MD §2.8 / the PF-302/304/305/306 ticket specs.

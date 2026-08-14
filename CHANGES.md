@@ -159,6 +159,110 @@ either.
 
 ---
 
+## TRO-410 — PF-402: Async-iterator pagination — `iterate()` on list clients, cursors fully internal
+
+**What changed.** Added `iterate()` to `DocumentsClient`/`IssuesClient`/`SprintsClient` (PF-401's
+three list-capable resource clients) — `for await (const doc of client.documents.iterate()) { ... }`
+(PLUGFORGE.MD §2.8's own usage shape). One shared generator, not three copies:
+`sdk/src/internal/pagination.ts`'s new `iteratePages<T>(fetchPage)` is a resource-agnostic
+`async function*` that drives any `(cursor) => Promise<ListPage<T>>` closure to completion, yielding
+individual items and fetching the next page via `next_cursor` only when the current page's items run
+out. Each resource's `iterate(params)` is a one-line call site: `iteratePages((cursor) =>
+this.list({ ...params, cursor }))`. `list()` itself is completely unchanged — same signature, same
+return shape, same cursor exposed to a caller who wants it; `iterate()` is a new, additive,
+cursor-free consumption path alongside it, exactly as PF-401's own header comments on
+`documents.ts`/`types.ts` predicted this ticket would add it.
+
+**Cursors are fully internal — enforced at both the type and the value level.** `IterateDocumentsParams`/
+`IterateIssuesParams`/`IterateSprintsParams` (`sdk/src/types.ts`) are each `Omit<List*Params, 'cursor'>`,
+so passing `{ cursor: '...' }` to `iterate()` is a compile-time excess-property error, not just an
+ignored runtime value. At runtime, the `cursor` variable `iteratePages` threads through `fetchPage`
+never crosses the `yield` boundary — a caller only ever sees bare `Document`/`Issue`/`Sprint` values,
+never a page wrapper or a `next_cursor` field (asserted directly in
+`resources/__tests__/iterate.test.ts`'s "cursors are fully internal" case).
+
+**Early-break does not overfetch — the harder half of the AC, proved by counting real HTTP calls.**
+`iteratePages`'s `while` loop calls `fetchPage` exactly once per page, then `yield`s that page's items
+one at a time from a `for...of` over `page.data`; execution suspends AT the `yield`, mid-array, and
+only resumes — reaching the next `fetchPage` call — when the caller asks for another item. A `for
+await` loop that `break`s (or a caller who simply stops calling `.next()`) never resumes past its last
+consumed item, so the next page's fetch never runs. `resources/__tests__/iterate.test.ts` proves this
+with a request-counting mocked `fetch`: breaking after the first item of a 3-item first page makes
+exactly 1 request (not 2); breaking immediately after draining ALL of page 1's items — the boundary
+case, where a naive prefetching implementation would most likely fetch ahead — still makes exactly 1
+request; and a contrast case proves the generator DOES correctly fetch page 2 the moment a 3rd item is
+actually requested past a 2-item page 1, so the "only 1 request" results above are laziness, not a
+generator that's just broken and never fetches more than once.
+
+**3+ page transparent iteration — proved twice, two different ways.**
+`resources/__tests__/iterate.test.ts` (mocked `fetch`, `DocumentsClient`) walks 3 mocked pages (2+2+1
+items) via `for await`, asserting every item comes through in order, no duplicates, no gaps, and
+exactly 3 requests made — plus a smaller version of the same proof for `issues.iterate()` and
+`sprints.iterate()`, confirming the shared `iteratePages` helper genuinely generalizes across all
+three resources rather than only having been wired correctly for `documents`.
+`sdk/src/__tests__/resources.liveServer.test.ts` adds a REAL end-to-end version: seeds 5 documents
+with strictly increasing `created_at` against a real Postgres + real running `createApp()`, iterates
+with `limit:2` (forcing AT LEAST 3 real server pages for those 5 items — possibly more, since the
+`type:'wiki'` filter also returns other `wiki` documents earlier tests in that same file created; the
+exact-request-count proof stays in the mocked suite, which controls its data completely), and asserts
+all 5 seeded ids come back exactly once, in the server's real keyset order (`created_at DESC, id DESC`
+— `api/src/platform/api/v1/pagination.ts`'s own contract), not just a hand-rolled mock of the page
+shape.
+
+**Evidence.**
+
+| Check | Result | Ran under |
+|---|---|---|
+| 3+ page transparent iteration (mocked, all 3 resources) | pass | `sdk/src/resources/__tests__/iterate.test.ts` |
+| 3+ page transparent iteration (real server + real Postgres, `documents`) | pass | `sdk/src/__tests__/resources.liveServer.test.ts` |
+| Early-break does not overfetch (request-count proof, 3 cases) | pass | `sdk/src/resources/__tests__/iterate.test.ts` |
+| Cursors fully internal (type-level `Omit` + runtime shape check) | pass | `sdk/src/resources/__tests__/iterate.test.ts` |
+| Full sdk suite | pass | `source .factory-env && cd sdk && npx vitest run` — 14 files, 120 tests, all green |
+| Type check | pass | `cd sdk && npx tsc --noEmit` — clean |
+
+**Observed.** Both commands above run directly, output captured in full; on the run that produced this
+entry, the live-server test's own stdout log showed exactly 3 `GET /api/v1/documents` request_ids for
+its `iterate()` call (5 seeded items + 1 pre-existing `wiki` doc from an earlier test in the same file
+= 6 items, `limit:2` = 3 pages) — consistent with, but not a guarantee independent of, the AT LEAST 3
+this test's own assertions actually require (see CodeRabbit triage below).
+
+**Derived.** The early-break request-count proof relies on `iteratePages`'s control-flow reasoning
+(fetch happens inside the `while` loop, yield happens inside the nested `for...of`, so a suspended
+generator literally cannot have executed a later `fetchPage` call) — stated in that file's own doc
+comment, not just asserted as a black-box test outcome.
+
+**Not verified.** `webhooks` has no `list()`/`iterate()` at all (PF-401's own scope: no
+`/api/v1/webhooks*` server route exists yet, so there was nothing to add `iterate()` over here either).
+Browser/non-Node `fetch` behavior under `iterate()` specifically (no new browser-specific code path was
+introduced — `iterate()` goes through the same `RequestClient`/`list()` PF-401 already covers for that
+environment — so this isn't a new gap, just not independently re-verified here).
+
+**CodeRabbit triage (1 finding, real, fixed).** This entry's own first draft, and the live-server
+test's own comments/title, claimed the `limit:2` iterate() call against real seeded data forced
+"exactly 3" real server pages. Correct for the specific run that produced the numbers (5 seeded items
++ 1 pre-existing `wiki` document an earlier test in the same file creates = 6, `limit:2` = 3 pages),
+but overclaiming as a general statement: `type:'wiki'` also returns any other `wiki` document a future
+test in that file might add, which would change the total item count (and therefore the exact page
+count) without changing anything this test actually verifies. Reworded throughout (this entry, the
+test's own comments, and its `it()` title) to "at least 3" / "3+" — matching the ticket's own AC
+wording — with the exact-request-count claim scoped to where it's actually guaranteed: the mocked-fetch
+suite, which fully controls its own data and asserts `toHaveBeenCalledTimes(3)` directly.
+
+**How to run it.** `cd sdk && npx vitest run src/resources/__tests__/iterate.test.ts` (no DB needed).
+`source .factory-env && cd sdk && npx vitest run src/__tests__/resources.liveServer.test.ts` for the
+real-server proof (needs the worktree's Postgres reachable). `npx tsc --noEmit` for the type-check
+alone.
+
+**Rollback.** Revert this ticket's merge commit. `sdk/src/internal/pagination.ts` is deleted; the
+`iterate()` method is removed from `DocumentsClient`/`IssuesClient`/`SprintsClient`; the three
+`Iterate*Params` types and their `index.ts` exports revert; the two new/extended test files revert to
+their PF-401 shape (`resources/__tests__/iterate.test.ts` deleted, the `iterate()` case in
+`resources.liveServer.test.ts` removed). `list()` on all three clients is untouched throughout — a
+straight revert of this ticket cannot affect any caller still using `list()` directly. No server-side,
+migration, or schema changes to unwind.
+
+---
+
 ## TRO-426 — PF-301: Domain write path + `IEventBus`
 
 **What changed.** Extended `api/src/services/documentService.ts` (PF-200 landed it with only

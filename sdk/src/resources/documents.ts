@@ -8,13 +8,19 @@
  * shape are this file's and `../types.ts`'s source of truth, not
  * PLUGFORGE.MD's prose alone).
  *
- * `iterate()` (async-iterator pagination over `list()`'s cursor) is PF-402,
- * a separate ticket — `list()` here returns one raw `{ data, next_cursor }`
- * page, deliberately not wrapped, so PF-402 can add `iterate()` as a new
- * method without changing this one's signature or return type.
+ * `iterate()` (PF-402, below) is async-iterator pagination over `list()`'s
+ * cursor — `list()` itself is unchanged: still one raw `{ data, next_cursor }`
+ * page, still exposing the cursor to a caller who wants it.
  */
+import { iteratePages } from '../internal/pagination.js';
 import type { RequestClient } from '../internal/requestClient.js';
-import type { CreateDocumentBody, Document, DocumentList, ListDocumentsParams } from '../types.js';
+import type {
+  CreateDocumentBody,
+  Document,
+  DocumentList,
+  IterateDocumentsParams,
+  ListDocumentsParams,
+} from '../types.js';
 
 const BASE_PATH = '/api/v1/documents';
 
@@ -54,5 +60,20 @@ export class DocumentsClient {
    */
   async create(body: CreateDocumentBody): Promise<Document> {
     return this.request.post<Document>(BASE_PATH, body);
+  }
+
+  /**
+   * `iterate()` (PF-402, PLUGFORGE.MD §2.8) — `for await (const doc of
+   * client.documents.iterate())`. Same params as `list()` minus `cursor`
+   * (`IterateDocumentsParams`, `../types.js`) — the cursor is fully internal
+   * to `internal/pagination.ts`'s shared `iteratePages` generator, which
+   * this method just points at `this.list()`. Fetches lazily, one page at a
+   * time, only as the caller consumes the previous page's items — an
+   * early `break` does not trigger a request for the next page. See
+   * `iteratePages`'s own doc comment for the mechanics, and
+   * `resources/__tests__/iterate.test.ts` for the request-count proof.
+   */
+  iterate(params: IterateDocumentsParams = {}): AsyncGenerator<Document, void, undefined> {
+    return iteratePages<Document>((cursor) => this.list({ ...params, cursor }));
   }
 }
