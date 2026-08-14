@@ -123,6 +123,13 @@ established pattern) and `sdk/src/__tests__/audit.liveServer.test.ts` (a real TC
 `createApp()` — an owner/super-admin success and a plain-member 403; the full admin/owner/first-party
 matrix is already exhaustive server-side, not re-duplicated here).
 
+**`docs/openapi.json` regenerated (found by forward-merging main, not this ticket's own AC).**
+PF-204's drift-check test (`generate-v1-openapi.test.ts`) failed for real, standalone, after
+merging PF-205 (Linear TRO-414, landed on `main` mid-PR): the committed `docs/openapi.json`
+snapshot predates this ticket's `/audit` route, so the in-process registry and the committed file
+disagreed. Regenerated via `pnpm generate:openapi`; `pnpm --filter @ship/api openapi:check:v1`
+confirms no drift.
+
 **Not verified.** Production-scale row volume/retention — this ticket writes and reads correctness,
 not the storage-growth question PF-905 (AI cost analysis, retention windows) is scoped to answer.
 
