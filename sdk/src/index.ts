@@ -19,3 +19,4 @@ export {
   DEFAULT_WEBHOOK_TOLERANCE_SECONDS,
   SHIP_SIGNATURE_HEADER_NAME,
 } from './verifyWebhook.js';
+export type { PlainHeaders } from './verifyWebhook.js';

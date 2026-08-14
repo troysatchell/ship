@@ -142,6 +142,35 @@ describe('verifyWebhook', () => {
       expect(verifyWebhook(headers, bufferBody, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
     });
 
+    // Regression tests for a CodeRabbit finding on this ticket: the original `headers` type
+    // (`Record<string,string>`) doesn't actually match Node's real `http.IncomingMessage.headers`
+    // (`IncomingHttpHeaders` — values can be `string | string[] | undefined`), so a real webhook
+    // receiver's most natural call site, `verifyWebhook(req.headers, ...)`, wouldn't type-check.
+    // Broadened to accept that shape directly. An array value (a duplicated header — never
+    // expected for `Ship-Signature` in practice) or an `undefined` value must fail closed rather
+    // than guessing which entry was meant.
+    it('accepts a Node IncomingHttpHeaders-shaped object with an unrelated array-valued header alongside it', () => {
+      const header = buildHeader(T, RAW_BODY, SECRET);
+      const headers = { 'ship-signature': header, 'set-cookie': ['a=1', 'b=2'] };
+
+      expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
+    });
+
+    it('fails closed when Ship-Signature itself is array-valued, without throwing', () => {
+      const header = buildHeader(T, RAW_BODY, SECRET);
+      const headers = { 'ship-signature': [header, header] };
+
+      expect(() => verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).not.toThrow();
+      expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+    });
+
+    it('fails closed when Ship-Signature is present but undefined, without throwing', () => {
+      const headers: Record<string, string | string[] | undefined> = { 'ship-signature': undefined };
+
+      expect(() => verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).not.toThrow();
+      expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+    });
+
     // Regression test for a CodeRabbit finding on this ticket: an earlier version normalized a
     // Buffer rawBody via `.toString('utf8')` before hashing, which is lossy for bytes that are
     // NOT valid UTF-8 (decode replaces invalid sequences with U+FFFD; re-encoding that string

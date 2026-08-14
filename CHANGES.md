@@ -34,11 +34,12 @@ digest of `${t}.${rawBody}` under `secret`, and compares against the header's `v
 non-finite/negative-tolerance guard, and the same parse logic as `signer.ts`'s (not exported)
 helpers, copied verbatim rather than re-derived.
 
-`headers` accepts either a plain `Record<string,string>` (Node's `req.headers`) or a standard
-`Headers` object (fetch API), read case-insensitively either way; `rawBody` accepts `string |
-Buffer`, hashed as raw bytes (`Buffer.concat([Buffer.from(`${t}.`), bodyBytes])` fed directly to
+`headers` accepts either a plain object shaped like Node's real `IncomingHttpHeaders`
+(`PlainHeaders = Record<string, string | string[] | undefined>`, exported) or a standard `Headers`
+object (fetch API), read case-insensitively either way; `rawBody` accepts `string | Buffer`, hashed
+as raw bytes (`Buffer.concat([Buffer.from(`${t}.`), bodyBytes])` fed directly to
 `createHmac(...).update(buffer)`) rather than through a string round-trip — see the CodeRabbit fix
-note below. Two deliberate divergences from `signer.ts`'s `verify()`, both documented in
+notes below. Two deliberate divergences from `signer.ts`'s `verify()`, both documented in
 `verifyWebhook.ts`'s own
 header comment: (1) never throws — an empty/non-string `secret` returns `false` instead of a
 `TypeError`, since this is the public, one-call, boolean-returning contract PLUGFORGE.MD §2.8
@@ -61,43 +62,61 @@ strongest available proof the port is byte-identical to the server-side signer's
 implementations are checked against one independently-generated source of truth instead of two
 hand-authored vector sets that could silently drift apart.
 
-**Test suite.** 27 cases in `sdk/src/verifyWebhook.test.ts`: the AC list verbatim (valid passes;
+**Test suite.** 30 cases in `sdk/src/verifyWebhook.test.ts`: the AC list verbatim (valid passes;
 tampered body fails; >5-min-old fails; missing `v1` fails; perf), the tolerance boundary (inclusive
 at 300s, false at 301s, plus a caller-supplied non-default tolerance), both accepted `headers`
-shapes (`Record<string,string>` — both lower- and upper-cased keys — and `Headers`, case-insensitive
-either way), a `Buffer` `rawBody` (both a valid-UTF-8 one and a deliberately-invalid-UTF-8 one — see
-below), the fail-closed non-finite/negative-tolerance guard, the never-throws-on-empty-secret
-divergence, the malformed-hex-with-trailing-garbage hardening ported from `signer.test.ts`, a
-`crypto.timingSafeEqual`-invocation proof (not measured timing uniformity, which is flake-prone),
-and the 7-case shared-fixture cross-validation above.
+shapes (`PlainHeaders` — both lower- and upper-cased keys, plus an unrelated array-valued header
+alongside a valid one — and `Headers`, case-insensitive either way), an array-valued or `undefined`
+`Ship-Signature` itself failing closed, a `Buffer` `rawBody` (both a valid-UTF-8 one and a
+deliberately-invalid-UTF-8 one — see below), the fail-closed non-finite/negative-tolerance guard,
+the never-throws-on-empty-secret divergence, the malformed-hex-with-trailing-garbage hardening
+ported from `signer.test.ts`, a `crypto.timingSafeEqual`-invocation proof (not measured timing
+uniformity, which is flake-prone), and the 7-case shared-fixture cross-validation above.
 
-**CodeRabbit finding, fixed pre-merge (minor).** The PR's first `verifyWebhook.ts` normalized a
-`Buffer` `rawBody` via `.toString('utf8')` before hashing the resulting string — lossy for bytes
-that are not valid UTF-8 (`decode` replaces invalid sequences with U+FFFD; re-encoding that string
-for `createHmac`'s `update()` then hashes different bytes than the ones actually signed), so a
-legitimate webhook body could fail verification. Fixed by hashing raw bytes directly
-(`Buffer.concat([Buffer.from(`${t}.`), bodyBytes])` handed straight to `update()`), matching
-`signer.ts`'s guarantee regardless of the body's byte content. Regression test added
-(`verifies a Buffer rawBody containing bytes that are not valid UTF-8, hashed as raw bytes`):
-signs a body with an embedded invalid UTF-8 sequence two ways (raw-bytes vs. decode-first), asserts
-the two digests provably differ, then asserts `verifyWebhook` accepts only the raw-bytes one —
-proving the fix isn't a coincidental pass.
+**CodeRabbit findings, both fixed pre-merge.**
 
-**Perf, measured (post-fix).** The in-suite perf test (1000 iterations after a 100-call warmup,
+1. *(minor, first review pass)* `verifyWebhook.ts` originally normalized a `Buffer` `rawBody` via
+   `.toString('utf8')` before hashing the resulting string — lossy for bytes that are not valid
+   UTF-8 (`decode` replaces invalid sequences with U+FFFD; re-encoding that string for
+   `createHmac`'s `update()` then hashes different bytes than the ones actually signed), so a
+   legitimate webhook body could fail verification. Fixed by hashing raw bytes directly
+   (`Buffer.concat([Buffer.from(`${t}.`), bodyBytes])` handed straight to `update()`), matching
+   `signer.ts`'s guarantee regardless of the body's byte content. Regression test added (`verifies
+   a Buffer rawBody containing bytes that are not valid UTF-8, hashed as raw bytes`): signs a body
+   with an embedded invalid UTF-8 sequence two ways (raw-bytes vs. decode-first), asserts the two
+   digests provably differ, then asserts `verifyWebhook` accepts only the raw-bytes one — proving
+   the fix isn't a coincidental pass.
+2. *(major, second review pass)* Two related problems in the original `headers instanceof
+   Headers` check and its `Record<string,string>` type: (a) `instanceof Headers` can throw a
+   `ReferenceError` in any runtime lacking the global `Headers` constructor, and can silently
+   false-negative against a `Headers` instance built from a different realm/polyfill's class (a
+   documented fetch-API cross-realm gotcha); (b) `Record<string,string>` doesn't actually match
+   Node's real `http.IncomingMessage.headers` type (`IncomingHttpHeaders` allows `string[]` or
+   `undefined` values), so `verifyWebhook(req.headers, ...)` — the single most natural call site
+   for a webhook receiver — wouldn't have type-checked. Fixed both: `Headers` detection is now
+   structural (`typeof headers.get === 'function'`, no reference to the global constructor at
+   all), and the plain-object type is now `PlainHeaders = Record<string, string | string[] |
+   undefined>` (exported), with a matched non-`string` value (array or `undefined`) treated as "no
+   signature header" — fail closed, never guessing which array entry was meant. Three regression
+   tests added covering an array-valued unrelated header alongside a valid one (still passes), an
+   array-valued `Ship-Signature` itself (fails closed, no throw), and an `undefined`-valued
+   `Ship-Signature` (fails closed, no throw).
+
+**Perf, measured (post-fixes).** The in-suite perf test (1000 iterations after a 100-call warmup,
 mirroring `signer.test.ts`'s own convention) asserts mean < 5ms as a generous CI-safe ceiling
 against the <1ms target — a tight 1ms assertion in CI is flake-prone under runner load, not because
 the target isn't met. A separate, out-of-vitest measurement (50,000 iterations after a 5,000-call
 warmup, against the built `dist/verifyWebhook.js`, no test-framework overhead) gives the honest
 number: **mean 0.00166ms, P50 0.00154ms, P95 0.00187ms, P99 0.00213ms** — roughly 470-650x under the
-1ms target, including the `Buffer.concat` fix above.
+1ms target, measured after both fixes above.
 
 **How to run it.**
 
 ```bash
 cd sdk && npx tsc --noEmit          # type-check (strict) — passes clean
 cd sdk && npx eslint src/verifyWebhook.ts src/verifyWebhook.test.ts src/index.ts   # passes clean
-cd sdk && npx vitest run            # 56 tests total (4 files): errors (16) + client (10) +
-                                     # verifyWebhook (27, new) + client.liveServer (3, needs DB)
+cd sdk && npx vitest run            # 59 tests total (4 files): errors (16) + client (10) +
+                                     # verifyWebhook (30, new) + client.liveServer (3, needs DB)
 scripts/factory/gate.sh             # full factory gate
 ```
 

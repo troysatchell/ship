@@ -20,9 +20,13 @@
  *      carry fixed 2023 Unix timestamps — can pin "now" deterministically instead of depending on
  *      real time or a live `Date` mock. Every documented call shape (3 or 4 arguments) is
  *      unaffected; `now` is never required and never appears in PLUGFORGE.MD's signature.
- *   2. `headers` accepts a plain `Record<string,string>` (Node's `req.headers`) OR a standard
- *      `Headers` object (fetch API — Express 5/undici, edge runtimes, and this SDK's own
- *      fetch-based `ShipClient` all speak this), read case-insensitively either way.
+ *   2. `headers` accepts a plain object shaped like Node's real `http.IncomingMessage.headers`
+ *      (`Record<string, string | string[] | undefined>` — Node's own `IncomingHttpHeaders` type;
+ *      values can be an array for a duplicated header, or absent) OR a standard `Headers` object
+ *      (fetch API — Express 5/undici, edge runtimes, and this SDK's own fetch-based `ShipClient`
+ *      all speak this), read case-insensitively either way. A matched value that isn't a plain
+ *      `string` (an array, or `undefined`) is treated as "no signature header" — fail closed,
+ *      never guess which array entry was meant.
  *   3. Never throws. `signer.ts`'s `verify()` throws `TypeError` for an empty/non-string `secret`
  *      by design: it treats a misconfigured secret as a caller bug distinct from "not valid," which
  *      is the right call for the server's OWN signer, called only by code in this repo. This
@@ -52,22 +56,48 @@ interface ParsedSignatureHeader {
   v1: string;
 }
 
+/** Node's real `http.IncomingMessage.headers` shape (`IncomingHttpHeaders`, spelled out locally
+ *  so this file doesn't need to import `node:http` just for a type): values can be a single
+ *  string, an array (a header sent more than once), or absent. Exported so a caller building a
+ *  `verifyWebhook(req.headers, ...)` call site can reference the exact accepted plain-object
+ *  shape rather than re-deriving it. */
+export type PlainHeaders = Record<string, string | string[] | undefined>;
+
+/**
+ * Structural check for a fetch-API `Headers`-like object (has a `.get` method) rather than
+ * `headers instanceof Headers`. CodeRabbit review (this ticket, major): `instanceof Headers`
+ * has two real failure modes an SDK meant to run in arbitrary host environments can't assume
+ * away — (a) a `ReferenceError` in any runtime where the global `Headers` constructor doesn't
+ * exist at all (this check never references it, so there is nothing to throw on), and (b) a
+ * false negative when the caller's `Headers` instance was constructed against a DIFFERENT
+ * realm/polyfill's `Headers` class than whatever this module would see as the global — a
+ * documented cross-realm `instanceof` gotcha for fetch-API classes (Headers/Request/Response)
+ * under some bundler/Node-version/worker combinations. Duck-typing on `.get` being a function
+ * sidesteps both.
+ */
+function isHeadersLike(headers: PlainHeaders | Headers): headers is Headers {
+  return typeof (headers as Headers).get === 'function';
+}
+
 /**
  * Reads the `Ship-Signature` header value out of either accepted header shape,
  * case-insensitively. `Headers#get` is already case-insensitive per the fetch spec; a plain
- * `Record<string,string>` is not guaranteed lower-cased by every caller (Node's own `req.headers`
- * is, but a hand-built object — a test fixture, a non-Node runtime — may not be), so this scans
- * keys rather than assuming exact casing.
+ * object is not guaranteed lower-cased by every caller (Node's own `req.headers` is, but a
+ * hand-built object — a test fixture, a non-Node runtime — may not be), so this scans keys
+ * rather than assuming exact casing. A matched value that isn't a `string` (an array, from a
+ * duplicated header, or `undefined`) returns `undefined` — fail closed per CodeRabbit's review,
+ * rather than guessing which array entry (if any) was the real signature.
  */
-function getSignatureHeaderValue(headers: Record<string, string> | Headers): string | undefined {
-  if (headers instanceof Headers) {
+function getSignatureHeaderValue(headers: PlainHeaders | Headers): string | undefined {
+  if (isHeadersLike(headers)) {
     return headers.get(SHIP_SIGNATURE_HEADER_NAME) ?? undefined;
   }
 
   const targetLower = SHIP_SIGNATURE_HEADER_NAME.toLowerCase();
   for (const key of Object.keys(headers)) {
     if (key.toLowerCase() === targetLower) {
-      return headers[key];
+      const value = headers[key];
+      return typeof value === 'string' ? value : undefined;
     }
   }
   return undefined;
@@ -157,7 +187,7 @@ function constantTimeHexEquals(a: string, b: string): boolean {
  * file's header comment. Omit it; the default is the real wall clock.
  */
 export function verifyWebhook(
-  headers: Record<string, string> | Headers,
+  headers: PlainHeaders | Headers,
   rawBody: string | Buffer,
   secret: string,
   toleranceSec: number = DEFAULT_WEBHOOK_TOLERANCE_SECONDS,
