@@ -207,6 +207,25 @@ export default tseslint.config(
     rules: correctnessRules,
   },
   {
+    // TRO-405 (PF-400): new sdk/ workspace package. Scoped the same way as
+    // shared/src and agent/src when each was added — same default
+    // correctness rules, not yet promoted to the api/src-only 'error'
+    // overrides above (no ticket has verified this population stays at zero
+    // under 'error' the way TRO-297 did for api).
+    files: ['sdk/src/**/*.ts'],
+    languageOptions: {
+      parser: tseslint.parser,
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    plugins: {
+      '@typescript-eslint': tseslint.plugin,
+    },
+    rules: correctnessRules,
+  },
+  {
     files: ['web/src/**/*.ts', 'web/src/**/*.tsx'],
     languageOptions: {
       parser: tseslint.parser,
