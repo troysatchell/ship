@@ -57,6 +57,7 @@ const ReviewsPage = React.lazy(() => import('@/pages/ReviewsPage').then((m) => (
 const OrgChartPage = React.lazy(() => import('@/pages/OrgChartPage').then((m) => ({ default: m.OrgChartPage })));
 const InviteAcceptPage = React.lazy(() => import('@/pages/InviteAccept').then((m) => ({ default: m.InviteAcceptPage })));
 const OAuthConsentPage = React.lazy(() => import('@/pages/OAuthConsent').then((m) => ({ default: m.OAuthConsentPage })));
+const OAuthDeviceVerifyPage = React.lazy(() => import('@/pages/OAuthDeviceVerify').then((m) => ({ default: m.OAuthDeviceVerifyPage })));
 const SetupPage = React.lazy(() => import('@/pages/Setup').then((m) => ({ default: m.SetupPage })));
 const NotFoundPage = React.lazy(() => import('@/pages/NotFound').then((m) => ({ default: m.NotFoundPage })));
 
@@ -204,6 +205,18 @@ function AppRoutes() {
         element={
           <ProtectedRoute>
             <OAuthConsentPage />
+          </ProtectedRoute>
+        }
+      />
+      {/* PF-106 (TRO-425): same dedicated-minimal-route reasoning as
+        * `/oauth-consent` above. NOT `/oauth/device/verify` — see
+        * OAuthDeviceVerify.tsx's header comment for the Vite dev-proxy trap
+        * that path would hit. */}
+      <Route
+        path="/oauth-device-verify"
+        element={
+          <ProtectedRoute>
+            <OAuthDeviceVerifyPage />
           </ProtectedRoute>
         }
       />
