@@ -101,6 +101,93 @@ all 11 route arrays across the five `resources/*.ts` files, reverts route-fitnes
 
 ---
 
+## TRO-422 — PF-405: Parity + size gates (spec<->SDK fitness, <250 KB min+gz in CI)
+
+Last ticket in Epic E4 (`@ship/sdk`) — PF-400/401/402/403/404 all merged already. Two gates:
+
+**1. Bidirectional parity fitness test** (`sdk/src/__tests__/parity.test.ts`). Structurally walks
+every operation in the real, generated `v1OpenApiDocument` (`api/src/platform/openapi/index.ts`)
+and every own instance method on `ShipClient`/`DocumentsClient`/`IssuesClient`/`SprintsClient`/
+`WebhooksClient`'s prototypes — no hand-maintained route or method list, same discipline as
+PF-203's `route-fitness.test.ts`. The one hand-maintained piece is `SDK_TO_OPERATION`, an explicit
+method-name -> {http method, path} table (inferring correspondence from naming alone was rejected —
+`webhooks.rotateSecret()` has no naming convention that derives `POST /webhooks/{id}/rotate`
+reliably); every assertion cross-checks that table against the two live discovered sets in both
+directions, so a stale entry (renamed/removed method OR operation) fails loudly. Two small,
+reasoned exemption tables carve out the rest: `SDK_EXEMPTIONS` (`documents/issues/sprints.iterate()`
+— client-side pagination convenience, not a distinct HTTP call; `webhooks.listDeliveries`/
+`replayDelivery` — target PF-305/PF-306 routes that don't exist yet, verified absent from the real,
+merged PF-302 registration) and `OPENAPI_EXEMPTIONS` (`GET /health`, `GET /openapi.json` — infra/meta
+endpoints, not typed domain resources, the identical two routes `route-fitness.test.ts`'s own
+`KNOWN_EXEMPTIONS` carves out). Deliberately METHOD+PATH-level, not response-body-schema-level — see
+below for a real, discovered, NOT-fixed schema mismatch this scope boundary leaves alone.
+
+**Real drift this test found and closed.** PF-302 (webhook subscriptions) merged concurrently with
+this ticket's own dependencies, with two more routes than PF-401's original `WebhooksClient` sketch
+had methods for: `GET /webhooks/{id}` and `POST /webhooks/{id}/rotate`. Closed by adding
+`getSubscription(id)`/`rotateSecret(id)` to `sdk/src/resources/webhooks.ts` (mocked-fetch tests in
+`webhooks.test.ts`, same pattern as the existing `deleteSubscription()` case) rather than exempting
+real, callable, merged endpoints — an exemption there would have meant "this public route has no
+way to call it from the typed SDK, forever," which is a worse outcome than a two-method addition.
+
+**Known, NOT fixed by this ticket** (flagged, not silently expanded into scope or silently ignored):
+the real PF-302 response shape (`app_id`, singular `event_type`, `target_url`, no `updated_at` —
+`platform/api/v1/resources/webhooks.ts`'s `serializeSubscription()`) does not match
+`WebhookSubscription`'s pre-existing TS interface (`app_id`-less, plural `events`, `url`,
+`updated_at` — PF-401 guessed this shape before PF-302 defined it for real). This ticket's fitness
+test is operation-existence-level by design (matching its own brief's scope), so it does not and
+should not catch a field-shape mismatch — worth a dedicated follow-up ticket.
+
+**2. CI size gate** (`sdk/scripts/measure-size.mjs`, wired into `.github/workflows/ci.yml` and
+`.gitlab-ci.yml` as `pnpm --filter @ship/sdk size-check`, right after the SDK unit-test step).
+Bundles `sdk/src/index.ts` with `esbuild` (`bundle: true, minify: true, platform: 'node'` — already
+resolvable in the lockfile as a transitive dependency of vite/tsx, added here as a direct
+`devDependency`; zero runtime `dependencies` in `sdk/package.json` means nothing to externalize),
+gzips the result (level 9, kB = 1000 bytes — same convention `audit/bundle/measure.mjs` documents
+for the web bundle), and fails if >= 250 KB. Measured today: **5.08 kB min+gz** (15.45 kB minified,
+un-gzipped) — comfortably under the 250 KB budget, exactly as the ticket's own brief predicted for a
+zero-dependency package; per that same brief, the check existing and actually gating is the
+deliverable, not the number. `checkSize(gzipBytes, thresholdKb)` is a pure function with its own
+permanent regression test (`sdk/src/__tests__/sizeGate.test.ts`) proving the threshold comparison
+(strict `<`, not `<=`) is correct and stays correct.
+
+**AC proof — both gates fail on simulated drift/bloat, then revert** (full captured output in the
+PR body):
+- Parity, orphan-method direction: added a scratch `documents.scratchOrphanTro422()` method with no
+  `SDK_TO_OPERATION`/`SDK_EXEMPTIONS` entry — `parity.test.ts` failed with `DRIFT: SDK method
+  'documents.scratchOrphanTro422' has no SDK_TO_OPERATION entry...`. Reverted; suite green again.
+- Parity, missing-coverage direction: added a scratch `GET /scratch-tro422` `registerPath` to
+  `api/src/platform/openapi/schemas/platform.ts` — `parity.test.ts` failed with `DRIFT: GET
+  /scratch-tro422 is registered ... but no SDK_TO_OPERATION entry targets it...`. Reverted; suite
+  green again.
+- Size gate: `node sdk/scripts/measure-size.mjs --threshold-kb 1` (a real, measured 5.08 kB gzip
+  size against a deliberately-lowered, test-only threshold — the script's own supported, documented
+  override, not a permanent change to the real 250 KB bar) exited 1 with `FAIL — 5.08 kB >= 1 kB
+  threshold.`. The permanent regression test (`sizeGate.test.ts`) exercises the identical code path
+  (`checkSize(5085, 1)`) so this proof doesn't rely only on a manual, unreverted-by-construction run.
+
+**How to run it.** `pnpm --filter @ship/sdk test` runs the parity test and the size-gate regression
+test (part of the normal suite, no separate wiring needed — both live under `sdk/src/__tests__/`,
+cross-package imports and all, per that directory's established `sdk/tsconfig.json` exclusion for
+exactly this). `pnpm --filter @ship/sdk size-check` runs the real, built-bundle size measurement
+standalone:
+
+```
+pnpm --filter @ship/sdk test
+pnpm --filter @ship/sdk size-check
+```
+
+**Rollback.** Revert this ticket's commit(s). No schema/migration, no runtime behavior change to any
+existing endpoint — `getSubscription()`/`rotateSecret()` are pure additions (nothing else calls
+them yet), and both gates are additive test/CI infrastructure. Reverting removes: the two new
+`WebhooksClient` methods (and their tests), `sdk/src/__tests__/parity.test.ts`,
+`sdk/src/__tests__/sizeGate.test.ts`, `sdk/scripts/measure-size.mjs`, the `esbuild` devDependency
+and `size-check` script in `sdk/package.json`, and the two new CI steps in `.github/workflows/
+ci.yml`/`.gitlab-ci.yml`. `pnpm install` after reverting to drop `esbuild` from the lockfile if it's
+not needed for anything else.
+
+---
+
 ## TRO-431 — PF-302: Webhook subscriptions API
 
 **Migration number correction.** PLUGFORGE.MD §2.2 lists this table under "migration 044", but that

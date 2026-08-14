@@ -113,6 +113,51 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     expect(init?.method).toBe('DELETE');
   });
 
+  it('getSubscription() GETs /api/v1/webhooks/:id and never returns a secret field', async () => {
+    const responseBody = {
+      id: 'sub_1',
+      app_id: 'app_1',
+      event_type: 'document.created',
+      target_url: 'https://example.com/hook',
+      active: true,
+      created_at: '2026-08-14T00:00:00.000Z',
+    };
+    const fetchSpy = fakeFetch(responseBody);
+    vi.stubGlobal('fetch', fetchSpy);
+    const client = new ShipClient({ token: 't', baseUrl: 'http://example.com' });
+
+    const subscription = await client.webhooks.getSubscription('sub_1');
+
+    const [url, init] = firstCall(fetchSpy);
+    expect(url).toBe('http://example.com/api/v1/webhooks/sub_1');
+    expect(init?.method).toBe('GET');
+    expect(subscription).toEqual(responseBody);
+    expect('secret' in subscription).toBe(false);
+  });
+
+  it('rotateSecret() POSTs to /api/v1/webhooks/:id/rotate with no body and returns the new plaintext secret', async () => {
+    const responseBody = {
+      id: 'sub_1',
+      app_id: 'app_1',
+      event_type: 'document.created',
+      target_url: 'https://example.com/hook',
+      active: true,
+      created_at: '2026-08-14T00:00:00.000Z',
+      secret: 'whsec_rotated456',
+    };
+    const fetchSpy = fakeFetch(responseBody, 200);
+    vi.stubGlobal('fetch', fetchSpy);
+    const client = new ShipClient({ token: 't', baseUrl: 'http://example.com' });
+
+    const rotated = await client.webhooks.rotateSecret('sub_1');
+
+    const [url, init] = firstCall(fetchSpy);
+    expect(url).toBe('http://example.com/api/v1/webhooks/sub_1/rotate');
+    expect(init?.method).toBe('POST');
+    expect(JSON.parse(String(init?.body))).toEqual({});
+    expect(rotated.secret).toBe('whsec_rotated456');
+  });
+
   it('listDeliveries() GETs /api/v1/webhooks/deliveries with subscription_id/status filters', async () => {
     const fetchSpy = fakeFetch({ data: [], next_cursor: null });
     vi.stubGlobal('fetch', fetchSpy);

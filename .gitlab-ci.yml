@@ -115,6 +115,11 @@ verify:
     # new, so like agent/ there is no quarantine baseline to compare against —
     # any failure here fails the job outright.
     - pnpm --filter @ship/sdk test
+    # PF-405 (TRO-422): CI size gate — the built @ship/sdk bundle (bundled
+    # from src/index.ts, minified, gzipped) must stay under 250 KB. Mirrors
+    # ci.yml's equivalent step — see that file's comment and
+    # sdk/scripts/measure-size.mjs's own header for the full rationale.
+    - pnpm --filter @ship/sdk size-check
     # The real gate: fails the job on any NEW failure vs the quarantine baseline.
     - node scripts/factory/lib/testdiff.mjs --package api --current api-tests.json --baseline audit/factory/quarantine.json --repo-root "$CI_PROJECT_DIR"
     - node scripts/factory/lib/testdiff.mjs --package web --current web-tests.json --baseline audit/factory/quarantine.json --repo-root "$CI_PROJECT_DIR"
