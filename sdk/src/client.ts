@@ -22,6 +22,7 @@ import { DocumentsClient } from './resources/documents.js';
 import { IssuesClient } from './resources/issues.js';
 import { SprintsClient } from './resources/sprints.js';
 import { WebhooksClient } from './resources/webhooks.js';
+import { AuditClient } from './resources/audit.js';
 import type { ITokenStore } from './tokenStore.js';
 import { runDeviceLoginFlow, type DeviceLoginFlowOptions } from './deviceLogin.js';
 import { runAuthorizationCodeFlow, type AuthorizationCodeFlowOptions as PkceFlowOptions } from './authorizationCodeFlow.js';
@@ -124,6 +125,10 @@ export class ShipClient {
    *  `sdk/src/__tests__/parity.test.ts` (PF-405) for how those two are
    *  carried as documented exemptions rather than silently untested. */
   readonly webhooks: WebhooksClient;
+  /** `audit.list` — real, merged PF-501 route (`/api/v1/audit`). Requires
+   *  `audit:read` plus an admin/owner/first-party caller — see
+   *  `resources/audit.ts`'s header. */
+  readonly audit: AuditClient;
 
   /**
    * Cheap construction — no I/O. Required by PF-703 (the agent gate builds a
@@ -147,6 +152,7 @@ export class ShipClient {
     this.issues = new IssuesClient(this.request);
     this.sprints = new SprintsClient(this.request);
     this.webhooks = new WebhooksClient(this.request);
+    this.audit = new AuditClient(this.request);
   }
 
   /**
