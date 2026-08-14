@@ -11,9 +11,15 @@
  * created specifically so PF-403 doesn't reinvent test cases — and drives `verifyWebhook` through
  * every case in it, so this module is checked against the exact vectors the server-side signer's
  * own suite uses, for byte-parity.
+ *
+ * `verifyWebhook` has no injectable clock (PLUGFORGE.MD §2.8's documented signature is exactly
+ * four arguments — see `verifyWebhook.ts`'s header comment for the CodeRabbit finding that led to
+ * removing an earlier `now` parameter). Every test in this file that needs a deterministic "now"
+ * pins it with `vi.useFakeTimers({ toFake: ['Date'] })` / `vi.setSystemTime()` instead — faking
+ * only `Date` leaves `performance.now()` (the perf test's actual measurement clock) real.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -71,17 +77,30 @@ describe('verifyWebhook', () => {
   const RAW_BODY = '{"event":"document.created","id":"doc_1"}';
   const T = 1_700_000_000;
 
+  // Default "now" for every test in this file — pins Date.now() to T seconds. Individual tests
+  // override with their own vi.setSystemTime() call when they need a different "now", or opt out
+  // entirely with vi.useRealTimers() (the real-wall-clock test below).
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(T * 1000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   // AC: valid signature passes.
   it('verifies a signature freshly signed for the same body and timestamp', () => {
     const header = buildHeader(T, RAW_BODY, SECRET);
     const headers = { 'Ship-Signature': header };
 
-    expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
+    expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(true);
   });
 
-  // Proves the real-clock default path (no `now` override) also works — not just the
-  // deterministic test-only path every other case in this file uses.
-  it('verifies against the real wall clock when `now` is omitted', () => {
+  // Proves the real-clock path also works — not just the fake-timers path every other case in
+  // this file uses.
+  it('verifies against the real wall clock', () => {
+    vi.useRealTimers();
     const nowSeconds = Math.floor(Date.now() / 1000);
     const header = buildHeader(nowSeconds, RAW_BODY, SECRET);
     const headers = { 'Ship-Signature': header };
@@ -95,7 +114,7 @@ describe('verifyWebhook', () => {
     const headers = { 'Ship-Signature': header };
     const tamperedBody = '{"event":"document.created","id":"doc_1","extra":"injected"}';
 
-    expect(verifyWebhook(headers, tamperedBody, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+    expect(verifyWebhook(headers, tamperedBody, SECRET)).toBe(false);
   });
 
   // AC: > 5-min-old (default 300s tolerance) fails.
@@ -103,20 +122,20 @@ describe('verifyWebhook', () => {
     const header = buildHeader(T - 400, RAW_BODY, SECRET); // 400s before verification
     const headers = { 'Ship-Signature': header };
 
-    expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+    expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(false);
   });
 
   // AC: missing v1 fails, without throwing.
   it('rejects a header with no v1 component, without throwing', () => {
     const headers = { 'Ship-Signature': `t=${T}` };
 
-    expect(() => verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).not.toThrow();
-    expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+    expect(() => verifyWebhook(headers, RAW_BODY, SECRET)).not.toThrow();
+    expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(false);
   });
 
   it('rejects a request with no Ship-Signature header at all, without throwing', () => {
-    expect(() => verifyWebhook({}, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).not.toThrow();
-    expect(verifyWebhook({}, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+    expect(() => verifyWebhook({}, RAW_BODY, SECRET)).not.toThrow();
+    expect(verifyWebhook({}, RAW_BODY, SECRET)).toBe(false);
   });
 
   describe('header input shapes', () => {
@@ -124,14 +143,14 @@ describe('verifyWebhook', () => {
       const header = buildHeader(T, RAW_BODY, SECRET);
       const headers = { 'ship-signature': header };
 
-      expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
+      expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(true);
     });
 
     it('accepts a standard Headers object, case-insensitively', () => {
       const header = buildHeader(T, RAW_BODY, SECRET);
       const headers = new Headers({ 'SHIP-SIGNATURE': header });
 
-      expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
+      expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(true);
     });
 
     it('accepts a Buffer rawBody equivalent to the signed UTF-8 string', () => {
@@ -139,7 +158,7 @@ describe('verifyWebhook', () => {
       const headers = { 'Ship-Signature': header };
       const bufferBody = Buffer.from(RAW_BODY, 'utf8');
 
-      expect(verifyWebhook(headers, bufferBody, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
+      expect(verifyWebhook(headers, bufferBody, SECRET)).toBe(true);
     });
 
     // Regression tests for a CodeRabbit finding on this ticket: the original `headers` type
@@ -153,22 +172,22 @@ describe('verifyWebhook', () => {
       const header = buildHeader(T, RAW_BODY, SECRET);
       const headers = { 'ship-signature': header, 'set-cookie': ['a=1', 'b=2'] };
 
-      expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
+      expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(true);
     });
 
     it('fails closed when Ship-Signature itself is array-valued, without throwing', () => {
       const header = buildHeader(T, RAW_BODY, SECRET);
       const headers = { 'ship-signature': [header, header] };
 
-      expect(() => verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).not.toThrow();
-      expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+      expect(() => verifyWebhook(headers, RAW_BODY, SECRET)).not.toThrow();
+      expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(false);
     });
 
     it('fails closed when Ship-Signature is present but undefined, without throwing', () => {
       const headers: Record<string, string | string[] | undefined> = { 'ship-signature': undefined };
 
-      expect(() => verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).not.toThrow();
-      expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+      expect(() => verifyWebhook(headers, RAW_BODY, SECRET)).not.toThrow();
+      expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(false);
     });
 
     // Regression test for a CodeRabbit finding on this ticket: an earlier version normalized a
@@ -192,12 +211,10 @@ describe('verifyWebhook', () => {
       expect(correctDigest).not.toBe(lossyDigest); // sanity: the two approaches really do diverge
 
       const headers = { 'Ship-Signature': `t=${T},v1=${correctDigest}` };
-      expect(verifyWebhook(headers, invalidUtf8Body, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
+      expect(verifyWebhook(headers, invalidUtf8Body, SECRET)).toBe(true);
 
       const lossyHeaders = { 'Ship-Signature': `t=${T},v1=${lossyDigest}` };
-      expect(verifyWebhook(lossyHeaders, invalidUtf8Body, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(
-        false,
-      );
+      expect(verifyWebhook(lossyHeaders, invalidUtf8Body, SECRET)).toBe(false);
     });
   });
 
@@ -219,15 +236,15 @@ describe('verifyWebhook', () => {
     const trailingGarbageHeader = `${tPart},v1=${realV1}zzzz`;
     const headers = { 'Ship-Signature': trailingGarbageHeader };
 
-    expect(() => verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).not.toThrow();
-    expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+    expect(() => verifyWebhook(headers, RAW_BODY, SECRET)).not.toThrow();
+    expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(false);
 
     // Sanity companions: length-mismatched malformed values were already rejected before this
     // guard existed, and stay rejected — this guard adds coverage, it doesn't replace the old path.
     const tooShort = { 'Ship-Signature': `${tPart},v1=${'a'.repeat(10)}` };
     const allInvalid = { 'Ship-Signature': `${tPart},v1=${'z'.repeat(64)}` };
     for (const malformed of [tooShort, allInvalid]) {
-      expect(verifyWebhook(malformed, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+      expect(verifyWebhook(malformed, RAW_BODY, SECRET)).toBe(false);
     }
   });
 
@@ -238,9 +255,9 @@ describe('verifyWebhook', () => {
     const header = buildHeader(T, RAW_BODY, SECRET);
     const headers = { 'Ship-Signature': header };
 
-    expect(verifyWebhook(headers, RAW_BODY, SECRET, Number.NaN, T)).toBe(false);
-    expect(verifyWebhook(headers, RAW_BODY, SECRET, Number.POSITIVE_INFINITY, T)).toBe(false);
-    expect(verifyWebhook(headers, RAW_BODY, SECRET, -1, T)).toBe(false);
+    expect(verifyWebhook(headers, RAW_BODY, SECRET, Number.NaN)).toBe(false);
+    expect(verifyWebhook(headers, RAW_BODY, SECRET, Number.POSITIVE_INFINITY)).toBe(false);
+    expect(verifyWebhook(headers, RAW_BODY, SECRET, -1)).toBe(false);
   });
 
   // Divergence from signer.ts's verify() (documented in verifyWebhook.ts's header comment):
@@ -251,8 +268,8 @@ describe('verifyWebhook', () => {
     const header = buildHeader(T, RAW_BODY, ''); // signed with the same empty secret
     const headers = { 'Ship-Signature': header };
 
-    expect(() => verifyWebhook(headers, RAW_BODY, '', DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).not.toThrow();
-    expect(verifyWebhook(headers, RAW_BODY, '', DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+    expect(() => verifyWebhook(headers, RAW_BODY, '')).not.toThrow();
+    expect(verifyWebhook(headers, RAW_BODY, '')).toBe(false);
   });
 
   // Tolerance boundary — inclusive at exactly 300s, false at 301s.
@@ -261,22 +278,22 @@ describe('verifyWebhook', () => {
       const header = buildHeader(T - 300, RAW_BODY, SECRET);
       const headers = { 'Ship-Signature': header };
 
-      expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(true);
+      expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(true);
     });
 
     it('rejects a signature one second past the 300s boundary', () => {
       const header = buildHeader(T - 301, RAW_BODY, SECRET);
       const headers = { 'Ship-Signature': header };
 
-      expect(verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T)).toBe(false);
+      expect(verifyWebhook(headers, RAW_BODY, SECRET)).toBe(false);
     });
 
     it('respects a caller-supplied non-default toleranceSec', () => {
       const header = buildHeader(T - 60, RAW_BODY, SECRET);
       const headers = { 'Ship-Signature': header };
 
-      expect(verifyWebhook(headers, RAW_BODY, SECRET, 30, T)).toBe(false);
-      expect(verifyWebhook(headers, RAW_BODY, SECRET, 120, T)).toBe(true);
+      expect(verifyWebhook(headers, RAW_BODY, SECRET, 30)).toBe(false);
+      expect(verifyWebhook(headers, RAW_BODY, SECRET, 120)).toBe(true);
     });
   });
 
@@ -285,19 +302,21 @@ describe('verifyWebhook', () => {
   // signer.test.ts uses for sign()'s own perf assertion (see that file's comment). The actual
   // measured mean is reported in the PR body's evidence table, not asserted at 1ms directly,
   // because CI-runner variance makes a tight assertion flaky, not because the target isn't met.
+  // Only `Date` is faked in this file's beforeEach (`toFake: ['Date']`), so `performance.now()`
+  // below is the real monotonic clock — this measurement is real elapsed wall-clock time.
   it('verifies in well under a generous CI-safe ceiling (target: < 1ms, asserted at < 5ms mean)', () => {
     const header = buildHeader(T, RAW_BODY, SECRET);
     const headers = { 'Ship-Signature': header };
 
     // Warmup — avoid JIT cold-start skew.
     for (let i = 0; i < 100; i++) {
-      verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T);
+      verifyWebhook(headers, RAW_BODY, SECRET);
     }
 
     const iterations = 1000;
     const start = performance.now();
     for (let i = 0; i < iterations; i++) {
-      verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T);
+      verifyWebhook(headers, RAW_BODY, SECRET);
     }
     const elapsed = performance.now() - start;
     const meanMs = elapsed / iterations;
@@ -315,7 +334,7 @@ describe('verifyWebhook', () => {
       const mockedTimingSafeEqual = vi.mocked(timingSafeEqualUnderTest);
       const callsBefore = mockedTimingSafeEqual.mock.calls.length;
 
-      verifyWebhook(headers, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T);
+      verifyWebhook(headers, RAW_BODY, SECRET);
 
       expect(mockedTimingSafeEqual.mock.calls.length).toBeGreaterThan(callsBefore);
     });
@@ -332,14 +351,10 @@ describe('verifyWebhook', () => {
 
       const flippedLastChar = v1.slice(0, -1) + (v1.at(-1) === '0' ? '1' : '0');
       const oneByteDifferentHeaders = { 'Ship-Signature': `${tPart},v1=${flippedLastChar}` };
-      expect(
-        verifyWebhook(oneByteDifferentHeaders, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T),
-      ).toBe(false);
+      expect(verifyWebhook(oneByteDifferentHeaders, RAW_BODY, SECRET)).toBe(false);
 
       const completelyDifferentHeaders = { 'Ship-Signature': `${tPart},v1=${'f'.repeat(v1.length)}` };
-      expect(
-        verifyWebhook(completelyDifferentHeaders, RAW_BODY, SECRET, DEFAULT_WEBHOOK_TOLERANCE_SECONDS, T),
-      ).toBe(false);
+      expect(verifyWebhook(completelyDifferentHeaders, RAW_BODY, SECRET)).toBe(false);
     });
   });
 
@@ -356,22 +371,17 @@ describe('verifyWebhook', () => {
     });
 
     // Expanded from the fixture loaded above, so each case reports as its own test result. Drives
-    // `verifyWebhook` directly against the fixture's raw `header` string (via the `now` test-only
-    // injection point, pinned to the fixture's own `verifyTimestamp`) and the same
-    // `toleranceSeconds` the fixture case specifies — the strongest available proof this port is
-    // byte-identical to the server-side signer's algorithm, since both consume one shared,
-    // independently-generated source of truth.
+    // `verifyWebhook` directly against the fixture's raw `header` string, pinning "now" to the
+    // fixture's own `verifyTimestamp` via `vi.setSystemTime` (overriding this describe block's
+    // outer `beforeEach` default), and the same `toleranceSeconds` the fixture case specifies —
+    // the strongest available proof this port is byte-identical to the server-side signer's
+    // algorithm, since both consume one shared, independently-generated source of truth.
     it.each(fixture.cases)('case "$name": $description', (testCase: FixtureCase) => {
       expect(typeof testCase.headerReproducibleBySign).toBe('boolean');
+      vi.setSystemTime(testCase.verifyTimestamp * 1000);
 
       const headers = { [SHIP_SIGNATURE_HEADER_NAME]: testCase.header };
-      const result = verifyWebhook(
-        headers,
-        testCase.verifyRawBody,
-        testCase.secret,
-        testCase.toleranceSeconds,
-        testCase.verifyTimestamp,
-      );
+      const result = verifyWebhook(headers, testCase.verifyRawBody, testCase.secret, testCase.toleranceSeconds);
       expect(result).toBe(testCase.expectedValid);
     });
   });

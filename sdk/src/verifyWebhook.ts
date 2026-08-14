@@ -9,25 +9,24 @@
  * signer's own test suite uses (`shared/fixtures/webhook-signature-vectors.json`, created by
  * PF-303/TRO-433 specifically for this ticket's byte-parity proof) — see `verifyWebhook.test.ts`.
  *
- * Three deliberate differences from `signer.ts`'s `verify()`, all narrowing the public surface for
+ * Two deliberate differences from `signer.ts`'s `verify()`, both narrowing the public surface for
  * a one-call, boolean-returning, third-party-facing SDK function rather than changing the crypto
- * itself:
+ * itself. No `Clock` parameter exists at all — PLUGFORGE.MD §2.8's documented signature is exactly
+ * `verifyWebhook(headers, rawBody, secret, toleranceSec = 300)`, four arguments, and "now" is
+ * always read from `Date.now()` internally to match it exactly (an earlier version of this file
+ * added a fifth, test-only `now` parameter for deterministic tests; a CodeRabbit review on this
+ * ticket flagged that as scope creep on a documented signature, correctly — `verifyWebhook.test.ts`
+ * now pins time with `vi.useFakeTimers()`/`vi.setSystemTime()` instead, which needs no change to
+ * the function under test):
  *
- *   1. No injected `Clock` callback on the public path — PLUGFORGE.MD §2.8's documented signature
- *      is exactly `verifyWebhook(headers, rawBody, secret, toleranceSec = 300)`, so "now" is read
- *      from `Date.now()` by default. A fifth, optional `now` parameter (Unix seconds) is added
- *      ONLY so this file's own tests — including the shared-fixture cross-validation, whose cases
- *      carry fixed 2023 Unix timestamps — can pin "now" deterministically instead of depending on
- *      real time or a live `Date` mock. Every documented call shape (3 or 4 arguments) is
- *      unaffected; `now` is never required and never appears in PLUGFORGE.MD's signature.
- *   2. `headers` accepts a plain object shaped like Node's real `http.IncomingMessage.headers`
+ *   1. `headers` accepts a plain object shaped like Node's real `http.IncomingMessage.headers`
  *      (`Record<string, string | string[] | undefined>` — Node's own `IncomingHttpHeaders` type;
  *      values can be an array for a duplicated header, or absent) OR a standard `Headers` object
  *      (fetch API — Express 5/undici, edge runtimes, and this SDK's own fetch-based `ShipClient`
  *      all speak this), read case-insensitively either way. A matched value that isn't a plain
  *      `string` (an array, or `undefined`) is treated as "no signature header" — fail closed,
  *      never guess which array entry was meant.
- *   3. Never throws. `signer.ts`'s `verify()` throws `TypeError` for an empty/non-string `secret`
+ *   2. Never throws. `signer.ts`'s `verify()` throws `TypeError` for an empty/non-string `secret`
  *      by design: it treats a misconfigured secret as a caller bug distinct from "not valid," which
  *      is the right call for the server's OWN signer, called only by code in this repo. This
  *      function is the public, one-call, boolean-returning contract third-party webhook receivers
@@ -180,21 +179,18 @@ function constantTimeHexEquals(a: string, b: string): boolean {
  * always `false`, so a misconfigured tolerance must be rejected explicitly rather than silently
  * disabling the replay-protection window); a missing or structurally unparseable `Ship-Signature`
  * header (including one with no `v1=` component); a timestamp outside `toleranceSec` seconds of
- * "now"; or a digest mismatch (tampered body, wrong secret, or a malformed `v1` that isn't valid
- * hex).
- *
- * `now` is Unix seconds and is NOT part of PLUGFORGE.MD §2.8's documented signature — see this
- * file's header comment. Omit it; the default is the real wall clock.
+ * "now" (`Date.now()`, read fresh on every call — see this file's header comment); or a digest
+ * mismatch (tampered body, wrong secret, or a malformed `v1` that isn't valid hex).
  */
 export function verifyWebhook(
   headers: PlainHeaders | Headers,
   rawBody: string | Buffer,
   secret: string,
   toleranceSec: number = DEFAULT_WEBHOOK_TOLERANCE_SECONDS,
-  now: number = Math.floor(Date.now() / 1000),
 ): boolean {
   if (typeof secret !== 'string' || secret.length === 0) return false;
   if (!Number.isFinite(toleranceSec) || toleranceSec < 0) return false;
+  const now = Math.floor(Date.now() / 1000);
   if (!Number.isFinite(now)) return false;
 
   const headerValue = getSignatureHeaderValue(headers);

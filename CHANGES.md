@@ -34,35 +34,36 @@ digest of `${t}.${rawBody}` under `secret`, and compares against the header's `v
 non-finite/negative-tolerance guard, and the same parse logic as `signer.ts`'s (not exported)
 helpers, copied verbatim rather than re-derived.
 
+The exported signature is exactly PLUGFORGE.MD §2.8's four arguments, no more — no injected clock
+on the public path; "now" is always read fresh from `Date.now()` inside the function (see the
+CodeRabbit fix notes below for why an earlier version's fifth `now` parameter was removed).
 `headers` accepts either a plain object shaped like Node's real `IncomingHttpHeaders`
 (`PlainHeaders = Record<string, string | string[] | undefined>`, exported) or a standard `Headers`
 object (fetch API), read case-insensitively either way; `rawBody` accepts `string | Buffer`, hashed
 as raw bytes (`Buffer.concat([Buffer.from(`${t}.`), bodyBytes])` fed directly to
-`createHmac(...).update(buffer)`) rather than through a string round-trip — see the CodeRabbit fix
-notes below. Two deliberate divergences from `signer.ts`'s `verify()`, both documented in
-`verifyWebhook.ts`'s own
-header comment: (1) never throws — an empty/non-string `secret` returns `false` instead of a
+`createHmac(...).update(buffer)`) rather than through a string round-trip — see below. One
+remaining deliberate divergence from `signer.ts`'s `verify()`, documented in `verifyWebhook.ts`'s
+own header comment: never throws — an empty/non-string `secret` returns `false` instead of a
 `TypeError`, since this is the public, one-call, boolean-returning contract PLUGFORGE.MD §2.8
 documents and third-party webhook receivers call directly in a route handler, not internal code
 this repo controls; the same vulnerability signer.ts's throw exists to prevent (an empty,
-guessable key must never verify `true`) is still closed, just via the `false` path; (2) a fifth,
-optional `now` parameter (Unix seconds) exists ONLY for this file's own tests — PLUGFORGE.MD's
-documented signature is the four-argument form, and every 3- or 4-argument call behaves exactly as
-specified; `now` defaults to `Math.floor(Date.now() / 1000)`, the real wall clock, whenever it is
-omitted.
+guessable key must never verify `true`) is still closed, just via the `false` path.
 
 **Cross-validated against the shared fixture.** `shared/fixtures/webhook-signature-vectors.json`
 (created by PF-303/TRO-433 specifically so this ticket wouldn't reinvent test cases) is loaded
 directly in `sdk/src/verifyWebhook.test.ts` and every one of its 7 cases (`valid`, `tampered`,
 `expired`, `missing_v1`, `boundary_within_tolerance`, `boundary_outside_tolerance`,
 `malformed_v1_trailing_garbage`) is driven through `verifyWebhook` — using the fixture's own
-`header` string, `verifyRawBody`, `secret`, `toleranceSeconds`, and `verifyTimestamp` (via the
-test-only `now` parameter) — and asserted against the fixture's `expectedValid`. This is the
+`header` string, `verifyRawBody`, `secret`, and `toleranceSeconds`, with `verifyTimestamp` pinned as
+"now" via `vi.setSystemTime()` (see the third CodeRabbit fix note below for why a test-only `now`
+parameter isn't how this is done) — and asserted against the fixture's `expectedValid`. This is the
 strongest available proof the port is byte-identical to the server-side signer's algorithm: both
 implementations are checked against one independently-generated source of truth instead of two
 hand-authored vector sets that could silently drift apart.
 
-**Test suite.** 30 cases in `sdk/src/verifyWebhook.test.ts`: the AC list verbatim (valid passes;
+**Test suite.** 30 cases in `sdk/src/verifyWebhook.test.ts`, deterministic via `vi.useFakeTimers({
+toFake: ['Date'] })` / `vi.setSystemTime()` (faking only `Date`, so the perf test's
+`performance.now()` measurements stay real): the AC list verbatim (valid passes;
 tampered body fails; >5-min-old fails; missing `v1` fails; perf), the tolerance boundary (inclusive
 at 300s, false at 301s, plus a caller-supplied non-default tolerance), both accepted `headers`
 shapes (`PlainHeaders` — both lower- and upper-cased keys, plus an unrelated array-valued header
@@ -73,7 +74,7 @@ the never-throws-on-empty-secret divergence, the malformed-hex-with-trailing-gar
 ported from `signer.test.ts`, a `crypto.timingSafeEqual`-invocation proof (not measured timing
 uniformity, which is flake-prone), and the 7-case shared-fixture cross-validation above.
 
-**CodeRabbit findings, both fixed pre-merge.**
+**CodeRabbit findings, all three fixed pre-merge.**
 
 1. *(minor, first review pass)* `verifyWebhook.ts` originally normalized a `Buffer` `rawBody` via
    `.toString('utf8')` before hashing the resulting string — lossy for bytes that are not valid
@@ -101,14 +102,25 @@ uniformity, which is flake-prone), and the 7-case shared-fixture cross-validatio
    tests added covering an array-valued unrelated header alongside a valid one (still passes), an
    array-valued `Ship-Signature` itself (fails closed, no throw), and an `undefined`-valued
    `Ship-Signature` (fails closed, no throw).
+3. *(third review pass)* The initial `verifyWebhook.ts` added a fifth, optional `now` parameter
+   (Unix seconds) purely so this file's own tests — including the shared-fixture cross-validation,
+   whose cases carry fixed 2023 Unix timestamps — could pin "now" deterministically. CodeRabbit
+   correctly called this scope creep on PLUGFORGE.MD §2.8's exactly-four-argument documented
+   signature: even as an optional trailing parameter, it's extra public surface a third-party SDK
+   consumer never asked for. Removed; `verifyWebhook` now reads `Date.now()` internally with no
+   clock injection at all, and `verifyWebhook.test.ts` pins time with
+   `vi.useFakeTimers({ toFake: ['Date'] })` / `vi.setSystemTime()` in a `beforeEach` instead
+   (individual tests override the pinned time, or opt out to the real clock, as needed) — the exact
+   alternative CodeRabbit's finding suggested. No behavior change; every existing assertion still
+   passes, just without a 5th argument at any call site.
 
 **Perf, measured (post-fixes).** The in-suite perf test (1000 iterations after a 100-call warmup,
 mirroring `signer.test.ts`'s own convention) asserts mean < 5ms as a generous CI-safe ceiling
 against the <1ms target — a tight 1ms assertion in CI is flake-prone under runner load, not because
 the target isn't met. A separate, out-of-vitest measurement (50,000 iterations after a 5,000-call
 warmup, against the built `dist/verifyWebhook.js`, no test-framework overhead) gives the honest
-number: **mean 0.00166ms, P50 0.00154ms, P95 0.00187ms, P99 0.00213ms** — roughly 470-650x under the
-1ms target, measured after both fixes above.
+number: **mean 0.00175ms, P50 0.00163ms, P95 0.00192ms, P99 0.00238ms** — roughly 420-610x under the
+1ms target, measured on the final four-argument signature after all three fixes above.
 
 **How to run it.**
 
