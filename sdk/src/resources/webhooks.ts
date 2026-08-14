@@ -174,8 +174,9 @@ export type WebhookDeliveryList = ListPage<WebhookDelivery>;
 export class WebhooksClient {
   constructor(private readonly request: RequestClient) {}
 
-  /** `GET /api/v1/webhooks` — list subscriptions. Server route does not
-   *  exist yet (PF-302); see this file's header. */
+  /** `GET /api/v1/webhooks` — list subscriptions. Real, merged PF-302
+   *  route (`platform/api/v1/resources/webhooks.ts`) — never includes the
+   *  signing secret. */
   async listSubscriptions(params: ListWebhookSubscriptionsParams = {}): Promise<WebhookSubscriptionList> {
     return this.request.get<WebhookSubscriptionList>(SUBSCRIPTIONS_PATH, {
       limit: params.limit,
@@ -183,15 +184,16 @@ export class WebhooksClient {
     });
   }
 
-  /** `POST /api/v1/webhooks` — create a subscription; the response is the
-   *  ONLY place the raw secret is ever returned. Server route does not
-   *  exist yet (PF-302); see this file's header. */
+  /** `POST /api/v1/webhooks` — create a subscription. Real, merged PF-302
+   *  route. The response is ONE of two places the raw secret is ever
+   *  returned — the other is `rotateSecret()` below; every other method on
+   *  this client never includes it. */
   async createSubscription(body: CreateWebhookSubscriptionBody): Promise<CreatedWebhookSubscription> {
     return this.request.post<CreatedWebhookSubscription>(SUBSCRIPTIONS_PATH, body);
   }
 
-  /** `DELETE /api/v1/webhooks/:id`. Server route does not exist yet
-   *  (PF-302); see this file's header. */
+  /** `DELETE /api/v1/webhooks/:id`. Real, merged PF-302 route — deactivates
+   *  (`active = false`) rather than a hard delete; idempotent `204`. */
   async deleteSubscription(id: string): Promise<void> {
     return this.request.delete(`${SUBSCRIPTIONS_PATH}/${encodeURIComponent(id)}`);
   }
