@@ -77,6 +77,16 @@ jobs:
       - name: Build shared (api and web both depend on its dist)
         run: pnpm build:shared
 
+      # PF-600 (TRO-448): @ship/sdk's package.json resolves `types` to
+      # ./dist/index.d.ts (compiled output), not source — any workspace
+      # package importing it (integrations/cli, integrations/browser-demo)
+      # fails `tsc --noEmit` with TS2307 "Cannot find module '@ship/sdk'" on
+      # a fresh checkout, because Type check below runs before `pnpm build`.
+      # Invisible locally: a dev worktree accumulates a built sdk/dist/ from
+      # iterative work, so only a truly fresh checkout (CI) exposes this.
+      - name: Build sdk (integrations/* both depend on its dist)
+        run: pnpm build:sdk
+
       # PF-204 (TRO-409): docs/openapi.json is the committed, public /api/v1
       # OpenAPI 3.1 spec (PF-202's generateV1OpenAPIDocument()). This
       # regenerates it in-process to a temp file and diffs against the

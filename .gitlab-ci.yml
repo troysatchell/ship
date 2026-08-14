@@ -67,6 +67,14 @@ verify:
         sleep 2
       done
     - pnpm build:shared
+    # PF-600 (TRO-448): @ship/sdk resolves `types` to ./dist/index.d.ts, not
+    # source — any workspace package importing it (integrations/cli,
+    # integrations/browser-demo) fails `tsc --noEmit` with TS2307 on a fresh
+    # checkout unless sdk is built before Type check. Invisible locally
+    # because a dev worktree accumulates a built sdk/dist/ from iterative
+    # work; only a truly fresh checkout (this pipeline) exposes it. Mirrors
+    # ci.yml's equivalent step.
+    - pnpm build:sdk
     # PF-204 (TRO-409): docs/openapi.json is the committed, public /api/v1
     # OpenAPI 3.1 spec (PF-202's generateV1OpenAPIDocument()). Regenerates it
     # in-process to a temp file and diffs against the committed copy — any

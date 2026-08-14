@@ -21,6 +21,33 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-601 — CI type-check runs before `@ship/sdk` is built, TS2307 on any workspace consumer's fresh checkout
+
+**What was broken.** `@ship/sdk`'s `package.json` resolves `types`/`main` to `./dist/index.d.ts`/
+`./dist/index.js` (compiled output), not source. Both `.github/workflows/ci.yml` and
+`.gitlab-ci.yml` (the graded pipeline) ran `pnpm build:shared` then `pnpm type-check` — `pnpm build`
+(which builds `sdk/dist`) ran *after* type-check, not before. On a truly fresh checkout, any
+workspace package importing `@ship/sdk` failed `tsc --noEmit` with `TS2307: Cannot find module
+'@ship/sdk'`. Found live: TRO-448/PF-600's PR #227 CI failed exactly this way, after two clean local
+`gate.sh` passes — invisible locally because every dev worktree accumulates a built `sdk/dist/` from
+iterative work, so only a genuinely fresh checkout exposes it. Affects every `integrations/*`
+package that depends on `@ship/sdk`, not just the CLI.
+
+**What changed.** Added a `build:sdk` script (mirrors the existing `build:shared`) to root
+`package.json`, and a "Build sdk" step in both CI files, placed right after "Build shared" and
+before "Type check" — same reasoning `build:shared`'s own step comment already states for api/web.
+
+**Evidence.** Reproduced the true fresh-checkout state locally (`rm -rf sdk/dist
+sdk/tsconfig.tsbuildinfo` — the tsbuildinfo file is gitignored, so a real CI checkout never has it):
+`integrations/cli`'s type-check fails with `TS2307` before the fix, passes clean after
+`pnpm --filter @ship/sdk build` runs first. The fix's own CI run is the fresh-checkout proof that
+matters most.
+
+**Rollback.** Revert this commit. Three-line diff (one root `package.json` script line, one CI step
+per file), no other coupling — reverting restores the pre-existing ordering bug, nothing else.
+
+---
+
 ## TRO-442 — PF-305: Webhook delivery log API
 
 **No new migration.** Migration 048 (`webhook_deliveries`, PF-304/TRO-438) already has every column
