@@ -297,6 +297,13 @@ generate `whsec_...` secrets, return the plaintext exactly once (creation/rotati
 pattern Stripe uses for webhook signing secrets. This is a deliberate, defensible deviation from
 the brief's literal wording, not an oversight, and a likely interview question.
 
+Implemented by PF-302 (Linear TRO-431, migration `047_webhook_subscriptions.sql`):
+`api/src/platform/webhooks/secretEncryption.ts` (`encryptSecret`/`decryptSecret`, the packing
+format for the single `signing_secret_ciphertext` column) and `api/src/platform/webhooks/secrets.ts`
+(`whsec_...` generation). `/api/v1/webhooks` (`api/src/platform/api/v1/resources/webhooks.ts`)
+returns the plaintext exactly once, on `POST /` and `POST /:id/rotate` — no other route, including
+`GET`/list, ever selects or serializes the ciphertext column.
+
 **Collab-persist events excluded from webhook publication (PF-301, landed TRO-426).** The Yjs
 collaboration server's autosave (`api/src/collaboration/index.ts:207`) does a debounced
 `UPDATE documents SET yjs_state, content, properties ...` on every live editing session — a tenth

@@ -59,15 +59,20 @@ const OAUTH_VERSIONS = ['042_oauth_apps', '043_oauth_tokens_and_codes'];
 // `oauth_device_codes.last_polled_at`/`token_issued_at` — originally
 // numbered 045, renumbered to 046 because TRO-421/PF-105 independently
 // claimed 045 first; see CHANGES.md) for the identical reason: it ALTERs
-// `oauth_device_codes`, also created by 043. Kept separate from
-// `OAUTH_VERSIONS` above (which names PF-101's own two migrations
-// specifically, and is used below in assertions scoped to just those two) —
-// extend THIS list, not that one, whenever a later ticket adds another
-// oauth_tokens-dependent (or other 043-created-table-dependent) migration.
+// `oauth_device_codes`, also created by 043. Extended again by PF-302/TRO-431
+// (`047_webhook_subscriptions`, which CREATEs `webhook_subscriptions.app_id
+// REFERENCES oauth_apps(id)`) — same reasoning, one step removed: it doesn't
+// ALTER a 043 table, it FK-references `oauth_apps` (042's own table), so it
+// equally cannot apply against the "prior, nothing from oauth yet" fixture
+// below. Kept separate from `OAUTH_VERSIONS` above (which names PF-101's own
+// two migrations specifically, and is used below in assertions scoped to
+// just those two) — extend THIS list, not that one, whenever a later ticket
+// adds another migration that depends on a table 042 or 043 creates.
 const LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS = [
   '044_oauth_tokens_authorization_code_id',
   '045_oauth_tokens_refresh_expiry',
   '046_oauth_device_codes_polling',
+  '047_webhook_subscriptions',
 ];
 
 /** Same helper shape as migrationRunner.test.ts — see that file for the full rationale. */
