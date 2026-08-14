@@ -1,57 +1,70 @@
 # Requirements Audit — Ship
-**Commit:** 06a15f147d443fbe405b51d4ea77ea2141f21e6e · **Date:** 2026-08-13T19:53:43Z · **Docs:** W6 (GFA_Week_6_PlugForge.pdf, 18pp) · **Mode:** baseline
+**Commit:** 24183537bb03388f58ef3831d1981aee13da1b27 · **Date:** 2026-08-14T09:51:08Z · **Docs:** W6 (GFA_Week_6_PlugForge.pdf, 18pp) · **Mode:** compare (`w6-mvp-wave`, baseline `matrix.baseline-W6.json` @ 06a15f1, 2026-08-13T19:53:43Z)
 
 ## Summary
 
-- VERIFIED: 14
-- IMPLEMENTED-UNVERIFIED: 1
-- PARTIAL: 11
-- MISSING: 50
-- N/A: 3
-- BLOCKED: 0
-- ASSUMED: 0
+- VERIFIED: 23 (was 14)
+- IMPLEMENTED-UNVERIFIED: 2 (was 1)
+- PARTIAL: 11 (was 11 — same count, different composition, see Delta)
+- MISSING: 40 (was 50)
+- N/A: 3 (unchanged)
+- BLOCKED: 0 (unchanged)
+- ASSUMED: 0 (unchanged)
 
-The MVP hard gate (W6-R2 through W6-R12, per the brief's own "(MVP hard gate.)" markers) is the
-finding this report leads with: **only 4 of those 11 requirements are VERIFIED** (R2, R4, R5,
-R7); four are PARTIAL (R3, R6, R11, R12) and three are MISSING (R8, R9, R10). The sharpest of the
-four PARTIALs is **W6-R3** — "Authorization Code + PKCE flow completes end-to-end via a Playwright
-test: /oauth/authorize → consent → /oauth/token → usable access token." Both halves of this flow
-individually pass green (`e2e/oauth-authorize.spec.ts`: 2/2 for authorize→consent→redirect;
-`token.test.ts`: 18/18 for the token exchange, including the mandatory negative case) — which is
-exactly the shape of gap that is easy to mistake for "done" from test-runner output alone. No
-Playwright spec calls `/oauth/token`, and `/api/v1/me` does not exist yet to call with the resulting
-token, so the literal graded scenario — one continuous proof ending in "a usable access token" —
-has never run. The codebase's own `CHANGES.md` entry for TRO-416 already says this plainly. The
-50/79 MISSING count is a separate, less alarming fact: the large majority of those rows are entire
-epics that have not started yet by design (E3 webhooks: R23–R29, R46–R48, R52–R53, R58, R68;
-E4 SDK: R30–R34, R45, R58, R60; E6 CLI/TTFE drill: R49–R57, R59, R61–R62; E8 integrations: folded
-into R61) — "not started" is a scope fact for a mid-sprint snapshot, not a defect, and is
-categorically different from the MVP-gate PARTIALs above, where code exists but the graded proof
-does not chain together.
+Six MVP-gate tickets landed since the baseline (TRO-400/PF-201 issues+sprints+me, TRO-402/PF-202
+OpenAPI v1 generator, TRO-404/PF-203 route-fitness test, TRO-405/PF-400 `@ship/sdk` scaffold,
+TRO-421/PF-105 refresh rotation, TRO-425/PF-106 device grant), and the MVP hard gate (W6-R2–R12)
+moved from **4/11 VERIFIED to 7/11 VERIFIED** — R6, R8, R9 joined R2/R4/R5/R7 as VERIFIED, all with
+freshly re-run, real test output against a dedicated scratch database. The finding this report
+leads with is the one gap that **did not** close despite all that landing: **W6-R3** — "Authorization
+Code + PKCE flow completes end-to-end via a Playwright test: /oauth/authorize → consent →
+/oauth/token → usable access token" — is still PARTIAL, for a narrower but equally real reason than
+at baseline. Every individual piece the literal scenario needs now exists and works
+(`/api/v1/me` is live, `token.test.ts` is 32/32 including the mandatory wrong-verifier negative,
+device grant and refresh rotation both landed too) — but `e2e/oauth-authorize.spec.ts` is
+byte-identical to baseline (confirmed via `git diff --stat`: zero e2e specs changed in this
+78-commit range). Nobody wrote the one Playwright test that chains authorize → consent → token →
+`/api/v1/me`, even though every backend blocker to writing it is now gone. W6-R10 (regression
+budget) moved MISSING → PARTIAL: three independently-verified compare-mode audits (api-perf,
+db-query, bundle) all PASS within the Part-1 ±10% budget, and a rigorous three-pass bisection
+proves the 32 failing e2e tests are pre-existing and unrelated to tonight's six tickets (zero code
+overlap against a verified pre-wave commit) — but the suite does not pass in the literal,
+unqualified sense the requirement's words state, so PARTIAL, not VERIFIED, is the honest tier. See
+the Delta section for the complete list of 13 verdict changes.
 
 ## Coverage and limitations
 
-- **No full regression suite ran during this sweep.** `pnpm test` (root, api+web+agent) and
-  `pnpm test:e2e` (full Playwright suite) were not run in full; only targeted `vitest run <file>`
-  commands scoped to each requirement's own test file ran (see Verification performed below).
-  W6-R10 (the cross-cutting "no regression, ±10% of Part-1 baseline" MVP-gate item) leans directly
-  on this and could not be verified — see its gaps entry.
-- **Live-deployment checks did not run.** No network egress was attempted against any deployed URL;
-  W6-R11 and W6-R77 (published spec URL / portal reachability) are judged on code presence only, per
-  a `NOT RUN` entry in `commands_run`.
-- **`terraform plan`/`apply`/`destroy` did not run against any real Render or AWS environment** this
-  sweep — W6-R12 and W6-R40 rely entirely on previously-committed plan/destroy-redeploy artifacts,
-  not a fresh run.
-- **Ticket dimension was NOT blocked** — Linear was reachable; see `ticket_mapping.status: "OK"`
-  below. No row's `tickets` array is `["BLOCKED"]`.
-- **61 of 79 rows (MISSING + PARTIAL) are statically traced only** — no behavioral verify command
-  bears on a MISSING row by definition (nothing exists to run), and PARTIAL rows mix passing
-  sub-evidence with a named absent piece; see the Matrix and Gaps sections for which is which.
-- **Independent citation verification (Step 3) found and fixed 9 citation/content defects across the
-  9 clusters' raw output** — 6 file:line corrections, 3 note-text corrections — plus 1 verdict
-  downgrade (W6-R39) and 1 verdict promotion (W6-R25, per interpretation I-04). None of the fixes
-  changed a MISSING/PARTIAL verdict to something rosier; the downgrade went the other direction
-  (VERIFIED → IMPLEMENTED-UNVERIFIED). Full list in this report's closing section below.
+- **Still no full `pnpm test`/`pnpm test:e2e` run performed directly by this sweep.** Targeted
+  `vitest run <file>` commands scoped to each requirement's own test file ran instead, this time
+  against a dedicated scratch database (`ship_audit_w6mvp_scratch`, created and migrated fresh for
+  this sweep, dropped after — never the shared worktree dev DB) rather than a worktree DB baseline
+  used. W6-R10's regression-budget clauses lean on three *separately* completed compare-mode audits
+  (api-perf/db-query/bundle) plus a documented e2e bisection, opened and read directly rather than
+  re-run in this sweep — see W6-R10's evidence and `commands_run`.
+- **Live-deployment checks still did not run.** No network egress was attempted against any deployed
+  URL; W6-R11 and W6-R77 (published spec URL / portal reachability) are judged on code presence
+  only, per `NOT RUN` entries in `commands_run`. W6-R11 moved PARTIAL → IMPLEMENTED-UNVERIFIED
+  because the code-level spec-URL blocker closed this range (PF-202 landed) — only the live probe
+  remains unrun.
+- **`terraform plan`/`apply`/`destroy` still did not run** — `terraform/` has zero diff since
+  baseline (confirmed via `git diff --stat`), so W6-R12/R38/R39/R40 carry forward unchanged,
+  relying on the same previously-committed plan/destroy-redeploy artifacts baseline cited.
+- **Ticket dimension was NOT blocked.** Linear was reachable; a fresh pull this sweep found 95
+  tickets in the project (up from 86 at baseline) — see `ticket_mapping.scope` in the matrix JSON.
+  No row's `tickets` array is `["BLOCKED"]`.
+- **Compare methodology:** each of the 79 rows was independently re-traced this sweep (not merely
+  copy-forwarded) — either directly by the lead sweep (the 37 IDs closest to the six landed
+  tickets: W6-R2–R21, R30–R34, R38–R45, R51, R60, R66, R74) or by five parallel subagents each
+  covering one feature-area cluster (webhooks, rate-limit/audit/portal, CLI/TTFE/integrations,
+  agent-rewire/cost, docs/process/submission). Every row confirmed its cited evidence still opens
+  and still supports its note — files that grew since baseline (`CHANGES.md`, `memory-bank/*.md`)
+  needed line-number corrections in several rows even where the underlying claim didn't change;
+  those are called out per-row rather than silently re-pointed.
+- **Independent citation verification this sweep** spot-checked a sample of citations across every
+  cluster (not just the lead sweep's own 37) by opening the file at the exact cited line — one
+  real error was found and fixed: `pnpm-workspace.yaml`'s `sdk` package entry is at line 6, not
+  line 1/4 as several draft citations first stated (the file's `packages:` header is line 1; `sdk`
+  is the 5th list item). Corrected everywhere it occurred before this report was finalized.
 
 ## Matrix
 
@@ -62,22 +75,22 @@ does not chain together.
 | W6-R3 | `/oauth/authorize` + consent UI + `/oauth/token` implementing RFC 6749 + 7636, proven by a... | TRO-412, TRO-416, TRO-503, TRO-550, TRO-549 | e2e/oauth-authorize.spec.ts:102, e2e/oauth-authorize.spec.ts:9, CHANGES.md:209 (+2 more) | PARTIAL |
 | W6-R4 | v1-only bearer middleware with three distinguishable 401 variants. | TRO-430 | api/src/platform/oauth/bearerAuth.ts:116, api/src/platform/api/v1/resources/documents.ts:117, api/src/platform/oauth/__tests__/bearerAuth.test.ts:246 | VERIFIED |
 | W6-R5 | `/api/v1/documents` list/get/create wired through a `require(scope)` factory. | TRO-398, TRO-430 | api/src/platform/api/v1/resources/documents.ts:115, api/src/platform/api/v1/resources/documents.ts:201, api/src/platform/api/v1/resources/documents.ts:254 (+3 more) | VERIFIED |
-| W6-R6 | Public error middleware producing the ApiError shape on every v1 failure path, plus a... | TRO-397, TRO-489, TRO-495, TRO-404 | api/src/platform/api/v1/errors.ts:31, api/src/platform/api/v1/errorMiddleware.ts:1, api/src/platform/api/v1/resources/__tests__/documents.test.ts:196 (+2 more) | PARTIAL |
+| W6-R6 | Public error middleware producing the ApiError shape on every v1 failure path, plus a... | TRO-397, TRO-489, TRO-495, TRO-404 | api/src/platform/api/v1/errors.ts:31, api/src/platform/api/v1/errorMiddleware.ts:1, api/src/platform/api/v1/__tests__/route-fitness.test.ts:335 (33/33 fresh) | **VERIFIED** (was PARTIAL) |
 | W6-R7 | A ScopeRegistry data structure; 403 responses carry the missing scope in details. | TRO-430 | api/src/platform/scopes/requireScope.ts:37, api/src/platform/scopes/registry.ts:23, api/src/platform/oauth/__tests__/bearerAuth.test.ts:219 | VERIFIED |
-| W6-R8 | In-process spec generator + serving route + schema-validation unit test. | TRO-402 | api/src/platform/openapi/README.md:8, api/src/platform/api/v1/router.ts:43, api/src/platform/oauth/__tests__/seedGraderApp.test.ts:15 (+1 more) | MISSING |
-| W6-R9 | `sdk/` workspace package exporting ShipClient with a working `me()`. | TRO-405, TRO-390 | pnpm-workspace.yaml:1, docs/architecture.md:195, docs/architecture.md:201 (+5 more) | MISSING |
-| W6-R10 | No regression: e2e suite green, and the three Part-1 baseline metrics (in `audit/`) stay within... | — | audit/api-perf/baseline.md:3, audit/bundle/baseline.md:3, audit/db-query/baseline.md:3 (+1 more) | MISSING |
-| W6-R11 | Live deployment carrying the platform layer, public spec URL, seeded grader OAuth app. | TRO-441, TRO-411, TRO-402 | api/src/platform/oauth/seedGraderApp.ts:80, api/src/db/seed.ts:100, terraform/render/plan/tro-411-pf900-w6-env-vars.md:299 (+2 more) | PARTIAL |
+| W6-R8 | In-process spec generator + serving route + schema-validation unit test. | TRO-402 | api/src/platform/openapi/index.ts:23, api/src/platform/api/v1/router.ts:50, api/src/platform/openapi/__tests__/document.test.ts:99 (9/9 fresh) | **VERIFIED** (was MISSING) |
+| W6-R9 | `sdk/` workspace package exporting ShipClient with a working `me()`. | TRO-405, TRO-390 | sdk/src/client.ts:90, sdk/src/__tests__/client.liveServer.test.ts:163 (3/3 fresh, real TCP round trip) | **VERIFIED** (was MISSING) |
+| W6-R10 | No regression: e2e suite green, and the three Part-1 baseline metrics (in `audit/`) stay within... | TRO-593, TRO-594, TRO-595, TRO-596 | audit/api-perf/compare-w6-r10-aug14/after-w6-r10-aug14.md:90, audit/db-query/.../after-w6-r10-aug14.md:66, audit/bundle/.../after-w6-aug14.md:43, memory-bank/activeContext.md:23 | **PARTIAL** (was MISSING) |
+| W6-R11 | Live deployment carrying the platform layer, public spec URL, seeded grader OAuth app. | TRO-441, TRO-411, TRO-402 | api/src/platform/oauth/seedGraderApp.ts:80, api/src/db/seed.ts:100, api/src/platform/api/v1/router.ts:50 (openapi.json now registered) | **IMPLEMENTED-UNVERIFIED** (was PARTIAL) |
 | W6-R12 | Complete IaC for the deployment (repo deploys to Render — the IAM-role language is AWS-shaped... | TRO-411, TRO-415, TRO-488, TRO-420 | terraform/render/versions.tf:9, terraform/render/postgres.tf:9, terraform/render/web_service.tf:9 (+4 more) | PARTIAL |
 | W6-R13 | Numbered migration creating `oauth_apps` with those columns; rotation also returns raw secret... | TRO-406, TRO-408, TRO-492, TRO-493 | api/src/db/migrations/042_oauth_apps.sql:31, api/src/platform/oauth/appRegistration.ts:177, api/src/routes/oauth-apps.ts:235 | VERIFIED |
 | W6-R14 | PKCE recorded on the authorization code and verified at token exchange; negative case returns... | TRO-412, TRO-416 | api/src/platform/oauth/authorize.ts:139, api/src/db/migrations/043_oauth_tokens_and_codes.sql:35, api/src/platform/oauth/token.ts:127 (+2 more) | VERIFIED |
-| W6-R15 | RFC 8628 Device Authorization Grant endpoints, including slow_down semantics honored by clients. | TRO-425 | api/src/db/migrations/043_oauth_tokens_and_codes.sql:96, api/src/platform/api/v1/router.ts:32 | MISSING |
+| W6-R15 | RFC 8628 Device Authorization Grant endpoints, including slow_down semantics honored by clients. | TRO-425 | api/src/platform/oauth/device.ts:1, api/src/platform/oauth/__tests__/device.test.ts:256 (9/9 fresh, compounding slow_down proven) | **VERIFIED** (was MISSING) |
 | W6-R16 | The seven named scopes exist as registry data; adding a scope requires no middleware edit. | TRO-430, TRO-491 | api/src/platform/scopes/registry.ts:57, api/src/platform/scopes/__tests__/registry.test.ts:21 | VERIFIED |
 | W6-R17 | Middleware sets a principal ({app, user, scopes}) on the request; overlaps W6-R4/R7 but adds the... | TRO-430 | api/src/platform/oauth/bearerAuth.ts:146, api/src/platform/oauth/__tests__/bearerAuth.test.ts:177 | VERIFIED |
-| W6-R18 | Refresh rotation with family-wide revocation on reuse of a rotated token. | TRO-421 | api/src/routes/oauth-token.ts:78, api/src/db/migrations/043_oauth_tokens_and_codes.sql:66 | MISSING |
+| W6-R18 | Refresh rotation with family-wide revocation on reuse of a rotated token. | TRO-421 | api/src/platform/oauth/token.ts:650 (rotateRefreshToken), :590 (revokeTokenFamily), token.test.ts (32/32 fresh, incl. forced concurrency test) | **VERIFIED** (was MISSING) |
 | W6-R19 | Boundary enforced by ESLint `no-restricted-imports` (or equivalent) failing CI on cross-imports. | TRO-399, TRO-500, TRO-496 | eslint.config.mjs:111, eslint.config.mjs:164, api/src/platform/__tests__/boundary-lint.test.ts:77 | VERIFIED |
 | W6-R20 | Keyset cursor pagination on every v1 list endpoint with the {data, next_cursor} envelope. | TRO-398, TRO-400, TRO-404 | api/src/platform/api/v1/pagination.ts:33, api/src/platform/api/v1/pagination.ts:44, api/src/platform/api/v1/resources/documents.ts:192 (+2 more) | VERIFIED |
-| W6-R21 | Spec generation is in-process from route metadata; a fitness test asserts 100% spec ↔ route... | TRO-402, TRO-404 | api/src/platform/openapi/README.md:8, CHANGES.md:1578, docs/architecture.md:278 | MISSING |
+| W6-R21 | Spec generation is in-process from route metadata; a fitness test asserts 100% spec ↔ route... | TRO-402, TRO-404 | api/src/platform/openapi/index.ts:11, api/src/platform/api/v1/__tests__/route-fitness.test.ts:284 (33/33 fresh) | **VERIFIED** (was MISSING) |
 | W6-R22 | An enumerable event registry of exactly these 8 types, each with a Zod payload schema. | TRO-419 | api/src/platform/webhooks/events.ts:99, api/src/platform/webhooks/events.ts:237, api/src/platform/webhooks/events.ts:255 (+1 more) | VERIFIED |
 | W6-R23 | IEventBus interface with in-process impl; publish() calls live only in the domain write path... | TRO-426 | api/src/platform/webhooks/README.md:16, api/src/services/documentService.ts:16, docs/architecture.md:300 | MISSING |
 | W6-R24 | Subscriptions table + CRUD API under webhooks:manage. NOTE: "hashed signing secret" is... | TRO-431 | api/src/platform/webhooks/README.md:16, api/src/platform/scopes/registry.ts:82, api/src/db/migrations/044_oauth_tokens_authorization_code_id.sql:25 (+1 more) | MISSING |
@@ -90,7 +103,7 @@ does not chain together.
 | W6-R31 | SDK auth helpers for both grants + ITokenStore with the three store implementations. | TRO-418, TRO-449, TRO-390 | docs/architecture.md:202, docs/architecture.md:216, PLUGFORGE.MD:259 (+1 more) | MISSING |
 | W6-R32 | Async-iterator pagination on SDK list clients; cursors fully internal. | TRO-410, TRO-449, TRO-390 | docs/architecture.md:214, PLUGFORGE.MD:257, PLUGFORGE.MD:289 | MISSING |
 | W6-R33 | One-call SDK verifier with the three failure modes. | TRO-413, TRO-433, TRO-390 | api/src/platform/webhooks/signer.ts:144, docs/architecture.md:205, PLUGFORGE.MD:258 (+1 more) | MISSING |
-| W6-R34 | Typed error union in the SDK, exhaustively switchable. | TRO-405, TRO-390 | PLUGFORGE.MD:255, docs/architecture.md:190 | MISSING |
+| W6-R34 | Typed error union in the SDK, exhaustively switchable. | TRO-405, TRO-390 | sdk/src/errors.ts:39, :76, :115, errors.test.ts (16/16 fresh, exhaustive it.each) | **VERIFIED** (was MISSING) |
 | W6-R35 | Two-level token buckets; headers on all v1 responses; 429 + Retry-After. (Requires exempting... | TRO-427, TRO-401, TRO-494, TRO-552, TRO-391 | api/src/platform/ratelimit/README.md:8, api/src/middleware/rate-limit.ts:212, api/src/middleware/rate-limit.ts:333 (+2 more) | MISSING |
 | W6-R36 | public_api_audit table + recording middleware + portal query surface. | TRO-432, TRO-391 | api/src/platform/audit/README.md:4, api/src/platform/oauth/bearerAuth.ts:30, CHANGES.md:1118 (+1 more) | MISSING |
 | W6-R37 | Developer portal in the existing Ship web app covering those six functions. | TRO-436, TRO-439, TRO-443, TRO-391 | web/src/pages:1, PLUGFORGE.MD:266 | MISSING |
@@ -99,9 +112,9 @@ does not chain together.
 | W6-R40 | Drift-detection demo + destroy-redeploy with committed evidence. | TRO-415 | terraform/render/plan/tro-316-destroy-redeploy-proof.md:23, terraform/render/plan/tro-316-destroy-redeploy-proof.md:25, memory-bank/progress.md:163 | PARTIAL |
 | W6-R41 | Human competency requirement (Troy must be able to read a plan unaided) — auto-fail stakes. | — | docs/submission/PLUGFORGE-DEFENSE-DECK.html:428 | N/A |
 | W6-R42 | Graded test scenario — PKCE e2e + mandatory negative. | TRO-412, TRO-416, TRO-503, TRO-550, TRO-549 | e2e/oauth-authorize.spec.ts:102, api/src/platform/oauth/__tests__/token.test.ts:324 | PARTIAL |
-| W6-R43 | Graded test scenario — device flow via CLI to /api/v1/me. | TRO-425, TRO-448 | api/src/platform/api/v1/router.ts:32 | MISSING |
-| W6-R44 | Graded test scenario — the route-enumeration fitness test with the four assertions. | TRO-404 | CHANGES.md:1578, api/src/platform/api/v1/__tests__/error-middleware.test.ts:20, api/src/platform/__tests__/boundary-lint.test.ts:1 | MISSING |
-| W6-R45 | Graded test scenario — spec validity + spec→SDK parity walk. | TRO-402, TRO-422 | pnpm-workspace.yaml:1, api/src/platform/openapi/README.md:8, docs/architecture.md:214 | MISSING |
+| W6-R43 | Graded test scenario — device flow via CLI to /api/v1/me. | TRO-425, TRO-448 | api/src/platform/oauth/__tests__/device.test.ts:256, :330 (introspected via real bearerAuth, not literally /api/v1/me; no CLI exists) | **PARTIAL** (was MISSING) |
+| W6-R44 | Graded test scenario — the route-enumeration fitness test with the four assertions. | TRO-404 | api/src/platform/api/v1/__tests__/route-fitness.test.ts:271, :41 (33/33 fresh, incl. real deliberate-drift AC proof) | **VERIFIED** (was MISSING) |
+| W6-R45 | Graded test scenario — spec validity + spec→SDK parity walk. | TRO-402, TRO-422 | api/src/platform/openapi/__tests__/document.test.ts:99 (5/5 fresh, spec-validity half done); sdk/ has no parity walk (SDK-parity half absent) | **PARTIAL** (was MISSING) |
 | W6-R46 | Graded test scenario — end-to-end webhook happy path + tamper negative, ≤2s first delivery. | TRO-455, TRO-413 | api/src/platform/webhooks/README.md:16 | MISSING |
 | W6-R47 | Graded test scenario — deterministic retry test (500×3 → 200 on attempt 4). | TRO-438 | api/src/platform/webhooks/README.md:16 | MISSING |
 | W6-R48 | Graded test scenario — DLQ + portal visibility + replay with original key. | TRO-438, TRO-439 | api/src/platform/webhooks/README.md:16 | MISSING |
@@ -122,7 +135,7 @@ does not chain together.
 | W6-R63 | No LLM calls anywhere in the platform layer; agent unchanged in cost shape. | TRO-434 | api/src/platform:0, api/package.json:24, agent/package.json:30 (+2 more) | PARTIAL |
 | W6-R64 | Dev-cost tracking obligations (this plus CI minutes, Playwright compute, spec-gen overhead,... | TRO-434, TRO-440 | docs/submission/AI-COST-ANALYSIS.md:1, agent/src/costTracking.ts:1, agent/cost-ledger-snapshot.jsonl:1 | MISSING |
 | W6-R65 | Production cost projections at 100/1k/10k/100k users with explicit assumptions: webhook fanout... | TRO-434, TRO-395 | PLUGFORGE.MD:301, docs/submission/AI-COST-ANALYSIS.md:1 | MISSING |
-| W6-R66 | New platform/SDK code under TypeScript strict mode; Zod schemas drive the spec. | — | tsconfig.json:13, api/tsconfig.json:2, agent/tsconfig.json:2 (+6 more) | PARTIAL |
+| W6-R66 | New platform/SDK code under TypeScript strict mode; Zod schemas drive the spec. | — | tsconfig.json:13, sdk/tsconfig.json:2 (extends root, `tsc --noEmit` exit 0), Zod in platform code | **VERIFIED** (was PARTIAL) |
 | W6-R67 | Epic 7: agent reads via app-identity OAuth, all traffic through @ship/sdk and /api/v1, provable... | TRO-393, TRO-417, TRO-423, TRO-428, TRO-435, TRO-440, TRO-414 | agent/src/shipClient.ts:1, agent/package.json:1, docs/architecture.md:228 (+1 more) | MISSING |
 | W6-R68 | Deliverer tests use an injected clock; zero setTimeout-based waiting. | TRO-438 | api/src/platform/webhooks/README.md:16, api/src/platform/webhooks/__tests__/signer.test.ts:61 | MISSING |
 | W6-R69 | integrations/* depend only on @ship/sdk, enforced by workspace/lint rules. | TRO-399, TRO-500, TRO-496 | scripts/check-integration-deps.mjs:1, scripts/__tests__/check-integration-deps.test.mjs:128, .gitlab-ci.yml:83 (+3 more) | PARTIAL |
@@ -141,53 +154,27 @@ does not chain together.
 
 ### W6-R3 — PARTIAL
 - **Quote:** "Authorization Code + PKCE flow completes end-to-end via a Playwright test: /oauth/authorize → consent → /oauth/token → usable access token."
-- **What's missing:** The authorize-to-consent-to-redirect-with-code leg is genuinely implemented and proven by a real, freshly-re-run Playwright e2e (VERIFIED for that portion). The requirement's full literal scope -- one Playwright spec spanning authorize -> consent -> token -> a usable access token against a real authenticated route -- is not met: no Playwright spec calls /oauth/token, and there is no /api/v1/me route yet to call with the resulting token. This is not an interpretive ambiguity; the codebase's own CHANGES.md entry (TRO-416) states the gap directly. Ticket list: TRO-412 (authorize/consent, Done), TRO-416 (/oauth/token, Done), TRO-503 (Backlog -- CloudFront has no /oauth/* cache behavior, a deploy-time follow-up flagged in the same spec's header), TRO-550 (Backlog -- consent screen shows generic app info, referenced directly in the spec's own comments), TRO-549 (Backlog -- weak/plausible match: the e2e login-flow assertion pattern this spec itself uses, 'not toHaveURL(/login)', is the exact pattern that ticket questions).
-- **Suggested scope:** Once PF-201/TRO-400 lands /api/v1/me, extend e2e/oauth-authorize.spec.ts (or add a new spec) to continue past the redirect: exchange the code via POST /oauth/token and call /api/v1/me with the resulting token, chaining all three hops (authorize -> token -> protected resource) into one Playwright test instead of two separately-proven halves (e2e for authorize+consent, vitest for token exchange).
+- **What's missing (updated 2026-08-14):** Narrower than at baseline, but not closed. Every individual piece the literal scenario needs now exists and works: `/api/v1/me` is live (PF-201/TRO-400 landed), `token.test.ts` is 32/32 including the mandatory wrong-verifier negative (grew from 18/18 via PF-105's rotation additions), and the authorize→consent leg is still proven by `e2e/oauth-authorize.spec.ts` (2/2, byte-identical to baseline). What's still missing is purely that nobody wrote the ONE Playwright spec chaining all three hops together — `e2e/` has zero diff since baseline (confirmed via `git diff --stat`), so this is now a pure test-authoring gap with zero remaining backend blockers, unlike baseline where `/api/v1/me` didn't exist yet.
+- **Suggested scope:** Extend `e2e/oauth-authorize.spec.ts` (or add a new spec) to continue past the redirect: exchange the code via `POST /oauth/token`, then call `GET /api/v1/me` with the resulting token, chaining all three hops into one Playwright test. No backend work is needed — this is now purely a test-writing task.
 
-### W6-R6 — PARTIAL
-- **Quote:** "Consistent ApiError shape ({code, message, details?, request_id}) returned on every public failure, asserted by a fitness test over all /api/v1 routes."
-- **What's missing:** The ApiError contract itself is solid and gate-tested (ran api/src/platform/api/v1/__tests__/error-middleware.test.ts + errors.test.ts: 20/20 passed; documents.test.ts independently exercises it on a real resource). The requirement's second, explicitly-named acceptance clause -- 'asserted by a fitness test over all /api/v1 routes' (PF-203) -- does not exist in the repo: no file walks v1Routes.stack or asserts shape-coverage across every registered route (searched for router.stack/listRoutes/enumerateRoutes patterns, none found), and TRO-404 (PF-203) is Backlog, confirmed independently by the project's own memory-bank as the last unmerged MVP-gate item. Not an ambiguity -- the artifact (memory-bank) states this plainly, per this repo's own claim-provenance discipline.
-- **Suggested scope:** Land PF-203/TRO-404: a fitness test that walks every registered /api/v1 route and asserts each error path returns the exact ApiErrorBody shape, replacing the current ad hoc two-scratch-route coverage in error-middleware.test.ts. Currently Backlog, blocked behind PF-202/TRO-402 per memory-bank/activeContext.md.
-
-### W6-R8 — MISSING
-- **Quote:** "OpenAPI 3.1 spec served at /api/v1/openapi.json, generated from route metadata (never hand-written), validating against the OpenAPI schema in a unit test."
-- **What's missing:** PF-202 (TRO-402, Linear status 'In Progress') is genuinely unmerged work-in-progress: a branch `feat/pf-202-openapi-v1-generator` exists with 3 commits ('feat/test/docs(TRO-402)') but `git merge-base --is-ancestor feat/pf-202-openapi-v1-generator main` returns false at the pinned commit — it is not an ancestor of main. memory-bank/activeContext.md line 11 corroborates: work is sitting uncommitted/in-progress in worktree `Ship-wt-tro_402`, dispatched but not landed at session rollover. The only OpenAPI surface reachable at this commit is the pre-existing internal `/api/openapi.json` (api/src/swagger.ts:39, api/src/openapi/registry.ts), which is a different registry instance serving `/api/*` (internal), not `/api/v1/*` (public). No unit test validating a v1 spec against the OpenAPI 3.1 schema exists in-repo.
-- **Suggested scope:** Ships when TRO-402/PF-202 merges (already in flight in another worktree per memory-bank) — add the v1 OpenAPI registry, a GET /api/v1/openapi.json route registered on v1Routes, and the schema-validation unit test. No new design work needed; this is a landing/merge gap, not a missing design.
-
-### W6-R9 — MISSING
-- **Quote:** "SDK skeleton exists in a pnpm workspace package; `new ShipClient({ token}).me()` against a running server returns the typed authenticated user."
-- **What's missing:** No `sdk/` directory exists anywhere in the repo, no `@ship/sdk` in pnpm-lock.yaml, and it is absent from pnpm-workspace.yaml. TRO-405/PF-400 is Backlog and per memory-bank/activeContext.md has not even been dispatched to a builder yet. A same-named `ShipClient` class exists at agent/src/shipClient.ts but is confirmed (by reading its docstring) to be an unrelated internal client, not this requirement's artifact.
-- **Suggested scope:** Ships when PF-400/TRO-405 lands: scaffold sdk/ as a pnpm workspace package (@ship/sdk), a ShipClient class with token-auth constructor + me(), and an integration test against a running test server. Also blocked on PF-201/TRO-400 (issues/sprints/me route, currently In Progress) landing first since me() has no live /api/v1/me endpoint to call yet.
-
-### W6-R10 — MISSING
+### W6-R10 — PARTIAL (was MISSING)
 - **Quote:** "Existing Playwright regression suite passes on main; P95 latency, bundle size, and per-route query counts within +10% of the Part 1 baseline."
-- **What's missing:** This is a cross-cutting MVP-gate constraint (no dedicated PF ticket owns it — it's referenced as an AC clause inside several tickets, e.g. PF-001's 'internal routes untouched (regression suite green)', but never as its own deliverable). As of this commit (06a15f1, mid-sprint, 2026-08-13) no compare-mode run of api-perf-audit/bundle-audit/db-query-audit has been captured against the 2026-07-27 Part-1 baselines, and no full Playwright regression run is documented since W6 platform code (oauth_apps, /api/v1 router, rate limiters, etc.) started landing. Given the volume of new middleware mounted on every request (request_id, CORS, rate-limit exemption logic in app.ts) this is a real, not merely paperwork, risk to the +10% latency/bundle/query-count budget. I did not run the full suites myself — W6-R10's acceptance evidence does not name a specific targeted test file (it names whole audit categories + the full e2e suite), so per the task's own instruction I could not treat this as a 'run only the named file' case, and running the entire suite/all three audits was explicitly out of scope for a targeted verify.
-- **Suggested scope:** Before final submission: run compare-mode api-perf-audit, bundle-audit, and db-query-audit skills against the current branch, plus the full e2e regression suite, and diff against audit/{api-perf,bundle,db-query}/baseline.{md,json} (2026-07-27). Commit the resulting compare artifacts (audit/{api-perf,bundle,db-query}/compare-w6-<date>/) the same way compare-phase2-jul30/ was committed for the prior comparison. If any metric exceeds +10%, that becomes its own remediation ticket before the gate closes.
+- **What's missing:** The three numeric budgets are done: `audit/api-perf/compare-w6-r10-aug14/after-w6-r10-aug14.md`, `audit/db-query/compare-w6-r10-aug14/after-w6-r10-aug14.md`, and `audit/bundle/compare-w6-aug14/after-w6-aug14.md` (all opened and read directly this sweep, not merely trusted) each report a clean PASS vs. the 2026-07-27 Part-1 baseline, with disclosed confounds (Postgres 15→16 version skew, gzip landing independently of tonight's tickets, one load-contaminated latency window disproven by a same-methodology quiet-load recheck). The fourth clause — "existing Playwright regression suite passes on main" — is literally false today: 32 tests fail. A rigorous three-pass bisection (documented in `memory-bank/activeContext.md:23`) traces every one of those 32 to causes wholly pre-existing and outside this range, with zero code overlap against a verified pre-wave commit (`6000c94`) — so none are a regression *from* W6 work — but the suite does not pass in the unqualified sense the requirement's words state. Filed as 4 remediation tickets (TRO-593 High, TRO-594/596 Low, TRO-595 Medium), none blocking MVP.
+- **Suggested scope:** The three quantitative budgets need no further work. Fix or quarantine the 4 pre-existing failure clusters (TRO-593..596) to make the literal "suite passes" clause true — none are caused by W6 work, so this is cleanup, not remediation of tonight's tickets.
 
-### W6-R11 — PARTIAL
-- **Quote:** "Deployed and publicly accessible: deployed Ship + published OpenAPI spec URL + at least one OAuth app pre-registered with read-only scopes for graders."
-- **What's missing:** Two of the three required pieces have real code: the grader OAuth app seed (Done, TRO-441) and its Terraform env-var wiring (TRO-411). The third — 'published OpenAPI spec URL' — cannot exist yet because /api/v1/openapi.json is not registered anywhere in the router (confirmed by reading router.ts directly, not inferred). Separately, 'deployed and publicly accessible' requires a live URL probe I cannot perform in this sandbox (no network egress attempted; per task instructions this stays unverified rather than assumed) — but that live-check gap is secondary to the harder fact that the spec-URL component is missing at the code level regardless of deployment.
-- **Suggested scope:** Land TRO-402/PF-202 (the /api/v1/openapi.json route) — once that exists, this requirement's spec-URL leg becomes a live-deploy verification question rather than a missing-code question. The grader-app and Terraform legs are already done and just need a real deploy + probe.
+> W6-R11 moved PARTIAL → IMPLEMENTED-UNVERIFIED this sweep (all three named pieces now have real
+> code; only a live-deployment probe remains) and is no longer part of this MISSING+PARTIAL subset —
+> see the Delta section below for its full evidence.
 
 ### W6-R12 — PARTIAL
 - **Quote:** "Terraform deployment: a terraform/ directory with a complete config describing the deployment topology (app container, database, networking, IAM task role and execution role). Provider versions must be pinned. Run terraform plan and include the annotated output as a submission artifact. Perform a destroy-and-redeploy: tear down the environment and re-apply from the Terraform config alone to prove IaC completeness."
 - **What's missing:** Config completeness, exact provider pin, and a committed annotated plan artifact are all real and present. The one piece that is not: destroy-redeploy evidence for the deployment as it stands today, including this week's platform additions (SECRET_ENCRYPTION_KEY, both new OAuth-secret env vars, rate-limit config, etc.) — the only destroy-redeploy proof on file predates PF-900's env vars and covers a single, narrower resource. TRO-415/PF-901 (the ticket meant to close this) is explicitly Backlog and flagged as needing human sign-off before any real terraform destroy against the graded environment.
 - **Suggested scope:** Once TRO-415/PF-901 gets its human go-ahead, run a real destroy → apply cycle against the current terraform/render/ topology (all three resources, not just the agent), and commit the proof the same way tro-316-destroy-redeploy-proof.md was committed for the narrower case. This is the same underlying gap as W6-R40 — closing one closes both.
 
-### W6-R15 — MISSING
-- **Quote:** "/oauth/device/code issues a user_code and device_code; /oauth/device/verify accepts the user_code; the client polls /oauth/token until authorized. Slow-down responses honored."
-- **What's missing:** No /oauth/device/code, /oauth/device/verify, or grant_type=urn:ietf:...:device_code branch exists anywhere in api/src/routes or api/src/platform/oauth at pinned commit 06a15f1 (grepped for device_code/user_code/authorization_pending/slow_down in api/src -- zero hits outside test/config/CORS-allowlist files). The real implementation exists as commit 33843e1 'feat(TRO-425): PF-106 device authorization grant (RFC 8628)' on branch feat/pf-106-device-auth-grant, confirmed via `git merge-base --is-ancestor 33843e1 06a15f1` = NOT an ancestor, and no PR (open or merged) references TRO-425/pf-106 (gh pr list --state all checked). At the pinned commit this requirement is unimplemented, not merely unverified.
-- **Suggested scope:** Not a small fix -- the full implementation already exists and is tested (422 lines of device.ts, 189-line route file, 9 passing test cases per the branch's own commit message) on feat/pf-106-device-auth-grant. Closing this gap means merging that branch, not writing new code; ships when TRO-425's PR lands on main.
-
-### W6-R18 — MISSING
-- **Quote:** "One-time-use refresh tokens with rotation. Stolen-refresh-token detection: reuse invalidates the family."
-- **What's missing:** Refresh tokens ARE minted and stored (refresh_token_hash) at authorization_code issuance (api/src/platform/oauth/token.ts:360), but there is no route or service code anywhere on main that redeems a refresh_token grant, rotates it, or performs family-wide revocation on reuse. The real implementation is commit 82c6460 'feat(TRO-421): POST /oauth/token grant_type=refresh_token -- rotation + family invalidation' on branch feat/pf-105-refresh-rotation, confirmed NOT an ancestor of 06a15f1 via git merge-base --is-ancestor, with no PR yet on GitHub for TRO-421/pf-105.
-- **Suggested scope:** Not a small fix -- full implementation (migration 045 + token.ts refresh_token grant + 14-case regression suite incl. a forced concurrency test) already exists on feat/pf-105-refresh-rotation per that branch's own commit history; closing this gap means merging that branch.
-
-### W6-R21 — MISSING
-- **Quote:** "Generated from route metadata in-process. Served at /api/v1/openapi.json. Validates against the OpenAPI schema in a unit test. Spec parity asserted by fitness test."
-- **What's missing:** This requirement restates W6-R8 (spec generation + serving + schema-validation test) and adds the spec/route parity fitness-test clause, which is W6-R44/PF-203. Both halves are unimplemented at this commit for the same reason documented under W6-R8: TRO-402/PF-202 is unmerged WIP (branch not an ancestor of main) and TRO-404/PF-203 is still Backlog with zero code found anywhere in the repo (grep for 'fitness'/'route-enumeration'/'enumerat' across api/web/e2e/agent/scripts turned up no route-enumeration test).
-- **Suggested scope:** Ships when both TRO-402/PF-202 (openapi generator + route) and TRO-404/PF-203 (route-enumeration fitness test) land — TRO-402 is already in flight in another worktree; TRO-404 explicitly depends on TRO-402 per memory-bank/activeContext.md's stated MVP-gate order ('PF-203/TRO-404 after PF-202 Done').
+> W6-R15 (device grant), W6-R18 (refresh rotation), W6-R21 (spec parity fitness test), W6-R44
+> (route-fitness graded scenario), W6-R34 (SDK error union), W6-R66 (TS strict mode), and W6-R8/R9/R6
+> (see above) all moved to VERIFIED this sweep — the six landed tickets closed them outright. See
+> the Delta section below for each row's fresh evidence rather than duplicating it here.
 
 ### W6-R23 — MISSING
 - **Quote:** "IEventBus interface. Domain layer publishes on writes — never the route layer. In-process implementation must-ship; queue-backed implementation is a Liskov-substitutable drop-in."
@@ -239,11 +226,6 @@ does not chain together.
 - **What's missing:** The underlying cryptographic algorithm and shared cross-validation fixtures already exist and are well-tested via PF-303 (server-side signer.ts, Done), but the requirement explicitly names an SDK helper ('One-call SDK verifier') — no sdk/ package exists to hold it, and TRO-413/PF-403 (the ticket that wraps signer.ts's logic as an SDK-exported verifyWebhook) is Backlog.
 - **Suggested scope:** Ships when PF-403/TRO-413 lands. Smaller gap than sibling SDK tickets — the algorithm and shared test vectors already exist (PF-303); PF-403 mainly needs sdk/ to exist first (PF-400) as a home for the thin wrapper + its own test suite.
 
-### W6-R34 — MISSING
-- **Quote:** "SDK errors are a discriminated union: { kind: 'auth' | 'rate_limit' | 'not_found' | 'validation' | 'server',...}. Consumers can switch on kind exhaustively."
-- **What's missing:** Zero implementation and zero design-doc coverage anywhere in the repo — grepped for ApiErrorKind, `kind: 'auth'`, SdkError, DiscriminatedError; the only hits are the requirements-inventory files themselves. Unlike the rest of the SDK surface, this specific piece (the typed error kind union) isn't even sketched in docs/architecture.md's otherwise-detailed SDK Surface section, though it is named in PF-400's Linear AC.
-- **Suggested scope:** Ships when PF-400/TRO-405 lands — add the kind union type ({kind:'auth'|'rate_limit'|'not_found'|'validation'|'server',...}) + an ApiError-code-to-kind mapping function + exhaustiveness-switch tests as part of PF-400's scope.
-
 ### W6-R35 — MISSING
 - **Quote:** "Per-app and per-token token-bucket limits. Public responses carry X-RateLimit-Limit, X-RateLimit-Remaining, X-RateLimit-Reset; 429 responses carry Retry-After."
 - **What's missing:** Grepped api/src for X-RateLimit, RateLimit-Limit/Remaining/Reset, Retry-After, and TokenBucket implementations (not just the string 'Token' or 'Bucket' separately) — zero hits outside comments/READMEs describing the not-yet-built feature. The only rate-limiting code that touches /api/v1 today is the exemption from the legacy per-IP/per-identity limiters (PF-004/TRO-401, Done) — that is a prerequisite, not the requirement itself. TRO-552 (Backlog) is a narrower follow-up about the exemption predicate's own test coverage at segment boundaries, tangential but related to the same code path. No ambiguity here — the code plainly does not implement token buckets or the three headers; verdict is a direct observation, not an inference.
@@ -251,8 +233,8 @@ does not chain together.
 
 ### W6-R36 — MISSING
 - **Quote:** "Every public API call recorded with timestamp, app client_id, user_id, route, scope used, status, latency. Queryable in the developer portal."
-- **What's missing:** Confirmed no public_api_audit table exists: grepped api/src/db/schema.sql and every file under api/src/db/migrations/ (highest numbered is 044_oauth_tokens_authorization_code_id.sql) — no migration 046 and no public_api_audit anywhere. Grepped api/src for the literal string public_api_audit — the only two hits are the bearerAuth.ts comment and the platform/audit README, both describing the gap, not filling it. Not ambiguous: the specific migration number (046) and table name are named directly in the requirement's own PLUGFORGE AC text and confirmed absent by direct inspection, not inference.
-- **Suggested scope:** Build TRO-432 (PF-501): migration 046 creating public_api_audit (timestamp, app client_id, user_id, route, scope, status, latency columns per the requirement), middleware that writes one row per /api/v1 call, and a query surface (GET /api/v1/audit, admin/owner-scoped) for the portal to read from. Currently deferred post-MVP; also a listed blocker for the portal's audit view (W6-R37) and for PF-703's audit-trail proof.
+- **What's missing:** Confirmed no public_api_audit table exists: grepped api/src/db/schema.sql and every migration (highest is now `046_oauth_device_codes_polling.sql`, landed by TRO-425/PF-106 this range — unrelated to audit logging) — no public_api_audit anywhere. **Update 2026-08-14:** the comment in `bearerAuth.ts:30` and this section's own baseline text named "migration 046" as PF-501's future slot — that specific number is now stale, since migration slot 046 was taken by tonight's unrelated device-grant work. PF-501's eventual migration will land as 047+. The substantive gap (table doesn't exist) is unchanged.
+- **Suggested scope:** Build TRO-432 (PF-501): a migration (047+) creating public_api_audit (timestamp, app client_id, user_id, route, scope, status, latency columns per the requirement), middleware that writes one row per /api/v1 call, and a query surface (GET /api/v1/audit, admin/owner-scoped) for the portal to read from. Currently deferred post-MVP; also a listed blocker for the portal's audit view (W6-R37) and for PF-703's audit-trail proof.
 
 ### W6-R37 — MISSING
 - **Quote:** "In-app UI for: listing apps, registering apps, viewing/rotating client_secret (shown once), managing subscriptions, browsing the delivery log, replaying failed deliveries."
@@ -271,23 +253,18 @@ does not chain together.
 
 ### W6-R42 — PARTIAL
 - **Quote:** "Complete the Authorization Code + PKCE flow in a Playwright test from a registered web app. Confirm that a wrong code_verifier on the token exchange returns invalid_grant (negative case is mandatory, not optional)."
-- **What's missing:** Identical underlying gap to W6-R3, viewed through this requirement's graded-scenario framing: the PRD asks specifically for 'a Playwright test from a registered web app' confirming the wrong-verifier negative. That exact negative case is real and passing, but lives in the vitest suite, not chained onto/after the Playwright authorize-consent flow which stops before ever calling /oauth/token. PARTIAL, not MISSING, because both halves of the mandated behavior individually exist and pass -- they are just not unified into the one Playwright artifact the requirement names.
-- **Suggested scope:** Add a negative-case Playwright test to e2e/oauth-authorize.spec.ts: drive the browser through authorize -> consent to obtain a real code, then POST to /oauth/token with a wrong code_verifier and assert the 400 invalid_grant response. The negative case is already proven at the vitest/supertest level (token.test.ts:324) but not yet inside the graded Playwright spec itself.
+- **What's missing (updated 2026-08-14):** Same underlying gap as W6-R3, same conclusion: the mandatory wrong-verifier negative case is real and passing (now 32/32 in token.test.ts, up from 18/18), but still lives only in the vitest suite, not chained onto the Playwright authorize→consent flow (`e2e/oauth-authorize.spec.ts`, byte-identical to baseline). No backend blocker remains.
+- **Suggested scope:** Same as W6-R3: add the wrong-verifier negative case to the same new/extended Playwright spec once it exists — pure test-authoring, no backend work needed.
 
-### W6-R43 — MISSING
+### W6-R43 — PARTIAL (was MISSING)
 - **Quote:** "Run the Device Authorization Grant flow from a test CLI: poll /oauth/token until authorized, verify slow-down responses are honored, confirm the resulting token works against /api/v1/me."
-- **What's missing:** This graded scenario needs three things that all currently do not exist on main: the device flow itself (W6-R15's gap -- TRO-425 unmerged), a test CLI (TRO-448/PF-600 CLI scaffold + 'ship login via device flow', status Backlog, no cli/ or integrations/ directory found in the repo root listing), and /api/v1/me (PF-201/TRO-400, status In Progress, not present in v1Routes). Confirmed by direct inspection of the route table, not inferred.
-- **Suggested scope:** Blocked on three separate unmerged/unbuilt pieces landing: TRO-425 (device grant, branch exists), TRO-400/PF-201 (/api/v1/me), and TRO-448/PF-600 (CLI). No small fix closes this alone -- ships when all three land.
+- **What's missing:** The device-grant mechanics are now rigorously proven: `api/src/platform/oauth/__tests__/device.test.ts`'s poll-to-approval test (deterministic clock, real DB) shows the slow_down interval genuinely compounding across three early polls (5s→10s→15s), then a successful token mint, then that token resolving the correct principal through the REAL production `bearerAuth` middleware. What's still missing to satisfy the requirement's literal framing: (1) no CLI exists anywhere in the repo (confirmed: no `integrations/` directory, no CLI workspace package) — "from a test CLI" isn't literally satisfiable yet; (2) the token-introspection assertion in device.test.ts calls a scratch Express app mounting `bearerAuth` directly, not literally `GET /api/v1/me` (which now exists, per W6-R9, but isn't exercised by this specific test).
+- **Suggested scope:** The mechanics are done. What remains is packaging: build the CLI (PF-600/TRO-448, Backlog), and either extend device.test.ts (or a new integration test) to call the literal `/api/v1/me` route with the minted token instead of a scratch introspection app.
 
-### W6-R44 — MISSING
-- **Quote:** "Enumerate every /api/v1/* route in a fitness test and assert each one (a) has an OpenAPI entry, (b) declares a scope, (c) returns the ApiError shape on failure paths, and (d) supports cursor pagination if it's a list endpoint."
-- **What's missing:** Grepped api/web/shared/agent/e2e/scripts for 'fitness', 'route-enumeration', and 'enumerat' — no route-enumeration walk exists anywhere in the repo. TRO-404 (PF-203) is Backlog. This requirement is also structurally blocked on W6-R8/PF-202 landing first (there is no OpenAPI registry yet for assertion (a), 'has an OpenAPI entry', to check against).
-- **Suggested scope:** Ships when TRO-404/PF-203 is built: a test that walks v1Router's registered stack and asserts, per route, an OpenAPI entry exists, a scope is declared, failures produce the ApiError shape, and list routes paginate. Blocked on TRO-402/PF-202 landing first for assertion (a).
-
-### W6-R45 — MISSING
+### W6-R45 — PARTIAL (was MISSING)
 - **Quote:** "Validate the generated /api/v1/openapi.json against the OpenAPI 3.1 JSON schema. Then walk every spec method and assert the SDK exposes a typed call for it."
-- **What's missing:** Both halves are missing: (1) no /api/v1/openapi.json to validate (blocked on TRO-402/PF-202, same as W6-R8/W6-R21), and (2) no @ship/sdk package exists at all yet (TRO-405/PF-400 — a directory listing plus pnpm-workspace.yaml confirms it doesn't exist), so there is nothing for a spec-method walk to assert typed SDK coverage against. TRO-422/PF-405 (the parity+size gate ticket) is Backlog.
-- **Suggested scope:** Ships in sequence after: TRO-402/PF-202 (spec exists) -> TRO-405/PF-400 (SDK skeleton exists) -> TRO-407/PF-401 (resource clients) -> TRO-422/PF-405 (the actual parity-walk + size-gate test this requirement describes). This is a multi-ticket dependency chain, not a small fix.
+- **What's missing:** The spec-validity half is now fully done: `api/src/platform/openapi/__tests__/document.test.ts` validates the real generated document against the official OpenAPI 3.1 JSON Schema (draft 2020-12) with a working negative control, landed by PF-202/TRO-402. The SDK-parity-walk half is still absent: `@ship/sdk` exposes only `ShipClient.me()` against the spec's 7 operations, and no walk of any kind exists (grepped `sdk/` and `api/src/platform/` for "parity" — the only hit is unrelated wording in a webhook signer test).
+- **Suggested scope:** Ships when PF-401 (SDK resource clients, W6-R30) and PF-405 (the parity fitness test itself, TRO-422) land: walk every `v1OpenApiDocument` path/method and assert the SDK exposes a typed call for it. The spec-validity half needs no further work.
 
 ### W6-R46 — MISSING
 - **Quote:** "Create a webhook subscription via the SDK; create a document; verify a signed POST arrives at the target URL within 2s; verify the signature with the SDK helper; tamper with the body and verify the helper rejects it."
@@ -331,8 +308,8 @@ does not chain together.
 
 ### W6-R54 — MISSING
 - **Quote:** "Public API responses with rate-limit headers|100%"
-- **What's missing:** This is the same code gap as W6-R35 (the PDF states it twice: once as a functional requirement on p.4, once as a scored NFR target on p.6), so I traced it to the identical evidence rather than treat it as independent. Grepped for any header-setting code (res.set/res.header/setHeader) near 'RateLimit' across api/src — none found.
-- **Suggested scope:** Same fix as W6-R35 (build TRO-427/PF-500). Closing this specific NFR additionally requires wiring a header-presence assertion into the route-enumeration fitness test (PF-203/TRO-404, itself Backlog and not yet written) so the 100% figure is machine-verified per-route rather than asserted by inspection.
+- **What's missing:** This is the same code gap as W6-R35 (the PDF states it twice: once as a functional requirement on p.4, once as a scored NFR target on p.6), so I traced it to the identical evidence rather than treat it as independent. Grepped for any header-setting code (res.set/res.header/setHeader) near 'RateLimit' across api/src — none found. **Correction (2026-08-14):** baseline's suggested_scope said the fitness test itself didn't exist yet — it now does (`api/src/platform/api/v1/__tests__/route-fitness.test.ts`, landed by TRO-404/PF-203 this range) but contains zero RateLimit/Retry-After references, so wiring in the header-presence assertion is now a smaller, more concrete add-on than baseline's phrasing implied.
+- **Suggested scope:** Same fix as W6-R35 (build TRO-427/PF-500). Closing this specific NFR additionally requires wiring a header-presence assertion into the now-existing route-enumeration fitness test (`api/src/platform/api/v1/__tests__/route-fitness.test.ts`) so the 100% figure is machine-verified per-route rather than asserted by inspection — no longer blocked on writing the fitness test itself.
 
 ### W6-R55 — MISSING
 - **Quote:** "CLI drill harness: pnpm drill ttfe runs the full loop end-to-end against a containerized Ship instance from a clean working directory."
@@ -389,10 +366,8 @@ does not chain together.
 - **What's missing:** TRO-434 (PF-905: AI cost analysis) is status Backlog and has no CHANGES.md entry (grepped, zero hits) — not yet built. The only doc at the expected path is the prior week's (W5) cost report, reused-path but wrong content, not a partial draft of the W6 deliverable. Nothing in api/, terraform/, docs/, or memory-bank/ contains a platform-cost-at-scale tier table.
 - **Suggested scope:** PF-905 ships when TRO-434 lands: a new committed doc (or a rewritten AI-COST-ANALYSIS.md section) with the 100/1k/10k/100k-user cost tier table and stated assumptions for webhook fanout ratio, agent active rate, and delivery-log/audit-row retention windows, traceable to ledger/CI data per the ticket's own AC.
 
-### W6-R66 — PARTIAL
-- **Quote:** "Node.js + Express (existing Ship stack); TypeScript strict mode required; Zod for request/response schemas and OpenAPI generation."
-- **What's missing:** The constraint holds for everything that exists today: all four workspace packages (including api/src/platform/) inherit strict:true from the root tsconfig, and platform code that exists (openapi registry, webhooks/events.ts, v1 documents resource) uses Zod for schemas feeding OpenAPI generation. But the requirement's own acceptance evidence names sdk/ specifically, and no sdk/ workspace package exists in this repo yet (that's W6-R9/R30-34's territory, tracked by other clusters) — so half of the named surface is unverifiable by absence rather than by failure. No single ticket implements this requirement; it's a blanket engineering standard PLUGFORGE.MD states once and every E1-E4 ticket is expected to honor via inherited tsconfig, so 0 tickets is the honest ticket mapping rather than forcing a match.
-- **Suggested scope:** Closes automatically once the sdk/ workspace package (W6-R9/PF-400, TRO-405) is created with its own strict:true tsconfig — no separate action needed beyond ensuring that ticket's tsconfig extends or matches the root strict config.
+> W6-R66 moved PARTIAL → VERIFIED this sweep, exactly as baseline's own suggested_scope predicted:
+> `sdk/tsconfig.json` now extends the root strict config and `tsc --noEmit` exits 0 — see Delta.
 
 ### W6-R67 — MISSING
 - **Quote:** "the Part 2 agent is rewired to authenticate as a first-party OAuth app and consume the public API through the SDK — same scopes, same rate limits, same audit trail."
@@ -436,8 +411,8 @@ does not chain together.
 
 ### W6-R77 — PARTIAL
 - **Quote:** "Public URL with a pre-registered OAuth app (read-only scopes) for graders, plus credentials in the README. Dev portal reachable; OpenAPI spec resolvable."
-- **What's missing:** README credentials + one-command setup + the seeded read-only grader app are real and done (TRO-441/PF-907, Done). The other two DoD items this requirement names verbatim — 'Dev portal reachable' and 'OpenAPI spec resolvable' — are not yet buildable: no portal component exists anywhere under web/src (grep for portal/developer components found nothing), and /api/v1/openapi.json is not registered in the v1 router. The README itself already discloses this gap in plain language rather than claiming completeness, which is worth noting as good practice, but it doesn't change the verdict: two of the four named sub-requirements are genuinely missing at the code level, not merely unverified live.
-- **Suggested scope:** Land TRO-402/PF-202 (openapi.json route) and at minimum TRO-436/PF-502 (portal — even a bare app-registration/detail page counts as 'reachable'). Once both exist, re-run this check against a real deploy for the live-probe half; the credentials/README/seed half is already closed.
+- **What's missing (updated 2026-08-14):** README credentials + one-command setup + the seeded read-only grader app remain real and done (TRO-441/PF-907, Done). Of the two DoD items baseline found missing — 'Dev portal reachable' and 'OpenAPI spec resolvable' — one is now closed at the code level: `/api/v1/openapi.json` is registered and publicly served (PF-202/TRO-402 landed; PR #192 recorded a live curl against a running instance, 200, independently re-validated against the real OpenAPI 3.1 schema). 'Dev portal reachable' remains genuinely missing — no portal component exists anywhere under web/src. Note: README.md:356's own caveat text still describes the OpenAPI gap as unbuilt — now stale and worth a small doc-freshness follow-up, though it doesn't change this verdict.
+- **Suggested scope:** Narrowed from baseline: only TRO-436/PF-502 (developer portal — even a bare app-registration/detail page counts as 'reachable') remains to close this requirement's code-level gap. The OpenAPI-resolvable half is done pending a live-deploy reprobe (this sweep did not attempt network egress). Also refresh README.md:356's now-stale caveat text.
 
 ### W6-R78 — MISSING
 - **Quote:** "Tag @GauntletAI. The screenshot is the ship webhooks tail terminal showing a verified signed event arriving in real time."
@@ -446,23 +421,99 @@ does not chain together.
 
 ## Orphan tickets
 
-Ticket-mapping scope: all 1 — see `ticket_mapping.scope` in the matrix for the exact
-population and rationale. 4 tickets in the PlugForge project map to zero
-requirements (EPIC container tickets TRO-386–395 excluded by design; see requirements-audit's own
-Step 4 methodology):
+Ticket-mapping scope this sweep: **95 tickets** in the PlugForge project (up from 86 at baseline) —
+see `ticket_mapping.scope` in the matrix JSON for the exact population and rationale. **10 tickets**
+map to zero requirements (up from 4 at baseline; EPIC container tickets TRO-386–395 excluded by
+design, per requirements-audit's own Step 4 methodology):
 
-- **TRO-396** "PF-001: Ship has no public API surface — platform scaffold + /api/v1 router (request IDs, public CORS)" — Foundational scaffolding ticket (Done). Its code (router.ts, requestIdMiddleware, public CORS setup) is cited as supporting EVIDENCE across many other requirements (W6-R4, R5, R6, R8, R11, R15, R43, etc.), but no PDF-graded requirement's own quote is specifically about the scaffold itself — the brief's requirement lines start from OAuth features (W6-R2 onward). Not a tracer oversight: there is no requirement line for PF-001 to attach to.
-- **TRO-490** "Pre-existing: swagger.ts YAML converter emits mis-indented YAML (openapi.yaml) — JSON spec unaffected" — Internal tooling bug found incidentally during W6 work on a pre-existing (pre-W6) script; not a PF-numbered requirement ticket and no PlugForge brief requirement covers YAML-output formatting of the internal Swagger converter.
-- **TRO-501** "Route-level createIssueSchema accepts 'none' priority — absent from IssuePriority union and OpenAPI schema" — A bug found in the internal (non-v1) issues route's schema, incidental to W6 work; not a PF-numbered ticket and no PlugForge brief requirement covers internal issue-priority validation.
-- **TRO-551** "OpenAPI registry + MCP executor hardcode the /api prefix — non-/api routes (/oauth/*) cannot be registered without shipping 404ing MCP tools" — Ship-internal MCP/OpenAPI tooling fix (Done), thematically adjacent to PF-202 (already covered by W6-R8/R11/R21/R45 via TRO-402) but not itself the subject of any graded requirement quote — no PF number, and none of the 79 requirements name it.
+- **TRO-396** "PF-001: Ship has no public API surface — platform scaffold + /api/v1 router (request IDs, public CORS)" — Foundational scaffolding ticket (Done). Its code (router.ts, requestIdMiddleware, public CORS setup) is cited as supporting EVIDENCE across many other requirements, but no PDF-graded requirement's own quote is specifically about the scaffold itself. Not a tracer oversight: there is no requirement line for PF-001 to attach to. (Unchanged from baseline.)
+- **TRO-490** "Pre-existing: swagger.ts YAML converter emits mis-indented YAML (openapi.yaml) — JSON spec unaffected" — Internal tooling bug, pre-existing script; no PlugForge brief requirement covers it. (Unchanged from baseline.)
+- **TRO-501** "Route-level createIssueSchema accepts 'none' priority — absent from IssuePriority union and OpenAPI schema" — A bug in the internal (non-v1) issues route's schema; no PlugForge brief requirement covers internal issue-priority validation. (Unchanged from baseline.)
+- **TRO-551** "OpenAPI registry + MCP executor hardcode the /api prefix — non-/api routes (/oauth/*) cannot be registered without shipping 404ing MCP tools" — Ship-internal MCP/OpenAPI tooling fix (Done), thematically adjacent to PF-202 but not itself the subject of any graded requirement quote. (Unchanged from baseline.)
+- **TRO-587** (NEW) "CodeQL js/insufficient-password-hash false-positive on oauth/credentials.ts — needs formal dismissal" — CodeRabbit/CodeQL review-triage follow-up from tonight's OAuth work; a security-scanner finding, not a requirement in the guideline PDF.
+- **TRO-588** (NEW) "/oauth/* routes have no route-scoped rate limiting" — Review-triage follow-up; overlaps W6-R35's territory but is scoped to /oauth/* specifically, not named by any inventory requirement's text.
+- **TRO-589** (NEW) "Device-grant user_code stored plaintext, not hashed" — Review-triage follow-up from PF-106/TRO-425 (landed tonight); a hardening finding, not itself a brief requirement.
+- **TRO-590** (NEW) "CodeQL js/missing-rate-limiting has a blind spot: flags test-only Express apps as production routes" — CodeQL tooling-accuracy finding, unrelated to any inventory requirement's text.
+- **TRO-591** (NEW) "Composite DB index opportunity flagged by PF-201's pagination work" — Performance-hardening follow-up from PF-201/TRO-400 (landed tonight); no inventory requirement names a specific index.
+- **TRO-592** (NEW) "Shared pagination-router factory opportunity across v1 resources" — Code-reuse/refactor follow-up from PF-201's four new v1 resources; not itself a brief requirement.
+
+Note: **TRO-593/594/595/596** (the 4 e2e-regression remediation tickets filed from this sweep's own
+W6-R10 bisection) are NOT orphans — they are mapped directly to W6-R10 (see its Matrix row and Delta
+entry), since they trace to the requirement's own "existing Playwright regression suite passes"
+clause.
 
 ## Blocked / assumed
 
-None. `needs_ruling` was one entry at the start of this sweep (W6-R25, the SDK-clause ambiguity) and
-is now empty: interpretation **I-04** (ruled 2026-08-13) resolved it — the signer suite alone
-satisfies W6-R25, promoted from PARTIAL to VERIFIED. No row carries verdict `BLOCKED` or `ASSUMED`.
+None, this sweep or the baseline. `needs_ruling` is empty (I-04, ruled at baseline, is the only
+interpretation governing any W6 row and was applied silently per its own ruling — no new ambiguity
+surfaced across any of the 79 re-traced rows this sweep). No row carries verdict `BLOCKED` or
+`ASSUMED`.
+
+## Delta
+
+Compare sweep `w6-mvp-wave`, run 2026-08-14T09:51:08Z against commit `2418353` (clean tree), vs.
+baseline `matrix.baseline-W6.json` (commit `06a15f1`, 2026-08-13T19:53:43Z). All 79 active
+requirements were independently re-traced this sweep — this table lists only the 13 whose verdict
+changed. Every other row's evidence citations were re-confirmed to still open and still support
+their notes; several needed line-number corrections only (files that grew since baseline —
+`CHANGES.md`, `memory-bank/*.md`, `token.ts`, `documents.ts`, `requireScope.ts`) and are called out
+in their own Matrix/Gaps entries above where relevant, not repeated here.
+
+| ID | baseline verdict | now | what changed |
+|---|---|---|---|
+| W6-R6 | PARTIAL | **VERIFIED** | PF-203/TRO-404's route-fitness test landed — 33/33 fresh, asserts the ApiError shape on every route's failure path via a live router-stack walk. |
+| W6-R8 | MISSING | **VERIFIED** | PF-202/TRO-402 landed — /api/v1/openapi.json generated in-process, served, validated against the real OpenAPI 3.1 JSON Schema with a working negative control (9/9 fresh). |
+| W6-R9 | MISSING | **VERIFIED** | PF-400/TRO-405 landed — `sdk/` now exists; `ShipClient.me()` proven via a real TCP round trip against a real running server (3/3 fresh), the requirement's own literal acceptance test. |
+| W6-R10 | MISSING | **PARTIAL** | Three independently-verified compare-mode audits (api-perf/db-query/bundle) all PASS within the Part-1 ±10% budget; a rigorous bisection proves the 32 failing e2e tests are pre-existing and unrelated to W6 (zero code overlap vs. commit 6000c94) — but the suite does not pass in the unqualified sense the requirement's words state, so PARTIAL not VERIFIED. |
+| W6-R11 | PARTIAL | **IMPLEMENTED-UNVERIFIED** | PF-202 landing closed the code-level "published OpenAPI spec URL" blocker baseline named; only a live-deployment probe (not attempted this sweep) remains. |
+| W6-R15 | MISSING | **VERIFIED** | PF-106/TRO-425 landed — device grant fully implemented; deterministic-clock test proves slow_down interval genuinely compounds across three early polls, then a real usable token (9/9 fresh). |
+| W6-R18 | MISSING | **VERIFIED** | PF-105/TRO-421 landed — one-time-use refresh rotation with family-wide revocation, proven by both a sequential-reuse case and a forced, deterministic concurrency race (32/32 fresh, up from 18/18). |
+| W6-R21 | MISSING | **VERIFIED** | Same landing as W6-R6/R8 — route-fitness.test.ts's check (a) is exactly the spec↔route parity walk this requirement names (33/33 fresh). |
+| W6-R34 | MISSING | **VERIFIED** | PF-400/TRO-405's error module ships the full discriminated union (superset of the requirement's 5 named kinds), exhaustively mapped and tested (16/16 fresh). |
+| W6-R43 | MISSING | **PARTIAL** | Device-grant mechanics (slow_down honored, resulting token usable) now rigorously proven — but no CLI exists yet, and the token-usability test calls a scratch app, not literally `/api/v1/me`. |
+| W6-R44 | MISSING | **VERIFIED** | Same landing as W6-R6 (this is the graded-scenario framing of the same fitness test) — 33/33 fresh across all 4 assertions. |
+| W6-R45 | MISSING | **PARTIAL** | Spec-validity half now fully proven (document.test.ts, real schema + negative control); SDK-parity-walk half still absent — SDK has only 1 of 7 spec operations implemented, no walk exists. |
+| W6-R66 | PARTIAL | **VERIFIED** | Exactly as baseline's own suggested_scope predicted: `sdk/tsconfig.json` now extends the root strict config and `tsc --noEmit` exits 0. |
+
+**What did NOT move, worth naming explicitly:** W6-R3 and W6-R42 (the literal graded PKCE
+Playwright scenario) stayed PARTIAL despite every backend piece they need now existing —
+`e2e/oauth-authorize.spec.ts` has zero diff since baseline. This is the sweep's sharpest finding:
+six MVP-gate tickets landed and the literal end-to-end e2e still isn't assembled, purely because no
+one wrote the connecting test. W6-R12/R38/R39/R40 (Terraform/IaC) also stayed unchanged — `terraform/`
+has zero diff in this range, confirmed via `git diff --stat`. All 15 webhooks-cluster rows (E3),
+all 9 CLI/TTFE-cluster rows (E6/E8), all 4 rate-limit/audit/portal rows (E5), all 4 agent-rewire
+rows (E7), and all 10 docs/process rows stayed at their baseline verdict — independently confirmed
+by five parallel subagents, each of whom verified via `git diff --stat` that no code in their
+cluster's territory changed, then re-opened every cited file to confirm the citation still holds
+(finding and fixing several stale evidentiary claims along the way — e.g. W6-R36/R54's "migration
+046" references, made stale by tonight's unrelated device-grant work taking that migration slot;
+W6-R77's evidence, since PF-202 landing closed one of its two named DoD gaps even though its
+verdict label stayed PARTIAL).
 
 ## Verification performed
+
+### Compare sweep (2026-08-14, `w6-mvp-wave`) — commands run this pass
+
+| Command | Result | Bears on |
+|---|---|---|
+| `cd api && DATABASE_URL=...ship_audit_w6mvp_scratch npx tsx src/db/migrate.ts` | 51 migration(s) applied successfully | (scratch DB setup) |
+| `cd api && ... npx vitest run route-fitness/error-middleware/errors/documents/issues/sprints/me.test.ts` | 7 test files, 77 tests passed (77) | W6-R5, W6-R6, W6-R20, W6-R21, W6-R44 |
+| `cd api && ... npx vitest run bearerAuth/app-registration/token/device/authorize/seedGraderApp/registry/boundary-lint/v1-router/document/endpoint.test.ts` | 11 test files, 102 tests passed (102) | W6-R2, W6-R4, W6-R7, W6-R8, W6-R13, W6-R14, W6-R16, W6-R17, W6-R19 |
+| `cd api && ... npx vitest run token.test.ts device.test.ts` (isolated re-run for per-file counts) | 2 test files, 41 tests passed (41) — 32 token.test.ts, 9 device.test.ts | W6-R14, W6-R15, W6-R18, W6-R43 |
+| `cd api && ... npx vitest run signer.test.ts events.test.ts` | 2 test files, 42 tests passed (42) | W6-R22, W6-R25 |
+| `cd sdk && npx vitest run client.test.ts errors.test.ts` | 2 test files, 26 tests passed (26) | W6-R9, W6-R34 |
+| `cd sdk && DATABASE_URL=...ship_audit_w6mvp_scratch npx vitest run src/__tests__/client.liveServer.test.ts` | 1 test file, 3 tests passed (3) — real TCP round trip, real http.Server wrapping createApp() | W6-R9 |
+| `cd sdk && npx tsc --noEmit -p tsconfig.json` | exit 0, no output | W6-R66 |
+| `gh repo view ...; git log --oneline --merges 06a15f1..2418353; gh pr view 192 --json body` | PUBLIC, deleteBranchOnMerge:false; 6 distinct per-ticket merge PRs (#192/193/194/195/197/198); PR #192 body confirms mandated PR-discipline pattern | W6-R71 |
+| Read `audit/api-perf/compare-w6-r10-aug14/after-w6-r10-aug14.md`, `audit/db-query/compare-w6-r10-aug14/after-w6-r10-aug14.md`, `audit/bundle/compare-w6-aug14/after-w6-aug14.md` directly (not re-run) | All three PASS vs. 2026-07-27 Part-1 baseline, each disclosing real confounds (Postgres version skew, gzip landing independently, one load-contaminated window disproven by a quiet-load recheck) | W6-R10 |
+| Read `memory-bank/activeContext.md:23` directly | Three-pass e2e bisection: 32 failures confirmed pre-existing, zero code overlap vs. commit 6000c94; filed as TRO-593..596 | W6-R10 |
+| `pnpm test` (full root suite) / `pnpm test:e2e` (full Playwright suite) | NOT RUN | W6-R10 |
+| `terraform plan/apply/destroy` against `terraform/render/` | NOT RUN | W6-R12, W6-R38, W6-R39, W6-R40 |
+| Live network probe of any deployed URL | NOT RUN | W6-R11, W6-R77 |
+| `mcp__linear__list_issues` scoped to the PlugForge project | 95 tickets returned (up from 86 at baseline) | ticket_mapping |
+| Five parallel subagent sweeps, each independently confirming via `git diff --stat 06a15f1..2418353` that their cluster's territory had zero relevant code changes, then re-opening every cited file | Webhooks (15 rows), rate-limit/audit/portal (4 rows), CLI/TTFE/integrations (9 rows), agent-rewire/cost (4 rows), docs/process (10 rows) — all 42 rows carried forward unchanged, several evidence corrections found and fixed (see Delta) | W6-R22–R29, R35–R37, R46–R48, R49–R57, R52–R53, R54, R58–R59, R61–R63, R65, R67–R69, R1, R70–R73, R75–R76, R78–R79 |
+
+### Baseline (2026-08-13) — carried forward for reference
 
 | Command | Result | Bears on |
 |---|---|---|
@@ -600,6 +651,29 @@ satisfies W6-R25, promoted from PARTIAL to VERIFIED. No row carries verdict `BLO
 | terraform destroy / terraform apply against any real Render or AWS environment (W6-R12, W6-R40) | NOT RUN | W6-R12, W6-R40 |
 | Full Playwright e2e regression suite and compare-mode api-perf-audit/bundle-audit/db-query-audit skills (W6-R10) | NOT RUN | W6-R10 |
 
+### Captured output — this sweep's newly-VERIFIED rows (2026-08-14)
+
+**W6-R6, W6-R21, W6-R44** — `cd api && DATABASE_URL=...ship_audit_w6mvp_scratch npx vitest run src/platform/api/v1/__tests__/route-fitness.test.ts`
+> ✓ src/platform/api/v1/__tests__/route-fitness.test.ts (33 tests) 144ms — Test Files 1 passed (1), Tests 33 passed (33)
+
+**W6-R8** — `cd api && ... npx vitest run src/platform/openapi/__tests__/document.test.ts src/platform/openapi/__tests__/endpoint.test.ts`
+> document.test.ts (5 tests) 189ms + endpoint.test.ts (4 tests) 128ms — Test Files 2 passed (2), Tests 9 passed (9)
+
+**W6-R9** — `cd sdk && DATABASE_URL=...ship_audit_w6mvp_scratch npx vitest run src/__tests__/client.liveServer.test.ts`
+> ✓ src/__tests__/client.liveServer.test.ts (3 tests) 60ms — real TCP round trip against a real http.Server wrapping createApp(); Test Files 1 passed (1), Tests 3 passed (3)
+
+**W6-R15** — `cd api && ... npx vitest run src/platform/oauth/__tests__/device.test.ts`
+> ✓ src/platform/oauth/__tests__/device.test.ts (9 tests) 173ms — includes the compounding-slow_down poll-to-approval case; Test Files 1 passed (1), Tests 9 passed (9)
+
+**W6-R18** — `cd api && ... npx vitest run src/platform/oauth/__tests__/token.test.ts`
+> ✓ src/platform/oauth/__tests__/token.test.ts (32 tests) 353ms — incl. "negative: reuse of a rotated refresh token -> revokes the whole family" and "genuine concurrent rotation of the same refresh token"; Test Files 1 passed (1), Tests 32 passed (32)
+
+**W6-R34** — `cd sdk && npx vitest run src/errors.test.ts`
+> ✓ src/errors.test.ts (16 tests) 3ms — Test Files 1 passed (1), Tests 16 passed (16)
+
+**W6-R66** — `cd sdk && npx tsc --noEmit -p tsconfig.json`
+> exit 0, no output (clean typecheck under sdk/tsconfig.json's inherited strict:true)
+
 ### Captured output — VERIFIED rows
 
 **W6-R2** — `cd api && npx vitest run src/platform/oauth/__tests__/app-registration.test.ts`
@@ -646,6 +720,14 @@ satisfies W6-R25, promoted from PARTIAL to VERIFIED. No row carries verdict `BLO
 
 
 ## Independent verification: citations fixed and verdicts changed
+
+> **2026-08-14 compare-sweep addendum:** this section documents the baseline sweep's own citation
+> fixes (2026-08-13). This sweep's own citation fixes: `pnpm-workspace.yaml` was cited at line 1 or
+> line 4 in several draft rows describing the `sdk` package entry — the file's `packages:` header is
+> line 1, and `sdk` is the 6th line, the 5th list item (after `api`, `web`, `shared`, `agent`).
+> Corrected to line 6 everywhere it occurred (W6-R9, R43, and four Cluster-G rows) before this report
+> was finalized. Spot-checked ~20 other citations across every cluster by opening the file at the
+> cited line; no other errors found.
 
 Per the requirements-audit skill's hard rule ("a true claim with a false citation is still a false
 citation"), every one of this sweep's 255 evidence citations across all 79 requirements was opened
