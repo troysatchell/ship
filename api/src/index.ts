@@ -28,6 +28,56 @@ async function main() {
   const app = createApp(CORS_ORIGIN);
   const server = createServer(app);
 
+  // PF-304 (TRO-438) — webhook deliverer: subscribe to the domain event bus
+  // and start the retry-schedule polling loop. Deliberately wired HERE, in
+  // the real process entrypoint, and NOT inside `createApp()`/`app.ts` —
+  // every test file in this repo calls `createApp()` directly, and a
+  // background `setInterval` (or an eager DB query per test-file's
+  // `documentService` writes) started from there would run during every
+  // `pnpm test` invocation across the whole api suite, not just this
+  // feature's own tests. `getEventBus()` is a process-wide module singleton
+  // (`platform/webhooks/eventBus.ts`) shared with `documentService.ts`
+  // regardless of where the subscription happens, so wiring it here reaches
+  // the exact same bus `documentService.publish()` calls in production.
+  const { getEventBus } = await import('./platform/webhooks/eventBus.js');
+  const { InMemoryWebhookDeliverer, wireDelivererToEventBus } = await import('./platform/webhooks/deliverer.js');
+  const { systemClock } = await import('./platform/webhooks/clock.js');
+  const { pool } = await import('./db/client.js');
+
+  const webhookDeliverer = new InMemoryWebhookDeliverer(pool, systemClock);
+  // Boot-time crash recovery (docs/architecture.md's "Deliverer crash"
+  // section) — restore any attempt that was scheduled but never executed
+  // before a prior process exit, before this instance starts serving. A
+  // failed recovery scan (e.g. the database is briefly unreachable right at
+  // boot) must not prevent the API from starting at all (CodeRabbit, this PR
+  // review) — every already-persisted `webhook_deliveries` row survives
+  // regardless, and the next successful `rehydrate()` (a future restart)
+  // picks up whatever this one missed.
+  try {
+    const restoredCount = await webhookDeliverer.rehydrate();
+    console.log(`webhook deliverer: rehydrated ${restoredCount} pending attempt(s)`);
+  } catch (error) {
+    console.error('webhook deliverer: rehydrate() failed at boot; continuing without recovery', error);
+  }
+  wireDelivererToEventBus(webhookDeliverer, getEventBus());
+  webhookDeliverer.start();
+
+  // Stop the deliverer's polling loop on shutdown (CodeRabbit, this PR
+  // review) — without this, `webhookDeliverer.start()`'s `setInterval` could
+  // fire and begin a new delivery attempt after the process has already
+  // decided to exit. Scoped deliberately to just the deliverer: this
+  // codebase has no broader graceful-shutdown sequence anywhere today (no
+  // existing SIGTERM/SIGINT handler, no HTTP-server drain) for this to slot
+  // into, and building one is a separate, much larger concern than this
+  // ticket's own scope.
+  const stopWebhookDeliverer = (signal: NodeJS.Signals) => {
+    console.log(`${signal} received: stopping webhook deliverer polling loop`);
+    webhookDeliverer.stop();
+    process.exit(0);
+  };
+  process.on('SIGTERM', stopWebhookDeliverer);
+  process.on('SIGINT', stopWebhookDeliverer);
+
   // TRO-276 / ERR-10: last resort for anything that escapes every guard. Installed
   // in the entrypoint, not in a library module, so importing the app (tests, the
   // MCP server) never hijacks the host process's error handling. See

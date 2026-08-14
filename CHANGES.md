@@ -21,6 +21,132 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-438 — PF-304: Webhook deliverer + retries + DLQ
+
+**Migration number correction.** PLUGFORGE.MD §2.6 lists `webhook_deliveries` under "migration
+045", but that number was already consumed by PF-104's OAuth work
+(`045_oauth_tokens_refresh_expiry.sql`) by the time this ticket started. Verified fresh via
+`ls api/src/db/migrations/ | sort -V | tail -3` before writing anything (045/046/047 all taken) —
+used `048_webhook_deliveries.sql`. Same renumbering situation `046_oauth_device_codes_polling.sql`
+and `047_webhook_subscriptions.sql` already document in their own headers for PF-105/106/302.
+
+**What changed.** `webhook_deliveries` (migration 048): one row **per delivery attempt** (not one
+row per delivery updated in place) — `id`, `subscription_id` (FK `webhook_subscriptions`, `ON
+DELETE CASCADE`), `event_id`, `event_type`, `payload` (jsonb), `idempotency_key`, `attempt_number`,
+`status` (`pending`/`success`/`failed`/`dead`), `response_status`, `response_excerpt`, `latency_ms`,
+`next_attempt_at`, `created_at` — columns match PLUGFORGE.MD §2.6's table row. Row lifecycle and the
+full rationale for the row-per-attempt shape are in the migration's own header.
+
+`IWebhookDeliverer` + `InMemoryWebhookDeliverer` (`api/src/platform/webhooks/deliverer.ts`) — the
+single must-ship implementation, same justified "in-memory queue on one Render instance" precedent
+`docs/architecture.md` already draws for FleetGraph's `ItemStore`:
+
+- **Subscription matcher.** `enqueueEvent(event)` matches active `webhook_subscriptions` by
+  `event_type` **and** the subscribing app's `workspace_id` matching the event's own
+  `workspace_id` (a join through `oauth_apps` — `webhook_subscriptions` carries no `workspace_id`
+  of its own). The workspace filter is a derived addition, not spelled out verbatim in the ticket
+  text: without it, a subscription in workspace A would receive every OTHER workspace's events of
+  the same type too, which contradicts every other workspace-scoped query in this codebase.
+- **Retry schedule, exact (PLUGFORGE.MD §2.6):** 1s, 4s, 16s, 1m, 5m, 30m + full jitter (`delay =
+  base + random() * base`, so a wait is never LESS than the schedule value). 5xx or a request
+  timeout retries per schedule; 4xx dead-letters immediately (`status = 'dead'`), no retry ever
+  scheduled; 6 failed attempts total → DLQ (`status = 'dead'`). The schedule's 6th entry (30m) is
+  defined for fidelity to the exact PRD numbers but is unreachable at `MAX_ATTEMPTS = 6` — only 5
+  waits are ever computed between 6 attempts — documented in `deliverer.ts`'s header rather than
+  silently dropped.
+- **Deterministic clock (this ticket's hard AC).** `clock.ts`'s injectable `Clock`
+  (`now(): number`, milliseconds) + `ManualClock` for tests — distinct from `signer.ts`'s own
+  unix-seconds `Clock` type, converted at the one call site that needs it. `processDue()` never
+  schedules anything; it asks "what's due right now, per the clock" and a test drives the whole
+  1s→4s→16s→1m→5m→30m schedule by calling `clock.advance(ms)` + `processDue()` directly. Zero real
+  `setTimeout`/sleep waits anywhere in the retry-schedule tests.
+- **Crash recovery (shipped, closing a gap `docs/architecture.md`'s "Deliverer crash" section
+  named as PF-304's own design intent, not yet implemented, before this ticket).**
+  `rehydrate()` restores every `'pending'` `webhook_deliveries` row — an attempt scheduled but
+  never executed, including because the process crashed — into a fresh in-memory queue at boot.
+  Wired from `api/src/index.ts` (the real process entrypoint) only, never from `app.ts`/
+  `createApp()`, so no recovery scan or background polling timer runs during `pnpm test`.
+- **`wireDelivererToEventBus(deliverer, bus)`** subscribes the deliverer to all 8 `IEventBus` event
+  types. `IEventBus` handlers are deliberately synchronous (`eventBus.ts`'s own header), so the
+  handler fires `enqueueEvent()` without awaiting it — a rejection is caught and reported via an
+  injectable `onEnqueueError` rather than becoming an unhandled rejection or interrupting
+  `publish()`'s dispatch loop.
+
+**How to run it.**
+
+```bash
+source .factory-env   # or your own DATABASE_URL — pointed at a factory-owned db
+pnpm db:migrate       # applies 048_webhook_deliveries.sql
+cd api && npx vitest run src/platform/webhooks/__tests__/deliverer.test.ts
+```
+
+**Evidence (both PLUGFORGE.MD §5 graded scenarios, `platform/webhooks/__tests__/deliverer.test.ts`,
+all 13 tests in the file passing in ~200-400ms real time):**
+- 500×3 then 200 → succeeds on attempt 4, with waits proven correctly ≥1s/4s/16s by asserting BOTH
+  directions at each boundary: advancing the clock by one millisecond less than the schedule value
+  never fires the retry (`processDue()` returns 0), advancing to/past it always does (`processDue()`
+  returns 1) — a stronger proof than asserting a single successful run.
+- 6 consecutive failures → `webhook_deliveries.status = 'dead'`.
+- Bonus coverage: jitter is actually added on top of the base schedule (not merely present in code
+  and unused), a 4xx dead-letters on attempt 1 with no retry ever scheduled, the subscription
+  matcher's workspace/event_type/active filtering, a stable `idempotency_key` across every attempt
+  of one delivery, `rehydrate()` recovering a scheduled retry into a brand-new deliverer instance
+  after its predecessor's in-memory queue is discarded (simulating a crash), and — the sharpest
+  finding of this PR's several rounds of local CodeRabbit-CLI review (below) — that a genuinely
+  undecryptable ciphertext dead-letters immediately while a GCM auth-tag mismatch (the SAME failure
+  shape a `SECRET_ENCRYPTION_KEY` rotation would produce) is instead treated as transient and
+  retried.
+
+**Two real bugs caught after the code was written, not just style findings:**
+1. **CI's coverage job, not `gate.sh`.** `api/src/db/__tests__/migrations-042-043.test.ts`'s AC-2
+   fixture builds a "prod-shaped, nothing from oauth yet" database by excluding every later
+   migration that depends (directly or transitively) on an oauth table — 044/045/046/047 were
+   already registered there by their own tickets for exactly this reason. `048_webhook_deliveries`
+   (FK-references 047's `webhook_subscriptions`) was never added, so the fixture excluded 047 but
+   still applied 048 against it, failing with `relation "webhook_subscriptions" does not exist`.
+   `gate.sh`'s own `tests:api` step (`vitest run`, no coverage) never caught this across 8 local
+   gate runs; CI's separate `test:coverage` job did, on the first real push. Fixed by registering
+   `048_webhook_deliveries` in that fixture's own exclusion list, per the file's own documented
+   convention. Re-verified locally afterward with the CI-exact command
+   (`pnpm --filter @ship/api test:coverage`), not just `gate.sh`, specifically because this class of
+   gap had just proven `gate.sh` alone insufficient.
+2. **Local CodeRabbit-CLI review.** An earlier revision of `attempt()` treated ANY decrypt/sign
+   failure as deterministic and dead-lettered it immediately. `secretEncryption.ts`'s own header
+   already discloses a known gap: rotating the deployment's `SECRET_ENCRYPTION_KEY` makes every
+   existing `signing_secret_ciphertext` row undecryptable, with no migration path back — and a GCM
+   auth-tag mismatch is indistinguishable, at the crypto level, between "this ciphertext is
+   genuinely corrupt" and "this ciphertext was encrypted under a key that has since rotated." The
+   blanket dead-letter would have silently and permanently dropped every in-flight webhook delivery
+   the moment an operator ever rotated that key. Fixed with a new `MalformedCiphertextError`
+   (`secretEncryption.ts`), thrown only by the one check that runs before any key-dependent
+   operation (ciphertext structurally too short to contain an IV + auth tag) — genuinely
+   deterministic regardless of key. Every other decrypt/sign failure now falls through to the
+   transient execution-failure path instead (backs off, eventually gives up in-memory, but the row
+   stays `'pending'` — recoverable once the key issue is fixed, via a future `rehydrate()`).
+
+**Not verified / explicit gaps.** No live HTTP delivery against a real external endpoint — every
+test injects `fetchImpl`. `GET /:id/deliveries` (a delivery-log listing endpoint) and
+`POST /:id/replay` are PF-305/PF-306, not this ticket. Two CodeRabbit findings deliberately not
+applied, with reasons: (1) `processDue()` awaits due deliveries serially rather than with a bounded
+concurrency limit — correct, just not maximally throughput-optimized; real added complexity for a
+"trivial"-severity finding on a Week-6 MVP single-instance queue, left as a disclosed follow-up
+rather than YAGNI'd in silently. (2) `index.ts`'s SIGTERM/SIGINT handler still calls `process.exit(0)`
+after `webhookDeliverer.stop()` — removing it, as suggested, would be a regression, not a fix: this
+codebase registers no other shutdown behavior for the HTTP server itself, so a handler that only logs
+and stops the deliverer without exiting would make the process **ignore SIGTERM/SIGINT entirely**
+(registering a signal handler overrides Node's default terminate-on-signal behavior), which is worse
+for deployment orchestration than the narrow "an in-flight processDue() could be cut short" risk it
+was trying to close. The transactional write in `attempt()`'s retry path (this same PR) already makes
+that narrow case crash-safe either way.
+
+**Rollback.** Revert the merge of `feat/pf-304-deliverer-retries-dlq`. Drop `webhook_deliveries`
+(`DROP TABLE webhook_deliveries;` — nothing else references it) or run a down-migration if one
+exists by then. Remove the `api/src/index.ts` wiring block (bounded by its own `// PF-304
+(TRO-438)` comment) to stop the production polling loop and event-bus subscription; `app.ts`/
+`createApp()` were never touched, so no test-path changes to revert.
+
+---
+
 ## TRO-427 — PF-500: Token buckets + rate-limit headers on `/api/v1`
 
 **What changed.** `api/src/platform/ratelimit/` (new): `tokenBucket.ts`'s `TokenBucket` — a
