@@ -21,6 +21,80 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-413 — PF-403: `verifyWebhook` — the SDK-side webhook signature verifier
+
+**What was added.** `sdk/src/verifyWebhook.ts` — a pure, dependency-free (only `node:crypto`)
+port of `api/src/platform/webhooks/signer.ts`'s `verify()` into `@ship/sdk`, exported from the
+package barrel (`sdk/src/index.ts`) alongside its two constants. One call:
+`verifyWebhook(headers, rawBody, secret, toleranceSec = 300): boolean` — parses the
+`Ship-Signature` header (`t=<unix-seconds>,v1=<hex-hmac-sha256>`), rejects anything outside
+`toleranceSec` of "now" (inclusive at the boundary, default 300s), recomputes the HMAC-SHA256
+digest of `${t}.${rawBody}` under `secret`, and compares against the header's `v1` via
+`crypto.timingSafeEqual` — the same format-before-length guard, the same fail-closed
+non-finite/negative-tolerance guard, and the same parse logic as `signer.ts`'s (not exported)
+helpers, copied verbatim rather than re-derived.
+
+`headers` accepts either a plain `Record<string,string>` (Node's `req.headers`) or a standard
+`Headers` object (fetch API), read case-insensitively either way; `rawBody` accepts `string |
+Buffer`, normalized to the exact UTF-8 string `signer.ts` would have signed before hashing. Two
+deliberate divergences from `signer.ts`'s `verify()`, both documented in `verifyWebhook.ts`'s own
+header comment: (1) never throws — an empty/non-string `secret` returns `false` instead of a
+`TypeError`, since this is the public, one-call, boolean-returning contract PLUGFORGE.MD §2.8
+documents and third-party webhook receivers call directly in a route handler, not internal code
+this repo controls; the same vulnerability signer.ts's throw exists to prevent (an empty,
+guessable key must never verify `true`) is still closed, just via the `false` path; (2) a fifth,
+optional `now` parameter (Unix seconds) exists ONLY for this file's own tests — PLUGFORGE.MD's
+documented signature is the four-argument form, and every 3- or 4-argument call behaves exactly as
+specified; `now` defaults to `Math.floor(Date.now() / 1000)`, the real wall clock, whenever it is
+omitted.
+
+**Cross-validated against the shared fixture.** `shared/fixtures/webhook-signature-vectors.json`
+(created by PF-303/TRO-433 specifically so this ticket wouldn't reinvent test cases) is loaded
+directly in `sdk/src/verifyWebhook.test.ts` and every one of its 7 cases (`valid`, `tampered`,
+`expired`, `missing_v1`, `boundary_within_tolerance`, `boundary_outside_tolerance`,
+`malformed_v1_trailing_garbage`) is driven through `verifyWebhook` — using the fixture's own
+`header` string, `verifyRawBody`, `secret`, `toleranceSeconds`, and `verifyTimestamp` (via the
+test-only `now` parameter) — and asserted against the fixture's `expectedValid`. This is the
+strongest available proof the port is byte-identical to the server-side signer's algorithm: both
+implementations are checked against one independently-generated source of truth instead of two
+hand-authored vector sets that could silently drift apart.
+
+**Test suite.** 26 cases in `sdk/src/verifyWebhook.test.ts`: the AC list verbatim (valid passes;
+tampered body fails; >5-min-old fails; missing `v1` fails; perf), the tolerance boundary (inclusive
+at 300s, false at 301s, plus a caller-supplied non-default tolerance), both accepted `headers`
+shapes (`Record<string,string>` — both lower- and upper-cased keys — and `Headers`, case-insensitive
+either way) and a `Buffer` `rawBody`, the fail-closed non-finite/negative-tolerance guard, the
+never-throws-on-empty-secret divergence, the malformed-hex-with-trailing-garbage hardening ported
+from `signer.test.ts`, a `crypto.timingSafeEqual`-invocation proof (not measured timing uniformity,
+which is flake-prone), and the 7-case shared-fixture cross-validation above.
+
+**Perf, measured.** The in-suite perf test (1000 iterations after a 100-call warmup, mirroring
+`signer.test.ts`'s own convention) asserts mean < 5ms as a generous CI-safe ceiling against the <1ms
+target — a tight 1ms assertion in CI is flake-prone under runner load, not because the target isn't
+met. A separate, out-of-vitest measurement (50,000 iterations after a 5,000-call warmup, against the
+built `dist/verifyWebhook.js`, no test-framework overhead) gives the honest number: **mean
+0.00148ms, P50 0.00137ms, P95 0.00179ms, P99 0.00200ms** — roughly 500-700x under the 1ms target.
+
+**How to run it.**
+
+```bash
+cd sdk && npx tsc --noEmit          # type-check (strict) — passes clean
+cd sdk && npx eslint src/verifyWebhook.ts src/verifyWebhook.test.ts src/index.ts   # passes clean
+cd sdk && npx vitest run            # 55 tests total (4 files): errors (16) + client (10) +
+                                     # verifyWebhook (26, new) + client.liveServer (3, needs DB)
+scripts/factory/gate.sh             # full factory gate
+```
+
+**Rollback.** Revert this ticket's commit(s) on `feat/pf-403-verifywebhook`: `sdk/src/verifyWebhook.ts`,
+`sdk/src/verifyWebhook.test.ts`, the barrel export addition in `sdk/src/index.ts`, and this
+`CHANGES.md` entry. No migrations, no schema changes, no dependency changes (still zero runtime
+deps). Nothing else in the repo imports `verifyWebhook` yet (PF-602's `ship webhooks tail` and
+PF-803's Slack integration are later tickets), so this is a clean, self-contained revert with no
+other ticket's work affected. `shared/fixtures/webhook-signature-vectors.json` is untouched —
+owned by TRO-433/PF-303, not this ticket.
+
+---
+
 ## TRO-404 — PF-203: route-enumeration fitness test — the drift gate for every v1 route
 
 **What changed.** `api/src/platform/api/v1/__tests__/route-fitness.test.ts` walks the REAL, live

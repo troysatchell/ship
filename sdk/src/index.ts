@@ -13,3 +13,9 @@ export {
   mapApiErrorCodeToKind,
 } from './errors.js';
 export type { ApiErrorCode, ApiErrorBody, SdkErrorKind, SdkErrorShape } from './errors.js';
+
+export {
+  verifyWebhook,
+  DEFAULT_WEBHOOK_TOLERANCE_SECONDS,
+  SHIP_SIGNATURE_HEADER_NAME,
+} from './verifyWebhook.js';
