@@ -165,6 +165,27 @@ resource "aws_cloudfront_distribution" "frontend" {
     }
   }
 
+  # OAuth authorize/token/device routes (TRO-503/PF-103 follow-up) - forward
+  # to EB, mirroring /api/* above. `app.ts` mounts these at `/oauth`, not
+  # `/api/oauth` (verified `app.use(['/api/v1', '/oauth'], ...)`), so without
+  # this block every /oauth/* request falls through to the S3 frontend
+  # origin's default behavior and never reaches the API.
+  dynamic "ordered_cache_behavior" {
+    for_each = var.eb_environment_cname != "" ? [1] : []
+    content {
+      path_pattern           = "/oauth/*"
+      target_origin_id       = "EB-API"
+      viewer_protocol_policy = "redirect-to-https"
+      allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+      cached_methods         = ["GET", "HEAD"]
+      compress               = true
+
+      # Use policies instead of forwarded_values for larger request body support
+      cache_policy_id          = aws_cloudfront_cache_policy.api_no_cache.id
+      origin_request_policy_id = aws_cloudfront_origin_request_policy.api.id
+    }
+  }
+
   # Health check endpoint (only when EB is configured)
   dynamic "ordered_cache_behavior" {
     for_each = var.eb_environment_cname != "" ? [1] : []
