@@ -199,7 +199,7 @@ v1Registry.registerPath({
       content: { 'application/json': { schema: WebhookDeliveryListResponseSchema } },
     },
     400: {
-      description: 'Invalid query parameters (including an unrecognized subscription_id or status value) or cursor.',
+      description: 'Invalid query parameters (a malformed, non-UUID subscription_id, or a status value outside pending/success/failed/dead) or an invalid cursor. A well-formed but unrecognized or cross-workspace subscription_id is NOT an error — it matches nothing and returns 200 with an empty data page (same fail-closed convention as the rest of this resource).',
       content: { 'application/json': { schema: ApiErrorSchema } },
     },
     401: UNAUTHORIZED_RESPONSE,

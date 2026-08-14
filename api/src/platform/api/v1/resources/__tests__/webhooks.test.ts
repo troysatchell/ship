@@ -788,6 +788,52 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       expect(page2Body.next_cursor).toBeNull();
     });
 
+    it('breaks a created_at tie using id DESC as the secondary sort key (CodeRabbit, this PR review)', async () => {
+      // The previous test's three rows all have DISTINCT created_at values,
+      // so it never actually exercises the keyset comparison's secondary
+      // key — `(created_at, id) < (cursor.created_at, cursor.id)` degrades
+      // to comparing created_at alone whenever every row's timestamp
+      // differs. Two rows sharing the EXACT same created_at are the only
+      // case that proves id is really part of the ordering, not just
+      // present in the tuple.
+      const tieSubscriptionId = await insertSubscription(
+        appId,
+        'document.updated',
+        'https://example.com/deliveries-tie-hook'
+      );
+      const tiedCreatedAt = new Date('2020-01-01T00:00:05.000Z');
+
+      const tiedA = await insertDelivery({ subscriptionId: tieSubscriptionId, status: 'success', createdAt: tiedCreatedAt });
+      const tiedB = await insertDelivery({ subscriptionId: tieSubscriptionId, status: 'success', createdAt: tiedCreatedAt });
+
+      // id DESC (string comparison agrees with Postgres's own uuid byte
+      // comparison here: gen_random_uuid()'s canonical lowercase-hex text
+      // form places hyphens at the same fixed positions in every value, so
+      // comparing the two 36-character strings character-by-character is
+      // equivalent to comparing the underlying 16 bytes).
+      const expectedOrder = [tiedA.id, tiedB.id].sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+
+      const page1 = await request(app)
+        .get(`/api/v1/webhooks/deliveries?subscription_id=${tieSubscriptionId}&limit=1`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(page1.status).toBe(200);
+      const page1Body = page1.body as DeliveryListResponseBody;
+      expect(page1Body.data.map((d) => d.id)).toEqual([expectedOrder[0]]);
+      expect(page1Body.next_cursor).toBeTruthy();
+
+      const page2 = await request(app)
+        .get(
+          `/api/v1/webhooks/deliveries?subscription_id=${tieSubscriptionId}&limit=1&cursor=${encodeURIComponent(
+            page1Body.next_cursor ?? ''
+          )}`
+        )
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(page2.status).toBe(200);
+      const page2Body = page2.body as DeliveryListResponseBody;
+      expect(page2Body.data.map((d) => d.id)).toEqual([expectedOrder[1]]);
+      expect(page2Body.next_cursor).toBeNull();
+    });
+
     it('filters by status', async () => {
       const res = await request(app)
         .get(`/api/v1/webhooks/deliveries?subscription_id=${deliverySubscriptionId}&status=failed&limit=100`)
