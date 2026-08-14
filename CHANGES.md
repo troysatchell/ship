@@ -103,6 +103,19 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 `documents`/`issues`/`sprints`/`webhooks` resource clients (PF-401), `ITokenStore` +
 `authorizationCodeFlow`/`deviceLogin` (PF-404), pagination async iterators, `verifyWebhook`.
 
+**How to run it.** A local PostgreSQL matching this worktree's `DATABASE_URL` (`.factory-env`) must be
+running and migrated first (`pnpm db:migrate`).
+
+```bash
+cd sdk && npx tsc --noEmit          # type-check (strict)
+cd sdk && npx tsc                   # build: dist/*.js + dist/*.d.ts (ESM)
+cd sdk && npx vitest run            # errors.test.ts (16 cases, pure) +
+                                     # __tests__/client.liveServer.test.ts (3 cases,
+                                     # real http.Server + real seeded DB — the MVP gate check)
+pnpm --filter @ship/sdk test        # same, via the workspace filter
+scripts/factory/gate.sh             # full factory gate, includes run_tests sdk
+```
+
 **Rollback.** Revert this ticket's commit(s) on `feat/pf-400-sdk-scaffold`. Nothing outside `sdk/`
 depends on `@ship/sdk` yet (no `integrations/*` package exists, and `agent/`'s own `PF-702`/`PF-703`
 SDK-mode rewire is a separate, not-yet-built ticket) — deleting `sdk/` and removing it from
