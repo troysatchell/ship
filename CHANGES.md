@@ -72,6 +72,14 @@ single must-ship implementation, same justified "in-memory queue on one Render i
   injectable `onEnqueueError` rather than becoming an unhandled rejection or interrupting
   `publish()`'s dispatch loop.
 
+**How to run it.**
+
+```bash
+source .factory-env   # or your own DATABASE_URL — pointed at a factory-owned db
+pnpm db:migrate       # applies 048_webhook_deliveries.sql
+cd api && npx vitest run src/platform/webhooks/__tests__/deliverer.test.ts
+```
+
 **Evidence (both PLUGFORGE.MD §5 graded scenarios, `platform/webhooks/__tests__/deliverer.test.ts`,
 all 10 tests in the file passing in ~250ms real time):**
 - 500×3 then 200 → succeeds on attempt 4, with waits proven correctly ≥1s/4s/16s by asserting BOTH

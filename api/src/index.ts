@@ -47,8 +47,18 @@ async function main() {
   const webhookDeliverer = new InMemoryWebhookDeliverer(pool, systemClock);
   // Boot-time crash recovery (docs/architecture.md's "Deliverer crash"
   // section) — restore any attempt that was scheduled but never executed
-  // before a prior process exit, before this instance starts serving.
-  await webhookDeliverer.rehydrate();
+  // before a prior process exit, before this instance starts serving. A
+  // failed recovery scan (e.g. the database is briefly unreachable right at
+  // boot) must not prevent the API from starting at all (CodeRabbit, this PR
+  // review) — every already-persisted `webhook_deliveries` row survives
+  // regardless, and the next successful `rehydrate()` (a future restart)
+  // picks up whatever this one missed.
+  try {
+    const restoredCount = await webhookDeliverer.rehydrate();
+    console.log(`webhook deliverer: rehydrated ${restoredCount} pending attempt(s)`);
+  } catch (error) {
+    console.error('webhook deliverer: rehydrate() failed at boot; continuing without recovery', error);
+  }
   wireDelivererToEventBus(webhookDeliverer, getEventBus());
   webhookDeliverer.start();
 

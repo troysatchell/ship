@@ -93,7 +93,7 @@
  * `fetchImpl` are faked.
  */
 
-import type { Pool } from 'pg';
+import type { Pool, QueryResult } from 'pg';
 import { randomUUID } from 'node:crypto';
 import { sign, type Clock as SignerClock } from './signer.js';
 import { decryptSecret } from './secretEncryption.js';
@@ -121,6 +121,19 @@ const DEFAULT_ATTEMPT_TIMEOUT_MS = 10_000;
 /** Default production polling interval for `start()` — how often `processDue()`
  * is called to check for due attempts. */
 const DEFAULT_POLL_INTERVAL_MS = 1_000;
+
+/** `rehydrate()`'s keyset page size — see its own docstring for why it
+ * paginates instead of one unbounded `SELECT`. */
+const REHYDRATE_BATCH_SIZE = 500;
+
+/** Narrows `value` to `EventType` by checking it against the registry's own
+ * `EVENT_TYPES`, rather than an unchecked `as EventType` cast — `event_type`
+ * is unconstrained TEXT at the database layer (migration 048's deliberate
+ * "events as data" call), so a row's real content is not guaranteed to match
+ * the type statically. */
+function isKnownEventType(value: string): value is EventType {
+  return (EVENT_TYPES as readonly string[]).includes(value);
+}
 
 export interface IWebhookDeliverer {
   /**
@@ -173,6 +186,23 @@ type AttemptOutcome =
   | { kind: 'success'; status: number; bodyExcerpt: string }
   | { kind: 'retryable'; status: number | null; bodyExcerpt: string }
   | { kind: 'permanent'; status: number | null; bodyExcerpt: string };
+
+/** One `webhook_deliveries` row joined to its subscription's delivery
+ * target/secret — exactly what `rehydrate()`'s query selects, named so its
+ * `QueryResult<RehydrateRow>` type doesn't need to be re-spelled at both the
+ * query call site and the loop's `lastRow` cursor variable. */
+interface RehydrateRow {
+  id: string;
+  subscription_id: string;
+  event_id: string;
+  event_type: string;
+  payload: unknown;
+  idempotency_key: string;
+  attempt_number: number;
+  next_attempt_at: Date | null;
+  target_url: string;
+  signing_secret_ciphertext: string;
+}
 
 /** Handle returned by `setTimeout`, as accepted by `clearTimeout` — same
  * narrow shape `resilientClient.ts`'s `TimerHandle` documents (only ever
@@ -292,52 +322,97 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
     this.queue = notYetDue;
 
     for (const item of due) {
-      await this.attempt(item);
+      try {
+        await this.attempt(item);
+      } catch (error) {
+        // `attempt()`'s own HTTP call never throws (performHttpAttempt()
+        // catches everything into a retryable outcome) — a throw here means
+        // the surrounding machinery failed: decryptSecret, sign, or a DB
+        // round-trip. The delivery's row is still 'pending' in the DB either
+        // way, but this item has already been spliced out of `this.queue`
+        // above — without re-queueing it here, it would be silently dropped
+        // from THIS process's in-memory schedule until the next restart's
+        // `rehydrate()` picks it back up (CodeRabbit, this PR review: one
+        // bad attempt must not take the rest of this batch down with it,
+        // nor strand its own delivery in memory).
+        this.queue.push(item);
+        console.error(
+          `webhook deliverer: attempt ${item.attemptNumber} for delivery ${item.deliveryRowId} failed to execute`,
+          error
+        );
+      }
     }
     return due.length;
   }
 
+  /**
+   * Restores every `'pending'` row, `REHYDRATE_BATCH_SIZE` at a time via a
+   * keyset (`id`) cursor rather than one unbounded `SELECT` — a deploy with a
+   * very large outstanding backlog (many failing subscriptions, a long
+   * outage) would otherwise load the entire thing into one result set/one
+   * pass at boot (CodeRabbit, this PR review). `id` is an arbitrary but
+   * STABLE total order for pagination purposes only — it does not need to
+   * correlate with `next_attempt_at` for correctness, since every restored
+   * row is queued by its own `next_attempt_at`/`dueAtMs` regardless of the
+   * order it was fetched in.
+   */
   async rehydrate(): Promise<number> {
-    const result = await this.pool.query<{
-      id: string;
-      subscription_id: string;
-      event_id: string;
-      event_type: string;
-      payload: unknown;
-      idempotency_key: string;
-      attempt_number: number;
-      next_attempt_at: Date | null;
-      target_url: string;
-      signing_secret_ciphertext: string;
-    }>(
-      `SELECT wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.payload, wd.idempotency_key,
-              wd.attempt_number, wd.next_attempt_at, ws.target_url, ws.signing_secret_ciphertext
-       FROM webhook_deliveries wd
-       JOIN webhook_subscriptions ws ON ws.id = wd.subscription_id
-       WHERE wd.status = 'pending'`
-    );
-
     let restored = 0;
-    for (const row of result.rows) {
-      this.queue.push({
-        deliveryRowId: row.id,
-        subscriptionId: row.subscription_id,
-        eventId: row.event_id,
-        eventType: row.event_type as EventType,
-        targetUrl: row.target_url,
-        signingSecretCiphertext: row.signing_secret_ciphertext,
-        // Re-serialized from the persisted jsonb, not byte-identical to the
-        // original `JSON.stringify(event)` (Postgres jsonb does not preserve
-        // key order/whitespace) — harmless, because this attempt signs
-        // whatever it is about to send, fresh, at send time (see `attempt()`
-        // below); it never needs to match a PAST attempt's exact bytes.
-        rawBody: JSON.stringify(row.payload),
-        idempotencyKey: row.idempotency_key,
-        attemptNumber: row.attempt_number,
-        dueAtMs: row.next_attempt_at ? row.next_attempt_at.getTime() : this.clock.now(),
-      });
-      restored++;
+    let cursorId: string | null = null;
+    let hasMore = true;
+
+    while (hasMore) {
+      const params: Array<string | number> = cursorId ? [cursorId, REHYDRATE_BATCH_SIZE] : [REHYDRATE_BATCH_SIZE];
+      const result: QueryResult<RehydrateRow> = await this.pool.query<RehydrateRow>(
+        `SELECT wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.payload, wd.idempotency_key,
+                wd.attempt_number, wd.next_attempt_at, ws.target_url, ws.signing_secret_ciphertext
+         FROM webhook_deliveries wd
+         JOIN webhook_subscriptions ws ON ws.id = wd.subscription_id
+         WHERE wd.status = 'pending' ${cursorId ? 'AND wd.id > $1' : ''}
+         ORDER BY wd.id ASC
+         LIMIT $${cursorId ? 2 : 1}`,
+        params
+      );
+
+      for (const row of result.rows) {
+        // event_type is unconstrained TEXT (migration 048's own deliberate
+        // "events as data" call — see its header) — validated against the
+        // registry, not blindly cast (CodeRabbit, this PR review: this
+        // codebase's convention is "no `!`/`as`-cast past an unchecked
+        // value," and a hand-edited or pre-migration row is exactly the case
+        // where the column's real content could disagree with the type).
+        if (!isKnownEventType(row.event_type)) {
+          console.error(`webhook deliverer: skipping delivery ${row.id} with unknown event_type "${row.event_type}"`);
+          continue;
+        }
+        this.queue.push({
+          deliveryRowId: row.id,
+          subscriptionId: row.subscription_id,
+          eventId: row.event_id,
+          eventType: row.event_type,
+          targetUrl: row.target_url,
+          signingSecretCiphertext: row.signing_secret_ciphertext,
+          // Re-serialized from the persisted jsonb, not byte-identical to the
+          // original `JSON.stringify(event)` (Postgres jsonb does not preserve
+          // key order/whitespace) — harmless, because this attempt signs
+          // whatever it is about to send, fresh, at send time (see `attempt()`
+          // below); it never needs to match a PAST attempt's exact bytes.
+          rawBody: JSON.stringify(row.payload),
+          idempotencyKey: row.idempotency_key,
+          attemptNumber: row.attempt_number,
+          dueAtMs: row.next_attempt_at ? row.next_attempt_at.getTime() : this.clock.now(),
+        });
+        restored++;
+      }
+
+      const lastRow: RehydrateRow | undefined = result.rows[result.rows.length - 1];
+      if (result.rows.length < REHYDRATE_BATCH_SIZE || !lastRow) {
+        hasMore = false;
+      } else {
+        cursorId = lastRow.id;
+      }
     }
+
     return restored;
   }
 
@@ -426,29 +501,50 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
     const nextAttemptAtMs = this.clock.now() + delayMs;
     const nextAttemptNumber = item.attemptNumber + 1;
 
-    await this.pool.query(
-      `UPDATE webhook_deliveries
-       SET status = 'failed', response_status = $2, response_excerpt = $3, latency_ms = $4, next_attempt_at = $5
-       WHERE id = $1`,
-      [item.deliveryRowId, outcome.status, outcome.bodyExcerpt, latencyMs, new Date(nextAttemptAtMs).toISOString()]
-    );
+    // The terminal 'failed' UPDATE and the next attempt's 'pending' INSERT
+    // must land together, in one transaction (CodeRabbit, this PR review —
+    // a real gap, not a style preference): `rehydrate()` only ever recovers
+    // `'pending'` rows. A crash between two separate, non-transactional
+    // statements here — commit the UPDATE, die before the INSERT — would
+    // leave a `'failed'` row with no `'pending'` sibling: a delivery that
+    // silently stops retrying forever, invisible to both `rehydrate()` and
+    // any future delivery-log UI (it looks like a normal in-progress retry,
+    // not a dead one, since `status` is `'failed'` rather than `'dead'`).
+    const client = await this.pool.connect();
+    let nextRow: { id: string } | undefined;
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `UPDATE webhook_deliveries
+         SET status = 'failed', response_status = $2, response_excerpt = $3, latency_ms = $4, next_attempt_at = $5
+         WHERE id = $1`,
+        [item.deliveryRowId, outcome.status, outcome.bodyExcerpt, latencyMs, new Date(nextAttemptAtMs).toISOString()]
+      );
 
-    const inserted = await this.pool.query<{ id: string }>(
-      `INSERT INTO webhook_deliveries
-         (subscription_id, event_id, event_type, payload, idempotency_key, attempt_number, status, next_attempt_at)
-       VALUES ($1, $2, $3, $4::jsonb, $5, $6, 'pending', $7)
-       RETURNING id`,
-      [
-        item.subscriptionId,
-        item.eventId,
-        item.eventType,
-        item.rawBody,
-        item.idempotencyKey,
-        nextAttemptNumber,
-        new Date(nextAttemptAtMs).toISOString(),
-      ]
-    );
-    const nextRow = inserted.rows[0];
+      const inserted = await client.query<{ id: string }>(
+        `INSERT INTO webhook_deliveries
+           (subscription_id, event_id, event_type, payload, idempotency_key, attempt_number, status, next_attempt_at)
+         VALUES ($1, $2, $3, $4::jsonb, $5, $6, 'pending', $7)
+         RETURNING id`,
+        [
+          item.subscriptionId,
+          item.eventId,
+          item.eventType,
+          item.rawBody,
+          item.idempotencyKey,
+          nextAttemptNumber,
+          new Date(nextAttemptAtMs).toISOString(),
+        ]
+      );
+      await client.query('COMMIT');
+      nextRow = inserted.rows[0];
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw error;
+    } finally {
+      client.release();
+    }
+
     if (!nextRow) return; // unreachable — see the identical guard in enqueueEvent()
 
     this.queue.push({

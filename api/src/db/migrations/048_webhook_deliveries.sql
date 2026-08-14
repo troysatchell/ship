@@ -78,6 +78,15 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
 -- idx_webhook_subscriptions_app_id (migration 047).
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_subscription_id ON webhook_deliveries (subscription_id);
 
+-- One row per (subscription, event, attempt_number) — a duplicate would mean
+-- two attempt-1 (or attempt-N) rows for the same delivery, which every reader
+-- of this table (rehydrate(), a future delivery-log/replay UI) assumes cannot
+-- happen (CodeRabbit, this PR review). Not just a defensive constraint: it is
+-- also the concrete backstop against a scheduling bug or a duplicate
+-- rehydrate() race ever double-enqueuing the same attempt.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_deliveries_unique_attempt
+  ON webhook_deliveries (subscription_id, event_id, attempt_number);
+
 -- Rehydration-query index: `InMemoryWebhookDeliverer.rehydrate()` scans
 -- exactly this shape at boot ("which attempts were scheduled but never
 -- executed before the process died"). Partial or full scan of every row would
