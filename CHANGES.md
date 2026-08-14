@@ -21,6 +21,81 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## Factory defect-gate engine — AST-based static-analysis rule framework (no ticket: tooling)
+
+**What changed.** Ported LabelHunter's AST-based defect-gate framework into Ship's factory:
+identity-hashed baseline diffing (multiset comparison, not raw counts), activation pinning (a
+newly-blocking rule runs report-only for branches cut before it existed), and replay calibration
+against real historical findings. New `scripts/factory/defect-gates/` module —
+`types.ts`/`engine.ts` (rule contract + runner), `identity.ts` (violation identity hashing),
+`baseline.ts` (`fileAtRef` + `introducedFindings`/`preExistingFindings` multiset diffing),
+`activation.ts` (`decidePin`/`resolvePinFacts`), `ast.ts` (TypeScript compiler-API helpers —
+`parse`/`walk`/`enclosingFunctionName`/`lineOf`), `replay.ts` (calibration harness), `run.ts` (CLI
+orchestrator, writes `.factory/defect-gate.json`) — plus one migrated rule,
+`rules/non-null-assertion.ts`, calibrated against two real historical commits (TRO-230, TRO-276).
+
+Wired into `gate.sh` as a new `G10` step (record id `defect-gate`, no `G`-number prefix, matching
+every other step's `record` call). The regex-based `non-null-assertion` entry in
+`review-patterns.mjs` was removed — now redundant, covered by G10's AST-based check — and replaced
+with a pointer comment; its five siblings (`as-any`, `any-annotation`, `as-unknown-as`,
+`fixed-sleep`, `tls-bypass`) are unchanged. `audit/factory/config.yaml` (new file) consolidates two
+facts that had been duplicated and drifting between `ship-factory/SKILL.md` and
+`ship-orchestrator/SKILL.md`: the active project (`meta.activeProject`) and the recurrence-ladder
+thresholds (`recurrenceLadder.briefRule`/`gateCheck`).
+
+**Activation pinning.** `rules/non-null-assertion.ts`'s `activatedAt` is pinned to
+`63d54e49b1eab2becab923eb823129eb4b829e8a` — the exact commit that landed G10 in `gate.sh` — so a
+branch cut before that commit runs report-only instead of retroactively failing on violations that
+predate the rule. `pinExpiresAfterMainCommits: 25` bounds a branch that never re-syncs with `main`.
+
+**Verification (this ticket's own claim-provenance evidence, CLAUDE.md).**
+- **Replay recall.** `1` (i.e. 1.0) on both real calibration rows: `TRO-230`
+  (`web/src/pages/OrgChartPage.test.tsx`) and `TRO-276`
+  (`api/src/__tests__/process-safety.test.ts`) each resolve and hit against real git history —
+  `{"total":2,"resolvable":2,"unresolvable":0,"hits":2,"recall":1}`.
+- **Forged break-one/fix-one**, in a scratch worktree branched from this branch's own tip (not
+  `worktree.sh` — no database is needed for this check, and Docker/the `ship-audit-pg` container
+  weren't available in this environment; also not literal `main`, see note below). Adding one new
+  `x!.y` non-null assertion produced exit code `1` with exactly one `introduced` finding, pointing
+  at `api/src/__tests__/scratch-verify.ts:2` (`scratchProbe`'s `x!.y`); removing it (fix-one)
+  produced exit code `0` with `introduced: []`. Confirms `introducedFindings`'s multiset comparison
+  distinguishes a genuinely new violation from baseline noise, not just a raw count.
+  - Note: the identical forged test run with `FACTORY_BASE_REF=main` against the **true**,
+    not-yet-merged `main` instead produces exit `0` in report-only mode — expected, not a defect.
+    True `main` predates this feature's own G10-activation commit, so `mergeBaseIsAfterActivation`
+    correctly resolves `false` (the same mechanism the next line tests directly).
+    `introducedFindings` still located the exact right single violation in that run too; only the
+    pin's blocking-vs-report-only mode differed. Once this branch merges to `main`, an ordinary
+    ticket branch's `FACTORY_BASE_REF=main` will resolve past the activation commit and this
+    distinction disappears.
+- **Activation-pinning report-only behavior.** `activation.test.ts` — 9/9 passed.
+- **Full suite.** `vitest run --config scripts/factory/defect-gates/vitest.config.ts` — 8 files / 77
+  tests, all passed. `tsc --noEmit -p scripts/factory/defect-gates` (the scoped tsconfig — `pnpm
+  type-check` does not reach `scripts/` at all) — 0 errors. `pnpm type-check` (the 5
+  `pnpm-workspace.yaml` packages, confirming no regression elsewhere) — clean.
+
+**How to run it.**
+
+```bash
+scripts/factory/gate.sh                                     # G10 runs as part of the full gate
+FACTORY_BASE_REF=main pnpm exec tsx scripts/factory/defect-gates/run.ts   # standalone
+pnpm exec vitest run --config scripts/factory/defect-gates/vitest.config.ts
+pnpm exec tsc --noEmit -p scripts/factory/defect-gates
+```
+
+**Rollback.** Remove `scripts/factory/defect-gates/` and `audit/factory/config.yaml`, revert
+`gate.sh`'s G10 block, restore `review-patterns.mjs`'s `non-null-assertion` regex rule from before
+commit `8a5d6dc`, and revert `ship-factory/SKILL.md`/`ship-orchestrator/SKILL.md`'s config-pointer
+edits back to their hardcoded values. No database or migration involved.
+
+**Follow-up if this PR's merge method changes.** `rules/non-null-assertion.ts`'s `activatedAt` pins
+to a specific commit SHA on this branch. That SHA only survives as a real ancestor of `main` because
+this repo merges PRs with an actual merge commit. If this PR is ever squash- or rebase-merged
+instead, that SHA becomes unreachable from `main` — re-pin `activatedAt` to the resulting commit on
+`main` when that happens.
+
+---
+
 ## TRO-438 — PF-304: Webhook deliverer + retries + DLQ
 
 **Migration number correction.** PLUGFORGE.MD §2.6 lists `webhook_deliveries` under "migration

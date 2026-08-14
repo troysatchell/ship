@@ -1,0 +1,29 @@
+# audit/factory/config.yaml — single source for facts that were previously
+# duplicated across .claude/skills/ship-factory/SKILL.md and
+# .claude/skills/ship-orchestrator/SKILL.md, both of which flagged the
+# duplication as "the thing most likely to go stale." Update this file when
+# any of these facts change; the skill docs point here instead of repeating
+# the value inline.
+#
+# Not parsed by any script at runtime — see
+# docs/superpowers/specs/2026-08-14-factory-defect-gate-design.md's
+# non-goals for why (verified against LabelHunter's own factory/config.yaml,
+# which has the same property: gate.sh there also hardcodes its scope-limit
+# number, referencing config.yaml only in a comment).
+
+meta:
+  activeProject: "FleetGraph — Week 5 Project Intelligence Agent"
+  team: Troysatchell
+  updatedAt: 2026-08-14
+  scopeGuard: >
+    Never dispatch outside the active project above. The team holds six projects
+    with interleaving issue numbers (ShipShape Audit Remediation, an iOS app,
+    a healthcare copilot, a separate security audit at TRO-250-275, ...).
+    Filter by project via the API, never by number range.
+
+recurrenceLadder:
+  briefRule: 2     # distinct tickets -> add a rule to references/lessons.md
+  gateCheck: 3      # distinct tickets -> add a mechanical gate check
+
+gate:
+  scopeLimitFiles: 40    # gate.sh G8 hardcodes this; kept in sync by hand, see gate.sh's own comment

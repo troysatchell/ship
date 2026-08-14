@@ -1,0 +1,218 @@
+// scripts/factory/defect-gates/run.ts
+import { spawnSync } from "node:child_process";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import type { PinDecision } from "./activation";
+import { decidePin, resolvePinFacts } from "./activation";
+import { fileAtRef, introducedFindings, preExistingFindings } from "./baseline";
+import { runRules } from "./engine";
+import nonNullAssertion from "./rules/non-null-assertion";
+import type { Finding, Rule, RuleResult } from "./types";
+
+const RULES: Rule[] = [nonNullAssertion];
+
+// Matches review-patterns.mjs's own path scope (api/web/shared/e2e/agent),
+// plus sdk/ — a real TS workspace package review-patterns.mjs predates
+// (gate.sh's TRO-405 comment). scripts/ itself is excluded: factory
+// tooling, not product code.
+const TRACKED_PATH_PREFIXES = ["api/", "web/", "shared/", "agent/", "sdk/", "e2e/"];
+
+export interface BuildInput {
+  results: RuleResult[];
+  baselines: Record<string, Finding[]>;
+  pins: Record<string, PinDecision>;
+  baseRef: string;
+  baseSha: string;
+  mergeBase: string;
+}
+
+export function buildDocument(input: BuildInput) {
+  const rules = input.results.map((result) => {
+    const baseline = input.baselines[result.id] ?? [];
+    const pin = input.pins[result.id];
+    if (!pin) {
+      throw new Error(
+        `buildDocument: no pin decision for rule '${result.id}' — every RuleResult needs a matching pins entry.`,
+      );
+    }
+    const introduced = introducedFindings(result.findings, baseline);
+    const preExisting = preExistingFindings(result.findings, baseline).length;
+    let status = result.status;
+    if (result.status !== "error") {
+      status = introduced.length > 0 ? "fail" : "pass";
+    }
+    return {
+      id: result.id,
+      version: result.version,
+      status,
+      mode: pin.mode,
+      pin,
+      introduced,
+      preExisting,
+      advisory: 0,
+      exempted: 0,
+      error: result.error,
+    };
+  });
+
+  const failing = rules.filter(
+    (r) => r.status === "error" || (r.status === "fail" && r.mode === "blocking"),
+  );
+
+  return {
+    version: 1,
+    ranAt: new Date().toISOString(),
+    baseRef: input.baseRef,
+    baseSha: input.baseSha,
+    mergeBase: input.mergeBase,
+    rules,
+    notRun: [] as string[],
+    exitCode: failing.length > 0 ? 1 : 0,
+  };
+}
+
+/**
+ * Formats the console lines for one report: every introduced finding, plus
+ * one line naming the failure detail for any rule with status "error".
+ *
+ * A rule can error with zero introduced findings — a pin-resolution
+ * failure (see `main`) never touches `findings` at all. Printing only per-
+ * finding lines then produced a blank report next to an exit code 1, with
+ * no clue why the gate failed. The error line is printed even when the
+ * same rule also has introduced findings, so neither detail hides the
+ * other.
+ */
+export function formatReportLines(doc: ReturnType<typeof buildDocument>): string[] {
+  const lines: string[] = [];
+  for (const rule of doc.rules) {
+    if (rule.status === "error") {
+      lines.push(`  ERROR   ${rule.id}  ${rule.error ?? "unknown error"}`);
+    }
+    for (const f of rule.introduced) {
+      lines.push(`  ${rule.mode === "blocking" ? "FAIL" : "report"}  ${f.file}:${f.line}  ${f.message}`);
+    }
+  }
+  return lines;
+}
+
+/**
+ * Runs `git` with an argument array, never a shell string.
+ *
+ * `execSync` hands its whole command string to `/bin/sh -c`, so a `baseRef`
+ * value (from `FACTORY_BASE_REF`, or any future caller) interpolated into
+ * that string is parsed by the shell — metacharacters in it change what
+ * actually runs. `spawnSync` with an argument array passes each value to
+ * `git` literally; no shell ever sees it.
+ */
+function sh(args: string[], cwd: string): string {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
+  if (result.status !== 0) {
+    const detail = result.stderr || result.error?.message || `exit code ${result.status}`;
+    throw new Error(`git ${args.join(" ")} failed: ${detail}`);
+  }
+  return (result.stdout ?? "").trim();
+}
+
+/**
+ * Lists this branch's changed `.ts`/`.tsx` files under the tracked package
+ * roots, excluding `.d.ts`.
+ *
+ * `--diff-filter=ACMR` keeps only Added, Copied, Modified, and Renamed
+ * paths. Without it, a deleted or renamed-away path reaches `readFileSync`
+ * downstream and throws `ENOENT` — `engine.ts` then reports `status:
+ * "error"`, which fails the gate on a branch that only deleted a file. A
+ * renamed path still analyses correctly: its new name is Added or
+ * Renamed, so it stays in the list under its current content.
+ */
+export function changedTsFiles(repoRoot: string, baseRef: string): string[] {
+  return sh(["diff", "--diff-filter=ACMR", `${baseRef}...HEAD`, "--name-only"], repoRoot)
+    .split("\n")
+    .filter((f) => /\.tsx?$/.test(f) && !f.endsWith(".d.ts"))
+    .filter((f) => TRACKED_PATH_PREFIXES.some((p) => f.startsWith(p)));
+}
+
+function main(): void {
+  const repoRoot = sh(["rev-parse", "--show-toplevel"], process.cwd());
+  const baseRef = process.env.FACTORY_BASE_REF ?? "main";
+  const outDir = join(repoRoot, ".factory");
+  mkdirSync(outDir, { recursive: true });
+
+  const changed = changedTsFiles(repoRoot, baseRef);
+
+  const ctx = {
+    files: changed.map((f) => join(repoRoot, f)),
+    repoRoot,
+  };
+
+  const results = runRules(RULES, ctx);
+
+  const mergeBase = sh(["merge-base", "HEAD", baseRef], repoRoot);
+
+  const baselines: Record<string, Finding[]> = {};
+  const pins: Record<string, PinDecision> = {};
+  for (const rule of RULES) {
+    // Read the baseline at the merge-base, not BASE_REF's own tip.
+    // changedTsFiles computes the changed-file list with three-dot (merge-base)
+    // diff semantics (baseRef...HEAD) — reading baseline content at BASE_REF's
+    // tip instead is a mismatch: if BASE_REF advances past this branch's
+    // merge-base with a commit that fixes a violation in a file this branch
+    // ALSO touches (but doesn't fix), the branch's untouched pre-existing
+    // violation gets misreported as introduced. The merge-base is still an
+    // ancestor of BASE_REF, so this preserves the anti-gaming property (a
+    // branch cannot forge its own baseline) while matching the same reference
+    // point the changed-file list already uses.
+    //
+    // Use fileAtRef, never a raw `git show`. A file this branch ADDED does not
+    // exist at the merge-base, and that is the common case, not the edge case.
+    // fileAtRef returns null there; a raw git show would throw and take the
+    // whole gate down.
+    baselines[rule.meta.id] = changed.flatMap((f) => {
+      const before = fileAtRef(repoRoot, mergeBase, f);
+      if (before === null) return [];
+      return rule.checkSource(f, before, ctx);
+    });
+    let facts: { mergeBaseIsAfterActivation: boolean; mainCommitsElapsed: number | null } = {
+      mergeBaseIsAfterActivation: true,
+      mainCommitsElapsed: null,
+    };
+    if (rule.meta.activatedAt) {
+      const resolved = resolvePinFacts(repoRoot, baseRef, rule.meta.activatedAt);
+      if (resolved.ok) {
+        facts = resolved.facts;
+      } else {
+        // An unresolved pin must never default to a silently non-blocking
+        // rule. Treat it the same as a crashed check: force status
+        // "error", so the gate fails loudly with the real reason, never a
+        // quiet, permanent report-only mode.
+        const idx = results.findIndex((r) => r.id === rule.meta.id);
+        if (idx !== -1) {
+          const current = results[idx];
+          if (current) {
+            results[idx] = { ...current, status: "error", error: resolved.error };
+          }
+        }
+      }
+    }
+    pins[rule.meta.id] = decidePin({
+      activatedAt: rule.meta.activatedAt,
+      mergeBaseIsAfterActivation: facts.mergeBaseIsAfterActivation,
+      mainCommitsElapsed: facts.mainCommitsElapsed,
+      expiresAfter: rule.meta.pinExpiresAfterMainCommits,
+    });
+  }
+
+  const doc = buildDocument({
+    results,
+    baselines,
+    pins,
+    baseRef,
+    baseSha: sh(["rev-parse", baseRef], repoRoot),
+    mergeBase,
+  });
+
+  writeFileSync(join(outDir, "defect-gate.json"), JSON.stringify(doc, null, 2) + "\n");
+  for (const line of formatReportLines(doc)) console.log(line);
+  process.exit(doc.exitCode);
+}
+
+if (process.argv[1] && process.argv[1].endsWith("run.ts")) main();

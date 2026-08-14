@@ -302,7 +302,7 @@ fi
 # Judgement-dependent classes (concurrency, docs accuracy) stay in the brief.
 if [ -f scripts/factory/review-patterns.mjs ]; then
   if RP_OUT="$(node scripts/factory/review-patterns.mjs "$BASE_REF" 2>&1)"; then
-    record review-patterns pass "no new non-null/any casts or fixed sleeps"
+    record review-patterns pass "no new any casts or fixed sleeps"
   else
     echo "$RP_OUT" > "$OUT_DIR/review-patterns.txt"
     RP_N="$(grep -cE '^\s{4}\S+:' "$OUT_DIR/review-patterns.txt")" || RP_N=0
@@ -376,6 +376,9 @@ else
 fi
 
 # --- G8: scope discipline ---------------------------------------------------
+# The 40-file threshold below is also recorded in audit/factory/config.yaml's
+# gate.scopeLimitFiles — kept in sync by hand; not parsed from there at
+# runtime (see the design spec's non-goals).
 CHANGED_FILES="$(git diff "${BASE_REF}"...HEAD --name-only 2>/dev/null | wc -l | tr -d ' ')"
 if [ "${CHANGED_FILES:-0}" -eq 0 ]; then
   record scope fail "branch has no changes vs ${BASE_REF}"
@@ -467,6 +470,19 @@ else
       record coderabbit warn "review did not complete (rc=${CR_RC}) — see .factory/coderabbit.err"
     fi
   fi
+fi
+
+# --- G10: defect-gate (AST-based, identity-baselined, activation-pinned) ---
+# Ported from LabelHunter's scripts/factory/defect-gates/ — see
+# docs/superpowers/specs/2026-08-14-factory-defect-gate-design.md.
+# scopeLimitFiles above (G8) also lives in audit/factory/config.yaml; this
+# comment is the same cross-reference LabelHunter's own gate.sh uses rather
+# than parsing the YAML at runtime.
+if pnpm exec tsx scripts/factory/defect-gates/run.ts > "$OUT_DIR/defect-gate.log" 2>&1; then
+  record defect-gate pass "no introduced findings"
+else
+  DG_N="$(grep -cE '^\s{2}(FAIL|report)' "$OUT_DIR/defect-gate.log" 2>/dev/null)" || DG_N=0
+  record defect-gate fail "${DG_N} introduced finding(s) — see .factory/defect-gate.json / defect-gate.log"
 fi
 
 # --- verdict ----------------------------------------------------------------
