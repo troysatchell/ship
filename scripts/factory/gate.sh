@@ -212,6 +212,15 @@ run_tests web
 # defaults to an empty knownFailing set), so this is zero-tolerance by
 # construction, matching CI.
 run_tests agent
+# TRO-405 (PF-400): the new sdk/ workspace package has its own vitest suite
+# (unit tests for the ApiError->kind mapping, plus a live-running-server
+# integration test — that suite IS "the MVP gate check", PLUGFORGE.MD's own
+# words for PF-400's AC). Same reasoning as TRO-322's `run_tests agent`
+# addition above: `run_tests` already tolerates a package absent from
+# quarantine.json's `packages` key (testdiff.mjs defaults to an empty
+# knownFailing set), so this is zero-tolerance by construction — any failure
+# here is a real new failure, not a baseline comparison.
+run_tests sdk
 
 # --- G5: tests were not weakened -------------------------------------------
 # Agents MUST add regression tests, so test files are not frozen outright. What
