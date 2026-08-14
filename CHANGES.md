@@ -57,21 +57,37 @@ to mint a fresh, unconsumed code, then calls `POST /oauth/token` with a real but
 **Bonus (ticket, additive): PKCE round-trip timing vs the 3s P95 target (W6-R51).** Measured
 wall-clock from the `/oauth/authorize` navigation to the `/oauth/token` response, asserted
 `<3000ms`. **Observed** (captured from a real `/e2e-test-runner`-equivalent run, `--reporter=list`,
-console output): `[TRO-597] PKCE round trip (authorize nav -> token response): 403ms` — comfortably
+console output): `[TRO-597] PKCE round trip (authorize nav -> token response): 87ms` — comfortably
 under target, as expected for one local-network sequence with no real network latency.
+
+CodeRabbit review finding, applied: the first version of this measurement started its clock BEFORE
+calling the shared `loginAuthorizeAndConsent` helper, which measures the whole login step (navigate
+to `/login`, fill credentials, submit, wait for redirect) as part of the "round trip" — contradicting
+this section's own stated intent and inflating the reported number (403ms observed under that
+mistake, vs. 87ms once corrected). Fixed by moving the clock start inside the helper, immediately
+before its one `/oauth/authorize` navigation, and returning the timestamp to the caller instead of
+letting the caller start its own clock earlier. The number above is post-fix.
 
 **How to run it.** `/e2e-test-runner` → `e2e/oauth-pkce-chain.spec.ts --workers=1` (never
 `pnpm test:e2e` directly — see CLAUDE.md). Same gate-visibility disclaimer as its sibling file:
 `e2e/*.spec.ts` is outside both vitest configs, so `gate.sh` never executes this file directly (it
 only counts toward the gate's "regression test added" grep).
 
-**Evidence, this session.** Ran twice, both clean, no retries/flakes (`test-results/progress.jsonl`
-shows each test going straight `pending → running → passed`, no intermediate `failed`): 2/2 passed,
-18.2s wall time for both tests together. Negative case genuinely exercises the real
-`redeemAuthorizationCode` PKCE-mismatch branch (the same code path `token.test.ts`'s own
-wrong-verifier case proves at the unit level) — not re-run red-before-green here since no production
-code changed; the branch's correctness is already proven by the 32/32-passing vitest suite this spec
-chains on top of.
+**Evidence, this session.** Ran three times across the timing fix, all clean, no retries/flakes
+(`test-results/progress.jsonl` shows each test going straight `pending → running → passed`, no
+intermediate `failed`): 2/2 passed every run, ~18-19s wall time for both tests together. Negative
+case genuinely exercises the real `redeemAuthorizationCode` PKCE-mismatch branch (the same code path
+`token.test.ts`'s own wrong-verifier case proves at the unit level) — not re-run red-before-green
+here since no production code changed; the branch's correctness is already proven by the
+32/32-passing vitest suite this spec chains on top of.
+
+`scripts/factory/gate.sh` (full) needed 3 attempts to go green: attempts 1-2 both failed on
+`tests:api`, each on a DIFFERENT, unrelated test (`documents.test.ts`'s DELETE case, then
+`documents-visibility.test.ts`'s move case) that PASSED standalone both times — gate.sh's own
+documented load-sensitive flake class (TRO-277), not a regression from this ticket's changes (which
+touch only the e2e spec and this file). Confirmed at the time: the machine was under heavy load from
+an unrelated sibling factory session in a different repo (`labelhunter-wt-tro_563`), ~107MB free RAM.
+Attempt 3 passed clean with zero code changes in between. See `audit/factory/scorecard.jsonl`.
 
 **Not verified.** Cross-origin `sameSite: 'strict'` session-cookie behavior on a genuinely different
 eTLD+1 (same open gap `oauth-authorize.spec.ts`'s own header already flags — this spec, like its

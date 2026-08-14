@@ -116,18 +116,29 @@ function requireCode(code: string | null): string {
 
 /** Drives the browser through login -> /oauth/authorize -> consent
  * "Authorize" click -> redirect, and returns the real `code` captured from
- * the final redirect URL. Identical browser-driven steps as
- * oauth-authorize.spec.ts's first test (same dev seed user, same consent
- * button), factored out here because both tests below need a fresh code —
- * the happy path needs one to redeem correctly, the negative case needs a
- * fresh one to redeem with the WRONG verifier (a code that had already been
- * used once would fail for the unrelated reason of code reuse, not the
- * verifier mismatch this test exists to prove). */
+ * the final redirect URL, PLUS the wall-clock timestamp taken immediately
+ * before the `/oauth/authorize` navigation (`authorizeNavStartMs`) — not
+ * before login. Identical browser-driven steps as oauth-authorize.spec.ts's
+ * first test (same dev seed user, same consent button), factored out here
+ * because both tests below need a fresh code — the happy path needs one to
+ * redeem correctly, the negative case needs a fresh one to redeem with the
+ * WRONG verifier (a code that had already been used once would fail for the
+ * unrelated reason of code reuse, not the verifier mismatch this test
+ * exists to prove).
+ *
+ * CodeRabbit finding (applied): an earlier version of this test started its
+ * "PKCE round trip" timer BEFORE calling this helper, which measured the
+ * whole login step (navigate to /login, fill credentials, submit, wait for
+ * redirect) as part of the round trip — contradicting the test's own stated
+ * intent ("the clock starts at the authorize navigation") and inflating the
+ * number actually reported. Fixed by starting the clock HERE, inside the
+ * helper, right before the one navigation that matters, and handing the
+ * timestamp back to the caller instead of letting it start the clock itself. */
 async function loginAuthorizeAndConsent(
   page: Page,
   apiServerUrl: string,
   params: { clientId: string; redirectUri: string; codeChallenge: string; state: string }
-): Promise<{ code: string }> {
+): Promise<{ code: string; authorizeNavStartMs: number }> {
   await page.goto('/login');
   await page.locator('#email').fill('dev@ship.local');
   await page.locator('#password').fill('admin123');
@@ -143,6 +154,7 @@ async function loginAuthorizeAndConsent(
   authorizeUrl.searchParams.set('scope', 'documents:read');
   authorizeUrl.searchParams.set('state', params.state);
 
+  const authorizeNavStartMs = Date.now();
   await page.goto(authorizeUrl.toString());
   await expect(page).toHaveURL(/\/oauth-consent/);
 
@@ -151,7 +163,7 @@ async function loginAuthorizeAndConsent(
 
   const finalUrl = new URL(page.url());
   expect(finalUrl.searchParams.get('state'), 'state must round-trip unchanged').toBe(params.state);
-  return { code: requireCode(finalUrl.searchParams.get('code')) };
+  return { code: requireCode(finalUrl.searchParams.get('code')), authorizeNavStartMs };
 }
 
 test.describe('OAuth PKCE full chain: authorize -> consent -> token -> /api/v1/me (TRO-597)', () => {
@@ -171,12 +183,11 @@ test.describe('OAuth PKCE full chain: authorize -> consent -> token -> /api/v1/m
     // Login is a precondition of the OAuth flow (a real client's browser
     // session already exists before it ever redirects to
     // /oauth/authorize), not part of the "PKCE round trip" the bonus timing
-    // assertion below measures — the clock starts at the authorize
-    // navigation, matching the ticket's own wording ("wall-clock from the
-    // authorize navigation to the token response").
-    const roundTripStartMs = Date.now();
-
-    const { code } = await loginAuthorizeAndConsent(page, apiServer.url, {
+    // assertion below measures — `authorizeNavStartMs` (returned by the
+    // helper, captured immediately before its `/oauth/authorize`
+    // navigation) is the clock start, matching the ticket's own wording
+    // ("wall-clock from the authorize navigation to the token response").
+    const { code, authorizeNavStartMs } = await loginAuthorizeAndConsent(page, apiServer.url, {
       clientId,
       redirectUri,
       codeChallenge,
@@ -196,7 +207,7 @@ test.describe('OAuth PKCE full chain: authorize -> consent -> token -> /api/v1/m
       },
     });
 
-    const roundTripMs = Date.now() - roundTripStartMs;
+    const roundTripMs = Date.now() - authorizeNavStartMs;
 
     // Read the body exactly once as text, then parse — keeps the raw text
     // available for the status assertion's failure message without relying
