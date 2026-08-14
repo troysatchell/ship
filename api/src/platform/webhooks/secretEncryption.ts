@@ -34,6 +34,22 @@
  * the same rationale in their headers): this file has nothing to do with a
  * database row or an Express request, so it has no business importing
  * either.
+ *
+ * **Known, disclosed limitation: no key versioning/rotation (CodeRabbit,
+ * this PR's review).** There is exactly one active `SECRET_ENCRYPTION_KEY`
+ * at a time, with no version tag stored alongside the ciphertext and no
+ * active/legacy keyring to resolve against. Rotating the deployment's own
+ * `SECRET_ENCRYPTION_KEY` — as opposed to a single subscription's `whsec_...`
+ * signing secret, which `POST /:id/rotate` already handles — would make
+ * every existing `signing_secret_ciphertext` row undecryptable, with no
+ * migration path back. This is a real gap, not a silently-ignored one: it is
+ * out of PF-302's own AC ("CRUD tests; secret non-recoverable via API after
+ * creation; rotation endpoint" — that "rotation" is the subscription
+ * secret's, per PLUGFORGE.MD §2.2, not the deployment key's), and building a
+ * versioned keyring is a real feature (key storage, re-encryption-in-place
+ * on retirement, a migration to add the version column) that no ticket has
+ * yet scoped. Flagged here explicitly so it is found by grep before it is
+ * found by an actual key-rotation incident.
  */
 
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto'

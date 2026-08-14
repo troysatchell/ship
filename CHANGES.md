@@ -112,6 +112,28 @@ rotation endpoint").**
   round-trip, per-call IV randomness, tamper detection (GCM auth tag), wrong-key rejection, and the
   three "misconfigured env var" error paths.
 
+**CodeRabbit triage (8 findings, self-reviewed — this handles secrets).** Fixed: (1) `created_at`
+now `NOT NULL` (matches the row type every route assumes; deliberately stricter than 042/043's own
+precedent, which is safe to do for a brand-new table with no legacy rows); (2) a partial unique
+index (`app_id, event_type, target_url) WHERE active`) blocks duplicate active subscriptions, with
+`POST /` mapping the resulting `23505` into a `validation_failed` response rather than a raw 500;
+(3) `target_url` now rejects non-http(s) schemes (`javascript:`, `file:`, etc.) via a cheap
+`.refine()` — deliberately NOT extended to block private/loopback IPs at creation time, since a
+hostname's DNS answer can change before PF-304 actually dials it (DNS rebinding) and a check here
+would be theater, not protection; documented as PF-304's job, not silently dropped; (4) fixed a
+stale doc comment on `resolveWorkspaceOrThrow` and de-duplicated `GET /:id`'s workspace-resolution
+logic into it (split into `resolveWorkspaceOrThrow`/`resolveWorkspaceOrNull` — `GET /`'s
+fail-to-empty-page behavior needs the latter); (5) `GET /` cursor-pagination test now asserts the
+just-created subscription's id is actually IN the returned page, not just that the response has the
+right shape; (6) replaced `?? undefined` + `as string` ciphertext narrowing in the test file with a
+throw-on-missing `fetchCiphertext()` helper (same shape `insertOauthApp`/`onlyRow` already use); (7)
+the test file's `SECRET_ENCRYPTION_KEY` fixture now saves/restores rather than unconditionally
+deletes, and every `beforeAll` seed insert now throws via `onlyRow` instead of defaulting to `''` on
+a missing row. Dismissed, disclosed rather than silently skipped: key VERSIONING/rotation for
+`SECRET_ENCRYPTION_KEY` itself (as opposed to a subscription's own `whsec_...` secret, which
+`POST /:id/rotate` already rotates) — real gap, out of PF-302's AC, documented at length in
+`secretEncryption.ts`'s own header as a named follow-up rather than fixed here as scope creep.
+
 **How to verify.**
 
 ```bash

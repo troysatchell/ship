@@ -58,11 +58,27 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
   let userId: string;
   let appId: string; // oauth_apps row in `workspaceId`
   let otherWorkspaceAppId: string; // oauth_apps row in `otherWorkspaceId`
+  let originalSecretEncryptionKey: string | undefined;
 
   /** scopes = ['webhooks:manage']. */
   let manageToken: string;
   /** scopes = ['documents:read'] — lacks webhooks:manage, for the 403 case. */
   let noScopeToken: string;
+
+  /** Narrows a possibly-empty pg result to its single row, throwing loudly
+   * rather than silently defaulting to `''` — same helper/rationale as
+   * `db/__tests__/migrations-042-043.test.ts`'s `onlyRow`, and the same
+   * throw-on-missing-row shape `insertOauthApp` below already uses; applied
+   * here too (CodeRabbit, this PR review) so a broken seed insert fails
+   * loudly at its own call site instead of producing a silently-empty id
+   * that fails confusingly three calls later. */
+  function onlyRow<T>(rows: T[]): T {
+    const [row] = rows;
+    if (row === undefined) {
+      throw new Error(`Expected exactly one row, got ${rows.length}.`);
+    }
+    return row;
+  }
 
   async function insertPersonalToken(scopes: string[]): Promise<string> {
     const raw = `ship_${crypto.randomBytes(24).toString('hex')}`;
@@ -93,30 +109,49 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
     return row.id;
   }
 
+  /** Reads back `signing_secret_ciphertext` for one subscription, throwing
+   * loudly rather than narrowing with `?? undefined` + `as string`
+   * (CodeRabbit, this PR review) — a missing row here means the test itself
+   * is broken (wrong id, or the INSERT never committed), which should fail
+   * at this call site with a clear message, not three lines later against
+   * `decryptSecret(undefined as unknown as string)`. */
+  async function fetchCiphertext(subscriptionId: string): Promise<string> {
+    const result = await pool.query<{ signing_secret_ciphertext: string }>(
+      `SELECT signing_secret_ciphertext FROM webhook_subscriptions WHERE id = $1`,
+      [subscriptionId]
+    );
+    return onlyRow(result.rows).signing_secret_ciphertext;
+  }
+
   beforeAll(async () => {
     // A real 32-byte key for this whole file — same pattern as
     // secretEncryption.test.ts, just file-scoped rather than per-test since
     // this file never needs to exercise the "unset/malformed key" paths.
+    // Save/restore rather than unconditionally delete (CodeRabbit, this PR
+    // review) — same pattern secretEncryption.test.ts uses per-test: a
+    // sibling suite in the same vitest process may have set a real value
+    // this file has no business clobbering on exit.
+    originalSecretEncryptionKey = process.env[SECRET_ENCRYPTION_KEY_ENV];
     process.env[SECRET_ENCRYPTION_KEY_ENV] = crypto.randomBytes(32).toString('hex');
 
     const workspaceResult = await pool.query<{ id: string }>(
       `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
       [`PF-302 Test ${testRunId}`]
     );
-    workspaceId = workspaceResult.rows[0]?.id ?? '';
+    workspaceId = onlyRow(workspaceResult.rows).id;
 
     const otherWorkspaceResult = await pool.query<{ id: string }>(
       `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
       [`PF-302 Other Test ${testRunId}`]
     );
-    otherWorkspaceId = otherWorkspaceResult.rows[0]?.id ?? '';
+    otherWorkspaceId = onlyRow(otherWorkspaceResult.rows).id;
 
     const userResult = await pool.query<{ id: string }>(
       `INSERT INTO users (email, password_hash, name, last_workspace_id)
        VALUES ($1, 'test-hash', 'PF-302 Test User', $2) RETURNING id`,
       [`pf302-${testRunId}@ship.local`, workspaceId]
     );
-    userId = userResult.rows[0]?.id ?? '';
+    userId = onlyRow(userResult.rows).id;
 
     appId = await insertOauthApp(workspaceId, `PF-302 App ${testRunId}`);
     otherWorkspaceAppId = await insertOauthApp(otherWorkspaceId, `PF-302 Other App ${testRunId}`);
@@ -131,7 +166,11 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
     await pool.query('DELETE FROM api_tokens WHERE workspace_id = $1', [workspaceId]);
     await pool.query('DELETE FROM users WHERE id = $1', [userId]);
     await pool.query('DELETE FROM workspaces WHERE id IN ($1, $2)', [workspaceId, otherWorkspaceId]);
-    delete process.env[SECRET_ENCRYPTION_KEY_ENV];
+    if (originalSecretEncryptionKey === undefined) {
+      delete process.env[SECRET_ENCRYPTION_KEY_ENV];
+    } else {
+      process.env[SECRET_ENCRYPTION_KEY_ENV] = originalSecretEncryptionKey;
+    }
   });
 
   // ────────────────────────────────────────────────────────────────────────
@@ -201,17 +240,13 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       expect(body.secret).toMatch(/^whsec_[0-9a-f]{64}$/);
       expect(body.warning).toContain('will not be shown again');
 
-      const row = await pool.query<{ signing_secret_ciphertext: string }>(
-        `SELECT signing_secret_ciphertext FROM webhook_subscriptions WHERE id = $1`,
-        [body.id]
-      );
-      const ciphertext = row.rows[0]?.signing_secret_ciphertext;
+      const ciphertext = await fetchCiphertext(body.id);
       expect(ciphertext).toBeTruthy();
       // The stored value is NOT the plaintext secret in any form.
       expect(ciphertext).not.toBe(body.secret);
-      expect(ciphertext).not.toContain(body.secret ?? ' never-matches');
+      expect(ciphertext).not.toContain(body.secret ?? ' never-matches');
       // But it decrypts back to exactly the plaintext that was returned.
-      expect(decryptSecret(ciphertext as string)).toBe(body.secret);
+      expect(decryptSecret(ciphertext)).toBe(body.secret);
     });
 
     it('every registered event_type is accepted', async () => {
@@ -229,11 +264,16 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
     });
 
     it('GET / lists this workspace\'s subscriptions, cursor-paginated, and excludes another workspace\'s', async () => {
-      // A subscription under THIS workspace's app.
-      await request(app)
+      // A subscription under THIS workspace's app — the most-recently-created
+      // row for `appId` at this point in the file, so (ORDER BY created_at
+      // DESC) it is guaranteed to be page 1's first item regardless of how
+      // many earlier CRUD-describe tests already created rows for `appId`.
+      const created = await request(app)
         .post('/api/v1/webhooks')
         .set('Authorization', `Bearer ${manageToken}`)
         .send({ app_id: appId, event_type: 'sprint.started', target_url: 'https://example.com/hook-list-a' });
+      expect(created.status).toBe(201);
+      const createdId = (created.body as SubscriptionBody).id;
 
       // A subscription under the OTHER workspace's app — must never appear.
       await pool.query(
@@ -256,6 +296,11 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       }
       expect('next_cursor' in body).toBe(true);
 
+      // The subscription just created is actually IN the returned page — not
+      // just "the response has the right shape" (CodeRabbit, this PR review:
+      // the original version of this test never asserted this).
+      expect(body.data.map((item) => item.id)).toContain(createdId);
+
       // None of this workspace's page items belong to the other workspace's app.
       const otherWsRow = await pool.query(
         `SELECT id FROM webhook_subscriptions WHERE app_id = $1`,
@@ -272,7 +317,7 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
         .post('/api/v1/webhooks')
         .set('Authorization', `Bearer ${manageToken}`)
         .send({ app_id: appId, event_type: 'issue.created', target_url: 'https://example.com/hook-get' });
-      const id = created.body.id as string;
+      const { id } = created.body as SubscriptionBody;
 
       const ok = await request(app)
         .get(`/api/v1/webhooks/${id}`)
@@ -311,7 +356,7 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
         .post('/api/v1/webhooks')
         .set('Authorization', `Bearer ${manageToken}`)
         .send({ app_id: appId, event_type: 'issue.status_changed', target_url: 'https://example.com/hook-delete' });
-      const id = created.body.id as string;
+      const { id } = created.body as SubscriptionBody;
 
       const first = await request(app)
         .delete(`/api/v1/webhooks/${id}`)
@@ -347,8 +392,12 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
         .post('/api/v1/webhooks')
         .set('Authorization', `Bearer ${manageToken}`)
         .send({ app_id: appId, event_type: 'sprint.completed', target_url: 'https://example.com/hook-secret-proof' });
-      const id = created.body.id as string;
-      const plaintextSecret = created.body.secret as string;
+      const createdBody = created.body as SubscriptionBody;
+      const { id } = createdBody;
+      const plaintextSecret = createdBody.secret;
+      if (plaintextSecret === undefined) {
+        throw new Error('POST / response did not include a secret');
+      }
       expect(plaintextSecret).toMatch(/^whsec_/);
 
       const getRes = await request(app)
@@ -389,8 +438,12 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
         .post('/api/v1/webhooks')
         .set('Authorization', `Bearer ${manageToken}`)
         .send({ app_id: appId, event_type: 'document.updated', target_url: 'https://example.com/hook-rotate' });
-      const id = created.body.id as string;
-      const originalSecret = created.body.secret as string;
+      const createdBody = created.body as SubscriptionBody;
+      const { id } = createdBody;
+      const originalSecret = createdBody.secret;
+      if (originalSecret === undefined) {
+        throw new Error('POST / response did not include a secret');
+      }
 
       const rotated = await request(app)
         .post(`/api/v1/webhooks/${id}/rotate`)
@@ -424,14 +477,14 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
           event_type: 'issue.status_changed',
           target_url: 'https://example.com/hook-rotate-invalidate',
         });
-      const id = created.body.id as string;
-      const oldSecret = created.body.secret as string;
+      const createdBody = created.body as SubscriptionBody;
+      const id = createdBody.id;
+      const oldSecret = createdBody.secret;
+      if (oldSecret === undefined) {
+        throw new Error('POST / response did not include a secret');
+      }
 
-      const beforeRow = await pool.query<{ signing_secret_ciphertext: string }>(
-        `SELECT signing_secret_ciphertext FROM webhook_subscriptions WHERE id = $1`,
-        [id]
-      );
-      const oldCiphertext = beforeRow.rows[0]?.signing_secret_ciphertext as string;
+      const oldCiphertext = await fetchCiphertext(id);
       expect(decryptSecret(oldCiphertext)).toBe(oldSecret);
 
       // A signature the deliverer would have produced under the OLD secret,
@@ -446,14 +499,14 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
         .post(`/api/v1/webhooks/${id}/rotate`)
         .set('Authorization', `Bearer ${manageToken}`);
       expect(rotateRes.status).toBe(200);
-      const newSecret = rotateRes.body.secret as string;
+      const rotatedBody = rotateRes.body as SubscriptionBody;
+      const newSecret = rotatedBody.secret;
+      if (newSecret === undefined) {
+        throw new Error('POST /:id/rotate response did not include a secret');
+      }
       expect(newSecret).not.toBe(oldSecret);
 
-      const afterRow = await pool.query<{ signing_secret_ciphertext: string }>(
-        `SELECT signing_secret_ciphertext FROM webhook_subscriptions WHERE id = $1`,
-        [id]
-      );
-      const newCiphertext = afterRow.rows[0]?.signing_secret_ciphertext as string;
+      const newCiphertext = await fetchCiphertext(id);
 
       // The stored ciphertext itself changed...
       expect(newCiphertext).not.toBe(oldCiphertext);

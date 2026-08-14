@@ -92,13 +92,42 @@ function requestIdOf(req: Request): string {
  * schema), not a DB CHECK constraint duplicating the same list. */
 export const WebhookEventTypeSchema = z.enum(EVENT_TYPES);
 
+const HTTP_URL_SCHEMES = new Set(['http:', 'https:']);
+
+/**
+ * `target_url` must be syntactically valid (`z.string().url()`) AND use an
+ * http/https scheme — rejects `javascript:`, `file:`, `ftp:`, etc. at the
+ * cheapest possible layer (no DNS lookup, no network call).
+ *
+ * Deliberately NOT extended to reject loopback/link-local/private-IP hosts
+ * here (CodeRabbit review, this PR — taken seriously, not dismissed: this is
+ * a real SSRF-adjacent concern, but the fix belongs at a different layer).
+ * A hostname's DNS answer can change between "this row is created" and
+ * "PF-304 actually dials target_url" (DNS rebinding is exactly this
+ * attack), so a host/IP check performed here would be checking a value that
+ * is no longer authoritative by delivery time — theater, not protection.
+ * The check that actually defends the delivery path has to run at PF-304's
+ * connect time, against the IP it is about to open a socket to. Left as an
+ * explicit, named gap for PF-304 to close, not silently absent.
+ */
+function isHttpUrl(value: string): boolean {
+  try {
+    return HTTP_URL_SCHEMES.has(new URL(value).protocol);
+  } catch {
+    return false;
+  }
+}
+
 /** `POST /api/v1/webhooks` request body. `app_id` must reference an
  * `oauth_apps` row in the caller's own workspace (checked in the handler,
  * not expressible in a zod schema). */
 export const CreateWebhookSubscriptionRequestSchema = z.object({
   app_id: z.string().uuid('app_id must be a UUID.'),
   event_type: WebhookEventTypeSchema,
-  target_url: z.string().url('target_url must be a valid URL.'),
+  target_url: z
+    .string()
+    .url('target_url must be a valid URL.')
+    .refine(isHttpUrl, { message: 'target_url must use the http or https scheme.' }),
 });
 
 /** `GET /api/v1/webhooks` query params — same cursor-pagination shape as
@@ -135,24 +164,42 @@ function serializeSubscription(row: WebhookSubscriptionRow) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Resolves `req.principal`'s workspace, or throws the right `ApiError` when
- * that is not possible — the exact `documents.ts` pattern, factored out
- * here because every one of this file's five routes repeats it. Returns
- * `null` only for the "no workspace, but not an error" list-route case
- * (mirroring `documents.ts`'s `GET /` behavior); callers that must have a
- * workspace pass `required: true` and get a thrown `ApiError` instead. */
-async function resolveWorkspaceOrThrow(
-  req: Request,
-  requestId: string
-): Promise<string> {
+/** Narrows a `catch` value to "a pg `DatabaseError` with this SQLSTATE code"
+ * — same `instanceof Error && 'code' in error` runtime-shape-check pattern
+ * `config/ssm.ts`'s `isAbortError` already uses for narrowing an unknown
+ * catch value (no `as any`/`as unknown as` cast; `pg` does not export a
+ * typed `DatabaseError` this codebase imports elsewhere). Used by `POST /`
+ * to turn migration 047's `idx_webhook_subscriptions_unique_active`
+ * violation (`23505`) into a `validation_failed` `ApiError` instead of a
+ * sanitized `server_error`. */
+function isPgErrorWithCode(error: unknown, expectedCode: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === expectedCode;
+}
+
+/** Resolves `req.principal`'s workspace, or `null` when none resolves (e.g. a
+ * personal token for a user who has never joined a workspace, or a dangling
+ * `app_id`) — never throws for that case. Every route in this file needs the
+ * principal-missing guard (`serverError` — unreachable in practice, since
+ * `bearerAuth` never calls `next()` without setting `req.principal`, but
+ * `req.principal` is typed optional so TypeScript can't see that statically),
+ * so it lives here once rather than four times. `GET /` is the one caller
+ * that uses the `null` return directly (fails closed to an empty page,
+ * matching `documents.ts`'s own `GET /` convention); every other route wants
+ * `resolveWorkspaceOrThrow` below instead. */
+async function resolveWorkspaceOrNull(req: Request, requestId: string): Promise<string | null> {
   const principal = req.principal;
   if (!principal) {
-    // Unreachable in practice — bearerAuth never calls next() without
-    // setting req.principal — but TypeScript can't see that guarantee
-    // statically (req.principal is typed optional).
     throw serverError(requestId);
   }
-  const workspaceId = await resolvePrincipalWorkspaceId(principal);
+  return resolvePrincipalWorkspaceId(principal);
+}
+
+/** `resolveWorkspaceOrNull`, but throws a `not_found` `ApiError` instead of
+ * returning `null` — what every route except `GET /` wants: `GET /:id`,
+ * `DELETE /:id`, and `POST /:id/rotate` all treat "no workspace resolves" as
+ * equivalent to "nothing found", the same as a real id lookup miss. */
+async function resolveWorkspaceOrThrow(req: Request, requestId: string): Promise<string> {
+  const workspaceId = await resolveWorkspaceOrNull(req, requestId);
   if (!workspaceId) {
     throw notFoundError(requestId, 'No workspace is associated with this credential.');
   }
@@ -190,12 +237,29 @@ webhooksRouter.post(
     const plaintextSecret = generateWebhookSecret();
     const ciphertext = encryptSecret(plaintextSecret);
 
-    const result = await pool.query<WebhookSubscriptionRow>(
-      `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
-       VALUES ($1, $2, $3, $4, true)
-       RETURNING id, app_id, event_type, target_url, active, created_at`,
-      [parseResult.data.app_id, parseResult.data.event_type, parseResult.data.target_url, ciphertext]
-    );
+    let result;
+    try {
+      result = await pool.query<WebhookSubscriptionRow>(
+        `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
+         VALUES ($1, $2, $3, $4, true)
+         RETURNING id, app_id, event_type, target_url, active, created_at`,
+        [parseResult.data.app_id, parseResult.data.event_type, parseResult.data.target_url, ciphertext]
+      );
+    } catch (error) {
+      // 23505 = unique_violation — migration 047's
+      // `idx_webhook_subscriptions_unique_active` partial unique index (app_id,
+      // event_type, target_url) WHERE active. A caller-facing, actionable
+      // error rather than a sanitized server_error: this is a validation
+      // outcome (a duplicate active subscription), not an unexpected failure.
+      if (isPgErrorWithCode(error, '23505')) {
+        throw validationFailedError(
+          requestId,
+          'An active subscription for this app_id/event_type/target_url combination already exists.',
+          { fieldErrors: { target_url: ['duplicate active subscription for this event_type and target_url'] } }
+        );
+      }
+      throw error;
+    }
     const row = result.rows[0];
     if (!row) {
       throw serverError(requestId);
@@ -239,11 +303,7 @@ webhooksRouter.get(
       }
     }
 
-    const principal = req.principal;
-    if (!principal) {
-      throw serverError(requestId);
-    }
-    const workspaceId = await resolvePrincipalWorkspaceId(principal);
+    const workspaceId = await resolveWorkspaceOrNull(req, requestId);
     if (!workspaceId) {
       // Same "fail closed to an empty page" convention as documents.ts.
       res.status(200).json({ data: [], next_cursor: null });
@@ -301,14 +361,7 @@ webhooksRouter.get(
       throw notFoundError(requestId);
     }
 
-    const principal = req.principal;
-    if (!principal) {
-      throw serverError(requestId);
-    }
-    const workspaceId = await resolvePrincipalWorkspaceId(principal);
-    if (!workspaceId) {
-      throw notFoundError(requestId);
-    }
+    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
 
     const result = await pool.query<WebhookSubscriptionRow>(
       `SELECT ${SUBSCRIPTION_COLUMNS}

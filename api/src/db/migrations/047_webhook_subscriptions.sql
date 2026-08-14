@@ -53,7 +53,14 @@ CREATE TABLE IF NOT EXISTS webhook_subscriptions (
   -- ciphertext) — see the header note above.
   signing_secret_ciphertext TEXT NOT NULL,
   active BOOLEAN NOT NULL DEFAULT TRUE,
-  created_at TIMESTAMPTZ DEFAULT now()
+  -- NOT NULL, deliberately stricter than 042/043's `created_at TIMESTAMPTZ
+  -- DEFAULT now()` precedent (neither adds NOT NULL): every route in
+  -- `resources/webhooks.ts` calls `row.created_at.toISOString()` against a
+  -- `WebhookSubscriptionRow` typed as non-nullable `Date`, and this is a
+  -- brand-new table with no legacy rows to reconcile — cheap correctness a
+  -- pre-existing table doesn't get to add for free. (CodeRabbit, this PR's
+  -- review.)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- FK-lookup index: every /api/v1/webhooks list/get/delete/rotate query joins
@@ -76,3 +83,17 @@ CREATE INDEX IF NOT EXISTS idx_webhook_subscriptions_event_type ON webhook_subsc
 -- id DESC) — same cursor shape as platform/api/v1/pagination.ts — scoped
 -- per-app via the FK index above and this composite for the ORDER BY itself.
 CREATE INDEX IF NOT EXISTS idx_webhook_subscriptions_created_at_id ON webhook_subscriptions (created_at DESC, id DESC);
+
+-- Partial unique index: an app cannot hold two ACTIVE subscriptions for the
+-- same (event_type, target_url) pair — every future delivery would otherwise
+-- fan out into duplicate deliveries of the same event to the same URL, with
+-- no way for a caller to tell them apart or to know creation silently
+-- produced a redundant row. Partial (`WHERE active`) rather than a plain
+-- unique constraint deliberately: DELETE (`resources/webhooks.ts`)
+-- deactivates rather than removes rows (see that file's header), so a
+-- caller must be able to deactivate one subscription and immediately create
+-- a fresh active one for the identical (app_id, event_type, target_url) —
+-- a non-partial index would make that impossible. (CodeRabbit, this PR's
+-- review — trivial severity, cheap to add now.)
+CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_subscriptions_unique_active
+  ON webhook_subscriptions (app_id, event_type, target_url) WHERE active;
