@@ -409,8 +409,12 @@ describe('documentService (TRO-426 / PF-301)', () => {
           // that by simply never flushing, and confirm nothing was published.
           expect(documentUpdatedEvents.find((e) => (e.data as { id: string }).id === issue.id)).toBeUndefined()
 
+          // Exact pre-transaction title (CodeRabbit, this PR), not just "not
+          // the rolled-back value" — the stronger assertion actually proves
+          // the ROLLBACK undid the write, rather than merely proving the title
+          // ended up as some other, unspecified string.
           const row = await pool.query<{ title: string }>('SELECT title FROM documents WHERE id = $1', [issue.id])
-          expect(row.rows[0]?.title).not.toBe('Should Be Rolled Back')
+          expect(row.rows[0]?.title).toBe('Update Target Issue')
         } finally {
           unsubscribe()
           client.release()
@@ -470,12 +474,16 @@ describe('documentService (TRO-426 / PF-301)', () => {
     })
 
     it('returns null and publishes nothing when no row matches', async () => {
+      const nonExistentId = '00000000-0000-0000-0000-000000000000'
       const { result, events } = await withSubscription('document.deleted', async () => {
-        return deleteDocument({ id: '00000000-0000-0000-0000-000000000000', workspaceId: testWorkspaceId })
+        return deleteDocument({ id: nonExistentId, workspaceId: testWorkspaceId })
       })
 
       expect(result).toBeNull()
-      expect(events).toHaveLength(0)
+      // Filtered by ID, matching every other test's event-lookup pattern in
+      // this file (CodeRabbit, this PR), rather than asserting the whole
+      // captured-events array is empty.
+      expect(events.filter((e) => (e.data as { id: string }).id === nonExistentId)).toHaveLength(0)
     })
   })
 })

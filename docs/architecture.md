@@ -319,9 +319,17 @@ enumerating exactly which sites route through it versus which are excluded is PF
   including the actual production sprint `planning → active → completed` transitions
   (`POST /:id/start`, `PATCH /:id`). It is not one of the four named resource routers, so it was
   left as inline SQL. `documentService.updateDocument()` still implements and unit-tests
-  `sprint.started`/`sprint.completed` derivation — it fires correctly if a sprint document is ever
-  updated through `documents.ts`'s generic `PATCH /:id` — but no production route reaches that path
-  today. A ~3600-line file with ~20 write sites was judged out of proportion for "smallest-possible
+  `sprint.started`/`sprint.completed` derivation. Reachability, precisely: `documents.ts`'s generic
+  `PATCH /:id` is the ONE consolidated primary endpoint with no `document_type` filter at all — it
+  would reach sprint derivation if called against a sprint document's id, and is the only one of the
+  eight consolidated primary endpoints (four routers × create/update/delete, minus create/delete
+  which don't apply here) for which that's even possible. `projects.ts`'s and `programs.ts`'s
+  `PATCH /:id` are filtered to `document_type = 'project'`/`'program'` respectively and structurally
+  cannot reach it; `issues.ts`'s `PATCH /:id` has no filter either but is only ever called against
+  issue ids by every real caller. In practice, no production caller sends a sprint id to
+  `documents.ts`'s `PATCH /:id` today, so the derivation is exercised only by
+  `documentService.test.ts`'s direct unit tests, not by any live request path. A ~3600-line file
+  with ~20 write sites was judged out of proportion for "smallest-possible
   consolidation" on this ticket's own stated risk profile. Note the precise claim here: none of the
   four routers' *consolidated primary create/update/delete* endpoints ever touch a sprint document
   (each filters to its own `document_type`) — that is narrower than "none of the four router *files*

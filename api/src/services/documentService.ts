@@ -143,11 +143,35 @@ export interface DocumentEventFields {
 }
 
 /**
- * Fires `dispatch` immediately when there is no transaction client (nothing to
- * roll back), or queues it onto `pendingEvents` when there is — see the file
- * header's "Publish timing" note. Throws if `client` is present without
- * `pendingEvents`: that combination means a caller is inside a transaction but
- * has no way to defer, which would silently reintroduce publish-before-commit.
+ * Runs `dispatch`, catching and logging (never rethrowing) any error a
+ * subscriber's own handler throws. By the time `dispatch` is called — whether
+ * immediately from `dispatchOrQueue` or later from `flushPendingEvents` — the
+ * write it describes has already durably committed (either there was never a
+ * wrapping transaction to roll back, or the caller's own `COMMIT` already
+ * succeeded). `IEventBus.publish()` deliberately does not catch a handler's
+ * own error (see `eventBus.ts`'s header comment) — that is correct for the bus
+ * itself, which has no way to know whether its caller is mid-write or
+ * post-write. This is that boundary: a subscriber that chokes on an event must
+ * not turn an already-successful write into a request the client sees as
+ * failed (CodeRabbit, this PR — flagged for both the immediate-dispatch branch
+ * below and the original `flushPendingEvents`, which only had this protection
+ * for the deferred path).
+ */
+function safeDispatch(dispatch: () => void): void {
+  try {
+    dispatch();
+  } catch (err) {
+    console.error('documentService: an event dispatch threw after its write already committed', err);
+  }
+}
+
+/**
+ * Fires `dispatch` immediately (via `safeDispatch`) when there is no
+ * transaction client (nothing to roll back), or queues it onto `pendingEvents`
+ * when there is — see the file header's "Publish timing" note. Throws if
+ * `client` is present without `pendingEvents`: that combination means a caller
+ * is inside a transaction but has no way to defer, which would silently
+ * reintroduce publish-before-commit.
  */
 function dispatchOrQueue(
   client: Queryable | undefined,
@@ -155,7 +179,7 @@ function dispatchOrQueue(
   dispatch: () => void
 ): void {
   if (client === undefined) {
-    dispatch();
+    safeDispatch(dispatch);
     return;
   }
   if (!pendingEvents) {
@@ -173,23 +197,13 @@ function dispatchOrQueue(
  * Runs every queued dispatch from a `pendingEvents` array (see
  * `CreateDocumentParams.pendingEvents`) after the caller's own
  * `client.query('COMMIT')` has succeeded. Call sites should use this rather
- * than iterating `pendingEvents` themselves (CodeRabbit, this PR): the write
- * this event describes already committed by the time flush runs, so a
- * subscriber that throws — `IEventBus.publish()` deliberately does not catch a
- * handler's own error, see `eventBus.ts`'s header comment — must not surface as
- * a failed request for a write that actually succeeded. Logs and continues to
- * the next queued event rather than losing the rest of the batch to one bad
- * subscriber. There is no ROLLBACK left to run at this point regardless; the
- * only options are "swallow and log" or "let the client wrongly see a 500 for
- * a commit that already happened," and the latter is strictly worse.
+ * than iterating `pendingEvents` themselves — each dispatch runs through
+ * `safeDispatch`, so one bad subscriber logs and loses only its own event, not
+ * the rest of the batch, and never turns this into a failed request.
  */
 export function flushPendingEvents(pendingEvents: Array<() => void>): void {
   for (const dispatch of pendingEvents) {
-    try {
-      dispatch();
-    } catch (err) {
-      console.error('documentService.flushPendingEvents: a post-commit event dispatch threw', err);
-    }
+    safeDispatch(dispatch);
   }
 }
 
@@ -294,7 +308,16 @@ export interface UpdateDocumentParams {
    * this function runs is byte-for-byte what the route used to run directly.
    */
   setClauses: string[];
-  /** Positional values for `setClauses`' `$1..$n` placeholders, in order. */
+  /**
+   * Positional values for `setClauses`' placeholders, in order. Contract
+   * (CodeRabbit, this PR): every placeholder any `setClauses` entry references
+   * must be numbered contiguously `$1..$n` where `n === values.length` — this
+   * function appends `id`/`workspaceId` (and `documentTypeFilter`, if given)
+   * starting at `$${values.length + 1}`, so a gap or an out-of-order number
+   * here would misalign those trailing placeholders. A `setClauses` entry with
+   * no placeholder at all (e.g. `'updated_at = now()'`) is fine and does not
+   * consume a slot in `values`.
+   */
   values: unknown[];
   /**
    * Extra `WHERE` condition matching the route's own filter, e.g. `'project'`
@@ -363,19 +386,32 @@ export interface DeleteDocumentParams {
   pendingEvents?: Array<() => void>;
 }
 
-/** Returns the deleted row, or `null` if no matching row existed (caller returns its own 404). */
-export async function deleteDocument(params: DeleteDocumentParams): Promise<DocumentRow | null> {
+/**
+ * Returns the deleted row, or `null` if no matching row existed (caller
+ * returns its own 404). Generic over `T extends DocumentEventFields` for the
+ * same reason `createDocument`/`updateDocument` are (CodeRabbit, this PR: no
+ * current caller needs a specifically-typed deleted row — every consolidated
+ * DELETE handler only checks truthiness — but keeping the same generic shape
+ * here means a future caller that does need one doesn't require touching this
+ * function's signature).
+ */
+export async function deleteDocument<T extends DocumentEventFields = DocumentRow>(
+  params: DeleteDocumentParams
+): Promise<T | null> {
   const db = params.client ?? pool;
 
   const conditions = ['id = $1', 'workspace_id = $2'];
   const values: unknown[] = [params.id, params.workspaceId];
 
   if (params.documentTypeFilter !== undefined) {
-    conditions.push(`document_type = $3`);
+    // Derived from values.length, not hardcoded $3 (CodeRabbit, this PR) —
+    // matches updateDocument's approach and stays correct if a future edit
+    // adds another condition/value before this one.
+    conditions.push(`document_type = $${values.length + 1}`);
     values.push(params.documentTypeFilter);
   }
 
-  const result = await db.query<DocumentRow>(
+  const result = await db.query<T>(
     `DELETE FROM documents WHERE ${conditions.join(' AND ')} RETURNING *`,
     values
   );
@@ -481,9 +517,19 @@ function publishDocumentUpdated(
     const prevStatus = prevProps.status;
     const newStatus = newProps.status;
     const sprintNumber = Number(newProps.sprint_number);
-    const isRealTransition =
-      (newStatus === 'active' && prevStatus === 'planning') ||
-      (newStatus === 'completed' && isSprintStatus(prevStatus) && prevStatus !== 'completed');
+
+    // Each transition type's condition is computed exactly once and reused
+    // identically by the diagnostic-log check and the publish branch below
+    // (CodeRabbit, this PR) — previously the same logical condition was
+    // written out twice, which could drift apart under a future edit.
+    // `completedPreviousStatus` returns the *narrowed* value directly (not a
+    // boolean) so the publish payload below needs no `as` cast: a boolean
+    // computed by calling `isSprintStatus()` here and reused later would lose
+    // TypeScript's narrowing, since narrowing only applies where the guard
+    // call itself appears in the controlling condition.
+    const isStartedTransition = newStatus === 'active' && prevStatus === 'planning';
+    const completedPreviousStatus = getCompletedTransitionPreviousStatus(prevStatus, newStatus);
+    const isRealTransition = isStartedTransition || completedPreviousStatus !== null;
 
     if (isRealTransition && !Number.isFinite(sprintNumber)) {
       // A genuine planning->active or ->completed transition, but
@@ -499,31 +545,19 @@ function publishDocumentUpdated(
       );
     }
 
-    if (newStatus === 'active' && prevStatus === 'planning' && Number.isFinite(sprintNumber)) {
+    if (isStartedTransition && Number.isFinite(sprintNumber)) {
       bus.publish('sprint.started', row.workspace_id, {
         id: row.id,
         sprint_number: sprintNumber,
         status: 'active',
         previous_status: 'planning',
       });
-    } else if (
-      newStatus === 'completed' &&
-      isSprintStatus(prevStatus) &&
-      prevStatus !== 'completed' &&
-      Number.isFinite(sprintNumber)
-    ) {
-      // `isSprintStatus` narrows `prevStatus` to the exact literal union
-      // `sprint.completed`'s schema requires — no `as` cast needed. Without this
-      // guard, a stored `properties.status` outside the three known values
-      // (data drift, or a future status this file doesn't know about yet) would
-      // reach `bus.publish()` and only be caught there, by the schema throwing —
-      // correct but a needlessly late place to catch a value this function can
-      // already see is wrong (CodeRabbit, this PR).
+    } else if (completedPreviousStatus !== null && Number.isFinite(sprintNumber)) {
       bus.publish('sprint.completed', row.workspace_id, {
         id: row.id,
         sprint_number: sprintNumber,
         status: 'completed',
-        previous_status: prevStatus,
+        previous_status: completedPreviousStatus,
       });
     }
   }
@@ -534,4 +568,19 @@ type SprintStatus = (typeof SPRINT_STATUSES)[number];
 
 function isSprintStatus(value: unknown): value is SprintStatus {
   return typeof value === 'string' && (SPRINT_STATUSES as readonly string[]).includes(value);
+}
+
+/**
+ * Returns the validated, narrowed "before" status for a real `-> completed`
+ * transition (`newStatus === 'completed'`, `prevStatus` a known non-completed
+ * `SprintStatus`), or `null` when this isn't one — the single source of truth
+ * `publishDocumentUpdated`'s warning check and its `sprint.completed` publish
+ * branch both call, so they can never disagree about what counts as the
+ * transition.
+ */
+function getCompletedTransitionPreviousStatus(prevStatus: unknown, newStatus: unknown): SprintStatus | null {
+  if (newStatus !== 'completed') return null;
+  if (!isSprintStatus(prevStatus)) return null;
+  if (prevStatus === 'completed') return null;
+  return prevStatus;
 }

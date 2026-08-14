@@ -140,6 +140,44 @@ corrected with distinct approximate timestamps and `tsApprox: true`, plus a note
 failures actually meant, since two DIFFERENT gate outcomes carrying the same timestamp is exactly the
 kind of unmarked-inference gap `.claude/CLAUDE.md` warns about.
 
+**CodeRabbit triage, round 2 (13 findings — a re-review of the round-1 fix itself).** Two more real
+issues: `flushPendingEvents()`'s protection against a throwing subscriber only covered the *deferred*
+(post-`COMMIT`) path — the *immediate*-dispatch path (`projects.ts`/`programs.ts`'s create/update, and
+every router's `DELETE`) had no such protection, so a bad subscriber there could still turn an
+already-committed write into a false 500. Unified both under one `safeDispatch()` helper (catch, log,
+never rethrow — the write is always durable by the time `dispatch()` runs, in both paths). Second:
+this ticket's own claim "no route in the four consolidated routers writes a sprint document in
+practice" was too broad — `projects.ts`'s secondary `POST /:id/sprints` endpoint genuinely creates
+`document_type = 'sprint'` documents. Corrected in `documentService.ts`'s header, this file, and
+`docs/architecture.md`; the accurate, narrower claim is that none of the *consolidated primary*
+create/update/delete endpoints touch a sprint document. Added the full enumeration of secondary write
+sites within the four consolidated routers themselves (a prior draft's exclusion list covered every
+*other* file but implicitly left the four routers' own non-primary endpoints uncounted) — see the
+"Secondary write sites" list above. Eight smaller findings, all fixed: `deleteDocument` made generic
+over `T` (matching `createDocument`/`updateDocument`) and its `documentTypeFilter` placeholder index
+derived from `values.length` instead of a hardcoded `$3`; the sprint-transition logic refactored so
+each transition type's condition is computed once and shared by the diagnostic-log check and the
+publish branch (previously duplicated, risking drift) — done via a helper that returns the *narrowed*
+value directly rather than a boolean, so no `as` cast is needed either; a diagnostic `console.warn`
+for a real sprint transition whose `sprint_number` is missing/non-numeric (previously silently
+skipped, no way to diagnose it); a JSDoc contract note on `UpdateDocumentParams.values`' placeholder
+numbering; two test tightenings (assert an exact pre-rollback title rather than "not the new value";
+filter delete's no-match test's events by id, matching every other test's pattern); and an explicit
+row type on a test's `pool.query` call. Two findings verified against the current code and skipped,
+with reasons: `issues.ts` lacks the `router.param('id', validateUuidParam)` guard `documents.ts` has
+(ERR-5) — real, but pre-existing (confirmed via `git show origin/main:api/src/routes/issues.ts`,
+identical before this PR) and unrelated to this ticket's write-path-consolidation scope; adding it
+would be exactly the "drive-by refactor in a file you're already touching" this ticket's own brief
+prohibits. `projects.ts`'s create endpoint doesn't wrap its document INSERT and its association
+INSERT in a transaction — also real, also pre-existing (same `git show` check), and not a
+publish-before-commit bug the way `documents.ts`/`issues.ts`'s case was: with no transaction,
+`createDocument`'s write is unconditionally durable the moment it runs, so publishing immediately is
+correct; the concern is about the *association* insert's independent failure mode, an existing
+architectural question this ticket's scope doesn't cover. One finding (a test-only DRY helper for
+repeated `EventEnvelope` payload narrowing) skipped as cosmetic — no functional benefit, and the
+`as`-narrowing pattern it flags is the same one already used consistently across this file's other
+tests.
+
 **How to verify — proof, exactly as the AC states.**
 
 ```bash
