@@ -180,7 +180,7 @@ resource "aws_cloudfront_distribution" "frontend" {
       cached_methods         = ["GET", "HEAD"]
       compress               = true
 
-      # Use policies instead of forwarded_values for larger request body support
+      # Use cache and origin request policies; forwarded_values is deprecated.
       cache_policy_id          = aws_cloudfront_cache_policy.api_no_cache.id
       origin_request_policy_id = aws_cloudfront_origin_request_policy.api.id
     }
