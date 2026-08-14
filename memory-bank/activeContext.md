@@ -2,7 +2,11 @@
 
 *The most-updated file in the bank. Read this first every session; rewrite it whenever focus shifts. Keep it under a screen — move finished work to progress.md.*
 
-**Last updated:** 2026-08-14 (~07:35Z, overnight autonomous run). **Week 6 (PlugForge) — MVP hard gate CODE-COMPLETE: all 6 MVP-gate tickets (PF-201/202/203/400 + PF-105/106) landed and merged tonight. One verification item left before declaring MVP actually done: W6-R10 (regression + baseline comparison) has never been run against W6 code.**
+**Last updated:** 2026-08-14 (~12:23Z). **Week 6 (PlugForge) — MVP hard gate CODE-COMPLETE (see below); W6-R10 now RESOLVED (zero regressions). Post-MVP wave 1: 3 of 4 tickets confirmed merged (TRO-413/PF-403, TRO-407/PF-401, TRO-418/PF-404); TRO-426/PF-301 status not directly observed this session — check before assuming.**
+
+## TRO-413/PF-403 (verifyWebhook) — DONE (2026-08-14 ~12:23Z)
+
+Built, gated (5 scorecard attempts — 1 operator error + 4 real passes with 3 CodeRabbit findings fixed), merged as PR #207 (`2e95639`), GitHub+GitLab confirmed in sync, Linear auto-Done + evidence comment posted. `sdk/src/verifyWebhook.ts`/`.test.ts` (30 tests) exported from `sdk/src/index.ts`. Measured perf: mean 0.00175ms/call (~500x under the 1ms AC). Byte-identical port of `signer.ts`'s `verify()`, cross-validated against all 7 cases in `shared/fixtures/webhook-signature-vectors.json`. **Confirmed by direct observation during this ticket's landing (three merge-forward rounds):** TRO-407/PF-401 (SDK resource clients — documents/issues/sprints/webhooks, PR #205) and TRO-418/PF-404 (SDK auth helpers — deviceLogin/PKCE/tokenStore, PR #206) are ALSO merged to `main` as of this session — `sdk/` now has the full `ShipClient` (resource clients + auth helpers + verifyWebhook) in one package, 111 sdk tests green post-merge. TRO-426/PF-301 (domain write consolidation, the wave's named top structural risk) was NOT seen landing in any of these three merge-forward diffs — its status is unverified from this session, check Linear/`gh pr list` fresh before assuming it's done or still blocking PF-302+.
 
 ## Overnight session note
 
@@ -30,15 +34,15 @@ TRO-597 (chain the PKCE e2e spec through `/oauth/token` → `/api/v1/me`) merged
 
 ## Post-MVP wave 1 dispatched (2026-08-14 ~11:04Z) — E3 + E4, feeding toward E6 (the actual graded TTFE metric)
 
-Four tickets in flight, chosen because they're the direct prerequisites for E6's TTFE drill (PLUGFORGE.MD's own sequencing note: "TTFE drill in CI as soon as SDK + one resource exist"), not because they're next in the epic-number order:
-- **TRO-426/PF-301** (domain write path + IEventBus) — **the PRD's own named top structural risk** ("smallest-possible consolidation; full regression suite is the gate"). Consolidates ~9-10 inline document-write sites across `documents/issues/projects/programs.ts` (+ maybe admin/team/workspaces/feedback/setup) into `documentService`, publishing webhook events. Briefed to hold a higher proof bar than usual (full `pnpm test` regression suite, not just `gate.sh`) given the blast radius. **Everything else in E3 (PF-302/304/305/306) is blocked on this landing first.**
-- **TRO-407/PF-401** (SDK resource clients: documents/issues/sprints/webhooks) — webhooks client will likely ship shape-only (its server routes, PF-302/304/305, don't exist yet) — that's expected, not a shortcut.
-- **TRO-413/PF-403** (verifyWebhook, SDK) — ports PF-303's already-merged HMAC signer logic; should cross-validate against `shared/fixtures/webhook-signature-vectors.json` if PF-303 left one.
-- **TRO-418/PF-404** (SDK auth helpers: deviceLogin, PKCE, ITokenStore, single-flight refresh) — depends on PF-106 (device grant, merged tonight) and PF-105 (refresh rotation, merged tonight), both satisfied.
+Four tickets dispatched, chosen because they're the direct prerequisites for E6's TTFE drill (PLUGFORGE.MD's own sequencing note: "TTFE drill in CI as soon as SDK + one resource exist"), not because they're next in the epic-number order:
+- **TRO-426/PF-301** (domain write path + IEventBus) — **the PRD's own named top structural risk**. Status **not directly observed this session** — re-check before assuming done or still blocking PF-302+.
+- **TRO-407/PF-401** (SDK resource clients: documents/issues/sprints/webhooks) — ✅ **merged** (PR #205), confirmed via merge-forward during TRO-413's landing. Webhooks client shipped shape-only as expected (server routes PF-302/304/305 don't exist yet).
+- **TRO-413/PF-403** (verifyWebhook, SDK) — ✅ **merged** (PR #207, `2e95639`). See dedicated section above.
+- **TRO-418/PF-404** (SDK auth helpers: deviceLogin, PKCE, ITokenStore, single-flight refresh) — ✅ **merged** (PR #206), confirmed via merge-forward during TRO-413's landing.
 
-All four are independent of each other (different files/packages) — dispatched in parallel. **PF-401/403/404 will very likely hit `sdk/` merge conflicts with each other** since they're all adding exports to the same `sdk/src/client.ts`/`index.ts` — expect convoy rounds, same pattern as tonight's earlier `router.ts` collision between TRO-400/402.
+As predicted, PF-401/403/404 all hit real `sdk/src/index.ts` barrel-export conflicts with each other during landing — each resolved by combining both sides' exports (never dropping either), confirmed working via `tsc --noEmit` + full `vitest run` (111 sdk tests green) after the third merge-forward round.
 
-**Once these land:** PF-302 (webhook subscriptions API) unblocks from PF-301; PF-402 (SDK async-iterator pagination) unblocks from PF-401; PF-405 (SDK parity+size gates) unblocks once 401-404 are all in. Then E3's remaining chain (304→305→306), E5 (rate-limit/audit/portal), E6 (CLI+TTFE — `pnpm drill ttfe` is the actual graded artifact), E8 integrations, E9 submission docs.
+**Once TRO-426/PF-301 lands (status unverified, check first):** PF-302 (webhook subscriptions API) unblocks; PF-402 (SDK async-iterator pagination) and PF-405 (SDK parity+size gates) unblock now that 401/403/404 are all in — only PF-402 itself is still outstanding to fully close E4. Then E3's remaining chain (304→305→306, all blocked on PF-301), E5 (rate-limit/audit/portal), E6 (CLI+TTFE — `pnpm drill ttfe` is the actual graded artifact, PF-602 `ship webhooks tail` will be the first real consumer of `verifyWebhook`), E8 integrations, E9 submission docs.
 
 ## Next actions
 

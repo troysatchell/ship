@@ -1,8 +1,13 @@
 // @ship/sdk — public barrel. PF-400 (PLUGFORGE.MD §2.8): scaffold + core
 // client. PF-401 adds the documents/issues/sprints/webhooks resource
 // clients below (webhooks is type-shape-only — its server routes don't
-// exist yet, see resources/webhooks.ts's header). PF-404 adds the auth
-// helpers: `ITokenStore` + `MemoryTokenStore`/`FileTokenStore`,
+// exist yet, see resources/webhooks.ts's header). PF-403 adds the one-call
+// webhook signature verifier: `verifyWebhook` +
+// `DEFAULT_WEBHOOK_TOLERANCE_SECONDS`/`SHIP_SIGNATURE_HEADER_NAME`/
+// `PlainHeaders` (unrelated to PF-401's `WebhooksClient` resource client
+// above — that manages subscriptions/deliveries over HTTP; this verifies an
+// inbound delivery's signature locally, no network call). PF-404 adds the
+// auth helpers: `ITokenStore` + `MemoryTokenStore`/`FileTokenStore`,
 // `generatePkcePair`, and `ShipClient.deviceLogin`/
 // `ShipClient.authorizationCodeFlow` (the static methods themselves are
 // exported via the `ShipClient` class, not separately). `iterate()`
@@ -52,6 +57,13 @@ export {
   mapApiErrorCodeToKind,
 } from './errors.js';
 export type { ApiErrorCode, ApiErrorBody, SdkErrorKind, SdkErrorShape } from './errors.js';
+
+export {
+  verifyWebhook,
+  DEFAULT_WEBHOOK_TOLERANCE_SECONDS,
+  SHIP_SIGNATURE_HEADER_NAME,
+} from './verifyWebhook.js';
+export type { PlainHeaders } from './verifyWebhook.js';
 
 export { MemoryTokenStore, FileTokenStore } from './tokenStore.js';
 export type { ITokenStore, TokenSet } from './tokenStore.js';
