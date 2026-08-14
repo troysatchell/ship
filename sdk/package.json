@@ -1,0 +1,35 @@
+{
+  "name": "@ship/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ship platform SDK — typed TypeScript client for the public /api/v1 REST API (PLUGFORGE.MD Epic 4).",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "22.19.5",
+    "@vitest/coverage-v8": "4.0.17",
+    "typescript": "5.9.3",
+    "vitest": "4.0.17"
+  }
+}
