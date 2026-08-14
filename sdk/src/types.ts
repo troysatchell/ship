@@ -49,8 +49,9 @@ export interface Me {
  * opaque string to pass back as `?cursor=` — this SDK does not decode it
  * (`pagination.ts`'s own doc comment: "deliberately opaque to callers").
  * `list()` here returns one raw page; wrapping this in an async iterator
- * (`for await (const x of client.documents.iterate())`) is PF-402, a
- * separate ticket — this shape is exactly what that ticket needs to build
+ * (`for await (const x of client.documents.iterate())`) is PF-402
+ * (`internal/pagination.ts`'s `iteratePages` helper, shared by every
+ * `iterate()` method below) — this shape is exactly what that ticket built
  * on, unchanged.
  */
 export interface ListPage<T> {
@@ -108,6 +109,14 @@ export interface ListDocumentsParams {
   readonly type?: DocumentType;
 }
 
+/** `documents.iterate()`'s params (PF-402) — everything `ListDocumentsParams`
+ *  above has EXCEPT `cursor`: `iterate()` manages the cursor internally, so
+ *  it is dropped from the type a caller can pass, not just left optional.
+ *  Passing `cursor` in an object literal here is a compile-time excess-
+ *  property error, matching the ticket's "cursors fully internal" AC at the
+ *  type level, not only at runtime. */
+export type IterateDocumentsParams = Omit<ListDocumentsParams, 'cursor'>;
+
 /** `POST /api/v1/documents` request body — mirrors
  *  `CreateDocumentRequestSchema` (`resources/documents.ts`). `title` is
  *  required at this public surface (no "Untitled" default here — that's the
@@ -152,6 +161,10 @@ export interface ListIssuesParams {
   readonly cursor?: string;
 }
 
+/** `issues.iterate()`'s params (PF-402) — same reasoning as
+ *  `IterateDocumentsParams` above. */
+export type IterateIssuesParams = Omit<ListIssuesParams, 'cursor'>;
+
 /** Matches `serializeSprint()`'s actual return shape
  *  (`api/src/platform/api/v1/resources/sprints.ts:57-66`) field-for-field —
  *  structurally identical to `Document` (this resource is deliberately left
@@ -178,3 +191,7 @@ export interface ListSprintsParams {
   readonly limit?: number;
   readonly cursor?: string;
 }
+
+/** `sprints.iterate()`'s params (PF-402) — same reasoning as
+ *  `IterateDocumentsParams` above. */
+export type IterateSprintsParams = Omit<ListSprintsParams, 'cursor'>;

@@ -256,4 +256,58 @@ describe('PF-401: DocumentsClient/IssuesClient/SprintsClient against a real runn
       properties: { sprint_number: 7, status: 'active' },
     });
   });
+
+  // ─── documents.iterate(): real 3+ page async-iterator pagination (PF-402) ─
+  //
+  // The mocked-fetch suite (resources/__tests__/iterate.test.ts) is what
+  // proves the harder AC — the exact HTTP request COUNT on an early break —
+  // deterministically. This test's job is different and complementary: prove
+  // `iterate()` walks a real server's real keyset cursors correctly end to
+  // end, not just a hand-rolled mock of the `{ data, next_cursor }` shape.
+
+  it('documents.iterate() transparently walks 3+ real pages and yields every seeded document exactly once, newest-first', async () => {
+    const wsId = workspaceId;
+    if (!wsId) throw new Error('workspaceId was not set by beforeAll');
+    const client = new ShipClient({ token: fullScopeToken, baseUrl });
+
+    // 5 documents, strictly increasing created_at, so keyset order
+    // (created_at DESC, id DESC — pagination.ts's own contract) is
+    // deterministic. limit:2 forces AT LEAST 3 real pages (2 + 2 + 1, or
+    // more — the workspace may already hold other `wiki` documents from
+    // earlier tests in this file, which `type:'wiki'` also returns; the
+    // exactly-N-requests proof lives in the mocked-fetch suite below, on
+    // data this test doesn't control) — this ticket's own "3+ pages" AC,
+    // against a real server, for 5 items.
+    const iterateTag = `pf402-iterate-${runId}`;
+    const seeded: { id: string; createdAt: number }[] = [];
+    for (let i = 0; i < 5; i++) {
+      const createdAtMs = BASE_MS + 20_000 + i * 1000;
+      const result = await pool.query<{ id: string }>(
+        `INSERT INTO documents (workspace_id, title, document_type, properties, created_at, updated_at)
+         VALUES ($1, $2, 'wiki', '{}', $3, $3) RETURNING id`,
+        [wsId, `${iterateTag} doc ${i}`, new Date(createdAtMs)]
+      );
+      seeded.push({ id: insertedId(result.rows, `iterate doc ${i}`), createdAt: createdAtMs });
+    }
+
+    // type:'wiki' still returns every wiki document in the workspace
+    // (including ones other tests in this file created) — filter to this
+    // test's own tagged rows so gap/dup/order assertions are unambiguous,
+    // while still exercising iterate() walking real, mixed-in pages.
+    const collected: string[] = [];
+    for await (const item of client.documents.iterate({ limit: 2, type: 'wiki' })) {
+      if (item.title.startsWith(iterateTag)) collected.push(item.id);
+    }
+
+    const expectedIds = seeded.map((s) => s.id).slice().sort();
+    expect(collected.slice().sort()).toEqual(expectedIds); // every seeded id, exactly once
+    expect(new Set(collected).size).toBe(collected.length); // no duplicates
+    expect(collected).toHaveLength(5); // no gaps
+
+    const expectedOrder = seeded
+      .slice()
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .map((s) => s.id);
+    expect(collected).toEqual(expectedOrder); // newest-first, matching the server's real cursor order
+  });
 });

@@ -10,8 +10,10 @@
 // auth helpers: `ITokenStore` + `MemoryTokenStore`/`FileTokenStore`,
 // `generatePkcePair`, and `ShipClient.deviceLogin`/
 // `ShipClient.authorizationCodeFlow` (the static methods themselves are
-// exported via the `ShipClient` class, not separately). `iterate()`
-// (PF-402) remains a later ticket and is not exported here yet.
+// exported via the `ShipClient` class, not separately). PF-402 adds
+// `iterate()` on `documents`/`issues`/`sprints` (methods on the already-
+// exported resource-client classes, so no new class export) plus the three
+// `Iterate*Params` types below.
 
 export { ShipClient } from './client.js';
 export type { ShipClientOptions } from './client.js';
@@ -25,15 +27,18 @@ export type {
   Document,
   DocumentList,
   ListDocumentsParams,
+  IterateDocumentsParams,
   CreateDocumentBody,
   IssueState,
   IssuePriority,
   Issue,
   IssueList,
   ListIssuesParams,
+  IterateIssuesParams,
   Sprint,
   SprintList,
   ListSprintsParams,
+  IterateSprintsParams,
 } from './types.js';
 
 export { DocumentsClient } from './resources/documents.js';
