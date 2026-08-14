@@ -115,6 +115,14 @@ verify:
     # new, so like agent/ there is no quarantine baseline to compare against —
     # any failure here fails the job outright.
     - pnpm --filter @ship/sdk test
+    # TRO-448 (PF-600): integrations/cli's own vitest suite — mirrors ci.yml's
+    # equivalent step. DATABASE_URL/NODE_ENV are already set at job level
+    # above (the same `variables:` block api/web/agent/sdk use); the spawned
+    # child api/ process additionally needs DATABASE_URL passed through
+    # explicitly by the test itself (see login.liveServer.test.ts's own
+    # header) since this runner has no api/.env.local. No quarantine
+    # baseline — cli/ is brand new, any failure here fails the job outright.
+    - pnpm --filter @ship/cli test
     # PF-405 (TRO-422): CI size gate — the built @ship/sdk bundle (bundled
     # from src/index.ts, minified, gzipped) must stay under 250 KB. Mirrors
     # ci.yml's equivalent step — see that file's comment and

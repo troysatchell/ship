@@ -221,6 +221,35 @@ run_tests agent
 # knownFailing set), so this is zero-tolerance by construction — any failure
 # here is a real new failure, not a baseline comparison.
 run_tests sdk
+# TRO-448 (PF-600): the new integrations/cli workspace package has its own
+# vitest suite (fully-mocked unit tests for login/whoami/config/errors, plus
+# one live-server integration test that spawns the real api/ package as a
+# separate process — see that file's own header). Same "new workspace
+# package trap" precedent as TRO-322's `run_tests agent` and TRO-405's
+# `run_tests sdk` additions above, called out explicitly in this ticket's own
+# brief: a test suite that exists on disk but is never invoked here would
+# still satisfy G6's static "regression test present" grep while never
+# actually running. Zero-tolerance by construction, same reasoning as sdk/
+# and agent/ above — cli/ is brand new, so there is no quarantine baseline to
+# compare against.
+run_tests cli
+
+# --- G4b: integrations/* runtime-dependency boundary (PLUGFORGE.MD §2.1 / PF-003) ---
+# `scripts/check-integration-deps.mjs` (TRO-399/PF-003) already existed and was
+# already wired into CI (ci.yml/.gitlab-ci.yml's "Integration package
+# dependency boundary" step) — but NOT into this script, so a worktree
+# provisioned before a boundary violation landed would report `gate.sh: pass`
+# while CI would separately fail it. integrations/cli (this ticket, TRO-448)
+# is the FIRST real package under integrations/, so this is also the first
+# gate.sh run that can actually exercise this check finding a violation
+# rather than passing vacuously on an absent directory. Added here rather
+# than left CI-only, per this ticket's own instruction to confirm the lint
+# actually covers the new package and fix the gap if it doesn't.
+if node scripts/check-integration-deps.mjs > "$OUT_DIR/integration-deps.log" 2>&1; then
+  record integration-deps pass "integrations/* packages depend only on @ship/sdk"
+else
+  record integration-deps fail "see .factory/integration-deps.log"
+fi
 
 # --- G5: tests were not weakened -------------------------------------------
 # Agents MUST add regression tests, so test files are not frozen outright. What

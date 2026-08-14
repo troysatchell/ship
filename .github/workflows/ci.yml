@@ -166,6 +166,22 @@ jobs:
           NODE_ENV: test
         run: pnpm --filter @ship/sdk test
 
+      # TRO-448 (PF-600): integrations/cli's own vitest suite — fully-mocked
+      # unit tests for `ship login`/`ship whoami` plus one live-server
+      # integration test that spawns the real api/ package as a SEPARATE OS
+      # process (never an import — PLUGFORGE.MD §2.1/PF-003's boundary rule
+      # applies to this package's tests too, not just its source; see that
+      # test file's own header). DATABASE_URL is required here for two
+      # reasons: this step's own `pg` fixture setup, AND the spawned child
+      # process needs it passed through explicitly (api/.env.local doesn't
+      # exist on a CI runner). Same "brand new, no quarantine baseline"
+      # unconditional-failure treatment as the Agent/SDK steps above.
+      - name: CLI unit tests
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+          NODE_ENV: test
+        run: pnpm --filter @ship/cli test
+
       # PF-405 (TRO-422): CI size gate — the built @ship/sdk bundle
       # (bundled from src/index.ts, minified, gzipped) must stay under
       # 250 KB. Given zero runtime dependencies (sdk/package.json) this is
