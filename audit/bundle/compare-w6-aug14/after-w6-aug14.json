@@ -1,0 +1,77 @@
+{
+  "category": "bundle",
+  "mode": "compare",
+  "commit": "397e3b75a0f62111bc38e25de0378186fd1fde14",
+  "dirty": false,
+  "date": "2026-08-14T07:45:00Z",
+  "environment": {
+    "hardware": "Apple Mac16,7 — 14 cores, 24 GB RAM (arm64)",
+    "os": "Darwin 25.5.0 arm64 / macOS 26.5.1",
+    "node": "v23.2.0",
+    "packageManagerVersion": "pnpm 10.27.0",
+    "dataVolume": "n/a — static analysis of the production build output, same as baseline",
+    "concurrency": "n/a — static analysis; no runtime load applied",
+    "scaffolding": [
+      "Build command identical to baseline: `pnpm build:web` (root) -> `pnpm run build:shared && pnpm --filter @ship/web build` -> `tsc && VITE_API_URL= vite build`.",
+      "web/vite.config.ts now has its OWN build.manifest:true and build.rollupOptions.output.manualChunks (added by TRO-202/BUN-6, merged before this run) — this is app config, not audit scaffolding, and was NOT modified for this measurement.",
+      "rollup-plugin-visualizer (baseline's treemap analyzer) is no longer present in web/node_modules and was not reinstalled for this run — baseline's own scaffolding note said it would remain for reuse but a subsequent `pnpm install` evidently pruned it (not in web/package.json). Dependency-level attribution below therefore comes from the named manualChunks groups (vendor-editor/vendor-highlight/vendor-emoji/vendor-react/vendor-query) rather than a fresh treemap. This is DERIVED attribution (chunk contents by construction, per web/vite.config.ts's manualChunks() rules), not a re-run of the baseline's exact treemap tool.",
+      "Measured totals (totalRawKb/totalGzipKb/jsRawKb/jsGzipKb/cssRawKb/cssGzipKb) are JS+CSS files only, excluding web/dist's font assets and dist/.vite/manifest.json — identical filter to how baseline.json's totals were computed (verified: baseline jsRawKb 2250.45 + cssRawKb 66.51 = totalRawKb 2316.96 exactly).",
+      "initialRawKb/initialGzipKb computed via audit/bundle/measure.mjs (committed to the repo at 7185e7a, itself a bundle-audit deliverable from the TRO-197..202 fix wave), which walks dist/.vite/manifest.json's static-import graph from the entry — cross-checked against web/dist/index.html's actual <script>/<link modulepreload> tags (index-D8XqzKKE.js + vendor-react + vendor-query + index.css); the two agree exactly. This is a more precise methodology than baseline's (baseline had only one chunk total, so 'what index.html references' and 'the manifest closure' were trivially the same thing then).",
+      "gzip level 9, matching baseline's stated methodology.",
+      "No app source, config, or dependency changed by this measurement run. web/dist and dist/.vite/manifest.json are build output (gitignored), not committed."
+    ]
+  },
+  "metrics": {
+    "totalRawKb": 2163.97,
+    "totalGzipKb": 645.56,
+    "initialRawKb": 379.80,
+    "initialGzipKb": 110.85,
+    "chunkCount": 71,
+    "jsChunkCount": 69,
+    "cssChunkCount": 2,
+    "jsRawKb": 2088.46,
+    "jsGzipKb": 631.10,
+    "cssRawKb": 75.52,
+    "cssGzipKb": 14.46,
+    "largestChunkName": "assets/vendor-editor-C6_BsdQf.js",
+    "largestChunkKb": 577.50,
+    "largestChunkGzipKb": 185.12,
+    "initialShareOfTotalRawPct": 17.55,
+    "initialShareOfTotalGzipPct": 17.17,
+    "routeLevelLazyChunkCount": 25,
+    "distDirTotalMb": 3.95,
+    "distDirTotalMbInclFonts": 3.95,
+    "unusedDependencyCount_BUN7": 0,
+    "duplicateRadixVersions_BUN8": "not re-verified this run (no treemap regenerated); grep against pnpm-lock.yaml for the exact baseline key found 0 matches, which itself signals the lockfile's dependency-version layout changed since baseline rather than confirming the duplicate is gone — needs a real treemap to call definitively"
+  },
+  "baselineRef": "audit/bundle/baseline.json",
+  "deltaVsBaseline": {
+    "totalRawKbPct": -6.60,
+    "totalGzipKbPct": -7.75,
+    "initialRawKbPct": -82.26,
+    "initialGzipKbPct": -81.55,
+    "chunkCountPct": -72.90,
+    "largestChunkGzipKbPct": -68.51,
+    "verdict": "PASS — within the +/-10% MVP-gate budget in every dimension measured; all deltas are reductions, not increases."
+  },
+  "findings": [
+    {
+      "id": "BUN-COMPARE-1",
+      "severity": "Info",
+      "title": "Current-vs-07-27-baseline delta reflects 18 days / 1263 commits of accumulated work, not just tonight's 6 platform tickets — the improvement is real but not attributable to tonight",
+      "location": "git log 076a1837..397e3b7 (1263 commits, 2026-07-28 through 2026-08-14)",
+      "evidence": "The 07-27 baseline commit is 076a18371da0a09f88b5329bd59611c4bc9536bb. HEAD is 397e3b75a0f62111bc38e25de0378186fd1fde14, 1263 commits later. In that range, the BUN-1..BUN-9 remediation tickets (TRO-197..TRO-202 and the BUN-7/BUN-8 dependency-hygiene PR) were merged: route-level code splitting (25 React.lazy page imports, up from 0), the editor/Tiptap/Yjs/highlight.js/emoji-picker stacks moved behind dynamic imports, and web/vite.config.ts gained manualChunks vendor splitting. Those fixes are the dominant driver of every reduction below, not tonight's six tickets.",
+      "hypothesis": "n/a — this is a scoping note, not a defect.",
+      "estimatedImpact": "The 07-27 baseline was correct as a Part-1 comparison point per PLUGFORGE.MD Section 6 ('existing baseline files are the comparison source'), so the gate check below is valid and passes. But 'has the bundle grown because of tonight's tickets' is a different, narrower question this comparison alone cannot answer — see BUN-COMPARE-2 for the isolated measurement."
+    },
+    {
+      "id": "BUN-COMPARE-2",
+      "severity": "Info",
+      "title": "Tonight's six platform tickets contributed one new lazy-loaded route (~1.2 kB gzip) to web/ and zero bytes from sdk/",
+      "location": "git diff c1caa61..397e3b7 -- web/ (3 files changed: web/src/main.tsx +13, web/src/pages/OAuthDeviceVerify.tsx +147 new file, web/vite.config.ts +8/-2)",
+      "evidence": "c1caa61 (2026-08-13 14:13:14 -0500) is the last commit before tonight's session; 58 commits landed 2026-08-14 00:5x-02:33. `git diff --stat c1caa61..HEAD -- web/` shows exactly 3 files touched, all part of PF-106's frontend half (OAuthDeviceVerify.tsx is registered as `React.lazy(() => import('@/pages/OAuthDeviceVerify')...)` in main.tsx — confirmed route-split, not eager). The vite.config.ts change only extends a dev/preview-server CSP middleware path list (configureServer/configurePreviewServer — does not run in `vite build`, zero production-bundle effect). Its emitted chunk in the current build is assets/OAuthDeviceVerify-BaIljLCK.js: 3.31 kB raw / 1.22 kB gzip, and it is NOT among the 4 files in the entry closure (confirmed via measure.mjs and cross-checked against web/dist/index.html's actual script/modulepreload tags) — so it adds 0 bytes to the initial-load payload. `grep -rn \"@ship/sdk\" web/src` and `grep -n sdk web/package.json` both return zero matches: the new sdk/ workspace package is not imported by web at all.",
+      "hypothesis": "n/a — directly observed via git diff and grep, not inferred.",
+      "estimatedImpact": "Tonight's frontend footprint is +3.31 kB raw / +1.22 kB gzip to the total bundle (0.15% raw / 0.19% gzip of the current 2163.97/645.56 kB total) and +0 kB to the initial-load bundle. Nowhere close to the +/-10% budget on any axis. OAuth core, the public API v1 router, the OpenAPI generator, and the rate-limit exemption middleware are all api/ (backend) changes with no web/ footprint; the new sdk/ package is a standalone workspace member web does not consume."
+    }
+  ]
+}

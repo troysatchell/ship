@@ -1,0 +1,31 @@
+
+=== current-main-397e3b7 ===
+initial payload (entry closure): 379.8 kB raw / 110.85 kB gzip  [4 assets, CSS 13.93 kB gzip]
+   index-D8XqzKKE.js                                79 kB raw     23.78 kB gzip
+   index-BMsBKL7R.css                            74.11 kB raw     13.93 kB gzip
+   vendor-react-C8b8llTi.js                     180.68 kB raw     59.33 kB gzip
+   vendor-query-CjPN4KE7.js                      46.02 kB raw     13.82 kB gzip
+
+real per-route payload (static-import closure incl. CSS, gzip):
+   /login  (unauthenticated first paint)          110.85 kB gzip  (379.8 kB raw, 4 files, CSS 13.93 kB)
+   /docs   (4-panel layout + document list)       186.35 kB gzip  (620.36 kB raw, 20 files, CSS 13.93 kB)
+   /documents/:id  (layout + editor shell)        217.87 kB gzip  (744.71 kB raw, 20 files, CSS 13.93 kB)
+
+js chunks emitted: 69   css: 2   all files: 152
+total dist (excl. .vite/manifest.json): 3949.37 kB raw / 2375.93 kB gzip
+
+top 12 assets by gzip:
+   assets/vendor-editor-C6_BsdQf.js                      577.5 kB raw    185.12 kB gzip
+   assets/vendor-emoji-CMwXMeTr.js                       270.7 kB raw     63.41 kB gzip
+   assets/vendor-react-C8b8llTi.js                      180.68 kB raw     59.33 kB gzip
+   assets/UnifiedDocumentPage-C9VTvuJO.js                142.6 kB raw     37.58 kB gzip
+   assets/App-DSZzolGL.js                               117.48 kB raw     30.22 kB gzip
+   assets/index-CmtDBcUa.js                              72.71 kB raw     25.78 kB gzip
+   assets/Editor-Dwahyugb.js                             84.42 kB raw     24.87 kB gzip
+   assets/index-D8XqzKKE.js                                 79 kB raw     23.78 kB gzip
+   assets/vendor-highlight-BYiguNiR.js                   70.64 kB raw     22.56 kB gzip
+   assets/IssuesList-CzCdqXmv.js                         54.37 kB raw      15.9 kB gzip
+   assets/core.esm-B5VSbDlL.js                            43.7 kB raw     14.49 kB gzip
+   assets/index-BMsBKL7R.css                             74.11 kB raw     13.93 kB gzip
+
+JSON {"label":"current-main-397e3b7","initial":{"files":4,"rawKb":379.8,"gzipKb":110.85,"cssGzipKb":13.93},"routes":[{"route":"/login  (unauthenticated first paint)","files":4,"rawKb":379.8,"gzipKb":110.85,"cssGzipKb":13.93,"inEntryChunk":[]},{"route":"/docs   (4-panel layout + document list)","files":20,"rawKb":620.36,"gzipKb":186.35,"cssGzipKb":13.93,"inEntryChunk":[]},{"route":"/documents/:id  (layout + editor shell)","files":20,"rawKb":744.71,"gzipKb":217.87,"cssGzipKb":13.93,"inEntryChunk":[]}],"churn":null,"jsChunkCount":69,"cssFileCount":2,"fileCount":152,"totalRawKb":3949.37,"totalGzipKb":2375.93,"assets":[{"file":"assets/vendor-editor-C6_BsdQf.js","raw":577495,"gzip":185119},{"file":"assets/vendor-emoji-CMwXMeTr.js","raw":270700,"gzip":63407},{"file":"assets/vendor-react-C8b8llTi.js","raw":180677,"gzip":59327},{"file":"assets/UnifiedDocumentPage-C9VTvuJO.js","raw":142602,"gzip":37575},{"file":"assets/App-DSZzolGL.js","raw":117479,"gzip":30223},{"file":"assets/index-CmtDBcUa.js","raw":72714,"gzip":25784},{"file":"assets/Editor-Dwahyugb.js","raw":84420,"gzip":24871},{"file":"assets/index-D8XqzKKE.js","raw":78998,"gzip":23778},{"file":"assets/vendor-highlight-BYiguNiR.js","raw":70635,"gzip":22559},{"file":"assets/IssuesList-CzCdqXmv.js","raw":54366,"gzip":15896},{"file":"assets/core.esm-B5VSbDlL.js","raw":43703,"gzip":14491},{"file":"assets/index-BMsBKL7R.css","raw":74105,"gzip":13929},{"file":"assets/vendor-query-CjPN4KE7.js","raw":46023,"gzip":13816},{"file":"assets/ReviewsPage-CiMNLc8p.js","raw":28662,"gzip":7338},{"file":"assets/TeamMode-BVy2Jtlk.js","raw":22109,"gzip":6743},{"file":"assets/ProgramWeeksTab-DKPWBO2u.js","raw":17534,"gzip":5873},{"file":"assets/WorkspaceSettings-C1yw9PgN.js","raw":18950,"gzip":4782},{"file":"assets/Projects-BHWcC5wx.js","raw":12959,"gzip":4319},{"file":"assets/OrgChartPage-Dx26jkKO.js","raw":11639,"gzip":4315},{"file":"assets/Dashboard-B7Tm62z2.js","raw":14446,"gzip":4107}]}

@@ -84,9 +84,13 @@ async function main() {
   const pool = new Pool({ connectionString: databaseUrl });
 
   try {
-    const ws = await pool.query('SELECT id FROM workspaces ORDER BY created_at LIMIT 1');
+    // Match seed.ts's own lookup (api/src/db/seed.ts:65: `WHERE name = 'Ship Workspace'`)
+    // rather than "oldest workspace" — a shared dev DB can carry leftover workspaces from
+    // unrelated test runs (e.g. an OAuth-ticket test fixture) that are older by created_at
+    // but have no program/project/sprint documents, which crashed this script downstream.
+    const ws = await pool.query("SELECT id FROM workspaces WHERE name = 'Ship Workspace'");
     const workspaceId = ws.rows[0]?.id;
-    if (!workspaceId) throw new Error('No workspace found — run `pnpm db:seed` first.');
+    if (!workspaceId) throw new Error('No "Ship Workspace" found — run `pnpm db:seed` first.');
 
     // ---------- 1. Users up to TARGET_USERS ----------
     const userCount = Number((await pool.query('SELECT count(*) FROM users')).rows[0].count);
