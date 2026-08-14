@@ -238,6 +238,58 @@ describe('PF-201: /api/v1/issues (Linear TRO-400)', () => {
     });
   });
 
+  // PF-205 (Linear TRO-414). Confirmed red-before-green live: written and
+  // run against the pre-fix `ListIssuesQuerySchema` (no `assignee_id` field,
+  // no WHERE-clause branch) — both assertions below failed for the right
+  // reason (both assignees' issues came back, unfiltered: 3 vs the expected
+  // 1 with the "does not include" assertion actually failing), not an
+  // import/typo error. Then the `assignee_id` schema field + WHERE clause
+  // were added and this re-ran green.
+  describe('?assignee_id= filter (PF-205, TRO-414)', () => {
+    it('only returns issues whose assignee_id matches the query param', async () => {
+      const targetId = await insertIssue('Filtered by assignee', new Date(BASE_MS + 30000), {
+        state: 'todo',
+        assignee_id: assigneeUserId,
+      });
+      const otherAssignee = await pool.query<{ id: string }>(
+        `INSERT INTO users (email, password_hash, name, last_workspace_id)
+         VALUES ($1, 'test-hash', 'PF-205 Other Assignee', $2) RETURNING id`,
+        [`pf205-other-assignee-${testRunId}@ship.local`, workspaceId]
+      );
+      const otherAssigneeId = otherAssignee.rows[0]?.id;
+      if (!otherAssigneeId) throw new Error('seed other-assignee insert produced no row');
+      const otherId = await insertIssue('Different assignee', new Date(BASE_MS + 31000), {
+        state: 'todo',
+        assignee_id: otherAssigneeId,
+      });
+
+      const res = await request(app)
+        .get(`/api/v1/issues?assignee_id=${assigneeUserId}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as ListResponseBody;
+      const ids = body.data.map((i) => i.id);
+      expect(ids).toContain(targetId);
+      expect(ids).not.toContain(otherId);
+      for (const item of body.data) {
+        expect(item.assignee_id).toBe(assigneeUserId);
+      }
+
+      await pool.query('DELETE FROM users WHERE id = $1', [otherAssigneeId]);
+    });
+
+    it('a malformed (non-UUID) assignee_id -> 400 validation_failed', async () => {
+      const res = await request(app)
+        .get('/api/v1/issues?assignee_id=not-a-uuid')
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(res.body.details.fieldErrors.assignee_id).toBeDefined();
+    });
+  });
+
   describe('scope enforcement', () => {
     it('a token without issues:read gets 403, details.missing_scope = issues:read', async () => {
       const res = await request(app)
