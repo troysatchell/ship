@@ -21,6 +21,109 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-442 — PF-305: Webhook delivery log API
+
+**No new migration.** Migration 048 (`webhook_deliveries`, PF-304/TRO-438) already has every column
+this ticket needed — `attempt_number`, `status`, `response_status`, `response_excerpt`,
+`latency_ms`, `subscription_id`, `event_id`, `event_type`, `idempotency_key`, `next_attempt_at`,
+`created_at` — confirmed by reading the migration file before writing any code, not assumed from
+the ticket brief. Nothing in this PR touches `api/src/db/`.
+
+**What changed.** `GET /api/v1/webhooks/deliveries` — a cursor-paginated delivery log, one row per
+delivery **attempt** (migration 048's own row-per-attempt design: a delivery retried 3 times before
+succeeding leaves 3 rows, sharing `event_id`, distinguished by `attempt_number`). Added to
+`api/src/platform/api/v1/resources/webhooks.ts` (the existing webhooks-CRUD file, same file PF-302
+put subscriptions CRUD in) and registered in `api/src/platform/openapi/schemas/webhooks.ts`, mirroring
+the existing `GET /webhooks` list route's cursor-pagination shape and workspace-scoping pattern
+exactly (`(created_at, id) DESC` keyset, opaque base64url cursor, `a.workspace_id = $1` via a join
+through `oauth_apps`).
+
+- **Route ordering matters here and is called out in both files' headers.** `GET /deliveries` is
+  registered on `webhooksRouter` *before* `GET /:id` — Express matches routes in registration
+  order, and without this, the literal path segment `"deliveries"` would match `:id` first, fail
+  `UUID_RE`, and 404 before this route's own handler ever ran. (OpenAPI path registration has no
+  such ordering constraint — paths are keyed by their literal string — so the two files don't need
+  to agree on order, only Express's real route table does.)
+- **Filters:** `subscription_id` (UUID) and `status` (`pending`/`success`/`failed`/`dead`, the exact
+  union `deliverer.ts` already defines as `WebhookDeliveryStatus`), both optional, combined with
+  the workspace-scoping `WHERE` clause via `AND`. An out-of-workspace `subscription_id` matches
+  nothing (fails closed to an empty page), not a leaked row — proven by this PR's own cross-tenant
+  test.
+- **Response fields per row:** `id`, `subscription_id`, `event_id`, `event_type`,
+  `idempotency_key`, `attempt_number`, `status`, `response_status`, `response_excerpt`,
+  `latency_ms`, `next_attempt_at`, `created_at` — this ticket's AC (`attempt_number`,
+  `response_status`, `latency_ms`) plus every other column on the row that's relevant to a delivery
+  log view. Deliberately **excludes `payload`** (the full JSON event envelope) — a documented,
+  scoped-out decision (see file header), not an oversight: `response_excerpt` already caps what one
+  attempt costs to display, and the raw payload belongs to a future replay endpoint (PF-306), not
+  this log view.
+- **Scope:** `webhooks:manage`, the same scope every other route on this resource already declares
+  — reused, not newly registered.
+- **OpenAPI:** `WebhookDelivery`/`WebhookDeliveryList` response schemas plus a
+  `v1Registry.registerPath` entry for `GET /webhooks/deliveries`, following
+  `platform/openapi/schemas/webhooks.ts`'s existing pattern for the sibling `GET /webhooks` route.
+
+**How to run it.**
+
+```bash
+source .factory-env   # or your own DATABASE_URL — pointed at a factory-owned db
+cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts
+cd api && npx vitest run src/platform/api/v1/__tests__/route-fitness.test.ts   # PF-203 drift gate
+```
+
+**Evidence.**
+- **Observed: regression test failed before the fix, for the right reason.** Ran the 6 new
+  `PF-305` cases in `webhooks.test.ts` against the pre-implementation tree (test code added, route
+  not yet added): all 6 failed with `expected 404 to be 200` (or `400`) — the route falling through
+  to the pre-existing `GET /:id` handler and 404ing on `id="deliveries"` failing `UUID_RE`. Not an
+  import error or a typo; the 401/403 auth-gate cases in the same new describe block passed even
+  before the fix, incidentally, because `GET /:id` also carries `bearerAuth` +
+  `requireScope('webhooks:manage')` — confirming the failure was specifically "this route's logic
+  doesn't exist yet," not "the test file is broken."
+- **Observed: same 6 cases pass after the fix**, alongside the file's pre-existing 14 — 20/20,
+  `webhooks.test.ts`, ~386ms. Coverage per the AC: cursor pagination across two pages (3 rows,
+  `limit=2`, confirms both `next_cursor` presence and its correct absence on the last page, and the
+  exact id order on each page); `subscription_id` filter (excludes a sibling subscription in the
+  same workspace); `status` filter (`status=failed` returns exactly the one failed row); a real
+  retry pair (same `event_id`, `attempt_number` 1 then 2) proving both attempts are visible, not
+  just the latest; cross-workspace exclusion with and without an explicit filter; and an invalid
+  `status` value rejected as `400 validation_failed`.
+- **Observed: PF-203 route-fitness suite passes with the new route included**, 71/71 (1 sanity
+  check + 5 per-route checks × 14 discovered routes — the suite's own structure, confirming
+  `GET /webhooks/deliveries` is among the 14; not independently re-run against `main` to get a
+  before/after route count, so no "up from N" claim is made here) —
+  `'get' '/webhooks/deliveries'` appears in the discovered-route list and passes all five
+  per-route checks: OpenAPI registration with `security` matching real `bearerAuth` presence, a
+  declared `requireScope(webhooks:manage)`, the §2.5 `ApiError` shape on its unauthenticated-failure
+  path, `{ data, next_cursor }` on its 200 schema (this is what confirmed the pagination envelope is
+  actually registered in OpenAPI, not just implemented in the handler), and `X-RateLimit-*` headers.
+- **Observed:** `pnpm type-check` — clean across all 5 workspace packages (no `as`/`!` casts added;
+  `pool.query<WebhookDeliveryRow>` is explicitly typed, following this sprint's own recurring
+  type-safety rule).
+- **Derived, not directly re-verified this ticket:** the legacy `pnpm --filter @ship/api
+  openapi:generate` script (writes `api/openapi.json`) does **not** cover this route — confirmed by
+  running it and finding zero `/webhook*` paths in its output. That script targets the older,
+  separate `api/src/openapi/` registry for internal `/api/*` routes (documents/issues/etc.), not the
+  PLUGFORGE `/api/v1` layer this ticket lives in. The correct verification for this layer is the
+  live `v1OpenApiDocument` (`platform/openapi/index.ts`), which `route-fitness.test.ts` already
+  exercises directly — this is not a gap in this PR, just a note against ever citing the legacy
+  generate script as proof for a `/platform/api/v1` route.
+
+**Not verified / explicit gaps.** No live end-to-end proof against `GET /api/v1/webhooks/deliveries`
+with rows produced by the *real* `InMemoryWebhookDeliverer` (this PR's tests insert
+`webhook_deliveries` rows directly via `pool.query`, same precedent `deliverer.test.ts` itself uses
+for the DB but not for the delivery mechanism — there is no route that creates delivery rows in
+production other than the deliverer, so this is the same test-double boundary PF-304's own tests
+already accepted). `POST /:id/replay` (PF-306) is out of scope and not touched.
+
+**Rollback.** Revert the merge of `feat/pf-305-delivery-log-api`. The route lives entirely inside
+`api/src/platform/api/v1/resources/webhooks.ts` (one added `webhooksRouter.get('/deliveries', ...)`
+block) and `api/src/platform/openapi/schemas/webhooks.ts` (two added schemas + one
+`registerPath` call) — no migration, no `app.ts` change, no other file touched. No database or
+migration involved; nothing to run backwards.
+
+---
+
 ## Factory defect-gate engine — AST-based static-analysis rule framework (no ticket: tooling)
 
 **What changed.** Ported LabelHunter's AST-based defect-gate framework into Ship's factory:
