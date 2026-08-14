@@ -2626,6 +2626,15 @@ Expected: `report.recall` is `1` (both `TRO-230` and `TRO-276` rows resolve and 
 
 - [ ] **Step 2: Forged break-one/fix-one, in a scratch worktree**
 
+**Caveat found during execution:** the commands below use `FACTORY_BASE_REF=main` literally. Before
+this branch merges to `main`, that will NOT reproduce the exit-1 result this step expects —
+`main` doesn't yet contain the commit that activates the rule (only this branch does), so
+activation-pinning correctly runs the gate in report-only mode (exit 0) against real `main`, per its
+own design. This is expected, not a bug — see `CHANGES.md`'s entry for this feature, which documents
+running the forged test both ways (against real `main`, and against a commit on this branch past
+activation) and explains why. Once this branch merges, `FACTORY_BASE_REF=main` will behave as written
+below.
+
 ```bash
 scripts/factory/worktree.sh TRO-DEFECT-GATE-VERIFY fix/defect-gate-verify
 # worktree.sh names the worktree deterministically: TICKET_SLUG lowercases
