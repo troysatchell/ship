@@ -69,6 +69,16 @@ function requestIdOf(req: Request): string {
 export const ListIssuesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(20),
   cursor: z.string().min(1).optional(),
+  // PF-205 (Linear TRO-414) — mirrors `getIssuesByAssignee()`
+  // (`agent/src/shipClient.ts:415-426`) -> internal
+  // `GET /api/issues?assignee_id=...`. A plain equality filter on the
+  // `assignee_id` property — the internal route additionally accepts the
+  // literal strings `'null'`/`'unassigned'` to mean "no assignee"
+  // (`routes/issues.ts:400-401`), which this v1 filter deliberately does NOT
+  // replicate: the PRD block asks only for "an `?assignee_id=` filter", and
+  // this file's `assignee_id` is always a UUID column value here (never a
+  // sentinel string) per this resource's own `IssueRowProperties` typing.
+  assignee_id: z.string().uuid().optional(),
 });
 
 /** The `properties` JSONB keys this resource reads — a narrow slice of the
@@ -124,7 +134,7 @@ issuesRouter.get(
         fieldErrors: parseResult.error.flatten().fieldErrors,
       });
     }
-    const { limit, cursor } = parseResult.data;
+    const { limit, cursor, assignee_id } = parseResult.data;
 
     let decodedCursor: KeysetCursor | null = null;
     if (cursor !== undefined) {
@@ -158,6 +168,11 @@ issuesRouter.get(
       "document_type = 'issue'",
       'deleted_at IS NULL',
     ];
+
+    if (assignee_id) {
+      values.push(assignee_id);
+      whereClauses.push(`properties->>'assignee_id' = $${values.length}`);
+    }
 
     if (decodedCursor) {
       values.push(decodedCursor.created_at, decodedCursor.id);

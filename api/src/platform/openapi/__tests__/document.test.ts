@@ -54,7 +54,7 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(document.openapi).toMatch(/^3\.1\.\d+$/);
   });
 
-  it('registers every route on /api/v1 as of PF-302: health, openapi.json, documents, issues, sprints, me, webhooks', () => {
+  it('registers every route on /api/v1 as of PF-205: health, openapi.json, documents (+4 sub-resources), issues, sprints (+{id}), me, webhooks, people, changes', () => {
     // Updated by PF-203 (Linear TRO-404): issues/sprints/me (PF-201)
     // predated this registry landing and were never retrofitted — this
     // ticket's route-fitness test (route-fitness.test.ts) exists precisely
@@ -69,16 +69,28 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     // /webhooks/{id}/rotate registered (`platform/openapi/schemas/webhooks.ts`)
     // — another legitimate addition to this hand-maintained list, same class
     // as the PF-203 update above, not a weakened check.
+    //
+    // Updated again by PF-205 (Linear TRO-414): /people, /changes, the four
+    // /documents/{id}/{associations,reverse-associations,backlinks,comments}
+    // sub-resources, and /sprints/{id} — the agent's remaining reads. Same
+    // class of legitimate addition, not a weakened check.
     const paths = document.paths ?? {};
     expect(Object.keys(paths).sort()).toEqual(
       [
+        '/changes',
         '/documents',
         '/documents/{id}',
+        '/documents/{id}/associations',
+        '/documents/{id}/backlinks',
+        '/documents/{id}/comments',
+        '/documents/{id}/reverse-associations',
         '/health',
         '/issues',
         '/me',
         '/openapi.json',
+        '/people',
         '/sprints',
+        '/sprints/{id}',
         '/webhooks',
         '/webhooks/{id}',
         '/webhooks/{id}/rotate',
@@ -90,14 +102,21 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(paths['/documents']?.get).toBeDefined();
     expect(paths['/documents']?.post).toBeDefined();
     expect(paths['/documents/{id}']?.get).toBeDefined();
+    expect(paths['/documents/{id}/associations']?.get).toBeDefined();
+    expect(paths['/documents/{id}/reverse-associations']?.get).toBeDefined();
+    expect(paths['/documents/{id}/backlinks']?.get).toBeDefined();
+    expect(paths['/documents/{id}/comments']?.get).toBeDefined();
     expect(paths['/issues']?.get).toBeDefined();
     expect(paths['/sprints']?.get).toBeDefined();
+    expect(paths['/sprints/{id}']?.get).toBeDefined();
     expect(paths['/me']?.get).toBeDefined();
     expect(paths['/webhooks']?.get).toBeDefined();
     expect(paths['/webhooks']?.post).toBeDefined();
     expect(paths['/webhooks/{id}']?.get).toBeDefined();
     expect(paths['/webhooks/{id}']?.delete).toBeDefined();
     expect(paths['/webhooks/{id}/rotate']?.post).toBeDefined();
+    expect(paths['/people']?.get).toBeDefined();
+    expect(paths['/changes']?.get).toBeDefined();
   });
 
   it('every authenticated /api/v1 operation requires bearerAuth; health and openapi.json require none', () => {
@@ -112,6 +131,13 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(paths['/webhooks/{id}']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks/{id}']?.delete?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks/{id}/rotate']?.post?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/people']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/changes']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/sprints/{id}']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/documents/{id}/associations']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/documents/{id}/reverse-associations']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/documents/{id}/backlinks']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/documents/{id}/comments']?.get?.security).toEqual([{ bearerAuth: [] }]);
     // /me requires bearerAuth like every other authenticated route — it just
     // requires no specific SCOPE (resources/me.ts's design decision; OpenAPI
     // security requirements for an http-bearer scheme don't carry a scope

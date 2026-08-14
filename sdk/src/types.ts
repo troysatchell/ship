@@ -195,3 +195,208 @@ export interface ListSprintsParams {
 /** `sprints.iterate()`'s params (PF-402) — same reasoning as
  *  `IterateDocumentsParams` above. */
 export type IterateSprintsParams = Omit<ListSprintsParams, 'cursor'>;
+
+// ─── PF-205 (Linear TRO-414) additions ─────────────────────────────────────
+// The agent's remaining reads (agent/src/shipClient.ts:360-455), given typed
+// SDK methods per PF-405's parity fitness test (sdk/src/__tests__/
+// parity.test.ts) — every new /api/v1 operation needs a corresponding
+// method, or that suite fails on this ticket's own diff.
+
+/** Matches the server's GET /api/v1/sprints/{id} response
+ *  (`api/src/platform/api/v1/resources/sprints.ts`'s `GET /:id` handler) —
+ *  `Sprint`'s envelope plus the cadence/week-dates fields that route adds.
+ *  `owner_id`/`status` are `null` when absent from `properties`; `start_date`/
+ *  `end_date`/`workspace_sprint_start_date` are `YYYY-MM-DD` strings. */
+export interface SprintDetail extends Sprint {
+  readonly sprint_number: number;
+  readonly owner_id: string | null;
+  readonly status: string | null;
+  readonly workspace_sprint_start_date: string;
+  readonly start_date: string;
+  readonly end_date: string;
+}
+
+/**
+ * One forward/reverse association edge — matches
+ * `platform/api/v1/resources/documents.ts`'s `/:id/associations` and
+ * `/:id/reverse-associations` handlers' identical response shape
+ * field-for-field. Deliberately has NO joined title/type field: the server
+ * omits it too, on purpose (a visibility-leak avoidance — see that file's
+ * own header comment).
+ */
+export interface AssociationEdge {
+  readonly id: string;
+  readonly document_id: string;
+  readonly related_id: string;
+  readonly relationship_type: string;
+  readonly metadata: Record<string, unknown>;
+  readonly created_at: string;
+}
+
+export type AssociationEdgeList = ListPage<AssociationEdge>;
+
+/** `GET /:id/associations` and `GET /:id/reverse-associations` query
+ *  params — limit/cursor only, same shape as every other v1 list route. */
+export interface ListAssociationsParams {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+/**
+ * A document that links to the anchor document — matches
+ * `platform/api/v1/resources/documents.ts`'s `/:id/backlinks` handler's
+ * response shape. `display_id` is `'#<ticket_number>'` for an issue source,
+ * `null` for every other document type.
+ */
+export interface Backlink {
+  readonly id: string;
+  readonly document_type: DocumentType;
+  readonly title: string;
+  readonly display_id: string | null;
+}
+
+export type BacklinkList = ListPage<Backlink>;
+
+export interface ListBacklinksParams {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+/**
+ * A comment on a document — matches `platform/api/v1/resources/
+ * documents.ts`'s `/:id/comments` handler's response shape. Named
+ * `DocumentComment`, not `Comment`: this package's own convention names
+ * every wire type after its resource (`Document`, `Issue`, `Sprint`), and a
+ * bare `Comment` would read as belonging to a `comments` top-level resource
+ * this SDK does not have (comments are only ever fetched scoped to a
+ * document, matching the server's own route shape).
+ */
+export interface DocumentComment {
+  readonly id: string;
+  readonly document_id: string;
+  readonly comment_id: string;
+  readonly parent_id: string | null;
+  readonly content: string;
+  readonly resolved_at: string | null;
+  readonly author: { readonly id: string; readonly name: string | null; readonly email: string | null } | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export type DocumentCommentList = ListPage<DocumentComment>;
+
+export interface ListDocumentCommentsParams {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+/**
+ * Matches `platform/api/v1/resources/people.ts`'s `serializePerson()`
+ * return shape field-for-field. `name` (not `title`) — the server's own
+ * deliberate naming for this resource, unlike `Document`/`Issue`/`Sprint`,
+ * which all use `title`.
+ */
+export interface Person {
+  readonly id: string;
+  readonly name: string;
+  readonly document_type: 'person';
+  readonly user_id: string | null;
+  readonly email: string | null;
+  readonly is_archived: boolean;
+  readonly is_pending: boolean;
+  readonly reports_to: string | null;
+  readonly role: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export type PersonList = ListPage<Person>;
+
+/** `GET /api/v1/people` query params — limit/cursor only. */
+export interface ListPeopleParams {
+  readonly limit?: number;
+  readonly cursor?: string;
+}
+
+/** `people.iterate()`'s params (PF-402-style) — same reasoning as
+ *  `IterateDocumentsParams` above. */
+export type IteratePeopleParams = Omit<ListPeopleParams, 'cursor'>;
+
+/**
+ * One entry in the public change feed — matches
+ * `platform/api/v1/resources/changes.ts`'s three row shapes, tagged with
+ * the `resource` discriminator that file's response actually returns (see
+ * that file's header for why this is a merged, discriminated-union `data`
+ * array rather than three parallel arrays). `history.id` is a plain
+ * `number` (Postgres `document_history.id` is a SERIAL, not a UUID) —
+ * every other resource's `id` in this package is a UUID string.
+ */
+export interface ChangedDocumentEntry {
+  readonly resource: 'document';
+  readonly dedupe_key: string;
+  readonly id: string;
+  readonly document_type: DocumentType;
+  readonly title: string;
+  readonly updated_at: string;
+  readonly created_by: string | null;
+}
+
+export interface ChangedHistoryEntry {
+  readonly resource: 'document_history';
+  readonly dedupe_key: string;
+  readonly id: number;
+  readonly document_id: string;
+  readonly field: string;
+  readonly old_value: string | null;
+  readonly new_value: string | null;
+  readonly changed_by: string | null;
+  readonly automated_by: string | null;
+  readonly created_at: string;
+}
+
+export interface ChangedCommentEntry {
+  readonly resource: 'comment';
+  readonly dedupe_key: string;
+  readonly id: string;
+  readonly document_id: string;
+  readonly comment_id: string;
+  readonly parent_id: string | null;
+  readonly author_id: string | null;
+  readonly content: string;
+  readonly resolved_at: string | null;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export type ChangeEntry = ChangedDocumentEntry | ChangedHistoryEntry | ChangedCommentEntry;
+
+/**
+ * `GET /api/v1/changes`'s response shape — NOT `ListPage<ChangeEntry>`,
+ * despite also having a `data`/`next_cursor` pair: this resource's
+ * `next_cursor` is an ISO 8601 timestamp to pass back as the next `since`
+ * (cursor-lagged, per `resources/changes.ts`'s header), never an opaque
+ * keyset cursor to pass back as `?cursor=` the way every other list
+ * resource's `next_cursor` is — reusing `ListPage<T>` here would say the
+ * two are interchangeable when they are not. `truncated` has no analogue on
+ * any other resource: it names which of the three underlying categories hit
+ * the per-poll limit, so a caller re-polling from the same `next_cursor`
+ * knows the response's own `data` array may not be the whole gap.
+ */
+export interface ChangesPage {
+  readonly data: readonly ChangeEntry[];
+  readonly next_cursor: string;
+  readonly truncated: {
+    readonly documents: boolean;
+    readonly document_history: boolean;
+    readonly comments: boolean;
+  };
+}
+
+/** `GET /api/v1/changes` query params — mirrors `GetChangesQuerySchema`
+ *  (`resources/changes.ts`). `since` is REQUIRED (unlike every other list
+ *  resource's optional `cursor`) — this endpoint has no "first page,
+ *  omit the param" case; a caller always names a starting point. */
+export interface GetChangesParams {
+  readonly since: string;
+  readonly limit?: number;
+}

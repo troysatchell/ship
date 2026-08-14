@@ -47,6 +47,69 @@ import { createDocument } from '../../../../services/documentService.js';
 export const documentsRouter: RouterType = Router();
 
 /**
+ * PF-205 (Linear TRO-414) — four read-only sub-resources added below the
+ * original three PF-200 routes: `GET /:id/associations`,
+ * `GET /:id/reverse-associations`, `GET /:id/backlinks`,
+ * `GET /:id/comments`. Each mirrors one of the agent's 10 reads
+ * (`agent/src/shipClient.ts:381-413`, `getAssociations`/
+ * `getReverseAssociations`/`getBacklinks`/`getComments`), which today hit
+ * INTERNAL routes (`api/src/routes/associations.ts`,
+ * `api/src/routes/backlinks.ts`, `api/src/routes/comments.ts`) — this file
+ * does not import from any of them (the one-way `platform/api/v1/**` ->
+ * `api/src/routes/**` boundary ban, this file's own module header above),
+ * it reimplements the read queries against the same tables, verified against
+ * each internal route's SQL before writing this.
+ *
+ * `resolveWorkspaceOrThrow`/`resolveWorkspaceOrNull` below follow
+ * `resources/webhooks.ts`'s identical helper-pair pattern (see that file's
+ * own doc comments) — introduced here because these four new routes all need
+ * the same "confirm the anchor document exists in the caller's workspace,
+ * else 404" check the three original routes above do not share a name for.
+ * The three original routes are left untouched (their inline
+ * principal/workspace checks are unchanged) — this is additive, not a
+ * refactor of working code outside this ticket's scope.
+ */
+
+async function resolveWorkspaceOrNull(req: Request, requestId: string): Promise<string | null> {
+  const principal = req.principal;
+  if (!principal) {
+    // Unreachable in practice — bearerAuth never calls next() without
+    // setting req.principal — but TypeScript can't see that guarantee
+    // statically (req.principal is typed optional).
+    throw serverError(requestId);
+  }
+  return resolvePrincipalWorkspaceId(principal);
+}
+
+async function resolveWorkspaceOrThrow(req: Request, requestId: string): Promise<string> {
+  const workspaceId = await resolveWorkspaceOrNull(req, requestId);
+  if (!workspaceId) {
+    throw notFoundError(requestId, 'No workspace is associated with this credential.');
+  }
+  return workspaceId;
+}
+
+/**
+ * Confirms `id` is a well-formed UUID that names a document in
+ * `workspaceId` (not deleted). Throws `not_found` otherwise — matching
+ * `GET /:id`'s existing "malformed or missing id both 404" convention
+ * (PF-200 test design AC-4), applied here as the shared anchor-document
+ * check every sub-resource route needs before querying its own join table.
+ */
+async function assertDocumentExists(id: string, workspaceId: string, requestId: string): Promise<void> {
+  if (!UUID_RE.test(id)) {
+    throw notFoundError(requestId);
+  }
+  const result = await pool.query<{ id: string }>(
+    `SELECT id FROM documents WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
+    [id, workspaceId]
+  );
+  if (!result.rows[0]) {
+    throw notFoundError(requestId);
+  }
+}
+
+/**
  * Same defensive fallback pattern as `errorMiddleware.ts`'s own
  * `requestIdOf` (not exported from there — this is a two-line duplicate
  * rather than reaching across a module boundary for it): every request
@@ -299,5 +362,385 @@ documentsRouter.post(
     });
 
     res.status(201).json(serializeDocument(created));
+  })
+);
+
+// ─── Sub-resource list query params (shared shape, limit/cursor only) ──────
+//
+// `export`ed (PF-202/PF-203 convention — every route's request/response zod
+// schema is exported for `platform/openapi/schemas/documents.ts` to
+// `registerPath` with) so all four sub-resource routes below share one
+// OpenAPI-registered query schema rather than four structurally-identical
+// copies.
+
+export const SubResourceListQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+  cursor: z.string().min(1).optional(),
+});
+
+// ─── GET /api/v1/documents/:id/associations ────────────────────────────
+//
+// Mirrors `getAssociations()` (`shipClient.ts:381-387`) -> internal
+// `GET /api/documents/:id/associations` (`associations.ts`). Deliberately
+// returns ONLY `related_id`/`relationship_type` (plus id/created_at/metadata
+// for pagination and completeness) — NOT the internal route's
+// `related_title`/`related_document_type` join columns. `shipClient.ts`'s
+// own `AssociationForwardEdge` docstring explains why: that internal route
+// checks access on the ANCHOR document only, never on each joined
+// `related_id`, so a private document's title could leak through. This is a
+// NEW public v1 endpoint, so it must not reintroduce that leak — the caller
+// is expected to re-fetch each `related_id` through `GET /:id` (which DOES
+// check access) before trusting anything about it, same discipline
+// `expansion.ts` already follows against the internal route.
+
+documentsRouter.get(
+  '/:id/associations',
+  bearerAuth,
+  rateLimitBuckets,
+  requireScope('documents:read'),
+  asyncHandler(async (req, res) => {
+    const requestId = requestIdOf(req);
+    const id = String(req.params.id);
+
+    const parseResult = SubResourceListQuerySchema.safeParse(req.query);
+    if (!parseResult.success) {
+      throw validationFailedError(requestId, 'Invalid query parameters.', {
+        fieldErrors: parseResult.error.flatten().fieldErrors,
+      });
+    }
+    const { limit, cursor } = parseResult.data;
+
+    let decodedCursor: KeysetCursor | null = null;
+    if (cursor !== undefined) {
+      decodedCursor = decodeCursor(cursor);
+      if (!decodedCursor) {
+        throw validationFailedError(requestId, 'Invalid cursor.', {
+          fieldErrors: { cursor: ['cursor is not a valid opaque cursor'] },
+        });
+      }
+    }
+
+    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+    await assertDocumentExists(id, workspaceId, requestId);
+
+    const values: unknown[] = [id];
+    const whereClauses = ['da.document_id = $1'];
+    if (decodedCursor) {
+      values.push(decodedCursor.created_at, decodedCursor.id);
+      whereClauses.push(`(da.created_at, da.id) < ($${values.length - 1}, $${values.length})`);
+    }
+    values.push(limit + 1);
+
+    const result = await pool.query<{
+      id: string;
+      document_id: string;
+      related_id: string;
+      relationship_type: string;
+      created_at: Date;
+      metadata: Record<string, unknown> | null;
+    }>(
+      `SELECT da.id, da.document_id, da.related_id, da.relationship_type, da.created_at, da.metadata
+       FROM document_associations da
+       WHERE ${whereClauses.join(' AND ')}
+       ORDER BY da.created_at DESC, da.id DESC
+       LIMIT $${values.length}`,
+      values
+    );
+
+    const rows = result.rows;
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const lastRow = page[page.length - 1];
+    const nextCursor =
+      hasMore && lastRow
+        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        : null;
+
+    res.status(200).json({
+      data: page.map((row) => ({
+        id: row.id,
+        document_id: row.document_id,
+        related_id: row.related_id,
+        relationship_type: row.relationship_type,
+        metadata: row.metadata ?? {},
+        created_at: row.created_at.toISOString(),
+      })),
+      next_cursor: nextCursor,
+    });
+  })
+);
+
+// ─── GET /api/v1/documents/:id/reverse-associations ────────────────────
+//
+// Mirrors `getReverseAssociations()` (`shipClient.ts:389-398`) -> internal
+// `GET /api/documents/:id/reverse-associations`. Same title-leak avoidance
+// as `/associations` above — `document_id` (the row pointing AT this
+// document) and `relationship_type` only, no joined title/type.
+
+documentsRouter.get(
+  '/:id/reverse-associations',
+  bearerAuth,
+  rateLimitBuckets,
+  requireScope('documents:read'),
+  asyncHandler(async (req, res) => {
+    const requestId = requestIdOf(req);
+    const id = String(req.params.id);
+
+    const parseResult = SubResourceListQuerySchema.safeParse(req.query);
+    if (!parseResult.success) {
+      throw validationFailedError(requestId, 'Invalid query parameters.', {
+        fieldErrors: parseResult.error.flatten().fieldErrors,
+      });
+    }
+    const { limit, cursor } = parseResult.data;
+
+    let decodedCursor: KeysetCursor | null = null;
+    if (cursor !== undefined) {
+      decodedCursor = decodeCursor(cursor);
+      if (!decodedCursor) {
+        throw validationFailedError(requestId, 'Invalid cursor.', {
+          fieldErrors: { cursor: ['cursor is not a valid opaque cursor'] },
+        });
+      }
+    }
+
+    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+    await assertDocumentExists(id, workspaceId, requestId);
+
+    const values: unknown[] = [id, workspaceId];
+    const whereClauses = ['da.related_id = $1', 'd.workspace_id = $2', 'd.deleted_at IS NULL'];
+    if (decodedCursor) {
+      values.push(decodedCursor.created_at, decodedCursor.id);
+      whereClauses.push(`(da.created_at, da.id) < ($${values.length - 1}, $${values.length})`);
+    }
+    values.push(limit + 1);
+
+    const result = await pool.query<{
+      id: string;
+      document_id: string;
+      related_id: string;
+      relationship_type: string;
+      created_at: Date;
+      metadata: Record<string, unknown> | null;
+    }>(
+      `SELECT da.id, da.document_id, da.related_id, da.relationship_type, da.created_at, da.metadata
+       FROM document_associations da
+       JOIN documents d ON d.id = da.document_id
+       WHERE ${whereClauses.join(' AND ')}
+       ORDER BY da.created_at DESC, da.id DESC
+       LIMIT $${values.length}`,
+      values
+    );
+
+    const rows = result.rows;
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const lastRow = page[page.length - 1];
+    const nextCursor =
+      hasMore && lastRow
+        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        : null;
+
+    res.status(200).json({
+      data: page.map((row) => ({
+        id: row.id,
+        document_id: row.document_id,
+        related_id: row.related_id,
+        relationship_type: row.relationship_type,
+        metadata: row.metadata ?? {},
+        created_at: row.created_at.toISOString(),
+      })),
+      next_cursor: nextCursor,
+    });
+  })
+);
+
+// ─── GET /api/v1/documents/:id/backlinks ────────────────────────────────
+//
+// Mirrors `getBacklinks()` (`shipClient.ts:403-405`) -> internal
+// `GET /api/documents/:id/backlinks` (`backlinks.ts`, `document_links`
+// table). Unlike the two association routes above, `shipClient.ts`'s own
+// `BacklinkEntry` docstring notes the internal route IS already
+// visibility-filtered server-side on the joined source document — but that
+// filter is session-user-based (`VISIBILITY_FILTER_SQL` + `req.userId`),
+// which a bearer-token `Principal` does not carry the same way. This route
+// scopes the join to the caller's own `workspace_id` only, matching every
+// other v1 list route's already-established workspace-only precedent (see
+// this file's header note on `assertDocumentExists`/the sub-resource
+// helpers) — title/document_type are included in the response, same as the
+// internal route, since both are ordinary fields of a document already
+// known to be in the caller's own workspace.
+
+documentsRouter.get(
+  '/:id/backlinks',
+  bearerAuth,
+  rateLimitBuckets,
+  requireScope('documents:read'),
+  asyncHandler(async (req, res) => {
+    const requestId = requestIdOf(req);
+    const id = String(req.params.id);
+
+    const parseResult = SubResourceListQuerySchema.safeParse(req.query);
+    if (!parseResult.success) {
+      throw validationFailedError(requestId, 'Invalid query parameters.', {
+        fieldErrors: parseResult.error.flatten().fieldErrors,
+      });
+    }
+    const { limit, cursor } = parseResult.data;
+
+    let decodedCursor: KeysetCursor | null = null;
+    if (cursor !== undefined) {
+      decodedCursor = decodeCursor(cursor);
+      if (!decodedCursor) {
+        throw validationFailedError(requestId, 'Invalid cursor.', {
+          fieldErrors: { cursor: ['cursor is not a valid opaque cursor'] },
+        });
+      }
+    }
+
+    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+    await assertDocumentExists(id, workspaceId, requestId);
+
+    const values: unknown[] = [id, workspaceId];
+    const whereClauses = ['dl.target_id = $1', 'd.workspace_id = $2', 'd.deleted_at IS NULL'];
+    if (decodedCursor) {
+      values.push(decodedCursor.created_at, decodedCursor.id);
+      whereClauses.push(`(dl.created_at, dl.id) < ($${values.length - 1}, $${values.length})`);
+    }
+    values.push(limit + 1);
+
+    const result = await pool.query<{
+      id: string;
+      created_at: Date;
+      document_id: string;
+      document_type: string;
+      title: string;
+      ticket_number: number | null;
+    }>(
+      `SELECT dl.id, dl.created_at, d.id as document_id, d.document_type, d.title, d.ticket_number
+       FROM document_links dl
+       JOIN documents d ON dl.source_id = d.id
+       WHERE ${whereClauses.join(' AND ')}
+       ORDER BY dl.created_at DESC, dl.id DESC
+       LIMIT $${values.length}`,
+      values
+    );
+
+    const rows = result.rows;
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const lastRow = page[page.length - 1];
+    const nextCursor =
+      hasMore && lastRow
+        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        : null;
+
+    res.status(200).json({
+      data: page.map((row) => ({
+        id: row.document_id,
+        document_type: row.document_type,
+        title: row.title,
+        display_id:
+          row.ticket_number !== null && row.document_type === 'issue'
+            ? `#${row.ticket_number}`
+            : null,
+      })),
+      next_cursor: nextCursor,
+    });
+  })
+);
+
+// ─── GET /api/v1/documents/:id/comments ─────────────────────────────────
+//
+// Mirrors `getComments()` (`shipClient.ts:407-413`) -> internal
+// `GET /api/documents/:id/comments` (`comments.ts`).
+
+documentsRouter.get(
+  '/:id/comments',
+  bearerAuth,
+  rateLimitBuckets,
+  requireScope('documents:read'),
+  asyncHandler(async (req, res) => {
+    const requestId = requestIdOf(req);
+    const id = String(req.params.id);
+
+    const parseResult = SubResourceListQuerySchema.safeParse(req.query);
+    if (!parseResult.success) {
+      throw validationFailedError(requestId, 'Invalid query parameters.', {
+        fieldErrors: parseResult.error.flatten().fieldErrors,
+      });
+    }
+    const { limit, cursor } = parseResult.data;
+
+    let decodedCursor: KeysetCursor | null = null;
+    if (cursor !== undefined) {
+      decodedCursor = decodeCursor(cursor);
+      if (!decodedCursor) {
+        throw validationFailedError(requestId, 'Invalid cursor.', {
+          fieldErrors: { cursor: ['cursor is not a valid opaque cursor'] },
+        });
+      }
+    }
+
+    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+    await assertDocumentExists(id, workspaceId, requestId);
+
+    const values: unknown[] = [id, workspaceId];
+    const whereClauses = ['c.document_id = $1', 'c.workspace_id = $2'];
+    if (decodedCursor) {
+      values.push(decodedCursor.created_at, decodedCursor.id);
+      whereClauses.push(`(c.created_at, c.id) < ($${values.length - 1}, $${values.length})`);
+    }
+    values.push(limit + 1);
+
+    const result = await pool.query<{
+      id: string;
+      document_id: string;
+      comment_id: string;
+      parent_id: string | null;
+      author_id: string | null;
+      author_name: string | null;
+      author_email: string | null;
+      content: string;
+      resolved_at: Date | null;
+      created_at: Date;
+      updated_at: Date;
+    }>(
+      `SELECT c.id, c.document_id, c.comment_id, c.parent_id, c.author_id,
+              u.name as author_name, u.email as author_email,
+              c.content, c.resolved_at, c.created_at, c.updated_at
+       FROM comments c
+       LEFT JOIN users u ON u.id = c.author_id
+       WHERE ${whereClauses.join(' AND ')}
+       ORDER BY c.created_at DESC, c.id DESC
+       LIMIT $${values.length}`,
+      values
+    );
+
+    const rows = result.rows;
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const lastRow = page[page.length - 1];
+    const nextCursor =
+      hasMore && lastRow
+        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        : null;
+
+    res.status(200).json({
+      data: page.map((row) => ({
+        id: row.id,
+        document_id: row.document_id,
+        comment_id: row.comment_id,
+        parent_id: row.parent_id,
+        content: row.content,
+        resolved_at: row.resolved_at ? row.resolved_at.toISOString() : null,
+        author: row.author_id
+          ? { id: row.author_id, name: row.author_name, email: row.author_email }
+          : null,
+        created_at: row.created_at.toISOString(),
+        updated_at: row.updated_at.toISOString(),
+      })),
+      next_cursor: nextCursor,
+    });
   })
 );
