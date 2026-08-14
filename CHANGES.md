@@ -43,6 +43,14 @@ sdk/tsconfig.tsbuildinfo` — the tsbuildinfo file is gitignored, so a real CI c
 `pnpm --filter @ship/sdk build` runs first. The fix's own CI run is the fresh-checkout proof that
 matters most.
 
+**How to run it.**
+```bash
+rm -rf sdk/dist sdk/tsconfig.tsbuildinfo   # simulate a true fresh checkout
+pnpm --filter @ship/cli type-check          # fails with TS2307 before this fix
+pnpm build:sdk                              # the new step this fix adds
+pnpm --filter @ship/cli type-check          # clean after
+```
+
 **Rollback.** Revert this commit. Three-line diff (one root `package.json` script line, one CI step
 per file), no other coupling — reverting restores the pre-existing ordering bug, nothing else.
 
