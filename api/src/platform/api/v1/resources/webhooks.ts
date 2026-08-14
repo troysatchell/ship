@@ -56,6 +56,23 @@
  * ciphertext is gone the instant this UPDATE commits, so any HMAC computed
  * against it (a future PF-304 delivery, or `__tests__/webhooks.test.ts`'s
  * "rotation invalidates" case) can never validate again.
+ *
+ * **`GET /deliveries` (PF-305, TRO-442) — the delivery log.** Added below
+ * `GET /` and deliberately BEFORE `GET /:id` in this file's route
+ * registration order: Express matches routes in registration order, and
+ * `webhook_deliveries` is a plain sibling path segment (`/webhooks/deliveries`),
+ * not a resource nested under a subscription id — if it were registered
+ * after `GET /:id`, the literal string `"deliveries"` would match `:id` first
+ * and 404 (it fails `UUID_RE`) before this route ever ran. One row per
+ * delivery ATTEMPT (migration 048's own row-per-attempt design — a retried
+ * delivery leaves multiple rows, one per `attempt_number`, sharing
+ * `event_id`), scoped to subscriptions whose `app_id` resolves to the
+ * caller's workspace via the same `oauth_apps` join every other route in
+ * this file uses. Filterable by `subscription_id` and `status`; cursor-
+ * paginated per the same `(created_at, id) DESC` keyset shape as `GET /`.
+ * Never selects `payload` (the full event envelope) — `response_excerpt`
+ * already caps what a delivery attempt costs to display, and the raw
+ * payload belongs to a future replay endpoint (PF-306), not this log view.
  */
 
 import { Router } from 'express';
@@ -159,6 +176,58 @@ function serializeSubscription(row: WebhookSubscriptionRow) {
     event_type: row.event_type,
     target_url: row.target_url,
     active: row.active,
+    created_at: row.created_at.toISOString(),
+  };
+}
+
+/** `GET /api/v1/webhooks/deliveries` query params — same cursor-pagination
+ * shape as `ListWebhookSubscriptionsQuerySchema` (PF-203), plus the two
+ * caller-supplied filters this ticket's AC names. `status` is validated
+ * against `deliverer.ts`'s own `WebhookDeliveryStatus` union, kept in sync
+ * here by hand (that file's own status literals are not re-exported as a
+ * zod schema, matching this codebase's "events as data" precedent for
+ * `event_type` — see migration 048's header). */
+export const ListWebhookDeliveriesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(100).optional().default(20),
+  cursor: z.string().min(1).optional(),
+  subscription_id: z.string().uuid('subscription_id must be a UUID.').optional(),
+  status: z.enum(['pending', 'success', 'failed', 'dead']).optional(),
+});
+
+/** Row shape for `webhook_deliveries` (migration 048) as read by the
+ * delivery-log route — deliberately never selects `payload`, see file
+ * header. */
+interface WebhookDeliveryRow {
+  id: string;
+  subscription_id: string;
+  event_id: string;
+  event_type: string;
+  idempotency_key: string;
+  attempt_number: number;
+  status: string;
+  response_status: number | null;
+  response_excerpt: string | null;
+  latency_ms: number | null;
+  next_attempt_at: Date | null;
+  created_at: Date;
+}
+
+const DELIVERY_COLUMNS =
+  'wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.idempotency_key, wd.attempt_number, wd.status, wd.response_status, wd.response_excerpt, wd.latency_ms, wd.next_attempt_at, wd.created_at';
+
+function serializeDelivery(row: WebhookDeliveryRow) {
+  return {
+    id: row.id,
+    subscription_id: row.subscription_id,
+    event_id: row.event_id,
+    event_type: row.event_type,
+    idempotency_key: row.idempotency_key,
+    attempt_number: row.attempt_number,
+    status: row.status,
+    response_status: row.response_status,
+    response_excerpt: row.response_excerpt,
+    latency_ms: row.latency_ms,
+    next_attempt_at: row.next_attempt_at ? row.next_attempt_at.toISOString() : null,
     created_at: row.created_at.toISOString(),
   };
 }
@@ -345,6 +414,92 @@ webhooksRouter.get(
 
     res.status(200).json({
       data: page.map(serializeSubscription),
+      next_cursor: nextCursor,
+    });
+  })
+);
+
+// ─── GET /api/v1/webhooks/deliveries ─────────────────────────────────────
+//
+// Registered BEFORE `GET /:id` — see file header for why route order
+// matters here.
+
+webhooksRouter.get(
+  '/deliveries',
+  bearerAuth,
+  rateLimitBuckets,
+  requireScope('webhooks:manage'),
+  asyncHandler(async (req, res) => {
+    const requestId = requestIdOf(req);
+
+    const parseResult = ListWebhookDeliveriesQuerySchema.safeParse(req.query);
+    if (!parseResult.success) {
+      throw validationFailedError(requestId, 'Invalid query parameters.', {
+        fieldErrors: parseResult.error.flatten().fieldErrors,
+      });
+    }
+    const { limit, cursor, subscription_id, status } = parseResult.data;
+
+    let decodedCursor: KeysetCursor | null = null;
+    if (cursor !== undefined) {
+      decodedCursor = decodeCursor(cursor);
+      if (!decodedCursor) {
+        throw validationFailedError(requestId, 'Invalid cursor.', {
+          fieldErrors: { cursor: ['cursor is not a valid opaque cursor'] },
+        });
+      }
+    }
+
+    const workspaceId = await resolveWorkspaceOrNull(req, requestId);
+    if (!workspaceId) {
+      // Same "fail closed to an empty page" convention as GET /.
+      res.status(200).json({ data: [], next_cursor: null });
+      return;
+    }
+
+    const values: unknown[] = [workspaceId];
+    const whereClauses = ['a.workspace_id = $1'];
+
+    if (subscription_id !== undefined) {
+      values.push(subscription_id);
+      whereClauses.push(`wd.subscription_id = $${values.length}`);
+    }
+
+    if (status !== undefined) {
+      values.push(status);
+      whereClauses.push(`wd.status = $${values.length}`);
+    }
+
+    if (decodedCursor) {
+      values.push(decodedCursor.created_at, decodedCursor.id);
+      whereClauses.push(`(wd.created_at, wd.id) < ($${values.length - 1}, $${values.length})`);
+    }
+
+    values.push(limit + 1);
+    const limitParamIndex = values.length;
+
+    const result = await pool.query<WebhookDeliveryRow>(
+      `SELECT ${DELIVERY_COLUMNS}
+       FROM webhook_deliveries wd
+       JOIN webhook_subscriptions ws ON ws.id = wd.subscription_id
+       JOIN oauth_apps a ON a.id = ws.app_id
+       WHERE ${whereClauses.join(' AND ')}
+       ORDER BY wd.created_at DESC, wd.id DESC
+       LIMIT $${limitParamIndex}`,
+      values
+    );
+
+    const rows = result.rows;
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const lastRow = page[page.length - 1];
+    const nextCursor =
+      hasMore && lastRow
+        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        : null;
+
+    res.status(200).json({
+      data: page.map(serializeDelivery),
       next_cursor: nextCursor,
     });
   })

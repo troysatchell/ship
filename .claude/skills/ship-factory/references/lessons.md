@@ -468,6 +468,20 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
     Before shipping anything that acts automatically, ask: *what does this do when it cannot see?*
     "It assumes the worst and takes the corrective action" is the wrong answer whenever the
     corrective action is itself disruptive.
+28. **An SDK response type written before the server route exists will drift from what the route
+    actually returns, and nothing catches it automatically. 2 findings across 2 tickets
+    (TRO-422/PF-405's `WebhookSubscription`, TRO-442/PF-305's `WebhookDelivery`).** Both instances:
+    an SDK client method was built against the PRD's prose description of a not-yet-built route
+    (explicitly disclosed in the file's own header as "inferred from prose, not verified against a
+    real schema"), the real route later landed with a different field set, and the SDK-vs-spec
+    parity fitness test (`sdk/src/__tests__/parity.test.ts`) did not catch it — that test is
+    deliberately method+path-level (does an SDK method exist for this operation?), not
+    response-body-level (does the SDK's type match what the operation actually returns?). Disclosing
+    the mismatch in the file header and CHANGES.md, as both instances did, is correct triage — do not
+    silently "fix" a guessed type without checking the real serializer function — but the pattern is
+    now proven recurring, not a one-off. Filed as `TRO-599`; if a third instance lands, this needs a
+    mechanical check (a response-shape fitness test asserting each resource's serializer output
+    against its SDK type), not a third disclosure.
 - 2026-08-08 (TRO-367/W5-CI, orchestrator) — **New load-flake identity, and this one appeared with NO
   sibling gate running:** `api/src/collaboration/__tests__/session-revocation.test.ts::does not persist
   document writes attempted after the session is revoked`. Failed inside a full `gate.sh` run, passed
