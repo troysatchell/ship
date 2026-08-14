@@ -27,10 +27,14 @@
  * / `expired_token`) — a binding PM triage decision on TRO-430
  * (2026-08-10): a revoked token reports `invalid_token` to the caller,
  * identically to an unrecognized one. Revocation IS distinguished server-side
- * (the `console.warn` calls below) — but not yet in a `public_api_audit` row,
- * because that table (migration 046, PF-501) has not landed as of this
- * ticket; noted as a gap in this ticket's final report, to be closed when
- * PF-501's audit middleware exists to write it.
+ * (the `console.warn` calls below); as of PF-501 (Linear TRO-432,
+ * `platform/audit/middleware.ts`) a `public_api_audit` row is ALSO written
+ * for this response (status 401, no app_client_id/user_id/scope_used — the
+ * middleware observes every `/api/v1` response regardless of where in the
+ * chain it was produced) — but that row still carries the same
+ * `invalid_token` shape the client sees, not a distinct "revoked" marker;
+ * only the `console.warn` line distinguishes the two server-side, per the
+ * PM decision above.
  */
 
 import type { NextFunction, Request, Response } from 'express';
