@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { requestIdMiddleware } from './requestId.js';
 import { errorMiddleware, notFoundHandler } from './errorMiddleware.js';
 import { documentsRouter } from './resources/documents.js';
+import { v1OpenApiDocument } from '../../openapi/index.js';
 import { issuesRouter } from './resources/issues.js';
 import { sprintsRouter } from './resources/sprints.js';
 import { meRouter } from './resources/me.js';
@@ -44,6 +45,14 @@ v1Routes.get('/health', (_req, res) => {
 
 // PF-200 (Linear TRO-398) — the documents resource.
 v1Routes.use('/documents', documentsRouter);
+
+// PF-202 (Linear TRO-402) — the generated /api/v1 OpenAPI 3.1 document.
+// Public, no auth (same as /health above) — served from a module-load-time
+// cache (`platform/openapi/index.ts`'s `v1OpenApiDocument`), not regenerated
+// per request, since the registry only changes at deploy time.
+v1Routes.get('/openapi.json', (_req, res) => {
+  res.status(200).json(v1OpenApiDocument);
+});
 
 // PF-201 (Linear TRO-400) — issues, sprints, and me: typed views over the
 // unified document model, plus the bearer-token identity endpoint.
