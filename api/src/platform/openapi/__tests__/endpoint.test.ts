@@ -37,25 +37,38 @@ describe('PF-202: GET /api/v1/openapi.json', () => {
     expect(body.openapi).toMatch(/^3\.1\.\d+$/);
   });
 
-  it('contains every registered /api/v1 route: health, itself, documents, issues, sprints, me, webhooks, audit (PF-203, PF-302, PF-501)', async () => {
+  it('contains every registered /api/v1 route: health, itself, documents (+4 sub-resources), issues, sprints (+{id}), me, webhooks, audit, people, changes (PF-203, PF-302, PF-205, PF-501)', async () => {
     const res = await request(app).get('/api/v1/openapi.json');
 
     const body: OpenApiDocumentBody = res.body;
     const paths = body.paths ?? {};
     // Updated by PF-302 (Linear TRO-431): /webhooks, /webhooks/{id},
-    // /webhooks/{id}/rotate added. Updated by PF-501 (Linear TRO-432): /audit
-    // added — see document.test.ts's identical update for the same rationale
-    // (a legitimate addition to a hand-maintained list, not a weakened check).
+    // /webhooks/{id}/rotate added — see document.test.ts's identical update
+    // for the same rationale (a legitimate addition to a hand-maintained
+    // list, not a weakened check).
+    //
+    // Updated by PF-501 (Linear TRO-432): /audit added — same rationale.
+    //
+    // Updated by PF-205 (Linear TRO-414): /people, /changes, the four
+    // /documents/{id}/... sub-resources, and /sprints/{id} added — same
+    // rationale.
     expect(Object.keys(paths).sort()).toEqual(
       [
         '/audit',
+        '/changes',
         '/documents',
         '/documents/{id}',
+        '/documents/{id}/associations',
+        '/documents/{id}/backlinks',
+        '/documents/{id}/comments',
+        '/documents/{id}/reverse-associations',
         '/health',
         '/issues',
         '/me',
         '/openapi.json',
+        '/people',
         '/sprints',
+        '/sprints/{id}',
         '/webhooks',
         '/webhooks/{id}',
         '/webhooks/{id}/rotate',

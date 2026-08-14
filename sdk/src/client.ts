@@ -23,6 +23,8 @@ import { IssuesClient } from './resources/issues.js';
 import { SprintsClient } from './resources/sprints.js';
 import { WebhooksClient } from './resources/webhooks.js';
 import { AuditClient } from './resources/audit.js';
+import { PeopleClient } from './resources/people.js';
+import { ChangesClient } from './resources/changes.js';
 import type { ITokenStore } from './tokenStore.js';
 import { runDeviceLoginFlow, type DeviceLoginFlowOptions } from './deviceLogin.js';
 import { runAuthorizationCodeFlow, type AuthorizationCodeFlowOptions as PkceFlowOptions } from './authorizationCodeFlow.js';
@@ -129,6 +131,12 @@ export class ShipClient {
    *  `audit:read` plus an admin/owner/first-party caller — see
    *  `resources/audit.ts`'s header. */
   readonly audit: AuditClient;
+  /** `people.list/iterate` — `/api/v1/people` (PF-205, Linear TRO-414). */
+  readonly people: PeopleClient;
+  /** `changes.list` — `/api/v1/changes` (PF-205). No `iterate()` — see
+   *  `ChangesClient`'s own header for why this resource's pagination shape
+   *  doesn't fit the shared `iteratePages` helper. */
+  readonly changes: ChangesClient;
 
   /**
    * Cheap construction — no I/O. Required by PF-703 (the agent gate builds a
@@ -153,6 +161,8 @@ export class ShipClient {
     this.sprints = new SprintsClient(this.request);
     this.webhooks = new WebhooksClient(this.request);
     this.audit = new AuditClient(this.request);
+    this.people = new PeopleClient(this.request);
+    this.changes = new ChangesClient(this.request);
   }
 
   /**

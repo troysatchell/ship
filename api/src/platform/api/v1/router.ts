@@ -8,6 +8,8 @@ import { sprintsRouter } from './resources/sprints.js';
 import { meRouter } from './resources/me.js';
 import { webhooksRouter } from './resources/webhooks.js';
 import { auditRouter } from './resources/audit.js';
+import { peopleRouter } from './resources/people.js';
+import { changesRouter } from './resources/changes.js';
 import { rateLimitDefaults } from '../../ratelimit/middleware.js';
 import { auditLogMiddleware } from '../../audit/middleware.js';
 
@@ -85,6 +87,12 @@ v1Routes.use('/webhooks', webhooksRouter);
 
 // PF-501 (Linear TRO-432) — the public API audit trail.
 v1Routes.use('/audit', auditRouter);
+
+// PF-205 (Linear TRO-414) — the agent's remaining reads: people directory
+// and the public change-feed contract (distinct from webhooks — see
+// resources/changes.ts's header for why the two must not be conflated).
+v1Routes.use('/people', peopleRouter);
+v1Routes.use('/changes', changesRouter);
 
 // Add new /api/v1 resource routes to `v1Routes` above this line — never
 // below it, and never directly to `v1Router` (see the stack-order comment
