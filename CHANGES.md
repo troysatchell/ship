@@ -211,6 +211,150 @@ prior implementations, only visibility changed.
 
 ---
 
+## TRO-400 — PF-201: Issues, sprints, me — typed views over the unified document model
+
+**What was added.**
+- `GET /api/v1/issues` — `api/src/platform/api/v1/resources/issues.ts`, cursor-paginated (same
+  keyset pattern as `documents.ts`) over `documents WHERE document_type = 'issue'`. Behind
+  `require('issues:read')` (already registered in `ScopeRegistry` by an earlier ticket — nothing to
+  add there). `state`, `priority`, `assignee_id` are lifted OUT of the `properties` JSONB blob into
+  top-level response fields — the response has **no** nested `properties` key at all, matching how
+  the internal `routes/issues.ts`'s `extractIssueListItemFromRow` and `routes/weeks.ts`'s
+  `extractSprintFromRow` both already flatten every known property to the top level rather than
+  leaving a duplicate raw blob alongside it.
+- `GET /api/v1/sprints` — `api/src/platform/api/v1/resources/sprints.ts`, same cursor-pagination
+  pattern, filtered to `document_type = 'sprint'`. Behind `require('sprints:read')` (also already
+  registered). The ticket's AC for this resource is just "sprints list," not typed-field lifting —
+  so unlike issues, this reuses `documents.ts`'s exact envelope
+  (`{id, title, document_type, properties, created_at, updated_at}`) rather than flattening
+  `sprint_number`/`owner_id`/`status`. See the file's header for the property names found in
+  `shared/src/types/document.ts`'s `WeekProperties`, recorded for whoever extends this later.
+- `GET /api/v1/me` — `api/src/platform/api/v1/resources/me.ts`, returns `{ user, app, scopes }` from
+  `req.principal` (set by PF-107's `bearerAuth`). **No `requireScope(...)` on this route** — any
+  valid bearer token may call it regardless of granted scopes. Reasoning (stated per the ticket's
+  own instruction to justify this rather than decide it silently): comparable identity endpoints —
+  GitHub's `GET /user`, Google's OIDC `userinfo` endpoint — are gated on "is this token valid" alone,
+  not on a specific resource scope, because a client needs to be able to ask "who/what am I" before
+  it knows which resource scope to check for. Gating `/me` on a scope would make it unusable by a
+  token that legitimately holds none of `documents:read`/`issues:read`/`sprints:read` (e.g. a
+  Client-Credentials app scoped only to `webhooks:manage`) — proven directly by this ticket's own
+  "no scope required" regression test.
+- All three mounted on `v1Routes` in `router.ts`, same pattern as PF-200's `documentsRouter` mount.
+- **Property names pinned, not guessed (CLAUDE.md's claim-provenance rule).** `state: IssueState`,
+  `priority: IssuePriority`, `assignee_id?: string | null` are `shared/src/types/document.ts`'s
+  `IssueProperties` interface, verbatim — cross-checked against the internal
+  `routes/issues.ts`'s `extractIssueListItemFromRow`, which reads the identical three keys off
+  `documents.properties` with the identical fallback defaults (`'backlog'` / `'medium'` / `null`)
+  reused here. The PRD block's prose says "assignee"; the real property name in both the shared type
+  and the JSONB is `assignee_id`, not `assignee` — this ticket uses the real key, not the prose's.
+- **No scope registry changes.** `issues:read`, `issues:write`, `sprints:read`, `sprints:write` were
+  already registered in `api/src/platform/scopes/registry.ts` by an earlier ticket (verified by
+  reading the file before writing any route code, not assumed from the ticket's "you may need to
+  add them" hedge) — `ScopeRegistry.has(...)` would throw at route-registration time if they weren't,
+  so their presence is also confirmed indirectly by every test in this ticket passing.
+- **No migration.** `document_type` enum already includes `'issue'`/`'sprint'` (`schema.sql:100`,
+  confirmed by reading the enum literal, not assumed) — nothing here changes the schema.
+
+**OpenAPI registration: NOT registered, explicitly deferred — same blocker as PF-200/TRO-398 and
+PF-104/TRO-416.** Checked both at the start of this ticket and again immediately before finishing
+(per the dispatch brief's instruction): `git log origin/main --oneline` has no PF-202/TRO-402 commit,
+and `api/src/platform/openapi/README.md` still reads "Empty until PF-202 lands." No zod
+`.openapi()` annotations or `registerPath` calls exist yet anywhere under `platform/api/v1/`, so
+this ticket does not add any either — it stays consistent with every prior `/api/v1` route.
+
+**Regression tests.**
+- `api/src/platform/api/v1/resources/__tests__/issues.test.ts` (8 tests) — the typed-field proof: a
+  seeded issue with `properties = {state, priority, assignee_id, source}` returns those three fields
+  at the top level and `properties` is `undefined` on the response body; a bare `properties = {}`
+  issue falls back to `state: 'backlog'`, `priority: 'medium'`, `assignee_id: null`; a `document_type
+  = 'wiki'` sibling document never appears in the list; cursor pagination (limit+next_cursor, an
+  actual page-2 walk via that cursor with no repeated row, and a malformed-cursor 400); scope
+  enforcement (403 `missing_scope: 'issues:read'`, and 401 unauthenticated). The page-2-walk and
+  malformed-cursor cases were added post-landing during CodeRabbit triage (a real coverage gap the
+  reviewer caught); re-verified red-before-green for the full file, not just carried over from the
+  original 6 — see the note below.
+- `api/src/platform/api/v1/resources/__tests__/sprints.test.ts` (4 tests) — list returns only
+  `document_type = 'sprint'` documents with the `documents.ts` envelope shape (including a raw
+  `properties` object, unlike issues); pagination; scope enforcement.
+- `api/src/platform/api/v1/resources/__tests__/me.test.ts` (4 tests) — **both token classes, as the
+  ticket requires:** a personal (`api_tokens`) token asserts `user` populated / `app: null` / scopes
+  matching; a Client-Credentials token is minted via the REAL `issueClientCredentialsToken`
+  (`platform/oauth/token.ts`, PF-104/TRO-416) against a real confidential `oauth_apps` row created
+  via `createOAuthApp` — not a hand-constructed row that only resembles one — and asserts `user:
+  null` / `app` populated (`id`, `client_id`, `name`, `is_first_party`) / scopes matching the grant's
+  actual resolved scopes. A third case proves the "no scope required" design decision directly: a
+  personal token holding only `webhooks:manage` (none of `documents:read`/`issues:read`/
+  `sprints:read`) still gets `200`. A fourth proves 401 with no `Authorization` header.
+
+**Red-before-green (seen, not claimed).** Temporarily commented out the three `v1Routes.use(...)`
+mount lines in `router.ts`, re-ran all 14 new tests: all 14 failed with `expected 404 to be
+200/401/403` (Express's `notFoundHandler` catching the unmounted paths) — a real routing failure,
+not an import or type error. Restored the mounts immediately after and re-ran: all 14 pass.
+Re-run again after CodeRabbit triage added 2 more `issues.test.ts` cases (pagination page-2 walk,
+malformed cursor): unmounted the same three lines, all 16 (not just the 2 new ones) failed with the
+same 404, restored, all 16 passed — the claim above covers the full current suite, not just its
+original subset.
+
+**How to run it.**
+```bash
+source .factory-env  # or api/.env.local outside a factory worktree
+pnpm --filter @ship/api exec vitest run \
+  src/platform/api/v1/resources/__tests__/issues.test.ts \
+  src/platform/api/v1/resources/__tests__/sprints.test.ts \
+  src/platform/api/v1/resources/__tests__/me.test.ts
+```
+
+**CodeRabbit triage (stale gate run, 11 findings; re-run against the landing commit, 1 finding) —
+fixed, deferred, or dismissed, each with a reason:**
+- *Fixed:* `issues.ts`'s `IssueRowProperties.state`/`.priority` now use the shared `IssueState`/
+  `IssuePriority` types instead of bare `string` (trivial, type-safety).
+- *Fixed:* `issues.test.ts`'s `beforeAll` seed inserts now throw on a missing row instead of
+  silently falling back to `''` for `workspaceId`/`userId`/`assigneeUserId` — matches `insertIssue`'s
+  existing guard (trivial).
+- *Fixed:* the document-type-filter test now asserts `body.data` is non-empty before looping, so an
+  empty response can't pass the assertion vacuously (minor).
+- *Fixed:* cursor pagination now also walks an actual page 2 via the returned `next_cursor` and
+  asserts a malformed cursor 400s with `validation_failed` (major — real coverage gap; see the
+  red-before-green re-check above).
+- *Fixed, after the re-run caught it:* this entry's own test counts (6→8 for `issues.test.ts`, 14→16
+  total) were stale once the two pagination cases above were added (minor — a real doc-accuracy
+  catch, not a misfire).
+- *Dismissed — matches an existing pattern, cross-file scope:* `requestIdOf` duplicated across
+  `documents.ts`/`issues.ts`/`sprints.ts`/`me.ts`, and `sha256Hex`/`insertPersonalToken` duplicated
+  across the `__tests__` files. Both already exist in `documents.ts`/`documents.test.ts` from PF-200;
+  a cross-file DRY refactor is a real cleanup but out of scope for this ticket to take on unasked.
+- *Dismissed — contradicts this ticket's stated design:* keeping a raw `properties` blob alongside
+  `issues.ts`'s lifted `state`/`priority`/`assignee_id` fields. The file's own header and this entry's
+  "What was added" section above document the opposite decision on purpose (a typed view, not a
+  passthrough) — reverting it would undo the ticket's actual AC.
+- *Dismissed — wrong threat model:* gating `me.ts`'s `user.email` field by scope. `/me` returns the
+  calling token's OWN identity (the same pattern as GitHub's `GET /user` or Google's `userinfo`) —
+  there is no other-user's email being exposed here to gate.
+- *Dismissed — current behavior already deterministic and intentional:* asserting
+  `me.test.ts`'s Client-Credentials `scopes` array order-independently. `issueClientCredentialsToken`
+  returns the grant's actual resolved scopes in a fixed order; the strict `toEqual` is this ticket's
+  own explicit proof that the returned scopes match the grant exactly, not an incidental strictness.
+- *Noted, real, out of scope — for a follow-up ticket, not filed here:* a composite index on
+  `documents(workspace_id, document_type, created_at DESC, id DESC) WHERE deleted_at IS NULL` would
+  help this resource's (and `sprints.ts`'s) keyset query at scale; this ticket adds no migration by
+  design (see "No migration" above). A shared `createDocumentTypeListRouter` factory to de-duplicate
+  the near-identical keyset-pagination route logic across `documents.ts`/`issues.ts`/`sprints.ts` is
+  a real architectural cleanup, bigger than this ticket's scope.
+
+**Not verified.** The `authorization_code` grant's shape for `/me` (both `user` and `app` populated
+simultaneously — see `me.ts`'s header for why this follows from the same mapping with no special
+case) is not separately tested here; only the personal-token and Client-Credentials shapes the
+ticket's AC names explicitly are covered. `resolvePrincipalWorkspaceId`'s app-token
+(`oauth_apps.workspace_id`) path for issues/sprints is exercised only indirectly, same caveat
+TRO-398's own entry recorded for `documents.ts` — this ticket's issues/sprints tests use personal
+tokens exclusively.
+
+**Rollback.** Find this ticket's commit(s) with `git log --oneline -- api/src/platform/api/v1/resources/issues.ts api/src/platform/api/v1/resources/sprints.ts api/src/platform/api/v1/resources/me.ts` and `git revert <sha(s)>`. The revert must include `router.ts`'s three new
+`v1Routes.use(...)` mounts and their three new imports (part of the same change) — reverting only
+the resource files while leaving `router.ts`'s imports in place breaks the build.
+
+---
+
 ## TRO-416 — PF-104: `/oauth/token` (authorization_code + PKCE + client_credentials, negative cases mandatory)
 
 **What changed.** Added `POST /oauth/token`, form-encoded per RFC 6749 §4.1.3/§4.4.2, mounted at
