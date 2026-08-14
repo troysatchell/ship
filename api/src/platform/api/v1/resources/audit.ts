@@ -66,7 +66,7 @@ import type { Principal } from '../../../oauth/principal.js';
 import { requireScope } from '../../../scopes/requireScope.js';
 import { rateLimitBuckets } from '../../../ratelimit/middleware.js';
 import { asyncHandler } from '../errorMiddleware.js';
-import { forbiddenError, validationFailedError } from '../errors.js';
+import { forbiddenError, serverError, validationFailedError } from '../errors.js';
 import { encodeCursor, decodeCursor, type KeysetCursor } from '../pagination.js';
 import { resolvePrincipalWorkspaceId } from './workspaceContext.js';
 
@@ -183,7 +183,14 @@ auditRouter.get(
     const requestId = requestIdOf(req);
     const principal = req.principal;
     if (!principal) {
-      throw forbiddenError(requestId);
+      // Unreachable in practice — bearerAuth never calls next() without
+      // setting req.principal — but TypeScript can't see that guarantee
+      // statically (req.principal is typed optional). Same defensive
+      // pattern (and same serverError, not forbiddenError — this is an
+      // internal-state inconsistency, not a caller authorization failure)
+      // as resources/webhooks.ts and resources/me.ts use for the identical
+      // check.
+      throw serverError(requestId);
     }
 
     const parseResult = ListAuditQuerySchema.safeParse(req.query);
