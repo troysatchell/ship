@@ -8,6 +8,7 @@ import { checkDocumentCompleteness } from '../utils/extractHypothesis.js';
 import { logDocumentChange, getLatestDocumentFieldHistory } from '../utils/document-crud.js';
 import { broadcastToUser } from '../collaboration/index.js';
 import type { ProjectDocumentRow, IssueDocumentRow, SprintDocumentRow } from './rowTypes.js';
+import { createDocument, updateDocument, deleteDocument } from '../services/documentService.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -47,6 +48,18 @@ interface ProjectDetailRow extends ProjectRow {
 
 /** `INSERT ... RETURNING` row for project creation. */
 type NewProjectRow = Pick<ProjectRow, 'id' | 'title' | 'properties' | 'archived_at' | 'created_at' | 'updated_at'>;
+
+/**
+ * `NewProjectRow` plus the fields `documentService`'s event derivation needs
+ * (TRO-426 / PF-301) — all genuinely present on the row (createDocument/
+ * updateDocument are always `RETURNING *`), just not previously declared here
+ * because this file never had to read them.
+ */
+type ProjectWriteRow = NewProjectRow & {
+  workspace_id: string;
+  document_type: string;
+  created_by: string | null;
+};
 
 /** Minimal projection for the redirect-on-convert lookup. */
 interface ConvertedDocRow {
@@ -698,18 +711,15 @@ router.post('/', authMiddleware, async (req: Request, res: Response) => {
     properties.is_complete = completeness.isComplete;
     properties.missing_fields = completeness.missingFields;
 
-    const result = await pool.query<NewProjectRow>(
-      `INSERT INTO documents (workspace_id, document_type, title, properties, created_by)
-       VALUES ($1, 'project', $2, $3, $4)
-       RETURNING id, title, properties, archived_at, created_at, updated_at`,
-      [req.workspaceId, title, JSON.stringify(properties), req.userId]
-    );
-
-    const createdRow = result.rows[0];
-    if (!createdRow) {
-      res.status(500).json({ error: 'Internal server error' });
-      return;
-    }
+    // TRO-426 / PF-301: write + document.created publication now live in
+    // documentService.
+    const createdRow = await createDocument<ProjectWriteRow>({
+      workspaceId: req.workspaceId as string,
+      documentType: 'project',
+      title,
+      properties,
+      createdByUserId: req.userId,
+    });
 
     // Create program association in junction table (mirrors PATCH behavior)
     if (program_id) {
@@ -910,11 +920,18 @@ router.patch('/:id', authMiddleware, authed(async (req, res) => {
     if (updates.length > 0) {
       updates.push(`updated_at = now()`);
 
-      await pool.query(
-        `UPDATE documents SET ${updates.join(', ')}
-         WHERE id = $${paramIndex} AND workspace_id = $${paramIndex + 1} AND document_type = 'project'`,
-        [...values, id, req.workspaceId]
-      );
+      // TRO-426 / PF-301: write + document.updated (+ derived events, none
+      // apply to projects today) publication now live in documentService. The
+      // response below always re-queries with its own projection (owner join,
+      // computed inferred_status), so the returned row is unused here.
+      await updateDocument({
+        id: id as string,
+        workspaceId: req.workspaceId,
+        setClauses: updates,
+        values,
+        documentTypeFilter: 'project',
+        previousProperties: currentProps,
+      });
     }
 
     // Broadcast celebration when plan is added
@@ -1047,11 +1064,9 @@ router.delete('/:id', authMiddleware, authed(async (req, res) => {
       [id]
     );
 
-    // Now delete it
-    await pool.query(
-      `DELETE FROM documents WHERE id = $1 AND workspace_id = $2 AND document_type = 'project'`,
-      [id, workspaceId]
-    );
+    // Now delete it. TRO-426 / PF-301: write + document.deleted publication
+    // now live in documentService.
+    await deleteDocument({ id: id as string, workspaceId, documentTypeFilter: 'project' });
 
     res.status(204).send();
   } catch (err) {

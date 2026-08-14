@@ -21,6 +21,89 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-426 — PF-301: Domain write path + `IEventBus`
+
+**What changed.** Extended `api/src/services/documentService.ts` (PF-200 landed it with only
+`createDocument()`, deliberately, as scaffolding for this ticket) with `updateDocument()` and
+`deleteDocument()`, and built `IEventBus` (`api/src/platform/webhooks/eventBus.ts`, PF-300's own
+`webhooks/README.md` marked it "not yet built") — an in-process synchronous bus: `publish()`
+validates the payload against `platform/webhooks/events.ts`'s registry schema for that event type,
+then calls every subscriber synchronously, in the same call stack. `publish()` calls live ONLY in
+`documentService.ts` — proven by a grep test, not just a code-review claim (see Proof below).
+
+**Write-site consolidation — the four resource routers' primary create/update/delete.**
+`api/src/routes/documents.ts` (`POST /`, `PATCH /:id`, `DELETE /:id`), `issues.ts` (same three),
+`projects.ts` (same three), `programs.ts` (same three) now delegate their document INSERT/UPDATE/
+DELETE to `documentService`, which fires `document.created` / `document.updated` / `document.deleted`
+on every write, plus derived `issue.created` (on create, `document_type === 'issue'`),
+`issue.status_changed` / `issue.assigned` (on update, diffing `properties.state` /
+`properties.assignee_id` against a caller-supplied "before" snapshot), and `sprint.started` /
+`sprint.completed` (same shape, `properties.status`, per PF-300's pinned field names). Handlers keep
+100% of their existing validation/authz/business logic (association wiring, history logging,
+visibility cascades, RACI fields) — only the actual `INSERT`/`UPDATE`/`DELETE` statement moved.
+`updateDocument()` takes the route's already-built `SET` clause fragments and values (including raw
+SQL fragments with no bind parameter, e.g. issues.ts's `started_at = now()`) rather than rebuilding
+that per-router logic generically — unifying four routers' divergent column-selection logic into one
+function would have been a rewrite of business logic this ticket did not audit line by line, not the
+"smallest-possible consolidation" its own risk note calls for.
+
+**Excluded write sites — explicit, matching the ticket's own collab-persist exclusion pattern:**
+- `api/src/collaboration/index.ts`'s Yjs persist (debounced `UPDATE documents SET yjs_state,
+  content, properties`) — excluded by the ticket itself: `document.updated` fires from explicit API
+  writes only, not a webhook per keystroke-batch. Defended in `docs/architecture.md`.
+- **`api/src/routes/weeks.ts`** — not named in the ticket's original 9-file survey, and NOT one of
+  the "four resource routers" the scope decision names, but re-grepping the live tree (as the ticket
+  itself warned the 2026-08-10 survey might be stale) found it owns EVERY sprint/standup/
+  weekly_review/weekly_plan document write — including the actual production sprint
+  `planning → active → completed` transitions (`POST /:id/start`, `PATCH /:id`). `programs.ts`,
+  despite being one of the four named routers, only ever writes `document_type = 'program'` — it
+  never touches sprint documents. Net effect: `sprint.started`/`sprint.completed` derivation is
+  implemented and unit-tested in `documentService.updateDocument()`, and fires correctly if a sprint
+  document is ever updated through `documents.ts`'s generic `PATCH /:id` — but no *production* route
+  reaches that path today, since the real sprint-transition endpoints live in `weeks.ts`, untouched.
+  Consolidating a 3600+ line file with ~20 write sites was judged out of proportion for "smallest
+  possible" on this ticket's own stated risk profile; flagged here rather than silently implied
+  fixed. Candidate for a dedicated follow-up ticket.
+- **`api/src/routes/feedback.ts:146`** — a public, unauthenticated endpoint that creates
+  `document_type = 'issue'` documents from external feedback submissions. The most consequential
+  exclusion: it bears directly on the same "creating an issue-type document" concern the AC names,
+  so issues created via public feedback do NOT currently fire `issue.created`. Left out for the same
+  blast-radius reasoning (public/unauthenticated surface, "smallest possible" bar) — flagged
+  explicitly as a known gap, not an oversight; worth a fast-follow ticket.
+- `admin.ts`, `team.ts`, `workspaces.ts`, `setup.ts` — administrative/bootstrapping flows (workspace
+  membership onboarding, invite acceptance, one-time initial superadmin setup) that create/patch
+  `person`/`wiki`/`sprint`(allocation-only, via `team.ts`) documents. None bear on this ticket's AC
+  (issue-create event pairing; zero `publish()` in route layer). Consolidating five more files with
+  their own bespoke write patterns (`jsonb_set` property patches, soft-delete `archived_at` toggles)
+  was judged out of scope for "smallest possible."
+
+**Proof, exactly as the AC states.**
+- Full internal regression suite: `pnpm test` (api + web + agent + sdk, root script) — 229 files /
+  2261 tests, green, run three times for confidence after two transient unrelated failures (see PR
+  body).
+- Issue-type document creation publishes `document.created` + `issue.created`: proven twice —
+  `api/src/services/documentService.test.ts` (service-level, real Postgres) and
+  `api/src/routes/issues.test.ts` ("publishes document.created and issue.created via IEventBus",
+  hits the real `POST /api/issues` route over HTTP, subscribes to the real process-wide `IEventBus`
+  singleton).
+- Zero `publish()`/`getEventBus()` call sites in the route layer:
+  `api/src/platform/webhooks/__tests__/publish-boundary.test.ts` — walks every `.ts` file under
+  `api/src/routes/**` and `api/src/platform/api/v1/resources/**` (excluding `*.test.ts`), asserts
+  zero matches, with a positive-control test proving the same grep DOES match inside
+  `documentService.ts` (so a vacuous "found nothing because the check is broken" can't pass silently).
+- New test coverage added along the way: `api/src/routes/programs.test.ts` — `programs.ts`'s
+  POST/PATCH/DELETE had ZERO existing route tests before this ticket (`rowTypes.test.ts` covers only
+  the pure `extractProgramFromRow` mapper), a real pre-existing gap this ticket inherited risk from.
+
+**Rollback.** Revert this ticket's merge commit. This reverts `documentService.ts` to PF-200's
+single-function scaffold, deletes `eventBus.ts` and its tests, and restores inline
+INSERT/UPDATE/DELETE SQL in `documents.ts`/`issues.ts`/`projects.ts`/`programs.ts` (no migration or
+schema change to unwind — this ticket is pure application-layer refactor). The v1
+`POST /api/v1/documents` route (PF-200) reverts to not publishing any event, matching its pre-ticket
+behavior.
+
+---
+
 ## TRO-404 — PF-203: route-enumeration fitness test — the drift gate for every v1 route
 
 **What changed.** `api/src/platform/api/v1/__tests__/route-fitness.test.ts` walks the REAL, live

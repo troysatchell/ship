@@ -135,7 +135,15 @@ describe('Projects API', () => {
   describe('POST /api/projects', () => {
     it('creates project without owner_id (optional)', async () => {
       const mockProject = {
-        id: 'project-new',
+        // TRO-426 / PF-301: this row now backs createDocument()'s `RETURNING *`,
+        // whose result documentService publishes as a document.created event —
+        // id/workspace_id/created_by must satisfy that event's Zod schema
+        // (`UuidSchema`), independent of the non-UUID `req.userId`/`req.workspaceId`
+        // placeholders the mocked auth middleware above sets.
+        id: 'aaaaaaaa-0000-0000-0000-000000000001',
+        workspace_id: '11111111-1111-1111-1111-111111111111',
+        document_type: 'project',
+        created_by: '22222222-2222-2222-2222-222222222222',
         title: 'Test Project',
         properties: { impact: 4, confidence: 3, ease: 5, owner_id: null, color: '#6366f1' },
         archived_at: null,
@@ -163,7 +171,12 @@ describe('Projects API', () => {
     it('creates project with valid data including optional owner_id', async () => {
       const ownerId = '11111111-1111-1111-1111-111111111111';
       const mockProject = {
-        id: 'project-new',
+        // TRO-426 / PF-301: see the comment on the sibling test above — this
+        // row backs createDocument()'s document.created publication.
+        id: 'aaaaaaaa-0000-0000-0000-000000000002',
+        workspace_id: '33333333-3333-3333-3333-333333333333',
+        document_type: 'project',
+        created_by: '22222222-2222-2222-2222-222222222222',
         title: 'New Project',
         properties: { impact: 4, confidence: 3, ease: 5, owner_id: ownerId, color: '#6366f1' },
         archived_at: null,
@@ -198,7 +211,13 @@ describe('Projects API', () => {
 
     it('uses null ICE values when not provided', async () => {
       const mockProject = {
-        id: 'project-new',
+        // TRO-426 / PF-301: see the comment on 'creates project without
+        // owner_id (optional)' above — this row backs createDocument()'s
+        // document.created publication.
+        id: 'aaaaaaaa-0000-0000-0000-000000000003',
+        workspace_id: '11111111-1111-1111-1111-111111111111',
+        document_type: 'project',
+        created_by: '22222222-2222-2222-2222-222222222222',
         title: 'Untitled',
         properties: { impact: null, confidence: null, ease: null, owner_id: null, color: '#6366f1' },
         archived_at: null,
@@ -293,8 +312,24 @@ describe('Projects API', () => {
       queryMock
         // Check existing
         .mockResolvedValueOnce(pgResult([existingProject]))
-        // Update
-        .mockResolvedValueOnce(pgResult([]))
+        // TRO-426 / PF-301: the UPDATE now runs through documentService's
+        // updateDocument(), which does `RETURNING *` and requires a row back
+        // (throws otherwise) to derive/publish document.updated — unlike the
+        // old inline `UPDATE ... ` with no RETURNING this replaced, whose
+        // result nothing read. This route still re-queries for its own
+        // response below (updatedProject), so only the event-schema fields
+        // (id/workspace_id/document_type/title) need to be real here.
+        .mockResolvedValueOnce(
+          pgResult([
+            {
+              id: 'aaaaaaaa-0000-0000-0000-000000000004',
+              workspace_id: '11111111-1111-1111-1111-111111111111',
+              document_type: 'project',
+              title: 'Updated Project',
+              properties: { impact: 5, confidence: 4, ease: 3, owner_id: 'owner-1', color: '#6366f1' },
+            },
+          ])
+        )
         // Re-query
         .mockResolvedValueOnce(pgResult([updatedProject]));
 

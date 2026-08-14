@@ -297,16 +297,42 @@ generate `whsec_...` secrets, return the plaintext exactly once (creation/rotati
 pattern Stripe uses for webhook signing secrets. This is a deliberate, defensible deviation from
 the brief's literal wording, not an oversight, and a likely interview question.
 
-**Collab-persist events excluded from webhook publication (PF-301).** The Yjs collaboration
-server's autosave (`api/src/collaboration/index.ts:207`) does a debounced
+**Collab-persist events excluded from webhook publication (PF-301, landed TRO-426).** The Yjs
+collaboration server's autosave (`api/src/collaboration/index.ts:207`) does a debounced
 `UPDATE documents SET yjs_state, content, properties ...` on every live editing session — a tenth
-document-write site alongside the nine route files that do inline writes today. Decision:
-`document.updated` fires only from explicit API writes routed through `documentService` (the four
-resource routers), never from the collaboration autosave path. The alternative — a webhook per
-keystroke-batch debounce — would mean a subscriber gets an event every few seconds per open editor,
-which is not what "a document changed" means to an integration. This is a documented, defended
-exclusion, not an accident: any write that bypasses `documentService` fires no webhook, and
+document-write site alongside the nine route files that did inline writes before this ticket.
+Decision: `document.updated` fires only from explicit API writes routed through `documentService`
+(the four resource routers), never from the collaboration autosave path. The alternative — a webhook
+per keystroke-batch debounce — would mean a subscriber gets an event every few seconds per open
+editor, which is not what "a document changed" means to an integration. This is a documented,
+defended exclusion, not an accident: any write that bypasses `documentService` fires no webhook, and
 enumerating exactly which sites route through it versus which are excluded is PF-301's own AC.
+
+**Two more exclusions, found only by re-grepping the live tree at implementation time (the
+2026-08-10 survey above was stale, exactly as this ticket's own brief warned it might be):**
+- **`api/src/routes/weeks.ts`** owns every sprint/standup/weekly_review/weekly_plan document write —
+  including the actual production sprint `planning → active → completed` transitions
+  (`POST /:id/start`, `PATCH /:id`). It is not one of the four named resource routers (`programs.ts`,
+  despite being one of the four, never writes a sprint document — it only ever writes
+  `document_type = 'program'`), so it was left as inline SQL. `documentService.updateDocument()`
+  still implements and unit-tests `sprint.started`/`sprint.completed` derivation — it fires correctly
+  if a sprint document is ever updated through `documents.ts`'s generic `PATCH /:id` — but no
+  production route reaches that path today. A ~3600-line file with ~20 write sites was judged out of
+  proportion for "smallest-possible consolidation" on this ticket's own stated risk profile.
+- **`api/src/routes/feedback.ts:146`** creates `document_type = 'issue'` documents from a public,
+  unauthenticated external-feedback endpoint — directly on point for "creating an issue-type
+  document," so issues created this way do not fire `issue.created`. Excluded for the same
+  blast-radius reasoning; flagged as a known gap rather than silently implied fixed.
+
+**Composition root note.** The pseudo-code above shows `eventBus` constructed in `app.ts` and
+injected via `createApiV1Router({ ..., eventBus, ... })`. That full composition root is PF-001's
+job and does not exist yet — nothing else it would be injected alongside (`rateLimiter`,
+`deliverer`, `oauthStore`) is a real class yet either. `documentService.ts` reaches the bus via
+`eventBus.ts`'s `getEventBus()` module singleton instead (with `setEventBusForTesting()` /
+`resetEventBusForTesting()` seams for test isolation) — a deliberate, minimal stand-in that does not
+block the DI wiring shown above: `InProcessEventBus` is exported and constructible exactly as the
+pseudo-code expects, so a future ticket can inject a concrete instance through `app.ts` and update
+`documentService` to accept it, without changing the class itself.
 
 ---
 
@@ -322,8 +348,12 @@ enumerating exactly which sites route through it versus which are excluded is PF
 
 ---
 
-*Last updated: 2026-08-10 (PF-903 Day-1 skeleton, TRO-424). No platform code has landed as of this
-writing — citations under `api/src/platform/`, `sdk/`, and `integrations/` are planned locations,
-not observed ones; citations to existing code (`api/src/app.ts`, `agent/src/shipClient.ts`,
-`api/src/collaboration/index.ts`) were read directly and are observed. Refresh each section against
-the real code as its owning ticket (named inline) lands.*
+*Last updated: 2026-08-10 (PF-903 Day-1 skeleton, TRO-424); Webhook Pipeline / Documented Deviations
+sections refreshed 2026-08-14 as PF-301 (TRO-426) landed `api/src/platform/webhooks/eventBus.ts`
+(`IEventBus` / `InProcessEventBus`, observed, read directly) and the `documentService.ts` write path
+it publishes from. Citations elsewhere under `api/src/platform/`, `sdk/`, and `integrations/` may
+still describe planned rather than observed state where their owning ticket hasn't landed yet or
+this file hasn't caught up — treat any specific claim as decided design unless it names the ticket
+that landed it, and refresh against the real code before relying on it. Citations to
+non-platform code (`api/src/app.ts`, `agent/src/shipClient.ts`, `api/src/collaboration/index.ts`)
+were read directly and are observed.*
