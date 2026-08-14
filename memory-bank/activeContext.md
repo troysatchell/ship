@@ -24,6 +24,22 @@ Per PLUGFORGE.MD §6 the MVP cut line is: PF-001…004 ✓ (prior session) · PF
 
 **Reading for the MVP gate:** the literal PLUGFORGE.MD §6 phrase "regression suite green" is not met in an absolute sense — real pre-existing gaps exist. But the gate's actual intent (did tonight's platform work regress anything) is cleanly verified NO, with real evidence, not assumption. These 32 failures are Week-4/5-era backlog debt that a genuinely-completed suite run surfaced for the first time, not a W6 defect. Worth stating this distinction explicitly if it comes up at the defense.
 
+## W6-R3/R42 also closed (2026-08-14 ~11:00Z)
+
+TRO-597 (chain the PKCE e2e spec through `/oauth/token` → `/api/v1/me`) merged (PR #203) — the last backend-complete-but-untested MVP-adjacent gap. New spec `e2e/oauth-pkce-chain.spec.ts` proves the full graded scenario end-to-end including the mandatory wrong-verifier negative case. PKCE round-trip measured at 87ms (target <3s). MVP hard gate should now read 8/11 VERIFIED once a fresh audit sweep confirms it (not yet re-run after this specific merge — the compare sweep that produced 7/11 ran before TRO-597 landed).
+
+## Post-MVP wave 1 dispatched (2026-08-14 ~11:04Z) — E3 + E4, feeding toward E6 (the actual graded TTFE metric)
+
+Four tickets in flight, chosen because they're the direct prerequisites for E6's TTFE drill (PLUGFORGE.MD's own sequencing note: "TTFE drill in CI as soon as SDK + one resource exist"), not because they're next in the epic-number order:
+- **TRO-426/PF-301** (domain write path + IEventBus) — **the PRD's own named top structural risk** ("smallest-possible consolidation; full regression suite is the gate"). Consolidates ~9-10 inline document-write sites across `documents/issues/projects/programs.ts` (+ maybe admin/team/workspaces/feedback/setup) into `documentService`, publishing webhook events. Briefed to hold a higher proof bar than usual (full `pnpm test` regression suite, not just `gate.sh`) given the blast radius. **Everything else in E3 (PF-302/304/305/306) is blocked on this landing first.**
+- **TRO-407/PF-401** (SDK resource clients: documents/issues/sprints/webhooks) — webhooks client will likely ship shape-only (its server routes, PF-302/304/305, don't exist yet) — that's expected, not a shortcut.
+- **TRO-413/PF-403** (verifyWebhook, SDK) — ports PF-303's already-merged HMAC signer logic; should cross-validate against `shared/fixtures/webhook-signature-vectors.json` if PF-303 left one.
+- **TRO-418/PF-404** (SDK auth helpers: deviceLogin, PKCE, ITokenStore, single-flight refresh) — depends on PF-106 (device grant, merged tonight) and PF-105 (refresh rotation, merged tonight), both satisfied.
+
+All four are independent of each other (different files/packages) — dispatched in parallel. **PF-401/403/404 will very likely hit `sdk/` merge conflicts with each other** since they're all adding exports to the same `sdk/src/client.ts`/`index.ts` — expect convoy rounds, same pattern as tonight's earlier `router.ts` collision between TRO-400/402.
+
+**Once these land:** PF-302 (webhook subscriptions API) unblocks from PF-301; PF-402 (SDK async-iterator pagination) unblocks from PF-401; PF-405 (SDK parity+size gates) unblocks once 401-404 are all in. Then E3's remaining chain (304→305→306), E5 (rate-limit/audit/portal), E6 (CLI+TTFE — `pnpm drill ttfe` is the actual graded artifact), E8 integrations, E9 submission docs.
+
 ## Next actions
 
 1. **Re-run `/requirements-audit`** to get a current MVP-gate verdict (the 2026-08-13T19:53Z sweep in `audit/requirements/REPORT-W6.md` is now stale — predates the entire landing wave). Expect the MVP hard gate (W6-R2..R12) to move from 4/11 to at or near 11/11 VERIFIED.
