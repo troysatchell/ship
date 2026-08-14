@@ -2,36 +2,39 @@
 
 *The most-updated file in the bank. Read this first every session; rewrite it whenever focus shifts. Keep it under a screen — move finished work to progress.md.*
 
-**Last updated:** 2026-08-13 (~02:20Z session clock; local 2026-08-12 evening). **Week 6 (PlugForge) — wave-3 tail cleared, 4 PRs open awaiting merge queue, MVP chain unblocking.**
+**Last updated:** 2026-08-13 (~18:47Z session clock). **Week 6 (PlugForge) — MVP-path merge queue fully cleared (5 tickets Done+blind-verified); 4 more E1/E2 builders dispatched and running in background at session end.**
 
 ## Current focus
 
-1. **Merge queue — state at rollover (2026-08-13 ~03:00Z):**
-   - **#183 (TRO-412/PF-103): MERGED** at `e841ba8`, both remotes verified. Evidence comment on ticket. **Blind verification pending — dispatch first thing** (ticket + diff + gate JSON only). **PF-104/TRO-416 is now UNBLOCKED — dispatch its builder.**
-   - **#187 (docs bookkeeping): branch updated after #183's merge, CI re-running at rollover** — merge on CI green alone (non-ticket exception), then sync GitLab. If it went red, read the failure — its content is docs/JSONL only, so a red here means CI infra, not the content.
-   - **#184** (TRO-441/PF-907): gate pass 12/12 at `40cc5d8` (+ convoy `36d9b26`). Awaiting CodeRabbit PR review → triage → merge. Deploy-verification half of AC explicitly deferred (portal/PF-202 don't exist).
-   - **#185** (TRO-489): gate 11/12, `regression-test` fail = **documented pure-refactor exception in PR body** (TRO-420 precedent). Awaiting CodeRabbit → merge. Post-convoy errors.test.ts 16/16.
-   - **#186** (TRO-398/PF-200): gate pass 12/12 at `bdff0d1` (+ convoy `e229e95`). Awaiting CodeRabbit → merge. **Its merge unblocks PF-201/TRO-400 and PF-202/TRO-402** (worktree Ship-wt-tro_402 pre-provisioned, stale base — re-provision or merge main).
-   - Each merge: `--merge` via gh, then sync GitLab (`git fetch <GH URL> main && git merge --ff-only && git push origin main`, verify both ls-remote SHAs), then blind verifier per ticket (ticket + diff + gate JSON ONLY), then Done with evidence comment.
-2. **MVP remainder after merges (Troy's MVP-first directive, PLUGFORGE §6):** PF-104/TRO-416 (after #183) → PF-105/TRO-421 → PF-106/TRO-425; PF-201/TRO-400 + PF-202/TRO-402 (after #186) → PF-203/TRO-404; PF-400/TRO-405 (after PF-201). PF-500/427 + PF-501/432 stay deferred.
-3. **Docs/bookkeeping PR** (branch `docs/w6-wave3-bookkeeping` if not yet open): CLAUDE.md, lessons.md (3 new entries), scorecard, review-findings ledger, memory-bank. Non-ticket content → merges on CI green alone. Does NOT touch CHANGES.md so no convoy tax on open PRs. Still queued from last session and NOT yet done: "stale architecture.md hedge fix" (details lost — re-derive or drop).
+1. **4 builders in flight at rollover — checked once at ~18:50Z, not fully finished, don't re-dispatch:**
+   - `Ship-wt-tro_400` (TRO-400/PF-201, issues/sprints/me): **DONE and PUSHED** — 3 clean commits (feat/test/docs), working tree clean, pushed to both remotes at `d1ab530`/`3f03bc6`/`20b243f` on `feat/pf-201-issues-sprints-me`. NOT yet independently gate-verified by the orchestrator or PR'd — do that first, don't re-dispatch the builder.
+   - `Ship-wt-tro_402` (TRO-402/PF-202, `/api/v1` OpenAPI registry): still in progress at rollover — real uncommitted work present (`api/src/platform/openapi/{registry,index}.ts`, `schemas/`, `__tests__/`). Check state fresh; if the agent looks stalled (no progress after checking twice), `SendMessage` its name to nudge before a fresh dispatch.
+   - `Ship-wt-tro_421` (TRO-421/PF-105, refresh rotation): still in progress — uncommitted work present, plus a **new migration `045_oauth_tokens_refresh_expiry.sql`**.
+   - `Ship-wt-tro_425` (TRO-425/PF-106, device auth grant): still in progress — uncommitted work present (API route, `device.ts`, web `OAuthDeviceVerify.tsx`), plus a **new migration `045_oauth_device_codes_polling.sql`**.
+   - **Migration-number collision, already predictable:** TRO-421 and TRO-425 independently claimed migration number `045` with different filenames — exactly the class TRO-551's own CHANGES.md comment anticipated for `044`. Whichever of the two merges SECOND needs its migration renumbered to `046` before its gate re-run (same reconciliation as a `CHANGES.md` convoy conflict, just for migrations instead). Check both branches' current head before assuming which merged first.
+   - For each unfinished worktree: `cd <worktree> && git log --oneline -8` + `git status --short` to see real state; if it has commits, independently re-run `scripts/factory/gate.sh` yourself (never trust self-report) before opening a PR.
+2. **Every PR this wave will need a `main`-forward convoy before it merges — main moved 5+ times in ~2hrs.** Pattern proven working: `git fetch origin main && git merge origin/main` → resolve `CHANGES.md` conflict via `node scripts/factory/merge-changes.mjs --ours <(git show HEAD:CHANGES.md) --theirs <(git show origin/main:CHANGES.md) --out CHANGES.md` (or via tmp files) → `--check` → commit → `pnpm install` → re-`gate.sh` → push. Expect it more than once per PR; #185/#189 each needed 4-5 rounds this session as `main` kept advancing underneath them.
+3. **After 400/402/421/425 land:** PF-203/TRO-404 (after PF-202 Done) and PF-400/TRO-405 (after PF-201 Done) are the last two MVP-gate tickets. PF-500/TRO-427 + PF-501/TRO-432 stay explicitly deferred (post-MVP, PLUGFORGE §6's own cut list). Full MVP gate = E0+E1+PF-200/202/203+PF-400+terraform(done)+deployed grader(done) — check PLUGFORGE.MD §6 again once these land, don't assume from memory.
 
 ## Standing facts
 
-- Factory Postgres: docker `ship-postgres-1` (:5433); `FACTORY_PG_CONTAINER=ship-postgres-1` for worktree.sh. `GH_REPO=troysatchell/ship` for all gh calls. serve.mjs on :7373 (may need restart in new session).
-- Both remotes verified `ccd776de` after #181's merge (2026-08-13 01:56Z). #180/#182 were merged externally on 2026-08-11 evening (not by a factory session); their tickets blind-verified CONFIRMED this session.
-- **One gate.sh at a time** (lesson 24). Two gate fails this session were sibling-load flakes (app-registration.test.ts, issues.test.ts — both passed standalone, both ledger'd in scorecard).
-- Verifier/builder targeted test runs: `cd api && npx vitest run <path>` — NEVER `pnpm --filter @ship/api test -- <path>` (runs full suite; new lessons entry).
-- Sub-agent watchdog: single silent commands >600s kill the agent. Stalled agents can be RESUMED via SendMessage with context intact (worked twice this session — cheaper than fresh dispatch).
-- TRO-402's Linear "blocked by TRO-398" gates PF-202 dispatch on TRO-398 being Done (merge + blind-verify), not merely PR'd.
+- Factory Postgres: docker `ship-postgres-1` (:5433); `FACTORY_PG_CONTAINER=ship-postgres-1` for `worktree.sh`. `GH_REPO=troysatchell/ship` for all `gh` calls.
+- **CodeRabbit (hosted PR review AND local free-CLI allowance) is capacity-constrained this session** — Troy confirmed another higher-priority project is consuming it. When it's rate-limited on a PR: try `gh pr comment <n> --body "@coderabbitai review"` once: if still limited, do a careful manual diff read yourself (documented as a stated exception in the PR body, same precedent class as the git-stash-guard override) rather than blocking. Don't assume this has cleared — check fresh each PR.
+- **GitHub Actions sometimes never triggers a `pull_request` run on push** (webhook miss, not a queue issue) — if `gh api "repos/.../actions/runs?branch=<b>"` shows nothing for 30-60s after a push, `gh workflow run ci.yml --ref <branch>` to force it. When polling for a run by SHA, use the FULL 40-char SHA — a short SHA silently matches nothing.
+- **New real CVE this session:** `nanoid <3.3.18` (GHSA-2v37-7h3g-55p8, transitive via `vitest>vite>postcss`), advisory updated 2026-08-13T15:43Z, blocked `dependency-audit-diff` repo-wide. Fixed via a `pnpm.overrides` entry in root `package.json` (same pattern as the existing js-yaml override) — already merged to `main`. If it recurs, it's already fixed; look for a NEW advisory instead of re-adding this one.
+- **Load-flake identities seen THIS session** (all confirmed: file untouched by the failing branch's diff, passes standalone via `gate.sh`'s own re-run) — joining the rule-24 set in `lessons.md`: `OrgChartPage.test.tsx`, `files.test.ts`, `weeks.test.ts` (previously catalogued), `UnifiedDocumentPage.programWeeksNav.test.tsx` (previously catalogued), and **new**: `documents-pagination.test.ts`. Root cause suspected: heavy concurrent `gate.sh` usage (up to 5 worktrees this session) PLUS a confirmed concurrent peer session (`implement-tro-558-559-ocr-eval`) hitting the same `ship-postgres-1` container. Not yet folded into `lessons.md` itself — do that next session if it recurs a 3rd+ time this wave (rule: 3+ recurrence → mechanical gate check, not just a bigger warning).
+- **CodeQL "missing rate limiting" on `/oauth/*` routes is an accepted, already-ticketed gap** (PF-500/TRO-427, explicitly post-MVP) — same dismissal PR #183 used; applies again to any future `/oauth/*` route (PF-105/106 will likely hit it too). Not a required merge check.
+- **Lock the Linear ticket to In Progress BEFORE dispatching the Agent call, not after** — missed this for TRO-551/TRO-416 initially, caught it when a peer session asked about collisions, fixed retroactively. Applied correctly for TRO-400/402/421/425.
+- Blind verification this session: dispatch a **fresh** agent (no shared context) with only the ticket body + `gh pr diff` output + `.factory/gate-result.json` written to files — orchestrator having already read the builder's report disqualifies it from verifying blind.
 
 ## Open questions
 
-- W6 deadline contradiction (Sun AM vs PM) — planning for **AM 2026-08-16**.
-- Carry-over: PR #138 (TRO-350) merge-or-hold; TRO-353 inbox draft 404s.
-- CodeRabbit PR reviews on #184/#185/#186 not yet posted at handoff — if absent after ~30 min, check the app's status; do not split or route around (guardrail).
+- W6 deadline: **AM 2026-08-16** (contradiction noted, planning for the earlier one).
+- TRO-441's blind verifier found a trivial dead import (`generateClientId`, unused) — not worth its own ticket, fix opportunistically if that file is touched again.
+- TRO-489's blind verifier found a stale doc reference (`oauth/README.md:18` still names the now-deleted `apiError.ts`) — same, opportunistic fix only.
+- Carry-over from before this wave, still untouched: PR #138 (TRO-350) merge-or-hold; TRO-353 inbox draft 404s; TRO-549/550/552 (Low/Medium CodeRabbit follow-ups, explicitly left in Backlog, not MVP-gate).
 
 ## Standing watch-outs
 
-- TRO-361 Render `auto_deploy` broken — manual deploys + SHA verify. Graded CI is GitLab (verify GitLab pipeline after syncs). TRO-503 (CloudFront /oauth/* gap, High) is deploy-blocking for PF-103's prod path — required edge-ceiling note on the ticket.
-- New tickets this session: TRO-549 (e2e login assertions, Low), TRO-550 (consent app-info lookup, Med), TRO-551 (OpenAPI /api-prefix hardcoded — **High, E1 adds more /oauth routes soon**), TRO-552 (limiter boundary predicate test, Low).
+- TRO-503 (CloudFront `/oauth/*` routing gap, High) — separate from the rate-limiting dismissal above, this is about `/oauth/authorize` being unreachable through CloudFront on the AWS deploy path. Still open, still relevant once PF-104/105/106 need a real deploy.
+- TRO-551 (OpenAPI `/api`-prefix fix) is merged — the mechanism exists now, but PF-104/105/106's `/oauth/*` routes remain UNREGISTERED by design (each ticket deferred it since the sibling tickets weren't landed yet at dispatch time). **This is real accumulating debt, not a mistake** — a follow-up ticket to register all of E1's routes at once (now that PF-103/104 exist, and 105/106 will soon) is a good candidate for after this wave, batching per the "shared root cause" dispatch principle rather than one ticket per route.
