@@ -37,13 +37,13 @@ describe('PF-202: GET /api/v1/openapi.json', () => {
     expect(body.openapi).toMatch(/^3\.1\.\d+$/);
   });
 
-  it('contains every registered /api/v1 route: health, itself, and the three documents routes', async () => {
+  it('contains every registered /api/v1 route: health, itself, documents, issues, sprints, me (PF-203)', async () => {
     const res = await request(app).get('/api/v1/openapi.json');
 
     const body: OpenApiDocumentBody = res.body;
     const paths = body.paths ?? {};
     expect(Object.keys(paths).sort()).toEqual(
-      ['/documents', '/documents/{id}', '/health', '/openapi.json'].sort()
+      ['/documents', '/documents/{id}', '/health', '/issues', '/me', '/openapi.json', '/sprints'].sort()
     );
   });
 

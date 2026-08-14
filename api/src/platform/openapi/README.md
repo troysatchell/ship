@@ -35,17 +35,20 @@ while the internal one stays 3.0.
   this file builds one that matches `serializeDocument()`'s actual output
   field-for-field.
 
-## Scope note (PF-202, as shipped)
+- `schemas/issues.ts` / `schemas/sprints.ts` / `schemas/me.ts` — registers
+  PF-201's `/issues`, `/sprints`, `/me` routes. Added by PF-203 (Linear
+  TRO-404), closing a real gap: PF-201 landed on a sibling branch concurrently
+  with PF-202 and was never retrofitted with `registerPath` calls, so those
+  three routes had no OpenAPI entry from PF-202's merge until this ticket.
+  `route-fitness.test.ts` (`platform/api/v1/__tests__/`) is the drift gate
+  that exists specifically so this class of gap fails CI going forward,
+  instead of silently persisting the way this one did.
 
-Registers every route that exists on `/api/v1` as of this ticket: `GET
-/health`, `GET /openapi.json`, and PF-200's three `/documents` routes. It
-does **not** register `/api/v1/issues`, `/api/v1/sprints`, or `/api/v1/me` —
-those are PF-201, built concurrently on a sibling branch and not merged to
-`main` as of PF-202's dispatch. Registering them is future work for whichever
-ticket lands PF-201: add `schemas/issues.ts` / `schemas/sprints.ts` /
-`schemas/me.ts` and import them from `schemas/index.ts`, following this
-directory's existing per-resource pattern — no change to `registry.ts` or
-`schemas/documents.ts` should be needed.
+## Scope note (PF-202/PF-203, as shipped)
+
+Registers every route that exists on `/api/v1`: `GET /health`, `GET
+/openapi.json`, PF-200's three `/documents` routes, and PF-201's `/issues`,
+`/sprints`, `/me` (the last three added by PF-203 — see above).
 
 ## Verifying it
 

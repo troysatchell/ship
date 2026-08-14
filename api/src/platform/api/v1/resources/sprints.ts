@@ -38,7 +38,10 @@ function requestIdOf(req: Request): string {
   return req.requestId ?? 'missing-request-id';
 }
 
-const ListSprintsQuerySchema = z.object({
+/** `export`ed (PF-203, Linear TRO-404 — closing the registration gap this
+ * ticket's brief flagged) so `platform/openapi/schemas/sprints.ts` can
+ * import and `registerPath` it. No route-handling logic changed. */
+export const ListSprintsQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(100).optional().default(20),
   cursor: z.string().min(1).optional(),
 });
