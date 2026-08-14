@@ -49,8 +49,13 @@ const OAUTH_VERSIONS = ['042_oauth_apps', '043_oauth_tokens_and_codes'];
 // Added by PF-104/TRO-416 (`044_oauth_tokens_authorization_code_id`, which
 // adds `oauth_tokens.authorization_code_id`) after its migration broke this
 // pre-existing test — `044`'s own migration-number-collision comment records
-// why 044 was available to take. Extended by PF-106/TRO-425
-// (`046_oauth_device_codes_polling`, which adds
+// why 044 was available to take. Extended by PF-105/TRO-421
+// (`045_oauth_tokens_refresh_expiry`, which adds
+// `oauth_tokens.refresh_token_expires_at`) for the identical reason — same
+// grep-for-other-implementations discipline lessons.md's rule about a
+// duplicate implementation of a hardened rule calls for, applied here to a
+// hardened *test fixture* rather than production code. Further extended by
+// PF-106/TRO-425 (`046_oauth_device_codes_polling`, which adds
 // `oauth_device_codes.last_polled_at`/`token_issued_at` — originally
 // numbered 045, renumbered to 046 because TRO-421/PF-105 independently
 // claimed 045 first; see CHANGES.md) for the identical reason: it ALTERs
@@ -58,9 +63,10 @@ const OAUTH_VERSIONS = ['042_oauth_apps', '043_oauth_tokens_and_codes'];
 // `OAUTH_VERSIONS` above (which names PF-101's own two migrations
 // specifically, and is used below in assertions scoped to just those two) —
 // extend THIS list, not that one, whenever a later ticket adds another
-// migration that ALTERs a table 043 creates.
+// oauth_tokens-dependent (or other 043-created-table-dependent) migration.
 const LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS = [
   '044_oauth_tokens_authorization_code_id',
+  '045_oauth_tokens_refresh_expiry',
   '046_oauth_device_codes_polling',
 ];
 
