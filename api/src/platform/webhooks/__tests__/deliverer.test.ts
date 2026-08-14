@@ -40,13 +40,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import crypto from 'crypto';
 import { pool } from '../../../db/client.js';
-import {
-  InMemoryWebhookDeliverer,
-  wireDelivererToEventBus,
-  EXECUTION_FAILURE_BACKOFF_MS,
-  MAX_EXECUTION_FAILURES,
-  type IWebhookDeliverer,
-} from '../deliverer.js';
+import { InMemoryWebhookDeliverer, wireDelivererToEventBus, type IWebhookDeliverer } from '../deliverer.js';
 import { ManualClock } from '../clock.js';
 import { InProcessEventBus } from '../eventBus.js';
 import type { EventEnvelope } from '../eventBus.js';
@@ -487,17 +481,20 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────
-  // processDue()'s EXECUTION-failure backoff (decrypt/sign/DB — never an
-  // HTTP delivery outcome, which always resolves to a terminal DB write).
+  // A signing failure (undecryptable/malformed secret) is a DETERMINISTIC
+  // failure — it will fail identically on every future attempt too — so
+  // attempt() dead-letters it immediately, distinct from processDue()'s
+  // execution-failure backoff (which is for TRANSIENT failures, e.g. the
+  // database briefly unreachable — see deliverer.ts's own doc comments).
   // ──────────────────────────────────────────────────────────────────────
 
-  it('an execution failure (e.g. an undecryptable secret) backs off instead of retrying immediately, then gives up in-memory after MAX_EXECUTION_FAILURES — leaving the row pending for rehydrate()', async () => {
+  it('an undecryptable/unsignable secret dead-letters immediately on attempt 1 — never retried, never left pending for rehydrate()', async () => {
     const workspaceId = await createWorkspace();
     const appId = await createOAuthApp(workspaceId);
     // A subscription with a garbage (non-AES-GCM) ciphertext — bypasses
     // createSubscription()'s real encryptSecret() call so that attempt()'s
-    // decryptSecret() throws, exercising processDue()'s execution-failure
-    // path (never reaches performHttpAttempt() at all).
+    // decryptSecret() throws, exercising attempt()'s own dead-letter path
+    // (never reaches performHttpAttempt() at all).
     const subscriptionResult = await pool.query<{ id: string }>(
       `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
        VALUES ($1, $2, $3, $4, true) RETURNING id`,
@@ -513,35 +510,22 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     await deliverer.enqueueEvent(event);
     expect(deliverer.queueLength).toBe(1);
 
-    // Attempt 1: execution fails. `processDue()` still reports 1 (it WAS due
-    // and WAS attempted — attempting is what failed), and the item is
-    // re-queued with a backoff delay, not retried on the very next call.
     expect(await deliverer.processDue()).toBe(1);
-    expect(fetchImpl).not.toHaveBeenCalled();
-    expect(deliverer.queueLength).toBe(1);
-
-    clock.advance(EXECUTION_FAILURE_BACKOFF_MS - 1);
-    expect(await deliverer.processDue()).toBe(0); // not due yet — backoff, not immediate retry
-    clock.advance(1);
-
-    // Drive it through the remaining execution failures until
-    // MAX_EXECUTION_FAILURES is reached and this process gives up in-memory.
-    for (let failureCount = 2; failureCount <= MAX_EXECUTION_FAILURES; failureCount++) {
-      expect(await deliverer.processDue()).toBe(1);
-      clock.advance(EXECUTION_FAILURE_BACKOFF_MS);
-    }
-
-    // Given up: the queue is empty (nothing left to re-process in THIS
-    // process), yet the DB row is still 'pending' — never touched by an
-    // execution failure, only by a real HTTP attempt outcome — so a future
-    // rehydrate() (this process's own restart, or another instance's boot)
-    // can still recover and eventually deliver it.
-    expect(deliverer.queueLength).toBe(0);
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchImpl).not.toHaveBeenCalled(); // never reached the HTTP layer at all
+    expect(deliverer.queueLength).toBe(0); // nothing re-queued — this is terminal, not backed off
 
     const rows = await fetchDeliveryRows(subscriptionId, event.id);
     expect(rows).toHaveLength(1);
-    expect(rows[0]?.status).toBe('pending');
+    expect(rows[0]?.status).toBe('dead');
+    expect(rows[0]?.response_status).toBeNull(); // never got far enough to have an HTTP status
+    expect(rows[0]?.next_attempt_at).toBeNull();
+
+    // Advancing the clock arbitrarily far and calling processDue() again
+    // attempts nothing more — confirms this is genuinely terminal, not just
+    // "not due yet."
+    clock.advance(10_000_000);
+    expect(await deliverer.processDue()).toBe(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   // ──────────────────────────────────────────────────────────────────────
@@ -588,18 +572,33 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     expect(rows.map((r) => r.status)).toEqual(['failed', 'success']);
   });
 
-  it('rehydrate() on a deliverer with nothing pending restores exactly 0', async () => {
-    // Establish a genuinely controlled "nothing pending" state (CodeRabbit,
-    // this PR review) rather than only asserting a relative delta: this is
-    // the LAST test in this describe block to touch `webhook_deliveries`
-    // (the sibling `wireDelivererToEventBus` describe below never touches
-    // the DB), so deleting every 'pending' row THIS FILE created — including
-    // the one the execution-failure test above deliberately left behind — is
-    // safe; no later test depends on it. Scoped to `createdWorkspaceIds`
-    // (every workspace `createWorkspace()` has made in this file) rather
-    // than a blanket `DELETE ... WHERE status = 'pending'` (CodeRabbit, this
-    // PR review — an earlier draft's blast radius reached rows this file
-    // never created).
+  /** Every `webhook_deliveries` row still 'pending' among the subscriptions
+   * THIS FILE's fixtures created (`createdWorkspaceIds`) — scoped, not a
+   * blanket table-wide query, so this assertion never depends on (or
+   * disturbs) whatever another source might leave pending elsewhere. */
+  async function pendingRowsForThisFilesFixtures(): Promise<{ id: string }[]> {
+    const result = await pool.query<{ id: string }>(
+      `SELECT wd.id
+       FROM webhook_deliveries wd
+       JOIN webhook_subscriptions ws ON ws.id = wd.subscription_id
+       JOIN oauth_apps a ON a.id = ws.app_id
+       WHERE a.workspace_id = ANY($1) AND wd.status = 'pending'`,
+      [createdWorkspaceIds]
+    );
+    return result.rows;
+  }
+
+  it('rehydrate() leaves nothing pending among this file\'s own fixtures once they are cleaned up', async () => {
+    // Establish a genuinely controlled "nothing pending, for OUR fixtures"
+    // state (CodeRabbit, this PR review) rather than only asserting a
+    // relative delta: this is the LAST test in this describe block to touch
+    // `webhook_deliveries` (the sibling `wireDelivererToEventBus` describe
+    // below never touches the DB), so deleting every 'pending' row THIS FILE
+    // created — including the one the dead-letter-immediately test above
+    // left behind — is safe; no later test depends on it. Scoped to
+    // `createdWorkspaceIds` rather than a blanket `DELETE ... WHERE status =
+    // 'pending'` across the whole table (CodeRabbit, this PR review — an
+    // earlier draft's blast radius reached rows this file never created).
     await pool.query(
       `DELETE FROM webhook_deliveries wd
        USING webhook_subscriptions ws, oauth_apps a
@@ -607,12 +606,21 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
          AND a.workspace_id = ANY($1) AND wd.status = 'pending'`,
       [createdWorkspaceIds]
     );
+    expect(await pendingRowsForThisFilesFixtures()).toHaveLength(0);
 
+    // rehydrate() is deliberately SYSTEM-WIDE by design (its own docstring:
+    // every outstanding 'pending' row, not scoped to one instance/event/
+    // subscription) — asserting its global `restored` count is exactly 0
+    // would be brittle against any OTHER source in the process leaving a
+    // stray pending row (CodeRabbit, this PR review). What actually matters,
+    // and is asserted precisely here regardless of global state: rehydrate()
+    // is read-only against the DB, so THIS file's own fixtures (already
+    // confirmed to have nothing pending, above) are still confirmed to have
+    // nothing pending afterward, whatever `restored` reports for the rest of
+    // the table.
     const deliverer = new InMemoryWebhookDeliverer(pool, new ManualClock(0));
-    expect(deliverer.queueLength).toBe(0);
-    const restored = await deliverer.rehydrate();
-    expect(restored).toBe(0);
-    expect(deliverer.queueLength).toBe(0);
+    await deliverer.rehydrate();
+    expect(await pendingRowsForThisFilesFixtures()).toHaveLength(0);
   });
 });
 

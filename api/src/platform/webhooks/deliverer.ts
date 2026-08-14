@@ -127,20 +127,24 @@ const DEFAULT_POLL_INTERVAL_MS = 1_000;
 const REHYDRATE_BATCH_SIZE = 500;
 
 /**
- * `processDue()`'s backoff for an EXECUTION failure (decrypt/sign/DB —
- * distinct from `RETRY_SCHEDULE_MS`, which is the HTTP DELIVERY retry
- * schedule). Deliberately a separate, much shorter fixed policy: an
- * execution failure most often means "the database is briefly unreachable,"
- * which is not the same failure class the 1s-30m delivery schedule is tuned
- * for. Re-queueing at `dueAtMs = now` (no backoff at all, the original
- * behavior) would spin every `processDue()` tick against a persistently
- * broken dependency; `MAX_EXECUTION_FAILURES` bounds how long this ONE
- * process keeps trying before giving up in-memory and leaving the row
- * `'pending'` for a future `rehydrate()` (this process's own restart, or
- * another instance's boot) instead (CodeRabbit, this PR review).
+ * `processDue()`'s backoff for a TRANSIENT EXECUTION failure — a DB
+ * round-trip throwing while recording an attempt's outcome — distinct from
+ * `RETRY_SCHEDULE_MS`, which is the HTTP DELIVERY retry schedule, AND
+ * distinct from `decryptSecret`/`sign` failing inside `attempt()` (a
+ * DETERMINISTIC failure — a malformed secret fails identically every time —
+ * dead-lettered immediately there, never reaching this backoff at all; see
+ * `attempt()`'s own try/catch around its signing step). What lands here is
+ * narrower than the file's earlier revisions treated it: "the database is
+ * briefly unreachable" during the UPDATE/INSERT that persists an attempt's
+ * result. Re-queueing at `dueAtMs = now` (no backoff at all) would spin every
+ * `processDue()` tick against a persistently broken dependency;
+ * `MAX_EXECUTION_FAILURES` bounds how long this ONE process keeps trying
+ * before giving up in-memory and leaving the row `'pending'` for a future
+ * `rehydrate()` (this process's own restart, or another instance's boot)
+ * instead (CodeRabbit, this PR review).
  */
-export const EXECUTION_FAILURE_BACKOFF_MS = 5_000;
-export const MAX_EXECUTION_FAILURES = 5;
+const EXECUTION_FAILURE_BACKOFF_MS = 5_000;
+const MAX_EXECUTION_FAILURES = 5;
 
 /** Narrows `value` to `EventType` by checking it against the registry's own
  * `EVENT_TYPES`, rather than an unchecked `as EventType` cast — `event_type`
@@ -196,12 +200,15 @@ interface QueuedAttempt {
   idempotencyKey: string;
   attemptNumber: number;
   dueAtMs: number;
-  /** Consecutive EXECUTION failures (decrypt/sign/DB — `processDue()`'s
-   * catch block; never an HTTP delivery outcome, which `attempt()` always
-   * resolves to a terminal DB write) for this queued item, in THIS process.
-   * Separate from `attemptNumber`, which only ever advances on a real HTTP
-   * attempt — see `processDue()`'s catch block for how this backs off and
-   * eventually gives up in-memory, leaving the row 'pending' for a future
+  /** Consecutive TRANSIENT execution failures — a DB round-trip throwing
+   * while `attempt()` records an outcome (`processDue()`'s own catch block).
+   * Does NOT count a `decryptSecret`/`sign` failure — that's a deterministic
+   * failure `attempt()` dead-letters immediately, internally, never reaching
+   * `processDue()`'s catch at all. Never an HTTP delivery outcome either
+   * (`attempt()` always resolves those to a terminal DB write). Separate
+   * from `attemptNumber`, which only ever advances on a real HTTP attempt —
+   * see `processDue()`'s catch block for how this backs off and eventually
+   * gives up in-memory, leaving the row 'pending' for a future
    * `rehydrate()`. */
   executionFailures: number;
 }
@@ -379,12 +386,15 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
         await this.attempt(item);
       } catch (error) {
         // `attempt()`'s own HTTP call never throws (performHttpAttempt()
-        // catches everything into a retryable outcome) — a throw here means
-        // the surrounding machinery failed: decryptSecret, sign, or a DB
-        // round-trip. The delivery's row is still 'pending' in the DB either
-        // way, but this item has already been spliced out of `this.queue`
-        // above — dropping it here, with no re-queue at all, would silently
-        // strand it in memory until the next restart's `rehydrate()` (CodeRabbit,
+        // catches everything into a retryable outcome), and a
+        // decryptSecret/sign failure is handled INSIDE attempt() too (dead-
+        // lettered immediately — see its own try/catch) — a throw reaching
+        // HERE means a DB round-trip failed while recording an outcome, a
+        // transient failure a retry has a real chance of clearing. The
+        // delivery's row is still 'pending' in the DB either way, but this
+        // item has already been spliced out of `this.queue` above —
+        // dropping it here, with no re-queue at all, would silently strand
+        // it in memory until the next restart's `rehydrate()` (CodeRabbit,
         // this PR review: one bad attempt must not take the rest of this
         // batch down with it, nor strand its own delivery in memory).
         const executionFailures = item.executionFailures + 1;
@@ -531,11 +541,39 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
   }
 
   private async attempt(item: QueuedAttempt): Promise<void> {
-    const secret = decryptSecret(item.signingSecretCiphertext);
-    // signer.ts's Clock returns unix SECONDS, not ms — see clock.ts's header
-    // for why the two `Clock` shapes are kept distinct.
-    const signerClock: SignerClock = () => Math.floor(this.clock.now() / 1000);
-    const signatureHeader = sign(item.rawBody, secret, signerClock);
+    let secret: string;
+    let signatureHeader: string;
+    try {
+      secret = decryptSecret(item.signingSecretCiphertext);
+      // signer.ts's Clock returns unix SECONDS, not ms — see clock.ts's
+      // header for why the two `Clock` shapes are kept distinct.
+      const signerClock: SignerClock = () => Math.floor(this.clock.now() / 1000);
+      signatureHeader = sign(item.rawBody, secret, signerClock);
+    } catch (error) {
+      // Deterministic, permanent failure (CodeRabbit, this PR review): a
+      // malformed/corrupted `signing_secret_ciphertext` or an empty secret
+      // will fail decrypt/sign identically on EVERY future attempt — this is
+      // not the transient "database briefly unreachable" case
+      // processDue()'s execution-failure backoff exists for. Retrying it
+      // with backoff wastes MAX_EXECUTION_FAILURES attempts on something
+      // that can never succeed, and giving up in-memory (the transient-
+      // failure path) would leave the row 'pending' forever, so every future
+      // rehydrate() — this process restarting, or another instance's boot —
+      // would pick it back up and retry it again, forever. Dead-letter it
+      // immediately instead, the same as a 4xx.
+      console.error(
+        `webhook deliverer: delivery ${item.deliveryRowId} has an undecryptable or unsignable secret — dead-lettering, not retrying`,
+        error
+      );
+      const message = error instanceof Error ? error.message : String(error);
+      await this.pool.query(
+        `UPDATE webhook_deliveries
+         SET status = 'dead', response_status = NULL, response_excerpt = $2, latency_ms = NULL, next_attempt_at = NULL
+         WHERE id = $1`,
+        [item.deliveryRowId, message.slice(0, RESPONSE_EXCERPT_MAX_CHARS)]
+      );
+      return;
+    }
 
     const startedAtMs = this.clock.now();
     const outcome = await this.performHttpAttempt(item, signatureHeader);
