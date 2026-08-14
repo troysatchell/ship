@@ -302,7 +302,7 @@ fi
 # Judgement-dependent classes (concurrency, docs accuracy) stay in the brief.
 if [ -f scripts/factory/review-patterns.mjs ]; then
   if RP_OUT="$(node scripts/factory/review-patterns.mjs "$BASE_REF" 2>&1)"; then
-    record review-patterns pass "no new non-null/any casts or fixed sleeps"
+    record review-patterns pass "no new any casts or fixed sleeps"
   else
     echo "$RP_OUT" > "$OUT_DIR/review-patterns.txt"
     RP_N="$(grep -cE '^\s{4}\S+:' "$OUT_DIR/review-patterns.txt")" || RP_N=0

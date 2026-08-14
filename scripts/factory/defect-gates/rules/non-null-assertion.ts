@@ -17,10 +17,13 @@ const meta: RuleMeta = {
   scope: "changeset",
   severity: "fail",
   repairability: "assisted",
-  // Set to null until the commit wiring this rule into gate.sh (G10) lands —
-  // see Task 9's activation-pinning step, which pins this to that commit's
-  // real sha so branches cut before it run report-only instead of failing
-  // retroactively.
+  // Pinned to 63d54e4, the commit that wired this rule into gate.sh (G10) —
+  // see Task 9. Branches cut before this commit run report-only instead of
+  // failing retroactively. This SHA must remain a real ancestor of main after
+  // this PR merges — safe under this repo's actual merge-commit convention
+  // (confirmed via `git log --merges main`), but a squash- or rebase-merge of
+  // THIS PR would leave it unreachable, degrading or breaking the pin. If that
+  // ever happens, re-pin this to the resulting merge commit on main.
   activatedAt: "63d54e49b1eab2becab923eb823129eb4b829e8a",
   pinExpiresAfterMainCommits: 25,
   replayCorpus: [

@@ -146,15 +146,28 @@ function main(): void {
 
   const results = runRules(RULES, ctx);
 
+  const mergeBase = sh(["merge-base", "HEAD", baseRef], repoRoot);
+
   const baselines: Record<string, Finding[]> = {};
   const pins: Record<string, PinDecision> = {};
   for (const rule of RULES) {
+    // Read the baseline at the merge-base, not BASE_REF's own tip.
+    // changedTsFiles computes the changed-file list with three-dot (merge-base)
+    // diff semantics (baseRef...HEAD) — reading baseline content at BASE_REF's
+    // tip instead is a mismatch: if BASE_REF advances past this branch's
+    // merge-base with a commit that fixes a violation in a file this branch
+    // ALSO touches (but doesn't fix), the branch's untouched pre-existing
+    // violation gets misreported as introduced. The merge-base is still an
+    // ancestor of BASE_REF, so this preserves the anti-gaming property (a
+    // branch cannot forge its own baseline) while matching the same reference
+    // point the changed-file list already uses.
+    //
     // Use fileAtRef, never a raw `git show`. A file this branch ADDED does not
-    // exist at BASE_REF, and that is the common case, not the edge case.
+    // exist at the merge-base, and that is the common case, not the edge case.
     // fileAtRef returns null there; a raw git show would throw and take the
     // whole gate down.
     baselines[rule.meta.id] = changed.flatMap((f) => {
-      const before = fileAtRef(repoRoot, baseRef, f);
+      const before = fileAtRef(repoRoot, mergeBase, f);
       if (before === null) return [];
       return rule.checkSource(f, before, ctx);
     });
@@ -194,7 +207,7 @@ function main(): void {
     pins,
     baseRef,
     baseSha: sh(["rev-parse", baseRef], repoRoot),
-    mergeBase: sh(["merge-base", "HEAD", baseRef], repoRoot),
+    mergeBase,
   });
 
   writeFileSync(join(outDir, "defect-gate.json"), JSON.stringify(doc, null, 2) + "\n");

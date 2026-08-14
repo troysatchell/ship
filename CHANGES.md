@@ -88,6 +88,12 @@ pnpm exec tsc --noEmit -p scripts/factory/defect-gates
 commit `8a5d6dc`, and revert `ship-factory/SKILL.md`/`ship-orchestrator/SKILL.md`'s config-pointer
 edits back to their hardcoded values. No database or migration involved.
 
+**Follow-up if this PR's merge method changes.** `rules/non-null-assertion.ts`'s `activatedAt` pins
+to a specific commit SHA on this branch. That SHA only survives as a real ancestor of `main` because
+this repo merges PRs with an actual merge commit. If this PR is ever squash- or rebase-merged
+instead, that SHA becomes unreachable from `main` — re-pin `activatedAt` to the resulting commit on
+`main` when that happens.
+
 ---
 
 ## TRO-438 — PF-304: Webhook deliverer + retries + DLQ

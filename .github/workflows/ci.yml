@@ -103,6 +103,12 @@ jobs:
       - name: check-integration-deps regression test
         run: node --test scripts/__tests__/check-integration-deps.test.mjs
 
+      - name: Factory defect-gate engine tests
+        run: pnpm exec vitest run --config scripts/factory/defect-gates/vitest.config.ts
+
+      - name: Factory defect-gate engine type-check
+        run: pnpm exec tsc --noEmit -p scripts/factory/defect-gates
+
       - name: Build all packages
         run: pnpm build
 

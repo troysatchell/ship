@@ -197,10 +197,9 @@ stop and report exactly what blocks you.
 
 ### 1. Select the next bundle (or ticket)
 
-Pull open issues from Linear, **team `Troysatchell`**, scoped to the project the run is for.
-**Default: `FleetGraph — Week 5 Project Intelligence Agent`** — that is the live work.
-`ShipShape Audit Remediation` is Week 4 and effectively closed (121/123 Done); select from it only
-for a named residual, never as queue-filler.
+Pull open issues from Linear, scoped to the project the run is for — read `audit/factory/config.yaml`'s
+`meta.activeProject` and `meta.team` at the start of every run; do not hardcode either here.
+Past-project tickets are selected only for a named residual, never as queue-filler.
 
 Scope is load-bearing, and issue numbers will not give it to you. This team holds six projects whose
 numbers **interleave**: `TRO-250`–`275` are a separate product's security audit, `TRO-312`–`365` are
