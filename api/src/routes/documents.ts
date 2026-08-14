@@ -7,7 +7,7 @@ import { validateUuidParam, limitQuerySchema } from '../middleware/paramValidati
 import { handleVisibilityChange, handleDocumentConversion, invalidateDocumentCache, broadcastToUser } from '../collaboration/index.js';
 import { extractHypothesisFromContent, extractSuccessCriteriaFromContent, extractVisionFromContent, extractGoalsFromContent, checkDocumentCompleteness } from '../utils/extractHypothesis.js';
 import { loadContentFromYjsState } from '../utils/yjsConverter.js';
-import { createDocument, updateDocument, deleteDocument } from '../services/documentService.js';
+import { createDocument, updateDocument, deleteDocument, flushPendingEvents } from '../services/documentService.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -675,7 +675,7 @@ router.post('/', authMiddleware, authed(async (req, res) => {
     }
 
     await client.query('COMMIT');
-    pendingEvents.forEach((dispatch) => dispatch());
+    flushPendingEvents(pendingEvents);
 
     // Broadcast accountability update for document types that affect action items
     // Sprint plans clear the "write sprint plan" action item
@@ -1133,7 +1133,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     }
 
     await client.query('COMMIT');
-    pendingEvents.forEach((dispatch) => dispatch());
+    flushPendingEvents(pendingEvents);
 
     // Post-commit operations (non-transactional)
 

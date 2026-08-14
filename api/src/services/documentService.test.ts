@@ -409,7 +409,7 @@ describe('documentService (TRO-426 / PF-301)', () => {
           // that by simply never flushing, and confirm nothing was published.
           expect(documentUpdatedEvents.find((e) => (e.data as { id: string }).id === issue.id)).toBeUndefined()
 
-          const row = await pool.query('SELECT title FROM documents WHERE id = $1', [issue.id])
+          const row = await pool.query<{ title: string }>('SELECT title FROM documents WHERE id = $1', [issue.id])
           expect(row.rows[0]?.title).not.toBe('Should Be Rolled Back')
         } finally {
           unsubscribe()

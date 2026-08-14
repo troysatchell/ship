@@ -61,12 +61,21 @@
  * `sprint.started`/`sprint.completed` derive the same way from
  * `properties.status` for `document_type === 'sprint'`, per PF-300's pinned field
  * names (`platform/webhooks/events.ts`'s header comment, "Discovery task").
- * Sprint derivation is implemented and unit-tested here even though, at time of
- * writing, no route in the four consolidated routers writes a sprint document in
- * practice (sprint documents are owned by `routes/weeks.ts`, out of scope for
- * this ticket — see the PR body / CHANGES.md "Excluded write sites" list). If a
- * sprint document is ever updated through `documents.ts`'s generic
- * `PATCH /api/documents/:id` (which applies to any `document_type`, including
+ * Sprint derivation is implemented and unit-tested here even though none of the
+ * *consolidated* primary create/update/delete endpoints (`POST /`, `PATCH /:id`,
+ * `DELETE /:id` on each of the four routers) reaches it in practice — every one
+ * of those filters to its own `document_type` (`updateDocument`'s
+ * `documentTypeFilter: 'project'`/`'program'`, `createDocument`'s hardcoded
+ * `documentType: 'issue'`/`'project'`/`'program'`, etc.), never `'sprint'`. That
+ * is narrower than "no route in these four files ever writes a sprint document"
+ * — CodeRabbit correctly caught that broader claim as false: `projects.ts`'s
+ * `POST /:id/sprints` (a secondary, non-consolidated endpoint) genuinely creates
+ * `document_type = 'sprint'` documents, alongside `routes/weeks.ts` and
+ * `team.ts`'s allocation endpoint — see CHANGES.md's "secondary write sites
+ * within the four consolidated routers" for the full list. If a sprint document
+ * is ever updated through `documents.ts`'s generic `PATCH /api/documents/:id`
+ * (the one primary endpoint with no `document_type` filter at all, which applies
+ * to any `document_type`, including
  * `sprint`), the derivation already fires correctly; `weeks.ts`'s own dedicated
  * sprint routes remain inline SQL until a follow-up ticket redirects them.
  *
@@ -158,6 +167,30 @@ function dispatchOrQueue(
     );
   }
   pendingEvents.push(dispatch);
+}
+
+/**
+ * Runs every queued dispatch from a `pendingEvents` array (see
+ * `CreateDocumentParams.pendingEvents`) after the caller's own
+ * `client.query('COMMIT')` has succeeded. Call sites should use this rather
+ * than iterating `pendingEvents` themselves (CodeRabbit, this PR): the write
+ * this event describes already committed by the time flush runs, so a
+ * subscriber that throws — `IEventBus.publish()` deliberately does not catch a
+ * handler's own error, see `eventBus.ts`'s header comment — must not surface as
+ * a failed request for a write that actually succeeded. Logs and continues to
+ * the next queued event rather than losing the rest of the batch to one bad
+ * subscriber. There is no ROLLBACK left to run at this point regardless; the
+ * only options are "swallow and log" or "let the client wrongly see a 500 for
+ * a commit that already happened," and the latter is strictly worse.
+ */
+export function flushPendingEvents(pendingEvents: Array<() => void>): void {
+  for (const dispatch of pendingEvents) {
+    try {
+      dispatch();
+    } catch (err) {
+      console.error('documentService.flushPendingEvents: a post-commit event dispatch threw', err);
+    }
+  }
 }
 
 export interface CreateDocumentParams {
@@ -448,6 +481,23 @@ function publishDocumentUpdated(
     const prevStatus = prevProps.status;
     const newStatus = newProps.status;
     const sprintNumber = Number(newProps.sprint_number);
+    const isRealTransition =
+      (newStatus === 'active' && prevStatus === 'planning') ||
+      (newStatus === 'completed' && isSprintStatus(prevStatus) && prevStatus !== 'completed');
+
+    if (isRealTransition && !Number.isFinite(sprintNumber)) {
+      // A genuine planning->active or ->completed transition, but
+      // `properties.sprint_number` is missing or not numeric — the event is
+      // skipped silently below rather than published with a garbage
+      // `sprint_number`. Logged (CodeRabbit, this PR) so a data-quality gap
+      // like this is diagnosable instead of a webhook subscriber just never
+      // seeing an event it should have.
+      console.warn(
+        `documentService: sprint ${row.id} had a real status transition (${String(prevStatus)} -> ` +
+          `${String(newStatus)}) but properties.sprint_number was not a finite number ` +
+          `(${JSON.stringify(newProps.sprint_number)}) — sprint.${newStatus === 'active' ? 'started' : 'completed'} not published`
+      );
+    }
 
     if (newStatus === 'active' && prevStatus === 'planning' && Number.isFinite(sprintNumber)) {
       bus.publish('sprint.started', row.workspace_id, {

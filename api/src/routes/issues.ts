@@ -16,7 +16,7 @@ import { broadcastToUser } from '../collaboration/index.js';
 // The registered OpenAPI schema is the single source of truth for the list
 // endpoint's pagination bounds — see the comment on the pagination block below.
 import { IssueListPaginationSchema } from '../openapi/schemas/issues.js';
-import { createDocument, updateDocument, deleteDocument } from '../services/documentService.js';
+import { createDocument, updateDocument, deleteDocument, flushPendingEvents } from '../services/documentService.js';
 
 type RouterType = ReturnType<typeof Router>;
 const router: RouterType = Router();
@@ -897,7 +897,7 @@ router.post('/', authMiddleware, authed(async (req, res) => {
     }
 
     await client.query('COMMIT');
-    pendingEvents.forEach((dispatch) => dispatch());
+    flushPendingEvents(pendingEvents);
 
     // Auto-complete sprint_issues accountability when first issue is created in a sprint
     const sprintAssociations = belongs_to.filter(bt => bt.type === 'sprint');
@@ -1248,7 +1248,7 @@ router.patch('/:id', authMiddleware, authed(async (req, res) => {
     }
 
     await client.query('COMMIT');
-    pendingEvents.forEach((dispatch) => dispatch());
+    flushPendingEvents(pendingEvents);
 
     // Post-commit operations (non-transactional)
 

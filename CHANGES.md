@@ -47,7 +47,13 @@ that per-router logic generically — unifying four routers' divergent column-se
 function would have been a rewrite of business logic this ticket did not audit line by line, not the
 "smallest-possible consolidation" its own risk note calls for.
 
-**Excluded write sites — explicit, matching the ticket's own collab-persist exclusion pattern:**
+**Excluded write sites — explicit, matching the ticket's own collab-persist exclusion pattern.**
+The ticket's own scoping note counts *route files* that do inline `documents` writes ("nine ...
+plus `admin.ts`, `team.ts`, `workspaces.ts`, `feedback.ts`, `setup.ts`") — a file-level count, not a
+count of individual `INSERT`/`UPDATE`/`DELETE` call sites; several of those files (and the four
+consolidated routers themselves) contain multiple such sites each. Read "nine route files" as
+bounding which *files* have inline writes, not how many statements they contain.
+
 - `api/src/collaboration/index.ts`'s Yjs persist (debounced `UPDATE documents SET yjs_state,
   content, properties`) — excluded by the ticket itself: `document.updated` fires from explicit API
   writes only, not a webhook per keystroke-batch. Defended in `docs/architecture.md`.
@@ -55,15 +61,10 @@ function would have been a rewrite of business logic this ticket did not audit l
   the "four resource routers" the scope decision names, but re-grepping the live tree (as the ticket
   itself warned the 2026-08-10 survey might be stale) found it owns EVERY sprint/standup/
   weekly_review/weekly_plan document write — including the actual production sprint
-  `planning → active → completed` transitions (`POST /:id/start`, `PATCH /:id`). `programs.ts`,
-  despite being one of the four named routers, only ever writes `document_type = 'program'` — it
-  never touches sprint documents. Net effect: `sprint.started`/`sprint.completed` derivation is
-  implemented and unit-tested in `documentService.updateDocument()`, and fires correctly if a sprint
-  document is ever updated through `documents.ts`'s generic `PATCH /:id` — but no *production* route
-  reaches that path today, since the real sprint-transition endpoints live in `weeks.ts`, untouched.
-  Consolidating a 3600+ line file with ~20 write sites was judged out of proportion for "smallest
-  possible" on this ticket's own stated risk profile; flagged here rather than silently implied
-  fixed. Candidate for a dedicated follow-up ticket.
+  `planning → active → completed` transitions (`POST /:id/start`, `PATCH /:id`). Consolidating a
+  3600+ line file with ~20 write sites was judged out of proportion for "smallest possible" on this
+  ticket's own stated risk profile; flagged here rather than silently implied fixed. Candidate for a
+  dedicated follow-up ticket.
 - **`api/src/routes/feedback.ts:146`** — a public, unauthenticated endpoint that creates
   `document_type = 'issue'` documents from external feedback submissions. The most consequential
   exclusion: it bears directly on the same "creating an issue-type document" concern the AC names,
@@ -76,6 +77,38 @@ function would have been a rewrite of business logic this ticket did not audit l
   (issue-create event pairing; zero `publish()` in route layer). Consolidating five more files with
   their own bespoke write patterns (`jsonb_set` property patches, soft-delete `archived_at` toggles)
   was judged out of scope for "smallest possible."
+
+**Secondary write sites *within* the four consolidated routers themselves — also excluded, also
+enumerated (CodeRabbit, this PR: a prior draft of this list correctly enumerated exclusions in
+*other* files but implicitly left the impression that every write site in the four routers'
+*own* files was covered; it wasn't — only each router's primary `POST /`, `PATCH /:id`,
+`DELETE /:id` was).** Every one of the endpoints below still does its own inline `documents`
+`INSERT`/`UPDATE`/`DELETE`, unconsolidated, and fires no event:
+- `documents.ts` — `PATCH /:id/content` (a dedicated content/yjs_state/properties write, separate
+  from the generic `PATCH /:id`); `POST /:id/convert` and `POST /:id/undo-conversion` (in-place
+  `document_type` conversion with snapshotting); and, *inside* the consolidated `PATCH /:id` handler
+  itself, two side-effect writes to **other** documents (not the one being updated): the weekly
+  plan/retro resubmission logic (patches a linked sprint's `plan_approval`/`review_approval`), and
+  the visibility-cascade (patches every descendant document when visibility changes).
+- `issues.ts` — `POST /bulk` (archive/delete/restore/update many issues via `id = ANY($1)`);
+  `POST /:id/accept` (triage → backlog) and `POST /:id/reject` (→ cancelled, sets
+  `rejection_reason`) — both real state transitions matching `issue.status_changed`'s shape, neither
+  wired.
+- `projects.ts` — `POST /:id/retro` / `PATCH /:id/retro` (retro content/properties);
+  `POST /:id/approve-plan` / `POST /:id/approve-retro` (approval-state property patches); and
+  **`POST /:id/sprints`, which creates `document_type = 'sprint'` documents** — a genuine sprint-
+  creation site inside one of the four named routers. (An earlier version of `documentService.ts`'s
+  own header comment claimed "no route in the four consolidated routers writes a sprint document in
+  practice" — CodeRabbit correctly caught that as too broad; the *consolidated* create/update/delete
+  endpoints never touch `document_type = 'sprint'`, but this secondary, non-consolidated endpoint
+  does. Corrected in the file's header comment.)
+- `programs.ts` — `POST /:id/merge` (re-parents the merged-away program's children, then archives
+  it).
+
+None of these were touched: no `documentService` call, no event, same inline-SQL shape as before
+this PR. Listed here so "every write site not routed through `documentService`" is something a
+reader can actually verify against this file list, not an implicit claim resting on the four
+routers' primary endpoints alone.
 
 **CodeRabbit triage (7 findings, all real — no dismissed-as-noise entries).** The most
 significant: **events were publishing before `COMMIT`.** `documents.ts`/`issues.ts`'s create/update
