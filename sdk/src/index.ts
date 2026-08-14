@@ -13,7 +13,11 @@
 // exported via the `ShipClient` class, not separately). PF-402 adds
 // `iterate()` on `documents`/`issues`/`sprints` (methods on the already-
 // exported resource-client classes, so no new class export) plus the three
-// `Iterate*Params` types below.
+// `Iterate*Params` types below. PF-205 adds `PeopleClient`/`ChangesClient`
+// (new resource-client exports, unlike PF-402's methods-only additions) plus
+// four new methods on the existing `DocumentsClient`/`SprintsClient`
+// exports (`getAssociations`/`getReverseAssociations`/`getBacklinks`/
+// `getComments`, `get`) and every wire type those seven methods need.
 
 export { ShipClient } from './client.js';
 export type { ShipClientOptions } from './client.js';
@@ -39,12 +43,36 @@ export type {
   SprintList,
   ListSprintsParams,
   IterateSprintsParams,
+  // PF-205 (Linear TRO-414) additions.
+  SprintDetail,
+  AssociationEdge,
+  AssociationEdgeList,
+  ListAssociationsParams,
+  Backlink,
+  BacklinkList,
+  ListBacklinksParams,
+  DocumentComment,
+  DocumentCommentList,
+  ListDocumentCommentsParams,
+  Person,
+  PersonList,
+  ListPeopleParams,
+  IteratePeopleParams,
+  ChangeEntry,
+  ChangedDocumentEntry,
+  ChangedHistoryEntry,
+  ChangedCommentEntry,
+  ChangesPage,
+  GetChangesParams,
 } from './types.js';
 
 export { DocumentsClient } from './resources/documents.js';
 export { IssuesClient } from './resources/issues.js';
 export { SprintsClient } from './resources/sprints.js';
 export { WebhooksClient } from './resources/webhooks.js';
+// PF-205 (Linear TRO-414) additions.
+export { PeopleClient } from './resources/people.js';
+export { ChangesClient } from './resources/changes.js';
 export type {
   WebhookEventType,
   WebhookSubscription,
