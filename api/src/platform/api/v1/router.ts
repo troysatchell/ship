@@ -7,6 +7,7 @@ import { issuesRouter } from './resources/issues.js';
 import { sprintsRouter } from './resources/sprints.js';
 import { meRouter } from './resources/me.js';
 import { webhooksRouter } from './resources/webhooks.js';
+import { rateLimitDefaults } from '../../ratelimit/middleware.js';
 
 /**
  * The public API router — `/api/v1/*` (PLUGFORGE.MD §2.1, §4 PF-001/PF-002).
@@ -14,20 +15,28 @@ import { webhooksRouter } from './resources/webhooks.js';
  * Stack, in fixed order:
  *   1. `requestIdMiddleware` — every request gets a `request_id` before
  *      anything else runs (PF-001).
- *   2. `v1Routes` — every actual `/api/v1` endpoint attaches HERE, not
+ *   2. `rateLimitDefaults` (PF-500, TRO-427) — sets baseline `X-RateLimit-*`
+ *      headers on EVERY request, before any routing happens. This is what
+ *      makes PLUGFORGE.MD §2.7's "100% of /api/v1 responses carry
+ *      X-RateLimit-*" true even for a request `rateLimitBuckets` (mounted
+ *      per-route, after each route's own `bearerAuth`) never reaches — an
+ *      unauthenticated 401, a 404 from an unmatched route, or a genuinely
+ *      public route like `GET /health`. See that file's own doc comment for
+ *      the full reasoning.
+ *   3. `v1Routes` — every actual `/api/v1` endpoint attaches HERE, not
  *      directly to `v1Router`. Because Express resolves a mounted router's
  *      own stack at request time (not at mount time), anything added to
  *      `v1Routes` later — a future ticket's resource router (PF-200 etc.),
- *      or a test's scratch route — is still tried before step 3 below,
+ *      or a test's scratch route — is still tried before step 4 below,
  *      regardless of when it is registered relative to this module's own
  *      top-level code. Attaching new routes directly to `v1Router` below its
  *      own `.use()` calls at the bottom of this file would NOT have that
  *      property: those calls run once, at module-load time, so anything
  *      appended to `v1Router` afterwards would land AFTER the catch-all in
- *      step 3 and be permanently unreachable dead code.
- *   3. `notFoundHandler` — nothing above matched; produces the §2.5
+ *      step 4 and be permanently unreachable dead code.
+ *   4. `notFoundHandler` — nothing above matched; produces the §2.5
  *      `not_found` shape (PF-002).
- *   4. `errorMiddleware` — terminal. Catches whatever `notFoundHandler`
+ *   5. `errorMiddleware` — terminal. Catches whatever `notFoundHandler`
  *      forwarded, plus any thrown/forwarded error from a v1 route (PF-002).
  *
  * `api/src/platform/api/v1/**` must never import from `api/src/routes/**`
@@ -38,6 +47,7 @@ export const v1Router = Router();
 export const v1Routes = Router();
 
 v1Router.use(requestIdMiddleware);
+v1Router.use(rateLimitDefaults);
 v1Router.use(v1Routes);
 
 v1Routes.get('/health', (_req, res) => {

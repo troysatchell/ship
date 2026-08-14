@@ -27,6 +27,7 @@ import { z } from 'zod';
 import { pool } from '../../../../db/client.js';
 import { bearerAuth } from '../../../oauth/bearerAuth.js';
 import { requireScope } from '../../../scopes/requireScope.js';
+import { rateLimitBuckets } from '../../../ratelimit/middleware.js';
 import { asyncHandler } from '../errorMiddleware.js';
 import { serverError, validationFailedError } from '../errors.js';
 import { encodeCursor, decodeCursor, type KeysetCursor } from '../pagination.js';
@@ -70,6 +71,7 @@ function serializeSprint(row: SprintRow) {
 sprintsRouter.get(
   '/',
   bearerAuth,
+  rateLimitBuckets,
   requireScope('sprints:read'),
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);
