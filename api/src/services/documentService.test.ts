@@ -50,9 +50,21 @@ describe('documentService (TRO-426 / PF-301)', () => {
   })
 
   afterAll(async () => {
-    await pool.query('DELETE FROM documents WHERE workspace_id = $1', [testWorkspaceId])
-    await pool.query('DELETE FROM users WHERE id = $1', [testUserId])
-    await pool.query('DELETE FROM workspaces WHERE id = $1', [testWorkspaceId])
+    // Guarded rather than unconditional (CodeRabbit, this PR): if beforeAll
+    // threw partway through (e.g. the workspace INSERT succeeded but the user
+    // INSERT failed), testWorkspaceId/testUserId can be undefined here — an
+    // unconditional DELETE would pass `undefined` as a bind parameter and
+    // throw from *this* hook, masking the real beforeAll failure that vitest
+    // would otherwise report.
+    if (testWorkspaceId) {
+      await pool.query('DELETE FROM documents WHERE workspace_id = $1', [testWorkspaceId])
+    }
+    if (testUserId) {
+      await pool.query('DELETE FROM users WHERE id = $1', [testUserId])
+    }
+    if (testWorkspaceId) {
+      await pool.query('DELETE FROM workspaces WHERE id = $1', [testWorkspaceId])
+    }
   })
 
   /** Subscribes to `type` for the duration of `fn`, then unsubscribes — keeps one test's events out of another's. */
@@ -306,6 +318,132 @@ describe('documentService (TRO-426 / PF-301)', () => {
           documentTypeFilter: 'project', // issue !== project
         })
       ).rejects.toThrow(/produced no row/)
+    })
+
+    it('changed_fields falls back to updated_at when it is the only touched column', async () => {
+      const issue = await createTestIssue({ state: 'todo' })
+
+      const { events } = await withSubscription('document.updated', async () => {
+        return updateDocument({
+          id: issue.id,
+          workspaceId: testWorkspaceId,
+          setClauses: ['updated_at = now()'],
+          values: [],
+        })
+      })
+
+      const event = events.find((e) => (e.data as { id: string }).id === issue.id)
+      expect(event).toBeDefined()
+      // Zod's schema requires changed_fields.length >= 1 — this is the case
+      // extractChangedFields()'s fallback exists for: every "meaningful" field
+      // was filtered out (there were none), so it falls back to the raw list
+      // (['updated_at']) rather than publishing an empty, schema-invalid array.
+      expect((event?.data as { changed_fields: string[] }).changed_fields).toEqual(['updated_at'])
+    })
+
+    describe('transaction client path (pendingEvents) — CodeRabbit, this PR', () => {
+      it('defers publish until the caller explicitly flushes pendingEvents (never fires inline, before COMMIT)', async () => {
+        const issue = await createTestIssue({ state: 'todo', priority: 'medium', assignee_id: null })
+
+        const bus = getEventBus()
+        const documentUpdatedEvents: EventEnvelope[] = []
+        const unsubscribe = bus.subscribe('document.updated', (e) => documentUpdatedEvents.push(e))
+
+        const client = await pool.connect()
+        try {
+          await client.query('BEGIN')
+          const pendingEvents: Array<() => void> = []
+
+          await updateDocument({
+            id: issue.id,
+            workspaceId: testWorkspaceId,
+            setClauses: ['title = $1', 'updated_at = now()'],
+            values: ['Renamed Inside Transaction'],
+            client,
+            pendingEvents,
+          })
+
+          // Not published yet — the transaction hasn't committed, and nothing
+          // has flushed pendingEvents. This is the exact bug CodeRabbit flagged:
+          // publishing here (before COMMIT) would mean a subscriber sees an
+          // event for a write a subsequent rollback could still undo.
+          expect(documentUpdatedEvents.find((e) => (e.data as { id: string }).id === issue.id)).toBeUndefined()
+
+          await client.query('COMMIT')
+          expect(documentUpdatedEvents.find((e) => (e.data as { id: string }).id === issue.id)).toBeUndefined()
+
+          // Only after the caller explicitly flushes (the route's own
+          // responsibility, done here to prove the contract) does it publish.
+          pendingEvents.forEach((dispatch) => dispatch())
+          expect(documentUpdatedEvents.find((e) => (e.data as { id: string }).id === issue.id)).toBeDefined()
+        } finally {
+          unsubscribe()
+          client.release()
+        }
+      })
+
+      it('never publishes an event for a write that was rolled back', async () => {
+        const issue = await createTestIssue({ state: 'todo', priority: 'medium', assignee_id: null })
+
+        const bus = getEventBus()
+        const documentUpdatedEvents: EventEnvelope[] = []
+        const unsubscribe = bus.subscribe('document.updated', (e) => documentUpdatedEvents.push(e))
+
+        const client = await pool.connect()
+        try {
+          await client.query('BEGIN')
+          const pendingEvents: Array<() => void> = []
+
+          await updateDocument({
+            id: issue.id,
+            workspaceId: testWorkspaceId,
+            setClauses: ['title = $1', 'updated_at = now()'],
+            values: ['Should Be Rolled Back'],
+            client,
+            pendingEvents,
+          })
+
+          await client.query('ROLLBACK')
+          // The route's own code never flushes pendingEvents on a rollback path
+          // (see documents.ts / issues.ts — flush only follows COMMIT). Simulate
+          // that by simply never flushing, and confirm nothing was published.
+          expect(documentUpdatedEvents.find((e) => (e.data as { id: string }).id === issue.id)).toBeUndefined()
+
+          const row = await pool.query('SELECT title FROM documents WHERE id = $1', [issue.id])
+          expect(row.rows[0]?.title).not.toBe('Should Be Rolled Back')
+        } finally {
+          unsubscribe()
+          client.release()
+        }
+      })
+
+      it('throws if a transaction client is passed without pendingEvents (cannot silently regress to publish-before-commit)', async () => {
+        const issue = await createTestIssue({ state: 'todo' })
+        const client = await pool.connect()
+        try {
+          await client.query('BEGIN')
+          // The UPDATE itself still runs (the throw is in the publish step,
+          // after the write) — ROLLBACK in the finally below is what actually
+          // proves nothing about this call is ever observable, not the throw
+          // alone.
+          await expect(
+            updateDocument({
+              id: issue.id,
+              workspaceId: testWorkspaceId,
+              setClauses: ['title = $1', 'updated_at = now()'],
+              values: ['Unobservable — Rolled Back Regardless Of This Assertion'],
+              client,
+              // pendingEvents intentionally omitted
+            })
+          ).rejects.toThrow(/pendingEvents/)
+        } finally {
+          // Unconditional, regardless of whether the assertion above passed —
+          // a client released mid-transaction would leave the pool holding a
+          // connection that's idle-in-transaction for whichever test reuses it.
+          await client.query('ROLLBACK').catch(() => {})
+          client.release()
+        }
+      })
     })
   })
 

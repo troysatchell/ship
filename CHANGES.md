@@ -77,6 +77,36 @@ function would have been a rewrite of business logic this ticket did not audit l
   their own bespoke write patterns (`jsonb_set` property patches, soft-delete `archived_at` toggles)
   was judged out of scope for "smallest possible."
 
+**CodeRabbit triage (7 findings, all real — no dismissed-as-noise entries).** The most
+significant: **events were publishing before `COMMIT`.** `documents.ts`/`issues.ts`'s create/update
+handlers wrap their write in `BEGIN`/`COMMIT` and do more work afterward (association inserts,
+sprint/program junction rows) that can still fail and roll the transaction back — but
+`documentService` was firing the derived event the moment its own `INSERT`/`UPDATE` succeeded,
+*inside* that still-open transaction. A subscriber could see `document.created` for a document a
+later failure in the same request then rolled back and never actually persisted — precisely the
+kind of bug this ticket's own risk profile exists to catch. Fixed with an explicit deferred-publish
+contract: `createDocument`/`updateDocument`/`deleteDocument` now require a `pendingEvents` array
+whenever a transaction `client` is passed — the derived publish call is queued onto it instead of
+firing, and the four call sites that use a transaction (`documents.ts` POST/PATCH, `issues.ts`
+POST/PATCH) now flush that array immediately after their own `client.query('COMMIT')` succeeds, never
+on a rollback path. Passing `client` without `pendingEvents` throws, so this can't silently regress.
+Three new tests in `documentService.test.ts` prove the contract directly: an event queued mid-transaction
+is not observable before flush, an event is never published for a rolled-back write, and the
+missing-`pendingEvents` guard throws. `projects.ts`/`programs.ts` never use a transaction for
+create/update/delete, so their immediate-publish behavior was already correct and is unchanged.
+Five smaller findings, all fixed: a stale file-path reference in `documentService.ts`'s own header
+comment (pointed at `services/__tests__/publish-boundary.test.ts`; the real path is
+`platform/webhooks/__tests__/publish-boundary.test.ts`); an unguarded `as` cast on
+`sprint.completed`'s `previous_status` replaced with an explicit `isSprintStatus()` type-guard so an
+unexpected stored value is rejected before it reaches `bus.publish()`, not after; a defensive
+`afterAll` guard in `documentService.test.ts` so a partially-failed `beforeAll` can't throw on
+`undefined` bind parameters and mask the real failure; two added test cases (the `client`/transaction
+path, and `extractChangedFields`'s `updated_at`-only fallback); and two `scorecard.jsonl` timestamps
+for this ticket's own attempts 1–2 that were identical (logged retroactively in one script call) —
+corrected with distinct approximate timestamps and `tsApprox: true`, plus a note on what each attempt's
+failures actually meant, since two DIFFERENT gate outcomes carrying the same timestamp is exactly the
+kind of unmarked-inference gap `.claude/CLAUDE.md` warns about.
+
 **How to verify — proof, exactly as the AC states.**
 
 ```bash
@@ -88,9 +118,11 @@ cd api && npx vitest run src/routes/issues.test.ts            # includes the doc
 cd api && npx vitest run src/routes/programs.test.ts           # new — closes a pre-existing zero-coverage gap
 ```
 
-- Full internal regression suite: `pnpm test` (api + web + agent + sdk, root script) — 229 files /
-  2261 tests, green, run three times for confidence after two transient unrelated failures (see PR
-  body).
+- Full internal regression suite: `pnpm test` (api + web + agent + sdk, root script) — green on
+  every run across this ticket's several full-suite passes (counts moved between runs as sibling
+  tickets' PRs landed on `main` and were merged forward into this branch — most recently 238 files /
+  2317 tests); several transient, unrelated failures observed and confirmed load-sensitive (see PR
+  body), zero deterministic regressions from this ticket's own changes.
 - Issue-type document creation publishes `document.created` + `issue.created`: proven twice —
   `api/src/services/documentService.test.ts` (service-level, real Postgres) and
   `api/src/routes/issues.test.ts` ("publishes document.created and issue.created via IEventBus",

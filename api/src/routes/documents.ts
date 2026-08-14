@@ -624,6 +624,11 @@ router.post('/', authMiddleware, authed(async (req, res) => {
     // TRO-426 / PF-301: the write + document.created (+ derived issue.created)
     // publication now live in documentService — see that file's header comment
     // for why the route keeps every other line of this handler unchanged.
+    // pendingEvents defers the publish until after COMMIT below (CodeRabbit,
+    // this PR): the association inserts that follow can still fail and roll
+    // this whole transaction back, and a subscriber must never see an event for
+    // a document that didn't actually end up persisted.
+    const pendingEvents: Array<() => void> = [];
     const newDoc = await createDocument({
       workspaceId: req.workspaceId,
       documentType: document_type,
@@ -634,6 +639,7 @@ router.post('/', authMiddleware, authed(async (req, res) => {
       visibility,
       content: content || null,
       client,
+      pendingEvents,
     });
 
     // Handle belongs_to associations (creates document_associations records)
@@ -669,6 +675,7 @@ router.post('/', authMiddleware, authed(async (req, res) => {
     }
 
     await client.query('COMMIT');
+    pendingEvents.forEach((dispatch) => dispatch());
 
     // Broadcast accountability update for document types that affect action items
     // Sprint plans clear the "write sprint plan" action item
@@ -1032,6 +1039,10 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     // publication now live in documentService; setClauses/values here are
     // exactly what this handler already built above — see documentService.ts's
     // header comment for why that assembly logic stays in the route.
+    // pendingEvents defers the publish until after COMMIT below (CodeRabbit,
+    // this PR): resubmission and visibility-cascade writes below can still fail
+    // and roll this whole transaction back before the update is truly durable.
+    const pendingEvents: Array<() => void> = [];
     const updatedRow = await updateDocument({
       id,
       workspaceId,
@@ -1039,6 +1050,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
       values,
       previousProperties: existing.properties ?? null,
       client,
+      pendingEvents,
     });
 
     // When a weekly plan/retro is edited after changes were requested, move it back to re-review.
@@ -1121,6 +1133,7 @@ router.patch('/:id', authMiddleware, async (req: Request, res: Response) => {
     }
 
     await client.query('COMMIT');
+    pendingEvents.forEach((dispatch) => dispatch());
 
     // Post-commit operations (non-transactional)
 

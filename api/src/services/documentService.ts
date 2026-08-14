@@ -12,7 +12,26 @@
  *
  * `publish()` (via `IEventBus`, `platform/webhooks/eventBus.ts`) is called ONLY
  * from this file — never from a route handler. That is the ticket's AC, verified
- * by grep in `api/src/services/__tests__/publish-boundary.test.ts`.
+ * by grep in `api/src/platform/webhooks/__tests__/publish-boundary.test.ts`.
+ *
+ * ── Publish timing: never before COMMIT (CodeRabbit, this PR) ────────────────
+ * `documents.ts`/`issues.ts`'s create/update handlers wrap their write in an
+ * explicit `BEGIN`/`COMMIT` and do more work after the row is written (association
+ * inserts, sprint/program junction rows) that can still fail and roll the whole
+ * transaction back. Publishing the moment the row is written — inside that still-
+ * open transaction — would mean a subscriber sees `document.created` for a
+ * document that a later failure in the SAME request then rolled back and never
+ * actually persisted. So: whenever a caller passes a transaction `client`, it MUST
+ * also pass `pendingEvents` (a plain array it owns) — this file pushes the derived
+ * publish call onto that array instead of firing it, and the caller is
+ * responsible for invoking every queued function AFTER `client.query('COMMIT')`
+ * succeeds, and never invoking them on a path that rolls back. Passing `client`
+ * without `pendingEvents` throws, so a future call site can't silently regress to
+ * the before-commit timing this fix removes. Callers that never pass `client`
+ * (projects.ts/programs.ts's create/update, and every router's plain-`pool`
+ * delete) have no enclosing transaction to roll back, so those still publish
+ * immediately — deferring them would only add complexity with no correctness
+ * benefit.
  *
  * ── Design choice: routes keep building their own SQL fragments ──────────────
  * `documents.ts`, `issues.ts`, `projects.ts`, and `programs.ts` each build a
@@ -114,6 +133,33 @@ export interface DocumentEventFields {
   created_by: string | null;
 }
 
+/**
+ * Fires `dispatch` immediately when there is no transaction client (nothing to
+ * roll back), or queues it onto `pendingEvents` when there is — see the file
+ * header's "Publish timing" note. Throws if `client` is present without
+ * `pendingEvents`: that combination means a caller is inside a transaction but
+ * has no way to defer, which would silently reintroduce publish-before-commit.
+ */
+function dispatchOrQueue(
+  client: Queryable | undefined,
+  pendingEvents: Array<() => void> | undefined,
+  dispatch: () => void
+): void {
+  if (client === undefined) {
+    dispatch();
+    return;
+  }
+  if (!pendingEvents) {
+    throw new Error(
+      'documentService: a transaction client was passed without pendingEvents. ' +
+        'Events must be deferred until after client.query(\'COMMIT\') succeeds, never fired ' +
+        'while the transaction is still open — pass a pendingEvents array and flush it ' +
+        'after COMMIT (never on a rollback path).'
+    );
+  }
+  pendingEvents.push(dispatch);
+}
+
 export interface CreateDocumentParams {
   workspaceId: string;
   title: string;
@@ -130,6 +176,13 @@ export interface CreateDocumentParams {
   ticketNumber?: number;
   /** Pass the transaction's checked-out client to participate in an existing BEGIN/COMMIT. */
   client?: Queryable;
+  /**
+   * Required whenever `client` is passed: the derived event is pushed here
+   * instead of published immediately. Flush (call every queued function) after
+   * `client.query('COMMIT')` succeeds; never flush on a rollback path. See the
+   * file header's "Publish timing" note.
+   */
+  pendingEvents?: Array<() => void>;
 }
 
 /**
@@ -191,7 +244,7 @@ export async function createDocument<T extends DocumentEventFields = DocumentRow
     throw new Error('documentService.createDocument: INSERT ... RETURNING produced no row');
   }
 
-  publishDocumentCreated(row);
+  dispatchOrQueue(params.client, params.pendingEvents, () => publishDocumentCreated(row));
 
   return row;
 }
@@ -224,6 +277,8 @@ export interface UpdateDocumentParams {
    */
   previousProperties?: Record<string, unknown> | null;
   client?: Queryable;
+  /** Required whenever `client` is passed — see `CreateDocumentParams.pendingEvents`. */
+  pendingEvents?: Array<() => void>;
 }
 
 export async function updateDocument<T extends DocumentEventFields = DocumentRow>(
@@ -258,7 +313,9 @@ export async function updateDocument<T extends DocumentEventFields = DocumentRow
   }
 
   const changedFields = extractChangedFields(params.setClauses);
-  publishDocumentUpdated(row, params.previousProperties ?? null, changedFields);
+  dispatchOrQueue(params.client, params.pendingEvents, () =>
+    publishDocumentUpdated(row, params.previousProperties ?? null, changedFields)
+  );
 
   return row;
 }
@@ -269,6 +326,8 @@ export interface DeleteDocumentParams {
   /** Matches the route's own filter, e.g. `'issue'`. Omit for an unfiltered delete. */
   documentTypeFilter?: string;
   client?: Queryable;
+  /** Required whenever `client` is passed — see `CreateDocumentParams.pendingEvents`. */
+  pendingEvents?: Array<() => void>;
 }
 
 /** Returns the deleted row, or `null` if no matching row existed (caller returns its own 404). */
@@ -293,9 +352,11 @@ export async function deleteDocument(params: DeleteDocumentParams): Promise<Docu
     return null;
   }
 
-  getEventBus().publish('document.deleted', row.workspace_id, {
-    id: row.id,
-    document_type: row.document_type,
+  dispatchOrQueue(params.client, params.pendingEvents, () => {
+    getEventBus().publish('document.deleted', row.workspace_id, {
+      id: row.id,
+      document_type: row.document_type,
+    });
   });
 
   return row;
@@ -384,8 +445,8 @@ function publishDocumentUpdated(
   }
 
   if (row.document_type === 'sprint') {
-    const prevStatus = prevProps.status as string | undefined;
-    const newStatus = newProps.status as string | undefined;
+    const prevStatus = prevProps.status;
+    const newStatus = newProps.status;
     const sprintNumber = Number(newProps.sprint_number);
 
     if (newStatus === 'active' && prevStatus === 'planning' && Number.isFinite(sprintNumber)) {
@@ -397,16 +458,30 @@ function publishDocumentUpdated(
       });
     } else if (
       newStatus === 'completed' &&
-      prevStatus !== undefined &&
+      isSprintStatus(prevStatus) &&
       prevStatus !== 'completed' &&
       Number.isFinite(sprintNumber)
     ) {
+      // `isSprintStatus` narrows `prevStatus` to the exact literal union
+      // `sprint.completed`'s schema requires — no `as` cast needed. Without this
+      // guard, a stored `properties.status` outside the three known values
+      // (data drift, or a future status this file doesn't know about yet) would
+      // reach `bus.publish()` and only be caught there, by the schema throwing —
+      // correct but a needlessly late place to catch a value this function can
+      // already see is wrong (CodeRabbit, this PR).
       bus.publish('sprint.completed', row.workspace_id, {
         id: row.id,
         sprint_number: sprintNumber,
         status: 'completed',
-        previous_status: prevStatus as 'planning' | 'active' | 'completed',
+        previous_status: prevStatus,
       });
     }
   }
+}
+
+const SPRINT_STATUSES = ['planning', 'active', 'completed'] as const;
+type SprintStatus = (typeof SPRINT_STATUSES)[number];
+
+function isSprintStatus(value: unknown): value is SprintStatus {
+  return typeof value === 'string' && (SPRINT_STATUSES as readonly string[]).includes(value);
 }

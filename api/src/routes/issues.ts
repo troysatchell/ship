@@ -869,7 +869,11 @@ router.post('/', authMiddleware, authed(async (req, res) => {
     };
 
     // TRO-426 / PF-301: write + document.created + derived issue.created
-    // publication now live in documentService.
+    // publication now live in documentService. pendingEvents defers the
+    // publish until after COMMIT below (CodeRabbit, this PR): the belongs_to
+    // association inserts that follow can still fail and roll this whole
+    // transaction back.
+    const pendingEvents: Array<() => void> = [];
     const createdRow = await createDocument<IssueWriteRow>({
       workspaceId: req.workspaceId,
       documentType: 'issue',
@@ -878,6 +882,7 @@ router.post('/', authMiddleware, authed(async (req, res) => {
       ticketNumber,
       createdByUserId: req.userId,
       client,
+      pendingEvents,
     });
     const newIssueId = createdRow.id;
 
@@ -892,6 +897,7 @@ router.post('/', authMiddleware, authed(async (req, res) => {
     }
 
     await client.query('COMMIT');
+    pendingEvents.forEach((dispatch) => dispatch());
 
     // Auto-complete sprint_issues accountability when first issue is created in a sprint
     const sprintAssociations = belongs_to.filter(bt => bt.type === 'sprint');
@@ -1191,7 +1197,11 @@ router.patch('/:id', authMiddleware, authed(async (req, res) => {
     // If we have document updates, do the UPDATE. TRO-426 / PF-301: write +
     // document.updated (+ derived issue.status_changed / issue.assigned)
     // publication now live in documentService — see its header comment for why
-    // the setClauses/values assembly above stays in this route.
+    // the setClauses/values assembly above stays in this route. pendingEvents
+    // defers the publish until after COMMIT below (CodeRabbit, this PR): the
+    // belongs_to association writes that follow can still fail and roll this
+    // whole transaction back.
+    const pendingEvents: Array<() => void> = [];
     let updatedRow: IssueWriteRow | undefined;
     if (updates.length > 0) {
       updates.push(`updated_at = now()`);
@@ -1203,6 +1213,7 @@ router.patch('/:id', authMiddleware, authed(async (req, res) => {
         values,
         previousProperties: currentProps,
         client,
+        pendingEvents,
       });
     }
 
@@ -1237,6 +1248,7 @@ router.patch('/:id', authMiddleware, authed(async (req, res) => {
     }
 
     await client.query('COMMIT');
+    pendingEvents.forEach((dispatch) => dispatch());
 
     // Post-commit operations (non-transactional)
 
