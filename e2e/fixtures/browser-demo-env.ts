@@ -60,7 +60,13 @@ async function waitForServer(url: string, timeout: number): Promise<void> {
       const res = await fetch(url);
       if (res.ok || res.status === 401 || res.status === 403) return;
     } catch (err) {
-      lastError = err as Error;
+      // `err as Error` is a compile-time lie for a non-Error throw (e.g. a
+      // string) — `.message` reads as `undefined` at runtime instead of
+      // failing loudly. Normalize instead (CodeRabbit review finding,
+      // TRO-449; same bug pre-existed in ./isolated-env.ts's own
+      // waitForServer, duplicated here per this file's header — fixed in
+      // this copy only, out of scope to also touch that shared file).
+      lastError = err instanceof Error ? err : new Error(String(err));
     }
     await new Promise((r) => setTimeout(r, 200));
   }

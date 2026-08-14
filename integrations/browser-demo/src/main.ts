@@ -83,12 +83,15 @@ function renderConnect(): void {
 function renderError(error: unknown): void {
   const root = requireApp();
   const message = error instanceof Error ? error.message : String(error);
-  root.innerHTML = '';
+  // renderConnect() FIRST, then prepend the error — renderConnect() does its
+  // own `root.innerHTML = ''`, which would silently wipe an error element
+  // appended before it ran (CodeRabbit review finding, TRO-449: the error
+  // never actually reached the visible DOM under the prior ordering).
+  renderConnect();
   const pre = document.createElement('pre');
   pre.id = 'error';
   pre.textContent = message;
-  root.appendChild(pre);
-  renderConnect();
+  root.prepend(pre);
 }
 
 async function renderDocuments(client: ShipClient): Promise<void> {
@@ -136,7 +139,21 @@ function renderDocumentItem(doc: Document): HTMLLIElement {
 
 async function boot(): Promise<void> {
   const url = new URL(window.location.href);
+  const oauthError = url.searchParams.get('error');
   const hasAuthorizationResponse = url.searchParams.has('code') && url.searchParams.has('state');
+
+  // RFC 6749 §4.1.2.1: a denied/failed authorization redirects back with
+  // `error` (e.g. `access_denied`), never `code` — so hasAuthorizationResponse
+  // is false here and this must be checked separately, or the user who
+  // clicks "deny" on Ship's own consent screen would land back on a demo
+  // that silently shows "Connect to Ship" again with no explanation and a
+  // stale ?error= sitting in the URL (CodeRabbit review finding, TRO-449).
+  if (oauthError !== null) {
+    window.history.replaceState({}, '', REDIRECT_URI);
+    const description = url.searchParams.get('error_description');
+    renderError(new Error(description ? `${oauthError}: ${description}` : oauthError));
+    return;
+  }
 
   try {
     if (hasAuthorizationResponse) {

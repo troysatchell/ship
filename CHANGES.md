@@ -70,12 +70,13 @@ factory lanes touching e2e infra this same week) drives a REAL browser through t
 rendered → page reload resumes from `localStorage` with no re-prompt. Plus the mandatory negative
 case: an unregistered `redirect_uri` never silently succeeds (Ship's own open-redirect guard,
 `oauth-authorize.ts`'s `sendUnsafeToRedirectError`, renders a static error and never redirects
-anywhere). Both tests pass, no retries (`test-results/progress.jsonl`: each test appears once,
-`running` → `passed`, no `failed` entry — not a flake). The demo build itself is 16.54 kB / 5.24 kB
-gzip; `grep` on the built bundle confirms zero `node:crypto`/`fs`/`path` references remain.
-`pnpm --filter @ship/sdk test`: 16/16 files, 161/161 tests green after the split (incl. the
-4 `*.liveServer.test.ts` files, run against this worktree's real factory Postgres via
-`.factory-env`, not skipped).
+anywhere). Plus a third: a failed leg-2 exchange (below) clears its stale `?code=` so retrying
+starts a fresh login instead of replaying a dead code. **3/3 tests pass, no retries**
+(`test-results/progress.jsonl`: each test appears once, `running` → `passed`, no `failed` entry —
+not a flake). The demo build itself is ~17.7 kB / ~5.4 kB gzip; `grep` on the built bundle confirms
+zero `node:crypto`/`fs`/`path` references remain. `pnpm --filter @ship/sdk test`: 16/16 files,
+161/161 tests green after the split (incl. the 4 `*.liveServer.test.ts` files, run against this
+worktree's real factory Postgres via `.factory-env`, not skipped).
 
 **A second real gap, found by CI itself:** `integrations/browser-demo` is the first workspace
 package to depend on `@ship/sdk` via its own `package.json` (`"workspace:*"`), which pnpm resolves
@@ -88,8 +89,15 @@ needed its compiled output at type-check time. CI's real run caught this (`Canno
 `build:sdk` root script and a `Build sdk` step to `ci.yml`, mirroring the existing `build:shared`
 step exactly.
 
-**Also found and fixed:** a self-review bug (below, separate commit) where a failed PKCE leg-2
-exchange left a stale `?code=` in the URL, blocking retry.
+**Also found and fixed, across a self-review pass and CodeRabbit's PR review:** a failed PKCE
+leg-2 exchange left a stale `?code=` in the URL, blocking retry; `renderError()` cleared itself
+immediately via its own call to `renderConnect()` (which resets `#app`'s `innerHTML`), so an error
+message never actually reached the visible DOM; a denied/failed OAuth authorization (`?error=`,
+RFC 6749 §4.1.2.1 — has no `code`) was never detected, so the demo silently showed "Connect to
+Ship" again instead of the failure; the Connect button's `authorizationCodeFlow()` call had no
+`.catch()`, so a rejection before `location.assign()` fires (e.g. no WebCrypto) would be a silent
+unhandled rejection. `FileTokenStore.set()`'s non-atomic write (real, but pre-existing PF-404 code
+only relocated here) filed separately as TRO-600 rather than fixed in this branch.
 
 **How to verify.**
 
@@ -101,9 +109,13 @@ pnpm --filter @ship/browser-demo build
 
 Then `/e2e-test-runner e2e/browser-demo-pkce.spec.ts` for the full browser-driven proof.
 
-**Rollback.** `git revert` this commit. The `sdk/src/tokenStore.ts` / `fileTokenStore.ts` / `node.ts`
-split and `package.json` `exports` addition revert cleanly together — nothing outside `sdk/`,
-`integrations/browser-demo/`, and the two new `e2e/` files changes.
+**Rollback.** `git revert` the ticket's commits (this branch has no single squashed SHA — revert
+the merge-forward-free commit range from `sdk/src/index.ts`'s TRO-449 header comment forward).
+Scope is wider than `integrations/browser-demo/`: it also includes the `sdk/src/tokenStore.ts` /
+`fileTokenStore.ts` / `node.ts` split + `sdk/package.json`'s `"./node"` export, the two new `e2e/`
+files, and root `package.json`'s `build:sdk` script + `.github/workflows/ci.yml`'s `Build sdk`
+step (needed by any future `@ship/sdk`-in-a-browser-bundle consumer, not just this one — see
+`integrations/browser-demo/README.md`'s own Rollback section for the itemized list).
 
 ---
 

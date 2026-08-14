@@ -66,9 +66,9 @@ unregistered `redirect_uri` never silently succeeds).
 
 ## Rollback
 
-`git revert` the ticket's commits (TRO-449, `CHANGES.md` names the exact SHAs) is the complete,
-correct rollback — this section exists to explain what that reverts, not as a substitute for it,
-since the change touches more than just this package:
+`git revert` the ticket's commits (search the git log for `TRO-449` — this branch has no single
+squashed SHA) is the complete, correct rollback — this section exists to explain what that
+reverts, not as a substitute for it, since the change touches more than just this package:
 
 - `integrations/browser-demo/` (this package) and `e2e/browser-demo-pkce.spec.ts` +
   `e2e/fixtures/browser-demo-env.ts` (its e2e proof) — delete both.

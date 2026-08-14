@@ -30,8 +30,8 @@ import type { Page } from '@playwright/test';
 
 async function login(page: Page): Promise<void> {
   await page.goto('/login');
-  await page.locator('#email').fill('dev@ship.local');
-  await page.locator('#password').fill('admin123');
+  await page.getByLabel('Email address').fill('dev@ship.local');
+  await page.getByLabel('Password').fill('admin123');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page).not.toHaveURL('/login', { timeout: 5000 });
 }
@@ -120,7 +120,7 @@ test.describe('Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-44
     // sendUnsafeToRedirectError) — stays on the API's own /oauth/authorize,
     // renders a static error, never reaches consent or the demo's redirect.
     await expect(page).toHaveURL(/\/oauth\/authorize/, { timeout: 5000 });
-    await expect(page.locator('h1')).toHaveText('Authorization error');
+    await expect(page.getByRole('heading', { name: 'Authorization error' })).toBeVisible();
     expect(page.url()).not.toContain(browserDemoServer.url + '/?');
   });
 
