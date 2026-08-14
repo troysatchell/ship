@@ -78,6 +78,24 @@ all four mechanically for every route it discovers, including these — 101/101 
 ticket (was 77/77 before; 6 new routes × ~4 checks each, one route (`GET /people`) plus `GET
 /changes` counted once more for the pagination check that only applies to non-`{param}` GETs).
 
+## The SDK consequence (PF-405's parity gate)
+
+The PRD block's own sentence — "PF-405's parity gate forces the matching SDK methods" — is literal,
+not rhetorical: `sdk/src/__tests__/parity.test.ts` (already merged, from PF-405) walks the real,
+generated `/api/v1` OpenAPI document and fails on any operation with no corresponding typed
+`@ship/sdk` method. Every one of the 7 new operations above tripped it. Closed in the same PR:
+
+- `DocumentsClient.getAssociations/getReverseAssociations/getBacklinks/getComments`
+- `SprintsClient.get`
+- new `PeopleClient` (`.people.list`/`.people.iterate`) and `ChangesClient` (`.changes.list` —
+  deliberately no `iterate()`; see `sdk/src/resources/changes.ts`'s header for why this resource's
+  `since`/`next_cursor` shape doesn't fit the shared `iteratePages()` helper)
+
+`parity.test.ts` is 49/49 passing after this ticket (was 41/41 before). Request-shape tests for all
+seven new SDK methods: `sdk/src/resources/__tests__/pf205.test.ts` (mocked `fetch` — the real
+server-side behavior is already covered by this ticket's api-side tests, so this file proves the
+SDK's request/response wiring, not a duplicate of server coverage).
+
 ## Not verified / deliberate scope decisions
 
 - **Visibility filtering.** Every existing v1 list route (`documents.ts`, `issues.ts`, `sprints.ts`)

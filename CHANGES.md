@@ -51,6 +51,14 @@ scoped, OpenAPI-registered, `ApiError`-shaped, and cursor-paginated where they l
 Also confirmed, not changed: the `?type=` filter on `GET /api/v1/documents` the PRD block asked for
 was already present in PF-200's original commit — no code change was needed there.
 
+**SDK consequence (PF-405's already-merged parity gate).** `sdk/src/__tests__/parity.test.ts` walks
+the real generated OpenAPI document and fails on any `/api/v1` operation with no corresponding typed
+`@ship/sdk` method — all 7 new operations above tripped it, exactly as the PRD block predicts. Closed
+in the same PR: `DocumentsClient.getAssociations/getReverseAssociations/getBacklinks/getComments`,
+`SprintsClient.get`, new `PeopleClient` (`list`/`iterate`) and `ChangesClient` (`list` only — no
+`iterate()`, see that file's header), both wired onto `ShipClient` as `.people`/`.changes`. New wire
+types in `sdk/src/types.ts`. `parity.test.ts` is 49/49 after this ticket (was 41/41).
+
 Committed checklist mapping all 10 agent reads to their `/api/v1` call:
 `docs/pf-205-agent-read-surface-checklist.md`.
 
@@ -74,7 +82,8 @@ plus new `describe` blocks in `documents.test.ts` (4 sub-resources), `issues.tes
 walk (`src/platform/api/v1/__tests__/route-fitness.test.ts`) now discovers 101 checks (was 77) and
 passes all of them for the 6 new routes.
 
-**Rollback.** Revert this commit. Removes: `platform/api/v1/resources/{people,changes}.ts`,
+**Rollback.** Revert this branch's commits (`git log --oneline main..fix/pf-205-agent-read-surface`
+lists them). Removes, on the `api/` side: `platform/api/v1/resources/{people,changes}.ts`,
 `platform/openapi/schemas/{people,changes}.ts`, the four new routes in
 `resources/documents.ts` + their OpenAPI registrations, the `?assignee_id=` branch in
 `resources/issues.ts`, the `GET /:id` route in `resources/sprints.ts` + its OpenAPI registration,
@@ -82,7 +91,13 @@ the two `/people` and `/changes` mounts in `platform/api/v1/router.ts`, the two 
 `platform/openapi/schemas/index.ts`, and `docs/pf-205-agent-read-surface-checklist.md`. Also revert
 the hand-maintained path-list assertions in `platform/openapi/__tests__/{document,endpoint}.test.ts`
 back to their pre-PF-205 list (10 paths, not 16) — those two tests will otherwise fail against a
-document that no longer registers the reverted routes.
+document that no longer registers the reverted routes. On the `sdk/` side: revert
+`sdk/src/resources/{people,changes}.ts`, `sdk/src/resources/__tests__/pf205.test.ts`, and the
+`.people`/`.changes` wiring in `sdk/src/client.ts`; revert the added methods in
+`sdk/src/resources/{documents,sprints}.ts` and the added types in `sdk/src/types.ts`; revert
+`SDK_TO_OPERATION`/`SDK_EXEMPTIONS`/`groups` additions in `sdk/src/__tests__/parity.test.ts` — if the
+api-side routes are reverted first and this side is not, `parity.test.ts` fails immediately (orphan
+methods) rather than silently, which is the intended fail-safe.
 
 ---
 
