@@ -21,6 +21,145 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-446 — PF-306: Replay from the delivery log
+
+**No new column existed for linking a replay to its original** — checked before writing any code
+(migration 048, `webhook_deliveries`, has no `replayed_from_id` or equivalent). Added migration
+`049_webhook_deliveries_replay.sql`: a nullable, self-referential `replayed_from_id UUID REFERENCES
+webhook_deliveries(id) ON DELETE SET NULL`, plus a partial index (`WHERE replayed_from_id IS NOT
+NULL`) for "every replay of this delivery" lookups. Migration number verified fresh via `ls
+api/src/db/migrations/ | sort -V | tail -5` immediately before writing the file (048 was the highest;
+049 was free), per this sprint's own renumbering discipline.
+
+**What changed.** `POST /api/v1/webhooks/deliveries/:id/replay` — looks up the original delivery row
+(workspace-scoped, the same `oauth_apps` join every route in this file already uses), then re-runs it
+through `platform/webhooks/deliverer.ts`'s deliverer with the SAME `idempotency_key` the original
+delivery used (read off the row, never regenerated). Creates a NEW `webhook_deliveries` row —
+`replayed_from_id` pointing at the original, same `event_id`, `attempt_number` continuing that
+event's existing series — and never mutates the original row. Works regardless of the original's
+`status`, `dead` (DLQ) included: the lookup query never filters or branches on status, which is the
+entire point of a DLQ-replay endpoint. Added to `api/src/platform/api/v1/resources/webhooks.ts`
+(same file PF-302/PF-305 already put every other webhooks route in) and registered in
+`api/src/platform/openapi/schemas/webhooks.ts`.
+
+- **Route ordering.** Registered alongside `GET /deliveries`, still before `GET /:id` — same
+  Express-registration-order reasoning that route's own header already documents (a literal
+  `deliveries` path segment has to be registered before the generic `/:id` pattern.) In this specific
+  case segment count (3 vs. 1/2) would already disambiguate it regardless, but grouping stays
+  consistent with the file's existing convention.
+- **Invoking the deliverer, not reimplementing it.** Added `IWebhookDeliverer.attemptNow()` /
+  `InMemoryWebhookDeliverer.attemptNow()` to `deliverer.ts` — a thin public wrapper over the existing
+  private `attempt()` (the same signing/HTTP-dispatch/response-truncation/persistence code path every
+  automatic delivery already uses), so the route never touches HTTP delivery logic directly. The route
+  constructs a fresh `InMemoryWebhookDeliverer` per request (cheap — no I/O in the constructor) rather
+  than a module-level singleton, since a singleton would not change the one disclosed limitation below.
+- **`attempt_number` continuation, not a fresh series.** Migration 048's unique index is keyed on
+  `(subscription_id, event_id, attempt_number)`, and its own header already named "Replay/dedup lookup
+  index (PF-306, not built by this ticket)" against `event_id` — reusing the original's `event_id`
+  (not minting a new one) is what keeps that lookup meaningful for a replay. The next `attempt_number`
+  is computed and inserted in ONE atomic `INSERT ... SELECT` (not a separate read-then-write) —
+  `COALESCE(MAX(attempt_number), 0) + 1` evaluated by the database at insert time. A genuine
+  concurrent race (two replay calls for the same delivery landing at once) can still compute the same
+  next number under READ COMMITTED; resolved by retrying on the unique-index violation (`23505`, up to
+  5 attempts) rather than assumed away — the concurrency argument lessons.md rule 18 asks for.
+- **Disclosed, accepted limitation (not a new gap — an existing property of this deliverer's
+  single-instance in-memory-queue architecture, applied to a new call path).** If a replay's own
+  attempt gets a retryable outcome (5xx/timeout) below `MAX_ATTEMPTS`, `attempt()` schedules a normal
+  `'pending'` retry-sibling row exactly as it would for an automatic delivery. That sibling is written
+  to the database correctly, but is NOT pushed into the long-running production deliverer's live
+  in-memory queue (`index.ts`'s own instance) — this call happens inside one HTTP request, not that
+  polling loop. It becomes a normal `'pending'` row, recovered the same way any such row is: a future
+  `rehydrate()` at the next process boot. Documented in `attemptNow()`'s own doc comment. An operator
+  who wants an immediate second attempt can call replay again.
+- **Scope:** `webhooks:manage`, same as every sibling route.
+- **OpenAPI:** `WebhookDeliveryResponseSchema` extended with `replayed_from_id` (nullable UUID) — also
+  surfaced on `GET /deliveries`'s existing rows now, not just the replay response, so the delivery log
+  itself shows which rows are replays. New `registerPath` entry for `POST
+  /webhooks/deliveries/{id}/replay`.
+- **SDK parity (`sdk/src/__tests__/parity.test.ts`).** `webhooks.replayDelivery` was a documented
+  `SDK_EXEMPTIONS` forward-declaration ("PF-306 has not landed yet"); moved to a real
+  `SDK_TO_OPERATION` entry now that the route exists, per that table's own "delete this line" note —
+  required for `tests:sdk` to pass, since the parity suite fails any real OpenAPI operation with no
+  SDK mapping. `sdk/src/resources/webhooks.ts`'s header and `replayDelivery()` doc comment updated to
+  match (route is real now).
+- **New SDK-response drift, same class as `lessons.md` rule 28 / TRO-599 (disclosed, not fixed
+  here).** The real replay response also carries `replayed_from_id`, which the SDK's pre-existing
+  (and already-known-stale — see PF-305's own CHANGES.md entry and TRO-599) `WebhookDelivery`
+  interface still does not declare, on top of its existing gaps (`'dead_letter'` vs. the real `'dead'`,
+  four missing fields). Not fixed here: this ticket's scope is the API route, and TRO-599 already owns
+  a full response-shape repair across every method on this client.
+
+**How to run it.**
+
+```bash
+source .factory-env   # or your own DATABASE_URL — pointed at a factory-owned db
+cd api && pnpm exec tsx src/db/migrate.ts    # applies migration 049
+cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts
+cd api && npx vitest run src/platform/webhooks/__tests__/deliverer.test.ts
+cd sdk && npx vitest run   # parity.test.ts, resources/__tests__/webhooks.test.ts
+```
+
+**Evidence.**
+- **Observed: regression tests failed before the fix, for the right reason.** Added 8 new `PF-306`
+  test cases to `webhooks.test.ts` (a pre-existing 20-case file). Proved red without `git stash`
+  (banned in this repo) by copying the fixed `webhooks.ts`/`deliverer.ts`/`openapi/schemas/webhooks.ts`
+  aside, reverting those three files to `HEAD` with `git checkout HEAD -- <path>`, and running the
+  suite: 4 of the 8 new cases failed — the two 401/403 auth-gate cases got `expected 404 to be
+  401/403` (the route doesn't exist yet, so no matching Express route means `bearerAuth` never even
+  runs), and the happy-path/DLQ-replay cases got `expected 404 to be 201`. The other 4 new cases
+  (unknown id, malformed id, cross-workspace id) passed even before the fix, incidentally — a
+  non-existent route also 404s, which happens to be the right status for those specific negative
+  cases; the positive cases are what actually prove the route's behavior is new. Not an import error
+  or a typo. Restored the fix from the copies afterward.
+- **Observed: all 28 cases (20 pre-existing + 8 new) pass after the fix** —
+  `cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts` → `28 tests`,
+  all passed. Coverage per the AC: happy-path replay (original `idempotency_key` preserved on both the
+  response AND the real outbound HTTP request the deliverer dispatched — asserted via a stubbed
+  `fetch`, not just the DB row; new row created; original row's `status`/`response_status`/
+  `response_excerpt`/`latency_ms`/`attempt_number`/`idempotency_key` all unchanged afterward); 404 for
+  an unknown id, a malformed non-UUID id, and a cross-workspace id; and the DLQ-replay case (original
+  `status='dead'`, `attempt_number=6` — replay still reaches the subscriber, succeeds, and the
+  original DLQ row stays `'dead'` and unchanged).
+- **Observed:** `deliverer.test.ts` still 13/13 after adding `attemptNow()` to `IWebhookDeliverer` (two
+  hand-built fake-deliverer test doubles in that file needed a same-shape `attemptNow` field to keep
+  compiling — not a behavior change, confirmed by re-running the file).
+- **Observed:** `pnpm --filter @ship/api type-check` and `pnpm --filter @ship/sdk type-check` both
+  clean. No non-null `!`, `as any`, or `as unknown as` added anywhere in this PR.
+- **Observed:** `cd sdk && npx vitest run` (with `DATABASE_URL` from `.factory-env`) → 186/186,
+  including `parity.test.ts`'s full suite — confirms `POST /webhooks/deliveries/{id}/replay` is
+  covered by `SDK_TO_OPERATION`, not left in `SDK_EXEMPTIONS` pointing at a route that now really
+  exists (which would have failed the "operation has a corresponding typed SDK method" check).
+- **Derived, not directly re-verified this ticket:** whether a replay's own scheduled retry-sibling
+  row (the disclosed limitation above) is actually picked up by a real running `index.ts` process at
+  its next restart — `deliverer.test.ts`'s existing `rehydrate()` coverage proves the general
+  mechanism works for any `'pending'` row, and this replay path writes the identical row shape, but
+  this ticket did not spin up a real second process to observe it end to end.
+
+**Not verified / explicit gaps.** No live end-to-end proof against a real subscriber process (this
+PR's tests stub `fetch`, same test-double boundary `deliverer.test.ts` itself already accepts — see
+that file's own header). PF-801 (named in this ticket's own brief) is the future e2e proof that a real
+subscriber recognizes the replayed `Idempotency-Key` as a duplicate of the original delivery; nothing
+in this PR can substitute for that. The SDK `WebhookDelivery` interface's pre-existing drift
+(TRO-599) is not repaired here, only grown by one more known-missing field (see above).
+
+**Roll back.** Revert the merge of `feat/pf-306-replay-endpoint`. Runtime implementation is confined
+to: `api/src/db/migrations/049_webhook_deliveries_replay.sql` (new, additive — `ADD COLUMN IF NOT
+EXISTS`/`CREATE INDEX IF NOT EXISTS`, safe to leave applied even if the route is reverted, since
+`replayed_from_id` merely goes unused), `api/src/platform/webhooks/deliverer.ts` (added
+`ReplayAttemptInput` type + `attemptNow()` on the interface and class — additive, no existing method
+changed), `api/src/platform/api/v1/resources/webhooks.ts` (one added `webhooksRouter.post
+('/deliveries/:id/replay', ...)` block, plus `replayed_from_id` added to the existing delivery
+row/serializer), and `api/src/platform/openapi/schemas/webhooks.ts` (one added field on
+`WebhookDeliveryResponseSchema` + one added `registerPath`). Reverting the merge also restores the
+regression tests, `sdk/src/__tests__/parity.test.ts`'s mapping (reverts `webhooks.replayDelivery` back
+to an `SDK_EXEMPTIONS` entry — correct once the route is gone again), `sdk/src/resources/webhooks.ts`'s
+doc comments, and this `CHANGES.md` entry. To roll back the database independently of a code revert:
+`ALTER TABLE webhook_deliveries DROP COLUMN IF EXISTS replayed_from_id;` (the partial index drops
+automatically with the column) — safe because the column is additive and nullable, so no other code
+path depends on it existing.
+
+---
+
 ## TRO-442 — PF-305: Webhook delivery log API
 
 **No new migration.** Migration 048 (`webhook_deliveries`, PF-304/TRO-438) already has every column

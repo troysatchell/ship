@@ -73,6 +73,19 @@
  * Never selects `payload` (the full event envelope) — `response_excerpt`
  * already caps what a delivery attempt costs to display, and the raw
  * payload belongs to a future replay endpoint (PF-306), not this log view.
+ *
+ * **`POST /deliveries/:id/replay` (PF-306, TRO-446) — replay from the
+ * delivery log.** Re-runs a logged delivery (looked up workspace-scoped, the
+ * same join as `GET /deliveries`) through `webhooks/deliverer.ts`'s
+ * `attemptNow()`, carrying the ORIGINAL `idempotency_key` — never a freshly
+ * generated one; this is the subscriber-dedupe contract PF-801's future e2e
+ * test verifies. Works regardless of the original row's status, `dead`
+ * (DLQ) included — this route never branches on it. Creates a NEW
+ * `webhook_deliveries` row (never mutates the original), linked back via
+ * `replayed_from_id` (migration 049) and sharing the original's `event_id`,
+ * with `attempt_number` continuing that event's existing attempt series
+ * (migration 048's unique index is keyed on `(subscription_id, event_id,
+ * attempt_number)`).
  */
 
 import { Router } from 'express';
@@ -93,6 +106,7 @@ import { resolvePrincipalWorkspaceId } from './workspaceContext.js';
 import { EVENT_TYPES } from '../../../webhooks/events.js';
 import { generateWebhookSecret } from '../../../webhooks/secrets.js';
 import { encryptSecret } from '../../../webhooks/secretEncryption.js';
+import { InMemoryWebhookDeliverer, isKnownEventType } from '../../../webhooks/deliverer.js';
 
 export const webhooksRouter: RouterType = Router();
 
@@ -194,9 +208,15 @@ export const ListWebhookDeliveriesQuerySchema = z.object({
   status: z.enum(['pending', 'success', 'failed', 'dead']).optional(),
 });
 
-/** Row shape for `webhook_deliveries` (migration 048) as read by the
- * delivery-log route — deliberately never selects `payload`, see file
- * header. */
+/** Row shape for `webhook_deliveries` (migration 048, plus migration 049's
+ * `replayed_from_id`) as read by the delivery-log route — deliberately never
+ * selects `payload`, see file header. `replayed_from_id` is non-NULL only for
+ * a row created by `POST /deliveries/:id/replay` (PF-306, TRO-446); NULL for
+ * every row the normal enqueueEvent()/attempt() pipeline creates (a fresh
+ * delivery or one of its own automatic retries). Surfaced on both this row
+ * type and the list route below (not just the replay route's own response)
+ * so a caller can tell, from the delivery log alone, which rows are replays
+ * and which they replayed FROM. */
 interface WebhookDeliveryRow {
   id: string;
   subscription_id: string;
@@ -209,11 +229,12 @@ interface WebhookDeliveryRow {
   response_excerpt: string | null;
   latency_ms: number | null;
   next_attempt_at: Date | null;
+  replayed_from_id: string | null;
   created_at: Date;
 }
 
 const DELIVERY_COLUMNS =
-  'wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.idempotency_key, wd.attempt_number, wd.status, wd.response_status, wd.response_excerpt, wd.latency_ms, wd.next_attempt_at, wd.created_at';
+  'wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.idempotency_key, wd.attempt_number, wd.status, wd.response_status, wd.response_excerpt, wd.latency_ms, wd.next_attempt_at, wd.replayed_from_id, wd.created_at';
 
 function serializeDelivery(row: WebhookDeliveryRow) {
   return {
@@ -228,6 +249,7 @@ function serializeDelivery(row: WebhookDeliveryRow) {
     response_excerpt: row.response_excerpt,
     latency_ms: row.latency_ms,
     next_attempt_at: row.next_attempt_at ? row.next_attempt_at.toISOString() : null,
+    replayed_from_id: row.replayed_from_id,
     created_at: row.created_at.toISOString(),
   };
 }
@@ -502,6 +524,170 @@ webhooksRouter.get(
       data: page.map(serializeDelivery),
       next_cursor: nextCursor,
     });
+  })
+);
+
+// ─── POST /api/v1/webhooks/deliveries/:id/replay ─────────────────────────
+//
+// PF-306 (Linear TRO-446). Registered here, alongside `GET /deliveries` and
+// still BEFORE `GET /:id` — same Express route-ordering reasoning as
+// `GET /deliveries` itself (see file header): `deliveries` is a literal path
+// segment, so as long as anything under `/deliveries/*` is registered before
+// the generic `/:id` pattern, the literal segment wins the match. (In this
+// specific case segment COUNT alone would already disambiguate this route
+// from `/:id` and `/:id/rotate` — 3 segments vs. 1 and 2 — but keeping every
+// `/deliveries/*` route grouped together, before `/:id`, matches this file's
+// existing convention and doesn't rely on that.)
+//
+// Looks up the ORIGINAL delivery row (workspace-scoped via the same
+// oauth_apps join every other route in this file uses — a caller cannot
+// replay another workspace's delivery), then re-runs it through the
+// deliverer with the SAME idempotency_key the original delivery used (read
+// off the row, never regenerated — the subscriber-dedupe contract PF-801's
+// future e2e test verifies). Works for ANY original status, including
+// 'dead' (DLQ) — this route never filters or branches on the original row's
+// own status; that is the entire point of a DLQ-replay endpoint.
+//
+// Records a NEW delivery row rather than mutating the original (this
+// ticket's own AC) — linked back via `replayed_from_id` (migration 049).
+// Continues the SAME (subscription_id, event_id) attempt_number series
+// rather than restarting at 1: migration 048's own unique index is keyed on
+// (subscription_id, event_id, attempt_number), and idx_webhook_deliveries_
+// event_id was added by that same migration specifically "in anticipation"
+// of this route resolving every attempt of an event, replays included (see
+// that migration's own header) — reusing event_id, not minting a fresh one,
+// is what keeps that lookup meaningful for a replayed delivery.
+
+interface ReplayLookupRow {
+  id: string;
+  subscription_id: string;
+  event_id: string;
+  event_type: string;
+  payload: unknown;
+  idempotency_key: string;
+  target_url: string;
+  signing_secret_ciphertext: string;
+}
+
+/** Bounded retry for the attempt_number race described below — not a
+ * silent-forever loop. */
+const REPLAY_ATTEMPT_NUMBER_MAX_RETRIES = 5;
+
+webhooksRouter.post(
+  '/deliveries/:id/replay',
+  bearerAuth,
+  rateLimitBuckets,
+  requireScope('webhooks:manage'),
+  asyncHandler(async (req, res) => {
+    const requestId = requestIdOf(req);
+    const id = String(req.params.id);
+
+    if (!UUID_RE.test(id)) {
+      throw notFoundError(requestId);
+    }
+
+    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+
+    const lookup = await pool.query<ReplayLookupRow>(
+      `SELECT wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.payload, wd.idempotency_key,
+              ws.target_url, ws.signing_secret_ciphertext
+       FROM webhook_deliveries wd
+       JOIN webhook_subscriptions ws ON ws.id = wd.subscription_id
+       JOIN oauth_apps a ON a.id = ws.app_id
+       WHERE wd.id = $1 AND a.workspace_id = $2`,
+      [id, workspaceId]
+    );
+
+    const original = lookup.rows[0];
+    if (!original) {
+      throw notFoundError(requestId);
+    }
+
+    // event_type is unconstrained TEXT (migration 048's own deliberate
+    // "events as data" call) — validated against the registry rather than
+    // blindly cast, same guard rehydrate() applies to a hand-edited or
+    // pre-migration row (deliverer.ts).
+    const eventType = original.event_type;
+    if (!isKnownEventType(eventType)) {
+      throw serverError(requestId);
+    }
+
+    // Re-serialized from the persisted jsonb, not necessarily byte-identical
+    // to whatever the original attempt actually sent (Postgres jsonb does
+    // not preserve key order/whitespace) — harmless, matching rehydrate()'s
+    // own identical comment: this replay signs and sends this exact string,
+    // fresh, and never needs to match a PAST attempt's exact bytes.
+    const rawBody = JSON.stringify(original.payload);
+
+    // Computed and inserted in ONE atomic INSERT ... SELECT — not a separate
+    // read-then-write. `COALESCE(MAX(attempt_number), 0) + 1` is evaluated by
+    // the database at INSERT time, not read back into this handler and
+    // re-sent, so nothing here can go stale between a read and a write.
+    // A genuine concurrent race (two replay calls for the SAME delivery
+    // landing at once) can still both compute the same next number under
+    // READ COMMITTED — resolved by retrying on the unique-index violation
+    // (23505) rather than assumed away (lessons.md rule 18: "push the
+    // predicate into the query, and state the concurrency argument" — the
+    // predicate IS pushed into the query; the bounded retry is the
+    // remaining, disclosed piece for the rare case two computations race).
+    let insertedRow: { id: string; attempt_number: number } | undefined;
+    for (let attempt = 0; attempt < REPLAY_ATTEMPT_NUMBER_MAX_RETRIES; attempt++) {
+      try {
+        const inserted = await pool.query<{ id: string; attempt_number: number }>(
+          `INSERT INTO webhook_deliveries
+             (subscription_id, event_id, event_type, payload, idempotency_key, attempt_number, status, replayed_from_id)
+           SELECT $1, $2, $3, $4::jsonb, $5, COALESCE(MAX(attempt_number), 0) + 1, 'pending', $6
+           FROM webhook_deliveries
+           WHERE subscription_id = $1 AND event_id = $2
+           RETURNING id, attempt_number`,
+          [original.subscription_id, original.event_id, original.event_type, rawBody, original.idempotency_key, original.id]
+        );
+        insertedRow = inserted.rows[0];
+        break;
+      } catch (error) {
+        if (isPgErrorWithCode(error, '23505') && attempt < REPLAY_ATTEMPT_NUMBER_MAX_RETRIES - 1) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    if (!insertedRow) {
+      throw serverError(requestId);
+    }
+
+    // Invoke delivery through the deliverer — never reimplement HTTP
+    // delivery/signing here. A fresh instance is cheap (no I/O in the
+    // constructor) and deliberately per-request rather than a module-level
+    // singleton: `attemptNow()`'s own doc comment (deliverer.ts) already
+    // discloses that a scheduled retry sibling from THIS call sits as a
+    // normal 'pending' row until a future rehydrate(), regardless of which
+    // deliverer instance made the call — a singleton would not change that,
+    // and per-request construction is simpler and keeps this route free of
+    // shared mutable state.
+    const deliverer = new InMemoryWebhookDeliverer(pool);
+    await deliverer.attemptNow({
+      deliveryRowId: insertedRow.id,
+      subscriptionId: original.subscription_id,
+      eventId: original.event_id,
+      eventType,
+      targetUrl: original.target_url,
+      signingSecretCiphertext: original.signing_secret_ciphertext,
+      rawBody,
+      idempotencyKey: original.idempotency_key,
+      attemptNumber: insertedRow.attempt_number,
+    });
+
+    const finalResult = await pool.query<WebhookDeliveryRow>(
+      `SELECT ${DELIVERY_COLUMNS} FROM webhook_deliveries wd WHERE wd.id = $1`,
+      [insertedRow.id]
+    );
+    const finalRow = finalResult.rows[0];
+    if (!finalRow) {
+      throw serverError(requestId);
+    }
+
+    res.status(201).json(serializeDelivery(finalRow));
   })
 );
 

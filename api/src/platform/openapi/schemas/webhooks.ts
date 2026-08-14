@@ -2,9 +2,10 @@
  * `/api/v1/webhooks` OpenAPI registration — PF-302 (Linear TRO-431).
  *
  * Wires `resources/webhooks.ts`'s existing request Zod schemas into
- * `v1Registry.registerPath` calls, for all five routes: `POST /webhooks`,
- * `GET /webhooks`, `GET /webhooks/{id}`, `DELETE /webhooks/{id}`,
- * `POST /webhooks/{id}/rotate`. Same pattern as
+ * `v1Registry.registerPath` calls, for every route: `POST /webhooks`,
+ * `GET /webhooks`, `GET /webhooks/deliveries`, `GET /webhooks/{id}`,
+ * `DELETE /webhooks/{id}`, `POST /webhooks/{id}/rotate`, and (PF-306,
+ * TRO-446) `POST /webhooks/deliveries/{id}/replay`. Same pattern as
  * `platform/openapi/schemas/documents.ts` (PF-202) — deliberately does not
  * modify `resources/webhooks.ts`'s route-handling logic.
  *
@@ -81,6 +82,7 @@ const WebhookDeliveryResponseSchema = z.object({
   response_excerpt: z.string().nullable().openapi({ description: "Up to 2000 characters of the subscriber's response body, or null if there was none." }),
   latency_ms: z.number().int().nullable().openapi({ description: 'Round-trip latency for this attempt in milliseconds, or null if it never completed.' }),
   next_attempt_at: z.string().datetime().nullable().openapi({ description: 'When the next retry is due (only meaningful on a failed row with a pending sibling), or null if this attempt is terminal (success/dead) or itself still pending execution.' }),
+  replayed_from_id: z.string().uuid().nullable().openapi({ description: 'The id of the delivery row this attempt replayed, if it was created by POST /deliveries/{id}/replay (PF-306). Null for every row created by the normal delivery pipeline (a fresh delivery or one of its own automatic retries).' }),
   created_at: z.string().datetime().openapi({ description: 'ISO 8601 timestamp this attempt row was created (its own enqueue time).' }),
 }).openapi('WebhookDelivery');
 
@@ -204,6 +206,41 @@ v1Registry.registerPath({
     },
     401: UNAUTHORIZED_RESPONSE,
     403: FORBIDDEN_RESPONSE,
+  },
+});
+
+// ─── POST /webhooks/deliveries/{id}/replay ───────────────────────────────
+//
+// PF-306 (Linear TRO-446). Registered here, alongside GET /webhooks/deliveries
+// — same "distinct literal OpenAPI path, no collision with /webhooks/{id}"
+// reasoning as that route's own comment above.
+
+const DeliveryIdParam = {
+  params: z.object({
+    id: z.string().openapi({ description: 'Delivery attempt id (a row from GET /webhooks/deliveries). A non-UUID value 404s rather than validation-failing.' }),
+  }),
+};
+
+v1Registry.registerPath({
+  method: 'post',
+  path: '/webhooks/deliveries/{id}/replay',
+  tags: ['Webhooks'],
+  summary: 'Replay a logged delivery',
+  description:
+    'Re-runs a logged delivery through the deliverer, carrying the ORIGINAL Idempotency-Key — never a freshly generated one, so a correctly-implemented subscriber recognizes it as the same logical delivery. Works regardless of the original delivery\'s status, including dead (DLQ) rows. Creates a NEW delivery row (never mutates the original), linked back to it via replayed_from_id. Requires the webhooks:manage scope.',
+  security: BEARER_SECURITY,
+  request: DeliveryIdParam,
+  responses: {
+    201: {
+      description: 'The new delivery row created by this replay.',
+      content: { 'application/json': { schema: WebhookDeliveryResponseSchema } },
+    },
+    401: UNAUTHORIZED_RESPONSE,
+    403: FORBIDDEN_RESPONSE,
+    404: {
+      description: 'No delivery with this id exists in the caller\'s workspace, or the id is malformed.',
+      content: { 'application/json': { schema: ApiErrorSchema } },
+    },
   },
 });
 

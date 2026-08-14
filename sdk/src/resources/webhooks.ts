@@ -82,6 +82,23 @@
  * rather than fixed inline (out of this ticket's stated scope: the API
  * route, not the SDK's response types).
  *
+ * UPDATE — PF-306 (Linear TRO-446). `POST /webhooks/deliveries/:id/replay`
+ * is now a real, merged route (`platform/api/v1/resources/webhooks.ts`) —
+ * `replayDelivery()` below needed no signature change (it already took just
+ * `id` and returned a `WebhookDelivery`), so `parity.test.ts` moved it from
+ * `SDK_EXEMPTIONS` to a real `SDK_TO_OPERATION` entry, per that table's own
+ * "delete this line" instruction. **Same NOT-FIXED gap as PF-305's own note
+ * immediately above, one field worse**: the real response also carries
+ * `replayed_from_id` (non-null on a replay row, pointing at the delivery it
+ * replayed — migration 049), which this `WebhookDelivery` interface still
+ * does not declare, on top of the four fields and the `'dead_letter'` vs
+ * `'dead'` mismatch already flagged above. Not fixed here either, same
+ * reasoning: this ticket's stated scope is the API route, not a response-type
+ * repair that spans every method on this client (TRO-599's job — see
+ * `.claude/skills/ship-factory/references/lessons.md` rule 28, which already
+ * names this exact recurring class from `WebhookSubscription`/`WebhookDelivery`
+ * before this update).
+ *
  * KNOWN, NOT FIXED BY PF-405: the real PF-302 response shape
  * (`app_id`, singular `event_type`, `target_url`, no `updated_at` — see
  * `platform/api/v1/resources/webhooks.ts`'s `serializeSubscription()`) does
@@ -254,9 +271,14 @@ export class WebhooksClient {
     });
   }
 
-  /** `POST /api/v1/webhooks/deliveries/:id/replay` — re-emits the delivery
-   *  with its original `Idempotency-Key`, per PF-306's ticket prose. Server
-   *  route does not exist yet (PF-306); see this file's header. */
+  /** `POST /api/v1/webhooks/deliveries/:id/replay` (PF-306, Linear TRO-446)
+   *  — re-emits a logged delivery, carrying its ORIGINAL `Idempotency-Key`
+   *  (never a freshly generated one), and returns the NEW delivery row this
+   *  creates (the original is never mutated). Works regardless of the
+   *  original delivery's status, `dead` (DLQ) included. Real, merged route
+   *  as of this update — see this file's header for the response-shape gap
+   *  this method's return type still has (same as `listDeliveries()`,
+   *  plus `replayed_from_id`, not fixed by this update). */
   async replayDelivery(id: string): Promise<WebhookDelivery> {
     return this.request.post<WebhookDelivery>(`${DELIVERIES_PATH}/${encodeURIComponent(id)}/replay`, {});
   }
