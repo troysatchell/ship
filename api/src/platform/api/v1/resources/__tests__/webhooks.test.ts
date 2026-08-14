@@ -16,6 +16,13 @@
  * PF-304 (the actual deliverer) does not exist yet, so there is no live HTTP
  * delivery to assert against; this is the closest verifiable proxy, as the
  * ticket brief itself anticipates.
+ *
+ * PF-305 (Linear TRO-442) — `GET /api/v1/webhooks/deliveries`: the delivery
+ * log, added at the bottom of this file. Deliveries are inserted directly via
+ * `pool.query` (there is no route that creates them — PF-304's deliverer is
+ * the only writer in production) so this test controls the exact row set
+ * under test, same precedent as this file's own cross-tenant fixture rows
+ * above.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
@@ -46,6 +53,28 @@ interface SubscriptionBody {
 
 interface ListResponseBody {
   data: SubscriptionBody[];
+  next_cursor: string | null;
+}
+
+/** `GET /api/v1/webhooks/deliveries` row shape — matches
+ * `serializeDelivery()` in `../webhooks.ts` exactly. */
+interface DeliveryBody {
+  id: string;
+  subscription_id: string;
+  event_id: string;
+  event_type: string;
+  idempotency_key: string;
+  attempt_number: number;
+  status: string;
+  response_status: number | null;
+  response_excerpt: string | null;
+  latency_ms: number | null;
+  next_attempt_at: string | null;
+  created_at: string;
+}
+
+interface DeliveryListResponseBody {
+  data: DeliveryBody[];
   next_cursor: string | null;
 }
 
@@ -107,6 +136,70 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
     const row = result.rows[0];
     if (!row) throw new Error('seed insertOauthApp produced no row');
     return row.id;
+  }
+
+  /** Inserts a `webhook_subscriptions` row directly (same shape the
+   * cross-tenant fixture rows elsewhere in this file already use) — a
+   * dedicated subscription per delivery-log test so its rows don't collide
+   * with the CRUD-describe block's own subscriptions under the same `appId`. */
+  async function insertSubscription(inAppId: string, eventType: string, targetUrl: string): Promise<string> {
+    const result = await pool.query<{ id: string }>(
+      `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
+       VALUES ($1, $2, $3, 'not-a-real-ciphertext', true) RETURNING id`,
+      [inAppId, eventType, targetUrl]
+    );
+    return onlyRow(result.rows).id;
+  }
+
+  /** Inserts a `webhook_deliveries` row directly — see this describe block's
+   * own header for why (PF-304's deliverer is the only production writer,
+   * and it does not run during this test). `createdAt` defaults to `now()`
+   * only if omitted; the delivery-log tests below always pass an explicit,
+   * distinct value so page ordering is deterministic regardless of what any
+   * other test file's rows (a different workspace, excluded by the route's
+   * own scoping) happen to contain. */
+  async function insertDelivery(options: {
+    subscriptionId: string;
+    eventId?: string;
+    eventType?: string;
+    attemptNumber?: number;
+    status?: string;
+    responseStatus?: number | null;
+    responseExcerpt?: string | null;
+    latencyMs?: number | null;
+    createdAt?: Date;
+  }): Promise<{ id: string; createdAt: Date }> {
+    const eventId = options.eventId ?? crypto.randomUUID();
+    const eventType = options.eventType ?? 'document.created';
+    const attemptNumber = options.attemptNumber ?? 1;
+    const status = options.status ?? 'success';
+    const responseStatus = options.responseStatus === undefined ? 200 : options.responseStatus;
+    const responseExcerpt = options.responseExcerpt === undefined ? 'ok' : options.responseExcerpt;
+    const latencyMs = options.latencyMs === undefined ? 42 : options.latencyMs;
+    const createdAt = options.createdAt ?? new Date();
+    const idempotencyKey = crypto.randomUUID();
+
+    const result = await pool.query<{ id: string; created_at: Date }>(
+      `INSERT INTO webhook_deliveries
+         (subscription_id, event_id, event_type, payload, idempotency_key, attempt_number, status, response_status, response_excerpt, latency_ms, created_at)
+       VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11)
+       RETURNING id, created_at`,
+      [
+        options.subscriptionId,
+        eventId,
+        eventType,
+        JSON.stringify({ hello: 'world' }),
+        idempotencyKey,
+        attemptNumber,
+        status,
+        responseStatus,
+        responseExcerpt,
+        latencyMs,
+        createdAt.toISOString(),
+      ]
+    );
+    const row = onlyRow(result.rows);
+    return { id: row.id, createdAt: row.created_at };
   }
 
   /** Reads back `signing_secret_ciphertext` for one subscription, throwing
@@ -529,6 +622,223 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       // actually signed with, proving the negative result above is about the
       // rotation, not a broken signer/verify pairing.
       expect(verify(signatureUnderOldSecret, rawBody, oldSecret, 300, clockAtVerifyTime)).toBe(true);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // PF-305 (Linear TRO-442) — GET /api/v1/webhooks/deliveries (delivery log)
+  // ────────────────────────────────────────────────────────────────────────
+
+  describe('PF-305: GET /api/v1/webhooks/deliveries (Linear TRO-442)', () => {
+    let deliverySubscriptionId: string;
+    let otherDeliverySubscriptionId: string;
+    let otherWorkspaceDeliverySubscriptionId: string;
+
+    // Fixed, deterministic, ordered timestamps — never `now()` — so page
+    // boundaries never depend on real-clock resolution or on what any other
+    // test file's rows happen to contain (the route's own workspace scoping
+    // already isolates this describe block's rows from everything else).
+    const T1 = new Date('2020-01-01T00:00:01.000Z'); // oldest
+    const T2 = new Date('2020-01-01T00:00:02.000Z');
+    const T3 = new Date('2020-01-01T00:00:03.000Z'); // newest
+    const T_OTHER_SUB = new Date('2020-01-01T00:00:04.000Z');
+
+    let row1Id: string; // attempt_number=1, status=success, T1
+    let row2Id: string; // attempt_number=1, status=failed,  T2 (retried below)
+    let row3Id: string; // attempt_number=2, status=success, T3 (retry of row2's event)
+
+    beforeAll(async () => {
+      deliverySubscriptionId = await insertSubscription(appId, 'document.created', 'https://example.com/deliveries-hook');
+      otherDeliverySubscriptionId = await insertSubscription(appId, 'issue.created', 'https://example.com/deliveries-hook-2');
+      otherWorkspaceDeliverySubscriptionId = await insertSubscription(
+        otherWorkspaceAppId,
+        'document.created',
+        'https://example.com/other-ws-deliveries-hook'
+      );
+
+      const retriedEventId = crypto.randomUUID();
+
+      const r1 = await insertDelivery({
+        subscriptionId: deliverySubscriptionId,
+        attemptNumber: 1,
+        status: 'success',
+        responseStatus: 200,
+        latencyMs: 120,
+        createdAt: T1,
+      });
+      row1Id = r1.id;
+
+      const r2 = await insertDelivery({
+        subscriptionId: deliverySubscriptionId,
+        eventId: retriedEventId,
+        attemptNumber: 1,
+        status: 'failed',
+        responseStatus: 503,
+        latencyMs: 50,
+        createdAt: T2,
+      });
+      row2Id = r2.id;
+
+      // A real retry: same event_id as row2, attempt_number=2 — the literal
+      // "every attempt visible" AC (migration 048's row-per-attempt design).
+      const r3 = await insertDelivery({
+        subscriptionId: deliverySubscriptionId,
+        eventId: retriedEventId,
+        attemptNumber: 2,
+        status: 'success',
+        responseStatus: 200,
+        latencyMs: 80,
+        createdAt: T3,
+      });
+      row3Id = r3.id;
+
+      // A delivery under a DIFFERENT subscription in the SAME workspace —
+      // must be excluded when filtering by `deliverySubscriptionId`, but
+      // included when no subscription_id filter is given.
+      await insertDelivery({
+        subscriptionId: otherDeliverySubscriptionId,
+        status: 'pending',
+        responseStatus: null,
+        latencyMs: null,
+        createdAt: T2,
+      });
+
+      // A delivery under the OTHER WORKSPACE's subscription — must never
+      // appear in any response in this describe block, regardless of filters.
+      await insertDelivery({
+        subscriptionId: otherWorkspaceDeliverySubscriptionId,
+        status: 'success',
+        responseStatus: 200,
+        latencyMs: 10,
+        createdAt: T_OTHER_SUB,
+      });
+    });
+
+    it('requires a bearer token (401)', async () => {
+      const res = await request(app).get('/api/v1/webhooks/deliveries');
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe('unauthorized');
+    });
+
+    it('requires the webhooks:manage scope (403, names the missing scope)', async () => {
+      const res = await request(app)
+        .get('/api/v1/webhooks/deliveries')
+        .set('Authorization', `Bearer ${noScopeToken}`);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('forbidden');
+      expect(res.body.details?.missing_scope).toBe('webhooks:manage');
+    });
+
+    it('lists attempts for a subscription with attempt_number/response_status/latency_ms present, newest first', async () => {
+      const res = await request(app)
+        .get(`/api/v1/webhooks/deliveries?subscription_id=${deliverySubscriptionId}&limit=100`)
+        .set('Authorization', `Bearer ${manageToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as DeliveryListResponseBody;
+      expect(body.data.map((d) => d.id)).toEqual([row3Id, row2Id, row1Id]);
+
+      const [three, two, one] = body.data;
+      expect(three?.attempt_number).toBe(2);
+      expect(three?.status).toBe('success');
+      expect(three?.response_status).toBe(200);
+      expect(three?.latency_ms).toBe(80);
+      expect(three?.subscription_id).toBe(deliverySubscriptionId);
+
+      expect(two?.attempt_number).toBe(1);
+      expect(two?.status).toBe('failed');
+      expect(two?.response_status).toBe(503);
+      expect(two?.latency_ms).toBe(50);
+      // row3 is the retry of row2's own event — proving BOTH attempts of the
+      // same logical delivery are visible, not just the latest.
+      expect(two?.event_id).toBe(three?.event_id);
+
+      expect(one?.attempt_number).toBe(1);
+      expect(one?.status).toBe('success');
+      expect(one?.response_status).toBe(200);
+      expect(one?.latency_ms).toBe(120);
+
+      // Never leaks the other subscription's or the other workspace's rows.
+      const ids = body.data.map((d) => d.id);
+      expect(ids).not.toContain('');
+      for (const item of body.data) {
+        expect(item.subscription_id).toBe(deliverySubscriptionId);
+      }
+    });
+
+    it('cursor-paginates across multiple pages in stable (created_at, id) DESC order', async () => {
+      const page1 = await request(app)
+        .get(`/api/v1/webhooks/deliveries?subscription_id=${deliverySubscriptionId}&limit=2`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(page1.status).toBe(200);
+      const page1Body = page1.body as DeliveryListResponseBody;
+      expect(page1Body.data.map((d) => d.id)).toEqual([row3Id, row2Id]);
+      expect(page1Body.next_cursor).toBeTruthy();
+
+      const page2 = await request(app)
+        .get(
+          `/api/v1/webhooks/deliveries?subscription_id=${deliverySubscriptionId}&limit=2&cursor=${encodeURIComponent(
+            page1Body.next_cursor ?? ''
+          )}`
+        )
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(page2.status).toBe(200);
+      const page2Body = page2.body as DeliveryListResponseBody;
+      expect(page2Body.data.map((d) => d.id)).toEqual([row1Id]);
+      expect(page2Body.next_cursor).toBeNull();
+    });
+
+    it('filters by status', async () => {
+      const res = await request(app)
+        .get(`/api/v1/webhooks/deliveries?subscription_id=${deliverySubscriptionId}&status=failed&limit=100`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(res.status).toBe(200);
+      const body = res.body as DeliveryListResponseBody;
+      expect(body.data.map((d) => d.id)).toEqual([row2Id]);
+      expect(body.data[0]?.status).toBe('failed');
+    });
+
+    it('filters by subscription_id, excluding another subscription in the same workspace', async () => {
+      const res = await request(app)
+        .get(`/api/v1/webhooks/deliveries?subscription_id=${otherDeliverySubscriptionId}&limit=100`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(res.status).toBe(200);
+      const body = res.body as DeliveryListResponseBody;
+      expect(body.data.length).toBe(1);
+      expect(body.data[0]?.subscription_id).toBe(otherDeliverySubscriptionId);
+      expect(body.data.map((d) => d.id)).not.toContain(row1Id);
+      expect(body.data.map((d) => d.id)).not.toContain(row2Id);
+      expect(body.data.map((d) => d.id)).not.toContain(row3Id);
+    });
+
+    it('never returns another workspace\'s delivery rows, with or without filters', async () => {
+      const unfiltered = await request(app)
+        .get('/api/v1/webhooks/deliveries?limit=100')
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(unfiltered.status).toBe(200);
+      const unfilteredBody = unfiltered.body as DeliveryListResponseBody;
+      for (const item of unfilteredBody.data) {
+        expect(item.subscription_id).not.toBe(otherWorkspaceDeliverySubscriptionId);
+      }
+
+      const filtered = await request(app)
+        .get(`/api/v1/webhooks/deliveries?subscription_id=${otherWorkspaceDeliverySubscriptionId}&limit=100`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(filtered.status).toBe(200);
+      // The caller's own credential resolves to `workspaceId`, not
+      // `otherWorkspaceId` — the join through oauth_apps.workspace_id means
+      // a subscription_id from a workspace this token can't see matches
+      // nothing, not a leaked row.
+      expect((filtered.body as DeliveryListResponseBody).data).toEqual([]);
+    });
+
+    it('rejects an invalid status filter (400 validation_failed)', async () => {
+      const res = await request(app)
+        .get('/api/v1/webhooks/deliveries?status=not-a-real-status')
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(res.body.details?.fieldErrors?.status).toBeTruthy();
     });
   });
 });
