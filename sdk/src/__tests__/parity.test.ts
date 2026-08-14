@@ -104,6 +104,8 @@ import { DocumentsClient } from '../resources/documents.js';
 import { IssuesClient } from '../resources/issues.js';
 import { SprintsClient } from '../resources/sprints.js';
 import { WebhooksClient } from '../resources/webhooks.js';
+import { PeopleClient } from '../resources/people.js';
+import { ChangesClient } from '../resources/changes.js';
 
 // ─── Structural discovery #1: every /api/v1 operation ─────────────────────
 
@@ -167,6 +169,9 @@ function discoverSdkMethods(): SdkMethod[] {
     { prefix: 'issues.', prototype: IssuesClient.prototype },
     { prefix: 'sprints.', prototype: SprintsClient.prototype },
     { prefix: 'webhooks.', prototype: WebhooksClient.prototype },
+    // PF-205 (Linear TRO-414) additions.
+    { prefix: 'people.', prototype: PeopleClient.prototype },
+    { prefix: 'changes.', prototype: ChangesClient.prototype },
   ];
   const methods: SdkMethod[] = [];
   for (const { prefix, prototype } of groups) {
@@ -193,6 +198,14 @@ const SDK_TO_OPERATION: Readonly<Record<string, OpenApiOperation>> = {
   'webhooks.getSubscription': { method: 'get', path: '/webhooks/{id}' },
   'webhooks.deleteSubscription': { method: 'delete', path: '/webhooks/{id}' },
   'webhooks.rotateSecret': { method: 'post', path: '/webhooks/{id}/rotate' },
+  // PF-205 (Linear TRO-414) additions.
+  'sprints.get': { method: 'get', path: '/sprints/{id}' },
+  'documents.getAssociations': { method: 'get', path: '/documents/{id}/associations' },
+  'documents.getReverseAssociations': { method: 'get', path: '/documents/{id}/reverse-associations' },
+  'documents.getBacklinks': { method: 'get', path: '/documents/{id}/backlinks' },
+  'documents.getComments': { method: 'get', path: '/documents/{id}/comments' },
+  'people.list': { method: 'get', path: '/people' },
+  'changes.list': { method: 'get', path: '/changes' },
 };
 
 const SDK_EXEMPTIONS: Readonly<Record<string, string>> = {
@@ -206,6 +219,8 @@ const SDK_EXEMPTIONS: Readonly<Record<string, string>> = {
     'Targets GET /webhooks/deliveries — PF-305 (delivery log API) has not landed; the route does not exist in v1OpenApiDocument yet (resources/webhooks.ts header, verified against the real, merged PF-302 registration). Remove this exemption and add a SDK_TO_OPERATION entry once PF-305 lands.',
   'webhooks.replayDelivery':
     'Targets POST /webhooks/deliveries/:id/replay — PF-306 (replay) has not landed; same verification as listDeliveries above. Remove this exemption once PF-306 lands.',
+  'people.iterate':
+    'Client-side pagination convenience over people.list() (PF-205, same pattern as PF-402) — an async-generator wrapper around list()\'s cursor, not a distinct HTTP call shape.',
 };
 
 const OPENAPI_EXEMPTIONS: Readonly<Record<string, string>> = {

@@ -2,11 +2,11 @@
  * `sprints` resource client (PF-401, PLUGFORGE.MD §2.8) — over
  * `/api/v1/sprints` (PF-201, `api/src/platform/api/v1/resources/sprints.ts`).
  *
- * `list()` only, same reasoning as `resources/issues.ts` (see that file's
- * header for the fuller rationale): `resources/sprints.ts` (145 lines, read
- * in full) and `platform/openapi/schemas/sprints.ts` (read in full) both
- * confirm the server registers exactly one route, `GET /api/v1/sprints`. No
- * `GET /api/v1/sprints/:id`, no `POST /api/v1/sprints` today.
+ * UPDATE — PF-205 (Linear TRO-414): `GET /api/v1/sprints/:id` (with
+ * sprint_number/owner_id/status/cadence week-dates) now exists — added
+ * below as `get()`. The header note this replaces (`list()` only, no `:id`
+ * route) was true when PF-201 wrote it and is no longer true; left as
+ * history in this ticket's own report rather than silently dropped.
  *
  * `iterate()` (PF-402) — async-iterator pagination over `list()`'s cursor,
  * same shared `iteratePages` helper `DocumentsClient`/`IssuesClient` use
@@ -14,7 +14,7 @@
  */
 import { iteratePages } from '../internal/pagination.js';
 import type { RequestClient } from '../internal/requestClient.js';
-import type { IterateSprintsParams, ListSprintsParams, Sprint, SprintList } from '../types.js';
+import type { IterateSprintsParams, ListSprintsParams, Sprint, SprintDetail, SprintList } from '../types.js';
 
 const BASE_PATH = '/api/v1/sprints';
 
@@ -40,5 +40,15 @@ export class SprintsClient {
    *  doc comment for the shared mechanics. */
   iterate(params: IterateSprintsParams = {}): AsyncGenerator<Sprint, void, undefined> {
     return iteratePages<Sprint>((cursor) => this.list({ ...params, cursor }));
+  }
+
+  /**
+   * `GET /api/v1/sprints/:id` (PF-205, Linear TRO-414). A malformed or
+   * non-existent `id` both produce a `not_found` `ShipSdkError` — matching
+   * `resources/sprints.ts`'s own `GET /:id` handler, which follows
+   * `documents.ts`'s identical AC-4 convention.
+   */
+  async get(id: string): Promise<SprintDetail> {
+    return this.request.get<SprintDetail>(`${BASE_PATH}/${encodeURIComponent(id)}`);
   }
 }
