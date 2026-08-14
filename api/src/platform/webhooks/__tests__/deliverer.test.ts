@@ -588,14 +588,21 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     expect(rows.map((r) => r.status)).toEqual(['failed', 'success']);
   });
 
-  it('rehydrate() on a deliverer with nothing pending restores 0', async () => {
+  it('rehydrate() on a deliverer with nothing pending restores exactly 0', async () => {
+    // Establish a genuinely controlled "nothing pending" state (CodeRabbit,
+    // this PR review) rather than only asserting a relative delta: this is
+    // the LAST test in this describe block to touch `webhook_deliveries`
+    // (the sibling `wireDelivererToEventBus` describe below never touches
+    // the DB), so deleting every 'pending' row here — including the one the
+    // execution-failure test above deliberately left behind — is safe; no
+    // later test depends on it.
+    await pool.query(`DELETE FROM webhook_deliveries WHERE status = 'pending'`);
+
     const deliverer = new InMemoryWebhookDeliverer(pool, new ManualClock(0));
-    // Not asserting exactly 0 globally (other tests in this file may leave
-    // rows behind transiently within the same run), only that THIS
-    // deliverer's own queue grows by exactly what rehydrate() reports.
-    const before = deliverer.queueLength;
+    expect(deliverer.queueLength).toBe(0);
     const restored = await deliverer.rehydrate();
-    expect(deliverer.queueLength).toBe(before + restored);
+    expect(restored).toBe(0);
+    expect(deliverer.queueLength).toBe(0);
   });
 });
 

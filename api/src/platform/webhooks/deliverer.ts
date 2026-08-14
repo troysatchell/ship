@@ -425,6 +425,10 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
     let restored = 0;
     let cursorId: string | null = null;
     let hasMore = true;
+    // Built once (not re-scanned per row): de-dupes against whatever is
+    // ALREADY queued (e.g. a second rehydrate() call, or an item that
+    // arrived via enqueueEvent() in between) — see the dedup check below.
+    const queuedDeliveryRowIds = new Set(this.queue.map((item) => item.deliveryRowId));
 
     while (hasMore) {
       const params: Array<string | number> = cursorId ? [cursorId, REHYDRATE_BATCH_SIZE] : [REHYDRATE_BATCH_SIZE];
@@ -450,6 +454,17 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
           console.error(`webhook deliverer: skipping delivery ${row.id} with unknown event_type "${row.event_type}"`);
           continue;
         }
+        if (queuedDeliveryRowIds.has(row.id)) {
+          // Already in this instance's in-memory queue — a second
+          // rehydrate() call (this codebase's own `index.ts` only calls it
+          // once at boot, but nothing stops a future caller from calling it
+          // again, e.g. an ops action) would otherwise push a DUPLICATE
+          // `QueuedAttempt` for the same DB row, and `processDue()` would
+          // then attempt() the SAME row twice once due (CodeRabbit, this PR
+          // review).
+          continue;
+        }
+        queuedDeliveryRowIds.add(row.id);
         this.queue.push({
           deliveryRowId: row.id,
           subscriptionId: row.subscription_id,
@@ -602,6 +617,14 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
         `INSERT INTO webhook_deliveries
            (subscription_id, event_id, event_type, payload, idempotency_key, attempt_number, status, next_attempt_at)
          VALUES ($1, $2, $3, $4::jsonb, $5, $6, 'pending', $7)
+         -- Same idx_webhook_deliveries_unique_attempt guard as
+         -- enqueueEvent()'s INSERT (CodeRabbit, this PR review): a duplicate
+         -- in-memory QueuedAttempt for this delivery (rehydrate()'s own
+         -- dedup narrows this, but does not eliminate every path -- e.g. two
+         -- deliverer instances racing against the same DB) attempting the
+         -- SAME (subscription, event, attempt_number) concurrently must not
+         -- crash this transaction; the second writer just queues nothing new.
+         ON CONFLICT (subscription_id, event_id, attempt_number) DO NOTHING
          RETURNING id`,
         [
           item.subscriptionId,
@@ -622,7 +645,11 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
       client.release();
     }
 
-    if (!nextRow) return; // unreachable — see the identical guard in enqueueEvent()
+    // No row: either the unreachable INSERT-without-RETURNING case, or a
+    // real ON CONFLICT DO NOTHING (a duplicate in-memory item for this same
+    // delivery already inserted attempt `nextAttemptNumber` — see the
+    // ON CONFLICT comment above). Either way, nothing new to queue here.
+    if (!nextRow) return;
 
     this.queue.push({
       ...item,

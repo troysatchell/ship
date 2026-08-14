@@ -81,7 +81,7 @@ cd api && npx vitest run src/platform/webhooks/__tests__/deliverer.test.ts
 ```
 
 **Evidence (both PLUGFORGE.MD §5 graded scenarios, `platform/webhooks/__tests__/deliverer.test.ts`,
-all 10 tests in the file passing in ~250ms real time):**
+all 12 tests in the file passing in ~250-300ms real time):**
 - 500×3 then 200 → succeeds on attempt 4, with waits proven correctly ≥1s/4s/16s by asserting BOTH
   directions at each boundary: advancing the clock by one millisecond less than the schedule value
   never fires the retry (`processDue()` returns 0), advancing to/past it always does (`processDue()`
@@ -95,7 +95,18 @@ all 10 tests in the file passing in ~250ms real time):**
 
 **Not verified / explicit gaps.** No live HTTP delivery against a real external endpoint — every
 test injects `fetchImpl`. `GET /:id/deliveries` (a delivery-log listing endpoint) and
-`POST /:id/replay` are PF-305/PF-306, not this ticket.
+`POST /:id/replay` are PF-305/PF-306, not this ticket. Two CodeRabbit findings deliberately not
+applied, with reasons: (1) `processDue()` awaits due deliveries serially rather than with a bounded
+concurrency limit — correct, just not maximally throughput-optimized; real added complexity for a
+"trivial"-severity finding on a Week-6 MVP single-instance queue, left as a disclosed follow-up
+rather than YAGNI'd in silently. (2) `index.ts`'s SIGTERM/SIGINT handler still calls `process.exit(0)`
+after `webhookDeliverer.stop()` — removing it, as suggested, would be a regression, not a fix: this
+codebase registers no other shutdown behavior for the HTTP server itself, so a handler that only logs
+and stops the deliverer without exiting would make the process **ignore SIGTERM/SIGINT entirely**
+(registering a signal handler overrides Node's default terminate-on-signal behavior), which is worse
+for deployment orchestration than the narrow "an in-flight processDue() could be cut short" risk it
+was trying to close. The transactional write in `attempt()`'s retry path (this same PR) already makes
+that narrow case crash-safe either way.
 
 **Rollback.** Revert the merge of `feat/pf-304-deliverer-retries-dlq`. Drop `webhook_deliveries`
 (`DROP TABLE webhook_deliveries;` — nothing else references it) or run a down-migration if one
