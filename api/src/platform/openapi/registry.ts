@@ -48,7 +48,12 @@ v1Registry.registerComponent('securitySchemes', 'bearerAuth', {
   type: 'http',
   scheme: 'bearer',
   description:
-    'A public API bearer token: either an OAuth access token (PF-104, PLUGFORGE.MD §2.2 oauth_tokens) or a scoped personal access token (api_tokens.scopes, PF-107). GET /api/v1/me introspects the authenticated principal (PF-201, not yet registered in this document — see this directory\'s README).',
+    // PF-204 (TRO-409) fix: this claimed GET /api/v1/me was "not yet
+    // registered in this document" — stale since PF-203 (TRO-404) added
+    // schemas/me.ts. Caught by CodeRabbit reviewing the now-committed
+    // docs/openapi.json (this string ships verbatim into it), not by any
+    // prior review of this file itself.
+    'A public API bearer token: either an OAuth access token (PF-104, PLUGFORGE.MD §2.2 oauth_tokens) or a scoped personal access token (api_tokens.scopes, PF-107). GET /api/v1/me introspects the authenticated principal (PF-201).',
 });
 
 /**
