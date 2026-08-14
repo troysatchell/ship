@@ -54,7 +54,7 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(document.openapi).toMatch(/^3\.1\.\d+$/);
   });
 
-  it('registers every route on /api/v1 as of PF-302: health, openapi.json, documents, issues, sprints, me, webhooks', () => {
+  it('registers every route on /api/v1 as of PF-305: health, openapi.json, documents, issues, sprints, me, webhooks', () => {
     // Updated by PF-203 (Linear TRO-404): issues/sprints/me (PF-201)
     // predated this registry landing and were never retrofitted — this
     // ticket's route-fitness test (route-fitness.test.ts) exists precisely
@@ -69,6 +69,12 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     // /webhooks/{id}/rotate registered (`platform/openapi/schemas/webhooks.ts`)
     // — another legitimate addition to this hand-maintained list, same class
     // as the PF-203 update above, not a weakened check.
+    //
+    // Updated again by PF-305 (Linear TRO-442): /webhooks/deliveries
+    // registered (same file) — same class of legitimate addition, not a
+    // weakened check; route-fitness.test.ts independently confirms this
+    // route also carries a declared scope and the {data, next_cursor}
+    // pagination envelope, which this file does not re-check.
     const paths = document.paths ?? {};
     expect(Object.keys(paths).sort()).toEqual(
       [
@@ -80,6 +86,7 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
         '/openapi.json',
         '/sprints',
         '/webhooks',
+        '/webhooks/deliveries',
         '/webhooks/{id}',
         '/webhooks/{id}/rotate',
       ].sort()
@@ -95,6 +102,7 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(paths['/me']?.get).toBeDefined();
     expect(paths['/webhooks']?.get).toBeDefined();
     expect(paths['/webhooks']?.post).toBeDefined();
+    expect(paths['/webhooks/deliveries']?.get).toBeDefined();
     expect(paths['/webhooks/{id}']?.get).toBeDefined();
     expect(paths['/webhooks/{id}']?.delete).toBeDefined();
     expect(paths['/webhooks/{id}/rotate']?.post).toBeDefined();
@@ -109,6 +117,7 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(paths['/sprints']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks']?.post?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/webhooks/deliveries']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks/{id}']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks/{id}']?.delete?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks/{id}/rotate']?.post?.security).toEqual([{ bearerAuth: [] }]);
