@@ -68,10 +68,13 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     // Updated again by PF-302 (Linear TRO-431): /webhooks, /webhooks/{id},
     // /webhooks/{id}/rotate registered (`platform/openapi/schemas/webhooks.ts`)
     // — another legitimate addition to this hand-maintained list, same class
-    // as the PF-203 update above, not a weakened check.
+    // as the PF-203 update above, not a weakened check. Updated again by
+    // PF-501 (Linear TRO-432): /audit registered
+    // (`platform/openapi/schemas/audit.ts`).
     const paths = document.paths ?? {};
     expect(Object.keys(paths).sort()).toEqual(
       [
+        '/audit',
         '/documents',
         '/documents/{id}',
         '/health',
@@ -98,6 +101,7 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(paths['/webhooks/{id}']?.get).toBeDefined();
     expect(paths['/webhooks/{id}']?.delete).toBeDefined();
     expect(paths['/webhooks/{id}/rotate']?.post).toBeDefined();
+    expect(paths['/audit']?.get).toBeDefined();
   });
 
   it('every authenticated /api/v1 operation requires bearerAuth; health and openapi.json require none', () => {
@@ -112,6 +116,7 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(paths['/webhooks/{id}']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks/{id}']?.delete?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks/{id}/rotate']?.post?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/audit']?.get?.security).toEqual([{ bearerAuth: [] }]);
     // /me requires bearerAuth like every other authenticated route — it just
     // requires no specific SCOPE (resources/me.ts's design decision; OpenAPI
     // security requirements for an http-bearer scheme don't carry a scope

@@ -37,17 +37,18 @@ describe('PF-202: GET /api/v1/openapi.json', () => {
     expect(body.openapi).toMatch(/^3\.1\.\d+$/);
   });
 
-  it('contains every registered /api/v1 route: health, itself, documents, issues, sprints, me, webhooks (PF-203, PF-302)', async () => {
+  it('contains every registered /api/v1 route: health, itself, documents, issues, sprints, me, webhooks, audit (PF-203, PF-302, PF-501)', async () => {
     const res = await request(app).get('/api/v1/openapi.json');
 
     const body: OpenApiDocumentBody = res.body;
     const paths = body.paths ?? {};
     // Updated by PF-302 (Linear TRO-431): /webhooks, /webhooks/{id},
-    // /webhooks/{id}/rotate added — see document.test.ts's identical update
-    // for the same rationale (a legitimate addition to a hand-maintained
-    // list, not a weakened check).
+    // /webhooks/{id}/rotate added. Updated by PF-501 (Linear TRO-432): /audit
+    // added — see document.test.ts's identical update for the same rationale
+    // (a legitimate addition to a hand-maintained list, not a weakened check).
     expect(Object.keys(paths).sort()).toEqual(
       [
+        '/audit',
         '/documents',
         '/documents/{id}',
         '/health',
