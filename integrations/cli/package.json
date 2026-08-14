@@ -1,0 +1,33 @@
+{
+  "name": "@ship/cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Ship platform CLI (PF-600, PLUGFORGE.MD Epic 6) — `ship login` (RFC 8628 device flow) + `ship whoami`, built on @ship/sdk only.",
+  "type": "module",
+  "bin": {
+    "ship": "./dist/bin.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc && chmod +x dist/bin.js",
+    "dev": "tsc --watch",
+    "clean": "rm -rf dist",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@ship/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.5",
+    "@types/pg": "8.16.0",
+    "commander": "15.0.0",
+    "pg": "8.16.3",
+    "typescript": "5.9.3",
+    "vitest": "4.0.17"
+  }
+}

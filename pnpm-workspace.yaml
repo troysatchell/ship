@@ -4,3 +4,4 @@ packages:
   - 'shared'
   - 'agent'
   - 'sdk'
+  - 'integrations/cli'
