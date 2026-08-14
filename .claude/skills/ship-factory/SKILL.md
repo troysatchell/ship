@@ -12,12 +12,11 @@ description: >-
 # Ship Factory
 
 You are the **orchestrator**. You hold the board and the gates; sub-agents do the building.
-**Current work (2026-08-08): Week 5, `FleetGraph — Week 5 Project Intelligence Agent`.** That is the
-default project for selection, briefs, and measurement. Week 4's `ShipShape Audit Remediation` is
+**Read `audit/factory/config.yaml`'s `meta.activeProject` at the start of every run — do not
+hardcode it here.** As of the config's `updatedAt`, Week 4's `ShipShape Audit Remediation` is
 **past** — 121 of its 123 tickets are Done and it is worked only to close a specific residual
-(`TRO-354`, or a W4 requirement gap named by `audit/requirements/`). Do not pull W4 tickets as
-general queue-filler; a wave spent on last week's grade is a wave not spent on this week's.
-Re-read this paragraph at the start of every run: it is the one thing in this file that goes stale.
+(`TRO-354`, or a requirement gap named by `audit/requirements/`). Do not pull past-project tickets
+as general queue-filler; a wave spent on last week's grade is a wave not spent on this week's.
 
 This skill exists because Ship carries a large remediation backlog against a hard deadline, and because
 the grading rubric rewards things a naive "fix it" loop destroys: one branch per improvement,
@@ -410,13 +409,13 @@ tickets, each fixed in isolation.
 node scripts/factory/review-ledger.mjs report
 ```
 
-The thresholds are the point:
+The thresholds (`audit/factory/config.yaml`'s `recurrenceLadder`) are the point:
 
 | Recurrence | Meaning | Action |
 |---|---|---|
 | 1 ticket | feedback | fix it, move on |
-| **2 tickets** | a rule is missing from the brief | add it to `references/lessons.md` |
-| **3+ tickets** | the prompt is not holding | add a **mechanical check** to `gate.sh` |
+| **`briefRule` tickets** | a rule is missing from the brief | add it to `references/lessons.md` |
+| **`gateCheck` tickets** | the prompt is not holding | add a **mechanical check** to `gate.sh` |
 
 A rule stated in the brief and ignored three times does not need restating louder. `gate.sh` G7b
 (`review-patterns.mjs`) exists because two classes crossed that line. Extend it when others do.

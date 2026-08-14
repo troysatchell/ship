@@ -168,10 +168,8 @@ Two mechanical notes:
 
 ## 5. Board hygiene
 
-- **Never dispatch outside the run's active project** in team `Troysatchell`. As of 2026-08-08 that
-  is `FleetGraph — Week 5 Project Intelligence Agent`; `ShipShape Audit Remediation` is Week 4 and
-  closed at 121/123. **Confirm the active project at the start of every run rather than trusting
-  this line** — it is the sentence in this file most likely to be stale.
+- **Never dispatch outside the run's active project.** Read `audit/factory/config.yaml`'s
+  `meta.activeProject` and `meta.team` at the start of every run — do not hardcode either here.
 
   The team holds six projects, including an iOS app, a healthcare copilot, and another product's
   security audit at `TRO-250`–`TRO-275`. Their issue numbers **interleave** with Ship's, so a
