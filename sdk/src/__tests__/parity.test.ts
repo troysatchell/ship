@@ -72,13 +72,16 @@
  *     operation. Two reasons appear today — `iterate()` (PF-402) is a
  *     client-side pagination convenience wrapping `list()`'s cursor in an
  *     async generator, not a second HTTP call shape (this ticket's own brief
- *     names this exact case); and `webhooks.listDeliveries`/
- *     `webhooks.replayDelivery`, which target `/webhooks/deliveries*` routes
- *     PF-305/PF-306 have not built yet (verified absent from the real,
- *     merged PF-302 registration — see `resources/webhooks.ts`'s header).
- *     This second kind should SHRINK over time, not grow: the day PF-305/
- *     PF-306 land, delete those two lines and add real `SDK_TO_OPERATION`
- *     entries instead.
+ *     names this exact case); and `webhooks.replayDelivery`, which targets
+ *     `/webhooks/deliveries/:id/replay`, a route PF-306 has not built yet
+ *     (verified absent from the real, merged registration).
+ *     `webhooks.listDeliveries` was the identical kind of exemption until
+ *     PF-305 (Linear TRO-442) landed the real `GET /webhooks/deliveries`
+ *     route — moved to `SDK_TO_OPERATION` at that point, per exactly the
+ *     "delete the line, add a real entry" instruction this comment used to
+ *     describe in the future tense. This exemption kind should SHRINK over
+ *     time, not grow: the day PF-306 lands, delete `replayDelivery`'s line
+ *     too.
  *   - `OPENAPI_EXEMPTIONS`: an operation that deliberately has no typed SDK
  *     method — `GET /health` and `GET /openapi.json`, both infra/meta
  *     endpoints rather than typed domain resources (the identical two
@@ -198,6 +201,10 @@ const SDK_TO_OPERATION: Readonly<Record<string, OpenApiOperation>> = {
   'webhooks.getSubscription': { method: 'get', path: '/webhooks/{id}' },
   'webhooks.deleteSubscription': { method: 'delete', path: '/webhooks/{id}' },
   'webhooks.rotateSecret': { method: 'post', path: '/webhooks/{id}/rotate' },
+  // PF-305 (Linear TRO-442) landed: GET /webhooks/deliveries is now a real,
+  // registered v1Registry operation — moved out of SDK_EXEMPTIONS below per
+  // that table's own "delete this line and add a real entry" instruction.
+  'webhooks.listDeliveries': { method: 'get', path: '/webhooks/deliveries' },
   // PF-205 (Linear TRO-414) additions.
   'sprints.get': { method: 'get', path: '/sprints/{id}' },
   'documents.getAssociations': { method: 'get', path: '/documents/{id}/associations' },
@@ -215,8 +222,6 @@ const SDK_EXEMPTIONS: Readonly<Record<string, string>> = {
     'Client-side pagination convenience over issues.list() (PF-402) — same reasoning as documents.iterate.',
   'sprints.iterate':
     'Client-side pagination convenience over sprints.list() (PF-402) — same reasoning as documents.iterate.',
-  'webhooks.listDeliveries':
-    'Targets GET /webhooks/deliveries — PF-305 (delivery log API) has not landed; the route does not exist in v1OpenApiDocument yet (resources/webhooks.ts header, verified against the real, merged PF-302 registration). Remove this exemption and add a SDK_TO_OPERATION entry once PF-305 lands.',
   'webhooks.replayDelivery':
     'Targets POST /webhooks/deliveries/:id/replay — PF-306 (replay) has not landed; same verification as listDeliveries above. Remove this exemption once PF-306 lands.',
   'people.iterate':

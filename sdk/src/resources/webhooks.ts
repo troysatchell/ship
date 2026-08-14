@@ -57,6 +57,31 @@
  * `iterate()`'s exemption. See parity.test.ts's own header for the full
  * correspondence rule.
  *
+ * UPDATE — PF-305 (Linear TRO-442). `GET /webhooks/deliveries` is now a
+ * real, merged route (`platform/api/v1/resources/webhooks.ts`) —
+ * `listDeliveries()`'s query params (`limit`, `cursor`, `subscription_id`,
+ * `status`) already match that route's real `ListWebhookDeliveriesQuerySchema`
+ * exactly, so this method needed no signature change; `parity.test.ts` moved
+ * it from `SDK_EXEMPTIONS` to a real `SDK_TO_OPERATION` entry.
+ * `replayDelivery()` is unaffected — still targets PF-306, not yet built.
+ *
+ * **NOT FIXED BY PF-305, same class as the "KNOWN, NOT FIXED BY PF-405"
+ * note below.** The real `GET /webhooks/deliveries` response
+ * (`serializeDelivery()`, same file) does not match this file's
+ * `WebhookDelivery` interface below in two ways: (1) `status`'s real 4th
+ * value is `'dead'`, not this interface's guessed `'dead_letter'` — a
+ * client checking `=== 'dead_letter'` will never match a real dead-lettered
+ * row; (2) the real row also carries `event_id`, `idempotency_key`,
+ * `response_excerpt`, and `next_attempt_at`, none of which this interface
+ * declares. PF-305's own ticket scope is the server route (TRO-442's own
+ * brief); `parity.test.ts` is deliberately method+path-level, not
+ * response-shape-level (see its header), so it does not catch this either.
+ * Flagged here rather than silently fixed or silently left implicit — same
+ * disclosure this file already sets as precedent for `WebhookSubscription`
+ * below, and named as a follow-up in this ticket's own PR/CHANGES.md entry
+ * rather than fixed inline (out of this ticket's stated scope: the API
+ * route, not the SDK's response types).
+ *
  * KNOWN, NOT FIXED BY PF-405: the real PF-302 response shape
  * (`app_id`, singular `event_type`, `target_url`, no `updated_at` — see
  * `platform/api/v1/resources/webhooks.ts`'s `serializeSubscription()`) does
@@ -215,8 +240,11 @@ export class WebhooksClient {
   }
 
   /** `GET /api/v1/webhooks/deliveries` — paginated, filterable by
-   *  `subscription_id`/`status`. Server route does not exist yet (PF-305);
-   *  see this file's header. */
+   *  `subscription_id`/`status`. Real, merged PF-305 route (Linear
+   *  TRO-442, `platform/api/v1/resources/webhooks.ts`) as of this SDK
+   *  update — see this file's header for the response-shape gap this
+   *  method's return type still has (`status`'s `'dead_letter'` vs the
+   *  real `'dead'`, and four missing fields), not fixed by this update. */
   async listDeliveries(params: ListWebhookDeliveriesParams = {}): Promise<WebhookDeliveryList> {
     return this.request.get<WebhookDeliveryList>(DELIVERIES_PATH, {
       limit: params.limit,
