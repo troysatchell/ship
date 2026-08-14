@@ -54,6 +54,15 @@ orchestrator authorization"). A human with real AWS access should run `terraform
 TF-8/TRO-283 and RULE-3/TRO-245 above: `gate.sh`'s regression-test check (G6) is expected to fail
 here and that failure is not a defect in this work.
 
+**How to verify.** Structural check only (no live AWS access from this sandbox — see above):
+
+```bash
+cp -R terraform /tmp/tf-check && rm -rf /tmp/tf-check/.terraform
+docker run --rm -v /tmp/tf-check:/workspace -w /workspace hashicorp/terraform:1.9 init -backend=false
+docker run --rm -v /tmp/tf-check:/workspace -w /workspace hashicorp/terraform:1.9 validate
+# => Success! The configuration is valid.
+```
+
 **Rollback.** `git revert` this commit — the added block is additive and self-contained (one new
 `dynamic "ordered_cache_behavior"`), nothing else in the file changes.
 
