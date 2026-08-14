@@ -3,6 +3,9 @@ import { requestIdMiddleware } from './requestId.js';
 import { errorMiddleware, notFoundHandler } from './errorMiddleware.js';
 import { documentsRouter } from './resources/documents.js';
 import { v1OpenApiDocument } from '../../openapi/index.js';
+import { issuesRouter } from './resources/issues.js';
+import { sprintsRouter } from './resources/sprints.js';
+import { meRouter } from './resources/me.js';
 
 /**
  * The public API router — `/api/v1/*` (PLUGFORGE.MD §2.1, §4 PF-001/PF-002).
@@ -50,6 +53,12 @@ v1Routes.use('/documents', documentsRouter);
 v1Routes.get('/openapi.json', (_req, res) => {
   res.status(200).json(v1OpenApiDocument);
 });
+
+// PF-201 (Linear TRO-400) — issues, sprints, and me: typed views over the
+// unified document model, plus the bearer-token identity endpoint.
+v1Routes.use('/issues', issuesRouter);
+v1Routes.use('/sprints', sprintsRouter);
+v1Routes.use('/me', meRouter);
 
 // Add new /api/v1 resource routes to `v1Routes` above this line — never
 // below it, and never directly to `v1Router` (see the stack-order comment
