@@ -77,6 +77,17 @@ jobs:
       - name: Build shared (api and web both depend on its dist)
         run: pnpm build:shared
 
+      # PF-204 (TRO-409): docs/openapi.json is the committed, public /api/v1
+      # OpenAPI 3.1 spec (PF-202's generateV1OpenAPIDocument()). This
+      # regenerates it in-process to a temp file and diffs against the
+      # committed copy — any drift (an added/changed/removed v1 route whose
+      # schema file wasn't updated, or a hand-edit of the committed file)
+      # fails the build. No DATABASE_URL/app boot needed — see
+      # api/src/scripts/generate-v1-openapi.ts's header for why. Refresh
+      # procedure: `pnpm generate:openapi`.
+      - name: OpenAPI v1 spec drift check (docs/openapi.json)
+        run: pnpm openapi:check
+
       - name: Type check
         run: pnpm type-check
 
