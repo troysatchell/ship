@@ -89,12 +89,19 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_deliveries_unique_attempt
 
 -- Rehydration-query index: `InMemoryWebhookDeliverer.rehydrate()` scans
 -- exactly this shape at boot ("which attempts were scheduled but never
--- executed before the process died"). Partial or full scan of every row would
--- both be correct, but this index is cheap to add now and the table is meant
--- to grow without bound (every attempt, forever, until a future retention
--- ticket).
-CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_pending_next_attempt
-  ON webhook_deliveries (next_attempt_at) WHERE status = 'pending';
+-- executed before the process died"), paginated via a keyset (id) cursor —
+-- `WHERE status = 'pending' AND id > $cursor ORDER BY id ASC LIMIT $n` — not
+-- a `next_attempt_at` range scan (`next_attempt_at` isn't referenced in that
+-- query's WHERE/ORDER BY at all: due-ness is decided in memory, per
+-- `processDue()`'s own clock comparison, once a row is loaded). The index
+-- therefore has to be on `id`, not `next_attempt_at` (CodeRabbit, this PR
+-- review — an earlier draft indexed the wrong column here, left over from
+-- before rehydrate() switched to keyset pagination). Partial (`WHERE status =
+-- 'pending'`) rather than a full index regardless: cheap to add now, and the
+-- table is meant to grow without bound (every attempt, forever, until a
+-- future retention ticket) while 'pending' rows stay a small fraction of it.
+CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_pending_id
+  ON webhook_deliveries (id) WHERE status = 'pending';
 
 -- Replay/dedup lookup index (PF-306, not built by this ticket): resolving
 -- every attempt row for a given event, or checking whether an event has

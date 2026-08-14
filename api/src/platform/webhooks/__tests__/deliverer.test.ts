@@ -11,13 +11,15 @@
  * ── Zero real-time waits (this ticket's hard AC) ──
  * Every test drives an injected `ManualClock` by hand (`clock.advance(ms)`)
  * and calls `processDue()` directly — there is no real `setTimeout`/sleep
- * anywhere in this file's control flow. The graded-scenario tests each assert
- * their OWN real wall-clock elapsed time stays low (a generous few-second
- * ceiling, not a tight one, to avoid flaking under a loaded CI box) as a
- * belt-and-suspenders proof that the ~5.5 minutes of SIMULATED retry
- * schedule this file exercises (1s+4s+16s+1m+5m across the two scenarios)
- * cost near-zero REAL time — the actual point of "deterministic clock
- * injection."
+ * anywhere in this file's control flow, and no assertion on real wall-clock
+ * elapsed time either (a fixed real-time threshold inside a test is exactly
+ * the load-sensitive-flake shape TEST-12/TRO-277 already burned this repo on
+ * — CodeRabbit, this PR review). The "genuinely fast" claim this ticket's own
+ * brief asks for is proven externally: run this file and read vitest's own
+ * reported duration (see this ticket's CHANGES.md entry and PR description
+ * for the observed number) — near-zero real time to simulate the ~5.5
+ * minutes of retry schedule the two graded scenarios exercise (1s+4s+16s+1m+
+ * 5m combined) is the actual point of "deterministic clock injection."
  *
  * ── DB fixtures, no HTTP layer ──
  * The deliverer operates on `webhook_subscriptions`/`webhook_deliveries`
@@ -38,7 +40,13 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import crypto from 'crypto';
 import { pool } from '../../../db/client.js';
-import { InMemoryWebhookDeliverer, wireDelivererToEventBus, type IWebhookDeliverer } from '../deliverer.js';
+import {
+  InMemoryWebhookDeliverer,
+  wireDelivererToEventBus,
+  EXECUTION_FAILURE_BACKOFF_MS,
+  MAX_EXECUTION_FAILURES,
+  type IWebhookDeliverer,
+} from '../deliverer.js';
 import { ManualClock } from '../clock.js';
 import { InProcessEventBus } from '../eventBus.js';
 import type { EventEnvelope } from '../eventBus.js';
@@ -52,6 +60,15 @@ function onlyRow<T>(rows: T[]): T {
   return row;
 }
 
+// Factories, not constants: a `Response`'s body can only be read once, and
+// `InMemoryWebhookDeliverer` reads it (`response.text()`, for
+// `response_excerpt`) on every attempt. A mock that returned the SAME
+// `Response` instance across multiple attempts (e.g. `mockResolvedValue`,
+// which resolves to one fixed value forever) would hand attempt 2+ an
+// already-consumed body (CodeRabbit, this PR review) — harmless in
+// production, where a real `fetch()` call always returns a fresh `Response`,
+// but a real correctness gap in a test mock. `fetchMockAlways`/
+// `fetchMockSequence` below always call the factory fresh, per invocation.
 function okResponse(body = 'ok') {
   return new Response(body, { status: 200 });
 }
@@ -60,6 +77,50 @@ function serverErrorResponse(status = 503, body = 'server error') {
 }
 function clientErrorResponse(status = 400, body = 'bad request') {
   return new Response(body, { status });
+}
+
+/** A `fetchImpl` double, explicitly typed as `typeof fetch` so every call's
+ * arguments are inferred at the call site — no `as [string, RequestInit]`
+ * cast needed to read them back out of `.mock.calls` (CodeRabbit, this PR
+ * review). Every invocation calls `factory()` fresh, forever. */
+function fetchMockAlways(factory: () => Response) {
+  return vi.fn<typeof fetch>(async () => factory());
+}
+
+/** Same typed-mock shape as `fetchMockAlways`, but a finite, ordered sequence
+ * of fresh responses — one `factory()` call per invocation, in order. Throws
+ * if called more times than `factories` provides, so a test that
+ * under-specifies its sequence fails loudly instead of returning `undefined`. */
+function fetchMockSequence(...factories: Array<() => Response>) {
+  const fn = vi.fn<typeof fetch>(async () => {
+    throw new Error('fetchMockSequence: called more times than responses were queued');
+  });
+  for (const factory of factories) {
+    fn.mockImplementationOnce(async () => factory());
+  }
+  return fn;
+}
+
+/** Narrows `RequestInit['headers']` (the full fetch union: `Headers`,
+ * `string[][]`, or a plain record whose values can themselves be an array —
+ * referenced via indexed access rather than the bare `HeadersInit` type name,
+ * which `undici-types` exports from its own module but does not re-expose as
+ * a global) down to a single header's value, without an `as Record<string,
+ * string>` cast past the non-record shapes (CodeRabbit, this PR review). */
+function extractHeader(headers: RequestInit['headers'], name: string): string | undefined {
+  if (!headers) return undefined;
+  if (headers instanceof Headers) return headers.get(name) ?? undefined;
+  if (Array.isArray(headers)) {
+    const lowerName = name.toLowerCase();
+    for (const pair of headers) {
+      const key = pair[0];
+      if (key !== undefined && key.toLowerCase() === lowerName) return pair[1];
+    }
+    return undefined;
+  }
+  const value = headers[name];
+  if (value === undefined) return undefined;
+  return typeof value === 'string' ? value : value.join(', ');
 }
 
 interface DeliveryRow {
@@ -171,12 +232,12 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     const { id: subscriptionId, secret } = await createSubscription(appId, 'document.created');
     const event = buildEvent(workspaceId);
 
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(serverErrorResponse(500))
-      .mockResolvedValueOnce(serverErrorResponse(500))
-      .mockResolvedValueOnce(serverErrorResponse(500))
-      .mockResolvedValueOnce(okResponse());
+    const fetchImpl = fetchMockSequence(
+      () => serverErrorResponse(500),
+      () => serverErrorResponse(500),
+      () => serverErrorResponse(500),
+      () => okResponse()
+    );
 
     const clock = new ManualClock(0);
     // randomSource: () => 0 removes jitter, so the exact schedule boundary
@@ -192,17 +253,24 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
 
     // The outbound POST carries a valid Ship-Signature, verifiable against
     // this subscription's own secret — proves the deliverer actually signs
-    // per PF-303's contract, not just that it POSTs.
-    const [, firstInit] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    const firstHeaders = firstInit.headers as Record<string, string>;
-    const signatureHeader = firstHeaders['Ship-Signature'];
+    // per PF-303's contract, not just that it POSTs. `fetchImpl` is typed as
+    // `typeof fetch` (`fetchMockSequence`), so `.mock.calls[0]` is already
+    // `Parameters<typeof fetch> | undefined` — no `as` cast needed to read it.
+    const firstCall = fetchImpl.mock.calls[0];
+    if (!firstCall) throw new Error('expected fetchImpl to have been called at least once');
+    const [, firstInit] = firstCall;
+    if (!firstInit) throw new Error('expected the deliverer to pass a RequestInit to fetch');
+
+    const signatureHeader = extractHeader(firstInit.headers, 'Ship-Signature');
     if (signatureHeader === undefined) {
       throw new Error('expected the deliverer to send a Ship-Signature header');
     }
-    expect(
-      verifySignature(signatureHeader, firstInit.body as string, secret, 300, () => Math.floor(clock.now() / 1000))
-    ).toBe(true);
-    expect(firstHeaders['Idempotency-Key']).toBeTruthy();
+    const rawBody = firstInit.body;
+    if (typeof rawBody !== 'string') {
+      throw new Error('expected the deliverer to send a string body');
+    }
+    expect(verifySignature(signatureHeader, rawBody, secret, 300, () => Math.floor(clock.now() / 1000))).toBe(true);
+    expect(extractHeader(firstInit.headers, 'Idempotency-Key')).toBeTruthy();
 
     // --- boundary check: attempt 2 must NOT fire before a full 1s has passed ---
     clock.advance(999);
@@ -258,7 +326,7 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     // so this test ends at a terminal state and leaves no dangling 'pending'
     // row behind (relevant to the rehydrate() tests below, which scan for
     // any 'pending' row).
-    const fetchImpl = vi.fn().mockResolvedValueOnce(serverErrorResponse(500)).mockResolvedValue(okResponse());
+    const fetchImpl = fetchMockSequence(() => serverErrorResponse(500), () => okResponse());
     const clock = new ManualClock(0);
     // Full jitter formula (see deliverer.ts): delay = base + random()*base.
     // random() => 0.5 on a 1000ms base schedule entry -> exactly 1500ms.
@@ -288,7 +356,7 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     const { id: subscriptionId } = await createSubscription(appId, 'document.created');
     const event = buildEvent(workspaceId);
 
-    const fetchImpl = vi.fn().mockResolvedValue(serverErrorResponse(503));
+    const fetchImpl = fetchMockAlways(() => serverErrorResponse(503));
     const clock = new ManualClock(0);
     const deliverer = new InMemoryWebhookDeliverer(pool, clock, { fetchImpl, randomSource: () => 0 });
 
@@ -328,7 +396,7 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     const { id: subscriptionId } = await createSubscription(appId, 'document.created');
     const event = buildEvent(workspaceId);
 
-    const fetchImpl = vi.fn().mockResolvedValue(clientErrorResponse(400));
+    const fetchImpl = fetchMockAlways(() => clientErrorResponse(400));
     const clock = new ManualClock(0);
     const deliverer = new InMemoryWebhookDeliverer(pool, clock, { fetchImpl });
 
@@ -345,6 +413,36 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     clock.advance(10_000_000);
     expect(await deliverer.processDue()).toBe(0);
     expect(fetchImpl).toHaveBeenCalledTimes(1); // still just the one attempt, ever
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
+  // enqueueEvent() called twice for the same (subscription, event): the
+  // migration 048 unique index + ON CONFLICT DO NOTHING dedup.
+  // ──────────────────────────────────────────────────────────────────────
+
+  it('enqueueEvent() called twice for the same event is a harmless no-op the second time, not a duplicate row or a thrown error', async () => {
+    const workspaceId = await createWorkspace();
+    const appId = await createOAuthApp(workspaceId);
+    const { id: subscriptionId } = await createSubscription(appId, 'document.created');
+    const event = buildEvent(workspaceId);
+
+    const fetchImpl = fetchMockAlways(() => okResponse());
+    const deliverer = new InMemoryWebhookDeliverer(pool, new ManualClock(0), { fetchImpl });
+
+    expect(await deliverer.enqueueEvent(event)).toBe(1);
+    // Second call: idx_webhook_deliveries_unique_attempt (subscription_id,
+    // event_id, attempt_number) already has a row for (this subscription,
+    // this event, attempt 1) — ON CONFLICT DO NOTHING means this returns 0
+    // enqueued rather than throwing a unique-violation.
+    await expect(deliverer.enqueueEvent(event)).resolves.toBe(0);
+
+    const rows = await fetchDeliveryRows(subscriptionId, event.id);
+    expect(rows).toHaveLength(1);
+    expect(deliverer.queueLength).toBe(1);
+
+    // Drain it — same "don't leave a dangling pending row" hygiene as the
+    // workspace-matcher test above.
+    expect(await deliverer.processDue()).toBe(1);
   });
 
   // ──────────────────────────────────────────────────────────────────────
@@ -370,7 +468,7 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     });
 
     const event = buildEvent(workspaceId, 'document.created');
-    const fetchImpl = vi.fn().mockResolvedValue(okResponse());
+    const fetchImpl = fetchMockAlways(() => okResponse());
     const deliverer = new InMemoryWebhookDeliverer(pool, new ManualClock(0), { fetchImpl });
 
     const enqueuedCount = await deliverer.enqueueEvent(event);
@@ -389,6 +487,64 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
   });
 
   // ──────────────────────────────────────────────────────────────────────
+  // processDue()'s EXECUTION-failure backoff (decrypt/sign/DB — never an
+  // HTTP delivery outcome, which always resolves to a terminal DB write).
+  // ──────────────────────────────────────────────────────────────────────
+
+  it('an execution failure (e.g. an undecryptable secret) backs off instead of retrying immediately, then gives up in-memory after MAX_EXECUTION_FAILURES — leaving the row pending for rehydrate()', async () => {
+    const workspaceId = await createWorkspace();
+    const appId = await createOAuthApp(workspaceId);
+    // A subscription with a garbage (non-AES-GCM) ciphertext — bypasses
+    // createSubscription()'s real encryptSecret() call so that attempt()'s
+    // decryptSecret() throws, exercising processDue()'s execution-failure
+    // path (never reaches performHttpAttempt() at all).
+    const subscriptionResult = await pool.query<{ id: string }>(
+      `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
+       VALUES ($1, $2, $3, $4, true) RETURNING id`,
+      [appId, 'document.created', 'https://example.com/hook', 'not-a-valid-ciphertext']
+    );
+    const subscriptionId = onlyRow(subscriptionResult.rows).id;
+    const event = buildEvent(workspaceId);
+
+    const fetchImpl = fetchMockAlways(() => okResponse()); // never reached
+    const clock = new ManualClock(0);
+    const deliverer = new InMemoryWebhookDeliverer(pool, clock, { fetchImpl });
+
+    await deliverer.enqueueEvent(event);
+    expect(deliverer.queueLength).toBe(1);
+
+    // Attempt 1: execution fails. `processDue()` still reports 1 (it WAS due
+    // and WAS attempted — attempting is what failed), and the item is
+    // re-queued with a backoff delay, not retried on the very next call.
+    expect(await deliverer.processDue()).toBe(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(deliverer.queueLength).toBe(1);
+
+    clock.advance(EXECUTION_FAILURE_BACKOFF_MS - 1);
+    expect(await deliverer.processDue()).toBe(0); // not due yet — backoff, not immediate retry
+    clock.advance(1);
+
+    // Drive it through the remaining execution failures until
+    // MAX_EXECUTION_FAILURES is reached and this process gives up in-memory.
+    for (let failureCount = 2; failureCount <= MAX_EXECUTION_FAILURES; failureCount++) {
+      expect(await deliverer.processDue()).toBe(1);
+      clock.advance(EXECUTION_FAILURE_BACKOFF_MS);
+    }
+
+    // Given up: the queue is empty (nothing left to re-process in THIS
+    // process), yet the DB row is still 'pending' — never touched by an
+    // execution failure, only by a real HTTP attempt outcome — so a future
+    // rehydrate() (this process's own restart, or another instance's boot)
+    // can still recover and eventually deliver it.
+    expect(deliverer.queueLength).toBe(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
+
+    const rows = await fetchDeliveryRows(subscriptionId, event.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe('pending');
+  });
+
+  // ──────────────────────────────────────────────────────────────────────
   // rehydrate(): the crash-recovery gap docs/architecture.md names as
   // PF-304's own design intent.
   // ──────────────────────────────────────────────────────────────────────
@@ -400,7 +556,7 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     const event = buildEvent(workspaceId);
 
     const clock = new ManualClock(0);
-    const fetchImplA = vi.fn().mockResolvedValue(serverErrorResponse(500));
+    const fetchImplA = fetchMockAlways(() => serverErrorResponse(500));
     const delivererA = new InMemoryWebhookDeliverer(pool, clock, { fetchImpl: fetchImplA, randomSource: () => 0 });
 
     await delivererA.enqueueEvent(event);
@@ -410,7 +566,7 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     // Simulate a process crash: `delivererA`'s in-memory queue is simply
     // discarded (never call processDue on it again). A brand-new instance,
     // same clock, starts with an EMPTY queue.
-    const fetchImplB = vi.fn().mockResolvedValue(okResponse());
+    const fetchImplB = fetchMockAlways(() => okResponse());
     const delivererB = new InMemoryWebhookDeliverer(pool, clock, { fetchImpl: fetchImplB, randomSource: () => 0 });
     expect(delivererB.queueLength).toBe(0);
 

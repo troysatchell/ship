@@ -62,6 +62,22 @@ async function main() {
   wireDelivererToEventBus(webhookDeliverer, getEventBus());
   webhookDeliverer.start();
 
+  // Stop the deliverer's polling loop on shutdown (CodeRabbit, this PR
+  // review) — without this, `webhookDeliverer.start()`'s `setInterval` could
+  // fire and begin a new delivery attempt after the process has already
+  // decided to exit. Scoped deliberately to just the deliverer: this
+  // codebase has no broader graceful-shutdown sequence anywhere today (no
+  // existing SIGTERM/SIGINT handler, no HTTP-server drain) for this to slot
+  // into, and building one is a separate, much larger concern than this
+  // ticket's own scope.
+  const stopWebhookDeliverer = (signal: NodeJS.Signals) => {
+    console.log(`${signal} received: stopping webhook deliverer polling loop`);
+    webhookDeliverer.stop();
+    process.exit(0);
+  };
+  process.on('SIGTERM', stopWebhookDeliverer);
+  process.on('SIGINT', stopWebhookDeliverer);
+
   // TRO-276 / ERR-10: last resort for anything that escapes every guard. Installed
   // in the entrypoint, not in a library module, so importing the app (tests, the
   // MCP server) never hijacks the host process's error handling. See

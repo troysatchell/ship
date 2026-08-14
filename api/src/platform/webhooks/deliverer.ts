@@ -126,6 +126,22 @@ const DEFAULT_POLL_INTERVAL_MS = 1_000;
  * paginates instead of one unbounded `SELECT`. */
 const REHYDRATE_BATCH_SIZE = 500;
 
+/**
+ * `processDue()`'s backoff for an EXECUTION failure (decrypt/sign/DB —
+ * distinct from `RETRY_SCHEDULE_MS`, which is the HTTP DELIVERY retry
+ * schedule). Deliberately a separate, much shorter fixed policy: an
+ * execution failure most often means "the database is briefly unreachable,"
+ * which is not the same failure class the 1s-30m delivery schedule is tuned
+ * for. Re-queueing at `dueAtMs = now` (no backoff at all, the original
+ * behavior) would spin every `processDue()` tick against a persistently
+ * broken dependency; `MAX_EXECUTION_FAILURES` bounds how long this ONE
+ * process keeps trying before giving up in-memory and leaving the row
+ * `'pending'` for a future `rehydrate()` (this process's own restart, or
+ * another instance's boot) instead (CodeRabbit, this PR review).
+ */
+export const EXECUTION_FAILURE_BACKOFF_MS = 5_000;
+export const MAX_EXECUTION_FAILURES = 5;
+
 /** Narrows `value` to `EventType` by checking it against the registry's own
  * `EVENT_TYPES`, rather than an unchecked `as EventType` cast — `event_type`
  * is unconstrained TEXT at the database layer (migration 048's deliberate
@@ -180,6 +196,14 @@ interface QueuedAttempt {
   idempotencyKey: string;
   attemptNumber: number;
   dueAtMs: number;
+  /** Consecutive EXECUTION failures (decrypt/sign/DB — `processDue()`'s
+   * catch block; never an HTTP delivery outcome, which `attempt()` always
+   * resolves to a terminal DB write) for this queued item, in THIS process.
+   * Separate from `attemptNumber`, which only ever advances on a real HTTP
+   * attempt — see `processDue()`'s catch block for how this backs off and
+   * eventually gives up in-memory, leaving the row 'pending' for a future
+   * `rehydrate()`. */
+  executionFailures: number;
 }
 
 type AttemptOutcome =
@@ -238,6 +262,18 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
 
   private queue: QueuedAttempt[] = [];
   private pollHandle: ReturnType<typeof setInterval> | null = null;
+  /** Single-flight guard for `start()`'s interval: true while a `processDue()`
+   * call it triggered is still in flight. Without this, a `processDue()` run
+   * that takes longer than `intervalMs` (many due deliveries, or a slow
+   * subscriber) would overlap with the NEXT tick's own `processDue()` call —
+   * both running concurrently against the same in-memory queue and DB rows
+   * (CodeRabbit, this PR review). Irrelevant to `processDue()` called
+   * directly (every test in this file does that, never through `start()`),
+   * which is exactly why this lives on the interval callback, not inside
+   * `processDue()` itself — a caller driving the queue by hand is always
+   * single-threaded by construction (JS has no real concurrency without an
+   * `await` yielding control), so this guard would be dead weight there. */
+  private pollInFlight = false;
 
   constructor(pool: Pool, clock: Clock = systemClock, options: InMemoryWebhookDelivererOptions = {}) {
     this.pool = pool;
@@ -275,20 +311,36 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
 
     for (const subscription of matches.rows) {
       const idempotencyKey = randomUUID();
-      const inserted = await this.pool.query<{ id: string }>(
-        `INSERT INTO webhook_deliveries
-           (subscription_id, event_id, event_type, payload, idempotency_key, attempt_number, status, next_attempt_at)
-         VALUES ($1, $2, $3, $4::jsonb, $5, 1, 'pending', $6)
-         RETURNING id`,
-        [subscription.id, event.id, event.type, rawBody, idempotencyKey, new Date(dueAtMs).toISOString()]
-      );
-      const row = inserted.rows[0];
-      if (!row) {
-        // INSERT ... RETURNING always returns a row on success; this branch
-        // is unreachable in practice and exists only so `row.id` below is
-        // never read off a possibly-undefined value.
+      let row: { id: string } | undefined;
+      try {
+        const inserted = await this.pool.query<{ id: string }>(
+          `INSERT INTO webhook_deliveries
+             (subscription_id, event_id, event_type, payload, idempotency_key, attempt_number, status, next_attempt_at)
+           VALUES ($1, $2, $3, $4::jsonb, $5, 1, 'pending', $6)
+           -- migration 048's idx_webhook_deliveries_unique_attempt: a second
+           -- enqueueEvent() call for the SAME (subscription, event) is a
+           -- harmless no-op, not an error — e.g. a caller re-publishing an
+           -- event it isn't sure was delivered the first time.
+           ON CONFLICT (subscription_id, event_id, attempt_number) DO NOTHING
+           RETURNING id`,
+          [subscription.id, event.id, event.type, rawBody, idempotencyKey, new Date(dueAtMs).toISOString()]
+        );
+        row = inserted.rows[0];
+      } catch (error) {
+        // One subscription's DB failure must not drop every LATER matching
+        // subscription in this fan-out (CodeRabbit, this PR review) — same
+        // "isolate one bad item from the rest of the batch" reasoning
+        // `processDue()` already applies per attempt.
+        console.error(
+          `webhook deliverer: failed to enqueue event ${event.id} for subscription ${subscription.id}`,
+          error
+        );
         continue;
       }
+      // No row: either the unreachable INSERT-without-RETURNING case, or a
+      // real ON CONFLICT DO NOTHING (attempt 1 for this delivery already
+      // exists) — both mean "nothing new to queue," never "retry this."
+      if (!row) continue;
 
       this.queue.push({
         deliveryRowId: row.id,
@@ -301,6 +353,7 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
         idempotencyKey,
         attemptNumber: 1,
         dueAtMs,
+        executionFailures: 0,
       });
       enqueued++;
     }
@@ -330,16 +383,28 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
         // the surrounding machinery failed: decryptSecret, sign, or a DB
         // round-trip. The delivery's row is still 'pending' in the DB either
         // way, but this item has already been spliced out of `this.queue`
-        // above — without re-queueing it here, it would be silently dropped
-        // from THIS process's in-memory schedule until the next restart's
-        // `rehydrate()` picks it back up (CodeRabbit, this PR review: one
-        // bad attempt must not take the rest of this batch down with it,
-        // nor strand its own delivery in memory).
-        this.queue.push(item);
+        // above — dropping it here, with no re-queue at all, would silently
+        // strand it in memory until the next restart's `rehydrate()` (CodeRabbit,
+        // this PR review: one bad attempt must not take the rest of this
+        // batch down with it, nor strand its own delivery in memory).
+        const executionFailures = item.executionFailures + 1;
         console.error(
-          `webhook deliverer: attempt ${item.attemptNumber} for delivery ${item.deliveryRowId} failed to execute`,
+          `webhook deliverer: attempt ${item.attemptNumber} for delivery ${item.deliveryRowId} failed to ` +
+            `execute (execution failure ${executionFailures}/${MAX_EXECUTION_FAILURES})`,
           error
         );
+        if (executionFailures >= MAX_EXECUTION_FAILURES) {
+          // Give up on THIS process's in-memory retry — see
+          // EXECUTION_FAILURE_BACKOFF_MS's own doc comment. The DB row is
+          // untouched (still 'pending'), so a future rehydrate() can still
+          // recover it; this only stops the current process from spinning.
+          console.error(
+            `webhook deliverer: giving up on delivery ${item.deliveryRowId} after ${executionFailures} ` +
+              `consecutive execution failures in this process; it remains 'pending' for a future rehydrate()`
+          );
+        } else {
+          this.queue.push({ ...item, executionFailures, dueAtMs: this.clock.now() + EXECUTION_FAILURE_BACKOFF_MS });
+        }
       }
     }
     return due.length;
@@ -401,6 +466,10 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
           idempotencyKey: row.idempotency_key,
           attemptNumber: row.attempt_number,
           dueAtMs: row.next_attempt_at ? row.next_attempt_at.getTime() : this.clock.now(),
+          // A restored row carries no in-memory execution-failure history —
+          // it gets a fresh EXECUTION_FAILURE_BACKOFF_MS budget in this
+          // (new) process, independent of whatever happened before rehydrate().
+          executionFailures: 0,
         });
         restored++;
       }
@@ -423,9 +492,17 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
   start(intervalMs: number = DEFAULT_POLL_INTERVAL_MS): void {
     if (this.pollHandle !== null) return;
     this.pollHandle = setInterval(() => {
-      void this.processDue().catch((error: unknown) => {
-        console.error('webhook deliverer: processDue() failed', error);
-      });
+      // Single-flight: skip this tick entirely if the previous one's
+      // processDue() hasn't finished yet — see pollInFlight's own doc comment.
+      if (this.pollInFlight) return;
+      this.pollInFlight = true;
+      void this.processDue()
+        .catch((error: unknown) => {
+          console.error('webhook deliverer: processDue() failed', error);
+        })
+        .finally(() => {
+          this.pollInFlight = false;
+        });
     }, intervalMs);
     this.pollHandle.unref?.();
   }
@@ -552,6 +629,11 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
       deliveryRowId: nextRow.id,
       attemptNumber: nextAttemptNumber,
       dueAtMs: nextAttemptAtMs,
+      // Execution (as opposed to delivery) succeeded this round — this
+      // attempt() call ran to completion and reached a real HTTP outcome, it
+      // just wasn't a successful DELIVERY. Reset the execution-failure
+      // counter rather than carrying it over via the `...item` spread.
+      executionFailures: 0,
     });
   }
 

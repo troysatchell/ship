@@ -94,9 +94,8 @@ all 10 tests in the file passing in ~250ms real time):**
   instance after its predecessor's in-memory queue is discarded (simulating a crash).
 
 **Not verified / explicit gaps.** No live HTTP delivery against a real external endpoint — every
-test injects `fetchImpl`. `POST /:id/deliveries` (a delivery-log listing endpoint) and
-`POST /:id/replay` are PF-305/PF-306, not this ticket. No graceful shutdown for the production
-polling loop (`stop()` exists but nothing calls it from `index.ts` — the process just exits).
+test injects `fetchImpl`. `GET /:id/deliveries` (a delivery-log listing endpoint) and
+`POST /:id/replay` are PF-305/PF-306, not this ticket.
 
 **Rollback.** Revert the merge of `feat/pf-304-deliverer-retries-dlq`. Drop `webhook_deliveries`
 (`DROP TABLE webhook_deliveries;` — nothing else references it) or run a down-migration if one
