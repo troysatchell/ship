@@ -593,10 +593,20 @@ describe('InMemoryWebhookDeliverer (PF-304 / TRO-438)', () => {
     // this PR review) rather than only asserting a relative delta: this is
     // the LAST test in this describe block to touch `webhook_deliveries`
     // (the sibling `wireDelivererToEventBus` describe below never touches
-    // the DB), so deleting every 'pending' row here — including the one the
-    // execution-failure test above deliberately left behind — is safe; no
-    // later test depends on it.
-    await pool.query(`DELETE FROM webhook_deliveries WHERE status = 'pending'`);
+    // the DB), so deleting every 'pending' row THIS FILE created — including
+    // the one the execution-failure test above deliberately left behind — is
+    // safe; no later test depends on it. Scoped to `createdWorkspaceIds`
+    // (every workspace `createWorkspace()` has made in this file) rather
+    // than a blanket `DELETE ... WHERE status = 'pending'` (CodeRabbit, this
+    // PR review — an earlier draft's blast radius reached rows this file
+    // never created).
+    await pool.query(
+      `DELETE FROM webhook_deliveries wd
+       USING webhook_subscriptions ws, oauth_apps a
+       WHERE wd.subscription_id = ws.id AND ws.app_id = a.id
+         AND a.workspace_id = ANY($1) AND wd.status = 'pending'`,
+      [createdWorkspaceIds]
+    );
 
     const deliverer = new InMemoryWebhookDeliverer(pool, new ManualClock(0));
     expect(deliverer.queueLength).toBe(0);

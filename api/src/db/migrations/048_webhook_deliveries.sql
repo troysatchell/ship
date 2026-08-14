@@ -74,16 +74,20 @@ CREATE TABLE IF NOT EXISTS webhook_deliveries (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- FK-lookup / per-subscription delivery-log index — same convention as
--- idx_webhook_subscriptions_app_id (migration 047).
-CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_subscription_id ON webhook_deliveries (subscription_id);
-
 -- One row per (subscription, event, attempt_number) — a duplicate would mean
 -- two attempt-1 (or attempt-N) rows for the same delivery, which every reader
 -- of this table (rehydrate(), a future delivery-log/replay UI) assumes cannot
 -- happen (CodeRabbit, this PR review). Not just a defensive constraint: it is
 -- also the concrete backstop against a scheduling bug or a duplicate
 -- rehydrate() race ever double-enqueuing the same attempt.
+--
+-- Also serves as the FK-lookup / per-subscription delivery-log index (same
+-- role idx_webhook_subscriptions_app_id plays for migration 047's table) —
+-- a plain `WHERE subscription_id = $1` query can use this index via its
+-- leading column (Postgres's leftmost-prefix rule for multi-column
+-- indexes), so a separate single-column index on subscription_id alone
+-- would be redundant (CodeRabbit, this PR review — an earlier draft had
+-- both).
 CREATE UNIQUE INDEX IF NOT EXISTS idx_webhook_deliveries_unique_attempt
   ON webhook_deliveries (subscription_id, event_id, attempt_number);
 

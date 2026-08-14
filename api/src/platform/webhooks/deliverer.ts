@@ -710,10 +710,53 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
     }
   }
 
+  /**
+   * Reads at most `RESPONSE_EXCERPT_MAX_CHARS` BYTES off the response body's
+   * stream directly, rather than `response.text()` (which buffers the ENTIRE
+   * body into memory before any truncation happens) — a subscriber returning
+   * a multi-gigabyte response would otherwise let every delivery attempt
+   * against it allocate that whole body, attacker-controlled and unbounded
+   * (CodeRabbit, this PR review: a real memory-exhaustion vector, not a style
+   * preference). `reader.cancel()` in `finally` releases the underlying
+   * connection once enough bytes are collected, instead of draining a huge
+   * remaining body for nothing.
+   */
   private async safeExcerpt(response: Response): Promise<string> {
     try {
-      const text = await response.text();
-      return text.slice(0, RESPONSE_EXCERPT_MAX_CHARS);
+      if (!response.body) {
+        // Matches `response.text()`'s own behavior on a null body: ''.
+        return '';
+      }
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+      try {
+        while (totalBytes < RESPONSE_EXCERPT_MAX_CHARS) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            chunks.push(value);
+            totalBytes += value.length;
+          }
+        }
+      } finally {
+        await reader.cancel().catch(() => {});
+      }
+
+      const excerptBytes = new Uint8Array(Math.min(totalBytes, RESPONSE_EXCERPT_MAX_CHARS));
+      let offset = 0;
+      for (const chunk of chunks) {
+        const remaining = excerptBytes.length - offset;
+        if (remaining <= 0) break;
+        const slice = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
+        excerptBytes.set(slice, offset);
+        offset += slice.length;
+      }
+      // A truncated final chunk can split a multi-byte UTF-8 codepoint —
+      // acceptable for a diagnostic excerpt (not re-parsed as JSON/text
+      // anywhere), same tradeoff response.text().slice() would have made at
+      // a character boundary instead of a byte one.
+      return new TextDecoder().decode(excerptBytes);
     } catch {
       return '';
     }
