@@ -39,6 +39,7 @@
 import { Router } from 'express';
 import type { Request, Router as RouterType } from 'express';
 import { z } from 'zod';
+import type { IssueState, IssuePriority } from '@ship/shared';
 import { pool } from '../../../../db/client.js';
 import { bearerAuth } from '../../../oauth/bearerAuth.js';
 import { requireScope } from '../../../scopes/requireScope.js';
@@ -67,8 +68,8 @@ const ListIssuesQuerySchema = z.object({
  * full `IssueProperties` (`shared/src/types/document.ts`), matching exactly
  * what the ticket's AC asks to be lifted to the top level. */
 interface IssueRowProperties {
-  state?: string;
-  priority?: string;
+  state?: IssueState;
+  priority?: IssuePriority;
   assignee_id?: string | null;
 }
 

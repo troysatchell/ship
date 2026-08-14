@@ -86,21 +86,27 @@ describe('PF-201: /api/v1/issues (Linear TRO-400)', () => {
       `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
       [`PF-201 Issues Test ${testRunId}`]
     );
-    workspaceId = workspaceResult.rows[0]?.id ?? '';
+    const workspaceRow = workspaceResult.rows[0];
+    if (!workspaceRow) throw new Error('seed workspace insert produced no row');
+    workspaceId = workspaceRow.id;
 
     const userResult = await pool.query<{ id: string }>(
       `INSERT INTO users (email, password_hash, name, last_workspace_id)
        VALUES ($1, 'test-hash', 'PF-201 Test User', $2) RETURNING id`,
       [`pf201-issues-${testRunId}@ship.local`, workspaceId]
     );
-    userId = userResult.rows[0]?.id ?? '';
+    const userRow = userResult.rows[0];
+    if (!userRow) throw new Error('seed user insert produced no row');
+    userId = userRow.id;
 
     const assigneeResult = await pool.query<{ id: string }>(
       `INSERT INTO users (email, password_hash, name, last_workspace_id)
        VALUES ($1, 'test-hash', 'PF-201 Assignee', $2) RETURNING id`,
       [`pf201-assignee-${testRunId}@ship.local`, workspaceId]
     );
-    assigneeUserId = assigneeResult.rows[0]?.id ?? '';
+    const assigneeRow = assigneeResult.rows[0];
+    if (!assigneeRow) throw new Error('seed assignee insert produced no row');
+    assigneeUserId = assigneeRow.id;
 
     readOnlyToken = await insertPersonalToken(['issues:read']);
     wrongScopeToken = await insertPersonalToken(['documents:read']);
@@ -175,6 +181,7 @@ describe('PF-201: /api/v1/issues (Linear TRO-400)', () => {
 
       expect(res.status).toBe(200);
       const body = res.body as ListResponseBody;
+      expect(body.data.length).toBeGreaterThan(0);
       for (const item of body.data) {
         expect(item.document_type).toBe('issue');
       }
@@ -196,6 +203,38 @@ describe('PF-201: /api/v1/issues (Linear TRO-400)', () => {
       const body = res.body as ListResponseBody;
       expect(body.data).toHaveLength(1);
       expect(typeof body.next_cursor).toBe('string');
+    });
+
+    it('walks to page 2 with the returned next_cursor and never repeats a row', async () => {
+      const res = await request(app)
+        .get('/api/v1/issues?limit=1')
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as ListResponseBody;
+      expect(body.data).toHaveLength(1);
+      expect(typeof body.next_cursor).toBe('string');
+
+      const page2 = await request(app)
+        .get(`/api/v1/issues?limit=1&cursor=${encodeURIComponent(body.next_cursor as string)}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(page2.status).toBe(200);
+      const body2 = page2.body as ListResponseBody;
+      expect(body2.data).toHaveLength(1);
+      // Page 2's row is strictly older (keyset order is created_at DESC, id
+      // DESC) than page 1's, and never a repeat of it.
+      expect(body2.data[0]?.id).not.toBe(body.data[0]?.id);
+    });
+
+    it('rejects a malformed cursor with 400 validation_failed', async () => {
+      const res = await request(app)
+        .get('/api/v1/issues?cursor=not-a-real-cursor')
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('validation_failed');
+      expect(res.body.details.fieldErrors.cursor).toBeDefined();
     });
   });
 
