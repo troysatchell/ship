@@ -82,3 +82,10 @@ ScopeRegistry.register({
   name: 'webhooks:manage',
   description: 'Create, list, and delete webhook subscriptions; view and replay deliveries.',
 });
+ScopeRegistry.register({
+  name: 'audit:read',
+  description:
+    'Read the public API audit trail (PF-501). Holding this scope is necessary but not ' +
+    'sufficient — GET /api/v1/audit additionally requires the caller to be a workspace admin, a ' +
+    'platform super-admin, or a first-party app credential (platform/api/v1/resources/audit.ts).',
+});
