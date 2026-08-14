@@ -79,9 +79,12 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
   directly by relative path) — same narrow exception `agent/src/__tests__/gateWriteBoundary.dbRoundTrip
   .test.ts` already makes, for the same reason (see that file's own header): a fake has no real server
   or database behind it to prove "a real client, talking to a real server, backed by the real seeded
-  DB" against. `sdk/tsconfig.json` excludes `src/__tests__/**/*` from `tsc`/`tsc --noEmit` because those
-  files sit outside the package's `rootDir` (TS6059) — same trade-off `agent/tsconfig.json` already
-  made for its own equivalent directory; `sdk/vitest.config.ts`'s `include` still covers it, so it runs
+  DB" against. `sdk/tsconfig.json` excludes `src/__tests__/**/*` from `tsc`/`tsc --noEmit` — not because
+  those test files themselves sit outside `rootDir` (they don't; `src/__tests__` is inside `sdk/src`),
+  but because what they IMPORT does: `api/src/app.ts`/`api/src/db/client.ts` live outside this package
+  entirely, so tsc's program fails with TS6059 ("File is not under 'rootDir'") on those imported files
+  once it follows the import graph — same trade-off `agent/tsconfig.json` already made for its own
+  equivalent directory; `sdk/vitest.config.ts`'s `include` still covers it, so it runs
   and asserts real behavior via vitest's esbuild transform, just isn't `tsc`-type-checked. **Observed,
   not assumed:** ran `cd sdk && npx vitest run` against this worktree's live database — 2 files, 19
   tests, all passing, with the real server's own request-id log lines

@@ -64,11 +64,18 @@ function insertedId(rows: readonly { id: string }[], label: string): string {
 describe('PF-400: ShipClient against a real running Ship API + the seeded worktree DB (MVP gate check)', () => {
   const runId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 
-  let server: import('http').Server;
+  // `server`/`workspaceId`/`userId` are optional (not just "assigned in
+  // beforeAll") so `afterAll` can tell "beforeAll ran to completion" from
+  // "beforeAll threw partway through" and clean up only what actually got
+  // created, instead of a bare `server.close(...)` throwing its own
+  // "Cannot read properties of undefined" and masking the real setup error
+  // (CodeRabbit finding, PR #TRO-405 — verified as a real gap: vitest still
+  // runs `afterAll` after a throwing `beforeAll`).
+  let server: import('http').Server | undefined;
   let baseUrl: string;
 
-  let workspaceId: string;
-  let userId: string;
+  let workspaceId: string | undefined;
+  let userId: string | undefined;
   let userEmail: string;
   let personalToken: string;
   let personalTokenScopes: string[];
@@ -123,15 +130,34 @@ describe('PF-400: ShipClient against a real running Ship API + the seeded worktr
   }, 30_000);
 
   afterAll(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await pool.query('DELETE FROM api_tokens WHERE workspace_id = $1', [workspaceId]);
-    await pool.query('DELETE FROM users WHERE id = $1', [userId]);
-    await pool.query('DELETE FROM workspaces WHERE id = $1', [workspaceId]);
-    // Nothing else in sdk's own test suite imports api/src/db/client.js —
-    // ending the pool here does not affect any other test file (vitest
-    // isolates modules per file by default; same reasoning
-    // gateWriteBoundary.dbRoundTrip.test.ts's own afterAll documents).
-    await pool.end();
+    // Nested try/finally so a failure at any one step (server close, a
+    // DELETE, ...) still lets later cleanup steps run — most importantly
+    // `pool.end()`, which must fire even if `beforeAll` died before creating
+    // any DB rows or the server at all.
+    try {
+      if (server) {
+        const liveServer = server;
+        await new Promise<void>((resolve) => liveServer.close(() => resolve()));
+      }
+    } finally {
+      try {
+        if (workspaceId) {
+          await pool.query('DELETE FROM api_tokens WHERE workspace_id = $1', [workspaceId]);
+        }
+        if (userId) {
+          await pool.query('DELETE FROM users WHERE id = $1', [userId]);
+        }
+        if (workspaceId) {
+          await pool.query('DELETE FROM workspaces WHERE id = $1', [workspaceId]);
+        }
+      } finally {
+        // Nothing else in sdk's own test suite imports api/src/db/client.js —
+        // ending the pool here does not affect any other test file (vitest
+        // isolates modules per file by default; same reasoning
+        // gateWriteBoundary.dbRoundTrip.test.ts's own afterAll documents).
+        await pool.end();
+      }
+    }
   }, 30_000);
 
   it('new ShipClient({ token, baseUrl }).me() returns the typed user for a real bearer token, over a real TCP round trip', async () => {
