@@ -2670,10 +2670,11 @@ Append an entry (matching the repo's existing `CHANGES.md` format — check a re
 
 ```bash
 pnpm exec vitest run --config scripts/factory/defect-gates/vitest.config.ts
+pnpm exec tsc --noEmit -p scripts/factory/defect-gates
 pnpm type-check
 ```
 
-Expected: both pass. `pnpm type-check` in particular confirms the new TS files (including the compiler-API-heavy `ast.ts` and `rules/non-null-assertion.ts`) type-check cleanly against the rest of the workspace.
+Expected: all three pass. Note the correction discovered during Task 7's review: `pnpm type-check` (`pnpm --recursive run type-check`) only runs each `pnpm-workspace.yaml` package's own check (`api`/`web`/`shared`/`agent`/`sdk`) — it never reaches `scripts/`, so it does NOT verify the new defect-gate files despite the original plan text's claim that it would. The scoped `pnpm exec tsc --noEmit -p scripts/factory/defect-gates` (the directory's own `tsconfig.json`, added during Task 7's fix loop) is what actually confirms the new TS files — including the compiler-API-heavy `ast.ts` and `rules/non-null-assertion.ts` — type-check cleanly. `pnpm type-check` is still run here to confirm this port didn't regress the rest of the workspace, not to verify the new directory.
 
 - [ ] **Step 6: Commit the CHANGES.md entry**
 
