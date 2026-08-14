@@ -12,7 +12,9 @@ describe("non-null-assertion checkSource", () => {
       ctx,
     );
     expect(findings).toHaveLength(1);
-    expect(findings[0].message).toContain("non-null assertion");
+    const [finding] = findings;
+    if (!finding) throw new Error("expected a finding");
+    expect(finding.message).toContain("non-null assertion");
   });
 
   it("flags a postfix ! on an element access", () => {
@@ -34,7 +36,9 @@ describe("non-null-assertion checkSource", () => {
       ctx,
     );
     expect(findings).toHaveLength(1);
-    expect(findings[0].line).toBe(2);
+    const [finding] = findings;
+    if (!finding) throw new Error("expected a finding");
+    expect(finding.line).toBe(2);
   });
 
   it("does not flag logical negation, which is syntactically unrelated", () => {
@@ -65,7 +69,9 @@ describe("non-null-assertion checkSource", () => {
       ctx,
     );
     expect(findings).toHaveLength(2);
-    expect(findings[0].identity).not.toBe(findings[1].identity);
+    const [first, second] = findings;
+    if (!first || !second) throw new Error("expected two findings");
+    expect(first.identity).not.toBe(second.identity);
   });
 
   it("reports the correct 1-based line number", () => {
@@ -74,6 +80,8 @@ describe("non-null-assertion checkSource", () => {
       `function f(foo: { bar: number } | null) {\n  return foo!.bar;\n}`,
       ctx,
     );
-    expect(findings[0].line).toBe(2);
+    const [finding] = findings;
+    if (!finding) throw new Error("expected a finding");
+    expect(finding.line).toBe(2);
   });
 });

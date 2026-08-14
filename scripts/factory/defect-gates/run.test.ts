@@ -28,8 +28,10 @@ describe("buildDocument", () => {
       results, baselines: { r: [] }, pins: { r: pin },
       baseRef: "main", baseSha: "s", mergeBase: "m",
     });
-    expect(doc.rules[0].status).toBe("fail");
-    expect(doc.rules[0].introduced).toHaveLength(1);
+    const [rule] = doc.rules;
+    if (!rule) throw new Error("expected a rule");
+    expect(rule.status).toBe("fail");
+    expect(rule.introduced).toHaveLength(1);
     expect(doc.exitCode).toBe(1);
   });
 
@@ -41,8 +43,10 @@ describe("buildDocument", () => {
       results, baselines: { r: [finding("old")] }, pins: { r: pin },
       baseRef: "main", baseSha: "s", mergeBase: "m",
     });
-    expect(doc.rules[0].status).toBe("pass");
-    expect(doc.rules[0].preExisting).toBe(1);
+    const [rule] = doc.rules;
+    if (!rule) throw new Error("expected a rule");
+    expect(rule.status).toBe("pass");
+    expect(rule.preExisting).toBe(1);
     expect(doc.exitCode).toBe(0);
   });
 
@@ -55,8 +59,10 @@ describe("buildDocument", () => {
       pins: { r: { ...pin, mode: "report-only", activatedAt: "abc", mergeBaseIsAfterActivation: false } },
       baseRef: "main", baseSha: "s", mergeBase: "m",
     });
-    expect(doc.rules[0].mode).toBe("report-only");
-    expect(doc.rules[0].introduced).toHaveLength(1);
+    const [rule] = doc.rules;
+    if (!rule) throw new Error("expected a rule");
+    expect(rule.mode).toBe("report-only");
+    expect(rule.introduced).toHaveLength(1);
     expect(doc.exitCode).toBe(0);
   });
 
@@ -68,7 +74,9 @@ describe("buildDocument", () => {
       results, baselines: { r: [] }, pins: { r: pin },
       baseRef: "main", baseSha: "s", mergeBase: "m",
     });
-    expect(doc.rules[0].status).toBe("error");
+    const [rule] = doc.rules;
+    if (!rule) throw new Error("expected a rule");
+    expect(rule.status).toBe("error");
     expect(doc.exitCode).toBe(1);
   });
 

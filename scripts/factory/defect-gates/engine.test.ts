@@ -25,6 +25,7 @@ const ctx: RuleContext = { files: [], repoRoot: "/repo" };
 describe("runRules", () => {
   it("reports pass for a rule that finds nothing", () => {
     const [result] = runRules([stubRule("quiet", [])], ctx);
+    if (!result) throw new Error("expected a result");
     expect(result.status).toBe("pass");
     expect(result.findings).toEqual([]);
   });
@@ -41,6 +42,7 @@ describe("runRules", () => {
       exemptedBy: null,
     };
     const [result] = runRules([stubRule("noisy", [finding])], ctx);
+    if (!result) throw new Error("expected a result");
     expect(result.status).toBe("fail");
     expect(result.findings).toHaveLength(1);
   });
@@ -53,6 +55,7 @@ describe("runRules", () => {
       },
     };
     const [result] = runRules([broken], ctx);
+    if (!result) throw new Error("expected a result");
     expect(result.status).toBe("error");
     expect(result.error).toContain("rule crashed");
   });
@@ -79,8 +82,10 @@ describe("runRules", () => {
       },
     };
     const results = runRules([broken, stubRule("quiet", [])], ctx);
-    expect(results[0].status).toBe("error");
-    expect(typeof results[0].error).toBe("string");
-    expect(results[1].status).toBe("pass");
+    const [first, second] = results;
+    if (!first || !second) throw new Error("expected two results");
+    expect(first.status).toBe("error");
+    expect(typeof first.error).toBe("string");
+    expect(second.status).toBe("pass");
   });
 });
