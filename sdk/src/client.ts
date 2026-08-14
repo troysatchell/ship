@@ -116,10 +116,13 @@ export class ShipClient {
   /** `sprints.list/iterate` — `/api/v1/sprints` (PF-201). No `get`/`create`, same
    *  reason as `issues` above — see `resources/sprints.ts`'s header. */
   readonly sprints: SprintsClient;
-  /** Typed against PLUGFORGE.MD §2.8 / the PF-302/304/305/306 ticket specs.
-   *  The server routes it calls (`/api/v1/webhooks*`) do not exist in this
-   *  repo yet — see `resources/webhooks.ts`'s header for the verification
-   *  and what that means for this ticket's test coverage. */
+  /** `webhooks.listSubscriptions/createSubscription/getSubscription/
+   *  deleteSubscription/rotateSecret` — real, merged PF-302 routes
+   *  (`/api/v1/webhooks*`). `webhooks.listDeliveries/replayDelivery` still
+   *  target PF-305/PF-306 routes that do not exist yet — see
+   *  `resources/webhooks.ts`'s header for the full verification and
+   *  `sdk/src/__tests__/parity.test.ts` (PF-405) for how those two are
+   *  carried as documented exemptions rather than silently untested. */
   readonly webhooks: WebhooksClient;
 
   /**

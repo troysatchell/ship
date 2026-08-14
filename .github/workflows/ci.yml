@@ -160,6 +160,17 @@ jobs:
           NODE_ENV: test
         run: pnpm --filter @ship/sdk test
 
+      # PF-405 (TRO-422): CI size gate — the built @ship/sdk bundle
+      # (bundled from src/index.ts, minified, gzipped) must stay under
+      # 250 KB. Given zero runtime dependencies (sdk/package.json) this is
+      # comfortably true today (~5 KB, see sdk/scripts/measure-size.mjs's
+      # own header) — the check existing at all, wired into CI, is the
+      # deliverable this ticket's AC asks for, not the number. No
+      # DATABASE_URL/services needed: it bundles from source and never
+      # touches a database.
+      - name: SDK size gate (<250 KB min+gz)
+        run: pnpm --filter @ship/sdk size-check
+
       - name: Check for test regressions vs quarantine baseline
         run: |
           node scripts/factory/lib/testdiff.mjs \
