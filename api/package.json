@@ -19,6 +19,8 @@
     "db:migrate": "tsx src/db/migrate.ts",
     "db:orphan-check": "tsx src/db/scripts/orphan-diagnostic.ts",
     "openapi:generate": "tsx src/scripts/generate-openapi.ts",
+    "openapi:generate:v1": "tsx src/scripts/generate-v1-openapi.ts",
+    "openapi:check:v1": "tsx src/scripts/generate-v1-openapi.ts --check",
     "mcp": "tsx src/mcp/server.ts"
   },
   "dependencies": {
