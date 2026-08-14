@@ -722,6 +722,128 @@
           "next_cursor"
         ]
       },
+      "WebhookDelivery": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Delivery attempt id."
+          },
+          "subscription_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The webhook_subscriptions id this attempt belongs to."
+          },
+          "event_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The event this attempt delivers. Shared across every attempt (same attempt_number series) of the same logical delivery."
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "document.created",
+              "document.updated",
+              "document.deleted",
+              "issue.created",
+              "issue.assigned",
+              "issue.status_changed",
+              "sprint.started",
+              "sprint.completed"
+            ]
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Stable across every attempt of the same logical delivery — the value sent in the Idempotency-Key header."
+          },
+          "attempt_number": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-indexed attempt number for this logical delivery. A retried delivery has multiple rows sharing event_id, one per attempt_number."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "success",
+              "failed",
+              "dead"
+            ],
+            "description": "This attempt's own state: pending (scheduled, not yet executed), success (2xx), failed (5xx/timeout, a retry was scheduled), or dead (permanent failure — 4xx, or the 6th failed attempt)."
+          },
+          "response_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The subscriber's HTTP response status, or null if this attempt never got a response (still pending, or a network/timeout failure)."
+          },
+          "response_excerpt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 2000 characters of the subscriber's response body, or null if there was none."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Round-trip latency for this attempt in milliseconds, or null if it never completed."
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next retry is due (only meaningful on a failed row with a pending sibling), or null if this attempt is terminal (success/dead) or itself still pending execution."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp this attempt row was created (its own enqueue time)."
+          }
+        },
+        "required": [
+          "id",
+          "subscription_id",
+          "event_id",
+          "event_type",
+          "idempotency_key",
+          "attempt_number",
+          "status",
+          "response_status",
+          "response_excerpt",
+          "latency_ms",
+          "next_attempt_at",
+          "created_at"
+        ]
+      },
+      "WebhookDeliveryList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookDelivery"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
       "PublicApiAuditRow": {
         "type": "object",
         "properties": {
@@ -2243,6 +2365,107 @@
           },
           "400": {
             "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the webhooks:manage scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/deliveries": {
+      "get": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "List webhook delivery attempts",
+        "description": "Cursor-paginated delivery log: one row per delivery ATTEMPT (a retried delivery leaves multiple rows, one per attempt_number, sharing event_id), scoped to subscriptions belonging to apps in the caller's workspace. Filterable by subscription_id and status. Requires the webhooks:manage scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "subscription_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "success",
+                "failed",
+                "dead"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of delivery attempts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDeliveryList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters (a malformed, non-UUID subscription_id, or a status value outside pending/success/failed/dead) or an invalid cursor. A well-formed but unrecognized or cross-workspace subscription_id is NOT an error — it matches nothing and returns 200 with an empty data page (same fail-closed convention as the rest of this resource).",
             "content": {
               "application/json": {
                 "schema": {
