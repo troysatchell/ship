@@ -16,7 +16,7 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "A public API bearer token: either an OAuth access token (PF-104, PLUGFORGE.MD §2.2 oauth_tokens) or a scoped personal access token (api_tokens.scopes, PF-107). GET /api/v1/me introspects the authenticated principal (PF-201, not yet registered in this document — see this directory's README)."
+        "description": "A public API bearer token: either an OAuth access token (PF-104, PLUGFORGE.MD §2.2 oauth_tokens) or a scoped personal access token (api_tokens.scopes, PF-107). GET /api/v1/me introspects the authenticated principal (PF-201)."
       }
     },
     "schemas": {

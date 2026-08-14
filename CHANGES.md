@@ -60,15 +60,38 @@ and in `api/src/platform/openapi/README.md`.
    simulate the edit defaulting to `ensure_ascii=True`, not a bug in the check). Reverted from a
    pristine backup; re-ran the same command: `OK: ... matches the in-process /api/v1 OpenAPI
    registry.`, exit 0.
-2. *Automated regression*, `api/src/scripts/generate-v1-openapi.test.ts` (6 tests, all against
-   throwaway files under `os.tmpdir()` — never the real `docs/openapi.json`): asserts
-   `diffAgainstCommitted` reports `drift: true` both when a committed file is hand-edited and when it
-   is missing a route the live registry has (the "undocumented route" drift shape named in the
-   ticket), and `drift: false` when the two exactly match. **Seen red for the right reason before
-   trusting it green**: temporarily changed the comparison to always return `drift: false`, reran the
-   suite — exactly the two drift-simulation tests failed (`expected false to be true` on
-   `result.drift`), the other four (rendering, determinism, missing-file) stayed green — then
-   reverted to the real implementation and confirmed all 6 pass.
+2. *Automated regression*, `api/src/scripts/generate-v1-openapi.test.ts` (7 tests, all against
+   throwaway files under `os.tmpdir()` — never the real `docs/openapi.json`, except the 7th, see
+   below): asserts `diffAgainstCommitted` reports `drift: true` both when a committed file is
+   hand-edited and when it is missing a route the live registry has (the "undocumented route" drift
+   shape named in the ticket), and `drift: false` when the two exactly match. **Seen red for the
+   right reason before trusting it green**: temporarily changed the comparison to always return
+   `drift: false`, reran the suite — exactly the two drift-simulation tests failed (`expected false
+   to be true` on `result.drift`), the other five stayed green — then reverted to the real
+   implementation and confirmed all 7 pass.
+
+**CodeRabbit triage** (local CLI review, captured by `gate.sh`'s G9 step — this repo is on the free
+CLI allowance, not an org plan; 3 findings, all fixed and re-verified, none dismissed):
+
+- **Major** — `generate-v1-openapi.ts`'s direct-execution guard compared `import.meta.url` against a
+  hand-built `file://${process.argv[1]}` string: fragile against a URL-encoding-worthy path or a
+  relative `argv[1]`, and — the real risk — if the guard silently fails to match, `main()` never
+  runs and the process exits 0 with **no output**, indistinguishable in a CI log from "checked, no
+  drift". Fixed: compare two resolved filesystem paths (`path.resolve(process.argv[1]) ===
+  __filename`) instead of a URL against a raw string. Added a 7th test that spawns the real CLI via
+  `tsx` (`API_ROOT`/`TSX_BIN`, same pattern as `seedFixturesDrift.test.ts`) and asserts real stdout —
+  proven red for the right reason by re-breaking the guard (`if (false)`) and confirming the new test
+  alone failed with `expected '' to contain '...'` (status 0, empty stdout — exactly the silent-pass
+  failure mode) before reverting.
+- **Minor** — `docs/openapi.json`'s (inherited from PF-202's `registry.ts`) `bearerAuth` description
+  still said `GET /api/v1/me` was "not yet registered in this document" — stale since PF-203 added
+  `schemas/me.ts`. Fixed at the source (`api/src/platform/openapi/registry.ts`, one sentence) and
+  regenerated `docs/openapi.json` via `pnpm generate:openapi`. Touching `registry.ts` is outside this
+  ticket's original file list, but the stale sentence ships verbatim into the document this ticket
+  commits and CI-gates going forward, so leaving it was worse than the one-line fix.
+- **Minor** — `api/src/platform/openapi/README.md`'s pre-existing "Scope note"/`Layout` list omitted
+  PF-302's five `/webhooks` routes (a gap that predates this ticket). Fixed since the file was
+  already being edited for this ticket's own new section.
 
 **How to run it.** `cd api && npx vitest run src/scripts/generate-v1-openapi.test.ts`. CI check:
 `pnpm openapi:check` from the repo root (no `DATABASE_URL` needed).
@@ -81,10 +104,12 @@ note in this PR's description if a conflict occurred.
 
 **Rollback.** Revert this ticket's merge commit. This deletes `docs/openapi.json`, the new
 `generate-v1-openapi.ts`/`.test.ts` scripts, the four new package.json script entries, and the two
-new CI steps (`pnpm openapi:check` lines in `.gitlab-ci.yml` and `.github/workflows/ci.yml`) — no
-schema or migration changes, no changes to any route or to PF-202's registry itself, nothing else to
-unwind. If only the CI enforcement should come out (keeping the committed spec and refresh script),
-remove just the two `pnpm openapi:check` step additions from the two CI files.
+new CI steps (`pnpm openapi:check` lines in `.gitlab-ci.yml` and `.github/workflows/ci.yml`), reverts
+the one-sentence `bearerAuth` description fix in `platform/openapi/registry.ts`, and reverts the
+webhooks additions to `platform/openapi/README.md` — no schema or migration changes, no changes to
+any route or to any `registerPath` call. If only the CI enforcement should come out (keeping the
+committed spec and refresh script), remove just the two `pnpm openapi:check` step additions from the
+two CI files.
 
 ---
 

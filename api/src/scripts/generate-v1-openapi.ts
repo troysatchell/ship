@@ -146,6 +146,14 @@ function main(): void {
 // src/scripts/generate-v1-openapi.ts`), never on import — this is what lets
 // generate-v1-openapi.test.ts import renderV1OpenApiSpec/diffAgainstCommitted
 // without writing to the real docs/openapi.json.
-if (import.meta.url === `file://${process.argv[1]}`) {
+//
+// CodeRabbit (this ticket's own review): comparing `import.meta.url` against
+// a hand-built `file://${process.argv[1]}` string breaks for a
+// URL-encoding-worthy path (a space, etc.) and for a relative argv[1] —
+// `__filename` on line ~48 is already the resolved, decoded absolute path
+// (via `fileURLToPath`), so resolve `process.argv[1]` the same way and
+// compare two normalized filesystem paths instead of a URL against a raw
+// string.
+if (process.argv[1] !== undefined && path.resolve(process.argv[1]) === __filename) {
   main();
 }

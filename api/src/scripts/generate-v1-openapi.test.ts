@@ -17,11 +17,18 @@
  * real difference and correctly recognize a real match.
  */
 import { randomBytes } from 'crypto';
+import { spawnSync } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { diffAgainstCommitted, renderV1OpenApiSpec } from './generate-v1-openapi.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const API_ROOT = path.resolve(__dirname, '..', '..');
+const TSX_BIN = path.join(API_ROOT, 'node_modules/.bin/tsx');
+const SCRIPT_PATH = path.join(__dirname, 'generate-v1-openapi.ts');
 
 let tmpDir: string;
 
@@ -109,5 +116,33 @@ describe('PF-204: diffAgainstCommitted() — the CI drift check', () => {
     expect(result.drift).toBe(true);
     expect(result.missing).toBe(true);
     expect(result.committed).toBeNull();
+  });
+});
+
+describe('PF-204: CLI entrypoint (`tsx generate-v1-openapi.ts --check`)', () => {
+  // CodeRabbit finding on this ticket: `main()`'s direct-execution guard
+  // compares `import.meta.url` against a hand-built `file://${process.argv[1]}`
+  // string. If that guard silently fails to match (a relative argv[1], an
+  // encoded path, a future refactor), `main()` never runs — the process
+  // still exits 0 with NO output, which is indistinguishable from "checked,
+  // no drift" in a CI log. Every test above exercises the pure functions
+  // directly and would stay green even if the guard were completely broken,
+  // so it cannot catch this. This test actually spawns the script exactly
+  // as CI does (`pnpm openapi:check` -> tsx generate-v1-openapi.ts --check`)
+  // and asserts real, visible stdout — a broken guard produces silent exit
+  // 0 with empty stdout, which fails the `toContain` assertion below.
+  //
+  // Runs `--check` (never plain refresh) so it only ever READS the real,
+  // committed docs/openapi.json — it cannot corrupt it if this suite fails
+  // partway through, and its precondition is exactly what the rest of this
+  // PR already guarantees: the committed spec matches the registry.
+  it('exits 0 and prints a real OK line against the actual committed docs/openapi.json', () => {
+    const result = spawnSync(TSX_BIN, [SCRIPT_PATH, '--check'], {
+      cwd: API_ROOT,
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('matches the in-process /api/v1 OpenAPI registry');
   });
 });

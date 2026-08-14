@@ -43,12 +43,17 @@ while the internal one stays 3.0.
   `route-fitness.test.ts` (`platform/api/v1/__tests__/`) is the drift gate
   that exists specifically so this class of gap fails CI going forward,
   instead of silently persisting the way this one did.
+- `schemas/webhooks.ts` — registers PF-302's (Linear TRO-431) five
+  `/webhooks` routes: `POST /webhooks`, `GET /webhooks`, `GET
+  /webhooks/{id}`, `DELETE /webhooks/{id}`, `POST /webhooks/{id}/rotate`.
+  Same pattern as `schemas/documents.ts`.
 
-## Scope note (PF-202/PF-203, as shipped)
+## Scope note (PF-202/PF-203/PF-302, as shipped)
 
 Registers every route that exists on `/api/v1`: `GET /health`, `GET
-/openapi.json`, PF-200's three `/documents` routes, and PF-201's `/issues`,
-`/sprints`, `/me` (the last three added by PF-203 — see above).
+/openapi.json`, PF-200's three `/documents` routes, PF-201's `/issues`,
+`/sprints`, `/me` (added by PF-203 — see above), and PF-302's five
+`/webhooks` routes (see `schemas/webhooks.ts` above).
 
 ## Verifying it
 
