@@ -73,12 +73,16 @@ and `api/src/platform/openapi/README.md` still reads "Empty until PF-202 lands."
 this ticket does not add any either — it stays consistent with every prior `/api/v1` route.
 
 **Regression tests.**
-- `api/src/platform/api/v1/resources/__tests__/issues.test.ts` (6 tests) — the typed-field proof: a
+- `api/src/platform/api/v1/resources/__tests__/issues.test.ts` (8 tests) — the typed-field proof: a
   seeded issue with `properties = {state, priority, assignee_id, source}` returns those three fields
   at the top level and `properties` is `undefined` on the response body; a bare `properties = {}`
   issue falls back to `state: 'backlog'`, `priority: 'medium'`, `assignee_id: null`; a `document_type
-  = 'wiki'` sibling document never appears in the list; cursor pagination; scope enforcement (403
-  `missing_scope: 'issues:read'`, and 401 unauthenticated).
+  = 'wiki'` sibling document never appears in the list; cursor pagination (limit+next_cursor, an
+  actual page-2 walk via that cursor with no repeated row, and a malformed-cursor 400); scope
+  enforcement (403 `missing_scope: 'issues:read'`, and 401 unauthenticated). The page-2-walk and
+  malformed-cursor cases were added post-landing during CodeRabbit triage (a real coverage gap the
+  reviewer caught); re-verified red-before-green for the full file, not just carried over from the
+  original 6 — see the note below.
 - `api/src/platform/api/v1/resources/__tests__/sprints.test.ts` (4 tests) — list returns only
   `document_type = 'sprint'` documents with the `documents.ts` envelope shape (including a raw
   `properties` object, unlike issues); pagination; scope enforcement.
@@ -96,6 +100,10 @@ this ticket does not add any either — it stays consistent with every prior `/a
 mount lines in `router.ts`, re-ran all 14 new tests: all 14 failed with `expected 404 to be
 200/401/403` (Express's `notFoundHandler` catching the unmounted paths) — a real routing failure,
 not an import or type error. Restored the mounts immediately after and re-ran: all 14 pass.
+Re-run again after CodeRabbit triage added 2 more `issues.test.ts` cases (pagination page-2 walk,
+malformed cursor): unmounted the same three lines, all 16 (not just the 2 new ones) failed with the
+same 404, restored, all 16 passed — the claim above covers the full current suite, not just its
+original subset.
 
 **How to run it.**
 ```bash
@@ -105,6 +113,43 @@ pnpm --filter @ship/api exec vitest run \
   src/platform/api/v1/resources/__tests__/sprints.test.ts \
   src/platform/api/v1/resources/__tests__/me.test.ts
 ```
+
+**CodeRabbit triage (stale gate run, 11 findings; re-run against the landing commit, 1 finding) —
+fixed, deferred, or dismissed, each with a reason:**
+- *Fixed:* `issues.ts`'s `IssueRowProperties.state`/`.priority` now use the shared `IssueState`/
+  `IssuePriority` types instead of bare `string` (trivial, type-safety).
+- *Fixed:* `issues.test.ts`'s `beforeAll` seed inserts now throw on a missing row instead of
+  silently falling back to `''` for `workspaceId`/`userId`/`assigneeUserId` — matches `insertIssue`'s
+  existing guard (trivial).
+- *Fixed:* the document-type-filter test now asserts `body.data` is non-empty before looping, so an
+  empty response can't pass the assertion vacuously (minor).
+- *Fixed:* cursor pagination now also walks an actual page 2 via the returned `next_cursor` and
+  asserts a malformed cursor 400s with `validation_failed` (major — real coverage gap; see the
+  red-before-green re-check above).
+- *Fixed, after the re-run caught it:* this entry's own test counts (6→8 for `issues.test.ts`, 14→16
+  total) were stale once the two pagination cases above were added (minor — a real doc-accuracy
+  catch, not a misfire).
+- *Dismissed — matches an existing pattern, cross-file scope:* `requestIdOf` duplicated across
+  `documents.ts`/`issues.ts`/`sprints.ts`/`me.ts`, and `sha256Hex`/`insertPersonalToken` duplicated
+  across the `__tests__` files. Both already exist in `documents.ts`/`documents.test.ts` from PF-200;
+  a cross-file DRY refactor is a real cleanup but out of scope for this ticket to take on unasked.
+- *Dismissed — contradicts this ticket's stated design:* keeping a raw `properties` blob alongside
+  `issues.ts`'s lifted `state`/`priority`/`assignee_id` fields. The file's own header and this entry's
+  "What was added" section above document the opposite decision on purpose (a typed view, not a
+  passthrough) — reverting it would undo the ticket's actual AC.
+- *Dismissed — wrong threat model:* gating `me.ts`'s `user.email` field by scope. `/me` returns the
+  calling token's OWN identity (the same pattern as GitHub's `GET /user` or Google's `userinfo`) —
+  there is no other-user's email being exposed here to gate.
+- *Dismissed — current behavior already deterministic and intentional:* asserting
+  `me.test.ts`'s Client-Credentials `scopes` array order-independently. `issueClientCredentialsToken`
+  returns the grant's actual resolved scopes in a fixed order; the strict `toEqual` is this ticket's
+  own explicit proof that the returned scopes match the grant exactly, not an incidental strictness.
+- *Noted, real, out of scope — for a follow-up ticket, not filed here:* a composite index on
+  `documents(workspace_id, document_type, created_at DESC, id DESC) WHERE deleted_at IS NULL` would
+  help this resource's (and `sprints.ts`'s) keyset query at scale; this ticket adds no migration by
+  design (see "No migration" above). A shared `createDocumentTypeListRouter` factory to de-duplicate
+  the near-identical keyset-pagination route logic across `documents.ts`/`issues.ts`/`sprints.ts` is
+  a real architectural cleanup, bigger than this ticket's scope.
 
 **Not verified.** The `authorization_code` grant's shape for `/me` (both `user` and `app` populated
 simultaneously — see `me.ts`'s header for why this follows from the same mapping with no special
