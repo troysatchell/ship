@@ -7,6 +7,8 @@ import { issuesRouter } from './resources/issues.js';
 import { sprintsRouter } from './resources/sprints.js';
 import { meRouter } from './resources/me.js';
 import { webhooksRouter } from './resources/webhooks.js';
+import { peopleRouter } from './resources/people.js';
+import { changesRouter } from './resources/changes.js';
 import { rateLimitDefaults } from '../../ratelimit/middleware.js';
 
 /**
@@ -73,6 +75,12 @@ v1Routes.use('/me', meRouter);
 
 // PF-302 (Linear TRO-431) — webhook subscriptions CRUD + rotation.
 v1Routes.use('/webhooks', webhooksRouter);
+
+// PF-205 (Linear TRO-414) — the agent's remaining reads: people directory
+// and the public change-feed contract (distinct from webhooks — see
+// resources/changes.ts's header for why the two must not be conflated).
+v1Routes.use('/people', peopleRouter);
+v1Routes.use('/changes', changesRouter);
 
 // Add new /api/v1 resource routes to `v1Routes` above this line — never
 // below it, and never directly to `v1Router` (see the stack-order comment
