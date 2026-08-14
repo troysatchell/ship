@@ -221,6 +221,196 @@ oauth_tokens-dependent migration.
 
 ---
 
+## TRO-425 — PF-106: Device Authorization Grant (RFC 8628) — `ship login`'s engine
+
+**What changed.** Three new endpoints, all mounted at `/oauth` alongside PF-103/PF-104's routers:
+`POST /oauth/device/code` (device/CLI-facing, issues the code pair), `POST /oauth/device/verify`
+(the verification page's session-authed Approve/Deny form target), and a new
+`grant_type=urn:ietf:params:oauth:grant-type:device_code` branch inside the EXISTING
+`POST /oauth/token` handler (`api/src/routes/oauth-token.ts`) — not a fourth router for polling,
+since polling is a `/oauth/token` grant like the other two.
+
+New files: `api/src/platform/oauth/device.ts` (service logic — code issuance, the verify decision,
+and `pollDeviceCode`, the state machine `authorization_pending`/`slow_down`/`expired_token`/
+`access_denied`/success all live in), `api/src/routes/oauth-device.ts` (thin route layer, same split
+as every other OAuth ticket), `web/src/pages/OAuthDeviceVerify.tsx` (the verification page),
+`api/src/db/migrations/046_oauth_device_codes_polling.sql` (see Schema below; renumbered from 045
+to 046 — TRO-421 (PF-105) independently claimed 045 for its own refresh-rotation migration first).
+
+**Reused rather than reimplemented**, per this ticket's own instruction ("a new 'how did the client
+get authorized' path feeding the same token-minting logic, not a wholesale reimplementation"):
+`token.ts`'s `generateAccessToken`/`generateRefreshToken`/`hashToken`/`ACCESS_TOKEN_TTL_MS` (now
+exported — previously module-private) mint the exact same token shape `redeemAuthorizationCode`
+does; `authorize.ts`'s `getOAuthAppByClientId`/`scopesAreRegistered`/`parseScopeParam`/
+`getSessionPrincipal` handle app lookup, scope validation, and the verify page's session check.
+`token.ts`'s `TokenErrorCode` union grew RFC 8628 §3.5's four polling codes
+(`authorization_pending`/`slow_down`/`access_denied`/`expired_token`) rather than a second,
+device-only error type, so `oauth-token.ts`'s existing `sendTokenResult`/`sendTokenError` dispatch
+needed zero changes to also serve this grant.
+
+**`user_code` format.** `XXXX-XXXX` from a 32-symbol unambiguous alphabet — uppercase letters minus
+`I`/`O`, digits minus `0`/`1` (exactly the four characters the ticket names), e.g. `BDWJ-KXQT`.
+32^8 ≈ 1.1 * 10^12 possible codes; no collision-retry loop on insert, same posture this codebase's
+`credentials.ts`'s `generateClientId` already takes (128 bits, no retry) — the realistic number of
+simultaneously pending device codes here is in the tens. `normalizeUserCode` uppercases, strips
+non-alphabet characters (so a lowercase paste, a missing hyphen, or stray whitespace still matches),
+then re-inserts the canonical hyphen — proven in the regression suite by submitting a mangled
+(`" bdwjkxqt "`-shaped) code at the approve step.
+
+**Chosen constants, stated explicitly (none were specified numerically by the ticket or
+PLUGFORGE.MD §2.2's `oauth_device_codes` row — a DERIVED choice, marked as such):**
+- `DEVICE_CODE_TTL_MS = 10 minutes` — same order of magnitude as `authorize.ts`'s 10-minute
+  authorization-code TTL; within RFC 8628's own worked example range (1800s) while short enough that
+  the "read a code off a screen, type it in" window doesn't feel indefinite.
+- `DEFAULT_DEVICE_POLL_INTERVAL_SECONDS = 5` — RFC 8628 §3.2's own stated default, and already
+  `oauth_device_codes.interval_seconds`'s column default (migration 043).
+- `DEVICE_SLOW_DOWN_INCREMENT_SECONDS = 5` — RFC 8628 §3.5's stated increment.
+
+**The polling state machine (`pollDeviceCode`), check order:**
+1. Unknown `device_code` → `invalid_grant`.
+2. Past `expires_at` → `expired_token` (lazily flips a still-`'pending'` row to `'expired'` — same
+   lazy-transition shape migration 043's own header already describes). Deliberately terminal even
+   for an `'approved'` row: `expires_at` is the deadline for the WHOLE flow (approval AND exchange),
+   not just the approval half — a human who approved just before expiry but whose device didn't poll
+   again in time still gets `expired_token`, not a token.
+3. `status === 'denied'` → `access_denied`.
+4. Already redeemed (`token_issued_at` set) → `invalid_grant`, no revocation (see the "why no
+   revoke-on-reuse" reasoning below).
+5. Polled again before `interval_seconds` elapsed since `last_polled_at` → `slow_down`, AND
+   `interval_seconds` is incremented server-side by `DEVICE_SLOW_DOWN_INCREMENT_SECONDS` — the
+   ticket's own AC ("the interval must ACTUALLY increase server-side... not just return the error").
+   `last_polled_at` starts `NULL` and is set on every poll, so the FIRST poll is never throttled
+   (RFC 8628 rate-limits consecutive polls, not time-since-issuance) — confirmed in the regression
+   suite: poll immediately after creation returns `authorization_pending`, not `slow_down`.
+6. `status === 'pending'` (not throttled) → `authorization_pending`.
+7. `status === 'approved'`, not yet redeemed, not throttled → atomically claims
+   `token_issued_at` (`UPDATE ... WHERE token_issued_at IS NULL RETURNING ...`, same single-writer-
+   wins shape as `token.ts`'s `consumed_at` claim for `authorization_code`) and mints a real token
+   pair.
+
+**Why no revoke-on-reuse for a `device_code`, unlike `token.ts`'s `authorization_code` path.**
+`redeemAuthorizationCode` revokes a code's whole token family on reuse because RFC 6749 §4.1.2
+explicitly calls for it — a reused authorization code strongly suggests it leaked via the redirect
+URI, a network-observable value. RFC 8628 states no equivalent requirement for `device_code`, and
+the leak model differs: a device_code is never transmitted through a redirect or URL an intermediary
+would see — the client holds it from the moment `POST /oauth/device/code` returns it, over the same
+channel it polls on. A second poll finding `token_issued_at` already set is treated as a client-side
+bug (double-poll after a success it already received), not evidence of theft: `invalid_grant`, no
+revocation. Extending to mirror `token.ts`'s posture (a `device_code_id` FK on `oauth_tokens`,
+mirroring migration 044's `authorization_code_id`) is a small, structurally similar follow-up if a
+future finding decides the stricter posture is worth it — not done here, to keep this ticket scoped
+to the RFC 8628 AC.
+
+**Schema (migration 046, renumbered from 045).** Migration 043 (PF-101) already created
+`oauth_device_codes` with every column PLUGFORGE.MD §2.2 lists — checked in full before writing
+anything, per this ticket's own instructions, and it does NOT need a new migration for the table
+itself. Two columns were missing for the polling state machine above and migration 046 adds them
+(originally numbered 045; renumbered to 046 because TRO-421 (PF-105) independently created its own
+`045_oauth_tokens_refresh_expiry.sql` first — see the top of this entry): `last_polled_at` (slow_down
+bookkeeping) and `token_issued_at` (single-use bookkeeping). Both nullable, both `ALTER TABLE ADD
+COLUMN IF NOT EXISTS`, applied cleanly on this worktree's database (`\d`-equivalent evidence: a
+direct `information_schema.columns` query, since `psql` is not on PATH in this environment —
+lessons.md rule 8 — confirmed both columns present with type `timestamp with time zone` after
+running `migrate.ts`).
+
+**The web verification page is `/oauth-device-verify`, NOT `/oauth/device/verify`, even though that
+second form is the ticket's own (and RFC 8628's) literal phrasing.** Same trap `oauth-authorize.ts`'s
+header already documents for why PF-103's consent screen is `/oauth-consent`: `web/vite.config.ts`'s
+dev/preview proxy has a `/oauth/` (trailing-slash) key that `startsWith`-matches ANY `oauth/*` path
+and forwards it straight to the API — a frontend SPA route actually living under that prefix would
+never reach React Router locally, only the API (which has no matching GET route, so it would 404 or
+serve the wrong thing). Confirmed this is the identical mechanism, not a new one: `vite.config.ts`'s
+own comment on the existing `/oauth/` proxy key already names `/oauth-consent` as the route it must
+NOT swallow. Only the frontend React Router path moved; both of this ticket's actual API endpoints
+(`POST /oauth/device/code`, `POST /oauth/device/verify`) keep the RFC-shaped `/oauth/device/*` path,
+require no new proxy entry (already covered by the existing `/oauth/` key), and the page's own form
+posts to the real `/oauth/device/verify` API path exactly as PF-103's consent page posts to
+`/oauth/authorize/decision`. The CSP plugin that sets `frame-ancestors 'none'` for `/oauth-consent`
+(clickjacking guard) was extended to also cover `/oauth-device-verify` — same shape of session-authed
+decision page, same guard.
+
+**Verification page flow.** Session-authed via `ProtectedRoute` (bounces to `/login?returnTo=...`
+and back, unchanged existing machinery — reuses `getSessionPrincipal`, same read-only session check
+`oauth-authorize.ts` already uses, not a redirect-driving `authMiddleware`). Submission is a plain
+HTML `<form>` POST, not `fetch()` — identical reasoning to `OAuthConsent.tsx`: `/oauth` carries the
+public, credential-less CORS policy (`credentials: false`), so a cross-origin `fetch(...,
+{credentials:'include'})` would be silently blocked from ever sending the session cookie; a native
+top-level form navigation isn't subject to CORS and carries the cookie under ordinary SameSite rules.
+No CSRF-synchronizer token, same reasoning `oauth-authorize.ts` documents (a plain form can't set the
+header; the session cookie is `sameSite:'strict'`, which already blocks a cross-site forged POST from
+carrying it). The server always responds with a redirect back to `/oauth-device-verify`, carrying
+either `?result=approved|denied` or `?error=<reason>` — the component is purely a view over those
+states, never calls the API directly.
+
+**OpenAPI registration: NOT registered — a scope decision, not a blocker, and this corrects PF-104's
+own entry's framing rather than copying it forward unread (CLAUDE.md's provenance rule: read the
+artifact before asserting about it).** PF-104's `oauth-token.ts` header states its own non-
+registration is blocked on TRO-551. Checked fresh for this ticket: `git log --oneline --all | grep
+551` shows `585fb9f "Merge pull request #188 from troysatchell/fix/tro-551-openapi-non-api-prefix"`
+already on `main` — and PR #188 merged BEFORE PF-104's own PR #189, so the `ROOT_SERVER` mechanism
+TRO-551 built (a per-operation OpenAPI `servers` override for routes mounted outside `/api`) was
+already available on `main` by the time PF-104 shipped; TRO-551's own CHANGES.md entry says exactly
+this ("PF-104's `GET /oauth/token` and PF-106's `/oauth/device/*` are not on `main` as of this
+ticket's dispatch... whoever lands them should reuse `ROOT_SERVER`"). So: not still blocked, just not
+done. Deferred here as a genuine scope decision (this ticket is about the device-grant flow itself;
+wiring three more non-`/api/v1` schema files — `POST /oauth/device/code`, `POST /oauth/device/verify`,
+and the new `/oauth/token` grant branch — through `ROOT_SERVER` is a follow-up), per the dispatching
+brief's explicit instruction to match PF-104's precedent. Flagged as a real, mechanically-easy
+follow-up rather than "still blocked."
+
+**Regression tests (the factory-gate proof).** `api/src/platform/oauth/__tests__/device.test.ts` — 9
+cases, run against this worktree's real `DATABASE_URL` (`source .factory-env` first — same hazard as
+every other api test file, `api/src/test/setup.ts` truncates 16 tables in `beforeAll`;
+`oauth_apps`/`oauth_device_codes`/`oauth_tokens` are not in that list, so this file cleans up its own
+rows):
+- `POST /oauth/device/code`: issues a well-formed `user_code`/`device_code`/`interval`/
+  `verification_uri(_complete)`, rejects an unknown `client_id` (`invalid_client`) and an
+  unregistered `scope` (`invalid_scope`).
+- **The AC's own flow, end to end, one test:** create → poll immediately → `authorization_pending` →
+  poll 2s later (< 5s interval) → `slow_down`, interval DB-verified at 10s → poll 3s later still
+  (< 10s interval) → `slow_down` AGAIN, interval DB-verified at 15s (proves the increase compounds,
+  not a one-time bump) → approve via the verify endpoint (mangled `user_code`, proving
+  normalization) → poll 15s later (respecting the now-15s interval) → a real token pair,
+  introspected through the REAL production `bearerAuth` middleware on a scratch Express app (same
+  "token works" proof `token.test.ts` established) → poll again immediately → `invalid_grant`
+  (already redeemed), and a DB count proves exactly one `oauth_tokens` row was ever minted.
+- Deny path: denied device_code polls as `access_denied`, `token_issued_at` stays `NULL`.
+- Expiry path (separate test, per this ticket's own instructions): fake-clock-advanced past
+  `DEVICE_CODE_TTL_MS` → poll returns `expired_token`, DB status flips to `'expired'`, AND the verify
+  endpoint independently rejects the same expired code with `error=expired`.
+- Negative cases: unknown `device_code` → `invalid_grant`; unauthenticated verify POST → redirects to
+  `/login?returnTo=...`; unrecognized `user_code` on verify → `error=not_found`.
+
+**Time, with no real waits (this ticket's own explicit AC).** Every function in `device.ts` that
+reasons about elapsed time takes an optional `now: () => Date` (default `() => new Date()`) — the
+same shape this codebase's `utils/circuitBreaker.ts` already uses (`now?: () => number`, default
+`Date.now`) for an identical cooldown-testability reason. The regression suite additionally drives
+the full HTTP stack with `vi.useFakeTimers({ toFake: ['Date'] })` + `vi.setSystemTime()` — the exact
+pattern `routes/change-feed.test.ts` already established for a real supertest+DB integration test
+(only `Date`/`new Date()` are faked, so the HTTP/DB round trips underneath still run on real timers
+and nothing hangs). No `setTimeout`/sleep anywhere in the suite.
+
+**Red-before-green (seen, not claimed).** Temporarily changed the `slow_down` branch's interval
+update from `row.interval_seconds + DEVICE_SLOW_DOWN_INCREMENT_SECONDS` to a no-op
+(`row.interval_seconds` unchanged) and re-ran the suite: exactly one assertion failed —
+`expected 5 to be 10` on the "interval increases" check inside the poll-to-approval test — while the
+other 8 cases stayed green, confirming the test fails for the specific reason it claims to prove
+(lessons.md rule 11) and isn't, e.g., an import error. Reverted immediately after; full suite
+re-confirmed green (9/9).
+
+**Rollback.** Revert this ticket's commit(s). Migration 046 only adds two nullable columns
+(`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) — safe to leave in place even if the application code is
+rolled back (no data loss, no NOT NULL constraint, nothing else references them); if a full rollback
+of the schema is wanted too, `ALTER TABLE oauth_device_codes DROP COLUMN IF EXISTS last_polled_at,
+DROP COLUMN IF EXISTS token_issued_at;` as a new numbered migration (never edit 046 in place — this
+codebase's migrations are append-only). No other table's schema changed. No existing route's
+behavior changed: `POST /oauth/token`'s two existing grant branches (`authorization_code`,
+`client_credentials`) are untouched aside from the new `if` branch above them; `token.ts`'s three
+newly-exported helpers (`generateAccessToken`/`generateRefreshToken`/`hashToken`) keep their exact
+prior implementations, only visibility changed.
+
+---
+
 ## TRO-402 — PF-202: OpenAPI 3.1 generator + `/api/v1/openapi.json`
 
 **What changed.** A new, separate `OpenAPIRegistry` instance for `/api/v1` —

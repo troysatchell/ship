@@ -162,10 +162,14 @@ export default defineConfig(({ mode }) => {
       // Flagged as a follow-up (see this ticket's final report / CHANGES.md);
       // out of scope here (terraform is PF-900-series work, not this ticket).
       {
+        // PF-106 (TRO-425): `/oauth-device-verify` is the same shape of
+        // auth-decision page `/oauth-consent` already is (session-authed,
+        // Approve/Deny), so it gets the identical clickjacking guard — added
+        // to the existing plugin/path-set rather than a second plugin.
         name: 'oauth-consent-csp',
         configureServer(server) {
           server.middlewares.use((req, res, next) => {
-            if (req.url && req.url.split('?')[0] === '/oauth-consent') {
+            if (req.url && ['/oauth-consent', '/oauth-device-verify'].includes(req.url.split('?')[0] ?? '')) {
               res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
             }
             next();
@@ -173,7 +177,7 @@ export default defineConfig(({ mode }) => {
         },
         configurePreviewServer(server) {
           server.middlewares.use((req, res, next) => {
-            if (req.url && req.url.split('?')[0] === '/oauth-consent') {
+            if (req.url && ['/oauth-consent', '/oauth-device-verify'].includes(req.url.split('?')[0] ?? '')) {
               res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
             }
             next();
