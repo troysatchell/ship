@@ -64,3 +64,26 @@ that test file's header comment for why a hand-rolled `ajv` + the raw
 `spec.openapis.org` schema hit a documented `$dynamicRef` /
 `unevaluatedProperties` interaction bug in `ajv` 8.x, and why this dependency
 was chosen instead of wiring `ajv` directly).
+
+## Static spec + CI parity (PF-204, Linear TRO-409)
+
+This registry's output is also committed as `docs/openapi.json` — the spec of
+record for anything outside the running process (SDK generation, external
+tooling, a reviewer reading the API without booting the server). CI
+regenerates it in-process on every push/PR and diffs against the committed
+copy; any difference (a new/changed/removed `/api/v1` route whose schema file
+wasn't updated, or a stray hand-edit of `docs/openapi.json` itself) fails the
+build — see `.gitlab-ci.yml` and `.github/workflows/ci.yml`'s `OpenAPI v1
+spec drift check` / `pnpm openapi:check` step.
+
+**Refresh procedure (one command):**
+
+```bash
+pnpm generate:openapi
+```
+
+Run this and commit the result whenever a `/api/v1` route or its schema
+changes. `api/src/scripts/generate-v1-openapi.ts` is the script — see its
+header comment for how the refresh (default) and `--check` (CI drift check)
+modes work, and `api/src/scripts/generate-v1-openapi.test.ts` for the
+regression tests proving the check can actually fail.
