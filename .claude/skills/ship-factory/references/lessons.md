@@ -522,6 +522,36 @@ the bar for appearing here: one finding is feedback, two is a missing rule.*
   this is the TRUNCATE hazard with extra steps. Targeted runs: `cd api && npx vitest run <path>`
   or `pnpm --filter @ship/api exec vitest run <path>`. Never put the `test -- <path>` form in a
   brief.
+- 2026-08-13 (W6 MVP-path wave, orchestrator) — **Lock the Linear ticket to In Progress BEFORE
+  dispatching the builder, not after.** Dispatched TRO-551 and TRO-416's `Agent()` calls, then only
+  set their Linear status afterward — caught mid-build when a peer Claude session, coordinating over
+  a cross-session message channel specifically to avoid ticket collisions, asked whether those
+  tickets were claimed. They were, in worktree/branch reality, but Linear — the actual lock every
+  session (including peers) checks first — still showed Backlog. No real collision happened this
+  time, but the sequencing was backwards: `worktree.sh` + Linear status update is the reservation,
+  and it has to complete before the agent that does the work starts, the same "reserve the whole set
+  before any agent starts" rule the bundle-dispatch section already states for batches — it applies
+  to single tickets too.
+- 2026-08-13 (W6 MVP-path wave, orchestrator) — **GitHub Actions sometimes never triggers a
+  `pull_request` run on push at all — not a hang, not a queue, just silence.** Observed 3+ times in
+  one session, always on a branch with an already-open PR: `git push` succeeds on both remotes, but
+  `gh api "repos/.../actions/runs?branch=<b>"` returns nothing for the new SHA even after 30-60s,
+  while a sibling branch's push triggers normally within seconds. `gh workflow run ci.yml --ref
+  <branch>` forces a real run at that SHA and its result attaches to the PR's check list exactly like
+  a push-triggered one would. When polling `actions/runs?head_sha=<sha>` afterward, use the FULL
+  40-character SHA — a short/truncated SHA matches nothing and looks identical to "still pending."
+- 2026-08-13 (W6 MVP-path wave, orchestrator) — **A new load-flake identity, joining the rule-24
+  set, surfaced under the heaviest concurrency this project has run gate.sh at:** `api/src/routes/
+  documents-pagination.test.ts`. Confirmed via the same test every prior entry in this set uses —
+  branch that failed it touched zero files in that area, `gate.sh`'s own standalone re-run passed
+  clean. Notable only for the load level it took to surface: up to 5 worktrees running `gate.sh`
+  concurrently from this session alone, PLUS a confirmed independent peer Claude session
+  (`implement-tro-558-559-ocr-eval`, verified via `ListAgents`) hitting the same `ship-postgres-1`
+  container at the same time — the worst-case concurrency this class has been observed under, and it
+  produced exactly one new identity, not a cascade. Some evidence the container degrades gracefully
+  under load rather than corrupting data; still never run gate.sh concurrently on purpose (rule 24
+  stands), but a session that discovers a peer is also hitting the container should read a `tests:api`
+  fail as more likely environmental, not less.
 
 ## Concurrency
 
