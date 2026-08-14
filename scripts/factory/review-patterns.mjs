@@ -46,21 +46,9 @@ try {
 }
 
 const RULES = [
-  {
-    id: 'non-null-assertion',
-    // Postfix `!` on an identifier or index, e.g. `foo!.bar`, `arr[0]!`, `x!)`.
-    // Also catches `!` immediately before a colon — TRO-230's CodeRabbit review
-    // caught this checker missing `let resolveFetch!: (res: Response) => void;`
-    // (a definite-assignment assertion) entirely, since `:` wasn't in the
-    // followed-by set. The same `!(?=\s*:)` shape also catches a non-null
-    // assertion in a ternary's consequent (`cond ? x! : y`), which is a second,
-    // independently valid case this addition covers.
-    // Deliberately not trying to catch every form: false positives here would
-    // make the check untrustworthy, and TS-4 counts the common shapes.
-    re: /(?:\w|\]|\))!(?=\s*[.,;)\]}:]|\s*$)/,
-    why: 'new non-null assertion — TS-4 tracks 236 of these as a measured number we are graded on reducing',
-    files: /\.(ts|tsx)$/,
-  },
+  // non-null-assertion migrated to scripts/factory/defect-gates/rules/non-null-assertion.ts
+  // (gate.sh's G10) — an AST-based check, identity-baselined and activation-pinned. See
+  // docs/superpowers/specs/2026-08-14-factory-defect-gate-design.md.
   {
     id: 'as-any',
     re: /\bas\s+any\b/,
