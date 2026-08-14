@@ -21,6 +21,114 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-418 — PF-404: SDK auth helpers — `deviceLogin`, PKCE, `ITokenStore`, single-flight refresh
+
+**What changed.** `@ship/sdk` gains a full client-side OAuth toolkit, wired directly against the
+already-merged server implementations (PF-104/PF-105/PF-106) rather than guessed from RFC prose:
+
+- `sdk/src/tokenStore.ts` — `ITokenStore` (`get`/`set`/`clear`), `MemoryTokenStore` (trivial,
+  in-process), `FileTokenStore` (JSON at a caller-given path, **0600 permissions enforced on every
+  write**, not just the first — `fs.writeFile`'s `mode` option only applies at file *creation*, so
+  an explicit `fs.chmod(path, 0o600)` runs after every `set()` to correct a pre-existing,
+  more-permissive file too; proven in `tokenStore.test.ts`'s
+  "corrects an existing file's permissions" case, which fails without that line).
+- `sdk/src/pkce.ts` — `generatePkcePair()`, RFC 7636 S256, **WebCrypto only** (`globalThis.crypto`),
+  not Node's `crypto` module — the SDK has to run in a browser (PF-802's later browser demo) and
+  stay zero-runtime-dependency. Cross-checked in `pkce.test.ts` against Node's own independent
+  `crypto.createHash('sha256')` implementation, not just against itself.
+- `sdk/src/deviceLogin.ts` — `runDeviceLoginFlow`, a full RFC 8628 client:
+  `POST /oauth/device/code` → `onUserCode(user_code, verification_uri)` → poll
+  `POST /oauth/token` (`grant_type=urn:ietf:params:oauth:grant-type:device_code`) until a terminal
+  state. `slow_down` **genuinely increases** the interval used for every subsequent poll (does not
+  just retry at the original cadence) — proven in `deviceLogin.test.ts` with an injected `sleep`
+  spy asserting strictly-increasing wait values (`[5000, 10000, 15000]` across a pending → slow_down
+  → slow_down → success sequence), not merely that the flow eventually succeeds.
+- `sdk/src/authorizationCodeFlow.ts` — `runAuthorizationCodeFlow`, browser-context PKCE, no client
+  secret. One function covers both legs of a real SPA flow (§2.8 specifies one
+  `Promise<ShipClient>`-returning call): leg 1 (no `code` in the current URL) generates a PKCE pair,
+  stores `code_verifier` in `sessionStorage` keyed by a fresh `state`, and `location.assign()`s to
+  `/oauth/authorize` — the returned promise deliberately never resolves in a real browser (the
+  navigation tears down the JS context); leg 2 (`code`+`state` present, e.g. after the app's router
+  re-invokes this on load) exchanges the code and resolves with a working `ShipClient`.
+  `location`/`storage` are both injectable (default to `window.location`/`window.sessionStorage`),
+  which is what makes leg 1 unit-testable without a real browser or a hanging promise.
+- `sdk/src/client.ts` — `ShipClient.deviceLogin()` and `ShipClient.authorizationCodeFlow()` (both
+  static, per PLUGFORGE.MD §2.8's signatures — `clientId`/`baseUrl` added explicitly to
+  `deviceLogin`'s abbreviated pseudocode signature, the same elision that section's own one-line
+  class signature already makes for `ShipClientOptions.baseUrl`; stated here per CLAUDE.md's
+  claim-provenance rule, not silently assumed). `ShipClientOptions.tokenStore` (typed `unknown` and
+  unused since PF-400) now does something: lazy hydration on first request (never in the
+  constructor — PF-703's "cheap construction, no I/O" requirement still holds), refresh-on-401 with
+  a **single-flight mutex** (`refreshOnce()` memoizes the in-flight `doRefresh()` promise so N
+  concurrent callers that all hit 401 produce exactly ONE `POST /oauth/token` — proven in
+  `client.refresh.test.ts`'s "SINGLE-FLIGHT" case: 6 concurrent `.me()` calls, 1 refresh call, 12
+  total `/api/v1/me` calls (6 initial 401s + 6 retries)), and **rotation transparency** (the new
+  refresh token from every rotation overwrites `this.refreshToken` before the promise resolves, so a
+  *later, independent* 401 refreshes again using the rotated token, not the now-revoked original —
+  proven in the same file's "ROTATION IS TRANSPARENT" case). A bare `{ token }` client with no
+  `clientId`/`tokenStore` (PF-400's original shape) behaves identically to before this ticket: no
+  refresh is ever attempted, a 401 still throws `ShipSdkError(kind: 'auth')` directly — the
+  pre-existing PF-400 test suite (`client.test.ts`, `client.liveServer.test.ts`) is unmodified and
+  still green.
+- `sdk/src/index.ts` — exports the new public surface (`ITokenStore`, `TokenSet`,
+  `MemoryTokenStore`, `FileTokenStore`, `generatePkcePair`, the flow option/result types).
+
+**How to run it.** PostgreSQL must be running locally first (`source .factory-env` in a factory
+worktree, or any local `DATABASE_URL` — the live-server suites seed and clean up their own
+workspace/user/app rows, same as PF-400's own `client.liveServer.test.ts`):
+
+```bash
+pnpm --filter @ship/sdk test                                   # full suite: 69/69, 10 files
+pnpm --filter @ship/sdk exec vitest run src/deviceLogin.test.ts                 # slow_down backoff proof
+pnpm --filter @ship/sdk exec vitest run src/client.refresh.test.ts              # single-flight + rotation proof
+pnpm --filter @ship/sdk exec vitest run src/tokenStore.test.ts                  # FileTokenStore 0600 proof
+pnpm --filter @ship/sdk exec vitest run src/__tests__/client.deviceLogin.liveServer.test.ts
+pnpm --filter @ship/sdk exec vitest run src/__tests__/client.authorizationCodeFlow.liveServer.test.ts
+pnpm --filter @ship/sdk type-check && pnpm --filter @ship/sdk build
+```
+
+**Evidence.**
+
+| Check | Result | Ran under |
+|---|---|---|
+| `deviceLogin()` e2e against a real running server | pass (2/2) | `sdk/src/__tests__/client.deviceLogin.liveServer.test.ts` |
+| `authorizationCodeFlow()` PKCE redemption e2e, incl. the mandatory wrong-verifier negative | pass (2/2) | `sdk/src/__tests__/client.authorizationCodeFlow.liveServer.test.ts` |
+| `slow_down` genuinely increases the poll interval | pass | `sdk/src/deviceLogin.test.ts` |
+| `FileTokenStore` 0600 permissions, incl. correcting an existing looser-mode file | pass | `sdk/src/tokenStore.test.ts` |
+| Single-flight refresh under 6 concurrent 401s (1 refresh call, not 6) | pass | `sdk/src/client.refresh.test.ts` |
+| Refresh rotation transparent across two independent 401 waves | pass | `sdk/src/client.refresh.test.ts` |
+| PKCE pair matches Node `crypto`'s independent SHA-256 | pass | `sdk/src/pkce.test.ts` |
+| Full `@ship/sdk` suite (pre-existing + new) | pass, 69/69, 10 files | `pnpm --filter @ship/sdk test` |
+| `pnpm --filter @ship/sdk type-check` / `build` | pass, zero errors | `sdk/tsconfig.json` |
+
+**Observed:** all of the above, run directly in this worktree against `ship_wt_tro_418` (port 5433)
+and the real `createApp()` server on an ephemeral port, per the commands in the table. The
+device-login live-server suite takes ~5s real wall-clock time for its "denied" case (the server
+throttles polling against real `Date.now()`, not an injectable clock at the HTTP layer — see that
+file's own header for why this is deliberate and bounded rather than a flake risk).
+
+**Derived:** `deviceLogin`/`authorizationCodeFlow`'s exact option shapes (`clientId`, `baseUrl`,
+`location`/`storage` injection points) are this ticket's own design, filling gaps PLUGFORGE.MD
+§2.8's abbreviated pseudocode signatures leave open — not literally specified anywhere, and called
+out as such at each point in the source comments rather than presented as given.
+
+**Not verified:** a real browser exercising `authorizationCodeFlow()`'s leg-1 redirect
+(`e2e/oauth-authorize.spec.ts` / `e2e/oauth-pkce-chain.spec.ts` already prove the *server* side of
+that hop end-to-end via Playwright; this ticket's own suite proves the SDK's redirect-URL
+construction and PKCE storage with an injected `location`/`storage` double, and the redemption leg
+against the real server — the two together cover the client contract, but no test in this ticket
+drives an actual Chromium window through `ShipClient.authorizationCodeFlow()`). PF-802 (browser
+demo, a later E8 ticket) is the natural place for that full-stack proof.
+
+**Rollback.** Revert this ticket's merge commit. Removes `sdk/src/tokenStore.ts`, `pkce.ts`,
+`deviceLogin.ts`, `authorizationCodeFlow.ts`, their test files, and the two live-server e2e suites;
+reverts `client.ts`/`index.ts` to their PF-400 state (`tokenStore` typed `unknown` and unused again,
+no static `deviceLogin`/`authorizationCodeFlow`, no `clientId`/`clientSecret` options, no
+refresh-on-401). No schema or migration changes, no server-side changes — this ticket is
+SDK-client-only, built entirely against already-merged, unmodified server endpoints.
+
+---
+
 ## TRO-404 — PF-203: route-enumeration fitness test — the drift gate for every v1 route
 
 **What changed.** `api/src/platform/api/v1/__tests__/route-fitness.test.ts` walks the REAL, live
