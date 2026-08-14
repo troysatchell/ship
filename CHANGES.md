@@ -21,6 +21,141 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-402 — PF-202: OpenAPI 3.1 generator + `/api/v1/openapi.json`
+
+**What changed.** A new, separate `OpenAPIRegistry` instance for `/api/v1` —
+`api/src/platform/openapi/registry.ts` — generating an **OpenAPI 3.1** document
+(`OpenApiGeneratorV31`, distinct from the existing internal registry's OpenAPI 3.0
+`OpenApiGeneratorV3`), served publicly at `GET /api/v1/openapi.json`.
+
+- `api/src/platform/openapi/registry.ts` — `v1Registry`, the `bearerAuth` security scheme, and
+  `generateV1OpenAPIDocument()`.
+- `api/src/platform/openapi/schemas/common.ts` — `ApiErrorSchema` (a hand-kept Zod mirror of
+  `platform/api/v1/errors.ts`'s `ApiErrorBody`, PLUGFORGE.MD §2.5's wire shape), plus
+  `BEARER_SECURITY`/`NO_SECURITY` constants.
+- `api/src/platform/openapi/schemas/platform.ts` — registers `GET /health` (PF-001, already live)
+  and `GET /openapi.json` (this ticket), both public/`security: []`.
+- `api/src/platform/openapi/schemas/documents.ts` — registers PF-200's three `/documents` routes,
+  importing `ListDocumentsQuerySchema`/`CreateDocumentRequestSchema`/`DocumentTypeSchema` from
+  `platform/api/v1/resources/documents.ts` rather than redefining them. Builds a new
+  `DocumentResponseSchema`/`DocumentListResponseSchema` matching that file's `serializeDocument()`
+  output field-for-field — there was no Zod response schema before this ticket.
+- `api/src/platform/openapi/schemas/index.ts`, `api/src/platform/openapi/index.ts` — the barrel +
+  entry point, mirroring `api/src/openapi/schemas/index.ts` / `api/src/openapi/index.ts`'s existing
+  "import schemas for their registration side effect, then export the generator" shape.
+- `api/src/platform/api/v1/router.ts` — mounts `GET /openapi.json` on `v1Routes`, serving a
+  module-load-time-cached document (`v1OpenApiDocument`), same caching pattern as
+  `api/src/swagger.ts`'s `swaggerSpec`.
+- `api/src/platform/api/v1/resources/documents.ts` — the ONLY change to this file: added `export` to
+  `DocumentTypeSchema`, `ListDocumentsQuerySchema`, `CreateDocumentRequestSchema` so the new registry
+  can import them. **No route-handling logic changed** — verified by re-reading the diff before
+  committing (lessons.md rule 25: a claim like this gets checked against the actual diff, not stated
+  and trusted).
+
+**Registration approach chosen, and why.** The ticket's brief offered two options: inline
+`.openapi()` annotations on the schemas in `documents.ts` itself, or a separate registration file
+that imports them. Chose the separate-file approach: `documents.ts`'s schemas import bare `z` from
+`'zod'`, not the OpenAPI-extended `z` re-exported by a registry module, and adding `.openapi()` calls
+there would mean either importing `platform/openapi/registry.ts` from a route-handling file (the
+wrong dependency direction — the OpenAPI docs module should depend on the route module, not vice
+versa) or duplicating the schemas. A separate `schemas/documents.ts` that imports the now-exported
+consts and calls `v1Registry.registerPath` keeps `documents.ts` genuinely unmodified in behavior and
+matches this repo's own established convention for the internal registry
+(`api/src/openapi/schemas/*.ts` never live inside `api/src/routes/*.ts`).
+
+**Scope boundary, stated explicitly (same honest-deferral pattern TRO-551 used for PF-104/PF-106).**
+This ticket registers every `/api/v1` route that exists on `main` as of its dispatch: `GET /health`,
+`GET /openapi.json`, and PF-200's three `/documents` routes. It does **not** register
+`/api/v1/issues`, `/api/v1/sprints`, or `/api/v1/me` — PF-201, building those concurrently on a
+sibling branch, had not merged to `main` as of this ticket's dispatch. The AC ("every registered
+route present") is satisfied against what is actually registered on `main` today, not against a
+ticket that doesn't exist yet in this branch's history. Whoever lands PF-201 should add
+`schemas/issues.ts`/`schemas/sprints.ts`/`schemas/me.ts` to this directory's barrel — no change to
+`registry.ts` or `schemas/documents.ts` should be needed (see `platform/openapi/README.md`, updated
+by this ticket with the same note).
+
+**The `ajv` dependency decision (checked before adding anything).** `ajv` was NOT a direct
+dependency of `api` before this ticket — only a transitive one (via `@modelcontextprotocol/sdk`,
+not resolvable from `api`'s own `node_modules` under pnpm's strict linking — confirmed with
+`node -e "require.resolve('ajv', {paths:['api']})"`, which threw `MODULE_NOT_FOUND`), and no package
+in the tree bundled the real OpenAPI 3.1 JSON Schema. Added `@seriousme/openapi-schema-validator`
+(2.9.1) as a devDependency instead of wiring `ajv` + a raw copy of the `spec.openapis.org` schema
+directly — **because the direct approach was tried first and failed**: compiling the real OpenAPI
+3.1 meta-schema (fetched via `@readme/openapi-schemas`, also evaluated) with `ajv/dist/2020`
+(`Ajv2020`, draft 2020-12) and validating a genuine document from this exact registry against it
+failed with `unevaluatedProperties` errors at every inline Schema Object, including on
+`@seriousme/openapi-schema-validator`'s own official petstore v3.1 fixture run through the identical
+hand-rolled setup — a documented `ajv` 8.x bug in how `$dynamicRef`/`$dynamicAnchor` interact with
+`unevaluatedProperties` (that package ships its own regression test naming this exact bug,
+`test/test-ajv-dynamic-ref-bug.js`). `@seriousme/openapi-schema-validator`'s `Validator` class still
+uses `ajv/dist/2020` against the same official schema underneath and works around the bug
+internally — satisfying the ticket's "ajv, draft 2020-12" requirement via a different, working path
+to the same real validator, not a looser substitute. Cross-verified this is a real, non-vacuous
+check, not just "trust the library": the official petstore v3.1 fixture validates `true` through it;
+a document missing required top-level fields (`info`, `paths`) validates `false`; the actually-shipped
+generated document (this ticket's own) is genuinely valid.
+
+**Regression tests (fail before the fix, pass after — verified, not claimed).**
+- `api/src/platform/openapi/__tests__/document.test.ts` (6 cases) — calls
+  `generateV1OpenAPIDocument()` directly (via `../index.js`, not `../registry.js` — see that file's
+  own header comment for why: importing the bare `registry.js` produces an EMPTY `paths` object,
+  because registration is an import side effect of `./schemas/index.js` that only `index.ts`
+  triggers before generating — caught by actually running the test with the wrong import, not
+  assumed). Asserts: valid 3.1 `openapi` string; all 5 paths present (`/health`, `/openapi.json`,
+  `/documents`, `/documents/{id}` GET+POST); PF-201's three routes are absent; every documents
+  operation requires `bearerAuth` while health/openapi.json require none; the document validates
+  against the real OpenAPI 3.1 JSON Schema; a negative-control malformed document does NOT validate.
+- `api/src/platform/openapi/__tests__/endpoint.test.ts` (4 cases) — real `createApp()` + supertest,
+  no DB fixtures needed (route touches no DB, needs no auth). Asserts: `GET /api/v1/openapi.json`
+  200s with a JSON 3.1 document and no auth required; the document's `paths` match the direct-call
+  test; `X-Request-Id` header present (PF-001 convention); public CORS (credential-less, matches
+  `/health`'s existing AC-2 test).
+
+**Red-before-green (seen, not claimed).** Two separate reverts, both restored immediately after,
+using `Edit` on the working tree (never `git stash` — banned per lessons.md, cross-worktree hazard):
+- Removed the `v1Routes.get('/openapi.json', ...)` mount from `router.ts`: 3 of 4
+  `endpoint.test.ts` cases failed with `expected 404 to be 200` and `expected [] to deeply equal
+  [...]` — the exact "route doesn't exist" failure, not an import error or typo. The 4th case
+  (`X-Request-Id` header) still passed, correctly, since that header is set by
+  `requestIdMiddleware` before route matching — that pass is not evidence against the revert, it's
+  the expected control.
+- Confirmed the schema-validity check is real (not vacuous) rather than reverting the fix a second
+  time for it: ran the ajv-backed validator against a deliberately broken document
+  (`{ openapi: '3.1.0' }`, missing required `info`/`paths`) and confirmed `valid: false` — see the
+  "negative control" test case and the ajv-dependency-decision section above.
+Both reverts restored; `document.test.ts` + `endpoint.test.ts` re-run green (10/10) before finishing.
+
+**Verified for real (observed, this exact repo).**
+1. `npx tsx src/tro402-scratch-check.ts`-equivalent (transient, not committed) against
+   `v1OpenApiDocument`: `openapi: "3.1.0"`; `paths` keys exactly `['/health', '/openapi.json',
+   '/documents', '/documents/{id}']`; `components.securitySchemes` has `bearerAuth`.
+2. `@seriousme/openapi-schema-validator`'s `Validator#validate()` against the real generated
+   document (JSON round-tripped, matching what `res.json()` actually sends): `valid: true`.
+3. `pnpm --filter @ship/api exec tsc --noEmit`: clean.
+4. `npx vitest run` targeted at the new test files plus `documents.test.ts`, `v1-router.test.ts`,
+   `boundary-lint.test.ts` (proving PF-200/PF-001/PF-003 are unaffected): all green.
+
+**How to run it.**
+`source .factory-env && cd api && npx vitest run src/platform/openapi/__tests__/document.test.ts
+src/platform/openapi/__tests__/endpoint.test.ts` (needs `DATABASE_URL` set — `createApp()` in
+`endpoint.test.ts` touches the DB pool at construction, even though this specific route makes no
+query). Manual: `pnpm dev`, then `curl http://localhost:<api-port>/api/v1/openapi.json | python3 -m
+json.tool`.
+
+**Rollback.**
+No schema/migration change — nothing at the DB level. Remove
+`api/src/platform/openapi/{registry,index}.ts`,
+`api/src/platform/openapi/schemas/{common,platform,documents,index}.ts`,
+`api/src/platform/openapi/__tests__/{document,endpoint}.test.ts`; revert the `export` keywords added
+to `DocumentTypeSchema`/`ListDocumentsQuerySchema`/`CreateDocumentRequestSchema` in
+`platform/api/v1/resources/documents.ts` (they have no other consumer as of this ticket, safe to
+drop); remove the `v1Routes.get('/openapi.json', ...)` block and its `v1OpenApiDocument` import from
+`platform/api/v1/router.ts`; remove `@seriousme/openapi-schema-validator` from `api/package.json`
+devDependencies and run `pnpm install`. `platform/openapi/README.md` reverts to its pre-ticket
+"empty until PF-202 lands" text (`git checkout <pre-ticket-sha> -- api/src/platform/openapi/README.md`).
+
+---
+
 ## TRO-400 — PF-201: Issues, sprints, me — typed views over the unified document model
 
 **What was added.**
