@@ -18,6 +18,7 @@ export * from './issues.js';
 export * from './sprints.js';
 export * from './me.js';
 export * from './webhooks.js';
+export * from './audit.js';
 
 // Add new /api/v1 resource schema files above this line, and export them
 // here.
