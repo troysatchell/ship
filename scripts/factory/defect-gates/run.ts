@@ -173,7 +173,10 @@ function main(): void {
         // quiet, permanent report-only mode.
         const idx = results.findIndex((r) => r.id === rule.meta.id);
         if (idx !== -1) {
-          results[idx] = { ...results[idx], status: "error", error: resolved.error };
+          const current = results[idx];
+          if (current) {
+            results[idx] = { ...current, status: "error", error: resolved.error };
+          }
         }
       }
     }
