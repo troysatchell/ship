@@ -113,6 +113,86 @@ two CI files.
 
 ---
 
+## TRO-414 — PF-205: v1 agent read surface (unblocks E7)
+
+**What changed.** The agent's 10 reads (`agent/src/shipClient.ts:360-455`) mapped onto only 2 of
+the `/api/v1` resources PF-200/PF-201 had specced (`documents`, `issues`) — everything else still
+went through internal, unversioned routes. Added six new read-only endpoints under `/api/v1`, all
+scoped, OpenAPI-registered, `ApiError`-shaped, and cursor-paginated where they list:
+
+- `GET /api/v1/changes` (new file `platform/api/v1/resources/changes.ts`) — the public change-feed
+  contract, mirroring `api/src/routes/change-feed.ts`'s cursor-lag semantics (never advances past
+  `now - 5s`, so a slower in-flight transaction can't be permanently missed) without importing from
+  it — `platform/api/v1/**` may never import `api/src/routes/**`. Merges the internal route's three
+  parallel arrays into one `data` array tagged by a `resource` discriminator
+  (`document`/`document_history`/`comment`), so PF-203's fitness check (d) is genuinely satisfied.
+- `GET /api/v1/people` (new file `platform/api/v1/resources/people.ts`) — typed view over
+  `documents WHERE document_type = 'person'`, same pattern `issues.ts` already uses.
+- `GET /api/v1/documents/:id/{associations,reverse-associations,backlinks,comments}` (added to
+  `platform/api/v1/resources/documents.ts`) — the two association routes deliberately omit the
+  joined related document's title/type (a visibility leak on the internal route, per
+  `shipClient.ts`'s own `AssociationForwardEdge` docstring) since this is a new *public* endpoint.
+- `?assignee_id=` filter on `GET /api/v1/issues` (`resources/issues.ts`).
+- `GET /api/v1/sprints/:id` (`resources/sprints.ts`) — did NOT already exist (the PRD block's
+  "already exists, extend the response" phrasing was checked against the code and found inaccurate
+  — see the checklist doc below); built fresh, with `sprint_number`/`owner_id`/`status` lifted from
+  `properties` and `workspace_sprint_start_date`/`start_date`/`end_date` computed from the
+  workspace's sprint-cadence anchor (day-math duplicated from `routes/weeks.ts`/`routes/team.ts`,
+  same boundary reason as `/changes`).
+
+Also confirmed, not changed: the `?type=` filter on `GET /api/v1/documents` the PRD block asked for
+was already present in PF-200's original commit — no code change was needed there.
+
+**SDK consequence (PF-405's already-merged parity gate).** `sdk/src/__tests__/parity.test.ts` walks
+the real generated OpenAPI document and fails on any `/api/v1` operation with no corresponding typed
+`@ship/sdk` method — all 7 new operations above tripped it, exactly as the PRD block predicts. Closed
+in the same PR: `DocumentsClient.getAssociations/getReverseAssociations/getBacklinks/getComments`,
+`SprintsClient.get`, new `PeopleClient` (`list`/`iterate`) and `ChangesClient` (`list` only — no
+`iterate()`, see that file's header), both wired onto `ShipClient` as `.people`/`.changes`. New wire
+types in `sdk/src/types.ts`. `parity.test.ts` is 49/49 after this ticket (was 41/41).
+
+Committed checklist mapping all 10 agent reads to their `/api/v1` call:
+`docs/pf-205-agent-read-surface-checklist.md`.
+
+**How to run it.**
+
+```bash
+curl -H "Authorization: Bearer <token with documents:read>" \
+  "http://localhost:3000/api/v1/changes?since=2026-01-01T00:00:00.000Z"
+curl -H "Authorization: Bearer <token with documents:read>" http://localhost:3000/api/v1/people
+curl -H "Authorization: Bearer <token with documents:read>" \
+  http://localhost:3000/api/v1/documents/<id>/comments
+curl -H "Authorization: Bearer <token with issues:read>" \
+  "http://localhost:3000/api/v1/issues?assignee_id=<uuid>"
+curl -H "Authorization: Bearer <token with sprints:read>" http://localhost:3000/api/v1/sprints/<id>
+```
+
+Regression tests: `api/src/platform/api/v1/resources/__tests__/{people,changes}.test.ts` (new),
+plus new `describe` blocks in `documents.test.ts` (4 sub-resources), `issues.test.ts`
+(`?assignee_id=`), and `sprints.test.ts` (`GET /:id`). Run with
+`pnpm --filter @ship/api exec vitest run src/platform/api/v1/resources/__tests__/`. The fitness
+walk (`src/platform/api/v1/__tests__/route-fitness.test.ts`) now discovers 101 checks (was 77) and
+passes all of them for the 6 new routes.
+
+**Rollback.** Revert this branch's commits (`git log --oneline main..fix/pf-205-agent-read-surface`
+lists them). Removes, on the `api/` side: `platform/api/v1/resources/{people,changes}.ts`,
+`platform/openapi/schemas/{people,changes}.ts`, the four new routes in
+`resources/documents.ts` + their OpenAPI registrations, the `?assignee_id=` branch in
+`resources/issues.ts`, the `GET /:id` route in `resources/sprints.ts` + its OpenAPI registration,
+the two `/people` and `/changes` mounts in `platform/api/v1/router.ts`, the two new exports in
+`platform/openapi/schemas/index.ts`, and `docs/pf-205-agent-read-surface-checklist.md`. Also revert
+the hand-maintained path-list assertions in `platform/openapi/__tests__/{document,endpoint}.test.ts`
+back to their pre-PF-205 list (10 paths, not 16) — those two tests will otherwise fail against a
+document that no longer registers the reverted routes. On the `sdk/` side: revert
+`sdk/src/resources/{people,changes}.ts`, `sdk/src/resources/__tests__/pf205.test.ts`, and the
+`.people`/`.changes` wiring in `sdk/src/client.ts`; revert the added methods in
+`sdk/src/resources/{documents,sprints}.ts` and the added types in `sdk/src/types.ts`; revert
+`SDK_TO_OPERATION`/`SDK_EXEMPTIONS`/`groups` additions in `sdk/src/__tests__/parity.test.ts` — if the
+api-side routes are reverted first and this side is not, `parity.test.ts` fails immediately (orphan
+methods) rather than silently, which is the intended fail-safe.
+
+---
+
 ## TRO-445 — PF-800: Refresh-rotation drill ("the stolen-token story")
 
 **What was broken.** Nothing. This ticket's job was to PROVE PF-105's (TRO-421) refresh-rotation +
