@@ -76,10 +76,15 @@ describe('PF-201: /api/v1/sprints (Linear TRO-400)', () => {
     return row.id;
   }
 
+  /** Fixed, known anchor date (not CURRENT_DATE) so PF-205's cadence/
+   * week-dates test below can compute an exact expected start_date/end_date
+   * rather than depending on whatever day the suite happens to run. */
+  const WORKSPACE_SPRINT_START_DATE = '2026-01-05'; // a Monday
+
   beforeAll(async () => {
     const workspaceResult = await pool.query<{ id: string }>(
-      `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
-      [`PF-201 Sprints Test ${testRunId}`]
+      `INSERT INTO workspaces (name, sprint_start_date) VALUES ($1, $2) RETURNING id`,
+      [`PF-201 Sprints Test ${testRunId}`, WORKSPACE_SPRINT_START_DATE]
     );
     workspaceId = workspaceResult.rows[0]?.id ?? '';
 
@@ -148,6 +153,98 @@ describe('PF-201: /api/v1/sprints (Linear TRO-400)', () => {
       const body = res.body as ListResponseBody;
       expect(body.data).toHaveLength(1);
       expect(typeof body.next_cursor).toBe('string');
+    });
+  });
+
+  // PF-205 (Linear TRO-414). Claim-provenance note: `GET /api/v1/sprints/:id`
+  // did NOT already exist before this ticket, despite the PRD block's
+  // "already exists, extend the response" phrasing — confirmed by reading
+  // this whole file (pre-TRO-414, it registered only `GET /`) and by
+  // `sprintsRouter`'s route list before this diff. Before this diff, every
+  // request below would have 404'd via `notFoundHandler` (a generic
+  // not_found ApiError from the v1-level catch-all) rather than the
+  // route-level not_found / 200 shapes asserted here.
+  describe('GET /:id — sprint-cadence/week-dates (PF-205, TRO-414)', () => {
+    it('200 with sprint_number/owner_id/status lifted, plus the computed cadence window', async () => {
+      const targetId = seedSprintIds[0];
+      if (!targetId) throw new Error('seedSprintIds[0] missing');
+
+      const res = await request(app)
+        .get(`/api/v1/sprints/${targetId}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.id).toBe(targetId);
+      expect(res.body.title).toBe('Sprint 0');
+      expect(res.body.document_type).toBe('sprint');
+      expect(res.body.sprint_number).toBe(1);
+      expect(res.body.owner_id).toBe(userId);
+      expect(res.body.status).toBe('planning');
+      // Fixed anchor date (see WORKSPACE_SPRINT_START_DATE above) makes this
+      // an exact, non-flaky expectation — not "some date near today".
+      expect(res.body.workspace_sprint_start_date).toBe(WORKSPACE_SPRINT_START_DATE);
+      expect(res.body.start_date).toBe('2026-01-05');
+      expect(res.body.end_date).toBe('2026-01-11');
+    });
+
+    it('a later sprint_number computes a correspondingly later window', async () => {
+      const targetId = seedSprintIds[1];
+      if (!targetId) throw new Error('seedSprintIds[1] missing');
+
+      const res = await request(app)
+        .get(`/api/v1/sprints/${targetId}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.sprint_number).toBe(2);
+      expect(res.body.start_date).toBe('2026-01-12');
+      expect(res.body.end_date).toBe('2026-01-18');
+    });
+
+    it('a non-existent (but well-formed) id returns 404 in ApiError shape', async () => {
+      const res = await request(app)
+        .get(`/api/v1/sprints/${crypto.randomUUID()}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+      expect(typeof res.body.request_id).toBe('string');
+    });
+
+    it('a malformed (non-UUID) id returns 404 in ApiError shape', async () => {
+      const res = await request(app)
+        .get('/api/v1/sprints/not-a-uuid')
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+
+    it('an issue id (wrong document_type) returns 404, not the issue', async () => {
+      const notASprint = await pool.query<{ id: string }>(
+        `SELECT id FROM documents WHERE workspace_id = $1 AND document_type = 'issue' LIMIT 1`,
+        [workspaceId]
+      );
+      const issueId = notASprint.rows[0]?.id;
+      if (!issueId) throw new Error('expected the seeded "Not a sprint" issue document to exist');
+
+      const res = await request(app)
+        .get(`/api/v1/sprints/${issueId}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+
+    it('a token without sprints:read gets 403, details.missing_scope = sprints:read', async () => {
+      const targetId = seedSprintIds[0];
+      const res = await request(app)
+        .get(`/api/v1/sprints/${targetId}`)
+        .set('Authorization', `Bearer ${wrongScopeToken}`);
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('forbidden');
+      expect(res.body.details).toEqual({ missing_scope: 'sprints:read' });
     });
   });
 
