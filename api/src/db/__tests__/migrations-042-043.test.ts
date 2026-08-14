@@ -41,19 +41,28 @@ const HOOK_TIMEOUT = 120_000;
 // The two migrations under test (PF-101 / TRO-406's own).
 const OAUTH_VERSIONS = ['042_oauth_apps', '043_oauth_tokens_and_codes'];
 
-// Later migrations that ALTER a table 043 creates (oauth_tokens) and
-// therefore cannot apply before it — must be excluded from the "prior,
-// nothing from oauth yet" AC-2 fixture below for the same reason 042/043
-// themselves are excluded there, or that fixture's own setup step fails
-// trying to alter a table that doesn't exist yet. Added by PF-104/TRO-416
-// (`044_oauth_tokens_authorization_code_id`, which adds
-// `oauth_tokens.authorization_code_id`) after its migration broke this
+// Later migrations that ALTER a table 043 creates (oauth_tokens,
+// oauth_device_codes, ...) and therefore cannot apply before it — must be
+// excluded from the "prior, nothing from oauth yet" AC-2 fixture below for
+// the same reason 042/043 themselves are excluded there, or that fixture's
+// own setup step fails trying to alter a table that doesn't exist yet.
+// Added by PF-104/TRO-416 (`044_oauth_tokens_authorization_code_id`, which
+// adds `oauth_tokens.authorization_code_id`) after its migration broke this
 // pre-existing test — `044`'s own migration-number-collision comment records
-// why 044 was available to take. Kept separate from `OAUTH_VERSIONS` above
-// (which names PF-101's own two migrations specifically, and is used below
-// in assertions scoped to just those two) — extend THIS list, not that one,
-// whenever a later ticket adds another oauth_tokens-dependent migration.
-const LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS = ['044_oauth_tokens_authorization_code_id'];
+// why 044 was available to take. Extended by PF-106/TRO-425
+// (`046_oauth_device_codes_polling`, which adds
+// `oauth_device_codes.last_polled_at`/`token_issued_at` — originally
+// numbered 045, renumbered to 046 because TRO-421/PF-105 independently
+// claimed 045 first; see CHANGES.md) for the identical reason: it ALTERs
+// `oauth_device_codes`, also created by 043. Kept separate from
+// `OAUTH_VERSIONS` above (which names PF-101's own two migrations
+// specifically, and is used below in assertions scoped to just those two) —
+// extend THIS list, not that one, whenever a later ticket adds another
+// migration that ALTERs a table 043 creates.
+const LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS = [
+  '044_oauth_tokens_authorization_code_id',
+  '046_oauth_device_codes_polling',
+];
 
 /** Same helper shape as migrationRunner.test.ts — see that file for the full rationale. */
 function databaseNames(): { adminUrl: string; urlFor: (name: string) => string; base: string } {
