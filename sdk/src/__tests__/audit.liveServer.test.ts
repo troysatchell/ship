@@ -112,13 +112,20 @@ describe('PF-501: AuditClient against a real running Ship API + the seeded workt
     seededAuditRowId = insertedId(auditRowResult.rows, 'audit row');
 
     const app = createApp();
-    server = app.listen(0);
+    // Assigned to a local const first, then to the outer `server` only once
+    // fully set up (CodeRabbit, this PR's review) — the same
+    // "local const, then assign for the outer scope" shape `afterAll`'s own
+    // `liveServer` already uses for teardown, applied to setup too, so
+    // nothing here reads the wider `Server | undefined`-typed `server`
+    // variable in between.
+    const liveServer = app.listen(0);
     await new Promise<void>((resolve, reject) => {
-      server.once('listening', () => resolve());
-      server.once('error', reject);
+      liveServer.once('listening', () => resolve());
+      liveServer.once('error', reject);
     });
-    const port = (server.address() as AddressInfo).port;
+    const port = (liveServer.address() as AddressInfo).port;
     baseUrl = `http://127.0.0.1:${port}`;
+    server = liveServer;
   }, 30_000);
 
   afterAll(async () => {

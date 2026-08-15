@@ -327,6 +327,28 @@ describe('PF-501: /api/v1/audit (Linear TRO-432)', () => {
         expect(row.app_client_id).toBe(firstPartyAppClientId);
       }
     });
+
+    it('does not leak another workspace\'s rows even when the caller explicitly filters by that workspace\'s app_client_id', async () => {
+      // The filter is ANDed onto the workspace-scoping WHERE clause
+      // (resources/audit.ts), never a replacement for it — an admin cannot
+      // use ?app_client_id= to escape their own workspace scope, even by
+      // asking for it by name. CodeRabbit, this PR's review: this was
+      // already true of the implementation but had no test proving it.
+      const otherWorkspaceRowId = await insertAuditRow({
+        appClientId: otherWorkspaceAppClientId,
+        userId: null,
+        route: '/api/v1/webhooks',
+      });
+
+      const res = await request(app)
+        .get(`/api/v1/audit?limit=100&app_client_id=${encodeURIComponent(otherWorkspaceAppClientId)}`)
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(200);
+      const body = res.body as ListResponseBody;
+      const ids = body.data.map((r) => r.id);
+      expect(ids).not.toContain(otherWorkspaceRowId);
+      expect(body.data).toEqual([]);
+    });
   });
 
   // ────────────────────────────────────────────────────────────────────────

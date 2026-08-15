@@ -91,16 +91,36 @@ export async function writeAuditRow(input: AuditRowInput): Promise<void> {
  * request-line log already states: a caller's query params can carry
  * sensitive values (e.g. a token passed as `?access_token=...`), so they
  * must never reach a log line or a stored row.
+ *
+ * Bounded to `MAX_ROUTE_LENGTH` (CodeRabbit, this PR's review): `route` is
+ * `TEXT` (unbounded) and `req.originalUrl` is attacker-controlled for an
+ * unauthenticated or 404 request — reached before `bearerAuth` can reject
+ * anything, so there is no upstream length limit protecting this column
+ * today. No "established" limit existed elsewhere in this codebase to
+ * reuse (checked — none found), so this picks a conservative, documented
+ * one rather than leaving the column truly unbounded.
  */
+const MAX_ROUTE_LENGTH = 2048;
+
 function routeOf(req: Request): string {
   const [pathOnly] = req.originalUrl.split('?');
-  return pathOnly && pathOnly.length > 0 ? pathOnly : req.path;
+  const path = pathOnly && pathOnly.length > 0 ? pathOnly : req.path;
+  return path.length > MAX_ROUTE_LENGTH ? path.slice(0, MAX_ROUTE_LENGTH) : path;
 }
 
 export function auditLogMiddleware(req: Request, res: Response, next: NextFunction): void {
   const startedAtNs = process.hrtime.bigint();
+  // Guards against a double write (CodeRabbit, this PR's review): 'finish'
+  // fires when the response completed normally; 'close' fires whenever the
+  // underlying connection closes, INCLUDING after 'finish' already ran (a
+  // normal completion also closes the connection). Without this flag, an
+  // ordinary successful request would be recorded twice.
+  let written = false;
 
-  res.on('finish', () => {
+  const recordOnce = (): void => {
+    if (written) return;
+    written = true;
+
     const latencyMs = Number(process.hrtime.bigint() - startedAtNs) / 1_000_000;
     const requestId = req.requestId ?? 'missing-request-id';
     const principal = req.principal;
@@ -110,18 +130,33 @@ export function auditLogMiddleware(req: Request, res: Response, next: NextFuncti
       appClientId: principal?.app?.clientId ?? null,
       userId: principal?.user?.id ?? null,
       method: req.method,
+      // `res.statusCode` reflects the status Express INTENDED to send, not
+      // proof the client actually received a complete response — for a
+      // request that closed early (see 'close' below) this is the
+      // server's last-known intent, e.g. the default 200 if no handler
+      // ever called res.status() before the client disconnected.
       route: routeOf(req),
       scopeUsed: req.auditScopeUsed ?? null,
       status: res.statusCode,
       latencyMs: Math.round(latencyMs),
     }).catch((error) => {
-      // The response is already sent by the time this listener runs — an
-      // audit-write failure must never surface to the caller. Logged
-      // server-side only, correlated by request_id (same convention as
-      // errorMiddleware.ts's server_error logging).
+      // The response is already sent (or the connection already closed) by
+      // the time this listener runs — an audit-write failure must never
+      // surface to the caller. Logged server-side only, correlated by
+      // request_id (same convention as errorMiddleware.ts's server_error
+      // logging).
       console.error(`[api/v1] request_id=${requestId} public_api_audit write failed:`, error);
     });
-  });
+  };
+
+  res.on('finish', recordOnce);
+  // A client that disconnects mid-request (or mid-response) never fires
+  // 'finish' — without this, an aborted call is silently absent from the
+  // audit trail, which is a real coverage gap against the architect note's
+  // "records EVERY v1 call" (CodeRabbit, this PR's review). 'close' fires
+  // for every response lifecycle, normal or aborted, hence the `written`
+  // guard above rather than a second, unconditional write here.
+  res.on('close', recordOnce);
 
   next();
 }

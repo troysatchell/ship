@@ -34,15 +34,44 @@ function requireHeader(res: request.Response, name: string): string {
   return value;
 }
 
+/** The raw `public_api_audit` row shape, as `pool.query`'s generic — typing
+ * the boundary explicitly (CodeRabbit, this PR's review; same "type the
+ * pool.query<T> boundary" rule this project's lessons.md names as its
+ * largest recurring type-safety finding class) rather than leaving every
+ * `SELECT *` an implicit `any`. */
+interface AuditDbRow {
+  id: string;
+  request_id: string;
+  app_client_id: string | null;
+  user_id: string | null;
+  method: string;
+  route: string;
+  scope_used: string | null;
+  status: number;
+  latency_ms: number;
+  created_at: Date;
+}
+
+/** Narrows a possibly-missing first row to a definite value, throwing
+ * loudly rather than an indexed-access assumption — same "fail loudly at
+ * the call site" convention `webhooks.test.ts`'s `onlyRow` uses. */
+function requireRow<T>(rows: readonly T[]): T {
+  const [row] = rows;
+  if (row === undefined) {
+    throw new Error(`Expected exactly one row, got ${rows.length}.`);
+  }
+  return row;
+}
+
 /** Polls `public_api_audit` for a row with this request_id. The write is
  * fire-and-forget (after `res.on('finish')`), so it can land a few event-
  * loop turns after the HTTP response returns — an observable condition to
  * poll for, not a fixed sleep (ship-qa / lessons.md rule 17). Bounded at
  * 1000ms total, well over what a single local INSERT ever takes. */
-async function pollForAuditRow(requestId: string): Promise<Record<string, unknown> | null> {
+async function pollForAuditRow(requestId: string): Promise<AuditDbRow | null> {
   const deadline = Date.now() + 1000;
   while (Date.now() < deadline) {
-    const result = await pool.query('SELECT * FROM public_api_audit WHERE request_id = $1', [requestId]);
+    const result = await pool.query<AuditDbRow>('SELECT * FROM public_api_audit WHERE request_id = $1', [requestId]);
     if (result.rows[0]) return result.rows[0];
     await new Promise((resolve) => setTimeout(resolve, 20));
   }
@@ -69,9 +98,8 @@ describe('PF-501: writeAuditRow (Linear TRO-432)', () => {
       latencyMs: 42,
     });
 
-    const result = await pool.query('SELECT * FROM public_api_audit WHERE request_id = $1', [requestId]);
-    const row = result.rows[0];
-    expect(row).toBeDefined();
+    const result = await pool.query<AuditDbRow>('SELECT * FROM public_api_audit WHERE request_id = $1', [requestId]);
+    const row = requireRow(result.rows);
     expect(row.app_client_id).toBe('ship_app_test');
     expect(row.user_id).toBeNull();
     expect(row.method).toBe('GET');
@@ -95,9 +123,8 @@ describe('PF-501: writeAuditRow (Linear TRO-432)', () => {
       latencyMs: 1,
     });
 
-    const result = await pool.query('SELECT * FROM public_api_audit WHERE request_id = $1', [requestId]);
-    const row = result.rows[0];
-    expect(row).toBeDefined();
+    const result = await pool.query<AuditDbRow>('SELECT * FROM public_api_audit WHERE request_id = $1', [requestId]);
+    const row = requireRow(result.rows);
     expect(row.app_client_id).toBeNull();
     expect(row.user_id).toBeNull();
     expect(row.scope_used).toBeNull();
@@ -128,7 +155,7 @@ describe('PF-501: auditLogMiddleware wired into a real request (Linear TRO-432)'
     expect(row?.user_id).toBeNull();
     expect(row?.scope_used).toBeNull();
     expect(typeof row?.latency_ms).toBe('number');
-    expect(row?.latency_ms as number).toBeGreaterThanOrEqual(0);
+    expect(row?.latency_ms ?? -1).toBeGreaterThanOrEqual(0);
   });
 
   it('records a 401 rejected before any scope check runs: scope_used stays null', async () => {

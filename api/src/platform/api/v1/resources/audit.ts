@@ -90,7 +90,7 @@ export const ListAuditQuerySchema = z.object({
 });
 
 /** Row shape for `public_api_audit` (migration 049), exactly the §2.7 column
- * list. */
+ * list, plus `created_at_precise` (see `AUDIT_COLUMNS`'s comment). */
 interface AuditRow {
   id: string;
   request_id: string;
@@ -102,10 +102,42 @@ interface AuditRow {
   status: number;
   latency_ms: number;
   created_at: Date;
+  /** `created_at::text` — cursor-internal only, never serialized into a
+   *  response. See its own comment on `AUDIT_COLUMNS` for why this exists. */
+  created_at_precise: string;
 }
 
+/**
+ * `created_at::text AS created_at_precise` (CodeRabbit, this PR's review —
+ * the same precision-loss defect this ticket's own CHANGES.md entry and
+ * pagination test already disclosed as a SHARED bug in
+ * `platform/api/v1/pagination.ts`, out of scope to fix there): `pg`'s
+ * default type parser converts a `timestamptz` column into a JS `Date`,
+ * which is MILLISECOND precision, while Postgres itself retains
+ * microseconds. Building a cursor from `row.created_at.toISOString()`
+ * therefore loses precision at the moment the row is READ, before any
+ * cursor code runs — two rows in the same millisecond can then put a
+ * not-yet-fetched row on the wrong side of a truncated cursor boundary and
+ * drop it from pagination silently and permanently (reproduced directly —
+ * see this PR's own pagination test comment and CHANGES.md entry).
+ *
+ * `::text` on a `timestamptz` column is cast SERVER-SIDE, before the value
+ * ever reaches `pg`'s type parser — the wire type becomes `text`, which
+ * `pg` returns verbatim (no Date conversion, no precision loss). That text
+ * is Postgres's own canonical `timestamptz` output format, which Postgres
+ * parses back losslessly when it's later bound as a query parameter in the
+ * cursor's `WHERE (created_at, id) < ($1, $2)` comparison — so THIS route's
+ * own pagination is fixed without touching pagination.ts or any other
+ * `/api/v1` list route. `documents`/`issues`/`sprints`/`webhooks` still
+ * carry the shared bug; that fix is filed separately (see CHANGES.md).
+ *
+ * Response shape is UNCHANGED: `serializeAuditRow` never reads
+ * `created_at_precise`, only `created_at` (the ordinary Date, millisecond
+ * ISO string) — this column exists purely to build a correct cursor.
+ */
 const AUDIT_COLUMNS =
-  'id, request_id, app_client_id, user_id, method, route, scope_used, status, latency_ms, created_at';
+  'id, request_id, app_client_id, user_id, method, route, scope_used, status, latency_ms, created_at, ' +
+  'created_at::text AS created_at_precise';
 
 function serializeAuditRow(row: AuditRow) {
   return {
@@ -258,9 +290,11 @@ auditRouter.get(
     const hasMore = rows.length > limit;
     const page = hasMore ? rows.slice(0, limit) : rows;
     const lastRow = page[page.length - 1];
+    // created_at_precise, not lastRow.created_at.toISOString() — see
+    // AUDIT_COLUMNS's comment for why the latter would silently drop rows.
     const nextCursor =
       hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at_precise })
         : null;
 
     res.status(200).json({

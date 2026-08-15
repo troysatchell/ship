@@ -58,8 +58,13 @@ export class AuditClient {
   /** `GET /api/v1/audit` — cursor-paginated audit trail. Requires the
    *  caller's token to hold `audit:read` AND resolve to a workspace admin,
    *  a platform super-admin ("owner"), or a first-party app credential —
-   *  a `ShipSdkError` with `kind: 'auth'` (403) for any other caller, same
-   *  as every other scope/role-gated route this SDK talks to. */
+   *  a missing/invalid token throws `ShipSdkError` with `kind: 'auth'`
+   *  (401); a valid token that fails either check throws `kind: 'forbidden'`
+   *  (403) — the server's `forbidden` ApiErrorCode maps to `'forbidden'`,
+   *  not `'auth'` (see `errors.ts#CODE_TO_KIND`). Same mapping as every
+   *  other scope/role-gated route this SDK talks to (CodeRabbit, this PR's
+   *  review — the prior wording of this comment claimed `kind: 'auth'` for
+   *  the 403 case, which was wrong). */
   async list(params: ListAuditParams = {}): Promise<AuditRowList> {
     return this.request.get<AuditRowList>(AUDIT_PATH, {
       limit: params.limit,
