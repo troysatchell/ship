@@ -40,7 +40,7 @@ import {
   serverError,
   validationFailedError,
 } from '../errors.js';
-import { encodeCursor, decodeCursor, type KeysetCursor } from '../pagination.js';
+import { encodeCursor, decodeCursor, preciseTimestamp, type KeysetCursor } from '../pagination.js';
 import { resolvePrincipalWorkspaceId } from './workspaceContext.js';
 import { createDocument, updateDocument } from '../../../../services/documentService.js';
 
@@ -188,9 +188,18 @@ interface DocumentRow {
   properties: Record<string, unknown> | null;
   created_at: Date;
   updated_at: Date;
+  /** `created_at::text` — cursor-internal only (TRO-602), never serialized
+   *  into a response body. See `pagination.ts`'s `PreciseTimestamp` header. */
+  created_at_precise: string;
 }
 
-function serializeDocument(row: DocumentRow) {
+// `Omit<..., 'created_at_precise'>`, not `DocumentRow` itself: this is also
+// called from POST /'s create path with a row shaped by
+// services/documentService.ts's OWN, unrelated `DocumentRow` type (a
+// same-named but structurally different interface, from a create response
+// that never builds a cursor) — that row has no `created_at_precise` field,
+// and never needs one, since serialization only ever reads the fields below.
+function serializeDocument(row: Omit<DocumentRow, 'created_at_precise'>) {
   return {
     id: row.id,
     title: row.title,
@@ -266,7 +275,7 @@ documentsRouter.get(
     const limitParamIndex = values.length;
 
     const result = await pool.query<DocumentRow>(
-      `SELECT id, title, document_type, properties, created_at, updated_at
+      `SELECT id, title, document_type, properties, created_at, updated_at, created_at::text AS created_at_precise
        FROM documents
        WHERE ${whereClauses.join(' AND ')}
        ORDER BY created_at DESC, id DESC
@@ -280,7 +289,7 @@ documentsRouter.get(
     const lastRow = page[page.length - 1];
     const nextCursor =
       hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
     res.status(200).json({
@@ -501,9 +510,11 @@ documentsRouter.get(
       related_id: string;
       relationship_type: string;
       created_at: Date;
+      /** `created_at::text` — cursor-internal only (TRO-602). */
+      created_at_precise: string;
       metadata: Record<string, unknown> | null;
     }>(
-      `SELECT da.id, da.document_id, da.related_id, da.relationship_type, da.created_at, da.metadata
+      `SELECT da.id, da.document_id, da.related_id, da.relationship_type, da.created_at, da.created_at::text AS created_at_precise, da.metadata
        FROM document_associations da
        WHERE ${whereClauses.join(' AND ')}
        ORDER BY da.created_at DESC, da.id DESC
@@ -517,7 +528,7 @@ documentsRouter.get(
     const lastRow = page[page.length - 1];
     const nextCursor =
       hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
     res.status(200).json({
@@ -585,9 +596,11 @@ documentsRouter.get(
       related_id: string;
       relationship_type: string;
       created_at: Date;
+      /** `created_at::text` — cursor-internal only (TRO-602). */
+      created_at_precise: string;
       metadata: Record<string, unknown> | null;
     }>(
-      `SELECT da.id, da.document_id, da.related_id, da.relationship_type, da.created_at, da.metadata
+      `SELECT da.id, da.document_id, da.related_id, da.relationship_type, da.created_at, da.created_at::text AS created_at_precise, da.metadata
        FROM document_associations da
        JOIN documents d ON d.id = da.document_id
        WHERE ${whereClauses.join(' AND ')}
@@ -602,7 +615,7 @@ documentsRouter.get(
     const lastRow = page[page.length - 1];
     const nextCursor =
       hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
     res.status(200).json({
@@ -676,12 +689,14 @@ documentsRouter.get(
     const result = await pool.query<{
       id: string;
       created_at: Date;
+      /** `created_at::text` — cursor-internal only (TRO-602). */
+      created_at_precise: string;
       document_id: string;
       document_type: string;
       title: string;
       ticket_number: number | null;
     }>(
-      `SELECT dl.id, dl.created_at, d.id as document_id, d.document_type, d.title, d.ticket_number
+      `SELECT dl.id, dl.created_at, dl.created_at::text AS created_at_precise, d.id as document_id, d.document_type, d.title, d.ticket_number
        FROM document_links dl
        JOIN documents d ON dl.source_id = d.id
        WHERE ${whereClauses.join(' AND ')}
@@ -696,7 +711,7 @@ documentsRouter.get(
     const lastRow = page[page.length - 1];
     const nextCursor =
       hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
     res.status(200).json({
@@ -768,11 +783,13 @@ documentsRouter.get(
       content: string;
       resolved_at: Date | null;
       created_at: Date;
+      /** `created_at::text` — cursor-internal only (TRO-602). */
+      created_at_precise: string;
       updated_at: Date;
     }>(
       `SELECT c.id, c.document_id, c.comment_id, c.parent_id, c.author_id,
               u.name as author_name, u.email as author_email,
-              c.content, c.resolved_at, c.created_at, c.updated_at
+              c.content, c.resolved_at, c.created_at, c.created_at::text AS created_at_precise, c.updated_at
        FROM comments c
        LEFT JOIN users u ON u.id = c.author_id
        WHERE ${whereClauses.join(' AND ')}
@@ -787,7 +804,7 @@ documentsRouter.get(
     const lastRow = page[page.length - 1];
     const nextCursor =
       hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
     res.status(200).json({

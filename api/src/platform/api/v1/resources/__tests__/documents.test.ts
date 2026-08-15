@@ -177,6 +177,77 @@ describe('PF-200: /api/v1/documents (Linear TRO-398)', () => {
     });
   });
 
+  describe('TRO-602: cursor precision — rows within the same millisecond are never silently dropped', () => {
+    /** Inserts a document with `created_at` set to `baseMs` PLUS a raw
+     *  microsecond offset, computed entirely in SQL (`interval` arithmetic)
+     *  rather than via a JS `Date` — a `Date` cannot represent sub-
+     *  millisecond precision at all, so passing one in (as `insertDocument`
+     *  above does, and as this exact bug's root cause does at read time)
+     *  could never produce a genuine same-millisecond/different-microsecond
+     *  pair to seed with. This makes the collision deterministic instead of
+     *  dependent on real insert timing happening to land within 1ms (which
+     *  the ticket's own reproduction notes as merely "reliably
+     *  reproducible", not guaranteed) — a flaky proof of a bug this
+     *  specific would be worse than no proof at all. */
+    async function insertDocumentAtPreciseTime(
+      title: string,
+      baseMs: number,
+      microsecondOffset: number
+    ): Promise<string> {
+      const result = await pool.query<{ id: string }>(
+        `INSERT INTO documents (workspace_id, title, document_type, created_at, updated_at)
+         VALUES (
+           $1, $2, 'wiki',
+           to_timestamp($3 / 1000.0) + ($4 || ' microseconds')::interval,
+           to_timestamp($3 / 1000.0) + ($4 || ' microseconds')::interval
+         )
+         RETURNING id`,
+        [workspaceId, title, baseMs, microsecondOffset]
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error('seed insertDocumentAtPreciseTime produced no row');
+      return row.id;
+    }
+
+    it('two rows in the same millisecond, at different microsecond offsets, are both returned across pages', async () => {
+      // A base far enough from every other test's seed data (5000s offset,
+      // well past AC-1's BASE_MS+0..4000ms range and its BASE_MS+2500ms
+      // mid-iteration insert) that this collision pair can never be
+      // adjacent to, or mistaken for, unrelated seeded rows.
+      const collisionBaseMs = BASE_MS + 5_000_000;
+
+      // Same millisecond (collisionBaseMs), microsecond offsets 100 and 900
+      // — genuinely different `timestamptz` values Postgres orders
+      // correctly, but whose shared millisecond-truncated ISO string
+      // (`Date#toISOString()`) would have been indistinguishable under the
+      // pre-fix cursor encoding (TRO-602's actual bug).
+      const earlierId = await insertDocumentAtPreciseTime('TRO-602 collision A', collisionBaseMs, 100);
+      const laterId = await insertDocumentAtPreciseTime('TRO-602 collision B', collisionBaseMs, 900);
+
+      // limit=1 forces a page boundary to land exactly between these two
+      // rows (ORDER BY created_at DESC, id DESC — laterId page 1, earlierId
+      // page 2) — the precise scenario where a truncated cursor would put
+      // earlierId on the wrong side of the boundary and drop it forever.
+      const page1 = await request(app)
+        .get('/api/v1/documents?limit=1')
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+      expect(page1.status).toBe(200);
+      const page1Body = page1.body as ListResponseBody;
+      expect(page1Body.data[0]?.id).toBe(laterId);
+      expect(page1Body.next_cursor).not.toBeNull();
+
+      const page2 = await request(app)
+        .get(`/api/v1/documents?limit=1&cursor=${encodeURIComponent(page1Body.next_cursor as string)}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+      expect(page2.status).toBe(200);
+      const page2Body = page2.body as ListResponseBody;
+      expect(
+        page2Body.data.map((d) => d.id),
+        'earlierId was silently dropped across the millisecond-collision page boundary (TRO-602)'
+      ).toContain(earlierId);
+    });
+  });
+
   describe('AC-2: GET /:id', () => {
     it('200 with the seeded document body matching id/title/type', async () => {
       const targetId = seedDocIds[0];
