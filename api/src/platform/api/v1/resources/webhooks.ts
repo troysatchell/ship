@@ -557,6 +557,17 @@ webhooksRouter.get(
 // of this route resolving every attempt of an event, replays included (see
 // that migration's own header) — reusing event_id, not minting a fresh one,
 // is what keeps that lookup meaningful for a replayed delivery.
+//
+// ACCEPTED CONSEQUENCE of continuing the series (CodeRabbit, this PR
+// review): replaying a delivery that was already dead-lettered after
+// exhausting `MAX_ATTEMPTS` (6) gets a replay `attempt_number` of 7+, which
+// is already `>= MAX_ATTEMPTS`. If that replay attempt itself gets a
+// retryable outcome (5xx/timeout), `attempt()`'s own pre-existing logic
+// dead-letters it immediately, with NO further retry scheduled — same rule
+// a 6th automatic attempt already follows, applied consistently to a
+// replay. This is intentional, not a bug: a replay of an already-exhausted
+// delivery that fails again is, correctly, still exhausted. An operator who
+// wants another shot calls replay again.
 
 interface ReplayLookupRow {
   id: string;
@@ -665,18 +676,41 @@ webhooksRouter.post(
     // deliverer instance made the call — a singleton would not change that,
     // and per-request construction is simpler and keeps this route free of
     // shared mutable state.
+    //
+    // `attemptNow()` itself never throws for an HTTP-level outcome
+    // (`performHttpAttempt()` catches every network/timeout failure into a
+    // 'retryable' outcome, persisted normally) — but it CAN throw for a
+    // process/deployment-level failure that isn't row-specific: a transient
+    // DB error while persisting the outcome, or a non-deterministic
+    // decrypt/sign failure (`attempt()`'s own doc comment — e.g. a GCM
+    // auth-tag mismatch from a rotated `SECRET_ENCRYPTION_KEY_ENV`, which is
+    // deliberately rethrown rather than dead-lettered, since it might not be
+    // permanent). Letting that propagate as an opaque 500 would be
+    // misleading: the NEW delivery row this request's whole job is to create
+    // already exists and is a real, valid 'pending' record either way — the
+    // 500 would suggest nothing happened when something did (CodeRabbit,
+    // this PR review). Caught and logged; the response always reflects the
+    // row's actual current state instead.
     const deliverer = new InMemoryWebhookDeliverer(pool);
-    await deliverer.attemptNow({
-      deliveryRowId: insertedRow.id,
-      subscriptionId: original.subscription_id,
-      eventId: original.event_id,
-      eventType,
-      targetUrl: original.target_url,
-      signingSecretCiphertext: original.signing_secret_ciphertext,
-      rawBody,
-      idempotencyKey: original.idempotency_key,
-      attemptNumber: insertedRow.attempt_number,
-    });
+    try {
+      await deliverer.attemptNow({
+        deliveryRowId: insertedRow.id,
+        subscriptionId: original.subscription_id,
+        eventId: original.event_id,
+        eventType,
+        targetUrl: original.target_url,
+        signingSecretCiphertext: original.signing_secret_ciphertext,
+        rawBody,
+        idempotencyKey: original.idempotency_key,
+        attemptNumber: insertedRow.attempt_number,
+      });
+    } catch (error) {
+      console.error(
+        `webhooks: replay attemptNow() failed to execute for new delivery row ${insertedRow.id} ` +
+          `(replay of ${original.id}); the row remains 'pending', recoverable by a future rehydrate()`,
+        error
+      );
+    }
 
     const finalResult = await pool.query<WebhookDeliveryRow>(
       `SELECT ${DELIVERY_COLUMNS} FROM webhook_deliveries wd WHERE wd.id = $1`,
@@ -687,6 +721,15 @@ webhooksRouter.post(
       throw serverError(requestId);
     }
 
+    // 201 means the NEW delivery row was created and an attempt ran to
+    // completion (or, per the catch above, at least was durably recorded as
+    // 'pending' if the attempt itself failed to execute) — it does NOT mean
+    // the subscriber accepted the delivery. `finalRow.status` is the
+    // authoritative outcome: 'success', 'failed' (a retry sibling was
+    // scheduled), 'dead' (permanent failure, or a replay whose continued
+    // attempt_number already met MAX_ATTEMPTS — see this file's header for
+    // that exhaustion case), or 'pending' (execution itself did not complete;
+    // see the catch above).
     res.status(201).json(serializeDelivery(finalRow));
   })
 );

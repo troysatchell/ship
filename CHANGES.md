@@ -111,7 +111,7 @@ cd sdk && npx vitest run   # parity.test.ts, resources/__tests__/webhooks.test.t
   non-existent route also 404s, which happens to be the right status for those specific negative
   cases; the positive cases are what actually prove the route's behavior is new. Not an import error
   or a typo. Restored the fix from the copies afterward.
-- **Observed: all 28 cases (20 pre-existing + 8 new) pass after the fix** —
+- **Observed: 28 cases (20 pre-existing + 8 new) passed after the fix** —
   `cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts` → `28 tests`,
   all passed. Coverage per the AC: happy-path replay (original `idempotency_key` preserved on both the
   response AND the real outbound HTTP request the deliverer dispatched — asserted via a stubbed
@@ -119,7 +119,9 @@ cd sdk && npx vitest run   # parity.test.ts, resources/__tests__/webhooks.test.t
   `response_excerpt`/`latency_ms`/`attempt_number`/`idempotency_key` all unchanged afterward); 404 for
   an unknown id, a malformed non-UUID id, and a cross-workspace id; and the DLQ-replay case (original
   `status='dead'`, `attempt_number=6` — replay still reaches the subscriber, succeeds, and the
-  original DLQ row stays `'dead'` and unchanged).
+  original DLQ row stays `'dead'` and unchanged). Two more cases added after local CodeRabbit-CLI
+  review (below) bring the file to **30/30** as of this PR's final state, re-confirmed by re-running
+  the file directly.
 - **Observed:** `deliverer.test.ts` still 13/13 after adding `attemptNow()` to `IWebhookDeliverer` (two
   hand-built fake-deliverer test doubles in that file needed a same-shape `attemptNow` field to keep
   compiling — not a behavior change, confirmed by re-running the file).
@@ -135,12 +137,53 @@ cd sdk && npx vitest run   # parity.test.ts, resources/__tests__/webhooks.test.t
   mechanism works for any `'pending'` row, and this replay path writes the identical row shape, but
   this ticket did not spin up a real second process to observe it end to end.
 
+**Local CodeRabbit-CLI review (`scripts/factory/gate.sh`'s G9 step) — 5 findings, 3 applied, 2
+declined with reasons:**
+1. **Major, applied.** `attemptNow()` can genuinely throw (a transient DB error while persisting the
+   outcome, or a non-deterministic decrypt/sign failure — `attempt()`'s own doc comment on
+   `MalformedCiphertextError`), and the route was letting that propagate as an opaque 500 while the
+   NEW delivery row it exists to create had already been durably inserted. Wrapped in try/catch: on
+   failure, log and re-read the row's actual current state (still `'pending'`), and return 201 with
+   that state rather than crashing — the row genuinely was created, so a 500 would misrepresent what
+   happened. New regression test: a ciphertext that's the right length (so it's not the deterministic
+   `MalformedCiphertextError` case) but has one flipped byte, causing a real GCM auth-tag mismatch —
+   same technique `deliverer.test.ts`'s own "GCM auth-tag mismatch ... treated as TRANSIENT" case
+   uses — asserts 201, `status: 'pending'`, `fetch` never called, and the state is durable (re-queried
+   fresh).
+2. **Major, applied (doc + test).** Replaying an already-dead-lettered delivery continues its
+   `attempt_number` past `MAX_ATTEMPTS` (6) — a replay of a delivery already dead at attempt 6 gets
+   `attempt_number: 7`. If THAT replay also gets a retryable outcome (5xx/timeout), `attempt()`'s
+   pre-existing exhaustion rule applies and it goes straight back to `'dead'`, no further retry
+   scheduled — correct (an already-exhausted delivery that fails again is still exhausted), but
+   undocumented and untested. Documented in this route's file header and in `attemptNow()`'s own doc
+   comment (`deliverer.ts`). New regression test: a dead-at-6 original, replayed with a stubbed 503 —
+   asserts the new row is `attempt_number: 7`, `status: 'dead'`, and that exactly two rows exist for
+   the event (no phantom third row).
+3. **Minor, applied (docs only).** The `POST /replay` OpenAPI description and its 201 response
+   description didn't say plainly that 201 means "the row was created / an attempt ran," not "the
+   subscriber accepted it" — a caller has to read `status` for the real outcome. Clarified both
+   descriptions in `platform/openapi/schemas/webhooks.ts`; `docs/openapi.json` regenerated
+   (`pnpm --filter @ship/api openapi:generate:v1`).
+4. **Minor, declined.** Suggested changing the SDK's `WebhookDelivery.status` literal from
+   `'dead_letter'` to `'dead'`. Correct that it's wrong, but it is the SAME pre-existing drift this
+   PR's own header/CHANGES.md text already extensively discloses (TRO-599, `lessons.md` rule 28) —
+   this ticket's own brief explicitly says to disclose that class, not fix it ("don't go fix unrelated
+   pre-existing SDK types, that's TRO-599's job"). Declined for scope discipline, not disagreement;
+   TRO-599 owns the actual fix.
+5. **Trivial, declined — verified technically incorrect for this codebase, not just out of scope.**
+   Suggested `CREATE INDEX CONCURRENTLY` for migration 049's `idx_webhook_deliveries_replayed_from_id`.
+   Checked `api/src/db/migrationRunner.ts:234-237` before applying anything: every migration file runs
+   as `BEGIN` / the full file's SQL / `COMMIT` on one connection, and `CREATE INDEX CONCURRENTLY`
+   cannot execute inside a transaction block (PostgreSQL rejects it outright) — applying this
+   suggestion would have broken the migration, not just been unnecessary. Left as the original
+   non-concurrent `CREATE INDEX IF NOT EXISTS`.
+
 **Not verified / explicit gaps.** No live end-to-end proof against a real subscriber process (this
 PR's tests stub `fetch`, same test-double boundary `deliverer.test.ts` itself already accepts — see
 that file's own header). PF-801 (named in this ticket's own brief) is the future e2e proof that a real
 subscriber recognizes the replayed `Idempotency-Key` as a duplicate of the original delivery; nothing
 in this PR can substitute for that. The SDK `WebhookDelivery` interface's pre-existing drift
-(TRO-599) is not repaired here, only grown by one more known-missing field (see above).
+(TRO-599) is not repaired here, only grown by one more known-missing field (see above and finding #4).
 
 **Roll back.** Revert the merge of `feat/pf-306-replay-endpoint`. Runtime implementation is confined
 to: `api/src/db/migrations/049_webhook_deliveries_replay.sql` (new, additive — `ADD COLUMN IF NOT

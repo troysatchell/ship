@@ -1134,5 +1134,108 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       expect(originalRow.status).toBe('dead');
       expect(originalRow.attempt_number).toBe(6);
     });
+
+    it('replaying a dead (DLQ) delivery that fails AGAIN with a 5xx goes straight back to dead — attempt_number continues past MAX_ATTEMPTS with no further retry scheduled (CodeRabbit, this PR review)', async () => {
+      const original = await insertDelivery({
+        subscriptionId: replaySubscriptionId,
+        payload: { hello: 'dlq-replay-fails-again' },
+        attemptNumber: 6,
+        status: 'dead',
+        responseStatus: 503,
+        responseExcerpt: 'gave up after 6 attempts',
+        latencyMs: 99,
+      });
+
+      const fetchMock = fetchMockAlways(() => new Response('still down', { status: 503 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+
+      expect(res.status).toBe(201);
+      const body = res.body as DeliveryBody;
+      expect(body.attempt_number).toBe(7);
+      // A 5xx is normally retryable — but attempt_number (7) is already
+      // >= MAX_ATTEMPTS (6), so attempt()'s pre-existing exhaustion rule
+      // applies exactly as it would to a 6th automatic attempt: dead
+      // immediately, no retry sibling. Documented in this route's own file
+      // header and in attemptNow()'s doc comment (deliverer.ts).
+      expect(body.status).toBe('dead');
+      expect(body.response_status).toBe(503);
+      expect(body.replayed_from_id).toBe(original.id);
+
+      // No THIRD row was created — exactly the replay row above, nothing
+      // scheduled after it.
+      const allRowsForEvent = await pool.query<{ id: string; attempt_number: number; status: string }>(
+        `SELECT id, attempt_number, status FROM webhook_deliveries WHERE event_id = $1 ORDER BY attempt_number`,
+        [original.eventId]
+      );
+      expect(allRowsForEvent.rows.map((r) => ({ attempt_number: r.attempt_number, status: r.status }))).toEqual([
+        { attempt_number: 6, status: 'dead' },
+        { attempt_number: 7, status: 'dead' },
+      ]);
+    });
+
+    it('if attemptNow() itself fails to execute (a non-deterministic decrypt failure), the route still returns 201 with the row\'s actual (pending) state — never an opaque 500 (CodeRabbit, this PR review)', async () => {
+      // A ciphertext that is the right LENGTH (so it is not the deterministic
+      // MalformedCiphertextError case) but whose final byte is flipped —
+      // decrypting it fails GCM auth-tag verification, which attempt() (per
+      // its own doc comment) treats as a non-deterministic, process-level
+      // failure and RETHROWS rather than dead-lettering. Same technique
+      // deliverer.test.ts's own "GCM auth-tag mismatch ... treated as
+      // TRANSIENT" case uses, duplicated here per this file's own small
+      // per-file test-helper convention.
+      function corruptedButCorrectlySizedCiphertext(secret: string): string {
+        const valid = Buffer.from(encryptSecret(secret), 'base64');
+        const tampered = Buffer.from(valid);
+        const lastIndex = tampered.length - 1;
+        const lastByte = tampered[lastIndex] ?? 0;
+        tampered[lastIndex] = lastByte ^ 0xff;
+        return tampered.toString('base64');
+      }
+
+      const brokenSubscription = await pool.query<{ id: string }>(
+        `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
+         VALUES ($1, $2, $3, $4, true) RETURNING id`,
+        [appId, 'document.created', 'https://example.com/replay-broken-hook', corruptedButCorrectlySizedCiphertext('whsec_test')]
+      );
+      const brokenSubscriptionId = onlyRow(brokenSubscription.rows).id;
+
+      const original = await insertDelivery({
+        subscriptionId: brokenSubscriptionId,
+        payload: { hello: 'broken-secret-replay' },
+        attemptNumber: 1,
+        status: 'success',
+        responseStatus: 200,
+      });
+
+      // fetch must never be reached — decrypt fails before any HTTP call.
+      const fetchMock = fetchMockAlways(() => new Response('unreachable', { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+
+      // Not a 500 — the new row was genuinely created, so the response
+      // reflects its real (pending) state rather than an opaque failure.
+      expect(res.status).toBe(201);
+      const body = res.body as DeliveryBody;
+      expect(body.id).not.toBe(original.id);
+      expect(body.replayed_from_id).toBe(original.id);
+      expect(body.idempotency_key).toBe(original.idempotencyKey);
+      expect(body.status).toBe('pending');
+      expect(body.response_status).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // Confirmed durable, not just reflected in this one response — a
+      // fresh SELECT shows the same 'pending' state.
+      const persisted = await pool.query<{ status: string }>(
+        `SELECT status FROM webhook_deliveries WHERE id = $1`,
+        [body.id]
+      );
+      expect(onlyRow(persisted.rows).status).toBe('pending');
+    });
   });
 });

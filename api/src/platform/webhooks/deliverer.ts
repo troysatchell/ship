@@ -227,6 +227,27 @@ export interface IWebhookDeliverer {
    * architecture (see this file's own header, and migration 048's) — not a
    * new gap that replay introduces. Replay callers who want an immediate
    * second attempt can call replay again.
+   *
+   * A second disclosed consequence (CodeRabbit, `resources/webhooks.ts`'s
+   * own PR review): a caller can pass an `attemptNumber` that is already
+   * `>= MAX_ATTEMPTS` (e.g. replaying a delivery that was already
+   * dead-lettered at attempt 6, with `attemptNumber: 7`). `attempt()`'s
+   * pre-existing logic treats that exactly like a 6th automatic attempt
+   * that failed retryably: dead-lettered immediately, no retry sibling
+   * scheduled. Intentional, not a bug — see `resources/webhooks.ts`'s own
+   * header for the replay-specific framing.
+   *
+   * Can THROW rather than resolve, for the same process/deployment-level
+   * failures `attempt()` itself can throw for (a transient DB error while
+   * persisting the outcome, or a non-deterministic decrypt/sign failure —
+   * see `attempt()`'s own doc comment on its `MalformedCiphertextError`
+   * handling for exactly which failures are rethrown rather than
+   * dead-lettered). Callers driving this from an HTTP request (the replay
+   * route) should catch it: the delivery row this call operates on was
+   * already durably persisted as `'pending'` before this method ran, so a
+   * thrown error here does not mean nothing happened — it means the row is
+   * still `'pending'`, recoverable by a future `rehydrate()`, same as any
+   * other `'pending'` row not currently held by a live queue.
    */
   attemptNow(item: ReplayAttemptInput): Promise<void>;
 }

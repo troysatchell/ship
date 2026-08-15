@@ -2421,7 +2421,7 @@
           "Webhooks"
         ],
         "summary": "Replay a logged delivery",
-        "description": "Re-runs a logged delivery through the deliverer, carrying the ORIGINAL Idempotency-Key — never a freshly generated one, so a correctly-implemented subscriber recognizes it as the same logical delivery. Works regardless of the original delivery's status, including dead (DLQ) rows. Creates a NEW delivery row (never mutates the original), linked back to it via replayed_from_id. Requires the webhooks:manage scope.",
+        "description": "Re-runs a logged delivery through the deliverer, carrying the ORIGINAL Idempotency-Key — never a freshly generated one, so a correctly-implemented subscriber recognizes it as the same logical delivery. Works regardless of the original delivery's status, including dead (DLQ) rows. Creates a NEW delivery row (never mutates the original), linked back to it via replayed_from_id. A 201 response means the row was created, not that the subscriber accepted it — see the response schema's own status field. Requires the webhooks:manage scope.",
         "security": [
           {
             "bearerAuth": []
@@ -2440,7 +2440,7 @@
         ],
         "responses": {
           "201": {
-            "description": "The new delivery row created by this replay.",
+            "description": "The new delivery row created by this replay. A 201 means the row was created and an attempt ran to completion (or was durably recorded as still pending, if the attempt itself failed to execute) — it does NOT mean the subscriber accepted the delivery. Read the row's own status field (success, failed, dead, or pending) for the actual outcome.",
             "content": {
               "application/json": {
                 "schema": {
