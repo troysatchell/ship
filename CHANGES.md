@@ -128,6 +128,157 @@ separately implemented in `web/src`.
 
 ---
 
+## TRO-605 — Widen GET /api/v1/documents(/:id): content/visibility/created_by/completed_at
+
+**Root cause / gap, not a bug.** `api/src/platform/api/v1/resources/documents.ts`'s `DocumentRow`/
+`serializeDocument()` deliberately excluded `content`, `visibility`, `created_by`, `completed_at` from
+the public v1 response — a documented decision when PF-200 was built. PF-701–704's later agent-as-
+platform-citizen work assumed sdk-mode `getDocument()` (`agent/src/shipClient.ts`) would have real
+content/visibility to work with; it didn't, so sdk-mode agent reads degraded silently (content
+absent, not just visibility failing closed) compared to internal mode — verified directly in PF-702's
+own build (`getDocumentViaSdk`'s `content: null, visibility: SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN,
+created_by: null, completed_at: undefined` synthesis, still present after this ticket — see below).
+PM decision (2026-08-15, TRO-605's Linear description): widen the public API rather than scope
+around the gap, since it blocks TRO-440/PF-704 (Epic 7's submission evidence) from an honest sdk-mode
+parity claim.
+
+**What changed.**
+- `api/src/platform/api/v1/resources/documents.ts`: `DocumentRow` and `serializeDocument()` widened to
+  include `content` (JSONB TipTap content — confirmed plain/JSON-serializable via `schema.sql:113`,
+  NOT the Yjs binary blob), `visibility` (`schema.sql:158`'s `'private' | 'workspace'` text enum),
+  `created_by`, and `completed_at` (`schema.sql:140`, ISO string or `null`). Both `GET /` and
+  `GET /:id`'s SQL `SELECT`s widened to fetch the four columns. `yjs_state` stays excluded — genuinely
+  internal collaboration-protocol binary state, not part of this widening (explicitly out of scope
+  per the ticket).
+- `api/src/platform/openapi/schemas/documents.ts`: `DocumentResponseSchema` gained the four fields
+  (`visibility` as a real `z.enum(['private','workspace'])`, `created_by` as nullable uuid,
+  `completed_at` as nullable datetime, `content` as `z.unknown()` matching `properties`'s own
+  per-key typing). `docs/openapi.json` regenerated via `pnpm openapi:generate:v1` — 30-line diff,
+  purely additive to the `Document` schema.
+- `sdk/src/types.ts`: `Document` interface gained the same four fields, typed narrowly
+  (`visibility: 'private' | 'workspace'`, `created_by`/`completed_at`: `string | null`,
+  `content: unknown`). `sdk/src/resources/__tests__/iterate.test.ts`'s `doc()` fixture updated to
+  satisfy the widened type (arbitrary values — that suite only asserts on pagination request counts).
+
+**Not touched, deliberately — `agent/src/shipClient.ts`'s `getDocumentViaSdk`.** It still synthesizes
+`content: null` / `visibility: SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN` / `created_by: null` /
+`completed_at: undefined` regardless of what `sdk.documents.get()` now actually returns — it never
+reads those fields off the SDK response at all. The v1 API and the SDK type now genuinely carry real
+values; `shipClient.ts` simply doesn't use them yet. The ticket's own brief explicitly steered toward
+NOT touching `agent/` here ("lean toward NOT touching agent/ code... that's PF-704's job to wire up
+the parity claim"), so this is disclosed rather than fixed. Confirmed via
+`agent/src/__tests__/shipClientParity.liveServer.test.ts`'s existing `getDocument()` case, which
+still passes unchanged — it asserts the OLD documented divergence (`viaSdk.content === null`, etc.),
+and that assertion is still literally true after this ticket, because `shipClient.ts` hasn't changed.
+**Follow-up needed on TRO-440/PF-704**: update `getDocumentViaSdk` to read the real
+`content`/`visibility`/`created_by`/`completed_at` off `sdk.documents.get()`'s response instead of
+synthesizing, then flip this parity test's assertions from "documented divergence" to "parity" —
+otherwise PF-704's flag-matrix evidence would still be asserting a gap that no longer needs to exist.
+
+**Claim-provenance note — the ticket's own premise, checked before writing the test.** The ticket text
+says a private-visibility regression test should confirm "visibility gating should still work exactly
+as before." Read `resources/documents.ts` and `resources/people.ts`'s own header comment before
+writing that test: **this route has never applied any visibility-based filtering** — `GET /` and
+`GET /:id` both scope only by `workspace_id` (+ `deleted_at IS NULL`), full stop. `people.ts`'s header
+already discloses this explicitly as "a pre-existing gap inherited from the pattern, not something
+new introduced here." So the ticket's premise was wrong (see CLAUDE.md's own claim-provenance
+discipline this project enforces) — there was no existing gating to leave unchanged. Left as originally
+found for title/properties/visibility/created_by/timestamps (still out of scope — see the CodeRabbit
+triage below for why retrofitting a full fix there is a bigger, auth-semantics change this ticket does
+not take on). One field is the exception: see below.
+
+**CodeRabbit triage — 1 finding, fixed.** Self-review found `troysatchell/Ship` is not connected to a
+CodeRabbit org, so this ran on the free CLI allowance; 1 finding, **critical**, on
+`documents.ts:223-225` (masked file/line numbers as of the flagged commit — see `.factory/
+coderabbit.json`): *"Enforce private-document authorization before serializeDocument() in both the
+list and single-document query paths: allow creators to access private documents, but filter or reject
+them for other workspace users before content is serialized."* **Fixed, narrowly** — not by
+retrofitting full access control (that would be the bigger, out-of-scope change discussed above), but
+by masking only the field this ticket itself adds that can carry real harm: `serializeDocument()` now
+takes a `viewerUserId` and returns `content: null` whenever `visibility === 'private'` and
+`created_by !== viewerUserId`. Reasoning: this route already leaked title/properties/visibility/
+created_by for a private document before this ticket (a pre-existing, disclosed, NOT-this-ticket's-
+problem gap) — but `content` is NEW, and unlike a title, it can carry a private document's actual body
+text. Shipping it unmasked would have taken an existing metadata leak and turned it into a content
+leak, a real escalation in harm this ticket alone would introduce, so it's fixed even though the
+adjacent metadata leak is not. All four call sites (`GET /`, `GET /:id`, `POST /`, `PATCH /:id`)
+updated to pass `principal.user?.id ?? null` through.
+**Not fixed, disclosed as a new problem for a future ticket**: while implementing this, found that
+`PATCH /api/v1/documents/:id` (PF-703/TRO-435, merged to `main` ahead of this branch) does not check
+visibility either — any workspace member with a `documents:write`-scoped token can already overwrite
+another user's *private* document's content today, a write-path issue more severe than this ticket's
+read-path finding and on code this ticket did not author. Flagged for a follow-up ticket rather than
+fixed here (a write-path auth change on a route from a different, already-merged ticket is squarely the
+kind of change this factory's own contract says to escalate, not decide unilaterally, mid-ticket).
+
+**CodeRabbit triage, 2nd round (after merging PF-601/TRO-450 forward) — 2 findings, both fixed.**
+1. **Minor**, `openapi/schemas/documents.ts`: the `visibility` field's OpenAPI description said
+   `'private' (creator only)`, which overclaims — this route does NOT actually gate on visibility for
+   most fields (id/title/document_type/properties/visibility/created_by/timestamps are returned
+   regardless of visibility, the pre-existing disclosed gap above); only `content` is restricted.
+   Fixed by rewording the description (and the matching `sdk/src/types.ts` doc comment) to say exactly
+   what the route does today, instead of what the column name implies it should do — the same
+   unmarked-inference failure CLAUDE.md's claim-provenance rule warns against, caught by CodeRabbit
+   rather than by re-reading my own prose.
+2. **Critical**, `documents.ts`'s `serializeDocument()`: `row.created_by === viewerUserId` alone
+   treats a `null === null` (an ownerless private document, `created_by IS NULL`, viewed by a
+   principal with no linked user — a Client Credentials OAuth token, where `principal.user` is always
+   null per `principal.ts`'s own doc comment) as a MATCH, i.e. NOT masked — the exact wrong-direction
+   failure `shipClient.ts`'s own "fail closed, never open" posture warns against elsewhere in this
+   codebase. Fixed: `viewerUserId !== null && row.created_by === viewerUserId`. New regression test
+   mints a REAL client-credentials token via `issueClientCredentialsToken` (same fixture pattern
+   `me.test.ts` uses for the identical grant type) against an ownerless private document, and asserts
+   `content` is masked — confirmed red before green: reverted only the added `viewerUserId !== null &&`
+   guard, the new test failed with the real private body text returned instead of `null`; restored,
+   passes.
+
+**Regression test — red before green, confirmed by temporary revert (not memory), three times: once
+for the widening, once for each CodeRabbit round.**
+`api/src/platform/api/v1/resources/__tests__/documents.test.ts`'s `describe('TRO-605: ...')` block (8
+cases: full round-trip on `GET /:id`, `completed_at: null` for an uncompleted doc, `GET /` list carries
+the same fields, `yjs_state` still never leaks, content masked for a different user's private doc
+(`GET /:id` and `GET /` both), the creator still sees their own private content in full, and the
+ownerless/client-credentials edge case above). First revert (the widening itself): `git checkout HEAD
+-- api/src/platform/api/v1/resources/documents.ts` then `-t TRO-605` — 4 of 5 then-existing cases
+failed with `AssertionError: expected undefined to deeply equal {...}` / `expected {...} to have
+property 'completed_at'`. Second revert (round-1 CodeRabbit fix): reverted only the
+`content: contentVisibleToViewer ? row.content : null` line back to unconditional `content: row.content`
+— the 2 masking-specific cases failed with `expected {...} to be null` (real private body text
+returned instead of `null`); the "creator sees own content" case correctly still passed (unmasked
+either way). Third revert (round-2 CodeRabbit fix): reverted only the `viewerUserId !== null &&` guard
+— the new ownerless/client-credentials case failed the same way. Restored the fix each time; full file:
+31/31 pass.
+
+**Other verification run.** `pnpm type-check` (all 8 workspace packages, after `pnpm --filter
+@ship/sdk build` — a fresh worktree has no `sdk/dist` yet, which `integrations/browser-demo` resolves
+against; unrelated to this diff, just an environment step). `api/src/platform/api/v1/__tests__/
+route-fitness.test.ts` (116 tests, PF-203) and `api/src/scripts/generate-v1-openapi.test.ts` (7 tests,
+PF-204's drift check) both green against the regenerated `docs/openapi.json`. `sdk/src/__tests__/
+parity.test.ts` (53 tests, PF-405) and `webhookResponseShape.test.ts` (5 tests, unrelated resource,
+confirms nothing else drifted) both green.
+`agent/src/__tests__/shipClientParity.liveServer.test.ts` (10 tests, PF-702's own proof) green,
+including the `getDocument()` case discussed above.
+
+**Not verified.** Whether `content: z.unknown()` should be marked `.required()` in the generated
+OpenAPI schema — observed that `docs/openapi.json`'s `Document.required` array includes `visibility`/
+`created_by`/`completed_at` but not `content`, because `@asteasolutions/zod-to-openapi` does not treat
+a bare `z.unknown()` as required (zod's own `ZodUnknown` accepts `undefined`). The real server
+response always includes the `content` key regardless — this is a schema-documentation looseness, not
+a functional gap, and matches how `properties`' own per-key values are typed (`z.record(z.unknown())`)
+elsewhere in this file.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run
+src/platform/api/v1/resources/__tests__/documents.test.ts`. Full gate: `scripts/factory/gate.sh`.
+
+**Roll back.** Revert this ticket's commit(s): `api/src/platform/api/v1/resources/documents.ts`,
+`api/src/platform/openapi/schemas/documents.ts`, `docs/openapi.json`, `sdk/src/types.ts`,
+`sdk/src/resources/__tests__/iterate.test.ts`, and the new `TRO-605` test block in
+`api/src/platform/api/v1/resources/__tests__/documents.test.ts`. No migration (no schema change —
+these columns already existed), no server-side behavior change beyond the response shape widening, so
+a plain revert is safe and fully restores the prior (narrower) public response.
+
+---
+
 ## TRO-595 — `admin-workspace-members.spec.ts`: "can add existing user" click timeout was a test deadlock, not an app bug
 
 **What was broken.** The cleanup `finally` block's "Remove" click hung for the full 60s default
