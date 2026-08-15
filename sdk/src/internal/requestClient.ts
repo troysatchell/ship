@@ -340,6 +340,16 @@ export class RequestClient {
     return (await res.json()) as T;
   }
 
+  /** Issues a `PATCH` with a JSON body (PF-703, TRO-435 — the gate's
+   *  sdk-mode `documents.update()`/`issues.update()` writes, the first
+   *  callers to need a non-idempotent partial update through this SDK).
+   *  Same shape as `post()` above — the hydrate/refresh-on-401/retry-once
+   *  pipeline in `execute()` applies identically to every verb. */
+  async patch<T>(path: string, body: unknown): Promise<T> {
+    const res = await this.execute(this.buildUrl(path), 'PATCH', { 'content-type': 'application/json' }, JSON.stringify(body));
+    return (await res.json()) as T;
+  }
+
   /** Issues a `DELETE`. No response body is parsed as JSON on success —
    *  most delete endpoints (including the webhooks subscription delete this
    *  client will call once PF-302 lands) return `204 No Content`, which has
