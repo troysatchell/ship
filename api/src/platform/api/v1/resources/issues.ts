@@ -383,6 +383,22 @@ issuesRouter.patch(
       });
 
       await client.query('COMMIT');
+      // Placement verified, not just copied (CodeRabbit, this PR round 2 —
+      // "major": suggested moving this past client.release() so a publisher
+      // error can't trigger ROLLBACK or be reported as a write failure).
+      // Checked before dismissing: `flushPendingEvents` (documentService.ts)
+      // iterates via `safeDispatch`, which wraps EVERY dispatch (including
+      // the schema-validation throw inside the event bus's own publish
+      // method itself, confirmed synchronous — its own doc comment:
+      // "dispatches synchronously ... returns the envelope") in a try/catch
+      // that logs and never rethrows. There is no code path by which this call can
+      // throw into the `catch` below, so it cannot trigger a spurious
+      // ROLLBACK or be misreported as this request's own failure — the
+      // finding's specific mechanism does not exist in the current code.
+      // Placement also matches routes/issues.ts's own internal PATCH
+      // handler exactly (flush immediately after COMMIT, before release) —
+      // moving only this route would be an unexplained deviation from that
+      // established convention, not an alignment with it.
       flushPendingEvents(pendingEvents);
     } catch (err) {
       // .catch(() => {}) matches routes/issues.ts's own internal PATCH

@@ -566,6 +566,16 @@ describe('PF-200: /api/v1/documents (Linear TRO-398)', () => {
       expect(res.body.code).toBe('not_found');
     });
 
+    it('a malformed (non-UUID) id -> 404 not_found (CodeRabbit, this PR — assertDocumentExists\'s UUID_RE guard, exercised directly for PATCH)', async () => {
+      const res = await request(app)
+        .patch('/api/v1/documents/not-a-uuid')
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({ content: { type: 'doc', content: [] } });
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+
     it('a missing content field -> 400 validation_failed', async () => {
       const docId = await insertDocument('PATCH missing content doc', new Date(BASE_MS + 51000));
 

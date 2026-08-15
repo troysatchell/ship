@@ -296,6 +296,21 @@ describe('GateShipClient sdk mode (PF-703 / TRO-435)', () => {
     expect(sdk.documents.create).not.toHaveBeenCalled();
   });
 
+  it('postStandup rejects a calendar-impossible date (Feb 30) — a shape check alone is not enough (CodeRabbit round 2)', async () => {
+    // `new Date('2026-02-30T00:00:00Z')` does not throw or produce Invalid
+    // Date — it silently rolls over to 2026-03-02 (verified directly before
+    // writing this test, not assumed). A regex-shape check alone
+    // (/^\d{4}-\d{2}-\d{2}$/) would let "2026-02-30" straight through to a
+    // wrong-date title; this proves the round-trip check catches it too.
+    const sdk = fakeSdkClient();
+    const sdkClientFactory = vi.fn().mockReturnValue(sdk);
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    await expect(gate.postStandup('tok', '2026-02-30')).rejects.toThrow(/not a valid YYYY-MM-DD date/);
+    expect(sdk.me).not.toHaveBeenCalled();
+    expect(sdk.documents.create).not.toHaveBeenCalled();
+  });
+
   it('the factory is called with whichever token is passed per call — no stickiness to a prior call\'s token', async () => {
     const sdkClientFactory = vi.fn().mockImplementation(() => fakeSdkClient());
     const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
@@ -347,11 +362,18 @@ describe('GateShipClient sdk mode (PF-703 / TRO-435)', () => {
 
   it('propagates the sdk\'s own thrown error unchanged (never wrapped in ShipApiError, never silently swallowed)', async () => {
     const sdk = fakeSdkClient();
-    sdk.issues.update.mockRejectedValueOnce(new Error('sdk: PATCH /api/v1/issues/issue-1 returned 403'));
+    // Identity comparison (CodeRabbit, this PR), not just a message-pattern
+    // match: a named error instance, rejected with THAT EXACT object, and
+    // asserted as the same reference on the other side — proves the error
+    // passes through unchanged rather than merely being re-thrown with a
+    // matching message (which a buggy `catch (e) { throw new Error(e.message)
+    // }` would also satisfy under a message-only assertion).
+    const sdkError = new Error('sdk: PATCH /api/v1/issues/issue-1 returned 403');
+    sdk.issues.update.mockRejectedValueOnce(sdkError);
     const sdkClientFactory = vi.fn().mockReturnValue(sdk);
     const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
 
-    await expect(gate.applyIssueTransition('tok', 'issue-1', 'in_review')).rejects.toThrow(/returned 403/);
+    await expect(gate.applyIssueTransition('tok', 'issue-1', 'in_review')).rejects.toBe(sdkError);
   });
 });
 

@@ -1012,19 +1012,33 @@ function assertSdkIssueState(value: string): SdkIssueState {
  * that public surface (`resources/documents.ts`'s `CreateDocumentRequestSchema`
  * own doc comment: "no 'Untitled' default here, unlike the internal API").
  *
- * Validates `date` before formatting (CodeRabbit, this PR): an `Invalid
- * Date` does not throw when passed to `toLocaleDateString` — it silently
- * returns the literal string `"Invalid Date"`, which would pass
- * `CreateDocumentRequestSchema`'s bare `min(1)` title check and create a
- * real document titled "Invalid Date Invalid Date Standup". The internal
- * route's own `createStandupSchema` fails loudly on malformed input instead
- * (`z.string().regex(/^\d{4}-\d{2}-\d{2}$/)`, a 400 before any write) — this
- * guard gives sdk mode the same fail-closed behavior rather than a silently
- * garbage-titled document.
+ * Validates `date` before formatting — two layers, both needed (CodeRabbit,
+ * this PR, round 2: the first cut only checked `Number.isNaN`, which does
+ * NOT catch a calendar-impossible date):
+ *  1. Shape: `date` must match `/^\d{4}-\d{2}-\d{2}$/` — an `Invalid Date`
+ *     does not throw when passed to `toLocaleDateString`, it silently
+ *     returns the literal string `"Invalid Date"`, which would pass
+ *     `CreateDocumentRequestSchema`'s bare `min(1)` title check and create a
+ *     real document titled "Invalid Date Invalid Date Standup".
+ *  2. Calendar validity: `new Date('2026-02-30T00:00:00Z')` does NOT throw
+ *     or produce `Invalid Date` either — it silently ROLLS OVER to
+ *     2026-03-02 (verified directly, not assumed). A shape check alone
+ *     passes "2026-02-30" straight through to a wrong-date title. Caught by
+ *     round-tripping: `dateObj`'s own ISO date part must equal the input
+ *     `date` string exactly, or the input didn't name a real calendar day.
+ * The internal route's own `createStandupSchema` fails loudly on malformed
+ * input instead (`z.string().regex(/^\d{4}-\d{2}-\d{2}$/)`, a 400 before any
+ * write, though even THAT route trusts `new Date()` for calendar validity
+ * the same way this file's first cut did) — this guard gives sdk mode the
+ * fail-closed behavior the internal route's own schema alone doesn't fully
+ * provide either.
  */
 function standupTitleForDate(date: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error(`GateShipClient.postStandup: "${date}" is not a valid YYYY-MM-DD date`);
+  }
   const dateObj = new Date(`${date}T00:00:00Z`);
-  if (Number.isNaN(dateObj.getTime())) {
+  if (Number.isNaN(dateObj.getTime()) || dateObj.toISOString().slice(0, 10) !== date) {
     throw new Error(`GateShipClient.postStandup: "${date}" is not a valid YYYY-MM-DD date`);
   }
   const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });

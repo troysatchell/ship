@@ -181,6 +181,55 @@ unaffected by carrying scopes it never checks.
 Re-verified after all fixes: type-check clean across all packages, agent 534/534, sdk 212/212, api
 1413/1413 (all three suites confirmed clean in a full run, no flakes that round).
 
+**CodeRabbit triage, round 2 (5 more findings after the merge with PF-600/TRO-448's CLI scaffold).
+Fixed 4, dismissed 1 with a written, verified reason:**
+- **major, dismissed** (`api/src/platform/api/v1/resources/issues.ts`, `flushPendingEvents`
+  placement) — suggested moving the call past `client.release()` so a publisher error couldn't
+  trigger `ROLLBACK` or be misreported as this request's own failure. Investigated before
+  dismissing, not assumed: `flushPendingEvents` (`documentService.ts`) iterates via `safeDispatch`,
+  which wraps every dispatch — including the schema-validation throw inside `IEventBus.publish()`
+  itself — in a try/catch that logs and never rethrows; `publish()`'s own doc comment confirms it is
+  fully synchronous ("dispatches synchronously ... returns the envelope"), so there is no async
+  rejection this catch could miss either. There is no code path by which this call can reach the
+  route's own `catch` block. Also verified the CURRENT placement (immediately after `COMMIT`, before
+  `client.release()`) exactly matches `routes/issues.ts`'s own internal PATCH handler — moving only
+  this route would be an unexplained deviation from that established convention, not an alignment
+  with it. Documented inline at the call site so a future review round doesn't re-raise the same
+  (already-investigated) question.
+- **major, fixed** (`agent/src/shipClient.ts`, `standupTitleForDate`) — round 1's date guard only
+  checked `Number.isNaN`, which does NOT catch a calendar-impossible date:
+  `new Date('2026-02-30T00:00:00Z')` neither throws nor produces `Invalid Date` — it silently ROLLS
+  OVER to 2026-03-02 (verified directly). A shape-only regex check would have passed "2026-02-30"
+  straight through to a wrong-date title. Fixed: added a round-trip check (`dateObj`'s own ISO date
+  part must equal the input string exactly) on top of the existing shape/NaN checks. New regression
+  test proves Feb 30 is rejected, confirmed the existing `Number.isNaN`-only version would NOT have
+  caught it (checked before writing the fix, not after).
+- **minor, fixed** (`audit/factory/scorecard.jsonl`) — attempt 4's row had `ts:
+  "2026-08-15T15:28:00Z"`, earlier than attempt 3's `"2026-08-15T15:42:03Z"` — a real off-by-one-hour
+  typo (should have been `16:28`, matching the actual local gate-run time), not a hypothetical.
+  Corrected.
+- **trivial, fixed** (`agent/src/__tests__/shipClient.test.ts`) — the sdk-error-propagation test
+  matched on the thrown error's message only. Fixed: rejects with a named error instance, asserted
+  by identity (`.rejects.toBe(sdkError)`), which a message-only match couldn't distinguish from a
+  buggy re-throw of a new error with the same text.
+- **trivial, fixed** (`api/src/platform/api/v1/resources/__tests__/documents.test.ts`) — the
+  malformed-id 404 case existed for `issues.ts`'s new PATCH route but not `documents.ts`'s (which
+  already had the right guard via `assertDocumentExists`, just no dedicated test proving it for
+  PATCH specifically). Added.
+
+**One more self-caught issue while re-verifying (not a CodeRabbit finding):** the dismissal comment
+above (`issues.ts`) originally read `` `IEventBus.publish()` itself `` — that literal substring
+matched `publish-boundary.test.ts`'s own plain-text scan (`/\.publish\s*\(/`), a deliberately
+naive grep-style boundary check that "route layer must never call `IEventBus` directly" and does
+not distinguish a comment from a call site. A real, if self-inflicted, test failure (`expected [] to
+deeply equal [{...}]`) — fixed by rewording the comment to describe the method without writing the
+literal call syntax; no assertion in that test was touched.
+
+Re-verified again after round 2: type-check clean, agent 535/535 (net +1 from round 1: the identity-
+comparison case is a rewrite of an existing test, the calendar-impossible-date case is new), api
+1414/1414 (net +1: the documents.ts malformed-id case), sdk 212/212 — all three in fresh full-suite
+runs with zero flakes.
+
 **How to verify.**
 
 ```bash
@@ -188,8 +237,8 @@ Re-verified after all fixes: type-check clean across all packages, agent 534/534
 pnpm build:shared && pnpm build:sdk   # sdk/dist must exist before agent's/api's type-check/tests
 pnpm type-check                        # clean across all packages
 pnpm --filter @ship/sdk test           # 212/212, incl. the two new documents.update/issues.update parity entries
-pnpm --filter @ship/agent test         # 534/534, incl. 8 new unit cases + 2 new live-DB sdk-mode cases
-pnpm --filter @ship/api test           # 1413/1413, incl. 22 new PATCH-route unit cases + route-fitness/openapi coverage
+pnpm --filter @ship/agent test         # 535/535, incl. 9 new unit cases + 2 new live-DB sdk-mode cases
+pnpm --filter @ship/api test           # 1414/1414, incl. 23 new PATCH-route unit cases + route-fitness/openapi coverage
 scripts/factory/gate.sh
 ```
 
