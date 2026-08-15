@@ -192,7 +192,7 @@ v1Registry.registerPath({
     401: UNAUTHORIZED_RESPONSE,
     403: FORBIDDEN_RESPONSE,
     404: {
-      description: 'No document with this id exists in the caller\'s workspace, or the id is malformed.',
+      description: 'No document with this id exists in the caller\'s workspace, the id is malformed, or the document is private and the caller is not its creator (TRO-611).',
       content: { 'application/json': { schema: ApiErrorSchema } },
     },
   },
