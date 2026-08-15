@@ -118,9 +118,11 @@ cd api && npx vitest run src/app.test.ts src/platform/__tests__/v1-router.test.t
 **Evidence.**
 - **Observed:** `cd api && npx tsc --noEmit -p .` clean, before and after every edit in this ticket.
   No non-null `!`, `as any`, or `as unknown as` added anywhere.
-- **Observed:** `webhooks.test.ts` → 34/34 (32 pre-existing + this ticket's own retitle-and-add of 1
-  → 2 tests). Both the fallback-path and the fix-path tests pass; the fix-path test was proven red
-  against the pre-fix code (see above).
+- **Observed:** `webhooks.test.ts` → 34/34 (33 pre-existing, per TRO-447's own CHANGES.md entry
+  above — plus this ticket's one new fix-proving test; the pre-existing fallback-path test was
+  retitled and had its trailing comment updated, not counted as a new case). Both the fallback-path
+  and the fix-path tests pass; the fix-path test was proven red against the pre-fix code (see
+  above).
 - **Observed:** `app.test.ts`, `v1-router.test.ts`, `error-middleware.test.ts`,
   `route-fitness.test.ts`, and `rate-limit-v1-exemption.test.ts` — the five files that either call
   `createApp()` directly with the default signature or import `v1Router`/`v1Routes` directly — all
