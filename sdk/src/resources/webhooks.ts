@@ -65,23 +65,6 @@
  * it from `SDK_EXEMPTIONS` to a real `SDK_TO_OPERATION` entry.
  * `replayDelivery()` is unaffected — still targets PF-306, not yet built.
  *
- * **NOT FIXED BY PF-305, same class as the "KNOWN, NOT FIXED BY PF-405"
- * note below.** The real `GET /webhooks/deliveries` response
- * (`serializeDelivery()`, same file) does not match this file's
- * `WebhookDelivery` interface below in two ways: (1) `status`'s real 4th
- * value is `'dead'`, not this interface's guessed `'dead_letter'` — a
- * client checking `=== 'dead_letter'` will never match a real dead-lettered
- * row; (2) the real row also carries `event_id`, `idempotency_key`,
- * `response_excerpt`, and `next_attempt_at`, none of which this interface
- * declares. PF-305's own ticket scope is the server route (TRO-442's own
- * brief); `parity.test.ts` is deliberately method+path-level, not
- * response-shape-level (see its header), so it does not catch this either.
- * Flagged here rather than silently fixed or silently left implicit — same
- * disclosure this file already sets as precedent for `WebhookSubscription`
- * below, and named as a follow-up in this ticket's own PR/CHANGES.md entry
- * rather than fixed inline (out of this ticket's stated scope: the API
- * route, not the SDK's response types).
- *
  * UPDATE — PF-306 (Linear TRO-446). `POST /webhooks/deliveries/:id/replay`
  * is now a real, merged route (`platform/api/v1/resources/webhooks.ts`) —
  * `replayDelivery()` below needed no signature change (it already took just
@@ -89,22 +72,62 @@
  * `SDK_EXEMPTIONS` to a real `SDK_TO_OPERATION` entry, per that table's own
  * "delete this line" instruction. `replayed_from_id` (non-null on a replay
  * row, pointing at the delivery it replayed — migration 050) IS now declared
- * on `WebhookDelivery` (CodeRabbit, PR #229's review, fixed) — the REST of
- * PF-305's own NOT-FIXED note immediately above (`'dead_letter'` vs `'dead'`,
- * missing `event_id`/`idempotency_key`/`response_excerpt`/`next_attempt_at`)
- * is unchanged, still TRO-599's job (see
- * `.claude/skills/ship-factory/references/lessons.md` rule 28).
+ * on `WebhookDelivery` (CodeRabbit, PR #229's review, fixed).
  *
- * KNOWN, NOT FIXED BY PF-405: the real PF-302 response shape
- * (`app_id`, singular `event_type`, `target_url`, no `updated_at` — see
- * `platform/api/v1/resources/webhooks.ts`'s `serializeSubscription()`) does
- * not match this file's pre-existing `WebhookSubscription` interface
- * (`app_id`-less, plural `events`, `url`, `updated_at`) — that mismatch
- * predates PF-405 (PF-401 guessed the shape before PF-302 defined it for
- * real) and PF-405's fitness test is deliberately METHOD+PATH-level
- * (operation existence), not response-body-level, so it does not catch
- * this. Flagged here, in the PR body, and left as a follow-up rather than
- * silently fixed or silently ignored — see CHANGES.md's TRO-422 entry.
+ * UPDATE — TRO-599 (this ticket; rule 28 of
+ * `.claude/skills/ship-factory/references/lessons.md` was written from this
+ * exact pattern recurring twice — PF-405's `WebhookSubscription` gap and
+ * PF-305's `WebhookDelivery` gap this file used to carry below). Both
+ * response-shape gaps are now FIXED, verified field-for-field against
+ * `serializeSubscription()`/`serializeDelivery()`
+ * (`platform/api/v1/resources/webhooks.ts`, including the two routes' own
+ * literal response-object construction) and cross-checked against the
+ * independent `platform/openapi/schemas/webhooks.ts` Zod schemas (both read
+ * in full, and the generated `/api/v1` OpenAPI document introspected
+ * directly, before touching this file):
+ *   - `WebhookSubscription` now has `app_id`, singular `event_type`,
+ *     `target_url`, and no `updated_at` (the real serializer never sets
+ *     one — `webhook_subscriptions`, migration 047, has no `updated_at`
+ *     column at all).
+ *   - `CreatedWebhookSubscription` (the `POST /` and `POST /:id/rotate`
+ *     response) now also declares `warning: string` — present on every
+ *     real response from both routes (`{ ...serializeSubscription(row),
+ *     secret, warning }`, literally at both call sites) but never declared
+ *     here before. Not one of TRO-599's two NAMED instances (the ticket
+ *     names `WebhookSubscription`/`WebhookDelivery` specifically), but the
+ *     same class of defect on the same interface family, found by reading
+ *     the routes' actual response construction rather than trusting that
+ *     two-item list as exhaustive — see `CHANGES.md`'s TRO-599 entry for
+ *     why this was fixed rather than only flagged.
+ *   - `WebhookDelivery.status`'s real 4th value is `'dead'`, not the old
+ *     guessed `'dead_letter'`, and the interface now also declares
+ *     `event_id`, `idempotency_key`, `response_excerpt`, and
+ *     `next_attempt_at` — all four present on every real
+ *     `GET /webhooks/deliveries` and `POST /webhooks/deliveries/:id/replay`
+ *     response, none previously declared.
+ * The existing mocked-`fetch` request-shape suite
+ * (`sdk/src/resources/__tests__/webhooks.test.ts`) and a new real-server
+ * round-trip regression suite
+ * (`sdk/src/resources/__tests__/webhooks.liveServer.test.ts`) both assert
+ * the corrected shapes now. A new response-shape fitness test
+ * (`sdk/src/__tests__/webhookResponseShape.test.ts`) locks the declared
+ * field set (names AND nullability) of both interfaces against the real,
+ * generated OpenAPI schemas, so a third recurrence of this bug class fails
+ * a test instead of requiring a third manual disclosure — see that file's
+ * own header for why it is scoped to webhooks specifically rather than
+ * generalized to every SDK resource in this same ticket.
+ *
+ * STILL NOT FIXED — found while verifying the above, explicitly OUT OF
+ * SCOPE for TRO-599 (which is the two RESPONSE types, not this REQUEST
+ * body): `CreateWebhookSubscriptionBody` below (`createSubscription()`'s
+ * request body — `url`/plural `events`) does not match the real
+ * `POST /api/v1/webhooks` route's `CreateWebhookSubscriptionRequestSchema`
+ * (`app_id`/singular `event_type`/`target_url`, all required,
+ * `platform/api/v1/resources/webhooks.ts`). As declared, a caller building
+ * a request from this SDK type cannot successfully create a subscription
+ * against the real server — every call 400s on validation. See that
+ * interface's own doc comment below, and `CHANGES.md`'s TRO-599 entry, for
+ * the same disclosure aimed at a human reviewer, and a follow-up ticket.
  */
 import type { RequestClient } from '../internal/requestClient.js';
 import type { ListPage } from '../types.js';
@@ -131,38 +154,61 @@ export type WebhookEventType =
   | 'sprint.completed';
 
 /**
- * A webhook subscription as returned by `list()` (and, once PF-302 lands,
- * presumably a future `get()`). NEVER carries the raw secret — see
- * `CreatedWebhookSubscription` below for the create-only exception.
- * INFERRED, not verified: no server schema exists yet. Shape follows
- * PF-302's ticket prose ("`/api/v1/webhooks` CRUD gated by
- * `webhooks:manage``; ...; active flag") and this SDK's own established
- * per-resource envelope convention (id/created_at/updated_at on everything
- * else in this package).
+ * A webhook subscription, as returned by `listSubscriptions()`,
+ * `getSubscription()`, `deleteSubscription()`'s underlying route, and (sans
+ * the extra fields) the base of `CreatedWebhookSubscription`. NEVER carries
+ * the raw secret — see `CreatedWebhookSubscription` below for the
+ * create/rotate-only exception. VERIFIED (TRO-599) against
+ * `serializeSubscription()` and `WebhookSubscriptionRow`
+ * (`platform/api/v1/resources/webhooks.ts`), and cross-checked against the
+ * independent `WebhookSubscriptionResponseSchema` Zod schema
+ * (`platform/openapi/schemas/webhooks.ts`) — both agree exactly. A
+ * subscription belongs to an `app_id` (`oauth_apps`, migration 047), not
+ * directly to a workspace or user, and the row has no `updated_at` column
+ * at all — every field below is required (never optional, never absent).
  */
 export interface WebhookSubscription {
   readonly id: string;
-  readonly url: string;
-  readonly events: readonly WebhookEventType[];
+  readonly app_id: string;
+  readonly event_type: WebhookEventType;
+  readonly target_url: string;
   readonly active: boolean;
   readonly created_at: string;
-  readonly updated_at: string;
 }
 
 /**
- * `create()`'s response — everything `WebhookSubscription` has, plus the
- * raw `whsec_`-prefixed secret. INFERRED from PF-302's ticket prose,
- * verbatim: "`whsec_` secret returned once, AES-256-GCM at rest." Shown
- * exactly once, at creation, matching §2.9's portal design ("secret shown
- * exactly once, copy-to-clipboard, never re-displayed") and PF-102's
- * already-built precedent for OAuth app secrets (`appRegistration.ts`) —
- * the same shown-once pattern this ticket's client types assume PF-302 will
- * follow, not something this SDK enforces itself.
+ * `createSubscription()`'s and `rotateSecret()`'s response — everything
+ * `WebhookSubscription` has, plus the raw `whsec_`-prefixed secret and a
+ * human-readable reminder to save it. VERIFIED (TRO-599) against both
+ * routes' literal response construction (`{ ...serializeSubscription(row),
+ * secret: plaintextSecret, warning: 'Save this secret now. It will not be
+ * shown again.' }`, `platform/api/v1/resources/webhooks.ts`) and the
+ * independent `WebhookSubscriptionCreatedResponseSchema` Zod schema
+ * (`platform/openapi/schemas/webhooks.ts`) — both agree exactly, including
+ * `warning`, which this interface did not declare before TRO-599. Shown
+ * exactly once, at creation or rotation — the secret is never recoverable
+ * via any other call.
  */
 export interface CreatedWebhookSubscription extends WebhookSubscription {
   readonly secret: string;
+  readonly warning: string;
 }
 
+/**
+ * `createSubscription()`'s request body. **NOT FIXED — out of TRO-599's
+ * scope**, which is specifically the two RESPONSE types
+ * (`WebhookSubscription`/`WebhookDelivery`), not this REQUEST body.
+ * Discovered while verifying ground truth for TRO-599, disclosed rather
+ * than silently left implicit: the real `POST /api/v1/webhooks` route
+ * validates against `CreateWebhookSubscriptionRequestSchema`
+ * (`platform/api/v1/resources/webhooks.ts`), which requires `app_id`
+ * (uuid), singular `event_type`, and `target_url` — none of which this
+ * interface declares (it still has plural `events` and `url`, PF-401's
+ * original pre-PF-302 guess). As declared, `createSubscription()` cannot
+ * successfully create a subscription against the real server; every call
+ * 400s on validation. See this file's header and `CHANGES.md`'s TRO-599
+ * entry for the same disclosure and a follow-up ticket.
+ */
 export interface CreateWebhookSubscriptionBody {
   readonly url: string;
   readonly events: readonly WebhookEventType[];
@@ -176,36 +222,50 @@ export interface ListWebhookSubscriptionsParams {
 export type WebhookSubscriptionList = ListPage<WebhookSubscription>;
 
 /**
- * A single delivery attempt log row. INFERRED from PF-305's ticket prose,
- * verbatim: "every attempt visible with attempt_number, response_status,
- * latency_ms." `status` (the delivery's own lifecycle state, distinct from
- * `response_status`'s raw subscriber HTTP status code) is this file's
- * least-verified field — PF-305 says deliveries are filterable "by
- * subscription/status" but names no enum; the four values below are this
- * SDK's own inference from PF-304's retry/DLQ prose ("5xx/timeout retries,
- * 4xx dead-letters immediately, 6 failures -> DLQ"), not a value copied from
- * any schema, because none exists to copy from yet. Flagged here so a
- * future PF-405 parity check (or a human) can correct it against the real
- * server type the moment PF-304/305 land, rather than this guess silently
- * becoming load-bearing.
+ * A single delivery ATTEMPT log row (migration 048's row-per-attempt
+ * design — a retried delivery leaves multiple rows, one per
+ * `attempt_number`, sharing `event_id`), as returned by `listDeliveries()`
+ * and `replayDelivery()`. VERIFIED (TRO-599) against `serializeDelivery()`
+ * and `WebhookDeliveryRow` (`platform/api/v1/resources/webhooks.ts`), and
+ * cross-checked against the independent `WebhookDeliveryResponseSchema` Zod
+ * schema (`platform/openapi/schemas/webhooks.ts`) — both agree exactly.
+ * Every field is required (never absent); the five marked nullable below
+ * can genuinely be `null` in a real response, verified against both the
+ * serializer and the OpenAPI schema's own nullable typing.
  */
 export interface WebhookDelivery {
   readonly id: string;
   readonly subscription_id: string;
+  /** The event this attempt delivers — shared across every attempt
+   *  (same `attempt_number` series) of the same logical delivery. */
+  readonly event_id: string;
+  readonly event_type: WebhookEventType;
+  /** Stable across every attempt of the same logical delivery — the value
+   *  sent in the `Idempotency-Key` header. */
+  readonly idempotency_key: string;
+  readonly attempt_number: number;
+  /** This attempt's own lifecycle state: `pending` (scheduled, not yet
+   *  executed), `success` (2xx), `failed` (5xx/timeout, a retry was
+   *  scheduled), or `dead` (permanent failure — 4xx, or the 6th failed
+   *  attempt). The real 4th value is `dead`, NOT `dead_letter` — the guess
+   *  this interface carried before TRO-599; a client checking
+   *  `=== 'dead_letter'` never matched a real dead-lettered row. */
+  readonly status: 'pending' | 'success' | 'failed' | 'dead';
+  /** The subscriber's HTTP response status, or `null` if this attempt never
+   *  got a response (still pending, or a network/timeout failure). */
+  readonly response_status: number | null;
+  /** Up to 2000 characters of the subscriber's response body, or `null` if
+   *  there was none. */
+  readonly response_excerpt: string | null;
+  readonly latency_ms: number | null;
+  /** When the next retry is due (only meaningful on a `failed` row with a
+   *  pending sibling), or `null` if this attempt is terminal
+   *  (`success`/`dead`) or itself still pending execution. */
+  readonly next_attempt_at: string | null;
   /** Non-null only for a row created by `replayDelivery()` — the id of the
    *  delivery it replayed. Added for PF-306/TRO-446 (CodeRabbit, PR #229's
-   *  review) — the one field of the real response shape this ticket's own
-   *  route introduces; the REST of the pre-existing gap between this
-   *  interface and the real response (`status`'s `dead_letter` vs `dead`,
-   *  missing `event_id`/`idempotency_key`/`response_excerpt`/
-   *  `next_attempt_at`) is unchanged and still tracked by TRO-599 — see this
-   *  file's header. */
+   *  review). */
   readonly replayed_from_id: string | null;
-  readonly event_type: WebhookEventType;
-  readonly status: 'pending' | 'success' | 'failed' | 'dead_letter';
-  readonly attempt_number: number;
-  readonly response_status: number | null;
-  readonly latency_ms: number | null;
   readonly created_at: string;
 }
 
@@ -263,10 +323,10 @@ export class WebhooksClient {
 
   /** `GET /api/v1/webhooks/deliveries` — paginated, filterable by
    *  `subscription_id`/`status`. Real, merged PF-305 route (Linear
-   *  TRO-442, `platform/api/v1/resources/webhooks.ts`) as of this SDK
-   *  update — see this file's header for the response-shape gap this
-   *  method's return type still has (`status`'s `'dead_letter'` vs the
-   *  real `'dead'`, and four missing fields), not fixed by this update. */
+   *  TRO-442, `platform/api/v1/resources/webhooks.ts`). The response-shape
+   *  gap this method's return type used to have (`status`'s `'dead_letter'`
+   *  vs the real `'dead'`, and four missing fields) is fixed as of TRO-599
+   *  — see `WebhookDelivery`'s own doc comment above. */
   async listDeliveries(params: ListWebhookDeliveriesParams = {}): Promise<WebhookDeliveryList> {
     return this.request.get<WebhookDeliveryList>(DELIVERIES_PATH, {
       limit: params.limit,
@@ -281,9 +341,9 @@ export class WebhooksClient {
    *  (never a freshly generated one), and returns the NEW delivery row this
    *  creates (the original is never mutated), with `replayed_from_id` set to
    *  the original's id. Works regardless of the original delivery's status,
-   *  `dead` (DLQ) included. Real, merged route as of this update — see this
-   *  file's header for the response-shape gap this method's return type
-   *  still has (TRO-599, unrelated to replay). */
+   *  `dead` (DLQ) included. Real, merged route. The response-shape gap this
+   *  method's return type used to have is fixed as of TRO-599 (unrelated to
+   *  replay itself) — see `WebhookDelivery`'s own doc comment above. */
   async replayDelivery(id: string): Promise<WebhookDelivery> {
     return this.request.post<WebhookDelivery>(`${DELIVERIES_PATH}/${encodeURIComponent(id)}/replay`, {});
   }
