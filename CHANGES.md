@@ -121,6 +121,104 @@ schema/migration involved, so no database rollback step.
 
 ---
 
+## TRO-449 (PF-802) — Browser SDK demo (PKCE SPA), and a real @ship/sdk packaging defect it uncovered
+
+**What was added.** `integrations/browser-demo/` — a Vite vanilla-TypeScript SPA, `@ship/sdk` its
+only runtime dependency (PLUGFORGE.MD §4's own AC). Signs in via `ShipClient.authorizationCodeFlow()`
+PKCE (no client secret ever ships to the browser), persists tokens in `localStorage` via a small
+`LocalStorageTokenStore` (`ITokenStore` implementation — the SDK deliberately ships no browser
+token store of its own, see `sdk/src/tokenStore.ts`'s header), and lists the signed-in user's
+documents via `client.documents.iterate()` (PF-402's async-iterator pagination). Config
+(`clientId`/`apiBaseUrl`/`redirectUri`/`scope`) resolves from `window.__SHIP_DEMO_CONFIG__` when
+present, else `VITE_SHIP_*` build-time env vars — see `src/main.ts`'s header for why (lets one
+built `dist/` be pointed at any environment without a rebuild; used by the e2e proof below).
+`scripts/seed-oauth-app.mjs` registers a local-dev public OAuth app (idempotent). Full run
+instructions in `integrations/browser-demo/README.md`.
+
+**A real, previously-latent `@ship/sdk` defect, found by being the first browser bundler consumer
+of the package.** `sdk`'s single barrel (`index.ts`) re-exported PF-403's `verifyWebhook`
+(`node:crypto`) and PF-404's `FileTokenStore` (`fs`/`path`) alongside the browser-safe
+`ShipClient`/PKCE/`ITokenStore` exports this demo needs. Building the demo against that barrel
+failed outright: Rollup/Vite has to bind every top-level import of every module reachable via an
+`export ... from` chain — **regardless of tree-shaking, and unaffected by adding `"sideEffects":
+false` to `sdk/package.json`** (tried first; verified it made no difference to the error, not
+assumed) — because binding happens before the tree-shake pass decides what to keep. An earlier fix
+attempt marked `node:crypto`/`fs`/`path` `external` in Rollup config: the BUILD then succeeded, but
+the resulting bundle contained literal `import"node:crypto";import"fs";import"path";` statements —
+invalid in a browser (bare specifiers a browser's native module loader cannot resolve), which threw
+and killed the entire script before any of `main.ts`'s code ran, including the parts with no SDK
+dependency at all (confirmed live: the "Connect to Ship" button never rendered, caught by the first
+e2e run against that build).
+
+**Real fix:** split the Node-only code out of the modules that mix it with browser-safe exports.
+`sdk/src/tokenStore.ts` now holds only `TokenSet`/`ITokenStore`/`MemoryTokenStore` (zero Node
+imports); `FileTokenStore` moved to a new `sdk/src/fileTokenStore.ts`. A new `sdk/src/node.ts`
+re-exports `verifyWebhook`/`DEFAULT_WEBHOOK_TOLERANCE_SECONDS`/`SHIP_SIGNATURE_HEADER_NAME`/
+`PlainHeaders`/`FileTokenStore`, published as a second `sdk/package.json` `exports` subpath,
+`@ship/sdk/node`. The main barrel (`index.ts`) no longer references either Node-only module at all,
+so a browser bundler resolving it never needs to bind `node:crypto`/`fs`/`path`. Verified **zero**
+existing consumers (`api/`, `agent/`, `web/`, and `sdk`'s own test suite) imported `verifyWebhook`
+or `FileTokenStore` via the main `@ship/sdk` barrel before this change (`grep`, both direct
+consumers and the parity/size-gate tooling) — this is a pure reorganization, not a breaking change
+for anything that exists today. `sdk/package.json` keeps `"sideEffects": false` anyway (harmless,
+correct metadata even though it didn't fix this specific class of failure).
+
+**Proof.** `e2e/browser-demo-pkce.spec.ts` (new fixture `e2e/fixtures/browser-demo-env.ts`, a
+sibling of `isolated-env.ts` — not an edit to that shared file, lower collision risk with concurrent
+factory lanes touching e2e infra this same week) drives a REAL browser through the demo SPA: click
+"Connect to Ship" → Ship login → `/oauth-consent` → "Authorize" → redirected back → documents
+rendered → page reload resumes from `localStorage` with no re-prompt. Plus the mandatory negative
+case: an unregistered `redirect_uri` never silently succeeds (Ship's own open-redirect guard,
+`oauth-authorize.ts`'s `sendUnsafeToRedirectError`, renders a static error and never redirects
+anywhere). Plus a third: a failed leg-2 exchange (below) clears its stale `?code=` so retrying
+starts a fresh login instead of replaying a dead code. **3/3 tests pass, no retries**
+(`test-results/progress.jsonl`: each test appears once, `running` → `passed`, no `failed` entry —
+not a flake). The demo build itself is ~17.7 kB / ~5.4 kB gzip; `grep` on the built bundle confirms
+zero `node:crypto`/`fs`/`path` references remain. `pnpm --filter @ship/sdk test`: 16/16 files,
+161/161 tests green after the split (incl. the 4 `*.liveServer.test.ts` files, run against this
+worktree's real factory Postgres via `.factory-env`, not skipped).
+
+**A second real gap, found by CI itself:** `integrations/browser-demo` is the first workspace
+package to depend on `@ship/sdk` via its own `package.json` (`"workspace:*"`), which pnpm resolves
+through `sdk/package.json`'s `types`/`main` fields (`./dist/index.d.ts`/`./dist/index.js`) — those
+paths don't exist until `sdk` is actually built. `.github/workflows/ci.yml` built `shared` before
+`pnpm type-check` (api/web depend on its dist) but never built `sdk`, because no prior consumer
+needed its compiled output at type-check time. CI's real run caught this (`Cannot find module
+'@ship/sdk' or its corresponding type declarations`, TS2307) — reproduced locally by deleting
+`sdk/dist` and re-running `pnpm type-check`, confirmed fixed by building `sdk` first. Added a
+`build:sdk` root script and a `Build sdk` step to `ci.yml`, mirroring the existing `build:shared`
+step exactly.
+
+**Also found and fixed, across a self-review pass and CodeRabbit's PR review:** a failed PKCE
+leg-2 exchange left a stale `?code=` in the URL, blocking retry; `renderError()` cleared itself
+immediately via its own call to `renderConnect()` (which resets `#app`'s `innerHTML`), so an error
+message never actually reached the visible DOM; a denied/failed OAuth authorization (`?error=`,
+RFC 6749 §4.1.2.1 — has no `code`) was never detected, so the demo silently showed "Connect to
+Ship" again instead of the failure; the Connect button's `authorizationCodeFlow()` call had no
+`.catch()`, so a rejection before `location.assign()` fires (e.g. no WebCrypto) would be a silent
+unhandled rejection. `FileTokenStore.set()`'s non-atomic write (real, but pre-existing PF-404 code
+only relocated here) filed separately as TRO-600 rather than fixed in this branch.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/sdk build
+pnpm --filter @ship/sdk test
+pnpm --filter @ship/browser-demo build
+```
+
+Then `/e2e-test-runner e2e/browser-demo-pkce.spec.ts` for the full browser-driven proof.
+
+**Rollback.** `git revert` the ticket's commits (this branch has no single squashed SHA — revert
+the merge-forward-free commit range from `sdk/src/index.ts`'s TRO-449 header comment forward).
+Scope is wider than `integrations/browser-demo/`: it also includes the `sdk/src/tokenStore.ts` /
+`fileTokenStore.ts` / `node.ts` split + `sdk/package.json`'s `"./node"` export, the two new `e2e/`
+files, and root `package.json`'s `build:sdk` script + `.github/workflows/ci.yml`'s `Build sdk`
+step (needed by any future `@ship/sdk`-in-a-browser-bundle consumer, not just this one — see
+`integrations/browser-demo/README.md`'s own Rollback section for the itemized list).
+
+---
+
 ## TRO-423 — PF-701: Seed first-party app ship_app_fleetgraph — idempotent, secret via env, boot check
 
 **Scope note.** In scope: the idempotent seed + its regression test (AC-1), the boot-time check in

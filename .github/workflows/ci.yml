@@ -77,6 +77,15 @@ jobs:
       - name: Build shared (api and web both depend on its dist)
         run: pnpm build:shared
 
+      # TRO-449 (PF-802): integrations/browser-demo is the first workspace
+      # package to depend on @ship/sdk via its package.json ("workspace:*"),
+      # which pnpm resolves through sdk/package.json's types/main fields
+      # (./dist/index.d.ts, ./dist/index.js) — those don't exist until sdk
+      # is actually built. Every prior consumer of @ship/sdk (its own tests,
+      # its own type-check) only ever needed sdk/src directly.
+      - name: Build sdk (browser-demo depends on its dist)
+        run: pnpm build:sdk
+
       # PF-204 (TRO-409): docs/openapi.json is the committed, public /api/v1
       # OpenAPI 3.1 spec (PF-202's generateV1OpenAPIDocument()). This
       # regenerates it in-process to a temp file and diffs against the
