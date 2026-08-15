@@ -34,7 +34,7 @@
  */
 
 import type { ResilientClient } from './resilientClient.js';
-import type { ShipClient as SdkShipClient, DocumentType as SdkDocumentType } from '@ship/sdk';
+import type { ShipClient as SdkShipClient, DocumentType as SdkDocumentType, IssueState as SdkIssueState } from '@ship/sdk';
 
 /**
  * PF-702 (TRO-428) — `AGENT_PLATFORM_MODE=sdk` mode. When `ShipClientOptions
@@ -948,22 +948,150 @@ export function plainTextToTipTapDoc(text: string): { type: 'doc'; content: unkn
   };
 }
 
+/**
+ * The narrow slice of `@ship/sdk`'s `ShipClient` that `GateShipClient`'s
+ * sdk-mode writes below actually call (PF-703, TRO-435) — same "Pick, not
+ * the whole class" convention this file already uses for `ShipClientLike`/
+ * `OnDemandShipClientLike`/`DeepShipClientLike`. A real `SdkShipClient`
+ * instance structurally satisfies this (its `.documents`/`.issues` fields
+ * have strictly MORE methods than these `Pick`s require); test doubles
+ * build a plain object literal instead — the same "fake, not a mock of the
+ * real class" convention `fakeRequestClient` already uses one layer down,
+ * in `shipClient.test.ts`, for internal mode.
+ */
+export interface GateSdkClientLike {
+  me: SdkShipClient['me'];
+  documents: Pick<SdkShipClient['documents'], 'create' | 'update'>;
+  issues: Pick<SdkShipClient['issues'], 'update'>;
+}
+
+const SDK_ISSUE_STATES_LIST = [
+  'triage', 'backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled',
+] as const;
+
+/** Compile-time exhaustiveness check (CodeRabbit, this PR): if `@ship/sdk`'s
+ *  `IssueState` union ever grows a member not listed in
+ *  `SDK_ISSUE_STATES_LIST` above, `_exhaustiveSdkIssueStatesCheck` below
+ *  fails to typecheck (`Exclude<...>` resolves to the missing member(s)
+ *  instead of `never`), catching the drift at build time — instead of the
+ *  new state silently always failing `assertSdkIssueState`'s runtime check
+ *  forever, with no signal anyone forgot to update this list. */
+type MissingSdkIssueStates = Exclude<SdkIssueState, (typeof SDK_ISSUE_STATES_LIST)[number]>;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- type-only, exists purely to fail `tsc` on drift.
+type _AssertNoMissingSdkIssueStates = MissingSdkIssueStates extends never ? true : ['missing from SDK_ISSUE_STATES_LIST:', MissingSdkIssueStates];
+const _exhaustiveSdkIssueStatesCheck: _AssertNoMissingSdkIssueStates = true;
+void _exhaustiveSdkIssueStatesCheck;
+
+const SDK_ISSUE_STATES: ReadonlySet<string> = new Set(SDK_ISSUE_STATES_LIST);
+
+/**
+ * `applyIssueTransition`'s `toState` is a plain `string` at this file's own
+ * `GateShipClientLike` boundary (unchanged by this ticket — every existing
+ * caller, `gate.ts`'s `acceptProposedTransition`, already passes a string).
+ * sdk mode's `issues.update()` (`@ship/sdk`) requires the narrower
+ * `IssueState` literal union. Guarded, not asserted blind (lessons.md #16):
+ * an unrecognized value throws HERE, in this process, with a clear message
+ * naming the bad value — never a silent `as SdkIssueState` past a value the
+ * server's own `UpdateIssueRequestSchema` would reject anyway with a less
+ * specific 400. */
+function assertSdkIssueState(value: string): SdkIssueState {
+  if (!SDK_ISSUE_STATES.has(value)) {
+    throw new Error(`GateShipClient.applyIssueTransition: "${value}" is not a recognized issue state`);
+  }
+  return value as SdkIssueState;
+}
+
+/**
+ * Same weekday/month-day title format the internal `POST /api/standups`
+ * route computes (`api/src/routes/standups.ts`) — reproduced here, not
+ * imported: `agent/` cannot reach into `api/src/...` (this file's own
+ * established convention; see `config.ts`'s `FLEETGRAPH_CLIENT_ID` doc
+ * comment for the identical "independently-verified copy" reasoning).
+ * Needed because sdk mode's `POST /api/v1/documents` has no server-side
+ * title default the way the internal route does — `title` is REQUIRED at
+ * that public surface (`resources/documents.ts`'s `CreateDocumentRequestSchema`
+ * own doc comment: "no 'Untitled' default here, unlike the internal API").
+ *
+ * Validates `date` before formatting — two layers, both needed (CodeRabbit,
+ * this PR, round 2: the first cut only checked `Number.isNaN`, which does
+ * NOT catch a calendar-impossible date):
+ *  1. Shape: `date` must match `/^\d{4}-\d{2}-\d{2}$/` — an `Invalid Date`
+ *     does not throw when passed to `toLocaleDateString`, it silently
+ *     returns the literal string `"Invalid Date"`, which would pass
+ *     `CreateDocumentRequestSchema`'s bare `min(1)` title check and create a
+ *     real document titled "Invalid Date Invalid Date Standup".
+ *  2. Calendar validity: `new Date('2026-02-30T00:00:00Z')` does NOT throw
+ *     or produce `Invalid Date` either — it silently ROLLS OVER to
+ *     2026-03-02 (verified directly, not assumed). A shape check alone
+ *     passes "2026-02-30" straight through to a wrong-date title. Caught by
+ *     round-tripping: `dateObj`'s own ISO date part must equal the input
+ *     `date` string exactly, or the input didn't name a real calendar day.
+ * The internal route's own `createStandupSchema` fails loudly on malformed
+ * input instead (`z.string().regex(/^\d{4}-\d{2}-\d{2}$/)`, a 400 before any
+ * write, though even THAT route trusts `new Date()` for calendar validity
+ * the same way this file's first cut did) — this guard gives sdk mode the
+ * fail-closed behavior the internal route's own schema alone doesn't fully
+ * provide either.
+ */
+function standupTitleForDate(date: string): string {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    throw new Error(`GateShipClient.postStandup: "${date}" is not a valid YYYY-MM-DD date`);
+  }
+  const dateObj = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(dateObj.getTime()) || dateObj.toISOString().slice(0, 10) !== date) {
+    throw new Error(`GateShipClient.postStandup: "${date}" is not a valid YYYY-MM-DD date`);
+  }
+  const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
+  const monthDay = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return `${dayName} ${monthDay} Standup`;
+}
+
 export interface GateShipClientOptions {
   baseUrl: string;
-  /** Narrowed to just `.request` — every call this client makes is a
-   * non-idempotent write (POST/PATCH), so `ResilientClient.get`'s retry
-   * behavior (built for idempotent reads only) is never appropriate here;
-   * see `resilientClient.ts`'s own docstring for `request` vs `get`. */
+  /** Narrowed to just `.request` — every INTERNAL-mode call this client
+   * makes is a non-idempotent write (POST/PATCH), so `ResilientClient.get`'s
+   * retry behavior (built for idempotent reads only) is never appropriate
+   * here; see `resilientClient.ts`'s own docstring for `request` vs `get`. */
   client: Pick<ResilientClient, 'request'>;
+  /**
+   * PF-703 (TRO-435) — when provided, sdk mode: each of the three write
+   * methods below calls `sdkClientFactory(token)` to build a FRESH
+   * `@ship/sdk` `ShipClient` bound to THAT call's own acting-human token
+   * (never a stored one — `GateShipClient` still holds no token field of
+   * its own; see this file's "gate's write-capable client" section above),
+   * and routes the write through `/api/v1/*` instead of `this.client
+   * .request` against the internal `/api/*` route. Constructing a client
+   * per call is cheap by design — `@ship/sdk`'s `ShipClient` constructor
+   * docstring states this explicitly: "Required by PF-703 (the agent gate
+   * builds a fresh ShipClient per human-token write); a constructor that
+   * made a network call would be prohibitively expensive there" — so a
+   * fresh instance per call is the intended pattern, not a perf concern.
+   *
+   * `undefined` (the default): internal mode, byte-for-byte unchanged from
+   * before this ticket — every write still goes straight to Ship's own
+   * internal API via `this.client.request`.
+   *
+   * Built EXTERNALLY (`index.ts`), mirroring `ShipClientOptions.sdk`'s own
+   * "constructed once, outside this file" convention for the read path —
+   * this file never needs to import `@ship/sdk`'s `ShipClient` as a VALUE,
+   * only as the type `GateSdkClientLike` above borrows method signatures
+   * from. `index.ts` mints a scoped personal token per accepted write
+   * (`api/src/routes/agent.ts`'s `POST /accept-draft` -> `mintEphemeralAgentToken`
+   * with `documents:write`/`issues:write` scopes, PF-703) and passes IT as
+   * `accepterToken` — this factory just decides which wire protocol that
+   * token authenticates against, not where the token itself comes from. */
+  sdkClientFactory?: (token: string) => GateSdkClientLike;
 }
 
 export class GateShipClient implements GateShipClientLike {
   private readonly base: string;
   private readonly client: Pick<ResilientClient, 'request'>;
+  private readonly sdkClientFactory: ((token: string) => GateSdkClientLike) | undefined;
 
   constructor(options: GateShipClientOptions) {
     this.base = options.baseUrl.replace(/\/+$/, '');
     this.client = options.client;
+    this.sdkClientFactory = options.sdkClientFactory;
   }
 
   private authHeaders(token: string): Record<string, string> {
@@ -983,16 +1111,95 @@ export class GateShipClient implements GateShipClientLike {
   }
 
   async postStandup(token: string, date: string): Promise<CreatedStandup> {
+    const factory = this.sdkClientFactory;
+    return factory ? this.postStandupViaSdk(factory(token), date) : this.postStandupViaInternal(token, date);
+  }
+
+  private async postStandupViaInternal(token: string, date: string): Promise<CreatedStandup> {
     return this.writeJson<CreatedStandup>('POST', `${this.base}/api/standups`, token, { date });
   }
 
+  /**
+   * `POST /api/v1/documents` (`documents:write` scope) with
+   * `document_type: 'standup'`. Two disclosed differences from internal
+   * mode (CHANGES.md, TRO-435 — same "disclosed limitation" posture PF-702
+   * used for sdk-mode `getDocument()`, not a silent gap):
+   *  - No idempotency check: the internal route returns the EXISTING
+   *    standup for this (author, date) if one already exists; this always
+   *    creates a new document. The one real call site
+   *    (`gate.ts`'s `acceptDraft`) never retries a successful accept, so
+   *    this is a real but narrow gap, not a correctness bug in the
+   *    happy path.
+   *  - `content` on the returned object is always `null` — the public
+   *    `GET/POST /api/v1/documents` route never returns `content`
+   *    (`resources/documents.ts`'s `serializeDocument()`, deliberately
+   *    narrower than the internal row). Harmless for the one real caller:
+   *    `acceptDraft` only reads `created.id` off this return value, never
+   *    `.content`.
+   * `properties.author_id` IS still set correctly — via one extra `me()`
+   * call to resolve the acting human's own id from their token (this
+   * client holds no user-id field, only the token) — so standup ownership
+   * (`GET /standups?date_from&date_to`'s own filter) keeps working the same
+   * as internal mode for anything created this way.
+   */
+  private async postStandupViaSdk(sdk: GateSdkClientLike, date: string): Promise<CreatedStandup> {
+    // Computed BEFORE the me() call (not inline in the create() args below)
+    // so a malformed date fails immediately, before spending a network
+    // round trip on a request this call is going to reject anyway.
+    const title = standupTitleForDate(date);
+    const me = await sdk.me();
+    const created = await sdk.documents.create({
+      title,
+      document_type: 'standup',
+      properties: { author_id: me.user?.id ?? null, date },
+    });
+    return { ...created, content: null };
+  }
+
   async setStandupContent(token: string, standupId: string, text: string): Promise<CreatedStandup> {
+    const factory = this.sdkClientFactory;
+    return factory
+      ? this.setStandupContentViaSdk(factory(token), standupId, text)
+      : this.setStandupContentViaInternal(token, standupId, text);
+  }
+
+  private async setStandupContentViaInternal(token: string, standupId: string, text: string): Promise<CreatedStandup> {
     return this.writeJson<CreatedStandup>('PATCH', `${this.base}/api/standups/${standupId}`, token, {
       content: plainTextToTipTapDoc(text),
     });
   }
 
+  /** `PATCH /api/v1/documents/:id` (`documents:write` scope), `content`
+   *  only. The response `content` is the exact TipTap doc this call just
+   *  sent — the public PATCH route doesn't echo `content` back either
+   *  (same `serializeDocument()` narrowing `postStandupViaSdk` documents),
+   *  but this is not a gap the way that one is: it is guaranteed accurate,
+   *  since it's the literal value this same call just wrote. */
+  private async setStandupContentViaSdk(sdk: GateSdkClientLike, standupId: string, text: string): Promise<CreatedStandup> {
+    const content = plainTextToTipTapDoc(text);
+    const updated = await sdk.documents.update(standupId, { content });
+    return { ...updated, content };
+  }
+
   async applyIssueTransition(token: string, issueId: string, toState: string): Promise<void> {
+    const factory = this.sdkClientFactory;
+    if (factory) {
+      await this.applyIssueTransitionViaSdk(factory(token), issueId, toState);
+      return;
+    }
+    await this.applyIssueTransitionViaInternal(token, issueId, toState);
+  }
+
+  private async applyIssueTransitionViaInternal(token: string, issueId: string, toState: string): Promise<void> {
     await this.writeJson<unknown>('PATCH', `${this.base}/api/issues/${issueId}`, token, { state: toState });
+  }
+
+  /** `PATCH /api/v1/issues/:id` (`issues:write` scope), `state` only —
+   *  see `platform/api/v1/resources/issues.ts`'s `UpdateIssueRequestSchema`
+   *  doc comment for the disclosed narrower-than-internal scope (no
+   *  title/priority/assignee_id/belongs_to, no "incomplete children" gate)
+   *  — irrelevant to this caller, which only ever sends `state`. */
+  private async applyIssueTransitionViaSdk(sdk: GateSdkClientLike, issueId: string, toState: string): Promise<void> {
+    await sdk.issues.update(issueId, { state: assertSdkIssueState(toState) });
   }
 }
