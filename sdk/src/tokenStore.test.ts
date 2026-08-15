@@ -8,7 +8,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
-import { FileTokenStore, MemoryTokenStore, type TokenSet } from './tokenStore.js';
+import { MemoryTokenStore, type TokenSet } from './tokenStore.js';
+// TRO-449/PF-802 split FileTokenStore into its own file (fs/path stay out
+// of tokenStore.ts entirely) — see tokenStore.ts's own header for why.
+import { FileTokenStore } from './fileTokenStore.js';
 
 const SAMPLE: TokenSet = {
   accessToken: 'ship_at_abc123',
