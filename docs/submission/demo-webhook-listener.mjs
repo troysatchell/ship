@@ -85,18 +85,44 @@ export function createReferenceSubscriber({ secret, verify, onDelivery = () => {
    * production-grade store). */
   const deliveries = new Map();
 
+  /** Caps how much of a request body this fixture will buffer before giving
+   * up and responding 413 (CodeRabbit, this ticket's review) — an
+   * un-capped `chunks.push(chunk)` loop lets an oversized or malicious
+   * sender exhaust this process's memory one delivery at a time. 1 MB is
+   * generously larger than any real Ship event payload (a webhook body is
+   * one JSON-serialized event envelope, never a bulk export). */
+  const MAX_BODY_BYTES = 1_000_000;
+
   function requestListener(req, res) {
     const chunks = [];
-    req.on('data', (chunk) => chunks.push(chunk));
+    let totalBytes = 0;
+    let aborted = false;
+
+    req.on('data', (chunk) => {
+      if (aborted) return;
+      totalBytes += chunk.length;
+      if (totalBytes > MAX_BODY_BYTES) {
+        aborted = true;
+        res.writeHead(413, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ received: false, reason: 'request body too large' }));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+
     req.on('end', () => {
+      if (aborted) return;
       const rawBody = Buffer.concat(chunks).toString('utf8');
       const signatureHeader = req.headers['ship-signature'];
       const idempotencyKeyHeader = req.headers['idempotency-key'];
-      const idempotencyKey = typeof idempotencyKeyHeader === 'string' ? idempotencyKeyHeader : undefined;
+      const idempotencyKey = typeof idempotencyKeyHeader === 'string' && idempotencyKeyHeader.length > 0
+        ? idempotencyKeyHeader
+        : undefined;
 
-      const verified = typeof signatureHeader === 'string' && verify(signatureHeader, rawBody, secret);
+      const signatureVerified = typeof signatureHeader === 'string' && verify(signatureHeader, rawBody, secret);
 
-      if (!verified) {
+      if (!signatureVerified) {
         onDelivery({ kind: 'rejected', idempotencyKey });
         // A signature that doesn't verify is NOT "handled" — a real
         // integrator should reject it (401 here; the exact status doesn't
@@ -104,6 +130,19 @@ export function createReferenceSubscriber({ secret, verify, onDelivery = () => {
         // "permanent failure, don't retry" per deliverer.ts's own contract).
         res.writeHead(401, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ received: false, reason: 'signature verification failed' }));
+        return;
+      }
+
+      // The dedupe contract has nothing to key on without this header
+      // (CodeRabbit, this ticket's review) — a verified request missing it
+      // is a malformed sender, not a delivery this fixture can safely
+      // dedupe-or-process. Rejected the same way an unverified signature is:
+      // outside 2xx/5xx, so a real sender's retry logic treats it as a
+      // permanent failure to fix, not a transient one to retry as-is.
+      if (idempotencyKey === undefined) {
+        onDelivery({ kind: 'rejected', idempotencyKey: undefined });
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ received: false, reason: 'missing or empty Idempotency-Key header' }));
         return;
       }
 
@@ -115,17 +154,15 @@ export function createReferenceSubscriber({ secret, verify, onDelivery = () => {
       }
 
       let isDuplicate = false;
-      if (idempotencyKey !== undefined) {
-        const existing = deliveries.get(idempotencyKey);
-        if (existing) {
-          // THE dedupe check: recognized, but deliberately NOT reprocessed —
-          // `existing.payload` (the FIRST delivery's payload) is left
-          // untouched, and only the duplicate count moves.
-          isDuplicate = true;
-          existing.duplicateCount += 1;
-        } else {
-          deliveries.set(idempotencyKey, { payload, firstSeenAt: new Date().toISOString(), duplicateCount: 0 });
-        }
+      const existing = deliveries.get(idempotencyKey);
+      if (existing) {
+        // THE dedupe check: recognized, but deliberately NOT reprocessed —
+        // `existing.payload` (the FIRST delivery's payload) is left
+        // untouched, and only the duplicate count moves.
+        isDuplicate = true;
+        existing.duplicateCount += 1;
+      } else {
+        deliveries.set(idempotencyKey, { payload, firstSeenAt: new Date().toISOString(), duplicateCount: 0 });
       }
 
       onDelivery({ kind: isDuplicate ? 'duplicate' : 'processed', idempotencyKey, payload });
