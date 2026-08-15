@@ -58,6 +58,11 @@ import { InMemoryDraftStore } from '../draftStore.js';
 import { acceptDraft, acceptProposedTransition } from '../gate.js';
 import { CircuitBreaker } from '../circuitBreaker.js';
 import { ResilientClient } from '../resilientClient.js';
+// PF-703 (TRO-435) — sdk mode's per-call gate client, real `@ship/sdk`, no
+// fake: the whole point of this file's "live DB" half is a real end-to-end
+// round trip, and sdk mode's own real wire protocol (/api/v1/*) is exactly
+// what needs proving here, same as internal mode above it.
+import { ShipClient as SdkShipClient } from '@ship/sdk';
 
 const RUN_ID = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
 
@@ -83,6 +88,43 @@ function insertedId(rows: readonly { id: string }[], label: string): string {
   return row.id;
 }
 
+/** The `public_api_audit` row shape this file's own attribution proofs read
+ *  — same fields `platform/audit/__tests__/middleware.test.ts`'s own
+ *  `AuditDbRow` declares, narrowed to just what these tests assert on. */
+interface AuditRow {
+  user_id: string | null;
+  app_client_id: string | null;
+  scope_used: string | null;
+  status: number;
+}
+
+/**
+ * Polls `public_api_audit` for a row matching `route`/`method` — mirrors
+ * `platform/audit/__tests__/middleware.test.ts`'s own `pollForAuditRow`
+ * (same 20ms/1000ms shape): the write is fire-and-forget, started inside
+ * `res.on('finish')` AFTER the HTTP response the SDK call already resolved
+ * on, so it can land a few event-loop turns later than the `await` above it
+ * — an observable condition to poll for, never a fixed sleep (lessons.md
+ * rule 17). Filters by `route`/`method` rather than `request_id` (which
+ * `@ship/sdk`'s `RequestClient` does not expose to callers — it returns
+ * only the parsed JSON body, never response headers) — safe here because
+ * every route this file polls for is scoped to a freshly-inserted UUID
+ * (`issueId2`, `standupId`), never reused across tests or runs.
+ */
+async function pollForAuditRow(route: string, method: string): Promise<AuditRow | null> {
+  const deadline = Date.now() + 1000;
+  while (Date.now() < deadline) {
+    const result = await pool.query<AuditRow>(
+      `SELECT user_id, app_client_id, scope_used, status FROM public_api_audit
+       WHERE route = $1 AND method = $2 ORDER BY created_at DESC LIMIT 1`,
+      [route, method]
+    );
+    if (result.rows[0]) return result.rows[0];
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return null;
+}
+
 async function snapshotDbState() {
   const dh = await pool.query<{ count: string; max_id: string }>(
     `SELECT COUNT(*)::text AS count, COALESCE(MAX(id), 0)::text AS max_id FROM document_history`
@@ -102,13 +144,35 @@ describe('the human-in-the-loop write boundary, against a real running Ship API 
   let workspaceId: string;
   let userId: string;
   let plainToken: string;
+  // PF-703 (TRO-435) — a SECOND, SCOPED personal token: bearerAuth
+  // (platform/oauth/bearerAuth.ts) rejects a `scopes IS NULL` personal
+  // token at /api/v1 outright ("the landmine"), so `plainToken` above
+  // (deliberately unscoped, matching production's `mintEphemeralAgentToken`
+  // default) can authenticate internal-mode writes but would 401 against
+  // every sdk-mode one. Same shape `shipClientParity.liveServer.test.ts`
+  // already seeds for reads — extended here to WRITE scopes.
+  let scopedToken: string;
   let issueId: string;
+  // PF-703 — a second issue, dedicated to the sdk-mode transition test
+  // below, so it never contends with the internal-mode "control" test's own
+  // mutation of `issueId` (both describe blocks run in the same file,
+  // sequentially — fileParallelism: false — but sharing one issue across
+  // two state-transition assertions would make the second test's starting
+  // state depend on the first test's own effect, which is not what either
+  // test claims to prove).
+  let issueId2: string;
   let sprintId: string;
   let app: Express;
   let server: Server;
   let baseUrl: string;
   let shipClient: ShipClient;
   let gateShipClient: GateShipClient;
+  // PF-703 — sdk mode's own gate client, same baseUrl/server, but its
+  // `sdkClientFactory` routes every write through a real per-call
+  // `@ship/sdk` `ShipClient` against `/api/v1/*` instead of
+  // `resilientClient.request` against the internal `/api/*` route (see
+  // `shipClient.ts`'s `GateShipClientOptions.sdkClientFactory` doc comment).
+  let sdkGateShipClient: GateShipClient;
   let itemStore: InMemoryItemStore;
   let draftStore: InMemoryDraftStore;
 
@@ -118,9 +182,18 @@ describe('the human-in-the-loop write boundary, against a real running Ship API 
     ]);
     workspaceId = insertedId(ws.rows, 'workspace');
 
+    // last_workspace_id (PF-703 addition): v1's resolvePrincipalWorkspaceId
+    // (platform/api/v1/resources/workspaceContext.ts) resolves a
+    // PERSONAL-token principal's workspace from users.last_workspace_id, NOT
+    // from api_tokens.workspace_id — same documented approximation
+    // shipClientParity.liveServer.test.ts's own beforeAll already sets this
+    // for. Internal-mode routes (used by plainToken above) never consult
+    // this column, so setting it is additive — it changes nothing about the
+    // existing internal-mode assertions below, only makes scopedToken's
+    // sdk-mode requests resolvable at all.
     const user = await pool.query<{ id: string }>(
-      `INSERT INTO users (email, password_hash, name) VALUES ($1, 'not-a-real-hash', 'FG-8 Gate Test User') RETURNING id`,
-      [`fg8-gate-test-${RUN_ID}@ship.local`]
+      `INSERT INTO users (email, password_hash, name, last_workspace_id) VALUES ($1, 'not-a-real-hash', 'FG-8 Gate Test User', $2) RETURNING id`,
+      [`fg8-gate-test-${RUN_ID}@ship.local`, workspaceId]
     );
     userId = insertedId(user.rows, 'test user');
 
@@ -136,12 +209,33 @@ describe('the human-in-the-loop write boundary, against a real running Ship API 
       [userId, workspaceId, 'FG-8 gate test token', tokenHash, plainToken.slice(0, 8)]
     );
 
+    scopedToken = `fg8-gate-test-scoped-token-${RUN_ID}`;
+    const scopedTokenHash = crypto.createHash('sha256').update(scopedToken).digest('hex');
+    await pool.query(
+      `INSERT INTO api_tokens (user_id, workspace_id, name, token_hash, token_prefix, scopes) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        userId,
+        workspaceId,
+        'FG-8 gate test scoped token (PF-703)',
+        scopedTokenHash,
+        scopedToken.slice(0, 8),
+        ['documents:write', 'issues:write'],
+      ]
+    );
+
     const issue = await pool.query<{ id: string }>(
       `INSERT INTO documents (workspace_id, document_type, title, properties, ticket_number, created_by)
        VALUES ($1, 'issue', 'FG-8 gate test issue', $2, 1, $3) RETURNING id`,
       [workspaceId, JSON.stringify({ state: 'todo', assignee_id: userId }), userId]
     );
     issueId = insertedId(issue.rows, 'test issue');
+
+    const issue2 = await pool.query<{ id: string }>(
+      `INSERT INTO documents (workspace_id, document_type, title, properties, ticket_number, created_by)
+       VALUES ($1, 'issue', 'FG-8 gate test issue (sdk mode)', $2, 3, $3) RETURNING id`,
+      [workspaceId, JSON.stringify({ state: 'todo', assignee_id: userId }), userId]
+    );
+    issueId2 = insertedId(issue2.rows, 'test issue (sdk mode)');
 
     // A live blocking approval — makes the proactive_fast run below do real
     // work (a real document_history READ that produces a real in-memory
@@ -184,6 +278,18 @@ describe('the human-in-the-loop write boundary, against a real running Ship API 
 
     shipClient = new ShipClient({ baseUrl, token: plainToken, client: resilientClient });
     gateShipClient = new GateShipClient({ baseUrl, client: resilientClient });
+    // PF-703 — sdkClientFactory present means sdk mode (same "presence
+    // decides the mode" convention as ShipClient's own `sdk` option);
+    // `sdk` here constructs a REAL `@ship/sdk` `ShipClient` per call, bound
+    // to whatever token the gate's own write methods are called with —
+    // never `scopedToken` baked in at construction time, proving the
+    // per-call-token contract the same way internal mode's own test above
+    // (a call with `token-for-alice` then `token-for-bob`) already does.
+    sdkGateShipClient = new GateShipClient({
+      baseUrl,
+      client: resilientClient,
+      sdkClientFactory: (token: string) => new SdkShipClient({ token, baseUrl }),
+    });
     itemStore = new InMemoryItemStore();
     draftStore = new InMemoryDraftStore();
   }, 30_000);
@@ -303,6 +409,132 @@ describe('the human-in-the-loop write boundary, against a real running Ship API 
       expect(JSON.stringify(row.rows[0]?.content)).toContain('Posted via the FG-8 gate write-boundary test.');
 
       expect(draftStore.get(draftId)?.status).toBe('posted');
+    });
+  });
+
+  // PF-703 (TRO-435) — the SAME control proof as above, routed through
+  // `sdkGateShipClient` (a real `@ship/sdk` `ShipClient` per call,
+  // `/api/v1/*`) instead of `gateShipClient` (internal `/api/*`), using
+  // `scopedToken` instead of `plainToken` (bearerAuth rejects a
+  // `scopes IS NULL` token at /api/v1 — see `scopedToken`'s own beforeAll
+  // comment). Proves both AC halves this ticket names explicitly: the
+  // write-boundary invariant still holds in sdk mode, and the write
+  // attributes to the human user in `public_api_audit` — never the app.
+  describe('sdk mode — the same write-boundary proof, routed through /api/v1/*, plus human-attribution evidence in public_api_audit', () => {
+    it('applyIssueTransition (sdk mode) moves document_history + issue state identically to internal mode, attributed to the human — never the agent, never the app', async () => {
+      const draftId = `standup-draft:${userId}:2026-08-06`;
+      draftStore.upsert({
+        id: draftId,
+        personUserId: userId,
+        windowDate: '2026-08-06',
+        draftText: 'I moved "FG-8 gate test issue (sdk mode)" to In Review.',
+        proposedTransitions: [
+          {
+            issueId: issueId2,
+            issueTitle: 'FG-8 gate test issue (sdk mode)',
+            field: 'state',
+            fromState: 'todo',
+            toState: 'in_review',
+            evidence: { kind: 'history', changedAt: new Date().toISOString(), changedBy: userId },
+          },
+        ],
+      });
+
+      const before = await snapshotDbState();
+
+      await acceptProposedTransition({ shipClient: sdkGateShipClient, itemStore, draftStore }, draftId, 0, scopedToken);
+
+      const after = await snapshotDbState();
+      expect(after.documentHistoryCount).toBe(before.documentHistoryCount + 1);
+      expect(after.documentHistoryMaxId).toBeGreaterThan(before.documentHistoryMaxId);
+      expect(after.documentsCount).toBe(before.documentsCount); // a transition never creates/deletes a document
+
+      const newRow = await pool.query<{ changed_by: string; automated_by: string | null }>(
+        `SELECT changed_by, automated_by FROM document_history
+         WHERE document_id = $1 AND field = 'state' ORDER BY created_at DESC, id DESC LIMIT 1`,
+        [issueId2]
+      );
+      // Attributed to the ACCEPTING person — never the agent. Same proof as
+      // internal mode's identical assertion above: there is no "agent
+      // identity" token anywhere in this test, only scopedToken, which
+      // authenticates as userId end to end (bearerAuth -> req.principal.user).
+      expect(newRow.rows[0]?.changed_by).toBe(userId);
+      expect(newRow.rows[0]?.automated_by).toBeNull();
+
+      const issueRow = await pool.query<{ state: string }>(
+        `SELECT properties->>'state' AS state FROM documents WHERE id = $1`,
+        [issueId2]
+      );
+      expect(issueRow.rows[0]?.state).toBe('in_review');
+
+      // THE ATTRIBUTION PROOF (this ticket's AC, verbatim: "writes attribute
+      // to the human user in public_api_audit"). This write went through a
+      // REAL /api/v1 route (PATCH /api/v1/issues/:id, PF-703's own new
+      // route) — PF-501's audit middleware recorded it, and the row names
+      // the human, never an app (a personal-token Principal.app is always
+      // null — platform/oauth/principal.ts — so app_client_id being NULL
+      // here is itself part of the proof, not a gap).
+      const audit = await pollForAuditRow(`/api/v1/issues/${issueId2}`, 'PATCH');
+      expect(audit, 'expected a public_api_audit row for PATCH /api/v1/issues/:id within 1000ms').not.toBeNull();
+      expect(audit?.user_id).toBe(userId);
+      expect(audit?.app_client_id).toBeNull();
+      expect(audit?.scope_used).toBe('issues:write');
+      expect(audit?.status).toBe(200);
+    });
+
+    it('acceptDraft (sdk mode) posts a real standup document via /api/v1/documents, attributed to the human in public_api_audit for BOTH the create and the content write', async () => {
+      const draftId = `standup-draft:${userId}:2026-08-07`;
+      draftStore.upsert({
+        id: draftId,
+        personUserId: userId,
+        windowDate: '2026-08-07',
+        draftText: 'Posted via the FG-8 gate write-boundary test (sdk mode).',
+        proposedTransitions: [],
+      });
+
+      const before = await snapshotDbState();
+
+      const { standupId } = await acceptDraft(
+        { shipClient: sdkGateShipClient, itemStore, draftStore },
+        draftId,
+        scopedToken
+      );
+
+      const after = await snapshotDbState();
+      expect(after.documentsCount).toBe(before.documentsCount + 1);
+
+      const row = await pool.query<{ created_by: string; author_id: string | null; content: unknown; document_type: string }>(
+        `SELECT created_by, properties->>'author_id' AS author_id, content, document_type FROM documents WHERE id = $1`,
+        [standupId]
+      );
+      expect(row.rows[0]?.document_type).toBe('standup');
+      // created_by (a real documents column, set server-side from
+      // req.principal.user.id by POST /api/v1/documents — resources/
+      // documents.ts) proves attribution independently of properties.author_id
+      // below, which GateShipClient's sdk-mode postStandup sets via its own
+      // extra me() call (shipClient.ts's postStandupViaSdk doc comment).
+      expect(row.rows[0]?.created_by).toBe(userId);
+      expect(row.rows[0]?.author_id).toBe(userId);
+      expect(JSON.stringify(row.rows[0]?.content)).toContain('Posted via the FG-8 gate write-boundary test (sdk mode).');
+
+      expect(draftStore.get(draftId)?.status).toBe('posted');
+
+      // THE ATTRIBUTION PROOF, both calls: POST /api/v1/documents
+      // (postStandup) and PATCH /api/v1/documents/:id (setStandupContent)
+      // each produce their own public_api_audit row, both attributed to the
+      // human, never the app.
+      const createAudit = await pollForAuditRow('/api/v1/documents', 'POST');
+      expect(createAudit, 'expected a public_api_audit row for POST /api/v1/documents within 1000ms').not.toBeNull();
+      expect(createAudit?.user_id).toBe(userId);
+      expect(createAudit?.app_client_id).toBeNull();
+      expect(createAudit?.scope_used).toBe('documents:write');
+
+      const patchAudit = await pollForAuditRow(`/api/v1/documents/${standupId}`, 'PATCH');
+      expect(patchAudit, 'expected a public_api_audit row for PATCH /api/v1/documents/:id within 1000ms').not.toBeNull();
+      expect(patchAudit?.user_id).toBe(userId);
+      expect(patchAudit?.app_client_id).toBeNull();
+      expect(patchAudit?.scope_used).toBe('documents:write');
+      expect(patchAudit?.status).toBe(200);
     });
   });
 });
