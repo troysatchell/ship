@@ -1692,7 +1692,7 @@
             }
           },
           "404": {
-            "description": "No document with this id exists in the caller's workspace, the id is malformed, or the document is private and the caller is neither its creator nor a workspace-visible writer (TRO-611).",
+            "description": "No document with this id exists in the caller's workspace, the id is malformed, or the document is private and the caller is not its creator (TRO-611).",
             "content": {
               "application/json": {
                 "schema": {
