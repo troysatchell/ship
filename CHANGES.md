@@ -21,6 +21,134 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-423 — PF-701: Seed first-party app ship_app_fleetgraph — idempotent, secret via env, boot check
+
+**Scope note.** In scope: the idempotent seed + its regression test (AC-1), the boot-time check in
+`index.ts`, and confirming the terraform wiring PF-900/TRO-411 already committed. Out of scope,
+per the dispatch brief: E7's actual agent-rewire write path (PF-702+) — this ticket only seeds the
+OAuth app row the agent will later authenticate as.
+
+**Terraform — already done, no `.tf` change needed in this branch.** Verified via grep before
+writing any code: `terraform/render/variables.tf`'s `fleetgraph_oauth_client_secret` (sensitive, no
+default) and both `terraform/render/web_service.tf` and `terraform/render/agent_service.tf`'s
+`FLEETGRAPH_OAUTH_CLIENT_SECRET = { value = var.fleetgraph_oauth_client_secret }` were committed by
+TRO-411/PF-900 ahead of this ticket, with a comment on `web_service.tf` naming this exact ticket
+("PF-701 seed reads this exact name"). This ticket's code reads that same literal env var name via
+an exported constant (never a re-declared literal) — no new terraform variable was invented.
+
+**What was added.**
+
+- `api/src/platform/oauth/seedFirstPartyApp.ts` — `seedFirstPartyApp(pool, workspaceId)`, an
+  idempotent seed for the first-party `ship_app_fleetgraph` app. Structurally close to PF-907's
+  `seedGraderApp.ts` (same `credentials.ts` hash-at-rest handling, same
+  check-then-insert-with-`ON CONFLICT` idempotency backed by the real guarantee — the unique index
+  on `oauth_apps.client_id`, migration 042) but differs in two deliberate ways, both per the
+  pre-implementation test design (TRO-423 Linear comment, ship-test-designer, 2026-08-10):
+  1. **`client_id` is the fixed literal `ship_app_fleetgraph`**, not workspace-derived like the
+     grader app's. No `FLEETGRAPH_OAUTH_CLIENT_ID` terraform var exists anywhere (confirmed by
+     grep) — PF-702's agent code and this seed can only agree on one client_id if it's a shared
+     constant, not a value only the seed computes. Assumes single-tenancy for the deployed grading
+     environment, the same assumption `db/seed.ts`'s "Ship Workspace" lookup already makes.
+  2. **A missing `FLEETGRAPH_OAUTH_CLIENT_SECRET` THROWS**, unlike the grader seed's silent
+     `skipped_no_secret`. Required because this function is also called from `index.ts`'s boot
+     path (see below), where the test design's AC-1 explicitly requires "the boot-seed function
+     throws/refuses rather than falling back to a hardcoded default secret." Callers where an
+     unset secret is an expected, non-error state (`db/seed.ts`, local dev) guard the call with a
+     presence check first rather than relying on the function itself to skip.
+  `requested_scopes` is exactly `['documents:read', 'issues:read', 'sprints:read']` (PLUGFORGE.MD
+  §2.3 / PF-700's scope defense) — never a `:write` or `webhooks:manage` scope. `client_type:
+  'confidential'`, `is_first_party: true`.
+- `api/src/db/seed.ts` — calls `seedFirstPartyApp(pool, workspaceId)` right after the grader-app
+  seed call, guarded by `if (process.env.FLEETGRAPH_OAUTH_CLIENT_SECRET)` so a normal local `pnpm
+  db:seed` run (which never has that var set) is unaffected — same "must not break ordinary local
+  dev" requirement the grader app satisfies, just enforced at this call site instead of inside the
+  seed function (see point 2 above for why).
+- `api/src/index.ts` — production-only (`NODE_ENV === 'production'`) boot check, added right after
+  the webhook-deliverer section's `pool` import: looks up the oldest workspace row; if none exists
+  yet (the legitimate pre-first-`db:seed` state on a freshly migrated database — the Docker image's
+  `CMD` runs `migrate.js && index.js`, never `db:seed`, confirmed against `Dockerfile`), logs an
+  informational line and continues. If a workspace exists, calls `seedFirstPartyApp` — success logs
+  `created`/`exists`; a thrown error (secret unset) is caught and logged as a loud, unmissable
+  `console.error` explaining the likely cause, but does **not** `process.exit` or otherwise stop the
+  rest of the API from starting. This is a deliberate design choice, documented at the call site:
+  Terraform's `fleetgraph_oauth_client_secret` has no default, so reaching this branch in a real
+  deploy means the value was removed from Render's env config after `apply` — worth a loud,
+  visible failure, but crash-looping the *entire* API (every document, every issue, the whole web
+  app) over one OAuth app's missing row would be a strictly worse outcome than a broken
+  agent-identity flow alone. Matches the existing fail-partial-not-fail-total posture
+  `routes/agent.ts` already uses for its own missing `AGENT_INTERNAL_SECRET` (503s only the
+  agent-proxy routes, never refuses to boot) rather than `app.ts`'s hard-throw-on-boot precedent
+  for `SESSION_SECRET` (a var every request genuinely needs, unlike this one).
+
+**Regression tests (red-before-green, observed on this branch, `DATABASE_URL` from
+`.factory-env`/`ship_wt_tro_423`).**
+
+- `api/src/platform/oauth/__tests__/seedFirstPartyApp.test.ts` (8 cases). Test-design source:
+  TRO-423's "Test design (pre-implementation)" Linear comment, AC-1 and AC-2 — both in scope here
+  (unlike PF-907's sibling test, which scoped its AC-2-equivalent out): PF-104's `/oauth/token` and
+  PF-201's `/api/v1/me` are both already merged on `main`, so the full `client_credentials` ->
+  `/api/v1/me` path is real, not stubbed. Red first: temporarily replaced the module with a stub
+  that inserts nothing and always reports `'created'` without touching the database (copied the
+  real file aside to the scratchpad first, per the "never `git stash`" rule — restored from that
+  copy afterward, diffed clean). 7 of 8 cases failed for the right reason (row-count/shape/throw
+  assertions against real DB state — e.g. "expected at least one row, got none", "expected 401 to
+  be 200" — never an import or reference error); the 8th (the negative "wrong secret -> 401" case)
+  passed against the stub too, which is expected and fine for a negative assertion. Restored the
+  real implementation, re-ran: 8/8 green. AC-1 covers: two-calls-in-sequence and concurrent-calls
+  both converge to exactly one row; `is_first_party = true`, `client_type: confidential`,
+  `client_id` starts `ship_app_` (and is exactly `ship_app_fleetgraph`), exactly the three
+  read-only scopes; `client_secret_hash` is the SHA-256 hex digest of the env value, never the raw
+  secret; the env var name is read via the module's own exported constant, never a hardcoded
+  literal in the test; an unset secret throws (asserted via `.rejects.toThrow`) and creates no row.
+  AC-2 covers: a real `POST /oauth/token` (`grant_type=client_credentials`) against the seeded app
+  returns a 200 with an `access_token` and no `refresh_token` field at all, and the returned token
+  used against a real `GET /api/v1/me` shows `user: null`, `app: { client_id: 'ship_app_fleetgraph',
+  name: 'FleetGraph Agent', is_first_party: true }`, and `scopes` equal to exactly the three
+  read-only scopes — the PRD's AC sentence, proven end to end. A second case confirms a wrong
+  `client_secret` gets 401 `invalid_client` and never reaches `/api/v1/me`.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/seedFirstPartyApp.test.ts
+
+# Manual end-to-end sanity check (not the graded proof — a local integration smoke check run
+# during this ticket, against this worktree's own database):
+FLEETGRAPH_OAUTH_CLIENT_SECRET=<any-value> pnpm --filter @ship/api exec tsx src/db/seed.ts
+# → "✅ Created first-party FleetGraph OAuth app (client_id: ship_app_fleetgraph)"
+# re-run the same command → "ℹ️  FleetGraph OAuth app already exists (client_id: ship_app_fleetgraph)"
+```
+
+**Observed vs. derived.** Observed: the 8/8 vitest run above, on this worktree's database, and the
+terraform-file grep confirming the env var wiring already exists. Derived, not run: the actual
+production boot check against a real deployed Render environment — no `terraform apply` was run as
+part of this ticket (explicitly out of scope; that's a human-gated deploy action), so "fresh deploy
+has the app" is proven at the unit/integration level (the seed function + the full grant->`/me`
+path) but not yet observed against the live graded instance. That observation belongs to PF-901's
+deploy-verification step, same split PF-907's own CHANGES.md entry already used for its "portal
+reachable" AC.
+
+**Not verified / explicitly deferred.** The boot check's own behavior against a real production
+process start (no vitest coverage is possible for `index.ts`'s `main()` — it is never invoked by
+any test file in this repo, by design, per that file's own header comment) — covered instead by
+manual reasoning in the code comment and by PF-901's live deploy-verification step per the test
+design's own "not vitest-testable" note.
+
+**Rollback.** Delete `api/src/platform/oauth/seedFirstPartyApp.ts` and
+`api/src/platform/oauth/__tests__/seedFirstPartyApp.test.ts`. In `api/src/db/seed.ts`, remove the
+`seedFirstPartyApp`/`FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR` import and the guarded seed-call block
+added right after the grader-app seed step — the rest of the seed file is unaffected. In
+`api/src/index.ts`, remove the `NODE_ENV === 'production'` boot-check block added right after the
+`pool` import (before the webhook-deliverer section) — the rest of `main()` is unaffected. No
+schema change was made (this ticket writes rows into `oauth_apps`, migration 042, already merged)
+— no migration to revert. No terraform change was made — nothing to revert there either. Any
+FleetGraph app row already seeded into a database can be removed with
+`DELETE FROM oauth_apps WHERE client_id = 'ship_app_fleetgraph' AND is_first_party = true;` (cascades
+to any `oauth_tokens` issued under it via `ON DELETE CASCADE`).
+
+---
+
 ## TRO-432 — PF-501: Public API audit trail
 
 **Migration number correction.** PLUGFORGE.MD §2.2 lists this table under "migration 046", but that
