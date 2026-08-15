@@ -67,7 +67,7 @@ import { requireScope } from '../../../scopes/requireScope.js';
 import { rateLimitBuckets } from '../../../ratelimit/middleware.js';
 import { asyncHandler } from '../errorMiddleware.js';
 import { forbiddenError, serverError, validationFailedError } from '../errors.js';
-import { encodeCursor, decodeCursor, type KeysetCursor } from '../pagination.js';
+import { encodeCursor, decodeCursor, preciseTimestamp, type KeysetCursor } from '../pagination.js';
 import { resolvePrincipalWorkspaceId } from './workspaceContext.js';
 
 export const auditRouter: RouterType = Router();
@@ -294,7 +294,7 @@ auditRouter.get(
     // AUDIT_COLUMNS's comment for why the latter would silently drop rows.
     const nextCursor =
       hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at_precise })
+        ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
     res.status(200).json({
