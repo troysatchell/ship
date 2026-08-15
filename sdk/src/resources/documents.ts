@@ -26,6 +26,7 @@ import type {
   ListBacklinksParams,
   ListDocumentCommentsParams,
   ListDocumentsParams,
+  UpdateDocumentBody,
 } from '../types.js';
 
 const BASE_PATH = '/api/v1/documents';
@@ -66,6 +67,17 @@ export class DocumentsClient {
    */
   async create(body: CreateDocumentBody): Promise<Document> {
     return this.request.post<Document>(BASE_PATH, body);
+  }
+
+  /**
+   * `PATCH /api/v1/documents/:id` (PF-703, TRO-435) — overwrites `content`
+   * only. Built for the agent gate's sdk-mode `setStandupContent` write
+   * (`agent/src/shipClient.ts`'s `GateShipClient`) — see
+   * `UpdateDocumentBody`'s own doc comment for the deliberate scope
+   * narrowing versus a general-purpose "update a document" method.
+   */
+  async update(id: string, body: UpdateDocumentBody): Promise<Document> {
+    return this.request.patch<Document>(`${BASE_PATH}/${encodeURIComponent(id)}`, body);
   }
 
   /**
