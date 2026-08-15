@@ -67,6 +67,13 @@ verify:
         sleep 2
       done
     - pnpm build:shared
+    # PF-702 (TRO-428): agent/ now depends on @ship/sdk ("workspace:*"),
+    # resolved through sdk/package.json's types/main fields
+    # (./dist/index.d.ts, ./dist/index.js) — those don't exist until sdk is
+    # built. Mirrors ci.yml's identical step (added for TRO-449/PF-802's
+    # browser-demo, the first @ship/sdk consumer; this pipeline never got the
+    # same fix because no workspace package here needed sdk/dist until now).
+    - pnpm build:sdk
     # PF-204 (TRO-409): docs/openapi.json is the committed, public /api/v1
     # OpenAPI 3.1 spec (PF-202's generateV1OpenAPIDocument()). Regenerates it
     # in-process to a temp file and diffs against the committed copy — any
@@ -180,6 +187,9 @@ e2e-agent:
     # agent/ needs building here, since global-setup.ts predates that
     # package and does not know about it.
     - pnpm build:shared
+    # PF-702 (TRO-428): agent/ now depends on @ship/sdk's built dist/ (same
+    # reasoning as the `verify` job's identical addition above).
+    - pnpm build:sdk
     - pnpm --filter @ship/agent build
     - pnpm exec playwright install --with-deps chromium
     - pnpm exec playwright test e2e/agent-detection-latency.spec.ts e2e/agent-chat-grounded-response.spec.ts --workers=1
