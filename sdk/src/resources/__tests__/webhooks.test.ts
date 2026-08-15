@@ -2,20 +2,24 @@
  * `WebhooksClient` request-SHAPE tests — mocked `fetch`, NOT integration
  * tests, and deliberately labeled as such throughout this file.
  *
- * Per this ticket's (PF-401) own scope note: `/api/v1/webhooks*` has no
- * server route yet (PF-302/304/305/306 haven't landed — verified in
- * `resources/webhooks.ts`'s header comment, not assumed). There is no real
- * server to integration-test this client against, so — unlike
- * `documents`/`issues`/`sprints`, which get a real running-server test in
- * `sdk/src/__tests__/resources.liveServer.test.ts` — this file only proves
- * `WebhooksClient` builds the HTTP request PLUGFORGE.MD §2.8 and the
- * PF-302/304/305/306 ticket prose describe (method, URL, query string,
- * JSON body) and parses a well-formed response back into the typed shape.
- * It does NOT prove the server accepts that request, because no server
- * exists to ask. Same mocked-`fetch` technique `client.test.ts` already
- * uses for `ShipClient`'s own request wiring (see that file's header for
- * why a mocked-fetch test is a legitimate, distinct thing from a
- * live-server integration test, not a substitute for one).
+ * Historical note (PF-401): originally written when `/api/v1/webhooks*` had
+ * no server route at all, so this file was this client's only coverage.
+ * That is no longer true — every route this file exercises is real and
+ * merged (PF-302/304/305/306, all landed; `resources/webhooks.ts`'s header
+ * has the full history), and `sdk/src/resources/__tests__/
+ * webhooks.liveServer.test.ts` (added TRO-599) now covers the same client
+ * against a real running server and a real database, the same pattern
+ * `documents`/`issues`/`sprints` already get in
+ * `sdk/src/__tests__/resources.liveServer.test.ts`. This file's job is
+ * unchanged and still distinct: proving `WebhooksClient` builds the exact
+ * HTTP request (method, URL, query string, JSON body) and parses a
+ * well-formed response back into the typed shape, cheaply and without a
+ * database — a mocked-`fetch` request-shape test is a legitimate,
+ * complementary thing to a live-server integration test, not a stand-in
+ * for one that's since been added. Response bodies used as fixtures below
+ * are the REAL shapes (TRO-599: verified against `serializeSubscription()`/
+ * `serializeDelivery()`), except `createSubscription()`'s REQUEST body,
+ * which is a disclosed, not-yet-fixed gap — see webhooks.ts's header.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ShipClient } from '../../client.js';
@@ -69,19 +73,32 @@ describe('WebhooksClient — request shape only (no real server exists to integr
   });
 
   it('createSubscription() POSTs to /api/v1/webhooks with a JSON body and returns the shown-once secret', async () => {
+    // Response shape is the REAL one (TRO-599: verified against
+    // serializeSubscription() + the routes' own `{ ...serialized, secret,
+    // warning }` construction) — app_id/singular event_type/target_url/no
+    // updated_at, plus the `warning` field. The REQUEST body below still
+    // uses the pre-existing `url`/`events` shape because
+    // `CreateWebhookSubscriptionBody` itself is a disclosed, NOT-fixed gap
+    // (out of TRO-599's scope — see webhooks.ts's header and this file's
+    // own note above the client construction below).
     const responseBody = {
       id: 'sub_1',
-      url: 'https://example.com/hook',
-      events: ['document.created'],
+      app_id: 'app_1',
+      event_type: 'document.created',
+      target_url: 'https://example.com/hook',
       active: true,
       created_at: '2026-08-14T00:00:00.000Z',
-      updated_at: '2026-08-14T00:00:00.000Z',
       secret: 'whsec_abc123',
+      warning: 'Save this secret now. It will not be shown again.',
     };
     const fetchSpy = fakeFetch(responseBody, 201);
     vi.stubGlobal('fetch', fetchSpy);
     const client = new ShipClient({ token: 't', baseUrl: 'http://example.com' });
 
+    // NOTE: this request body matches `CreateWebhookSubscriptionBody` as
+    // currently (still incorrectly) declared, not the real server schema —
+    // see webhooks.ts's header "STILL NOT FIXED" note. A real call built
+    // from this SDK type would 400 against the real server.
     const created = await client.webhooks.createSubscription({
       url: 'https://example.com/hook',
       events: ['document.created'],
@@ -144,6 +161,7 @@ describe('WebhooksClient — request shape only (no real server exists to integr
       active: true,
       created_at: '2026-08-14T00:00:00.000Z',
       secret: 'whsec_rotated456',
+      warning: 'Save this secret now. It will not be shown again.',
     };
     const fetchSpy = fakeFetch(responseBody, 200);
     vi.stubGlobal('fetch', fetchSpy);
@@ -170,14 +188,23 @@ describe('WebhooksClient — request shape only (no real server exists to integr
   });
 
   it('replayDelivery() POSTs to /api/v1/webhooks/deliveries/:id/replay', async () => {
+    // Real shape (TRO-599: verified against serializeDelivery()) — includes
+    // event_id/idempotency_key/response_excerpt/next_attempt_at, and status
+    // 'dead' rather than the old guessed 'dead_letter'. replayed_from_id set
+    // (non-null on a replay row — PF-306/TRO-446).
     const responseBody = {
       id: 'del_2',
       subscription_id: 'sub_1',
+      event_id: 'evt_1',
       event_type: 'document.created',
-      status: 'pending',
+      idempotency_key: 'idem_1',
       attempt_number: 1,
+      status: 'pending',
       response_status: null,
+      response_excerpt: null,
       latency_ms: null,
+      next_attempt_at: null,
+      replayed_from_id: 'del_1',
       created_at: '2026-08-14T00:00:00.000Z',
     };
     const fetchSpy = fakeFetch(responseBody, 201);
