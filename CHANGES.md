@@ -21,6 +21,59 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-594 — `accessibility-remediation.spec.ts`: tooltip "hide on mouse-away" hang was a Playwright teleporting-mouse race, not a Radix hide-delay
+
+**What was broken.** "tooltips shown on hover also appear on focus" failed at
+`await expect(tooltipOnHover).toBeHidden({ timeout: 3000 })` right after `page.mouse.move(0, 0)` —
+the tooltip stayed genuinely visible (`getByRole('tooltip')` resolved "visible" on all 7 retries
+within the 3s window), not just animating out slowly. Reproduced directly, not inferred from the
+ticket's own "hide-delay genuinely regressed?" framing.
+
+**Root cause, verified against the installed `@radix-ui/react-tooltip@1.2.8` source
+(`node_modules/.../dist/index.mjs`), not assumed from docs.** `TooltipContentHoverable`'s
+"hoverable content" grace-area mechanism (`disableHoverableContent` defaults to `false`, and this
+repo's `Tooltip.tsx` wrapper never overrides it) only closes the tooltip in two steps:
+
+1. A `pointerleave` on the trigger computes a grace-area polygon and calls
+   `onPointerInTransitChange(true)`, then a `useEffect` (keyed on the resulting `pointerGraceArea`
+   state) attaches a `document`-level `pointermove` listener — asynchronously, after React commits
+   the state update.
+2. Only a **subsequent** `pointermove` event, once that listener is attached, checks whether the
+   pointer left the grace polygon and calls `onClose()`.
+
+`page.mouse.move(0, 0)` (Playwright's default, `steps: 1`) teleports the virtual cursor to the
+destination in a single synthetic event — firing `pointerleave` and the terminating `pointermove`
+essentially back-to-back, faster than React's effect-attachment cycle. If that single `pointermove`
+lands before the listener attaches, it's the *only* one that will ever fire (Playwright's mouse
+isn't moving physically, so there's no natural stream of follow-up events to catch on a later
+frame) — the tooltip is stuck open indefinitely. A real user's mouse generates a continuous stream
+of `pointermove` events crossing the screen, so this class of miss is specific to Playwright's
+synthetic single-step teleport, not something an actual user would ever hit.
+
+**The fix.** `page.mouse.move(0, 0, { steps: 10 })` — multiple intermediate `pointermove` events
+give the (asynchronously-attached) grace-area listener several chances to observe one after it's
+live, matching how a real mouse move behaves.
+
+**Proof.** Reproduced standalone first (tooltip stayed visible for the full 3s window, 7 retries).
+Verified the fix standalone (passes cleanly). Full spec file: 57/57 tests green — one unrelated
+pre-existing `networkidle`-wait timeout (`decorative icons are hidden from screen readers`) that
+passed clean on Playwright's own retry, verified via `progress.jsonl`'s fail-then-pass sequence, not
+a regression from this change.
+
+**How to run it.**
+
+```bash
+pnpm exec playwright test e2e/accessibility-remediation.spec.ts --grep "tooltips shown on hover also appear on focus"
+pnpm exec playwright test e2e/accessibility-remediation.spec.ts
+```
+
+**Roll back.** Revert `page.mouse.move(0, 0, { steps: 10 })` back to `page.mouse.move(0, 0)` in
+`e2e/accessibility-remediation.spec.ts` — reintroduces the race (won't reproduce every run, since
+it depends on exact event-vs-effect timing, which is part of why this bug went unnoticed as
+"probably just a slow hide-delay" rather than diagnosed as a real race).
+
+---
+
 ## TRO-450 — PF-601: `ship docs ls | get <id> | create --title` via SDK only
 
 **What changed.** Three new subcommands added to `integrations/cli` (`@ship/cli`), nested under a
