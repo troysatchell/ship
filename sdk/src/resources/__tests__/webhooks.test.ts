@@ -6,10 +6,11 @@
  * no server route at all, so this file was this client's only coverage.
  * That is no longer true — every route this file exercises is real and
  * merged (PF-302/304/305/306, all landed; `resources/webhooks.ts`'s header
- * has the full history), and `sdk/src/resources/__tests__/
- * webhooks.liveServer.test.ts` (added TRO-599) now covers the same client
- * against a real running server and a real database, the same pattern
- * `documents`/`issues`/`sprints` already get in
+ * has the full history), and `sdk/src/__tests__/webhooks.liveServer.test.ts`
+ * (added TRO-599; path corrected here — it lives directly under
+ * `sdk/src/__tests__/`, not `sdk/src/resources/__tests__/`) now covers the
+ * same client against a real running server and a real database, the same
+ * pattern `documents`/`issues`/`sprints` already get in
  * `sdk/src/__tests__/resources.liveServer.test.ts`. This file's job is
  * unchanged and still distinct: proving `WebhooksClient` builds the exact
  * HTTP request (method, URL, query string, JSON body) and parses a
@@ -18,8 +19,9 @@
  * complementary thing to a live-server integration test, not a stand-in
  * for one that's since been added. Response bodies used as fixtures below
  * are the REAL shapes (TRO-599: verified against `serializeSubscription()`/
- * `serializeDelivery()`), except `createSubscription()`'s REQUEST body,
- * which is a disclosed, not-yet-fixed gap — see webhooks.ts's header.
+ * `serializeDelivery()`); `createSubscription()`'s REQUEST body is now the
+ * REAL shape too (TRO-452 fixed the previously-disclosed gap — see
+ * webhooks.ts's header for the full history).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ShipClient } from '../../client.js';
@@ -73,14 +75,16 @@ describe('WebhooksClient — request shape only (no real server exists to integr
   });
 
   it('createSubscription() POSTs to /api/v1/webhooks with a JSON body and returns the shown-once secret', async () => {
-    // Response shape is the REAL one (TRO-599: verified against
-    // serializeSubscription() + the routes' own `{ ...serialized, secret,
-    // warning }` construction) — app_id/singular event_type/target_url/no
-    // updated_at, plus the `warning` field. The REQUEST body below still
-    // uses the pre-existing `url`/`events` shape because
-    // `CreateWebhookSubscriptionBody` itself is a disclosed, NOT-fixed gap
-    // (out of TRO-599's scope — see webhooks.ts's header and this file's
-    // own note above the client construction below).
+    // Both response AND request shapes are the REAL ones now. Response:
+    // TRO-599, verified against serializeSubscription() + the routes' own
+    // `{ ...serialized, secret, warning }` construction — app_id/singular
+    // event_type/target_url/no updated_at, plus `warning`. Request: TRO-452
+    // (this ticket needed a working createSubscription() to implement
+    // `ship webhooks tail`) — app_id/singular event_type/target_url, per
+    // `CreateWebhookSubscriptionRequestSchema`
+    // (`platform/api/v1/resources/webhooks.ts`), replacing the old
+    // `url`/plural-`events` shape that would 400 against a real server (see
+    // webhooks.ts's header for the full history).
     const responseBody = {
       id: 'sub_1',
       app_id: 'app_1',
@@ -95,13 +99,10 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     vi.stubGlobal('fetch', fetchSpy);
     const client = new ShipClient({ token: 't', baseUrl: 'http://example.com' });
 
-    // NOTE: this request body matches `CreateWebhookSubscriptionBody` as
-    // currently (still incorrectly) declared, not the real server schema —
-    // see webhooks.ts's header "STILL NOT FIXED" note. A real call built
-    // from this SDK type would 400 against the real server.
     const created = await client.webhooks.createSubscription({
-      url: 'https://example.com/hook',
-      events: ['document.created'],
+      app_id: 'app_1',
+      event_type: 'document.created',
+      target_url: 'https://example.com/hook',
     });
 
     const [url, init] = firstCall(fetchSpy);
@@ -109,8 +110,9 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     expect(init?.method).toBe('POST');
     expect(init?.headers).toMatchObject({ Authorization: 'Bearer t', 'content-type': 'application/json' });
     expect(JSON.parse(String(init?.body))).toEqual({
-      url: 'https://example.com/hook',
-      events: ['document.created'],
+      app_id: 'app_1',
+      event_type: 'document.created',
+      target_url: 'https://example.com/hook',
     });
     expect(created).toEqual(responseBody);
     expect(created.secret).toBe('whsec_abc123');
