@@ -358,9 +358,17 @@ jobs:
       # own globalSetup, unconditional on every `playwright test` run) — only
       # agent/ needs building here, since global-setup.ts predates that
       # package and does not know about it.
-      - name: Build shared + agent
+      #
+      # PF-702 (TRO-428): agent/ now depends on @ship/sdk ("workspace:*"),
+      # resolved through sdk/package.json's types/main fields
+      # (./dist/index.d.ts, ./dist/index.js) — those don't exist until sdk is
+      # built. This job is a SEPARATE runner from `verify` (which already
+      # builds sdk before its own agent-touching steps), so it needs its own
+      # build:sdk step too.
+      - name: Build shared + sdk + agent
         run: |
           pnpm build:shared
+          pnpm build:sdk
           pnpm --filter @ship/agent build
 
       - name: Install Playwright (chromium only)

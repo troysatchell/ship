@@ -20,6 +20,10 @@ describe('loadConfig', () => {
     expect(config.onDemandDocumentCap).toBe(12);
     // TRO-320 / FG-9: no default — a missing secret must fail /chat closed.
     expect(config.agentInternalSecret).toBeUndefined();
+    // PF-702 / TRO-428 — default OFF until PF-704; no secret required unless
+    // AGENT_PLATFORM_MODE=sdk is actually set.
+    expect(config.agentPlatformMode).toBe('internal');
+    expect(config.fleetgraphOauthClientSecret).toBeUndefined();
     // CodeRabbit review, PR #120 — shorter than api/'s own
     // AGENT_REQUEST_TIMEOUT_MS (30s, api/src/routes/agent.ts).
     expect(config.chatHandlerTimeoutMs).toBe(25_000);
@@ -56,6 +60,8 @@ describe('loadConfig', () => {
       ANTHROPIC_REQUEST_TIMEOUT_MS: '15000',
       ANTHROPIC_MAX_RETRIES: '4',
       ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS: '9000',
+      AGENT_PLATFORM_MODE: 'sdk',
+      FLEETGRAPH_OAUTH_CLIENT_SECRET: 'fleetgraph-secret-abc',
     });
 
     expect(config).toEqual({
@@ -78,7 +84,17 @@ describe('loadConfig', () => {
       anthropicRequestTimeoutMs: 15000,
       anthropicMaxRetries: 4,
       anthropicPreModelWorkAllowanceMs: 9000,
+      agentPlatformMode: 'sdk',
+      fleetgraphOauthClientSecret: 'fleetgraph-secret-abc',
     });
+  });
+
+  it('AGENT_PLATFORM_MODE falls back to "internal" for anything other than the literal "sdk" (unset, empty, a typo)', () => {
+    expect(loadConfig({}).agentPlatformMode).toBe('internal');
+    expect(loadConfig({ AGENT_PLATFORM_MODE: '' }).agentPlatformMode).toBe('internal');
+    expect(loadConfig({ AGENT_PLATFORM_MODE: 'SDK' }).agentPlatformMode).toBe('internal');
+    expect(loadConfig({ AGENT_PLATFORM_MODE: 'internal' }).agentPlatformMode).toBe('internal');
+    expect(loadConfig({ AGENT_PLATFORM_MODE: 'sdk' }).agentPlatformMode).toBe('sdk');
   });
 
   it('falls back to defaults on non-numeric PORT / timeout rather than NaN', () => {

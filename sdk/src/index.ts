@@ -113,3 +113,9 @@ export type {
   PkceLocation,
   PkceStorage,
 } from './authorizationCodeFlow.js';
+
+// PF-702 (TRO-428) addition — the static method itself is exported via the
+// `ShipClient` class (`ShipClient.clientCredentials`), same convention as
+// `deviceLogin`/`authorizationCodeFlow` above; only the options/result types
+// are exported separately here.
+export type { ClientCredentialsFlowOptions, ClientCredentialsTokenSet } from './clientCredentials.js';

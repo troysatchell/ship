@@ -155,10 +155,22 @@ export type IssueList = ListPage<Issue>;
 
 /** `GET /api/v1/issues` query params — mirrors `ListIssuesQuerySchema`
  *  (`resources/issues.ts`). No `type` filter here (fixed to `'issue'`
- *  server-side, unlike `documents`'s list). */
+ *  server-side, unlike `documents`'s list).
+ *
+ *  `assignee_id` (PF-702, TRO-428) — the server (`ListIssuesQuerySchema`,
+ *  `resources/issues.ts`) has accepted this query param since PF-205 landed
+ *  it ("mirrors `getIssuesByAssignee()` -> internal `GET
+ *  /api/issues?assignee_id=...`" — that file's own header comment), but this
+ *  type and `IssuesClient.list()` never forwarded it — a real, confirmed gap
+ *  found while wiring the agent's `getIssuesByAssignee` through this SDK
+ *  (CHANGES.md, TRO-428), not a guess. A plain equality filter on a UUID —
+ *  see `ListIssuesQuerySchema`'s own comment for why this deliberately does
+ *  NOT replicate the internal route's `'null'`/`'unassigned'` sentinel
+ *  strings. */
 export interface ListIssuesParams {
   readonly limit?: number;
   readonly cursor?: string;
+  readonly assignee_id?: string;
 }
 
 /** `issues.iterate()`'s params (PF-402) — same reasoning as

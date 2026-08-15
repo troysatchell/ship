@@ -105,6 +105,26 @@ record() {           # record <id> <status> <detail>
 echo "=== factory gate: ${TICKET} (base ${BASE_REF}) ==="
 echo
 
+# PF-702 (TRO-428): `agent/` now depends on `@ship/sdk` ("workspace:*"),
+# which pnpm resolves through sdk/package.json's types/main fields
+# (./dist/index.d.ts, ./dist/index.js) — those don't exist until sdk is
+# actually built. `.github/workflows/ci.yml` already builds sdk before
+# type-check (added for TRO-449/PF-802's browser-demo, the first @ship/sdk
+# consumer); this gate script and .gitlab-ci.yml did not, because no
+# workspace package needed sdk/dist until now. Build shared first (api/web
+# both depend on its dist) and sdk second, exactly like ci.yml, so G1 below
+# does not fail with "Cannot find module '@ship/sdk'" on a fresh worktree.
+pnpm build:shared > "$OUT_DIR/build-shared.log" 2>&1 || {
+  echo "ERROR: pnpm build:shared failed — see $OUT_DIR/build-shared.log" >&2
+  cat "$OUT_DIR/build-shared.log" >&2
+  exit 2
+}
+pnpm build:sdk > "$OUT_DIR/build-sdk.log" 2>&1 || {
+  echo "ERROR: pnpm build:sdk failed — see $OUT_DIR/build-sdk.log" >&2
+  cat "$OUT_DIR/build-sdk.log" >&2
+  exit 2
+}
+
 # --- G1: type check ---------------------------------------------------------
 if pnpm type-check > "$OUT_DIR/typecheck.log" 2>&1; then
   record typecheck pass "all packages clean"
