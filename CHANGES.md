@@ -128,6 +128,61 @@ separately implemented in `web/src`.
 
 ---
 
+## TRO-595 — `admin-workspace-members.spec.ts`: "can add existing user" click timeout was a test deadlock, not an app bug
+
+**What was broken.** The cleanup `finally` block's "Remove" click hung for the full 60s default
+timeout on every run — despite Playwright's own actionability log reporting the button visible,
+enabled, and stable, then "performing click action" with no further output. `AdminWorkspaceDetail.
+tsx`'s `handleRemoveMember` calls the native, synchronous `window.confirm()`, which blocks the
+page's JS thread until dismissed. The test's code was:
+
+```ts
+const dialog = page.waitForEvent('dialog')   // arms a listener, returns a Promise — does not itself accept/dismiss
+await carolRow.getByRole('button', { name: 'Remove' }).click()   // <-- never resolves
+await (await dialog).accept()                // <-- unreachable until the line above resolves
+```
+
+`.click()` cannot resolve while the synchronous `confirm()` blocks the page, and nothing calls
+`dialog.accept()` until *after* `.click()` resolves — a genuine deadlock in the test's own code, not
+an app defect. Confirmed directly by reproducing the hang and reading the actionability log, not
+inferred from the ticket's own "likely an overlay/event-handler issue" framing.
+
+**The fix.** This exact repo already has the correct, working pattern elsewhere
+(`e2e/file-attachments.spec.ts`): register a `dialog` handler *before* the click, so it can
+`accept()` reactively while `.click()` is still pending, instead of awaiting the dialog only after:
+
+```ts
+page.once('dialog', (dialog) => { void dialog.accept() })
+await carolRow.getByRole('button', { name: 'Remove' }).click()
+```
+
+**Proof.** Reproduced the hang standalone first (confirmed the exact 60s timeout + stuck
+actionability log), then verified the fix standalone (passes in ~30s) and re-ran the full spec file
+(14/14 tests, one unrelated pre-existing `beforeEach` load-flake that passed clean on Playwright's
+own retry — verified via `progress.jsonl` showing fail-then-pass, not a regression from this change).
+
+**New regression test.** The existing test only ever exercised the dialog's ACCEPT path. Added
+`"canceling the remove-member confirmation dialog leaves the member in place (TRO-595 regression)"`
+— exercises the previously-untested CANCEL path (`dialog.dismiss()`), directly asserts the click
+resolves in under 5s (the exact property that broke — the old pattern hung toward the 60s default
+action timeout), and asserts the member count is unchanged after cancel. Proves the fix generalizes
+to both dialog outcomes, not just the one the original test happened to use.
+
+**How to run it.**
+
+```bash
+pnpm exec playwright test e2e/admin-workspace-members.spec.ts --grep "can add existing user"
+pnpm exec playwright test e2e/admin-workspace-members.spec.ts --grep "TRO-595 regression"
+pnpm exec playwright test e2e/admin-workspace-members.spec.ts
+```
+
+**Roll back.** Revert the `page.once('dialog', ...)` change in
+`e2e/admin-workspace-members.spec.ts`'s cleanup block back to the sequential
+`waitForEvent`/`accept()` pattern — reintroduces the deadlock, so only do this if something else is
+also changing the click/dialog flow at the same time.
+
+---
+
 ## TRO-594 — `accessibility-remediation.spec.ts`: tooltip "hide on mouse-away" hang was a Playwright teleporting-mouse race, not a Radix hide-delay
 
 **What was broken.** "tooltips shown on hover also appear on focus" failed at
