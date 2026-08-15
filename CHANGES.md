@@ -102,15 +102,22 @@ nothing here touches schema, so it stays free.
 
 ```bash
 source .factory-env   # or your own DATABASE_URL — pointed at a factory-owned db
-cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts
+(cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts)
 pnpm exec playwright test e2e/webhook-idempotency-key-drill.spec.ts --workers=1
 ```
 
-**Not verified.** The CLI demo path (`node docs/submission/demo-webhook-listener.mjs`, using the
-SDK's `verifyWebhook()`) was checked with `node --check` for syntax only, not run end-to-end against
-a live `pnpm dev` instance in this session — unchanged risk profile from before this ticket, since
-that code path is identical to what TRO-441 already shipped, only refactored into an importable
-factory function.
+Each line is independent — the first runs in a subshell (CodeRabbit, this ticket's review; a bare
+`cd api && ...` pasted into one running shell session leaves that session inside `api/` for the
+Playwright line after it, which then fails to find `e2e/`), so both commands work whether run
+together or one at a time from the repo root.
+
+**Not verified.** The CLI demo path (`node docs/submission/demo-webhook-listener.mjs`) was checked
+with `node --check` for syntax only, not run end-to-end against a live `pnpm dev` instance in this
+session. Unlike TRO-441's original version, this is NOT an unchanged risk profile any more
+(CodeRabbit, this ticket's review, correctly caught an earlier draft of this note overclaiming that)
+— the refactor added real runtime behavior to this same code path: the 1MB body cap, required-key
+rejection, deduplication tracking, and the try/catch around `verify()`, none of which the CLI path
+has been exercised against live.
 
 **Orchestrator triage of a fresh local CodeRabbit-CLI review (post merge-forward) — 5 findings, 4
 fixed, 1 dismissed as verified inapplicable:**
@@ -138,6 +145,36 @@ fixed, 1 dismissed as verified inapplicable:**
 
 Re-verified after fixing: `webhooks.test.ts` 33/33; `e2e/webhook-idempotency-key-drill.spec.ts` 1/1,
 no retry (via `/e2e-test-runner`, `PLAYWRIGHT_WORKERS=1` given concurrent factory load).
+
+**Hosted GitHub CodeRabbit review (orchestrator triage) — 9 findings, 8 fixed, 0 dismissed:**
+1. **Minor, fixed.** `webhooks.test.ts`'s new PF-801 test destructured the delivery-log response by
+   array position ("newest first") — two rows created milliseconds apart can share a `created_at`,
+   making the order non-deterministic. Switched to lookup by id, matching the e2e drill's own
+   already-correct pattern.
+2. **Minor, fixed.** CHANGES.md's own evidence commands and CLI risk-profile claim — see above,
+   both corrected in place.
+3. **Major, fixed (docs).** `docs/architecture.md`'s dedupe-contract guidance described a naive
+   check-then-store without addressing the TOCTOU race a real, non-single-threaded production
+   subscriber can hit. Added guidance requiring an atomic durable claim (unique constraint +
+   `ON CONFLICT DO NOTHING` or equivalent) and documented the missing-key 4xx behavior explicitly.
+4. **Trivial, fixed.** `ReferenceSubscriber.deliveries` typed as `Map`, contradicting its own
+   "read-only introspection" doc comment — switched to `ReadonlyMap`.
+5. **Minor, fixed.** `pathToFileURL(process.argv[1])` (round-3's own fix) throws if `argv[1]` is
+   `undefined` — guarded.
+6. **Minor, fixed.** The CLI logger printed "signature check failed" for BOTH rejection causes
+   (bad signature vs. missing Idempotency-Key), misdiagnosing the latter. Added a `reason` field
+   threaded from the handler through to the logger.
+7. **Minor, fixed (docs).** `PLUGFORGE-DEMO-SCRIPT.md`'s "a replay always re-sends" claim needed
+   qualifying to "of an active subscription" now that TRO-446's own review added the
+   deactivated-subscription 404 guard.
+8. **Minor, fixed.** The e2e spec's `requireDeliveryListBody` cast its array elements (`as
+   DeliveryBody[]`) instead of validating them through the file's own `requireDeliveryBody` helper;
+   the CSRF response body was asserted with no validation at all. Both now validate explicitly.
+9. **Trivial, fixed.** The e2e spec's login step used CSS id selectors (`#email`/`#password`)
+   instead of this repo's own accessible-locator convention — switched to `getByLabel`, matching
+   `Login.tsx`'s real, associated (screen-reader-only) `<label>` elements.
+
+Re-verified again after this round: `webhooks.test.ts` 33/33; e2e spec 1/1, no retry.
 
 **Roll back.** Revert this ticket's commit(s). `docs/submission/demo-webhook-listener.mjs` reverts
 to its TRO-441 shape (no dedupe tracking, no exported factory — the file becomes non-importable

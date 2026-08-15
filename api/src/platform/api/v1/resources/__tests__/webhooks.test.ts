@@ -1522,13 +1522,20 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
         expect(logRes.status).toBe(200);
         const logBody = logRes.body as DeliveryListResponseBody;
         expect(logBody.data).toHaveLength(2);
-        const [replayedRow, originalRowFromLog] = logBody.data; // newest first
-        expect(replayedRow?.id).toBe(replayBody.id);
-        expect(replayedRow?.replayed_from_id).toBe(originalRow.id);
-        expect(originalRowFromLog?.id).toBe(originalRow.id);
-        expect(originalRowFromLog?.replayed_from_id).toBeNull();
-        expect(replayedRow?.idempotency_key).toBe(idempotencyKey);
-        expect(originalRowFromLog?.idempotency_key).toBe(idempotencyKey);
+        // By id, not array position (CodeRabbit, this ticket's review): both
+        // rows can share a `created_at` timestamp (created milliseconds
+        // apart within one test), so "newest first" is not a guaranteed
+        // order to destructure against — the e2e drill already does this
+        // lookup by id for the same reason.
+        const replayedRow = logBody.data.find((d) => d.id === replayBody.id);
+        const originalRowFromLog = logBody.data.find((d) => d.id === originalRow.id);
+        if (!replayedRow || !originalRowFromLog) {
+          throw new Error(`expected both the original and replay rows, got: ${JSON.stringify(logBody)}`);
+        }
+        expect(replayedRow.replayed_from_id).toBe(originalRow.id);
+        expect(originalRowFromLog.replayed_from_id).toBeNull();
+        expect(replayedRow.idempotency_key).toBe(idempotencyKey);
+        expect(originalRowFromLog.idempotency_key).toBe(idempotencyKey);
       } finally {
         await subscriber.close();
         // Isolated rows this test owns exclusively — explicit order, same

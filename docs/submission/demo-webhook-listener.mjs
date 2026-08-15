@@ -140,7 +140,7 @@ export function createReferenceSubscriber({ secret, verify, onDelivery = () => {
       }
 
       if (!signatureVerified) {
-        onDelivery({ kind: 'rejected', idempotencyKey });
+        onDelivery({ kind: 'rejected', idempotencyKey, reason: 'signature verification failed' });
         // A signature that doesn't verify is NOT "handled" — a real
         // integrator should reject it (401 here; the exact status doesn't
         // matter to the sender, only that it's outside 2xx/5xx, i.e.
@@ -157,7 +157,11 @@ export function createReferenceSubscriber({ secret, verify, onDelivery = () => {
       // outside 2xx/5xx, so a real sender's retry logic treats it as a
       // permanent failure to fix, not a transient one to retry as-is.
       if (idempotencyKey === undefined) {
-        onDelivery({ kind: 'rejected', idempotencyKey: undefined });
+        onDelivery({
+          kind: 'rejected',
+          idempotencyKey: undefined,
+          reason: 'missing or empty Idempotency-Key header',
+        });
         res.writeHead(400, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ received: false, reason: 'missing or empty Idempotency-Key header' }));
         return;
@@ -242,7 +246,7 @@ export function createReferenceSubscriber({ secret, verify, onDelivery = () => {
 // import, regardless of this branch's runtime condition. Moving every
 // `await` inside this IIFE removes the syntax from the module's top level
 // entirely.
-if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
   void (async () => {
     const port = Number(process.env.PORT ?? 8787);
     const secret = process.env.SECRET;
@@ -262,11 +266,15 @@ if (import.meta.url === pathToFileURL(process.argv[1]).href) {
       // implementations exist).
       verify: (signatureHeaderValue, rawBody, secretArg) =>
         verifyWebhook({ 'ship-signature': signatureHeaderValue }, rawBody, secretArg),
-      onDelivery: ({ kind, idempotencyKey, payload }) => {
+      onDelivery: ({ kind, idempotencyKey, payload, reason }) => {
         const stamp = new Date().toISOString();
         const key = idempotencyKey ?? '(none)';
         if (kind === 'rejected') {
-          console.log(`✗ rejected  ${stamp}  signature check failed`);
+          // The real reason (CodeRabbit, this ticket's review) — a
+          // demo operator who forgot the Idempotency-Key header used to see
+          // the same "signature check failed" message a real bad secret
+          // would produce, a wrong diagnosis for a different mistake.
+          console.log(`✗ rejected  ${stamp}  ${reason ?? 'rejected'}`);
         } else if (kind === 'duplicate') {
           console.log(
             `✓ verified  ${stamp}  DUPLICATE  idempotency-key=${key}  (recognized, not reprocessed)`

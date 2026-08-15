@@ -210,6 +210,23 @@ own "PF-801" describe block.
    (`deliverer.ts`) reads a non-2xx/non-5xx response as a permanent failure (dead-lettered
    immediately) and a 5xx/timeout as retryable (re-sent per the retry schedule above) — neither
    outcome means "already handled." Only 2xx tells the sender to stop.
+   **Missing or empty `Idempotency-Key`:** reject with a 4xx (the reference implementation uses
+   400) — there is nothing to dedupe on, and a 4xx tells the sender's retry logic this is a
+   permanent failure to fix, not a transient one to retry as-is.
+   **Make the claim atomic — a real integration point CodeRabbit's review of this ticket correctly
+   raised.** The reference implementation's check-then-store is safe only because it is
+   synchronous, single-threaded JavaScript with no `await` between the check and the store — Node's
+   event loop cannot interleave two deliveries mid-handler. A REAL production subscriber almost
+   never has that guarantee: if "check" and "store" are separate operations against a database
+   (even a fast one), two concurrent deliveries with the same key can both pass the check before
+   either has stored it, and both get processed as if fresh. Implement the claim as a single atomic
+   operation — a unique constraint on `idempotency_key` plus `INSERT ... ON CONFLICT DO NOTHING`
+   (or equivalent), never a separate read-then-write — and treat "the insert found an existing row"
+   as the dedupe signal itself, not a prior `SELECT`. Define what happens when a claim is already
+   in progress (another request for the same key hasn't finished processing yet): either block
+   until it resolves, or return 2xx immediately and let the original request's outcome stand —
+   document whichever choice a real implementation makes, since a caller polling for consistency
+   needs to know which.
 
 **Copyable reference implementation:** `docs/submission/demo-webhook-listener.mjs`'s
 `createReferenceSubscriber()` — a genuine, small, standalone HTTP listener implementing exactly

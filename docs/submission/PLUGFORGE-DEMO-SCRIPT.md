@@ -322,9 +322,11 @@ all, it runs the FULL api suite; `lessons.md`'s 2026-08-12 entry has the mechani
 - **PF-306 (replay) and PF-801 (idempotency-key dedupe) are BOTH merged to `main` as of this
   revision** (corrected 2026-08-14 — an earlier draft of this line said PF-306 wasn't merged yet;
   it has been since `feat/pf-306-replay-endpoint` landed). Two SEPARATE beats — deliberately not
-  conflated (an earlier draft of this section did, incorrectly: a replay always re-sends to the
-  subscription's own `target_url`, so replaying against a subscription whose target is genuinely
-  unreachable cannot "succeed against the listener" at all):
+  conflated (an earlier draft of this section did, incorrectly: a replay of an ACTIVE subscription
+  sends to that subscription's own `target_url`, so replaying against a subscription whose target
+  is genuinely unreachable cannot "succeed against the listener" at all — note "active": TRO-446's
+  own CodeRabbit review added a guard rejecting replay of a DEACTIVATED subscription entirely with
+  a 404, so this qualifier is load-bearing, not decorative):
   1. **DLQ resilience** (what the retry schedule guards against): point a subscription at an
      unreachable URL, let real attempts exhaust into the DLQ (or narrate this over
      `deliverer.test.ts`'s deterministic-clock proof above instead of waiting on real retries) —

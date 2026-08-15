@@ -23,6 +23,9 @@ export interface ReferenceSubscriberDeliveryEvent {
   kind: 'processed' | 'duplicate' | 'rejected';
   idempotencyKey?: string;
   payload?: unknown;
+  /** Only set for `kind: 'rejected'` — distinguishes a signature-verification
+   *  failure from a missing/empty Idempotency-Key header. */
+  reason?: string;
 }
 
 export interface CreateReferenceSubscriberOptions {
@@ -34,7 +37,7 @@ export interface CreateReferenceSubscriberOptions {
 export interface ReferenceSubscriber {
   server: import('node:http').Server;
   /** `Idempotency-Key` -> delivery record. Read-only introspection. */
-  deliveries: Map<string, ReferenceSubscriberDelivery>;
+  deliveries: ReadonlyMap<string, ReferenceSubscriberDelivery>;
   wasDeduped(key: string): boolean;
   wasProcessed(key: string): boolean;
   listen(port?: number): Promise<number>;

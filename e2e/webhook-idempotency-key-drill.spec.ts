@@ -167,14 +167,6 @@ interface DeliveryListBody {
   data: DeliveryBody[];
 }
 
-function requireDeliveryListBody(body: unknown): DeliveryListBody {
-  const b = body as Record<string, unknown>;
-  if (!Array.isArray(b.data)) {
-    throw new Error(`expected { data: [...] } from GET /api/v1/webhooks/deliveries, got: ${JSON.stringify(body)}`);
-  }
-  return { data: b.data as DeliveryBody[] };
-}
-
 function requireDeliveryBody(body: unknown): DeliveryBody {
   const b = body as Record<string, unknown>;
   if (typeof b.id !== 'string' || typeof b.idempotency_key !== 'string' || typeof b.status !== 'string') {
@@ -186,6 +178,19 @@ function requireDeliveryBody(body: unknown): DeliveryBody {
     status: b.status,
     replayed_from_id: typeof b.replayed_from_id === 'string' ? b.replayed_from_id : null,
   };
+}
+
+function requireDeliveryListBody(body: unknown): DeliveryListBody {
+  const b = body as Record<string, unknown>;
+  if (!Array.isArray(b.data)) {
+    throw new Error(`expected { data: [...] } from GET /api/v1/webhooks/deliveries, got: ${JSON.stringify(body)}`);
+  }
+  // Validated per-element via requireDeliveryBody (CodeRabbit, this ticket's
+  // review) — the previous `as DeliveryBody[]` cast declared a shape the
+  // code never checked, so a changed API response would surface later as a
+  // confusing assertion failure on an undefined field instead of a clear
+  // parse error here.
+  return { data: b.data.map(requireDeliveryBody) };
 }
 
 test.describe('Webhook Idempotency-Key drill (TRO-447 / PF-801)', () => {
@@ -233,14 +238,23 @@ test.describe('Webhook Idempotency-Key drill (TRO-447 / PF-801)', () => {
       // real, already-running deliverer picks up and sends, over a real
       // socket, to the reference subscriber above. ──
       await page.goto('/login');
-      await page.locator('#email').fill('dev@ship.local');
-      await page.locator('#password').fill('admin123');
+      // Accessible role locators (CodeRabbit, this ticket's review) — both
+      // inputs have a real, associated `<label>` (Login.tsx: "Email
+      // address" / "Password", screen-reader-only but still exposed to the
+      // accessibility tree), matching this repo's own coding guideline of
+      // preferring getByRole/getByLabel over CSS id selectors.
+      await page.getByLabel('Email address').fill('dev@ship.local');
+      await page.getByLabel('Password').fill('admin123');
       await page.getByRole('button', { name: 'Sign in', exact: true }).click();
       await expect(page).not.toHaveURL('/login', { timeout: 5000 });
 
       const csrfRes = await page.request.get(`${apiServer.url}/api/csrf-token`);
       expect(csrfRes.ok(), await csrfRes.text()).toBe(true);
-      const { token: csrfToken } = (await csrfRes.json()) as { token: string };
+      const csrfBody = (await csrfRes.json()) as Record<string, unknown>;
+      if (typeof csrfBody.token !== 'string') {
+        throw new Error(`expected { token } from GET /api/csrf-token, got: ${JSON.stringify(csrfBody)}`);
+      }
+      const csrfToken = csrfBody.token;
 
       // Empty body -> document_type 'wiki', title 'Untitled' (this repo's
       // own default-title convention) — this test only needs the event to
