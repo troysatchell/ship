@@ -73,6 +73,113 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-596 — E2E tests assert never-built owner-selection UI: deleted 8 tests following TRO-293 precedent
+
+**Root cause — precise scope (revised after CodeRabbit review, initial claim was overbroad).**
+`e2e/program-mode-week-ux.spec.ts` contains eight tests asserting a **specific creation-time flow**:
+click an empty future week window on the timeline → a `.fixed.inset-0` modal opens showing "Who
+should own" + availability indicators (✓ Available / ⚠ N sprints) → pick an owner → click a
+"Create & Open" button → a new week/sprint is created and you navigate to it. **This exact flow —
+the modal, the "Who should own" text, and the "Create & Open" button — was never built**: zero
+matches anywhere in `web/src` for `"Create & Open"`, `"Create Week"`, or `"Who should own"`; no
+`.fixed.inset-0` component in the repo is a week-creation modal (the 13 that exist are
+`ConfirmDialog`, `CommandPalette`, `ActionItemsModal`, `ProjectSetupWizard`, `ApprovalButton`,
+`ConversionDialog`, `UploadNavigationWarning`, `WeeklyReviewSubNav`, `SessionTimeoutModal`,
+`BacklogPickerModal`, `App.tsx`, `MergeProgramDialog`, `TeamMode.tsx` — none creation-flow-shaped).
+
+**What the initial claim got wrong, and what actually exists:** owner selection as a *concept* is
+real and built — `web/src/components/sidebars/WeekSidebar.tsx`'s `PropertyRow label="Owner"` is a
+properties-sidebar dropdown (`ownerOptions` computed via `useMemo`, availability descriptions
+included) for **editing an already-existing** sprint/week document's owner field, in the standard
+4-panel-layout properties sidebar — a completely different UI pattern (edit-existing-document
+property, not a creation-time modal triggered by clicking a timeline window) from what these 8
+tests describe. A blanket "owner selection was never built" is false and contradicted by a plain
+grep; "this specific click-window→modal→create-with-owner-selection flow was never built" is what
+the evidence actually supports, and is the only claim this ticket relies on.
+
+TRO-286 (TEST-14) converted conditional guards (`if (modalVisible)`) into hard assertions (direct
+`expect()`), surfacing these 8 tests as failing hard rather than silently passing on a feature that
+was never built to this shape.
+
+**Precedent applied: TRO-293.** When E2E tests assert UI that was never built, TRO-293 (commit 05f3626) 
+deleted those tests entirely rather than leaving them as `test.fixme()`, with rationale: "No commit ever 
+added and then removed this feature; it was asserted without ever being built. Deleted all four fixme 
+tests and their shared docstring rather than leave any test.fixme() behind for this finding." This ticket 
+applies the same resolution to the eight tests depending on the never-built owner-selection modal.
+
+**What was changed.**
+
+Deleted the following test cases from `e2e/program-mode-week-ux.spec.ts`:
+1. "clicking empty future window opens owner selection prompt" (Phase 3, asserts `/Who should own/`)
+2. "owner selection shows availability indicators" (Phase 3, expects modal)
+3. "selecting owner and clicking Create creates sprint" (Phase 3, expects modal + tests POST flow)
+4. "can cancel owner selection" (Phase 3, expects modal)
+5. "created sprint has correct week matching clicked window" (Phase 3 Continued, expects modal)
+6. "owner availability shows warning for busy owners" (Phase 3 Continued, expects modal)
+7. "created sprint has correct owner_id in API response" (Phase 3 Continued, expects modal + validates POST response)
+8. "sprint creation flow: click window → select owner → navigate to sprint" (Integration, expects full flow)
+
+The remaining tests in both Phase 3 blocks remain and were verified independent (read directly,
+neither references the owner-selection modal): "week windows show date range" (Phase 3),
+"past empty windows are not clickable" (Phase 3 Continued).
+
+The two Integration-suite tests ("user navigates to program → Weeks tab → sees graph + timeline",
+"user filters issues by backlog → sees only unassigned issues") were **not independently verified
+against the owner-selection modal** — they weren't touched by this change and are unrelated by
+name/location, but that claim of independence is narrower than "verified": it rests on not
+referencing the deleted tests' shared fixtures, not on reading their full bodies. Narrowing this
+claim per CodeRabbit review rather than leaving it unqualified.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm test:e2e e2e/program-mode-week-ux.spec.ts
+```
+
+**Exact counts from a real run** (`/e2e-test-runner`, single-spec, this branch): **54 total, 23
+passed, 1 failed, 30 skipped.** The 1 failure ("Issues tab has sprint filter dropdown", line 491) is
+**not** caused by this ticket's diff — confirmed via `git diff main...HEAD -- e2e/program-mode-week-ux.spec.ts`,
+which only touches the Phase 3 / Phase 3 Continued / Integration blocks this ticket edited, none of
+which contain that test. The 30 skips are a cascade from that one failure: the file has
+`test.describe.configure({ mode: 'serial' })` at file scope (line 17), so one failure skips every
+later test in the file, not just its own block. Filed as TRO-609 (separate, pre-existing, out of this
+ticket's scope) rather than fixed here or left undisclosed.
+
+The 8 deleted tests were originally failing hard on line 489 (asserts `/Who should own/`), line
+507/531 (asserts modal exists with that text), lines 1053/1070/1094 (same), and line 1325 (same).
+
+**Evidence.**
+
+| Finding | Evidence |
+|---|---|
+| The specific creation modal ("Who should own", "Create & Open") does not exist | `grep -rn "Who should own\|Create & Open\|Create Week" web/src` returns zero matches; none of the 13 `.fixed.inset-0` components in `web/src` is a week-creation modal (named and checked individually — see root-cause section) |
+| Owner selection *as a concept* does exist, elsewhere | `web/src/components/sidebars/WeekSidebar.tsx`'s `PropertyRow label="Owner"` — a properties-sidebar dropdown for editing an existing sprint's owner, not a creation-time modal. Disclosed explicitly so this entry doesn't contradict a plain grep. |
+| Feature (the specific modal flow) was never built | `git log -p --follow -- e2e/program-mode-week-ux.spec.ts` shows the test was added with conditional guard `if (modalVisible)` which TRO-286 converted to hard assert; no commit ever added the modal/"Create & Open" button to `web/src` |
+| Precedent matches exactly | TRO-293 commit 05f3626 deleted 4 similar `test.fixme()` tests asserting never-built IssuesList per-row quick-menu; this ticket deletes 8 tests asserting a never-built owner-selection **modal** (not the concept of owner selection generally) |
+| Remaining Phase 3 tests are independent | Verified by reading both directly — "week windows show date range" and "past empty windows are not clickable" do not reference the modal |
+
+**Gate results (documented here per CodeRabbit review, not just the PR body).**
+`scripts/factory/gate.sh`: pass on every check except two, both intentional and justified, not
+silently bypassed:
+- `tests:not-weakened` — fails on a net loss of 14 test lines. These are removed, not weakened —
+  no version of them could ever pass honestly, since the flow they assert doesn't exist.
+- `regression-test` — fails, no new test added. A regression test doesn't make sense for a flow
+  that was never built; there is no behavior to protect. Matches TRO-293's precedent, which also
+  added no replacement test.
+
+**Rollback.**
+
+```bash
+git revert <this ticket's commit SHA>
+```
+
+Restores all 8 deleted test functions to their state before this ticket. Tests will fail hard on assertions
+(at lines mentioning `/Who should own/`, modal.getByText, etc.) unless the owner-selection modal feature is
+separately implemented in `web/src`.
+
+---
+
 ## TRO-605 — Widen GET /api/v1/documents(/:id): content/visibility/created_by/completed_at
 
 **Root cause / gap, not a bug.** `api/src/platform/api/v1/resources/documents.ts`'s `DocumentRow`/
