@@ -81,7 +81,14 @@
  */
 
 import 'dotenv/config';
-import { loadConfig, isConfigComplete, assertAnthropicBudgetFitsHandlerDeadline } from './config.js';
+import {
+  loadConfig,
+  isConfigComplete,
+  assertAnthropicBudgetFitsHandlerDeadline,
+  FLEETGRAPH_CLIENT_ID,
+  FLEETGRAPH_APP_SCOPES,
+} from './config.js';
+import { ShipClient as SdkShipClient } from '@ship/sdk';
 import { createServer, buildShipClient, buildAnthropicModel } from './server.js';
 import { buildGraph, type CompiledGraph } from './graph.js';
 import { ShipClient, GateShipClient, type GateShipClientLike } from './shipClient.js';
@@ -185,6 +192,35 @@ if (!isConfigComplete(config)) {
   // identity, so there is no reason for a per-asker client to reset that
   // state.
   const resilientHttpClient = buildShipClient(config);
+
+  // PF-702 (TRO-428) — AGENT_PLATFORM_MODE=sdk: the SHARED/proactive
+  // instance authenticates as the app itself (Client Credentials against
+  // ship_app_fleetgraph, PF-701 — see config.ts's FLEETGRAPH_CLIENT_ID/
+  // FLEETGRAPH_APP_SCOPES doc comment) rather than impersonating a human, and
+  // its 10 reads delegate to @ship/sdk's /api/v1/* surface instead of the
+  // internal /api/* routes — see shipClient.ts's module docstring for the
+  // per-method mapping and the fields that cannot carry over. Stays
+  // 'internal' by default (this ticket does not flip PF-704's default); the
+  // secret check below is a startup fail-loud, same posture
+  // assertAnthropicBudgetFitsHandlerDeadline above already uses for a
+  // configuration this process cannot function correctly under.
+  let sharedSdkClient: SdkShipClient | undefined;
+  if (config.agentPlatformMode === 'sdk') {
+    if (!config.fleetgraphOauthClientSecret) {
+      throw new Error(
+        '[agent] AGENT_PLATFORM_MODE=sdk requires FLEETGRAPH_OAUTH_CLIENT_SECRET (the ' +
+          "ship_app_fleetgraph app's client secret, PF-701) to mint an app-identity Client " +
+          'Credentials token. Set it, or unset AGENT_PLATFORM_MODE to run in internal mode.'
+      );
+    }
+    sharedSdkClient = await SdkShipClient.clientCredentials({
+      baseUrl: config.shipApiBaseUrl,
+      clientId: FLEETGRAPH_CLIENT_ID,
+      clientSecret: config.fleetgraphOauthClientSecret,
+      scope: FLEETGRAPH_APP_SCOPES.join(' '),
+    });
+  }
+
   const shipClient = new ShipClient({
     baseUrl: config.shipApiBaseUrl,
     // isConfigComplete() already guarantees this is set. Used for the
@@ -192,16 +228,29 @@ if (!isConfigComplete(config)) {
     // only — both intentionally still run under ONE shared token, since
     // neither has a per-invocation requesting user to source a per-call one
     // from (see `ProactiveDeps`/`DeepDeps`'s own docstrings in graph.ts).
+    // In `sdk` mode this token is unused (see `sdk` field below) — kept for
+    // type-compat with every existing `internal`-mode caller/test.
     token: config.shipApiToken as string,
     client: resilientHttpClient,
+    sdk: sharedSdkClient,
   });
   // TRO-342: the on-demand path DOES have a requesting user on every
   // invocation (the person asking in the chat panel), so it gets a FRESH
   // `ShipClient` per invocation, bound to that person's own token — never
   // the shared one above. See `OnDemandDeps.shipClientFactory`'s own
-  // docstring (graph.ts) for the full rationale.
+  // docstring (graph.ts) for the full rationale. PF-702: in `sdk` mode this
+  // ALSO delegates through @ship/sdk, but authenticated with the asking
+  // person's OWN token — never the app's Client Credentials token — so
+  // TRO-342's "no service account for on-demand reads" guarantee is
+  // unchanged by this ticket; only the wire protocol/response parsing
+  // changes, not who is authenticated.
   const onDemandShipClientFactory = (token: string): ShipClient =>
-    new ShipClient({ baseUrl: config.shipApiBaseUrl, token, client: resilientHttpClient });
+    new ShipClient({
+      baseUrl: config.shipApiBaseUrl,
+      token,
+      client: resilientHttpClient,
+      sdk: config.agentPlatformMode === 'sdk' ? new SdkShipClient({ token, baseUrl: config.shipApiBaseUrl }) : undefined,
+    });
   itemStore = new InMemoryItemStore();
   draftStore = new InMemoryDraftStore();
   // TRO-348: the SAME `resilientHttpClient` every other outbound call above

@@ -34,6 +34,55 @@
  */
 
 import type { ResilientClient } from './resilientClient.js';
+import type { ShipClient as SdkShipClient, DocumentType as SdkDocumentType } from '@ship/sdk';
+
+/**
+ * PF-702 (TRO-428) — `AGENT_PLATFORM_MODE=sdk` mode. When `ShipClientOptions
+ * .sdk` is set, each of the 10 read methods below delegates to `@ship/sdk`'s
+ * typed `/api/v1/*` resource clients instead of calling Ship's internal
+ * `/api/*` routes directly. Every method is split into a `ViaInternal`/
+ * `ViaSdk` pair, kept immediately adjacent so the two are easy to diff
+ * against each other — the public method just dispatches on `this.sdk`.
+ * `agent/` is a permitted `@ship/sdk` workspace consumer per PLUGFORGE.MD
+ * §2.1/§1.3 (documented in `api/src/platform/README.md`'s boundary-rules
+ * section, and deliberately excluded from `scripts/check-integration-deps
+ * .mjs`'s enforcement — see that script's own header).
+ *
+ * ── Fields that CANNOT carry over from internal to sdk mode (verified, not
+ *    guessed — CLAUDE.md's claim-provenance rule) ──
+ *
+ * `getDocument()`: `GET /api/v1/documents/:id`'s own doc comment states it
+ * plainly — "Deliberately narrower than the full internal `documents` row
+ * (no `content`, `yjs_state`, `visibility`, etc.)" — confirmed by reading
+ * `DocumentRow`/`serializeDocument()` in
+ * `api/src/platform/api/v1/resources/documents.ts` directly. `content` and
+ * `completed_at` are absent from the v1 response; `visibility`/`created_by`
+ * are absent too. The last two are not cosmetic: `visibility.ts`'s
+ * `isDocumentVisibleTo` — FleetGraph's own "never surface a document the
+ * recipient can't see" security check — REQUIRES real `visibility`/
+ * `created_by` values. `getDocumentViaSdk` below synthesizes values that
+ * make that check FAIL CLOSED (never treated as visible) rather than
+ * fabricating `'workspace'`/a matching `created_by`, which would silently
+ * WIDEN who a private document gets surfaced to — the same "wrong direction
+ * to be wrong in" posture `visibility.ts`'s own docstring already states for
+ * its missing-admin-check case. This is a real, disclosed behavioral
+ * difference in `sdk` mode, not a silent gap — see CHANGES.md (TRO-428) and
+ * the parity test's own `getDocument` case for exactly what is and is not
+ * proven equivalent.
+ *
+ * `getAssociations()`/`getReverseAssociations()`: the internal route's
+ * `?type=` filter (e.g. `'blocks'`, `'project'`, `'sprint'` — actively used
+ * by `standupDraft.ts`/`blockerFanout.ts`/`retroDraft.ts`) has no server-side
+ * equivalent on the v1 sub-resource (`SubResourceListQuerySchema` is
+ * `limit`/`cursor` only — verified by reading
+ * `api/src/platform/api/v1/resources/documents.ts` directly). `ViaSdk` below
+ * fetches every page (bounded, see `collectAllPages`) and filters by `type`
+ * client-side instead — correct for the association counts this codebase
+ * actually has (a handful per document), but more round trips than the
+ * internal route's single filtered query. Also a real, disclosed gap, not
+ * silently absorbed.
+ */
+const SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN = 'sdk_mode_unknown';
 
 export interface ChangeFeedDocument {
   id: string;
@@ -332,17 +381,58 @@ export interface ShipClientOptions {
    * idempotent read, so only `ResilientClient.get` (timeout + retry +
    * breaker) is ever needed, never `.request`. */
   client: Pick<ResilientClient, 'get'>;
+  /** PF-702 (TRO-428) — `AGENT_PLATFORM_MODE=sdk`. When set, every read
+   * method below delegates to this `@ship/sdk` client's `/api/v1/*`
+   * resource methods instead of `client.get` against internal `/api/*`
+   * routes. `token`/`client` above stay required (unchanged contract for
+   * every existing caller) even when `sdk` is set — they simply go unused
+   * for that instance's reads. The bearer token actually used for `sdk`
+   * requests is whatever this `SdkShipClient` was itself constructed with
+   * (a personal token for the on-demand per-asker factory, or an app
+   * Client Credentials token for the shared/proactive instance — see
+   * `index.ts` for which) — this class never re-derives or overrides it. */
+  sdk?: SdkShipClient;
 }
 
 export class ShipClient {
   private readonly base: string;
   private readonly token: string;
   private readonly client: Pick<ResilientClient, 'get'>;
+  private readonly sdk: SdkShipClient | undefined;
 
   constructor(options: ShipClientOptions) {
     this.base = options.baseUrl.replace(/\/+$/, '');
     this.token = options.token;
     this.client = options.client;
+    this.sdk = options.sdk;
+  }
+
+  /**
+   * Walks every page of a v1 list sub-resource up to `maxPages` (default 20
+   * pages, i.e. up to 2,000 items at the server's own 100-per-page cap) —
+   * used by the `ViaSdk` methods below whose internal counterpart returns
+   * the WHOLE collection in one call (no `limit` parameter on the agent's
+   * own method signature: `getAssociations`/`getReverseAssociations`/
+   * `getBacklinks`/`getComments`), unlike `documents`/`issues`/`sprints`/
+   * `people`, which already have a real `iterate()` on the SDK. Bounded
+   * rather than unbounded so a pathological document can never hang a read
+   * — matches this file's own existing pattern of capping unbounded internal
+   * reads (`listDocuments`'s own default-everything internal route, capped
+   * only by the caller's `limit` argument when one is passed).
+   */
+  private async collectAllPages<T>(
+    fetchPage: (cursor?: string) => Promise<{ data: readonly T[]; next_cursor: string | null }>,
+    maxPages = 20
+  ): Promise<T[]> {
+    const items: T[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < maxPages; page++) {
+      const result = await fetchPage(cursor);
+      items.push(...result.data);
+      if (!result.next_cursor) break;
+      cursor = result.next_cursor;
+    }
+    return items;
   }
 
   private authHeaders(): Record<string, string> {
@@ -358,6 +448,11 @@ export class ShipClient {
   }
 
   async getChangeFeed(since: string, limit?: number): Promise<ChangeFeedResponse> {
+    const sdk = this.sdk;
+    return sdk ? this.getChangeFeedViaSdk(sdk, since, limit) : this.getChangeFeedViaInternal(since, limit);
+  }
+
+  private async getChangeFeedViaInternal(since: string, limit?: number): Promise<ChangeFeedResponse> {
     const url = new URL(`${this.base}/api/change-feed`);
     url.searchParams.set('since', since);
     if (limit !== undefined) {
@@ -366,12 +461,122 @@ export class ShipClient {
     return this.getJson<ChangeFeedResponse>(url.toString());
   }
 
+  /** `GET /api/v1/changes` (PF-205) — a single tagged `data[]` array
+   *  (`resource: 'document' | 'document_history' | 'comment'`), not three
+   *  parallel arrays. Every field the internal shape needs (including
+   *  `dedupe_key`) survives on the matching `data` entry — verified by
+   *  reading `resources/changes.ts` directly, not guessed — so this is a
+   *  lossless reassembly, partitioning by `.resource` and rebuilding the
+   *  three `*_truncated` flags from `page.truncated`. */
+  private async getChangeFeedViaSdk(sdk: SdkShipClient, since: string, limit?: number): Promise<ChangeFeedResponse> {
+    const page = await sdk.changes.list({ since, limit });
+    const documents: ChangeFeedDocument[] = [];
+    const history: ChangeFeedHistoryEntry[] = [];
+    const comments: ChangeFeedComment[] = [];
+
+    for (const entry of page.data) {
+      if (entry.resource === 'document') {
+        documents.push({
+          id: entry.id,
+          document_type: entry.document_type,
+          title: entry.title,
+          updated_at: entry.updated_at,
+          created_by: entry.created_by,
+          dedupe_key: entry.dedupe_key,
+        });
+      } else if (entry.resource === 'document_history') {
+        history.push({
+          id: entry.id,
+          document_id: entry.document_id,
+          field: entry.field,
+          old_value: entry.old_value,
+          new_value: entry.new_value,
+          changed_by: entry.changed_by,
+          automated_by: entry.automated_by,
+          created_at: entry.created_at,
+          dedupe_key: entry.dedupe_key,
+        });
+      } else {
+        comments.push({
+          id: entry.id,
+          document_id: entry.document_id,
+          comment_id: entry.comment_id,
+          parent_id: entry.parent_id,
+          author_id: entry.author_id,
+          content: entry.content,
+          resolved_at: entry.resolved_at,
+          created_at: entry.created_at,
+          updated_at: entry.updated_at,
+          dedupe_key: entry.dedupe_key,
+        });
+      }
+    }
+
+    return {
+      next_cursor: page.next_cursor,
+      documents,
+      documents_truncated: page.truncated.documents,
+      history,
+      history_truncated: page.truncated.document_history,
+      comments,
+      comments_truncated: page.truncated.comments,
+    };
+  }
+
   async getDocument(id: string): Promise<ShipDocument> {
+    const sdk = this.sdk;
+    return sdk ? this.getDocumentViaSdk(sdk, id) : this.getDocumentViaInternal(id);
+  }
+
+  private async getDocumentViaInternal(id: string): Promise<ShipDocument> {
     return this.getJson<ShipDocument>(`${this.base}/api/documents/${id}`);
   }
 
+  /** See this file's module docstring ("Fields that CANNOT carry over") for
+   *  the full, verified explanation of why `content`/`completed_at` are
+   *  `null`/`undefined` and `visibility`/`created_by` are synthesized to
+   *  fail `isDocumentVisibleTo` closed rather than open. */
+  private async getDocumentViaSdk(sdk: SdkShipClient, id: string): Promise<ShipDocument> {
+    const doc = await sdk.documents.get(id);
+    return {
+      id: doc.id,
+      document_type: doc.document_type,
+      title: doc.title,
+      content: null,
+      visibility: SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN,
+      created_by: null,
+      properties: doc.properties as ShipDocument['properties'],
+      completed_at: undefined,
+    };
+  }
+
   async getPeople(): Promise<ShipPerson[]> {
+    const sdk = this.sdk;
+    return sdk ? this.getPeopleViaSdk(sdk) : this.getPeopleViaInternal();
+  }
+
+  private async getPeopleViaInternal(): Promise<ShipPerson[]> {
     return this.getJson<ShipPerson[]>(`${this.base}/api/team/people`);
+  }
+
+  /** `GET /api/v1/people` (PF-205) is paginated; the internal route returns
+   *  the whole directory in one call. `people.iterate()` (the SDK's own
+   *  async-iterator pagination, PF-402) walks every page transparently. */
+  private async getPeopleViaSdk(sdk: SdkShipClient): Promise<ShipPerson[]> {
+    const people: ShipPerson[] = [];
+    for await (const person of sdk.people.iterate()) {
+      people.push({
+        id: person.id,
+        user_id: person.user_id,
+        name: person.name,
+        email: person.email,
+        isArchived: person.is_archived,
+        isPending: person.is_pending,
+        reportsTo: person.reports_to,
+        role: person.role,
+      });
+    }
+    return people;
   }
 
   /** Forward associations FROM `documentId` (`associations.ts`'s
@@ -379,6 +584,11 @@ export class ShipClient {
    * plus `blocks` (FG-15/TRO-333), all in one generic surface since
    * `associations.ts` never filtered by type on this route unless asked. */
   async getAssociations(documentId: string, type?: string): Promise<AssociationForwardEdge[]> {
+    const sdk = this.sdk;
+    return sdk ? this.getAssociationsViaSdk(sdk, documentId, type) : this.getAssociationsViaInternal(documentId, type);
+  }
+
+  private async getAssociationsViaInternal(documentId: string, type?: string): Promise<AssociationForwardEdge[]> {
     const url = new URL(`${this.base}/api/documents/${documentId}/associations`);
     if (type !== undefined) {
       url.searchParams.set('type', type);
@@ -386,10 +596,29 @@ export class ShipClient {
     return this.getJson<AssociationForwardEdge[]>(url.toString());
   }
 
+  /** `GET /api/v1/documents/:id/associations` has no `?type=` filter (see
+   *  module docstring) — fetches every page (`collectAllPages`) and filters
+   *  by `type` client-side instead. */
+  private async getAssociationsViaSdk(sdk: SdkShipClient, documentId: string, type?: string): Promise<AssociationForwardEdge[]> {
+    const edges = await this.collectAllPages((cursor) =>
+      sdk.documents.getAssociations(documentId, { limit: 100, cursor })
+    );
+    return edges
+      .filter((edge) => type === undefined || edge.relationship_type === type)
+      .map((edge) => ({ related_id: edge.related_id, relationship_type: edge.relationship_type }));
+  }
+
   /** Associations pointing AT `documentId` (`associations.ts`'s
    * `GET /:id/reverse-associations`) — e.g. every issue in a week, or every
    * issue that `blocks` this one. */
   async getReverseAssociations(documentId: string, type?: string): Promise<AssociationReverseEdge[]> {
+    const sdk = this.sdk;
+    return sdk
+      ? this.getReverseAssociationsViaSdk(sdk, documentId, type)
+      : this.getReverseAssociationsViaInternal(documentId, type);
+  }
+
+  private async getReverseAssociationsViaInternal(documentId: string, type?: string): Promise<AssociationReverseEdge[]> {
     const url = new URL(`${this.base}/api/documents/${documentId}/reverse-associations`);
     if (type !== undefined) {
       url.searchParams.set('type', type);
@@ -397,11 +626,47 @@ export class ShipClient {
     return this.getJson<AssociationReverseEdge[]>(url.toString());
   }
 
+  /** Same "no server-side type filter" gap as `getAssociationsViaSdk` above
+   *  — see module docstring. */
+  private async getReverseAssociationsViaSdk(
+    sdk: SdkShipClient,
+    documentId: string,
+    type?: string
+  ): Promise<AssociationReverseEdge[]> {
+    const edges = await this.collectAllPages((cursor) =>
+      sdk.documents.getReverseAssociations(documentId, { limit: 100, cursor })
+    );
+    return edges
+      .filter((edge) => type === undefined || edge.relationship_type === type)
+      .map((edge) => ({ document_id: edge.document_id, relationship_type: edge.relationship_type }));
+  }
+
   /** Documents that link to `documentId` (`backlinks.ts`'s `document_links`
    * table) — "documents that mention it" (TRO-318's Scope section). Already
    * visibility-filtered server-side. */
   async getBacklinks(documentId: string): Promise<BacklinkEntry[]> {
+    const sdk = this.sdk;
+    return sdk ? this.getBacklinksViaSdk(sdk, documentId) : this.getBacklinksViaInternal(documentId);
+  }
+
+  private async getBacklinksViaInternal(documentId: string): Promise<BacklinkEntry[]> {
     return this.getJson<BacklinkEntry[]>(`${this.base}/api/documents/${documentId}/backlinks`);
+  }
+
+  /** `GET /api/v1/documents/:id/backlinks` (PF-205) is paginated; the
+   *  internal route returns every backlink in one call — `collectAllPages`
+   *  walks every page to match. `display_id: string | null` (v1) narrows
+   *  cleanly to `BacklinkEntry.display_id?: string` by omitting the key when
+   *  `null` (v1 uses `null` for "no ticket number"; the agent's own type
+   *  already treats "absent" and a former `undefined` the same way). */
+  private async getBacklinksViaSdk(sdk: SdkShipClient, documentId: string): Promise<BacklinkEntry[]> {
+    const backlinks = await this.collectAllPages((cursor) => sdk.documents.getBacklinks(documentId, { limit: 100, cursor }));
+    return backlinks.map((b) => ({
+      id: b.id,
+      document_type: b.document_type,
+      title: b.title,
+      ...(b.display_id !== null ? { display_id: b.display_id } : {}),
+    }));
   }
 
   /** Comments on `documentId` (`comments.ts`) — evidence text attached to a
@@ -409,7 +674,35 @@ export class ShipClient {
    * different document (a comment lives ON a document, it does not point at
    * one). */
   async getComments(documentId: string): Promise<CommentEntry[]> {
+    const sdk = this.sdk;
+    return sdk ? this.getCommentsViaSdk(sdk, documentId) : this.getCommentsViaInternal(documentId);
+  }
+
+  private async getCommentsViaInternal(documentId: string): Promise<CommentEntry[]> {
     return this.getJson<CommentEntry[]>(`${this.base}/api/documents/${documentId}/comments`);
+  }
+
+  /** `GET /api/v1/documents/:id/comments` (PF-205) is paginated (walked via
+   *  `collectAllPages` to match the internal route's return-everything
+   *  shape) and, verified by reading the handler directly, LEFT JOINs the
+   *  author (`author: null` when the author's user row is gone) where the
+   *  internal route INNER JOINs (a comment with no resolvable author is
+   *  simply absent from the internal route's results instead). A genuinely
+   *  authorless comment is the only case this placeholder fires for — see
+   *  CHANGES.md (TRO-428). */
+  private async getCommentsViaSdk(sdk: SdkShipClient, documentId: string): Promise<CommentEntry[]> {
+    const comments = await this.collectAllPages((cursor) => sdk.documents.getComments(documentId, { limit: 100, cursor }));
+    return comments.map((c) => ({
+      id: c.id,
+      content: c.content,
+      author: {
+        id: c.author?.id ?? '',
+        name: c.author?.name ?? '(unknown)',
+        email: c.author?.email ?? null,
+      },
+      created_at: c.created_at,
+      resolved_at: c.resolved_at,
+    }));
   }
 
   /** Other issues assigned to `assigneeUserId` (`issues.ts`'s
@@ -417,12 +710,43 @@ export class ShipClient {
    * `limit` keeps one prolific assignee from flooding a single hop's
    * candidate set; omitted = every matching issue (the route's own default). */
   async getIssuesByAssignee(assigneeUserId: string, limit?: number): Promise<AssigneeIssueSummary[]> {
+    const sdk = this.sdk;
+    return sdk
+      ? this.getIssuesByAssigneeViaSdk(sdk, assigneeUserId, limit)
+      : this.getIssuesByAssigneeViaInternal(assigneeUserId, limit);
+  }
+
+  private async getIssuesByAssigneeViaInternal(assigneeUserId: string, limit?: number): Promise<AssigneeIssueSummary[]> {
     const url = new URL(`${this.base}/api/issues`);
     url.searchParams.set('assignee_id', assigneeUserId);
     if (limit !== undefined) {
       url.searchParams.set('limit', String(limit));
     }
     return this.getJson<AssigneeIssueSummary[]>(url.toString());
+  }
+
+  /** `GET /api/v1/issues?assignee_id=` (PF-702 fix — `IssuesClient.list()`
+   *  did not forward `assignee_id` before this ticket; see `sdk/src/types
+   *  .ts`'s `ListIssuesParams` doc comment and CHANGES.md for the finding).
+   *  `omitted limit` (internal's own default = every matching issue) maps to
+   *  `collectAllPages` walking every page; a real `limit` maps to a single
+   *  page request at that size, matching the internal route's own "limit
+   *  caps the whole result, not a page" semantics for this method. */
+  private async getIssuesByAssigneeViaSdk(
+    sdk: SdkShipClient,
+    assigneeUserId: string,
+    limit?: number
+  ): Promise<AssigneeIssueSummary[]> {
+    const issues =
+      limit === undefined
+        ? await this.collectAllPages((cursor) => sdk.issues.list({ assignee_id: assigneeUserId, limit: 100, cursor }))
+        : (await sdk.issues.list({ assignee_id: assigneeUserId, limit })).data;
+    return issues.map((issue) => ({
+      id: issue.id,
+      title: issue.title,
+      state: issue.state,
+      updated_at: issue.updated_at,
+    }));
   }
 
   /** `GET /api/documents?type=...` (`documents.ts`) — workspace-wide, NOT
@@ -436,12 +760,43 @@ export class ShipClient {
    * `detectBlockingApprovals` already relies on — one token, many
    * recipients), not a distinct token per person. */
   async listDocuments(type: string, limit?: number): Promise<DocumentListItem[]> {
+    const sdk = this.sdk;
+    return sdk ? this.listDocumentsViaSdk(sdk, type, limit) : this.listDocumentsViaInternal(type, limit);
+  }
+
+  private async listDocumentsViaInternal(type: string, limit?: number): Promise<DocumentListItem[]> {
     const url = new URL(`${this.base}/api/documents`);
     url.searchParams.set('type', type);
     if (limit !== undefined) {
       url.searchParams.set('limit', String(limit));
     }
     return this.getJson<DocumentListItem[]>(url.toString());
+  }
+
+  /** `GET /api/v1/documents?type=` — a full field superset of
+   *  `DocumentListItem` (adds `title`, dropped here). Same "no limit ==
+   *  every matching row" vs "a real limit == one page" split as
+   *  `getIssuesByAssigneeViaSdk` above, for the identical reason
+   *  (`listDocuments`'s own internal route has no page concept either). */
+  private async listDocumentsViaSdk(sdk: SdkShipClient, type: string, limit?: number): Promise<DocumentListItem[]> {
+    // `listDocuments(type: string, ...)` takes a plain string (every call
+    // site passes a real document_type literal — 'standup' etc.); the SDK's
+    // `ListDocumentsParams.type` narrows to `DocumentType`. Not `as any`/`as
+    // unknown as` (review-patterns.mjs / lessons.md rule 16) — a direct
+    // narrowing cast to a specific literal union, the same shape this file's
+    // other `ViaSdk` methods use implicitly via object-literal field access.
+    const docType = type as SdkDocumentType;
+    const docs =
+      limit === undefined
+        ? await this.collectAllPages((cursor) => sdk.documents.list({ type: docType, limit: 100, cursor }))
+        : (await sdk.documents.list({ type: docType, limit })).data;
+    return docs.map((doc) => ({
+      id: doc.id,
+      document_type: doc.document_type,
+      properties: doc.properties,
+      created_at: doc.created_at,
+      updated_at: doc.updated_at,
+    }));
   }
 
   /** `GET /api/weeks/:id` (`weeks.ts`), narrowed to ONLY
@@ -451,7 +806,21 @@ export class ShipClient {
    * FG-17's only consumer: `retroDraft.ts`'s `gatherWeekDelivery`, to
    * compute which calendar days a week actually spans. */
   async getWeekDates(weekId: string): Promise<ShipWeekDates> {
+    const sdk = this.sdk;
+    return sdk ? this.getWeekDatesViaSdk(sdk, weekId) : this.getWeekDatesViaInternal(weekId);
+  }
+
+  private async getWeekDatesViaInternal(weekId: string): Promise<ShipWeekDates> {
     return this.getJson<ShipWeekDates>(`${this.base}/api/weeks/${weekId}`);
+  }
+
+  /** `GET /api/v1/sprints/:id` (PF-205) — a "week" internally is a `sprint`
+   *  document type; `SprintDetail.workspace_sprint_start_date` is exactly
+   *  the one fact `ShipWeekDates` needs (verified against
+   *  `resources/sprints.ts`'s `GET /:id` handler directly). */
+  private async getWeekDatesViaSdk(sdk: SdkShipClient, weekId: string): Promise<ShipWeekDates> {
+    const sprint = await sdk.sprints.get(weekId);
+    return { workspace_sprint_start_date: sprint.workspace_sprint_start_date };
   }
 }
 

@@ -15,6 +15,31 @@ export interface AgentConfig {
   shipApiBaseUrl: string;
   /** Per-user Ship API token the agent runs under (FLEETGRAPH.MD: "no service account"). */
   shipApiToken: string | undefined;
+  /** `internal` (default) | `sdk` — PF-702 (TRO-428). In `internal` mode
+   *  `ShipClient`'s 10 read methods call Ship's internal `/api/*` routes
+   *  directly, exactly as before this ticket. In `sdk` mode they delegate to
+   *  `@ship/sdk`'s typed `/api/v1/*` resource clients instead — see
+   *  `shipClient.ts`'s module docstring for the per-method mapping and the
+   *  fields that structurally cannot carry over (documented there, not
+   *  silently dropped). Stays `internal` by default until PF-704 (the full
+   *  flag-matrix + audit-proof ticket) makes `sdk` graduation-ready — this
+   *  ticket's own scope is READ delegation behind a flag defaulting OFF, not
+   *  flipping the default. An unrecognized value falls back to `internal`
+   *  (fail to the long-established, already-audited behavior, not to the
+   *  newer one). */
+  agentPlatformMode: 'internal' | 'sdk';
+  /** Client secret for the first-party `ship_app_fleetgraph` OAuth app
+   *  (PF-701, seeded by `seedFirstPartyApp.ts`; terraform variable
+   *  `fleetgraph_oauth_client_secret`) — required only in `sdk` mode, to mint
+   *  an app-identity Client Credentials token via `@ship/sdk`'s
+   *  `ShipClient.clientCredentials()` (PF-702) rather than impersonating a
+   *  human user for the shared/proactive `ShipClient` instance. No default:
+   *  `undefined` in `internal` mode is normal and expected (this var is
+   *  genuinely unused there); `undefined` while `agentPlatformMode === 'sdk'`
+   *  is a misconfiguration `index.ts`'s boot path rejects loudly, same
+   *  fail-closed posture `seedFirstPartyApp.ts` already uses for the
+   *  identical env var on the api/ side. */
+  fleetgraphOauthClientSecret: string | undefined;
   /** Whether LangSmith tracing is enabled (`LANGCHAIN_TRACING_V2=true`). */
   langchainTracingV2: boolean;
   /** LangSmith project name traces are grouped under. */
@@ -180,6 +205,23 @@ const DEFAULT_ANTHROPIC_MAX_RETRIES = 1;
 // docstring states for its figure).
 const DEFAULT_ANTHROPIC_PRE_MODEL_WORK_ALLOWANCE_MS = 7_000;
 
+/**
+ * PF-702 (TRO-428) — the first-party OAuth app's identity, duplicated here
+ * (not imported) for the same reason `sdk/src/types.ts` duplicates
+ * `DocumentType` rather than importing `@ship/shared`/`api/src`: `agent/`
+ * cannot import from `api/src/...` (not a workspace it may reach into), so
+ * every consumer independently verifies its own copy of the server's real
+ * constant. Source of truth: `api/src/platform/oauth/seedFirstPartyApp.ts`'s
+ * `FLEETGRAPH_CLIENT_ID` (`'ship_app_fleetgraph'`) / `FLEETGRAPH_APP_SCOPES`
+ * (`['documents:read', 'issues:read', 'sprints:read']`) — read directly
+ * before writing this, not guessed. There is no `FLEETGRAPH_OAUTH_CLIENT_ID`
+ * terraform var (confirmed by grep, matching that file's own comment): the
+ * seed and this agent can only agree on one `client_id` because it is a
+ * shared literal, not a value only one side computes.
+ */
+export const FLEETGRAPH_CLIENT_ID = 'ship_app_fleetgraph';
+export const FLEETGRAPH_APP_SCOPES = ['documents:read', 'issues:read', 'sprints:read'] as const;
+
 /** Worst-case backoff (ms) `@langchain/core`'s `AsyncCaller` inserts before
  * the Nth retry attempt (1-indexed), when it is constructed the way this
  * package constructs it. Verified by reading the actual library source, not
@@ -298,6 +340,14 @@ function positiveInt(value: string | undefined, fallback: number): number {
  * rejecting negatives (a leading `-` fails the digits-only test) and
  * anything non-numeric back to the fallback rather than a partially-parsed
  * value. */
+/** PF-702 — parses `AGENT_PLATFORM_MODE`. Falls back to `'internal'` for
+ *  anything other than the literal string `'sdk'` (unset, empty, or a typo)
+ *  — same "fail to the established behavior" reasoning as `AgentConfig
+ *  .agentPlatformMode`'s own docstring. */
+function parsePlatformMode(value: string | undefined): 'internal' | 'sdk' {
+  return value === 'sdk' ? 'sdk' : 'internal';
+}
+
 function nonNegativeInt(value: string | undefined, fallback: number): number {
   if (value === undefined) return fallback;
   const trimmed = value.trim();
@@ -313,6 +363,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AgentConfig {
     anthropicApiKey: env.ANTHROPIC_API_KEY,
     shipApiBaseUrl: env.SHIP_API_BASE_URL ?? DEFAULT_SHIP_API_BASE_URL,
     shipApiToken: env.SHIP_API_TOKEN,
+    agentPlatformMode: parsePlatformMode(env.AGENT_PLATFORM_MODE),
+    fleetgraphOauthClientSecret: env.FLEETGRAPH_OAUTH_CLIENT_SECRET,
     langchainTracingV2: env.LANGCHAIN_TRACING_V2 === 'true',
     langchainProject: env.LANGCHAIN_PROJECT,
     shipRequestTimeoutMs: positiveInt(env.SHIP_REQUEST_TIMEOUT_MS, DEFAULT_SHIP_REQUEST_TIMEOUT_MS),
