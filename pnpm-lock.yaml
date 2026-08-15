@@ -325,6 +325,9 @@ importers:
       express:
         specifier: 4.22.1
         version: 4.22.1
+      express-rate-limit:
+        specifier: 8.2.1
+        version: 8.2.1(express@4.22.1)
       supertest:
         specifier: 7.2.2
         version: 7.2.2

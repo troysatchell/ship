@@ -64,7 +64,17 @@ verified against the installed package's own type declarations) drives the real 
 `issue.assigned` posts correctly; invalid signature → 401, Slack never called; a verified delivery
 of an event type this receiver doesn't act on → 200 ignored, Slack never called; a Slack API
 failure → 502 (Ship's own deliverer retry schedule is the intended recovery path, not a
-receiver-invented retry).
+receiver-invented retry). A 6th test proves a real, deliberately-low-limit rate limiter actually
+rejects (`429`) a request over the configured limit — found by GitHub's non-required CodeQL check
+(`js/missing-rate-limiting`, real and scoped to this PR's diff, not repo-noise — verified via the
+check-run's own "New alerts in code changed by this pull request" annotation before fixing, not
+assumed): a route performing signature verification with no rate limit invites brute-force/
+volumetric abuse against the verification step itself, the same finding class already flagged
+elsewhere in this repo's OAuth routes. Fixed with `express-rate-limit` (matching
+`api/src/middleware/rate-limit.ts`'s established convention, incl. its IPv6-safe
+`ipKeyGenerator`), 100 req/min per source IP by default — generous for real deliverer traffic,
+still bounding abuse. `express-rate-limit` is a devDependency, bundled at build time same as
+`express`/`@slack/web-api` — `check-integration-deps.mjs` re-verified compliant after adding it.
 
 **Honest gap, disclosed rather than faked.** PF-803's AC also asks for "screenshot evidence for
 the demo" — that requires a real Slack workspace and a real live Ship deployment, neither of which

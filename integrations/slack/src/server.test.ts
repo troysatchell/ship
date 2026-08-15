@@ -198,4 +198,34 @@ describe('Slack integration receiver (PF-803, mocked Slack API)', () => {
 
     expect(res.status).toBe(502);
   });
+
+  it('the webhook route rate-limits repeated requests from one source (CodeQL js/missing-rate-limiting)', async () => {
+    // A separate app instance with a deliberately low limit — proving the
+    // limiter fires without sending 100+ real requests. Same technique
+    // PF-500's own rate-limit test suite uses: deliberately exceed the
+    // configured limit and watch it actually reject, not just trust the
+    // middleware is wired.
+    const limitedApp = createApp({
+      webhookSecret: WEBHOOK_SECRET,
+      slackClient: new WebClient('xoxb-fake-test-token', { slackApiUrl: mockSlack.url, retryConfig: { retries: 0 } }),
+      channel: CHANNEL,
+      rateLimitMax: 2,
+    });
+
+    // A signature valid enough to reach the rate limiter (it runs before
+    // signature verification in the middleware chain) — an intentionally
+    // wrong secret keeps this test from also depending on Slack delivery.
+    const body = JSON.stringify({ type: 'document.created' });
+    const t = Math.floor(Date.now() / 1000);
+    const send = () =>
+      request(limitedApp)
+        .post('/webhooks/ship')
+        .set('Content-Type', 'application/json')
+        .set('Ship-Signature', shipSignatureHeader(t, body, 'irrelevant-wrong-secret'))
+        .send(body);
+
+    const statuses = [await send(), await send(), await send()].map((res) => res.status);
+    expect(statuses.slice(0, 2)).toEqual([401, 401]); // under the limit, signature check runs as normal
+    expect(statuses[2]).toBe(429); // third request in the window is rate-limited
+  });
 });
