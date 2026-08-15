@@ -4,6 +4,50 @@ Every improvement made to Ship during the ShipShape sprint: what was added, how 
 how to roll it back. Newest first. One entry per ticket; the ticket ID is the join key to Linear,
 to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
+---
+
+## TRO-604 — `.dockerignore`'s test-file patterns never matched anything, breaking every deploy since ~05:00 UTC today
+
+**What was broken.** `.dockerignore`'s "Test files" section (`*.test.ts`, `*.spec.ts`, `__tests__`)
+used bare patterns, which Docker's ignore-matching treats as build-context-root-only — unlike
+`.gitignore`, Docker's syntax is not recursive without an explicit `**/` prefix. None of `api/`'s
+or `web/`'s nested test files (e.g. `api/src/platform/api/v1/resources/__tests__/webhooks.test.ts`)
+were ever actually excluded from the Docker build context; this has been silently vacuous since the
+file was written. It only started mattering when TRO-447/PF-801 (PR #235) added an import in
+`webhooks.test.ts` reaching outside the build context (`docs/submission/demo-webhook-listener.mjs`,
+itself excluded by `.dockerignore`'s separate `docs` line) — `pnpm build`'s `tsc` pass then failed
+to resolve that module, because the test file importing it *was* present (never actually excluded)
+while the thing it imported wasn't.
+
+**Impact, discovered while investigating an unrelated submission-readiness gap:** this broke the
+`build · push image (GHCR)` CI check (non-required, previously dismissed as low-priority) **and**
+the real deployed Render service, which builds from this same `Dockerfile`. Checked the live
+service's (`srv-d9kf2t942hec73aofrt0`, `ship-rr6m.onrender.com`) deploy history directly via the
+Render API: 7 consecutive `build_failed` deploys since PR #235 (~05:00 UTC) through PR #244 — the
+live deployment has been stuck on the PR #239 commit this entire time, meaning PF-801, PF-702,
+TRO-602, PF-600, PF-703, and TRO-599 were all merged to `main` but never actually live.
+
+**What changed.** `.dockerignore`'s test-file patterns now use `**/*.test.ts`, `**/*.spec.ts`,
+`**/__tests__` — matching at any depth, not just the root. This is a general fix, not a special
+case for `webhooks.test.ts`'s one import: no *future* test-only cross-boundary import can break
+this build path again, since test files are now genuinely absent from the image entirely.
+
+**Evidence.** `docker build --target build .` — succeeds (previously failed with `error TS2307:
+Cannot find module '../../../../../../../docs/submission/demo-webhook-listener.mjs'`).
+`docker run --rm <image> sh -c "find /app/api/src -name '__tests__' -o -name '*.test.ts'"` — empty,
+confirming test files are genuinely absent from the built image now, not just this one import
+resolved by luck.
+
+**No vitest regression test** — this is a Docker-build-context configuration fix; no unit test can
+exercise "does the real multi-stage Docker build succeed," the same accepted-exception class as
+this project's terraform tickets (e.g. PF-900). The real `docker build` run above is the actual
+proof, disclosed rather than silently claimed.
+
+**Rollback.** Revert this commit (one file, `.dockerignore`). Test files would again reach the
+Docker build context — safe to revert only once `webhooks.test.ts`'s cross-boundary import is
+independently fixed (TRO-604's original three suggested options for that import specifically are
+still valid follow-ups), otherwise this exact deploy failure recurs immediately.
+
 Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add an entry here.
 
 **The `audit-baseline` tag.** Points at `149873a` — verified with `git rev-list -n1 audit-baseline`

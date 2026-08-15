@@ -18,10 +18,19 @@ docs
 .vscode
 .idea
 
-# Test files
-*.test.ts
-*.spec.ts
-__tests__
+# Test files — Docker's ignore-pattern matching is literal, not recursive
+# like .gitignore's; a bare pattern only matches at the build-context root.
+# These bare forms never matched any of api/'s or web's nested __tests__
+# directories or *.test.ts files (e.g. api/src/platform/api/v1/resources/
+# __tests__/webhooks.test.ts) — silently vacuous since this file was
+# written. Found because one such file grew a relative import reaching
+# outside the build context (into docs/, itself excluded below), which
+# `pnpm build`'s tsc pass then failed to resolve — both in CI's GHCR image
+# job and on the real deployed Render service, whose build uses this same
+# Dockerfile. The **/ prefix makes these match at any depth.
+**/*.test.ts
+**/*.spec.ts
+**/__tests__
 coverage
 
 # Frontend build artifacts - source needed for local dev, but not prod API image
