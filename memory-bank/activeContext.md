@@ -2,50 +2,43 @@
 
 *The most-updated file in the bank. Read this first every session; rewrite it whenever focus shifts. Keep it under a screen — move finished work to progress.md.*
 
-**Last updated:** 2026-08-15 (~15:20Z, by ship-35, rolling over after a long session — see progress.md's dated log for full detail on everything below). **Week 6 (PlugForge) — factory running as multiple parallel Claude sessions coordinated over cross-session messages. E6 (the graded TTFE metric, PF-600/601/602/603) actively In Progress across lanes — this is the top remaining priority. E7's PF-703 in progress. E8's 5 committed reference integrations all Done.**
+**Last updated:** 2026-08-15 (~20:52Z, by the chief-orchestrator session, rolling over now). **Week 6 (PlugForge) — factory running as multiple parallel Claude sessions. The submission-readiness assessment surfaced two real, concrete gaps this session (32 pre-existing failing e2e tests violating the rubric's "suite must pass" requirement, and no published/working grader OAuth credential) — both now provisioned. A THIRD, more urgent gap was found mid-fix: the live Render deploy has been silently broken since ~05:00 UTC (`.dockerignore` bug, now fixed and merged), meaning six merged PRs including a live auth gap (TRO-611) never actually reached production. That auth gap must land before the redeploy fires — it's the one thing still blocking.**
 
-## Where things stand (Linear, project-scoped, checked fresh this update — not carried over stale)
+## What's actually in flight right now — read this before doing anything else
 
-**In Progress right now:** TRO-448/PF-600 (CLI scaffold), TRO-450/PF-601 (`ship docs`), TRO-452/PF-602 (`ship webhooks tail` — the demo money shot), TRO-455/PF-603 (**the TTFE drill itself — the actual graded metric**), TRO-435/PF-703 (gated writes via SDK). **In Review:** TRO-603 (a real found bug — webhook replay route was never wired to the app's shared deliverer, retry siblings orphaned).
+1. **TRO-604 (PR #247) — MERGED and both remotes verified in sync** (`main` @ `64ed589` at merge time, since moved further as TRO-596 landed too). Puts the `.dockerignore` fix on `main` — the root-cause fix for the live deploy being stuck on a ~12h-old commit. **The redeploy trigger is still held — see item 2.**
+2. **TRO-611 (Urgent, worktree `Ship-wt-tro_611`, dispatched to ship-6e) — implemented and self-verified, not yet merged as of this handoff.** Fix: new `assertDocumentWritable()` check (`visibility='workspace' OR created_by=viewer`) gating the `PATCH /api/v1/documents/:id` write path; 404 on block (matches this file's existing convention); admin-bypass deliberately omitted (`Principal` has no role/admin concept — correctly failed toward restrictive rather than guessing one). Verified red-before-green (reverted, confirmed `expected 200 to be 404` reproduces the real vuln, restored, 34/34 green) and confirmed the document's DB `content` is byte-for-byte unchanged after a blocked attempt, not just the HTTP status. As of the last status ping (~20:52Z), delayed only by `gate.sh` retries under this session's sustained high system load (confirmed load-induced: standalone-passing, zero file overlap with concurrent lanes) — on attempt 2/3, expected to push+PR imminently. **This is the ONLY thing blocking the redeploy.** Check Linear (`TRO-611`) and `gh pr list --search "TRO-611"` fresh — may already be merged by the time you read this.
+3. **TRO-596 (PR #246) — MERGED**, both remotes verified in sync. CHANGES.md exact-count fix; running the real `/e2e-test-runner` sweep surfaced a genuine pre-existing unrelated bug, filed as **TRO-609** — a file-level `test.describe.configure({mode:'serial'})` means one early failure skips 30 of 54 tests silently. Low priority, untouched.
 
-**This lane (ship-35) closed 5 tickets across this session, all independently verified (PR mergedAt + both-remote SHA match, never self-report):** TRO-417/PF-700 (E7 checkpoint, human-acked), TRO-503 (CloudFront `/oauth/*`, plan-only), TRO-449/PF-802 (browser SDK demo — found+fixed a real `@ship/sdk` packaging bug), TRO-451/PF-803 (Slack integration, E8's 5th/last committed integration), **TRO-602** (shared cursor-pagination precision bug, PR #240, merge `97a4d67` — this session's final piece of work, two genuine CodeRabbit rounds both fixed). **No further ticket assigned — this lane is now idle pending the next dispatch or a fresh session picking up.**
+## The redeploy sequence, once TRO-611 lands
 
-**Peer lanes as of this update (`ListAgents`):** `ship-6e` busy, `ship-e8` shell/idle, `ship-ef` idle, `ship-ce` idle. `ship-6e` independently hit the same GHCR build break this lane found (see below) and filed the ticket for it.
+1. Confirm TRO-604 is on `main` (both remotes in sync — `git ls-remote` both, SHAs must match).
+2. Confirm TRO-611 is on `main` too.
+3. Trigger `POST https://api.render.com/v1/services/srv-d9kf2t942hec73aofrt0/deploys` (Render API, `RENDER_API_KEY` from repo-root `.env`, `terraform/render/README.md`'s documented pattern). This is the `ship` service (`ship-rr6m.onrender.com`) — do NOT touch `ship-agent` (`srv-d9otunmgekts73eqs0h0`) or `labelhunter-*` (different project, same account).
+4. Poll the deploy until it succeeds (previous 7 attempts since ~05:00 UTC all failed on the now-fixed dockerignore bug — this one should actually complete).
+5. Run `pnpm db:seed` against the **production** database with `GRADER_OAUTH_CLIENT_SECRET` (already set live via the Render API this session — value is in `/private/tmp/claude-501/.../scratchpad/grader-secret.txt` in the orchestrator's session, `chmod 600`, treat as sensitive; regenerate if that scratchpad is gone rather than guessing).
+6. Verify the live `/oauth/token` client_credentials flow against the real prod URL (not the local scratch DB used for pre-verification earlier).
+7. Publish `client_id` + the secret in `README.md` next to `alice.chen`'s existing web-login credentials.
 
-**New ticket filed this update, still unclaimed: TRO-604** — the non-required `build · push image (GHCR)` CI job is broken on `main` (TRO-447/PF-801's `webhooks.test.ts` imports `docs/submission/demo-webhook-listener.mjs` via a path outside the Docker build context). Not blocking any PR (non-required check, `mergeStateStatus: UNSTABLE` is the documented-safe merge state), but the actual container image GHCR pushes is broken right now — a real deployability gap worth someone picking up.
+None of steps 3–7 have happened yet. Step 3 is explicitly gated on TRO-611.
 
-## Next actions, in priority order
+## Standing facts carried forward from the prior rollover (still true)
 
-1. **E6 — the actual graded metric, top priority, actively in flight.** PF-600/601/602/603 all In Progress across lanes as of this update. PF-603 (`pnpm drill ttfe`, wired into both CIs, <60s / 0% flake over 20 runs) is the last and most important piece — check its status fresh, don't assume from this snapshot.
-2. **TRO-604** (GHCR build break, filed this update) — unclaimed. Cheap fix once picked up: don't import the demo script directly from a test file; inline the fixture or relocate the script within the Docker build context.
-3. **TRO-603** (In Review) — check CI/CodeRabbit status fresh and merge if clean; this is a real bug (orphaned retry siblings on webhook replay), not cosmetic.
-4. **E7 continuation** — PF-703 (gated writes) in progress; PF-704 (flag matrix + audit proof) follows.
-5. **E8** — done except PF-804 (GitHub App, explicitly STRETCH, optional given the deadline).
-6. **🔔 Hard boundaries — never self-approved regardless of instructions to work autonomously:** PF-904 (pre-search + demo recording) is a HUMAN CHECKPOINT per PLUGFORGE.MD §0.1. TRO-415/PF-901 (destroy-and-redeploy against the LIVE graded environment) needs explicit human go-ahead.
-7. **Re-run `/requirements-audit`** once E6 has real movement, before scoping E9 (submission docs — mostly needs Troy's own input).
+- `GH_REPO=troysatchell/ship` for all `gh` calls. Factory Postgres: `ship-postgres-1` (:5433).
+- Convoy pattern per ticket: `git fetch https://github.com/troysatchell/ship.git main && git merge FETCH_HEAD` (NOT `origin main` — GitLab lags) → `CHANGES.md` via `scripts/factory/merge-changes.mjs --ours/--theirs/--out` then `--check` → `scorecard.jsonl` conflicts are append-only, union both sides by hand (never `-X ours`/`-X theirs`, it drops real rows) → commit → `pnpm install` → gate → push.
+- **`main` moved extremely fast this session** — 6+ merges landed while just two PRs (TRO-604, TRO-596) were each mid-CI. Budget for repeated merge-forward rounds as normal, not a surprise.
+- **CodeRabbit is capacity-constrained team-wide this sprint.** A `"pass"` bucket can mean "rate limited," not "reviewed" — check the detail string (`"Review rate limited"` vs `"Review completed"`) before trusting it.
+- **Only 3 checks are required for merge**: `typecheck · build · unit tests`, `source-code inventory`, `security scan (CodeQL)`. Non-required checks (`CodeQL`, `build · push image (GHCR)`, `e2e · agent detection latency + grounded chat`) can fail without blocking.
+- **A CI run can genuinely take 9–13 minutes** for `typecheck · build · unit tests` under this sprint's concurrent-lane load. Check `gh run view --json jobs` for `startedAt` before assuming a stall.
+- **Load-flake test identities keep recurring under concurrent `gate.sh` load** (rule-24 class) — this session added `ratelimit/middleware.test.ts`, `token.test.ts`, `backlinks.test.ts`, `webhooks.test.ts` to the list of tests seen flaking. Always verify via `.factory/*-standalone.txt` (gate.sh does this automatically) before treating as a regression. When local `gate.sh` itself hangs or takes 3-5x its normal duration under heavy concurrent load, killing and pushing to rely on GitHub's CI (unaffected by local contention) is a reasonable call — this session did that once for TRO-604 after a 15+ minute outlier.
+- A `pass-with-disclosed-exception` gate verdict is legitimate and precedented (PF-900/terraform tickets, TRO-293/TRO-596 test-deletion tickets) when the failing check (`regression-test`, `tests:not-weakened`) is structurally inapplicable to the ticket's own nature and the CHANGES.md entry already documents why — don't chase an unreachable "pass" on those specific checks.
 
-## Standing procedure — convoy pattern, still needed for every ticket
+## Deadline
 
-Main moves fast during an active wave — this session hit it 3 separate times in one PR's review cycle. Per ticket: `git fetch https://github.com/troysatchell/ship.git main && git merge FETCH_HEAD` (NOT `origin main` — GitLab, the fetch remote, lags GitHub until manually synced) → resolve conflicts: `CHANGES.md` via `node scripts/factory/merge-changes.mjs --ours <(git show :2:CHANGES.md) --theirs <(git show :3:CHANGES.md) --out CHANGES.md` then `--check`, `scorecard.jsonl` via manual append-both (it's append-only, so conflicts are almost always "keep both sides") → commit → re-`gate.sh` (if `sdk/` or a new workspace dependency changed, run `pnpm install` and `pnpm build:sdk` first — a stale `node_modules` symlink or unbuilt `sdk/dist` can cause a spurious `tsc` "cannot find module '@ship/sdk'" that clears on its own re-run once `sdk/dist` finishes writing) → push. After every GitHub merge, sync GitLab from the **shared main dir** (not a worktree): `git pull https://github.com/troysatchell/ship.git main --ff-only && git push origin main`, verify both `git ls-remote` SHAs match.
+W6 deadline: **AM 2026-08-16** — very close. E6 (PF-600/601/602/603, the graded TTFE metric) is still the top substantive priority once the redeploy/auth-gap sequence above resolves; PF-603 (`pnpm drill ttfe`, <60s / 0% flake over 20 runs) is the last and most important piece and has not been picked up this session.
 
-**Migration numbers in the PRD are stale** — check fresh before assigning a number.
+## Open, lower priority
 
-## Standing facts (for the next dispatch wave)
-
-- Factory Postgres: docker `ship-postgres-1` (:5433); `FACTORY_PG_CONTAINER=ship-postgres-1` for `worktree.sh`. `GH_REPO=troysatchell/ship` for all `gh` calls.
-- **CodeRabbit is capacity-constrained this sprint, team-wide** — the hosted check's own `pass`/`fail` label is NOT trustworthy on its own: a rate-limited skip also reports `pass`. Always cross-check: `gh pr checks <n>` shows a `"Review rate limited"` vs `"Review completed"` detail string, and `gh api repos/.../pulls/<n>/comments --jq length` — 0 comments + "rate limited" means no real review happened. When genuinely rate-limited (both hosted `@coderabbitai review` and local `coderabbit review --base main` CLI — they share one team-wide allowance), do a disclosed manual self-review of the diff rather than merging blind. When it does complete, it can find real, non-obvious findings worth fixing (TRO-602 round 2's calendar-validation gap was genuinely subtle) — don't rubber-stamp a "pass" without reading what actually posted.
-- **Only 3 checks are required for merge**: `typecheck · build · unit tests`, `source-code inventory`, `security scan (CodeQL)` (confirmed via `gh api repos/troysatchell/ship/branches/main/protection/required_status_checks`). A separate non-required `CodeQL` (GitHub default Advanced Security) and `build · push image (GHCR)` (currently broken, see TRO-604) can both fail without blocking. `mergeStateStatus: UNSTABLE` (not `BLOCKED`) is safe to merge once the 3 required checks are green.
-- **A CI run can genuinely take 9-12 minutes for `typecheck · build · unit tests`** under this sprint's concurrent-lane load — don't assume a stall before checking the job's own `startedAt` via `gh run view --job <id> --json status,startedAt`.
-- **Load-flake test identities keep recurring under concurrent `gate.sh`/CI load** (rule-24 class in `lessons.md` — hit `weeks.test.ts`, `token.test.ts`, `issues.test.ts`, `webhooks.test.ts`, `server.test.ts` this session alone) — always re-run standalone (and check `uptime`) before believing a failure; never widen the quarantine. `gate.sh` itself already does this standalone re-check automatically and reports it in its output — read `.factory/*-standalone.txt`, don't just re-derive it by hand.
-- Lock the Linear ticket to In Progress BEFORE dispatching.
-- **Shared main-worktree collision risk still stands:** confine all git mutations to your own ticket worktree; only `fetch`/`status`/`log`/`ls-remote` are safe in the shared main dir.
-
-## Open questions / carry-over (low priority)
-
-- W6 deadline: **AM 2026-08-16** (brief's own AM/PM contradiction, planning for the earlier one) — getting close; E6 is the metric that matters most between now and then.
-- Carry-over, still untouched: PR #138 (TRO-350) merge-or-hold; TRO-353 inbox draft 404s; TRO-549/550/552 (Low/Medium, explicitly Backlog).
-- TRO-593 (High) — `session-timeout.spec.ts` browser-context crash, not yet root-caused, unrelated to any W6 ticket.
-
----
-
-**🔁 Session rollover: start a fresh session now.** This session ran long (5 tickets: TRO-417, TRO-503, TRO-449, TRO-451, TRO-602) and has been resending a very large transcript on every tool call. Resume prompt: **"run the factory"** — the board rebuilds cleanly from Linear, `git worktree list`, `gh pr list`, and `audit/factory/scorecard.jsonl`, not from anything held only in this session's memory.
+- TRO-609 (e2e serial-mode cascade + one unrelated failing test, filed this session) — Medium, Backlog, untouched.
+- TRO-593 (session-timeout browser-context crash) — was In Progress on ship-e8 as of the last check this session; verify status fresh.
+- Carry-over from before: PR #138 (TRO-350), TRO-353, TRO-549/550/552 — all still untouched, Backlog.
