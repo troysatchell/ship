@@ -148,6 +148,23 @@ run_tests() { # run_tests <pkg>
   local pkg="$1"
   local json="$OUT_DIR/${pkg}-tests.json"
   local log="$OUT_DIR/${pkg}-tests.log"
+  # TRO-448: resolve the real package directory via pnpm rather than assuming
+  # ${WT_ROOT}/${pkg} — true for top-level packages (api/web/agent/sdk) but
+  # false for nested integrations/* packages (cli lives at integrations/cli),
+  # which broke the standalone-rerun cd below with "No such file or
+  # directory" the first time tests:cli actually failed for real.
+  local pkg_dir
+  pkg_dir="$(pnpm --filter "@ship/${pkg}" exec pwd 2>/dev/null | tail -1)"
+  if [ ! -d "$pkg_dir" ]; then
+    # `pnpm exec pwd` failing is itself unexpected, but if it does, don't
+    # silently fall back to a path that's wrong for every nested
+    # integrations/* package — try top-level first, then integrations/*.
+    if [ -d "${WT_ROOT}/${pkg}" ]; then
+      pkg_dir="${WT_ROOT}/${pkg}"
+    else
+      pkg_dir="${WT_ROOT}/integrations/${pkg}"
+    fi
+  fi
   pnpm --filter "@ship/${pkg}" test --reporter=json --outputFile="$json" > "$log" 2>&1
   if [ ! -f "$json" ]; then
     record "tests:${pkg}" fail "runner produced no report — see .factory/${pkg}-tests.log"
@@ -201,7 +218,7 @@ run_tests() { # run_tests <pkg>
       while IFS= read -r tf; do
         [ -z "$tf" ] && continue
         standalone_total=$((standalone_total + 1))
-        if (cd "${WT_ROOT}/${pkg}" && npx vitest run "$tf" > /dev/null 2>&1); then
+        if (cd "$pkg_dir" && npx vitest run "$tf" > /dev/null 2>&1); then
           standalone_pass=$((standalone_pass + 1))
           echo "PASSED standalone: $tf" >> "$OUT_DIR/${pkg}-standalone.txt"
         else
@@ -241,6 +258,35 @@ run_tests agent
 # knownFailing set), so this is zero-tolerance by construction — any failure
 # here is a real new failure, not a baseline comparison.
 run_tests sdk
+# TRO-448 (PF-600): the new integrations/cli workspace package has its own
+# vitest suite (fully-mocked unit tests for login/whoami/config/errors, plus
+# one live-server integration test that spawns the real api/ package as a
+# separate process — see that file's own header). Same "new workspace
+# package trap" precedent as TRO-322's `run_tests agent` and TRO-405's
+# `run_tests sdk` additions above, called out explicitly in this ticket's own
+# brief: a test suite that exists on disk but is never invoked here would
+# still satisfy G6's static "regression test present" grep while never
+# actually running. Zero-tolerance by construction, same reasoning as sdk/
+# and agent/ above — cli/ is brand new, so there is no quarantine baseline to
+# compare against.
+run_tests cli
+
+# --- G4b: integrations/* runtime-dependency boundary (PLUGFORGE.MD §2.1 / PF-003) ---
+# `scripts/check-integration-deps.mjs` (TRO-399/PF-003) already existed and was
+# already wired into CI (ci.yml/.gitlab-ci.yml's "Integration package
+# dependency boundary" step) — but NOT into this script, so a worktree
+# provisioned before a boundary violation landed would report `gate.sh: pass`
+# while CI would separately fail it. integrations/cli (this ticket, TRO-448)
+# is the FIRST real package under integrations/, so this is also the first
+# gate.sh run that can actually exercise this check finding a violation
+# rather than passing vacuously on an absent directory. Added here rather
+# than left CI-only, per this ticket's own instruction to confirm the lint
+# actually covers the new package and fix the gap if it doesn't.
+if node scripts/check-integration-deps.mjs > "$OUT_DIR/integration-deps.log" 2>&1; then
+  record integration-deps pass "integrations/* packages depend only on @ship/sdk"
+else
+  record integration-deps fail "see .factory/integration-deps.log"
+fi
 
 # --- G5: tests were not weakened -------------------------------------------
 # Agents MUST add regression tests, so test files are not frozen outright. What
