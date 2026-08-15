@@ -85,9 +85,17 @@ source .factory-env
 pnpm test:e2e e2e/program-mode-week-ux.spec.ts
 ```
 
-The remaining ~24 tests in this file pass. The 8 deleted tests were originally failing hard on line 489 
-(asserts `/Who should own/`), line 507/531 (asserts modal exists with that text), lines 1053/1070/1094 
-(same), and line 1325 (same).
+**Exact counts from a real run** (`/e2e-test-runner`, single-spec, this branch): **54 total, 23
+passed, 1 failed, 30 skipped.** The 1 failure ("Issues tab has sprint filter dropdown", line 491) is
+**not** caused by this ticket's diff — confirmed via `git diff main...HEAD -- e2e/program-mode-week-ux.spec.ts`,
+which only touches the Phase 3 / Phase 3 Continued / Integration blocks this ticket edited, none of
+which contain that test. The 30 skips are a cascade from that one failure: the file has
+`test.describe.configure({ mode: 'serial' })` at file scope (line 17), so one failure skips every
+later test in the file, not just its own block. Filed as TRO-609 (separate, pre-existing, out of this
+ticket's scope) rather than fixed here or left undisclosed.
+
+The 8 deleted tests were originally failing hard on line 489 (asserts `/Who should own/`), line
+507/531 (asserts modal exists with that text), lines 1053/1070/1094 (same), and line 1325 (same).
 
 **Evidence.**
 
