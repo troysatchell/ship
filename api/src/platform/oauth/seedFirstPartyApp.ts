@@ -98,16 +98,23 @@ export type SeedFirstPartyAppResult =
 
 /**
  * Idempotent: safe to call on every boot, every `db:seed` run, and every
- * restart. Two non-throwing outcomes:
+ * restart. Two non-throwing outcomes (both REQUIRE the secret to be set —
+ * see below):
  *
  * - No row for `client_id = ship_app_fleetgraph` yet → creates it, returns
  *   `'created'`.
  * - A row already exists → no-op, returns `'exists'`.
  *
- * Throws when `FLEETGRAPH_OAUTH_CLIENT_SECRET` is unset AND no row exists
- * yet — see module header point 2 for why this is a hard failure rather
- * than a skip, and for which callers are responsible for not reaching this
- * function at all in a context where an unset secret is expected and fine.
+ * Throws whenever `FLEETGRAPH_OAUTH_CLIENT_SECRET` is unset, REGARDLESS of
+ * whether a row already exists — checked first, before the existing-row
+ * lookup (CodeRabbit finding, this ticket: an existing-row fast path that
+ * skipped this check would let a deployment whose secret was later removed
+ * from its env config silently keep reporting `'exists'` forever, which
+ * defeats the "guaranteed on every boot" property `index.ts`'s boot check
+ * depends on). See module header point 2 for why this is a hard failure
+ * rather than a skip, and for which callers are responsible for not
+ * reaching this function at all in a context where an unset secret is
+ * expected and fine.
  */
 export async function seedFirstPartyApp(pool: Pool, workspaceId: string): Promise<SeedFirstPartyAppResult> {
   // CodeRabbit (this PR review, Major): the secret MUST be read and
