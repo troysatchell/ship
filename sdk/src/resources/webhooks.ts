@@ -117,17 +117,22 @@
  * own header for why it is scoped to webhooks specifically rather than
  * generalized to every SDK resource in this same ticket.
  *
- * STILL NOT FIXED — found while verifying the above, explicitly OUT OF
- * SCOPE for TRO-599 (which is the two RESPONSE types, not this REQUEST
- * body): `CreateWebhookSubscriptionBody` below (`createSubscription()`'s
- * request body — `url`/plural `events`) does not match the real
- * `POST /api/v1/webhooks` route's `CreateWebhookSubscriptionRequestSchema`
- * (`app_id`/singular `event_type`/`target_url`, all required,
- * `platform/api/v1/resources/webhooks.ts`). As declared, a caller building
- * a request from this SDK type cannot successfully create a subscription
- * against the real server — every call 400s on validation. See that
- * interface's own doc comment below, and `CHANGES.md`'s TRO-599 entry, for
- * the same disclosure aimed at a human reviewer, and a follow-up ticket.
+ * UPDATE — TRO-455 (PF-603, the TTFE drill). The "STILL NOT FIXED" gap this
+ * header used to document here (`CreateWebhookSubscriptionBody` declaring
+ * `url`/plural `events` instead of the real route's `app_id`/singular
+ * `event_type`/`target_url`) is now FIXED — it was a direct, confirmed
+ * blocker for this ticket's own literal AC ("`webhooks.create`" against a
+ * real running server): the drill genuinely could not create a subscription
+ * through this method as declared. Verified again, fresh, against
+ * `CreateWebhookSubscriptionRequestSchema`
+ * (`platform/api/v1/resources/webhooks.ts:158-165`) before changing the
+ * interface below — `app_id` (uuid, required), `event_type` (singular,
+ * required), `target_url` (required, http/https only). `createSubscription()`
+ * itself needed no change (it already forwards `body` as-is to
+ * `POST /api/v1/webhooks`); only the TYPE lied. See
+ * `sdk/src/resources/__tests__/webhooks.test.ts`'s updated
+ * `createSubscription()` case and `scripts/drill/ttfe.ts`'s own live use of
+ * this method for the round-trip proof.
  */
 import type { RequestClient } from '../internal/requestClient.js';
 import type { ListPage } from '../types.js';
@@ -195,23 +200,19 @@ export interface CreatedWebhookSubscription extends WebhookSubscription {
 }
 
 /**
- * `createSubscription()`'s request body. **NOT FIXED — out of TRO-599's
- * scope**, which is specifically the two RESPONSE types
- * (`WebhookSubscription`/`WebhookDelivery`), not this REQUEST body.
- * Discovered while verifying ground truth for TRO-599, disclosed rather
- * than silently left implicit: the real `POST /api/v1/webhooks` route
- * validates against `CreateWebhookSubscriptionRequestSchema`
- * (`platform/api/v1/resources/webhooks.ts`), which requires `app_id`
- * (uuid), singular `event_type`, and `target_url` — none of which this
- * interface declares (it still has plural `events` and `url`, PF-401's
- * original pre-PF-302 guess). As declared, `createSubscription()` cannot
- * successfully create a subscription against the real server; every call
- * 400s on validation. See this file's header and `CHANGES.md`'s TRO-599
- * entry for the same disclosure and a follow-up ticket.
+ * `createSubscription()`'s request body. FIXED by TRO-455 (PF-603) — see
+ * this file's header "UPDATE — TRO-455" note. Matches the real
+ * `POST /api/v1/webhooks` route's `CreateWebhookSubscriptionRequestSchema`
+ * (`platform/api/v1/resources/webhooks.ts:158-165`) field-for-field:
+ * `app_id` (uuid of an `oauth_apps` row in the caller's own workspace),
+ * singular `event_type`, and `target_url` (http/https only, validated
+ * server-side by `isHttpUrl()`). All three required — the route has no
+ * optional fields on this body.
  */
 export interface CreateWebhookSubscriptionBody {
-  readonly url: string;
-  readonly events: readonly WebhookEventType[];
+  readonly app_id: string;
+  readonly event_type: WebhookEventType;
+  readonly target_url: string;
 }
 
 export interface ListWebhookSubscriptionsParams {

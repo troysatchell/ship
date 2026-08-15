@@ -22,15 +22,15 @@
  * (flaky, slow, and address-dependent) or mocking the attempt away
  * (which would stop this from being a genuine round trip).
  *
- * Every row this suite reads through the SDK is seeded directly via SQL —
- * `createSubscription()`'s own REQUEST body is a separate, disclosed,
- * NOT-fixed gap (`sdk/src/resources/webhooks.ts`'s header; out of TRO-599's
- * scope, which is the two RESPONSE types) that would 400 against this real
- * server if used, so seeding the row directly is what makes it possible to
- * prove the RESPONSE shapes (`listSubscriptions`/`getSubscription`/
- * `rotateSecret`/`listDeliveries`/`replayDelivery` — every read/action
- * method whose request needs no body beyond an id) without depending on the
- * one still-broken method.
+ * Every row this suite reads through the SDK is seeded directly via SQL,
+ * unchanged by TRO-455/PF-603's fix to `createSubscription()`'s request body
+ * (`sdk/src/resources/webhooks.ts`'s header) — that fix is proven separately,
+ * live, by `scripts/drill/ttfe.ts` (the TTFE drill actually calls
+ * `webhooks.createSubscription()` against a real server). Direct SQL seeding
+ * here keeps this file focused on what it exists to prove: the RESPONSE
+ * shapes (`listSubscriptions`/`getSubscription`/`rotateSecret`/
+ * `listDeliveries`/`replayDelivery` — every read/action method whose request
+ * needs no body beyond an id).
  *
  * DB SAFETY: own isolated workspace/user/oauth_app/api_token/webhook rows in
  * `beforeAll`, deleted in `afterAll`; does not touch `pnpm db:seed`'s
