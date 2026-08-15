@@ -35,6 +35,10 @@ import { decryptSecret, encryptSecret, SECRET_ENCRYPTION_KEY_ENV } from '../../.
 import { sign, verify } from '../../../../webhooks/signer.js';
 import { EVENT_TYPES } from '../../../../webhooks/events.js';
 import { InMemoryWebhookDeliverer } from '../../../../webhooks/deliverer.js';
+// ManualClock (TRO-603's new fix-proving test, below) — advances a deliverer
+// instance's notion of "now" without a real setTimeout wait, same technique
+// `deliverer.test.ts` already uses for its own retry-schedule assertions.
+import { ManualClock } from '../../../../webhooks/clock.js';
 // The reference-subscriber fixture (PF-801 / TRO-447) — see its own file
 // header for why this is the SAME implementation the e2e drill
 // (`e2e/webhook-idempotency-key-drill.spec.ts`) and the CLI demo both use,
@@ -1236,11 +1240,21 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       ]);
     });
 
-    it('a retryable replay (attempt_number below MAX_ATTEMPTS) that fails again schedules a retry sibling that stays un-polled until a process restart — a real, documented, narrow limitation (TRO-603, CodeRabbit this PR review)', async () => {
+    it('a retryable replay (attempt_number below MAX_ATTEMPTS) that fails again schedules a retry sibling that stays un-polled until a process restart — TRUE ONLY for the no-injection fallback path (TRO-603 fixes this when a shared deliverer is injected — see the next test)', async () => {
       // Below MAX_ATTEMPTS (6) — unlike the DLQ-exhaustion test above, this
       // replay's failure IS retryable per attempt()'s own backoff rule, so a
       // new 'pending' sibling row gets scheduled rather than going straight
       // to 'dead'.
+      //
+      // This test uses the file's own top-level `app` (`createApp()`, no
+      // options — see this file's own `const app: Express = createApp();`)
+      // — i.e. it exercises the FALLBACK path `resources/webhooks.ts`'s
+      // `createWebhooksRouter()` still preserves for any caller that doesn't
+      // inject a deliverer (every other test file in this repo that calls
+      // `createApp()` with no options, and local `pnpm dev`). That fallback
+      // is deliberately unchanged by TRO-603 — see the next test for the
+      // FIXED path, which is identical in every way except which
+      // `createApp()` instance the request goes through.
       const original = await insertDelivery({
         subscriptionId: replaySubscriptionId,
         payload: { hello: 'retryable-replay-schedules-orphaned-sibling' },
@@ -1284,18 +1298,121 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       expect(sibling.status).toBe('pending');
       expect(sibling.next_attempt_at).not.toBeNull();
 
-      // The documented limitation (TRO-603, not fixed by this ticket): that
-      // sibling is durable in Postgres, proven above — but it was queued
-      // only on the THROWAWAY `InMemoryWebhookDeliverer` this HTTP request's
-      // route handler constructed (webhooks.ts, `const deliverer = new
-      // InMemoryWebhookDeliverer(pool)`), which this test process discards
-      // the moment the request above resolves. This test suite never starts
-      // a production-shaped singleton's `processDue()` polling loop, exactly
-      // mirroring the real route's own behavior — the sibling staying
-      // 'pending' here is not a tautology, it is the same orphaning the real
-      // deployed route produces, reproduced under test rather than merely
-      // asserted in a comment. See TRO-603 for the fix (inject the app's
-      // real running deliverer instead of constructing a throwaway one).
+      // The documented, still-live fallback behavior: that sibling is
+      // durable in Postgres, proven above — but it was queued only on the
+      // THROWAWAY `InMemoryWebhookDeliverer` this HTTP request's route
+      // handler constructed (webhooks.ts, `injectedDeliverer ?? new
+      // InMemoryWebhookDeliverer(pool)` — `app` here was built via
+      // `createApp()` with no `webhookDeliverer` option, so
+      // `injectedDeliverer` is `undefined`), which this test process
+      // discards the moment the request above resolves. This test suite
+      // never starts a production-shaped singleton's `processDue()` polling
+      // loop against THIS throwaway instance — the sibling staying
+      // 'pending' here is not a tautology, it is the same orphaning an
+      // uninjected `createApp()` caller still produces after TRO-603,
+      // reproduced under test rather than merely asserted in a comment. See
+      // the next test for the fix.
+    });
+
+    it('TRO-603 FIX: when the app is built with its real, shared deliverer injected, a retryable replay\'s retry sibling is queued on THAT instance and gets drained by its own processDue() — no process restart required', async () => {
+      // Identical scenario to the fallback-path test above (attempt_number
+      // 2, 'failed', a 503 that stays retryable) — the only difference is
+      // which deliverer instance the route handler uses. This test builds
+      // its OWN `createApp()` instance via `CreateAppOptions.webhookDeliverer`
+      // (`app.ts`), injecting an `InMemoryWebhookDeliverer` this test also
+      // keeps a direct reference to — mirroring exactly what `index.ts` does
+      // at boot (build the deliverer, then pass that same instance into
+      // `createApp()`) — so it can call `processDue()` on that SAME instance
+      // after the HTTP request completes, the same call `start()`'s real
+      // `setInterval` makes on a 1-second cadence in production. A
+      // `ManualClock` makes the retry-schedule wait (RETRY_SCHEDULE_MS[2] =
+      // 16s, plus up to one more 16s of full jitter — see `attempt()`'s own
+      // comment in deliverer.ts) instant rather than a real sleep.
+      //
+      // The fetch stub MUST be installed BEFORE `new InMemoryWebhookDeliverer(...)`
+      // — its constructor reads `options.fetchImpl ?? fetch` once, eagerly,
+      // and stores that reference (`deliverer.ts`'s own `this.fetchImpl =
+      // options.fetchImpl ?? fetch`). Constructing first and stubbing after
+      // (this test's own first draft) captures whatever global `fetch` was
+      // at that moment instead of the mock — the fallback-path test above
+      // never hits this because it constructs its throwaway deliverer
+      // INSIDE the route handler, which only runs after this test's stub is
+      // already in place.
+      let fetchCallCount = 0;
+      const fetchMock = vi.fn<typeof fetch>(async () => {
+        fetchCallCount++;
+        if (fetchCallCount === 1) return new Response('still down', { status: 503 });
+        return new Response('recovered', { status: 200 });
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const sharedClock = new ManualClock(Date.now());
+      const sharedDeliverer = new InMemoryWebhookDeliverer(pool, sharedClock);
+      const appWithSharedDeliverer = createApp('http://localhost:5173', {
+        webhookDeliverer: sharedDeliverer,
+      });
+
+      const original = await insertDelivery({
+        subscriptionId: replaySubscriptionId,
+        payload: { hello: 'retryable-replay-fixed-by-injection' },
+        attemptNumber: 2,
+        status: 'failed',
+        responseStatus: 503,
+        responseExcerpt: 'transient failure',
+        latencyMs: 88,
+      });
+
+      // First fetch call is the replay's own attempt (attempt_number 3):
+      // still down, 503 — retryable, schedules a sibling, same as the
+      // fallback-path test. The second call is whatever `processDue()`
+      // below dispatches for that sibling (attempt_number 4): the
+      // subscriber has recovered, 200 — so a definite 'success' outcome on
+      // the sibling proves it was actually attempted, not just left
+      // 'pending' for an unrelated reason.
+
+      const res = await request(appWithSharedDeliverer)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+
+      expect(res.status).toBe(201);
+      const body = res.body as DeliveryBody;
+      expect(body.attempt_number).toBe(3);
+      expect(body.status).toBe('failed');
+      expect(body.replayed_from_id).toBe(original.id);
+      expect(fetchCallCount).toBe(1);
+
+      // The sibling exists — durability was never the bug, exactly as the
+      // fallback-path test above also proves.
+      const siblingBefore = await pool.query<{ id: string; status: string; next_attempt_at: Date | null }>(
+        `SELECT id, status, next_attempt_at FROM webhook_deliveries
+         WHERE event_id = $1 AND attempt_number = 4`,
+        [original.eventId]
+      );
+      expect(siblingBefore.rows).toHaveLength(1);
+      const siblingRow = siblingBefore.rows[0];
+      if (siblingRow === undefined) throw new Error('expected the sibling row to exist');
+      expect(siblingRow.status).toBe('pending');
+      expect(siblingRow.next_attempt_at).not.toBeNull();
+
+      // THIS is the fix under test: the sibling above was queued in-memory
+      // by the SAME `sharedDeliverer` instance the replay route just used
+      // (because it was injected, not constructed fresh per-request).
+      // Before TRO-603, this route always built its own throwaway instance,
+      // whose queue this `processDue()` call could never have reached — see
+      // the fallback-path test's own trailing comment for that still-true
+      // behavior when nothing is injected.
+      sharedClock.advance(40_000);
+      const processedCount = await sharedDeliverer.processDue();
+      expect(processedCount).toBe(1);
+      expect(fetchCallCount).toBe(2);
+
+      const siblingAfter = await pool.query<{ status: string; response_status: number | null }>(
+        `SELECT status, response_status FROM webhook_deliveries WHERE id = $1`,
+        [siblingRow.id]
+      );
+      const siblingAfterRow = onlyRow(siblingAfter.rows);
+      expect(siblingAfterRow.status).toBe('success');
+      expect(siblingAfterRow.response_status).toBe(200);
     });
 
     it('if attemptNow() itself fails to execute (a non-deterministic decrypt failure), the route still returns 201 with the row\'s actual (pending) state — never an opaque 500 (CodeRabbit, this PR review)', async () => {

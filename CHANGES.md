@@ -148,6 +148,131 @@ is behaviorally inert for every existing deployment. The `scopes` addition to
 
 ---
 
+## TRO-603 — PF-306 follow-up: inject the app's shared webhook deliverer into the replay route
+
+**Fixes the disclosed, tested limitation TRO-446/PF-306 shipped with (CodeRabbit, PR #229's
+review) — retry siblings scheduled by a retryable replay were orphaned from live polling until a
+process restart.** `POST /api/v1/webhooks/deliveries/:id/replay`
+(`api/src/platform/api/v1/resources/webhooks.ts`) used to construct a throwaway
+`new InMemoryWebhookDeliverer(pool)` per request. `InMemoryWebhookDeliverer` owns a PRIVATE
+per-instance in-memory `queue` array (`platform/webhooks/deliverer.ts`), so if a replay's own
+attempt was retryable (5xx/timeout) and the original delivery's `attempt_number` was below
+`MAX_ATTEMPTS` (6), `attempt()` pushed a new `'pending'` retry-sibling row onto that throwaway
+instance's queue — discarded the instant the HTTP request returned. The production singleton
+(`api/src/index.ts`'s `webhookDeliverer`, `.start()`'s polling `processDue()`) never saw that
+sibling, because it lived on a different instance's queue. The row was never lost (durably
+`'pending'` in Postgres), only orphaned from live polling. Confirmed narrow: never affected the
+primary DLQ-replay case, since a `dead` delivery's `attempt_number` is already `>= MAX_ATTEMPTS`,
+so no sibling is ever scheduled for it.
+
+**The fix: dependency-inject the app's real, running deliverer instance instead of constructing a
+new one per request.**
+
+- **`api/src/platform/api/v1/resources/webhooks.ts`.** `webhooksRouter` changed from a module-level
+  `Router()` singleton to a factory, `createWebhooksRouter(injectedDeliverer?: IWebhookDeliverer):
+  RouterType` — chosen because this codebase already has exactly this precedent for a router that
+  needs a per-`createApp()`-call dependency: `routes/oauth-authorize.ts`'s
+  `createOAuthAuthorizeRouter(webOrigin)` (and the sibling OAuth token/device routers). The one line
+  that changes behavior: `const deliverer = new InMemoryWebhookDeliverer(pool);` became `const
+  deliverer: IWebhookDeliverer = injectedDeliverer ?? new InMemoryWebhookDeliverer(pool);` — every
+  other line of the replay handler is unchanged. The route's own doc comment (already corrected once
+  by TRO-446 to accurately describe the limitation) is corrected again to describe the fix.
+- **`api/src/platform/api/v1/router.ts`.** `v1Router`/`v1Routes` construction moved into a new
+  `createV1Router(webhookDeliverer?: IWebhookDeliverer)` factory that builds `/webhooks` via
+  `createWebhooksRouter(webhookDeliverer)`. The module still exports `v1Router`/`v1Routes` as
+  module-level consts — the factory called with no deliverer, i.e. byte-for-byte the same router
+  this file always built — so every existing direct importer (`app.ts`'s default path, plus
+  `middleware/__tests__/rate-limit-v1-exemption.test.ts`, `platform/api/v1/__tests__/route-fitness.
+  test.ts`, and `platform/api/v1/__tests__/error-middleware.test.ts`, which mount/inspect
+  `v1Router`/`v1Routes` directly without going through `createApp()`) needed zero changes.
+- **`api/src/app.ts`.** `createApp(corsOrigin, options?: CreateAppOptions)` — a new optional second
+  parameter, `{ webhookDeliverer?: IWebhookDeliverer }`, defaulting to `{}`. When
+  `options.webhookDeliverer` is set, `createApp()` builds a fresh `v1Router` via
+  `createV1Router(options.webhookDeliverer)` for that one call; otherwise it mounts the existing
+  module-level `v1Router` singleton, unchanged. **Every one of the 60 existing `createApp()` call
+  sites in this repo** (found via `grep -rn "createApp(" api/src e2e --include="*.ts"` before writing
+  any code) calls it with zero or one argument — none pass a second argument — so none needed
+  modification; they all keep getting the pre-existing singleton/throwaway-instance behavior,
+  byte-for-byte.
+- **`api/src/index.ts`.** The `webhookDeliverer` construction/`rehydrate()`/`wireDelivererToEventBus`/
+  `.start()` block — previously positioned AFTER `createApp()`/`createServer()` — moved earlier in
+  `main()`, to before those calls (nothing in that block ever depended on `app`/`server`, so nothing
+  else about when it runs changed). `createApp(CORS_ORIGIN)` became `createApp(CORS_ORIGIN, {
+  webhookDeliverer })`, passing the real, already-`rehydrate()`d, already-`.start()`'d singleton.
+  `createApp()` itself stays synchronous, unchanged — only the ALREADY-CONSTRUCTED instance is handed
+  in, so no caller anywhere needed to become async.
+
+**Regression tests (`api/src/platform/api/v1/resources/__tests__/webhooks.test.ts`, PF-306 describe
+block).** Kept TRO-446's existing test (retitled, its trailing comment updated) rather than deleting
+it — it still correctly documents behavior that is still true today: it uses the file's own
+top-level `app` (`createApp()`, no options), so it proves the FALLBACK path — the one every other
+test file in this repo that calls `createApp()` with no options still exercises — is deliberately
+unchanged by this ticket. Added a new test alongside it, `'TRO-603 FIX: when the app is built with
+its real, shared deliverer injected, a retryable replay's retry sibling is queued on THAT instance
+and gets drained by its own processDue() — no process restart required'`, that:
+1. Builds its own `createApp('http://localhost:5173', { webhookDeliverer: sharedDeliverer })`
+   instance, where `sharedDeliverer` is an `InMemoryWebhookDeliverer` constructed with a `ManualClock`
+   (`platform/webhooks/clock.ts`) this test also holds a direct reference to — mirroring exactly what
+   `index.ts` does at boot (construct the deliverer, then pass that same instance into `createApp()`).
+2. Replays a `'failed'`, `attempt_number: 2` delivery against a stubbed 503, asserting the same
+   `'failed'` + scheduled-sibling outcome the fallback test proves.
+3. **Proves the fix, not just the durability**: advances `sharedClock` past the sibling's scheduled
+   backoff and calls `sharedDeliverer.processDue()` directly — the same call `start()`'s real
+   `setInterval` makes on a 1-second cadence in production — with a second stubbed fetch response
+   (200, recovered) distinguishing "actually attempted" from "still pending for an unrelated reason."
+   Asserts `processedCount === 1`, `fetchCallCount === 2`, and the sibling row's DB status flips to
+   `'success'`.
+
+**Proved red before green.** Reverted the DI fix locally (`deliverer: injectedDeliverer ??
+new InMemoryWebhookDeliverer(pool)` back to the pre-fix `new InMemoryWebhookDeliverer(pool)`, via a
+saved copy of the file — not `git stash`, banned in this repo) and re-ran the file: the new
+`processDue()` assertion failed with `expected 0 to be 1` (the sibling was queued on a different,
+discarded instance, exactly the pre-fix bug), while the other 33 tests stayed green. Restored the
+fix and re-ran: all 34 pass.
+
+**How to run it.**
+
+```bash
+source .factory-env
+cd api && npx tsc --noEmit -p .
+cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts
+cd api && npx vitest run src/app.test.ts src/platform/__tests__/v1-router.test.ts \
+  src/platform/api/v1/__tests__/error-middleware.test.ts \
+  src/platform/api/v1/__tests__/route-fitness.test.ts \
+  src/middleware/__tests__/rate-limit-v1-exemption.test.ts
+```
+
+**Evidence.**
+- **Observed:** `cd api && npx tsc --noEmit -p .` clean, before and after every edit in this ticket.
+  No non-null `!`, `as any`, or `as unknown as` added anywhere.
+- **Observed:** `webhooks.test.ts` → 34/34 (33 pre-existing, per TRO-447's own CHANGES.md entry
+  above — plus this ticket's one new fix-proving test; the pre-existing fallback-path test was
+  retitled and had its trailing comment updated, not counted as a new case). Both the fallback-path
+  and the fix-path tests pass; the fix-path test was proven red against the pre-fix code (see
+  above).
+- **Observed:** `app.test.ts`, `v1-router.test.ts`, `error-middleware.test.ts`,
+  `route-fitness.test.ts`, and `rate-limit-v1-exemption.test.ts` — the five files that either call
+  `createApp()` directly with the default signature or import `v1Router`/`v1Routes` directly — all
+  pass (138/138 total across the five files), confirming the module-level singleton default path is
+  byte-for-byte unaffected.
+- **Derived, not directly re-verified this ticket:** whether a real second process picking up a
+  rehydrated sibling (the pre-existing fallback recovery path, still in place and still correct) still
+  works end to end — unchanged by this ticket, and `deliverer.test.ts`'s own pre-existing
+  `rehydrate()` coverage is the evidence for that mechanism, not re-run here since nothing in
+  `rehydrate()` itself changed.
+
+**Roll back.** Revert this ticket's commit(s). Confined to: `api/src/platform/api/v1/resources/
+webhooks.ts` (`webhooksRouter` const → `createWebhooksRouter()` factory; the deliverer construction
+line inside the replay handler; its surrounding doc comment), `api/src/platform/api/v1/router.ts`
+(`v1Router`/`v1Routes` consts → `createV1Router()` factory + the same two consts built from it with
+no argument), `api/src/app.ts` (`createApp()` gains an optional second parameter, defaulted so every
+existing call site is unaffected), `api/src/index.ts` (the webhook-deliverer construction block moved
+earlier in `main()`; `createApp()` call site passes the new option). No migration, no schema change,
+no new dependency. Reverting also restores the pre-fix `webhooks.test.ts` test titles/bodies. Safe to
+revert independently of TRO-446/TRO-447 — this ticket added no new route, column, or SDK surface.
+
+---
+
 ## TRO-602 — Shared /api/v1 cursor pagination silently dropped rows landing in the same millisecond
 
 **What was broken.** `platform/api/v1/pagination.ts`'s `encodeCursor` built every `/api/v1` list
