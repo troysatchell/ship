@@ -83,9 +83,12 @@ enforces explicitly on the read side (TRO-605).
   create (200, content genuinely updated, verified via a DB read-back) — confirms the fix does not
   regress the existing legitimate case.
 
-Run: `source .factory-env && npx vitest run api/src/platform/api/v1/resources/__tests__/documents.test.ts`
-(from the repo root; full file, 34/34 passed after the fix, including all pre-existing GET/POST/PATCH
-coverage — no regressions).
+**How to run it.**
+```bash
+source .factory-env && npx vitest run api/src/platform/api/v1/resources/__tests__/documents.test.ts
+```
+Full file, 34/34 passed after the fix, including all pre-existing GET/POST/PATCH coverage — no
+regressions.
 
 **Not verified / left for a follow-up ticket.** The four read-only sub-resource routes' own
 pre-existing visibility gap (disclosed, not touched here — see "What changed" above). No public
