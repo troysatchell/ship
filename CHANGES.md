@@ -23,6 +23,41 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ## TRO-428 (PF-702) — Agent reads via SDK behind `AGENT_PLATFORM_MODE` flag, and two real SDK gaps it uncovered
 
+**CodeRabbit triage (local CLI, 6 findings, PR #238).** Fixed 5, dismissed 1:
+- **major** (`agent/src/index.ts`) — the shared `ShipClient`'s `token: config.shipApiToken as string`
+  lied to the type system (pre-existing line, unchanged by this ticket until now). Fixed to
+  `?? ''`: behaviorally identical in every currently-reachable path (`isConfigComplete()` already
+  guarantees `shipApiToken` truthy whenever this code runs, in either mode) but no longer asserts
+  something the type system can't verify. The fuller fix CodeRabbit suggested — widen
+  `ShipClientOptions.token` to `string | undefined` and push the requirement into `internal`-mode's
+  own code paths — changes the constructor's public contract used by every existing `ShipClient`
+  call site including several tests; deferred to PF-704, which already owns this rough edge (see
+  below).
+- **minor** (`agent/src/shipClient.ts`, `getCommentsViaSdk`) — a comment whose author user was
+  deleted was mapped to a fabricated `'(unknown)'` author to satisfy `CommentEntry`'s non-null
+  `author` field. Correctly identified as a WORSE parity mismatch than dropping the row: the
+  internal route INNER JOINs and simply never returns such a comment. Fixed to filter it out
+  instead, matching internal mode's actual behavior rather than inventing a value it would never
+  produce.
+- **minor** (`agent/src/__tests__/shipClientParity.liveServer.test.ts`, `getIssuesByAssignee` case)
+  — the hardcoded expected literal included `updated_at: viaSdk[0]?.updated_at`, comparing a value
+  to itself (tautological). Fixed: the real proof for `updated_at` parity is the existing
+  cross-mode `pickIssue(viaSdk)).toEqual(pickIssue(viaInternal))` line above it; the hardcoded-value
+  check now covers only `id`/`title`/`state`.
+- **trivial** (`agent/src/shipClient.ts`, `getDocumentViaSdk`) — an unnecessary
+  `as ShipDocument['properties']` cast. Removed: `doc.properties` (`Record<string, unknown>`) is
+  already structurally compatible with `ShipDocument['properties']`'s own `[key: string]: unknown`
+  index signature.
+- **trivial** (`agent/src/shipClient.ts`, `collectAllPages`) — a result truncated at the
+  `maxPages` bound was silently indistinguishable from a genuinely complete collection. Fixed: logs
+  a `console.warn` when the bound is hit with a `next_cursor` still set.
+- **minor, dismissed** (`sdk/src/client.clientCredentials.test.ts`) — a fixed 15ms `setTimeout` in
+  the single-flight concurrency test, suggested to become a real request barrier. Dismissed: this
+  is the identical, already-merged technique `client.refresh.test.ts`'s own concurrency test uses
+  for the identical proof requirement (same comment, same reasoning) — fixing it in only the newer
+  file while the older one keeps the pattern would be inconsistent, not an improvement. A real fix
+  belongs to both files at once, as its own follow-up, not a drive-by in this ticket.
+
 **What was added.** `agent/src/shipClient.ts`'s `ShipClient` class gains an optional `sdk` field
 (a `@ship/sdk` `ShipClient` instance). Each of its 10 read methods (`getChangeFeed`, `getDocument`,
 `getPeople`, `getAssociations`, `getReverseAssociations`, `getBacklinks`, `getComments`,

@@ -431,6 +431,15 @@ export class ShipClient {
       items.push(...result.data);
       if (!result.next_cursor) break;
       cursor = result.next_cursor;
+      // CodeRabbit finding (TRO-428): make a truncated collection
+      // observable rather than silently returning fewer items than
+      // internal mode's own return-everything behavior would. Only fires
+      // on the LAST allowed page when more data genuinely remains.
+      if (page === maxPages - 1) {
+        console.warn(
+          `[shipClient] collectAllPages hit the ${maxPages}-page bound with a next_cursor still set; result is truncated at ${items.length} item(s)`
+        );
+      }
     }
     return items;
   }
@@ -545,7 +554,12 @@ export class ShipClient {
       content: null,
       visibility: SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN,
       created_by: null,
-      properties: doc.properties as ShipDocument['properties'],
+      // No cast needed (CodeRabbit finding, TRO-428): `doc.properties` is
+      // `Record<string, unknown>`, and `ShipDocument['properties']`'s own
+      // index signature (`[key: string]: unknown`) already makes every
+      // named field structurally optional-and-compatible — a plain
+      // `Record<string, unknown>` satisfies it without narrowing.
+      properties: doc.properties,
       completed_at: undefined,
     };
   }
@@ -686,23 +700,31 @@ export class ShipClient {
    *  `collectAllPages` to match the internal route's return-everything
    *  shape) and, verified by reading the handler directly, LEFT JOINs the
    *  author (`author: null` when the author's user row is gone) where the
-   *  internal route INNER JOINs (a comment with no resolvable author is
-   *  simply absent from the internal route's results instead). A genuinely
-   *  authorless comment is the only case this placeholder fires for — see
-   *  CHANGES.md (TRO-428). */
+   *  internal route INNER JOINs — a comment with no resolvable author is
+   *  simply ABSENT from the internal route's results, never returned with a
+   *  placeholder. CodeRabbit finding (TRO-428): an earlier version of this
+   *  method fabricated a `'(unknown)'` author to satisfy `CommentEntry`'s
+   *  non-null `author` field, which is a WORSE parity mismatch than dropping
+   *  the row — filtering matches the internal route's actual behavior
+   *  exactly, rather than inventing a value it would never produce. */
   private async getCommentsViaSdk(sdk: SdkShipClient, documentId: string): Promise<CommentEntry[]> {
     const comments = await this.collectAllPages((cursor) => sdk.documents.getComments(documentId, { limit: 100, cursor }));
-    return comments.map((c) => ({
-      id: c.id,
-      content: c.content,
-      author: {
-        id: c.author?.id ?? '',
-        name: c.author?.name ?? '(unknown)',
-        email: c.author?.email ?? null,
-      },
-      created_at: c.created_at,
-      resolved_at: c.resolved_at,
-    }));
+    return comments
+      .filter((c): c is typeof c & { author: NonNullable<typeof c.author> } => c.author !== null)
+      .map((c) => ({
+        id: c.id,
+        content: c.content,
+        // `author.name` is independently `string | null` in the SDK's own
+        // type even once `author` itself is non-null (a real user row with
+        // no name recorded) — `users.name` is NOT NULL in this repo's
+        // schema, so the internal route's own `author.name` is never
+        // actually null in practice, but the fallback keeps this method
+        // honest about what the SDK's type actually allows rather than
+        // asserting it away.
+        author: { id: c.author.id, name: c.author.name ?? '(unknown)', email: c.author.email },
+        created_at: c.created_at,
+        resolved_at: c.resolved_at,
+      }));
   }
 
   /** Other issues assigned to `assigneeUserId` (`issues.ts`'s

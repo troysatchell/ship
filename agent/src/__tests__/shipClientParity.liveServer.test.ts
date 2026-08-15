@@ -443,9 +443,13 @@ describe('PF-702: ShipClient parity — internal mode vs sdk mode, same fixtures
       sdkClient.getIssuesByAssignee(assigneeUserId),
     ]);
     const pickIssue = (rows: typeof viaInternal) => rows.map((r) => pick(r, ['id', 'title', 'state', 'updated_at']));
+    // Cross-mode equality (above real proof for updated_at parity, since a
+    // hardcoded expected value here would be self-referential — CodeRabbit
+    // finding, TRO-428) plus a fixed-field check against the seeded fixture
+    // for everything EXCEPT updated_at.
     expect(pickIssue(viaSdk)).toEqual(pickIssue(viaInternal));
-    expect(pickIssue(viaSdk)).toEqual([
-      { id: issueDocId, title: `PF-702 parity issue ${RUN_ID}`, state: 'in_progress', updated_at: viaSdk[0]?.updated_at },
+    expect(pickIssue(viaSdk).map(({ id, title, state }) => ({ id, title, state }))).toEqual([
+      { id: issueDocId, title: `PF-702 parity issue ${RUN_ID}`, state: 'in_progress' },
     ]);
   });
 

@@ -223,14 +223,24 @@ if (!isConfigComplete(config)) {
 
   const shipClient = new ShipClient({
     baseUrl: config.shipApiBaseUrl,
-    // isConfigComplete() already guarantees this is set. Used for the
-    // proactive fast tier (`proactiveDeps`) and the deep tier (`deepDeps`)
-    // only — both intentionally still run under ONE shared token, since
-    // neither has a per-invocation requesting user to source a per-call one
-    // from (see `ProactiveDeps`/`DeepDeps`'s own docstrings in graph.ts).
-    // In `sdk` mode this token is unused (see `sdk` field below) — kept for
-    // type-compat with every existing `internal`-mode caller/test.
-    token: config.shipApiToken as string,
+    // isConfigComplete() already guarantees this is set (in EITHER mode —
+    // that check is unconditional on agentPlatformMode) for every branch
+    // that reaches this construction. Used for the proactive fast tier
+    // (`proactiveDeps`) and the deep tier (`deepDeps`) only — both
+    // intentionally still run under ONE shared token, since neither has a
+    // per-invocation requesting user to source a per-call one from (see
+    // `ProactiveDeps`/`DeepDeps`'s own docstrings in graph.ts). In `sdk`
+    // mode this token is unused (see `sdk` field below). `?? ''` rather
+    // than `as string` (CodeRabbit finding, TRO-428): the invariant above
+    // is real, but asserting it away is worse than a fallback that's
+    // simply never exercised in practice — a `ShipClientOptions.token:
+    // string | undefined` widening plus pushing the requirement down into
+    // `internal`-mode's own code paths would be the fully clean fix, but it
+    // changes the constructor's public contract used by every existing
+    // `ShipClient` call site (including many tests) — deferred to PF-704,
+    // which already owns the flag-matrix work this rough edge belongs to
+    // (see CHANGES.md, TRO-428).
+    token: config.shipApiToken ?? '',
     client: resilientHttpClient,
     sdk: sharedSdkClient,
   });
