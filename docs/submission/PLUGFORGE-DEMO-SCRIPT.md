@@ -309,17 +309,38 @@ The full retry schedule (1s/4s/16s/1m/5m/30m) is ~36 minutes wall-clock — don'
 the **deterministic** proof instead:
 
 ```bash
-pnpm --filter @ship/api test -- deliverer
+cd api && npx vitest run src/platform/webhooks/__tests__/deliverer.test.ts
 ```
+
+(NOT `pnpm --filter @ship/api test -- deliverer` — that `--` form does not scope to the path at
+all, it runs the FULL api suite; `lessons.md`'s 2026-08-12 entry has the mechanism. Corrected here,
+2026-08-14, found while writing up PF-801 below.)
 
 - **SAY:** "This is the graded scenario — three `500`s then a `200`, retries land at 1, 4, and 16
   seconds, succeeds on attempt 4. It's proven with an injected clock, not real `setTimeout` waits —
   zero flake risk in CI. Six failures dead-letters into the DLQ; that's the same test file."
-- If PF-306 (replay) has merged by demo time: point a subscription at an unreachable URL, force a
-  DLQ entry, then `POST /api/v1/webhooks/deliveries/:id/replay` and show it succeed against the
-  listener with the *original* `Idempotency-Key` header — the listener script above already prints
-  it. **As of 2026-08-14 this route isn't on `main` yet** (built on `feat/pf-306-replay-endpoint`,
-  not merged) — check before promising it live.
+- **PF-306 (replay) and PF-801 (idempotency-key dedupe) are BOTH merged to `main` as of this
+  revision** (corrected 2026-08-14 — an earlier draft of this line said PF-306 wasn't merged yet;
+  it has been since `feat/pf-306-replay-endpoint` landed). Two SEPARATE beats — deliberately not
+  conflated (an earlier draft of this section did, incorrectly: a replay of an ACTIVE subscription
+  sends to that subscription's own `target_url`, so replaying against a subscription whose target
+  is genuinely unreachable cannot "succeed against the listener" at all — note "active": TRO-446's
+  own CodeRabbit review added a guard rejecting replay of a DEACTIVATED subscription entirely with
+  a 404, so this qualifier is load-bearing, not decorative):
+  1. **DLQ resilience** (what the retry schedule guards against): point a subscription at an
+     unreachable URL, let real attempts exhaust into the DLQ (or narrate this over
+     `deliverer.test.ts`'s deterministic-clock proof above instead of waiting on real retries) —
+     `status: 'dead'` in `GET /api/v1/webhooks/deliveries`.
+  2. **Dedupe** (this ticket, PF-801): reuse Act 3's subscription — the one already pointed at the
+     LIVE listener, which already received one successful delivery — and replay THAT delivery:
+     `POST /api/v1/webhooks/deliveries/:id/replay`. The listener script above now prints
+     `DUPLICATE ... recognized, not reprocessed` for it, because the replay carries the exact same
+     `Idempotency-Key` the original successful delivery did. That dedupe behavior is the reference
+     implementation `createReferenceSubscriber()` (same file,
+     `docs/submission/demo-webhook-listener.mjs`) exports — see `docs/architecture.md`'s "Subscriber
+     dedupe contract" section for the write-up, and `e2e/webhook-idempotency-key-drill.spec.ts` for
+     the recorded, deterministic proof of exactly this deliver → replay → dedupe sequence end to
+     end.
 
 ## Act 5 — Browser SDK, PKCE, no secret in the browser (3:30–4:15)
 
