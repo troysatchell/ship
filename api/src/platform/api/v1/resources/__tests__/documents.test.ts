@@ -505,4 +505,79 @@ describe('PF-200: /api/v1/documents (Linear TRO-398)', () => {
       expect(res.body.code).toBe('not_found');
     });
   });
+
+  // PF-703 (Linear TRO-435) — the agent gate's sdk-mode write path
+  // (GateShipClient.setStandupContent). See UpdateDocumentRequestSchema's
+  // own doc comment for the deliberate content-only scope narrowing.
+  describe('PATCH /api/v1/documents/:id (PF-703, TRO-435)', () => {
+    it('overwrites content and bumps updated_at; a follow-up GET reflects it (title/document_type untouched)', async () => {
+      const docId = await insertDocument('PATCH content doc', new Date(BASE_MS + 50000), 'standup');
+      const newContent = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'patched' }] }] };
+
+      const res = await request(app)
+        .patch(`/api/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({ content: newContent });
+
+      expect(res.status).toBe(200);
+      const body = res.body as DocumentBody;
+      expect(body.id).toBe(docId);
+      expect(body.title).toBe('PATCH content doc');
+      expect(body.document_type).toBe('standup');
+
+      const row = await pool.query<{ content: unknown; title: string }>(
+        `SELECT content, title FROM documents WHERE id = $1`,
+        [docId]
+      );
+      expect(row.rows[0]?.content).toEqual(newContent);
+      // properties/title are untouched by a content-only PATCH.
+      expect(row.rows[0]?.title).toBe('PATCH content doc');
+    });
+
+    it('a well-formed but nonexistent id -> 404 not_found', async () => {
+      const res = await request(app)
+        .patch(`/api/v1/documents/${crypto.randomUUID()}`)
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({ content: { type: 'doc', content: [] } });
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+
+    it('a missing content field -> 400 validation_failed', async () => {
+      const docId = await insertDocument('PATCH missing content doc', new Date(BASE_MS + 51000));
+
+      const res = await request(app)
+        .patch(`/api/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('validation_failed');
+    });
+
+    it('a documents:read-only token -> 403, details.missing_scope = documents:write', async () => {
+      const docId = await insertDocument('PATCH missing scope doc', new Date(BASE_MS + 52000));
+
+      const res = await request(app)
+        .patch(`/api/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`)
+        .send({ content: { type: 'doc', content: [] } });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('forbidden');
+      expect(res.body.details).toEqual({ missing_scope: 'documents:write' });
+    });
+
+    it('no Authorization header gets 401 in ApiError shape', async () => {
+      const docId = await insertDocument('PATCH no auth doc', new Date(BASE_MS + 53000));
+
+      const res = await request(app)
+        .patch(`/api/v1/documents/${docId}`)
+        .send({ content: { type: 'doc', content: [] } });
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe('unauthorized');
+    });
+  });
 });

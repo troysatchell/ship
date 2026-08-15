@@ -367,7 +367,12 @@ issuesRouter.patch(
       await client.query('COMMIT');
       flushPendingEvents(pendingEvents);
     } catch (err) {
-      await client.query('ROLLBACK');
+      // .catch(() => {}) matches routes/issues.ts's own internal PATCH
+      // handler convention (CodeRabbit precedent, that route's history): if
+      // ROLLBACK itself throws (e.g. the connection already dropped), that
+      // secondary error must never replace the original `err` being
+      // rethrown below — swallow it here rather than losing the real cause.
+      await client.query('ROLLBACK').catch(() => {});
       throw err;
     } finally {
       client.release();
