@@ -118,6 +118,54 @@ function waitForReady(child: ChildProcessWithoutNullStreams, timeoutMs: number):
   });
 }
 
+/** Spawns the real `api/` package bound to a fresh ephemeral port, retrying
+ *  with a NEW port if it loses the TOCTOU race between `getFreePort()`
+ *  closing its probe socket and the child actually binding — a real, if
+ *  low-probability, gap CodeRabbit caught. Only retries when the child's own
+ *  stderr names `EADDRINUSE`; any other early exit rethrows immediately on
+ *  the first attempt, so a genuine startup bug still fails fast instead of
+ *  being masked behind retries. */
+async function spawnApiChild(
+  databaseUrl: string,
+  onStderr: (chunk: Buffer) => void
+): Promise<{ child: ChildProcessWithoutNullStreams; port: number }> {
+  const MAX_ATTEMPTS = 3;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const port = await getFreePort();
+    const attemptStderr: Buffer[] = [];
+    const child = spawn('pnpm', ['--filter', '@ship/api', 'exec', 'tsx', 'src/index.ts'], {
+      cwd: REPO_ROOT,
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: process.env.HOME ?? '',
+        PORT: String(port),
+        DATABASE_URL: databaseUrl,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      attemptStderr.push(chunk);
+      onStderr(chunk);
+    });
+
+    try {
+      await waitForReady(child, 30_000);
+      return { child, port };
+    } catch (err) {
+      const isPortRace = Buffer.concat(attemptStderr).toString('utf8').includes('EADDRINUSE');
+      if (!isPortRace || attempt === MAX_ATTEMPTS) throw err;
+      if (child.exitCode === null) {
+        await new Promise<void>((resolveKill) => {
+          child.once('exit', () => resolveKill());
+          child.kill('SIGTERM');
+        });
+      }
+    }
+  }
+  /* istanbul ignore next -- unreachable: the loop above always returns or throws */
+  throw new Error('spawnApiChild: exhausted retries without returning or throwing');
+}
+
 describe('PF-600: ship login / ship whoami end-to-end against a real running Ship API', () => {
   const databaseUrl = process.env.DATABASE_URL;
 
@@ -177,9 +225,6 @@ describe('PF-600: ship login / ship whoami end-to-end against a real running Shi
       [workspaceId, clientId, ['documents:read']]
     );
 
-    const port = await getFreePort();
-    baseUrl = `http://127.0.0.1:${port}`;
-
     // The real api/ package, as a separate process — see this file's header
     // for why this is a subprocess and not an import. DATABASE_URL is passed
     // explicitly rather than left to `api/.env.local` (index.ts's own dotenv
@@ -191,19 +236,11 @@ describe('PF-600: ship login / ship whoami end-to-end against a real running Shi
     // to) the moment it runs in ci.yml/.gitlab-ci.yml. SESSION_SECRET/
     // CORS_ORIGIN both have safe hardcoded fallbacks in app.ts/index.ts when
     // unset, so only DATABASE_URL and PORT need to be explicit here.
-    child = spawn('pnpm', ['--filter', '@ship/api', 'exec', 'tsx', 'src/index.ts'], {
-      cwd: REPO_ROOT,
-      env: {
-        PATH: process.env.PATH ?? '',
-        HOME: process.env.HOME ?? '',
-        PORT: String(port),
-        DATABASE_URL: databaseUrl,
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    child.stderr.on('data', (chunk: Buffer) => childStderrChunks.push(chunk));
-
-    await waitForReady(child, 30_000);
+    // `spawnApiChild` retries with a fresh port on EADDRINUSE — see its own
+    // header for why.
+    const started = await spawnApiChild(databaseUrl, (chunk) => childStderrChunks.push(chunk));
+    child = started.child;
+    baseUrl = `http://127.0.0.1:${started.port}`;
 
     credentialsDir = await mkdtemp(join(tmpdir(), 'ship-cli-liveserver-test-'));
     credentialsPath = join(credentialsDir, 'credentials.json');
@@ -252,11 +289,19 @@ describe('PF-600: ship login / ship whoami end-to-end against a real running Shi
       // Wraps the CLI's own real stdout writer: the moment `ship login`
       // prints the user_code (this ticket's own AC), react to it exactly
       // like a human would — open the verify endpoint and approve. Fired
-      // fire-and-forget, same convention
-      // `client.deviceLogin.liveServer.test.ts`'s own `onUserCode` uses
-      // (`void decideDeviceCode(...)`), except this approves over a REAL
-      // HTTP POST to `/oauth/device/verify` (this ticket's own "auto-approve
-      // via API in test" instruction) instead of an in-process function call.
+      // Fired from inside the `onUserCode` callback (still called from a
+      // stdout event, not from top-level test code), same "kick it off from
+      // the callback" shape `client.deviceLogin.liveServer.test.ts`'s own
+      // `onUserCode` uses, except this approves over a REAL HTTP POST to
+      // `/oauth/device/verify` (this ticket's own "auto-approve via API in
+      // test" instruction) instead of an in-process function call. Unlike
+      // that file's `void decideDeviceCode(...)`, the promise is RETAINED
+      // here (not `void`-discarded) so it can be awaited and asserted after
+      // `runLogin` resolves — a fire-and-forget POST that silently 500s
+      // would otherwise only surface as `runLogin`'s own confusing
+      // poll-timeout failure, with no signal pointing at the approval step
+      // itself.
+      let approvalFetch: Promise<Response> | undefined;
       const wrappedIo = {
         stdout: (line: string) => {
           loginIo.stdout(line);
@@ -267,16 +312,12 @@ describe('PF-600: ship login / ship whoami end-to-end against a real running Shi
             // successful approve responds 303 to `verification_uri`
             // (`http://localhost:5609/oauth-device-verify?result=approved` —
             // the WEB origin, nothing listening on it in this test). Fetch's
-            // DEFAULT is `redirect: 'follow'`, and since this call is
-            // deliberately fire-and-forget (unawaited, matching
-            // `client.deviceLogin.liveServer.test.ts`'s own `void
-            // decideDeviceCode(...)` convention), an auto-followed redirect
-            // to a dead port becomes an ECONNREFUSED on an unhandled
-            // rejection with no test code anywhere near it — confirmed by
+            // DEFAULT is `redirect: 'follow'`, and an auto-followed redirect
+            // to a dead port becomes an ECONNREFUSED — confirmed by
             // reproducing it standalone before writing this comment. This
             // call only needs the 303 itself (proof the decision landed),
             // never the page it points to.
-            void fetch(`${baseUrl}/oauth/device/verify`, {
+            approvalFetch = fetch(`${baseUrl}/oauth/device/verify`, {
               method: 'POST',
               headers: {
                 'content-type': 'application/x-www-form-urlencoded',
@@ -298,6 +339,14 @@ describe('PF-600: ship login / ship whoami end-to-end against a real running Shi
         scope: 'documents:read',
         credentialsPath,
       });
+
+      // Awaited AFTER runLogin resolves (the approval POST races the CLI's
+      // own poll — either can land first), not before — awaiting earlier
+      // would deadlock: this POST is issued synchronously from inside the
+      // stdout handler that runLogin's own poll loop triggers.
+      expect(approvalFetch, 'approval POST was never issued — user_code line never matched').toBeDefined();
+      const approvalResponse = await approvalFetch!;
+      expect(approvalResponse.status).toBe(303);
 
       expect(loginCode, `stderr: ${loginIo.stderrLines.join('\n')}`).toBe(0);
       expect(loginIo.stdoutLines.some((l) => l.startsWith('To authorize this CLI, open:'))).toBe(true);
