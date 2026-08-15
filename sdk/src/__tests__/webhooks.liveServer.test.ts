@@ -306,10 +306,13 @@ describe('TRO-599: WebhooksClient against a real running Ship API + the seeded w
     // `event_type`/`target_url`. This call proves the fix works end-to-end:
     // a real HTTP POST against a real running server, using the corrected
     // body shape, creating a real row in the database.
+    expect(oauthAppId, 'oauthAppId must be set in beforeAll').toBeDefined();
+    if (!oauthAppId) return;
+
     const client = new ShipClient({ token, baseUrl });
 
     const created = await client.webhooks.createSubscription({
-      app_id: oauthAppId!,
+      app_id: oauthAppId,
       event_type: 'issue.created',
       target_url: targetUrl,
     });
