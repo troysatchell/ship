@@ -347,15 +347,46 @@ or, on a re-run against an already-seeded database:
   normal, unaffected path for every ordinary local `pnpm db:seed` / `./start.sh` run. The variable
   only needs to be set in an environment meant to actually host the grader's credential (a deployed
   grading instance's boot environment, provisioned via Terraform — PF-900).
-- **Obtaining a working bearer token** for the grader's `client_id` + secret via the OAuth 2.0 Client
-  Credentials grant will use `POST /oauth/token`, once PF-104 (`/oauth/token`) lands on this branch —
-  it has not yet as of this section being written (2026-08-10/11); today, the seed proves the
-  credential exists and is read-only-scoped (`api/src/platform/oauth/__tests__/seedGraderApp.test.ts`),
-  but no token-issuing endpoint exists yet to exercise end-to-end. Do not read this section as
-  claiming a live token round-trip works today — it does not.
-- **Portal reachability** and **`/api/v1/openapi.json` being publicly resolvable** are DoD items for
-  a deployed instance and depend on E5 (developer portal) and PF-202 (OpenAPI generator), neither of
-  which exists on this branch yet — deliberately out of scope for the grader-app seed itself. See
+
+**Try it — mint a token and call the API.** No browser, no login, no portal — the grader's
+credential uses the OAuth 2.0 Client Credentials grant (`POST /oauth/token`), which trades a
+`client_id`/`client_secret` directly for a bearer token in one call. Paste this whole block (fill
+in the `client_id` the seed step printed and the secret you chose for
+`GRADER_OAUTH_CLIENT_SECRET`):
+
+```bash
+API_URL=http://localhost:3000          # or your deployed instance's URL
+CLIENT_ID=ship_app_grader_...          # from the seed step's printed output
+CLIENT_SECRET=...                      # whatever you set GRADER_OAUTH_CLIENT_SECRET to
+
+TOKEN=$(curl -s -X POST "$API_URL/oauth/token" \
+  -d 'grant_type=client_credentials' \
+  -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" \
+  -d 'scope=documents:read issues:read sprints:read' \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
+
+curl -s "$API_URL/api/v1/me" -H "authorization: Bearer $TOKEN" | python3 -m json.tool
+curl -s "$API_URL/api/v1/documents?limit=5" -H "authorization: Bearer $TOKEN" | python3 -m json.tool
+curl -s "$API_URL/api/v1/issues?limit=5" -H "authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
+`GET /api/v1/me` confirms the principal: `{"user": null, "app": {"name": "Grader (read-only)", ...},
+"scopes": ["documents:read","issues:read","sprints:read"]}` — an app identity, no human attached,
+exactly the three read scopes and nothing else. The credential is provably read-only, not just
+labeled that way — any write is rejected with the missing scope named, never a bare "forbidden":
+
+```bash
+curl -s -X POST "$API_URL/api/v1/documents" -H "authorization: Bearer $TOKEN" \
+  -H 'content-type: application/json' -d '{"title":"test","document_type":"wiki"}'
+# → 403 {"code":"forbidden","message":"...","details":{"missing_scope":"documents:write"}}
+```
+
+The full public surface is browsable at `GET /api/v1/openapi.json` (no auth required) — every
+route the token above can reach, plus request/response schemas.
+
+- **Portal reachability** is a DoD item for a deployed instance and depends on E5 (developer
+  portal), which doesn't exist on this branch yet — there's no UI to click through; the walkthrough
+  above (and `/api/v1/openapi.json`) is the full grader-facing surface until E5 lands. See
   `PLUGFORGE.MD` §4 (PF-907) and §6 (MVP cut line) for the full epic breakdown.
 
 ### Environment Variables
