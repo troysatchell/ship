@@ -21,6 +21,133 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-602 — Shared /api/v1 cursor pagination silently dropped rows landing in the same millisecond
+
+**What was broken.** `platform/api/v1/pagination.ts`'s `encodeCursor` built every `/api/v1` list
+route's keyset cursor from `row.created_at.toISOString()` — `pg`'s default parser gives a
+**millisecond**-precision JS `Date`, while Postgres's own `timestamptz` retains **microsecond**
+precision. Two rows landing in the same millisecond (found live and reliably reproducible via
+ordinary sequential `await`ed inserts against local Docker Postgres — not a rare race; TRO-432's
+own PR #225 hit it on nearly every pagination-test run before that test was rewritten to seed
+second-spaced timestamps instead) could put a not-yet-fetched row on the wrong side of a
+truncated cursor boundary. That row was then **silently and permanently dropped** — never
+appeared on any later page, no error anywhere. Affected every `/api/v1` list route:
+`documents`/`issues`/`sprints`/`people`/`webhooks`/`webhook-deliveries` — 10 call sites across 5
+resource files, only `audit` (PF-501/TRO-432) had a local, per-route workaround
+(`created_at::text AS created_at_precise`, bypassing `pg`'s lossy `Date` parsing for the cursor).
+
+**The centralization decision (the ticket's own open question).** Repeating `audit.ts`'s SQL
+pattern per resource (option 1) would have fixed the bug but left the *guarantee* undefended —
+nothing stops a future new list route from reintroducing the identical mistake, since a lossy
+`Date#toISOString()` string and a precise `created_at::text` string are both just `string` to
+TypeScript. Centralized instead (option 2), but not by having `pagination.ts` own the SQL (it
+can't — every resource selects different columns, so there's no single query for it to author):
+`pagination.ts` now exports a nominal branded type, `PreciseTimestamp = string & { __brand }`, and
+`encodeCursor` only accepts that type for its `created_at` field, not a bare `string`. The **one**
+sanctioned way to produce one is the new `preciseTimestamp()` function, meant to be called only on
+a `created_at::text` SQL alias. This makes the bug's exact root cause **a compile error**, not
+something that only surfaces under a same-millisecond collision in production — verified directly:
+tightening the type alone made `tsc` enumerate all 10 remaining lossy call sites as errors, which
+is how every site below was found and fixed (not a fresh manual audit that could have missed one).
+
+**Fixed:** `documents.ts` (5 sites — main list, forward/reverse associations, backlinks, comments),
+`issues.ts`, `people.ts`, `sprints.ts`, `webhooks.ts` (2 sites — subscriptions, deliveries), plus
+`audit.ts`'s own already-correct site updated to the new shared type for consistency. Every SELECT
+gained a `created_at::text AS created_at_precise` column (harmless, additive — matches
+`audit.ts`'s proven pattern); every cursor-building call now passes
+`preciseTimestamp(lastRow.created_at_precise)`. No response-body field changed — every resource's
+own serializer still uses `row.created_at.toISOString()` for what it returns to the caller; only
+the *opaque, internal* cursor's precision changed, matching the AC's "no API contract change."
+
+One real type-collision the compiler caught along the way: `documents.ts`'s `serializeDocument()`
+is also called from `POST /`'s create path with a differently-shaped row from
+`services/documentService.ts` (a same-named but unrelated `DocumentRow` interface, from a
+single-record create response that never builds a cursor) — making `created_at_precise` a
+*required* field on the type `serializeDocument` accepts broke that call site. Fixed by narrowing
+`serializeDocument`'s parameter to `Omit<DocumentRow, 'created_at_precise'>`, which both callers
+satisfy structurally.
+
+**Proof.** A new deterministic regression test (`documents.test.ts`, "TRO-602: cursor precision")
+seeds two rows at the exact same millisecond but different microsecond offsets — via raw SQL
+`interval` arithmetic (`to_timestamp($ms/1000.0) + '$microseconds microseconds'::interval`), not a
+JS `Date` (which cannot represent sub-millisecond precision at all, so passing one in could never
+produce a genuine collision to seed with) — then walks a `limit=1` page boundary forced to land
+exactly between them and asserts the earlier row is never dropped. **Red-before-green verified
+directly, not assumed:** temporarily reverted just the one call site's fix
+(`preciseTimestamp(lastRow.created_at.toISOString())`, forcing the brand onto a deliberately lossy
+value) and re-ran — the test failed with exactly the predicted message ("earlierId was silently
+dropped across the millisecond-collision page boundary"), then the fix was restored and the same
+run went green. Full `api` suite: **122/122 files, 1372/1372 tests green** — nothing else broke
+across the 10 touched call sites.
+
+**CodeRabbit triage (local CLI, completed review, 1 Major finding).** `preciseTimestamp()`
+performed zero runtime validation, so it would silently brand any string — including exactly the
+`Date#toISOString()` value TRO-602 exists to keep out — as precise, relying entirely on the type
+system plus call-site discipline. Finding accepted, but its literal suggested fix ("require a fixed
+six-digit fraction") was itself wrong: verified directly against this repo's Postgres container that
+`timestamptz::text` trims trailing zero digits and **omits the fraction entirely** when it's exactly
+zero (`2026-08-15 05:33:23+00`, not `...23.000000+00`) — a fixed-six-digit check would have rejected
+a large fraction of genuinely precise real timestamps. Implemented the corrected version instead:
+`POSTGRES_TIMESTAMPTZ_TEXT_RE` (`pagination.ts`) accepts Postgres's actual variable-length-fraction
+shape and rejects `Date#toISOString()`'s structurally disjoint `T...Z` shape. `preciseTimestamp()`
+now throws on a shape mismatch (every call site passes a DB-selected value, so a mismatch there is a
+call-site bug, not client input); `decodeCursor()` checks the same regex on the client-supplied
+`?cursor=` value **before** calling `preciseTimestamp()`, preserving its existing contract that a
+garbled cursor degrades to `null` → `validation_failed`, never a thrown 500. New test file
+`api/v1/__tests__/pagination.test.ts` (8 cases) covers: accepting Postgres's zero-fraction and
+trimmed-fraction real output, rejecting a `Date#toISOString()` value and garbage, and
+`decodeCursor` returning `null` (not throwing) for both a Date-shaped and a garbage hand-crafted
+cursor. Red-before-green verified directly: reverted `preciseTimestamp` to its pre-fix no-op body,
+confirmed the two validation tests failed with the predicted "expected function to throw" message,
+restored, confirmed all 8 green. Full `api/v1` suite re-run after the change: 12 files, 244 tests
+green — every resource's live pagination integration test still passes against real
+`created_at::text` output, confirming the regex doesn't false-reject real data.
+
+**CodeRabbit triage, round 2 (hosted, completed review — genuine this time, not rate-limited: left
+2 inline comments).** Major finding, accepted: `isPreciseTimestampShape`'s regex was purely lexical,
+so a calendar-impossible value like `"2026-02-31 05:33:23+00"` or an out-of-range offset like
+`"+99:99"` matched it and reached the resource's SQL query as a bind parameter — verified directly
+that Postgres then throws `date/time field value out of range`, uncaught from that `pool.query()`
+call. `errorMiddleware.ts` already sanitizes that into a generic `server_error` 500 with no leaked
+detail (checked, not assumed — no information-disclosure or crash risk existed), but the status was
+wrong: a malformed `?cursor=` should get `validation_failed` like every other malformed-cursor case,
+not a 500. Fixed by adding calendar/offset validity to the same shape check: constructs a UTC date
+from the matched fields via `Date.UTC` and compares the fields back (catches Feb 31 — `Date.UTC`
+silently normalizes it to March 3 — without a hand-rolled days-per-month table), plus an explicit
+UTC-offset bound (00-14 hours, 00-59 minutes, since `Date.UTC` has no offset concept to
+overflow-check). 5 new test cases cover both the rejections (Feb 31, hour 25, offset +99:99 and
++15:00, and the exact `decodeCursor` case CodeRabbit's own probe used) and that real edge values
+still pass (leap day Feb 29, offset boundary +14:00) — red-before-green verified: reverted the
+calendar/offset check back to the lexical-only regex, confirmed exactly the 4 new `preciseTimestamp`
+tests plus the new `decodeCursor` case failed with the predicted messages, restored, confirmed all
+13 green. Minor finding, accepted: `CHANGES.md` itself was missing a blank line before a fenced
+code block (markdownlint MD031) — fixed. Full `api/v1` suite re-run: 12 files, 249 tests green.
+
+**How to run it.**
+
+```bash
+pnpm --filter api exec vitest run src/platform/api/v1/__tests__/pagination.test.ts
+pnpm --filter api exec vitest run src/platform/api/v1/
+```
+
+**Roll back.** Revert `pagination.ts`'s `preciseTimestamp`/`decodeCursor`/`isPreciseTimestampShape`
+changes across both follow-up commits and delete `api/v1/__tests__/pagination.test.ts`; the original
+TRO-602 fix (branded type, no runtime validation) is unaffected and stays correct on its own.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api type-check
+pnpm --filter @ship/api exec vitest run src/platform/api/v1/resources/__tests__/documents.test.ts
+pnpm --filter @ship/api test
+```
+
+**Rollback.** `git revert` this commit. `pagination.ts`'s `PreciseTimestamp`/`preciseTimestamp()`
+and the 10 SELECT/`encodeCursor` call-site changes revert together; nothing outside
+`api/src/platform/api/v1/` changes.
+
+---
+
 ## TRO-428 (PF-702) — Agent reads via SDK behind `AGENT_PLATFORM_MODE` flag, and two real SDK gaps it uncovered
 
 **CodeRabbit triage (local CLI, 6 findings, PR #238).** Fixed 5, dismissed 1:

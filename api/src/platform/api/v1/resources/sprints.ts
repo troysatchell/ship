@@ -30,7 +30,7 @@ import { requireScope } from '../../../scopes/requireScope.js';
 import { rateLimitBuckets } from '../../../ratelimit/middleware.js';
 import { asyncHandler } from '../errorMiddleware.js';
 import { notFoundError, serverError, validationFailedError } from '../errors.js';
-import { encodeCursor, decodeCursor, type KeysetCursor } from '../pagination.js';
+import { encodeCursor, decodeCursor, preciseTimestamp, type KeysetCursor } from '../pagination.js';
 import { resolvePrincipalWorkspaceId } from './workspaceContext.js';
 
 export const sprintsRouter: RouterType = Router();
@@ -53,6 +53,8 @@ interface SprintRow {
   properties: Record<string, unknown> | null;
   created_at: Date;
   updated_at: Date;
+  /** `created_at::text` — cursor-internal only (TRO-602). */
+  created_at_precise: string;
 }
 
 function serializeSprint(row: SprintRow) {
@@ -121,7 +123,7 @@ sprintsRouter.get(
     const limitParamIndex = values.length;
 
     const result = await pool.query<SprintRow>(
-      `SELECT id, title, properties, created_at, updated_at
+      `SELECT id, title, properties, created_at, updated_at, created_at::text AS created_at_precise
        FROM documents
        WHERE ${whereClauses.join(' AND ')}
        ORDER BY created_at DESC, id DESC
@@ -135,7 +137,7 @@ sprintsRouter.get(
     const lastRow = page[page.length - 1];
     const nextCursor =
       hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
     res.status(200).json({
