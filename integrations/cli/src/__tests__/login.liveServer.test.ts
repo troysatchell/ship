@@ -117,7 +117,12 @@ function waitForReady(child: ChildProcessByStdio<null, Readable, Readable>, time
     };
     child.stdout.on('data', onData);
 
-    child.once('exit', (exitCode) => {
+    // 'close', not 'exit': 'exit' fires as soon as the process terminates,
+    // but stdio streams can still have buffered data draining at that point
+    // — 'close' fires only after every stream has finished delivering, which
+    // spawnApiChild's own EADDRINUSE classification depends on seeing before
+    // it inspects attemptStderr (CodeRabbit caught this race).
+    child.once('close', (exitCode) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
