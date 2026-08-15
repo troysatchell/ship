@@ -117,6 +117,159 @@ No migration, no server-side change — this ticket touches SDK types and tests 
 
 ---
 
+## TRO-448 — PF-600: CLI scaffold + `ship login` via device flow
+
+**What changed.** `integrations/cli` (`@ship/cli`) — the first real package under `integrations/`,
+PLUGFORGE.MD §2.1's tree made concrete. A commander-based CLI with two commands, built entirely on
+top of the already-merged `@ship/sdk` (PF-404/PF-106):
+
+- `ship login` — calls `ShipClient.deviceLogin()` (RFC 8628, all polling/backoff logic owned by the
+  SDK, not reimplemented here), prints the `user_code` + verification URL exactly once as they
+  arrive, polls to success, and persists the resulting tokens via `FileTokenStore` at
+  `~/.ship/credentials.json` (overridable via `SHIP_CLI_CREDENTIALS_PATH` for tests) with **0600
+  permissions enforced on every write** (the SDK's own `FileTokenStore`, not reimplemented).
+- `ship whoami` — reads the stored token, calls `GET /api/v1/me`, prints the identity (handling all
+  three `Me` shapes: personal-token/user-only, Client-Credentials/app-only, and
+  authorization_code/both — `sdk/src/types.ts`'s own header is explicit these are not mutually
+  exclusive).
+- `src/config.ts` — `SHIP_CLI_CLIENT_ID` (required; no CLI client_id is pre-seeded anywhere in this
+  repo, PF-102's app registration is admin-only) and `SHIP_API_BASE_URL` (reused from the SDK's own
+  existing env var, not a second name) resolve client id / base URL; `--client-id`/`--base-url` CLI
+  flags override both.
+- `src/io.ts` / `src/errors.ts` / `src/identity.ts` — small seams (an `Io` interface instead of bare
+  `console.*`, one `formatError`, one `formatIdentity`) that make `commands/*.ts` testable without
+  stubbing globals and keep failure rendering in one place.
+
+**Boundary rule (PLUGFORGE.MD §2.1 / PF-003).** `integrations/cli`'s `package.json` declares exactly
+one runtime dependency (`"dependencies": {"@ship/sdk": "workspace:*"}`); `commander`/`pg`/etc. are
+devDependencies only, per this ticket's own instruction ("CLI plumbing devDeps like commander" are
+allowed alongside the SDK). **Gap found and fixed, not just confirmed**: `scripts/check-integration-
+deps.mjs` (TRO-399/PF-003) already existed and was already wired into CI
+(`ci.yml`/`.gitlab-ci.yml`'s "Integration package dependency boundary" step) — but was never called
+from `scripts/factory/gate.sh`, so a worktree gating locally could report `verdict: pass` while CI
+would separately fail the same violation. Added as a new `gate.sh` check (`integration-deps`,
+`node scripts/check-integration-deps.mjs`). `integrations/cli` is also the first package this check
+has ever evaluated against real content — every prior run passed vacuously on an absent/empty
+`integrations/` directory.
+
+**The "new package trap" (this ticket's own explicit brief, following TRO-322's `agent` and
+TRO-405's `sdk` precedent).** A new workspace package's tests are NOT automatically executed by
+`gate.sh`'s existing `run_tests api`/`run_tests web` calls — only *statically counted* by G6's
+regression-test grep, which a suite that exists on disk but never runs would still satisfy. Added
+`run_tests cli` to `gate.sh` (after `run_tests sdk`) and a "CLI unit tests" step to both
+`ci.yml` and `.gitlab-ci.yml` (mirroring the SDK step exactly). `pnpm-workspace.yaml` gained
+`integrations/cli`; root `package.json` gained `test:cli` in the same chain `test:sdk`/`test:agent`
+already sit in, so `integrations/cli`'s `build`/`type-check` scripts are picked up by the existing
+`pnpm build`/`pnpm type-check` recursive fan-out with no extra wiring needed for those two.
+
+**Tests.** Two tiers, matching `@ship/sdk`'s own `deviceLogin.test.ts` (mocked) /
+`client.deviceLogin.liveServer.test.ts` (real server) split:
+
+- `src/config.test.ts`, `src/errors.test.ts`, `src/identity.test.ts` — pure logic, 18 cases.
+- `src/commands/login.test.ts`, `src/commands/whoami.test.ts` — `fetch` fully mocked (no real
+  network), `sleep`/`now` injected as no-ops so the polling loop asserted in the first case runs
+  with zero real wall-clock wait. Covers: prints user_code+URL, polls through
+  `authorization_pending` before succeeding, persists tokens, and — read back off disk, not asserted
+  decoratively — `(stat(credentialsPath).mode & 0o777).toString(8) === '600'`; missing client id
+  (fails before ever calling `fetch`); `access_denied`; `expired_token`; a thrown `fetch` (network
+  kind); not-logged-in; a working token; a server-rejected (401) token; a corrupt credentials file.
+  9 cases across the two files (5 in `login.test.ts`, 4 in `whoami.test.ts`).
+- `src/__tests__/login.liveServer.test.ts` — the one live-server case. Spawns the REAL `api/`
+  package as a **separate OS process** (`pnpm --filter @ship/api exec tsx src/index.ts`, exactly how
+  `pnpm dev:api` runs it) rather than importing `api/src` — the boundary rule applies to this
+  package's tests too, not just its source, unlike `sdk/`'s and `agent/`'s own liveServer suites
+  which document a deliberate cross-package-import exception for themselves. Fixture setup (a
+  workspace/user/session/public OAuth app) goes through a raw `pg` connection (a devDependency, not
+  a runtime one). "Auto-approve via API in test" (this ticket's own instruction, pointing at
+  PF-104/PF-106's e2e precedent): the moment the CLI's own real stdout printer emits the `user_code`
+  line, the test POSTs to the real `/oauth/device/verify` endpoint with a session cookie — the exact
+  HTTP endpoint `device.test.ts`'s `submitVerifyDecision` helper already proves, over a real TCP
+  connection this time instead of supertest. Proves `ship login` polls a real server to success,
+  the configured credentials path (a `mkdtemp`-created temp file, not the literal
+  `~/.ship/credentials.json` default — the default is exercised by `config.test.ts` instead) lands
+  at 0600 for real, and `ship whoami` then reports the identical identity back.
+
+**A real bug found and fixed while writing that last test, not shipped.** The approve `fetch()` call
+was initially fire-and-forget (unawaited, matching `client.deviceLogin.liveServer.test.ts`'s own
+`void decideDeviceCode(...)` convention). Without `redirect: 'manual'`, a successful approve's 303
+response (`Location:` the verification_uri's web origin, e.g.
+`http://localhost:5609/oauth-device-verify` — nothing listening there in this test) made `fetch`'s
+default `redirect: 'follow'` behavior auto-chase that redirect and fail with `ECONNREFUSED`,
+surfacing as an **unhandled promise rejection** that vitest still reported alongside an
+otherwise-passing test — reproduced deterministically (5/5 runs) with a wrapped `global.fetch`
+logger before finding the missing option, confirmed fixed across 3 consecutive clean runs after.
+**Since fixed further** (CodeRabbit review): the promise is now retained rather than discarded,
+awaited after `runLogin` resolves, and its status asserted at 303 — a silently-failing approval now
+fails at the approval step itself instead of surfacing only as `runLogin`'s own confusing
+poll-timeout.
+Purely a test-file bug (the `redirect` option only affects this fire-and-forget approval call, never
+any request the CLI itself makes), documented in the test's own inline comment so it doesn't
+resurface silently.
+
+**How to run it.**
+
+```bash
+source .factory-env                                  # DATABASE_URL for the live-server fixture
+pnpm --filter @ship/cli test                          # full suite: 28/28, 6 files
+pnpm --filter @ship/cli exec vitest run src/commands/login.test.ts     # mocked login paths
+pnpm --filter @ship/cli exec vitest run src/commands/whoami.test.ts    # mocked whoami paths
+pnpm --filter @ship/cli exec vitest run src/__tests__/login.liveServer.test.ts  # real server e2e
+pnpm --filter @ship/cli type-check && pnpm --filter @ship/cli build
+node dist/bin.js login   # (from integrations/cli, after build) prints "No OAuth client id configured..." with no SHIP_CLI_CLIENT_ID set, exit 1
+```
+
+**Evidence.**
+
+| Check | Result | Ran under |
+|---|---|---|
+| `ship login`/`ship whoami` end-to-end against a real spawned `api/` process | pass (1/1) | `src/__tests__/login.liveServer.test.ts` |
+| `ship login` mocked paths (success incl. polling + 0600, missing client id, denied, expired, network failure) | pass (5/5) | `src/commands/login.test.ts` |
+| `ship whoami` mocked paths (not logged in, working token, 401, corrupt file) | pass (4/4) | `src/commands/whoami.test.ts` |
+| Config/error/identity pure-logic unit tests | pass (18/18) | `src/config.test.ts`, `src/errors.test.ts`, `src/identity.test.ts` |
+| Full `@ship/cli` suite | pass, 28/28, 6 files | `pnpm --filter @ship/cli test` |
+| `pnpm --filter @ship/cli type-check` / `build` | pass, zero errors; `dist/bin.js` executable with shebang preserved | `integrations/cli/tsconfig.json` |
+| `node scripts/check-integration-deps.mjs` against real `integrations/cli` content | pass | new `gate.sh` `integration-deps` check |
+| `gate.sh`'s new `run_tests cli` actually executes the suite (not just counts it) | confirmed by re-running `pnpm --filter @ship/cli test` by hand and comparing the reported count to `gate.sh`'s own log | `.factory/cli-tests.json` |
+
+**Observed:** all of the above, run directly in this worktree against `ship_wt_tro_448` (port 5433).
+The live-server test took under 1.1s wall-clock across every run observed (approval landed before
+the poller's first request in each case) — no fixed real wait was needed, unlike `@ship/sdk`'s own
+device-login liveServer suite, which documents an unavoidable ~5s wait for its "denied" case; this
+package's single case happened to resolve on the fast path every time it was run, which is a
+property of request timing, not a guarantee — a slower machine could still take one real
+`interval_seconds` (5s) wait, and the test's own timeout (30s) accounts for that.
+
+**Derived:** `SHIP_CLI_CLIENT_ID`/`SHIP_CLI_CREDENTIALS_PATH` env var names are this ticket's own
+design (no fixed CLI client_id exists anywhere in this repo to default to, and PLUGFORGE.MD §2.8's
+abbreviated `deviceLogin`/`ShipClient` signatures don't name a CLI-specific config surface at all) —
+called out as such in `src/config.ts`'s own comments, not presented as spec-given.
+
+**Not verified:** the actual `ship` binary published/installed via a package manager and invoked from
+an arbitrary shell `$PATH` (this ticket builds and proves the workspace package; `dist/bin.js` was
+smoke-tested directly via `node dist/bin.js login`/`whoami`, confirming the shebang and executable
+bit survive `tsc` + the build script's `chmod +x`, but npm-publishing `integrations/cli` is out of
+scope the same way `sdk/`'s own npm-publishing is — `docs/architecture.md`). A real human's browser
+actually visiting the printed verification URL and clicking Approve (the live-server test approves
+via a direct HTTP POST to the same endpoint the verify page's form submits to, not by driving a
+browser through the consent UI — PF-106's own `e2e/oauth-authorize.spec.ts`-adjacent suite owns that
+UI proof, not this ticket).
+
+**Rollback.** Revert this ticket's commits. Removes `integrations/cli/` entirely; reverts
+`pnpm-workspace.yaml` (drops the `integrations/cli` package entry), root `package.json` (drops
+`test:cli` and its chain slot), `scripts/factory/gate.sh` (drops `run_tests cli` — safe, scoped only
+to this package), and `ci.yml`/`.gitlab-ci.yml` (drops the "CLI unit tests" step). No schema or
+migration changes, no changes to any existing package's source.
+
+**Do not revert `scripts/factory/gate.sh`'s `integration-deps` check as part of rolling back this
+ticket** — it is generic coverage for every package under `integrations/`, not scoped to `cli`
+alone, and by the time this could plausibly be rolled back `integrations/browser-demo`
+(TRO-449/PF-802) and `integrations/slack` (TRO-451/PF-803) also exist and genuinely rely on it.
+Removing it would silently drop the PF-003 boundary check locally (CI's own
+"Integration package dependency boundary" step is separate and unaffected) for packages this
+ticket doesn't own.
+
+---
+
 ## TRO-603 — PF-306 follow-up: inject the app's shared webhook deliverer into the replay route
 
 **Fixes the disclosed, tested limitation TRO-446/PF-306 shipped with (CodeRabbit, PR #229's
