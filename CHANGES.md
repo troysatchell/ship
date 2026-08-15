@@ -21,6 +21,70 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-596 — E2E tests assert never-built owner-selection UI: deleted 8 tests following TRO-293 precedent
+
+**Root cause.** `e2e/program-mode-week-ux.spec.ts` contains eight tests asserting a "Who should own" 
+owner-selection prompt that was never implemented in `web/src`. TRO-286 (TEST-14) converted conditional 
+guards (`if (modalVisible)`) into hard assertions (direct `expect()`), surfacing tests that were written 
+ahead of the feature but the feature was never built. Verified independently: `grep -rn "Who should own" 
+web/src` returns zero matches; `git log` shows no commits adding and then removing this feature.
+
+**Precedent applied: TRO-293.** When E2E tests assert UI that was never built, TRO-293 (commit 05f3626) 
+deleted those tests entirely rather than leaving them as `test.fixme()`, with rationale: "No commit ever 
+added and then removed this feature; it was asserted without ever being built. Deleted all four fixme 
+tests and their shared docstring rather than leave any test.fixme() behind for this finding." This ticket 
+applies the same resolution to the eight tests depending on the never-built owner-selection modal.
+
+**What was changed.**
+
+Deleted the following test cases from `e2e/program-mode-week-ux.spec.ts`:
+1. "clicking empty future window opens owner selection prompt" (Phase 3, asserts `/Who should own/`)
+2. "owner selection shows availability indicators" (Phase 3, expects modal)
+3. "selecting owner and clicking Create creates sprint" (Phase 3, expects modal + tests POST flow)
+4. "can cancel owner selection" (Phase 3, expects modal)
+5. "created sprint has correct week matching clicked window" (Phase 3 Continued, expects modal)
+6. "owner availability shows warning for busy owners" (Phase 3 Continued, expects modal)
+7. "created sprint has correct owner_id in API response" (Phase 3 Continued, expects modal + validates POST response)
+8. "sprint creation flow: click window → select owner → navigate to sprint" (Integration, expects full flow)
+
+The remaining tests in both Phase 3 blocks and the integration suite are independent and remain:
+- "week windows show date range" (Phase 3)
+- "past empty windows are not clickable" (Phase 3 Continued)
+- "user navigates to program → Weeks tab → sees graph + timeline" (Integration)
+- "user filters issues by backlog → sees only unassigned issues" (Integration)
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm test:e2e e2e/program-mode-week-ux.spec.ts
+```
+
+The remaining ~24 tests in this file pass. The 8 deleted tests were originally failing hard on line 489 
+(asserts `/Who should own/`), line 507/531 (asserts modal exists with that text), lines 1053/1070/1094 
+(same), and line 1325 (same).
+
+**Evidence.**
+
+| Finding | Evidence |
+|---|---|
+| "Who should own" text does not exist in web/src | `grep -rn "Who should own" web/src` returned zero matches in worktree `Ship-wt-tro_596` |
+| Feature was never built | `git log --all --oneline -- web/src \| grep -i "owner\|program.*week"` shows only unrelated commits; `git log -p --follow -- e2e/program-mode-week-ux.spec.ts` shows the test was added with conditional guard `if (modalVisible)` which TRO-286 converted to hard assert; no commits show the feature ever existing |
+| Precedent matches exactly | TRO-293 commit 05f3626 deleted 4 similar `test.fixme()` tests asserting never-built IssuesList per-row quick-menu; this ticket deletes 8 tests asserting never-built owner-selection modal |
+| Remaining Phase 3 tests are independent | Verified "week windows show date range" and "past empty windows are not clickable" do not depend on owner-selection modal opening |
+
+**Rollback.**
+
+```bash
+git revert <this ticket's commit SHA>
+```
+
+Restores all 8 deleted test functions to their state before this ticket. Tests will fail hard on assertions
+(at lines mentioning `/Who should own/`, modal.getByText, etc.) unless the owner-selection modal feature is
+separately implemented in `web/src`.
+
+---
+
 ## TRO-599 — SDK response types drift from real server shapes: WebhookSubscription + WebhookDelivery
 
 **Root cause.** `sdk/src/resources/webhooks.ts`'s `WebhookSubscription`/`WebhookDelivery` interfaces were
