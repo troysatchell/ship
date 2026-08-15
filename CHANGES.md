@@ -178,6 +178,38 @@ declined with reasons:**
    suggestion would have broken the migration, not just been unnecessary. Left as the original
    non-concurrent `CREATE INDEX IF NOT EXISTS`.
 
+**Second local CodeRabbit-CLI review (after the fixes above) — 4 more findings, 1 applied, 3
+declined with reasons:**
+1. **Trivial, applied (docs only).** `attemptNow()`'s own doc comment didn't state its precondition
+   explicitly: `item.deliveryRowId` must be a row currently `'pending'`, not an already-terminal one —
+   the replay route satisfies this by construction (always inserts a fresh `'pending'` row immediately
+   before calling it), but the contract wasn't written down. Added to `deliverer.ts`'s doc comment.
+2. **Major, declined.** Suggested adding `replayed_from_id` to the SDK's `WebhookDelivery` interface —
+   purely additive, leaving the disputed `dead_letter`/`dead` mismatch alone. Defensible on its own,
+   but declined for the same scope-discipline reason as finding #4 above and for consistency with this
+   exact sprint's own precedent: PF-305 (TRO-442) added new response fields to this same real endpoint
+   shape and chose disclosure over a partial fix, for the identical reason this ticket's own brief
+   states explicitly for "the field you're adding." Fixing one field now while five others (from
+   PF-305) and the wrong enum value stay broken would leave the interface in a worse, partially-patched
+   state than either "fully wrong" or "fully right" — TRO-599 owns doing this once, completely.
+3. **Minor, declined — verified against this codebase's own convention, not just judgment.** Suggested
+   adding a 500 (`server_error`) OpenAPI response to the replay operation. Checked first: `grep -rn
+   "500:" api/src/platform/openapi/schemas/*.ts` returns zero matches — no route in this file, or
+   anywhere else in the `/api/v1` registry, documents a 500 response, even though every route can reach
+   `serverError()` via the same `resolveWorkspaceOrThrow`/`resolveWorkspaceOrNull` defensive guards this
+   route also uses. Adding one only here would be a one-route deviation from a consistent,
+   codebase-wide, evidently deliberate convention, not a genuine gap unique to this endpoint.
+4. **Trivial, declined — the concern is already satisfied, verified rather than assumed.** Suggested an
+   explicit timeout on the replay's `attemptNow()` call, shorter than the API's proxy/gateway budget.
+   The route already gets `InMemoryWebhookDeliverer`'s default per-attempt timeout (`DEFAULT_ATTEMPT_
+   TIMEOUT_MS`, 10s — module-private, not currently exported) automatically, since no `options.timeoutMs`
+   override is passed; this is the identical bound every automatic delivery attempt already uses, and
+   it applies to exactly ONE HTTP attempt here (not the automatic pipeline's compounding multi-attempt
+   backoff schedule rule 27 in `lessons.md` warns about), so the total request time is bounded at
+   roughly 10s plus a few single-digit-ms DB round trips — comfortably under any typical gateway/proxy
+   timeout (ALB/CloudFront defaults are 30-60s). Passing an explicit `{ timeoutMs: 10_000 }` would
+   duplicate the existing default with no behavior change.
+
 **Not verified / explicit gaps.** No live end-to-end proof against a real subscriber process (this
 PR's tests stub `fetch`, same test-double boundary `deliverer.test.ts` itself already accepts — see
 that file's own header). PF-801 (named in this ticket's own brief) is the future e2e proof that a real

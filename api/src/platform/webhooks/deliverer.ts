@@ -206,6 +206,16 @@ export interface IWebhookDeliverer {
    * that reflects the attempt's real terminal outcome inside the same
    * request/response cycle, not a future `processDue()` poll tick.
    *
+   * **Precondition (CodeRabbit, this PR review):** `item.deliveryRowId` must
+   * identify a row currently in the `'pending'` state — freshly inserted for
+   * this exact call, not a row already sitting in a terminal `'success'` or
+   * `'dead'` state. This method does not check that itself (it trusts the
+   * caller, same as `attempt()` trusts `processDue()`'s own queue contents);
+   * calling it against an already-terminal row would silently overwrite that
+   * row's real outcome with whatever THIS attempt produces. The replay route
+   * satisfies this by construction: it always inserts a brand-new `'pending'`
+   * row (never reuses an existing id) immediately before calling this.
+   *
    * Reuses the exact same signing / HTTP-dispatch / response-truncation /
    * persistence code path as a normal queued attempt (the private
    * `attempt()` below, which this is a thin public wrapper over) — this
