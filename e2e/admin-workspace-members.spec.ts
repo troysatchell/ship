@@ -367,14 +367,23 @@ test.describe('Admin User Search', () => {
     // Reuses carol, same as the sibling test -- add then immediately cancel
     // her removal, so the "no membership anywhere" fixture invariant still
     // holds afterward (net effect: added, then removed again for real).
-    await page.getByPlaceholder('Search by email...').fill('carol')
-    const userResult = page.getByRole('button', { name: /carol/i }).first()
-    await expect(userResult).toBeVisible({ timeout: 3000 })
-    await userResult.click()
-    await page.getByRole('button', { name: 'Add User' }).click()
-    await expect(memberHeading).toContainText(`(${initialCount + 1})`, { timeout: 5000 })
-
+    //
+    // `carolAdded` mirrors the sibling test's own guard: the whole add
+    // sequence lives inside `try`, so a failure ANYWHERE during add (a
+    // flaky assertion, a slow debounce) still routes to `finally` and
+    // attempts best-effort cleanup, rather than leaving carol stuck added
+    // with no cleanup path -- which would break the worker-scoped "no
+    // membership anywhere" invariant every other test in this file relies on.
+    let carolAdded = false
     try {
+      await page.getByPlaceholder('Search by email...').fill('carol')
+      const userResult = page.getByRole('button', { name: /carol/i }).first()
+      await expect(userResult).toBeVisible({ timeout: 3000 })
+      await userResult.click()
+      await page.getByRole('button', { name: 'Add User' }).click()
+      carolAdded = true
+      await expect(memberHeading).toContainText(`(${initialCount + 1})`, { timeout: 5000 })
+
       const carolRow = page.locator('tr').filter({ hasText: /carol/i }).first()
       await expect(carolRow).toBeVisible({ timeout: 5000 })
 
@@ -394,13 +403,20 @@ test.describe('Admin User Search', () => {
     } finally {
       // Real cleanup: remove carol for real this time, restoring the
       // fixture's "no membership anywhere" invariant for the next test.
-      const carolRow = page.locator('tr').filter({ hasText: /carol/i }).first()
-      await expect(carolRow).toBeVisible({ timeout: 5000 })
-      page.once('dialog', (dialog) => {
-        void dialog.accept()
-      })
-      await carolRow.getByRole('button', { name: 'Remove' }).click()
-      await expect(memberHeading).toContainText(`(${initialCount})`, { timeout: 5000 })
+      // Deliberately `if`-guarded rather than an early `return` -- a
+      // `return` inside `finally` would silently swallow whatever
+      // exception was propagating from `try`, turning a real failure into
+      // a false-positive pass (the exact class of bug this test exists to
+      // avoid reintroducing).
+      if (carolAdded) {
+        const carolRow = page.locator('tr').filter({ hasText: /carol/i }).first()
+        await expect(carolRow).toBeVisible({ timeout: 5000 })
+        page.once('dialog', (dialog) => {
+          void dialog.accept()
+        })
+        await carolRow.getByRole('button', { name: 'Remove' }).click()
+        await expect(memberHeading).toContainText(`(${initialCount})`, { timeout: 5000 })
+      }
     }
   })
 })
