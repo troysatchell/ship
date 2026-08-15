@@ -218,7 +218,13 @@ export const test = base.extend<
           // in this fixture persists an encrypted secret across a server
           // restart, and each worker's `webhook_subscriptions` rows live
           // only in that worker's own throwaway Postgres container.
-          SECRET_ENCRYPTION_KEY: process.env.SECRET_ENCRYPTION_KEY ?? crypto.randomBytes(32).toString('hex'),
+          // `??` alone treats an empty string as present (CodeRabbit, this
+          // ticket's review) — an accidentally-set-but-empty
+          // SECRET_ENCRYPTION_KEY in the outer environment would pass through
+          // unchanged and still fail inside encryptSecret(), the exact
+          // failure this fix exists to prevent. `||` falls through empty
+          // string to the random default too.
+          SECRET_ENCRYPTION_KEY: process.env.SECRET_ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex'),
         },
         stdio: ['pipe', 'pipe', 'pipe'],
       });

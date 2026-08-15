@@ -335,6 +335,18 @@ test.describe('Webhook Idempotency-Key drill (TRO-447 / PF-801)', () => {
       expect(originalRow.idempotency_key).toBe(freshKey);
     } finally {
       await subscriber.close();
+      // Deactivate the subscription (CodeRabbit, this ticket's review) — the
+      // production deliverer keeps polling for the rest of this worker's
+      // lifetime (it is a real, long-running process, not scoped to this one
+      // test), and a still-active subscription pointing at this now-closed
+      // port would make any LATER `document.created` event in this same
+      // worker fire a real, doomed outbound HTTP attempt at a dead
+      // localhost port. The real `DELETE /:id` route, not a raw SQL
+      // statement — same reason `TRO-446`'s own regression test uses it:
+      // exercises the real deactivation path, not just a DB shortcut.
+      await page.request.delete(`${apiServer.url}/api/v1/webhooks/${subscriptionId}`, {
+        headers: { Authorization: `Bearer ${bearerToken}` },
+      });
     }
   });
 });

@@ -47,6 +47,7 @@
 // URL if demoing against a deployed, non-local Ship instance).
 
 import { createServer } from 'node:http';
+import { pathToFileURL } from 'node:url';
 
 /**
  * Creates a reference webhook-subscriber request handler implementing the
@@ -120,7 +121,23 @@ export function createReferenceSubscriber({ secret, verify, onDelivery = () => {
         ? idempotencyKeyHeader
         : undefined;
 
-      const signatureVerified = typeof signatureHeader === 'string' && verify(signatureHeader, rawBody, secret);
+      // A malformed Ship-Signature value (wrong format, non-hex, etc.) is a
+      // real possibility from a misbehaving or malicious sender — `verify`
+      // is an INJECTED function (signer.ts's or the SDK's), and this fixture
+      // cannot assume either implementation always returns false rather than
+      // throwing on malformed input. Treated the same as a failed
+      // verification (CodeRabbit, this ticket's review) rather than letting
+      // an uncaught exception crash the whole listener process — a signer
+      // bug should not take down every future delivery this subscriber
+      // would otherwise have accepted.
+      let signatureVerified = false;
+      if (typeof signatureHeader === 'string') {
+        try {
+          signatureVerified = verify(signatureHeader, rawBody, secret);
+        } catch {
+          signatureVerified = false;
+        }
+      }
 
       if (!signatureVerified) {
         onDelivery({ kind: 'rejected', idempotencyKey });
@@ -225,7 +242,7 @@ export function createReferenceSubscriber({ secret, verify, onDelivery = () => {
 // import, regardless of this branch's runtime condition. Moving every
 // `await` inside this IIFE removes the syntax from the module's top level
 // entirely.
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   void (async () => {
     const port = Number(process.env.PORT ?? 8787);
     const secret = process.env.SECRET;

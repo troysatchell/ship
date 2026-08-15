@@ -112,6 +112,33 @@ a live `pnpm dev` instance in this session — unchanged risk profile from befor
 that code path is identical to what TRO-441 already shipped, only refactored into an importable
 factory function.
 
+**Orchestrator triage of a fresh local CodeRabbit-CLI review (post merge-forward) — 5 findings, 4
+fixed, 1 dismissed as verified inapplicable:**
+1. **Major, fixed.** The reference subscriber's `verify()` call was unguarded — `verify` is an
+   INJECTED function (either implementation), and a malformed `Ship-Signature` value could throw
+   rather than return `false`, crashing the whole listener process on one bad request. Wrapped in
+   try/catch, treated as a failed verification.
+2. **Major, fixed.** The e2e spec's cleanup closed the reference-subscriber listener but never
+   deactivated the `webhook_subscriptions` row — the production deliverer keeps polling for the rest
+   of the worker's real, long-running process lifetime, so any LATER `document.created` event in that
+   worker would fire a real, doomed HTTP attempt at the now-closed port. Fixed with the real
+   `DELETE /:id` route (same pattern TRO-446's own regression test uses), not a raw SQL statement.
+3. **Major, dismissed — verified against the actual schema, not just judgment.** Suggested explicit
+   `webhook_deliveries` cleanup before `webhook_subscriptions` in `webhooks.test.ts`'s new PF-801
+   test. Checked `048_webhook_deliveries.sql` first: `subscription_id ... REFERENCES
+   webhook_subscriptions(id) ON DELETE CASCADE` — deleting the subscription already cascades
+   correctly; the suggested extra step would be redundant, not a fix for a real gap.
+4. **Minor, fixed.** `SECRET_ENCRYPTION_KEY: process.env.SECRET_ENCRYPTION_KEY ?? crypto.randomBytes(...)`
+   would pass an accidentally-empty-string env value through unchanged (`??` only catches
+   null/undefined) — switched to `||`, which also falls through an empty string to the random
+   default.
+5. **Trivial, fixed.** The CLI entry-point guard (`import.meta.url === \`file://${process.argv[1]}\``)
+   mishandles paths with spaces or non-ASCII characters on some platforms — switched to
+   `pathToFileURL(process.argv[1]).href`, the standard-library-correct comparison.
+
+Re-verified after fixing: `webhooks.test.ts` 33/33; `e2e/webhook-idempotency-key-drill.spec.ts` 1/1,
+no retry (via `/e2e-test-runner`, `PLAYWRIGHT_WORKERS=1` given concurrent factory load).
+
 **Roll back.** Revert this ticket's commit(s). `docs/submission/demo-webhook-listener.mjs` reverts
 to its TRO-441 shape (no dedupe tracking, no exported factory — the file becomes non-importable
 again). Deletes `docs/submission/demo-webhook-listener.d.mts`,
