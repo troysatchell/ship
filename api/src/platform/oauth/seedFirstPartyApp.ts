@@ -110,6 +110,29 @@ export type SeedFirstPartyAppResult =
  * function at all in a context where an unset secret is expected and fine.
  */
 export async function seedFirstPartyApp(pool: Pool, workspaceId: string): Promise<SeedFirstPartyAppResult> {
+  // CodeRabbit (this PR review, Major): the secret MUST be read and
+  // validated before the existing-row fast path below, not after — this is
+  // deliberately not "only" a first-creation check. index.ts's boot check
+  // calls this function on EVERY production boot, and the whole point of
+  // "seeding guaranteed in deployed env (terraform env var + boot check)"
+  // is a guarantee that holds on every boot, not just the first one. If the
+  // secret were checked only on the not-found branch, a deployment that had
+  // the app seeded once (secret present at the time) and then later had
+  // FLEETGRAPH_OAUTH_CLIENT_SECRET removed from its env config (a real
+  // misconfiguration — Terraform's var has no default, so removal only
+  // happens out-of-band) would silently keep reporting 'exists' forever
+  // and never surface the loud failure index.ts's boot check depends on.
+  const rawSecret = process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR];
+  if (!rawSecret) {
+    throw new Error(
+      `Cannot seed/verify the first-party ${FLEETGRAPH_CLIENT_ID} OAuth app: ` +
+        `${FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR} is not set. ` +
+        'This must come from Terraform (terraform/render/variables.tf\'s ' +
+        '`fleetgraph_oauth_client_secret`, no default) — never a hardcoded ' +
+        'fallback secret.'
+    );
+  }
+
   // The unique index on oauth_apps.client_id (migration 042) is the actual
   // idempotency guarantee under a race — this SELECT is only a fast path,
   // same convention as seedGraderApp.ts's identical comment.
@@ -122,26 +145,21 @@ export async function seedFirstPartyApp(pool: Pool, workspaceId: string): Promis
     return { status: 'exists', clientId: existingRow.client_id };
   }
 
-  const rawSecret = process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR];
-  if (!rawSecret) {
-    throw new Error(
-      `Cannot seed the first-party ${FLEETGRAPH_CLIENT_ID} OAuth app: ` +
-        `${FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR} is not set. ` +
-        'This must come from Terraform (terraform/render/variables.tf\'s ' +
-        '`fleetgraph_oauth_client_secret`, no default) — never a hardcoded ' +
-        'fallback secret.'
-    );
-  }
-
   const secretHash = hashClientSecret(rawSecret);
 
-  await pool.query(
+  // CodeRabbit (this PR review, Minor): `RETURNING` distinguishes a real
+  // insert from a conflict-resolved no-op under a race, rather than always
+  // reporting 'created' regardless of which concurrent caller actually won.
+  const insertResult = await pool.query<{ client_id: string }>(
     `INSERT INTO oauth_apps
        (workspace_id, name, client_id, client_type, client_secret_hash, requested_scopes, is_first_party)
      VALUES ($1, $2, $3, 'confidential', $4, $5, true)
-     ON CONFLICT (client_id) DO NOTHING`,
+     ON CONFLICT (client_id) DO NOTHING
+     RETURNING client_id`,
     [workspaceId, FLEETGRAPH_APP_NAME, FLEETGRAPH_CLIENT_ID, secretHash, [...FLEETGRAPH_APP_SCOPES]]
   );
 
-  return { status: 'created', clientId: FLEETGRAPH_CLIENT_ID };
+  return insertResult.rows[0]
+    ? { status: 'created', clientId: FLEETGRAPH_CLIENT_ID }
+    : { status: 'exists', clientId: FLEETGRAPH_CLIENT_ID };
 }

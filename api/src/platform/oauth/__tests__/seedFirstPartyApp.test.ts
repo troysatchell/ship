@@ -15,6 +15,21 @@
  * `api/src/platform/oauth/__tests__/seedFirstPartyApp.test.ts` — same
  * "utility tests live in `__tests__/` next to the util" convention
  * `seedGraderApp.test.ts` already follows in this directory.
+ *
+ * CodeRabbit (this PR's review) flagged this file's use of the fixed,
+ * global `FLEETGRAPH_CLIENT_ID` (rather than a per-test-run generated one)
+ * as a test-isolation risk — a fair structural concern in general, but not
+ * a live one today: this is the ONLY file anywhere in the repo that
+ * references `FLEETGRAPH_CLIENT_ID` / `seedFirstPartyApp` (verified by
+ * grep before writing this note), `api/vitest.config.ts` sets
+ * `fileParallelism: false` so test FILES never run concurrently against
+ * this shared worktree database, and `it` blocks within one `describe`
+ * run sequentially by default (none of the blocks below use
+ * `.concurrent`). A real collision needs a second file to exist that also
+ * seeds/expects this row — most likely PF-702's own tests. Whoever adds
+ * that file should either share this file's `deleteFleetgraphApp()`
+ * helper and sequencing discipline, or stop assuming a clean slate and
+ * read the row this file already proved works instead of deleting it.
  */
 
 import { describe, expect, it, beforeAll, afterAll } from 'vitest';
@@ -203,6 +218,35 @@ describe('seedFirstPartyApp (PF-701 / TRO-423)', () => {
           FLEETGRAPH_CLIENT_ID,
         ]);
         expect(rows.rows).toHaveLength(0);
+      } finally {
+        process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR] = testSecret;
+      }
+    });
+
+    it('throws on a LATER call even when the row already exists, if the secret has since been unset', async () => {
+      // CodeRabbit (this PR review, Major): the existing-row fast path must
+      // not bypass missing-secret detection — this is exactly the scenario
+      // that finding describes. Row created while the secret was set
+      // (matches a real first boot); a later boot with the secret removed
+      // from the environment (a real misconfiguration, not an expected
+      // state — Terraform's var has no default) must still fail loudly,
+      // not silently report 'exists' the way it did before this fix.
+      await deleteFleetgraphApp();
+      process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR] = testSecret;
+      const first = await seedFirstPartyApp(pool, workspaceId);
+      expect(first.status).toBe('created');
+
+      delete process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR];
+      try {
+        await expect(seedFirstPartyApp(pool, workspaceId)).rejects.toThrow(
+          /FLEETGRAPH_OAUTH_CLIENT_SECRET/
+        );
+
+        // The already-existing row is untouched by the rejected call.
+        const rows = await pool.query(`SELECT id FROM oauth_apps WHERE client_id = $1`, [
+          FLEETGRAPH_CLIENT_ID,
+        ]);
+        expect(rows.rows).toHaveLength(1);
       } finally {
         process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR] = testSecret;
       }
