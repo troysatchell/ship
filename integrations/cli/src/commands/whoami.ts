@@ -29,8 +29,20 @@ export interface RunWhoamiOptions {
 export async function runWhoami(opts: RunWhoamiOptions): Promise<number> {
   const { io } = opts;
 
-  const credentialsPath = opts.credentialsPath ?? resolveCredentialsPath(opts.env);
-  const baseUrl = resolveBaseUrl(opts.baseUrl, opts.env);
+  // Neither resolver throws today, but login.ts wraps the equivalent
+  // resolution in the same try/catch — matching that here means a future
+  // validation added to either resolver fails cleanly (formatted, exit 1)
+  // instead of escaping as an unhandled exception (CodeRabbit caught the
+  // inconsistency).
+  let credentialsPath: string;
+  let baseUrl: string | undefined;
+  try {
+    credentialsPath = opts.credentialsPath ?? resolveCredentialsPath(opts.env);
+    baseUrl = resolveBaseUrl(opts.baseUrl, opts.env);
+  } catch (err) {
+    io.stderr(formatError(err));
+    return 1;
+  }
   const tokenStore = new FileTokenStore(credentialsPath);
 
   let tokens;
