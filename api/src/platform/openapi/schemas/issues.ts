@@ -14,7 +14,7 @@
  * `resources/issues.ts:90-102`, before writing this).
  */
 
-import { ListIssuesQuerySchema } from '../../api/v1/resources/issues.js';
+import { ListIssuesQuerySchema, UpdateIssueRequestSchema } from '../../api/v1/resources/issues.js';
 import { v1Registry, z } from '../registry.js';
 import { ApiErrorSchema, BEARER_SECURITY } from './common.js';
 
@@ -83,5 +83,40 @@ v1Registry.registerPath({
     },
     401: UNAUTHORIZED_RESPONSE,
     403: FORBIDDEN_RESPONSE,
+  },
+});
+
+// ─── PATCH /issues/{id} ─────────────────────────────────────────────────
+
+v1Registry.registerPath({
+  method: 'patch',
+  path: '/issues/{id}',
+  tags: ['Issues'],
+  summary: 'Apply a state transition to an issue',
+  description: 'Updates an issue\'s state field (PF-703, TRO-435) — a deliberately narrow update surface (state only; no title/priority/assignee_id/belongs_to, no "incomplete children" confirmation gate — see UpdateIssueRequestSchema\'s own doc comment). Built for the agent gate\'s sdk-mode write path (GateShipClient.applyIssueTransition). Requires the issues:write scope.',
+  security: BEARER_SECURITY,
+  request: {
+    params: z.object({
+      id: z.string().openapi({ description: 'Document id. A non-UUID value 404s rather than validation-failing.' }),
+    }),
+    body: {
+      content: { 'application/json': { schema: UpdateIssueRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The updated issue.',
+      content: { 'application/json': { schema: IssueResponseSchema } },
+    },
+    400: {
+      description: 'Invalid request body.',
+      content: { 'application/json': { schema: ApiErrorSchema } },
+    },
+    401: UNAUTHORIZED_RESPONSE,
+    403: FORBIDDEN_RESPONSE,
+    404: {
+      description: 'No issue with this id exists in the caller\'s workspace, or the id is malformed.',
+      content: { 'application/json': { schema: ApiErrorSchema } },
+    },
   },
 });

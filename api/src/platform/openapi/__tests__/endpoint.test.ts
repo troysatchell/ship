@@ -58,6 +58,10 @@ describe('PF-202: GET /api/v1/openapi.json', () => {
     //
     // Updated by PF-306 (Linear TRO-446): /webhooks/deliveries/{id}/replay
     // added — same rationale, see document.test.ts's identical update.
+    //
+    // Updated by PF-703 (Linear TRO-435): PATCH /documents/{id} (existing
+    // path, new method) and PATCH /issues/{id} (a new path key) — the
+    // agent gate's sdk-mode write path. Same rationale.
     expect(Object.keys(paths).sort()).toEqual(
       [
         '/audit',
@@ -70,6 +74,7 @@ describe('PF-202: GET /api/v1/openapi.json', () => {
         '/documents/{id}/reverse-associations',
         '/health',
         '/issues',
+        '/issues/{id}',
         '/me',
         '/openapi.json',
         '/people',

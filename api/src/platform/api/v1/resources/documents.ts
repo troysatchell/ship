@@ -42,7 +42,7 @@ import {
 } from '../errors.js';
 import { encodeCursor, decodeCursor, preciseTimestamp, type KeysetCursor } from '../pagination.js';
 import { resolvePrincipalWorkspaceId } from './workspaceContext.js';
-import { createDocument } from '../../../../services/documentService.js';
+import { createDocument, updateDocument } from '../../../../services/documentService.js';
 
 export const documentsRouter: RouterType = Router();
 
@@ -155,16 +155,48 @@ export const CreateDocumentRequestSchema = z.object({
   properties: z.record(z.unknown()).optional(),
 });
 
-/** The public response shape for one document — id/title/type plus
- * properties and timestamps. Deliberately narrower than the full internal
- * `documents` row (no `content`, `yjs_state`, `visibility`, etc.) — §2.4's
- * "own this mapping explicitly" applies to what a public resource exposes,
- * not just how it queries. */
+/** `PATCH /api/v1/documents/:id` request body (PF-703, Linear TRO-435) —
+ * the gate's sdk-mode `setStandupContent` write (`agent/src/shipClient.ts`'s
+ * `GateShipClient`). `content` only — the ONE thing this ticket's write
+ * path needs: `GateShipClient.postStandup` creates a standup via `POST /`
+ * above (with Ship's own blank template properties), then this route
+ * overwrites that template with the drafted/edited text.
+ *
+ * Deliberately narrow, same "disclosed scope, not silent gap" posture as
+ * `issues.ts`'s `UpdateIssueRequestSchema` (CHANGES.md, TRO-435): no
+ * `title`/`properties` update here — a future ticket that needs a fuller
+ * public "update a document" surface extends this schema rather than this
+ * ticket guessing at fields no current caller sends. No `document_type`
+ * filter either, matching the internal API's own generic
+ * `PATCH /api/documents/:id` (`routes/documents.ts`) — the one primary
+ * internal endpoint with no type filter at all, already anticipated by
+ * `documentService.ts`'s own header comment ("If a sprint document is ever
+ * updated through documents.ts's generic PATCH ..., including sprint").
+ * `.strict()` (CodeRabbit, this PR): an extra field like `title` must be
+ * REJECTED, not silently dropped — a caller sending it needs to learn it
+ * was never applied, not assume it was. */
+export const UpdateDocumentRequestSchema = z.object({
+  content: z.record(z.unknown()),
+}).strict();
+
+/** The public response shape for one document — id/title/type/properties/
+ * timestamps, plus `content`/`visibility`/`created_by`/`completed_at`
+ * (TRO-605). `yjs_state` stays excluded — that one is genuinely internal
+ * collaboration-protocol binary state, not a public document field; see
+ * TRO-605's Linear description for why the rest of this row widened instead
+ * of leaving PF-702's sdk-mode agent reads permanently degraded relative to
+ * internal mode. `content` is the TipTap JSON column (`schema.sql:113`,
+ * JSONB — plain-JSON-serializable, NOT the Yjs binary blob), `visibility`
+ * is the `'private' | 'workspace'` text enum (`schema.sql:158`). */
 interface DocumentRow {
   id: string;
   title: string;
   document_type: string;
   properties: Record<string, unknown> | null;
+  content: unknown;
+  visibility: string;
+  created_by: string | null;
+  completed_at: Date | null;
   created_at: Date;
   updated_at: Date;
   /** `created_at::text` — cursor-internal only (TRO-602), never serialized
@@ -178,12 +210,52 @@ interface DocumentRow {
 // same-named but structurally different interface, from a create response
 // that never builds a cursor) — that row has no `created_at_precise` field,
 // and never needs one, since serialization only ever reads the fields below.
-function serializeDocument(row: Omit<DocumentRow, 'created_at_precise'>) {
+// That service-side `DocumentRow` is a `RETURNING *` projection (verified by
+// reading `documentService.ts` directly) and already declares
+// `content`/`visibility`/`created_by`/`completed_at`, so it satisfies this
+// widened `Omit<...>` structurally with no change to that file.
+//
+// `viewerUserId` (CodeRabbit finding on this ticket, TRO-605) — masks
+// `content` to `null` for a `visibility: 'private'` document the caller did
+// not create. This route has NEVER enforced visibility-based access control
+// (confirmed by reading the handlers directly; `resources/people.ts`'s own
+// header documents this as a pre-existing, disclosed gap) — title/
+// properties/visibility/created_by/timestamps were already fully readable
+// for a private document belonging to another workspace member before this
+// ticket, and retrofitting full access control onto every field is a
+// materially bigger change than "widen the response shape" (it would need
+// to reconcile with every sub-resource route in this file too, and is
+// exactly the kind of auth-semantics change this factory's own contract
+// says to escalate rather than decide unilaterally). What IS squarely this
+// ticket's own responsibility: `content` is a NEW field this ticket adds,
+// and unlike title/properties it can carry a private document's actual
+// body text — shipping it unmasked would take an existing, disclosed
+// metadata leak and turn it into a content leak, a real escalation in harm
+// this ticket alone introduces. So only the newly-added `content` field is
+// masked here; every other field's pre-existing (unfixed, disclosed)
+// behavior is left exactly as it was. See CHANGES.md's TRO-605 entry for
+// the full writeup, including what remains unfixed and why.
+//
+// `viewerUserId !== null &&` (2nd CodeRabbit finding, same round): without
+// this guard, a `null === null` comparison would treat an ownerless private
+// document (`created_by IS NULL` — a legacy/system-created row) as "visible"
+// to a caller whose principal has no linked user at all (an app-only
+// OAuth/client-credentials token, `principal.user` undefined) — the exact
+// wrong-direction failure this file's own module docstring already warns
+// against elsewhere (`shipClient.ts`'s "fail closed, never open"). A missing
+// creator and a missing viewer must never be treated as a match.
+function serializeDocument(row: Omit<DocumentRow, 'created_at_precise'>, viewerUserId: string | null) {
+  const contentVisibleToViewer =
+    row.visibility !== 'private' || (viewerUserId !== null && row.created_by === viewerUserId);
   return {
     id: row.id,
     title: row.title,
     document_type: row.document_type,
     properties: row.properties ?? {},
+    content: contentVisibleToViewer ? row.content : null,
+    visibility: row.visibility,
+    created_by: row.created_by,
+    completed_at: row.completed_at ? row.completed_at.toISOString() : null,
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString(),
   };
@@ -254,7 +326,8 @@ documentsRouter.get(
     const limitParamIndex = values.length;
 
     const result = await pool.query<DocumentRow>(
-      `SELECT id, title, document_type, properties, created_at, updated_at, created_at::text AS created_at_precise
+      `SELECT id, title, document_type, properties, content, visibility, created_by, completed_at,
+              created_at, updated_at, created_at::text AS created_at_precise
        FROM documents
        WHERE ${whereClauses.join(' AND ')}
        ORDER BY created_at DESC, id DESC
@@ -271,8 +344,9 @@ documentsRouter.get(
         ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
+    const viewerUserId = principal.user?.id ?? null;
     res.status(200).json({
-      data: page.map(serializeDocument),
+      data: page.map((row) => serializeDocument(row, viewerUserId)),
       next_cursor: nextCursor,
     });
   })
@@ -317,7 +391,8 @@ documentsRouter.get(
     }
 
     const result = await pool.query<DocumentRow>(
-      `SELECT id, title, document_type, properties, created_at, updated_at
+      `SELECT id, title, document_type, properties, content, visibility, created_by, completed_at,
+              created_at, updated_at
        FROM documents
        WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
       [id, workspaceId]
@@ -328,7 +403,7 @@ documentsRouter.get(
       throw notFoundError(requestId);
     }
 
-    res.status(200).json(serializeDocument(row));
+    res.status(200).json(serializeDocument(row, principal.user?.id ?? null));
   })
 );
 
@@ -370,7 +445,55 @@ documentsRouter.post(
       createdByUserId: principal.user?.id ?? null,
     });
 
-    res.status(201).json(serializeDocument(created));
+    res.status(201).json(serializeDocument(created, principal.user?.id ?? null));
+  })
+);
+
+// ─── PATCH /api/v1/documents/:id ─────────────────────────────────────────
+//
+// PF-703 (Linear TRO-435) — see UpdateDocumentRequestSchema's own doc
+// comment for the deliberate `content`-only scope narrowing.
+
+documentsRouter.patch(
+  '/:id',
+  bearerAuth,
+  rateLimitBuckets,
+  requireScope('documents:write'),
+  asyncHandler(async (req, res) => {
+    const requestId = requestIdOf(req);
+    const id = String(req.params.id);
+
+    const parseResult = UpdateDocumentRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      throw validationFailedError(requestId, 'The request could not be validated.', {
+        fieldErrors: parseResult.error.flatten().fieldErrors,
+      });
+    }
+
+    const principal = req.principal;
+    if (!principal) {
+      throw serverError(requestId);
+    }
+
+    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+    // 404s on a malformed/nonexistent id or wrong workspace before the
+    // UPDATE runs — matches every other :id route in this file's "malformed
+    // or missing id both 404" convention (PF-200 test design AC-4).
+    await assertDocumentExists(id, workspaceId, requestId);
+
+    const updated = await updateDocument({
+      id,
+      workspaceId,
+      setClauses: ['content = $1', 'updated_at = now()'],
+      values: [JSON.stringify(parseResult.data.content)],
+      // No documentTypeFilter and no previousProperties — this route never
+      // touches `properties`, so issue/sprint event derivation (which reads
+      // previousProperties) has nothing to diff; the generic
+      // `document.updated` event still fires (documentService.ts's own
+      // dispatchOrQueue, unconditional on document_type).
+    });
+
+    res.status(200).json(serializeDocument(updated, principal.user?.id ?? null));
   })
 );
 

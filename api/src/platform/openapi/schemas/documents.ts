@@ -24,6 +24,7 @@
 import {
   ListDocumentsQuerySchema,
   CreateDocumentRequestSchema,
+  UpdateDocumentRequestSchema,
   DocumentTypeSchema,
   SubResourceListQuerySchema,
 } from '../../api/v1/resources/documents.js';
@@ -32,13 +33,27 @@ import { ApiErrorSchema, BEARER_SECURITY } from './common.js';
 
 /** Matches `serializeDocument()`'s return shape in
  * `platform/api/v1/resources/documents.ts` exactly: id/title/document_type,
- * `properties` defaulted to `{}` (never null), and `created_at`/`updated_at`
- * as `Date#toISOString()` strings. */
+ * `properties` defaulted to `{}` (never null), `content`/`visibility`/
+ * `created_by`/`completed_at` (TRO-605), and `created_at`/`updated_at` as
+ * `Date#toISOString()` strings. `content` is TipTap JSON (`schema.sql:113`) —
+ * an arbitrary JSON value, so `z.unknown()`, same as `properties`'s own
+ * per-key values — EXCEPT it is `null` for a `visibility: 'private'`
+ * document the caller did not create (`serializeDocument()`'s own doc
+ * comment has the full reasoning: this route has no other visibility
+ * enforcement, a pre-existing disclosed gap, but `content` is new to this
+ * ticket and can carry a private document's real body text, so it alone is
+ * masked). `visibility` is the `'private' | 'workspace'` text enum
+ * (`schema.sql:158`). `yjs_state` deliberately stays unregistered — see
+ * that field's own exclusion note in `resources/documents.ts`. */
 const DocumentResponseSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Document id.' }),
   title: z.string(),
   document_type: DocumentTypeSchema,
   properties: z.record(z.unknown()),
+  content: z.unknown().openapi({ description: "TipTap JSON document content (not the Yjs binary collaboration state, which stays internal-only). Null when visibility is 'private' and the caller is not the document's creator." }),
+  visibility: z.enum(['private', 'workspace']).openapi({ description: "'private' or 'workspace'. NOTE (CodeRabbit finding, TRO-605): this route does not currently gate on visibility for most fields — id/title/document_type/properties/visibility/created_by/timestamps are returned for any document in the caller's workspace regardless of this value (a pre-existing, disclosed gap, see resources/documents.ts). Only `content` is actually restricted: it is null for a 'private' document the caller did not create." }),
+  created_by: z.string().uuid().nullable().openapi({ description: 'User id of the document creator, or null.' }),
+  completed_at: z.string().datetime().nullable().openapi({ description: 'ISO 8601 timestamp when this document (e.g. an issue) was marked done, or null.' }),
   created_at: z.string().datetime().openapi({ description: 'ISO 8601 creation timestamp.' }),
   updated_at: z.string().datetime().openapi({ description: 'ISO 8601 last-updated timestamp.' }),
 }).openapi('Document');
@@ -145,6 +160,41 @@ v1Registry.registerPath({
     },
     401: UNAUTHORIZED_RESPONSE,
     403: FORBIDDEN_RESPONSE,
+  },
+});
+
+// ─── PATCH /documents/{id} ────────────────────────────────────────────────
+
+v1Registry.registerPath({
+  method: 'patch',
+  path: '/documents/{id}',
+  tags: ['Documents'],
+  summary: 'Update a document\'s content',
+  description: 'Overwrites a document\'s content field (PF-703, TRO-435) — a deliberately narrow update surface (content only, no title/properties, no document_type filter). Built for the agent gate\'s sdk-mode write path (GateShipClient.setStandupContent). Requires the documents:write scope.',
+  security: BEARER_SECURITY,
+  request: {
+    params: z.object({
+      id: z.string().openapi({ description: 'Document id. A non-UUID value 404s rather than validation-failing.' }),
+    }),
+    body: {
+      content: { 'application/json': { schema: UpdateDocumentRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The updated document.',
+      content: { 'application/json': { schema: DocumentResponseSchema } },
+    },
+    400: {
+      description: 'Invalid request body.',
+      content: { 'application/json': { schema: ApiErrorSchema } },
+    },
+    401: UNAUTHORIZED_RESPONSE,
+    403: FORBIDDEN_RESPONSE,
+    404: {
+      description: 'No document with this id exists in the caller\'s workspace, or the id is malformed.',
+      content: { 'application/json': { schema: ApiErrorSchema } },
+    },
   },
 });
 
