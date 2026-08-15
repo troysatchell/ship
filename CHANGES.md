@@ -79,10 +79,16 @@ was a latent test-authoring gap the crash had hidden the entire time.
   than it is.
 - No new `web/src/**/*.test.ts(x)` regression test — the root cause did not touch
   `useSessionTimeout.ts`/`useRealtimeEvents.tsx` runtime behavior, so there is no new product-code
-  behavior to unit-test (the ticket brief anticipated this outcome explicitly). Because of this,
-  `scripts/factory/gate.sh`'s G6 (`regression-test`) has no added `test(`/`it(` line to count and is
-  expected to report `fail` — the same class of documented, reasoned gate exception as TRO-233's
-  `tests:not-weakened` override. The real proof is the e2e run itself (below), not a unit test.
+  behavior to unit-test (the ticket brief anticipated this outcome explicitly). The real proof is the
+  e2e run itself (below), not a unit test — `e2e/` is outside both vitest projects `gate.sh` executes
+  (`/ship-qa`'s documented gap). Expected `scripts/factory/gate.sh`'s G6 (`regression-test`) to report
+  `fail` on that basis, since no `test(`/`it(` case was added — **checked, and that expectation was
+  wrong, worth correcting rather than leaving stated**: G6 actually reported `pass`, "6 test case(s)
+  added." Its regex is `^\+[[:space:]]*(it|test)(\.[a-z]+)?\(`, which matches not just `test(...)`
+  definitions but any `test.<word>(` call — including the 6 `test.slow();` lines this fix added
+  (`git diff main...HEAD -- e2e/session-timeout.spec.ts | grep -E '^\+[[:space:]]*(it|test)(\.[a-z]+)?\('`
+  confirms exactly those 6 lines and nothing else). A real gap in the check, not a real regression
+  test — flagged here so the `pass` isn't read as "a unit test was added" when none was.
 
 **Proof — before/after, real background runs via `/e2e-test-runner`, `pnpm exec playwright test
 e2e/session-timeout.spec.ts`, `retries: 1` (this repo's local default):**
