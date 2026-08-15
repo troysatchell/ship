@@ -115,6 +115,16 @@ function waitForReady(child: ChildProcessWithoutNullStreams, timeoutMs: number):
       clearTimeout(timer);
       reject(new Error(`api server exited early with code ${exitCode} before reporting ready`));
     });
+
+    // A spawn-level failure (e.g. `pnpm` not on PATH, ENOENT) fires 'error',
+    // not 'exit' — without this, such a failure would silently wait out the
+    // full timeout instead of rejecting immediately with the real cause.
+    child.once('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
   });
 }
 
@@ -152,14 +162,18 @@ async function spawnApiChild(
       await waitForReady(child, 30_000);
       return { child, port };
     } catch (err) {
-      const isPortRace = Buffer.concat(attemptStderr).toString('utf8').includes('EADDRINUSE');
-      if (!isPortRace || attempt === MAX_ATTEMPTS) throw err;
+      // Every failure path below rethrows or moves to a new attempt — either
+      // way this attempt's child must not be left running. Missing this on
+      // the non-retryable and final-attempt paths (fixed here) would leak a
+      // still-listening process per failed attempt.
       if (child.exitCode === null) {
         await new Promise<void>((resolveKill) => {
           child.once('exit', () => resolveKill());
           child.kill('SIGTERM');
         });
       }
+      const isPortRace = Buffer.concat(attemptStderr).toString('utf8').includes('EADDRINUSE');
+      if (!isPortRace || attempt === MAX_ATTEMPTS) throw err;
     }
   }
   /* istanbul ignore next -- unreachable: the loop above always returns or throws */
@@ -344,8 +358,11 @@ describe('PF-600: ship login / ship whoami end-to-end against a real running Shi
       // own poll — either can land first), not before — awaiting earlier
       // would deadlock: this POST is issued synchronously from inside the
       // stdout handler that runLogin's own poll loop triggers.
-      expect(approvalFetch, 'approval POST was never issued — user_code line never matched').toBeDefined();
-      const approvalResponse = await approvalFetch!;
+      const approval = approvalFetch;
+      if (!approval) {
+        throw new Error('approval POST was never issued — user_code line never matched');
+      }
+      const approvalResponse = await approval;
       expect(approvalResponse.status).toBe(303);
 
       expect(loginCode, `stderr: ${loginIo.stderrLines.join('\n')}`).toBe(0);

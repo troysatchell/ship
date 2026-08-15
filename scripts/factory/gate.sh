@@ -135,7 +135,16 @@ run_tests() { # run_tests <pkg>
   # directory" the first time tests:cli actually failed for real.
   local pkg_dir
   pkg_dir="$(pnpm --filter "@ship/${pkg}" exec pwd 2>/dev/null | tail -1)"
-  [ -d "$pkg_dir" ] || pkg_dir="${WT_ROOT}/${pkg}"
+  if [ ! -d "$pkg_dir" ]; then
+    # `pnpm exec pwd` failing is itself unexpected, but if it does, don't
+    # silently fall back to a path that's wrong for every nested
+    # integrations/* package — try top-level first, then integrations/*.
+    if [ -d "${WT_ROOT}/${pkg}" ]; then
+      pkg_dir="${WT_ROOT}/${pkg}"
+    else
+      pkg_dir="${WT_ROOT}/integrations/${pkg}"
+    fi
+  fi
   pnpm --filter "@ship/${pkg}" test --reporter=json --outputFile="$json" > "$log" 2>&1
   if [ ! -f "$json" ]; then
     record "tests:${pkg}" fail "runner produced no report — see .factory/${pkg}-tests.log"
