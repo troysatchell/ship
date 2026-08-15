@@ -171,10 +171,13 @@ export const CreateDocumentRequestSchema = z.object({
  * `PATCH /api/documents/:id` (`routes/documents.ts`) — the one primary
  * internal endpoint with no type filter at all, already anticipated by
  * `documentService.ts`'s own header comment ("If a sprint document is ever
- * updated through documents.ts's generic PATCH ..., including sprint"). */
+ * updated through documents.ts's generic PATCH ..., including sprint").
+ * `.strict()` (CodeRabbit, this PR): an extra field like `title` must be
+ * REJECTED, not silently dropped — a caller sending it needs to learn it
+ * was never applied, not assume it was. */
 export const UpdateDocumentRequestSchema = z.object({
   content: z.record(z.unknown()),
-});
+}).strict();
 
 /** The public response shape for one document — id/title/type plus
  * properties and timestamps. Deliberately narrower than the full internal

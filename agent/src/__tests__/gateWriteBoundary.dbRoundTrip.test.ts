@@ -99,25 +99,32 @@ interface AuditRow {
 }
 
 /**
- * Polls `public_api_audit` for a row matching `route`/`method` — mirrors
- * `platform/audit/__tests__/middleware.test.ts`'s own `pollForAuditRow`
- * (same 20ms/1000ms shape): the write is fire-and-forget, started inside
- * `res.on('finish')` AFTER the HTTP response the SDK call already resolved
- * on, so it can land a few event-loop turns later than the `await` above it
- * — an observable condition to poll for, never a fixed sleep (lessons.md
- * rule 17). Filters by `route`/`method` rather than `request_id` (which
- * `@ship/sdk`'s `RequestClient` does not expose to callers — it returns
- * only the parsed JSON body, never response headers) — safe here because
- * every route this file polls for is scoped to a freshly-inserted UUID
- * (`issueId2`, `standupId`), never reused across tests or runs.
+ * Polls `public_api_audit` for a row matching `route`/`method`/`userId` —
+ * mirrors `platform/audit/__tests__/middleware.test.ts`'s own
+ * `pollForAuditRow` (same 20ms/1000ms shape): the write is fire-and-forget,
+ * started inside `res.on('finish')` AFTER the HTTP response the SDK call
+ * already resolved on, so it can land a few event-loop turns later than the
+ * `await` above it — an observable condition to poll for, never a fixed
+ * sleep (lessons.md rule 17). Filters by `route`/`method`/`userId` rather
+ * than `request_id` (which `@ship/sdk`'s `RequestClient` does not expose to
+ * callers — it returns only the parsed JSON body, never response headers).
+ *
+ * `userId` (CodeRabbit, this PR — a real gap, not a hypothetical one): the
+ * PATCH calls below are scoped by a freshly-inserted UUID in the route
+ * itself (`issueId2`, `standupId`), but `POST /api/v1/documents` is a
+ * COLLECTION route with no id in its path at all — `route = $1` alone
+ * cannot distinguish this test's own create from any other concurrent
+ * caller of that exact literal route/method. Filtering by `userId` too
+ * closes that gap for every call site uniformly, not just the one that
+ * needed it.
  */
-async function pollForAuditRow(route: string, method: string): Promise<AuditRow | null> {
+async function pollForAuditRow(route: string, method: string, userId: string): Promise<AuditRow | null> {
   const deadline = Date.now() + 1000;
   while (Date.now() < deadline) {
     const result = await pool.query<AuditRow>(
       `SELECT user_id, app_client_id, scope_used, status FROM public_api_audit
-       WHERE route = $1 AND method = $2 ORDER BY created_at DESC LIMIT 1`,
-      [route, method]
+       WHERE route = $1 AND method = $2 AND user_id = $3 ORDER BY created_at DESC LIMIT 1`,
+      [route, method, userId]
     );
     if (result.rows[0]) return result.rows[0];
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -474,7 +481,7 @@ describe('the human-in-the-loop write boundary, against a real running Ship API 
       // the human, never an app (a personal-token Principal.app is always
       // null — platform/oauth/principal.ts — so app_client_id being NULL
       // here is itself part of the proof, not a gap).
-      const audit = await pollForAuditRow(`/api/v1/issues/${issueId2}`, 'PATCH');
+      const audit = await pollForAuditRow(`/api/v1/issues/${issueId2}`, 'PATCH', userId);
       expect(audit, 'expected a public_api_audit row for PATCH /api/v1/issues/:id within 1000ms').not.toBeNull();
       expect(audit?.user_id).toBe(userId);
       expect(audit?.app_client_id).toBeNull();
@@ -523,13 +530,14 @@ describe('the human-in-the-loop write boundary, against a real running Ship API 
       // (postStandup) and PATCH /api/v1/documents/:id (setStandupContent)
       // each produce their own public_api_audit row, both attributed to the
       // human, never the app.
-      const createAudit = await pollForAuditRow('/api/v1/documents', 'POST');
+      const createAudit = await pollForAuditRow('/api/v1/documents', 'POST', userId);
       expect(createAudit, 'expected a public_api_audit row for POST /api/v1/documents within 1000ms').not.toBeNull();
       expect(createAudit?.user_id).toBe(userId);
       expect(createAudit?.app_client_id).toBeNull();
       expect(createAudit?.scope_used).toBe('documents:write');
+      expect(createAudit?.status).toBe(201);
 
-      const patchAudit = await pollForAuditRow(`/api/v1/documents/${standupId}`, 'PATCH');
+      const patchAudit = await pollForAuditRow(`/api/v1/documents/${standupId}`, 'PATCH', userId);
       expect(patchAudit, 'expected a public_api_audit row for PATCH /api/v1/documents/:id within 1000ms').not.toBeNull();
       expect(patchAudit?.user_id).toBe(userId);
       expect(patchAudit?.app_client_id).toBeNull();

@@ -441,6 +441,47 @@ describe('PF-201: /api/v1/issues (Linear TRO-400)', () => {
       expect(res.body.code).toBe('not_found');
     });
 
+    it('a malformed (non-UUID) id -> 404 not_found, never a raw 500 (CodeRabbit, this PR)', async () => {
+      // Real gap this test caught in review: without a UUID_RE guard before
+      // the `id = $1` query, a non-UUID id reaches Postgres's UUID-typed
+      // column predicate directly and raises "invalid input syntax for type
+      // uuid" — an unhandled driver error that errorMiddleware sanitizes to
+      // a 500, not the 404 every other :id route in this codebase returns
+      // for a malformed id (PF-200 test design AC-4).
+      const res = await request(app)
+        .patch('/api/v1/issues/not-a-uuid')
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({ state: 'in_progress' });
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+
+    it('a request body with an unrecognized extra field -> 400 validation_failed (strict schema)', async () => {
+      const issueId = await insertIssue('PATCH strict schema issue', new Date(BASE_MS + 47000), {
+        state: 'todo',
+        priority: 'low',
+      });
+
+      const res = await request(app)
+        .patch(`/api/v1/issues/${issueId}`)
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({ state: 'in_progress', priority: 'urgent' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('validation_failed');
+
+      // Never silently applied — priority must stay whatever it already was
+      // (seeded explicitly as 'low' so this proves the request's own
+      // 'urgent' was rejected wholesale, not just ignored on an already-null
+      // field).
+      const row = await pool.query<{ priority: string }>(
+        `SELECT properties->>'priority' AS priority FROM documents WHERE id = $1`,
+        [issueId]
+      );
+      expect(row.rows[0]?.priority).toBe('low');
+    });
+
     it('an issue belonging to a DIFFERENT workspace -> 404, never updated (workspace isolation)', async () => {
       const otherWorkspace = await pool.query<{ id: string }>(
         `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
@@ -454,20 +495,27 @@ describe('PF-201: /api/v1/issues (Linear TRO-400)', () => {
       );
       const otherIssueId = onlyRow(otherIssue.rows).id;
 
-      const res = await request(app)
-        .patch(`/api/v1/issues/${otherIssueId}`)
-        .set('Authorization', `Bearer ${writeToken}`)
-        .send({ state: 'in_progress' });
+      // try/finally (CodeRabbit, this PR): the cleanup below must run even
+      // if an assertion above throws — otherwise a failed run leaks
+      // otherWorkspace/otherIssue rows into the shared worktree database.
+      // documents.workspace_id is ON DELETE CASCADE (schema.sql), so
+      // deleting the workspace alone removes otherIssueId too.
+      try {
+        const res = await request(app)
+          .patch(`/api/v1/issues/${otherIssueId}`)
+          .set('Authorization', `Bearer ${writeToken}`)
+          .send({ state: 'in_progress' });
 
-      expect(res.status).toBe(404);
+        expect(res.status).toBe(404);
 
-      const row = await pool.query<{ state: string }>(
-        `SELECT properties->>'state' AS state FROM documents WHERE id = $1`,
-        [otherIssueId]
-      );
-      expect(row.rows[0]?.state).toBe('todo');
-
-      await pool.query('DELETE FROM workspaces WHERE id = $1', [otherWorkspaceId]);
+        const row = await pool.query<{ state: string }>(
+          `SELECT properties->>'state' AS state FROM documents WHERE id = $1`,
+          [otherIssueId]
+        );
+        expect(row.rows[0]?.state).toBe('todo');
+      } finally {
+        await pool.query('DELETE FROM workspaces WHERE id = $1', [otherWorkspaceId]);
+      }
     });
 
     it('an unrecognized state value -> 400 validation_failed', async () => {

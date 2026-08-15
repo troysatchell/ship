@@ -965,9 +965,24 @@ export interface GateSdkClientLike {
   issues: Pick<SdkShipClient['issues'], 'update'>;
 }
 
-const SDK_ISSUE_STATES: ReadonlySet<string> = new Set([
+const SDK_ISSUE_STATES_LIST = [
   'triage', 'backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled',
-]);
+] as const;
+
+/** Compile-time exhaustiveness check (CodeRabbit, this PR): if `@ship/sdk`'s
+ *  `IssueState` union ever grows a member not listed in
+ *  `SDK_ISSUE_STATES_LIST` above, `_exhaustiveSdkIssueStatesCheck` below
+ *  fails to typecheck (`Exclude<...>` resolves to the missing member(s)
+ *  instead of `never`), catching the drift at build time — instead of the
+ *  new state silently always failing `assertSdkIssueState`'s runtime check
+ *  forever, with no signal anyone forgot to update this list. */
+type MissingSdkIssueStates = Exclude<SdkIssueState, (typeof SDK_ISSUE_STATES_LIST)[number]>;
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- type-only, exists purely to fail `tsc` on drift.
+type _AssertNoMissingSdkIssueStates = MissingSdkIssueStates extends never ? true : ['missing from SDK_ISSUE_STATES_LIST:', MissingSdkIssueStates];
+const _exhaustiveSdkIssueStatesCheck: _AssertNoMissingSdkIssueStates = true;
+void _exhaustiveSdkIssueStatesCheck;
+
+const SDK_ISSUE_STATES: ReadonlySet<string> = new Set(SDK_ISSUE_STATES_LIST);
 
 /**
  * `applyIssueTransition`'s `toState` is a plain `string` at this file's own
@@ -996,9 +1011,22 @@ function assertSdkIssueState(value: string): SdkIssueState {
  * title default the way the internal route does — `title` is REQUIRED at
  * that public surface (`resources/documents.ts`'s `CreateDocumentRequestSchema`
  * own doc comment: "no 'Untitled' default here, unlike the internal API").
+ *
+ * Validates `date` before formatting (CodeRabbit, this PR): an `Invalid
+ * Date` does not throw when passed to `toLocaleDateString` — it silently
+ * returns the literal string `"Invalid Date"`, which would pass
+ * `CreateDocumentRequestSchema`'s bare `min(1)` title check and create a
+ * real document titled "Invalid Date Invalid Date Standup". The internal
+ * route's own `createStandupSchema` fails loudly on malformed input instead
+ * (`z.string().regex(/^\d{4}-\d{2}-\d{2}$/)`, a 400 before any write) — this
+ * guard gives sdk mode the same fail-closed behavior rather than a silently
+ * garbage-titled document.
  */
 function standupTitleForDate(date: string): string {
   const dateObj = new Date(`${date}T00:00:00Z`);
+  if (Number.isNaN(dateObj.getTime())) {
+    throw new Error(`GateShipClient.postStandup: "${date}" is not a valid YYYY-MM-DD date`);
+  }
   const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'long', timeZone: 'UTC' });
   const monthDay = dateObj.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
   return `${dayName} ${monthDay} Standup`;
@@ -1101,9 +1129,13 @@ export class GateShipClient implements GateShipClientLike {
    * as internal mode for anything created this way.
    */
   private async postStandupViaSdk(sdk: GateSdkClientLike, date: string): Promise<CreatedStandup> {
+    // Computed BEFORE the me() call (not inline in the create() args below)
+    // so a malformed date fails immediately, before spending a network
+    // round trip on a request this call is going to reject anyway.
+    const title = standupTitleForDate(date);
     const me = await sdk.me();
     const created = await sdk.documents.create({
-      title: standupTitleForDate(date),
+      title,
       document_type: 'standup',
       properties: { author_id: me.user?.id ?? null, date },
     });

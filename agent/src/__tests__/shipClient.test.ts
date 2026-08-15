@@ -214,8 +214,18 @@ describe('GateShipClient sdk mode (PF-703 / TRO-435)', () => {
     documents: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
     issues: { update: ReturnType<typeof vi.fn> };
   } {
+    // `meUserId: null` returns the REAL "no acting user" shape (`user:
+    // null`), not a malformed `{ id: null }` object — `@ship/sdk`'s real
+    // `Me` type is `{ user: MeUser | null; ... }`, never a MeUser with a
+    // null id (CodeRabbit, this PR: the previous fixture's `{ id: null }`
+    // let `me.user?.id` reach the same `?? null` fallback by coincidence,
+    // without ever exercising the real `me.user?.` short-circuit branch).
     return {
-      me: vi.fn().mockResolvedValue({ user: overrides.meUserId !== undefined ? { id: overrides.meUserId } : { id: 'user-a' }, app: null, scopes: [] }),
+      me: vi.fn().mockResolvedValue(
+        overrides.meUserId === null
+          ? { user: null, app: null, scopes: [] }
+          : { user: { id: overrides.meUserId ?? 'user-a', email: 'user-a@ship.local', name: 'User A' }, app: null, scopes: [] }
+      ),
       documents: {
         create: vi.fn().mockResolvedValue(
           overrides.createResult ?? {
@@ -276,6 +286,16 @@ describe('GateShipClient sdk mode (PF-703 / TRO-435)', () => {
     );
   });
 
+  it('postStandup rejects a malformed date BEFORE ever calling the sdk, rather than creating an "Invalid Date" titled document', async () => {
+    const sdk = fakeSdkClient();
+    const sdkClientFactory = vi.fn().mockReturnValue(sdk);
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    await expect(gate.postStandup('tok', 'not-a-real-date')).rejects.toThrow(/not a valid YYYY-MM-DD date/);
+    expect(sdk.me).not.toHaveBeenCalled();
+    expect(sdk.documents.create).not.toHaveBeenCalled();
+  });
+
   it('the factory is called with whichever token is passed per call — no stickiness to a prior call\'s token', async () => {
     const sdkClientFactory = vi.fn().mockImplementation(() => fakeSdkClient());
     const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
@@ -325,7 +345,7 @@ describe('GateShipClient sdk mode (PF-703 / TRO-435)', () => {
     expect(sdk.issues.update).not.toHaveBeenCalled();
   });
 
-  it('throws ShipApiError-free — a non-ok /api/v1 response from the sdk surfaces as whatever @ship/sdk itself throws, not silently swallowed', async () => {
+  it('propagates the sdk\'s own thrown error unchanged (never wrapped in ShipApiError, never silently swallowed)', async () => {
     const sdk = fakeSdkClient();
     sdk.issues.update.mockRejectedValueOnce(new Error('sdk: PATCH /api/v1/issues/issue-1 returned 403'));
     const sdkClientFactory = vi.fn().mockReturnValue(sdk);

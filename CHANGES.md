@@ -115,6 +115,72 @@ unaffected by carrying scopes it never checks.
    propagation) — confirmed red for the right reason by temporarily removing the
    `assertSdkIssueState` guard (an `AssertionError`, not an import/type error) before restoring it.
 
+**CodeRabbit triage (local CLI, capacity-constrained on the PR — see below; 11 findings). Fixed all
+11, dismissed 0, one intentionally re-scoped:**
+- **major** (`api/src/platform/api/v1/resources/issues.ts`, `PATCH /:id`) — a malformed (non-UUID)
+  `id` reached the `id = $1` query directly, no `UUID_RE` guard existed in this file at all. Postgres
+  raises "invalid input syntax for type uuid" for that predicate, an unhandled error `errorMiddleware`
+  sanitizes to a 500 — breaking this codebase's own "malformed or missing id both 404" convention
+  every other `:id` route follows (PF-200 test design AC-4). A real, user-visible defect, not a style
+  nit. Fixed: added the same `UUID_RE` check `documents.ts` already uses, before the query. New
+  regression test (`issues.test.ts`) confirms 404, not 500.
+- **major** (`agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts`, `pollForAuditRow`) — the
+  attribution-proof poll filtered `public_api_audit` by `route`/`method` only; every PATCH call site
+  is scoped by a fresh UUID in the path, but `POST /api/v1/documents` is a collection route with no
+  id in its path at all, so that one call site could pick up a different caller's row under real
+  concurrency (this file's own docstring's "safe because every route is scoped to a UUID" claim was
+  therefore false for the POST case — caught, not asserted past). Fixed: `pollForAuditRow` now also
+  filters by `userId`, applied uniformly to all three call sites.
+- **minor** (`api/src/platform/api/v1/resources/__tests__/issues.test.ts`) — the cross-workspace
+  isolation test's `DELETE FROM workspaces` cleanup ran as the test's last line, not in `finally` —
+  an assertion failure above it would leak the row. Fixed: wrapped in `try/finally`.
+- **minor** (`agent/src/__tests__/shipClient.test.ts`, `fakeSdkClient`) — the "no acting user" fixture
+  returned `{ user: { id: null } }`, which is not a shape `@ship/sdk`'s real `Me` type can ever
+  produce (`user` is `MeUser | null`, never a `MeUser` with a null `id`) — the test passed by
+  coincidence (`{id:null}.id ?? null` and `null?.id ?? null` both evaluate to `null`) without ever
+  exercising the real `me.user?.` optional-chaining branch. Fixed: returns `user: null` for that case.
+- **minor** (`agent/src/shipClient.ts`, `postStandupViaSdk`) — companion fix, not itself a CodeRabbit
+  finding: reordered so `standupTitleForDate(date)` is computed BEFORE the `me()` call, so a malformed
+  date fails immediately instead of spending a network round trip on a request that was going to be
+  rejected anyway. Found while adding the regression test for the finding below.
+- **minor** (`agent/src/shipClient.ts`, `standupTitleForDate`) — an invalid `date` does not throw when
+  passed to `toLocaleDateString` (returns the literal string `"Invalid Date"`), which would pass
+  `CreateDocumentRequestSchema`'s bare `min(1)` title check and silently create a document titled
+  "Invalid Date Invalid Date Standup" — the internal route's own schema rejects this with a 400 before
+  any write. Fixed: validates the parsed `Date` before formatting, throwing a clear error naming the
+  bad value (matching `assertSdkIssueState`'s own guarded-not-blind posture).
+- **minor** (`api/src/platform/api/v1/resources/__tests__/documents.test.ts`) — the content-overwrite
+  test asserted the DB row directly but never that `updated_at` moved, and never exercised a
+  follow-up `GET`. Fixed the `updated_at` gap directly. The suggested "follow-up GET reflects the
+  patched content" half is **not satisfiable as literally stated** — verified against
+  `serializeDocument()` before dismissing it, not assumed: `GET /api/v1/documents/:id` never returns
+  `content` at all (this route's own `DocumentResponseSchema` doc comment: "no content, yjs_state,
+  visibility"). Added the follow-up `GET` anyway, asserting what it CAN return
+  (title/document_type/absence of a `content` key) — the direct SQL read remains the real proof for
+  content itself.
+- **trivial** (`agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts`) — the `acceptDraft`
+  sdk-mode test's create-audit assertions never checked `status`. Added `expect(createAudit?.status)
+  .toBe(201)` (matching `documents.ts`'s `POST /` handler, which returns 201 on success).
+- **trivial** (`agent/src/__tests__/shipClient.test.ts`) — a test name described the assertion as
+  "ShipApiError-free" when the actual point is that the sdk's own error propagates UNCHANGED, never
+  wrapped. Renamed for clarity; assertions unchanged.
+- **trivial × 2** (`api/src/platform/api/v1/resources/issues.ts` / `documents.ts`,
+  `UpdateIssueRequestSchema` / `UpdateDocumentRequestSchema`) — plain `z.object({...})` silently drops
+  an unrecognized field (e.g. `priority` sent alongside `state`) rather than rejecting it, letting a
+  caller believe a field was applied when it was ignored. Fixed: `.strict()` on both, each with a new
+  regression test proving the extra field is rejected (400) and never silently applied.
+  `docs/openapi.json` regenerated — `.strict()` changes the registered schema's
+  `additionalProperties` from unset to `false`.
+- **trivial** (`agent/src/shipClient.ts`, `SDK_ISSUE_STATES`) — the hardcoded state list had no
+  compile-time link to `@ship/sdk`'s own `IssueState` union, so a future SDK state addition would
+  silently always fail `assertSdkIssueState`'s runtime check with no build-time signal anyone forgot
+  to update this file. Fixed: added a compile-time exhaustiveness check
+  (`Exclude<SdkIssueState, (typeof SDK_ISSUE_STATES_LIST)[number]>` must resolve to `never`, verified
+  by `tsc` failing to compile when it doesn't).
+
+Re-verified after all fixes: type-check clean across all packages, agent 534/534, sdk 212/212, api
+1413/1413 (all three suites confirmed clean in a full run, no flakes that round).
+
 **How to verify.**
 
 ```bash
@@ -122,8 +188,8 @@ unaffected by carrying scopes it never checks.
 pnpm build:shared && pnpm build:sdk   # sdk/dist must exist before agent's/api's type-check/tests
 pnpm type-check                        # clean across all packages
 pnpm --filter @ship/sdk test           # 212/212, incl. the two new documents.update/issues.update parity entries
-pnpm --filter @ship/agent test         # 533/533, incl. 7 new unit cases + 2 new live-DB sdk-mode cases
-pnpm --filter @ship/api test           # incl. the two new /api/v1 PATCH routes' route-fitness/openapi coverage
+pnpm --filter @ship/agent test         # 534/534, incl. 8 new unit cases + 2 new live-DB sdk-mode cases
+pnpm --filter @ship/api test           # 1413/1413, incl. 22 new PATCH-route unit cases + route-fitness/openapi coverage
 scripts/factory/gate.sh
 ```
 
@@ -140,7 +206,8 @@ is behaviorally inert for every existing deployment. The `scopes` addition to
 (internal-mode `authMiddleware` never read the column). Scope: `agent/src/shipClient.ts`,
 `agent/src/index.ts`, `agent/src/__tests__/shipClient.test.ts`,
 `agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts`, `api/src/platform/api/v1/resources/
-{documents,issues}.ts`, `api/src/platform/openapi/schemas/{documents,issues}.ts`,
+{documents,issues}.ts`, `api/src/platform/api/v1/resources/__tests__/{documents,issues}.test.ts`,
+`api/src/platform/openapi/schemas/{documents,issues}.ts`,
 `api/src/platform/openapi/__tests__/{document,endpoint}.test.ts`, `api/src/services/agentTokens.ts`,
 `api/src/routes/agent.ts`, `docs/openapi.json` (regenerated), `sdk/src/internal/requestClient.ts`,
 `sdk/src/resources/{documents,issues}.ts`, `sdk/src/types.ts`, `sdk/src/index.ts`,

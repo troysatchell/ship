@@ -53,6 +53,11 @@ import { getTimestampUpdates, logDocumentChange } from '../../../../utils/docume
 
 export const issuesRouter: RouterType = Router();
 
+/** Same pattern as `resources/documents.ts`'s own `UUID_RE` — PF-703's
+ *  `PATCH /:id` is the first route in this file to take an `:id` param, so
+ *  this constant is new here (`GET /` never needed one). */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Same defensive fallback pattern as `resources/documents.ts`'s own
  * `requestIdOf` — see that file's header for why this is a two-line
  * duplicate rather than a shared import. */
@@ -142,10 +147,13 @@ export const IssueStateSchema = z.enum(['triage', 'backlog', 'todo', 'in_progres
  * silent gap. A future ticket that needs the fuller update surface (or a
  * public-API equivalent of the orphan-children confirmation flow) extends
  * this schema and handler rather than this ticket porting a 240-line
- * handler for a caller that only ever sends `state`. */
+ * handler for a caller that only ever sends `state`. `.strict()` (CodeRabbit,
+ * this PR): an extra field like `priority` must be REJECTED, not silently
+ * dropped — a caller sending it needs to learn it was never applied, not
+ * assume it was. */
 export const UpdateIssueRequestSchema = z.object({
   state: IssueStateSchema,
-});
+}).strict();
 
 /** Defaults match `IssueState`/`IssuePriority`'s implicit defaults elsewhere
  * in this codebase: `createIssueSchema` (`routes/issues.ts`) defaults
@@ -272,6 +280,16 @@ issuesRouter.patch(
   asyncHandler(async (req, res) => {
     const requestId = requestIdOf(req);
     const id = String(req.params.id);
+
+    // Malformed id -> not_found, not a raw Postgres "invalid input syntax
+    // for type uuid" error (which would otherwise reach the `id = $1`
+    // predicate below and surface as a sanitized 500) — matches
+    // documents.ts's own UUID_RE / "malformed or missing id both 404"
+    // convention (PF-200 test design AC-4). Real gap, caught in review: this
+    // guard was missing entirely before (CodeRabbit, this PR).
+    if (!UUID_RE.test(id)) {
+      throw notFoundError(requestId);
+    }
 
     const parseResult = UpdateIssueRequestSchema.safeParse(req.body);
     if (!parseResult.success) {

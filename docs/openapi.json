@@ -1614,7 +1614,8 @@
                 },
                 "required": [
                   "content"
-                ]
+                ],
+                "additionalProperties": false
               }
             }
           }
@@ -2192,7 +2193,8 @@
                 },
                 "required": [
                   "state"
-                ]
+                ],
+                "additionalProperties": false
               }
             }
           }
