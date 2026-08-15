@@ -118,7 +118,7 @@ entire point of a DLQ-replay endpoint. Added to `api/src/platform/api/v1/resourc
 
 ```bash
 source .factory-env   # or your own DATABASE_URL — pointed at a factory-owned db
-cd api && pnpm exec tsx src/db/migrate.ts    # applies migration 050
+cd api && pnpm exec tsx src/db/migrate.ts    # applies migrations 050 and 051
 cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts
 cd api && npx vitest run src/platform/webhooks/__tests__/deliverer.test.ts
 cd sdk && npx vitest run   # parity.test.ts, resources/__tests__/webhooks.test.ts
@@ -144,9 +144,9 @@ cd sdk && npx vitest run   # parity.test.ts, resources/__tests__/webhooks.test.t
   `response_excerpt`/`latency_ms`/`attempt_number`/`idempotency_key` all unchanged afterward); 404 for
   an unknown id, a malformed non-UUID id, and a cross-workspace id; and the DLQ-replay case (original
   `status='dead'`, `attempt_number=6` — replay still reaches the subscriber, succeeds, and the
-  original DLQ row stays `'dead'` and unchanged). Two more cases added after local CodeRabbit-CLI
-  review (below) bring the file to **30/30** as of this PR's final state, re-confirmed by re-running
-  the file directly.
+  original DLQ row stays `'dead'` and unchanged). More cases added across three local CodeRabbit-CLI
+  review rounds (below) plus the deactivated-subscription guard bring the file to **32/32** as of this
+  PR's final state, re-confirmed by re-running the file directly.
 - **Observed:** `deliverer.test.ts` still 13/13 after adding `attemptNow()` to `IWebhookDeliverer` (two
   hand-built fake-deliverer test doubles in that file needed a same-shape `attemptNow` field to keep
   compiling — not a behavior change, confirmed by re-running the file).
@@ -315,6 +315,18 @@ TRO-432/PF-501) — 5 findings, 2 fixed for real, 1 doc cleanup, 1 bookkeeping c
    a genuine operator error (the migration re-run by mistake) rather than handle a legitimate
    pre-existence case. Declined as inapplicable to this migration's actual situation, not a blanket
    rejection of the pattern.
+
+**Fourth local CodeRabbit-CLI review (after the round-3 fixes above) — 3 findings, 2 applied
+(bookkeeping/test), 1 declined:**
+1. **Major, declined — same TRO-599 class, 3rd re-raise, no new information.** Full `WebhookDelivery`
+   SDK-type repair suggested again; already addressed above.
+2. **Minor, applied.** This entry's own test-count claim (30/30) was stale — re-ran the file fresh:
+   **32/32** (round 3 added one more case). Fixed here; the migrate-command snippet's stale "applies
+   migration 050" (pre-renumbering wording) corrected to "applies migrations 050 and 051."
+3. **Trivial, applied.** Added a `GET /deliveries` list-serializer assertion to the happy-path replay
+   test, confirming `replayed_from_id` is exposed there too, not just on the `POST /replay` response —
+   a genuinely separate code path (the list route's own serializer) that the existing tests hadn't
+   independently covered.
 
 **Migration renumbering (orchestrator, at merge-forward time — see the note at the top of this
 entry).** Originally `049_webhook_deliveries_replay.sql` + `050_webhook_deliveries_replay_

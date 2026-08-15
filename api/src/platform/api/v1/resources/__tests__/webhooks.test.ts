@@ -1128,6 +1128,17 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       expect(originalRow.latency_ms).toBe(11);
       expect(originalRow.attempt_number).toBe(1);
       expect(originalRow.idempotency_key).toBe(original.idempotencyKey);
+
+      // GET /deliveries (the list serializer, a separate code path from the
+      // replay response above) exposes replayed_from_id too — not just the
+      // POST /replay response (CodeRabbit, this PR review).
+      const listRes = await request(app)
+        .get(`/api/v1/webhooks/deliveries?subscription_id=${replaySubscriptionId}`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(listRes.status).toBe(200);
+      const listedReplay = (listRes.body as { data: DeliveryBody[] }).data.find((d) => d.id === body.id);
+      if (!listedReplay) throw new Error('expected the new replay row to appear in GET /deliveries');
+      expect(listedReplay.replayed_from_id).toBe(original.id);
     });
 
     it('replays a dead (DLQ) delivery successfully — the graded replay-after-DLQ scenario', async () => {
