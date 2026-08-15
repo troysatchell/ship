@@ -551,6 +551,46 @@ else
   record defect-gate fail "${DG_N} introduced finding(s) — see .factory/defect-gate.json / defect-gate.log"
 fi
 
+# --- G11: TTFE drill — threshold-logic regression tests + typecheck --------
+# TRO-455 (PF-603). scripts/drill/ isn't a workspace package (absent from
+# pnpm-workspace.yaml, same as scripts/factory/defect-gates), so nothing
+# under it is covered by `run_tests` above or by G1's recursive `pnpm
+# type-check` — the exact "regression test added but never EXECUTED by the
+# gate" trap `ship-qa`'s own skill documents (an e2e-only spec passing G6's
+# grep unexecuted), recurring here one directory over from
+# scripts/factory/defect-gates' own identical precedent. Own scoped
+# vitest.config.ts/tsconfig.json (same shape as defect-gates'), invoked
+# explicitly here so gate.sh itself — not just CI — actually runs them.
+if pnpm exec vitest run --config scripts/drill/vitest.config.ts > "$OUT_DIR/drill-tests.log" 2>&1; then
+  record drill-tests pass "evaluateDrillStages regression suite green"
+else
+  record drill-tests fail "see .factory/drill-tests.log"
+fi
+if pnpm exec tsc --noEmit -p scripts/drill > "$OUT_DIR/drill-typecheck.log" 2>&1; then
+  record drill-typecheck pass "scripts/drill/ clean"
+else
+  record drill-typecheck fail "see .factory/drill-typecheck.log"
+fi
+
+# --- G12: TTFE drill — live run against this worktree's own database -------
+# The actual drill (`pnpm drill ttfe`): testcontainers Postgres per repo
+# pattern when no DATABASE_URL is set, or — as here, inside a factory
+# worktree with `.factory-env` already sourced above — this worktree's own
+# exclusive database, reused directly (no Docker touched; see
+# scripts/drill/ttfe.ts's own header for why, and for the same reasoning
+# `.gitlab-ci.yml`'s/`ci.yml`'s new `drill-ttfe` CI jobs apply). Spawns a
+# real api process on an ephemeral port and cleans up every row it inserts
+# (`cleanupPrincipal` in ttfe.ts) whether it passes or fails, so running this
+# repeatedly across many `gate.sh` invocations in this worktree's lifetime
+# never accumulates orphan data. `pnpm drill ttfe`'s own exit code IS the
+# verdict — `evaluateDrillStages` (G11's own subject) already decided pass
+# vs fail before this process exits.
+if pnpm drill ttfe > "$OUT_DIR/drill-ttfe.log" 2>&1; then
+  record drill-ttfe pass "green — see .factory/drill-ttfe.log for per-stage timings"
+else
+  record drill-ttfe fail "see .factory/drill-ttfe.log"
+fi
+
 # --- verdict ----------------------------------------------------------------
 echo
 echo "=== ${TICKET}: ${OVERALL} ==="
