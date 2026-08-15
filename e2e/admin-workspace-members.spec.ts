@@ -324,11 +324,83 @@ test.describe('Admin User Search', () => {
       if (carolAdded) {
         const carolRow = page.locator('tr').filter({ hasText: /carol/i }).first()
         await expect(carolRow).toBeVisible({ timeout: 5000 })
-        const dialog = page.waitForEvent('dialog')
+        // `handleRemoveMember` (AdminWorkspaceDetail.tsx) calls the native,
+        // synchronous `confirm()` -- which blocks the page's JS thread until
+        // dismissed. `page.waitForEvent('dialog')` awaited AFTER `.click()`
+        // deadlocks here: `.click()` can't resolve while the dialog blocks
+        // the page, and nothing accepts the dialog until `.click()` resolves
+        // (confirmed directly -- Playwright's own actionability log reported
+        // the button visible/enabled/stable, then hung forever at
+        // "performing click action", the 60s default timeout). Matching
+        // file-attachments.spec.ts's established pattern instead: register
+        // the handler BEFORE the click so it can `accept()` reactively while
+        // `.click()` is still pending, not after.
+        page.once('dialog', (dialog) => {
+          void dialog.accept()
+        })
         await carolRow.getByRole('button', { name: 'Remove' }).click()
-        await (await dialog).accept()
         await expect(memberHeading).toContainText(`(${initialCount})`, { timeout: 5000 })
       }
+    }
+  })
+
+  test('canceling the remove-member confirmation dialog leaves the member in place (TRO-595 regression)', async ({ page }) => {
+    // TRO-595: the "Remove" button's native confirm() dialog previously
+    // deadlocked its own click() promise when handled with
+    // `page.waitForEvent('dialog')` awaited AFTER the click (see the
+    // "can add existing user" test's cleanup block for the full writeup).
+    // That test only ever exercised the ACCEPT path. This test exercises
+    // the CANCEL path -- previously untested -- and directly asserts the
+    // click resolves quickly (well under Playwright's 60s default timeout,
+    // which is exactly what the old, deadlocking pattern would have hit),
+    // proving the fix generalizes to both dialog outcomes, not just accept.
+    await page.goto('/admin')
+
+    const testSpaceLink = page.getByRole('link').filter({ hasText: /test space/i }).first()
+    await expect(testSpaceLink).toBeVisible({ timeout: 5000 })
+    await testSpaceLink.click()
+
+    const memberHeading = page.getByRole('heading', { name: /Members \((\d+)\)/ })
+    const headingText = await memberHeading.textContent()
+    const initialCount = parseInt(headingText?.match(/\d+/)?.[0] || '0')
+
+    // Reuses carol, same as the sibling test -- add then immediately cancel
+    // her removal, so the "no membership anywhere" fixture invariant still
+    // holds afterward (net effect: added, then removed again for real).
+    await page.getByPlaceholder('Search by email...').fill('carol')
+    const userResult = page.getByRole('button', { name: /carol/i }).first()
+    await expect(userResult).toBeVisible({ timeout: 3000 })
+    await userResult.click()
+    await page.getByRole('button', { name: 'Add User' }).click()
+    await expect(memberHeading).toContainText(`(${initialCount + 1})`, { timeout: 5000 })
+
+    try {
+      const carolRow = page.locator('tr').filter({ hasText: /carol/i }).first()
+      await expect(carolRow).toBeVisible({ timeout: 5000 })
+
+      page.once('dialog', (dialog) => {
+        void dialog.dismiss()
+      })
+      const clickStart = Date.now()
+      await carolRow.getByRole('button', { name: 'Remove' }).click()
+      const clickDurationMs = Date.now() - clickStart
+      expect(
+        clickDurationMs,
+        'Clicking Remove and dismissing its confirm() dialog should resolve in well under a second, not hang toward the 60s action timeout'
+      ).toBeLessThan(5000)
+
+      // Canceling must leave the member in place -- the count should NOT change.
+      await expect(memberHeading).toContainText(`(${initialCount + 1})`, { timeout: 3000 })
+    } finally {
+      // Real cleanup: remove carol for real this time, restoring the
+      // fixture's "no membership anywhere" invariant for the next test.
+      const carolRow = page.locator('tr').filter({ hasText: /carol/i }).first()
+      await expect(carolRow).toBeVisible({ timeout: 5000 })
+      page.once('dialog', (dialog) => {
+        void dialog.accept()
+      })
+      await carolRow.getByRole('button', { name: 'Remove' }).click()
+      await expect(memberHeading).toContainText(`(${initialCount})`, { timeout: 5000 })
     }
   })
 })
