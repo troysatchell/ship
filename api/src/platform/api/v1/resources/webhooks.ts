@@ -101,14 +101,16 @@ import {
   serverError,
   validationFailedError,
 } from '../errors.js';
-import { encodeCursor, decodeCursor, type KeysetCursor } from '../pagination.js';
+import { encodeCursor, decodeCursor, preciseTimestamp, type KeysetCursor } from '../pagination.js';
 import { resolvePrincipalWorkspaceId } from './workspaceContext.js';
 import { EVENT_TYPES } from '../../../webhooks/events.js';
 import { generateWebhookSecret } from '../../../webhooks/secrets.js';
 import { encryptSecret } from '../../../webhooks/secretEncryption.js';
-import { InMemoryWebhookDeliverer, isKnownEventType } from '../../../webhooks/deliverer.js';
-
-export const webhooksRouter: RouterType = Router();
+import {
+  InMemoryWebhookDeliverer,
+  isKnownEventType,
+  type IWebhookDeliverer,
+} from '../../../webhooks/deliverer.js';
 
 /** Same defensive fallback pattern as `resources/documents.ts`'s own
  * `requestIdOf` — every request reaching a `webhooksRouter` handler already
@@ -179,9 +181,14 @@ interface WebhookSubscriptionRow {
   target_url: string;
   active: boolean;
   created_at: Date;
+  /** `created_at::text` — cursor-internal only (TRO-602), harmlessly
+   *  present on every query reusing `SUBSCRIPTION_COLUMNS`, not just the
+   *  list route that actually builds a cursor from it. */
+  created_at_precise: string;
 }
 
-const SUBSCRIPTION_COLUMNS = 'ws.id, ws.app_id, ws.event_type, ws.target_url, ws.active, ws.created_at';
+const SUBSCRIPTION_COLUMNS =
+  'ws.id, ws.app_id, ws.event_type, ws.target_url, ws.active, ws.created_at, ws.created_at::text AS created_at_precise';
 
 function serializeSubscription(row: WebhookSubscriptionRow) {
   return {
@@ -231,10 +238,12 @@ interface WebhookDeliveryRow {
   next_attempt_at: Date | null;
   replayed_from_id: string | null;
   created_at: Date;
+  /** `created_at::text` — cursor-internal only (TRO-602). */
+  created_at_precise: string;
 }
 
 const DELIVERY_COLUMNS =
-  'wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.idempotency_key, wd.attempt_number, wd.status, wd.response_status, wd.response_excerpt, wd.latency_ms, wd.next_attempt_at, wd.replayed_from_id, wd.created_at';
+  'wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.idempotency_key, wd.attempt_number, wd.status, wd.response_status, wd.response_excerpt, wd.latency_ms, wd.next_attempt_at, wd.replayed_from_id, wd.created_at, wd.created_at::text AS created_at_precise';
 
 function serializeDelivery(row: WebhookDeliveryRow) {
   return {
@@ -298,584 +307,619 @@ async function resolveWorkspaceOrThrow(req: Request, requestId: string): Promise
   return workspaceId;
 }
 
-// ─── POST /api/v1/webhooks ───────────────────────────────────────────────
+/**
+ * Builds the `/api/v1/webhooks` router. Takes the app's webhook deliverer
+ * as an optional parameter, following the same "factory function taking a
+ * per-`createApp()`-call dependency" pattern `routes/oauth-authorize.ts`'s
+ * `createOAuthAuthorizeRouter(webOrigin)` already establishes in this
+ * codebase — chosen over a module-level singleton `Router()` (this file's
+ * prior shape) specifically because a singleton is built once, at module
+ * load, before `index.ts`'s real deliverer even exists (TRO-603).
+ *
+ * `POST /deliveries/:id/replay` (below) is the one route that reads
+ * `injectedDeliverer`: when the caller (production `index.ts`) supplies its
+ * real, already-`.start()`'d singleton, a retry sibling scheduled by a
+ * replay's retryable outcome is queued on the SAME instance whose
+ * `processDue()` polling loop drains it — no longer orphaned until the next
+ * process restart's `rehydrate()`. Every caller that does not pass one
+ * (every test file in this repo that calls `createApp()` with no options,
+ * plus any future dev/test caller) gets today's unchanged fallback: a
+ * fresh, throwaway `InMemoryWebhookDeliverer` constructed per request,
+ * scoped to that one HTTP call — see the route's own comment below for the
+ * full before/after.
+ */
+export function createWebhooksRouter(injectedDeliverer?: IWebhookDeliverer): RouterType {
+  const webhooksRouter: RouterType = Router();
 
-webhooksRouter.post(
-  '/',
-  bearerAuth,
-  rateLimitBuckets,
-  requireScope('webhooks:manage'),
-  asyncHandler(async (req, res) => {
-    const requestId = requestIdOf(req);
+  // ─── POST /api/v1/webhooks ───────────────────────────────────────────────
 
-    const parseResult = CreateWebhookSubscriptionRequestSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      throw validationFailedError(requestId, 'The request could not be validated.', {
-        fieldErrors: parseResult.error.flatten().fieldErrors,
-      });
-    }
+  webhooksRouter.post(
+    '/',
+    bearerAuth,
+    rateLimitBuckets,
+    requireScope('webhooks:manage'),
+    asyncHandler(async (req, res) => {
+      const requestId = requestIdOf(req);
 
-    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+      const parseResult = CreateWebhookSubscriptionRequestSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        throw validationFailedError(requestId, 'The request could not be validated.', {
+          fieldErrors: parseResult.error.flatten().fieldErrors,
+        });
+      }
 
-    const appLookup = await pool.query<{ id: string }>(
-      `SELECT id FROM oauth_apps WHERE id = $1 AND workspace_id = $2`,
-      [parseResult.data.app_id, workspaceId]
-    );
-    if (!appLookup.rows[0]) {
-      throw validationFailedError(requestId, 'app_id does not reference an app in your workspace.', {
-        fieldErrors: { app_id: ['no such app in your workspace'] },
-      });
-    }
+      const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
 
-    const plaintextSecret = generateWebhookSecret();
-    const ciphertext = encryptSecret(plaintextSecret);
-
-    let result;
-    try {
-      result = await pool.query<WebhookSubscriptionRow>(
-        `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
-         VALUES ($1, $2, $3, $4, true)
-         RETURNING id, app_id, event_type, target_url, active, created_at`,
-        [parseResult.data.app_id, parseResult.data.event_type, parseResult.data.target_url, ciphertext]
+      const appLookup = await pool.query<{ id: string }>(
+        `SELECT id FROM oauth_apps WHERE id = $1 AND workspace_id = $2`,
+        [parseResult.data.app_id, workspaceId]
       );
-    } catch (error) {
-      // 23505 = unique_violation — migration 047's
-      // `idx_webhook_subscriptions_unique_active` partial unique index (app_id,
-      // event_type, target_url) WHERE active. A caller-facing, actionable
-      // error rather than a sanitized server_error: this is a validation
-      // outcome (a duplicate active subscription), not an unexpected failure.
-      if (isPgErrorWithCode(error, '23505')) {
-        throw validationFailedError(
-          requestId,
-          'An active subscription for this app_id/event_type/target_url combination already exists.',
-          { fieldErrors: { target_url: ['duplicate active subscription for this event_type and target_url'] } }
-        );
-      }
-      throw error;
-    }
-    const row = result.rows[0];
-    if (!row) {
-      throw serverError(requestId);
-    }
-
-    // The only response, ever, that carries `secret`. Not stored anywhere
-    // beyond this local variable and this one JSON body — AC: "secret
-    // non-recoverable via API after creation."
-    res.status(201).json({
-      ...serializeSubscription(row),
-      secret: plaintextSecret,
-      warning: 'Save this secret now. It will not be shown again.',
-    });
-  })
-);
-
-// ─── GET /api/v1/webhooks ────────────────────────────────────────────────
-
-webhooksRouter.get(
-  '/',
-  bearerAuth,
-  rateLimitBuckets,
-  requireScope('webhooks:manage'),
-  asyncHandler(async (req, res) => {
-    const requestId = requestIdOf(req);
-
-    const parseResult = ListWebhookSubscriptionsQuerySchema.safeParse(req.query);
-    if (!parseResult.success) {
-      throw validationFailedError(requestId, 'Invalid query parameters.', {
-        fieldErrors: parseResult.error.flatten().fieldErrors,
-      });
-    }
-    const { limit, cursor } = parseResult.data;
-
-    let decodedCursor: KeysetCursor | null = null;
-    if (cursor !== undefined) {
-      decodedCursor = decodeCursor(cursor);
-      if (!decodedCursor) {
-        throw validationFailedError(requestId, 'Invalid cursor.', {
-          fieldErrors: { cursor: ['cursor is not a valid opaque cursor'] },
+      if (!appLookup.rows[0]) {
+        throw validationFailedError(requestId, 'app_id does not reference an app in your workspace.', {
+          fieldErrors: { app_id: ['no such app in your workspace'] },
         });
       }
-    }
 
-    const workspaceId = await resolveWorkspaceOrNull(req, requestId);
-    if (!workspaceId) {
-      // Same "fail closed to an empty page" convention as documents.ts.
-      res.status(200).json({ data: [], next_cursor: null });
-      return;
-    }
+      const plaintextSecret = generateWebhookSecret();
+      const ciphertext = encryptSecret(plaintextSecret);
 
-    const values: unknown[] = [workspaceId];
-    const whereClauses = ['a.workspace_id = $1'];
-
-    if (decodedCursor) {
-      values.push(decodedCursor.created_at, decodedCursor.id);
-      whereClauses.push(`(ws.created_at, ws.id) < ($${values.length - 1}, $${values.length})`);
-    }
-
-    values.push(limit + 1);
-    const limitParamIndex = values.length;
-
-    const result = await pool.query<WebhookSubscriptionRow>(
-      `SELECT ${SUBSCRIPTION_COLUMNS}
-       FROM webhook_subscriptions ws
-       JOIN oauth_apps a ON a.id = ws.app_id
-       WHERE ${whereClauses.join(' AND ')}
-       ORDER BY ws.created_at DESC, ws.id DESC
-       LIMIT $${limitParamIndex}`,
-      values
-    );
-
-    const rows = result.rows;
-    const hasMore = rows.length > limit;
-    const page = hasMore ? rows.slice(0, limit) : rows;
-    const lastRow = page[page.length - 1];
-    const nextCursor =
-      hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
-        : null;
-
-    res.status(200).json({
-      data: page.map(serializeSubscription),
-      next_cursor: nextCursor,
-    });
-  })
-);
-
-// ─── GET /api/v1/webhooks/deliveries ─────────────────────────────────────
-//
-// Registered BEFORE `GET /:id` — see file header for why route order
-// matters here.
-
-webhooksRouter.get(
-  '/deliveries',
-  bearerAuth,
-  rateLimitBuckets,
-  requireScope('webhooks:manage'),
-  asyncHandler(async (req, res) => {
-    const requestId = requestIdOf(req);
-
-    const parseResult = ListWebhookDeliveriesQuerySchema.safeParse(req.query);
-    if (!parseResult.success) {
-      throw validationFailedError(requestId, 'Invalid query parameters.', {
-        fieldErrors: parseResult.error.flatten().fieldErrors,
-      });
-    }
-    const { limit, cursor, subscription_id, status } = parseResult.data;
-
-    let decodedCursor: KeysetCursor | null = null;
-    if (cursor !== undefined) {
-      decodedCursor = decodeCursor(cursor);
-      if (!decodedCursor) {
-        throw validationFailedError(requestId, 'Invalid cursor.', {
-          fieldErrors: { cursor: ['cursor is not a valid opaque cursor'] },
-        });
-      }
-    }
-
-    const workspaceId = await resolveWorkspaceOrNull(req, requestId);
-    if (!workspaceId) {
-      // Same "fail closed to an empty page" convention as GET /.
-      res.status(200).json({ data: [], next_cursor: null });
-      return;
-    }
-
-    const values: unknown[] = [workspaceId];
-    const whereClauses = ['a.workspace_id = $1'];
-
-    if (subscription_id !== undefined) {
-      values.push(subscription_id);
-      whereClauses.push(`wd.subscription_id = $${values.length}`);
-    }
-
-    if (status !== undefined) {
-      values.push(status);
-      whereClauses.push(`wd.status = $${values.length}`);
-    }
-
-    if (decodedCursor) {
-      values.push(decodedCursor.created_at, decodedCursor.id);
-      whereClauses.push(`(wd.created_at, wd.id) < ($${values.length - 1}, $${values.length})`);
-    }
-
-    values.push(limit + 1);
-    const limitParamIndex = values.length;
-
-    const result = await pool.query<WebhookDeliveryRow>(
-      `SELECT ${DELIVERY_COLUMNS}
-       FROM webhook_deliveries wd
-       JOIN webhook_subscriptions ws ON ws.id = wd.subscription_id
-       JOIN oauth_apps a ON a.id = ws.app_id
-       WHERE ${whereClauses.join(' AND ')}
-       ORDER BY wd.created_at DESC, wd.id DESC
-       LIMIT $${limitParamIndex}`,
-      values
-    );
-
-    const rows = result.rows;
-    const hasMore = rows.length > limit;
-    const page = hasMore ? rows.slice(0, limit) : rows;
-    const lastRow = page[page.length - 1];
-    const nextCursor =
-      hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
-        : null;
-
-    res.status(200).json({
-      data: page.map(serializeDelivery),
-      next_cursor: nextCursor,
-    });
-  })
-);
-
-// ─── POST /api/v1/webhooks/deliveries/:id/replay ─────────────────────────
-//
-// PF-306 (Linear TRO-446). Registered here, alongside `GET /deliveries` and
-// still BEFORE `GET /:id` — same Express route-ordering reasoning as
-// `GET /deliveries` itself (see file header): `deliveries` is a literal path
-// segment, so as long as anything under `/deliveries/*` is registered before
-// the generic `/:id` pattern, the literal segment wins the match. (In this
-// specific case segment COUNT alone would already disambiguate this route
-// from `/:id` and `/:id/rotate` — 3 segments vs. 1 and 2 — but keeping every
-// `/deliveries/*` route grouped together, before `/:id`, matches this file's
-// existing convention and doesn't rely on that.)
-//
-// Looks up the ORIGINAL delivery row (workspace-scoped via the same
-// oauth_apps join every other route in this file uses — a caller cannot
-// replay another workspace's delivery), then re-runs it through the
-// deliverer with the SAME idempotency_key the original delivery used (read
-// off the row, never regenerated — the subscriber-dedupe contract PF-801's
-// future e2e test verifies). Works for ANY original status, including
-// 'dead' (DLQ) — this route never filters or branches on the original row's
-// own status; that is the entire point of a DLQ-replay endpoint.
-//
-// Records a NEW delivery row rather than mutating the original (this
-// ticket's own AC) — linked back via `replayed_from_id` (migration 050).
-// Continues the SAME (subscription_id, event_id) attempt_number series
-// rather than restarting at 1: migration 048's own unique index is keyed on
-// (subscription_id, event_id, attempt_number), and idx_webhook_deliveries_
-// event_id was added by that same migration specifically "in anticipation"
-// of this route resolving every attempt of an event, replays included (see
-// that migration's own header) — reusing event_id, not minting a fresh one,
-// is what keeps that lookup meaningful for a replayed delivery.
-//
-// ACCEPTED CONSEQUENCE of continuing the series (CodeRabbit, this PR
-// review): replaying a delivery that was already dead-lettered after
-// exhausting `MAX_ATTEMPTS` (6) gets a replay `attempt_number` of 7+, which
-// is already `>= MAX_ATTEMPTS`. If that replay attempt itself gets a
-// retryable outcome (5xx/timeout), `attempt()`'s own pre-existing logic
-// dead-letters it immediately, with NO further retry scheduled — same rule
-// a 6th automatic attempt already follows, applied consistently to a
-// replay. This is intentional, not a bug: a replay of an already-exhausted
-// delivery that fails again is, correctly, still exhausted. An operator who
-// wants another shot calls replay again.
-
-interface ReplayLookupRow {
-  id: string;
-  subscription_id: string;
-  event_id: string;
-  event_type: string;
-  payload: unknown;
-  idempotency_key: string;
-  target_url: string;
-  signing_secret_ciphertext: string;
-}
-
-/** Bounded retry for the attempt_number race described below — not a
- * silent-forever loop. */
-const REPLAY_ATTEMPT_NUMBER_MAX_RETRIES = 5;
-
-webhooksRouter.post(
-  '/deliveries/:id/replay',
-  bearerAuth,
-  rateLimitBuckets,
-  requireScope('webhooks:manage'),
-  asyncHandler(async (req, res) => {
-    const requestId = requestIdOf(req);
-    const id = String(req.params.id);
-
-    if (!UUID_RE.test(id)) {
-      throw notFoundError(requestId);
-    }
-
-    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
-
-    // ws.active required (CodeRabbit, PR #229's review): without this,
-    // replaying a delivery whose subscription was later deactivated
-    // (`DELETE /webhooks/:id`, this file's own header — a soft
-    // active=false, not a hard delete, so history stays queryable) would
-    // still fire a real HTTP POST to `target_url` — exactly what the owner
-    // turned the subscription off to stop. `GET /deliveries` (the history
-    // view) intentionally still shows these rows regardless of `active`;
-    // only REPLAY (an active re-send) needs this guard. A deactivated
-    // subscription's deliveries 404 the same as a truly unknown id — replay
-    // history isn't distinguishable from "not found" at this endpoint
-    // (matches this route's existing fail-closed convention).
-    const lookup = await pool.query<ReplayLookupRow>(
-      `SELECT wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.payload, wd.idempotency_key,
-              ws.target_url, ws.signing_secret_ciphertext
-       FROM webhook_deliveries wd
-       JOIN webhook_subscriptions ws ON ws.id = wd.subscription_id
-       JOIN oauth_apps a ON a.id = ws.app_id
-       WHERE wd.id = $1 AND a.workspace_id = $2 AND ws.active`,
-      [id, workspaceId]
-    );
-
-    const original = lookup.rows[0];
-    if (!original) {
-      throw notFoundError(requestId);
-    }
-
-    // event_type is unconstrained TEXT (migration 048's own deliberate
-    // "events as data" call) — validated against the registry rather than
-    // blindly cast, same guard rehydrate() applies to a hand-edited or
-    // pre-migration row (deliverer.ts).
-    const eventType = original.event_type;
-    if (!isKnownEventType(eventType)) {
-      throw serverError(requestId);
-    }
-
-    // Re-serialized from the persisted jsonb, not necessarily byte-identical
-    // to whatever the original attempt actually sent (Postgres jsonb does
-    // not preserve key order/whitespace) — harmless, matching rehydrate()'s
-    // own identical comment: this replay signs and sends this exact string,
-    // fresh, and never needs to match a PAST attempt's exact bytes.
-    const rawBody = JSON.stringify(original.payload);
-
-    // Computed and inserted in ONE atomic INSERT ... SELECT — not a separate
-    // read-then-write. `COALESCE(MAX(attempt_number), 0) + 1` is evaluated by
-    // the database at INSERT time, not read back into this handler and
-    // re-sent, so nothing here can go stale between a read and a write.
-    // A genuine concurrent race (two replay calls for the SAME delivery
-    // landing at once) can still both compute the same next number under
-    // READ COMMITTED — resolved by retrying on the unique-index violation
-    // (23505) rather than assumed away (lessons.md rule 18: "push the
-    // predicate into the query, and state the concurrency argument" — the
-    // predicate IS pushed into the query; the bounded retry is the
-    // remaining, disclosed piece for the rare case two computations race).
-    let insertedRow: { id: string; attempt_number: number } | undefined;
-    for (let attempt = 0; attempt < REPLAY_ATTEMPT_NUMBER_MAX_RETRIES; attempt++) {
+      let result;
       try {
-        const inserted = await pool.query<{ id: string; attempt_number: number }>(
-          `INSERT INTO webhook_deliveries
-             (subscription_id, event_id, event_type, payload, idempotency_key, attempt_number, status, replayed_from_id)
-           SELECT $1, $2, $3, $4::jsonb, $5, COALESCE(MAX(attempt_number), 0) + 1, 'pending', $6
-           FROM webhook_deliveries
-           WHERE subscription_id = $1 AND event_id = $2
-           RETURNING id, attempt_number`,
-          [original.subscription_id, original.event_id, original.event_type, rawBody, original.idempotency_key, original.id]
+        result = await pool.query<WebhookSubscriptionRow>(
+          `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
+           VALUES ($1, $2, $3, $4, true)
+           RETURNING id, app_id, event_type, target_url, active, created_at`,
+          [parseResult.data.app_id, parseResult.data.event_type, parseResult.data.target_url, ciphertext]
         );
-        insertedRow = inserted.rows[0];
-        break;
       } catch (error) {
-        if (isPgErrorWithCode(error, '23505') && attempt < REPLAY_ATTEMPT_NUMBER_MAX_RETRIES - 1) {
-          continue;
+        // 23505 = unique_violation — migration 047's
+        // `idx_webhook_subscriptions_unique_active` partial unique index (app_id,
+        // event_type, target_url) WHERE active. A caller-facing, actionable
+        // error rather than a sanitized server_error: this is a validation
+        // outcome (a duplicate active subscription), not an unexpected failure.
+        if (isPgErrorWithCode(error, '23505')) {
+          throw validationFailedError(
+            requestId,
+            'An active subscription for this app_id/event_type/target_url combination already exists.',
+            { fieldErrors: { target_url: ['duplicate active subscription for this event_type and target_url'] } }
+          );
         }
         throw error;
       }
-    }
+      const row = result.rows[0];
+      if (!row) {
+        throw serverError(requestId);
+      }
 
-    if (!insertedRow) {
-      throw serverError(requestId);
-    }
-
-    // Invoke delivery through the deliverer — never reimplement HTTP
-    // delivery/signing here. A fresh instance is cheap (no I/O in the
-    // constructor).
-    //
-    // KNOWN LIMITATION, CORRECTED (CodeRabbit, PR #229's review — an earlier
-    // version of this comment claimed a singleton wouldn't change this;
-    // that was wrong and has been retracted). `InMemoryWebhookDeliverer`
-    // owns a PRIVATE in-memory `queue` array per instance (deliverer.ts).
-    // If this replay's attempt is retryable (5xx/timeout) AND the original's
-    // `attempt_number` was below `MAX_ATTEMPTS`, `attempt()` pushes a new
-    // 'pending' retry-sibling row onto THIS throwaway instance's queue —
-    // which is discarded the moment this request returns. The production
-    // singleton (`api/src/index.ts`, `start()`'s polling `processDue()`)
-    // never sees that sibling, because it lives on a different instance's
-    // queue. The row is NOT lost (it is durably 'pending' in Postgres) but
-    // it IS orphaned from live polling until the next process
-    // restart/`rehydrate()` — a real, narrow gap, not a cosmetic one. It
-    // does NOT affect the primary DLQ-replay use case (attempt_number
-    // already >= MAX_ATTEMPTS never schedules a sibling — see the
-    // 'PF-306: replay of a DLQ (dead) delivery' test below). The correct
-    // fix is injecting the app's real running deliverer instance into this
-    // route instead of constructing a throwaway one — a `createApp()`/
-    // `index.ts` dependency-wiring change bigger than this ticket's own
-    // scope, filed as TRO-603 rather than attempted here under this
-    // sprint's deadline. See 'PF-306: a retryable replay leaves its retry
-    // sibling un-polled until restart (TRO-603, documented not fixed)' below
-    // for the regression test proving this is documented, known behavior.
-    //
-    // `attemptNow()` itself never throws for an HTTP-level outcome
-    // (`performHttpAttempt()` catches every network/timeout failure into a
-    // 'retryable' outcome, persisted normally) — but it CAN throw for a
-    // process/deployment-level failure that isn't row-specific: a transient
-    // DB error while persisting the outcome, or a non-deterministic
-    // decrypt/sign failure (`attempt()`'s own doc comment — e.g. a GCM
-    // auth-tag mismatch from a rotated `SECRET_ENCRYPTION_KEY_ENV`, which is
-    // deliberately rethrown rather than dead-lettered, since it might not be
-    // permanent). Letting that propagate as an opaque 500 would be
-    // misleading: the NEW delivery row this request's whole job is to create
-    // already exists and is a real, valid 'pending' record either way — the
-    // 500 would suggest nothing happened when something did (CodeRabbit,
-    // this PR review). Caught and logged; the response always reflects the
-    // row's actual current state instead.
-    const deliverer = new InMemoryWebhookDeliverer(pool);
-    try {
-      await deliverer.attemptNow({
-        deliveryRowId: insertedRow.id,
-        subscriptionId: original.subscription_id,
-        eventId: original.event_id,
-        eventType,
-        targetUrl: original.target_url,
-        signingSecretCiphertext: original.signing_secret_ciphertext,
-        rawBody,
-        idempotencyKey: original.idempotency_key,
-        attemptNumber: insertedRow.attempt_number,
+      // The only response, ever, that carries `secret`. Not stored anywhere
+      // beyond this local variable and this one JSON body — AC: "secret
+      // non-recoverable via API after creation."
+      res.status(201).json({
+        ...serializeSubscription(row),
+        secret: plaintextSecret,
+        warning: 'Save this secret now. It will not be shown again.',
       });
-    } catch (error) {
-      console.error(
-        `webhooks: replay attemptNow() failed to execute for new delivery row ${insertedRow.id} ` +
-          `(replay of ${original.id}); the row remains 'pending', recoverable by a future rehydrate()`,
-        error
+    })
+  );
+
+  // ─── GET /api/v1/webhooks ────────────────────────────────────────────────
+
+  webhooksRouter.get(
+    '/',
+    bearerAuth,
+    rateLimitBuckets,
+    requireScope('webhooks:manage'),
+    asyncHandler(async (req, res) => {
+      const requestId = requestIdOf(req);
+
+      const parseResult = ListWebhookSubscriptionsQuerySchema.safeParse(req.query);
+      if (!parseResult.success) {
+        throw validationFailedError(requestId, 'Invalid query parameters.', {
+          fieldErrors: parseResult.error.flatten().fieldErrors,
+        });
+      }
+      const { limit, cursor } = parseResult.data;
+
+      let decodedCursor: KeysetCursor | null = null;
+      if (cursor !== undefined) {
+        decodedCursor = decodeCursor(cursor);
+        if (!decodedCursor) {
+          throw validationFailedError(requestId, 'Invalid cursor.', {
+            fieldErrors: { cursor: ['cursor is not a valid opaque cursor'] },
+          });
+        }
+      }
+
+      const workspaceId = await resolveWorkspaceOrNull(req, requestId);
+      if (!workspaceId) {
+        // Same "fail closed to an empty page" convention as documents.ts.
+        res.status(200).json({ data: [], next_cursor: null });
+        return;
+      }
+
+      const values: unknown[] = [workspaceId];
+      const whereClauses = ['a.workspace_id = $1'];
+
+      if (decodedCursor) {
+        values.push(decodedCursor.created_at, decodedCursor.id);
+        whereClauses.push(`(ws.created_at, ws.id) < ($${values.length - 1}, $${values.length})`);
+      }
+
+      values.push(limit + 1);
+      const limitParamIndex = values.length;
+
+      const result = await pool.query<WebhookSubscriptionRow>(
+        `SELECT ${SUBSCRIPTION_COLUMNS}
+         FROM webhook_subscriptions ws
+         JOIN oauth_apps a ON a.id = ws.app_id
+         WHERE ${whereClauses.join(' AND ')}
+         ORDER BY ws.created_at DESC, ws.id DESC
+         LIMIT $${limitParamIndex}`,
+        values
       );
-    }
 
-    const finalResult = await pool.query<WebhookDeliveryRow>(
-      `SELECT ${DELIVERY_COLUMNS} FROM webhook_deliveries wd WHERE wd.id = $1`,
-      [insertedRow.id]
-    );
-    const finalRow = finalResult.rows[0];
-    if (!finalRow) {
-      throw serverError(requestId);
-    }
+      const rows = result.rows;
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      const lastRow = page[page.length - 1];
+      const nextCursor =
+        hasMore && lastRow
+          ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
+          : null;
 
-    // 201 means the NEW delivery row was created and an attempt ran to
-    // completion (or, per the catch above, at least was durably recorded as
-    // 'pending' if the attempt itself failed to execute) — it does NOT mean
-    // the subscriber accepted the delivery. `finalRow.status` is the
-    // authoritative outcome: 'success', 'failed' (a retry sibling was
-    // scheduled), 'dead' (permanent failure, or a replay whose continued
-    // attempt_number already met MAX_ATTEMPTS — see this file's header for
-    // that exhaustion case), or 'pending' (execution itself did not complete;
-    // see the catch above).
-    res.status(201).json(serializeDelivery(finalRow));
-  })
-);
+      res.status(200).json({
+        data: page.map(serializeSubscription),
+        next_cursor: nextCursor,
+      });
+    })
+  );
 
-// ─── GET /api/v1/webhooks/:id ────────────────────────────────────────────
+  // ─── GET /api/v1/webhooks/deliveries ─────────────────────────────────────
+  //
+  // Registered BEFORE `GET /:id` — see file header for why route order
+  // matters here.
 
-webhooksRouter.get(
-  '/:id',
-  bearerAuth,
-  rateLimitBuckets,
-  requireScope('webhooks:manage'),
-  asyncHandler(async (req, res) => {
-    const requestId = requestIdOf(req);
-    const id = String(req.params.id);
+  webhooksRouter.get(
+    '/deliveries',
+    bearerAuth,
+    rateLimitBuckets,
+    requireScope('webhooks:manage'),
+    asyncHandler(async (req, res) => {
+      const requestId = requestIdOf(req);
 
-    if (!UUID_RE.test(id)) {
-      throw notFoundError(requestId);
-    }
+      const parseResult = ListWebhookDeliveriesQuerySchema.safeParse(req.query);
+      if (!parseResult.success) {
+        throw validationFailedError(requestId, 'Invalid query parameters.', {
+          fieldErrors: parseResult.error.flatten().fieldErrors,
+        });
+      }
+      const { limit, cursor, subscription_id, status } = parseResult.data;
 
-    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+      let decodedCursor: KeysetCursor | null = null;
+      if (cursor !== undefined) {
+        decodedCursor = decodeCursor(cursor);
+        if (!decodedCursor) {
+          throw validationFailedError(requestId, 'Invalid cursor.', {
+            fieldErrors: { cursor: ['cursor is not a valid opaque cursor'] },
+          });
+        }
+      }
 
-    const result = await pool.query<WebhookSubscriptionRow>(
-      `SELECT ${SUBSCRIPTION_COLUMNS}
-       FROM webhook_subscriptions ws
-       JOIN oauth_apps a ON a.id = ws.app_id
-       WHERE ws.id = $1 AND a.workspace_id = $2`,
-      [id, workspaceId]
-    );
+      const workspaceId = await resolveWorkspaceOrNull(req, requestId);
+      if (!workspaceId) {
+        // Same "fail closed to an empty page" convention as GET /.
+        res.status(200).json({ data: [], next_cursor: null });
+        return;
+      }
 
-    const row = result.rows[0];
-    if (!row) {
-      throw notFoundError(requestId);
-    }
+      const values: unknown[] = [workspaceId];
+      const whereClauses = ['a.workspace_id = $1'];
 
-    res.status(200).json(serializeSubscription(row));
-  })
-);
+      if (subscription_id !== undefined) {
+        values.push(subscription_id);
+        whereClauses.push(`wd.subscription_id = $${values.length}`);
+      }
 
-// ─── DELETE /api/v1/webhooks/:id ─────────────────────────────────────────
+      if (status !== undefined) {
+        values.push(status);
+        whereClauses.push(`wd.status = $${values.length}`);
+      }
 
-webhooksRouter.delete(
-  '/:id',
-  bearerAuth,
-  rateLimitBuckets,
-  requireScope('webhooks:manage'),
-  asyncHandler(async (req, res) => {
-    const requestId = requestIdOf(req);
-    const id = String(req.params.id);
+      if (decodedCursor) {
+        values.push(decodedCursor.created_at, decodedCursor.id);
+        whereClauses.push(`(wd.created_at, wd.id) < ($${values.length - 1}, $${values.length})`);
+      }
 
-    if (!UUID_RE.test(id)) {
-      throw notFoundError(requestId);
-    }
+      values.push(limit + 1);
+      const limitParamIndex = values.length;
 
-    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+      const result = await pool.query<WebhookDeliveryRow>(
+        `SELECT ${DELIVERY_COLUMNS}
+         FROM webhook_deliveries wd
+         JOIN webhook_subscriptions ws ON ws.id = wd.subscription_id
+         JOIN oauth_apps a ON a.id = ws.app_id
+         WHERE ${whereClauses.join(' AND ')}
+         ORDER BY wd.created_at DESC, wd.id DESC
+         LIMIT $${limitParamIndex}`,
+        values
+      );
 
-    // Deactivates rather than deletes — see file header. No `active = true`
-    // filter in the WHERE clause: a repeat call against an already-inactive
-    // subscription still matches and still returns 204 (idempotent DELETE),
-    // it just has nothing left to change.
-    const result = await pool.query<{ id: string }>(
-      `UPDATE webhook_subscriptions ws
-       SET active = false
-       FROM oauth_apps a
-       WHERE ws.id = $1 AND ws.app_id = a.id AND a.workspace_id = $2
-       RETURNING ws.id`,
-      [id, workspaceId]
-    );
+      const rows = result.rows;
+      const hasMore = rows.length > limit;
+      const page = hasMore ? rows.slice(0, limit) : rows;
+      const lastRow = page[page.length - 1];
+      const nextCursor =
+        hasMore && lastRow
+          ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
+          : null;
 
-    if (!result.rows[0]) {
-      throw notFoundError(requestId);
-    }
+      res.status(200).json({
+        data: page.map(serializeDelivery),
+        next_cursor: nextCursor,
+      });
+    })
+  );
 
-    res.status(204).send();
-  })
-);
+  // ─── POST /api/v1/webhooks/deliveries/:id/replay ─────────────────────────
+  //
+  // PF-306 (Linear TRO-446). Registered here, alongside `GET /deliveries` and
+  // still BEFORE `GET /:id` — same Express route-ordering reasoning as
+  // `GET /deliveries` itself (see file header): `deliveries` is a literal path
+  // segment, so as long as anything under `/deliveries/*` is registered before
+  // the generic `/:id` pattern, the literal segment wins the match. (In this
+  // specific case segment COUNT alone would already disambiguate this route
+  // from `/:id` and `/:id/rotate` — 3 segments vs. 1 and 2 — but keeping every
+  // `/deliveries/*` route grouped together, before `/:id`, matches this file's
+  // existing convention and doesn't rely on that.)
+  //
+  // Looks up the ORIGINAL delivery row (workspace-scoped via the same
+  // oauth_apps join every other route in this file uses — a caller cannot
+  // replay another workspace's delivery), then re-runs it through the
+  // deliverer with the SAME idempotency_key the original delivery used (read
+  // off the row, never regenerated — the subscriber-dedupe contract PF-801's
+  // future e2e test verifies). Works for ANY original status, including
+  // 'dead' (DLQ) — this route never filters or branches on the original row's
+  // own status; that is the entire point of a DLQ-replay endpoint.
+  //
+  // Records a NEW delivery row rather than mutating the original (this
+  // ticket's own AC) — linked back via `replayed_from_id` (migration 050).
+  // Continues the SAME (subscription_id, event_id) attempt_number series
+  // rather than restarting at 1: migration 048's own unique index is keyed on
+  // (subscription_id, event_id, attempt_number), and idx_webhook_deliveries_
+  // event_id was added by that same migration specifically "in anticipation"
+  // of this route resolving every attempt of an event, replays included (see
+  // that migration's own header) — reusing event_id, not minting a fresh one,
+  // is what keeps that lookup meaningful for a replayed delivery.
+  //
+  // ACCEPTED CONSEQUENCE of continuing the series (CodeRabbit, this PR
+  // review): replaying a delivery that was already dead-lettered after
+  // exhausting `MAX_ATTEMPTS` (6) gets a replay `attempt_number` of 7+, which
+  // is already `>= MAX_ATTEMPTS`. If that replay attempt itself gets a
+  // retryable outcome (5xx/timeout), `attempt()`'s own pre-existing logic
+  // dead-letters it immediately, with NO further retry scheduled — same rule
+  // a 6th automatic attempt already follows, applied consistently to a
+  // replay. This is intentional, not a bug: a replay of an already-exhausted
+  // delivery that fails again is, correctly, still exhausted. An operator who
+  // wants another shot calls replay again.
 
-// ─── POST /api/v1/webhooks/:id/rotate ────────────────────────────────────
+  interface ReplayLookupRow {
+    id: string;
+    subscription_id: string;
+    event_id: string;
+    event_type: string;
+    payload: unknown;
+    idempotency_key: string;
+    target_url: string;
+    signing_secret_ciphertext: string;
+  }
 
-webhooksRouter.post(
-  '/:id/rotate',
-  bearerAuth,
-  rateLimitBuckets,
-  requireScope('webhooks:manage'),
-  asyncHandler(async (req, res) => {
-    const requestId = requestIdOf(req);
-    const id = String(req.params.id);
+  /** Bounded retry for the attempt_number race described below — not a
+   * silent-forever loop. */
+  const REPLAY_ATTEMPT_NUMBER_MAX_RETRIES = 5;
 
-    if (!UUID_RE.test(id)) {
-      throw notFoundError(requestId);
-    }
+  webhooksRouter.post(
+    '/deliveries/:id/replay',
+    bearerAuth,
+    rateLimitBuckets,
+    requireScope('webhooks:manage'),
+    asyncHandler(async (req, res) => {
+      const requestId = requestIdOf(req);
+      const id = String(req.params.id);
 
-    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+      if (!UUID_RE.test(id)) {
+        throw notFoundError(requestId);
+      }
 
-    const plaintextSecret = generateWebhookSecret();
-    const ciphertext = encryptSecret(plaintextSecret);
+      const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
 
-    // Single-column UPDATE, no grace period — see file header (PF-102
-    // `rotateOAuthAppSecret` precedent). The old ciphertext is gone the
-    // instant this commits; nothing keeps it around for a fallback verify.
-    const result = await pool.query<WebhookSubscriptionRow>(
-      `UPDATE webhook_subscriptions ws
-       SET signing_secret_ciphertext = $1
-       FROM oauth_apps a
-       WHERE ws.id = $2 AND ws.app_id = a.id AND a.workspace_id = $3
-       RETURNING ws.id, ws.app_id, ws.event_type, ws.target_url, ws.active, ws.created_at`,
-      [ciphertext, id, workspaceId]
-    );
+      // ws.active required (CodeRabbit, PR #229's review): without this,
+      // replaying a delivery whose subscription was later deactivated
+      // (`DELETE /webhooks/:id`, this file's own header — a soft
+      // active=false, not a hard delete, so history stays queryable) would
+      // still fire a real HTTP POST to `target_url` — exactly what the owner
+      // turned the subscription off to stop. `GET /deliveries` (the history
+      // view) intentionally still shows these rows regardless of `active`;
+      // only REPLAY (an active re-send) needs this guard. A deactivated
+      // subscription's deliveries 404 the same as a truly unknown id — replay
+      // history isn't distinguishable from "not found" at this endpoint
+      // (matches this route's existing fail-closed convention).
+      const lookup = await pool.query<ReplayLookupRow>(
+        `SELECT wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.payload, wd.idempotency_key,
+                ws.target_url, ws.signing_secret_ciphertext
+         FROM webhook_deliveries wd
+         JOIN webhook_subscriptions ws ON ws.id = wd.subscription_id
+         JOIN oauth_apps a ON a.id = ws.app_id
+         WHERE wd.id = $1 AND a.workspace_id = $2 AND ws.active`,
+        [id, workspaceId]
+      );
 
-    const row = result.rows[0];
-    if (!row) {
-      throw notFoundError(requestId);
-    }
+      const original = lookup.rows[0];
+      if (!original) {
+        throw notFoundError(requestId);
+      }
 
-    res.status(200).json({
-      ...serializeSubscription(row),
-      secret: plaintextSecret,
-      warning: 'Save this secret now. It will not be shown again.',
-    });
-  })
-);
+      // event_type is unconstrained TEXT (migration 048's own deliberate
+      // "events as data" call) — validated against the registry rather than
+      // blindly cast, same guard rehydrate() applies to a hand-edited or
+      // pre-migration row (deliverer.ts).
+      const eventType = original.event_type;
+      if (!isKnownEventType(eventType)) {
+        throw serverError(requestId);
+      }
+
+      // Re-serialized from the persisted jsonb, not necessarily byte-identical
+      // to whatever the original attempt actually sent (Postgres jsonb does
+      // not preserve key order/whitespace) — harmless, matching rehydrate()'s
+      // own identical comment: this replay signs and sends this exact string,
+      // fresh, and never needs to match a PAST attempt's exact bytes.
+      const rawBody = JSON.stringify(original.payload);
+
+      // Computed and inserted in ONE atomic INSERT ... SELECT — not a separate
+      // read-then-write. `COALESCE(MAX(attempt_number), 0) + 1` is evaluated by
+      // the database at INSERT time, not read back into this handler and
+      // re-sent, so nothing here can go stale between a read and a write.
+      // A genuine concurrent race (two replay calls for the SAME delivery
+      // landing at once) can still both compute the same next number under
+      // READ COMMITTED — resolved by retrying on the unique-index violation
+      // (23505) rather than assumed away (lessons.md rule 18: "push the
+      // predicate into the query, and state the concurrency argument" — the
+      // predicate IS pushed into the query; the bounded retry is the
+      // remaining, disclosed piece for the rare case two computations race).
+      let insertedRow: { id: string; attempt_number: number } | undefined;
+      for (let attempt = 0; attempt < REPLAY_ATTEMPT_NUMBER_MAX_RETRIES; attempt++) {
+        try {
+          const inserted = await pool.query<{ id: string; attempt_number: number }>(
+            `INSERT INTO webhook_deliveries
+               (subscription_id, event_id, event_type, payload, idempotency_key, attempt_number, status, replayed_from_id)
+             SELECT $1, $2, $3, $4::jsonb, $5, COALESCE(MAX(attempt_number), 0) + 1, 'pending', $6
+             FROM webhook_deliveries
+             WHERE subscription_id = $1 AND event_id = $2
+             RETURNING id, attempt_number`,
+            [original.subscription_id, original.event_id, original.event_type, rawBody, original.idempotency_key, original.id]
+          );
+          insertedRow = inserted.rows[0];
+          break;
+        } catch (error) {
+          if (isPgErrorWithCode(error, '23505') && attempt < REPLAY_ATTEMPT_NUMBER_MAX_RETRIES - 1) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      if (!insertedRow) {
+        throw serverError(requestId);
+      }
+
+      // Invoke delivery through the deliverer — never reimplement HTTP
+      // delivery/signing here.
+      //
+      // FIXED (TRO-603, follow-up from PF-306/TRO-446's CodeRabbit review).
+      // Previously this line unconditionally built a fresh throwaway
+      // `InMemoryWebhookDeliverer(pool)` per request. `InMemoryWebhookDeliverer`
+      // owns a PRIVATE in-memory `queue` array per instance (deliverer.ts), so
+      // if this replay's attempt was retryable (5xx/timeout) AND the
+      // original's `attempt_number` was below `MAX_ATTEMPTS`, `attempt()`
+      // would push a new 'pending' retry-sibling row onto THAT throwaway
+      // instance's queue — discarded the moment the request returned. The
+      // production singleton (`api/src/index.ts`, `start()`'s polling
+      // `processDue()`) never saw that sibling, because it lived on a
+      // different instance's queue: the row was not lost (durably 'pending'
+      // in Postgres) but was orphaned from live polling until the next
+      // process restart's `rehydrate()`.
+      //
+      // Now: `createWebhooksRouter()` (this file's own factory, see its doc
+      // comment above) takes the app's deliverer as `injectedDeliverer`, and
+      // `index.ts` passes its real, already-`.start()`'d singleton when it
+      // calls `createApp()`. When present, THIS delivery attempt runs on that
+      // same instance, so a scheduled retry sibling lands in the queue the
+      // live `processDue()` loop is already draining — no orphaning, no wait
+      // for a restart. The throwaway-instance fallback (`?? new
+      // InMemoryWebhookDeliverer(pool)`) is preserved for every caller that
+      // does not inject one (every test file that calls `createApp()` with no
+      // options, and any other dev/test caller) — see
+      // '__tests__/webhooks.test.ts' for both the fallback-path regression
+      // test (documents the still-orphaned behavior when nothing is injected)
+      // and the fixed-path test (proves the sibling now gets polled when a
+      // shared instance is used).
+      //
+      // This does NOT affect the primary DLQ-replay use case either way
+      // (attempt_number already >= MAX_ATTEMPTS never schedules a sibling —
+      // see the 'PF-306: replay of a DLQ (dead) delivery' test).
+      //
+      // `attemptNow()` itself never throws for an HTTP-level outcome
+      // (`performHttpAttempt()` catches every network/timeout failure into a
+      // 'retryable' outcome, persisted normally) — but it CAN throw for a
+      // process/deployment-level failure that isn't row-specific: a transient
+      // DB error while persisting the outcome, or a non-deterministic
+      // decrypt/sign failure (`attempt()`'s own doc comment — e.g. a GCM
+      // auth-tag mismatch from a rotated `SECRET_ENCRYPTION_KEY_ENV`, which is
+      // deliberately rethrown rather than dead-lettered, since it might not be
+      // permanent). Letting that propagate as an opaque 500 would be
+      // misleading: the NEW delivery row this request's whole job is to create
+      // already exists and is a real, valid 'pending' record either way — the
+      // 500 would suggest nothing happened when something did (CodeRabbit,
+      // this PR review). Caught and logged; the response always reflects the
+      // row's actual current state instead.
+      const deliverer: IWebhookDeliverer = injectedDeliverer ?? new InMemoryWebhookDeliverer(pool);
+      try {
+        await deliverer.attemptNow({
+          deliveryRowId: insertedRow.id,
+          subscriptionId: original.subscription_id,
+          eventId: original.event_id,
+          eventType,
+          targetUrl: original.target_url,
+          signingSecretCiphertext: original.signing_secret_ciphertext,
+          rawBody,
+          idempotencyKey: original.idempotency_key,
+          attemptNumber: insertedRow.attempt_number,
+        });
+      } catch (error) {
+        console.error(
+          `webhooks: replay attemptNow() failed to execute for new delivery row ${insertedRow.id} ` +
+            `(replay of ${original.id}); the row remains 'pending', recoverable by a future rehydrate()`,
+          error
+        );
+      }
+
+      const finalResult = await pool.query<WebhookDeliveryRow>(
+        `SELECT ${DELIVERY_COLUMNS} FROM webhook_deliveries wd WHERE wd.id = $1`,
+        [insertedRow.id]
+      );
+      const finalRow = finalResult.rows[0];
+      if (!finalRow) {
+        throw serverError(requestId);
+      }
+
+      // 201 means the NEW delivery row was created and an attempt ran to
+      // completion (or, per the catch above, at least was durably recorded as
+      // 'pending' if the attempt itself failed to execute) — it does NOT mean
+      // the subscriber accepted the delivery. `finalRow.status` is the
+      // authoritative outcome: 'success', 'failed' (a retry sibling was
+      // scheduled), 'dead' (permanent failure, or a replay whose continued
+      // attempt_number already met MAX_ATTEMPTS — see this file's header for
+      // that exhaustion case), or 'pending' (execution itself did not complete;
+      // see the catch above).
+      res.status(201).json(serializeDelivery(finalRow));
+    })
+  );
+
+  // ─── GET /api/v1/webhooks/:id ────────────────────────────────────────────
+
+  webhooksRouter.get(
+    '/:id',
+    bearerAuth,
+    rateLimitBuckets,
+    requireScope('webhooks:manage'),
+    asyncHandler(async (req, res) => {
+      const requestId = requestIdOf(req);
+      const id = String(req.params.id);
+
+      if (!UUID_RE.test(id)) {
+        throw notFoundError(requestId);
+      }
+
+      const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+
+      const result = await pool.query<WebhookSubscriptionRow>(
+        `SELECT ${SUBSCRIPTION_COLUMNS}
+         FROM webhook_subscriptions ws
+         JOIN oauth_apps a ON a.id = ws.app_id
+         WHERE ws.id = $1 AND a.workspace_id = $2`,
+        [id, workspaceId]
+      );
+
+      const row = result.rows[0];
+      if (!row) {
+        throw notFoundError(requestId);
+      }
+
+      res.status(200).json(serializeSubscription(row));
+    })
+  );
+
+  // ─── DELETE /api/v1/webhooks/:id ─────────────────────────────────────────
+
+  webhooksRouter.delete(
+    '/:id',
+    bearerAuth,
+    rateLimitBuckets,
+    requireScope('webhooks:manage'),
+    asyncHandler(async (req, res) => {
+      const requestId = requestIdOf(req);
+      const id = String(req.params.id);
+
+      if (!UUID_RE.test(id)) {
+        throw notFoundError(requestId);
+      }
+
+      const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+
+      // Deactivates rather than deletes — see file header. No `active = true`
+      // filter in the WHERE clause: a repeat call against an already-inactive
+      // subscription still matches and still returns 204 (idempotent DELETE),
+      // it just has nothing left to change.
+      const result = await pool.query<{ id: string }>(
+        `UPDATE webhook_subscriptions ws
+         SET active = false
+         FROM oauth_apps a
+         WHERE ws.id = $1 AND ws.app_id = a.id AND a.workspace_id = $2
+         RETURNING ws.id`,
+        [id, workspaceId]
+      );
+
+      if (!result.rows[0]) {
+        throw notFoundError(requestId);
+      }
+
+      res.status(204).send();
+    })
+  );
+
+  // ─── POST /api/v1/webhooks/:id/rotate ────────────────────────────────────
+
+  webhooksRouter.post(
+    '/:id/rotate',
+    bearerAuth,
+    rateLimitBuckets,
+    requireScope('webhooks:manage'),
+    asyncHandler(async (req, res) => {
+      const requestId = requestIdOf(req);
+      const id = String(req.params.id);
+
+      if (!UUID_RE.test(id)) {
+        throw notFoundError(requestId);
+      }
+
+      const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+
+      const plaintextSecret = generateWebhookSecret();
+      const ciphertext = encryptSecret(plaintextSecret);
+
+      // Single-column UPDATE, no grace period — see file header (PF-102
+      // `rotateOAuthAppSecret` precedent). The old ciphertext is gone the
+      // instant this commits; nothing keeps it around for a fallback verify.
+      const result = await pool.query<WebhookSubscriptionRow>(
+        `UPDATE webhook_subscriptions ws
+         SET signing_secret_ciphertext = $1
+         FROM oauth_apps a
+         WHERE ws.id = $2 AND ws.app_id = a.id AND a.workspace_id = $3
+         RETURNING ws.id, ws.app_id, ws.event_type, ws.target_url, ws.active, ws.created_at`,
+        [ciphertext, id, workspaceId]
+      );
+
+      const row = result.rows[0];
+      if (!row) {
+        throw notFoundError(requestId);
+      }
+
+      res.status(200).json({
+        ...serializeSubscription(row),
+        secret: plaintextSecret,
+        warning: 'Save this secret now. It will not be shown again.',
+      });
+    })
+  );
+
+  return webhooksRouter;
+}

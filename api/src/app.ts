@@ -51,8 +51,9 @@ import weeklyPlansRoutes, { weeklyRetrosRouter } from './routes/weekly-plans.js'
 import { documentCommentsRouter, commentsRouter } from './routes/comments.js';
 import { setupSwagger } from './swagger.js';
 import { initializeCAIA } from './services/caia.js';
-import { v1Router } from './platform/api/v1/router.js';
+import { v1Router, createV1Router } from './platform/api/v1/router.js';
 import { createPublicApiCors } from './platform/publicCors.js';
+import type { IWebhookDeliverer } from './platform/webhooks/deliverer.js';
 
 // Validate SESSION_SECRET in production
 if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) {
@@ -228,7 +229,26 @@ export function resolveTrustProxyHops(rawValue: string | undefined): number {
   return parsed;
 }
 
-export function createApp(corsOrigin: string = 'http://localhost:5173'): express.Express {
+/**
+ * Optional per-call dependencies for `createApp()` (TRO-603). Today the only
+ * member is `webhookDeliverer` — the app's real, running
+ * `IWebhookDeliverer` singleton, so `POST /api/v1/webhooks/deliveries/:id/replay`
+ * can dispatch a replay through the SAME instance whose `processDue()`
+ * polling loop is already running, instead of building a throwaway instance
+ * per request (see `platform/api/v1/resources/webhooks.ts`'s
+ * `createWebhooksRouter()` for the full before/after). `index.ts` is the only
+ * caller that passes this — every other `createApp()` call site (dev,
+ * every test file in this repo) omits it and gets the pre-existing
+ * throwaway-instance fallback, unchanged.
+ */
+export interface CreateAppOptions {
+  webhookDeliverer?: IWebhookDeliverer;
+}
+
+export function createApp(
+  corsOrigin: string = 'http://localhost:5173',
+  options: CreateAppOptions = {}
+): express.Express {
   const app = express();
 
   // Trust proxy headers (CloudFront/Render) for secure cookies and correct
@@ -393,7 +413,18 @@ export function createApp(corsOrigin: string = 'http://localhost:5173'): express
   // also touch this CORS wiring. PF-104/TRO-416's token router (also mounted
   // below) gets the same benefit for free, for the identical reason.
   app.use(['/api/v1', '/oauth'], createPublicApiCors());
-  app.use('/api/v1', v1Router);
+  // TRO-603: use the module-level default `v1Router` singleton unless this
+  // call was given a real webhook deliverer to inject — in which case a
+  // fresh `v1Router` is built via `createV1Router()` so its `/webhooks`
+  // sub-router closes over that specific instance (see `router.ts`'s and
+  // `resources/webhooks.ts`'s own doc comments for why this can't just be a
+  // property set on the shared singleton). Every existing `createApp()` call
+  // site — every test file in this repo, plus local `pnpm dev` — passes no
+  // options and is unaffected: same singleton, same behavior as before.
+  const mountedV1Router = options.webhookDeliverer
+    ? createV1Router(options.webhookDeliverer).v1Router
+    : v1Router;
+  app.use('/api/v1', mountedV1Router);
 
   // Skip the app-global session CORS for the public-surface path prefixes —
   // they already received (or will receive) the public policy above, and

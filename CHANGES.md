@@ -174,6 +174,258 @@ ticket doesn't own.
 
 ---
 
+## TRO-603 — PF-306 follow-up: inject the app's shared webhook deliverer into the replay route
+
+**Fixes the disclosed, tested limitation TRO-446/PF-306 shipped with (CodeRabbit, PR #229's
+review) — retry siblings scheduled by a retryable replay were orphaned from live polling until a
+process restart.** `POST /api/v1/webhooks/deliveries/:id/replay`
+(`api/src/platform/api/v1/resources/webhooks.ts`) used to construct a throwaway
+`new InMemoryWebhookDeliverer(pool)` per request. `InMemoryWebhookDeliverer` owns a PRIVATE
+per-instance in-memory `queue` array (`platform/webhooks/deliverer.ts`), so if a replay's own
+attempt was retryable (5xx/timeout) and the original delivery's `attempt_number` was below
+`MAX_ATTEMPTS` (6), `attempt()` pushed a new `'pending'` retry-sibling row onto that throwaway
+instance's queue — discarded the instant the HTTP request returned. The production singleton
+(`api/src/index.ts`'s `webhookDeliverer`, `.start()`'s polling `processDue()`) never saw that
+sibling, because it lived on a different instance's queue. The row was never lost (durably
+`'pending'` in Postgres), only orphaned from live polling. Confirmed narrow: never affected the
+primary DLQ-replay case, since a `dead` delivery's `attempt_number` is already `>= MAX_ATTEMPTS`,
+so no sibling is ever scheduled for it.
+
+**The fix: dependency-inject the app's real, running deliverer instance instead of constructing a
+new one per request.**
+
+- **`api/src/platform/api/v1/resources/webhooks.ts`.** `webhooksRouter` changed from a module-level
+  `Router()` singleton to a factory, `createWebhooksRouter(injectedDeliverer?: IWebhookDeliverer):
+  RouterType` — chosen because this codebase already has exactly this precedent for a router that
+  needs a per-`createApp()`-call dependency: `routes/oauth-authorize.ts`'s
+  `createOAuthAuthorizeRouter(webOrigin)` (and the sibling OAuth token/device routers). The one line
+  that changes behavior: `const deliverer = new InMemoryWebhookDeliverer(pool);` became `const
+  deliverer: IWebhookDeliverer = injectedDeliverer ?? new InMemoryWebhookDeliverer(pool);` — every
+  other line of the replay handler is unchanged. The route's own doc comment (already corrected once
+  by TRO-446 to accurately describe the limitation) is corrected again to describe the fix.
+- **`api/src/platform/api/v1/router.ts`.** `v1Router`/`v1Routes` construction moved into a new
+  `createV1Router(webhookDeliverer?: IWebhookDeliverer)` factory that builds `/webhooks` via
+  `createWebhooksRouter(webhookDeliverer)`. The module still exports `v1Router`/`v1Routes` as
+  module-level consts — the factory called with no deliverer, i.e. byte-for-byte the same router
+  this file always built — so every existing direct importer (`app.ts`'s default path, plus
+  `middleware/__tests__/rate-limit-v1-exemption.test.ts`, `platform/api/v1/__tests__/route-fitness.
+  test.ts`, and `platform/api/v1/__tests__/error-middleware.test.ts`, which mount/inspect
+  `v1Router`/`v1Routes` directly without going through `createApp()`) needed zero changes.
+- **`api/src/app.ts`.** `createApp(corsOrigin, options?: CreateAppOptions)` — a new optional second
+  parameter, `{ webhookDeliverer?: IWebhookDeliverer }`, defaulting to `{}`. When
+  `options.webhookDeliverer` is set, `createApp()` builds a fresh `v1Router` via
+  `createV1Router(options.webhookDeliverer)` for that one call; otherwise it mounts the existing
+  module-level `v1Router` singleton, unchanged. **Every one of the 60 existing `createApp()` call
+  sites in this repo** (found via `grep -rn "createApp(" api/src e2e --include="*.ts"` before writing
+  any code) calls it with zero or one argument — none pass a second argument — so none needed
+  modification; they all keep getting the pre-existing singleton/throwaway-instance behavior,
+  byte-for-byte.
+- **`api/src/index.ts`.** The `webhookDeliverer` construction/`rehydrate()`/`wireDelivererToEventBus`/
+  `.start()` block — previously positioned AFTER `createApp()`/`createServer()` — moved earlier in
+  `main()`, to before those calls (nothing in that block ever depended on `app`/`server`, so nothing
+  else about when it runs changed). `createApp(CORS_ORIGIN)` became `createApp(CORS_ORIGIN, {
+  webhookDeliverer })`, passing the real, already-`rehydrate()`d, already-`.start()`'d singleton.
+  `createApp()` itself stays synchronous, unchanged — only the ALREADY-CONSTRUCTED instance is handed
+  in, so no caller anywhere needed to become async.
+
+**Regression tests (`api/src/platform/api/v1/resources/__tests__/webhooks.test.ts`, PF-306 describe
+block).** Kept TRO-446's existing test (retitled, its trailing comment updated) rather than deleting
+it — it still correctly documents behavior that is still true today: it uses the file's own
+top-level `app` (`createApp()`, no options), so it proves the FALLBACK path — the one every other
+test file in this repo that calls `createApp()` with no options still exercises — is deliberately
+unchanged by this ticket. Added a new test alongside it, `'TRO-603 FIX: when the app is built with
+its real, shared deliverer injected, a retryable replay's retry sibling is queued on THAT instance
+and gets drained by its own processDue() — no process restart required'`, that:
+1. Builds its own `createApp('http://localhost:5173', { webhookDeliverer: sharedDeliverer })`
+   instance, where `sharedDeliverer` is an `InMemoryWebhookDeliverer` constructed with a `ManualClock`
+   (`platform/webhooks/clock.ts`) this test also holds a direct reference to — mirroring exactly what
+   `index.ts` does at boot (construct the deliverer, then pass that same instance into `createApp()`).
+2. Replays a `'failed'`, `attempt_number: 2` delivery against a stubbed 503, asserting the same
+   `'failed'` + scheduled-sibling outcome the fallback test proves.
+3. **Proves the fix, not just the durability**: advances `sharedClock` past the sibling's scheduled
+   backoff and calls `sharedDeliverer.processDue()` directly — the same call `start()`'s real
+   `setInterval` makes on a 1-second cadence in production — with a second stubbed fetch response
+   (200, recovered) distinguishing "actually attempted" from "still pending for an unrelated reason."
+   Asserts `processedCount === 1`, `fetchCallCount === 2`, and the sibling row's DB status flips to
+   `'success'`.
+
+**Proved red before green.** Reverted the DI fix locally (`deliverer: injectedDeliverer ??
+new InMemoryWebhookDeliverer(pool)` back to the pre-fix `new InMemoryWebhookDeliverer(pool)`, via a
+saved copy of the file — not `git stash`, banned in this repo) and re-ran the file: the new
+`processDue()` assertion failed with `expected 0 to be 1` (the sibling was queued on a different,
+discarded instance, exactly the pre-fix bug), while the other 33 tests stayed green. Restored the
+fix and re-ran: all 34 pass.
+
+**How to run it.**
+
+```bash
+source .factory-env
+cd api && npx tsc --noEmit -p .
+cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts
+cd api && npx vitest run src/app.test.ts src/platform/__tests__/v1-router.test.ts \
+  src/platform/api/v1/__tests__/error-middleware.test.ts \
+  src/platform/api/v1/__tests__/route-fitness.test.ts \
+  src/middleware/__tests__/rate-limit-v1-exemption.test.ts
+```
+
+**Evidence.**
+- **Observed:** `cd api && npx tsc --noEmit -p .` clean, before and after every edit in this ticket.
+  No non-null `!`, `as any`, or `as unknown as` added anywhere.
+- **Observed:** `webhooks.test.ts` → 34/34 (33 pre-existing, per TRO-447's own CHANGES.md entry
+  above — plus this ticket's one new fix-proving test; the pre-existing fallback-path test was
+  retitled and had its trailing comment updated, not counted as a new case). Both the fallback-path
+  and the fix-path tests pass; the fix-path test was proven red against the pre-fix code (see
+  above).
+- **Observed:** `app.test.ts`, `v1-router.test.ts`, `error-middleware.test.ts`,
+  `route-fitness.test.ts`, and `rate-limit-v1-exemption.test.ts` — the five files that either call
+  `createApp()` directly with the default signature or import `v1Router`/`v1Routes` directly — all
+  pass (138/138 total across the five files), confirming the module-level singleton default path is
+  byte-for-byte unaffected.
+- **Derived, not directly re-verified this ticket:** whether a real second process picking up a
+  rehydrated sibling (the pre-existing fallback recovery path, still in place and still correct) still
+  works end to end — unchanged by this ticket, and `deliverer.test.ts`'s own pre-existing
+  `rehydrate()` coverage is the evidence for that mechanism, not re-run here since nothing in
+  `rehydrate()` itself changed.
+
+**Roll back.** Revert this ticket's commit(s). Confined to: `api/src/platform/api/v1/resources/
+webhooks.ts` (`webhooksRouter` const → `createWebhooksRouter()` factory; the deliverer construction
+line inside the replay handler; its surrounding doc comment), `api/src/platform/api/v1/router.ts`
+(`v1Router`/`v1Routes` consts → `createV1Router()` factory + the same two consts built from it with
+no argument), `api/src/app.ts` (`createApp()` gains an optional second parameter, defaulted so every
+existing call site is unaffected), `api/src/index.ts` (the webhook-deliverer construction block moved
+earlier in `main()`; `createApp()` call site passes the new option). No migration, no schema change,
+no new dependency. Reverting also restores the pre-fix `webhooks.test.ts` test titles/bodies. Safe to
+revert independently of TRO-446/TRO-447 — this ticket added no new route, column, or SDK surface.
+
+---
+
+## TRO-602 — Shared /api/v1 cursor pagination silently dropped rows landing in the same millisecond
+
+**What was broken.** `platform/api/v1/pagination.ts`'s `encodeCursor` built every `/api/v1` list
+route's keyset cursor from `row.created_at.toISOString()` — `pg`'s default parser gives a
+**millisecond**-precision JS `Date`, while Postgres's own `timestamptz` retains **microsecond**
+precision. Two rows landing in the same millisecond (found live and reliably reproducible via
+ordinary sequential `await`ed inserts against local Docker Postgres — not a rare race; TRO-432's
+own PR #225 hit it on nearly every pagination-test run before that test was rewritten to seed
+second-spaced timestamps instead) could put a not-yet-fetched row on the wrong side of a
+truncated cursor boundary. That row was then **silently and permanently dropped** — never
+appeared on any later page, no error anywhere. Affected every `/api/v1` list route:
+`documents`/`issues`/`sprints`/`people`/`webhooks`/`webhook-deliveries` — 10 call sites across 5
+resource files, only `audit` (PF-501/TRO-432) had a local, per-route workaround
+(`created_at::text AS created_at_precise`, bypassing `pg`'s lossy `Date` parsing for the cursor).
+
+**The centralization decision (the ticket's own open question).** Repeating `audit.ts`'s SQL
+pattern per resource (option 1) would have fixed the bug but left the *guarantee* undefended —
+nothing stops a future new list route from reintroducing the identical mistake, since a lossy
+`Date#toISOString()` string and a precise `created_at::text` string are both just `string` to
+TypeScript. Centralized instead (option 2), but not by having `pagination.ts` own the SQL (it
+can't — every resource selects different columns, so there's no single query for it to author):
+`pagination.ts` now exports a nominal branded type, `PreciseTimestamp = string & { __brand }`, and
+`encodeCursor` only accepts that type for its `created_at` field, not a bare `string`. The **one**
+sanctioned way to produce one is the new `preciseTimestamp()` function, meant to be called only on
+a `created_at::text` SQL alias. This makes the bug's exact root cause **a compile error**, not
+something that only surfaces under a same-millisecond collision in production — verified directly:
+tightening the type alone made `tsc` enumerate all 10 remaining lossy call sites as errors, which
+is how every site below was found and fixed (not a fresh manual audit that could have missed one).
+
+**Fixed:** `documents.ts` (5 sites — main list, forward/reverse associations, backlinks, comments),
+`issues.ts`, `people.ts`, `sprints.ts`, `webhooks.ts` (2 sites — subscriptions, deliveries), plus
+`audit.ts`'s own already-correct site updated to the new shared type for consistency. Every SELECT
+gained a `created_at::text AS created_at_precise` column (harmless, additive — matches
+`audit.ts`'s proven pattern); every cursor-building call now passes
+`preciseTimestamp(lastRow.created_at_precise)`. No response-body field changed — every resource's
+own serializer still uses `row.created_at.toISOString()` for what it returns to the caller; only
+the *opaque, internal* cursor's precision changed, matching the AC's "no API contract change."
+
+One real type-collision the compiler caught along the way: `documents.ts`'s `serializeDocument()`
+is also called from `POST /`'s create path with a differently-shaped row from
+`services/documentService.ts` (a same-named but unrelated `DocumentRow` interface, from a
+single-record create response that never builds a cursor) — making `created_at_precise` a
+*required* field on the type `serializeDocument` accepts broke that call site. Fixed by narrowing
+`serializeDocument`'s parameter to `Omit<DocumentRow, 'created_at_precise'>`, which both callers
+satisfy structurally.
+
+**Proof.** A new deterministic regression test (`documents.test.ts`, "TRO-602: cursor precision")
+seeds two rows at the exact same millisecond but different microsecond offsets — via raw SQL
+`interval` arithmetic (`to_timestamp($ms/1000.0) + '$microseconds microseconds'::interval`), not a
+JS `Date` (which cannot represent sub-millisecond precision at all, so passing one in could never
+produce a genuine collision to seed with) — then walks a `limit=1` page boundary forced to land
+exactly between them and asserts the earlier row is never dropped. **Red-before-green verified
+directly, not assumed:** temporarily reverted just the one call site's fix
+(`preciseTimestamp(lastRow.created_at.toISOString())`, forcing the brand onto a deliberately lossy
+value) and re-ran — the test failed with exactly the predicted message ("earlierId was silently
+dropped across the millisecond-collision page boundary"), then the fix was restored and the same
+run went green. Full `api` suite: **122/122 files, 1372/1372 tests green** — nothing else broke
+across the 10 touched call sites.
+
+**CodeRabbit triage (local CLI, completed review, 1 Major finding).** `preciseTimestamp()`
+performed zero runtime validation, so it would silently brand any string — including exactly the
+`Date#toISOString()` value TRO-602 exists to keep out — as precise, relying entirely on the type
+system plus call-site discipline. Finding accepted, but its literal suggested fix ("require a fixed
+six-digit fraction") was itself wrong: verified directly against this repo's Postgres container that
+`timestamptz::text` trims trailing zero digits and **omits the fraction entirely** when it's exactly
+zero (`2026-08-15 05:33:23+00`, not `...23.000000+00`) — a fixed-six-digit check would have rejected
+a large fraction of genuinely precise real timestamps. Implemented the corrected version instead:
+`POSTGRES_TIMESTAMPTZ_TEXT_RE` (`pagination.ts`) accepts Postgres's actual variable-length-fraction
+shape and rejects `Date#toISOString()`'s structurally disjoint `T...Z` shape. `preciseTimestamp()`
+now throws on a shape mismatch (every call site passes a DB-selected value, so a mismatch there is a
+call-site bug, not client input); `decodeCursor()` checks the same regex on the client-supplied
+`?cursor=` value **before** calling `preciseTimestamp()`, preserving its existing contract that a
+garbled cursor degrades to `null` → `validation_failed`, never a thrown 500. New test file
+`api/v1/__tests__/pagination.test.ts` (8 cases) covers: accepting Postgres's zero-fraction and
+trimmed-fraction real output, rejecting a `Date#toISOString()` value and garbage, and
+`decodeCursor` returning `null` (not throwing) for both a Date-shaped and a garbage hand-crafted
+cursor. Red-before-green verified directly: reverted `preciseTimestamp` to its pre-fix no-op body,
+confirmed the two validation tests failed with the predicted "expected function to throw" message,
+restored, confirmed all 8 green. Full `api/v1` suite re-run after the change: 12 files, 244 tests
+green — every resource's live pagination integration test still passes against real
+`created_at::text` output, confirming the regex doesn't false-reject real data.
+
+**CodeRabbit triage, round 2 (hosted, completed review — genuine this time, not rate-limited: left
+2 inline comments).** Major finding, accepted: `isPreciseTimestampShape`'s regex was purely lexical,
+so a calendar-impossible value like `"2026-02-31 05:33:23+00"` or an out-of-range offset like
+`"+99:99"` matched it and reached the resource's SQL query as a bind parameter — verified directly
+that Postgres then throws `date/time field value out of range`, uncaught from that `pool.query()`
+call. `errorMiddleware.ts` already sanitizes that into a generic `server_error` 500 with no leaked
+detail (checked, not assumed — no information-disclosure or crash risk existed), but the status was
+wrong: a malformed `?cursor=` should get `validation_failed` like every other malformed-cursor case,
+not a 500. Fixed by adding calendar/offset validity to the same shape check: constructs a UTC date
+from the matched fields via `Date.UTC` and compares the fields back (catches Feb 31 — `Date.UTC`
+silently normalizes it to March 3 — without a hand-rolled days-per-month table), plus an explicit
+UTC-offset bound (00-14 hours, 00-59 minutes, since `Date.UTC` has no offset concept to
+overflow-check). 5 new test cases cover both the rejections (Feb 31, hour 25, offset +99:99 and
++15:00, and the exact `decodeCursor` case CodeRabbit's own probe used) and that real edge values
+still pass (leap day Feb 29, offset boundary +14:00) — red-before-green verified: reverted the
+calendar/offset check back to the lexical-only regex, confirmed exactly the 4 new `preciseTimestamp`
+tests plus the new `decodeCursor` case failed with the predicted messages, restored, confirmed all
+13 green. Minor finding, accepted: `CHANGES.md` itself was missing a blank line before a fenced
+code block (markdownlint MD031) — fixed. Full `api/v1` suite re-run: 12 files, 249 tests green.
+
+**How to run it.**
+
+```bash
+pnpm --filter api exec vitest run src/platform/api/v1/__tests__/pagination.test.ts
+pnpm --filter api exec vitest run src/platform/api/v1/
+```
+
+**Roll back.** Revert `pagination.ts`'s `preciseTimestamp`/`decodeCursor`/`isPreciseTimestampShape`
+changes across both follow-up commits and delete `api/v1/__tests__/pagination.test.ts`; the original
+TRO-602 fix (branded type, no runtime validation) is unaffected and stays correct on its own.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api type-check
+pnpm --filter @ship/api exec vitest run src/platform/api/v1/resources/__tests__/documents.test.ts
+pnpm --filter @ship/api test
+```
+
+**Rollback.** `git revert` this commit. `pagination.ts`'s `PreciseTimestamp`/`preciseTimestamp()`
+and the 10 SELECT/`encodeCursor` call-site changes revert together; nothing outside
+`api/src/platform/api/v1/` changes.
+
+---
+
 ## TRO-428 (PF-702) — Agent reads via SDK behind `AGENT_PLATFORM_MODE` flag, and two real SDK gaps it uncovered
 
 **CodeRabbit triage (local CLI, 6 findings, PR #238).** Fixed 5, dismissed 1:
