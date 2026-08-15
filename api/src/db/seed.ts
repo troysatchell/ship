@@ -11,6 +11,10 @@ import {
   seedGraderApp,
   GRADER_OAUTH_CLIENT_SECRET_ENV_VAR,
 } from '../platform/oauth/seedGraderApp.js';
+import {
+  seedFirstPartyApp,
+  FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR,
+} from '../platform/oauth/seedFirstPartyApp.js';
 
 const { Pool } = pg;
 
@@ -105,6 +109,34 @@ async function seed() {
     } else {
       console.log(
         `ℹ️  Skipped grader OAuth app seed — ${GRADER_OAUTH_CLIENT_SECRET_ENV_VAR} not set`
+      );
+    }
+
+    // Seed the first-party ship_app_fleetgraph OAuth app (PF-701 / TRO-423).
+    // Idempotent — safe on every re-seed. Unlike seedGraderApp above,
+    // seedFirstPartyApp THROWS when its secret env var is unset (see that
+    // module's header for why — it also runs from index.ts's boot path,
+    // where an unset secret in a deployed environment must fail loudly, not
+    // silently skip). So the presence check happens HERE, at the call site,
+    // to keep a normal local `pnpm db:seed` / `./start.sh` run (which never
+    // has FLEETGRAPH_OAUTH_CLIENT_SECRET set) working unchanged — same
+    // "must not affect ordinary local dev" requirement the grader app's own
+    // no-op-by-design skip satisfies, just enforced by the caller instead of
+    // the callee for this app.
+    if (process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR]) {
+      const fleetgraphAppSeedResult = await seedFirstPartyApp(pool, workspaceId);
+      if (fleetgraphAppSeedResult.status === 'created') {
+        console.log(
+          `✅ Created first-party FleetGraph OAuth app (client_id: ${fleetgraphAppSeedResult.clientId})`
+        );
+      } else {
+        console.log(
+          `ℹ️  FleetGraph OAuth app already exists (client_id: ${fleetgraphAppSeedResult.clientId})`
+        );
+      }
+    } else {
+      console.log(
+        `ℹ️  Skipped FleetGraph OAuth app seed — ${FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR} not set`
       );
     }
 
