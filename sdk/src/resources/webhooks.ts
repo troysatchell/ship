@@ -87,17 +87,13 @@
  * `replayDelivery()` below needed no signature change (it already took just
  * `id` and returned a `WebhookDelivery`), so `parity.test.ts` moved it from
  * `SDK_EXEMPTIONS` to a real `SDK_TO_OPERATION` entry, per that table's own
- * "delete this line" instruction. **Same NOT-FIXED gap as PF-305's own note
- * immediately above, one field worse**: the real response also carries
- * `replayed_from_id` (non-null on a replay row, pointing at the delivery it
- * replayed — migration 049), which this `WebhookDelivery` interface still
- * does not declare, on top of the four fields and the `'dead_letter'` vs
- * `'dead'` mismatch already flagged above. Not fixed here either, same
- * reasoning: this ticket's stated scope is the API route, not a response-type
- * repair that spans every method on this client (TRO-599's job — see
- * `.claude/skills/ship-factory/references/lessons.md` rule 28, which already
- * names this exact recurring class from `WebhookSubscription`/`WebhookDelivery`
- * before this update).
+ * "delete this line" instruction. `replayed_from_id` (non-null on a replay
+ * row, pointing at the delivery it replayed — migration 049) IS now declared
+ * on `WebhookDelivery` (CodeRabbit, PR #229's review, fixed) — the REST of
+ * PF-305's own NOT-FIXED note immediately above (`'dead_letter'` vs `'dead'`,
+ * missing `event_id`/`idempotency_key`/`response_excerpt`/`next_attempt_at`)
+ * is unchanged, still TRO-599's job (see
+ * `.claude/skills/ship-factory/references/lessons.md` rule 28).
  *
  * KNOWN, NOT FIXED BY PF-405: the real PF-302 response shape
  * (`app_id`, singular `event_type`, `target_url`, no `updated_at` — see
@@ -196,6 +192,15 @@ export type WebhookSubscriptionList = ListPage<WebhookSubscription>;
 export interface WebhookDelivery {
   readonly id: string;
   readonly subscription_id: string;
+  /** Non-null only for a row created by `replayDelivery()` — the id of the
+   *  delivery it replayed. Added for PF-306/TRO-446 (CodeRabbit, PR #229's
+   *  review) — the one field of the real response shape this ticket's own
+   *  route introduces; the REST of the pre-existing gap between this
+   *  interface and the real response (`status`'s `dead_letter` vs `dead`,
+   *  missing `event_id`/`idempotency_key`/`response_excerpt`/
+   *  `next_attempt_at`) is unchanged and still tracked by TRO-599 — see this
+   *  file's header. */
+  readonly replayed_from_id: string | null;
   readonly event_type: WebhookEventType;
   readonly status: 'pending' | 'success' | 'failed' | 'dead_letter';
   readonly attempt_number: number;
@@ -274,11 +279,11 @@ export class WebhooksClient {
   /** `POST /api/v1/webhooks/deliveries/:id/replay` (PF-306, Linear TRO-446)
    *  — re-emits a logged delivery, carrying its ORIGINAL `Idempotency-Key`
    *  (never a freshly generated one), and returns the NEW delivery row this
-   *  creates (the original is never mutated). Works regardless of the
-   *  original delivery's status, `dead` (DLQ) included. Real, merged route
-   *  as of this update — see this file's header for the response-shape gap
-   *  this method's return type still has (same as `listDeliveries()`,
-   *  plus `replayed_from_id`, not fixed by this update). */
+   *  creates (the original is never mutated), with `replayed_from_id` set to
+   *  the original's id. Works regardless of the original delivery's status,
+   *  `dead` (DLQ) included. Real, merged route as of this update — see this
+   *  file's header for the response-shape gap this method's return type
+   *  still has (TRO-599, unrelated to replay). */
   async replayDelivery(id: string): Promise<WebhookDelivery> {
     return this.request.post<WebhookDelivery>(`${DELIVERIES_PATH}/${encodeURIComponent(id)}/replay`, {});
   }

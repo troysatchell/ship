@@ -1177,6 +1177,68 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       ]);
     });
 
+    it('a retryable replay (attempt_number below MAX_ATTEMPTS) that fails again schedules a retry sibling that stays un-polled until a process restart — a real, documented, narrow limitation (TRO-603, CodeRabbit this PR review)', async () => {
+      // Below MAX_ATTEMPTS (6) — unlike the DLQ-exhaustion test above, this
+      // replay's failure IS retryable per attempt()'s own backoff rule, so a
+      // new 'pending' sibling row gets scheduled rather than going straight
+      // to 'dead'.
+      const original = await insertDelivery({
+        subscriptionId: replaySubscriptionId,
+        payload: { hello: 'retryable-replay-schedules-orphaned-sibling' },
+        attemptNumber: 2,
+        status: 'failed',
+        responseStatus: 503,
+        responseExcerpt: 'transient failure',
+        latencyMs: 88,
+      });
+
+      const fetchMock = fetchMockAlways(() => new Response('still down', { status: 503 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+
+      expect(res.status).toBe(201);
+      const body = res.body as DeliveryBody;
+      expect(body.attempt_number).toBe(3);
+      // Below MAX_ATTEMPTS: attempt() marks THIS replay row 'failed' (not
+      // 'dead') and schedules a retry sibling, per its normal backoff rule.
+      expect(body.status).toBe('failed');
+      expect(body.replayed_from_id).toBe(original.id);
+
+      // The sibling WAS created: a THIRD row, attempt_number 4, 'pending',
+      // due for retry.
+      const siblingResult = await pool.query<{
+        id: string;
+        attempt_number: number;
+        status: string;
+        next_attempt_at: Date | null;
+      }>(
+        `SELECT id, attempt_number, status, next_attempt_at FROM webhook_deliveries
+         WHERE event_id = $1 AND attempt_number = 4`,
+        [original.eventId]
+      );
+      expect(siblingResult.rows).toHaveLength(1);
+      const sibling = siblingResult.rows[0];
+      if (sibling === undefined) throw new Error('expected the sibling row to exist');
+      expect(sibling.status).toBe('pending');
+      expect(sibling.next_attempt_at).not.toBeNull();
+
+      // The documented limitation (TRO-603, not fixed by this ticket): that
+      // sibling is durable in Postgres, proven above — but it was queued
+      // only on the THROWAWAY `InMemoryWebhookDeliverer` this HTTP request's
+      // route handler constructed (webhooks.ts, `const deliverer = new
+      // InMemoryWebhookDeliverer(pool)`), which this test process discards
+      // the moment the request above resolves. This test suite never starts
+      // a production-shaped singleton's `processDue()` polling loop, exactly
+      // mirroring the real route's own behavior — the sibling staying
+      // 'pending' here is not a tautology, it is the same orphaning the real
+      // deployed route produces, reproduced under test rather than merely
+      // asserted in a comment. See TRO-603 for the fix (inject the app's
+      // real running deliverer instead of constructing a throwaway one).
+    });
+
     it('if attemptNow() itself fails to execute (a non-deterministic decrypt failure), the route still returns 201 with the row\'s actual (pending) state — never an opaque 500 (CodeRabbit, this PR review)', async () => {
       // A ciphertext that is the right LENGTH (so it is not the deterministic
       // MalformedCiphertextError case) but whose final byte is flipped —

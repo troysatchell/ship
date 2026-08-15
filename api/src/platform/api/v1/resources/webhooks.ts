@@ -669,13 +669,31 @@ webhooksRouter.post(
 
     // Invoke delivery through the deliverer — never reimplement HTTP
     // delivery/signing here. A fresh instance is cheap (no I/O in the
-    // constructor) and deliberately per-request rather than a module-level
-    // singleton: `attemptNow()`'s own doc comment (deliverer.ts) already
-    // discloses that a scheduled retry sibling from THIS call sits as a
-    // normal 'pending' row until a future rehydrate(), regardless of which
-    // deliverer instance made the call — a singleton would not change that,
-    // and per-request construction is simpler and keeps this route free of
-    // shared mutable state.
+    // constructor).
+    //
+    // KNOWN LIMITATION, CORRECTED (CodeRabbit, PR #229's review — an earlier
+    // version of this comment claimed a singleton wouldn't change this;
+    // that was wrong and has been retracted). `InMemoryWebhookDeliverer`
+    // owns a PRIVATE in-memory `queue` array per instance (deliverer.ts).
+    // If this replay's attempt is retryable (5xx/timeout) AND the original's
+    // `attempt_number` was below `MAX_ATTEMPTS`, `attempt()` pushes a new
+    // 'pending' retry-sibling row onto THIS throwaway instance's queue —
+    // which is discarded the moment this request returns. The production
+    // singleton (`api/src/index.ts`, `start()`'s polling `processDue()`)
+    // never sees that sibling, because it lives on a different instance's
+    // queue. The row is NOT lost (it is durably 'pending' in Postgres) but
+    // it IS orphaned from live polling until the next process
+    // restart/`rehydrate()` — a real, narrow gap, not a cosmetic one. It
+    // does NOT affect the primary DLQ-replay use case (attempt_number
+    // already >= MAX_ATTEMPTS never schedules a sibling — see the
+    // 'PF-306: replay of a DLQ (dead) delivery' test below). The correct
+    // fix is injecting the app's real running deliverer instance into this
+    // route instead of constructing a throwaway one — a `createApp()`/
+    // `index.ts` dependency-wiring change bigger than this ticket's own
+    // scope, filed as TRO-603 rather than attempted here under this
+    // sprint's deadline. See 'PF-306: a retryable replay leaves its retry
+    // sibling un-polled until restart (TRO-603, documented not fixed)' below
+    // for the regression test proving this is documented, known behavior.
     //
     // `attemptNow()` itself never throws for an HTTP-level outcome
     // (`performHttpAttempt()` catches every network/timeout failure into a

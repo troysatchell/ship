@@ -51,8 +51,7 @@ entire point of a DLQ-replay endpoint. Added to `api/src/platform/api/v1/resourc
   `InMemoryWebhookDeliverer.attemptNow()` to `deliverer.ts` — a thin public wrapper over the existing
   private `attempt()` (the same signing/HTTP-dispatch/response-truncation/persistence code path every
   automatic delivery already uses), so the route never touches HTTP delivery logic directly. The route
-  constructs a fresh `InMemoryWebhookDeliverer` per request (cheap — no I/O in the constructor) rather
-  than a module-level singleton, since a singleton would not change the one disclosed limitation below.
+  constructs a fresh `InMemoryWebhookDeliverer` per request (cheap — no I/O in the constructor).
 - **`attempt_number` continuation, not a fresh series.** Migration 048's unique index is keyed on
   `(subscription_id, event_id, attempt_number)`, and its own header already named "Replay/dedup lookup
   index (PF-306, not built by this ticket)" against `event_id` — reusing the original's `event_id`
@@ -62,15 +61,24 @@ entire point of a DLQ-replay endpoint. Added to `api/src/platform/api/v1/resourc
   concurrent race (two replay calls for the same delivery landing at once) can still compute the same
   next number under READ COMMITTED; resolved by retrying on the unique-index violation (`23505`, up to
   5 attempts) rather than assumed away — the concurrency argument lessons.md rule 18 asks for.
-- **Disclosed, accepted limitation (not a new gap — an existing property of this deliverer's
-  single-instance in-memory-queue architecture, applied to a new call path).** If a replay's own
+- **Disclosed, accepted limitation, corrected and given its own regression test (CodeRabbit, PR #229's
+  review — an earlier version of this entry, and of the route's own code comment, claimed a singleton
+  deliverer would not change this; that claim was wrong and has been retracted).** If a replay's own
   attempt gets a retryable outcome (5xx/timeout) below `MAX_ATTEMPTS`, `attempt()` schedules a normal
   `'pending'` retry-sibling row exactly as it would for an automatic delivery. That sibling is written
-  to the database correctly, but is NOT pushed into the long-running production deliverer's live
-  in-memory queue (`index.ts`'s own instance) — this call happens inside one HTTP request, not that
-  polling loop. It becomes a normal `'pending'` row, recovered the same way any such row is: a future
-  `rehydrate()` at the next process boot. Documented in `attemptNow()`'s own doc comment. An operator
-  who wants an immediate second attempt can call replay again.
+  to the database correctly, but `InMemoryWebhookDeliverer` owns a PRIVATE per-instance in-memory
+  `queue` — the sibling is queued only on this route's THROWAWAY instance, discarded the moment the
+  HTTP request returns, and the production singleton (`index.ts`'s `start()`/`processDue()` polling
+  loop) never sees it. A real singleton injected into this route WOULD fix it (its queue is the one
+  actually being polled). Recovered the same way any orphaned `'pending'` row is: a future
+  `rehydrate()` at the next process boot, or an operator calling replay again. Proven, not just
+  claimed: `webhooks.test.ts`'s new "a retryable replay ... schedules a retry sibling that stays
+  un-polled until a process restart" case reproduces the sibling row and its `'pending'`/scheduled
+  state under test. Does NOT affect the primary DLQ-replay use case (`attempt_number` already
+  `>= MAX_ATTEMPTS` never schedules a sibling — see the DLQ-exhaustion test above). Fix filed as
+  **TRO-603** (inject the app's real running deliverer instance into the router) — a
+  `createApp()`/`index.ts` dependency-wiring change bigger than this ticket's scope, not attempted
+  here under this sprint's deadline.
 - **Scope:** `webhooks:manage`, same as every sibling route.
 - **OpenAPI:** `WebhookDeliveryResponseSchema` extended with `replayed_from_id` (nullable UUID) — also
   surfaced on `GET /deliveries`'s existing rows now, not just the replay response, so the delivery log
@@ -82,12 +90,23 @@ entire point of a DLQ-replay endpoint. Added to `api/src/platform/api/v1/resourc
   required for `tests:sdk` to pass, since the parity suite fails any real OpenAPI operation with no
   SDK mapping. `sdk/src/resources/webhooks.ts`'s header and `replayDelivery()` doc comment updated to
   match (route is real now).
-- **New SDK-response drift, same class as `lessons.md` rule 28 / TRO-599 (disclosed, not fixed
-  here).** The real replay response also carries `replayed_from_id`, which the SDK's pre-existing
-  (and already-known-stale — see PF-305's own CHANGES.md entry and TRO-599) `WebhookDelivery`
-  interface still does not declare, on top of its existing gaps (`'dead_letter'` vs. the real `'dead'`,
-  four missing fields). Not fixed here: this ticket's scope is the API route, and TRO-599 already owns
-  a full response-shape repair across every method on this client.
+- **SDK-response drift (CodeRabbit, PR #229's review) — the `replayed_from_id` field fixed, the rest
+  still TRO-599's.** `sdk/src/resources/webhooks.ts`'s `WebhookDelivery` interface now declares
+  `readonly replayed_from_id: string | null`, matching the real response this ticket's own route
+  returns. The REST of TRO-599's already-tracked gap (`'dead_letter'` vs. the real `'dead'`, and
+  `event_id`/`idempotency_key`/`response_excerpt`/`next_attempt_at` still missing) is unchanged —
+  fixing one new field this ticket introduces is in scope; repairing the whole pre-existing interface
+  is TRO-599's job, not duplicated here.
+- **Migration 049's DDL split (CodeRabbit, PR #229's review — real finding, fixed for the FK, dismissed
+  with a documented reason for the index).** The FK is now added `NOT VALID` (migration 049) and
+  validated separately (new migration `050_webhook_deliveries_replay_validate_fk.sql`) — the standard
+  two-step pattern that avoids a validated-add's table scan + `SHARE ROW EXCLUSIVE` lock, at zero cost
+  regardless of table size. The index is NOT `CONCURRENTLY` — confirmed via source read that
+  `migrationRunner.ts` wraps every migration in `BEGIN`/`COMMIT`, and `CREATE INDEX CONCURRENTLY`
+  cannot run inside a transaction block at all; using it would need a non-transactional migration mode
+  in the runner itself, a change out of this ticket's scope. Accepted as-is because `webhook_deliveries`
+  has zero rows in every real environment right now (048 only just created it) — the write-blocking
+  window this would avoid is currently negligible. Documented in migration 049's own comments.
 
 **How to run it.**
 
@@ -210,16 +229,65 @@ declined with reasons:**
    timeout (ALB/CloudFront defaults are 30-60s). Passing an explicit `{ timeoutMs: 10_000 }` would
    duplicate the existing default with no behavior change.
 
+**Hosted GitHub CodeRabbit review (landed after the two local-CLI rounds above and the PR's manual
+self-review comment — the orchestrator's own triage, not the building agent's) — 3 findings, all
+Major, 2 fixed for real, 1 partially fixed:**
+1. **Major, fixed.** The migration-DDL finding covered by round-1 finding #5 above only addressed
+   half the picture (declined `CONCURRENTLY` on the index, correctly — see #5). The hosted review
+   additionally, and correctly, flagged the FK add itself: `ADD COLUMN ... REFERENCES ... ON DELETE
+   SET NULL` with no `NOT VALID` takes a validated-add's `SHARE ROW EXCLUSIVE` lock and scans the
+   table. Fixed by splitting into `ADD COLUMN` (no FK) + `ADD CONSTRAINT ... FOREIGN KEY ... NOT
+   VALID` in migration 049, plus a new `050_webhook_deliveries_replay_validate_fk.sql` running
+   `VALIDATE CONSTRAINT` (`SHARE UPDATE EXCLUSIVE`, compatible with concurrent writes) — the standard
+   two-step pattern. Verified by hand: reset this worktree's test database's migration state for 049,
+   re-ran `pnpm --filter @ship/api db:migrate` with the edited 049 + new 050 (first attempt hit a real
+   syntax error — Postgres does not accept `NOT VALID` on the inline column-level `REFERENCES`
+   shorthand, only on an explicit `ADD CONSTRAINT`; fixed and re-verified clean), then confirmed via
+   `\d webhook_deliveries` and `SELECT convalidated FROM pg_constraint` that the resulting schema is
+   identical to before (same FK, same behavior) and the constraint ends up validated (`convalidated =
+   t`). The index itself stays non-concurrent — confirmed by source read of `migrationRunner.ts` that
+   `CREATE INDEX CONCURRENTLY` cannot run inside its per-migration `BEGIN`/`COMMIT` transaction at all
+   (a runner-level change, out of scope); accepted because `webhook_deliveries` has zero rows in every
+   real environment right now, so the write-blocking window is currently negligible.
+2. **Major, fixed (comment correction + test, not the underlying architecture — filed as TRO-603).**
+   The agent's own reasoning in the code comment above `deliverer.attemptNow()` ("a singleton would
+   not change" the retry-sibling limitation) was independently re-verified against `deliverer.ts`'s
+   source and found to be **wrong**: `InMemoryWebhookDeliverer` owns a PRIVATE per-instance `queue`
+   array — a retry sibling scheduled on this route's throwaway instance genuinely never reaches the
+   production singleton's (`index.ts`) live-polling `processDue()` loop, which only drains its OWN
+   instance's queue. A real shared instance injected into this route WOULD close the gap. Corrected
+   the code comment to state this precisely (not the retracted claim). Added a regression test
+   (`webhooks.test.ts`, "a retryable replay ... schedules a retry sibling that stays un-polled until a
+   process restart") that reproduces the orphaned sibling row under test — proof this is documented,
+   known behavior, not an unverified claim in a comment. The actual fix (inject `index.ts`'s real
+   running deliverer into the router instead of constructing a throwaway one) touches `app.ts`,
+   route-mounting, and every test that calls `createApp()` directly — an architecture change bigger
+   than this ticket's scope under this sprint's deadline. Filed as **TRO-603**. Confirmed narrow: does
+   NOT affect the primary DLQ-replay path (`attempt_number >= MAX_ATTEMPTS` never schedules a sibling
+   at all — proven by the existing DLQ-exhaustion test above).
+3. **Major, partially fixed.** Re-raised round-2 finding #2's suggestion (add `replayed_from_id` to
+   the SDK's `WebhookDelivery` interface) with the hosted review's own severity read (Major, not the
+   local CLI's judgment call). Re-triaged rather than assumed still-declined: added JUST
+   `replayed_from_id` (the one field this ticket's own route introduces) to the interface, leaving the
+   REST of the pre-existing gap (`'dead_letter'`/`'dead'`, four other missing fields — TRO-599's) where
+   it was. This splits the difference between the local round's "decline entirely, TRO-599 owns it
+   all" and the hosted review's "fix the one field this PR is responsible for" — the field this PR
+   itself introduces is this PR's to declare correctly; the pre-existing four-field gap PF-305 already
+   disclosed is still TRO-599's to fix once, completely, not piecemeal.
+
 **Not verified / explicit gaps.** No live end-to-end proof against a real subscriber process (this
 PR's tests stub `fetch`, same test-double boundary `deliverer.test.ts` itself already accepts — see
 that file's own header). PF-801 (named in this ticket's own brief) is the future e2e proof that a real
 subscriber recognizes the replayed `Idempotency-Key` as a duplicate of the original delivery; nothing
 in this PR can substitute for that. The SDK `WebhookDelivery` interface's pre-existing drift
-(TRO-599) is not repaired here, only grown by one more known-missing field (see above and finding #4).
+(TRO-599) is not repaired here — `replayed_from_id` was added (see the hosted-review triage above),
+the other four fields and the `'dead_letter'`/`'dead'` mismatch remain TRO-599's to fix. TRO-603
+(retry-sibling orphaning on replay) is real, documented, and tested, but not fixed in this PR.
 
 **Roll back.** Revert the merge of `feat/pf-306-replay-endpoint`. Runtime implementation is confined
-to: `api/src/db/migrations/049_webhook_deliveries_replay.sql` (new, additive — `ADD COLUMN IF NOT
-EXISTS`/`CREATE INDEX IF NOT EXISTS`, safe to leave applied even if the route is reverted, since
+to: `api/src/db/migrations/049_webhook_deliveries_replay.sql` + `050_webhook_deliveries_replay_
+validate_fk.sql` (both new, additive — `ADD COLUMN`/`ADD CONSTRAINT ... NOT VALID`/`VALIDATE
+CONSTRAINT`/`CREATE INDEX IF NOT EXISTS`, safe to leave applied even if the route is reverted, since
 `replayed_from_id` merely goes unused), `api/src/platform/webhooks/deliverer.ts` (added
 `ReplayAttemptInput` type + `attemptNow()` on the interface and class — additive, no existing method
 changed), `api/src/platform/api/v1/resources/webhooks.ts` (one added `webhooksRouter.post
@@ -228,10 +296,10 @@ row/serializer), and `api/src/platform/openapi/schemas/webhooks.ts` (one added f
 `WebhookDeliveryResponseSchema` + one added `registerPath`). Reverting the merge also restores the
 regression tests, `sdk/src/__tests__/parity.test.ts`'s mapping (reverts `webhooks.replayDelivery` back
 to an `SDK_EXEMPTIONS` entry — correct once the route is gone again), `sdk/src/resources/webhooks.ts`'s
-doc comments, and this `CHANGES.md` entry. To roll back the database independently of a code revert:
-`ALTER TABLE webhook_deliveries DROP COLUMN IF EXISTS replayed_from_id;` (the partial index drops
-automatically with the column) — safe because the column is additive and nullable, so no other code
-path depends on it existing.
+doc comments and its `replayed_from_id` field, and this `CHANGES.md` entry. To roll back the database
+independently of a code revert: `ALTER TABLE webhook_deliveries DROP COLUMN IF EXISTS
+replayed_from_id;` (the FK and partial index drop automatically with the column) — safe because the
+column is additive and nullable, so no other code path depends on it existing.
 
 ---
 
