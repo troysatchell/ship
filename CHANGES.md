@@ -21,6 +21,207 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-432 — PF-501: Public API audit trail
+
+**Migration number correction.** PLUGFORGE.MD §2.2 lists this table under "migration 046", but that
+number was already consumed by `046_oauth_device_codes_polling.sql` (PF-105/PF-106) by the time this
+ticket started. Verified fresh via `ls api/src/db/migrations/ | sort -V | tail -5` before writing
+anything (044/045/046/047/048 all taken) — used `049_public_api_audit.sql`. Same renumbering
+situation 046/047/048 already document in their own headers for PF-105/106/302/304.
+
+**What changed.** `public_api_audit` (migration 049): `id`, `request_id`, `app_client_id`,
+`user_id`, `method`, `route`, `scope_used`, `status`, `latency_ms`, `created_at` — the exact §2.7
+column list. No foreign keys on `app_client_id`/`user_id` — an audit trail must survive the
+app/user it describes being deleted, unchanged.
+
+`auditLogMiddleware` (`api/src/platform/audit/middleware.ts`) is mounted globally on `v1Router`,
+immediately after `rateLimitDefaults` and before `v1Routes` — the same "run before routing"
+position `rateLimitDefaults` already uses to guarantee its own header on 100% of responses, applied
+here so a `public_api_audit` row is written for literally every `/api/v1` response: `GET /health`,
+`GET /openapi.json`, a 401 from `bearerAuth` before any route matched, a 404 from the catch-all, and
+every real route. The write happens inside `res.on('finish')` — strictly after the response is
+already sent, so it can never add latency to a caller's request — and is itself awaited internally
+with its failure logged, so it is never silently dropped even though it never blocks the response.
+`scope_used` is populated by a one-line addition to the existing `requireScope(scope)` middleware
+(`platform/scopes/requireScope.ts`): it now sets `req.auditScopeUsed = scope` unconditionally,
+before the pass/fail branch, so the value reflects what was actually checked for that request
+(including a 403), not what the route would check on a successful path.
+
+`GET /api/v1/audit` (`api/src/platform/api/v1/resources/audit.ts`) is the read side — cursor-paginated
+(`{ data, next_cursor }`), gated by `requireScope('audit:read')` (new scope, registered in
+`platform/scopes/registry.ts`, bringing the registry from seven scopes to eight) plus an
+**admin/owner** role check the scope alone cannot express — `api-tokens.ts` lets any user self-mint
+a personal token requesting any registered scope, so holding `audit:read` proves nothing about the
+caller's role. This schema has no distinct `owner` role (`workspace_memberships.role` is `CHECK
+(role IN ('admin', 'member'))`), so this ticket maps the PRD's two words onto the two elevated-access
+concepts that already exist in the codebase — a binding design decision, documented at length in
+`resources/audit.ts`'s own header:
+
+- **"owner"** → `users.is_super_admin` — sees every workspace's rows, unscoped.
+- **"admin"** → `workspace_memberships.role = 'admin'` for the caller's own resolved workspace, or a
+  **first-party** app credential (Client Credentials, no acting user — no human to check a role
+  against) — both scoped to exactly that one workspace. A third-party app credential is rejected
+  regardless of which scopes its token holds.
+
+Row visibility for a non-owner caller is scoped to their own workspace: every row whose
+`app_client_id` belongs to one of that workspace's `oauth_apps`, plus every NULL-`app_client_id`
+(personal-token) row whose `user_id` is a member of that workspace. Optional `?app_client_id=`
+filter is the AC's literal "queryable per app" — this is Epic 7's proof surface (PF-704 greps this
+table for a specific agent's `client_id`), so `app_client_id` is a plain queryable TEXT column, not
+buried in a JSON blob.
+
+OpenAPI registration: `api/src/platform/openapi/schemas/audit.ts`, wired into `schemas/index.ts` —
+PF-203's route-fitness test walks the live router and fails on any unregistered route.
+
+**A real, pre-existing bug found while writing this ticket's own tests — fixed LOCALLY for this
+route, filed as a follow-up for the rest.** `platform/api/v1/pagination.ts`'s `encodeCursor`
+serializes a cursor via `row.created_at.toISOString()`, which is **millisecond** precision.
+Postgres's own `timestamptz` column retains **microsecond** precision. Two rows landing in the same
+millisecond — reliably reproducible against this ticket's local Docker Postgres with ordinary
+sequential awaited inserts, not a rare race — can put a not-yet-fetched row on the wrong side of a
+millisecond-truncated cursor boundary and drop it from pagination **silently and permanently**.
+Confirmed directly: a temp-table repro showed a row's own real timestamp (`...532037`) failing its
+own truncated-to-`...532000` cursor comparison. This is shared infrastructure used by every
+`/api/v1` list route — documents, issues, sprints, webhooks, webhooks/deliveries, and audit.
+
+CodeRabbit's review independently found the same defect (major severity) and pointed at a fix
+scoped to this route alone, without touching the shared `pagination.ts` module: `resources/audit.ts`
+now selects `created_at::text AS created_at_precise` alongside the ordinary `created_at` column.
+`::text` casts server-side, before the value ever reaches `pg`'s lossy `timestamptz`-to-`Date`
+parser, so the wire type becomes plain `text` and `pg` returns it verbatim — Postgres's own
+canonical output format, which Postgres parses back losslessly when bound as the cursor's `WHERE
+(created_at, id) < ($1, $2)` parameter. The public response shape is unchanged (`created_at` in the
+JSON body is still the ordinary millisecond ISO string); only the internal cursor uses the precise
+value. `documents`/`issues`/`sprints`/`webhooks`/`webhooks/deliveries` still carry the shared bug —
+filed as **TRO-602** (linked from this ticket), since fixing those needs its own regression tests
+per consuming resource, out of scope for PF-501 itself. This ticket's own pagination test also
+still seeds rows with explicit, second-spaced `created_at` values (belt-and-braces, not load-bearing
+now that the precision fix is in) so it proves `audit.ts`'s WHERE/ORDER BY/cursor wiring
+deterministically either way.
+
+**Proof (AC, verbatim: "rows carry request_id/app/user/route/scope/status/latency; queryable per
+app").**
+- `api/src/platform/audit/__tests__/middleware.test.ts` — `writeAuditRow` unit tests (every column,
+  nullable fields tolerated), plus two HTTP round-trip proofs that the middleware is actually wired
+  in: a genuinely public route (`GET /health`, no principal/scope) and a 401 rejected before any
+  scope check runs (`scope_used` stays null — proves it reflects what was *checked*, not what the
+  route *would* check).
+- `api/src/platform/api/v1/resources/__tests__/audit.test.ts` — the full admin/owner authorization
+  matrix: 401 no token, 403 missing scope, 403 a token that *holds* `audit:read` but belongs to a
+  plain member (not admin/owner), 403 a third-party app credential despite holding the scope;
+  workspace isolation (an admin never sees another workspace's rows; a super-admin sees every
+  workspace; a first-party app is scoped to its own workspace); the `?app_client_id=` filter; cursor
+  pagination (round-trips a full multi-page walk); an invalid-cursor 400; and a proof that the audit
+  endpoint's own call is itself recorded with `scope_used = audit:read`.
+- `document.test.ts`/`endpoint.test.ts` — `/audit` added to the hand-maintained OpenAPI path lists
+  PF-203/PF-302 already established this pattern for.
+- `api/src/test/setup.ts` — `public_api_audit` added to the per-file `TRUNCATE` list. It carries no
+  foreign keys (by design — see above), so `TRUNCATE ... CASCADE` on `workspaces`/`users` never
+  reaches it the way it reaches `oauth_apps`/`api_tokens`/`webhook_subscriptions`; without this fix
+  it would accumulate rows across every file in one `pnpm test` run.
+
+**`@ship/sdk` follow-through (found by `gate.sh`, not this ticket's own AC).** PF-405's parity
+fitness test (`sdk/src/__tests__/parity.test.ts`) fails any registered `/api/v1` operation with no
+typed SDK method and no documented exemption — `GET /audit` is a substantive domain resource, not an
+infra/meta endpoint, so it earns a real method rather than an `OPENAPI_EXEMPTIONS` entry (that table
+is reserved for the `/health`/`/openapi.json` case, per its own header). Added `AuditClient` (one
+method, `list()` — the server registers only `GET /audit`), wired into `ShipClient` as `.audit`, and
+added to `parity.test.ts`'s discovery groups + `SDK_TO_OPERATION` table. Tested two ways:
+`sdk/src/resources/__tests__/audit.test.ts` (mocked-`fetch` request shape, `webhooks.test.ts`'s
+established pattern) and `sdk/src/__tests__/audit.liveServer.test.ts` (a real TCP round trip against
+`createApp()` — an owner/super-admin success and a plain-member 403; the full admin/owner/first-party
+matrix is already exhaustive server-side, not re-duplicated here).
+
+**`docs/openapi.json` regenerated (found by forward-merging main, not this ticket's own AC).**
+PF-204's drift-check test (`generate-v1-openapi.test.ts`) failed for real, standalone, after
+merging PF-205 (Linear TRO-414, landed on `main` mid-PR): the committed `docs/openapi.json`
+snapshot predates this ticket's `/audit` route, so the in-process registry and the committed file
+disagreed. Regenerated via `pnpm generate:openapi`; `pnpm --filter @ship/api openapi:check:v1`
+confirms no drift.
+
+**CodeRabbit triage (10 findings, all real reviewer output once the sprint's capacity limit
+cleared — not self-review; earlier `gate.sh` runs this same session hit `rc=1`/rate-limited,
+recorded in `audit/factory/scorecard.jsonl`).** Fixed (6):
+1. **[major]** Cursor precision loss (`resources/audit.ts`) — the same defect this entry's
+   pagination paragraph above already discloses; CodeRabbit found it independently and the fix
+   above is exactly its suggestion. Filed **TRO-602** for the four other routes.
+2. **[minor]** `routeOf()` (`platform/audit/middleware.ts`) had no length bound on an
+   attacker-reachable, unauthenticated value (`req.originalUrl`, read before `bearerAuth` can
+   reject anything) written into an unbounded `TEXT` column. No "established maximum route
+   length" constant actually existed elsewhere in this codebase (checked, none found — the
+   finding's own phrasing assumed one); added `MAX_ROUTE_LENGTH = 2048` as a new, documented
+   constant and truncate to it.
+3. **[minor]** Aborted requests (client disconnects before the server finishes) never fired
+   `res.on('finish')` and were silently absent from the audit trail — a real gap against "records
+   EVERY v1 call." Added a `res.on('close', ...)` handler sharing the same write path, guarded by
+   a `written` flag so a normal completion (which fires both `finish` and `close`) is never
+   recorded twice. Documented that `status` for an aborted request reflects the server's last
+   intended status, not proof of delivery.
+4. **[minor]** `sdk/resources/audit.ts`'s doc comment claimed a 403 throws `ShipSdkError` with
+   `kind: 'auth'` — wrong; the server's `forbidden` `ApiErrorCode` maps to `kind: 'forbidden'`
+   (`errors.ts#CODE_TO_KIND`), which is what this PR's own tests already asserted correctly. Fixed
+   the comment to match the code and tests, and to state the actual 401-vs-403 split.
+5. **[major]** `sdk/src/__tests__/audit.liveServer.test.ts`'s setup assigned `app.listen(0)`
+   directly to the outer, nullable `server` variable before use. Changed to the same
+   "local `const liveServer` first, assign to `server` for teardown after" shape the file's own
+   `afterAll` already uses.
+6. **[trivial]** `resources/__tests__/audit.test.ts` had no test proving the `?app_client_id=`
+   filter can't be used to escape workspace scoping (i.e., an admin passing another workspace's
+   `app_client_id` gets an empty page, not a leak) — the implementation was already correct, only
+   the proof was missing. Added.
+
+Also applied without a numbered finding: `platform/audit/__tests__/middleware.test.ts`'s raw
+`pool.query('SELECT * ...')` rows were an implicit `any` (this project's largest recurring
+type-safety class per `lessons.md`) — added an `AuditDbRow` interface and `pool.query<AuditDbRow>`,
+plus a `requireRow()` throw-on-missing helper for the `noUncheckedIndexedAccess` errors that typing
+correctly surfaced.
+
+Dismissed (2), both trivial, both premature optimization with no evidence of a real problem yet:
+1. Merge `resolveAuditAccess`'s two sequential queries (`users.is_super_admin`, then
+   `workspace_memberships.role`) into one `LEFT JOIN`. The current shape is a deliberate fast-path:
+   the common super-admin case returns after ONE indexed lookup; a join would run both lookups
+   unconditionally on every request, including that fast path. Two cheap indexed reads over one
+   unconditional join is not a shown regression to fix.
+2. Add a composite `(app_client_id, created_at DESC, id DESC)` index. The migration already has
+   the two indexes this route's queries actually use (`idx_public_api_audit_app_client_id`,
+   `idx_public_api_audit_created_at_id`); the suggestion's own text asks for `EXPLAIN ANALYZE`
+   validation "against a realistic dataset" before committing to it, which this ticket has none of
+   yet — premature indexing on an empty table is YAGNI, not correctness.
+
+**Not verified.** Production-scale row volume/retention — this ticket writes and reads correctness,
+not the storage-growth question PF-905 (AI cost analysis, retention windows) is scoped to answer.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/api exec vitest run \
+  src/platform/audit/__tests__/middleware.test.ts \
+  src/platform/api/v1/resources/__tests__/audit.test.ts \
+  src/platform/scopes/__tests__/registry.test.ts \
+  src/platform/api/v1/__tests__/route-fitness.test.ts \
+  src/platform/openapi/__tests__/document.test.ts \
+  src/platform/openapi/__tests__/endpoint.test.ts
+
+pnpm --filter @ship/sdk exec vitest run \
+  src/__tests__/parity.test.ts \
+  src/resources/__tests__/audit.test.ts \
+  src/__tests__/audit.liveServer.test.ts
+```
+
+**Rollback.** Revert this PR's commit(s). The migration is additive-only (`CREATE TABLE IF NOT
+EXISTS`, no altered/dropped columns on any existing table) — dropping `public_api_audit` by hand
+(`DROP TABLE IF EXISTS public_api_audit;`) is safe on any database, since nothing references it via
+foreign key by design. Unmount `/api/v1/audit` by removing its line in `platform/api/v1/router.ts`
+(and the `auditLogMiddleware` mount immediately above it, if disabling audit logging entirely) and
+its `schemas/audit.js` export in `platform/openapi/schemas/index.ts`. Removing the
+`req.auditScopeUsed = scope;` line from `requireScope.ts` is safe independently — it only affects
+what `scope_used` records, never authorization behavior. On the SDK side, removing `.audit` from
+`ShipClient` requires also removing the `audit.list` entry from `parity.test.ts`'s
+`SDK_TO_OPERATION` table and the `audit.` group from `discoverSdkMethods()` — otherwise that suite
+fails on a stale key rather than cleanly reverting.
+
+---
+
 ## TRO-503 (PF-103 follow-up) — CloudFront had no `ordered_cache_behavior` for `/oauth/*`, so the OAuth authorize flow was unreachable on the AWS/CloudFront deploy path
 
 **What changed.** Added an `ordered_cache_behavior` block to `terraform/s3-cloudfront.tf` for

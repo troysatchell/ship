@@ -31,6 +31,22 @@ import { ScopeRegistry } from './registry.js';
 import { forbiddenError } from '../api/v1/errors.js';
 import '../oauth/principal.js';
 
+// Extend Express Request with the scope this route's requireScope(...) call
+// checked — read by `platform/audit/middleware.ts`'s fire-and-forget audit
+// write (PF-501/TRO-432) for the `public_api_audit.scope_used` column. Set
+// unconditionally, before the pass/fail branch below, so a 403 (scope
+// missing) is recorded with the SAME scope_used a 200 would have carried —
+// the audit trail's whole point is showing what was checked, not just what
+// succeeded. Merges with the other `declare global` augmentations in this
+// codebase (requestId.ts, principal.ts) the same way those files describe.
+declare global {
+  namespace Express {
+    interface Request {
+      auditScopeUsed?: string;
+    }
+  }
+}
+
 export function requireScope(scope: string) {
   if (!ScopeRegistry.has(scope)) {
     // Fails at route-registration time (module load / app construction),
@@ -43,6 +59,7 @@ export function requireScope(scope: string) {
   }
 
   const middleware = (req: Request, res: Response, next: NextFunction): void => {
+    req.auditScopeUsed = scope;
     const principal = req.principal;
     if (!principal || !principal.scopes.includes(scope)) {
       const err = forbiddenError(

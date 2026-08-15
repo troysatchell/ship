@@ -28,7 +28,8 @@
  * WHAT COUNTS AS "AN SDK METHOD": every own (non-inherited, non-constructor)
  * instance method on `ShipClient.prototype` plus every resource client's
  * prototype (`DocumentsClient`, `IssuesClient`, `SprintsClient`,
- * `WebhooksClient`) — discovered by walking `Object.getOwnPropertyNames`,
+ * `WebhooksClient`, `AuditClient`) — discovered by walking
+ * `Object.getOwnPropertyNames`,
  * NOT a hand-maintained method list, so a new method added to any of these
  * five classes is picked up automatically the next time this suite runs.
  * `ShipClient`'s STATIC methods (`deviceLogin`, `authorizationCodeFlow`) are
@@ -107,6 +108,7 @@ import { DocumentsClient } from '../resources/documents.js';
 import { IssuesClient } from '../resources/issues.js';
 import { SprintsClient } from '../resources/sprints.js';
 import { WebhooksClient } from '../resources/webhooks.js';
+import { AuditClient } from '../resources/audit.js';
 import { PeopleClient } from '../resources/people.js';
 import { ChangesClient } from '../resources/changes.js';
 
@@ -172,6 +174,7 @@ function discoverSdkMethods(): SdkMethod[] {
     { prefix: 'issues.', prototype: IssuesClient.prototype },
     { prefix: 'sprints.', prototype: SprintsClient.prototype },
     { prefix: 'webhooks.', prototype: WebhooksClient.prototype },
+    { prefix: 'audit.', prototype: AuditClient.prototype },
     // PF-205 (Linear TRO-414) additions.
     { prefix: 'people.', prototype: PeopleClient.prototype },
     { prefix: 'changes.', prototype: ChangesClient.prototype },
@@ -201,6 +204,7 @@ const SDK_TO_OPERATION: Readonly<Record<string, OpenApiOperation>> = {
   'webhooks.getSubscription': { method: 'get', path: '/webhooks/{id}' },
   'webhooks.deleteSubscription': { method: 'delete', path: '/webhooks/{id}' },
   'webhooks.rotateSecret': { method: 'post', path: '/webhooks/{id}/rotate' },
+  'audit.list': { method: 'get', path: '/audit' },
   // PF-305 (Linear TRO-442) landed: GET /webhooks/deliveries is now a real,
   // registered v1Registry operation — moved out of SDK_EXEMPTIONS below per
   // that table's own "delete this line and add a real entry" instruction.

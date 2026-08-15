@@ -37,7 +37,7 @@ describe('PF-202: GET /api/v1/openapi.json', () => {
     expect(body.openapi).toMatch(/^3\.1\.\d+$/);
   });
 
-  it('contains every registered /api/v1 route: health, itself, documents (+4 sub-resources), issues, sprints (+{id}), me, webhooks (+deliveries), people, changes (PF-203, PF-302, PF-305, PF-205)', async () => {
+  it('contains every registered /api/v1 route: health, itself, documents (+4 sub-resources), issues, sprints (+{id}), me, webhooks (+deliveries), audit, people, changes (PF-203, PF-302, PF-305, PF-205, PF-501)', async () => {
     const res = await request(app).get('/api/v1/openapi.json');
 
     const body: OpenApiDocumentBody = res.body;
@@ -47,6 +47,8 @@ describe('PF-202: GET /api/v1/openapi.json', () => {
     // for the same rationale (a legitimate addition to a hand-maintained
     // list, not a weakened check).
     //
+    // Updated by PF-501 (Linear TRO-432): /audit added — same rationale.
+    //
     // Updated by PF-305 (Linear TRO-442): /webhooks/deliveries added — same
     // rationale, see document.test.ts's identical update.
     //
@@ -55,6 +57,7 @@ describe('PF-202: GET /api/v1/openapi.json', () => {
     // rationale.
     expect(Object.keys(paths).sort()).toEqual(
       [
+        '/audit',
         '/changes',
         '/documents',
         '/documents/{id}',
