@@ -185,6 +185,39 @@ domain write (documentService) -> IEventBus.publish -> subscription matcher
   immediately; 6 failed attempts → DLQ. Tested with an **injected deterministic clock** — never a
   real `setTimeout` wait (§2.6).
 
+### Subscriber dedupe contract (PF-801 / TRO-447)
+
+The "Idempotency-Key origin" bullet above states the platform-side half of this contract; this is
+the integrator-facing half — what a real subscriber implements on the receiving end, now proven
+end-to-end (deliver → replay → dedupe) by `e2e/webhook-idempotency-key-drill.spec.ts` and, at the
+tier the factory gate actually executes, `api/src/platform/api/v1/resources/__tests__/webhooks.test.ts`'s
+own "PF-801" describe block.
+
+1. **Idempotency keys are stable across replay.** A first-attempt delivery mints a fresh
+   `Idempotency-Key` (`deliverer.ts`'s `enqueueEvent()`, `randomUUID()` per logical delivery).
+   `POST /api/v1/webhooks/deliveries/:id/replay` never generates a new one — it reads
+   `idempotency_key` off the original delivery row and resends it verbatim
+   (`resources/webhooks.ts`'s own header). A genuinely NEW event always gets a genuinely NEW key;
+   a REPLAY of an existing delivery always carries the SAME key its original attempt did. That
+   single fact is what makes `Idempotency-Key` a valid dedupe key in the first place.
+2. **How to implement dedup: check-then-store on `Idempotency-Key`, always return 200.** On each
+   inbound POST — after verifying `Ship-Signature` — check whether `Idempotency-Key` has already
+   been recorded. If not, process it and store the key (with whatever durability a real production
+   subscriber needs — the reference implementation below uses an in-memory `Map`, which is
+   sufficient to prove the contract but not what a production subscriber should ship). If the key
+   HAS been seen before, do not reprocess it as a new logical delivery — but still respond with a
+   2xx status either way. This second half matters as much as the first: Ship's own deliverer
+   (`deliverer.ts`) reads a non-2xx/non-5xx response as a permanent failure (dead-lettered
+   immediately) and a 5xx/timeout as retryable (re-sent per the retry schedule above) — neither
+   outcome means "already handled." Only 2xx tells the sender to stop.
+
+**Copyable reference implementation:** `docs/submission/demo-webhook-listener.mjs`'s
+`createReferenceSubscriber()` — a genuine, small, standalone HTTP listener implementing exactly
+this contract (verify `Ship-Signature`, check-then-store on `Idempotency-Key`, 200 either way, in
+about 60 lines). Run it directly as a CLI demo (`node docs/submission/demo-webhook-listener.mjs`),
+or import `createReferenceSubscriber` the same way this repo's own e2e drill and vitest coverage
+do — it's the identical function in all three places, not three separate reimplementations.
+
 ---
 
 ## SDK Surface
