@@ -77,7 +77,7 @@ already sit in, so `integrations/cli`'s `build`/`type-check` scripts are picked 
   decoratively — `(stat(credentialsPath).mode & 0o777).toString(8) === '600'`; missing client id
   (fails before ever calling `fetch`); `access_denied`; `expired_token`; a thrown `fetch` (network
   kind); not-logged-in; a working token; a server-rejected (401) token; a corrupt credentials file.
-  10 cases across the two files.
+  9 cases across the two files (5 in `login.test.ts`, 4 in `whoami.test.ts`).
 - `src/__tests__/login.liveServer.test.ts` — the one live-server case. Spawns the REAL `api/`
   package as a **separate OS process** (`pnpm --filter @ship/api exec tsx src/index.ts`, exactly how
   `pnpm dev:api` runs it) rather than importing `api/src` — the boundary rule applies to this
@@ -89,18 +89,23 @@ already sit in, so `integrations/cli`'s `build`/`type-check` scripts are picked 
   line, the test POSTs to the real `/oauth/device/verify` endpoint with a session cookie — the exact
   HTTP endpoint `device.test.ts`'s `submitVerifyDecision` helper already proves, over a real TCP
   connection this time instead of supertest. Proves `ship login` polls a real server to success,
-  `~/.ship/credentials.json` lands at 0600 for real, and `ship whoami` then reports the identical
-  identity back.
+  the configured credentials path (a `mkdtemp`-created temp file, not the literal
+  `~/.ship/credentials.json` default — the default is exercised by `config.test.ts` instead) lands
+  at 0600 for real, and `ship whoami` then reports the identical identity back.
 
 **A real bug found and fixed while writing that last test, not shipped.** The approve `fetch()` call
-above is deliberately fire-and-forget (unawaited, matching
-`client.deviceLogin.liveServer.test.ts`'s own `void decideDeviceCode(...)` convention). Without
-`redirect: 'manual'`, a successful approve's 303 response (`Location:` the verification_uri's web
-origin, e.g. `http://localhost:5609/oauth-device-verify` — nothing listening there in this test)
-made `fetch`'s default `redirect: 'follow'` behavior auto-chase that redirect and fail with
-`ECONNREFUSED`, surfacing as an **unhandled promise rejection** that vitest still reported alongside
-an otherwise-passing test — reproduced deterministically (5/5 runs) with a wrapped `global.fetch`
+was initially fire-and-forget (unawaited, matching `client.deviceLogin.liveServer.test.ts`'s own
+`void decideDeviceCode(...)` convention). Without `redirect: 'manual'`, a successful approve's 303
+response (`Location:` the verification_uri's web origin, e.g.
+`http://localhost:5609/oauth-device-verify` — nothing listening there in this test) made `fetch`'s
+default `redirect: 'follow'` behavior auto-chase that redirect and fail with `ECONNREFUSED`,
+surfacing as an **unhandled promise rejection** that vitest still reported alongside an
+otherwise-passing test — reproduced deterministically (5/5 runs) with a wrapped `global.fetch`
 logger before finding the missing option, confirmed fixed across 3 consecutive clean runs after.
+**Since fixed further** (CodeRabbit review): the promise is now retained rather than discarded,
+awaited after `runLogin` resolves, and its status asserted at 303 — a silently-failing approval now
+fails at the approval step itself instead of surfacing only as `runLogin`'s own confusing
+poll-timeout.
 Purely a test-file bug (the `redirect` option only affects this fire-and-forget approval call, never
 any request the CLI itself makes), documented in the test's own inline comment so it doesn't
 resurface silently.
@@ -155,13 +160,17 @@ UI proof, not this ticket).
 
 **Rollback.** Revert this ticket's commits. Removes `integrations/cli/` entirely; reverts
 `pnpm-workspace.yaml` (drops the `integrations/cli` package entry), root `package.json` (drops
-`test:cli` and its chain slot), `scripts/factory/gate.sh` (drops `run_tests cli` and the
-`integration-deps` check — the latter is genuinely new gate coverage, not scoped to this package
-alone, but has nothing to check once `integrations/cli` is the only package under `integrations/`
-and is gone too), and `ci.yml`/`.gitlab-ci.yml` (drops the "CLI unit tests" step). No schema or
-migration changes, no changes to any existing package's source — this ticket adds one new,
-self-contained workspace package and the minimum wiring to keep it inside the repo's existing
-build/typecheck/test/CI fan-out.
+`test:cli` and its chain slot), `scripts/factory/gate.sh` (drops `run_tests cli` — safe, scoped only
+to this package), and `ci.yml`/`.gitlab-ci.yml` (drops the "CLI unit tests" step). No schema or
+migration changes, no changes to any existing package's source.
+
+**Do not revert `scripts/factory/gate.sh`'s `integration-deps` check as part of rolling back this
+ticket** — it is generic coverage for every package under `integrations/`, not scoped to `cli`
+alone, and by the time this could plausibly be rolled back `integrations/browser-demo`
+(TRO-449/PF-802) and `integrations/slack` (TRO-451/PF-803) also exist and genuinely rely on it.
+Removing it would silently drop the PF-003 boundary check locally (CI's own
+"Integration package dependency boundary" step is separate and unaffected) for packages this
+ticket doesn't own.
 
 ---
 

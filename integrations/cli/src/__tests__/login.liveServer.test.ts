@@ -40,7 +40,8 @@
  * the real thing" proof, kept to one case to bound the real wall-clock cost.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import { createServer } from 'node:net';
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -89,7 +90,7 @@ function getFreePort(): Promise<number> {
  *  convention, lessons.md rule 17). Rejects on early exit/error or a bounded
  *  timeout so a broken server fails this test fast instead of hanging the
  *  whole suite. */
-function waitForReady(child: ChildProcessWithoutNullStreams, timeoutMs: number): Promise<void> {
+function waitForReady(child: ChildProcessByStdio<null, Readable, Readable>, timeoutMs: number): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     let settled = false;
     const timer = setTimeout(() => {
@@ -98,9 +99,16 @@ function waitForReady(child: ChildProcessWithoutNullStreams, timeoutMs: number):
       reject(new Error(`api server did not report ready within ${timeoutMs}ms`));
     }, timeoutMs);
 
+    // Accumulate across chunks rather than testing each in isolation — Node
+    // can split "API server running on ..." across two 'data' events, and a
+    // per-chunk check would miss that split and wait out the full timeout
+    // with a misleading "did not report ready" error (CodeRabbit caught
+    // this).
+    let buffered = '';
     const onData = (chunk: Buffer) => {
       if (settled) return;
-      if (chunk.toString('utf8').includes('API server running on')) {
+      buffered += chunk.toString('utf8');
+      if (buffered.includes('API server running on')) {
         settled = true;
         clearTimeout(timer);
         child.stdout.off('data', onData);
@@ -138,7 +146,7 @@ function waitForReady(child: ChildProcessWithoutNullStreams, timeoutMs: number):
 async function spawnApiChild(
   databaseUrl: string,
   onStderr: (chunk: Buffer) => void
-): Promise<{ child: ChildProcessWithoutNullStreams; port: number }> {
+): Promise<{ child: ChildProcessByStdio<null, Readable, Readable>; port: number }> {
   const MAX_ATTEMPTS = 3;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     const port = await getFreePort();
@@ -184,7 +192,7 @@ describe('PF-600: ship login / ship whoami end-to-end against a real running Shi
   const databaseUrl = process.env.DATABASE_URL;
 
   let pool: pg.Pool | undefined;
-  let child: ChildProcessWithoutNullStreams | undefined;
+  let child: ChildProcessByStdio<null, Readable, Readable> | undefined;
   let credentialsDir: string;
   let credentialsPath: string;
   let baseUrl: string;

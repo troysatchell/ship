@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import os from 'node:os';
+import path from 'node:path';
 import {
   CLIENT_ID_ENV_VAR,
   CREDENTIALS_PATH_ENV_VAR,
@@ -55,7 +57,12 @@ describe('resolveCredentialsPath', () => {
   });
 
   it('defaults to ~/.ship/credentials.json (this ticket\'s own AC path)', () => {
+    // Platform-native comparison, not a hardcoded POSIX suffix — path.join()
+    // returns backslash separators on Windows, so a literal
+    // '.ship/credentials.json' string would never match there even against
+    // a correct implementation (CodeRabbit caught this).
     const resolved = resolveCredentialsPath({});
-    expect(resolved.endsWith('.ship/credentials.json')).toBe(true);
+    const expected = path.join(os.homedir(), '.ship', 'credentials.json');
+    expect(resolved).toBe(expected);
   });
 });

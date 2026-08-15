@@ -8,20 +8,6 @@
   "include": ["src/**/*"],
   "exclude": [
     "node_modules",
-    "dist",
-    // src/__tests__/**/* holds this package's one live-server integration test
-    // (login.liveServer.test.ts), which spawns the REAL api/ package as a
-    // separate OS process (`tsx api/src/index.ts` via child_process) and talks
-    // to it purely over HTTP + a raw `pg` connection — never an import of
-    // api/src. That keeps this package's actual dependency graph exactly
-    // `@ship/sdk` (PLUGFORGE.MD §2.1 / PF-003), so, unlike sdk/tsconfig.json's
-    // identically-shaped exclusion (which excludes its own __tests__ because
-    // IT genuinely imports api/src/app.ts as a documented exception), this
-    // exclusion exists only so a `pg`-typed devDependency-only test file
-    // doesn't need to be part of this package's own `tsc`/`tsc --noEmit`
-    // program. vitest.config.ts's `include` is a separate glob that still
-    // covers src/__tests__/** (via esbuild's type-stripping transform, not
-    // tsc), so the test still executes and asserts real behavior.
-    "src/__tests__/**/*"
+    "dist"
   ]
 }
