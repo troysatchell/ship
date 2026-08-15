@@ -42,7 +42,7 @@ import {
 } from '../errors.js';
 import { encodeCursor, decodeCursor, type KeysetCursor } from '../pagination.js';
 import { resolvePrincipalWorkspaceId } from './workspaceContext.js';
-import { createDocument } from '../../../../services/documentService.js';
+import { createDocument, updateDocument } from '../../../../services/documentService.js';
 
 export const documentsRouter: RouterType = Router();
 
@@ -153,6 +153,27 @@ export const CreateDocumentRequestSchema = z.object({
   title: z.string().min(1, 'title is required'),
   document_type: DocumentTypeSchema.optional().default('wiki'),
   properties: z.record(z.unknown()).optional(),
+});
+
+/** `PATCH /api/v1/documents/:id` request body (PF-703, Linear TRO-435) —
+ * the gate's sdk-mode `setStandupContent` write (`agent/src/shipClient.ts`'s
+ * `GateShipClient`). `content` only — the ONE thing this ticket's write
+ * path needs: `GateShipClient.postStandup` creates a standup via `POST /`
+ * above (with Ship's own blank template properties), then this route
+ * overwrites that template with the drafted/edited text.
+ *
+ * Deliberately narrow, same "disclosed scope, not silent gap" posture as
+ * `issues.ts`'s `UpdateIssueRequestSchema` (CHANGES.md, TRO-435): no
+ * `title`/`properties` update here — a future ticket that needs a fuller
+ * public "update a document" surface extends this schema rather than this
+ * ticket guessing at fields no current caller sends. No `document_type`
+ * filter either, matching the internal API's own generic
+ * `PATCH /api/documents/:id` (`routes/documents.ts`) — the one primary
+ * internal endpoint with no type filter at all, already anticipated by
+ * `documentService.ts`'s own header comment ("If a sprint document is ever
+ * updated through documents.ts's generic PATCH ..., including sprint"). */
+export const UpdateDocumentRequestSchema = z.object({
+  content: z.record(z.unknown()),
 });
 
 /** The public response shape for one document — id/title/type plus
@@ -362,6 +383,49 @@ documentsRouter.post(
     });
 
     res.status(201).json(serializeDocument(created));
+  })
+);
+
+// ─── PATCH /api/v1/documents/:id ─────────────────────────────────────────
+//
+// PF-703 (Linear TRO-435) — see UpdateDocumentRequestSchema's own doc
+// comment for the deliberate `content`-only scope narrowing.
+
+documentsRouter.patch(
+  '/:id',
+  bearerAuth,
+  rateLimitBuckets,
+  requireScope('documents:write'),
+  asyncHandler(async (req, res) => {
+    const requestId = requestIdOf(req);
+    const id = String(req.params.id);
+
+    const parseResult = UpdateDocumentRequestSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      throw validationFailedError(requestId, 'The request could not be validated.', {
+        fieldErrors: parseResult.error.flatten().fieldErrors,
+      });
+    }
+
+    const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
+    // 404s on a malformed/nonexistent id or wrong workspace before the
+    // UPDATE runs — matches every other :id route in this file's "malformed
+    // or missing id both 404" convention (PF-200 test design AC-4).
+    await assertDocumentExists(id, workspaceId, requestId);
+
+    const updated = await updateDocument({
+      id,
+      workspaceId,
+      setClauses: ['content = $1', 'updated_at = now()'],
+      values: [JSON.stringify(parseResult.data.content)],
+      // No documentTypeFilter and no previousProperties — this route never
+      // touches `properties`, so issue/sprint event derivation (which reads
+      // previousProperties) has nothing to diff; the generic
+      // `document.updated` event still fires (documentService.ts's own
+      // dispatchOrQueue, unconditional on document_type).
+    });
+
+    res.status(200).json(serializeDocument(updated));
   })
 );
 
