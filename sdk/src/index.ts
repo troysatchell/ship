@@ -41,12 +41,16 @@ export type {
   ListDocumentsParams,
   IterateDocumentsParams,
   CreateDocumentBody,
+  // PF-703 (Linear TRO-435) — the agent gate's sdk-mode write path.
+  UpdateDocumentBody,
   IssueState,
   IssuePriority,
   Issue,
   IssueList,
   ListIssuesParams,
   IterateIssuesParams,
+  // PF-703 (Linear TRO-435) — the agent gate's sdk-mode write path.
+  UpdateIssueBody,
   Sprint,
   SprintList,
   ListSprintsParams,
