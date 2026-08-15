@@ -32,13 +32,22 @@ import { ApiErrorSchema, BEARER_SECURITY } from './common.js';
 
 /** Matches `serializeDocument()`'s return shape in
  * `platform/api/v1/resources/documents.ts` exactly: id/title/document_type,
- * `properties` defaulted to `{}` (never null), and `created_at`/`updated_at`
- * as `Date#toISOString()` strings. */
+ * `properties` defaulted to `{}` (never null), `content`/`visibility`/
+ * `created_by`/`completed_at` (TRO-605), and `created_at`/`updated_at` as
+ * `Date#toISOString()` strings. `content` is TipTap JSON (`schema.sql:113`) —
+ * an arbitrary JSON value, so `z.unknown()`, same as `properties`'s own
+ * per-key values. `visibility` is the `'private' | 'workspace'` text enum
+ * (`schema.sql:158`). `yjs_state` deliberately stays unregistered — see
+ * that field's own exclusion note in `resources/documents.ts`. */
 const DocumentResponseSchema = z.object({
   id: z.string().uuid().openapi({ description: 'Document id.' }),
   title: z.string(),
   document_type: DocumentTypeSchema,
   properties: z.record(z.unknown()),
+  content: z.unknown().openapi({ description: 'TipTap JSON document content (not the Yjs binary collaboration state, which stays internal-only).' }),
+  visibility: z.enum(['private', 'workspace']).openapi({ description: "'private' (creator only) or 'workspace' (all workspace members)." }),
+  created_by: z.string().uuid().nullable().openapi({ description: 'User id of the document creator, or null.' }),
+  completed_at: z.string().datetime().nullable().openapi({ description: 'ISO 8601 timestamp when this document (e.g. an issue) was marked done, or null.' }),
   created_at: z.string().datetime().openapi({ description: 'ISO 8601 creation timestamp.' }),
   updated_at: z.string().datetime().openapi({ description: 'ISO 8601 last-updated timestamp.' }),
 }).openapi('Document');

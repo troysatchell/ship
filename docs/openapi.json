@@ -103,6 +103,33 @@
             "type": "object",
             "additionalProperties": {}
           },
+          "content": {
+            "description": "TipTap JSON document content (not the Yjs binary collaboration state, which stays internal-only)."
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "workspace"
+            ],
+            "description": "'private' (creator only) or 'workspace' (all workspace members)."
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "User id of the document creator, or null."
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "ISO 8601 timestamp when this document (e.g. an issue) was marked done, or null."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -119,6 +146,9 @@
           "title",
           "document_type",
           "properties",
+          "visibility",
+          "created_by",
+          "completed_at",
           "created_at",
           "updated_at"
         ]

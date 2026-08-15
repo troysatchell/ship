@@ -155,16 +155,24 @@ export const CreateDocumentRequestSchema = z.object({
   properties: z.record(z.unknown()).optional(),
 });
 
-/** The public response shape for one document — id/title/type plus
- * properties and timestamps. Deliberately narrower than the full internal
- * `documents` row (no `content`, `yjs_state`, `visibility`, etc.) — §2.4's
- * "own this mapping explicitly" applies to what a public resource exposes,
- * not just how it queries. */
+/** The public response shape for one document — id/title/type/properties/
+ * timestamps, plus `content`/`visibility`/`created_by`/`completed_at`
+ * (TRO-605). `yjs_state` stays excluded — that one is genuinely internal
+ * collaboration-protocol binary state, not a public document field; see
+ * TRO-605's Linear description for why the rest of this row widened instead
+ * of leaving PF-702's sdk-mode agent reads permanently degraded relative to
+ * internal mode. `content` is the TipTap JSON column (`schema.sql:113`,
+ * JSONB — plain-JSON-serializable, NOT the Yjs binary blob), `visibility`
+ * is the `'private' | 'workspace'` text enum (`schema.sql:158`). */
 interface DocumentRow {
   id: string;
   title: string;
   document_type: string;
   properties: Record<string, unknown> | null;
+  content: unknown;
+  visibility: string;
+  created_by: string | null;
+  completed_at: Date | null;
   created_at: Date;
   updated_at: Date;
   /** `created_at::text` — cursor-internal only (TRO-602), never serialized
@@ -178,12 +186,20 @@ interface DocumentRow {
 // same-named but structurally different interface, from a create response
 // that never builds a cursor) — that row has no `created_at_precise` field,
 // and never needs one, since serialization only ever reads the fields below.
+// That service-side `DocumentRow` is a `RETURNING *` projection (verified by
+// reading `documentService.ts` directly) and already declares
+// `content`/`visibility`/`created_by`/`completed_at`, so it satisfies this
+// widened `Omit<...>` structurally with no change to that file.
 function serializeDocument(row: Omit<DocumentRow, 'created_at_precise'>) {
   return {
     id: row.id,
     title: row.title,
     document_type: row.document_type,
     properties: row.properties ?? {},
+    content: row.content,
+    visibility: row.visibility,
+    created_by: row.created_by,
+    completed_at: row.completed_at ? row.completed_at.toISOString() : null,
     created_at: row.created_at.toISOString(),
     updated_at: row.updated_at.toISOString(),
   };
@@ -254,7 +270,8 @@ documentsRouter.get(
     const limitParamIndex = values.length;
 
     const result = await pool.query<DocumentRow>(
-      `SELECT id, title, document_type, properties, created_at, updated_at, created_at::text AS created_at_precise
+      `SELECT id, title, document_type, properties, content, visibility, created_by, completed_at,
+              created_at, updated_at, created_at::text AS created_at_precise
        FROM documents
        WHERE ${whereClauses.join(' AND ')}
        ORDER BY created_at DESC, id DESC
@@ -317,7 +334,8 @@ documentsRouter.get(
     }
 
     const result = await pool.query<DocumentRow>(
-      `SELECT id, title, document_type, properties, created_at, updated_at
+      `SELECT id, title, document_type, properties, content, visibility, created_by, completed_at,
+              created_at, updated_at
        FROM documents
        WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL`,
       [id, workspaceId]
