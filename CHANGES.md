@@ -103,15 +103,36 @@ restored, confirmed all 8 green. Full `api/v1` suite re-run after the change: 12
 green — every resource's live pagination integration test still passes against real
 `created_at::text` output, confirming the regex doesn't false-reject real data.
 
+**CodeRabbit triage, round 2 (hosted, completed review — genuine this time, not rate-limited: left
+2 inline comments).** Major finding, accepted: `isPreciseTimestampShape`'s regex was purely lexical,
+so a calendar-impossible value like `"2026-02-31 05:33:23+00"` or an out-of-range offset like
+`"+99:99"` matched it and reached the resource's SQL query as a bind parameter — verified directly
+that Postgres then throws `date/time field value out of range`, uncaught from that `pool.query()`
+call. `errorMiddleware.ts` already sanitizes that into a generic `server_error` 500 with no leaked
+detail (checked, not assumed — no information-disclosure or crash risk existed), but the status was
+wrong: a malformed `?cursor=` should get `validation_failed` like every other malformed-cursor case,
+not a 500. Fixed by adding calendar/offset validity to the same shape check: constructs a UTC date
+from the matched fields via `Date.UTC` and compares the fields back (catches Feb 31 — `Date.UTC`
+silently normalizes it to March 3 — without a hand-rolled days-per-month table), plus an explicit
+UTC-offset bound (00-14 hours, 00-59 minutes, since `Date.UTC` has no offset concept to
+overflow-check). 5 new test cases cover both the rejections (Feb 31, hour 25, offset +99:99 and
++15:00, and the exact `decodeCursor` case CodeRabbit's own probe used) and that real edge values
+still pass (leap day Feb 29, offset boundary +14:00) — red-before-green verified: reverted the
+calendar/offset check back to the lexical-only regex, confirmed exactly the 4 new `preciseTimestamp`
+tests plus the new `decodeCursor` case failed with the predicted messages, restored, confirmed all
+13 green. Minor finding, accepted: `CHANGES.md` itself was missing a blank line before a fenced
+code block (markdownlint MD031) — fixed. Full `api/v1` suite re-run: 12 files, 249 tests green.
+
 **How to run it.**
+
 ```bash
 pnpm --filter api exec vitest run src/platform/api/v1/__tests__/pagination.test.ts
 pnpm --filter api exec vitest run src/platform/api/v1/
 ```
 
-**Roll back.** Revert `pagination.ts`'s `preciseTimestamp`/`decodeCursor` changes in this commit and
-delete `api/v1/__tests__/pagination.test.ts`; the original TRO-602 fix (branded type, no runtime
-validation) is unaffected and stays correct on its own.
+**Roll back.** Revert `pagination.ts`'s `preciseTimestamp`/`decodeCursor`/`isPreciseTimestampShape`
+changes across both follow-up commits and delete `api/v1/__tests__/pagination.test.ts`; the original
+TRO-602 fix (branded type, no runtime validation) is unaffected and stays correct on its own.
 
 **How to verify.**
 
