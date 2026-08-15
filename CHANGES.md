@@ -21,6 +21,170 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-447 — PF-801: Idempotency-Key drill (deliver → replay → dedupe, end to end)
+
+**Investigate-tier, proof/docs only — no migration.** TRO-442/PF-305 (delivery log) and
+TRO-446/PF-306 (replay) were both already merged and already proved, at the DB-column level, that a
+replay reuses the original `idempotency_key`. What had never been proven: that a REAL subscriber
+process, receiving the actual wire traffic (not a stubbed `fetch`), sees the identical key twice and
+genuinely dedupes on it — this ticket's own AC. Verified no migration was needed: `ls
+api/src/db/migrations/ | sort -V | tail -5` showed 047–051 taken (050/051 are PF-306's own, not
+049 — that's `049_public_api_audit.sql`, a different ticket); the next free number is 052, but
+nothing here touches schema, so it stays free.
+
+**What was added.**
+
+- **`createReferenceSubscriber()`** (`docs/submission/demo-webhook-listener.mjs`) — the reference
+  subscriber-dedupe implementation this ticket's AC asks for, and the artifact integrators actually
+  copy. Extends TRO-441's existing demo listener (established convention/location for this kind of
+  reference artifact — reused and extended in place, not duplicated) rather than replacing it: same
+  file, same CLI entry point (`node docs/submission/demo-webhook-listener.mjs`), now refactored into
+  an exported, importable factory plus a thin CLI wrapper. A real, standalone `http.Server` — never
+  a mock — that verifies `Ship-Signature` via an INJECTED `verify(header, rawBody, secret)`
+  function (never reimplemented; see below for why two byte-identical implementations exist), then
+  check-then-stores on `Idempotency-Key`: a key seen before is recognized as a duplicate and NOT
+  reprocessed, but the response is still 200 either way, matching `deliverer.ts`'s own retry
+  contract (2xx = handled, don't retry; 5xx/timeout = retryable; anything else = permanent failure)
+  — a subscriber that 4xx'd or 5xx'd a recognized duplicate would get it retried or dead-lettered,
+  neither of which is "already handled."
+- **`docs/submission/demo-webhook-listener.d.mts`** — hand-written type declarations for the `.mjs`
+  module (lessons.md rule 21: a plain `.js`/`.mjs` import is an untyped boundary in this repo's
+  `strict`/`noImplicitAny` tsconfig; both consuming test files needed this to avoid an implicit
+  `any`).
+- **`verify` is injected, not hardcoded**, because two byte-identical implementations of the
+  Ship-Signature algorithm already exist in this repo (`sdk/src/verifyWebhook.ts`'s own header:
+  "Port of `signer.ts`'s `verify()` — same algorithm, byte-identical"): the CLI block still injects
+  the SDK's `verifyWebhook()` (what a real external integrator actually has available — unchanged
+  behavior from before this ticket, still needs `pnpm --filter @ship/sdk build` first, documented in
+  the file's own header), while both test suites below inject `signer.ts`'s own `verify()` instead,
+  so neither `pnpm test` nor the e2e suite needs an SDK build as a hidden prerequisite just to prove
+  the dedupe contract.
+- **`e2e/webhook-idempotency-key-drill.spec.ts`** — the narrated, real-browser/real-process e2e
+  drill, matching `e2e/oauth-pkce-chain.spec.ts` / `e2e/oauth-refresh-rotation-stolen-token.spec.ts`'s
+  structure: logs in as the real seeded admin, creates a subscription via the real
+  `POST /api/v1/webhooks`, starts the reference subscriber on a real reserved loopback port, creates
+  a document via the real app (which publishes `document.created` through the real, already-running
+  production deliverer — `apiServer` spawns the real `dist/index.js`, so `InMemoryWebhookDeliverer`'s
+  polling loop genuinely runs), confirms the reference subscriber processed it (not a dupe) via
+  `expect.poll` (no real sleeps — the delivery is genuinely async, on the deliverer's real 1s
+  interval), replays it via `POST /api/v1/webhooks/deliveries/:id/replay`, confirms the SAME
+  `Idempotency-Key` reaches the subscriber a second time and gets recognized as a duplicate, and
+  confirms via `GET /deliveries` that the log shows two distinct rows linked by `replayed_from_id`.
+  Per `ship-qa`'s own rule, this file is ADDITIVE — `gate.sh` counts it toward the regression-test
+  grep but never executes it (neither vitest config collects `e2e/`).
+- **The gate-executed proof** — a new "PF-801" describe block in
+  `api/src/platform/api/v1/resources/__tests__/webhooks.test.ts`, at the tier `gate.sh` actually
+  runs. Distinct from that file's pre-existing "replays a successful delivery" test (which stubs
+  `fetch` and inserts the ORIGINAL delivery directly via SQL, so it only ever captures one real HTTP
+  call and compares it against a DB column): this test dispatches BOTH the fresh delivery (via
+  `InMemoryWebhookDeliverer.enqueueEvent()` + `processDue()`, real HTTP over a real loopback socket)
+  and the replay (via the real route) into the SAME reference-subscriber instance, and asserts the
+  fixture's own dedupe state — not just a captured header. Uses a fully isolated
+  workspace/user/app/token (not the file's shared fixtures): `enqueueEvent()` matches EVERY active
+  subscription in a workspace for the given `event_type`, and this file's own "every registered
+  event_type is accepted" test leaves one active `document.created` subscription behind under the
+  shared workspace — reusing it would have made `processDue()` fire real outbound HTTP attempts at
+  every other subscription's `target_url` too (mostly `https://example.com/...` placeholders),
+  observed directly during development (`enqueuedCount` was 6, not 1, on the first run) before the
+  isolation fix.
+- **`docs/architecture.md`** — new "Subscriber dedupe contract" subsection under "Webhook Pipeline":
+  idempotency keys are stable across replay (restating the existing "Idempotency-Key origin" bullet
+  from the integrator's side), how to implement dedup (check-then-store, 200 either way, and why),
+  and a pointer at `createReferenceSubscriber()` as copyable sample code.
+- **`docs/submission/PLUGFORGE-DEMO-SCRIPT.md`** — Act 4 corrected: it previously said "PF-306 isn't
+  on `main` yet," which was stale (both PF-306 and this ticket are merged as of this revision) — left
+  uncorrected, it would have sat directly next to this ticket's own new, true claims. Also fixed a
+  known-wrong command in the same paragraph (`pnpm --filter @ship/api test -- deliverer` does NOT
+  scope to the path — lessons.md's 2026-08-12 entry — replaced with the working `cd api && npx
+  vitest run <path>` form), and added a pointer at the new e2e spec as the recorded dedupe proof.
+
+**How to run it.**
+
+```bash
+source .factory-env   # or your own DATABASE_URL — pointed at a factory-owned db
+(cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts)
+pnpm exec playwright test e2e/webhook-idempotency-key-drill.spec.ts --workers=1
+```
+
+Each line is independent — the first runs in a subshell (CodeRabbit, this ticket's review; a bare
+`cd api && ...` pasted into one running shell session leaves that session inside `api/` for the
+Playwright line after it, which then fails to find `e2e/`), so both commands work whether run
+together or one at a time from the repo root.
+
+**Not verified.** The CLI demo path (`node docs/submission/demo-webhook-listener.mjs`) was checked
+with `node --check` for syntax only, not run end-to-end against a live `pnpm dev` instance in this
+session. Unlike TRO-441's original version, this is NOT an unchanged risk profile any more
+(CodeRabbit, this ticket's review, correctly caught an earlier draft of this note overclaiming that)
+— the refactor added real runtime behavior to this same code path: the 1MB body cap, required-key
+rejection, deduplication tracking, and the try/catch around `verify()`, none of which the CLI path
+has been exercised against live.
+
+**Orchestrator triage of a fresh local CodeRabbit-CLI review (post merge-forward) — 5 findings, 4
+fixed, 1 dismissed as verified inapplicable:**
+1. **Major, fixed.** The reference subscriber's `verify()` call was unguarded — `verify` is an
+   INJECTED function (either implementation), and a malformed `Ship-Signature` value could throw
+   rather than return `false`, crashing the whole listener process on one bad request. Wrapped in
+   try/catch, treated as a failed verification.
+2. **Major, fixed.** The e2e spec's cleanup closed the reference-subscriber listener but never
+   deactivated the `webhook_subscriptions` row — the production deliverer keeps polling for the rest
+   of the worker's real, long-running process lifetime, so any LATER `document.created` event in that
+   worker would fire a real, doomed HTTP attempt at the now-closed port. Fixed with the real
+   `DELETE /:id` route (same pattern TRO-446's own regression test uses), not a raw SQL statement.
+3. **Major, dismissed — verified against the actual schema, not just judgment.** Suggested explicit
+   `webhook_deliveries` cleanup before `webhook_subscriptions` in `webhooks.test.ts`'s new PF-801
+   test. Checked `048_webhook_deliveries.sql` first: `subscription_id ... REFERENCES
+   webhook_subscriptions(id) ON DELETE CASCADE` — deleting the subscription already cascades
+   correctly; the suggested extra step would be redundant, not a fix for a real gap.
+4. **Minor, fixed.** `SECRET_ENCRYPTION_KEY: process.env.SECRET_ENCRYPTION_KEY ?? crypto.randomBytes(...)`
+   would pass an accidentally-empty-string env value through unchanged (`??` only catches
+   null/undefined) — switched to `||`, which also falls through an empty string to the random
+   default.
+5. **Trivial, fixed.** The CLI entry-point guard (`import.meta.url === \`file://${process.argv[1]}\``)
+   mishandles paths with spaces or non-ASCII characters on some platforms — switched to
+   `pathToFileURL(process.argv[1]).href`, the standard-library-correct comparison.
+
+Re-verified after fixing: `webhooks.test.ts` 33/33; `e2e/webhook-idempotency-key-drill.spec.ts` 1/1,
+no retry (via `/e2e-test-runner`, `PLAYWRIGHT_WORKERS=1` given concurrent factory load).
+
+**Hosted GitHub CodeRabbit review (orchestrator triage) — 9 findings, 8 fixed, 0 dismissed:**
+1. **Minor, fixed.** `webhooks.test.ts`'s new PF-801 test destructured the delivery-log response by
+   array position ("newest first") — two rows created milliseconds apart can share a `created_at`,
+   making the order non-deterministic. Switched to lookup by id, matching the e2e drill's own
+   already-correct pattern.
+2. **Minor, fixed.** CHANGES.md's own evidence commands and CLI risk-profile claim — see above,
+   both corrected in place.
+3. **Major, fixed (docs).** `docs/architecture.md`'s dedupe-contract guidance described a naive
+   check-then-store without addressing the TOCTOU race a real, non-single-threaded production
+   subscriber can hit. Added guidance requiring an atomic durable claim (unique constraint +
+   `ON CONFLICT DO NOTHING` or equivalent) and documented the missing-key 4xx behavior explicitly.
+4. **Trivial, fixed.** `ReferenceSubscriber.deliveries` typed as `Map`, contradicting its own
+   "read-only introspection" doc comment — switched to `ReadonlyMap`.
+5. **Minor, fixed.** `pathToFileURL(process.argv[1])` (round-3's own fix) throws if `argv[1]` is
+   `undefined` — guarded.
+6. **Minor, fixed.** The CLI logger printed "signature check failed" for BOTH rejection causes
+   (bad signature vs. missing Idempotency-Key), misdiagnosing the latter. Added a `reason` field
+   threaded from the handler through to the logger.
+7. **Minor, fixed (docs).** `PLUGFORGE-DEMO-SCRIPT.md`'s "a replay always re-sends" claim needed
+   qualifying to "of an active subscription" now that TRO-446's own review added the
+   deactivated-subscription 404 guard.
+8. **Minor, fixed.** The e2e spec's `requireDeliveryListBody` cast its array elements (`as
+   DeliveryBody[]`) instead of validating them through the file's own `requireDeliveryBody` helper;
+   the CSRF response body was asserted with no validation at all. Both now validate explicitly.
+9. **Trivial, fixed.** The e2e spec's login step used CSS id selectors (`#email`/`#password`)
+   instead of this repo's own accessible-locator convention — switched to `getByLabel`, matching
+   `Login.tsx`'s real, associated (screen-reader-only) `<label>` elements.
+
+Re-verified again after this round: `webhooks.test.ts` 33/33; e2e spec 1/1, no retry.
+
+**Roll back.** Revert this ticket's commit(s). `docs/submission/demo-webhook-listener.mjs` reverts
+to its TRO-441 shape (no dedupe tracking, no exported factory — the file becomes non-importable
+again). Deletes `docs/submission/demo-webhook-listener.d.mts`,
+`e2e/webhook-idempotency-key-drill.spec.ts`, and the "PF-801" describe block in `webhooks.test.ts`.
+Reverts the `docs/architecture.md` and `docs/submission/PLUGFORGE-DEMO-SCRIPT.md` doc edits. No
+schema/migration involved, so no database rollback step.
+
+---
+
 ## TRO-451 (PF-803) — Slack integration: verified Ship webhooks → channel posts, the 5th and last committed reference integration
 
 **What was added.** `integrations/slack/` — an Express receiver verifying every delivery with
