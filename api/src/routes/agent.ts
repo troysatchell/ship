@@ -502,9 +502,25 @@ router.post('/accept-draft', authMiddleware, authed(async (req, res) => {
   // above (no point spending a real api_tokens row on a request that's about
   // to be refused anyway), BEFORE the outbound call — acceptDraft's Ship
   // write must be attributed to THIS person, never the agent's own identity.
+  //
+  // PF-703 (TRO-435) — `scopes` requested here: `authMiddleware` (internal
+  // mode) never reads this column (`agentTokens.ts`'s own doc comment,
+  // verified against `validateApiToken`'s SELECT), so this is additive, not
+  // a behavior change for internal mode. It IS required for `agent/`'s
+  // sdk-mode `GateShipClient` writes (PF-703's own scope) to work at all:
+  // `bearerAuth` (`platform/oauth/bearerAuth.ts`) rejects a `scopes IS NULL`
+  // personal token at `/api/v1` outright ("the landmine: a legacy unscoped
+  // internal token. Never valid here.") — without this, the SAME token that
+  // works for internal-mode acceptDraft would 401 against every sdk-mode
+  // write. `documents:write` covers postStandup/setStandupContent;
+  // `issues:write` covers applyIssueTransition — both scopes requested
+  // unconditionally (api/ has no visibility into agent/'s own
+  // AGENT_PLATFORM_MODE, a separate process's env var) so ONE minted token
+  // is valid against whichever wire protocol the running agent happens to
+  // be configured for.
   let minted: MintedAgentToken;
   try {
-    minted = await mintEphemeralAgentToken(req.userId, req.workspaceId);
+    minted = await mintEphemeralAgentToken(req.userId, req.workspaceId, ['documents:write', 'issues:write']);
   } catch (err) {
     console.error('[agent-proxy] failed to mint a per-user Ship API token for the agent:', err);
     res.status(502).json({ error: 'agent_unavailable' });

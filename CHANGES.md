@@ -76,6 +76,249 @@ also changing the click/dialog flow at the same time.
 
 ---
 
+## TRO-435 (PF-703) — Gated writes via SDK: per-call `ShipClient` with the acting human's token
+
+**What was added.** `agent/src/shipClient.ts`'s `GateShipClient` gains an optional
+`sdkClientFactory?: (token: string) => GateSdkClientLike` constructor option (mirrors
+`ShipClient`'s own `sdk` option from PF-702 — presence decides the mode, never a separate flag).
+When set, each of the three write methods (`postStandup`, `setStandupContent`,
+`applyIssueTransition`) builds a FRESH `@ship/sdk` `ShipClient` bound to THAT call's own token
+(`sdkClientFactory(token)`) and routes through `/api/v1/*` instead of `this.client.request` against
+the internal `/api/*` route. `GateShipClient` still holds no token field of its own — the structural
+guarantee this class exists for (TRO-321/FG-8) is unchanged; sdk mode only changes which wire
+protocol the caller-supplied token authenticates against. `agent/src/index.ts` wires
+`sdkClientFactory` only when `config.agentPlatformMode === 'sdk'`, using the SAME
+`AGENT_PLATFORM_MODE` flag PF-702 introduced — this ticket does not add a second flag or flip the
+default (still `internal`).
+
+**The two new `/api/v1` write routes this required, and why they didn't already exist.**
+`GateShipClient`'s three writes had no `/api/v1` equivalent before this ticket — `/api/v1/issues`
+was read-only (its own header comment: "Read-only in this ticket — no POST/PATCH here"), and there
+was no `/api/v1` standups resource at all. Added, both deliberately narrower than their internal
+counterparts (disclosed scope, not a silent gap — same posture PF-702 used for `getDocument()`):
+
+- **`PATCH /api/v1/issues/:id`** (`issues:write` scope, already registered in `ScopeRegistry` "for a
+  later ticket to use" — this is that ticket) — `state` only. No title/priority/assignee_id/
+  belongs_to, no "incomplete children" confirmation gate for closing a parent with open sub-issues.
+  Reuses `utils/document-crud.ts`'s `getTimestampUpdates` for started_at/completed_at/reopened_at/
+  cancelled_at bookkeeping, and `logDocumentChange` for the `document_history` row — transactional
+  (BEGIN/logDocumentChange/UPDATE/COMMIT, event publish deferred via `pendingEvents` until after
+  COMMIT), matching the internal route's own atomicity. **Caught by this ticket's own regression
+  test, red before fix**: an early version of this route called `updateDocument()` without also
+  calling `logDocumentChange()` — it built and typechecked cleanly, but the sdk-mode
+  `acceptProposedTransition` test failed for the right reason (`document_history` count unchanged,
+  not an error) until the transactional `logDocumentChange` call was added.
+- **`PATCH /api/v1/documents/:id`** (`documents:write` scope, already registered) — `content` only.
+  Mirrors the internal API's own generic `PATCH /api/documents/:id` (no `document_type` filter),
+  already anticipated by `documentService.ts`'s own header comment.
+
+Both registered with OpenAPI (`platform/openapi/schemas/{documents,issues}.ts`) and picked up
+automatically by the existing structural fitness suites (`route-fitness.test.ts`,
+`sdk/src/__tests__/parity.test.ts` — extended with `documents.update`/`issues.update` entries in
+`SDK_TO_OPERATION`), not hand-verified.
+
+**SDK additions:** `RequestClient.patch<T>()` (`sdk/src/internal/requestClient.ts` — the SDK had
+`get`/`post`/`delete` but no `patch` before this ticket), `DocumentsClient.update()` and
+`IssuesClient.update()` (`sdk/src/resources/*.ts`), `UpdateDocumentBody`/`UpdateIssueBody` types
+(`sdk/src/types.ts`, exported from the public barrel).
+
+**The token plumbing this required on the `api/` side.** `GateShipClient`'s sdk-mode writes need a
+token that satisfies `bearerAuth`'s `scopes IS NOT NULL` requirement (PF-107's second token class,
+migration 043) — the existing `accepterToken` (minted by `api/src/services/agentTokens.ts`'s
+`mintEphemeralAgentToken`, called from `api/src/routes/agent.ts`'s `POST /accept-draft`) is a
+`scopes: NULL` legacy personal token, which `bearerAuth` rejects outright at `/api/v1`
+("the landmine: a legacy unscoped internal token. Never valid here."). Added an optional
+`scopes?: string[]` parameter to `mintEphemeralAgentToken` (default `undefined` — every other
+caller, `POST /chat`'s `askingUserToken`, is unaffected) and `POST /accept-draft` now requests
+`['documents:write', 'issues:write']` unconditionally (api/ has no visibility into the agent
+process's own `AGENT_PLATFORM_MODE`). Verified safe for internal mode: `authMiddleware`
+(`middleware/auth.ts`) never reads the `scopes` column at all (`validateApiToken`'s own `SELECT`
+omits it) — the same minted token still authenticates internal-mode writes exactly as before,
+unaffected by carrying scopes it never checks.
+
+**Disclosed, narrower-than-internal-mode behavior in sdk-mode's `postStandup`/`setStandupContent`
+(CHANGES.md, same "disclosed limitation" posture as PF-702's `getDocument()`):**
+- No idempotency check — the internal route returns the EXISTING standup for a (author, date) pair
+  if one already exists; sdk mode always creates a new document. The one real call site
+  (`gate.ts`'s `acceptDraft`) never retries a successful accept, so this is a real but narrow gap.
+- The returned `CreatedStandup.content` in sdk mode: `postStandupViaSdk` sets it to `null` (the
+  public `POST/PATCH /api/v1/documents` routes never return `content` — `serializeDocument()`'s own
+  deliberate narrowing); `setStandupContentViaSdk` sets it to the exact TipTap doc it just sent
+  (guaranteed accurate, not a gap, since it's the literal value that call wrote).
+- `properties.author_id` IS still set correctly in sdk mode, via one extra `GET /api/v1/me` call per
+  `postStandup` to resolve the acting human's id from their token (`GateShipClient` holds no user-id
+  field, only the token) — proven by this ticket's own attribution test, not assumed.
+
+**The AC's required proofs.**
+1. **Write-boundary invariant holds in both modes.**
+   `agent/src/__tests__/graphWriteBoundary.test.ts` (the static AST proof that `graph.ts` never
+   references `GateShipClient`/`.request(`/bare `fetch(`) is unmodified and needed no changes — it
+   is mode-invariant by construction (it inspects `graph.ts`'s own source, which never changed).
+   `agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts` (the live-DB proof) gained a second
+   `describe` block running the SAME `acceptProposedTransition`/`acceptDraft` control proofs through
+   a real `sdkClientFactory`-configured `GateShipClient` against a second, scoped token — proving a
+   real `/api/v1` write moves `document_history`/`documents` identically to internal mode.
+2. **Human-attribution proof in `public_api_audit`.** The same two new sdk-mode tests query
+   `public_api_audit` directly (polling — the write is fire-and-forget, `platform/audit/
+   middleware.ts`'s own documented behavior) and assert `user_id` equals the accepting human,
+   `app_client_id` is `NULL` (a personal-token `Principal.app` is always null —
+   `platform/oauth/principal.ts`), and `scope_used` matches the scope the route actually checked.
+3. **Unit-level sdk-mode coverage** for `GateShipClient` itself:
+   `agent/src/__tests__/shipClient.test.ts` gained a `sdkClientFactory`-injected fake-client describe
+   block (7 new cases: title computation, null-author fallback, per-call token (no stickiness),
+   content echo, state transition, the guarded-cast rejection for an unrecognized state, and error
+   propagation) — confirmed red for the right reason by temporarily removing the
+   `assertSdkIssueState` guard (an `AssertionError`, not an import/type error) before restoring it.
+
+**CodeRabbit triage (local CLI, capacity-constrained on the PR — see below; 11 findings). Fixed all
+11, dismissed 0, one intentionally re-scoped:**
+- **major** (`api/src/platform/api/v1/resources/issues.ts`, `PATCH /:id`) — a malformed (non-UUID)
+  `id` reached the `id = $1` query directly, no `UUID_RE` guard existed in this file at all. Postgres
+  raises "invalid input syntax for type uuid" for that predicate, an unhandled error `errorMiddleware`
+  sanitizes to a 500 — breaking this codebase's own "malformed or missing id both 404" convention
+  every other `:id` route follows (PF-200 test design AC-4). A real, user-visible defect, not a style
+  nit. Fixed: added the same `UUID_RE` check `documents.ts` already uses, before the query. New
+  regression test (`issues.test.ts`) confirms 404, not 500.
+- **major** (`agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts`, `pollForAuditRow`) — the
+  attribution-proof poll filtered `public_api_audit` by `route`/`method` only; every PATCH call site
+  is scoped by a fresh UUID in the path, but `POST /api/v1/documents` is a collection route with no
+  id in its path at all, so that one call site could pick up a different caller's row under real
+  concurrency (this file's own docstring's "safe because every route is scoped to a UUID" claim was
+  therefore false for the POST case — caught, not asserted past). Fixed: `pollForAuditRow` now also
+  filters by `userId`, applied uniformly to all three call sites.
+- **minor** (`api/src/platform/api/v1/resources/__tests__/issues.test.ts`) — the cross-workspace
+  isolation test's `DELETE FROM workspaces` cleanup ran as the test's last line, not in `finally` —
+  an assertion failure above it would leak the row. Fixed: wrapped in `try/finally`.
+- **minor** (`agent/src/__tests__/shipClient.test.ts`, `fakeSdkClient`) — the "no acting user" fixture
+  returned `{ user: { id: null } }`, which is not a shape `@ship/sdk`'s real `Me` type can ever
+  produce (`user` is `MeUser | null`, never a `MeUser` with a null `id`) — the test passed by
+  coincidence (`{id:null}.id ?? null` and `null?.id ?? null` both evaluate to `null`) without ever
+  exercising the real `me.user?.` optional-chaining branch. Fixed: returns `user: null` for that case.
+- **minor** (`agent/src/shipClient.ts`, `postStandupViaSdk`) — companion fix, not itself a CodeRabbit
+  finding: reordered so `standupTitleForDate(date)` is computed BEFORE the `me()` call, so a malformed
+  date fails immediately instead of spending a network round trip on a request that was going to be
+  rejected anyway. Found while adding the regression test for the finding below.
+- **minor** (`agent/src/shipClient.ts`, `standupTitleForDate`) — an invalid `date` does not throw when
+  passed to `toLocaleDateString` (returns the literal string `"Invalid Date"`), which would pass
+  `CreateDocumentRequestSchema`'s bare `min(1)` title check and silently create a document titled
+  "Invalid Date Invalid Date Standup" — the internal route's own schema rejects this with a 400 before
+  any write. Fixed: validates the parsed `Date` before formatting, throwing a clear error naming the
+  bad value (matching `assertSdkIssueState`'s own guarded-not-blind posture).
+- **minor** (`api/src/platform/api/v1/resources/__tests__/documents.test.ts`) — the content-overwrite
+  test asserted the DB row directly but never that `updated_at` moved, and never exercised a
+  follow-up `GET`. Fixed the `updated_at` gap directly. The suggested "follow-up GET reflects the
+  patched content" half is **not satisfiable as literally stated** — verified against
+  `serializeDocument()` before dismissing it, not assumed: `GET /api/v1/documents/:id` never returns
+  `content` at all (this route's own `DocumentResponseSchema` doc comment: "no content, yjs_state,
+  visibility"). Added the follow-up `GET` anyway, asserting what it CAN return
+  (title/document_type/absence of a `content` key) — the direct SQL read remains the real proof for
+  content itself.
+- **trivial** (`agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts`) — the `acceptDraft`
+  sdk-mode test's create-audit assertions never checked `status`. Added `expect(createAudit?.status)
+  .toBe(201)` (matching `documents.ts`'s `POST /` handler, which returns 201 on success).
+- **trivial** (`agent/src/__tests__/shipClient.test.ts`) — a test name described the assertion as
+  "ShipApiError-free" when the actual point is that the sdk's own error propagates UNCHANGED, never
+  wrapped. Renamed for clarity; assertions unchanged.
+- **trivial × 2** (`api/src/platform/api/v1/resources/issues.ts` / `documents.ts`,
+  `UpdateIssueRequestSchema` / `UpdateDocumentRequestSchema`) — plain `z.object({...})` silently drops
+  an unrecognized field (e.g. `priority` sent alongside `state`) rather than rejecting it, letting a
+  caller believe a field was applied when it was ignored. Fixed: `.strict()` on both, each with a new
+  regression test proving the extra field is rejected (400) and never silently applied.
+  `docs/openapi.json` regenerated — `.strict()` changes the registered schema's
+  `additionalProperties` from unset to `false`.
+- **trivial** (`agent/src/shipClient.ts`, `SDK_ISSUE_STATES`) — the hardcoded state list had no
+  compile-time link to `@ship/sdk`'s own `IssueState` union, so a future SDK state addition would
+  silently always fail `assertSdkIssueState`'s runtime check with no build-time signal anyone forgot
+  to update this file. Fixed: added a compile-time exhaustiveness check
+  (`Exclude<SdkIssueState, (typeof SDK_ISSUE_STATES_LIST)[number]>` must resolve to `never`, verified
+  by `tsc` failing to compile when it doesn't).
+
+Re-verified after all fixes: type-check clean across all packages, agent 534/534, sdk 212/212, api
+1413/1413 (all three suites confirmed clean in a full run, no flakes that round).
+
+**CodeRabbit triage, round 2 (5 more findings after the merge with PF-600/TRO-448's CLI scaffold).
+Fixed 4, dismissed 1 with a written, verified reason:**
+- **major, dismissed** (`api/src/platform/api/v1/resources/issues.ts`, `flushPendingEvents`
+  placement) — suggested moving the call past `client.release()` so a publisher error couldn't
+  trigger `ROLLBACK` or be misreported as this request's own failure. Investigated before
+  dismissing, not assumed: `flushPendingEvents` (`documentService.ts`) iterates via `safeDispatch`,
+  which wraps every dispatch — including the schema-validation throw inside `IEventBus.publish()`
+  itself — in a try/catch that logs and never rethrows; `publish()`'s own doc comment confirms it is
+  fully synchronous ("dispatches synchronously ... returns the envelope"), so there is no async
+  rejection this catch could miss either. There is no code path by which this call can reach the
+  route's own `catch` block. Also verified the CURRENT placement (immediately after `COMMIT`, before
+  `client.release()`) exactly matches `routes/issues.ts`'s own internal PATCH handler — moving only
+  this route would be an unexplained deviation from that established convention, not an alignment
+  with it. Documented inline at the call site so a future review round doesn't re-raise the same
+  (already-investigated) question.
+- **major, fixed** (`agent/src/shipClient.ts`, `standupTitleForDate`) — round 1's date guard only
+  checked `Number.isNaN`, which does NOT catch a calendar-impossible date:
+  `new Date('2026-02-30T00:00:00Z')` neither throws nor produces `Invalid Date` — it silently ROLLS
+  OVER to 2026-03-02 (verified directly). A shape-only regex check would have passed "2026-02-30"
+  straight through to a wrong-date title. Fixed: added a round-trip check (`dateObj`'s own ISO date
+  part must equal the input string exactly) on top of the existing shape/NaN checks. New regression
+  test proves Feb 30 is rejected, confirmed the existing `Number.isNaN`-only version would NOT have
+  caught it (checked before writing the fix, not after).
+- **minor, fixed** (`audit/factory/scorecard.jsonl`) — attempt 4's row had `ts:
+  "2026-08-15T15:28:00Z"`, earlier than attempt 3's `"2026-08-15T15:42:03Z"` — a real off-by-one-hour
+  typo (should have been `16:28`, matching the actual local gate-run time), not a hypothetical.
+  Corrected.
+- **trivial, fixed** (`agent/src/__tests__/shipClient.test.ts`) — the sdk-error-propagation test
+  matched on the thrown error's message only. Fixed: rejects with a named error instance, asserted
+  by identity (`.rejects.toBe(sdkError)`), which a message-only match couldn't distinguish from a
+  buggy re-throw of a new error with the same text.
+- **trivial, fixed** (`api/src/platform/api/v1/resources/__tests__/documents.test.ts`) — the
+  malformed-id 404 case existed for `issues.ts`'s new PATCH route but not `documents.ts`'s (which
+  already had the right guard via `assertDocumentExists`, just no dedicated test proving it for
+  PATCH specifically). Added.
+
+**One more self-caught issue while re-verifying (not a CodeRabbit finding):** the dismissal comment
+above (`issues.ts`) originally read `` `IEventBus.publish()` itself `` — that literal substring
+matched `publish-boundary.test.ts`'s own plain-text scan (`/\.publish\s*\(/`), a deliberately
+naive grep-style boundary check that "route layer must never call `IEventBus` directly" and does
+not distinguish a comment from a call site. A real, if self-inflicted, test failure (`expected [] to
+deeply equal [{...}]`) — fixed by rewording the comment to describe the method without writing the
+literal call syntax; no assertion in that test was touched.
+
+Re-verified again after round 2: type-check clean, agent 535/535 (net +1 from round 1: the identity-
+comparison case is a rewrite of an existing test, the calendar-impossible-date case is new), api
+1414/1414 (net +1: the documents.ts malformed-id case), sdk 212/212 — all three in fresh full-suite
+runs with zero flakes.
+
+**How to verify.**
+
+```bash
+# PostgreSQL running, this worktree's DATABASE_URL migrated (source .factory-env)
+pnpm build:shared && pnpm build:sdk   # sdk/dist must exist before agent's/api's type-check/tests
+pnpm type-check                        # clean across all packages
+pnpm --filter @ship/sdk test           # 212/212, incl. the two new documents.update/issues.update parity entries
+pnpm --filter @ship/agent test         # 535/535, incl. 9 new unit cases + 2 new live-DB sdk-mode cases
+pnpm --filter @ship/api test           # 1414/1414, incl. 23 new PATCH-route unit cases + route-fitness/openapi coverage
+scripts/factory/gate.sh
+```
+
+**Not built in this ticket, deliberately (scope boundary, PRD verbatim):** flipping
+`AGENT_PLATFORM_MODE`'s default (PF-704's job); the full flag-matrix + audit proof PF-704 owns;
+standup idempotency-by-date in sdk mode (disclosed above); the internal PATCH route's
+"incomplete children" confirmation gate (disclosed above) or its other update fields
+(title/priority/assignee_id/belongs_to) on the new v1 issues PATCH route.
+
+**Rollback.** Revert this ticket's commit(s) on `fix/pf-703-gated-writes-sdk`. `AGENT_PLATFORM_MODE`
+defaults to `internal` and `sdkClientFactory` is `undefined` unless that flag is `sdk`, so a revert
+is behaviorally inert for every existing deployment. The `scopes` addition to
+`mintEphemeralAgentToken`/`POST /accept-draft` is additive and harmless to revert alongside the rest
+(internal-mode `authMiddleware` never read the column). Scope: `agent/src/shipClient.ts`,
+`agent/src/index.ts`, `agent/src/__tests__/shipClient.test.ts`,
+`agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts`, `api/src/platform/api/v1/resources/
+{documents,issues}.ts`, `api/src/platform/api/v1/resources/__tests__/{documents,issues}.test.ts`,
+`api/src/platform/openapi/schemas/{documents,issues}.ts`,
+`api/src/platform/openapi/__tests__/{document,endpoint}.test.ts`, `api/src/services/agentTokens.ts`,
+`api/src/routes/agent.ts`, `docs/openapi.json` (regenerated), `sdk/src/internal/requestClient.ts`,
+`sdk/src/resources/{documents,issues}.ts`, `sdk/src/types.ts`, `sdk/src/index.ts`,
+`sdk/src/__tests__/parity.test.ts`.
+
+---
+
 ## TRO-599 — SDK response types drift from real server shapes: WebhookSubscription + WebhookDelivery
 
 **Root cause.** `sdk/src/resources/webhooks.ts`'s `WebhookSubscription`/`WebhookDelivery` interfaces were
