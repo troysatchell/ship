@@ -92,70 +92,158 @@ change, no data was written or backfilled by this fix, so nothing else needs und
 
 ---
 
-## TRO-604 — `.dockerignore`'s test-file patterns never matched anything, breaking every deploy since ~05:00 UTC today
+## TRO-593 — `e2e/session-timeout.spec.ts`: 29/58 tests crashed the browser context at a consistent ~60s timeout
 
-**What was broken.** `.dockerignore`'s "Test files" section (`*.test.ts`, `*.spec.ts`, `__tests__`)
-used bare patterns, which Docker's ignore-matching treats as build-context-root-only — unlike
-`.gitignore`, Docker's syntax is not recursive without an explicit `**/` prefix. None of `api/`'s
-or `web/`'s nested test files (e.g. `api/src/platform/api/v1/resources/__tests__/webhooks.test.ts`)
-were ever actually excluded from the Docker build context; this has been silently vacuous since the
-file was written. It only started mattering when TRO-447/PF-801 (PR #235) added an import in
-`webhooks.test.ts` reaching outside the build context (`docs/submission/demo-webhook-listener.mjs`,
-itself excluded by `.dockerignore`'s separate `docs` line) — `pnpm build`'s `tsc` pass then failed
-to resolve that module, because the test file importing it *was* present (never actually excluded)
-while the thing it imported wasn't.
+**Root cause, observed via a direct diagnostic, not just Playwright's docs.** `page.clock.fastForward()`
+"only fires due timers at most once" while `page.clock.runFor()` fires every timer callback
+progressively — once per real occurrence (Playwright's own docs at
+https://playwright.dev/docs/clock). Every periodic timer mounted app-wide — the WebSocket keepalive
+ping in `web/src/hooks/useRealtimeEvents.tsx:150` (30s), and react-query `refetchInterval` polls in
+`useInboxQuery`/`useActionItemsQuery` (60s each), both wired into `App.tsx` and therefore live on
+every page in every test — does real async work each time it fires. `runFor()` over a long simulated
+span multiplies that real work by the number of periods elapsed; `fastForward()` pays it at most once
+regardless of span. Confirmed the mechanism directly with a throwaway diagnostic script (chromium +
+`page.clock`, no app, no server): a bare 1Hz `setInterval` on a blank page cost **255ms** of real time
+for a 62-simulated-second `runFor()` (not ~60s) — proving the cost lives in what the real app does per
+callback, not in Playwright's clock implementation. On the real app, the same 62-second span with the
+session-timeout countdown's own 1s interval active took close to the full 60s test timeout even
+running alone with no sibling test — and the file's five 12-hour-absolute-timeout tests, which
+`runFor()`'d the full ~11h55m span (making every 30s/60s app timer fire ~1400/~715 times respectively
+instead of once), crashed outright ("Target page, context or browser has been closed") every time.
 
-**Impact, discovered while investigating an unrelated submission-readiness gap:** this broke the
-`build · push image (GHCR)` CI check (non-required, previously dismissed as low-priority) **and**
-the real deployed Render service, which builds from this same `Dockerfile`. Checked the live
-service's (`srv-d9kf2t942hec73aofrt0`, `ship-rr6m.onrender.com`) deploy history directly via the
-Render API: 7 consecutive `build_failed` deploys since PR #235 (~05:00 UTC) through PR #244 — the
-live deployment has been stuck on the PR #239 commit this entire time, meaning PF-801, PF-702,
-TRO-602, PF-600, PF-703, and TRO-599 were all merged to `main` but never actually live.
+**A second, distinct defect the crash was masking.** The five absolute-timeout tests each did a single
+uninterrupted `runFor()` with zero simulated user activity. `useSessionTimeout.ts`'s own inactivity
+one-shot timer (14-minute mark) is unconditional — it doesn't know or care that the test intends to
+exercise the 12-hour absolute cap — so it fires partway through every one of these tests' long jumps,
+shows the *inactivity* warning first, and (per `scheduleAbsoluteWarning`'s own `if (!showWarning)`
+guard) suppresses the absolute warning entirely. These tests were never observed passing under either
+mechanism (they always timed out before reaching their assertions), so this wasn't a regression — it
+was a latent test-authoring gap the crash had hidden the entire time.
 
-**What changed.** `.dockerignore`'s test-file patterns now use `**/*.test.ts`, `**/*.spec.ts`,
-`**/__tests__` — matching at any depth, not just the root. This is a general fix, not a special
-case for `webhooks.test.ts`'s one import: no *future* test-only cross-boundary import can break
-this build path again, since test files are now genuinely absent from the image entirely.
+**The fix — entirely e2e-spec-authoring, no application code touched.** `useSessionTimeout.ts` and
+`useRealtimeEvents.tsx` are unmodified; this did not meet the escalation bar in the ticket brief.
 
-**Evidence.** `docker build --target build .` — succeeds (previously failed with `error TS2307:
-Cannot find module '../../../../../../../docs/submission/demo-webhook-listener.mjs'`).
-`docker run --rm <image> sh -c "find /app/api/src -name '__tests__' -o -name '*.test.ts'"` — empty,
-confirming test files are genuinely absent from the built image now, not just this one import
-resolved by luck.
+- Converted every `runFor()` call that only needs a boundary condition (a one-shot warning timer
+  firing, a modal appearing) to `fastForward()` — 27 call sites. This is exactly the pattern most of
+  the file's originally-passing tests already used for the same 14-minute jump.
+- Added `fastForwardWithActivity(page, target)`: advances in ≤10-minute chunks with a real `mousemove`
+  dispatched between chunks, so the 14-minute inactivity timer never accumulates enough idle time to
+  fire and preempt whatever longer-horizon behavior (the 12-hour absolute timeout) the test is
+  actually exercising. Applied to all 5 absolute-timeout tests and to `Accessibility › focus is
+  trapped within modal`, which also reaches the absolute warning — this is what actually fixes the
+  masked defect above, not just the crash.
+- Kept `runFor()` for the 6 call sites that generate a real product-code effect a single `fastForward`
+  can't: a countdown interval that must complete 60 (or 300) real ticks to call the app's own
+  `onTimeout()` and trigger a redirect (`logs user out when countdown reaches zero`, `shows session
+  expired message after forced logout`, the tail of `clicking I Understand...` and `logs user out at
+  12-hour mark...`), and one deliberate race-condition test (`race condition: user clicks Stay Logged
+  In as timer expires`) whose whole point is clicking near the exact moment the countdown reaches
+  zero — swapping that one to `fastForward` would have defeated the test's stated purpose, not fixed
+  it (initially miscategorized this one before re-reading its own comment; corrected before shipping).
+- `clicking I Understand on absolute warning does NOT extend session` and `logs user out at 12-hour
+  mark regardless of activity` each still progressively fire a real 300-tick (5-minute) countdown —
+  5x the ticks of the file's other countdown-completion tests — and measured consistently over the
+  default 60s test timeout under normal load even after removing the 11h55m portion. Chunking the
+  `runFor()` call would not reduce that real work; `test.slow()` (triples the default 60s to 180s —
+  `e2e/AGENTS.md` names this exact tool "for genuinely long tests") was added to both, giving them a
+  realistic budget for the amount of genuine async work they do rather than pretending it's cheaper
+  than it is.
+- No new `web/src/**/*.test.ts(x)` regression test — the root cause did not touch
+  `useSessionTimeout.ts`/`useRealtimeEvents.tsx` runtime behavior, so there is no new product-code
+  behavior to unit-test (the ticket brief anticipated this outcome explicitly). The real proof is the
+  e2e run itself (below), not a unit test — `e2e/` is outside both vitest projects `gate.sh` executes
+  (`/ship-qa`'s documented gap). Expected `scripts/factory/gate.sh`'s G6 (`regression-test`) to report
+  `fail` on that basis, since no `test(`/`it(` case was added — **checked, and that expectation was
+  wrong, worth correcting rather than leaving stated**: G6 actually reported `pass`, "6 test case(s)
+  added." Its regex is `^\+[[:space:]]*(it|test)(\.[a-z]+)?\(`, which matches not just `test(...)`
+  definitions but any `test.<word>(` call — including the 6 `test.slow();` lines this fix added
+  (`git diff main...HEAD -- e2e/session-timeout.spec.ts | grep -E '^\+[[:space:]]*(it|test)(\.[a-z]+)?\('`
+  confirms exactly those 6 lines and nothing else). A real gap in the check, not a real regression
+  test — flagged here so the `pass` isn't read as "a unit test was added" when none was.
 
-**No vitest regression test** — this is a Docker-build-context configuration fix; no unit test can
-exercise "does the real multi-stage Docker build succeed," the same accepted-exception class as
-this project's terraform tickets (e.g. PF-900). The real `docker build` run above is the actual
-proof, disclosed rather than silently claimed.
+**Proof — before/after, real background runs via `/e2e-test-runner`, `pnpm exec playwright test
+e2e/session-timeout.spec.ts`, `retries: 1` (this repo's local default):**
 
-**How to run it.**
-```bash
-docker build --target build -t ship-build-verify .
-docker run --rm ship-build-verify sh -c "find /app/api/src -name '__tests__' -o -name '*.test.ts'"
-# expect: build succeeds, find output is empty
-docker rmi ship-build-verify
-```
+| | Total | Passed | Failed (after retry) |
+|---|---|---|---|
+| Before (unfixed `main`, this branch's starting point) | 58 | 26 | 32 |
+| After (final verification run) | 58 | 58 | 0 |
 
-**Rollback.** Revert this commit (one file, `.dockerignore`). Test files would again reach the
-Docker build context — safe to revert only once `webhooks.test.ts`'s cross-boundary import is
-independently fixed (TRO-604's original three suggested options for that import specifically are
-still valid follow-ups), otherwise this exact deploy failure recurs immediately.
+The crash/timeout mechanism this ticket is about — "Test timeout of 60000ms exceeded", browser context
+closed — went from 29-32/58 tests to a rare, load-dependent occurrence confined to the 6 call sites
+that structurally still need `runFor()` (a real countdown interval completing 60-300 real ticks — see
+above). It was **not** fully eliminated on the first pass: one verification run reproduced it once more
+on `shows session expired message after forced logout` (60,043ms, "Target page, context or browser has
+been closed" — the exact TRO-593 signature) under this session's sustained heavy concurrent-worktree
+load. Rather than rely on the retry margin alone, `test.slow()` (triples the default 60s budget to
+180s) was added to all 6 remaining `runFor`-using tests — the same fix already applied to the two
+300-tick tests, extended here for consistency and to close out the residual risk directly rather than
+leave it to chance.
 
-Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add an entry here.
+Every other failure observed across the roughly dozen verification runs was a **clean assertion
+failure with a normal duration**, never a timeout, and each was individually investigated per this
+repo's claim-provenance rule rather than assumed to be the same defect or silently absorbed into a
+claimed clean run:
 
-**The `audit-baseline` tag.** Points at `149873a` — verified with `git rev-list -n1 audit-baseline`
-and confirmed as the commit immediately before Phase 2 fixes started landing (it is `bace770`'s
-first parent per `git show bace770 --stat`, and `bace770` is TRO-242 below, the first Phase 2 merge).
-It marks the Phase 1 (audit-only) state so it stays a fixed reference once Phase 2 starts changing
-the source it measured. Every category audit skill's "compare mode" (`/<category>-audit compare
-<label>`) re-measures against this tag under identical conditions to prove a fix's effect —
-documented in `.claude/skills/ship-factory/references/evals.md`; this file's own entries lean on it
-directly (see TRO-174's compression note further down, which warns that a compare-mode run against
-`audit-baseline` looks flat or worse over loopback for a fix that is real). Not itself a ticket, so
-it has no rollback entry of its own — `git tag -d audit-baseline` removes the **local** tag, which
-leaves compare mode with no fixed reference point; a tag already pushed also needs
-`git push origin :refs/tags/audit-baseline` to remove it from the remote.
+- `Stay Logged In calls extend session endpoint` (one run) — `extendCalls.length` expected 1, got 0,
+  ~26s duration. Re-ran 3x in isolation: 3/3 passed (~8.6s each). A pre-existing CSRF-token-fetch race
+  (`web/src/lib/api.ts`'s `ensureCsrfToken()` does an unmocked, uninterceptable fetch before the mocked
+  `extend-session` call), unrelated to this ticket's clock mechanism.
+- One `dbContainer` setup timeout (`handles computer sleep/wake gracefully`, one run) — this machine
+  ran 5-6 concurrent factory worktrees' `gate.sh`/vitest/playwright processes for this entire
+  investigation (`ps aux` confirmed repeatedly), and `dbContainer` is a testcontainers-managed
+  worker-scoped Postgres container whose startup competes for the same Docker/CPU pool — this repo's
+  documented "the host is not under test" class (`lessons.md` rule 25), not a defect. Re-ran 2x in
+  isolation: 2/2 passed (~27s each).
+- `logs user out when countdown reaches zero`, `clicking I Understand on absolute warning does NOT
+  extend session` (each on separate runs) — both showed the *identical* signature: `toHaveURL(/\/login/)`
+  observed the URL briefly become `/login?expired=true&returnTo=...` and then settle back on `/docs`
+  before the assertion's polling window closed. Traced to ground truth, not guessed: `PublicRoute`
+  (`web/src/main.tsx:108-124`, wrapping the `/login` route) redirects to `/docs` whenever `useAuth()`
+  reports an authenticated `user` — and the server's own session validity is real-wall-clock-based
+  (`api/src/routes/auth.ts:153/193`, `maxAge: SESSION_TIMEOUT_MS` computed from `Date.now()`, not the
+  page's faked clock). Every test in this file that reaches a client-triggered `/login` redirect via
+  `page.clock` is racing the *server's* real-time session validity, which — since a real test run
+  takes well under 15 real minutes — is almost always still valid at redirect time. Whether
+  `toHaveURL`'s poll happens to sample the transient `/login` state before `PublicRoute` bounces back
+  is genuine, non-deterministic timing, not something either test code or a clock-timing fix can
+  resolve. **This is pre-existing** (the mechanism has nothing to do with `runFor`/`fastForward`) and
+  was invisible before this ticket only because every one of these tests previously crashed before
+  reaching this assertion at all.
+
+None of these four classes are TRO-593 regressions and none were "fixed" by widening a timeout or
+loosening an assertion — each was traced to a distinct, pre-existing, independently-verified cause and
+is reported here rather than silently absorbed into a claimed clean run. The final row in the table
+above is a genuinely clean 58/58 run (`test-results/.last-run.json`: `"status": "passed",
+"failedTests": []`), captured after the `test.slow()` hardening above; earlier runs during
+verification (used to characterize the failure classes above) are not the row reported.
+
+**Found but NOT fixed — a real, security-relevant product defect, reported per this ticket's own
+escalation instruction rather than patched unilaterally.** Investigating the `clicking I Understand...`
+failure above surfaced a second, separate, and more concrete bug while ruling out an unrelated
+explanation: `SessionTimeoutModal.tsx`'s action button is wired unconditionally —
+`onClick={onStayLoggedIn}` (`web/src/components/SessionTimeoutModal.tsx:184`) — regardless of
+`warningType`, and `App.tsx` passes `onStayLoggedIn={resetSessionTimer}` (`web/src/pages/App.tsx:702`).
+`resetSessionTimer` is `useSessionTimeout.ts`'s `resetTimer`, which calls
+`apiPost('/api/auth/extend-session')`. So clicking the **absolute**-timeout warning's "I Understand"
+button — labeled and described as `"This timeout cannot be extended. Please log in again after your
+session ends."` — actually calls the exact same handler as the inactivity warning's "Stay Logged In"
+button and **does extend the real server-side session**. This directly contradicts the UI's own text
+and the test's own name/intent (`clicking I Understand on absolute warning does NOT extend session`).
+Per the ticket brief's escalation trigger ("a user-visible/session-semantics change... should
+stop-and-report rather than proceed unilaterally"), `SessionTimeoutModal.tsx`/`App.tsx` were **not**
+touched — the test that catches this (indirectly, via the redirect-race above compounding on top of a
+now-actually-extended session) is left asserting the correct, intended behavior rather than weakened to
+pass. Needs its own ticket and a product decision on the fix (route `onClick` through `warningType`, or
+give `SessionTimeoutModal` two distinct callback props).
+
+**How to run it.** `/e2e-test-runner`'s discipline: background run, poll
+`test-results/summary.json`, read `test-results/errors/*.log`. Scoped: `pnpm exec playwright test
+e2e/session-timeout.spec.ts`.
+
+**Roll back.** `git revert` this ticket's commit(s) on `e2e/session-timeout.spec.ts`. Purely additive
+in risk terms — reverting restores the pre-fix `runFor`-heavy spec (and its crash) but changes no
+application code, since none was touched.
 
 ---
 
@@ -263,6 +351,73 @@ git revert <this ticket's commit SHA>
 Restores all 8 deleted test functions to their state before this ticket. Tests will fail hard on assertions
 (at lines mentioning `/Who should own/`, modal.getByText, etc.) unless the owner-selection modal feature is
 separately implemented in `web/src`.
+
+---
+
+## TRO-604 — `.dockerignore`'s test-file patterns never matched anything, breaking every deploy since ~05:00 UTC today
+
+**What was broken.** `.dockerignore`'s "Test files" section (`*.test.ts`, `*.spec.ts`, `__tests__`)
+used bare patterns, which Docker's ignore-matching treats as build-context-root-only — unlike
+`.gitignore`, Docker's syntax is not recursive without an explicit `**/` prefix. None of `api/`'s
+or `web/`'s nested test files (e.g. `api/src/platform/api/v1/resources/__tests__/webhooks.test.ts`)
+were ever actually excluded from the Docker build context; this has been silently vacuous since the
+file was written. It only started mattering when TRO-447/PF-801 (PR #235) added an import in
+`webhooks.test.ts` reaching outside the build context (`docs/submission/demo-webhook-listener.mjs`,
+itself excluded by `.dockerignore`'s separate `docs` line) — `pnpm build`'s `tsc` pass then failed
+to resolve that module, because the test file importing it *was* present (never actually excluded)
+while the thing it imported wasn't.
+
+**Impact, discovered while investigating an unrelated submission-readiness gap:** this broke the
+`build · push image (GHCR)` CI check (non-required, previously dismissed as low-priority) **and**
+the real deployed Render service, which builds from this same `Dockerfile`. Checked the live
+service's (`srv-d9kf2t942hec73aofrt0`, `ship-rr6m.onrender.com`) deploy history directly via the
+Render API: 7 consecutive `build_failed` deploys since PR #235 (~05:00 UTC) through PR #244 — the
+live deployment has been stuck on the PR #239 commit this entire time, meaning PF-801, PF-702,
+TRO-602, PF-600, PF-703, and TRO-599 were all merged to `main` but never actually live.
+
+**What changed.** `.dockerignore`'s test-file patterns now use `**/*.test.ts`, `**/*.spec.ts`,
+`**/__tests__` — matching at any depth, not just the root. This is a general fix, not a special
+case for `webhooks.test.ts`'s one import: no *future* test-only cross-boundary import can break
+this build path again, since test files are now genuinely absent from the image entirely.
+
+**Evidence.** `docker build --target build .` — succeeds (previously failed with `error TS2307:
+Cannot find module '../../../../../../../docs/submission/demo-webhook-listener.mjs'`).
+`docker run --rm <image> sh -c "find /app/api/src -name '__tests__' -o -name '*.test.ts'"` — empty,
+confirming test files are genuinely absent from the built image now, not just this one import
+resolved by luck.
+
+**No vitest regression test** — this is a Docker-build-context configuration fix; no unit test can
+exercise "does the real multi-stage Docker build succeed," the same accepted-exception class as
+this project's terraform tickets (e.g. PF-900). The real `docker build` run above is the actual
+proof, disclosed rather than silently claimed.
+
+**How to run it.**
+```bash
+docker build --target build -t ship-build-verify .
+docker run --rm ship-build-verify sh -c "find /app/api/src -name '__tests__' -o -name '*.test.ts'"
+# expect: build succeeds, find output is empty
+docker rmi ship-build-verify
+```
+
+**Rollback.** Revert this commit (one file, `.dockerignore`). Test files would again reach the
+Docker build context — safe to revert only once `webhooks.test.ts`'s cross-boundary import is
+independently fixed (TRO-604's original three suggested options for that import specifically are
+still valid follow-ups), otherwise this exact deploy failure recurs immediately.
+
+Assignment rule 8. `scripts/factory/gate.sh` fails any branch that does not add an entry here.
+
+**The `audit-baseline` tag.** Points at `149873a` — verified with `git rev-list -n1 audit-baseline`
+and confirmed as the commit immediately before Phase 2 fixes started landing (it is `bace770`'s
+first parent per `git show bace770 --stat`, and `bace770` is TRO-242 below, the first Phase 2 merge).
+It marks the Phase 1 (audit-only) state so it stays a fixed reference once Phase 2 starts changing
+the source it measured. Every category audit skill's "compare mode" (`/<category>-audit compare
+<label>`) re-measures against this tag under identical conditions to prove a fix's effect —
+documented in `.claude/skills/ship-factory/references/evals.md`; this file's own entries lean on it
+directly (see TRO-174's compression note further down, which warns that a compare-mode run against
+`audit-baseline` looks flat or worse over loopback for a fix that is real). Not itself a ticket, so
+it has no rollback entry of its own — `git tag -d audit-baseline` removes the **local** tag, which
+leaves compare mode with no fixed reference point; a tag already pushed also needs
+`git push origin :refs/tags/audit-baseline` to remove it from the remote.
 
 ---
 
