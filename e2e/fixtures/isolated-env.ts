@@ -22,6 +22,7 @@ import { existsSync } from 'fs';
 import path from 'path';
 import getPort, { portNumbers } from 'get-port';
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 // The REAL migration runner behind `pnpm db:migrate` (api/src/db/migrate.ts)
 // — see this file's own `runMigrations` below (TRO-430) for why this fixture
 // now delegates to it instead of its own, unsound shortcut.
@@ -206,6 +207,24 @@ export const test = base.extend<
           NODE_ENV: 'test',
           // Prevent dotenv from overriding our DATABASE_URL
           DOTENV_CONFIG_PATH: '/dev/null',
+          // PF-801 / TRO-447: `POST /api/v1/webhooks` 500s without this
+          // (`encryptSecret()` throws — same gap `PLUGFORGE-DEMO-SCRIPT.md`'s
+          // own pre-stage note documents for local `pnpm dev`). Because
+          // `DOTENV_CONFIG_PATH` above is deliberately `/dev/null`, this
+          // spawned server never picks one up from `api/.env.local` either —
+          // no prior e2e spec touched a `webhooks` route, so this gap was
+          // never hit until `e2e/webhook-idempotency-key-drill.spec.ts`
+          // (this ticket) needed it. A fresh key per worker is fine: nothing
+          // in this fixture persists an encrypted secret across a server
+          // restart, and each worker's `webhook_subscriptions` rows live
+          // only in that worker's own throwaway Postgres container.
+          // `??` alone treats an empty string as present (CodeRabbit, this
+          // ticket's review) — an accidentally-set-but-empty
+          // SECRET_ENCRYPTION_KEY in the outer environment would pass through
+          // unchanged and still fail inside encryptSecret(), the exact
+          // failure this fix exists to prevent. `||` falls through empty
+          // string to the random default too.
+          SECRET_ENCRYPTION_KEY: process.env.SECRET_ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex'),
         },
         stdio: ['pipe', 'pipe', 'pipe'],
       });
